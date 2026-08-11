@@ -110,12 +110,30 @@ message ChartManifest {
   string namespace = 4;
   string environment = 5;
 
-  // App names composed into this chart. Not "<domain>-<name>" — these are bare
-  // app names, matching what the Starlark rule extracts from the app_metadata
-  // target labels.
+  // DEPRECATED — bare app names, not "<domain>-<name>" or domain-qualified.
+  // resolveChartApps falls back to matching these by name alone when
+  // app_refs (below) is empty, which fails when the name is ambiguous
+  // across domains — see tools/app_registry/ARCHITECTURE.md "AssertApps
+  // (additive) vs. ReconcileApps (absence sweep)" and PLAN.md's AR-7a.
+  // `tools/bazel:release.bzl`'s `helm_chart_metadata` rule still populates
+  // this for one release cycle's backward compatibility (an
+  // already-cached, pre-AR-7a chart metadata JSON on a CI runner); new
+  // consumers should read app_refs instead. Slated for deletion once every
+  // chart manifest in the tree is produced by a tools/helm build that
+  // emits app_refs — see PLAN.md's AR-7a for the removal pointer.
   repeated string apps = 6;
 
   string chart_target = 7;
+
+  // App references composed into this chart, domain-qualified as
+  // "<domain>/<name>" — the field resolveChartApps prefers when present.
+  // Because each reference carries its own domain, it can never be
+  // ambiguous across domains the way a bare name in `apps` can be. Emitted
+  // by `helm_chart_metadata` in tools/bazel/release.bzl, which reads each
+  // referenced app's `domain` attribute directly (via the AppMetadataInfo
+  // provider) rather than inferring it from the target's package path — see
+  // PLAN.md's AR-7a.
+  repeated string app_refs = 8;
 }
 
 // AppManifestSet is the full set of manifests discovered by a `bazel query`

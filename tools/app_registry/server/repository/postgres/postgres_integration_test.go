@@ -1542,6 +1542,15 @@ func appStatus(t *testing.T, pool *pgxpool.Pool, appID string) string {
 	return status
 }
 
+func chartStatus(t *testing.T, pool *pgxpool.Pool, chartID string) string {
+	t.Helper()
+	var status string
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM chart WHERE chart_id = $1`, chartID).Scan(&status); err != nil {
+		t.Fatalf("read chart status for %s: %v", chartID, err)
+	}
+	return status
+}
+
 // TestMigration006SeedsSentinelWatermarkRow proves migration 006's seed:
 // exactly one row, the documented sentinel (empty git_sha, zero
 // timestamps) -- see that migration's comments for why a seeded sentinel,
@@ -1859,5 +1868,192 @@ func TestReconcileWatermark_ConcurrentCallsSerializeOnTheLockedRow(t *testing.T)
 	if gitSha != "high-sha" || sourceCommittedAt != 200 {
 		t.Fatalf("expected the higher ordering key (high-sha, 200) to win regardless of goroutine scheduling, got (%q, %d) -- this means the two concurrent Reconcile calls were NOT properly serialized by the watermark's locking read",
 			gitSha, sourceCommittedAt)
+	}
+}
+
+// ============================================================================
+// AR-7a: sweep robustness -- partial-apply Reconcile
+// ============================================================================
+//
+// PLAN.md's AR-7a calls out a real-Postgres integration test explicitly: the
+// fake (server/repository/fake) cannot catch a transaction-rollback
+// regression here, because its dryRun path is a superficial in-memory clone,
+// not a real database transaction. Pre-AR-7a, resolveChartApps returning any
+// error propagated straight out of Reconcile and aborted the WHOLE WithTx
+// transaction -- see TestRecordArtifact_ChartLinkFailureRollsBackTransaction
+// above for the established "real rollback" pattern this mirrors. AR-7a's
+// fix only works if the unresolved-chart error stays IN-BAND (the
+// *chartResolutionError path in postgres/app.go's Reconcile) rather than
+// propagating -- if that regressed, this test would see the whole call fail
+// and nothing committed, exactly like the pre-AR-7a behavior.
+
+// TestReconcile_UnresolvedChartDoesNotRollBackWholeTransaction is AR-7a's
+// headline exit criterion: "a chart manifest naming a nonexistent app leaves
+// every other app/chart registered, advances the watermark, and reports the
+// offending chart."
+func TestReconcile_UnresolvedChartDoesNotRollBackWholeTransaction(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-ar7a-1", 10000, 10000,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "good-app")},
+			[]*appmetapb.ChartManifest{
+				{Domain: "acme", Name: "bad-chart", Apps: []string{"nonexistent-app"}},
+				{Domain: "acme", Name: "good-chart", Apps: []string{"good-app"}},
+			},
+		),
+		IdempotencyKey: "ar7a-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile with one bad chart must not fail the whole call: %v", err)
+	}
+
+	// 1. The offending chart is reported, not fatal.
+	if len(resp.UnresolvedCharts) != 1 {
+		t.Fatalf("expected exactly 1 unresolved chart, got %+v", resp.UnresolvedCharts)
+	}
+	uc := resp.UnresolvedCharts[0]
+	if uc.Domain != "acme" || uc.Name != "bad-chart" {
+		t.Fatalf("expected unresolved chart acme/bad-chart, got %+v", uc)
+	}
+	if len(uc.AppRefs) != 1 || uc.AppRefs[0] != "nonexistent-app" {
+		t.Fatalf("expected offending app_refs=[nonexistent-app], got %+v", uc.AppRefs)
+	}
+	if uc.Reason == "" {
+		t.Fatal("expected a non-empty reason")
+	}
+
+	// 2. Every OTHER app and chart in the same call still registered -- the
+	// assertion only a real Postgres transaction proves: a regression back to
+	// whole-transaction rollback would make good-app/good-chart vanish along
+	// with bad-chart.
+	if len(resp.CreatedApps) != 1 || resp.CreatedApps[0].Name != "good-app" {
+		t.Fatalf("expected good-app to be created, got %+v", resp.CreatedApps)
+	}
+	if len(resp.CreatedCharts) != 1 || resp.CreatedCharts[0].Name != "good-chart" {
+		t.Fatalf("expected only good-chart to be created, got %+v", resp.CreatedCharts)
+	}
+
+	appRow, err := reg.Apps().GetAppByFullName(ctx, "acme-good-app")
+	if err != nil {
+		t.Fatalf("good-app must be queryable after commit: %v", err)
+	}
+	if appRow.Status != repository.StatusActive {
+		t.Fatalf("expected good-app ACTIVE, got %s", appRow.Status)
+	}
+
+	chartRow, err := reg.Apps().GetChartByFullName(ctx, "acme-good-chart")
+	if err != nil {
+		t.Fatalf("good-chart must be queryable after commit: %v", err)
+	}
+	if chartRow.Status != repository.StatusActive {
+		t.Fatalf("expected good-chart ACTIVE, got %s", chartRow.Status)
+	}
+
+	// bad-chart must not have been written at all.
+	if _, err := reg.Apps().GetChartByFullName(ctx, "acme-bad-chart"); !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected bad-chart to not exist, got err=%v", err)
+	}
+
+	// 3. The watermark still advanced -- pre-AR-7a this call would have
+	// rolled back before ever reaching the watermark write.
+	gitSha, sourceCommittedAt, _ := watermarkRow(t, pool)
+	if gitSha != "sha-ar7a-1" || sourceCommittedAt != 10000 {
+		t.Fatalf("expected the watermark to advance to (sha-ar7a-1, 10000) despite the unresolved chart, got (%q, %d)", gitSha, sourceCommittedAt)
+	}
+}
+
+// TestReconcile_UnresolvedChartNotMarkedMissing_Postgres proves the
+// deliberate semantics ARCHITECTURE.md "AssertApps (additive) vs.
+// ReconcileApps (absence sweep)" states: a chart already registered that
+// becomes unresolvable in a later reconcile is skipped, not swept into
+// MISSING -- against real Postgres, where the absence sweep is a real SQL
+// statement scanning `status = 'active'` (see Reconcile's `SELECT ... FROM
+// chart WHERE status = 'active'`), not the fake's map iteration.
+func TestReconcile_UnresolvedChartNotMarkedMissing_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	first, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-ar7a-2a", 20000, 20000,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "acme", Name: "chart", Apps: []string{"svc"}}},
+		),
+		IdempotencyKey: "ar7a-2a",
+	})
+	if err != nil {
+		t.Fatalf("initial reconcile: %v", err)
+	}
+	if len(first.CreatedCharts) != 1 {
+		t.Fatalf("expected 1 created chart, got %+v", first.CreatedCharts)
+	}
+	chartID := first.CreatedCharts[0].ChartId
+
+	// Reconcile again: the chart's manifest now references an app that does
+	// not exist ("svc" renamed without updating the chart) -- an unresolvable
+	// reference. The chart itself is still present in this call's manifest
+	// set, unlike an app/chart that simply drops out.
+	second, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-ar7a-2b", 21000, 21000,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "acme", Name: "chart", Apps: []string{"renamed-away"}}},
+		),
+		IdempotencyKey: "ar7a-2b",
+	})
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if len(second.UnresolvedCharts) != 1 {
+		t.Fatalf("expected the chart to be reported unresolved, got %+v", second.UnresolvedCharts)
+	}
+	if len(second.NewlyMissingCharts) != 0 {
+		t.Fatalf("an unresolved chart must NOT be swept into newly_missing_charts, got %+v", second.NewlyMissingCharts)
+	}
+
+	if got := chartStatus(t, pool, chartID); got != "active" {
+		t.Fatalf("expected the chart to remain ACTIVE (present, not absent) after becoming unresolvable, got %q", got)
+	}
+}
+
+// TestReconcile_DomainQualifiedAppRefsResolveUnambiguously_Postgres proves
+// AR-7a's fix for cross-domain bare-name ambiguity against real Postgres:
+// two apps sharing a bare name in different domains previously made
+// resolveChartApps's `SELECT app_id FROM app WHERE name = $1` return 2 rows
+// and fail; a chart using AppRefs (domain-qualified) resolves
+// deterministically via getAppByDomainName instead, bypassing that query
+// entirely.
+func TestReconcile_DomainQualifiedAppRefsResolveUnambiguously_Postgres(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-ar7a-3", 30000, 30000,
+			[]*appmetapb.AppManifest{oneAppManifest("domain-a", "shared-name"), oneAppManifest("domain-b", "shared-name")},
+			[]*appmetapb.ChartManifest{
+				{Domain: "domain-b", Name: "chart", AppRefs: []string{"domain-b/shared-name"}},
+			},
+		),
+		IdempotencyKey: "ar7a-3",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(resp.UnresolvedCharts) != 0 {
+		t.Fatalf("expected the domain-qualified ref to resolve without ambiguity, got unresolved=%+v", resp.UnresolvedCharts)
+	}
+	if len(resp.CreatedCharts) != 1 || len(resp.CreatedCharts[0].AppIds) != 1 {
+		t.Fatalf("expected 1 chart composing exactly 1 app, got %+v", resp.CreatedCharts)
+	}
+
+	domainBApp, err := reg.Apps().GetAppByFullName(ctx, "domain-b-shared-name")
+	if err != nil {
+		t.Fatalf("get domain-b's app: %v", err)
+	}
+	if resp.CreatedCharts[0].AppIds[0] != domainBApp.AppID {
+		t.Fatalf("expected the chart to resolve to domain-b's app (id=%s), got %+v", domainBApp.AppID, resp.CreatedCharts[0].AppIds)
 	}
 }

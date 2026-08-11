@@ -54,9 +54,20 @@ type AppRepository interface {
 	// app/chart in the manifest set is created or updated and set ACTIVE;
 	// anything known but absent is marked MISSING (ARCHIVED rows are left
 	// alone); anything MISSING that reappears is reported as recovered.
-	// chart.apps entries are resolved to app_ids and the call fails with
-	// ErrInvalidArgument if any name is unknown. dryRun computes the result
-	// without writing.
+	// chart.apps/app_refs entries are resolved to app_ids.
+	//
+	// AR-7a: this is PARTIALLY applying with respect to chart resolution. A
+	// chart whose apps references don't all resolve (unknown app, or an
+	// ambiguous bare name across domains) is reported in
+	// ReconcileResult.UnresolvedCharts and SKIPPED -- it is not created or
+	// updated, its chart_app membership is not touched, and critically it is
+	// NOT marked MISSING by the absence sweep either: a chart present in the
+	// manifest set but unresolvable is *present*, not absent (see
+	// ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps"). Every
+	// other app and chart in the same call still applies, and the watermark
+	// still advances. This is a deliberate change from pre-AR-7a behavior,
+	// where any resolution failure aborted the whole transaction and left
+	// the watermark unmoved. dryRun computes the result without writing.
 	//
 	// source carries the ordering metadata (git_sha / source_committed_at /
 	// discovered_at) this call is checked against the reconcile watermark

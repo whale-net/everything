@@ -15,6 +15,10 @@ import (
 // Bazel builds it as a normal (cheap) dependency — no nested bazel needed.
 const fixtureMetadataPath = "testdata/fixture-app_metadata_metadata.json"
 
+// fixtureChartMetadataPath is the analogous full-coverage fixture for
+// ChartManifest — see TestChartFixtureLeavesNoFieldUnset.
+const fixtureChartMetadataPath = "testdata/fixture-helm_chart_metadata_chart_metadata.json"
+
 // TestFixtureLeavesNoFieldUnset is the proto -> rule direction of the
 // contract: //tools/appmeta/testdata sets every release_app attribute, so
 // decoding its emitted manifest must leave no AppManifest field unset. If a
@@ -29,6 +33,28 @@ func TestFixtureLeavesNoFieldUnset(t *testing.T) {
 	var manifest appmetapb.AppManifest
 	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("decode fixture metadata: %v", err)
+	}
+
+	assertNoFieldUnset(t, manifest.ProtoReflect())
+}
+
+// TestChartFixtureLeavesNoFieldUnset is TestFixtureLeavesNoFieldUnset's
+// counterpart for ChartManifest, added in AR-7a alongside the app_refs
+// field: //tools/appmeta/testdata's fixture-helm_chart_metadata sets every
+// helm_chart_metadata attribute (including composing an app, so `apps` and
+// `app_refs` are both non-empty), so decoding its emitted manifest must
+// leave no ChartManifest field unset -- catching a field added to
+// appmeta.proto that the rule never populates, same as the AppManifest
+// direction above.
+func TestChartFixtureLeavesNoFieldUnset(t *testing.T) {
+	data, err := os.ReadFile(fixtureChartMetadataPath)
+	if err != nil {
+		t.Fatalf("read fixture chart metadata: %v", err)
+	}
+
+	var manifest appmetapb.ChartManifest
+	if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("decode fixture chart metadata: %v", err)
 	}
 
 	assertNoFieldUnset(t, manifest.ProtoReflect())

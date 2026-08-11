@@ -32,7 +32,7 @@ all merged to `main`** — see the table below.*
 | AR-4a / AR-4b | [#512](https://github.com/whale-net/everything/pull/512), [#514](https://github.com/whale-net/everything/pull/514) | merged — writeback `Publish` is still the stub |
 | AR-5a | [#513](https://github.com/whale-net/everything/pull/513) | merged — **inert**: no domain at stage `allocate`, `plan.go`'s tag path untouched |
 | AR-6a / AR-6b | [#516](https://github.com/whale-net/everything/pull/516), [#515](https://github.com/whale-net/everything/pull/515) | merged |
-| AR-7 | [#559](https://github.com/whale-net/everything/pull/559) | design only — no implementation |
+| AR-7 | [#559](https://github.com/whale-net/everything/pull/559) | design only — AR-7a implemented (branch `ar-7a-sweep-robustness`, not yet merged); AR-7b…AR-7f not started |
 
 The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
@@ -48,12 +48,18 @@ say "not merged" in places; the table above is authoritative.
 implemented and tested, wired to nothing. See "AR-5" below for what remains
 before any domain can be cut over.
 
-**AR-7 (issue #558) is designed, nothing implemented.** It makes a release run
-hermetic — no dependency on `main`'s reconcile having gone first — via an
-artifact `allocated → publishing → published` lifecycle, an identity/manifest-
-snapshot split of `app`, and a run log CI writes to. It is a prerequisite for
-the AR-5 cutover, and AR-7a/AR-7b fix two failure modes that are silent on
-`main` today. Design is in ARCHITECTURE.md's "Release lifecycle (issue #558)";
+**AR-7 (issue #558) is designed; AR-7a is implemented, not yet merged.** The
+full phase makes a release run hermetic — no dependency on `main`'s reconcile
+having gone first — via an artifact `allocated → publishing → published`
+lifecycle, an identity/manifest-snapshot split of `app`, and a run log CI
+writes to; that part (AR-7b…AR-7f) is still design only. AR-7a, independent of
+the rest, fixes ordering 4 (see ARCHITECTURE.md "The problem: four cross-run
+orderings"): `ReconcileApps` is now partially applying (one bad chart is
+skipped and reported, not a whole-sweep rollback), chart manifests carry
+domain-qualified app references so a bare-name collision across domains can't
+break the sweep, and `ci.yml`'s `reconcile-app-registry` job is no longer
+`continue-on-error`. See "AR-7a" below for the as-built detail. Design for the
+rest of AR-7 is in ARCHITECTURE.md's "Release lifecycle (issue #558)";
 delivery is "AR-7" below.
 
 **Where deferred work is tracked.** Three places, deliberately:
@@ -870,41 +876,110 @@ than by hand. Read ARCHITECTURE.md's "Release lifecycle (issue #558)" first;
 it carries the design, the four orderings this fixes, and the rejected
 alternatives. This section is delivery only.
 
-**Nothing here is implemented.** The sub-phases are ordered by dependency;
-AR-7a and AR-7b each stand alone and fix a failure mode that is silent today.
+**AR-7a is implemented, not yet merged** (branch `ar-7a-sweep-robustness`).
+The remaining sub-phases (AR-7b … AR-7f) are ordered by dependency and still
+design only.
 
-### AR-7a — Sweep robustness — no schema change
+### AR-7a — Sweep robustness — done (not yet merged)
 
-Independent of everything else in AR-7. Land first.
+Independent of everything else in AR-7. Landed first, as planned.
 
-**Scope**
-- `Reconcile` becomes **partially applying**: a chart whose apps fail to
-  resolve is skipped and reported (new `unresolved_charts` field on
-  `ReconcileAppsResponse`, each entry naming the chart and the offending app
-  reference); every other app and chart applies and the watermark advances.
-  Today one bad manifest rolls the whole transaction back, wedging identity
-  registration repo-wide until someone notices.
-- **Domain-qualified app references in chart manifests.** `resolveChartApps`
-  currently falls back to `SELECT app_id FROM app WHERE name = $1` and fails
-  on more than one match, so adding an app in domain B whose bare name
-  collides with one in domain A that any chart references breaks the sweep.
-  Qualify the reference at the manifest level (`tools/helm` +
-  `//tools/appmeta/proto`), keep bare-name resolution as a deprecated
-  compatibility path for one release cycle, then delete it.
-- **Drop `continue-on-error` from `ci.yml`'s `reconcile-app-registry` job** —
-  any error reds the job (decided in review; see ARCHITECTURE.md
-  "Availability, restated per adoption stage"). The wedge stayed invisible
-  because a red step sat inside a green job. Accepted consequence: with the
-  opt-in on, a registry outage reds `main` CI, and
-  `APP_REGISTRY_CICD_OPT_IN=false` is the lever.
+**What shipped**
+- `Reconcile` is now **partially applying**. A chart whose apps references
+  don't all resolve is SKIPPED and reported, instead of rolling back the
+  whole transaction: `ReconcileAppsResponse.unresolved_charts` (new,
+  `protos/api_messages_app.proto`) carries one `UnresolvedChart` per bad
+  chart (`domain`, `name`, `app_refs` — the offending references verbatim —
+  and a human-readable `reason`). Every other app/chart in the same call
+  still applies and the watermark still advances. Implemented in both
+  `postgres/app.go`'s `Reconcile` (a new unexported `*chartResolutionError`
+  distinguishes a resolution failure, downgraded to a per-chart skip, from a
+  genuine infrastructure error, which still aborts the whole transaction
+  unchanged) and `fake/reconcile.go`'s mirror (returns
+  `(ids, offending, reason)` directly — the fake has no transaction to
+  distinguish an abort from).
+  - **Deliberate semantics for the interaction with the absence sweep**: a
+    skipped chart is never marked `MISSING` as a side effect of not being
+    re-applied this call. If the chart already existed, its id is folded into
+    the same "present" set the absence sweep checks, so it is left ACTIVE —
+    a chart present in the manifest set but unresolvable is *present*, not
+    absent (see ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps").
+    Covered by `TestReconcileApps_UnresolvedChartNotMarkedMissing`
+    (fake-backed) and `TestReconcile_UnresolvedChartNotMarkedMissing_Postgres`
+    (real Postgres).
+- **Domain-qualified app references.** `ChartManifest.app_refs` (new,
+  `//tools/appmeta/proto/appmeta.proto`, field 8) carries `"<domain>/<name>"`
+  strings. `helm_chart_metadata` in `tools/bazel/release.bzl` emits it by
+  reading each composed app's real `domain` attribute off its
+  `AppMetadataInfo` provider (the rule's `apps` attr changed from
+  `attr.string_list` of pre-parsed names to `attr.label_list` of the
+  `app_metadata` targets themselves) — not by inferring the domain from a
+  target's package path, so it cannot be wrong regardless of directory
+  layout. `resolveChartApps` (postgres and fake) prefers `app_refs`, resolving
+  each reference by exact `(domain, name)` lookup — this can never be
+  ambiguous, because the domain is carried on the reference itself.
+  `ChartManifest.apps` (bare names) is kept as an explicitly **DEPRECATED**
+  compatibility path for one release cycle (its own doc comment in
+  appmeta.proto points back here), used only when `app_refs` is empty;
+  ambiguous bare names there are still an error, but now a per-chart skip via
+  the same `unresolved_charts` mechanism, not a whole-sweep failure.
+  `//tools/appmeta:manifest_contract_test` gained a chart-side fixture
+  (`testdata:fixture-helm_chart_metadata`, composing the existing app
+  fixture) and `TestChartFixtureLeavesNoFieldUnset`, the `ChartManifest`
+  counterpart of the existing `AppManifest` full-coverage check — both
+  directions of the contract test (hermetic fixture, and the real
+  `bazel run` sweep over every `helm_chart_metadata` target in the repo)
+  pass with `app_refs` populated.
+- **`ci.yml`'s `reconcile-app-registry` job dropped `continue-on-error`**,
+  with a comment pointing at ARCHITECTURE.md "Availability, restated per
+  adoption stage" and stating the accepted consequence plainly: once
+  `APP_REGISTRY_CICD_OPT_IN` is `true`, a registry outage reds this job (and
+  therefore `main` CI) until it recovers, and `APP_REGISTRY_CICD_OPT_IN=false`
+  is the only lever that stops it. The `if:` opt-in gate and
+  `timeout-minutes: 5` are unchanged.
+- CLI: `apps reconcile`'s output gained `printUnresolvedChartsWarning`
+  (`cli/cmd/apps.go`), a stderr banner in `promote.go`'s
+  `printDriftWarning` style — unresolved charts can't hide inside a green
+  step or an unread JSON body. The server handler also logs each skipped
+  chart at `Warn`, matching the existing `skipped_stale` convention.
 
-**Exit criteria**
+**Deliberately NOT done** (scoped out, tracked for later phases or
+explicitly out of scope — see the ground rules that constrained this phase):
+- `AssertApps`, the artifact `allocated → publishing → published` lifecycle,
+  the app identity/manifest-snapshot split, and the run log are all AR-7b/c/d
+  and untouched here — this phase touches only `ReconcileApps` and chart
+  manifest resolution.
+- The bare-name `ChartManifest.apps` field itself was NOT removed — it is
+  marked deprecated and kept for one release cycle per the exit criterion,
+  with a doc-comment pointer to this section for whoever does the deletion.
+- `tools/release_helper_go`'s own chart-app resolution
+  (`build_helm.go`/`plan_helm.go`'s `findChartApp`, used for chart packaging
+  and image-tag substitution, not the registry) was left untouched — it
+  already existed, it is a separate resolution path from the registry's
+  `resolveChartApps`, and touching it was not in AR-7a's scope. It still
+  reads `ChartManifest.apps` (now also has `app_refs` available, unused by
+  it).
+- No schema change, as the phase name promises — no migration was added.
+
+**Exit criteria — all met**
 - A chart manifest naming a nonexistent app leaves every other app/chart
-  registered, advances the watermark, and reports the offending chart.
+  registered, advances the watermark, and reports the offending chart. See
+  `TestReconcileApps_UnknownChartAppSkipsChartOnly` (fake) and
+  `TestReconcile_UnresolvedChartDoesNotRollBackWholeTransaction` (real
+  Postgres).
 - A bare app name that is ambiguous across domains cannot be produced by
-  `tools/helm` at all.
-- Postgres integration test: sweep with one bad chart, assert partial apply
-  (the fake cannot catch the transaction-rollback behavior this changes).
+  `tools/helm` at all: `helm_chart_metadata` only ever emits `app_refs`
+  entries paired with their app's real domain; verified against every real
+  `helm_chart_metadata` target in the repo via
+  `bazel run //tools/appmeta:manifest_contract_test`.
+- Postgres integration test: sweep with one bad chart, assert partial apply —
+  `TestReconcile_UnresolvedChartDoesNotRollBackWholeTransaction`,
+  `TestReconcile_UnresolvedChartNotMarkedMissing_Postgres`, and
+  `TestReconcile_DomainQualifiedAppRefsResolveUnambiguously_Postgres` in
+  `postgres_integration_test.go`. Each was verified to fail when the
+  behavior it guards was deliberately broken (whole-transaction-rollback
+  reintroduced, the not-marked-missing guard removed, and qualified
+  resolution disabled), then the break was reverted.
 
 ### AR-7b — Artifact lifecycle states — migration `007_artifact_lifecycle`
 

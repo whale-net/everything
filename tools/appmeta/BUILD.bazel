@@ -1,5 +1,20 @@
 load("@rules_go//go:def.bzl", "go_test")
 
+# gazelle:exclude proto_to_rule_test.go
+# gazelle:exclude rule_to_proto_test.go
+#
+# Without these, gazelle doesn't associate the hand-written
+# manifest_contract_test rule below with these two source files (there is no
+# go_library in this package for it to key off of) and generates a SECOND,
+# competing go_test rule for them on every `bazel run //:gazelle` -- with
+# neither the `data` fixture deps nor the `manual` tag, so it would fail
+# outright under a plain `bazel test //tools/...` (the fixture JSON isn't a
+# declared input). `# keep` alone (see the rule below) only stops gazelle
+# from touching the rule it's attached to; it does not stop gazelle from
+# adding a new one. Discovered and fixed in AR-7a
+# (//tools/app_registry/PLAN.md) -- if a future field addition needs a THIRD
+# fixture/test file pair here, exclude it here too.
+
 # Anti-drift enforcement for the appmeta schema, both directions — see
 # README.md's "The contract test" section.
 #
@@ -13,6 +28,14 @@ load("@rules_go//go:def.bzl", "go_test")
 # this target follows the same idiom: tagged "manual" so it's excluded from
 # `//tools/...` / `//...` wildcards, and invoked by explicit name in CI.
 go_test(
+    # keep -- gazelle does not recognize this rule as covering
+    # proto_to_rule_test.go/rule_to_proto_test.go on its own (it has no
+    # go_library to embed) and otherwise generates a second, competing
+    # go_test rule for the same srcs with neither the `data` fixture deps nor
+    # the `manual` tag -- breaking under a plain `bazel test //tools/...`
+    # since the fixture JSON wouldn't be a declared input. See AR-7a and the
+    # `# keep` convention on
+    # //tools/app_registry/server/repository/postgres:postgres_integration_test.
     name = "manifest_contract_test",
     srcs = [
         "proto_to_rule_test.go",
@@ -20,12 +43,13 @@ go_test(
     ],
     data = [
         "//tools/appmeta/testdata:fixture-app_metadata",
+        "//tools/appmeta/testdata:fixture-helm_chart_metadata",
     ],
     tags = [
+        "integration",
         "manual",  # requires a real bazel invocation against the full checkout; see doc comment
         "no-cache",
         "no-sandbox",
-        "integration",
     ],
     deps = [
         "//tools/appmeta/proto:appmetapb",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -193,7 +194,31 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 	for _, cm := range charts {
 		appIDs, err := r.resolveChartApps(ctx, appIDByKey, cm)
 		if err != nil {
-			return nil, err
+			var re *chartResolutionError
+			if !errors.As(err, &re) {
+				// A real infrastructure error (failed query, etc) -- abort
+				// the whole reconcile, unchanged from pre-AR-7a behavior.
+				return nil, err
+			}
+			// AR-7a: this chart's apps didn't all resolve. Report it and
+			// skip it -- every other app/chart in this call still applies,
+			// and the watermark still advances (see Reconcile's doc comment
+			// on repository.AppRepository and ARCHITECTURE.md "AssertApps
+			// (additive) vs. ReconcileApps"). Deliberately NOT marked
+			// MISSING as a side effect: if this chart already exists, add
+			// its id to presentChartIDs so the absence sweep below leaves it
+			// alone -- a chart present in the manifest set but unresolvable
+			// is present, not absent. If it doesn't exist yet, there is
+			// nothing to mark missing either way.
+			result.UnresolvedCharts = append(result.UnresolvedCharts, repository.UnresolvedChart{
+				Domain: cm.Domain, Name: cm.Name, AppRefs: re.offending, Reason: re.reason,
+			})
+			if existingChart, lookErr := r.getChartByDomainName(ctx, cm.Domain, cm.Name); lookErr == nil {
+				presentChartIDs[existingChart.ChartID] = true
+			} else if !errors.Is(lookErr, repository.ErrNotFound) {
+				return nil, fmt.Errorf("reconcile: look up chart %s/%s after unresolved apps: %w", cm.Domain, cm.Name, lookErr)
+			}
+			continue
 		}
 
 		existing, err := r.getChartByDomainName(ctx, cm.Domain, cm.Name)
@@ -339,14 +364,75 @@ func (r *appRepo) setChartApps(ctx context.Context, chartID string, appIDs []str
 	return nil
 }
 
-// resolveChartApps resolves ChartManifest.apps (bare app names) to app_ids.
-// Same-domain matches are preferred (checked first against appIDByKey, which
-// includes apps created/updated earlier in this same reconcile call);
-// otherwise a cross-domain match is accepted only if unique. Fails the whole
-// reconcile with ErrInvalidArgument if any name is unknown.
+// chartResolutionError carries every app reference in one chart manifest
+// that failed to resolve, so Reconcile's caller can build a precise
+// ReconcileResult.UnresolvedCharts entry and skip only this chart -- AR-7a.
+// Deliberately distinct from the plain errors resolveChartApps returns for a
+// real infrastructure failure (a failed query): only THIS type is downgraded
+// to a per-chart skip; anything else still aborts the whole Reconcile
+// transaction, unchanged from pre-AR-7a behavior. See Reconcile's call site.
+type chartResolutionError struct {
+	offending []string // app refs that failed, exactly as they appeared in the manifest
+	reason    string
+}
+
+func (e *chartResolutionError) Error() string { return e.reason }
+
+// resolveChartApps resolves a chart manifest's app references to app_ids.
+//
+// Prefers cm.AppRefs, domain-qualified "<domain>/<name>" strings emitted by
+// tools/bazel/release.bzl's helm_chart_metadata rule -- each reference
+// carries its own domain, so it can never be ambiguous. Falls back to the
+// DEPRECATED cm.Apps (bare names) only when AppRefs is empty, for one
+// release cycle's backward compatibility with a chart metadata JSON built
+// before AR-7a; same-domain matches are preferred there (checked first
+// against appIDByKey, which includes apps created/updated earlier in this
+// same reconcile call), and a cross-domain match is accepted only if unique.
+// See ChartManifest.apps's doc comment in appmeta.proto and PLAN.md's AR-7a
+// for the removal pointer.
+//
+// AR-7a: an unresolved reference no longer fails the whole reconcile. Every
+// unresolved reference for this chart is collected and returned together as
+// a *chartResolutionError; the caller downgrades that to a per-chart skip. A
+// genuine query failure is returned as a plain error and still aborts the
+// whole Reconcile, unchanged.
 func (r *appRepo) resolveChartApps(ctx context.Context, appIDByKey map[string]string, cm *appmetapb.ChartManifest) ([]string, error) {
-	ids := make([]string, 0, len(cm.Apps))
-	for _, name := range cm.Apps {
+	qualified := len(cm.AppRefs) > 0
+	refs := cm.AppRefs
+	if !qualified {
+		refs = cm.Apps
+	}
+
+	ids := make([]string, 0, len(refs))
+	var offending, reasons []string
+
+	for _, ref := range refs {
+		if qualified {
+			domain, name, ok := strings.Cut(ref, "/")
+			if !ok {
+				offending = append(offending, ref)
+				reasons = append(reasons, fmt.Sprintf("app_ref %q is not domain-qualified", ref))
+				continue
+			}
+			if id, ok := appIDByKey[domain+"|"+name]; ok {
+				ids = append(ids, id)
+				continue
+			}
+			existing, err := r.getAppByDomainName(ctx, domain, name)
+			if err != nil {
+				if errors.Is(err, repository.ErrNotFound) {
+					offending = append(offending, ref)
+					reasons = append(reasons, fmt.Sprintf("app_ref %q not found", ref))
+					continue
+				}
+				return nil, fmt.Errorf("reconcile: resolve chart app_ref %q: %w", ref, err)
+			}
+			ids = append(ids, existing.AppID)
+			continue
+		}
+
+		// DEPRECATED bare-name path -- see doc comment above.
+		name := ref
 		if id, ok := appIDByKey[cm.Domain+"|"+name]; ok {
 			ids = append(ids, id)
 			continue
@@ -369,11 +455,20 @@ func (r *appRepo) resolveChartApps(ctx context.Context, appIDByKey map[string]st
 
 		switch len(matches) {
 		case 0:
-			return nil, fmt.Errorf("%w: chart %s/%s references unknown app %q", repository.ErrInvalidArgument, cm.Domain, cm.Name, name)
+			offending = append(offending, name)
+			reasons = append(reasons, fmt.Sprintf("unknown app %q", name))
 		case 1:
 			ids = append(ids, matches[0])
 		default:
-			return nil, fmt.Errorf("%w: chart %s/%s app name %q is ambiguous across domains", repository.ErrInvalidArgument, cm.Domain, cm.Name, name)
+			offending = append(offending, name)
+			reasons = append(reasons, fmt.Sprintf("app name %q is ambiguous across domains", name))
+		}
+	}
+
+	if len(offending) > 0 {
+		return nil, &chartResolutionError{
+			offending: offending,
+			reason:    fmt.Sprintf("chart %s/%s: %s", cm.Domain, cm.Name, strings.Join(reasons, "; ")),
 		}
 	}
 	return ids, nil

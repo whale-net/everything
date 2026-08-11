@@ -62,6 +62,36 @@ message ReconcileAppsResponse {
   // true -- so a caller/log line can say exactly which commit is currently
   // recorded instead of just "something newer already applied."
   string current_watermark_git_sha = 11;
+
+  // Charts from this call's manifest set whose apps references did not all
+  // resolve to known apps -- AR-7a. Each is SKIPPED, not fatal: every other
+  // app/chart above still applied, and the watermark still advanced. A
+  // skipped chart is never included in newly_missing_charts either -- a
+  // chart present in the manifest set but unresolvable is treated as
+  // present, not absent. See
+  // tools/app_registry/ARCHITECTURE.md "AssertApps (additive) vs.
+  // ReconcileApps (absence sweep)" and PLAN.md's AR-7a. Populated on a
+  // dry_run call too -- a dry run computes the same resolution and reports
+  // it the same way, it just writes nothing.
+  repeated UnresolvedChart unresolved_charts = 12;
+}
+
+// UnresolvedChart names one chart manifest that ReconcileApps could not
+// fully resolve and therefore skipped -- see
+// ReconcileAppsResponse.unresolved_charts.
+message UnresolvedChart {
+  string domain = 1;
+  string name = 2;
+
+  // Every app reference from the chart manifest that failed to resolve,
+  // exactly as it appeared in the manifest (a bare name via the deprecated
+  // ChartManifest.apps, or a "<domain>/<name>" string via
+  // ChartManifest.app_refs).
+  repeated string app_refs = 3;
+
+  // Human-readable explanation (unknown app, ambiguous bare name across
+  // domains, malformed app_ref). Not machine-parsed.
+  string reason = 4;
 }
 
 // ============================================================================

@@ -81,6 +81,16 @@ type ReconcileResult struct {
 	NewlyMissingCharts []Chart
 	RecoveredCharts    []Chart
 
+	// UnresolvedCharts lists every chart in this call's manifest set whose
+	// apps entries could not all be resolved to identity rows -- AR-7a. Each
+	// such chart is SKIPPED, not fatal: every other app/chart in the same
+	// call still applies, and the watermark still advances. See
+	// ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps (absence
+	// sweep)" and PLAN.md's AR-7a. Always empty for a dry run's diff in the
+	// same shape as every other bucket here -- a dry run computes the same
+	// resolution and reports it the same way, it just writes nothing.
+	UnresolvedCharts []UnresolvedChart
+
 	// SkippedStale is true when the reconcile watermark rejected this call
 	// as older (in commit order) than the most recently applied one -- see
 	// watermark.go's ShouldApplyReconcile. A no-op success, not an error:
@@ -90,6 +100,23 @@ type ReconcileResult struct {
 	// CurrentWatermarkGitSHA is the git_sha this call lost to. Populated
 	// only when SkippedStale is true.
 	CurrentWatermarkGitSHA string
+}
+
+// UnresolvedChart is one chart manifest whose apps references could not all
+// be resolved to app identity rows during Reconcile -- AR-7a. Modeled on the
+// existing App/Chart result buckets: enough to act on without re-deriving it
+// from server logs.
+type UnresolvedChart struct {
+	Domain string
+	Name   string
+	// AppRefs is every app reference from the chart manifest that failed to
+	// resolve, exactly as it appeared in the manifest (a bare name via the
+	// deprecated `ChartManifest.apps` path, or a "<domain>/<name>" string
+	// via `app_refs`).
+	AppRefs []string
+	// Reason is a human-readable explanation (unknown app, ambiguous bare
+	// name across domains, malformed app_ref) -- not machine-parsed.
+	Reason string
 }
 
 // AppListFilter is ListAppsRequest's filter set, decoupled from the proto.

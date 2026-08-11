@@ -90,13 +90,16 @@ without anyone extending the proto. The enforcement is
    each result with `DiscardUnknown: false`. Unlike `release_helper_go`'s
    `ListAllApps`/`ListAllHelmCharts`, this query does **not** exclude
    `testonly` targets: it needs to validate the fixture below, not release it.
-2. **proto → rule** (`TestFixtureLeavesNoFieldUnset`): the fixture in
-   `testdata/` calls `app_metadata` directly (not the `release_app` macro) so
-   it creates no image/openapi_spec targets, and is marked `testonly = True`
-   so `ListAllApps` excludes it from `plan --apps all` — a test fixture must
-   never become a real release. It still sets every `app_metadata` attribute;
-   assert the decoded message has no unset field, to catch a field defined
-   here that the rule never populates.
+2. **proto → rule** (`TestFixtureLeavesNoFieldUnset` /
+   `TestChartFixtureLeavesNoFieldUnset`): the fixtures in `testdata/` call
+   `app_metadata` / `helm_chart_metadata` directly (not the `release_app` /
+   `release_helm_chart` macros) so they create no image/helm_chart targets,
+   and are marked `testonly = True` so `ListAllApps`/`ListAllHelmCharts`
+   exclude them from `plan --apps all` — a test fixture must never become a
+   real release. Each still sets every attribute on its rule (the chart
+   fixture composes the app fixture, so `apps`/`app_refs` are non-empty
+   too); assert the decoded message has no unset field, to catch a field
+   defined here that the rule never populates.
 
 Direction 2 is fully hermetic — it just reads the fixture's built metadata
 JSON as a `data` dependency, so it runs under a normal `bazel test`.
@@ -130,9 +133,17 @@ reverting.
 
 Three edits, and the contract test fails until all three are done:
 
-1. Add the attr to `app_metadata` in `release.bzl` and emit it.
-2. Add the field to `AppManifest` in `appmeta.proto`.
-3. Extend the fixture in `testdata/`.
+1. Add the attr to `app_metadata` (or `helm_chart_metadata`) in `release.bzl`
+   and emit it.
+2. Add the field to `AppManifest` (or `ChartManifest`) in `appmeta.proto`.
+3. Extend the corresponding fixture in `testdata/`.
+
+`ChartManifest.app_refs` (AR-7a) is a worked example: the attr
+(`helm_chart_metadata`'s `apps` label_list, reading each app's `domain` off
+`AppMetadataInfo`), the proto field, and `fixture-helm_chart_metadata`'s
+composed app all went in together. `ChartManifest.apps` (bare app names) is
+now deprecated in favor of it — see the proto's doc comment and
+`//tools/app_registry/PLAN.md`'s AR-7a section.
 
 ## Migration
 
