@@ -16,7 +16,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated finishing AR-7e (issue #558). **AR-M through AR-7b are all
+*Last updated finishing AR-7f (issue #558). **AR-M through AR-7b are all
 merged to `main`** — see the table below.*
 
 | Phase | PR | State |
@@ -37,7 +37,8 @@ merged to `main`** — see the table below.*
 | AR-7b | [#562](https://github.com/whale-net/everything/pull/562) | merged — artifact lifecycle, migration `007`, `BeginPublish`/`FailPublish`, stale-row reaper |
 | AR-7c | branch `ar-7c-manifest-snapshot`, not yet merged | **implemented** — app identity/manifest-snapshot split, migration `008`, `AssertApps` |
 | AR-7d | branch `ar-7d-run-log`, stacked on `ar-7c-manifest-snapshot`, not yet merged | **implemented** — `GetReleaseRun`, `BeginPublishBatch`, `app-registry builds status`, `release.yml` resume, no schema change |
-| AR-7e | branch `ar-7e-adopt-artifact`, stacked on `ar-7d-run-log`, not yet merged | **implemented** — `AdoptArtifact` (admin-only), `app-registry artifacts adopt`/`list --provenance`, OPERATIONS.md disaster-recovery runbook, no schema change |
+| AR-7e | branch `ar-7e-adopt-artifact`, not yet merged | **implemented** — `AdoptArtifact` (admin-only), `app-registry artifacts adopt`/`list --provenance`, OPERATIONS.md disaster-recovery runbook, no schema change |
+| AR-7f | branch `ar-7f-chart-hermeticity`, stacked on `ar-7e-adopt-artifact`, not yet merged | **implemented** — `CheckChartHermeticity` RPC, `build-helm-chart` call site, no schema change, **ships inert** (no domain at stage `allocate`) |
 
 The registry is being deployed to `dev` by the repo owner. `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
@@ -54,7 +55,7 @@ implemented and tested, wired to nothing. See "AR-5" below for what remains
 before any domain can be cut over.
 
 **AR-7 (issue #558): AR-7a and AR-7b are merged to `main`; AR-7c, AR-7d, and
-AR-7e are implemented, not yet merged.** The full phase makes a release run
+AR-7e and AR-7f are implemented, not yet merged.** The full phase makes a release run
 hermetic — no dependency on `main`'s reconcile having gone first — via an
 artifact
 `allocated → publishing → published` lifecycle, an identity/manifest-snapshot
@@ -74,9 +75,14 @@ own "Deliberately NOT done" left open (see AR-7b's section below),
 behavior. AR-7e adds `AdoptArtifact` — an admin-only, per-artifact path for
 recording an artifact the registry never observed being published, used when
 a chart release fails on a pre-registry pin, plus OPERATIONS.md's
-disaster-recovery runbook. All three phases' exit criteria are met; none has
-merged yet. AR-7f remains design-only. Design is in ARCHITECTURE.md's
-"Release lifecycle (issue #558)"; delivery is "AR-7" below.
+disaster-recovery runbook. AR-7f adds
+`ArtifactRegistry.CheckChartHermeticity` and its call site in
+`build-helm-chart`, moving the "chart may only pin published images" rule
+from record time to compose time for domains at adoption stage `allocate` —
+see its subsection for the full contract and why it ships inert. **Every
+sub-phase of AR-7 is now implemented**; AR-7c…AR-7f have not merged yet.
+Design is in ARCHITECTURE.md's "Release lifecycle (issue #558)"; delivery is
+"AR-7" below.
 
 **Where deferred work is tracked.** Three places, deliberately:
 [Carry-over items](#carry-over-items) for small cross-cutting gaps that
@@ -893,10 +899,11 @@ it carries the design, the four orderings this fixes, and the rejected
 alternatives. This section is delivery only.
 
 **AR-7a and AR-7b are merged to `main`** ([#561](https://github.com/whale-net/everything/pull/561),
-[#562](https://github.com/whale-net/everything/pull/562)). **AR-7c and AR-7d
-are implemented, not yet merged** (branches `ar-7c-manifest-snapshot` and
-`ar-7d-run-log`, stacked in that order). The remaining sub-phases (AR-7e,
-AR-7f) are ordered by dependency and still design only.
+[#562](https://github.com/whale-net/everything/pull/562)). **AR-7c, AR-7d,
+and AR-7f are implemented, not yet merged** (branches `ar-7c-manifest-snapshot`,
+`ar-7d-run-log`, and `ar-7f-chart-hermeticity`, stacked in that order — AR-7f
+was built directly on top of AR-7d rather than after AR-7e, since it does not
+depend on `AdoptArtifact`). Only AR-7e remains design only.
 
 ### AR-7a — Sweep robustness — done, merged (#561)
 
@@ -1663,30 +1670,69 @@ alternatives it does not revisit):
   `ListArtifacts(provenance=ADOPTED)` / `artifacts list --provenance
   adopted`.
 
-### AR-7f — Compose-time chart hermeticity — gated per domain
+### AR-7f — Compose-time chart hermeticity — gated per domain — done (not yet merged)
 
 Enforce "a chart may only pin images the registry has published" at chart
 **compose** time, so the failure lands before anything is pushed rather than
-after every push. This is the steady state the issue title asks for; it is
-last only because of cutover cost, which the per-domain gate bounds.
+after every push. This is the steady state the issue title asks for. It was
+built directly after AR-7d rather than after AR-7e (which it does not depend
+on) — see ARCHITECTURE.md's "Compose-time chart hermeticity (AR-7f, issue
+#558)" for the full design.
 
-**Scope**
-- `tools/helm`'s composer (or the release plan step feeding it) checks each
-  member app's pinned version against the registry and fails the chart build
-  if any is not `published`.
-- **Enforced only for domains at `domain_adoption.stage = 'allocate'`**
-  (decided in review) — the same per-domain gate every other tightening uses,
-  so a domain meets the strict rule only after it has been releasing through
-  the registry anyway. Repo-wide enforcement was rejected: it would block
-  every chart build until every member app had released through the registry
-  at least once.
-- Hermeticity constraint: the check runs in the release path, never inside a
-  Bazel action — see "Chart → image lockfile" in ARCHITECTURE.md.
+**As built.** Implemented on branch `ar-7f-chart-hermeticity`, stacked on
+`ar-7d-run-log`. No migration — no schema change, in either direction.
+
+**What shipped**
+- `ArtifactRegistry.CheckChartHermeticity(chart_domain, pins[])` (new RPC,
+  `protos/api_messages_artifact.proto`; handler in a new file,
+  `server/handlers/chart_hermeticity.go`, kept separate from `artifact.go`
+  to avoid colliding with AR-7e's parallel work on that file). Reads
+  `chart_domain`'s adoption stage; returns `enforced = false` at anything
+  other than `allocate` (nil violations, mandatory no-op for the caller).
+  At `allocate`, looks up each `(app_full_name, version)` pin via
+  `Artifacts().GetArtifact` and reports a violation for anything not found
+  or not yet `ArtifactStatePublished` — `publishing`, `allocated`, and
+  `failed` are all violations, not just "row absent."
+- `tools/release_helper_go`'s `build-helm-chart` (new file
+  `cmd/chart_hermeticity.go`) calls it right after `resolveChartAppVersions`
+  resolves each member app's release version and before the chart is
+  packaged. No-op (checker never even constructed) unless
+  `APP_REGISTRY_CICD_OPT_IN == "true"`; a transport/auth error talking to
+  the registry is logged as a warning and does not fail the build — only an
+  `enforced = true` response naming violations does, naming every offending
+  `app@version` pair in the error.
+- `release.yml`'s "Build helm charts with versioning" step gained the same
+  `APP_REGISTRY_ADDRESS` / `GRPC_AUTH_*` env vars the job's later App
+  Registry steps already use, so `build-helm-chart` can dial the same
+  server when opt-in is on.
+- **Hermeticity constraint satisfied exactly as scoped**: the check runs
+  inside `build-helm-chart`, a release-path CLI command CI invokes as its
+  own workflow step — never inside the `bazel build` two lines above it,
+  which still runs `tools/helm/composer.go` unmodified, with no registry
+  access added. See ARCHITECTURE.md "Chart → image lockfile" and
+  "Compose-time chart hermeticity" for why that split is load-bearing.
+
+**Ships inert.** No domain is at adoption stage `allocate` in any
+environment today (see "AR-5a" above and ARCHITECTURE.md's "Relationship to
+AR-5") — `CheckChartHermeticity` always returns `enforced = false` right
+now, so this phase changes no chart build's output or outcome anywhere it
+runs today. It starts to matter the first time an operator moves a domain's
+`domain_adoption.stage` row to `allocate`, a separate explicit operational
+action (see ARCHITECTURE.md "Per-domain cutover gate" in the Version model
+section) — from that point on, a chart in that domain fails to build if any
+member app's pinned version has not been recorded as `published`.
 
 **Exit criteria**
 - A chart in an `allocate`-stage domain whose member app was never published
-  fails at compose time, naming the app, with nothing pushed.
+  fails at compose time, naming the app, with nothing pushed. Proven by
+  `TestCheckChartHermeticity_AllocateRejectsUnpublishedPin` (server) and
+  `TestCheckChartHermeticity_ViolationNamesTheApp` (release_helper_go).
 - A chart in an `observe`/`promote`-stage domain builds exactly as it does
+  today. Proven by `TestCheckChartHermeticity_NotEnforcedAtObserve` /
+  `_NotEnforcedAtPromote` (server) and `TestCheckChartHermeticity_
+  NotEnforced` / `_OptInOff` / `_OptInFalse` (release_helper_go) — the last
+  two additionally prove no registry call is even attempted with the opt-in
+  off, which is every environment without `APP_REGISTRY_CICD_OPT_IN=true`
   today.
 
 ### Deliberately NOT in AR-7

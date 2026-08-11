@@ -994,6 +994,18 @@ jobs:
         DRY_RUN: ${{ github.event.inputs.dry_run }}
         INCREMENT_MINOR: ${{ github.event.inputs.increment_minor }}
         INCREMENT_PATCH: ${{ github.event.inputs.increment_patch }}
+        # AR-7f (issue #558): compose-time chart hermeticity. build-helm-chart
+        # is a no-op here unless APP_REGISTRY_CICD_OPT_IN is exactly "true" --
+        # see tools/release_helper_go/cmd/chart_hermeticity.go's doc comment
+        # and ARCHITECTURE.md "APP_REGISTRY_CICD_OPT_IN". Same builder
+        # credential and env var names as every other App Registry step in
+        # this job below, so this dials the same server.
+        APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
+        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+        GRPC_AUTH_MODE: oidc
+        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
       run: |
         echo "Building helm charts with version $VERSION"
         

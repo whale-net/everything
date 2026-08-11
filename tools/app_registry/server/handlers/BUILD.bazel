@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "app.go",
         "artifact.go",
+        "chart_hermeticity.go",
         "convert.go",
         "environment.go",
         "errors.go",
@@ -36,6 +37,7 @@ go_test(
         "artifact_adopt_test.go",
         "artifact_test.go",
         "authz_test.go",
+        "chart_hermeticity_test.go",
         "environment_test.go",
         "promotion_test.go",
     ],

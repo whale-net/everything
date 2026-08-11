@@ -73,6 +73,18 @@ func newBuildHelmChartCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				// AR-7f (issue #558): compose-time chart hermeticity, gated
+				// per domain. Runs here -- release_helper_go, a CLI the
+				// release workflow invokes as its own step -- not inside the
+				// `bazel build` below, which composes the chart via
+				// tools/helm/composer.go with no version resolution or
+				// registry access at all. See
+				// //tools/app_registry/ARCHITECTURE.md "Chart -> image
+				// lockfile" for why a registry call must never happen inside
+				// that Bazel action.
+				if err := checkChartHermeticity(cmd.Context(), func(msg string) { fmt.Fprintln(cmd.ErrOrStderr(), "::warning::"+msg) }, chart.Domain, appVersions); err != nil {
+					return err
+				}
 			} else {
 				appVersions = map[string]string{}
 				for _, appName := range chart.Apps {

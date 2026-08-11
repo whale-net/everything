@@ -10,7 +10,10 @@ go_library(
     ),
     importpath = "github.com/whale-net/everything/tools/release_helper_go/cmd",
     deps = [
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
         "//libs/go/semver",
+        "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",
         "//tools/helm:helm_lib",
         "@com_github_spf13_cobra//:cobra",

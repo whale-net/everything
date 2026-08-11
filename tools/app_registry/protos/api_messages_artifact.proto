@@ -338,3 +338,48 @@ message AllocateVersionResponse {
 
   bool already_allocated = 3;
 }
+
+// ============================================================================
+// Compose-time chart hermeticity (phase AR-7f, issue #558)
+//
+// "A chart may only pin images the registry has published," enforced before
+// the chart is packaged or pushed -- not after, the way the ordering-3 reject
+// in RecordArtifact's `contains` validation already does. See
+// ARCHITECTURE.md's "Compose-time chart hermeticity" subsection.
+// ============================================================================
+
+// ChartPin is one member app's resolved image pin, as release_helper_go's
+// build-helm-chart bakes into the chart's values.yaml imageTag -- the
+// release-resolved version (from git tags today, AllocateVersion after the
+// AR-5 cutover), not the "latest" placeholder composer.go's hermetic Bazel
+// action writes to the compose-time image lockfile.
+message ChartPin {
+  string app_full_name = 1;  // "<domain>-<name>"
+  string version = 2;        // semver tag, e.g. "v1.2.3"
+}
+
+message CheckChartHermeticityRequest {
+  // The chart's own domain. domain_adoption.stage is read for THIS domain,
+  // not each pinned app's domain -- "a domain meets the strict rule after it
+  // has been releasing through the registry" means the chart's own release
+  // history, not an incidentally cross-domain-referenced app's.
+  string chart_domain = 1;
+  repeated ChartPin pins = 2;
+}
+
+// ChartPinViolation is one pin that failed the check: not recorded at all,
+// or recorded but not yet in ARTIFACT_STATE_PUBLISHED.
+message ChartPinViolation {
+  string app_full_name = 1;
+  string version = 2;
+  string reason = 3;
+}
+
+message CheckChartHermeticityResponse {
+  // False when chart_domain's adoption stage is not "allocate" -- the
+  // per-domain gate every other AR-7 tightening uses (see ARCHITECTURE.md
+  // "Rejected alternatives (issue #558)"). violations is always empty when
+  // this is false; the caller must not fail the chart build in that case.
+  bool enforced = 1;
+  repeated ChartPinViolation violations = 2;
+}
