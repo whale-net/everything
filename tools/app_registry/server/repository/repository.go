@@ -236,6 +236,14 @@ type ArtifactRepository interface {
 	// branch; an existing row keeps whatever AllocateVersion (or a prior
 	// BeginPublish) already gave it. published is ErrFailedPrecondition.
 	//
+	// The handler builds repositoryHint from BeginPublishRequest.repository
+	// when the caller sets it, and only otherwise from the owner row's
+	// stored image_repository/chart_repository. Chart callers must set it:
+	// chart.chart_repository is structurally always '' (no write path has
+	// ever populated it, and migration 008 hardcodes it in v_current_chart),
+	// so a chart taking the ∅ branch with no request-supplied repository is
+	// rejected here rather than silently recorded with an empty repository.
+	//
 	// publishing -> publishing (AR-7d, issue #558) is a legal, idempotent
 	// heartbeat/re-arm, not a rejection: it refreshes state_changed_at (and
 	// build_id) without changing state. This exists because

@@ -793,6 +793,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [plan-release, release, create-github-releases, release-helm-charts, build-release-tools]
     if: always()
+    env:
+      # Same value, same default, and the same override as the
+      # release-helm-charts job's -- see that job's CHART_REPO_URL comment.
+      # Repeated because `env` is per-job; the summary this job writes tells
+      # users where to `helm repo add` from, so it must not drift from where
+      # the charts were actually uploaded.
+      CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -855,7 +862,7 @@ jobs:
             echo "### 📚 Helm Repository" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Charts have been published to the Helm repository:" >> $GITHUB_STEP_SUMMARY
-            echo "- **Repository URL:** https://charts.whalenet.dev/" >> $GITHUB_STEP_SUMMARY
+            echo "- **Repository URL:** ${CHART_REPO_URL}/" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             
             echo "### 🏷️ Git Tags" >> $GITHUB_STEP_SUMMARY
@@ -876,7 +883,7 @@ jobs:
             
             echo "**Add the repository:**" >> $GITHUB_STEP_SUMMARY
             echo '```bash' >> $GITHUB_STEP_SUMMARY
-            echo "helm repo add whalenet https://charts.whalenet.dev/" >> $GITHUB_STEP_SUMMARY
+            echo "helm repo add whalenet ${CHART_REPO_URL}/" >> $GITHUB_STEP_SUMMARY
             echo "helm repo update" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -908,6 +915,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write     # Push git tags and read repository content
+    env:
+      # The ChartMuseum this job uploads to, and the base of the
+      # artifact.repository value recorded in the App Registry for every
+      # chart ("$CHART_REPO_URL/<published-name>"). Defined once here rather
+      # than inline per step: the upload step, the App Registry
+      # begin-publish/record steps, and the summary output must all agree on
+      # it, and they only do by construction if they read one value. Override
+      # with a CHART_REPO_URL repository/environment variable to point a fork
+      # or a staging run at a different ChartMuseum.
+      CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -1128,9 +1145,18 @@ jobs:
           CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
 
           set +e
+          # --repository is REQUIRED here, unlike the image job's
+          # begin-publish, which can leave the server to fall back to the
+          # app's registered image_repository: chart.chart_repository has
+          # never been populated by any write path (migration 008 hardcodes
+          # it to '' in v_current_chart), so a chart's ∅ -> publishing
+          # branch has no server-side value to fall back to. Same URL the
+          # "Record chart artifacts" step below passes -- both write the one
+          # artifact.repository column, so they must agree.
           BEGIN_OUTPUT=$("$APP_REGISTRY_CLI" artifacts begin-publish \
             --kind chart \
             --owner "$PUBLISHED_NAME" \
+            --repository "${CHART_REPO_URL}/${PUBLISHED_NAME}" \
             --version "$CHART_VERSION" \
             --build-id "$BUILD_ID" \
             --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart-begin" 2>&1)
@@ -1214,9 +1240,9 @@ jobs:
         CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
         CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
       run: |
-        echo "Publishing charts to https://charts.whalenet.dev/..."
+        echo "Publishing charts to ${CHART_REPO_URL}/..."
         
-        REPO_URL="https://charts.whalenet.dev"
+        REPO_URL="$CHART_REPO_URL"
         
         # Verify chart files exist before attempting upload
         CHART_COUNT=$(ls -1 /tmp/helm-charts/*.tgz 2>/dev/null | wc -l)
@@ -1398,7 +1424,7 @@ jobs:
             --build-id "$BUILD_ID" \
             --kind chart \
             --owner "$PUBLISHED_NAME" \
-            --repository "https://charts.whalenet.dev/${PUBLISHED_NAME}" \
+            --repository "${CHART_REPO_URL}/${PUBLISHED_NAME}" \
             --version "$CHART_VERSION" \
             --digest "$CHART_DIGEST" \
             --contains "$CONTAINS_FILE" \
@@ -1450,13 +1476,13 @@ jobs:
     - name: Report deployment URL
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
       run: |
-        echo "✅ Helm charts deployed to https://charts.whalenet.dev/!"
+        echo "✅ Helm charts deployed to ${CHART_REPO_URL}/!"
         echo ""
         echo "📦 Helm Repository URL:"
-        echo "  https://charts.whalenet.dev/"
+        echo "  ${CHART_REPO_URL}/"
         echo ""
         echo "Users can add the repository with:"
-        echo "  helm repo add whalenet https://charts.whalenet.dev/"
+        echo "  helm repo add whalenet ${CHART_REPO_URL}/"
         echo "  helm repo update"
         
     - name: Upload helm chart artifacts

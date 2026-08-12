@@ -118,7 +118,7 @@ func newArtifactsRecordCmd() *cobra.Command {
 // -> publishing transition. See ARCHITECTURE.md "Artifact lifecycle:
 // allocated -> publishing -> published".
 func newArtifactsBeginPublishCmd() *cobra.Command {
-	var kind, owner, version, buildID string
+	var kind, owner, version, buildID, repository string
 	c := &cobra.Command{
 		Use:   "begin-publish",
 		Short: "Begin publishing an artifact, before the push (CI)",
@@ -132,6 +132,7 @@ func newArtifactsBeginPublishCmd() *cobra.Command {
 				OwnerFullName:  owner,
 				Version:        version,
 				BuildId:        buildID,
+				Repository:     repository,
 				IdempotencyKey: idempotencyKeyFlag,
 			}
 			return withClient(cmd, func(rc *registryClient) error {
@@ -147,6 +148,7 @@ func newArtifactsBeginPublishCmd() *cobra.Command {
 	c.Flags().StringVar(&owner, "owner", "", "Owning app or chart, as <domain>-<name>")
 	c.Flags().StringVar(&version, "version", "", "Semver tag, e.g. v1.2.3")
 	c.Flags().StringVar(&buildID, "build-id", "", "Build id returned by 'builds record'")
+	c.Flags().StringVar(&repository, "repository", "", "Where the artifact is about to be pushed. Required for --kind chart; optional for --kind image, which defaults to the app's registered image repository")
 	c.Flags().StringVar(&idempotencyKeyFlag, "idempotency-key", "", "Required. <workflow_run_id>-<attempt>-<owner>-<kind>")
 	_ = c.MarkFlagRequired("kind")
 	_ = c.MarkFlagRequired("owner")

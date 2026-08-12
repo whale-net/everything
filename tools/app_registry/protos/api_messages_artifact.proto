@@ -92,6 +92,23 @@ message BeginPublishRequest {
 
   // Required. "<workflow_run_id>-<attempt>-<owner_full_name>-<kind>".
   string idempotency_key = 5;
+
+  // Where the artifact is about to be pushed, e.g.
+  // "ghcr.io/whale-net/app-registry-api" or
+  // "https://charts.whalenet.dev/app-registry-app-registry". Consulted ONLY
+  // on the ∅ -> publishing branch (no prior AllocateVersion row for this
+  // version), which has to create the artifact row from nothing and so needs
+  // a value for the NOT NULL artifact.repository column -- an existing
+  // allocated/failed/publishing row keeps the repository it already has.
+  //
+  // Optional, and normally omitted: the server prefers this field but falls
+  // back to the owning app's stored image_repository. That fallback does not
+  // exist for charts -- chart.chart_repository has never been populated by
+  // any write path and migration 008 hardcodes it to '' in v_current_chart
+  // (a chart's ChartMuseum URL is deployment config the registry has no way
+  // to derive) -- so chart callers MUST set this. See RecordArtifactRequest.
+  // repository, which carries the same value for the same reason.
+  string repository = 6;
 }
 
 message BeginPublishResponse {

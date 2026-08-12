@@ -438,6 +438,14 @@ func (s *ArtifactServer) BeginPublish(ctx context.Context, req *pb.BeginPublishR
 	if err != nil {
 		return nil, err
 	}
+	// The caller's own repository wins over the owner row's when supplied.
+	// Required for charts, which have no usable stored repository at all --
+	// see BeginPublishRequest.repository's doc comment. Images normally omit
+	// it and fall back to the app's stored image_repository, which is the
+	// same value RecordArtifact would go on to use.
+	if req.Repository != "" {
+		repo = req.Repository
+	}
 
 	artifact, err := s.beginPublishOne(ctx, req.IdempotencyKey, kind, ownerID, req.Version, req.BuildId, repo)
 	if err != nil {
