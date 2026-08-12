@@ -315,6 +315,97 @@ func TestRecordBuild_IdempotencyKeyReplay_DoesNotDoubleWrite(t *testing.T) {
 	}
 }
 
+// TestBeginPublishThenRecordArtifact_SharedIdempotencyKey_ExecuteIndependently_Postgres
+// is the real-Postgres counterpart to the same-named test in
+// server/handlers/artifact_test.go: a regression test for issue #575 proving
+// migration 009's `(idempotency_key, method)` primary key -- not just the Go
+// call site -- is what makes two different RPCs sharing one idempotency key
+// execute independently instead of the second replaying the first's stored
+// response.
+//
+// release.yml used to give BeginPublish and RecordArtifact the SAME key for
+// a release leg. Because BeginPublishResponse and RecordArtifactResponse
+// both put an Artifact at proto field 1, RecordArtifact's call unmarshaled
+// BeginPublish's already-committed row without error, and runIdempotent
+// treated it as a valid replay -- RecordArtifact's real write never ran, no
+// error surfaced, and the artifact row was left stuck 'publishing' forever.
+func TestBeginPublishThenRecordArtifact_SharedIdempotencyKey_ExecuteIndependently_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	appSrv := handlers.NewAppServer(reg)
+	artSrv := handlers.NewArtifactServer(reg)
+
+	// Registry/Organization/RepoName (unlike oneAppManifest's bare fixture)
+	// are required here: BeginPublish's ∅ -> publishing fresh-create branch
+	// needs a real image_repository to stamp onto the artifact row.
+	am := &appmetapb.AppManifest{
+		Domain: "acme", Name: "shared-key-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
+		Registry: "ghcr.io", Organization: "acme", RepoName: "acme-shared-key-app",
+	}
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-575", 100, 100, []*appmetapb.AppManifest{am}, nil),
+		IdempotencyKey: "shared-key-reconcile",
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	build, err := artSrv.RecordBuild(ctx, &pb.RecordBuildRequest{
+		GitSha: "sha-575", WorkflowRunId: "run-575-pg", IdempotencyKey: "shared-key-build",
+	})
+	if err != nil {
+		t.Fatalf("record build: %v", err)
+	}
+
+	// The exact collision shape issue #575 traced back to release.yml:
+	// "Begin publish (image)" and "Record image artifact" both used
+	// "${run_id}-${attempt}-${domain}-${app}-image".
+	const sharedKey = "run-575-pg-attempt-1-acme-shared-key-app-image"
+
+	begun, err := artSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "acme-shared-key-app",
+		Version: "v1.0.0", BuildId: build.Build.BuildId, IdempotencyKey: sharedKey,
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+	if begun.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING || begun.Artifact.Digest != "" {
+		t.Fatalf("expected state PUBLISHING with no digest after BeginPublish, got state=%v digest=%q", begun.Artifact.State, begun.Artifact.Digest)
+	}
+
+	recorded, err := artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-shared-key-app", Digest: "sha256:shared-key-real-digest", Version: "v1.0.0",
+		IdempotencyKey: sharedKey, // reuses BeginPublish's key -- this is the bug
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact with a key already used by BeginPublish: %v", err)
+	}
+	if recorded.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("RecordArtifact did not actually execute -- got state %v (bug: cross-method replay of BeginPublish's response)", recorded.Artifact.State)
+	}
+	if recorded.Artifact.Digest != "sha256:shared-key-real-digest" {
+		t.Fatalf("RecordArtifact did not actually execute -- got digest %q (bug: cross-method replay of BeginPublish's response)", recorded.Artifact.Digest)
+	}
+
+	// Ground truth: migration 009's (idempotency_key, method) primary key
+	// means both calls got their OWN row for the same idempotency_key text.
+	rows, err := pool.Query(ctx, `SELECT method FROM idempotency_key WHERE idempotency_key = $1 ORDER BY method`, sharedKey)
+	if err != nil {
+		t.Fatalf("query idempotency_key rows: %v", err)
+	}
+	defer rows.Close()
+	var methods []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			t.Fatalf("scan method: %v", err)
+		}
+		methods = append(methods, m)
+	}
+	if want := []string{"BeginPublish", "RecordArtifact"}; len(methods) != len(want) || methods[0] != want[0] || methods[1] != want[1] {
+		t.Fatalf("expected one idempotency_key row per method (%v) for the reused key, got %v", want, methods)
+	}
+}
+
 // --- 3. unique index enforcement -----------------------------------------
 
 // TestRecordArtifact_DuplicateOwnerKindVersionRejectedByRealIndex proves the

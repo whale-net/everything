@@ -339,13 +339,18 @@ type DomainAdoptionRepository interface {
 	GetStage(ctx context.Context, domain string) (DomainAdoptionStage, error)
 }
 
-// IdempotencyRepository stores key -> serialized response for write RPCs.
-// See ARCHITECTURE.md "Idempotency".
+// IdempotencyRepository stores (key, method) -> serialized response for
+// write RPCs. See ARCHITECTURE.md "Idempotency".
 type IdempotencyRepository interface {
-	// Get returns the stored response bytes for key, if present.
-	Get(ctx context.Context, key string) (response []byte, found bool, err error)
-	// Put stores key -> response. Called only after the write it guards has
-	// succeeded, in the same transaction (see Registry.WithTx).
+	// Get returns the stored response bytes for key, scoped to method, if
+	// present. A key stored under a DIFFERENT method (a caller reusing a
+	// key across two different RPCs, by mistake or otherwise -- see issue
+	// #575) must behave exactly like no stored response at all: found=false,
+	// never an error, so the caller re-executes rather than replaying
+	// another RPC's response.
+	Get(ctx context.Context, key, method string) (response []byte, found bool, err error)
+	// Put stores (key, method) -> response. Called only after the write it
+	// guards has succeeded, in the same transaction (see Registry.WithTx).
 	Put(ctx context.Context, key, method string, response []byte) error
 }
 

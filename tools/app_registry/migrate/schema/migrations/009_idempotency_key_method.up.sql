@@ -1,0 +1,28 @@
+-- App Registry — Scope idempotency lookups to (idempotency_key, method)
+-- (issue #575)
+--
+-- idempotency_key was PRIMARY KEY on idempotency_key alone; method was
+-- recorded by Put but never consulted by Get (server/repository/postgres/
+-- idempotency.go). Two different RPCs given the SAME key by a caller
+-- (release.yml did exactly this for BeginPublish/RecordArtifact, and
+-- separately for chart begin-publish/record) collided: whichever RPC ran
+-- second found the first RPC's stored response and, because
+-- BeginPublishResponse and RecordArtifactResponse both put an Artifact at
+-- proto field 1, unmarshaled it without error -- runIdempotent treated it
+-- as a valid replay and the second RPC's real logic (completePublish,
+-- which sets digest/state=published) never ran. No error, no warning: the
+-- artifact row was left permanently in 'publishing' until the stale-row
+-- reaper failed it, long after CI reported green. See ARCHITECTURE.md
+-- "Idempotency" and issue #575 for the full trace.
+--
+-- Fix: uniqueness (and therefore lookup) is scoped to (idempotency_key,
+-- method), not idempotency_key alone. A caller reusing a key across two
+-- different RPCs now gets two independent, correctly-executed calls
+-- instead of one correct and one silently wrong -- Get(key, method) with a
+-- mismatched method behaves as "not found" (re-execute), never as an
+-- error. This is a strictly WIDER key space than before (every existing
+-- row's idempotency_key was already globally unique, so it trivially stays
+-- unique alongside its own method); no existing row's method value
+-- changes, and no data is deleted or rewritten.
+ALTER TABLE idempotency_key DROP CONSTRAINT idempotency_key_pkey;
+ALTER TABLE idempotency_key ADD PRIMARY KEY (idempotency_key, method);

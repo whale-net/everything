@@ -281,8 +281,13 @@ Re-run the failed jobs (GitHub Actions → the run → "Re-run failed jobs", or
 
 - An app already `published` needs no action — `release-multiarch` still
   runs for it (there is no per-app skip in the build step itself), but the
-  recording calls for it are idempotent replays (same
-  `<workflow_run_id>-<attempt>-<owner>-<kind>` key), not new writes.
+  recording calls for it are idempotent replays, not new writes: `Begin
+  publish` and `Record artifact` each carry their own
+  `<workflow_run_id>-<attempt>-<owner>-<kind>-<begin|record>` key (issue
+  #575 — the two used to share one key, and a re-run's `Record artifact`
+  call would silently replay `Begin publish`'s stored response instead of
+  actually recording anything), so a re-run replays each RPC's own prior
+  response rather than either one replaying the other's.
 - An app still `publishing` or `failed` re-attempts its push and recording
   normally — `BeginPublish`'s `failed -> publishing` transition (or a
   same-target idempotent replay of an already-`publishing` row) picks up
@@ -395,6 +400,42 @@ simply missing history until something needs it:
   path at all — it is this registry's own record of what it did, not a
   mirror of an external source of truth. A restore-behind here is a real
   gap; there is nothing to reconstruct it from.
+
+### Case 3: a row stuck `publishing` from a release that reported green (issue #575)
+
+Before the fix in issue #575, `release.yml` gave `Begin publish` and `Record
+artifact` (or the chart equivalents) the SAME idempotency key for a leg, so
+`Record artifact`'s call silently replayed `Begin publish`'s already-stored
+response instead of actually recording anything — no error, the RPC returned
+`OK`, and the release job showed green. The artifact row was left in
+`publishing` (no digest, no `published_at`) and eventually reaped to
+`failed` with `fail_reason = "stale"`, typically well after the run
+finished. See ARCHITECTURE.md's "Idempotency" → "Fixed: cross-method replay
+via a reused key (issue #575)" for the mechanism.
+
+Symptoms of a row stuck this way, for a release run from before this fix
+shipped:
+
+- `app-registry builds status <workflow-run-id> --incomplete` still lists
+  the artifact (state `ARTIFACT_STATE_PUBLISHING` or `ARTIFACT_STATE_FAILED`
+  with `fail_reason = "stale"`), even though the run's own GitHub Actions
+  logs show the image/chart push and the "Record ... artifact in App
+  Registry" step both succeeded.
+- The image or chart genuinely exists in GHCR / the chart repository — the
+  push itself was never the problem, only recording it was.
+
+**Do not re-run the workflow to fix an already-fixed-forward run** — a re-run
+would push a new (probably identical, if the build is reproducible) image
+under the same version, which `RecordArtifact` may reject as a
+digest mismatch on an already-`publishing` row, or which just wastes a
+build. Re-running only helps when the run is still recent enough to safely
+redo (see ["A release run didn't complete"](#a-release-run-didnt-complete)
+above); for one that finished and reported green a while ago, treat it like
+Case 1: confirm the digest actually exists in GHCR/the chart repository,
+then `app-registry artifacts adopt` it with a `reason` citing issue #575.
+**This is a human decision against the live registry, not something to run
+speculatively or automate** — see this repo's `AGENTS.md` ("do not patch
+production environments") and "It is lazy and per-artifact" above.
 
 ### Auditing what was adopted
 
