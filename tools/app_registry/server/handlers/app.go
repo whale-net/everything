@@ -11,6 +11,7 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -39,6 +40,7 @@ func (s *AppServer) ReconcileApps(ctx context.Context, req *pb.ReconcileAppsRequ
 	if req.Manifests == nil {
 		return nil, status.Error(codes.InvalidArgument, "manifests is required")
 	}
+	normalizeChartManifests(req.Manifests.Charts)
 
 	// source is the ordering metadata Reconcile checks against the
 	// reconcile watermark -- see ARCHITECTURE.md "Reconcile watermark" and
@@ -112,6 +114,19 @@ func (s *AppServer) ReconcileApps(ctx context.Context, req *pb.ReconcileAppsRequ
 	return resp.(*pb.ReconcileAppsResponse), nil
 }
 
+// normalizeChartManifests strips the "helm-{domain}-" prefix
+// release_helm_chart's Bazel macro bakes into ChartManifest.Name before it
+// reaches either ReconcileApps or AssertApps, so both key charts the same
+// way they key apps: bare name, domain held separately. See
+// repository.NormalizeChartName and Chart.FullName's doc comments. Mutates
+// in place -- req.Manifests is this call's private, freshly-unmarshaled
+// copy, not shared or cached elsewhere.
+func normalizeChartManifests(charts []*appmetapb.ChartManifest) {
+	for _, cm := range charts {
+		cm.Name = repository.NormalizeChartName(cm.Domain, cm.Name)
+	}
+}
+
 func reconcileResultToPB(r *repository.ReconcileResult, dryRun bool) *pb.ReconcileAppsResponse {
 	return &pb.ReconcileAppsResponse{
 		CreatedApps:            appsToPB(r.CreatedApps),
@@ -159,6 +174,7 @@ func (s *AppServer) AssertApps(ctx context.Context, req *pb.AssertAppsRequest) (
 	if req.Manifests == nil {
 		return nil, status.Error(codes.InvalidArgument, "manifests is required")
 	}
+	normalizeChartManifests(req.Manifests.Charts)
 	if req.IdempotencyKey == "" {
 		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
 	}

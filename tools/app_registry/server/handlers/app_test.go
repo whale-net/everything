@@ -375,6 +375,40 @@ func TestReconcileApps_ChartComposesApps(t *testing.T) {
 	}
 }
 
+// TestReconcileApps_ChartNameStripsHelmDomainPrefix covers the manifest
+// shape release_helm_chart's Bazel macro actually emits: Name carries a
+// "helm-{domain}-" prefix baked in for git tag/tarball naming (e.g.
+// "helm-app-registry-app-registry" when a chart's domain and base name
+// coincide, as with the app-registry chart itself). ReconcileApps must strip
+// that prefix so Chart.FullName() matches the "{domain}-{name}" identifier
+// the release pipeline uses for BeginPublish/RecordArtifact, rather than
+// doubling up the domain (e.g. "app-registry-helm-app-registry-app-registry").
+func TestReconcileApps_ChartNameStripsHelmDomainPrefix(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("app-registry", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "app-registry", Name: "helm-app-registry-app-registry", Apps: []string{"svc"}}},
+		),
+		IdempotencyKey: "run-4-2",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(resp.CreatedCharts) != 1 {
+		t.Fatalf("expected 1 created chart, got %+v", resp.CreatedCharts)
+	}
+	chart := resp.CreatedCharts[0]
+	if chart.Name != "app-registry" {
+		t.Fatalf("expected helm-{domain}- prefix stripped from name, got %q", chart.Name)
+	}
+	if chart.FullName != "app-registry-app-registry" {
+		t.Fatalf("expected FullName %q, got %q", "app-registry-app-registry", chart.FullName)
+	}
+}
+
 // ============================================================================
 // Reconcile watermark (issue #545) -- fake-backed handler coverage.
 // See postgres_integration_test.go's "Reconcile watermark" section for the
@@ -822,6 +856,51 @@ func TestAssertApps_ThenRecordArtifact_NoReconcileNeeded(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("RecordArtifact should succeed immediately after AssertApps, with no ReconcileApps ever having run: %v", err)
+	}
+}
+
+// TestAssertApps_ThenRecordArtifact_ChartOwnerFullNameMatches is the chart
+// counterpart of the test above, using the manifest shape release_helm_chart's
+// Bazel macro actually emits (Name carrying a baked-in "helm-{domain}-"
+// prefix) and the "{domain}-{name}" owner string release.yml's PUBLISHED_NAME
+// derives from it (CHART with the literal "helm-" prefix trimmed). Before
+// AssertApps normalized ChartManifest.Name, these two never matched -- see
+// Chart.FullName's doc comment -- and RecordArtifact's chart-owner lookup
+// failed with "not found -- has it been reconciled?" for every chart, most
+// visibly for app-registry's own chart where domain == base name.
+func TestAssertApps_ThenRecordArtifact_ChartOwnerFullNameMatches(t *testing.T) {
+	ctx := authedCtx()
+	repo := fake.New()
+	appSrv := NewAppServer(repo)
+	artSrv := NewArtifactServer(repo)
+
+	if _, err := appSrv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{oneApp("app-registry", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "app-registry", Name: "helm-app-registry-app-registry", Apps: []string{"svc"}}},
+		),
+		IdempotencyKey: "assert-6-1",
+	}); err != nil {
+		t.Fatalf("assert: %v", err)
+	}
+
+	build, err := artSrv.RecordBuild(ctx, &pb.RecordBuildRequest{
+		GitSha: "sha1", WorkflowRunId: "run-1", IdempotencyKey: "build-2",
+	})
+	if err != nil {
+		t.Fatalf("record build: %v", err)
+	}
+
+	// PUBLISHED_NAME in release.yml: "${CHART#helm-}" against
+	// "helm-app-registry-app-registry" -- exactly what release.yml passes as
+	// --owner to BeginPublish/RecordArtifact for this chart.
+	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "app-registry-app-registry", Version: "v0.0.13", Digest: "sha256:chart13",
+		IdempotencyKey: "artifact-2",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact should find the chart AssertApps just created by the release pipeline's owner name: %v", err)
 	}
 }
 
