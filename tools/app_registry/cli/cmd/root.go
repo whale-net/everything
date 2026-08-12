@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/whale-net/everything/tools/app_registry/apierrors"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -39,6 +40,25 @@ var rootCmd = &cobra.Command{
 // since a shell script can't import this package.
 const exitOwnerNotReconciled = 3
 
+// exitVersionSkew is the process exit code Execute uses when an RPC fails
+// with codes.Unimplemented -- the deployed app-registry-api does not have a
+// method this CLI build calls (issue #570, the general case #569 was one
+// instance of). Unlike a plain outage (Unavailable, DeadlineExceeded,
+// Unauthenticated -- all still exit 1), Unimplemented does not clear on
+// retry: it means CI's CLI and the deployed server have drifted, and only
+// redeploying the server (or turning off APP_REGISTRY_CICD_OPT_IN) fixes it.
+// Composite actions use this to escalate their annotation from `::warning::`
+// (transient, best-effort-and-move-on) to `::error::` (deployment defect,
+// loud at every adoption stage) -- see
+// tools/app_registry/ARCHITECTURE.md#availability-and-bootstrap.
+//
+// Keep this constant's value in sync with every GitHub Actions call site
+// that checks for it literally, since a shell script can't import this
+// package -- see the "$RECORD_EXIT -eq 4" (or equivalent) branches across
+// .github/actions/app-registry-*/action.yml and release.yml's inline chart
+// loops.
+const exitVersionSkew = 4
+
 // Execute runs the CLI. Called from main.go.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
@@ -48,14 +68,27 @@ func Execute() {
 }
 
 // exitCodeFor classifies err into a process exit code. Every failure other
-// than the owner-not-reconciled case keeps the CLI's long-standing exit
-// code 1 -- this only carves out one specific, structured signal a caller
-// can rely on; it is not a general error-taxonomy exit-code scheme.
+// than the two carved-out cases below keeps the CLI's long-standing exit
+// code 1 -- this is not a general error-taxonomy exit-code scheme, just the
+// specific, structured signals a caller can rely on.
 func exitCodeFor(err error) int {
 	if isOwnerNotReconciled(err) {
 		return exitOwnerNotReconciled
 	}
+	if isVersionSkew(err) {
+		return exitVersionSkew
+	}
 	return 1
+}
+
+// isVersionSkew reports whether err is a gRPC status with
+// codes.Unimplemented -- the server doesn't have the method at all, as
+// opposed to rejecting the call for a reason of its own (those come back as
+// InvalidArgument, FailedPrecondition, etc. and fall through to exit 1 like
+// always). A non-gRPC error naturally reports false.
+func isVersionSkew(err error) bool {
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.Unimplemented
 }
 
 // isOwnerNotReconciled reports whether err is a gRPC status carrying an

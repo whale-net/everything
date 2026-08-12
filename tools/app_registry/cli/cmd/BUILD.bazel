@@ -23,6 +23,7 @@ go_library(
         "@com_github_google_uuid//:uuid",
         "@com_github_spf13_cobra//:cobra",
         "@org_golang_google_genproto_googleapis_rpc//errdetails",
+        "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",

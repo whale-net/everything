@@ -16,6 +16,14 @@ description: >-
   tools/app_registry/ARCHITECTURE.md "AssertApps (additive) vs.
   ReconcileApps (absence sweep)".
 
+  Being the first registry call in a release run also makes this the
+  earliest point a CI/server version-skew defect (issue #570) can be
+  caught: if the deployed app-registry-api doesn't implement AssertApps at
+  all, the CLI exits 4 (exitVersionSkew, see cli/cmd/root.go) and this step
+  emits an `::error::` annotation up front, rather than the skew only
+  surfacing later at whichever RecordBuild/RecordArtifact/BeginPublish call
+  happens to hit a missing RPC first.
+
   Requires RELEASE_HELPER and APP_REGISTRY_CLI env vars already set (see
   .github/actions/download-release-tools).
 
@@ -58,6 +66,22 @@ runs:
       # simply means every app/chart at this ref gets a fresh snapshot.
       run: |
         "$RELEASE_HELPER" manifest-set --git-sha "$GIT_SHA" > "$RUNNER_TEMP/manifest-set.json"
-        "$APP_REGISTRY_CLI" apps assert \
+
+        set +e
+        ASSERT_OUTPUT=$("$APP_REGISTRY_CLI" apps assert \
           --from-plan "$RUNNER_TEMP/manifest-set.json" \
-          --idempotency-key "$IDEMPOTENCY_KEY"
+          --idempotency-key "$IDEMPOTENCY_KEY" 2>&1)
+        ASSERT_EXIT=$?
+        set -e
+
+        if [[ $ASSERT_EXIT -eq 4 ]]; then
+          echo "$ASSERT_OUTPUT"
+          echo "::error title=App Registry: version skew (AssertApps not implemented)::The deployed app-registry-api does not implement AssertApps. This is a CI/server version skew (issue #570), not an outage -- it will NOT clear on retry, and every recording step later in this run will very likely fail the same way. Roll app-registry-api forward, or set APP_REGISTRY_CICD_OPT_IN to false until it is deployed."
+          exit 1
+        elif [[ $ASSERT_EXIT -ne 0 ]]; then
+          echo "$ASSERT_OUTPUT"
+          echo "::warning title=App Registry: AssertApps skipped (registry error)::Could not assert app/chart identity in the App Registry -- a registry outage, auth failure, or other transient error. Recording later in this run is best-effort and may hit issue #547's owner-not-reconciled case as a result."
+          exit 1
+        fi
+
+        echo "$ASSERT_OUTPUT"

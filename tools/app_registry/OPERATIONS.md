@@ -74,18 +74,32 @@ To check whether a specific release actually got recorded:
    succeeded.
 4. A step that ran, shows a red `X` inline but the **job** is still green —
    this is the silent-failure case. The run's summary page (the
-   `::warning::` annotations GitHub surfaces at the top of the run, and the
-   `$GITHUB_STEP_SUMMARY` section below the job list) tells you which kind:
-   - **`App Registry: <owner> not registered yet`** — as of AR-7c (issue
-     #558), this should no longer happen in normal operation: `release.yml`
-     now calls `AssertApps` as the first App Registry step of every job that
-     later resolves an owner by full name (see "AR-7c: AssertApps closed
-     issue #547" below). If you see it anyway, the `AssertApps` step itself
-     probably failed too (a registry outage fails every App Registry step in
-     the same job, `AssertApps` included) — check that step's log first.
-   - **`App Registry: recording skipped (registry error)`** — a genuine
-     registry outage, auth failure, or timeout. Check the step log for the
-     underlying gRPC error (`Unauthenticated`, `Unavailable`, etc.).
+   `::warning::`/`::error::` annotations GitHub surfaces at the top of the
+   run, and the `$GITHUB_STEP_SUMMARY` section below the job list) tells you
+   which kind:
+   - **`::error:: App Registry: version skew (... not implemented)`** (issue
+     #570) — the deployed `app-registry-api` doesn't have an RPC this CLI
+     build calls. **This will not clear on retry or re-run** — CI's CLI is
+     built from the commit being released, the server is whatever was last
+     deployed, and re-running the same release just calls the same missing
+     method again. Roll `app-registry-api` forward to a build that has the
+     RPC, or set `APP_REGISTRY_CICD_OPT_IN=false` until it is deployed. This
+     is an `::error::`, not a `::warning::`, specifically so it doesn't read
+     as "try again later" — see
+     [ARCHITECTURE.md](ARCHITECTURE.md#version-skew-vs-outage-issue-570).
+   - **`::warning:: App Registry: <owner> not registered yet`** — as of AR-7c
+     (issue #558), this should no longer happen in normal operation:
+     `release.yml` now calls `AssertApps` as the first App Registry step of
+     every job that later resolves an owner by full name (see "AR-7c:
+     AssertApps closed issue #547" below). If you see it anyway, the
+     `AssertApps` step itself probably failed too (a registry outage fails
+     every App Registry step in the same job, `AssertApps` included) — check
+     that step's log first.
+   - **`::warning:: App Registry: recording skipped (registry error)`** — a
+     genuine, transient outage: connectivity, auth, or a timeout. Check the
+     step log for the underlying gRPC error (`Unauthenticated`,
+     `Unavailable`, `DeadlineExceeded`, etc.). Re-running later is a
+     reasonable next step here, unlike the version-skew case above.
    The job outcome tells you nothing; only the step log (or now, the run
    summary) does.
 
