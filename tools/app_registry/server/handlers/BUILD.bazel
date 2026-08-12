@@ -22,6 +22,7 @@ go_library(
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/auth",
         "//tools/app_registry/server/repository",
+        "//tools/appmeta/proto:appmetapb",
         "@org_golang_google_genproto_googleapis_rpc//errdetails",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",

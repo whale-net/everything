@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"strings"
 	"time"
 
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
@@ -133,6 +134,19 @@ type Chart struct {
 }
 
 func (c Chart) FullName() string { return c.Domain + "-" + c.Name }
+
+// NormalizeChartName strips the "helm-{domain}-" prefix that
+// release_helm_chart's Bazel macro bakes into ChartManifest.Name (needed
+// there for git tag and tarball naming, e.g. "helm-manmanv2-control-services")
+// so ReconcileApps/AssertApps store and look up charts the same way they do
+// apps: a bare name, with domain held separately. Without this, FullName()
+// would double up the domain (e.g. "app-registry-helm-app-registry-app-registry"
+// for the chart whose domain and base name happen to coincide), which never
+// matches the "{domain}-{name}" identifier the release pipeline uses for
+// BeginPublish/RecordArtifact.
+func NormalizeChartName(domain, name string) string {
+	return strings.TrimPrefix(name, "helm-"+domain+"-")
+}
 
 // ReconcileResult buckets every App/Chart row touched by one ReconcileApps
 // call, matching ReconcileAppsResponse in protos/api_messages_app.proto.
