@@ -539,6 +539,23 @@ as a rejection, not a silent fallback to the old behavior. The reaper
 outbox drainer, configured via `ENV.md`'s `ARTIFACT_REAPER_TIMEOUT` /
 `ARTIFACT_REAPER_POLL_INTERVAL` — see `worker/README.md`.
 
+**Where `artifact.repository` comes from on `∅ → publishing`.** That branch
+creates the row from nothing, so it needs a value for the `NOT NULL`
+`repository` column, and there is no single source that serves both kinds.
+An image's is derivable server-side from the owning app's stored
+`image_repository`. A chart's is **not**: `chart.chart_repository` has never
+been populated by any write path, and migration `008` hardcodes it to `''` in
+`v_current_chart` — a chart lives at a ChartMuseum URL that is deployment
+configuration the registry has no way to derive. So `BeginPublishRequest`
+carries an optional `repository`, which wins over the owner row when set;
+chart callers must set it, and `release.yml` passes the same
+`$CHART_REPO_URL/<published-name>` its `RecordArtifact` call already passed.
+A chart taking this branch with neither is rejected rather than recorded with
+an empty repository. This was AR-7b's original blind spot: because
+`BeginPublish` resolved the repository *only* from the owner, every chart
+release failed the transition, so no chart ever reached `publishing` and
+`FailPublish` — gated on that step having succeeded — could never arm.
+
 ### App identity vs. per-build manifest snapshot
 
 Today `app` carries *mutable metadata* — `deploy_unit`, `image_repository`,

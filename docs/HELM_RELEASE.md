@@ -324,6 +324,14 @@ Helm charts are published to https://charts.whalenet.dev/ with basic authenticat
 - `CHART_REPO_USER` - Username for chart repository authentication
 - `CHART_REPO_PASS` - Password for chart repository authentication
 
+**Optional variable:**
+- `CHART_REPO_URL` - ChartMuseum base URL, defaulting to `https://charts.whalenet.dev`.
+  Set it to point a fork or a staging run at a different ChartMuseum. The
+  `release-helm-charts` and `release-summary` jobs both read it, so the upload
+  target, the `artifact.repository` value recorded in the App Registry
+  (`$CHART_REPO_URL/<published-name>`), and the `helm repo add` line in the run
+  summary cannot drift apart.
+
 **Adding the repository:**
 ```bash
 helm repo add whalenet https://charts.whalenet.dev/

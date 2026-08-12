@@ -901,6 +901,92 @@ func TestBeginPublish_NoPriorAllocation_TagPath(t *testing.T) {
 	}
 }
 
+// TestBeginPublish_Chart_RepositoryComesFromRequest proves a chart's
+// ∅ -> publishing branch cannot lean on its owner row the way an image's
+// can. chart.chart_repository is structurally always '' -- no write path has
+// ever populated it, and migration 008 hardcodes it in v_current_chart --
+// so there is nothing server-side to fall back to and the caller must supply
+// the repository itself.
+//
+// Regression test for the release pipeline's chart leg failing every run
+// with "repository is required to begin publishing chart <version> with no
+// prior allocation": release.yml passed --repository to `artifacts record`
+// but not to `artifacts begin-publish`, so no chart ever reached
+// "publishing" and the failure path (FailPublish, gated on this step having
+// succeeded) could never arm.
+func TestBeginPublish_Chart_RepositoryComesFromRequest(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	appSrv := NewAppServer(repo)
+	ctx := authedCtx()
+
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet(
+			[]*appmetapb.AppManifest{
+				{Domain: "demo", Name: "image-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE,
+					Registry: "ghcr.io", Organization: "whale-net", RepoName: "demo-image-app"},
+			},
+			// Named the way release_helm_chart's Bazel macro names charts,
+			// so this exercises the same normalized "demo-bundle" full name
+			// release.yml's PUBLISHED_NAME passes as --owner.
+			[]*appmetapb.ChartManifest{{Domain: "demo", Name: "helm-demo-bundle", AppRefs: []string{"demo/image-app"}}},
+		),
+		IdempotencyKey: "begin-chart-reconcile",
+	}); err != nil {
+		t.Fatalf("reconcile chart: %v", err)
+	}
+	build := recordBuild(t, artifactSrv, "run-chart-begin")
+
+	// No repository anywhere: rejected outright, rather than quietly
+	// creating a row with an empty artifact.repository.
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART, OwnerFullName: "demo-bundle",
+		Version: "v0.0.15", BuildId: build.BuildId, IdempotencyKey: "chart-begin-no-repo",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for a chart BeginPublish with no repository, got %v", err)
+	}
+
+	const chartRepo = "https://charts.example.test/demo-bundle"
+	begun, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART, OwnerFullName: "demo-bundle",
+		Version: "v0.0.15", BuildId: build.BuildId, Repository: chartRepo,
+		IdempotencyKey: "chart-begin-with-repo",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish for a chart with a request repository: %v", err)
+	}
+	if begun.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING, got %v", begun.Artifact.State)
+	}
+	if begun.Artifact.Repository != chartRepo {
+		t.Fatalf("artifact.repository = %q, want the request's %q", begun.Artifact.Repository, chartRepo)
+	}
+}
+
+// TestBeginPublish_Image_RequestRepositoryOverridesOwner proves the request
+// field is not chart-only: when an image caller sets it, it wins over the
+// app's stored image_repository. Omitting it (the normal image case) still
+// falls back to that stored value -- see
+// TestBeginPublish_NoPriorAllocation_TagPath.
+func TestBeginPublish_Image_RequestRepositoryOverridesOwner(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-image-begin-repo-override")
+
+	const override = "ghcr.io/whale-net/somewhere-else"
+	begun, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v9.9.9", BuildId: build.BuildId, Repository: override,
+		IdempotencyKey: "image-begin-repo-override",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+	if begun.Artifact.Repository != override {
+		t.Fatalf("artifact.repository = %q, want the request's %q", begun.Artifact.Repository, override)
+	}
+}
+
 // TestBeginPublish_RejectsPublishedRow proves publishing -> published is
 // terminal: BeginPublish against an already-published version is
 // FailedPrecondition, not a silent no-op or re-publish.
