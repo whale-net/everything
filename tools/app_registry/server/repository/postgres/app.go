@@ -127,7 +127,7 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 					}
 					return nil, fmt.Errorf("reconcile: insert app %s/%s: %w", am.Domain, am.Name, err)
 				}
-				if err := r.upsertAppManifestSnapshot(ctx, appID, am, source, repository.ManifestProvenanceSweep); err != nil {
+				if err := r.recordAppManifestSweep(ctx, appID, am, source, now); err != nil {
 					return nil, fmt.Errorf("reconcile: %w", err)
 				}
 			}
@@ -147,7 +147,7 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 			if _, err := r.ex.Exec(ctx, `UPDATE app SET status='active', last_seen_at=$2 WHERE app_id=$1`, existing.AppID, now); err != nil {
 				return nil, fmt.Errorf("reconcile: update app %s/%s: %w", am.Domain, am.Name, err)
 			}
-			if err := r.upsertAppManifestSnapshot(ctx, existing.AppID, am, source, repository.ManifestProvenanceSweep); err != nil {
+			if err := r.recordAppManifestSweep(ctx, existing.AppID, am, source, now); err != nil {
 				return nil, fmt.Errorf("reconcile: %w", err)
 			}
 		}
@@ -242,7 +242,7 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 				if err := r.setChartApps(ctx, chartID, appIDs); err != nil {
 					return nil, err
 				}
-				if err := r.upsertChartManifestSnapshot(ctx, chartID, cm, source, repository.ManifestProvenanceSweep); err != nil {
+				if err := r.recordChartManifestSweep(ctx, chartID, cm, source, now); err != nil {
 					return nil, fmt.Errorf("reconcile: %w", err)
 				}
 			}
@@ -264,7 +264,7 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 			if err := r.setChartApps(ctx, existing.ChartID, appIDs); err != nil {
 				return nil, err
 			}
-			if err := r.upsertChartManifestSnapshot(ctx, existing.ChartID, cm, source, repository.ManifestProvenanceSweep); err != nil {
+			if err := r.recordChartManifestSweep(ctx, existing.ChartID, cm, source, now); err != nil {
 				return nil, fmt.Errorf("reconcile: %w", err)
 			}
 		}
@@ -307,6 +307,16 @@ func (r *appRepo) Reconcile(ctx context.Context, apps []*appmetapb.AppManifest, 
 		if err := r.advanceReconcileWatermark(ctx, source, now); err != nil {
 			return nil, fmt.Errorf("reconcile: advance watermark: %w", err)
 		}
+		// reconcile_run (migration 010, AR-8): one row per sweep that
+		// actually applies, replacing the old one-row-per-app-per-sweep
+		// record. A dry run writes nothing, same as every other write in
+		// this function.
+		if _, err := r.ex.Exec(ctx, `
+			INSERT INTO reconcile_run (git_sha, source_committed_at, applied_at, apps_seen, charts_seen)
+			VALUES ($1, $2, $3, $4, $5)`,
+			source.GitSHA, source.SourceCommittedAt, now, len(apps), len(charts)); err != nil {
+			return nil, fmt.Errorf("reconcile: record reconcile_run: %w", err)
+		}
 	}
 
 	return result, nil
@@ -342,7 +352,7 @@ func (r *appRepo) AssertApps(ctx context.Context, apps []*appmetapb.AppManifest,
 				}
 				return nil, fmt.Errorf("assert: insert app %s/%s: %w", am.Domain, am.Name, err)
 			}
-			if err := r.upsertAppManifestSnapshot(ctx, appID, am, source, repository.ManifestProvenanceRelease); err != nil {
+			if err := r.recordAppManifestRelease(ctx, appID, am, source); err != nil {
 				return nil, fmt.Errorf("assert: %w", err)
 			}
 			result.CreatedApps = append(result.CreatedApps, appFromManifest(appID, am, repository.StatusActive, now, now))
@@ -364,7 +374,7 @@ func (r *appRepo) AssertApps(ctx context.Context, apps []*appmetapb.AppManifest,
 		if _, err := r.ex.Exec(ctx, `UPDATE app SET status='active', last_seen_at=$2 WHERE app_id=$1`, existing.AppID, now); err != nil {
 			return nil, fmt.Errorf("assert: update app %s/%s: %w", am.Domain, am.Name, err)
 		}
-		if err := r.upsertAppManifestSnapshot(ctx, existing.AppID, am, source, repository.ManifestProvenanceRelease); err != nil {
+		if err := r.recordAppManifestRelease(ctx, existing.AppID, am, source); err != nil {
 			return nil, fmt.Errorf("assert: %w", err)
 		}
 		updated := appFromManifest(existing.AppID, am, repository.StatusActive, existing.FirstSeenAt, now)
@@ -396,7 +406,7 @@ func (r *appRepo) AssertApps(ctx context.Context, apps []*appmetapb.AppManifest,
 				}
 				return nil, fmt.Errorf("assert: insert chart %s/%s: %w", cm.Domain, cm.Name, err)
 			}
-			if err := r.upsertChartManifestSnapshot(ctx, chartID, cm, source, repository.ManifestProvenanceRelease); err != nil {
+			if err := r.recordChartManifestRelease(ctx, chartID, cm, source); err != nil {
 				return nil, fmt.Errorf("assert: %w", err)
 			}
 			result.CreatedCharts = append(result.CreatedCharts, chartFromManifest(chartID, cm, nil, repository.StatusActive, now, now))
@@ -415,7 +425,7 @@ func (r *appRepo) AssertApps(ctx context.Context, apps []*appmetapb.AppManifest,
 		if _, err := r.ex.Exec(ctx, `UPDATE chart SET status='active', last_seen_at=$2 WHERE chart_id=$1`, existing.ChartID, now); err != nil {
 			return nil, fmt.Errorf("assert: update chart %s/%s: %w", cm.Domain, cm.Name, err)
 		}
-		if err := r.upsertChartManifestSnapshot(ctx, existing.ChartID, cm, source, repository.ManifestProvenanceRelease); err != nil {
+		if err := r.recordChartManifestRelease(ctx, existing.ChartID, cm, source); err != nil {
 			return nil, fmt.Errorf("assert: %w", err)
 		}
 		// existing.AppIDs (populated by getChartByDomainName via
@@ -674,7 +684,8 @@ func (r *appRepo) getChartByDomainName(ctx context.Context, domain, name string)
 }
 
 // ============================================================================
-// Manifest snapshots (migration 008, AR-7c)
+// Manifest content + history (migration 010, AR-8; originally migration
+// 008, AR-7c)
 // ============================================================================
 
 // manifestJSONMarshal serializes AppManifest/ChartManifest VERBATIM as
@@ -688,37 +699,176 @@ func (r *appRepo) getChartByDomainName(ctx context.Context, domain, name string)
 // columns' CASE expressions to see a key that is genuinely always present.
 var manifestJSONMarshal = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}
 
-// upsertAppManifestSnapshot writes one app_manifest row keyed
-// (appID, source.GitSHA) -- idempotent via ON CONFLICT DO NOTHING, because
-// the manifest for a given commit cannot change (migration 008's header
-// comment). provenance distinguishes a ReconcileApps sweep (the only kind
-// v_current_app reads) from an AssertApps release-time call.
-func (r *appRepo) upsertAppManifestSnapshot(ctx context.Context, appID string, am *appmetapb.AppManifest, source repository.ManifestSource, provenance repository.ManifestProvenance) error {
+// resolveOrCreateAppManifestContent resolves the content-addressed
+// app_manifest row for am under appID (migration 010, AR-8), creating it if
+// this exact manifest has never been seen for this owner before. INSERT ...
+// ON CONFLICT DO NOTHING + a fallback SELECT keyed on JSONB equality (not a
+// hand-computed hash -- Postgres's own equality operator is authoritative)
+// is what makes this race-safe against a concurrent Reconcile/AssertApps
+// call writing the SAME new content at the same time.
+func (r *appRepo) resolveOrCreateAppManifestContent(ctx context.Context, appID string, am *appmetapb.AppManifest) (string, error) {
 	body, err := manifestJSONMarshal.Marshal(am)
 	if err != nil {
-		return fmt.Errorf("marshal app manifest for %s/%s: %w", am.Domain, am.Name, err)
+		return "", fmt.Errorf("marshal app manifest for %s/%s: %w", am.Domain, am.Name, err)
 	}
-	if _, err := r.ex.Exec(ctx, `
-		INSERT INTO app_manifest (owner_id, source_git_sha, source_committed_at, provenance, manifest_json)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (owner_id, source_git_sha) DO NOTHING`,
-		appID, source.GitSHA, source.SourceCommittedAt, string(provenance), string(body)); err != nil {
-		return fmt.Errorf("record app manifest snapshot for %s/%s: %w", am.Domain, am.Name, err)
+	row := r.ex.QueryRow(ctx, `
+		INSERT INTO app_manifest (owner_id, manifest_json)
+		VALUES ($1, $2)
+		ON CONFLICT (owner_id, manifest_hash) DO NOTHING
+		RETURNING app_manifest_id`, appID, string(body))
+	var id string
+	if serr := row.Scan(&id); serr == nil {
+		return id, nil
+	} else if !errors.Is(serr, pgx.ErrNoRows) {
+		return "", fmt.Errorf("record app manifest content for %s/%s: %w", am.Domain, am.Name, serr)
+	}
+	row = r.ex.QueryRow(ctx, `SELECT app_manifest_id FROM app_manifest WHERE owner_id = $1 AND manifest_json = $2::jsonb`, appID, string(body))
+	if err := row.Scan(&id); err != nil {
+		return "", fmt.Errorf("resolve app manifest content for %s/%s: %w", am.Domain, am.Name, err)
+	}
+	return id, nil
+}
+
+func (r *appRepo) resolveOrCreateChartManifestContent(ctx context.Context, chartID string, cm *appmetapb.ChartManifest) (string, error) {
+	body, err := manifestJSONMarshal.Marshal(cm)
+	if err != nil {
+		return "", fmt.Errorf("marshal chart manifest for %s/%s: %w", cm.Domain, cm.Name, err)
+	}
+	row := r.ex.QueryRow(ctx, `
+		INSERT INTO chart_manifest (owner_id, manifest_json)
+		VALUES ($1, $2)
+		ON CONFLICT (owner_id, manifest_hash) DO NOTHING
+		RETURNING chart_manifest_id`, chartID, string(body))
+	var id string
+	if serr := row.Scan(&id); serr == nil {
+		return id, nil
+	} else if !errors.Is(serr, pgx.ErrNoRows) {
+		return "", fmt.Errorf("record chart manifest content for %s/%s: %w", cm.Domain, cm.Name, serr)
+	}
+	row = r.ex.QueryRow(ctx, `SELECT chart_manifest_id FROM chart_manifest WHERE owner_id = $1 AND manifest_json = $2::jsonb`, chartID, string(body))
+	if err := row.Scan(&id); err != nil {
+		return "", fmt.Errorf("resolve chart manifest content for %s/%s: %w", cm.Domain, cm.Name, err)
+	}
+	return id, nil
+}
+
+// recordAppManifestSweep performs the SCD2 close-and-open write against
+// app_manifest_history for a ReconcileApps sweep (migration 010, AR-8) --
+// see AGENTS.md "SCD2". validFrom is the commit's committer time
+// (to_timestamp equivalent in Go), falling back to wall clock only for the
+// source_committed_at = 0 sentinel -- never NOW() unconditionally, so "value
+// at T" answers what was in the tree, not when CI happened to run. Writes
+// ZERO new app_manifest_history rows when the owner's currently-open
+// interval already has this exact content -- only last_git_sha advances.
+func (r *appRepo) recordAppManifestSweep(ctx context.Context, appID string, am *appmetapb.AppManifest, source repository.ManifestSource, now time.Time) error {
+	contentID, err := r.resolveOrCreateAppManifestContent(ctx, appID, am)
+	if err != nil {
+		return err
+	}
+	validFrom := now
+	if source.SourceCommittedAt != 0 {
+		validFrom = time.Unix(source.SourceCommittedAt, 0).UTC()
+	}
+
+	row := r.ex.QueryRow(ctx, `
+		SELECT app_manifest_history_id, app_manifest_id
+		FROM app_manifest_history WHERE owner_id = $1 AND valid_to IS NULL`, appID)
+	var historyID, currentContentID string
+	switch serr := row.Scan(&historyID, &currentContentID); {
+	case errors.Is(serr, pgx.ErrNoRows):
+		if _, err := r.ex.Exec(ctx, `
+			INSERT INTO app_manifest_history (owner_id, app_manifest_id, valid_from, first_git_sha, last_git_sha)
+			VALUES ($1, $2, $3, $4, $4)`, appID, contentID, validFrom, source.GitSHA); err != nil {
+			return fmt.Errorf("open app manifest history for %s/%s: %w", am.Domain, am.Name, err)
+		}
+	case serr != nil:
+		return fmt.Errorf("read current app manifest history for %s/%s: %w", am.Domain, am.Name, serr)
+	case currentContentID == contentID:
+		if _, err := r.ex.Exec(ctx, `UPDATE app_manifest_history SET last_git_sha = $2 WHERE app_manifest_history_id = $1`, historyID, source.GitSHA); err != nil {
+			return fmt.Errorf("advance app manifest history for %s/%s: %w", am.Domain, am.Name, err)
+		}
+	default:
+		if _, err := r.ex.Exec(ctx, `UPDATE app_manifest_history SET valid_to = $2 WHERE app_manifest_history_id = $1`, historyID, validFrom); err != nil {
+			return fmt.Errorf("close app manifest history for %s/%s: %w", am.Domain, am.Name, err)
+		}
+		if _, err := r.ex.Exec(ctx, `
+			INSERT INTO app_manifest_history (owner_id, app_manifest_id, valid_from, first_git_sha, last_git_sha)
+			VALUES ($1, $2, $3, $4, $4)`, appID, contentID, validFrom, source.GitSHA); err != nil {
+			return fmt.Errorf("open app manifest history for %s/%s: %w", am.Domain, am.Name, err)
+		}
 	}
 	return nil
 }
 
-func (r *appRepo) upsertChartManifestSnapshot(ctx context.Context, chartID string, cm *appmetapb.ChartManifest, source repository.ManifestSource, provenance repository.ManifestProvenance) error {
-	body, err := manifestJSONMarshal.Marshal(cm)
+func (r *appRepo) recordChartManifestSweep(ctx context.Context, chartID string, cm *appmetapb.ChartManifest, source repository.ManifestSource, now time.Time) error {
+	contentID, err := r.resolveOrCreateChartManifestContent(ctx, chartID, cm)
 	if err != nil {
-		return fmt.Errorf("marshal chart manifest for %s/%s: %w", cm.Domain, cm.Name, err)
+		return err
+	}
+	validFrom := now
+	if source.SourceCommittedAt != 0 {
+		validFrom = time.Unix(source.SourceCommittedAt, 0).UTC()
+	}
+
+	row := r.ex.QueryRow(ctx, `
+		SELECT chart_manifest_history_id, chart_manifest_id
+		FROM chart_manifest_history WHERE owner_id = $1 AND valid_to IS NULL`, chartID)
+	var historyID, currentContentID string
+	switch serr := row.Scan(&historyID, &currentContentID); {
+	case errors.Is(serr, pgx.ErrNoRows):
+		if _, err := r.ex.Exec(ctx, `
+			INSERT INTO chart_manifest_history (owner_id, chart_manifest_id, valid_from, first_git_sha, last_git_sha)
+			VALUES ($1, $2, $3, $4, $4)`, chartID, contentID, validFrom, source.GitSHA); err != nil {
+			return fmt.Errorf("open chart manifest history for %s/%s: %w", cm.Domain, cm.Name, err)
+		}
+	case serr != nil:
+		return fmt.Errorf("read current chart manifest history for %s/%s: %w", cm.Domain, cm.Name, serr)
+	case currentContentID == contentID:
+		if _, err := r.ex.Exec(ctx, `UPDATE chart_manifest_history SET last_git_sha = $2 WHERE chart_manifest_history_id = $1`, historyID, source.GitSHA); err != nil {
+			return fmt.Errorf("advance chart manifest history for %s/%s: %w", cm.Domain, cm.Name, err)
+		}
+	default:
+		if _, err := r.ex.Exec(ctx, `UPDATE chart_manifest_history SET valid_to = $2 WHERE chart_manifest_history_id = $1`, historyID, validFrom); err != nil {
+			return fmt.Errorf("close chart manifest history for %s/%s: %w", cm.Domain, cm.Name, err)
+		}
+		if _, err := r.ex.Exec(ctx, `
+			INSERT INTO chart_manifest_history (owner_id, chart_manifest_id, valid_from, first_git_sha, last_git_sha)
+			VALUES ($1, $2, $3, $4, $4)`, chartID, contentID, validFrom, source.GitSHA); err != nil {
+			return fmt.Errorf("open chart manifest history for %s/%s: %w", cm.Domain, cm.Name, err)
+		}
+	}
+	return nil
+}
+
+// recordAppManifestRelease records a release-time (AssertApps) observation
+// (migration 010, AR-8): resolve the content row, then INSERT INTO
+// app_manifest_release ... ON CONFLICT (owner_id, git_sha) DO NOTHING --
+// idempotent on a repeat AssertApps call for the same commit, exactly like
+// migration 008's snapshot write was. Never touches app_manifest_history.
+func (r *appRepo) recordAppManifestRelease(ctx context.Context, appID string, am *appmetapb.AppManifest, source repository.ManifestSource) error {
+	contentID, err := r.resolveOrCreateAppManifestContent(ctx, appID, am)
+	if err != nil {
+		return err
 	}
 	if _, err := r.ex.Exec(ctx, `
-		INSERT INTO chart_manifest (owner_id, source_git_sha, source_committed_at, provenance, manifest_json)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (owner_id, source_git_sha) DO NOTHING`,
-		chartID, source.GitSHA, source.SourceCommittedAt, string(provenance), string(body)); err != nil {
-		return fmt.Errorf("record chart manifest snapshot for %s/%s: %w", cm.Domain, cm.Name, err)
+		INSERT INTO app_manifest_release (owner_id, app_manifest_id, git_sha)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (owner_id, git_sha) DO NOTHING`, appID, contentID, source.GitSHA); err != nil {
+		return fmt.Errorf("record app manifest release for %s/%s: %w", am.Domain, am.Name, err)
+	}
+	return nil
+}
+
+func (r *appRepo) recordChartManifestRelease(ctx context.Context, chartID string, cm *appmetapb.ChartManifest, source repository.ManifestSource) error {
+	contentID, err := r.resolveOrCreateChartManifestContent(ctx, chartID, cm)
+	if err != nil {
+		return err
+	}
+	if _, err := r.ex.Exec(ctx, `
+		INSERT INTO chart_manifest_release (owner_id, chart_manifest_id, git_sha)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (owner_id, git_sha) DO NOTHING`, chartID, contentID, source.GitSHA); err != nil {
+		return fmt.Errorf("record chart manifest release for %s/%s: %w", cm.Domain, cm.Name, err)
 	}
 	return nil
 }

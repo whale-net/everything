@@ -36,21 +36,6 @@ const (
 	PromotabilityNotPromotable Promotability = "not_promotable"
 )
 
-// ManifestProvenance mirrors app_manifest.provenance / chart_manifest.provenance
-// (migration 008, AR-7c, issue #558): which call wrote a manifest snapshot.
-// "sweep" is ReconcileApps, running only from main push -- the only
-// provenance v_current_app/v_current_chart read (see ARCHITECTURE.md
-// "AssertApps (additive) vs. ReconcileApps"). "release" is AssertApps,
-// called from release.yml against whatever ref is being released -- kept
-// for audit ("was this artifact's promotability derived from a sweep
-// snapshot or a release-time one?"), never read by the current-state views.
-type ManifestProvenance string
-
-const (
-	ManifestProvenanceSweep   ManifestProvenance = "sweep"
-	ManifestProvenanceRelease ManifestProvenance = "release"
-)
-
 // ManifestSource is the ordering/provenance metadata one Reconcile or
 // AssertApps call carries -- the same three AppManifestSet fields
 // ReconcileSource already wraps (git_sha / source_committed_at /
@@ -92,11 +77,14 @@ type AssertResult struct {
 //
 // As of migration 008 (AR-7c, issue #558) `app` itself is pure identity
 // (domain, name, status, first/last-seen) -- every field below EXCEPT those
-// is populated by a join to the latest `main`-sweep app_manifest snapshot
-// (v_current_app, in postgres/app.go), not stored directly. This struct's
-// SHAPE is unchanged from before AR-7c on purpose: the wire (App in
-// protos/messages.proto) and every handler/CLI consumer read these fields
-// exactly as before -- only where postgres/app.go sources them from moved.
+// is populated by a join to the owner's CURRENT `main`-sweep manifest
+// content (v_current_app, in postgres/app.go), not stored directly.
+// Migration 010 (AR-8, issue #587) changed how v_current_app finds "current"
+// (a point lookup against app_manifest_history's open SCD2 interval, instead
+// of a LEFT JOIN LATERAL over one row per commit) but not this struct's
+// shape: the wire (App in protos/messages.proto) and every handler/CLI
+// consumer read these fields exactly as before -- only where postgres/app.go
+// sources them from moved, twice now.
 type App struct {
 	AppID           string
 	Domain          string
@@ -314,21 +302,25 @@ type Artifact struct {
 	// State == ArtifactStateFailed.
 	FailReason string
 
-	// ManifestID is the app_manifest/chart_manifest snapshot (migration 008,
-	// AR-7c) this row's Promotability was derived from -- set once, at the
-	// instant State reaches ArtifactStatePublished, never touched again.
-	// Empty for allocated/publishing/failed rows, and for any row published
-	// before migration 008 (no snapshot exists that honestly corresponds to
-	// what was live when those were originally published -- see migration
-	// 008's backfill comments). No FK: it is a polymorphic reference (an
-	// image artifact's ManifestID names an app_manifest row, a chart
-	// artifact's a chart_manifest row), same reasoning as Artifact not
-	// carrying its own FK-typed owner_id.
+	// ManifestID is the app_manifest/chart_manifest CONTENT row (migration
+	// 010, AR-8; originally a per-commit snapshot row, migration 008, AR-7c)
+	// this row's Promotability was derived from -- set once, at the instant
+	// State reaches ArtifactStatePublished, never touched again. Empty for
+	// allocated/publishing/failed rows, and for any row published before
+	// migration 008 (no content row exists that honestly corresponds to what
+	// was live when those were originally published -- see migration 008's
+	// backfill comments). No FK: it is a polymorphic reference (an image
+	// artifact's ManifestID names an app_manifest row, a chart artifact's a
+	// chart_manifest row), same reasoning as Artifact not carrying its own
+	// FK-typed owner_id. Content-addressing (AR-8) means many artifacts built
+	// from byte-identical manifests now legitimately share one ManifestID --
+	// a storage side-effect, not something any reader should infer meaning
+	// from.
 	ManifestID string
 
 	// Promotability is now STORED (migration 008, AR-7c) -- computed ONCE by
 	// repository.DerivePromotability at the instant State reaches
-	// ArtifactStatePublished, from ManifestID's snapshot (or, absent one,
+	// ArtifactStatePublished, from ManifestID's content (or, absent one,
 	// the owner's current v_current_app/v_current_chart deploy_unit -- see
 	// postgres/artifact.go's resolveManifestForPublish). Never recomputed on
 	// read. This is the fix for the retroactivity bug ARCHITECTURE.md

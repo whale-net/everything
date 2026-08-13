@@ -185,12 +185,18 @@ graph LR
     AR3 --> AR4["AR-4<br/>Writeback"]
     AR4 --> AR7["AR-7<br/>Release lifecycle"]
     AR7 --> AR5["AR-5b+<br/>Allocate versions"]
+    AR7 --> AR8["AR-8<br/>Manifest history"]
     AR2 -. "soak period" .-> AR3
     style AR0 fill:#e8f5e8
     style ARM fill:#fff4e0
     style AR7 fill:#fff4e0
     style AR5 fill:#ffe9e9
+    style AR8 fill:#fff4e0
 ```
+
+AR-8 depends only on AR-7 being merged (it rewrites AR-7c's `v_current_app`/
+`artifact.manifest_id`) — independent of the AR-5 cutover in either
+direction.
 
 **AR-7 (issue #558) sits between AR-4 and the AR-5 cutover**, despite its
 number. AR-5a's inert foundations already landed; the cutover to `allocate`
@@ -325,6 +331,77 @@ for it: a later `version_prerelease TEXT` column can be added without changing
 the constraint or the integer triple, and the ordering index would gain a
 trailing term. Do not add the column now; do note the extension point in
 `ARCHITECTURE.md`.
+
+---
+
+## AR-8 — SCD2 manifest history (issue #587)
+
+**Goal:** stop `ReconcileApps` from writing one `app_manifest`/`chart_manifest`
+row per app per `main` commit unconditionally (migration 008's shape) — row
+count should scale with manifest *content* change, not CI frequency. Fixes
+the legibility complaint in issue #581 and the unbounded growth of
+`v_current_app`'s `LEFT JOIN LATERAL` scan.
+
+**Depends on AR-7 being fully merged** (it rewrites `v_current_app` and
+`artifact.manifest_id`, both created by AR-7c/migration 008) — satisfied, see
+"Current status" above.
+
+**Scope**
+- Migration `010`: splits `app_manifest`/`chart_manifest` into
+  content-addressed tables (one row per DISTINCT manifest per owner, ever)
+  plus `app_manifest_history`/`chart_manifest_history` (SCD2, the `main`
+  sweep timeline), `app_manifest_release`/`chart_manifest_release`
+  (release-time observations), and `reconcile_run` (one row per sweep).
+  Backfills existing data via the `LEAD()`/`LAG()` window-function pattern
+  AGENTS.md prescribes for deriving SCD2 over a non-SCD2 table, and remaps
+  every pre-migration `artifact.manifest_id` from its old per-commit id to
+  the new content id.
+- `postgres/app.go`: `Reconcile`'s manifest write becomes an SCD2
+  close-and-open compare-swap against `*_manifest_history`;
+  `AssertApps`'s becomes a plain insert into `*_manifest_release`. Neither
+  touches the other's table.
+- `postgres/artifact.go`: `resolveManifestForPublish` gains a third
+  fallback tier (exact release match → current-history-interval commit
+  match → current-history-interval regardless of commit), propagating the
+  new O(1) "current" lookup to publish time too.
+- Full detail, including the design tradeoffs against three rejected
+  alternatives (add `valid_from`/`valid_to` to `app_manifest` in place;
+  content-dedupe alone with no history table; skip-insert-when-unchanged
+  with no schema change at all), is in ARCHITECTURE.md's "App identity vs.
+  per-build manifest snapshot" → "As built (AR-8, migration `010`)".
+
+**Deliberately NOT done**
+- No backfill of historical `reconcile_run` rows for sweeps that predate
+  this migration — no acceptance criterion needs it, and reconstructing "one
+  row per sweep" faithfully from the old per-app data is only approximate.
+  Going forward is what the issue asks for.
+- `chart_app`'s destructive rewrite-on-every-sweep (issue #587's own
+  "Follow-up, out of scope") is untouched — a separate ticket once chart
+  manifests carry `app_refs` on the open `chart_manifest` row.
+
+**Testing note:** every acceptance criterion below is covered by new
+`postgres_integration_test.go` tests (real-Postgres tier, tag
+`integration`/`manual`) — this repo's dev sandbox has no Docker available to
+run that tier locally; it needs CI's `Test Database Integration` job (or a
+local run with a working Docker daemon) before merge.
+
+**Exit criteria**
+- A sweep where no manifest changed inserts zero new `app_manifest`/
+  `app_manifest_history` rows — only `last_git_sha` and `reconcile_run`
+  advance.
+- A sweep where one app changed closes exactly that app's open history row
+  and opens exactly one new one.
+- A → B → A produces three history rows with non-overlapping intervals in
+  the correct order.
+- `AssertApps` from a non-`main` ref writes a content row + an
+  `*_manifest_release` row and never touches `*_manifest_history`.
+- `v_current_app`/`v_current_chart` return byte-identical results to
+  pre-migration for every existing app/chart.
+- Every pre-migration `artifact.manifest_id` resolves to a content row with
+  the same `manifest_json` it pointed at before; `promotability` is
+  unchanged for every existing artifact row.
+- `resolveManifestForPublish` still prefers the build's exact `git_sha`.
+- `010_*.down.sql` restores the pre-migration (migration 008) shape.
 
 ---
 

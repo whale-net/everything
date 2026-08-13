@@ -255,67 +255,92 @@ func ownerIDOf(a repository.Artifact) string {
 }
 
 // ============================================================================
-// Manifest resolution at publish time (migration 008, AR-7c)
+// Manifest resolution at publish time (migration 010, AR-8; originally
+// migration 008, AR-7c)
 // ============================================================================
 
 // resolveManifestForPublish resolves the app_manifest/chart_manifest
-// snapshot to attribute a NEWLY published artifact to, and derives its
-// Promotability from that snapshot -- see ARCHITECTURE.md "App identity vs.
+// CONTENT row to attribute a NEWLY published artifact to, and derives its
+// Promotability from that content -- see ARCHITECTURE.md "App identity vs.
 // per-build manifest snapshot". Called from insertArtifact/completePublish
 // at the exact instant a row reaches "published", and ONLY then -- the
 // result is stored and never recomputed, which is what fixes the
 // retroactivity bug (repository.Artifact.Promotability's doc comment).
 //
-// Prefers the snapshot recorded at the EXACT commit buildID's build was
-// built from -- typically the one release.yml's AssertApps step just wrote,
-// at this same run's git_sha. Falls back to the newest snapshot for this
-// owner, regardless of commit, when no exact match exists (a domain that
-// hasn't wired AssertApps into its release path yet, or a build whose
-// commit predates AR-7c). This is a deliberate simplification: "derived at
-// publish time" means "from the best snapshot known at publish time," not
-// "guaranteed to be the exact build commit" -- requiring an exact match
-// would make every domain's FIRST post-AR-7c publish fail until it adopts
-// AssertApps, which is the opposite of "additive, safe from any ref."
+// Prefers the content recorded at the EXACT commit buildID's build was built
+// from -- typically the one release.yml's AssertApps step just wrote, at
+// this same run's git_sha, looked up in *_manifest_release. Falls back to
+// the owner's CURRENT `main`-sweep content (*_manifest_history's open
+// interval) when no exact release match exists (a domain that hasn't wired
+// AssertApps into its release path yet, or a build whose commit predates
+// AR-7c/AR-8) -- this is the same deliberate simplification migration 008
+// documented: "derived at publish time" means "from the best content known
+// at publish time," not "guaranteed to be the exact build commit."
 //
-// Errors (ErrFailedPrecondition) only if NO snapshot exists at all for this
-// owner, which should be unreachable in practice: every write path that can
-// create an app/chart identity row (Reconcile, AssertApps, and migration
-// 008's backfill) always writes at least one manifest snapshot in the same
-// call/migration -- resolveOwner (handlers/artifact.go) already guarantees
-// the owner's IDENTITY exists before RecordArtifact/BeginPublish ever calls
-// this, so a missing snapshot here would mean that invariant broke, not a
-// normal operational condition.
+// Errors (ErrFailedPrecondition) only if NEITHER a release row NOR a current
+// history interval exists for this owner, which should be unreachable in
+// practice: every write path that can create an app/chart identity row
+// (Reconcile, AssertApps, and migration 010's backfill) always writes at
+// least one manifest content row in the same call/migration -- resolveOwner
+// (handlers/artifact.go) already guarantees the owner's IDENTITY exists
+// before RecordArtifact/BeginPublish ever calls this, so a missing content
+// row here would mean that invariant broke, not a normal operational
+// condition.
 func (r *artifactRepo) resolveManifestForPublish(ctx context.Context, kind repository.ArtifactKind, ownerID, buildID string) (manifestID string, promotability repository.Promotability, err error) {
 	var buildGitSHA string
 	if buildID != "" {
 		row := r.ex.QueryRow(ctx, `SELECT git_sha FROM build WHERE build_id = $1`, buildID)
-		_ = row.Scan(&buildGitSHA) // best-effort -- falls through to "newest" below regardless
+		_ = row.Scan(&buildGitSHA) // best-effort -- falls through to "current" below regardless
 	}
 
 	if kind == repository.ArtifactKindChart {
-		id, ferr := r.latestChartManifestID(ctx, ownerID, buildGitSHA)
+		id, ferr := r.currentChartManifestID(ctx, ownerID, buildGitSHA)
 		if ferr != nil {
 			return "", "", ferr
 		}
 		// A chart artifact's Promotability never depends on its own
-		// snapshot: chart.deploy_unit is always the hardcoded 'chart'
+		// content: chart.deploy_unit is always the hardcoded 'chart'
 		// constant (migration 008's "Why chart_manifest has no generated
 		// columns"), so DerivePromotability(CHART, CHART) is always
 		// PROMOTABLE -- no data-dependent branch needed.
 		return id, repository.DerivePromotability(kind, appmetapb.DeployUnit_DEPLOY_UNIT_CHART), nil
 	}
 
-	id, deployUnit, ferr := r.latestAppManifest(ctx, ownerID, buildGitSHA)
+	id, deployUnit, ferr := r.currentAppManifest(ctx, ownerID, buildGitSHA)
 	if ferr != nil {
 		return "", "", ferr
 	}
 	return id, repository.DerivePromotability(kind, deployUnit), nil
 }
 
-func (r *artifactRepo) latestAppManifest(ctx context.Context, ownerID, preferGitSHA string) (manifestID string, deployUnit appmetapb.DeployUnit, err error) {
+// currentAppManifest resolves the app_manifest content row to use, in three
+// tiers (migration 010, AR-8 -- see resolveManifestForPublish's doc
+// comment): (1) an exact-git_sha release observation, (2) the owner's
+// CURRENT `main`-sweep interval when ITS first/last_git_sha matches the
+// build's commit (the common case: the release's commit is what's currently
+// live on main), (3) the current interval regardless of commit -- the new
+// O(1) point lookup migration 010 exists to make possible, propagating the
+// same perf win to publish time.
+func (r *artifactRepo) currentAppManifest(ctx context.Context, ownerID, preferGitSHA string) (manifestID string, deployUnit appmetapb.DeployUnit, err error) {
 	if preferGitSHA != "" {
-		row := r.ex.QueryRow(ctx, `SELECT app_manifest_id, deploy_unit FROM app_manifest WHERE owner_id = $1 AND source_git_sha = $2`, ownerID, preferGitSHA)
+		row := r.ex.QueryRow(ctx, `
+			SELECT m.app_manifest_id, m.deploy_unit
+			FROM app_manifest_release r
+			JOIN app_manifest m ON m.app_manifest_id = r.app_manifest_id
+			WHERE r.owner_id = $1 AND r.git_sha = $2`, ownerID, preferGitSHA)
 		var id, du string
+		if serr := row.Scan(&id, &du); serr == nil {
+			return id, deployUnitFromDB(du), nil
+		} else if !errors.Is(serr, pgx.ErrNoRows) {
+			return "", 0, fmt.Errorf("resolve manifest for publish: %w", serr)
+		}
+
+		row = r.ex.QueryRow(ctx, `
+			SELECT m.app_manifest_id, m.deploy_unit
+			FROM app_manifest_history h
+			JOIN app_manifest m ON m.app_manifest_id = h.app_manifest_id
+			WHERE h.owner_id = $1 AND h.valid_to IS NULL
+			  AND ($2 IN (h.first_git_sha, h.last_git_sha))`, ownerID, preferGitSHA)
 		if serr := row.Scan(&id, &du); serr == nil {
 			return id, deployUnitFromDB(du), nil
 		} else if !errors.Is(serr, pgx.ErrNoRows) {
@@ -323,23 +348,38 @@ func (r *artifactRepo) latestAppManifest(ctx context.Context, ownerID, preferGit
 		}
 	}
 	row := r.ex.QueryRow(ctx, `
-		SELECT app_manifest_id, deploy_unit FROM app_manifest
-		WHERE owner_id = $1
-		ORDER BY source_committed_at DESC, recorded_at DESC LIMIT 1`, ownerID)
+		SELECT m.app_manifest_id, m.deploy_unit
+		FROM app_manifest_history h
+		JOIN app_manifest m ON m.app_manifest_id = h.app_manifest_id
+		WHERE h.owner_id = $1 AND h.valid_to IS NULL`, ownerID)
 	var id, du string
 	if serr := row.Scan(&id, &du); serr != nil {
 		if errors.Is(serr, pgx.ErrNoRows) {
-			return "", 0, fmt.Errorf("%w: no manifest snapshot recorded for app owner %s -- AssertApps/ReconcileApps must run before publishing", repository.ErrFailedPrecondition, ownerID)
+			return "", 0, fmt.Errorf("%w: no manifest recorded for app owner %s -- AssertApps/ReconcileApps must run before publishing", repository.ErrFailedPrecondition, ownerID)
 		}
 		return "", 0, fmt.Errorf("resolve manifest for publish: %w", serr)
 	}
 	return id, deployUnitFromDB(du), nil
 }
 
-func (r *artifactRepo) latestChartManifestID(ctx context.Context, ownerID, preferGitSHA string) (string, error) {
+func (r *artifactRepo) currentChartManifestID(ctx context.Context, ownerID, preferGitSHA string) (string, error) {
 	if preferGitSHA != "" {
-		row := r.ex.QueryRow(ctx, `SELECT chart_manifest_id FROM chart_manifest WHERE owner_id = $1 AND source_git_sha = $2`, ownerID, preferGitSHA)
+		row := r.ex.QueryRow(ctx, `
+			SELECT r.chart_manifest_id
+			FROM chart_manifest_release r
+			WHERE r.owner_id = $1 AND r.git_sha = $2`, ownerID, preferGitSHA)
 		var id string
+		if serr := row.Scan(&id); serr == nil {
+			return id, nil
+		} else if !errors.Is(serr, pgx.ErrNoRows) {
+			return "", fmt.Errorf("resolve manifest for publish: %w", serr)
+		}
+
+		row = r.ex.QueryRow(ctx, `
+			SELECT h.chart_manifest_id
+			FROM chart_manifest_history h
+			WHERE h.owner_id = $1 AND h.valid_to IS NULL
+			  AND ($2 IN (h.first_git_sha, h.last_git_sha))`, ownerID, preferGitSHA)
 		if serr := row.Scan(&id); serr == nil {
 			return id, nil
 		} else if !errors.Is(serr, pgx.ErrNoRows) {
@@ -347,13 +387,13 @@ func (r *artifactRepo) latestChartManifestID(ctx context.Context, ownerID, prefe
 		}
 	}
 	row := r.ex.QueryRow(ctx, `
-		SELECT chart_manifest_id FROM chart_manifest
-		WHERE owner_id = $1
-		ORDER BY source_committed_at DESC, recorded_at DESC LIMIT 1`, ownerID)
+		SELECT chart_manifest_id
+		FROM chart_manifest_history
+		WHERE owner_id = $1 AND valid_to IS NULL`, ownerID)
 	var id string
 	if serr := row.Scan(&id); serr != nil {
 		if errors.Is(serr, pgx.ErrNoRows) {
-			return "", fmt.Errorf("%w: no manifest snapshot recorded for chart owner %s -- AssertApps/ReconcileApps must run before publishing", repository.ErrFailedPrecondition, ownerID)
+			return "", fmt.Errorf("%w: no manifest recorded for chart owner %s -- AssertApps/ReconcileApps must run before publishing", repository.ErrFailedPrecondition, ownerID)
 		}
 		return "", fmt.Errorf("resolve manifest for publish: %w", serr)
 	}
