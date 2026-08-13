@@ -198,3 +198,12 @@ wires up three read-restricted (`--access-mode=restricted`) crystaldba
 These are separate from `PG_DATABASE_URL` above (which the server/migration
 processes read) so that dev and prod can be queried side by side from the
 same Claude Code session without swapping a single variable.
+
+`postgres-mcp`'s `pyproject.toml` declares an unpinned `mcp[cli]>=1.25.0`
+dependency; `uvx` resolves that to `mcp==2.x`, which dropped
+`mcp.server.fastmcp` and breaks `postgres-mcp` at import time
+(`ModuleNotFoundError: No module named 'mcp.server.fastmcp'`). Each server's
+`args` therefore pin it down with `--with "mcp<2"` before `postgres-mcp`.
+See [crystaldba/postgres-mcp#187](https://github.com/crystaldba/postgres-mcp/issues/187).
+If reconnecting still fails with the same error, `uv`'s package cache may
+need a `uv cache clean postgres-mcp` / `uv cache clean mcp`.
