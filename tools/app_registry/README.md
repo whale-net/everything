@@ -161,7 +161,7 @@ checks. All rules live server-side so a future UI cannot drift from it.
 
 ## Status
 
-AR-1 (foundations) is landed: schema migration, server and CLI skeletons, no
-business logic — every RPC returns `Unimplemented`. See [PLAN.md](PLAN.md) for
-phasing and [ARCHITECTURE.md](ARCHITECTURE.md) for the data model and the
-decisions behind it.
+Not tracked here — it changes independently of this file and duplicating it
+invites drift. See [PLAN.md](PLAN.md) → "Current status" for what's deployed
+and merged right now, and [ARCHITECTURE.md](ARCHITECTURE.md) for the data
+model and the decisions behind it.

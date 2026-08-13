@@ -307,8 +307,8 @@ approve the run when prompted.
   admin tooling and may add a second condition the prod promoter must
   satisfy.
 - **GitHub Actions OIDC** was considered and rejected for now in favour of
-  Keycloak service accounts — see PLAN.md → AR-3 → "Credential model". Worth
-  revisiting for secretless CI once this is proven.
+  Keycloak service accounts — see PLAN-HISTORY.md → AR-3 → "Credential
+  model". Worth revisiting for secretless CI once this is proven.
 
 ## Related
 
