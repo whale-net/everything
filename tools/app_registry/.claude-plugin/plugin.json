@@ -1,0 +1,7 @@
+{
+  "name": "app-registry",
+  "description": "Postgres MCP access (crystaldba postgres-mcp) to the App Registry database across tilt/dev/prod",
+  "author": {
+    "name": "whale_net"
+  }
+}

@@ -43,6 +43,7 @@ what is next, and the carry-over items** — start there when picking this up.
 | [TESTING.md](TESTING.md) | Running the registry locally in Tilt for manual integration testing; which checks belong in unit vs Postgres vs Tilt tiers |
 | [DEPLOY.md](DEPLOY.md) | Deploying for real — which Keycloak clients and roles to create, server env vars, and where each CI secret goes. Start here when standing the service up in an environment. |
 | [OPERATIONS.md](OPERATIONS.md) | Day-2 operations — the release → record → promote → verify → rollback lifecycle, how to spot a silently failed recording, how to check drift, and how to tell whether the registry is actually in use yet. Start here once DEPLOY.md is done and you need to ship something through it. |
+| [.mcp.json](.mcp.json) | Claude Code plugin (`app-registry`, see `.claude-plugin/plugin.json`) — three crystaldba `postgres-mcp` servers (`app-registry-pg-{tilt,dev,prod}`) for querying the database directly; see ENV.md "Postgres MCP" |
 
 ## Components
 
