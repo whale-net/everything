@@ -42,6 +42,8 @@ plan as an Issue, and task execution on a GitHub Project (v2) board. See
                                                                                   findings ──▶ planner (new tickets)
 ```
 
+Any persona can also file a **scope note** (`Status: Noted` → `Carry-over`/`Deferred`/rejected → scheduled or closed) for scope it notices but doesn't act on — a lifecycle instead of a stray comment, so a deferred decision stays queryable. See `CONVENTIONS.md` § Scope notes.
+
 Every phase reads/writes GitHub directly via `gh` — there is no separate task store. Query available work on a plan's Project at any time with:
 
 ```sh
