@@ -1479,11 +1479,21 @@ func TestMigration004BackfillsVersionColumns(t *testing.T) {
 // wants "apply".
 func reconcileTx(t *testing.T, reg *Registry, apps []*appmetapb.AppManifest, charts []*appmetapb.ChartManifest) *repository.ReconcileResult {
 	t.Helper()
-	now := time.Now().UnixNano()
+	// GitSHA uses nanosecond precision purely for per-call UNIQUENESS (two
+	// calls in the same test must never collide); SourceCommittedAt is Unix
+	// SECONDS, matching the real git-committer-timestamp contract
+	// (ARCHITECTURE.md "Reconcile watermark") -- migration 010's
+	// recordAppManifestSweep feeds it through time.Unix(sec, 0) to compute
+	// app_manifest_history.valid_from, so a nanosecond value here (as this
+	// helper used before AR-8) overflows Postgres's timestamptz range.
+	// ShouldApplyReconcile treats a TIE as "apply" (see its doc comment), so
+	// two calls landing in the same wall-clock second is harmless.
+	nowNano := time.Now().UnixNano()
+	nowSec := time.Now().Unix()
 	source := repository.ReconcileSource{
-		GitSHA:            fmt.Sprintf("test-sha-%d", now),
-		SourceCommittedAt: now,
-		DiscoveredAt:      now,
+		GitSHA:            fmt.Sprintf("test-sha-%d", nowNano),
+		SourceCommittedAt: nowSec,
+		DiscoveredAt:      nowSec,
 	}
 	var result *repository.ReconcileResult
 	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
@@ -3531,11 +3541,18 @@ func TestMigration010BackfillsHistoryFromExistingRows(t *testing.T) {
 		t.Fatalf("expected exactly 1 backfilled app_manifest_release row, got %d", releaseCount)
 	}
 
-	if n := appManifestContentCount(t, db.Pool, chartID); n != 1 {
-		t.Fatalf("expected 1 backfilled chart content row, got %d", n)
+	var chartContentCount, chartHistoryCount int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM chart_manifest WHERE owner_id = $1`, chartID).Scan(&chartContentCount); err != nil {
+		t.Fatalf("count chart_manifest content rows: %v", err)
 	}
-	if n := appManifestHistoryCount(t, db.Pool, chartID); n != 1 {
-		t.Fatalf("expected 1 backfilled chart_manifest_history row, got %d", n)
+	if chartContentCount != 1 {
+		t.Fatalf("expected 1 backfilled chart content row, got %d", chartContentCount)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM chart_manifest_history WHERE owner_id = $1`, chartID).Scan(&chartHistoryCount); err != nil {
+		t.Fatalf("count chart_manifest_history rows: %v", err)
+	}
+	if chartHistoryCount != 1 {
+		t.Fatalf("expected 1 backfilled chart_manifest_history row, got %d", chartHistoryCount)
 	}
 
 	// v_current_app must reflect the REVERTED-TO-A content (the newest

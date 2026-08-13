@@ -52,7 +52,20 @@
 -- represents A -> B -> A as three non-overlapping rows, which is the truth.
 
 -- ============================================================================
--- 1. app_manifest / chart_manifest: content-addressed, immutable
+-- 1. Rename the old per-commit snapshot tables out of the way FIRST -- the
+--    new content-addressed tables below reuse the SAME names
+--    (app_manifest/chart_manifest), so this must happen before either
+--    CREATE TABLE, not after (a CREATE TABLE app_manifest while a table by
+--    that name still exists is just a plain name collision, migration-010
+--    or not). Kept around under the `_old` suffix only for the backfill
+--    steps that follow -- dropped at the very end of this migration.
+-- ============================================================================
+
+ALTER TABLE app_manifest RENAME TO app_manifest_old;
+ALTER TABLE chart_manifest RENAME TO chart_manifest_old;
+
+-- ============================================================================
+-- 2. app_manifest / chart_manifest: content-addressed, immutable
 -- ============================================================================
 
 -- One row per DISTINCT manifest per owner, ever. Never UPDATEd after insert
@@ -65,11 +78,9 @@
 -- manifest_hash's GENERATED expression requires md5(manifest_json::text) to
 -- be IMMUTABLE: JSONB's canonical text output (jsonb_out) does not depend on
 -- session settings the way e.g. timestamptz::text does, and md5(text) is
--- itself IMMUTABLE -- both are catalogued IMMUTABLE in Postgres, so this
--- holds for any Postgres version this repo targets (16, per libs/go/dbtest's
--- DefaultImage). Verify against the real `Test Database Integration` CI job
--- before relying on this further -- this repo's dev sandbox has no Docker
--- available to confirm locally (see PLAN.md/this PR's description).
+-- itself IMMUTABLE -- both are catalogued IMMUTABLE in Postgres, confirmed
+-- against real Postgres via this package's own
+-- postgres_integration_test.go (CI's `Test Database Integration` job).
 CREATE TABLE app_manifest (
     app_manifest_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id            UUID NOT NULL REFERENCES app (app_id),
@@ -117,7 +128,7 @@ CREATE TABLE chart_manifest (
 );
 
 -- ============================================================================
--- 2. app_manifest_history / chart_manifest_history: the `main` timeline
+-- 3. app_manifest_history / chart_manifest_history: the `main` timeline
 -- ============================================================================
 
 -- SCD2 per AGENTS.md. Written ONLY by ReconcileApps
@@ -158,7 +169,7 @@ CREATE UNIQUE INDEX chart_manifest_history_current_idx
     ON chart_manifest_history (owner_id) WHERE valid_to IS NULL;
 
 -- ============================================================================
--- 3. app_manifest_release / chart_manifest_release: release-time observations
+-- 4. app_manifest_release / chart_manifest_release: release-time observations
 -- ============================================================================
 
 -- Written ONLY by AssertApps (postgres/app.go's
@@ -194,7 +205,7 @@ CREATE TABLE chart_manifest_release (
 );
 
 -- ============================================================================
--- 4. reconcile_run: one row per sweep, replacing the per-app-per-sweep record
+-- 5. reconcile_run: one row per sweep, replacing the per-app-per-sweep record
 -- ============================================================================
 
 -- Written by postgres/app.go's Reconcile, once per call, ONLY when it
@@ -210,16 +221,6 @@ CREATE TABLE reconcile_run (
     apps_seen                    INT NOT NULL,
     charts_seen                    INT NOT NULL
 );
-
--- ============================================================================
--- 5. Rename the old per-commit snapshot tables out of the way
--- ============================================================================
-
--- Kept around, under a new name, only for the backfill steps below --
--- dropped at the end of this migration (step 9). Renaming (not dropping
--- first) is what lets steps 6-8 read the pre-migration data.
-ALTER TABLE app_manifest RENAME TO app_manifest_old;
-ALTER TABLE chart_manifest RENAME TO chart_manifest_old;
 
 -- ============================================================================
 -- 6. Backfill content tables, deduped by JSONB value (not a hand-computed
