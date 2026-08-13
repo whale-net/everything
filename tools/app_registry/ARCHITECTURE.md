@@ -3,6 +3,32 @@
 Design record for `//tools/app_registry`. Read [README.md](README.md) first for
 what the system is and the end-to-end flows.
 
+This file is long (every section below is real, current design — nothing here
+is history; see [PLAN-HISTORY.md](PLAN-HISTORY.md) for phase-by-phase as-built
+narrative instead). Jump straight to the section you need rather than reading
+serially:
+
+| Section | Read it for |
+|---|---|
+| [Design principles](#design-principles) | The five rules everything else in this doc follows |
+| [Shared manifest schema](#shared-manifest-schema) | Why `AppManifest`/`ChartManifest` live in `appmeta`, not here |
+| [Data model](#data-model) / [Tables](#tables) / [SCD2 on `promotion`](#scd2-on-promotion) | The schema, table by table; SCD2 read/write pattern |
+| [Version model (AR-5a)](#version-model-ar-5a) | How `AllocateVersion` orders/reserves versions — not yet wired to any release |
+| [Reconcile watermark (issue #545)](#reconcile-watermark-issue-545) | Why `Reconcile` can safely skip a stale/out-of-order call |
+| [Release-vs-reconcile gap (issue #547)](#release-vs-reconcile-gap-issue-547) | Superseded by AR-7c — kept for historical/rollback context only |
+| [Release lifecycle (issue #558)](#release-lifecycle-issue-558) | The big one: artifact `allocated → publishing → published`, identity/manifest-snapshot split, the run log — start here for anything touching recording or `release.yml` |
+| [Promotability](#promotability) | What makes an artifact legal to promote |
+| [Chart → image lockfile](#chart--image-lockfile) | Compose-time vs. publish-time digest pinning |
+| [Writeback: outbox → Temporal](#writeback-outbox--temporal) | How a promotion reaches the gitops repo (stub today) |
+| [Authorization](#authorization) | The role model and where environment scoping actually comes from |
+| [Idempotency](#idempotency) | Key scoping, including the cross-method replay bug fixed in #575/#576 |
+| [Triage: the MISSING/ARCHIVED lifecycle](#triage-the-missingarchived-lifecycle) | What each app/chart status means and how it transitions |
+| [Availability and bootstrap](#availability-and-bootstrap) | `APP_REGISTRY_CICD_OPT_IN`, version skew, and what breaks silently vs. loudly |
+| [Rejected alternatives](#rejected-alternatives) | Designs considered and why they lost |
+| [Future: approval gate](#future-approval-gate) | Not built — `PENDING_APPROVAL` exists in the schema only |
+| [Resolved questions](#resolved-questions) | Numbered Q&A cited by number elsewhere in this doc and in PLAN.md |
+| [Open questions](#open-questions) | What's still genuinely undecided |
+
 ## Design principles
 
 1. **Manifests stay authoritative.** The registry never invents app metadata.
@@ -406,7 +432,7 @@ also surfaced a new, still-open defect — issue
 [#585](https://github.com/whale-net/everything/issues/585) — in
 `RecordArtifact`'s digest-replay path; see "Artifact lifecycle" below and
 PLAN.md's "AR-5" for why it blocks any domain moving past `observe`. Delivery
-is PLAN.md's AR-7. Six slices of this section describe real code: AR-7a's —
+is PLAN-HISTORY.md's AR-7. Six slices of this section describe real code: AR-7a's —
 ordering 4, partial-apply reconcile, domain-qualified chart app references,
 and the `continue-on-error` drop on `ci.yml`'s sweep job — AR-7b's — the
 artifact lifecycle (`allocated → publishing → published → failed`),
@@ -770,8 +796,8 @@ the table above. The gap this leaves: a matrix leg that never starts at all
 complete?" cannot distinguish that from "not part of this run" for such a
 leg. Closing that gap needs either a new RPC or loosening
 `AllocateVersion`'s stage gate, and is deliberately left to AR-7d, which
-owns `GetReleaseRun`/resume semantics — see PLAN.md's AR-7b "Deliberately
-NOT done".
+owns `GetReleaseRun`/resume semantics — see PLAN-HISTORY.md's AR-7b
+"Deliberately NOT done".
 
 **As built (AR-7d), the gap above is closed — with one adaptation the
 original design didn't anticipate.** The intent write is now genuinely
@@ -1185,7 +1211,7 @@ registry is the source of truth for that file.
 
 **As of AR-4b, the diagram above is built through "activity: render env
 state" only** — the render and publish steps exist, the gitops commit and S3
-put do not (see PLAN.md's AR-4b "Explicitly not in scope"). Concretely:
+put do not (see PLAN-HISTORY.md's AR-4b "Explicitly not in scope"). Concretely:
 
 - `server/handlers/promotion.go`'s `enqueueWriteback` writes the
   `writeback_outbox` row inside the exact same transaction as the SCD2
@@ -1224,7 +1250,7 @@ put do not (see PLAN.md's AR-4b "Explicitly not in scope"). Concretely:
 `serviceerror.WorkflowExecutionAlreadyStarted`) are Go dependencies added in
 `go.mod`/`MODULE.bazel`; `libs/go/temporal` (client construction, env
 config, worker bootstrap, logging bridge to `libs/go/logging`) shipped in
-AR-4a — see [PLAN.md](PLAN.md).
+AR-4a — see [PLAN-HISTORY.md](PLAN-HISTORY.md).
 
 ## Authorization
 
