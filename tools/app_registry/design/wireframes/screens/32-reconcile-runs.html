@@ -1,0 +1,53 @@
+<!-- wf: name="reconcile-runs" title="Reconcile Runs" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Reconcile Runs</h1>
+  <p class="text-sm opacity-80">The identity pipeline — <span class="font-mono">ReconcileApps</span> from <span class="font-mono">ci.yml</span>, on every push to main. Separate from Builds: this tracks app/chart identity, not published artifacts.</p>
+</div>
+
+<div class="alert alert-info shadow-md mb-6">
+  <span>A <strong>Rejected — stale watermark</strong> sweep is expected, correct behavior, not a bug — it means state already reflects a commit newer than this one in history. See OPERATIONS.md "Why didn't my reconcile apply?" (issue #545).</span>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <table class="table">
+      <thead>
+        <tr><th>Sweep (commit)</th><th>Trigger</th><th>Status</th><th>Manifests changed</th><th class="text-right">When</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hover">
+          <td class="font-mono text-sm">3e9a7c1</td>
+          <td class="text-sm opacity-70">push to main</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Applied</span></td>
+          <td class="text-sm"><a href="#/app-detail" class="link">leaflab-ingest</a>, <a href="#/chart-detail" class="link">leaflab-edge</a></td>
+          <td class="text-right opacity-60">20m ago</td>
+        </tr>
+        <tr class="hover bg-warning/5">
+          <td class="font-mono text-sm">a04f21e</td>
+          <td class="text-sm opacity-70">push to main (re-run)</td>
+          <td>
+            <span class="badge badge-soft badge-warning badge-sm">Rejected — stale</span>
+          </td>
+          <td class="text-sm opacity-60">watermark already at <span class="font-mono">7bd6e02</span></td>
+          <td class="text-right opacity-60">45m ago</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm">7bd6e02</td>
+          <td class="text-sm opacity-70">push to main</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Applied</span></td>
+          <td class="text-sm"><a href="#/app-detail" class="link">manmanv2-worker</a></td>
+          <td class="text-right opacity-60">1h ago</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm">99c1b40</td>
+          <td class="text-sm opacity-70">push to main</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Applied</span></td>
+          <td class="text-sm opacity-50">none — manifest set byte-identical to previous sweep</td>
+          <td class="text-right opacity-60">1d ago</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: as of AR-8 (#592) this is a cheap, meaningful view — one row per sweep, content-addressed manifest history means "0 changed" is the common case and no longer a wall of duplicate rows. "Manifests changed" links straight to the app/chart whose identity actually moved, so a reconcile complaint can be chased without a direct DB query.</p>

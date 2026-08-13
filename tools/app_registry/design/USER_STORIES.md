@@ -150,3 +150,31 @@ implies a "deploy" or "sync" button.
     it's actually made of without leaving the UI.
     - Acceptance: an artifact detail view shows `contains` for chart
       artifacts, each linking to that image artifact's own detail.
+
+19. As the admin, from an app's page I want one click to the chart that
+    publishes it (when it's `VIA_CHART`), and from that chart's page one
+    click back to every app it publishes, so I never have to hold the
+    app↔chart relationship in my head or go find it myself.
+    - Acceptance: an app whose deploy unit involves a chart shows a "part of
+      chart" link; the chart's own page lists every app it currently
+      publishes, each linking back to that app's page.
+
+20. As the admin, I want every artifact CI has ever recorded for an app in
+    one place, separate from the promotion timeline, so I can answer "what
+    versions exist" without it being tangled up with "what's been promoted
+    where."
+    - Acceptance: a version-history view lists every recorded artifact for
+      one app (version, digest, provenance, build, current promotion state
+      if any), reachable with one click from that app's page.
+
+## Epic G — Troubleshooting the identity pipeline (reconcile)
+
+21. As the admin, I want to see the history of `ReconcileApps` sweeps
+    (applied vs. rejected as stale) separately from release/build
+    troubleshooting, so a "why didn't my app/chart identity update" question
+    doesn't get mixed up with "why didn't my release publish."
+    - Acceptance: a reconcile-runs view lists each sweep's commit, outcome,
+      and which app/chart manifests actually changed, linking to the
+      affected app/chart. A rejected sweep states plainly that this is
+      expected behavior (stale watermark), not a failure. Maps to AR-8's
+      `reconcile_run` + manifest history tables (#592).
