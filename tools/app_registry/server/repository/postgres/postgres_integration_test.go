@@ -106,14 +106,18 @@ func seedApp(t *testing.T, pool *pgxpool.Pool, domain, name, deployUnit string) 
 	return appID
 }
 
-// seedAppManifest writes one app_manifest snapshot row directly, bypassing
+// seedAppManifest writes one app_manifest CONTENT row plus an OPEN
+// app_manifest_history interval directly (migration 010, AR-8), bypassing
 // protojson -- a raw SQL fixture matching EXACTLY the key shape
 // postgres/app.go's manifestJSONMarshal produces (UseProtoNames,
 // EmitUnpopulated): snake_case keys, deploy_unit as the protojson enum NAME
-// ("DEPLOY_UNIT_IMAGE" etc, matching migration 008's generated-column CASE
-// expression), so tests can seed a specific (owner, git_sha) snapshot
-// directly -- e.g. to test resolveManifestForPublish's exact-commit
-// preference, or app_manifest's (owner_id, source_git_sha) idempotency.
+// ("DEPLOY_UNIT_IMAGE" etc, matching the generated-column CASE expression),
+// so tests can seed a specific (owner, git_sha) history entry directly --
+// e.g. to test resolveManifestForPublish's exact-commit preference. appID
+// is always freshly created by seedApp's caller, so there is never a
+// pre-existing open interval to close here -- this is a straight open, not
+// the full close-and-open compare-swap postgres/app.go's
+// recordAppManifestSweep performs.
 func seedAppManifest(t *testing.T, pool *pgxpool.Pool, appID, domain, name, deployUnit, gitSHA string) {
 	t.Helper()
 	protoDeployUnit := map[string]string{
@@ -127,21 +131,27 @@ func seedAppManifest(t *testing.T, pool *pgxpool.Pool, appID, domain, name, depl
 	}
 	manifestJSON := fmt.Sprintf(`{"domain":%q,"name":%q,"deploy_unit":%q,"registry":"","organization":"","repo_name":""}`,
 		domain, name, protoDeployUnit)
-	_, err := pool.Exec(context.Background(), `
-		INSERT INTO app_manifest (owner_id, source_git_sha, provenance, manifest_json)
-		VALUES ($1, $2, 'sweep', $3::jsonb)
-		ON CONFLICT (owner_id, source_git_sha) DO NOTHING`,
-		appID, gitSHA, manifestJSON)
-	if err != nil {
-		t.Fatalf("seed app_manifest for %s/%s: %v", domain, name, err)
+	ctx := context.Background()
+	var contentID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO app_manifest (owner_id, manifest_json)
+		VALUES ($1, $2::jsonb)
+		ON CONFLICT (owner_id, manifest_hash) DO UPDATE SET manifest_json = EXCLUDED.manifest_json
+		RETURNING app_manifest_id`, appID, manifestJSON).Scan(&contentID); err != nil {
+		t.Fatalf("seed app_manifest content for %s/%s: %v", domain, name, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO app_manifest_history (owner_id, app_manifest_id, valid_from, first_git_sha, last_git_sha)
+		VALUES ($1, $2, NOW(), $3, $3)`, appID, contentID, gitSHA); err != nil {
+		t.Fatalf("seed app_manifest_history for %s/%s: %v", domain, name, err)
 	}
 }
 
-// seedChart mirrors seedApp: pure identity plus one 'sweep'-provenance
-// chart_manifest snapshot, so any test that goes on to publish a chart
-// artifact finds a snapshot for resolveManifestForPublish to attribute it
-// to -- without one, RecordArtifact/BeginPublish for a chart kind would
-// fail with ErrFailedPrecondition ("no manifest snapshot recorded").
+// seedChart mirrors seedApp: pure identity plus one content row and one open
+// chart_manifest_history interval, so any test that goes on to publish a
+// chart artifact finds a CURRENT interval for resolveManifestForPublish to
+// attribute it to -- without one, RecordArtifact/BeginPublish for a chart
+// kind would fail with ErrFailedPrecondition ("no manifest recorded").
 func seedChart(t *testing.T, pool *pgxpool.Pool, domain, name string) string {
 	t.Helper()
 	ctx := context.Background()
@@ -153,12 +163,18 @@ func seedChart(t *testing.T, pool *pgxpool.Pool, domain, name string) string {
 		t.Fatalf("seed chart %s/%s: %v", domain, name, err)
 	}
 	manifestJSON := fmt.Sprintf(`{"domain":%q,"name":%q}`, domain, name)
+	var contentID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO chart_manifest (owner_id, manifest_json)
+		VALUES ($1, $2::jsonb)
+		ON CONFLICT (owner_id, manifest_hash) DO UPDATE SET manifest_json = EXCLUDED.manifest_json
+		RETURNING chart_manifest_id`, chartID, manifestJSON).Scan(&contentID); err != nil {
+		t.Fatalf("seed chart_manifest content for %s/%s: %v", domain, name, err)
+	}
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO chart_manifest (owner_id, source_git_sha, provenance, manifest_json)
-		VALUES ($1, $2, 'sweep', $3::jsonb)
-		ON CONFLICT (owner_id, source_git_sha) DO NOTHING`,
-		chartID, "seed-"+uuid.NewString(), manifestJSON); err != nil {
-		t.Fatalf("seed chart_manifest for %s/%s: %v", domain, name, err)
+		INSERT INTO chart_manifest_history (owner_id, chart_manifest_id, valid_from, first_git_sha, last_git_sha)
+		VALUES ($1, $2, NOW(), $3, $3)`, chartID, contentID, "seed-"+uuid.NewString()); err != nil {
+		t.Fatalf("seed chart_manifest_history for %s/%s: %v", domain, name, err)
 	}
 	return chartID
 }
@@ -2658,36 +2674,56 @@ func TestMigration007FoldsVersionAllocationIntoArtifact(t *testing.T) {
 // 10. App identity / manifest snapshot split (AR-7c, migration 008, issue #558)
 // ============================================================================
 
-// appManifestRow reads back one app_manifest row's generated columns plus
-// the raw manifest_json, for asserting the generated-column derivation
-// directly against real Postgres (not just through v_current_app).
-func appManifestRow(t *testing.T, pool *pgxpool.Pool, appID, gitSHA string) (deployUnit, imageRepository string, found bool) {
+// appManifestReleaseRow reads back one app_manifest_release row's joined
+// content generated columns, for asserting the generated-column derivation
+// directly against real Postgres (not just through v_current_app) at an
+// exact release commit (migration 010, AR-8).
+func appManifestReleaseRow(t *testing.T, pool *pgxpool.Pool, appID, gitSHA string) (deployUnit, imageRepository string, found bool) {
 	t.Helper()
 	err := pool.QueryRow(context.Background(), `
-		SELECT deploy_unit, image_repository FROM app_manifest WHERE owner_id = $1 AND source_git_sha = $2`,
-		appID, gitSHA).Scan(&deployUnit, &imageRepository)
+		SELECT m.deploy_unit, m.image_repository
+		FROM app_manifest_release r
+		JOIN app_manifest m ON m.app_manifest_id = r.app_manifest_id
+		WHERE r.owner_id = $1 AND r.git_sha = $2`, appID, gitSHA).Scan(&deployUnit, &imageRepository)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", false
 	}
 	if err != nil {
-		t.Fatalf("read app_manifest for %s/%s: %v", appID, gitSHA, err)
+		t.Fatalf("read app_manifest_release for %s/%s: %v", appID, gitSHA, err)
 	}
 	return deployUnit, imageRepository, true
 }
 
-func appManifestSnapshotCount(t *testing.T, pool *pgxpool.Pool, appID string) int {
+// appManifestContentCount counts DISTINCT-manifest content rows (migration
+// 010, AR-8) -- one per manifest ever seen for this owner, not one per
+// commit.
+func appManifestContentCount(t *testing.T, pool *pgxpool.Pool, appID string) int {
 	t.Helper()
 	var n int
 	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM app_manifest WHERE owner_id = $1`, appID).Scan(&n); err != nil {
-		t.Fatalf("count app_manifest rows for %s: %v", appID, err)
+		t.Fatalf("count app_manifest content rows for %s: %v", appID, err)
+	}
+	return n
+}
+
+// appManifestHistoryCount counts app_manifest_history rows (the `main`
+// sweep timeline, migration 010, AR-8) for this owner.
+func appManifestHistoryCount(t *testing.T, pool *pgxpool.Pool, appID string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM app_manifest_history WHERE owner_id = $1`, appID).Scan(&n); err != nil {
+		t.Fatalf("count app_manifest_history rows for %s: %v", appID, err)
 	}
 	return n
 }
 
 // TestAssertApps_CreatesIdentityAndSnapshot_Postgres proves AR-7c's AssertApps
-// against real Postgres: identity row created, exactly one app_manifest
-// snapshot written, and the generated deploy_unit/image_repository columns
-// resolve correctly straight off manifest_json.
+// against real Postgres, updated for AR-8/migration 010's content+release
+// split: identity row created, exactly one app_manifest content row and one
+// app_manifest_release row written, the generated deploy_unit/
+// image_repository columns resolve correctly straight off manifest_json, and
+// (the AR-8 acceptance criterion) AssertApps NEVER writes to
+// app_manifest_history -- that stays ReconcileApps/sweep-only.
 func TestAssertApps_CreatesIdentityAndSnapshot_Postgres(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	ctx := authedCtx()
@@ -2709,12 +2745,12 @@ func TestAssertApps_CreatesIdentityAndSnapshot_Postgres(t *testing.T) {
 	}
 	appID := resp.CreatedApps[0].AppId
 
-	if n := appManifestSnapshotCount(t, pool, appID); n != 1 {
-		t.Fatalf("expected exactly 1 app_manifest snapshot, got %d", n)
+	if n := appManifestContentCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected exactly 1 app_manifest content row, got %d", n)
 	}
-	du, repoCol, found := appManifestRow(t, pool, appID, "sha-assert-1")
+	du, repoCol, found := appManifestReleaseRow(t, pool, appID, "sha-assert-1")
 	if !found {
-		t.Fatalf("expected an app_manifest row keyed (owner_id=%s, source_git_sha=sha-assert-1)", appID)
+		t.Fatalf("expected an app_manifest_release row keyed (owner_id=%s, git_sha=sha-assert-1)", appID)
 	}
 	if du != "image" {
 		t.Fatalf("expected the generated deploy_unit column to resolve 'image', got %q", du)
@@ -2723,25 +2759,32 @@ func TestAssertApps_CreatesIdentityAndSnapshot_Postgres(t *testing.T) {
 		t.Fatalf("expected the generated image_repository column to resolve 'ghcr.io/acme/acme-assert-svc', got %q", repoCol)
 	}
 
-	// The provenance recorded is 'release', not 'sweep' -- AssertApps, not
-	// ReconcileApps.
-	var provenance string
-	if err := pool.QueryRow(ctx, `SELECT provenance FROM app_manifest WHERE owner_id = $1`, appID).Scan(&provenance); err != nil {
-		t.Fatalf("read provenance: %v", err)
-	}
-	if provenance != "release" {
-		t.Fatalf("expected provenance 'release' for an AssertApps snapshot, got %q", provenance)
+	if n := appManifestHistoryCount(t, pool, appID); n != 0 {
+		t.Fatalf("expected AssertApps to write zero app_manifest_history rows (sweep-only), got %d", n)
 	}
 }
 
-// TestAppManifestSnapshot_IdempotentOnOwnerGitSha proves migration 008's
-// UNIQUE (owner_id, source_git_sha) is what makes repeated AssertApps calls
-// for the SAME commit naturally idempotent -- a real release re-run (same
-// git_sha, different idempotency_key) writes no new snapshot row.
+// TestAppManifestSnapshot_IdempotentOnOwnerGitSha proves migration 010's
+// UNIQUE (owner_id, git_sha) on app_manifest_release is what makes repeated
+// AssertApps calls for the SAME commit naturally idempotent -- a real
+// release re-run (same git_sha, different idempotency_key) writes no new
+// release row. Also proves the AR-8 content-addressing point directly: a
+// genuinely NEW commit with IDENTICAL manifest content writes a new release
+// row (a new commit was observed) but NOT a new content row (the content
+// already exists) -- row count now scales with content change, not commits.
 func TestAppManifestSnapshot_IdempotentOnOwnerGitSha(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	ctx := authedCtx()
 	srv := handlers.NewAppServer(reg)
+
+	appManifestReleaseCount := func(appID string) int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM app_manifest_release WHERE owner_id = $1`, appID).Scan(&n); err != nil {
+			t.Fatalf("count app_manifest_release rows for %s: %v", appID, err)
+		}
+		return n
+	}
 
 	am := oneAppManifest("acme", "idem-svc")
 	first, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
@@ -2754,29 +2797,35 @@ func TestAppManifestSnapshot_IdempotentOnOwnerGitSha(t *testing.T) {
 	appID := first.CreatedApps[0].AppId
 
 	// Re-run with a DIFFERENT idempotency_key (a real second CI attempt, not
-	// a replay) but the SAME git_sha -- this must still write no NEW
-	// snapshot row, because ON CONFLICT (owner_id, source_git_sha) DO
-	// NOTHING is what carries the idempotency here, not the idempotency_key
-	// table.
+	// a replay) but the SAME git_sha -- this must still write no NEW release
+	// row, because ON CONFLICT (owner_id, git_sha) DO NOTHING is what
+	// carries the idempotency here, not the idempotency_key table.
 	if _, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
 		Manifests:      reconcileManifests("sha-idem", 100, 100, []*appmetapb.AppManifest{am}, nil),
 		IdempotencyKey: "assert-idem-2",
 	}); err != nil {
 		t.Fatalf("second assert (same git_sha): %v", err)
 	}
-	if n := appManifestSnapshotCount(t, pool, appID); n != 1 {
-		t.Fatalf("expected exactly 1 snapshot after two calls for the SAME git_sha, got %d", n)
+	if n := appManifestContentCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected exactly 1 content row after two calls for the SAME git_sha, got %d", n)
+	}
+	if n := appManifestReleaseCount(appID); n != 1 {
+		t.Fatalf("expected exactly 1 release row after two calls for the SAME git_sha, got %d", n)
 	}
 
-	// A DIFFERENT git_sha for the same owner DOES write a new snapshot.
+	// A DIFFERENT git_sha, SAME manifest content: a new release row (a new
+	// commit was genuinely observed), but content stays deduped at 1 row.
 	if _, err := srv.AssertApps(ctx, &pb.AssertAppsRequest{
 		Manifests:      reconcileManifests("sha-idem-2", 200, 200, []*appmetapb.AppManifest{am}, nil),
 		IdempotencyKey: "assert-idem-3",
 	}); err != nil {
 		t.Fatalf("third assert (new git_sha): %v", err)
 	}
-	if n := appManifestSnapshotCount(t, pool, appID); n != 2 {
-		t.Fatalf("expected 2 snapshots after a genuinely new commit, got %d", n)
+	if n := appManifestContentCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected content to stay deduped at 1 row (identical manifest, new commit), got %d", n)
+	}
+	if n := appManifestReleaseCount(appID); n != 2 {
+		t.Fatalf("expected 2 release rows after a genuinely new commit, got %d", n)
 	}
 }
 
@@ -2932,14 +2981,17 @@ func TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres(t *testing.T) 
 	// absence sweep has never run, so nothing about `app` beyond identity
 	// (domain/name/status/timestamps) was ever written for this owner --
 	// confirmed by the fact this app never shows up in chart_app (there is
-	// no chart here) and its ONLY manifest snapshot is the AssertApps one
-	// at sha-unmerged-1, never superseded by a 'sweep' snapshot.
+	// no chart here), its ONLY manifest content row is the AssertApps one at
+	// sha-unmerged-1, and app_manifest_history (sweep-only) has zero rows.
 	appID, err := reg.Apps().GetAppByFullName(ctx, "acme-unmerged-branch-app")
 	if err != nil {
 		t.Fatalf("get app: %v", err)
 	}
-	if n := appManifestSnapshotCount(t, pool, appID.AppID); n != 1 {
-		t.Fatalf("expected exactly 1 manifest snapshot (the AssertApps one), got %d", n)
+	if n := appManifestContentCount(t, pool, appID.AppID); n != 1 {
+		t.Fatalf("expected exactly 1 manifest content row (the AssertApps one), got %d", n)
+	}
+	if n := appManifestHistoryCount(t, pool, appID.AppID); n != 0 {
+		t.Fatalf("expected zero app_manifest_history rows -- ReconcileApps never ran, got %d", n)
 	}
 }
 
@@ -3008,6 +3060,243 @@ func TestRecordArtifact_PromotabilityIsNotRetroactive_Postgres(t *testing.T) {
 	}
 }
 
+// currentAppHistoryRow reads back the owner's OPEN app_manifest_history
+// interval (valid_to IS NULL) -- there must be exactly one, per the unique
+// partial index app_manifest_history_current_idx.
+func currentAppHistoryRow(t *testing.T, pool *pgxpool.Pool, appID string) (contentID, firstGitSHA, lastGitSHA string) {
+	t.Helper()
+	err := pool.QueryRow(context.Background(), `
+		SELECT app_manifest_id, first_git_sha, last_git_sha
+		FROM app_manifest_history WHERE owner_id = $1 AND valid_to IS NULL`, appID).
+		Scan(&contentID, &firstGitSHA, &lastGitSHA)
+	if err != nil {
+		t.Fatalf("read current app_manifest_history row for %s: %v", appID, err)
+	}
+	return contentID, firstGitSHA, lastGitSHA
+}
+
+// TestReconcile_ManifestHistorySCD2_Postgres proves migration 010's SCD2
+// close-and-open write path (postgres/app.go's recordAppManifestSweep)
+// against real Postgres -- AR-8's central acceptance criteria: a sweep where
+// nothing changed writes ZERO new content/history rows (only last_git_sha
+// advances), and a sweep where the manifest changed closes exactly the open
+// interval and opens exactly one new one.
+func TestReconcile_ManifestHistorySCD2_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	am := &appmetapb.AppManifest{Domain: "acme", Name: "scd2-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE}
+	created, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-scd2-1", 100, 100, []*appmetapb.AppManifest{am}, nil),
+		IdempotencyKey: "scd2-1",
+	})
+	if err != nil {
+		t.Fatalf("initial reconcile: %v", err)
+	}
+	appID := created.CreatedApps[0].AppId
+
+	if n := appManifestContentCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected 1 content row after the first sweep, got %d", n)
+	}
+	if n := appManifestHistoryCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected 1 history row (opened) after the first sweep, got %d", n)
+	}
+	firstContentID, _, lastGitSHA := currentAppHistoryRow(t, pool, appID)
+	if lastGitSHA != "sha-scd2-1" {
+		t.Fatalf("expected last_git_sha 'sha-scd2-1', got %q", lastGitSHA)
+	}
+
+	// A second sweep of the SAME manifest content, a NEW commit: zero new
+	// content/history rows -- only last_git_sha advances.
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-scd2-2", 200, 200, []*appmetapb.AppManifest{am}, nil),
+		IdempotencyKey: "scd2-2",
+	}); err != nil {
+		t.Fatalf("no-op sweep: %v", err)
+	}
+	if n := appManifestContentCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected content to STAY at 1 row after a no-op sweep, got %d", n)
+	}
+	if n := appManifestHistoryCount(t, pool, appID); n != 1 {
+		t.Fatalf("expected history to STAY at 1 row after a no-op sweep, got %d", n)
+	}
+	unchangedContentID, _, lastGitSHA := currentAppHistoryRow(t, pool, appID)
+	if unchangedContentID != firstContentID {
+		t.Fatalf("expected the SAME content row after a no-op sweep, got a different app_manifest_id")
+	}
+	if lastGitSHA != "sha-scd2-2" {
+		t.Fatalf("expected last_git_sha to advance to 'sha-scd2-2', got %q", lastGitSHA)
+	}
+
+	// A third sweep with a GENUINELY different manifest: closes the open
+	// interval and opens exactly one new one.
+	changed := &appmetapb.AppManifest{Domain: "acme", Name: "scd2-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART}
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-scd2-3", 300, 300, []*appmetapb.AppManifest{changed}, nil),
+		IdempotencyKey: "scd2-3",
+	}); err != nil {
+		t.Fatalf("changed sweep: %v", err)
+	}
+	if n := appManifestContentCount(t, pool, appID); n != 2 {
+		t.Fatalf("expected 2 content rows after a genuinely changed sweep, got %d", n)
+	}
+	if n := appManifestHistoryCount(t, pool, appID); n != 2 {
+		t.Fatalf("expected exactly 2 history rows (one closed, one opened) after a changed sweep, got %d", n)
+	}
+	newContentID, firstGitSHA, lastGitSHA := currentAppHistoryRow(t, pool, appID)
+	if newContentID == firstContentID {
+		t.Fatalf("expected the NEW open interval to point at a NEW content row")
+	}
+	if firstGitSHA != "sha-scd2-3" || lastGitSHA != "sha-scd2-3" {
+		t.Fatalf("expected the new interval's first/last_git_sha to both be 'sha-scd2-3', got first=%q last=%q", firstGitSHA, lastGitSHA)
+	}
+	var closedValidTo *time.Time
+	if err := pool.QueryRow(context.Background(), `
+		SELECT valid_to FROM app_manifest_history WHERE owner_id = $1 AND app_manifest_id = $2`, appID, firstContentID).
+		Scan(&closedValidTo); err != nil {
+		t.Fatalf("read closed interval's valid_to: %v", err)
+	}
+	if closedValidTo == nil {
+		t.Fatalf("expected the superseded interval's valid_to to be set (closed), got NULL")
+	}
+}
+
+// TestReconcile_AThenBThenAProducesThreeNonOverlappingIntervals_Postgres is
+// AR-8's A -> B -> A acceptance criterion: editing a manifest, then
+// reverting it, must NOT merge the two "A" periods into one interval that
+// spans "B" -- it must produce three separate, correctly-ordered,
+// non-overlapping intervals.
+func TestReconcile_AThenBThenAProducesThreeNonOverlappingIntervals_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	manifestA := &appmetapb.AppManifest{Domain: "acme", Name: "aba-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE}
+	manifestB := &appmetapb.AppManifest{Domain: "acme", Name: "aba-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART}
+
+	created, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-aba-1", 100, 100, []*appmetapb.AppManifest{manifestA}, nil),
+		IdempotencyKey: "aba-1",
+	})
+	if err != nil {
+		t.Fatalf("sweep A: %v", err)
+	}
+	appID := created.CreatedApps[0].AppId
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-aba-2", 200, 200, []*appmetapb.AppManifest{manifestB}, nil),
+		IdempotencyKey: "aba-2",
+	}); err != nil {
+		t.Fatalf("sweep B: %v", err)
+	}
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests:      reconcileManifests("sha-aba-3", 300, 300, []*appmetapb.AppManifest{manifestA}, nil),
+		IdempotencyKey: "aba-3",
+	}); err != nil {
+		t.Fatalf("sweep A again: %v", err)
+	}
+
+	if n := appManifestContentCount(t, pool, appID); n != 2 {
+		t.Fatalf("expected 2 DISTINCT content rows (A and B; A is not re-inserted), got %d", n)
+	}
+	if n := appManifestHistoryCount(t, pool, appID); n != 3 {
+		t.Fatalf("expected 3 history intervals (A, B, A) -- not 2 (which would mean the second A merged into the first), got %d", n)
+	}
+
+	rows, err := pool.Query(context.Background(), `
+		SELECT first_git_sha, valid_from, valid_to FROM app_manifest_history
+		WHERE owner_id = $1 ORDER BY valid_from`, appID)
+	if err != nil {
+		t.Fatalf("query intervals: %v", err)
+	}
+	defer rows.Close()
+	var shas []string
+	var froms []time.Time
+	var tos []*time.Time
+	for rows.Next() {
+		var sha string
+		var from time.Time
+		var to *time.Time
+		if err := rows.Scan(&sha, &from, &to); err != nil {
+			t.Fatalf("scan interval: %v", err)
+		}
+		shas = append(shas, sha)
+		froms = append(froms, from)
+		tos = append(tos, to)
+	}
+	if len(shas) != 3 {
+		t.Fatalf("expected 3 ordered intervals, got %d", len(shas))
+	}
+	if shas[0] != "sha-aba-1" || shas[1] != "sha-aba-2" || shas[2] != "sha-aba-3" {
+		t.Fatalf("expected intervals in commit order sha-aba-1, sha-aba-2, sha-aba-3, got %v", shas)
+	}
+	if tos[2] != nil {
+		t.Fatalf("expected the LAST interval to still be open (valid_to NULL), got %v", *tos[2])
+	}
+	// Non-overlapping and correctly chained: each interval's valid_to equals
+	// the next interval's valid_from.
+	if tos[0] == nil || !tos[0].Equal(froms[1]) {
+		t.Fatalf("expected interval 1's valid_to to equal interval 2's valid_from")
+	}
+	if tos[1] == nil || !tos[1].Equal(froms[2]) {
+		t.Fatalf("expected interval 2's valid_to to equal interval 3's valid_from")
+	}
+}
+
+// TestResolveManifestForPublish_PrefersExactBuildCommit_Postgres proves
+// currentAppManifest's tier-1 fallback (postgres/artifact.go): a build whose
+// commit has an exact app_manifest_release observation is attributed to
+// THAT content, not the owner's newest `main`-sweep content -- a build's
+// promotability must derive from its OWN manifest.
+func TestResolveManifestForPublish_PrefersExactBuildCommit_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := authedCtx()
+	appSrv := handlers.NewAppServer(reg)
+	artSrv := handlers.NewArtifactServer(reg)
+
+	// main's current sweep content: CHART (not promotable on its own).
+	created, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-exact-main", 100, 100,
+			[]*appmetapb.AppManifest{{Domain: "acme", Name: "exact-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART}}, nil),
+		IdempotencyKey: "exact-main-1",
+	})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	_ = created
+
+	// A divergent release branch at its OWN commit: IMAGE.
+	if _, err := appSrv.AssertApps(ctx, &pb.AssertAppsRequest{
+		Manifests: reconcileManifests("sha-exact-release", 50, 50,
+			[]*appmetapb.AppManifest{{Domain: "acme", Name: "exact-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE}}, nil),
+		IdempotencyKey: "exact-release-1",
+	}); err != nil {
+		t.Fatalf("assert: %v", err)
+	}
+
+	// A build recorded at the RELEASE branch's commit must resolve to that
+	// release's IMAGE manifest (PROMOTABLE), not main's current CHART one
+	// (VIA_CHART).
+	var buildID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO build (git_sha, workflow_run_id) VALUES ('sha-exact-release', 'run-exact')
+		RETURNING build_id`).Scan(&buildID); err != nil {
+		t.Fatalf("seed build: %v", err)
+	}
+	resp, err := artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-exact-svc", Version: "v1.0.0", Digest: "sha256:exact1",
+		IdempotencyKey: "exact-artifact-1",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+	if resp.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("expected PROMOTABLE (the release commit's own IMAGE manifest), got %v -- resolveManifestForPublish did not prefer the exact build commit", resp.Artifact.Promotability)
+	}
+}
+
 // TestMigration008BackfillsSnapshotsFromExistingRows applies migrations
 // 001-007 against a fresh database, seeds `app`/`chart` rows in the
 // PRE-008 shape (mutable columns directly on the table, as every
@@ -3060,12 +3349,17 @@ func TestMigration008BackfillsSnapshotsFromExistingRows(t *testing.T) {
 		t.Fatalf("advance watermark: %v", err)
 	}
 
-	if err := runner.Up(); err != nil {
+	// Steps(1), not Up() -- migrations 009/010 also exist beyond 008 now;
+	// this test isolates 008's OWN backfill logic in the exact pre-009/010
+	// schema shape it was written against. Migration 010's own backfill (a
+	// different, later transformation of these same tables) has its own
+	// test below.
+	if err := runner.Steps(1); err != nil {
 		t.Fatalf("apply migration 008: %v", err)
 	}
 
 	// Exactly one snapshot each, attributed to the watermark's git_sha.
-	if n := appManifestSnapshotCount(t, db.Pool, appID); n != 1 {
+	if n := appManifestContentCount(t, db.Pool, appID); n != 1 {
 		t.Fatalf("expected exactly 1 backfilled app_manifest row, got %d", n)
 	}
 	var appSnapGitSHA string
@@ -3114,6 +3408,228 @@ func TestMigration008BackfillsSnapshotsFromExistingRows(t *testing.T) {
 	}
 	if appHasDeployUnit {
 		t.Fatalf("expected migration 008 to have dropped app.deploy_unit")
+	}
+}
+
+// TestMigration010BackfillsHistoryFromExistingRows applies migrations
+// 001-009 (the full migration-008 per-commit-snapshot shape), seeds an app
+// with three sweep snapshots forming an A -> B -> A sequence plus one
+// release-provenance snapshot from a divergent commit, and an artifact row
+// whose manifest_id points at the OLD per-commit "B" row, then applies
+// migration 010 and proves every AR-8 backfill acceptance criterion at
+// once: content deduplicates to one row per DISTINCT manifest (3 here: A's
+// content, B's content, the release's content -- A's second occurrence is
+// NOT a 4th row), app_manifest_history collapses to exactly 3
+// non-overlapping intervals in commit order with the LAST one open and
+// pointing at A's content again (the revert), app_manifest_release gets
+// exactly the one release row, v_current_app reflects the reverted-to-A
+// content, and artifact.manifest_id is remapped to the NEW content row that
+// has the SAME manifest_json the old "B" row had.
+func TestMigration010BackfillsHistoryFromExistingRows(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	if err != nil {
+		t.Fatalf("open database/sql handle: %v", err)
+	}
+	defer sqlDB.Close()
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	if err := runner.Steps(9); err != nil {
+		t.Fatalf("apply migrations 001-009: %v", err)
+	}
+
+	var appID string
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO app (domain, name) VALUES ('acme', 'aba-migration-app')
+		RETURNING app_id`).Scan(&appID); err != nil {
+		t.Fatalf("seed app: %v", err)
+	}
+	var chartID string
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO chart (domain, name) VALUES ('acme', 'aba-migration-chart')
+		RETURNING chart_id`).Scan(&chartID); err != nil {
+		t.Fatalf("seed chart: %v", err)
+	}
+
+	seedOldAppManifest := func(gitSHA string, committedAt int64, provenance, deployUnit string) string {
+		t.Helper()
+		manifestJSON := fmt.Sprintf(`{"domain":"acme","name":"aba-migration-app","deploy_unit":%q,"registry":"","organization":"","repo_name":""}`, deployUnit)
+		var id string
+		if err := db.Pool.QueryRow(ctx, `
+			INSERT INTO app_manifest (owner_id, source_git_sha, source_committed_at, provenance, manifest_json)
+			VALUES ($1, $2, $3, $4, $5::jsonb)
+			RETURNING app_manifest_id`, appID, gitSHA, committedAt, provenance, manifestJSON).Scan(&id); err != nil {
+			t.Fatalf("seed old app_manifest %s: %v", gitSHA, err)
+		}
+		return id
+	}
+	seedOldAppManifest("sha-mig-a1", 100, "sweep", "DEPLOY_UNIT_IMAGE")          // A
+	bRowID := seedOldAppManifest("sha-mig-b", 200, "sweep", "DEPLOY_UNIT_CHART") // B
+	seedOldAppManifest("sha-mig-a2", 300, "sweep", "DEPLOY_UNIT_IMAGE")          // A again (reverts)
+	seedOldAppManifest("sha-mig-release", 150, "release", "DEPLOY_UNIT_NONE")    // divergent release
+
+	if _, err := db.Pool.Exec(ctx, `
+		INSERT INTO chart_manifest (owner_id, source_git_sha, source_committed_at, provenance, manifest_json)
+		VALUES ($1, 'sha-mig-chart', 100, 'sweep', '{"domain":"acme","name":"aba-migration-chart"}'::jsonb)`,
+		chartID); err != nil {
+		t.Fatalf("seed chart_manifest: %v", err)
+	}
+
+	buildID := seedBuild(t, db.Pool, "run-migration-010")
+	var artifactID string
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id, state, provenance, version_source, promotability, manifest_id)
+		VALUES ('image', $1, 'ghcr.io/acme/aba-migration-app', 'v1.0.0', 'sha256:mig1', $2, 'published', 'observed', 'tag', 'via_chart', $3)
+		RETURNING artifact_id`, appID, buildID, bRowID).Scan(&artifactID); err != nil {
+		t.Fatalf("seed artifact pointing at B's old snapshot: %v", err)
+	}
+
+	if err := runner.Steps(1); err != nil {
+		t.Fatalf("apply migration 010: %v", err)
+	}
+
+	if n := appManifestContentCount(t, db.Pool, appID); n != 3 {
+		t.Fatalf("expected 3 distinct content rows (A, B, release), got %d", n)
+	}
+	if n := appManifestHistoryCount(t, db.Pool, appID); n != 3 {
+		t.Fatalf("expected 3 history intervals (A, B, A again -- not collapsed), got %d", n)
+	}
+
+	rows, err := db.Pool.Query(ctx, `
+		SELECT first_git_sha, valid_to FROM app_manifest_history WHERE owner_id = $1 ORDER BY valid_from`, appID)
+	if err != nil {
+		t.Fatalf("query backfilled intervals: %v", err)
+	}
+	var shas []string
+	var openCount int
+	for rows.Next() {
+		var sha string
+		var validTo *time.Time
+		if err := rows.Scan(&sha, &validTo); err != nil {
+			t.Fatalf("scan interval: %v", err)
+		}
+		shas = append(shas, sha)
+		if validTo == nil {
+			openCount++
+		}
+	}
+	rows.Close()
+	if len(shas) != 3 || shas[0] != "sha-mig-a1" || shas[1] != "sha-mig-b" || shas[2] != "sha-mig-a2" {
+		t.Fatalf("expected backfilled intervals in commit order [sha-mig-a1 sha-mig-b sha-mig-a2], got %v", shas)
+	}
+	if openCount != 1 {
+		t.Fatalf("expected exactly 1 open interval, got %d", openCount)
+	}
+
+	var releaseCount int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM app_manifest_release WHERE owner_id = $1 AND git_sha = 'sha-mig-release'`, appID).Scan(&releaseCount); err != nil {
+		t.Fatalf("count app_manifest_release: %v", err)
+	}
+	if releaseCount != 1 {
+		t.Fatalf("expected exactly 1 backfilled app_manifest_release row, got %d", releaseCount)
+	}
+
+	if n := appManifestContentCount(t, db.Pool, chartID); n != 1 {
+		t.Fatalf("expected 1 backfilled chart content row, got %d", n)
+	}
+	if n := appManifestHistoryCount(t, db.Pool, chartID); n != 1 {
+		t.Fatalf("expected 1 backfilled chart_manifest_history row, got %d", n)
+	}
+
+	// v_current_app must reflect the REVERTED-TO-A content (the newest
+	// sweep), not B.
+	var currentDeployUnit string
+	if err := db.Pool.QueryRow(ctx, `SELECT deploy_unit FROM v_current_app WHERE app_id = $1`, appID).Scan(&currentDeployUnit); err != nil {
+		t.Fatalf("read v_current_app: %v", err)
+	}
+	if currentDeployUnit != "image" {
+		t.Fatalf("expected v_current_app.deploy_unit = 'image' (A, the reverted-to content), got %q", currentDeployUnit)
+	}
+
+	// artifact.manifest_id was remapped to a NEW content row carrying the
+	// SAME manifest_json B's old row had.
+	var remappedID string
+	var remappedDeployUnit string
+	if err := db.Pool.QueryRow(ctx, `SELECT manifest_id FROM artifact WHERE artifact_id = $1`, artifactID).Scan(&remappedID); err != nil {
+		t.Fatalf("read remapped artifact.manifest_id: %v", err)
+	}
+	if remappedID == bRowID {
+		t.Fatalf("expected manifest_id to be remapped away from the OLD per-commit row id")
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT deploy_unit FROM app_manifest WHERE app_manifest_id = $1`, remappedID).Scan(&remappedDeployUnit); err != nil {
+		t.Fatalf("read remapped content row: %v", err)
+	}
+	if remappedDeployUnit != "chart" {
+		t.Fatalf("expected the remapped content row to carry B's manifest (deploy_unit='chart'), got %q", remappedDeployUnit)
+	}
+}
+
+// TestMigration010DownRestoresPreMigrationShape proves 010_*.down.sql
+// round-trips: after applying 010 over seeded pre-010 data and then rolling
+// it back, app_manifest/chart_manifest exist again in the migration-008
+// shape (source_git_sha/provenance columns) and v_current_app still resolves
+// -- matching this migration set's established "best-effort restore, not
+// full fidelity" down-migration convention (migrations 003/007/008).
+func TestMigration010DownRestoresPreMigrationShape(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	if err != nil {
+		t.Fatalf("open database/sql handle: %v", err)
+	}
+	defer sqlDB.Close()
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	if err := runner.Up(); err != nil {
+		t.Fatalf("apply all migrations including 010: %v", err)
+	}
+
+	// Write real post-010 data through the actual repository, not raw SQL,
+	// so the round-trip exercises the real write path.
+	reg := NewRepository(db.Pool)
+	ctxAuthed := authedCtx()
+	srv := handlers.NewAppServer(reg)
+	if _, err := srv.ReconcileApps(ctxAuthed, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-down-1", 100, 100,
+			[]*appmetapb.AppManifest{{Domain: "acme", Name: "down-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE}}, nil),
+		IdempotencyKey: "down-1",
+	}); err != nil {
+		t.Fatalf("seed via real ReconcileApps: %v", err)
+	}
+
+	if err := runner.Steps(-1); err != nil {
+		t.Fatalf("roll back migration 010: %v", err)
+	}
+
+	var appHasSourceGitSha bool
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'app_manifest' AND column_name = 'source_git_sha')`).
+		Scan(&appHasSourceGitSha); err != nil {
+		t.Fatalf("check app_manifest.source_git_sha column existence: %v", err)
+	}
+	if !appHasSourceGitSha {
+		t.Fatalf("expected the down migration to restore app_manifest.source_git_sha")
+	}
+
+	var deployUnit string
+	if err := db.Pool.QueryRow(ctx, `SELECT deploy_unit FROM v_current_app WHERE domain = 'acme' AND name = 'down-svc'`).Scan(&deployUnit); err != nil {
+		t.Fatalf("read v_current_app after rollback: %v", err)
+	}
+	if deployUnit != "image" {
+		t.Fatalf("expected v_current_app to still resolve deploy_unit='image' after rollback, got %q", deployUnit)
+	}
+
+	var newTablesExist bool
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'app_manifest_history')`).
+		Scan(&newTablesExist); err != nil {
+		t.Fatalf("check app_manifest_history table existence: %v", err)
+	}
+	if newTablesExist {
+		t.Fatalf("expected the down migration to drop app_manifest_history")
 	}
 }
 

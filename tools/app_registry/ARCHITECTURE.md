@@ -100,12 +100,16 @@ erDiagram
 | `version_allocation` | append-only | AR-5a. `AllocateVersion`'s reservation ledger — see "Version model" below. |
 | `domain_adoption` | mutable | One row per domain; `stage` ∈ observe/promote/allocate. See "Resolved questions" #3. |
 | `reconcile_watermark` | singleton, mutable | Migration 006 (issue #545). Exactly one row (`id = 1`), seeded as a sentinel. Guards `Reconcile` against a stale (older-commit) call — see "Reconcile watermark" below. |
+| `app_manifest` / `chart_manifest` | append-only, content-addressed | Migration 010 (AR-8, issue #587). One row per DISTINCT manifest per owner, ever — `UNIQUE (owner_id, manifest_hash)`. `app`/`chart` themselves are pure identity (`domain`, `name`, `status`, first/last-seen); everything else is read off the owner's CURRENT manifest via `v_current_app`/`v_current_chart`. See "App identity vs. per-build manifest snapshot" below. |
+| `app_manifest_history` / `chart_manifest_history` | **SCD2** | Migration 010 (AR-8). The `main` sweep timeline — `valid_from`/`valid_to`, written ONLY by `ReconcileApps`. Partial unique index on current (`valid_to IS NULL`) rows backs `v_current_app`'s point lookup. |
+| `app_manifest_release` / `chart_manifest_release` | append-only | Migration 010 (AR-8). One row per `(owner, git_sha)` observed by `AssertApps`, from any ref. Keeps `resolveManifestForPublish`'s exact-commit preference working without perturbing the `main` timeline. |
+| `reconcile_run` | append-only | Migration 010 (AR-8). One row per sweep that actually applies — replaces the old one-row-per-app-per-sweep record `app_manifest` used to be. |
 
-**Planned (AR-7, issue #558; none of this is built):** `artifact` gains
-`state`/`provenance`/`version_source` with nullable `digest`/`build_id`, absorbing
-`version_allocation`, which is dropped; `app`/`chart` shed their mutable
-metadata to new append-only `app_manifest`/`chart_manifest` snapshot tables and
-a `v_current_app` view. See "Release lifecycle (issue #558)" below.
+`artifact` gained `state`/`provenance`/`version_source` with nullable
+`digest`/`build_id` in AR-7b (migration 007), absorbing `version_allocation`,
+which was dropped, and gained `manifest_id`/`promotability` in AR-7c
+(migration 008). AR-7 (issue #558) is fully merged — see "Release lifecycle
+(issue #558)" below.
 
 ### SCD2 on `promotion`
 
@@ -683,6 +687,74 @@ row that predates it, from the CURRENT (about-to-be-dropped)
 promotability via a live join; those rows' `manifest_id` is left `NULL`
 (no snapshot honestly represents what was live when they actually
 published).
+
+**As built (AR-8, migration `010`, issue #587).** Migration 008's
+`app_manifest`/`chart_manifest` wrote one row per owner on EVERY sweep,
+unconditionally — ~13.6k rows/year in this repo, ~99% byte-identical to
+their predecessor (issue #581). Migration 010 splits content from timeline,
+replacing those two tables with four per side:
+
+- `app_manifest`/`chart_manifest` are now **content-addressed**: one row per
+  DISTINCT manifest per owner, ever, never updated after insert
+  (`UNIQUE (owner_id, manifest_hash)`, `manifest_hash` a `GENERATED ALWAYS AS
+  (md5(manifest_json::text)) STORED` column). The same two generated columns
+  from migration 008 (`deploy_unit`/`image_repository`, app-side only) ride
+  along unchanged.
+- `app_manifest_history`/`chart_manifest_history` are the `main` timeline —
+  SCD2 per `AGENTS.md` (`valid_from`/`valid_to`), written ONLY by
+  `ReconcileApps` (`postgres/app.go`'s `recordAppManifestSweep`/
+  `recordChartManifestSweep`): a sweep whose content hasn't changed since
+  the owner's currently-open interval writes ZERO new rows (only
+  `last_git_sha` advances); a genuine change closes that interval and opens
+  exactly one new one. A partial unique index
+  (`WHERE valid_to IS NULL`) backs `v_current_app`'s lookup — a point read
+  instead of migration 008's `LEFT JOIN LATERAL ... ORDER BY ... LIMIT 1`
+  scan over an ever-growing table. `v_current_chart` needed no change: it
+  never joined `chart_manifest` to begin with (see "Why chart_manifest has
+  no generated columns" above).
+- `app_manifest_release`/`chart_manifest_release` are release-time
+  observations, written ONLY by `AssertApps` — this is what keeps
+  `resolveManifestForPublish`'s exact-`git_sha` preference working
+  (`postgres/artifact.go`'s `currentAppManifest`/`currentChartManifestID` now
+  check this table first, then the owner's current history interval by
+  git_sha, then the current interval regardless of commit — the same
+  three-tier fallback migration 008 described as two-tier, now split across
+  two tables instead of one column). `AssertApps` NEVER writes to
+  `*_manifest_history` — identity assertion from a divergent ref still can't
+  perturb what `main`'s sweep considers current, same guarantee migration
+  008 established, now enforced by table separation rather than a filtered
+  read.
+- `reconcile_run` replaces the per-app-per-sweep record with one row per
+  sweep that actually applies (not a dry run, not rejected as stale by the
+  watermark) — `git_sha`/`source_committed_at`/`applied_at`/`apps_seen`/
+  `charts_seen`. Answers "which commits were reconciled," which
+  `reconcile_watermark` (a singleton with no history) never could.
+
+`valid_from`/`valid_to` use the commit's committer time
+(`to_timestamp(source_committed_at)`), not wall-clock `NOW()` — falling back
+to wall clock only for the `source_committed_at = 0` sentinel (an
+unresolved-at-record-time commit, migration 006's convention) — so "value at
+time T" answers what was actually in the tree, not when CI happened to run.
+The classic SCD2 pitfall this design avoids: content-dedupe alone (a
+`first_seen`/`last_seen` pair on the content row, no separate history table)
+breaks on **A → B → A** — editing a `release_app` attribute and then
+reverting it, which is normal, not exotic — because content-only dedup has
+no way to represent "A was current, then wasn't, then was again" without
+either merging the two A-periods into one interval spanning B (wrong) or
+losing the second occurrence entirely. A separate history table represents
+A → B → A as three non-overlapping intervals in commit order, which is the
+truth; `postgres_integration_test.go`'s
+`TestReconcile_AThenBThenAProducesThreeNonOverlappingIntervals_Postgres`
+proves this directly against real Postgres.
+
+`artifact.manifest_id` keeps its exact shape (still a polymorphic,
+non-FK `UUID`) but now names an immutable CONTENT row instead of a
+per-commit snapshot row — migration 010 remaps every pre-migration
+`manifest_id` from its old per-commit id to the new content id sharing the
+same `(owner_id, manifest_json)`, in place. Many artifacts built from
+byte-identical manifests now legitimately share one `manifest_id`; that is
+content-addressing's natural consequence, not a signal to read anything
+into.
 
 ### `AssertApps` (additive) vs. `ReconcileApps` (absence sweep)
 
