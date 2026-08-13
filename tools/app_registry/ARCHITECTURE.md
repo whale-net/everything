@@ -292,7 +292,7 @@ not."
 
 ## Release-vs-reconcile gap (issue #547)
 
-> **Closed by AR-7c (built, not yet merged).** Issue #558 rejected "accept
+> **Closed by AR-7c (merged, #566).** Issue #558 rejected "accept
 > the gap" as the end state — see "Release lifecycle (issue #558)" →
 > "AssertApps (additive) vs. ReconcileApps (absence sweep)" below.
 > `release.yml` now calls `AssertApps` as the first App Registry step of
@@ -397,9 +397,16 @@ tradeoff above, not a separate gap to close.
 
 ## Release lifecycle (issue #558)
 
-**Status: AR-7a and AR-7b built and merged to `main` (#561, #562); AR-7c,
-AR-7d, AR-7e, and AR-7f built, not yet merged.** Delivery is PLAN.md's
-AR-7. Six slices of this section describe real code: AR-7a's —
+**Status: every sub-phase, AR-7a through AR-7f, is built and merged to
+`main`** (#561, #562, #566, #567, #571, #572). Verified live: release run
+[31660476677](https://github.com/whale-net/everything/actions/runs/31660476677)
+(2026-08-13) exercised `AssertApps`, `BeginPublishBatch`, and the artifact
+lifecycle against the deployed `dev` registry for real. That verification
+also surfaced a new, still-open defect — issue
+[#585](https://github.com/whale-net/everything/issues/585) — in
+`RecordArtifact`'s digest-replay path; see "Artifact lifecycle" below and
+PLAN.md's "AR-5" for why it blocks any domain moving past `observe`. Delivery
+is PLAN.md's AR-7. Six slices of this section describe real code: AR-7a's —
 ordering 4, partial-apply reconcile, domain-qualified chart app references,
 and the `continue-on-error` drop on `ci.yml`'s sweep job — AR-7b's — the
 artifact lifecycle (`allocated → publishing → published → failed`),
@@ -477,6 +484,19 @@ claims and keeping them apart is what makes the rest coherent:
 
 The registry stops learning about an artifact *after* the fact. It records the
 intent to publish **before** the push, and completes the record after.
+
+> **Known defect: issue [#585](https://github.com/whale-net/everything/issues/585).**
+> `RecordArtifact`'s idempotent-replay step matches an existing row by
+> `digest` alone, with no `(owner, kind, version)` scoping. A reproducible,
+> no-op rebuild (routine in this monorepo) can produce a digest identical to
+> an *older* published version of the same app; `RecordArtifact` matches that
+> older row, reports success, and never transitions the new version's
+> `publishing` row — it sits until the reaper reaps it to `failed`. Confirmed
+> live against `dev`: every image released by run
+> [31660476677](https://github.com/whale-net/everything/actions/runs/31660476677)
+> hit this. Not blocking at adoption stage `observe` (recording is
+> best-effort); must be fixed before any domain moves to `promote` or
+> `allocate`, where recording becomes mandatory — see PLAN.md's "AR-5".
 
 | State | Written by | version | build_id | digest |
 |---|---|---|---|---|
@@ -640,7 +660,7 @@ published).
 
 ### `AssertApps` (additive) vs. `ReconcileApps` (absence sweep)
 
-**`AssertApps` is built (AR-7c, not yet merged).** The partial-apply and
+**`AssertApps` is built (AR-7c, merged, #566).** The partial-apply and
 domain-qualified-reference paragraphs below are AR-7a, built earlier; the
 split this heading names is now real: `AppRegistry.AssertApps`
 (`protos/api.proto`/`api_messages_app.proto`) exists alongside

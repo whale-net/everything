@@ -16,8 +16,10 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated finishing AR-7f (issue #558). **AR-M through AR-7b are all
-merged to `main`** — see the table below.*
+*Last updated after verifying release run
+[31660476677](https://github.com/whale-net/everything/actions/runs/31660476677)
+against `dev` (2026-08-13). **AR-M through AR-7f are all merged to `main`**
+— see the table below.*
 
 | Phase | PR | State |
 |---|---|---|
@@ -35,14 +37,46 @@ merged to `main`** — see the table below.*
 | AR-7 (design) | [#559](https://github.com/whale-net/everything/pull/559) | merged — design + delivery plan only, no implementation |
 | AR-7a | [#561](https://github.com/whale-net/everything/pull/561) | merged — sweep robustness, no schema change |
 | AR-7b | [#562](https://github.com/whale-net/everything/pull/562) | merged — artifact lifecycle, migration `007`, `BeginPublish`/`FailPublish`, stale-row reaper |
-| AR-7c | branch `ar-7c-manifest-snapshot`, not yet merged | **implemented** — app identity/manifest-snapshot split, migration `008`, `AssertApps` |
-| AR-7d | branch `ar-7d-run-log`, stacked on `ar-7c-manifest-snapshot`, not yet merged | **implemented** — `GetReleaseRun`, `BeginPublishBatch`, `app-registry builds status`, `release.yml` resume, no schema change |
-| AR-7e | branch `ar-7e-adopt-artifact`, not yet merged | **implemented** — `AdoptArtifact` (admin-only), `app-registry artifacts adopt`/`list --provenance`, OPERATIONS.md disaster-recovery runbook, no schema change |
-| AR-7f | branch `ar-7f-chart-hermeticity`, stacked on `ar-7e-adopt-artifact`, not yet merged | **implemented** — `CheckChartHermeticity` RPC, `build-helm-chart` call site, no schema change, **ships inert** (no domain at stage `allocate`) |
+| AR-7c | [#566](https://github.com/whale-net/everything/pull/566) | merged — app identity/manifest-snapshot split, migration `008`, `AssertApps` |
+| AR-7d | [#567](https://github.com/whale-net/everything/pull/567) | merged — `GetReleaseRun`, `BeginPublishBatch`, `app-registry builds status`, `release.yml` resume, no schema change |
+| AR-7e | [#571](https://github.com/whale-net/everything/pull/571) | merged — `AdoptArtifact` (admin-only), `app-registry artifacts adopt`/`list --provenance`, OPERATIONS.md disaster-recovery runbook, no schema change |
+| AR-7f | [#572](https://github.com/whale-net/everything/pull/572) | merged — `CheckChartHermeticity` RPC, `build-helm-chart` call site, no schema change, **ships inert** (no domain at stage `allocate`) |
 
-The registry is being deployed to `dev` by the repo owner. `app-registry-api`
+**Post-AR-7 fixes, all merged, found by running the deployed `dev` registry
+for real:** [#574](https://github.com/whale-net/everything/pull/574) (issue
+#570 — distinguish CI/server version skew from a transient outage),
+[#576](https://github.com/whale-net/everything/pull/576) (issue #575 —
+idempotency lookups were keyed by string alone, so `RecordArtifact` could
+silently replay `BeginPublish`'s stored response), `#579`/`#580` (chart
+naming/repository bugs blocking `BeginPublish` for charts), and `#583`
+(`tools/app_registry/citest`, a contract test over every real `app-registry`
+CLI invocation embedded in `.github/workflows/*.yml` — every bug in this list
+lived at that CI-shell-to-CLI seam, invisible to unit tests and to a green
+run because recording is `continue-on-error`).
+
+**A new bug in the same family is open: issue
+[#585](https://github.com/whale-net/everything/issues/585).**
+`RecordArtifact`'s idempotent-replay lookup matches by digest alone, with no
+`(owner, kind, version)` scoping. A reproducible, no-op rebuild (routine in
+this monorepo — a release batch commonly rebuilds every app in a domain even
+when only one changed) produces a digest identical to an older published
+version of the *same* app; `RecordArtifact` matches the old row, reports
+success, and leaves the new version's row stranded in `publishing` until the
+reaper reaps it. Confirmed against run 31660476677: all four
+`app-registry` images it released (cli, api, migration, worker) hit this and
+never reached `published`. Harmless today only because every domain is still
+at adoption stage `observe` (recording best-effort); it must be fixed before
+any domain moves to `promote` or `allocate` — see "AR-5" below.
+
+The registry is deployed to `dev` and is being actively exercised by real
+release runs (see run 31660476677 above) — `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
-`APP_REGISTRY_CICD_OPT_IN` is still unset, so CI makes no registry calls.
+`domain_adoption` has zero rows (verified directly against `dev` via the
+Postgres MCP plugin): every domain, including `app-registry`'s own, is still
+at the implicit `observe` stage — no cutover has started for anything.
+`APP_REGISTRY_CICD_OPT_IN` is now `true` (recording steps ran against `dev`
+and wrote real rows in the run above) — this section previously described it
+as unset.
 
 **AR-3 (promotion) and AR-4 (writeback) are implemented and merged.** The
 writeback *contract* — outbox, worker, workflow, stub activity — is done; the
@@ -54,8 +88,8 @@ say "not merged" in places; the table above is authoritative.
 implemented and tested, wired to nothing. See "AR-5" below for what remains
 before any domain can be cut over.
 
-**AR-7 (issue #558): AR-7a and AR-7b are merged to `main`; AR-7c, AR-7d, and
-AR-7e and AR-7f are implemented, not yet merged.** The full phase makes a release run
+**AR-7 (issue #558): every sub-phase, AR-7a through AR-7f, is merged to
+`main`.** The full phase makes a release run
 hermetic — no dependency on `main`'s reconcile having gone first — via an
 artifact
 `allocated → publishing → published` lifecycle, an identity/manifest-snapshot
@@ -80,8 +114,8 @@ disaster-recovery runbook. AR-7f adds
 `build-helm-chart`, moving the "chart may only pin published images" rule
 from record time to compose time for domains at adoption stage `allocate` —
 see its subsection for the full contract and why it ships inert. **Every
-sub-phase of AR-7 is now implemented**; AR-7c…AR-7f have not merged yet.
-Design is in ARCHITECTURE.md's "Release lifecycle (issue #558)"; delivery is
+sub-phase of AR-7 is implemented and merged.** Design is in ARCHITECTURE.md's
+"Release lifecycle (issue #558)"; delivery is
 "AR-7" below.
 
 **Where deferred work is tracked.** Three places, deliberately:
@@ -718,7 +752,7 @@ it as verified before then.
 **Goal:** the registry becomes the version source of truth. Highest risk —
 CI now depends on the registry being up.
 
-### AR-5a — Inert foundations — done, not merged
+### AR-5a — Inert foundations — done, merged (#513)
 
 **Goal:** everything `AllocateVersion` needs, fully implemented and tested,
 with no release able to reach it. See ARCHITECTURE.md's "Version model
@@ -821,7 +855,13 @@ with no release able to reach it. See ARCHITECTURE.md's "Version model
   by moving its stage back.
 
 **Do not start** until AR-2's parity check has been clean across a meaningful
-number of real releases.
+number of real releases, **and issue
+[#585](https://github.com/whale-net/everything/issues/585) is fixed** —
+`RecordArtifact`'s digest-replay lookup currently ignores `(owner, kind,
+version)`, so a reproducible no-op rebuild strands the new version's row in
+`publishing` forever. Harmless at `observe` (recording is best-effort); it
+will hard-fail routine releases the moment a domain reaches `promote`, where
+recording becomes mandatory.
 
 ### Addendum — semver semantics (decided)
 
@@ -898,12 +938,17 @@ than by hand. Read ARCHITECTURE.md's "Release lifecycle (issue #558)" first;
 it carries the design, the four orderings this fixes, and the rejected
 alternatives. This section is delivery only.
 
-**AR-7a and AR-7b are merged to `main`** ([#561](https://github.com/whale-net/everything/pull/561),
-[#562](https://github.com/whale-net/everything/pull/562)). **AR-7c, AR-7d,
-and AR-7f are implemented, not yet merged** (branches `ar-7c-manifest-snapshot`,
-`ar-7d-run-log`, and `ar-7f-chart-hermeticity`, stacked in that order — AR-7f
-was built directly on top of AR-7d rather than after AR-7e, since it does not
-depend on `AdoptArtifact`). Only AR-7e remains design only.
+**Every sub-phase, AR-7a through AR-7f, is merged to `main`**
+([#561](https://github.com/whale-net/everything/pull/561),
+[#562](https://github.com/whale-net/everything/pull/562),
+[#566](https://github.com/whale-net/everything/pull/566),
+[#567](https://github.com/whale-net/everything/pull/567),
+[#571](https://github.com/whale-net/everything/pull/571),
+[#572](https://github.com/whale-net/everything/pull/572)). AR-7f was built
+directly on top of AR-7d rather than after AR-7e, since it does not depend on
+`AdoptArtifact`, and landed second-to-last regardless. Several follow-up
+fixes for defects found by actually running the deployed `dev` registry
+landed after AR-7f — see the "Current status" section above.
 
 ### AR-7a — Sweep robustness — done, merged (#561)
 
@@ -1008,8 +1053,8 @@ explicitly out of scope — see the ground rules that constrained this phase):
 
 ### AR-7b — Artifact lifecycle states — migration `007_artifact_lifecycle` — done, merged (#562)
 
-**As built.** Implemented on branch `ar-7b-artifact-lifecycle`, not yet
-merged. Migration numbering matched the plan exactly — `007`, not `006`:
+**As built.** Implemented on branch `ar-7b-artifact-lifecycle`, since merged
+(#562). Migration numbering matched the plan exactly — `007`, not `006`:
 `006` was already `006_reconcile_watermark` (issue #545, landed between the
 AR-7 design session and this implementation), so there was no free slot to
 reuse. See `migrate/README.md`'s numbering note.
@@ -1184,7 +1229,7 @@ phases):**
 - Postgres integration tests: every legal transition, every illegal one
   rejected, reaper timeout, and the folded `version_allocation` data.
 
-### AR-7c — App identity / manifest snapshot split — migration `008` — done (not yet merged)
+### AR-7c — App identity / manifest snapshot split — migration `008` — done, merged (#566)
 
 The design change. Depends on AR-7b (it touches the same write path).
 Implemented on branch `ar-7c-manifest-snapshot`, stacked on
@@ -1378,7 +1423,7 @@ Implemented on branch `ar-7c-manifest-snapshot`, stacked on
   `release.yml` — `AssertApps` runs as the first App Registry step of both
   jobs that later resolve an owner by full name, before any such call.
 
-### AR-7d — Run log and resume — no schema change — done (not yet merged)
+### AR-7d — Run log and resume — no schema change — done, merged (#567)
 
 **As built.** Implemented on branch `ar-7d-run-log`, originally stacked on
 `ar-7b-artifact-lifecycle` (now merged to `main` as AR-7b — this branch has
@@ -1543,7 +1588,7 @@ reaper-hazard follow-up fix below.
   the leg's own `BeginPublish` call revives the row and `RecordArtifact`
   completes it normally.
 
-### AR-7e — Adoption and disaster recovery
+### AR-7e — Adoption and disaster recovery — done, merged (#571)
 
 **As built.** Implemented on branch `ar-7e-adopt-artifact`, stacked on
 `ar-7d-run-log` (which sits on `ar-7c-manifest-snapshot`, on `main`). No
@@ -1670,7 +1715,7 @@ alternatives it does not revisit):
   `ListArtifacts(provenance=ADOPTED)` / `artifacts list --provenance
   adopted`.
 
-### AR-7f — Compose-time chart hermeticity — gated per domain — done (not yet merged)
+### AR-7f — Compose-time chart hermeticity — gated per domain — done, merged (#572)
 
 Enforce "a chart may only pin images the registry has published" at chart
 **compose** time, so the failure lands before anything is pushed rather than
