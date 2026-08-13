@@ -8,6 +8,11 @@
       "name": "project-manager",
       "description": "Multi-persona, GitHub-tracked project management pipeline (producer/architect/planner/workers/system-validator)",
       "source": "./tools/project-manager"
+    },
+    {
+      "name": "app-registry",
+      "description": "Postgres MCP access (crystaldba postgres-mcp) to the App Registry database across tilt/dev/prod",
+      "source": "./tools/app_registry"
     }
   ]
 }

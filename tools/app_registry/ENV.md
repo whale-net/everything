@@ -181,3 +181,29 @@ a shell into its pod (`WRITEBACK_OUTPUT_DIR` lives inside the container).
 `ENABLE_APP_REGISTRY_WORKER=true` with `ENABLE_TEMPORAL=false` skips the
 worker (it has nothing to poll) with a printed warning rather than deploying
 into a guaranteed-crash loop.
+
+## Postgres MCP (Claude Code plugin)
+
+`.mcp.json` at the plugin root (`tools/app_registry/.mcp.json`, part of the
+`app-registry` Claude Code plugin — see `.claude-plugin/marketplace.json`)
+wires up three read-restricted (`--access-mode=restricted`) crystaldba
+`postgres-mcp` servers via `uvx`, one per environment:
+
+| Server | Connection |
+|---|---|
+| `app-registry-pg-tilt` | Hardcoded to the Tiltfile default (`postgres://postgres:password@localhost:5432/app_registry`) — matches `setup_postgres`'s local credentials, not a secret |
+| `app-registry-pg-dev` | `APP_REGISTRY_DEV_DATABASE_URI` (shell env var, not set by default) |
+| `app-registry-pg-prod` | `APP_REGISTRY_PROD_DATABASE_URI` (shell env var, not set by default) |
+
+These are separate from `PG_DATABASE_URL` above (which the server/migration
+processes read) so that dev and prod can be queried side by side from the
+same Claude Code session without swapping a single variable.
+
+`postgres-mcp`'s `pyproject.toml` declares an unpinned `mcp[cli]>=1.25.0`
+dependency; `uvx` resolves that to `mcp==2.x`, which dropped
+`mcp.server.fastmcp` and breaks `postgres-mcp` at import time
+(`ModuleNotFoundError: No module named 'mcp.server.fastmcp'`). Each server's
+`args` therefore pin it down with `--with "mcp<2"` before `postgres-mcp`.
+See [crystaldba/postgres-mcp#187](https://github.com/crystaldba/postgres-mcp/issues/187).
+If reconnecting still fails with the same error, `uv`'s package cache may
+need a `uv cache clean postgres-mcp` / `uv cache clean mcp`.
