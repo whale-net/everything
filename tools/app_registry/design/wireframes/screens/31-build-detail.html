@@ -1,0 +1,64 @@
+<!-- wf: name="build-detail" title="Run #48291" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul>
+    <li><a href="#/builds">Builds</a></li>
+    <li>#48291</li>
+  </ul>
+</div>
+
+<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+  <div>
+    <h1 class="text-2xl md:text-3xl font-bold">Run #48291</h1>
+    <p class="text-sm opacity-70 font-mono">3e9a7c1 · attempt 2 · leaflab domain</p>
+  </div>
+  <span class="badge badge-soft badge-error badge-lg">Recording health: Failed</span>
+</div>
+
+<div class="alert alert-warning shadow-md mb-6">
+  <span>1 of 7 artifacts is incomplete. The release itself may still have succeeded — check the artifact states below before assuming otherwise.</span>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <div class="flex justify-between items-center p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Artifacts in this run</h2>
+      <label class="label cursor-pointer gap-2">
+        <span class="label-text text-sm">Incomplete only</span>
+        <input type="checkbox" class="toggle toggle-sm toggle-warning" checked />
+      </label>
+    </div>
+    <table class="table">
+      <thead>
+        <tr><th>Owner</th><th>Kind</th><th>Version</th><th>State</th><th>Detail</th><th class="text-right">Actions</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hover bg-error/5">
+          <td class="font-mono text-sm">leaflab-ingest</td>
+          <td class="text-sm">image</td>
+          <td class="font-mono text-sm">v0.9.3</td>
+          <td><span class="badge badge-soft badge-error badge-sm">Failed</span></td>
+          <td class="text-sm opacity-70 font-mono">fail_reason: "stale"</td>
+          <td class="text-right"><a href="#/adopt" class="btn btn-xs btn-error btn-outline">Adopt…</a></td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm">leaflab-api</td>
+          <td class="text-sm">image</td>
+          <td class="font-mono text-sm">v0.4.2</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Published</span></td>
+          <td class="text-sm opacity-50">—</td>
+          <td class="text-right opacity-40 text-sm">—</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm">leaflab-ingest</td>
+          <td class="text-sm">chart</td>
+          <td class="font-mono text-sm">v0.9.3</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Published</span></td>
+          <td class="text-sm opacity-50">—</td>
+          <td class="text-right opacity-40 text-sm">—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: "Adopt…" only appears on non-published rows, and only here (a troubleshooting context) — never on the routine promote screens. See PRINCIPLES.md #8.</p>

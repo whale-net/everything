@@ -1,0 +1,47 @@
+<!-- wf: name="adopt" title="Adopt Artifact" parent="build-detail" -->
+<div class="flex justify-between items-center mb-4">
+  <h2 class="text-xl font-bold text-error">⚠️ Adopt artifact</h2>
+  <a href="#/build-detail" class="btn btn-sm btn-circle btn-ghost">✕</a>
+</div>
+
+<div class="alert alert-warning shadow-md mb-4">
+  <span><strong>Admin-only, rare and deliberate.</strong> This asserts a digest exists in GHCR/the chart repository — it does not verify it. Get it right before confirming. Not for routine recording gaps; see OPERATIONS.md "Adoption and disaster recovery."</span>
+</div>
+
+<div class="grid md:grid-cols-2 gap-4 mb-4">
+  <div class="form-control">
+    <label class="label"><span class="label-text">Owner</span></label>
+    <input class="input input-bordered font-mono" value="leaflab-ingest" readonly />
+  </div>
+  <div class="form-control">
+    <label class="label"><span class="label-text">Kind</span></label>
+    <input class="input input-bordered" value="image" readonly />
+  </div>
+  <div class="form-control">
+    <label class="label"><span class="label-text">Version</span></label>
+    <input class="input input-bordered font-mono" value="v0.9.3" readonly />
+  </div>
+  <div class="form-control">
+    <label class="label"><span class="label-text">Digest</span></label>
+    <input class="input input-bordered font-mono" placeholder="sha256:…" />
+  </div>
+</div>
+
+<div class="form-control mb-4">
+  <label class="label"><span class="label-text">Reason <span class="text-error">*</span> — will read sensibly to someone in six months</span></label>
+  <textarea class="textarea textarea-bordered" rows="2" placeholder="e.g. row stuck 'publishing' from issue #575 cross-method replay; confirmed digest present in GHCR 2026-08-13"></textarea>
+</div>
+
+<div class="form-control mb-6">
+  <label class="label cursor-pointer justify-start gap-3">
+    <input type="checkbox" class="checkbox checkbox-error" />
+    <span class="label-text">I have confirmed this digest actually exists in GHCR / the chart repository.</span>
+  </label>
+</div>
+
+<div class="flex gap-2 justify-end">
+  <a href="#/build-detail" class="btn btn-secondary">Cancel</a>
+  <button class="btn btn-error btn-disabled" disabled>Adopt artifact</button>
+</div>
+
+<p class="wf-note mt-4">note: confirm-checkbox gates the submit button, same pattern as the override acknowledgment on Promote — deliberate friction for an action the registry cannot verify on its own.</p>

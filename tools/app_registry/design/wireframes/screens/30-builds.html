@@ -1,0 +1,57 @@
+<!-- wf: name="builds" title="Builds" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Builds</h1>
+  <p class="text-sm opacity-80">CI run recording status — find out exactly what did and didn't finish.</p>
+</div>
+
+<div class="flex flex-col md:flex-row gap-3 mb-4">
+  <input type="text" placeholder="Workflow run id…" class="input input-bordered input-sm w-full md:w-64" />
+  <button class="btn btn-sm btn-primary">Look up</button>
+  <div class="flex-1"></div>
+  <label class="label cursor-pointer gap-2">
+    <span class="label-text text-sm">Incomplete only</span>
+    <input type="checkbox" class="toggle toggle-sm toggle-warning" />
+  </label>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <table class="table">
+      <thead>
+        <tr><th>Run</th><th>Commit</th><th>Recording health</th><th>Artifacts</th><th class="text-right">When</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hover bg-error/5">
+          <td class="font-mono text-sm"><a href="#/build-detail" class="link link-hover">#48291 <span class="opacity-60">(attempt 2)</span></a></td>
+          <td class="font-mono text-xs">3e9a7c1 · leaflab</td>
+          <td><span class="badge badge-soft badge-error badge-sm">Failed</span></td>
+          <td class="text-sm">6 of 7 published</td>
+          <td class="text-right opacity-60">1h ago</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/build-detail" class="link link-hover">#48277</a></td>
+          <td class="font-mono text-xs">a04f21e · manmanv2</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Healthy</span></td>
+          <td class="text-sm">12 of 12 published</td>
+          <td class="text-right opacity-60">5h ago</td>
+        </tr>
+        <tr class="hover bg-warning/5">
+          <td class="font-mono text-sm"><a href="#/build-detail" class="link link-hover">#48260</a></td>
+          <td class="font-mono text-xs">99c1b40 · friendly_computing_machine</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">Skipped (opt-in off)</span></td>
+          <td class="text-sm">0 recorded</td>
+          <td class="text-right opacity-60">1d ago</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/build-detail" class="link link-hover">#48214</a></td>
+          <td class="font-mono text-xs">7bd6e02 · manmanv2</td>
+          <td><span class="badge badge-soft badge-success badge-sm">Healthy</span></td>
+          <td class="text-sm">12 of 12 published</td>
+          <td class="text-right opacity-60">2d ago</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: "Recording health" is deliberately separate from any notion of release success — a red badge here never implies the release itself failed, only that recording did. "Skipped (opt-in off)" is its own state, not folded into failed.</p>
