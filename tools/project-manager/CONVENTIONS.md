@@ -10,6 +10,7 @@ Shared conventions all `project-manager` personas follow. Everything lives in Gi
 | Root plan (FR/NFR, personas, lifecycle) | GitHub Issue, `plan:*` labels | producer |
 | Task tracking (phase, claim, done) | GitHub Project (v2), one per approved plan | planner |
 | Task issues (scaffold/implementation/testing/validation/findings) | GitHub Issue, added as a Project item | planner / system-validator |
+| Scope notes (deferred/cross-cutting decisions) | GitHub Issue, added as a Project item at `Status: Noted` | any persona; triaged by planner |
 
 Labels (`plan:*`) still gate the root-plan review lifecycle — that's a human approval gate, not a phase pipeline, and stays as-is. Everything downstream of `plan:approved` (task phase, claim state, completion) is tracked on the Project board instead of `phase:*`/`status:*` labels.
 
@@ -78,7 +79,10 @@ Once the root issue is `plan:approved`, planner creates the plan's Project befor
            {name: "Implementation", color: BLUE, description: ""},
            {name: "Testing", color: YELLOW, description: ""},
            {name: "Validation", color: ORANGE, description: ""},
-           {name: "Done", color: GREEN, description: ""}
+           {name: "Done", color: GREEN, description: ""},
+           {name: "Noted", color: PURPLE, description: ""},
+           {name: "Carry-over", color: PINK, description: ""},
+           {name: "Deferred", color: RED, description: ""}
          ]
        }) { projectV2Field { ... on ProjectV2SingleSelectField { id name options { id name } } } }
      }' -f fieldId="$FIELD_ID"
@@ -86,7 +90,7 @@ Once the root issue is `plan:approved`, planner creates the plan's Project befor
 
 5. Post `gh issue comment <n> --body "Project board: <project-url>"` on the root issue (skip if already posted, per step 1).
 
-Phases run in order: `Scaffold` → `Implementation` → `Testing` → `Validation` → `Done`. `Done` is the only value that means closed/finished — the other phase values just say what kind of task an item is, not how far along it is.
+Phases run in order: `Scaffold` → `Implementation` → `Testing` → `Validation` → `Done`. `Done` is the only value that means closed/finished — the other phase values just say what kind of task an item is, not how far along it is. `Noted`/`Carry-over`/`Deferred` are a second, parallel lifecycle riding the same field — see § Scope notes — never treated as a phase a task issue passes through.
 
 ## Task issues
 
@@ -154,9 +158,43 @@ Unblocking dependents needs no action — the next worker's readiness check re-r
 
 **Tester finds a bug in the dependency, not the test:** comment on both issues; do **not** close, do not touch `Status`, do not unassign.
 
+**Verification discipline.** A Testing task issue is not done because a test exists and passes — it's done because the test was *seen* to catch the thing it guards. Before closing: deliberately break the behavior under test, confirm the test fails with the expected message, then revert. Note this in the close comment (e.g. "verified by breaking X, confirmed red, reverted"). A test nobody watched fail is not verified, regardless of whether it's green now.
+
 ## System validation
 
 After all `Implementation` and `Testing` items under a root plan's Project are `Done`, **system-validator** runs the system end-to-end (Tilt) and grades it against the root plan's acceptance criteria — confirm readiness the same precise way as above (`gh project item-list ... --query "status:Implementation"` / `"status:Testing"` scoped to the plan must both come back empty before findings are trusted). Findings become new issues added to the same Project at `Status: Validation`, titled descriptively, containing `Part of #<root-issue-number>` and `from:system-validator` in the body (no labels needed — the Project item's presence + phase is the tracking). If a finding represents new work rather than a pass/fail note, **planner** converts it into properly sequenced task issues on the same Project — linked back to the finding for traceability, but never `Depends on:` the finding issue itself (a finding is a report, not a work product any worker closes). Planner then closes the finding issue and sets its item to `Status: Done` once its follow-ups are filed and linked — the one case where planner closes an issue itself.
+
+## Scope notes
+
+Work gets consciously *not* done constantly: a worker defers something outside its issue's stated scope, a validator spots a cross-cutting gap, architect flags something bigger than this plan. Left as a stray issue comment, that decision is invisible to everyone who didn't read that exact thread — a deferred-work list nobody can query is exactly what let a prior generation of hand-maintained plan documents in this repo balloon past what an agent can read in one sitting before anyone noticed. A scope note is the fix: a lifecycle, not a comment, so a deferred decision stays queryable and is never silently dropped.
+
+```mermaid
+stateDiagram-v2
+    noted: Status = Noted
+    carryover: Status = Carry-over
+    deferred: Status = Deferred
+    rejected: closed (rejected)
+    done: Status = Done, issue closed
+
+    [*] --> noted: any persona notices scope not covered\nby an existing issue on the plan
+    noted --> carryover: planner triages — cross-cutting,\nnot specific to this plan
+    noted --> deferred: planner triages — this plan's own\nconscious scope cut
+    noted --> rejected: planner triages — not worth tracking
+    carryover --> done: planner (this plan or a later one) files\nreal task issue(s) and closes the note
+    deferred --> done: planner (if this plan is revisited) files\nreal task issue(s) and closes the note
+```
+
+**Filing.** Any persona that notices scope outside its current issue — and not already covered by another issue on the plan — files a note instead of just leaving a comment: `gh issue create --title "Scope note: <short desc>" --body-file <tmpfile>`, body containing `Part of #<root-issue-number>`, `from:<persona>`, and why it's out of scope right now. Add it to the plan's Project at `Status: Noted` (`gh project item-add` / `gh project item-edit` per § Project setup).
+
+**Triage.** Planner reads every `Status: Noted` item on a plan's Project whenever it revisits that plan — not a one-time pass — and sets each to exactly one of:
+
+- **Carry-over** — cross-cutting, not specific to this plan; likely relevant to future plans too.
+- **Deferred** — a conscious scope cut for *this* plan; revisit only if this plan itself is revisited.
+- Closed immediately, with a one-line reason comment, if it isn't worth tracking at all.
+
+**Scheduling.** When planner (now, or on a later pass) decides to act on a `Carry-over`/`Deferred` note, it opens real task issue(s) following the normal task-issue rules on the same Project, linked back to the note (`Part of #<root-issue-number>`, referencing the note's issue number), and closes the note with `Status: Done` — the same close mechanic already used for system-validator findings above.
+
+This is deliberately a *lifecycle*, not a static label: a note can't sit unclassified forever (it moves to `Carry-over`/`Deferred`/rejected the next time anyone looks at the plan), and it can't be forgotten once classified (`Carry-over`/`Deferred` are `Status` values on a Project item, so `gh project item-list ... --query "status:Carry-over"` finds every one ever filed, across every plan). If a note doesn't fit these three outcomes, that's a signal to adjust the lifecycle itself — add a state, don't force the note into the nearest existing one.
 
 ## Model tiers
 
