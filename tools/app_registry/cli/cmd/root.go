@@ -16,12 +16,7 @@ var (
 	format     string
 )
 
-var rootCmd = &cobra.Command{
-	Use:          "app-registry",
-	Short:        "Thin gRPC client for the App Registry",
-	Long:         "app-registry is a thin gRPC client for the App Registry. It validates argument shape, calls one RPC, and formats the response — no business logic lives here.",
-	SilenceUsage: true,
-}
+var rootCmd = NewRootCmd()
 
 // exitOwnerNotReconciled is the process exit code Execute uses for a
 // RecordArtifact call that failed because owner_full_name isn't registered
@@ -109,12 +104,30 @@ func isOwnerNotReconciled(err error) bool {
 	return false
 }
 
-func init() {
-	rootCmd.SilenceErrors = true
-	rootCmd.PersistentFlags().StringVar(&serverAddr, "address", defaultServerAddr(), "app-registry-api address (host:port)")
-	rootCmd.PersistentFlags().StringVar(&format, "format", "json", "Output format: json or table")
+// NewRootCmd builds a complete, independent command tree. Package-level
+// state (the flag variables above, and each subcommand constructor's own
+// closed-over flag variables) is bound freshly per call, so two trees never
+// share flag values.
+//
+// Exported, and a constructor rather than the usual package-level singleton
+// plus init(), because callers that run more than one command in one process
+// need that independence: cobra writes parsed flags into the variables a
+// command's constructor closed over, so a reused tree carries the previous
+// invocation's values into the next one. //tools/app_registry/citest drives
+// exactly the command lines .github/workflows/release.yml runs, in sequence,
+// against one in-process server -- see that package's doc comment.
+func NewRootCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:          "app-registry",
+		Short:        "Thin gRPC client for the App Registry",
+		Long:         "app-registry is a thin gRPC client for the App Registry. It validates argument shape, calls one RPC, and formats the response — no business logic lives here.",
+		SilenceUsage: true,
+	}
+	c.SilenceErrors = true
+	c.PersistentFlags().StringVar(&serverAddr, "address", defaultServerAddr(), "app-registry-api address (host:port)")
+	c.PersistentFlags().StringVar(&format, "format", "json", "Output format: json or table")
 
-	rootCmd.AddCommand(
+	c.AddCommand(
 		newAppsCmd(),
 		newArtifactsCmd(),
 		newBuildsCmd(),
@@ -125,7 +138,13 @@ func init() {
 		newDiffCmd(),
 		newEnvCmd(),
 	)
+	return c
 }
+
+// ExitCodeFor exposes exitCodeFor's classification so a caller running the
+// CLI in-process can assert on the same exit code a CI shell script would
+// branch on ($? == 3 / 4) rather than re-deriving it.
+func ExitCodeFor(err error) int { return exitCodeFor(err) }
 
 // defaultServerAddr reads APP_REGISTRY_ADDRESS, matching the ADDRESS
 // convention other CLIs in this repo use for their target service.

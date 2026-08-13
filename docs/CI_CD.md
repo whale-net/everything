@@ -94,10 +94,16 @@ Two `continue-on-error` steps, both gated on `vars.APP_REGISTRY_CICD_OPT_IN
   chart --contains ...`.
 
 `APP_REGISTRY_CICD_OPT_IN` is unset by default. With it unset, CI makes no
-registry calls at all — the recording steps do not run. Because they are
-`continue-on-error`, **a failed recording still shows a green job** — check
-the step's own log, not the job status, to know whether it actually
-recorded anything. As of issue #547, a failed recording also carries a
+registry calls at all — the recording steps do not run. The recording steps
+themselves are still `continue-on-error` (a registry outage must never fail
+a real release), but each job that has any also ends with an **App Registry
+recording health** step that is not: it fails the job if any recording step
+in it failed, after the real push/tag/upload has already happened — so a
+failed recording now shows a RED job, not a green one. Check the step's own
+log to know which recording step failed and why; see
+[`tools/app_registry/OPERATIONS.md` "Recording (automatic,
+best-effort)"](../tools/app_registry/OPERATIONS.md#2-recording-automatic-best-effort)
+for the full triage. As of issue #547, a failed recording also carries a
 `::warning::` annotation and a `$GITHUB_STEP_SUMMARY` entry naming which of
 two cases it is — "app not registered yet" (the release ran ahead of
 `ReconcileApps`) vs. a genuine registry error — so this no longer requires

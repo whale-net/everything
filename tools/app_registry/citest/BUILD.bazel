@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "citest",
+    srcs = ["workflow.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/citest",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "citest_test",
+    srcs = [
+        "contract_test.go",
+        "sequence_test.go",
+    ],
+    # The real workflow/action YAML, not a copy -- the whole point is to
+    # test what CI actually runs. See //.github:ci_config.
+    data = ["//.github:ci_config"],
+    embed = [":citest"],
+    deps = [
+        "//libs/go/grpcauth",
+        "//tools/app_registry/cli/cmd",
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/server/auth",
+        "//tools/app_registry/server/handlers",
+        "//tools/app_registry/server/repository/fake",
+        "//tools/appmeta/proto:appmetapb",
+        "@com_github_spf13_cobra//:cobra",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
+)

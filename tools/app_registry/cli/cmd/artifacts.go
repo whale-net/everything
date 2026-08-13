@@ -408,15 +408,20 @@ func newArtifactsAdoptCmd() *cobra.Command {
 }
 
 func newArtifactsGetCmd() *cobra.Command {
-	var version string
+	var kind, version string
 	c := &cobra.Command{
 		Use:   "get <domain-name>",
-		Short: "Get one artifact by owner + version",
+		Short: "Get one artifact by owner + kind + version",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			k, err := parseArtifactKind(kind)
+			if err != nil {
+				return err
+			}
 			return withClient(cmd, func(rc *registryClient) error {
 				resp, err := rc.Artifact.GetArtifact(cmd.Context(), &pb.GetArtifactRequest{
 					OwnerFullName: args[0],
+					Kind:          k,
 					Version:       version,
 				})
 				if err != nil {
@@ -426,7 +431,18 @@ func newArtifactsGetCmd() *cobra.Command {
 			})
 		},
 	}
+	// --kind is REQUIRED: the (owner_full_name, kind, version) lookup
+	// GetArtifactRequest's doc comment describes needs all three -- both
+	// repository implementations filter on kind, and an image/chart pair
+	// can legitimately share a version number, so there is no default that
+	// is safe to assume. Before this flag existed, this command always sent
+	// kind ARTIFACT_KIND_UNSPECIFIED, which matches no stored row, so every
+	// invocation returned NotFound regardless of owner or version -- see
+	// OPERATIONS.md, which documents this exact command as the recovery
+	// diagnostic for "release looks green but nothing was recorded".
+	c.Flags().StringVar(&kind, "kind", "", "Artifact kind (image|chart)")
 	c.Flags().StringVar(&version, "version", "", "Version to look up, e.g. v1.2.3")
+	_ = c.MarkFlagRequired("kind")
 	_ = c.MarkFlagRequired("version")
 	return c
 }

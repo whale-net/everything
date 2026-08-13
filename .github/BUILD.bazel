@@ -1,0 +1,24 @@
+# .github is not built by Bazel, but its workflow and composite-action YAML
+# is a TEST INPUT: //tools/app_registry/citest reads the real command lines
+# CI runs and validates them against the CLI, so the seam between the two
+# stops being untested. Exported as a filegroup so that test can depend on
+# the actual files rather than a copy that would drift.
+filegroup(
+    name = "ci_config",
+    srcs = glob(
+        [
+            "workflows/*.yml",
+            "actions/*/action.yml",
+        ],
+        # Both patterns must match something: an empty filegroup would make
+        # the tests that read it vacuously pass.
+        allow_empty = False,
+    ) + glob(
+        [
+            "workflows/*.yaml",
+            "actions/*/action.yaml",
+        ],
+        allow_empty = True,
+    ),
+    visibility = ["//visibility:public"],
+)

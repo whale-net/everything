@@ -1381,18 +1381,47 @@ release (AR-7c, see "`AssertApps` (additive) vs. `ReconcileApps`" above), a
 skew there now surfaces immediately rather than only once whichever
 downstream RPC happens to be the first one the deployed server lacks.
 
-**What this does not do:** the steps stay `continue-on-error: true` at
-adoption stage `observe` (every domain, today), same as before — an
-`::error::` annotation is louder than `::warning::` in the run's summary, but
-it does not turn the job red on its own. Making version skew (or any
-recording failure) actually fail the job at `promote`/`allocate` requires CI
-to read a domain's `domain_adoption.stage` per release, which does not exist
-today (see "Availability, restated per adoption stage" above — that table is
-a design target, not current behavior) and is a reasonable fast-follow, not
-part of this change. The `main`-push reconcile sweep (`ci.yml`,
+**Original scope note, now superseded below:** at the time this section was
+written, the steps stayed `continue-on-error: true` with no job-level
+consequence — an `::error::` annotation was louder than `::warning::` in the
+run's summary, but nothing turned the job red on its own, so seeing it still
+required someone to read the summary. See "App Registry recording health: no
+more silent job-level failures" below for how that gap was closed, without
+giving up the underlying `continue-on-error` posture this whole section
+depends on. The `main`-push reconcile sweep (`ci.yml`,
 `app-registry-reconcile`) already fails red on any error including skew,
 uniformly, because it was already NOT `continue-on-error` (AR-7a) — it needed
-no change here.
+no change here or below.
+
+### App Registry recording health: no more silent job-level failures
+
+The gap the note above described — a recording failure being real but
+invisible at the job level — is what let the chart-repository `BeginPublish`
+bug (see "`artifact.repository` on the `∅ → publishing` branch" above) ship
+and run for as long as it did: every individual recording step's failure was
+masked by its own `continue-on-error`, so the job, and the whole run, stayed
+green regardless of the `::error::`/`::warning::` annotation's loudness.
+Nobody watches annotations on a green run.
+
+Each of `plan-release`, `release`, and `release-helm-charts` now ends with
+one **App Registry recording health** step. Every individual recording step
+in that job is still `continue-on-error: true` — the availability contract
+above is unchanged, and a registry outage still cannot block a real
+image/chart push. This step runs LAST, after every real push, tag, and
+upload in the job has already happened, and is deliberately NOT
+`continue-on-error`: it reads every recording step's own `steps.*.outcome`
+in that job and fails if any of them is `failure`. That failure is the
+job's, and the whole run's, only because nothing real was left to protect by
+the time it runs.
+
+This goes further than issue #570 originally asked for (only make version
+skew louder): ANY recording failure — outage, skew, or the routine "release
+ran ahead of reconcile" case (`exitOwnerNotReconciled`, issue #547) — now
+reddens the job. The last of those is expected and self-heals, but the
+recommended response (re-run once `main`'s CI has caught up, or accept the
+miss) is the same either way, and a red run is a far better prompt for that
+than a warning nobody reads. See OPERATIONS.md "Recording (automatic,
+best-effort)" for what an operator sees and does next.
 
 ### `APP_REGISTRY_CICD_OPT_IN` — the bootstrap kill switch
 
@@ -1413,7 +1442,10 @@ if: vars.APP_REGISTRY_CICD_OPT_IN == 'true'
   state the repo ships in and stays in until the registry is deployed and its
   credentials are configured.
 - **`true`:** recording steps run, still `continue-on-error` so a registry
-  outage warns rather than failing a release.
+  outage warns rather than failing a release. Each job's own **App Registry
+  recording health** step still runs last and turns the JOB red on a
+  recording failure — but only after the real release work in that job has
+  already completed. See "App Registry recording health" above.
 
 Two independent gates, easily confused — keep them distinct:
 

@@ -242,6 +242,7 @@ jobs:
 
     - name: Begin publish batch in App Registry
       if: ${{ steps.batch-targets.outcome == 'success' }}
+      id: app-registry-begin-publish-batch
       continue-on-error: true
       timeout-minutes: 5
       uses: ./.github/actions/app-registry-begin-publish-batch
@@ -253,6 +254,35 @@ jobs:
         build-id: ${{ steps.app-registry-build.outputs.build-id }}
         targets-file: ${{ steps.batch-targets.outputs.targets-file }}
         idempotency-key-prefix: ${{ github.run_id }}-${{ github.run_attempt }}
+
+    # App Registry steps in this job stay continue-on-error: a registry
+    # outage must never block planning (and therefore never block the real
+    # image builds/pushes downstream in the `release` job) -- see
+    # ARCHITECTURE.md "Availability, restated per adoption stage". What
+    # continue-on-error must NOT do is make a real failure invisible, which
+    # is what let the chart repository bug (see "Begin publish (charts)" in
+    # the release-helm-charts job) ship silently for as long as it did. This
+    # step runs LAST, after every real planning step above has already had
+    # its chance to run, and is deliberately NOT continue-on-error: it is
+    # the one place in this job that is allowed to turn the run red, and it
+    # does so without having blocked anything real to get there.
+    - name: App Registry recording health
+      if: always()
+      run: |
+        FAILED=0
+        check() {
+          if [[ "$2" == "failure" ]]; then
+            echo "::error::App Registry step '$1' failed this run -- see its own annotation above for detail. This does not mean planning failed; it means a release-run.md or begin-publish-batch call did not go through and the run's App Registry bookkeeping is incomplete."
+            FAILED=1
+          fi
+        }
+        check "Record build" "${{ steps.app-registry-build.outcome }}"
+        check "Begin publish batch" "${{ steps.app-registry-begin-publish-batch.outcome }}"
+        if [[ "$FAILED" -eq 1 ]]; then
+          echo "One or more App Registry recording steps failed. Nothing about the release plan itself is affected. See tools/app_registry/OPERATIONS.md."
+          exit 1
+        fi
+        echo "✅ App Registry recording steps in this job succeeded (or did not apply)."
 
     # Full ReconcileApps (the absence sweep) deliberately does NOT run here.
     # It requires the complete, current manifest set -- anything absent from
@@ -440,6 +470,7 @@ jobs:
     # release failure.
     - name: Assert apps/charts in App Registry
       if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      id: app-registry-assert
       continue-on-error: true
       timeout-minutes: 5
       uses: ./.github/actions/app-registry-assert
@@ -619,6 +650,7 @@ jobs:
     # there a row here worth failing.
     - name: Fail publish (image) in App Registry
       if: ${{ failure() && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-begin-publish.outcome == 'success' }}
+      id: app-registry-fail-publish
       continue-on-error: true
       timeout-minutes: 5
       uses: ./.github/actions/app-registry-fail-publish
@@ -655,6 +687,7 @@ jobs:
 
     - name: Record image artifact in App Registry
       if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' }}
+      id: app-registry-record-image
       continue-on-error: true
       timeout-minutes: 5
       uses: ./.github/actions/app-registry-record-image
@@ -668,6 +701,38 @@ jobs:
         repository: ghcr.io/${{ github.repository_owner }}/${{ matrix.domain }}-${{ matrix.app }}
         version: ${{ matrix.version || needs.plan-release.outputs.version }}
         idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-record
+
+    # Same posture as plan-release's own health-check step above: every
+    # App Registry step in this job stays continue-on-error (a registry
+    # outage must never block a real image push -- ARCHITECTURE.md
+    # "Availability, restated per adoption stage"), but this step runs LAST,
+    # after the real push and git tag above have already happened, and is
+    # deliberately NOT continue-on-error -- it is what turns a recording
+    # failure into a red run instead of an annotation nobody reads.
+    #
+    # "Fail publish" only ever runs when the job is already failing for a
+    # real reason (its own `if:` requires failure()); it is checked here too
+    # so a fail-publish that itself failed shows up explicitly rather than
+    # being one more thing folded into whatever the original failure was.
+    - name: App Registry recording health
+      if: always()
+      run: |
+        FAILED=0
+        check() {
+          if [[ "$2" == "failure" ]]; then
+            echo "::error::App Registry step '$1' failed this run -- see its own annotation above for detail."
+            FAILED=1
+          fi
+        }
+        check "Assert apps/charts" "${{ steps.app-registry-assert.outcome }}"
+        check "Begin publish (image)" "${{ steps.app-registry-begin-publish.outcome }}"
+        check "Fail publish (image)" "${{ steps.app-registry-fail-publish.outcome }}"
+        check "Record image artifact" "${{ steps.app-registry-record-image.outcome }}"
+        if [[ "$FAILED" -eq 1 ]]; then
+          echo "One or more App Registry recording steps failed. The image release itself is NOT affected -- these steps never block a real push. See tools/app_registry/OPERATIONS.md."
+          exit 1
+        fi
+        echo "✅ App Registry recording steps in this job succeeded (or did not apply)."
 
     - name: Generate release notes for app
       if: ${{ github.event.inputs.dry_run == 'false' }}
@@ -956,6 +1021,7 @@ jobs:
     # idempotency key is scoped to "charts" rather than a domain/app pair.
     - name: Assert apps/charts in App Registry
       if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      id: app-registry-assert
       continue-on-error: true
       timeout-minutes: 5
       uses: ./.github/actions/app-registry-assert
@@ -1290,6 +1356,7 @@ jobs:
     # actually ran and produced 'publishing' rows to fail.
     - name: Fail publish (charts) in App Registry
       if: ${{ failure() && steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-begin-publish.outcome == 'success' }}
+      id: app-registry-fail-publish
       continue-on-error: true
       timeout-minutes: 10
       env:
@@ -1356,6 +1423,7 @@ jobs:
     # step's own former build-recording call was removed, not duplicated.
     - name: Record chart artifacts in App Registry
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != ''
+      id: app-registry-record-charts
       continue-on-error: true
       # See the "Record build in App Registry" step above -- same hang risk
       # (issue #539), same fix.
@@ -1472,6 +1540,39 @@ jobs:
         if [[ "${RECORDING_HAD_FAILURE:-0}" -eq 1 ]]; then
           exit 1
         fi
+
+    # Same posture as the release job's own health-check step: every App
+    # Registry step in this job stays continue-on-error (a registry outage
+    # must never block a real chart push -- ARCHITECTURE.md "Availability,
+    # restated per adoption stage"), but this step runs LAST, after the real
+    # ChartMuseum upload and git tags above have already happened, and is
+    # deliberately NOT continue-on-error.
+    #
+    # This also surfaces "chart not registered yet" (release ran ahead of
+    # ReconcileApps -- an accepted, self-healing, documented gap, see
+    # OPERATIONS.md) as a red run, not just a warning nobody reads. That is
+    # intentional: the recommended response is the same either way (re-run
+    # this job after main's CI catches up, or accept the miss), and a red
+    # run is a much better prompt for that than an annotation.
+    - name: App Registry recording health
+      if: always()
+      run: |
+        FAILED=0
+        check() {
+          if [[ "$2" == "failure" ]]; then
+            echo "::error::App Registry step '$1' failed this run -- see its own annotation above for detail."
+            FAILED=1
+          fi
+        }
+        check "Assert apps/charts" "${{ steps.app-registry-assert.outcome }}"
+        check "Begin publish (charts)" "${{ steps.app-registry-begin-publish.outcome }}"
+        check "Fail publish (charts)" "${{ steps.app-registry-fail-publish.outcome }}"
+        check "Record chart artifacts" "${{ steps.app-registry-record-charts.outcome }}"
+        if [[ "$FAILED" -eq 1 ]]; then
+          echo "One or more App Registry recording steps failed. The chart release itself is NOT affected -- these steps never block a real push. See tools/app_registry/OPERATIONS.md."
+          exit 1
+        fi
+        echo "✅ App Registry recording steps in this job succeeded (or did not apply)."
 
     - name: Report deployment URL
       if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'

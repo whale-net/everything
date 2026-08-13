@@ -25,7 +25,7 @@ app-registry apps set-status <domain-name> --status archived --reason "..."
 app-registry apps reconcile --from-plan <file> --idempotency-key K [--dry-run]     # CI
 
 app-registry artifacts list [domain-name] [--kind image|chart] [--promotable] [--provenance observed|adopted]
-app-registry artifacts get <domain-name> --version vX.Y.Z
+app-registry artifacts get <domain-name> --kind image|chart --version vX.Y.Z
 app-registry artifacts resolve <digest|artifact-id>            # chart -> images
 app-registry artifacts record ... --idempotency-key K          # CI
 app-registry artifacts begin-publish --kind K --owner O --version V --build-id B --idempotency-key K   # CI, AR-7b
