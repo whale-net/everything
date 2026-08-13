@@ -1,0 +1,64 @@
+<!-- wf: name="environment-form" title="Edit Environment" parent="environments" -->
+<div class="flex justify-between items-center mb-4">
+  <h2 class="text-xl font-bold">Edit environment: prod</h2>
+  <a href="#/environments" class="btn btn-sm btn-circle btn-ghost">✕</a>
+</div>
+
+<div class="grid md:grid-cols-2 gap-4 mb-4">
+  <div class="form-control">
+    <label class="label"><span class="label-text">Key <span class="text-error">*</span> — immutable once other rows reference it</span></label>
+    <input class="input input-bordered font-mono" value="prod" disabled />
+  </div>
+  <div class="form-control">
+    <label class="label"><span class="label-text">Display name</span></label>
+    <input class="input input-bordered" value="Production" />
+  </div>
+  <div class="form-control">
+    <label class="label"><span class="label-text">Rank — higher is closer to prod; orders promotion legality</span></label>
+    <input type="number" class="input input-bordered" value="2" />
+  </div>
+  <div class="form-control">
+    <label class="label"><span class="label-text">GitOps path — where this environment's rendered state writes to</span></label>
+    <input class="input input-bordered font-mono" value="environments/prod" />
+  </div>
+</div>
+
+<div class="form-control mb-4">
+  <label class="label"><span class="label-text">Allowed principals — OIDC subjects permitted to promote here, on top of holding the promoter role for this environment</span></label>
+  <textarea class="textarea textarea-bordered font-mono text-sm" rows="3">a.holguin@whale-net.io
+j.kim@whale-net.io
+release-bot@whale-net.io</textarea>
+</div>
+
+<div class="alert alert-warning shadow-md mb-4">
+  <span><strong>Requires approval</strong> is stored but not yet enforced — <span class="font-mono">Promote</span> does not check it today. Toggling this on will not gate anything until the approval workflow ships. See ARCHITECTURE.md "Future: approval gate."</span>
+</div>
+
+<div class="form-control mb-6">
+  <label class="label cursor-pointer justify-start gap-3">
+    <input type="checkbox" class="toggle" />
+    <span class="label-text">Requires approval <span class="opacity-60">(inert today)</span></span>
+  </label>
+</div>
+
+<div class="flex gap-2 justify-end mb-8">
+  <a href="#/environments" class="btn btn-secondary">Cancel</a>
+  <button class="btn btn-primary">Save environment</button>
+</div>
+
+<div class="card bg-base-100 border-2 border-error/40 shadow-md">
+  <div class="bg-error/10 px-6 py-4 border-b-2 border-error/40 rounded-t-box">
+    <h3 class="text-lg font-semibold text-error">⚠️ Danger Zone</h3>
+  </div>
+  <div class="card-body">
+    <h4 class="font-semibold">Archive this environment</h4>
+    <p class="text-sm opacity-70 mb-2">Environments are never hard-deleted. Archiving stops it from appearing as a promotion target; its promotion history is retained.</p>
+    <div class="form-control mb-3 max-w-md">
+      <label class="label"><span class="label-text">Reason <span class="text-error">*</span></span></label>
+      <textarea class="textarea textarea-bordered textarea-sm" rows="2" placeholder="e.g. canary environment decommissioned, no traffic since 2026-06"></textarea>
+    </div>
+    <button class="btn btn-error">Archive prod</button>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: adding a brand-new environment (rather than editing one) shows this same form with the Key field editable and no danger zone — creating an environment is exactly "an insert, not a release" (README.md), but still rare enough to deserve the full form rather than an inline row-add.</p>

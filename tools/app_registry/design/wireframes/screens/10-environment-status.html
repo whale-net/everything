@@ -1,16 +1,7 @@
-<!-- wf: name="environment-status" title="Environment Status" -->
+<!-- wf: name="environment-status" title="Deployments" -->
 <div class="wf-hero p-6 md:p-8 mb-6 shadow-lg">
-  <div class="flex flex-col md:flex-row justify-between md:items-center gap-4">
-    <div>
-      <h1 class="text-2xl md:text-3xl font-bold mb-2">Environment Status</h1>
-      <p class="text-sm opacity-80">What is currently promoted — the answer to "what's live."</p>
-    </div>
-    <div class="join">
-      <a href="#/environment-status" class="btn btn-sm join-item">dev</a>
-      <a href="#/environment-status" class="btn btn-sm btn-active join-item">stage</a>
-      <a href="#/environment-status" class="btn btn-sm join-item">prod</a>
-    </div>
-  </div>
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Deployments</h1>
+  <p class="text-sm opacity-80">One row per promotable entity, one column per environment. Every promote/rollback action lives inside the exact cell it acts on — there is no environment picker to get wrong.</p>
 </div>
 
 <div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-4">
@@ -22,89 +13,213 @@
       <option>custom…</option>
     </select>
   </div>
-  <a href="#/environment-diff" class="btn btn-sm btn-secondary">Compare to another environment</a>
+  <a href="#/environment-diff" class="btn btn-sm btn-secondary">Compare environments</a>
 </div>
 
 <div class="alert alert-error shadow-md mb-4">
-  <span>⚠️ <strong>leaflab-ingest</strong> is drifted — promoted directly (override) and no longer matches its chart's current pin. <a href="#/app-detail" class="link link-error font-semibold">View</a></span>
+  <span>⚠️ <strong>leaflab-edge / stage</strong> has drift — expand the row to see which composed app was overridden. <a href="#/drift-audit" class="link link-error font-semibold">Review drift</a></span>
 </div>
 
-<div class="card bg-base-100 shadow-md">
-  <div class="card-body p-0">
-    <div class="overflow-x-auto">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>App</th>
-            <th>Version</th>
-            <th>Digest</th>
-            <th>Promotability</th>
-            <th>Promoted</th>
-            <th class="text-right">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr class="hover">
-            <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">manmanv2-control-api</a></td>
-            <td class="font-mono text-sm">v1.4.0</td>
-            <td class="font-mono text-xs opacity-70">sha256:a1b2c3…</td>
-            <td><span class="badge badge-soft badge-success badge-sm">Promotable</span></td>
-            <td class="text-sm">a.holguin · 14m ago</td>
-            <td class="text-right">
-              <a href="#/promote" class="btn btn-xs btn-primary">Promote</a>
-              <a href="#/rollback" class="btn btn-xs btn-secondary">Rollback</a>
-            </td>
-          </tr>
-          <tr class="hover">
-            <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">manmanv2-worker</a></td>
-            <td class="font-mono text-sm">v1.4.0</td>
-            <td class="font-mono text-xs opacity-70">sha256:9f8e7d…</td>
-            <td><span class="badge badge-soft badge-info badge-sm">Via chart</span></td>
-            <td class="text-sm">a.holguin · 14m ago</td>
-            <td class="text-right">
-              <a href="#/promote" class="btn btn-xs btn-primary">Promote</a>
-              <a href="#/rollback" class="btn btn-xs btn-secondary">Rollback</a>
-            </td>
-          </tr>
-          <tr class="hover bg-error/5">
-            <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">leaflab-ingest</a></td>
-            <td class="font-mono text-sm">v0.9.2</td>
-            <td class="font-mono text-xs opacity-70">sha256:44de21…</td>
-            <td>
-              <span class="badge badge-soft badge-info badge-sm">Via chart</span>
-              <span class="badge badge-soft badge-error badge-sm">Override</span>
-            </td>
-            <td class="text-sm">j.kim · 1h ago</td>
-            <td class="text-right">
-              <a href="#/promote" class="btn btn-xs btn-primary">Promote</a>
-              <a href="#/rollback" class="btn btn-xs btn-secondary">Rollback</a>
-            </td>
-          </tr>
-          <tr class="hover">
-            <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">friendly-computing-machine</a></td>
-            <td class="font-mono text-sm">v2.0.4</td>
-            <td class="font-mono text-xs opacity-70">sha256:77bc10…</td>
-            <td><span class="badge badge-soft badge-success badge-sm">Promotable</span></td>
-            <td class="text-sm">ci-bot · 2d ago</td>
-            <td class="text-right">
-              <a href="#/promote" class="btn btn-xs btn-primary">Promote</a>
-              <a href="#/rollback" class="btn btn-xs btn-secondary">Rollback</a>
-            </td>
-          </tr>
-          <tr class="hover">
-            <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">app-registry-api</a></td>
-            <td class="font-mono text-sm">—</td>
-            <td class="font-mono text-xs opacity-70">—</td>
-            <td><span class="badge badge-soft badge-neutral badge-sm">Not promotable</span></td>
-            <td class="text-sm opacity-50">never promoted</td>
-            <td class="text-right">
-              <button class="btn btn-xs btn-disabled" disabled>Promote</button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+<div class="overflow-x-auto">
+  <div class="min-w-[760px]">
+    <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-2 text-xs font-semibold uppercase opacity-60 border-b-2 border-base-300">
+      <div>Promotable entity</div>
+      <div>dev</div>
+      <div>stage</div>
+      <div>prod</div>
     </div>
+
+    <details class="collapse collapse-arrow bg-base-100 border-b border-base-300" open>
+      <summary class="collapse-title p-0 cursor-pointer">
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-3 items-center">
+          <div class="flex items-center gap-2 pl-6">
+            <a href="#/chart-detail" class="link link-hover font-mono text-sm">leaflab-edge</a>
+            <span class="badge badge-soft badge-success badge-xs">chart</span>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v0.9.3</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote leaflab-edge to dev">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback dev">↺</a>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v0.9.1</span>
+            <span class="badge badge-soft badge-error badge-xs">drift</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote leaflab-edge to stage">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback stage">↺</a>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v0.9.0</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote leaflab-edge to prod">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback prod">↺</a>
+          </div>
+        </div>
+      </summary>
+      <div class="collapse-content p-0">
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-2 items-center border-t border-base-300/60">
+          <div class="pl-12 flex items-center gap-2">
+            <a href="#/app-detail" class="link link-hover font-mono text-sm">leaflab-ingest</a>
+            <span class="badge badge-soft badge-info badge-xs">image</span>
+          </div>
+          <div class="font-mono text-xs opacity-70">v0.9.3 <a href="#/promote" class="link text-xs opacity-60 ml-1">override…</a></div>
+          <div class="font-mono text-xs">
+            <span class="text-error">v0.9.2</span> <span class="badge badge-soft badge-error badge-xs">override</span>
+            <a href="#/promote" class="link text-xs ml-1">edit…</a>
+          </div>
+          <div class="font-mono text-xs opacity-70">v0.9.0 <a href="#/promote" class="link text-xs opacity-60 ml-1">override…</a></div>
+        </div>
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-2 items-center">
+          <div class="pl-12 flex items-center gap-2">
+            <a href="#/app-detail" class="link link-hover font-mono text-sm">leaflab-migrate</a>
+            <span class="badge badge-soft badge-info badge-xs">image</span>
+          </div>
+          <div class="font-mono text-xs opacity-70">v0.9.3 <a href="#/promote" class="link text-xs opacity-60 ml-1">override…</a></div>
+          <div class="font-mono text-xs opacity-70">v0.9.1 <a href="#/promote" class="link text-xs opacity-60 ml-1">override…</a></div>
+          <div class="font-mono text-xs opacity-70">v0.9.0 <a href="#/promote" class="link text-xs opacity-60 ml-1">override…</a></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="collapse collapse-arrow bg-base-100 border-b border-base-300">
+      <summary class="collapse-title p-0 cursor-pointer">
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-3 items-center">
+          <div class="flex items-center gap-2 pl-6">
+            <a href="#/chart-detail" class="link link-hover font-mono text-sm">manmanv2-control-api</a>
+            <span class="badge badge-soft badge-success badge-xs">chart</span>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v1.5.0-rc1</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to dev">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback dev">↺</a>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v1.4.0</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to stage">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback stage">↺</a>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v1.4.0</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to prod">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback prod">↺</a>
+          </div>
+        </div>
+      </summary>
+      <div class="collapse-content p-0">
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-2 items-center border-t border-base-300/60">
+          <div class="pl-12 flex items-center gap-2">
+            <a href="#/app-detail" class="link link-hover font-mono text-sm">manmanv2-control-api <span class="opacity-50 font-sans text-xs">(own image)</span></a>
+            <span class="badge badge-soft badge-info badge-xs">image</span>
+          </div>
+          <div class="font-mono text-xs opacity-70">v1.5.0-rc1</div>
+          <div class="font-mono text-xs opacity-70">v1.4.0</div>
+          <div class="font-mono text-xs opacity-70">v1.4.0</div>
+        </div>
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-2 items-center">
+          <div class="pl-12 flex items-center gap-2">
+            <a href="#/app-detail" class="link link-hover font-mono text-sm">manmanv2-worker</a>
+            <span class="badge badge-soft badge-info badge-xs">image</span>
+          </div>
+          <div class="font-mono text-xs opacity-70">v1.4.0</div>
+          <div class="font-mono text-xs opacity-70">v1.4.0</div>
+          <div class="font-mono text-xs opacity-70">v1.4.0</div>
+        </div>
+      </div>
+    </details>
+
+    <details class="collapse collapse-arrow bg-base-100 border-b border-base-300">
+      <summary class="collapse-title p-0 cursor-pointer">
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-3 items-center">
+          <div class="flex items-center gap-2 pl-6">
+            <a href="#/chart-detail" class="link link-hover font-mono text-sm">leaflab-api</a>
+            <span class="badge badge-soft badge-success badge-xs">chart</span>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v0.4.2</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to dev">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback dev">↺</a>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v0.4.1</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to stage">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback stage">↺</a>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="text-xs opacity-50">not promoted</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to prod">⬆</a>
+          </div>
+        </div>
+      </summary>
+      <div class="collapse-content p-0">
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-2 items-center border-t border-base-300/60">
+          <div class="pl-12 flex items-center gap-2">
+            <a href="#/app-detail" class="link link-hover font-mono text-sm">leaflab-api <span class="opacity-50 font-sans text-xs">(own image)</span></a>
+            <span class="badge badge-soft badge-info badge-xs">image</span>
+          </div>
+          <div class="font-mono text-xs opacity-70">v0.4.2</div>
+          <div class="font-mono text-xs opacity-70">v0.4.1</div>
+          <div class="text-xs opacity-40">—</div>
+        </div>
+      </div>
+    </details>
+
+    <details class="collapse collapse-arrow bg-base-100 border-b border-base-300">
+      <summary class="collapse-title p-0 cursor-pointer">
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-3 items-center">
+          <div class="flex items-center gap-2 pl-6">
+            <a href="#/chart-detail" class="link link-hover font-mono text-sm">friendly-computing-machine</a>
+            <span class="badge badge-soft badge-success badge-xs">chart</span>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v2.1.0</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to dev">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback dev">↺</a>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v2.0.4</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to stage">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback stage">↺</a>
+          </div>
+          <div class="flex items-center gap-1 flex-wrap">
+            <span class="font-mono text-xs">v2.1.0</span>
+            <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to prod">⬆</a>
+            <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback prod">↺</a>
+          </div>
+        </div>
+      </summary>
+      <div class="collapse-content p-0">
+        <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-2 items-center border-t border-base-300/60">
+          <div class="pl-12 flex items-center gap-2">
+            <a href="#/app-detail" class="link link-hover font-mono text-sm">friendly-computing-machine <span class="opacity-50 font-sans text-xs">(own image)</span></a>
+            <span class="badge badge-soft badge-info badge-xs">image</span>
+          </div>
+          <div class="font-mono text-xs opacity-70">v2.1.0</div>
+          <div class="font-mono text-xs opacity-70">v2.0.4</div>
+          <div class="font-mono text-xs opacity-70">v2.1.0</div>
+        </div>
+      </div>
+    </details>
+
+    <div class="bg-base-100 border-b border-base-300">
+      <div class="grid grid-cols-[minmax(220px,2fr)_repeat(3,minmax(170px,1fr))] gap-2 px-4 py-3 items-center">
+        <div class="flex items-center gap-2 pl-6">
+          <span class="inline-block w-4"></span>
+          <a href="#/app-detail" class="link link-hover font-mono text-sm">leaflab-gateway</a>
+          <span class="badge badge-soft badge-info badge-xs">image</span>
+        </div>
+        <div class="flex items-center gap-1 flex-wrap">
+          <span class="font-mono text-xs">v0.3.0</span>
+          <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to dev">⬆</a>
+          <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback dev">↺</a>
+        </div>
+        <div class="flex items-center gap-1 flex-wrap">
+          <span class="font-mono text-xs">v0.3.0</span>
+          <a href="#/promote" class="btn btn-xs btn-primary btn-square" title="Promote to stage">⬆</a>
+          <a href="#/rollback" class="btn btn-xs btn-secondary btn-square" title="Rollback stage">↺</a>
+        </div>
+        <div class="text-xs opacity-40" title="not a deploy target for this environment">not applicable</div>
+      </div>
+    </div>
+
   </div>
 </div>
 
-<p class="wf-note mt-4">note: "Not promotable" rows show a disabled Promote button with the reason on hover, rather than hiding the row — the admin should be able to confirm an app exists and see why it can't be targeted.</p>
+<p class="wf-note mt-4">note: rows are exactly the `PROMOTABLE` targets (chart artifacts, and standalone `image`-deploy-unit apps like leaflab-gateway) — a `NOT_PROMOTABLE` app (e.g. app-registry-api itself, build-only) never appears here at all. `VIA_CHART` apps only ever surface nested, under the chart that publishes them, and only ever get "override…"/"edit…" — never the primary ⬆ Promote button — so promoting the wrong artifact class takes a deliberate extra step, not an accidental click. Every ⬆/↺ opens already scoped to its exact (entity, environment) pair; nothing in this flow ever asks "which environment?" Assumes ≤4-5 environment columns fits before this needs to become "only render a column when it's a valid target for this row" — "not applicable" (leaflab-gateway / prod) is that fallback in miniature. Implementation note: a real build should stop a click on a nested action from also toggling the row's `&lt;details&gt;` open/closed state (event handling `&lt;details&gt;`/`&lt;summary&gt;` can't do statically) — not a concern for this static mockup.</p>

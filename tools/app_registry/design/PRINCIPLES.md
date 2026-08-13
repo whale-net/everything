@@ -77,3 +77,25 @@ is a consequence of that one sentence, or of a specific operational lesson in
     label per value across every screen. An admin should never have to
     re-learn what a color means between the dashboard and a build-detail
     page.
+
+11. **The wrong environment should be structurally hard to hit, not just
+    discouraged.** A promotion is exactly the kind of write this system
+    cannot cheaply undo (rollback reverts to the *previous* promotion, not a
+    guarantee that promoting somewhere was harmless). Rather than one
+    "Promote" action plus an environment picker an admin can fat-finger, the
+    deployments view puts every environment side by side as its own column,
+    with that environment's promote/rollback controls living inside its own
+    cell. The environment is chosen by which button the admin's cursor is
+    already on, never typed or selected separately — the UI removes the
+    step where a mis-click is possible, rather than asking the admin to be
+    careful.
+
+12. **A chart's composed apps are detail, not a second class of top-level
+    entity.** Only `PROMOTABLE` targets (charts, and standalone
+    `image`-deploy-unit apps) get a top-level row anywhere a "what can I
+    promote" list appears; a chart's `VIA_CHART` apps are reachable by
+    drilling in, never listed as siblings of first-class promotion targets.
+    This is the same promotability guardrail as #2, applied to layout: if a
+    `VIA_CHART` app can't appear next to a `PROMOTABLE` one with an
+    equally-weighted "Promote" button, an admin can't mistake one for the
+    other by list position either.

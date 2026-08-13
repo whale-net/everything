@@ -1,0 +1,66 @@
+<!-- wf: name="environments" title="Environments" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg flex flex-col md:flex-row justify-between md:items-center gap-4">
+  <div>
+    <h1 class="text-2xl md:text-3xl font-bold mb-2">Environments</h1>
+    <p class="text-sm opacity-80">A row, not an enum — an environment is an insert, not a release. Rare to add or archive; admin-only.</p>
+  </div>
+  <a href="#/environment-form" class="btn bg-base-100 text-primary border-0 shadow-md">+ Add environment</a>
+</div>
+
+<label class="label cursor-pointer gap-2 w-fit mb-4">
+  <input type="checkbox" class="toggle toggle-sm" />
+  <span class="label-text text-sm">Show archived</span>
+</label>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Key</th><th>Display name</th><th>Rank</th><th>Requires approval</th>
+          <th>Allowed principals</th><th>GitOps path</th><th class="text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="hover">
+          <td class="font-mono text-sm">dev</td>
+          <td>Development</td>
+          <td class="font-mono text-sm">0</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">No</span></td>
+          <td class="text-sm opacity-70">any promoter-dev principal</td>
+          <td class="font-mono text-xs opacity-70">environments/dev</td>
+          <td class="text-right"><a href="#/environment-form" class="btn btn-xs btn-primary">Edit</a></td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm">stage</td>
+          <td>Staging</td>
+          <td class="font-mono text-sm">1</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">No</span></td>
+          <td class="text-sm opacity-70">any promoter-stage principal</td>
+          <td class="font-mono text-xs opacity-70">environments/stage</td>
+          <td class="text-right"><a href="#/environment-form" class="btn btn-xs btn-primary">Edit</a></td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm">prod</td>
+          <td>Production</td>
+          <td class="font-mono text-sm">2</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">No <span class="opacity-60">(not enforced yet)</span></span></td>
+          <td class="text-sm opacity-70">3 named principals</td>
+          <td class="font-mono text-xs opacity-70">environments/prod</td>
+          <td class="text-right"><a href="#/environment-form" class="btn btn-xs btn-primary">Edit</a></td>
+        </tr>
+        <tr class="hover opacity-50">
+          <td class="font-mono text-sm">canary</td>
+          <td>Canary (archived)</td>
+          <td class="font-mono text-sm">3</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">No</span></td>
+          <td class="text-sm opacity-70">—</td>
+          <td class="font-mono text-xs opacity-70">environments/canary</td>
+          <td class="text-right"><a href="#/environment-form" class="btn btn-xs btn-secondary">View</a></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: "Requires approval" is a real, settable field today (`environment.requires_approval`, `PromotionState.PENDING_APPROVAL`) but the approval gate itself is unbuilt — `Promote` does not yet check it. The UI says so inline rather than implying the toggle does something it doesn't (ARCHITECTURE.md "Future: approval gate"). "Rank" orders promotion legality (higher = closer to prod) and drives the environment column order on the Deployments matrix.</p>

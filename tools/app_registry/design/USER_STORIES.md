@@ -20,24 +20,43 @@ implies a "deploy" or "sync" button.
 1. As the admin, I want a single screen listing every environment with what's
    currently promoted, so I can answer "what's live?" without running a CLI
    command per environment.
-   - Acceptance: shows app/chart, version, short digest, promoted-by,
-     promoted-at, and promotability, for every environment, refreshable
-     without navigating away. Maps to `app-registry status <env>` run once
-     per environment.
+   - Acceptance: one matrix — a row per promotable entity, a column per
+     environment (dev/stage/prod/…) — shows version and promotability at a
+     glance for everything, everywhere, without switching tabs or re-running
+     a per-environment lookup. Maps to `app-registry status <env>` run once
+     per environment and rendered together.
+
+1a. As the admin, I want a chart's composed apps available without them
+    cluttering the top-level list, so the matrix stays scannable on a calm
+    day but still answers "what exactly is in this chart" on a bad one.
+    - Acceptance: only `PROMOTABLE` entities (charts, and standalone
+      `image`-deploy-unit apps) are top-level rows; a chart's `VIA_CHART`
+      apps are reachable by expanding that row, never listed as their own
+      top-level row.
 
 2. As the admin, I want environments that have drifted (an overridden image
    no longer matching its chart's pin) to be visually loud on the overview,
    not something I have to go looking for.
    - Acceptance: a drift count/badge is visible on the dashboard and on the
-     affected environment's row before I click into anything. Maps to
-     `status`'s `DriftEntry` banner.
+     affected entity's row before I click into anything. Maps to `status`'s
+     `DriftEntry` banner.
 
 3. As the admin, I want to see what was deployed at a past point in time, not
    just right now, so I can answer "was this version live during the
    incident window?"
-   - Acceptance: environment status view accepts an "as of" instant and
-     shows the SCD2 snapshot for that time. Maps to
-     `app-registry status <env> --at <time>`.
+   - Acceptance: the deployments matrix accepts an "as of" instant and shows
+     the SCD2 snapshot for that time, across every environment column at
+     once. Maps to `app-registry status <env> --at <time>`.
+
+3a. As the admin, I want every promote/rollback action to be scoped to the
+    exact environment I clicked, with no environment-selection step in
+    between, so I can't promote the right app to the wrong environment by
+    picking the wrong option in a dropdown or losing track of which tab I'm
+    on.
+    - Acceptance: each environment column's cell carries its own
+      promote/rollback controls; the promote/rollback layers open already
+      scoped to (entity, environment) and never ask the admin to choose an
+      environment.
 
 ## Epic B — Promotion
 
@@ -178,3 +197,42 @@ implies a "deploy" or "sync" button.
       affected app/chart. A rejected sweep states plainly that this is
       expected behavior (stale watermark), not a failure. Maps to AR-8's
       `reconcile_run` + manifest history tables (#592).
+
+## Epic H — Environment administration
+
+Environments are a row, not an enum (README.md "Core concepts") — a new
+region or an ephemeral environment is meant to be an insert, not a release.
+Rare, but real, and admin-only (`app-registry-admin` role, per
+ARCHITECTURE.md "Authorization").
+
+22. As the admin, I want to see every environment the registry knows about —
+    including archived ones — in one place, separate from what's currently
+    deployed to them, so "what environments exist" and "what's live" don't
+    get tangled into one screen.
+    - Acceptance: an environments view lists key, display name, rank,
+      requires-approval, allowed principals, and gitops path, with an
+      explicit toggle to include archived rows. Maps to `app-registry env
+      list [--include-archived]`.
+
+23. As the admin, on the rare occasion I need to add a new environment (a
+    new region/canary/ephemeral env), I want one form that captures everything
+    it needs — key, rank, gitops path, allowed principals — rather than
+    hunting for the right CLI flags.
+    - Acceptance: an add/edit form mirrors `env upsert`'s fields exactly,
+      including ones that don't do anything yet (see #24). Maps to
+      `app-registry env upsert <key>`.
+
+24. As the admin, I want the UI to tell me plainly when a field I can set
+    doesn't actually do anything yet, so I don't waste time debugging an
+    approval gate that was never wired up.
+    - Acceptance: `requires_approval` is shown and settable (it's a real
+      column), but labeled inert until the approval workflow ships — see
+      ARCHITECTURE.md "Future: approval gate."
+
+25. As the admin, I want archiving an environment to require a reason and be
+    clearly separated from routine edits, so it's treated with the same
+    care as any other destructive-adjacent action in this UI.
+    - Acceptance: archive lives in a danger-zone section of the same
+      edit form, requires a reason, and states that promotion history is
+      retained (nothing is hard-deleted). Maps to `app-registry env archive
+      <key> --reason`.
