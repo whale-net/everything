@@ -60,20 +60,39 @@ registry is on.
 If `APP_REGISTRY_CICD_OPT_IN=true`, `release.yml` records the pushed
 image/chart after publishing it — see
 [`docs/CI_CD.md`](../../docs/CI_CD.md#app-registry) for exactly which steps.
-**Do not assume a green release means recording succeeded** — the steps are
-`continue-on-error` by design (a registry outage must never fail a release).
+Every individual recording step is still `continue-on-error` by design (a
+registry outage must never fail a release) — but the `plan-release`,
+`release`, and `release-helm-charts` jobs each end with one **App Registry
+recording health** step that is deliberately NOT `continue-on-error`. It runs
+last, after every real push/tag/upload in that job has already happened, and
+checks every App Registry step's own outcome; if any of them failed, this
+step fails too. **A release job going red because of this step never means
+the release itself failed** — check whether "App Registry recording health"
+is specifically the red step before assuming otherwise.
+
+Before this existed, a recording failure was invisible at the job level —
+every individual step's red `X` was masked by its own `continue-on-error`,
+so the job (and the whole run) stayed green regardless. That silent-failure
+window is why issue #547, #570, and the `BeginPublish` chart-repository bug
+all shipped and ran for a while before anyone noticed. The health-check step
+does not change what best-effort recording means; it only makes a real
+recording failure show up as a red run instead of an annotation nobody read.
 
 To check whether a specific release actually got recorded:
 
-1. Open the release run in GitHub Actions → the `release` (or
-   `release-helm-charts`) job → the `Record build and artifact in App
-   Registry` (or `Record chart artifacts in App Registry`) step.
-2. A skipped step (greyed out, "This step was skipped") means the opt-in
-   was off — expected, not a failure.
-3. A step that ran and shows `✅ Recorded ... in App Registry` at the end
+1. Open the release run in GitHub Actions. A red **App Registry recording
+   health** step (last step of `release`/`release-helm-charts`/
+   `plan-release`) means at least one recording step failed this run — go to
+   step 4. A green run with that step present and green means every
+   recording step that ran succeeded.
+2. Find the specific failed step: the `Record build and artifact in App
+   Registry` (or `Record chart artifacts in App Registry`) step, or one of
+   `Assert apps/charts` / `Begin publish` / `Fail publish`.
+3. A skipped step (greyed out, "This step was skipped") means the opt-in
+   was off — expected, not a failure, and does not trip the health check.
+4. A step that ran and shows `✅ Recorded ... in App Registry` at the end
    succeeded.
-4. A step that ran, shows a red `X` inline but the **job** is still green —
-   this is the silent-failure case. The run's summary page (the
+5. A step that ran and shows a red `X` failed. The run's summary page (the
    `::warning::`/`::error::` annotations GitHub surfaces at the top of the
    run, and the `$GITHUB_STEP_SUMMARY` section below the job list) tells you
    which kind:
@@ -100,8 +119,8 @@ To check whether a specific release actually got recorded:
      step log for the underlying gRPC error (`Unauthenticated`,
      `Unavailable`, `DeadlineExceeded`, etc.). Re-running later is a
      reasonable next step here, unlike the version-skew case above.
-   The job outcome tells you nothing; only the step log (or now, the run
-   summary) does.
+   The job outcome now tells you THAT something failed; the step log (or the
+   run summary) still tells you WHICH failure it was and what to do about it.
 
 **"Why didn't my reconcile apply?" (issue #545).** The `reconcile-app-registry`
 job in `ci.yml` runs green but `app-registry apps list`/`get` still shows
@@ -141,9 +160,11 @@ a normal `release.yml` run.
 
 **If you still see it:** the `AssertApps` step itself likely failed first —
 a registry outage fails every App Registry step in the same job, this one
-included, and `continue-on-error` on `AssertApps` means that failure can be
-silent too. Check the `Assert apps/charts in App Registry` step's log before
-assuming this is the old #547 gap reopening. The underlying mechanism
+included. `AssertApps` is still `continue-on-error` (an outage there must not
+block the release), but that job's **App Registry recording health** step
+will have gone red, so this is visible rather than silent. Check the
+`Assert apps/charts in App Registry` step's log before assuming this is the
+old #547 gap reopening. The underlying mechanism
 (exit code 3, `apierrors.ReasonOwnerNotReconciled`) is unchanged and still
 fires if `resolveOwner` (`server/handlers/artifact.go`) genuinely can't find
 the owner — it is just no longer reachable through the intended path.
@@ -152,15 +173,16 @@ To confirm a specific artifact recorded, from the registry side rather than
 the log:
 
 ```bash
-app-registry artifacts get <domain>-<name> --version vX.Y.Z
+app-registry artifacts get <domain>-<name> --kind image|chart --version vX.Y.Z
 # NotFound means it was never recorded (opt-in off, or a step failed)
 ```
 
-**What a failed silent recording looks like in practice:** a release ships,
-the workflow run is all green, but `app-registry artifacts get` for that
-version returns `NotFound`. The most common cause is the builder credential
-being wrong or expired (`Unauthenticated`, masked by `continue-on-error`) —
-see [DEPLOY.md §4](DEPLOY.md#4-ci-credentials).
+**What a failed recording looks like in practice:** a release ships, the
+`release`/`release-helm-charts` job goes red on its **App Registry recording
+health** step (the release itself still succeeded — real images/charts were
+still pushed), and `app-registry artifacts get` for that version returns
+`NotFound`. The most common cause is the builder credential being wrong or
+expired (`Unauthenticated`) — see [DEPLOY.md §4](DEPLOY.md#4-ci-credentials).
 
 ### 3. Promote to an environment
 
