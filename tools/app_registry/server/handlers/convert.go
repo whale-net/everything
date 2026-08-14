@@ -213,6 +213,25 @@ func buildsToPB(builds []repository.Build) []*pb.Build {
 	return out
 }
 
+func reconcileRunToPB(r repository.ReconcileRun) *pb.ReconcileRun {
+	return &pb.ReconcileRun{
+		ReconcileRunId:    r.ReconcileRunID,
+		GitSha:            r.GitSHA,
+		SourceCommittedAt: r.SourceCommittedAt,
+		AppliedAt:         timeToUnix(r.AppliedAt),
+		AppsSeen:          r.AppsSeen,
+		ChartsSeen:        r.ChartsSeen,
+	}
+}
+
+func reconcileRunsToPB(runs []repository.ReconcileRun) []*pb.ReconcileRun {
+	out := make([]*pb.ReconcileRun, 0, len(runs))
+	for _, r := range runs {
+		out = append(out, reconcileRunToPB(r))
+	}
+	return out
+}
+
 func artifactLinkToPB(l repository.ArtifactLink) *pb.ArtifactLink {
 	return &pb.ArtifactLink{
 		ArtifactId: l.ImageArtifactID,

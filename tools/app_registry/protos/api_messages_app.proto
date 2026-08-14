@@ -94,6 +94,30 @@ message UnresolvedChart {
   string reason = 4;
 }
 
+// ReconcileRun is one row from the `reconcile_run` table -- one row per
+// sweep that actually applied (never dry-run, never stale-rejected).
+message ReconcileRun {
+  string reconcile_run_id = 1;
+  string git_sha = 2;
+  int64 source_committed_at = 3;
+  int64 applied_at = 4;
+  int32 apps_seen = 5;
+  int32 charts_seen = 6;
+}
+
+message ListReconcileRunsRequest {
+  // Optional: only return runs with applied_at >= since (Unix timestamp).
+  int64 since = 1;
+  PageRequest page = 2;
+}
+
+message ListReconcileRunsResponse {
+  // Ordered most-recent-first by applied_at, tie-broken by
+  // reconcile_run_id.
+  repeated ReconcileRun reconcile_runs = 1;
+  PageResponse page = 2;
+}
+
 // ============================================================================
 // AssertApps (AR-7c, issue #558)
 // ============================================================================

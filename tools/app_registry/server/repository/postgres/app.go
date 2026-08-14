@@ -1101,3 +1101,83 @@ func (r *appRepo) SetAppStatus(ctx context.Context, appID string, target reposit
 	a.Status = target
 	return &a, nil
 }
+
+// defaultReconcileRunPageSize is what ListReconcileRuns falls back to when
+// the caller passes pageSize <= 0. There is no existing
+// ListPromotionEvents/ListArtifacts precedent that enforces a default (both
+// still read their whole result set unpaginated) -- this is a fresh,
+// deliberate choice for this package's first real (LIMIT + keyset cursor)
+// pagination, per issue #607.
+const defaultReconcileRunPageSize = 50
+
+const reconcileRunColumns = `reconcile_run_id, git_sha, source_committed_at, applied_at, apps_seen, charts_seen`
+
+func scanReconcileRun(row pgx.Row) (repository.ReconcileRun, error) {
+	var rr repository.ReconcileRun
+	if err := row.Scan(&rr.ReconcileRunID, &rr.GitSHA, &rr.SourceCommittedAt, &rr.AppliedAt, &rr.AppsSeen, &rr.ChartsSeen); err != nil {
+		return repository.ReconcileRun{}, err
+	}
+	return rr, nil
+}
+
+// ListReconcileRuns implements repository.AppRepository.ListReconcileRuns --
+// see that doc comment for the pagination contract. reconcile_run.applied_at
+// has no supporting index (see ARCHITECTURE.md "ListReconcileRuns"); at
+// current/foreseeable sweep volume an unindexed ORDER BY ... LIMIT full sort
+// is fine by deliberate choice.
+func (r *appRepo) ListReconcileRuns(ctx context.Context, since time.Time, pageSize int32, pageToken string) ([]repository.ReconcileRun, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultReconcileRunPageSize
+	}
+
+	query := `SELECT ` + reconcileRunColumns + ` FROM reconcile_run WHERE 1=1`
+	var args []any
+	if !since.IsZero() {
+		args = append(args, since)
+		query += fmt.Sprintf(" AND applied_at >= $%d", len(args))
+	}
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeKeysetCursor(pageToken)
+		if err != nil {
+			return nil, "", fmt.Errorf("list reconcile runs: %w", err)
+		}
+		// Keyset predicate for "resume strictly after (ts, id)" on an
+		// ORDER BY applied_at DESC, reconcile_run_id DESC query --
+		// explicit casts because the row-value comparison below gives
+		// Postgres nothing else to infer $N's type from.
+		args = append(args, cursorTS, cursorID)
+		query += fmt.Sprintf(" AND (applied_at, reconcile_run_id) < ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+	}
+	// Fetch one extra row so we can tell whether there is a next page
+	// without a separate COUNT(*) query.
+	args = append(args, pageSize+1)
+	query += fmt.Sprintf(" ORDER BY applied_at DESC, reconcile_run_id DESC LIMIT $%d", len(args))
+
+	rows, err := r.ex.Query(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	var out []repository.ReconcileRun
+	for rows.Next() {
+		rr, err := scanReconcileRun(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, rr)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	var nextPageToken string
+	if int32(len(out)) > pageSize {
+		// The extra row proves a next page exists; the cursor resumes
+		// after the LAST row of THIS page (the pageSize-th, not the
+		// extra one), which is then dropped.
+		last := out[pageSize-1]
+		nextPageToken = encodeKeysetCursor(last.AppliedAt, last.ReconcileRunID)
+		out = out[:pageSize]
+	}
+	return out, nextPageToken, nil
+}

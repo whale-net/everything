@@ -4,6 +4,7 @@ go_library(
     name = "fake",
     srcs = [
         "fake.go",
+        "keyset_cursor.go",
         "reconcile.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/fake",

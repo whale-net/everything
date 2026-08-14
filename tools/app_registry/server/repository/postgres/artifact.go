@@ -104,6 +104,74 @@ func (r *buildRepo) GetBuildByWorkflowRun(ctx context.Context, workflowRunID str
 	return &b, nil
 }
 
+// defaultBuildPageSize is what ListBuilds falls back to when the caller
+// passes pageSize <= 0. Matches defaultReconcileRunPageSize (app.go) so
+// both real-pagination RPCs added by #607/#608 behave consistently.
+const defaultBuildPageSize = 50
+
+// ListBuilds implements repository.BuildRepository.ListBuilds -- see that
+// doc comment for the pagination contract. build.recorded_at has no
+// supporting index (see ARCHITECTURE.md "ListBuilds"); at current/
+// foreseeable build volume an unindexed ORDER BY ... LIMIT full sort is
+// fine by deliberate choice, same tradeoff as ListReconcileRuns's
+// applied_at.
+func (r *buildRepo) ListBuilds(ctx context.Context, since time.Time, pageSize int32, pageToken string) ([]repository.Build, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultBuildPageSize
+	}
+
+	query := `SELECT ` + buildColumns + ` FROM build WHERE 1=1`
+	var args []any
+	if !since.IsZero() {
+		args = append(args, since)
+		query += fmt.Sprintf(" AND recorded_at >= $%d", len(args))
+	}
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeKeysetCursor(pageToken)
+		if err != nil {
+			return nil, "", fmt.Errorf("list builds: %w", err)
+		}
+		// Keyset predicate for "resume strictly after (ts, id)" on an
+		// ORDER BY recorded_at DESC, build_id DESC query -- explicit
+		// casts because the row-value comparison below gives Postgres
+		// nothing else to infer $N's type from.
+		args = append(args, cursorTS, cursorID)
+		query += fmt.Sprintf(" AND (recorded_at, build_id) < ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+	}
+	// Fetch one extra row so we can tell whether there is a next page
+	// without a separate COUNT(*) query.
+	args = append(args, pageSize+1)
+	query += fmt.Sprintf(" ORDER BY recorded_at DESC, build_id DESC LIMIT $%d", len(args))
+
+	rows, err := r.ex.Query(ctx, query, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	var out []repository.Build
+	for rows.Next() {
+		b, err := scanBuild(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	var nextPageToken string
+	if int32(len(out)) > pageSize {
+		// The extra row proves a next page exists; the cursor resumes
+		// after the LAST row of THIS page (the pageSize-th, not the
+		// extra one), which is then dropped.
+		last := out[pageSize-1]
+		nextPageToken = encodeKeysetCursor(last.RecordedAt, last.BuildID)
+		out = out[:pageSize]
+	}
+	return out, nextPageToken, nil
+}
+
 // ============================================================================
 // ArtifactRepository
 // ============================================================================
@@ -996,6 +1064,36 @@ func (r *artifactRepo) ResolveArtifact(ctx context.Context, lookup repository.Ar
 	a.Contains = links
 
 	return a, images, builds, nil
+}
+
+// ListArtifactPins is ResolveArtifact's mirror image: given an image
+// artifact lookup, returns the chart artifacts whose artifact_link row
+// points at it.
+func (r *artifactRepo) ListArtifactPins(ctx context.Context, lookup repository.ArtifactLookup) ([]repository.Artifact, error) {
+	a, err := r.findArtifact(ctx, lookup)
+	if err != nil {
+		return nil, err
+	}
+	if a.Kind != repository.ArtifactKindImage {
+		return nil, fmt.Errorf("%w: artifact %s is not an image", repository.ErrInvalidArgument, a.ArtifactID)
+	}
+
+	rows, err := r.ex.Query(ctx, artifactSelectBase+`
+		JOIN artifact_link al ON al.chart_artifact_id = a.artifact_id
+		WHERE al.image_artifact_id = $1`, a.ArtifactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var chartArtifacts []repository.Artifact
+	for rows.Next() {
+		ca, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		chartArtifacts = append(chartArtifacts, ca)
+	}
+	return chartArtifacts, rows.Err()
 }
 
 // ============================================================================

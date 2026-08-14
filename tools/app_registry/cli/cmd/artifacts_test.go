@@ -60,3 +60,32 @@ func TestNewArtifactsListCmd_RegistersProvenanceFlagAndOptionalOwner(t *testing.
 		t.Error("expected two args to be rejected")
 	}
 }
+
+// TestPinnedByLookupRequest_DigestArgSetsDigest and
+// TestPinnedByLookupRequest_ArtifactIdArgSetsArtifactId cover `artifacts
+// pinned-by`'s digest-vs-artifact-id argument dispatch (issue #612): a
+// "sha256:..." arg must send a Digest-populated request, anything else an
+// ArtifactId-populated one -- this is the same dispatch
+// newArtifactsResolveCmd uses for `artifacts resolve`, which has no direct
+// test coverage of its own to mirror.
+func TestPinnedByLookupRequest_DigestArgSetsDigest(t *testing.T) {
+	req := pinnedByLookupRequest("sha256:abcdef")
+
+	if req.Digest != "sha256:abcdef" {
+		t.Errorf("Digest = %q, want %q", req.Digest, "sha256:abcdef")
+	}
+	if req.ArtifactId != "" {
+		t.Errorf("expected ArtifactId to be empty, got %q", req.ArtifactId)
+	}
+}
+
+func TestPinnedByLookupRequest_ArtifactIdArgSetsArtifactId(t *testing.T) {
+	req := pinnedByLookupRequest("artifact-123")
+
+	if req.ArtifactId != "artifact-123" {
+		t.Errorf("ArtifactId = %q, want %q", req.ArtifactId, "artifact-123")
+	}
+	if req.Digest != "" {
+		t.Errorf("expected Digest to be empty, got %q", req.Digest)
+	}
+}

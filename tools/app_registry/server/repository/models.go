@@ -199,6 +199,22 @@ type ChartListFilter struct {
 	Statuses []Status
 }
 
+// ReconcileRun is one row from the `reconcile_run` table (migration 010,
+// AR-8) -- one row per sweep that actually applied (never dry-run, never
+// stale-rejected; see postgres/app.go's Reconcile). Mirrors the
+// ReconcileRun proto message field-for-field. SourceCommittedAt stays an
+// int64 Unix timestamp (matching the underlying BIGINT column and the wire
+// type) rather than time.Time, unlike AppliedAt -- see migration 010's
+// column comment.
+type ReconcileRun struct {
+	ReconcileRunID    string
+	GitSHA            string
+	SourceCommittedAt int64
+	AppliedAt         time.Time
+	AppsSeen          int32
+	ChartsSeen        int32
+}
+
 // Build is one CI run. Every artifact hangs off a build.
 type Build struct {
 	BuildID         string

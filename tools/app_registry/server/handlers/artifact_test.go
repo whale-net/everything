@@ -425,6 +425,215 @@ func TestResolveArtifact_ReturnsImagesForChart(t *testing.T) {
 	}
 }
 
+// TestListArtifactPins_ReturnsSingleChartThatPinsImage is required coverage
+// (issue #612, FR3.1): an image artifact pinned by exactly one chart
+// artifact is returned by ListArtifactPins.
+func TestListArtifactPins_ReturnsSingleChartThatPinsImage(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-pins-single")
+
+	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:pinssingleimg", Version: "v1.0.0",
+		IdempotencyKey: "record-pins-single-img",
+	})
+	if err != nil {
+		t.Fatalf("record image: %v", err)
+	}
+
+	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Digest: "sha256:pinssinglechart", Version: "v1.0.0",
+		Contains: []*pb.ContainedImage{
+			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
+		},
+		IdempotencyKey: "record-pins-single-chart",
+	})
+	if err != nil {
+		t.Fatalf("record chart: %v", err)
+	}
+
+	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.Artifact.ArtifactId})
+	if err != nil {
+		t.Fatalf("ListArtifactPins: %v", err)
+	}
+	if len(resp.ChartArtifacts) != 1 || resp.ChartArtifacts[0].ArtifactId != chart.Artifact.ArtifactId {
+		t.Fatalf("expected exactly the one pinning chart artifact, got %+v", resp.ChartArtifacts)
+	}
+}
+
+// TestListArtifactPins_ReturnsMultipleChartsThatPinSameImage is required
+// coverage (issue #612, FR3.1): two different chart artifacts pinning the
+// same image digest are both returned, with no duplicates.
+func TestListArtifactPins_ReturnsMultipleChartsThatPinSameImage(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-pins-multi")
+
+	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:pinsmultiimg", Version: "v1.0.0",
+		IdempotencyKey: "record-pins-multi-img",
+	})
+	if err != nil {
+		t.Fatalf("record image: %v", err)
+	}
+
+	chartV1, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Digest: "sha256:pinsmultichart1", Version: "v1.0.0",
+		Contains: []*pb.ContainedImage{
+			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
+		},
+		IdempotencyKey: "record-pins-multi-chart1",
+	})
+	if err != nil {
+		t.Fatalf("record chart v1: %v", err)
+	}
+	chartV2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Digest: "sha256:pinsmultichart2", Version: "v1.1.0",
+		Contains: []*pb.ContainedImage{
+			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
+		},
+		IdempotencyKey: "record-pins-multi-chart2",
+	})
+	if err != nil {
+		t.Fatalf("record chart v2: %v", err)
+	}
+
+	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.Artifact.ArtifactId})
+	if err != nil {
+		t.Fatalf("ListArtifactPins: %v", err)
+	}
+	got := map[string]bool{}
+	for _, c := range resp.ChartArtifacts {
+		got[c.ArtifactId] = true
+	}
+	if len(resp.ChartArtifacts) != 2 || !got[chartV1.Artifact.ArtifactId] || !got[chartV2.Artifact.ArtifactId] {
+		t.Fatalf("expected both pinning charts with no duplicates, got %+v", resp.ChartArtifacts)
+	}
+}
+
+// TestListArtifactPins_ImageWithNoPins_ReturnsEmptySuccess is required
+// coverage (issue #612, FR3.2/FR3.3): an image artifact that exists but is
+// pinned by nothing returns a SUCCESS response with an empty list, not an
+// error -- this is the not-found-vs-empty distinction the RPC exists to
+// draw.
+func TestListArtifactPins_ImageWithNoPins_ReturnsEmptySuccess(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-pins-none")
+
+	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:pinsnoneimg", Version: "v1.0.0",
+		IdempotencyKey: "record-pins-none-img",
+	})
+	if err != nil {
+		t.Fatalf("record image: %v", err)
+	}
+
+	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.Artifact.ArtifactId})
+	if err != nil {
+		t.Fatalf("expected a success response for an unpinned-but-existing artifact, got err: %v", err)
+	}
+	if len(resp.ChartArtifacts) != 0 {
+		t.Fatalf("expected an empty ChartArtifacts list, got %+v", resp.ChartArtifacts)
+	}
+}
+
+// TestListArtifactPins_UnknownArtifact_ReturnsNotFound is required coverage
+// (issue #612, FR3.2): an artifact id that does not exist at all is
+// NotFound, distinct from the "exists but unpinned" empty-success case
+// above.
+func TestListArtifactPins_UnknownArtifact_ReturnsNotFound(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+
+	_, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: "does-not-exist"})
+	if err == nil {
+		t.Fatal("expected an error for an unknown artifact id")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestListArtifactPins_ChartArtifact_ReturnsInvalidArgument is required
+// coverage (issue #612, FR3.3): passing a valid artifact id/digest of the
+// wrong kind (a chart, not an image) is InvalidArgument, not an empty list
+// and not a crash.
+func TestListArtifactPins_ChartArtifact_ReturnsInvalidArgument(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-pins-wrongkind")
+
+	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Digest: "sha256:pinswrongkindchart", Version: "v1.0.0",
+		IdempotencyKey: "record-pins-wrongkind-chart",
+	})
+	if err != nil {
+		t.Fatalf("record chart: %v", err)
+	}
+
+	_, err = artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: chart.Artifact.ArtifactId})
+	if err == nil {
+		t.Fatal("expected an error when looking up pins for a chart artifact")
+	}
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// TestListArtifactPins_DigestAndArtifactIdBothResolveSameArtifact mirrors
+// ResolveArtifact's dual-lookup coverage (see
+// TestResolveArtifact_ReturnsImagesForChart above): looking up the same
+// underlying image artifact by digest and by artifact_id must return the
+// same set of pinning chart artifacts.
+func TestListArtifactPins_DigestAndArtifactIdBothResolveSameArtifact(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-pins-duallookup")
+
+	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:pinsduallookupimg", Version: "v1.0.0",
+		IdempotencyKey: "record-pins-duallookup-img",
+	})
+	if err != nil {
+		t.Fatalf("record image: %v", err)
+	}
+	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Digest: "sha256:pinsduallookupchart", Version: "v1.0.0",
+		Contains: []*pb.ContainedImage{
+			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
+		},
+		IdempotencyKey: "record-pins-duallookup-chart",
+	})
+	if err != nil {
+		t.Fatalf("record chart: %v", err)
+	}
+
+	byID, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.Artifact.ArtifactId})
+	if err != nil {
+		t.Fatalf("ListArtifactPins by artifact_id: %v", err)
+	}
+	byDigest, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{Digest: img.Artifact.Digest})
+	if err != nil {
+		t.Fatalf("ListArtifactPins by digest: %v", err)
+	}
+	if len(byID.ChartArtifacts) != 1 || byID.ChartArtifacts[0].ArtifactId != chart.Artifact.ArtifactId {
+		t.Fatalf("artifact_id lookup: expected the one pinning chart, got %+v", byID.ChartArtifacts)
+	}
+	if len(byDigest.ChartArtifacts) != 1 || byDigest.ChartArtifacts[0].ArtifactId != chart.Artifact.ArtifactId {
+		t.Fatalf("digest lookup: expected the one pinning chart, got %+v", byDigest.ChartArtifacts)
+	}
+}
+
 // TestRecordArtifact_IdempotencyReplaysWithoutDoubleWrite proves a repeated
 // RecordArtifact call with the same idempotency_key does not create a second
 // row, asserted by ListArtifacts count.

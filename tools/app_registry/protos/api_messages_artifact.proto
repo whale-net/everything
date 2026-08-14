@@ -218,6 +218,18 @@ message GetReleaseRunResponse {
   repeated Artifact artifacts = 2;
 }
 
+message ListBuildsRequest {
+  // Optional: only return builds with recorded_at >= since (Unix timestamp).
+  int64 since = 1;
+  PageRequest page = 2;
+}
+
+message ListBuildsResponse {
+  // Ordered most-recent-first by recorded_at, tie-broken by build_id.
+  repeated Build builds = 1;
+  PageResponse page = 2;
+}
+
 // ============================================================================
 // Adoption and disaster recovery (AR-7e, issue #558)
 // ============================================================================
@@ -324,6 +336,21 @@ message ResolveArtifactResponse {
   // maps straight back to a commit.
   repeated Artifact images = 2;
   repeated Build builds = 3;
+}
+
+message ListArtifactPinsRequest {
+  string artifact_id = 1;
+  string digest = 2;
+}
+
+message ListArtifactPinsResponse {
+  // The chart artifacts that pin the requested image artifact. Empty (not
+  // an error) when the image artifact exists but nothing pins it -- see
+  // the Implementation issue for the not-found-vs-empty distinction.
+  // Deliberately unpaginated: artifact_link_image_artifact_id_idx already
+  // exists (migration 001), and fan-in per image is bounded by distinct
+  // pinning chart-versions, not by total repo history.
+  repeated Artifact chart_artifacts = 1;
 }
 
 // ============================================================================

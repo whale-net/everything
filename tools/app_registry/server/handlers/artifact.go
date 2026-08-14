@@ -279,6 +279,31 @@ func (s *ArtifactServer) ResolveArtifact(ctx context.Context, req *pb.ResolveArt
 	}, nil
 }
 
+// ListArtifactPins is ResolveArtifact's reverse walk: given an image
+// artifact, returns the chart artifacts that pin it -- see
+// ARCHITECTURE.md "ListArtifactPins" for the not-found-vs-empty
+// distinction (FR3.2/FR3.3).
+func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtifactPinsRequest) (*pb.ListArtifactPinsResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
+	var lookup repository.ArtifactLookup
+	switch {
+	case req.ArtifactId != "":
+		lookup = repository.ArtifactLookup{ArtifactID: req.ArtifactId}
+	case req.Digest != "":
+		lookup = repository.ArtifactLookup{Digest: req.Digest}
+	default:
+		return nil, status.Error(codes.InvalidArgument, "artifact_id or digest is required")
+	}
+
+	chartArtifacts, err := s.repo.Artifacts().ListArtifactPins(ctx, lookup)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return &pb.ListArtifactPinsResponse{ChartArtifacts: artifactsToPB(chartArtifacts)}, nil
+}
+
 // maxAllocateVersionAttempts bounds the retry loop below. A collision means
 // a concurrent caller's INSERT into version_allocation won the race for the
 // version this attempt computed (see postgres/errors.go's ErrAlreadyExists
@@ -651,6 +676,32 @@ func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRu
 	return &pb.GetReleaseRunResponse{
 		Build:     buildToPB(*build),
 		Artifacts: artifactsToPB(artifacts),
+	}, nil
+}
+
+// ListBuilds browses the `build` table (migration 001, no schema change) --
+// see ARCHITECTURE.md "ListBuilds" for the pagination contract. Additive to
+// GetReleaseRun/GetBuildByWorkflowRun above and the CLI's `builds status`
+// (FR2.5) -- neither is changed by this RPC.
+func (s *ArtifactServer) ListBuilds(ctx context.Context, req *pb.ListBuildsRequest) (*pb.ListBuildsResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
+	since := time.Time{}
+	if req.Since != 0 {
+		since = time.Unix(req.Since, 0)
+	}
+	builds, nextToken, err := s.repo.Builds().ListBuilds(ctx, since, req.GetPage().GetPageSize(), req.GetPage().GetPageToken())
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return &pb.ListBuildsResponse{
+		Builds: buildsToPB(builds),
+		// total_size is a PAGE-LOCAL count (len(builds) <= page_size), not
+		// the true total row count across all pages -- same tradeoff as
+		// ListReconcileRuns's identical note (see ARCHITECTURE.md's
+		// pagination note this issue adds).
+		Page: &pb.PageResponse{NextPageToken: nextToken, TotalSize: int32(len(builds))},
 	}, nil
 }
 

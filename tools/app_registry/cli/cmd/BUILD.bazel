@@ -9,6 +9,7 @@ go_library(
         "client.go",
         "env.go",
         "promote.go",
+        "reconcile_runs.go",
         "root.go",
         "util.go",
     ],

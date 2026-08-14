@@ -149,6 +149,18 @@ type AppRepository interface {
 	// other starting status, or a target other than StatusArchived, fails
 	// with ErrFailedPrecondition.
 	SetAppStatus(ctx context.Context, appID string, target Status, reason string) (*App, error)
+
+	// ListReconcileRuns returns reconcile_run rows ordered most-recent-first
+	// by applied_at, tie-broken by reconcile_run_id, with real LIMIT +
+	// keyset cursor pagination (the cursor encodes applied_at +
+	// reconcile_run_id -- see postgres/keyset_cursor.go). since, if
+	// non-zero, filters to applied_at >= since. pageSize <= 0 means the
+	// server default (50 -- there is no existing ListPromotionEvents/
+	// ListArtifacts precedent that enforces a page size to follow, so this
+	// is a fresh, deliberate choice for the first real-pagination RPC in
+	// this package). A malformed pageToken returns an error wrapping
+	// ErrInvalidArgument. nextPageToken is "" when there is no next page.
+	ListReconcileRuns(ctx context.Context, since time.Time, pageSize int32, pageToken string) (runs []ReconcileRun, nextPageToken string, err error)
 }
 
 // BuildRepository covers the `build` table.
@@ -165,6 +177,23 @@ type BuildRepository interface {
 	// has been re-run. Returns ErrNotFound if no build was ever recorded
 	// for this run id (attempt == 0) or this exact (run id, attempt) pair.
 	GetBuildByWorkflowRun(ctx context.Context, workflowRunID string, attempt int32) (*Build, error)
+
+	// ListBuilds returns `build` rows ordered most-recent-first by
+	// recorded_at, tie-broken by build_id, with real LIMIT + keyset cursor
+	// pagination (the cursor encodes recorded_at + build_id -- see
+	// postgres/keyset_cursor.go). Deliberately recorded_at, not
+	// started_at: started_at is nullable and caller-supplied (RecordBuild's
+	// handler only sets it when given a nonzero value), so ordering or
+	// filtering on it would sort NULL rows first and could let a row with
+	// no started_at never satisfy a since filter -- see ARCHITECTURE.md
+	// "ListBuilds". since, if non-zero, filters to recorded_at >= since.
+	// pageSize <= 0 means the server default -- matches
+	// AppRepository.ListReconcileRuns's default so both real-pagination
+	// RPCs behave consistently. A malformed pageToken returns an error
+	// wrapping ErrInvalidArgument. nextPageToken is "" when there is no
+	// next page. This is additive to GetBuildByWorkflowRun/GetReleaseRun
+	// (FR2.5) -- neither is changed by this method.
+	ListBuilds(ctx context.Context, since time.Time, pageSize int32, pageToken string) (builds []Build, nextPageToken string, err error)
 }
 
 // ArtifactRepository covers `artifact` and `artifact_link`. As of AR-7b
@@ -203,6 +232,14 @@ type ArtifactRepository interface {
 	// and their originating builds. lookup identifies the chart artifact by
 	// artifact_id or digest.
 	ResolveArtifact(ctx context.Context, lookup ArtifactLookup) (artifact *Artifact, images []Artifact, builds []Build, err error)
+
+	// ListArtifactPins is ResolveArtifact's mirror image: given an image
+	// artifact lookup, returns the chart artifacts (kind == chart) whose
+	// artifact_link row points at it. Returns ErrNotFound if the image
+	// artifact itself doesn't exist; returns an empty (nil) slice, not an
+	// error, if it exists but nothing pins it. Returns ErrInvalidArgument if
+	// the resolved artifact is a chart, not an image.
+	ListArtifactPins(ctx context.Context, lookup ArtifactLookup) ([]Artifact, error)
 
 	// AllocateVersion reserves the next version for (kind, ownerID) per
 	// ARCHITECTURE.md's version model (AR-5) and PLAN.md's AR-5 addendum:
