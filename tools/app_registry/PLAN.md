@@ -50,25 +50,30 @@ for real:** [#574](https://github.com/whale-net/everything/pull/574) (issue
 [#576](https://github.com/whale-net/everything/pull/576) (issue #575 —
 idempotency lookups were keyed by string alone, so `RecordArtifact` could
 silently replay `BeginPublish`'s stored response), `#579`/`#580` (chart
-naming/repository bugs blocking `BeginPublish` for charts), and `#583`
+naming/repository bugs blocking `BeginPublish` for charts), `#583`
 (`tools/app_registry/citest`, a contract test over every real `app-registry`
 CLI invocation embedded in `.github/workflows/*.yml` — every bug in this list
 lived at that CI-shell-to-CLI seam, invisible to unit tests and to a green
-run because recording is `continue-on-error`).
-
-**A new bug in the same family is open: issue
-[#585](https://github.com/whale-net/everything/issues/585).**
-`RecordArtifact`'s idempotent-replay lookup matches by digest alone, with no
-`(owner, kind, version)` scoping. A reproducible, no-op rebuild (routine in
-this monorepo — a release batch commonly rebuilds every app in a domain even
-when only one changed) produces a digest identical to an older published
-version of the *same* app; `RecordArtifact` matches the old row, reports
-success, and leaves the new version's row stranded in `publishing` until the
-reaper reaps it. Confirmed against run 31660476677: all four
-`app-registry` images it released (cli, api, migration, worker) hit this and
-never reached `published`. Harmless today only because every domain is still
-at adoption stage `observe` (recording best-effort); it must be fixed before
-any domain moves to `promote` or `allocate` — see "AR-5" below.
+run because recording is `continue-on-error`), and issue
+[#585](https://github.com/whale-net/everything/issues/585) —
+`RecordArtifact`'s idempotent-replay lookup matched an existing row by
+`digest` alone, with no `(owner, kind, version)` scoping. A reproducible,
+no-op rebuild (routine in this monorepo — a release batch commonly rebuilds
+every app in a domain even when only one changed) can produce a digest
+identical to an older published version of the *same* app; the lookup
+matched the old row and reported success without ever touching the new
+version's `publishing` row, stranding it until the reaper reaped it.
+Confirmed against run 31660476677: all four `app-registry` images it
+released (cli, api, migration, worker) hit this. Fixed by scoping the
+lookup to the request's own `(owner, kind, version)` identity — a
+same-digest/different-version request now falls through to the real
+`artifact_digest_idx` unique-constraint check instead, which fails the
+request loudly rather than silently stranding it. That constraint is still
+a real gate the moment a domain reaches `promote` or `allocate` (recording
+becomes mandatory there) — a reproducible no-op rebuild that collides with
+an older version's digest will hard-fail the release job outright. Whether
+that needs its own accommodation is AR-5 cutover design work, not part of
+this fix — see "AR-5" below.
 
 The registry is deployed to `dev` and is being actively exercised by real
 release runs (see run 31660476677 above) — `app-registry-api`
@@ -259,13 +264,19 @@ forward-looking, not historical, which is why it lives here and not there.
   by moving its stage back.
 
 **Do not start** until AR-2's parity check has been clean across a meaningful
-number of real releases, **and issue
-[#585](https://github.com/whale-net/everything/issues/585) is fixed** —
-`RecordArtifact`'s digest-replay lookup currently ignores `(owner, kind,
-version)`, so a reproducible no-op rebuild strands the new version's row in
-`publishing` forever. Harmless at `observe` (recording is best-effort); it
-will hard-fail routine releases the moment a domain reaches `promote`, where
-recording becomes mandatory.
+number of real releases. Issue
+[#585](https://github.com/whale-net/everything/issues/585) is fixed —
+`RecordArtifact`'s digest-replay lookup no longer ignores `(owner, kind,
+version)`, so it can no longer silently strand a reproducible no-op
+rebuild's row in `publishing`. That fix surfaces the underlying tension
+instead of hiding it: a same-digest/different-version request now hard-fails
+on `artifact_digest_idx`'s real uniqueness constraint. That's harmless at
+`observe` (recording is best-effort) but **will hard-fail routine releases
+the moment a domain reaches `promote`**, where recording becomes mandatory —
+reproducible no-op rebuilds are routine in this monorepo. Design how AR-5's
+cutover accommodates this (e.g. treating a digest collision against an
+older version of the same owner as an idempotent success rather than a
+conflict) before promoting any domain past `observe`.
 
 ### Addendum — semver semantics (decided)
 

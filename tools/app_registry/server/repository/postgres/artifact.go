@@ -180,11 +180,24 @@ func scanArtifact(row pgx.Row) (repository.Artifact, error) {
 // "observe" only) the backward-compatible direct-create path. See the
 // interface doc comment for the full state-machine contract.
 func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, domainStage repository.DomainAdoptionStage) (*repository.Artifact, bool, error) {
-	// 1. Idempotent replay: an existing row with this EXACT digest. Only a
+	// 1. Idempotent replay: an existing row with this EXACT digest AND the
+	// SAME (owner, kind, version) identity as the request. Only a
 	// "published" row can ever match here (digest is NULL on every other
-	// state, per migration 007's artifact_state_shape CHECK), so this is
-	// unambiguously "already recorded", regardless of adoption stage.
-	row := r.ex.QueryRow(ctx, artifactSelectBase+` WHERE a.digest = $1`, a.Digest)
+	// state, per migration 007's artifact_state_shape CHECK). The identity
+	// scoping matters: digest alone is not enough (issue #585) -- Bazel's
+	// reproducible builds routinely produce a byte-identical image for an
+	// app with no functional change between two releases, so a NEW
+	// version's digest can equal an OLDER already-published version's
+	// digest for the SAME owner. Without the identity check, this step
+	// would match that older row and report success without ever touching
+	// the row BeginPublish created for the new version, leaving it
+	// orphaned in "publishing". Requiring the full identity match here
+	// means a same-digest/different-version case correctly falls through
+	// to step 2, which resolves it against the request's own (owner,
+	// kind, version) row instead.
+	row := r.ex.QueryRow(ctx, artifactSelectBase+`
+		WHERE a.digest = $1 AND a.owner_id = $2 AND a.kind = $3 AND a.version = $4`,
+		a.Digest, ownerIDOf(a), string(a.Kind), a.Version)
 	if existing, err := scanArtifact(row); err == nil {
 		if existing.Kind == repository.ArtifactKindChart {
 			links, lerr := r.loadContains(ctx, existing.ArtifactID)

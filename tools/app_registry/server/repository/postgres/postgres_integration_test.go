@@ -471,6 +471,92 @@ func TestRecordArtifact_DuplicateOwnerKindVersionRejectedByRealIndex(t *testing.
 	}
 }
 
+// TestRecordArtifact_ReproducibleBuildSameDigestDifferentVersion is the
+// regression test for issue #585: a Bazel reproducible build can produce a
+// byte-identical image for two different versions of the SAME owner (no
+// functional change between releases). Before the fix, RecordArtifact's
+// step-1 replay lookup matched on digest ALONE, so the new version's
+// RecordArtifact call silently matched the OLDER, already-published
+// version's row and reported SUCCESS -- without ever touching the row
+// BeginPublish created for the new version, leaving it stranded in
+// "publishing" indefinitely while the CI job reported green.
+//
+// Scoping step 1 to the request's own (owner, kind, version) identity fixes
+// the lie: a same-digest/different-version request no longer short-circuits
+// against the wrong row. It falls through to step 2 and genuinely attempts
+// to complete ITS OWN row -- which now correctly fails loudly on
+// artifact_digest_idx's real UNIQUE constraint (digest must be globally
+// unique; two published rows can never share one), instead of silently
+// succeeding. An honest failure here is the intended outcome: it surfaces
+// the problem to the release job rather than hiding it. The row stays
+// exactly as BeginPublish left it (still "publishing", no digest) because
+// the failed UPDATE rolls back within its own transaction.
+func TestRecordArtifact_ReproducibleBuildSameDigestDifferentVersion(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+
+	appID := seedApp(t, pool, "acme", "repro", "image")
+	buildID1 := seedBuild(t, pool, "run-repro-1")
+	buildID2 := seedBuild(t, pool, "run-repro-2")
+
+	const sharedDigest = "sha256:reproducible"
+
+	// v1.0.0 publishes normally with the shared digest.
+	first, _, err := recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appID,
+		Repository: "ghcr.io/acme/repro", Version: "v1.0.0",
+		Digest: sharedDigest, BuildID: buildID1,
+	}, nil)
+	if err != nil {
+		t.Fatalf("record v1.0.0: %v", err)
+	}
+	if first.State != repository.ArtifactStatePublished {
+		t.Fatalf("expected v1.0.0 published, got %q", first.State)
+	}
+
+	// v1.0.1 goes through the real BeginPublish -> RecordArtifact sequence
+	// (as release.yml does), and the rebuild happens to be byte-identical
+	// to v1.0.0 -- same digest, different version.
+	publishing, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v1.0.1", buildID2, "ghcr.io/acme/repro", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("BeginPublish v1.0.1: %v", err)
+	}
+	if publishing.State != repository.ArtifactStatePublishing {
+		t.Fatalf("expected v1.0.1 publishing, got %q", publishing.State)
+	}
+
+	_, _, err = recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appID,
+		Repository: "ghcr.io/acme/repro", Version: "v1.0.1",
+		Digest: sharedDigest, BuildID: buildID2,
+	}, nil)
+	if err == nil {
+		t.Fatalf("expected RecordArtifact for v1.0.1 to fail honestly on the digest collision, got nil error (bug: silently matched v1.0.0's row instead)")
+	}
+	if !errors.Is(err, repository.ErrAlreadyExists) {
+		t.Fatalf("expected ErrAlreadyExists (translated unique-violation on artifact_digest_idx), got: %v", err)
+	}
+
+	// v1.0.1's row must be untouched -- still exactly what BeginPublish left.
+	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, publishing.ArtifactID); state != "publishing" || hasDigest || !hasBuildID {
+		t.Fatalf("expected v1.0.1's row to remain publishing with no digest after the failed completePublish, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+	}
+
+	// v1.0.0's row must be completely unaffected.
+	v100, err := reg.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{
+		OwnerFullName: "acme-repro", Kind: repository.ArtifactKindImage, Version: "v1.0.0",
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact v1.0.0: %v", err)
+	}
+	if v100.State != repository.ArtifactStatePublished || v100.Digest != sharedDigest {
+		t.Fatalf("expected v1.0.0 unchanged (published, digest=%s), got state=%s digest=%s", sharedDigest, v100.State, v100.Digest)
+	}
+
+	if n := artifactCount(t, pool, sharedDigest); n != 1 {
+		t.Fatalf("expected exactly 1 row holding the shared digest (only v1.0.0), found %d", n)
+	}
+}
+
 // --- 4. ResolveArtifact chart -> image join --------------------------------
 
 // TestResolveArtifact_ChartToImageJoin proves the real JOIN chain
