@@ -217,6 +217,17 @@ inside a chart) is rejected unless you pass `--allow-override` — passing it
 records the promotion as a drift-tracked override, not an invisible
 workaround. See [ARCHITECTURE.md](ARCHITECTURE.md#promotability).
 
+**`PermissionDenied desc = requires role "app-registry-promoter-<env>"`
+(issue #602):** the promoter client authenticated fine but its service
+account isn't holding the expected realm role — either it was never
+assigned, or it was assigned as a *client* role instead of a *realm* role.
+This is a Keycloak configuration gap, not something retrying or redeploying
+fixes. Decode a token for the client to confirm which (and check the other
+two promoter clients while you're there — each environment is provisioned
+independently): [DEPLOY.md §2](DEPLOY.md#2-verify-a-token-by-hand). Fix by
+assigning the realm role in the Keycloak admin console: [DEPLOY.md §1,
+"Realm roles"](DEPLOY.md#realm-roles).
+
 ### 4. Verify
 
 ```bash

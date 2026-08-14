@@ -119,6 +119,30 @@ Expected:
   will fail. See KEYCLOAK.md §4d.
 - The role appears under `resource_access` instead of `realm_access` → you
   created a client role. Re-assign it as a realm role.
+- The role is absent from both → it was never assigned to this client's
+  service account.
+
+All three of the above surface identically at call time — `rpc error: code =
+PermissionDenied desc = requires role "<role>"` — so decoding the token is
+what tells you which one you're looking at (see issue #602).
+
+The three promoter clients (`app-registry-promoter-dev/-stage/-prod`) are
+provisioned independently, so a fix to one says nothing about the others.
+Check all of them in one pass:
+
+```bash
+for env in dev stage prod; do
+  echo "=== app-registry-promoter-$env ==="
+  TOKEN=$(curl -s -X POST \
+    https://<host>/realms/<realm>/protocol/openid-connect/token \
+    -d grant_type=client_credentials \
+    -d client_id=app-registry-promoter-$env \
+    -d client_secret=<that environment's secret> | jq -r .access_token)
+  echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq '{realm_access, resource_access}'
+done
+```
+
+Expect `realm_access.roles` to contain `app-registry-promoter-<env>` for each.
 
 ---
 
