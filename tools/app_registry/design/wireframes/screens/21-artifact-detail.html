@@ -1,0 +1,51 @@
+<!-- wf: name="artifact-detail" title="Artifact: sha256:44de21…" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul>
+    <li><a href="#/apps-catalog">Apps</a></li>
+    <li><a href="#/app-detail">leaflab-ingest</a></li>
+    <li>artifact</li>
+  </ul>
+</div>
+
+<div class="flex items-center gap-3 mb-6 flex-wrap">
+  <h1 class="text-2xl md:text-3xl font-bold">Image artifact</h1>
+  <span class="badge badge-soft badge-neutral">observed</span>
+</div>
+
+<div class="card bg-base-100 shadow-md mb-6">
+  <div class="card-body">
+    <table class="table table-sm">
+      <tbody>
+        <tr><td class="opacity-60 w-40">Owner</td><td class="font-mono"><a href="#/app-detail" class="link">leaflab-ingest</a></td></tr>
+        <tr><td class="opacity-60">Kind</td><td>image</td></tr>
+        <tr><td class="opacity-60">Version</td><td class="font-mono">v0.9.2</td></tr>
+        <tr><td class="opacity-60">Digest</td><td class="font-mono text-sm">sha256:44de21a9…f0</td></tr>
+        <tr><td class="opacity-60">Built from</td><td><a href="#/build-detail" class="link font-mono">run #48260, attempt 1</a></td></tr>
+        <tr><td class="opacity-60">Provenance</td><td><span class="badge badge-soft badge-neutral badge-sm">observed</span> — recorded by CI, not adopted</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Pinned by</h2>
+      <p class="text-sm opacity-60">Charts that pin this app's image — an image artifact is contained, it doesn't contain.</p>
+    </div>
+    <table class="table">
+      <thead>
+        <tr><th>Chart</th><th>Chart version</th><th>Pins this app at</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hover bg-error/5">
+          <td class="font-mono text-sm"><a href="#/chart-detail" class="link link-hover">leaflab-edge</a></td>
+          <td class="font-mono text-sm">v0.9.1</td>
+          <td class="font-mono text-sm text-error">v0.9.1 <span class="opacity-60 font-sans">(this artifact is v0.9.2 — live on stage only as an override)</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: this is the "resolve" view — given any digest, show what it is; for a chart-kind artifact this same layout instead shows "Pins (contains)" (see chart-detail for that direction). Every digest anywhere in the UI links here rather than being inert text.</p>

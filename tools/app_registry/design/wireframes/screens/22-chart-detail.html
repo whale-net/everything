@@ -1,0 +1,65 @@
+<!-- wf: name="chart-detail" title="Chart: leaflab-edge" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul>
+    <li><a href="#/apps-catalog">Apps</a></li>
+    <li>leaflab-edge (chart)</li>
+  </ul>
+</div>
+
+<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+  <div class="flex items-center gap-3 flex-wrap">
+    <h1 class="text-2xl md:text-3xl font-bold">leaflab-edge</h1>
+    <span class="badge badge-soft badge-success">chart</span>
+  </div>
+  <a href="#/promote" class="btn btn-primary">Promote…</a>
+</div>
+
+<p class="text-sm opacity-70 mb-6">A Helm chart composing one or more apps — usually the real deploy unit (README.md "Core concepts"). This is what's promoted as a first-class target; the apps below reach an environment by being pinned inside whichever version of this chart is promoted there.</p>
+
+<div class="grid md:grid-cols-3 gap-4 mb-6">
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">dev</div>
+    <div class="stat-value text-lg font-mono">v0.9.3</div>
+    <div class="stat-desc">promoted 20m ago</div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">stage</div>
+    <div class="stat-value text-lg font-mono">v0.9.1</div>
+    <div class="stat-desc text-error">leaflab-ingest overridden to v0.9.2 — <a href="#/drift-audit" class="link link-error">drift</a></div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">prod</div>
+    <div class="stat-value text-lg font-mono">v0.9.0</div>
+    <div class="stat-desc">promoted 9d ago</div>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <div class="p-4 border-b border-base-300">
+      <h2 class="text-lg font-semibold">Apps published in leaflab-edge v0.9.1 (stage)</h2>
+      <p class="text-sm opacity-60">Every app image this chart version pins — each links to its own app page.</p>
+    </div>
+    <table class="table">
+      <thead>
+        <tr><th>App</th><th>Version</th><th>Digest</th><th>Provenance</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">leaflab-ingest</a></td>
+          <td class="font-mono text-sm">v0.9.1</td>
+          <td class="font-mono text-xs"><a href="#/artifact-detail" class="link">sha256:9f8e7d…</a></td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">observed</span></td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">leaflab-migrate</a></td>
+          <td class="font-mono text-sm">v0.9.1</td>
+          <td class="font-mono text-xs"><a href="#/artifact-detail" class="link">sha256:11ac02…</a></td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">observed</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: leaflab-ingest is currently live on stage at v0.9.2, one minor version ahead of what this chart version pins (v0.9.1) — that gap is the override/drift shown on its app page and in Drift &amp; Audit. This page always shows what the chart itself says, not what's actually running per-app. "leaflab-migrate" reuses the leaflab-ingest app-detail fragment in this wireframe — a real build would have its own page.</p>

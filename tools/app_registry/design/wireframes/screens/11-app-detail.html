@@ -1,0 +1,83 @@
+<!-- wf: name="app-detail" title="App: leaflab-ingest" -->
+<div class="breadcrumbs text-sm mb-4">
+  <ul>
+    <li><a href="#/apps-catalog">Apps</a></li>
+    <li>leaflab-ingest</li>
+  </ul>
+</div>
+
+<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+  <div class="flex items-center gap-3 flex-wrap">
+    <h1 class="text-2xl md:text-3xl font-bold">leaflab-ingest</h1>
+    <span class="badge badge-soft badge-info">deploy unit: image (via chart)</span>
+    <a href="#/chart-detail" class="badge badge-soft badge-neutral hover:badge-primary">📦 part of chart: leaflab-edge</a>
+  </div>
+  <div class="flex gap-2">
+    <a href="#/app-version-history" class="btn btn-secondary">Version history</a>
+    <a href="#/promote" class="btn btn-primary">Promote…</a>
+  </div>
+</div>
+
+<div class="grid md:grid-cols-3 gap-4 mb-6">
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">dev</div>
+    <div class="stat-value text-lg font-mono">v0.9.3</div>
+    <div class="stat-desc"><span class="badge badge-soft badge-success badge-sm">Promotable</span></div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">stage</div>
+    <div class="stat-value text-lg font-mono">v0.9.2</div>
+    <div class="stat-desc"><span class="badge badge-soft badge-error badge-sm">Override · Drift</span></div>
+  </div>
+  <div class="stat bg-base-100 rounded-box shadow-md">
+    <div class="stat-title">prod</div>
+    <div class="stat-value text-lg font-mono">v0.9.0</div>
+    <div class="stat-desc"><span class="badge badge-soft badge-info badge-sm">Via chart</span></div>
+  </div>
+</div>
+
+<div class="grid md:grid-cols-2 gap-6 mb-6">
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body">
+      <h2 class="card-title text-lg">Current artifact (stage)</h2>
+      <table class="table table-sm">
+        <tbody>
+          <tr><td class="opacity-60">Version</td><td class="font-mono">v0.9.2</td></tr>
+          <tr><td class="opacity-60">Digest</td><td class="font-mono text-xs"><a href="#/artifact-detail" class="link">sha256:44de21…</a></td></tr>
+          <tr><td class="opacity-60">Provenance</td><td><span class="badge badge-soft badge-neutral badge-sm">observed</span></td></tr>
+          <tr><td class="opacity-60">Built from</td><td><a href="#/build-detail" class="link font-mono">run #48291, attempt 1</a></td></tr>
+          <tr><td class="opacity-60">Chart pin says</td><td class="font-mono text-error">v0.9.1 (mismatch)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card bg-base-100 shadow-md">
+    <div class="card-body">
+      <h2 class="card-title text-lg">Promotion history</h2>
+      <ul class="timeline timeline-vertical timeline-compact">
+        <li>
+          <div class="timeline-start text-xs opacity-60">1h ago</div>
+          <div class="timeline-middle"><span class="badge badge-soft badge-error badge-xs"></span></div>
+          <div class="timeline-end timeline-box text-sm">stage → v0.9.2 (override) — j.kim, "verify sensor batch fix"</div>
+          <hr/>
+        </li>
+        <li>
+          <hr/>
+          <div class="timeline-start text-xs opacity-60">3d ago</div>
+          <div class="timeline-middle"><span class="badge badge-soft badge-success badge-xs"></span></div>
+          <div class="timeline-end timeline-box text-sm">dev → v0.9.3 — ci-bot, "auto-promote on merge"</div>
+          <hr/>
+        </li>
+        <li>
+          <hr/>
+          <div class="timeline-start text-xs opacity-60">9d ago</div>
+          <div class="timeline-middle"><span class="badge badge-soft badge-success badge-xs"></span></div>
+          <div class="timeline-end timeline-box text-sm">prod → v0.9.0 — a.holguin, "monthly cut"</div>
+        </li>
+      </ul>
+      <a href="#/app-detail" class="link link-primary text-sm mt-2">View full promotion history →</a>
+    </div>
+  </div>
+</div>
+
+<p class="wf-note">note: "Chart pin says" only renders when the current promotion is an override and differs from the chart's resolved pin — this is the drift signal surfaced inline, not just on the environment list. "part of chart" only renders for a `VIA_CHART` app; an app whose own deploy unit is `chart` links to its own chart the same way instead.</p>

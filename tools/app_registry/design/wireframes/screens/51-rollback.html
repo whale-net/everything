@@ -1,0 +1,36 @@
+<!-- wf: name="rollback" title="Rollback" parent="environment-status" -->
+<div class="flex justify-between items-center mb-4">
+  <h2 class="text-xl font-bold">Rollback manmanv2-control-api on prod</h2>
+  <a href="#/environment-status" class="btn btn-sm btn-circle btn-ghost">✕</a>
+</div>
+
+<p class="text-sm opacity-70 mb-4">Rollback has no version argument — it reverts to whatever the history shows as the immediately preceding promotion. That target is shown below before you confirm.</p>
+
+<div class="grid md:grid-cols-2 gap-4 mb-6">
+  <div class="card bg-base-100 border border-base-300">
+    <div class="card-body">
+      <span class="text-xs uppercase opacity-50">Currently live</span>
+      <span class="font-mono text-lg">v1.4.0</span>
+      <span class="text-sm opacity-60">promoted 14m ago by a.holguin</span>
+    </div>
+  </div>
+  <div class="card bg-base-100 border-2 border-success">
+    <div class="card-body">
+      <span class="text-xs uppercase opacity-50">Will roll back to</span>
+      <span class="font-mono text-lg">v1.3.2</span>
+      <span class="text-sm opacity-60">live from 3d ago until 14m ago</span>
+    </div>
+  </div>
+</div>
+
+<div class="form-control mb-6">
+  <label class="label"><span class="label-text">Reason <span class="text-error">*</span></span></label>
+  <textarea class="textarea textarea-bordered" rows="2" placeholder="e.g. v1.4.0 causing elevated 5xx on /sessions"></textarea>
+</div>
+
+<div class="flex gap-2 justify-end">
+  <a href="#/environment-status" class="btn btn-secondary">Cancel</a>
+  <button class="btn btn-error">Confirm rollback to v1.3.2</button>
+</div>
+
+<p class="wf-note mt-4">note: for an app/env with no prior promotion, this panel instead shows a disabled confirm button and "nothing to roll back to" inline — never a silent no-op (User Story C.9).</p>

@@ -1,0 +1,87 @@
+<!-- wf: name="apps-catalog" title="Apps Catalog" -->
+<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg flex flex-col md:flex-row justify-between md:items-center gap-4">
+  <div>
+    <h1 class="text-2xl md:text-3xl font-bold mb-2">Apps Catalog</h1>
+    <p class="text-sm opacity-80">Every registered app and chart, and what "promotable" means for each.</p>
+  </div>
+  <a href="#/reconcile-runs" class="btn bg-base-100 text-primary border-0 shadow-md">Reconcile runs →</a>
+</div>
+
+<div class="flex flex-col md:flex-row gap-3 mb-4">
+  <input type="text" placeholder="Search apps…" class="input input-bordered input-sm w-full md:w-72" />
+  <select class="select select-sm select-bordered">
+    <option>All domains</option>
+    <option>manmanv2</option>
+    <option>leaflab</option>
+    <option>friendly_computing_machine</option>
+    <option>tools</option>
+  </select>
+  <select class="select select-sm select-bordered">
+    <option>All deploy units</option>
+    <option>chart</option>
+    <option>image</option>
+    <option>none</option>
+  </select>
+</div>
+
+<div class="card bg-base-100 shadow-md">
+  <div class="card-body p-0">
+    <table class="table">
+      <thead>
+        <tr><th>App</th><th>Domain</th><th>Deploy unit</th><th>dev</th><th>stage</th><th>prod</th></tr>
+      </thead>
+      <tbody>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">manmanv2-control-api</a></td>
+          <td class="text-sm opacity-70">manmanv2</td>
+          <td><span class="badge badge-soft badge-success badge-sm">chart</span></td>
+          <td class="font-mono text-xs">v1.5.0-rc1</td>
+          <td class="font-mono text-xs">v1.4.0</td>
+          <td class="font-mono text-xs">v1.4.0</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">manmanv2-worker</a></td>
+          <td class="text-sm opacity-70">manmanv2</td>
+          <td><span class="badge badge-soft badge-info badge-sm">image (via chart)</span></td>
+          <td class="font-mono text-xs">v1.4.0</td>
+          <td class="font-mono text-xs">v1.4.0</td>
+          <td class="font-mono text-xs">v1.4.0</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">leaflab-ingest</a></td>
+          <td class="text-sm opacity-70">leaflab</td>
+          <td><span class="badge badge-soft badge-info badge-sm">image (via chart)</span></td>
+          <td class="font-mono text-xs">v0.9.3</td>
+          <td class="font-mono text-xs text-error">v0.9.2*</td>
+          <td class="font-mono text-xs">v0.9.0</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">leaflab-api</a></td>
+          <td class="text-sm opacity-70">leaflab</td>
+          <td><span class="badge badge-soft badge-success badge-sm">chart</span></td>
+          <td class="font-mono text-xs">v0.4.2</td>
+          <td class="font-mono text-xs">v0.4.1</td>
+          <td class="text-xs opacity-50">not promoted</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">friendly-computing-machine</a></td>
+          <td class="text-sm opacity-70">friendly_computing_machine</td>
+          <td><span class="badge badge-soft badge-success badge-sm">chart</span></td>
+          <td class="font-mono text-xs">v2.1.0</td>
+          <td class="font-mono text-xs">v2.0.4</td>
+          <td class="font-mono text-xs">v2.1.0</td>
+        </tr>
+        <tr class="hover">
+          <td class="font-mono text-sm"><a href="#/app-detail" class="link link-hover">app-registry-api</a></td>
+          <td class="text-sm opacity-70">tools</td>
+          <td><span class="badge badge-soft badge-neutral badge-sm">none (build-only)</span></td>
+          <td class="text-xs opacity-50">—</td>
+          <td class="text-xs opacity-50">—</td>
+          <td class="text-xs opacity-50">—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: the * on leaflab-ingest / stage is the drift marker, consistent with the badge used in environment-status and app-detail — same visual language everywhere per PRINCIPLES.md #10.</p>
