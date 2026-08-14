@@ -432,10 +432,11 @@ tradeoff above, not a separate gap to close.
 [31660476677](https://github.com/whale-net/everything/actions/runs/31660476677)
 (2026-08-13) exercised `AssertApps`, `BeginPublishBatch`, and the artifact
 lifecycle against the deployed `dev` registry for real. That verification
-also surfaced a new, still-open defect — issue
+also surfaced a defect, since fixed — issue
 [#585](https://github.com/whale-net/everything/issues/585) — in
 `RecordArtifact`'s digest-replay path; see "Artifact lifecycle" below and
-PLAN.md's "AR-5" for why it blocks any domain moving past `observe`. Delivery
+PLAN.md's "AR-5" for the design work the fix still leaves open before any
+domain can move past `observe`. Delivery
 is PLAN-HISTORY.md's AR-7. Six slices of this section describe real code: AR-7a's —
 ordering 4, partial-apply reconcile, domain-qualified chart app references,
 and the `continue-on-error` drop on `ci.yml`'s sweep job — AR-7b's — the
@@ -515,18 +516,25 @@ claims and keeping them apart is what makes the rest coherent:
 The registry stops learning about an artifact *after* the fact. It records the
 intent to publish **before** the push, and completes the record after.
 
-> **Known defect: issue [#585](https://github.com/whale-net/everything/issues/585).**
-> `RecordArtifact`'s idempotent-replay step matches an existing row by
+> **Fixed: issue [#585](https://github.com/whale-net/everything/issues/585).**
+> `RecordArtifact`'s idempotent-replay step used to match an existing row by
 > `digest` alone, with no `(owner, kind, version)` scoping. A reproducible,
 > no-op rebuild (routine in this monorepo) can produce a digest identical to
-> an *older* published version of the same app; `RecordArtifact` matches that
-> older row, reports success, and never transitions the new version's
-> `publishing` row — it sits until the reaper reaps it to `failed`. Confirmed
+> an *older* published version of the same app; the lookup matched that
+> older row, reported success, and never transitioned the new version's
+> `publishing` row — it sat until the reaper reaped it to `failed`. Confirmed
 > live against `dev`: every image released by run
 > [31660476677](https://github.com/whale-net/everything/actions/runs/31660476677)
-> hit this. Not blocking at adoption stage `observe` (recording is
-> best-effort); must be fixed before any domain moves to `promote` or
-> `allocate`, where recording becomes mandatory — see PLAN.md's "AR-5".
+> hit this. The lookup is now scoped to the request's own `(owner, kind,
+> version)` identity, so a same-digest/different-version request no longer
+> short-circuits against the wrong row — it falls through to `artifact_digest_idx`'s
+> real uniqueness constraint instead, which correctly rejects it (`digest` is
+> globally unique by design — see the `artifact` row in "Data model" above).
+> That rejection is still a live problem for AR-5: it's harmless at
+> adoption stage `observe` (recording is best-effort) but will hard-fail a
+> routine no-op rebuild's release the moment a domain reaches `promote` or
+> `allocate`, where recording becomes mandatory — see PLAN.md's "AR-5" for
+> the design work still needed before that cutover.
 
 | State | Written by | version | build_id | digest |
 |---|---|---|---|---|
