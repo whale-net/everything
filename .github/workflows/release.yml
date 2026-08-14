@@ -439,14 +439,14 @@ jobs:
         fetch-depth: 0
         fetch-tags: true
 
-    # - name: Setup Build Environment
-    #   uses: ./.github/actions/setup-build-env
-    #   with:
-    #     setup-docker: 'true'
-    #     cache-suffix: 'docker'
-    #     bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-    #     bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-    #     bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        setup-docker: 'true'
+        cache-suffix: 'docker'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
 
     # release_helper_go still invokes Bazel itself to build the per-app
     # images (release-multiarch), so Setup Build Environment above is still
