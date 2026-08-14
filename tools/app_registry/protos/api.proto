@@ -39,6 +39,8 @@ service AppRegistry {
 
   // Human triage of a MISSING app: archive it or restore it. Role: admin.
   rpc SetAppStatus(SetAppStatusRequest) returns (SetAppStatusResponse);
+
+  rpc ListReconcileRuns(ListReconcileRunsRequest) returns (ListReconcileRunsResponse);
 }
 
 // ============================================================================
@@ -73,6 +75,9 @@ service ArtifactRegistry {
 
   // Walk a chart artifact down to the image digests it pins.
   rpc ResolveArtifact(ResolveArtifactRequest) returns (ResolveArtifactResponse);
+
+  rpc ListBuilds(ListBuildsRequest) returns (ListBuildsResponse);
+  rpc ListArtifactPins(ListArtifactPinsRequest) returns (ListArtifactPinsResponse);
 
   // Phase AR-5: transactional version allocation, replacing git-tag scanning.
   rpc AllocateVersion(AllocateVersionRequest) returns (AllocateVersionResponse);

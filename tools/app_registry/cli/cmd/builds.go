@@ -12,7 +12,7 @@ func newBuildsCmd() *cobra.Command {
 		Use:   "builds",
 		Short: "Record and inspect CI builds",
 	}
-	buildsCmd.AddCommand(newBuildsRecordCmd(), newBuildsStatusCmd())
+	buildsCmd.AddCommand(newBuildsRecordCmd(), newBuildsStatusCmd(), newBuildsListCmd())
 	return buildsCmd
 }
 
@@ -90,6 +90,37 @@ func newBuildsStatusCmd() *cobra.Command {
 	}
 	c.Flags().IntVar(&workflowAttempt, "attempt", 0, "GitHub Actions run attempt (default: latest recorded for this run id)")
 	c.Flags().BoolVar(&incompleteOnly, "incomplete", false, "Only show artifacts not yet published")
+	return c
+}
+
+// newBuildsListCmd is the operator-facing browser over the `build` table
+// (migration 001, issue #608) -- see ARCHITECTURE.md "ListBuilds" and
+// OPERATIONS.md's "browsing build history" note. Distinct from `builds
+// status <workflow-run-id>` above: this browses recent builds, that does a
+// point lookup for one CI run's build plus its child artifacts.
+func newBuildsListCmd() *cobra.Command {
+	var since int64
+	var pageSize int32
+	var pageToken string
+	c := &cobra.Command{
+		Use:   "list",
+		Short: "List recent CI builds, most recent first",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.ListBuilds(cmd.Context(), &pb.ListBuildsRequest{
+					Since: since,
+					Page:  &pb.PageRequest{PageSize: pageSize, PageToken: pageToken},
+				})
+				if err != nil {
+					return err
+				}
+				return printResponse(resp)
+			})
+		},
+	}
+	c.Flags().Int64Var(&since, "since", 0, "Only show builds recorded at or after this Unix timestamp")
+	c.Flags().Int32Var(&pageSize, "page-size", 0, "Max rows to return (0 = server default)")
+	c.Flags().StringVar(&pageToken, "page-token", "", "Resume from a previous response's next_page_token")
 	return c
 }
 

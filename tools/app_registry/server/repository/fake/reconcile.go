@@ -167,6 +167,19 @@ func reconcile(s *state, apps []*appmetapb.AppManifest, charts []*appmetapb.Char
 			DiscoveredAt:      source.DiscoveredAt,
 			UpdatedAt:         now,
 		}
+		// reconcile_run bookkeeping (migration 010, AR-8): one row per
+		// sweep that actually applies, mirroring postgres/app.go's
+		// Reconcile insert into `reconcile_run`. A dry run writes nothing,
+		// same as every other write in this function.
+		runID := uuid.NewString()
+		workState.ReconcileRuns[runID] = repository.ReconcileRun{
+			ReconcileRunID:    runID,
+			GitSHA:            source.GitSHA,
+			SourceCommittedAt: source.SourceCommittedAt,
+			AppliedAt:         now,
+			AppsSeen:          int32(len(apps)),
+			ChartsSeen:        int32(len(charts)),
+		}
 	}
 
 	return result, nil

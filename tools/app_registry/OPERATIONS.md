@@ -136,6 +136,51 @@ older commit. See [ARCHITECTURE.md "Reconcile watermark"](ARCHITECTURE.md#reconc
 for the full mechanism, and re-run `ci.yml` for the commit you actually want
 reflected if that's not what already ran.
 
+**Browsing reconcile history (issue #607).** To confirm a given commit was
+actually reconciled (or just see recent sweep activity), page through the
+`reconcile_run` table with the CLI rather than re-deriving it from CI logs:
+
+```sh
+app-registry reconcile-runs list [--since <unix-ts>] [--page-size N] [--page-token <token>]
+```
+
+Rows are most-recent-`applied_at`-first. Pass the previous response's
+`next_page_token` back in via `--page-token` to page further back; `--since`
+narrows to runs at or after a given time. See
+[ARCHITECTURE.md "ListReconcileRuns"](ARCHITECTURE.md#listreconcileruns-issue-607)
+for the pagination contract.
+
+**Browsing build history (issue #608).** To scan recent CI builds rather than
+look up one known run, page through the `build` table with the CLI:
+
+```sh
+app-registry builds list [--since <unix-ts>] [--page-size N] [--page-token <token>]
+```
+
+Rows are most-recent-`recorded_at`-first. This is a browse, distinct from
+`app-registry builds status <workflow-run-id>` (a point lookup for one run's
+build plus its child artifacts, unchanged by this command) — reach for
+`builds list` when you don't already know which run you're looking for. See
+[ARCHITECTURE.md "ListBuilds"](ARCHITECTURE.md#listbuilds-issue-608) for the
+pagination contract.
+
+**"What pins this image?" before removing or deprecating it (issue #609).**
+Before deleting an image, retiring a repository, or otherwise treating an
+image artifact as unused, confirm nothing still pins it:
+
+```sh
+app-registry artifacts pinned-by <digest-or-artifact-id>
+```
+
+Returns the chart artifacts whose `artifact_link` row points at that image
+— empty means the image exists but nothing currently pins it, safe to
+consider for removal; an unknown digest/artifact-id is a `NotFound` error,
+not an empty result, so don't read "not found" as "safe to delete." This is
+`artifacts resolve`'s reverse: `resolve` walks a chart down to its pinned
+images, `pinned-by` walks an image up to the charts pinning it. See
+[ARCHITECTURE.md "ListArtifactPins"](ARCHITECTURE.md#listartifactpins-issue-609)
+for the not-found-vs-empty contract.
+
 ### AR-7c: AssertApps closed issue #547
 
 **Retired runbook.** Before AR-7c (issue #558), `release.yml` had no path to

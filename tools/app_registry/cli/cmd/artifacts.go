@@ -19,6 +19,7 @@ func newArtifactsCmd() *cobra.Command {
 		newArtifactsListCmd(),
 		newArtifactsGetCmd(),
 		newArtifactsResolveCmd(),
+		newArtifactsPinnedByCmd(),
 		newArtifactsRecordCmd(),
 		newArtifactsBeginPublishCmd(),
 		newArtifactsBeginPublishBatchCmd(),
@@ -469,6 +470,39 @@ func newArtifactsResolveCmd() *cobra.Command {
 		},
 	}
 	return c
+}
+
+func newArtifactsPinnedByCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "pinned-by <digest-or-artifact-id>",
+		Short: "Show which chart artifacts pin a given image artifact",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := pinnedByLookupRequest(args[0])
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.ListArtifactPins(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				return printResponse(resp)
+			})
+		},
+	}
+	return c
+}
+
+// pinnedByLookupRequest builds `artifacts pinned-by`'s ListArtifactPinsRequest
+// from its single positional arg: a "sha256:..." prefix dispatches to
+// Digest, anything else to ArtifactId -- mirrors newArtifactsResolveCmd's
+// identical dispatch for `artifacts resolve`.
+func pinnedByLookupRequest(arg string) *pb.ListArtifactPinsRequest {
+	req := &pb.ListArtifactPinsRequest{}
+	if len(arg) > 7 && arg[:7] == "sha256:" {
+		req.Digest = arg
+	} else {
+		req.ArtifactId = arg
+	}
+	return req
 }
 
 func parseArtifactKind(s string) (pb.ArtifactKind, error) {

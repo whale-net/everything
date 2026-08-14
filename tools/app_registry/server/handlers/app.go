@@ -6,6 +6,7 @@ package handlers
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/whale-net/everything/libs/go/logging"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -320,4 +321,30 @@ func (s *AppServer) SetAppStatus(ctx context.Context, req *pb.SetAppStatusReques
 		return nil, mapRepoErr(err)
 	}
 	return &pb.SetAppStatusResponse{App: appToPB(*app)}, nil
+}
+
+// ListReconcileRuns browses the `reconcile_run` table (migration 010, AR-8)
+// -- see ARCHITECTURE.md "ListReconcileRuns" for the pagination contract.
+func (s *AppServer) ListReconcileRuns(ctx context.Context, req *pb.ListReconcileRunsRequest) (*pb.ListReconcileRunsResponse, error) {
+	if err := auth.RequireAuthenticated(ctx); err != nil {
+		return nil, err
+	}
+	since := time.Time{}
+	if req.Since != 0 {
+		since = time.Unix(req.Since, 0)
+	}
+	runs, nextToken, err := s.repo.Apps().ListReconcileRuns(ctx, since, req.GetPage().GetPageSize(), req.GetPage().GetPageToken())
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return &pb.ListReconcileRunsResponse{
+		ReconcileRuns: reconcileRunsToPB(runs),
+		// total_size is a PAGE-LOCAL count (len(runs) <= page_size), not the
+		// true total row count across all pages -- real pagination means we
+		// no longer read the whole table to answer this RPC, so an accurate
+		// total would cost a separate COUNT(*) over an ever-growing table.
+		// No caller (CLI or otherwise) reads total_size today; see
+		// ARCHITECTURE.md's pagination note this issue adds.
+		Page: &pb.PageResponse{NextPageToken: nextToken, TotalSize: int32(len(runs))},
+	}, nil
 }

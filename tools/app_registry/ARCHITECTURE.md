@@ -15,10 +15,13 @@ serially:
 | [Data model](#data-model) / [Tables](#tables) / [SCD2 on `promotion`](#scd2-on-promotion) | The schema, table by table; SCD2 read/write pattern |
 | [Version model (AR-5a)](#version-model-ar-5a) | How `AllocateVersion` orders/reserves versions — not yet wired to any release |
 | [Reconcile watermark (issue #545)](#reconcile-watermark-issue-545) | Why `Reconcile` can safely skip a stale/out-of-order call |
+| [ListReconcileRuns (issue #607)](#listreconcileruns-issue-607) | Real (LIMIT + keyset cursor) pagination over `reconcile_run`, and why it's unindexed |
 | [Release-vs-reconcile gap (issue #547)](#release-vs-reconcile-gap-issue-547) | Superseded by AR-7c — kept for historical/rollback context only |
 | [Release lifecycle (issue #558)](#release-lifecycle-issue-558) | The big one: artifact `allocated → publishing → published`, identity/manifest-snapshot split, the run log — start here for anything touching recording or `release.yml` |
+| [ListBuilds (issue #608)](#listbuilds-issue-608) | Real (LIMIT + keyset cursor) pagination over `build`, and why it orders/filters on `recorded_at`, not `started_at` |
 | [Promotability](#promotability) | What makes an artifact legal to promote |
 | [Chart → image lockfile](#chart--image-lockfile) | Compose-time vs. publish-time digest pinning |
+| [ListArtifactPins (issue #609)](#listartifactpins-issue-609) | `ResolveArtifact`'s reverse walk — which charts pin a given image; deliberately unpaginated |
 | [Writeback: outbox → Temporal](#writeback-outbox--temporal) | How a promotion reaches the gitops repo (stub today) |
 | [Authorization](#authorization) | The role model and where environment scoping actually comes from |
 | [Idempotency](#idempotency) | Key scoping, including the cross-method replay bug fixed in #575/#576 |
@@ -319,6 +322,49 @@ is what "no watermark yet" means operationally — see migration 006's
 comments and `ShouldApplyReconcile`'s doc comment; it is invisible above the
 repository interface, which only ever exposes "is there a watermark or
 not."
+
+## ListReconcileRuns (issue #607)
+
+`AppRegistry.ListReconcileRuns` browses `reconcile_run` (migration 010,
+AR-8 — see "Data model" above): "which commits were actually reconciled, and
+when" for an operator confirming a release landed (see OPERATIONS.md
+"browsing reconcile history"). Ordered most-recent-`applied_at`-first,
+tie-broken by `reconcile_run_id` (`ORDER BY applied_at DESC,
+reconcile_run_id DESC`); an optional `since` (Unix timestamp) filters to
+`applied_at >= since`.
+
+**Real pagination**, not a client-side slice: `page_size`/`page_token` drive
+an actual `LIMIT` and a keyset (seek) predicate, `(applied_at,
+reconcile_run_id) < (cursor_ts, cursor_id)`, matching the `DESC, DESC`
+ordering above. The server fetches `page_size + 1` rows to detect whether a
+next page exists without a separate `COUNT(*)`; the opaque cursor
+(`postgres/keyset_cursor.go`'s `encodeKeysetCursor`/`decodeKeysetCursor`)
+encodes the last returned row's `(applied_at, reconcile_run_id)`. A
+malformed `page_token` is rejected with `ErrInvalidArgument`. `page_size <=
+0` falls back to a server default of 50 — there is no existing
+`ListPromotionEvents`/`ListArtifacts` precedent to follow here (both still
+read their whole result set unpaginated), so this is a fresh, deliberate
+choice for this package's first RPC with real pagination. The in-memory
+`fake` implementation (used by handler-level tests) mirrors the same
+ordering and keyset semantics with its own same-shape, independent cursor
+codec (`fake/keyset_cursor.go`) — only its own round-trip needs to hold,
+never cross-compatibility with postgres's token format.
+
+**`reconcile_run.applied_at` has no supporting index.** At
+current/foreseeable sweep volume (~380/yr — one `main`-push reconcile per
+day, roughly), an unindexed `ORDER BY applied_at DESC, reconcile_run_id DESC
+LIMIT ...` full sort is fine by deliberate choice, not an oversight. An
+index is the natural follow-up if volume grows or a future monitoring
+consumer's poll frequency (see plan #601's NFR2 — the stable, poll-safe
+ordering this pagination shape exists to give such a consumer) makes the
+full sort measurably expensive.
+
+**`PageResponse.total_size` is a page-local count**, not a true total row
+count across all pages: `len(reconcile_runs) <= page_size` on this and every
+other RPC using this same pagination shape. Real (LIMIT-based) pagination
+means the server no longer reads the whole table to answer the request, so
+an accurate total would cost a separate `COUNT(*)` over an ever-growing
+table for a field no caller (CLI or otherwise) reads today.
 
 ## Release-vs-reconcile gap (issue #547)
 
@@ -980,6 +1026,39 @@ Concretely:
   workflow — a resume, not a blind retry, since every already-`published`
   child's recording calls replay idempotently rather than re-executing.
 
+### ListBuilds (issue #608)
+
+`ArtifactRegistry.ListBuilds` browses `build` (migration 001, no schema
+change): "what has CI actually built recently" for an operator scanning
+history rather than looking up one known run — additive to
+`GetReleaseRun`/`app-registry builds status` above, which stay a point
+lookup for a single `workflow_run_id`. Ordered most-recent-`recorded_at`-first,
+tie-broken by `build_id` (`ORDER BY recorded_at DESC, build_id DESC`); an
+optional `since` (Unix timestamp) filters to `recorded_at >= since`.
+
+**Deliberately `recorded_at`, not `started_at`.** `build.started_at` is
+nullable and caller-supplied (`RecordBuild`'s handler only sets it when
+given a nonzero value); `recorded_at` is `NOT NULL DEFAULT NOW()`,
+server-set. Ordering or filtering on `started_at` would sort `NULL` rows
+first (wrong) and would let a row with no `started_at` never satisfy a
+`since` filter, permanently breaking plan #601's NFR2 poll-safety guarantee
+for that row. This was an explicit architect/owner decision on the root
+plan, not a default that happened to be convenient.
+
+**Real pagination, same shape as `ListReconcileRuns` (issue #607) above** —
+`page_size`/`page_token` drive an actual `LIMIT` and a keyset predicate,
+`(recorded_at, build_id) < (cursor_ts, cursor_id)`, matching the `DESC,
+DESC` ordering; the server fetches `page_size + 1` rows to detect a next
+page without a separate `COUNT(*)`, reusing the same opaque cursor codec
+(`postgres/keyset_cursor.go`'s `encodeKeysetCursor`/`decodeKeysetCursor`,
+and `fake/keyset_cursor.go`'s independent same-shape codec for the
+in-memory `fake` implementation). `page_size <= 0` falls back to the same
+server default of 50 as `ListReconcileRuns`, kept consistent across both
+real-pagination RPCs. `build.recorded_at` has no supporting index and
+`PageResponse.total_size` is a page-local count, not a true total across
+pages — see "ListReconcileRuns (issue #607)" above for both notes in full;
+the same deliberate tradeoff applies here unchanged.
+
 ### Availability, restated per adoption stage
 
 "The registry can be down for hours without blocking a release" and "the
@@ -1260,6 +1339,34 @@ nothing ever updates or rewrites an `artifact_link` row afterward. A later
 `Reconcile` changing the chart's live `chart_app` composition therefore
 cannot change what an already-recorded (and possibly already-promoted) chart
 artifact renders.
+
+## ListArtifactPins (issue #609)
+
+`ArtifactRegistry.ListArtifactPins` is `ResolveArtifact`'s mirror image:
+given an image artifact (by `artifact_id` or `digest`), it returns the chart
+artifacts whose `artifact_link` row pins it, walking the same table as
+"Chart → image lockfile" above but in the opposite direction (`WHERE
+al.image_artifact_id = $1` against `artifactSelectBase` joined on
+`al.chart_artifact_id = a.artifact_id`, instead of `ResolveArtifact`'s
+`WHERE al.chart_artifact_id = $1`).
+
+**Not-found vs. empty (FR3.2/FR3.3).** An image artifact that exists but
+that nothing currently pins returns an empty list, not an error — same
+"exists but has none" convention used elsewhere in this API. An
+`artifact_id`/`digest` that doesn't resolve to any artifact at all is
+`NotFound`, the same convention `GetReleaseRun` uses for an unknown
+`workflow-run-id`. Passing a *chart* artifact's id/digest — the reverse
+lookup only makes sense for images — is rejected with `InvalidArgument`,
+mirroring `ResolveArtifact`'s own chart-kind check inverted to require an
+image.
+
+**Deliberately unpaginated.** Unlike `ListReconcileRuns` (issue #607) and
+`ListBuilds` (issue #608), this RPC takes no page size/token:
+`artifact_link_image_artifact_id_idx` (migration 001) already backs the
+lookup, and fan-in per image is bounded by the number of distinct pinning
+chart-*versions*, not by total repo history the way `build`/`reconcile_run`
+grow unboundedly over time. Revisit if a widely-shared base image's fan-in
+ever grows unbounded in practice.
 
 ## Writeback: outbox → Temporal
 

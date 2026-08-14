@@ -9,6 +9,7 @@ go_library(
         "environment.go",
         "errors.go",
         "idempotency.go",
+        "keyset_cursor.go",
         "promotion.go",
         "repository.go",
         "writeback.go",
@@ -29,7 +30,10 @@ go_library(
 
 go_test(
     name = "postgres_test",
-    srcs = ["errors_test.go"],
+    srcs = [
+        "errors_test.go",
+        "keyset_cursor_test.go",
+    ],
     embed = [":postgres"],
     deps = [
         "//tools/app_registry/server/repository",

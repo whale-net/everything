@@ -4384,3 +4384,333 @@ func TestAdoptArtifact_FailedRow_Postgres(t *testing.T) {
 		}
 	})
 }
+
+// --- 12. ListReconcileRuns pagination/since/ordering (AR-8, issue #610) ----
+
+// seedReconcileRunRow inserts a reconcile_run row directly -- there is no
+// repository write path exercised by this test file that lets a caller pin
+// an exact applied_at (Reconcile's own bookkeeping always uses time.Now(),
+// see reconcile.go/postgres/app.go), and this test specifically needs
+// duplicate applied_at values across rows, which a real sweep cannot
+// reliably construct without racing the clock.
+func seedReconcileRunRow(t *testing.T, pool *pgxpool.Pool, id string, appliedAt time.Time, appsSeen, chartsSeen int) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `
+		INSERT INTO reconcile_run (reconcile_run_id, git_sha, source_committed_at, applied_at, apps_seen, charts_seen)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, "sha-"+id, appliedAt.Unix(), appliedAt, appsSeen, chartsSeen)
+	if err != nil {
+		t.Fatalf("seed reconcile_run %s: %v", id, err)
+	}
+}
+
+// TestListReconcileRuns_Pagination_MatchesFullOrderedScan_Postgres is the
+// "real Postgres ordering/index-free full sort" behavior the fake cannot
+// exercise: pages through with a small page_size and confirms the full
+// traversal matches a single unfiltered `ORDER BY applied_at DESC,
+// reconcile_run_id DESC` scan exactly, in order, with no duplicates and no
+// omissions -- including across a duplicate-applied_at pair, which is
+// exactly the case a naive `ORDER BY applied_at DESC LIMIT n` keyset
+// implementation (missing the reconcile_run_id tie-break) gets wrong.
+func TestListReconcileRuns_Pagination_MatchesFullOrderedScan_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	ids := []string{
+		uuid.NewString(), uuid.NewString(), uuid.NewString(),
+		uuid.NewString(), uuid.NewString(), uuid.NewString(), uuid.NewString(),
+	}
+	// ids[2] and ids[3] share the exact same applied_at -- the
+	// duplicate-timestamp pair the keyset tie-break must still order
+	// deterministically.
+	tie := base.Add(3 * time.Hour)
+	seedReconcileRunRow(t, pool, ids[0], base, 1, 1)
+	seedReconcileRunRow(t, pool, ids[1], base.Add(1*time.Hour), 1, 1)
+	seedReconcileRunRow(t, pool, ids[2], tie, 1, 1)
+	seedReconcileRunRow(t, pool, ids[3], tie, 1, 1)
+	seedReconcileRunRow(t, pool, ids[4], base.Add(4*time.Hour), 1, 1)
+	seedReconcileRunRow(t, pool, ids[5], base.Add(5*time.Hour), 1, 1)
+	seedReconcileRunRow(t, pool, ids[6], base.Add(6*time.Hour), 1, 1)
+
+	// Ground truth: a single unfiltered scan in the same order the
+	// repository contract promises.
+	rows, err := pool.Query(ctx, `SELECT reconcile_run_id FROM reconcile_run ORDER BY applied_at DESC, reconcile_run_id DESC`)
+	if err != nil {
+		t.Fatalf("ground-truth scan: %v", err)
+	}
+	var want []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan ground-truth row: %v", err)
+		}
+		want = append(want, id)
+	}
+	rows.Close()
+	if len(want) != len(ids) {
+		t.Fatalf("expected %d rows in ground-truth scan, got %d", len(ids), len(want))
+	}
+
+	var got []string
+	seen := map[string]bool{}
+	token := ""
+	for page := 0; page < len(ids)+1; page++ {
+		runs, next, err := reg.Apps().ListReconcileRuns(ctx, time.Time{}, 2, token)
+		if err != nil {
+			t.Fatalf("ListReconcileRuns page %d: %v", page, err)
+		}
+		if len(runs) == 0 {
+			t.Fatalf("page %d: got 0 rows", page)
+		}
+		if len(runs) > 2 {
+			t.Fatalf("page %d: expected at most page_size=2 rows, got %d", page, len(runs))
+		}
+		for _, rr := range runs {
+			if seen[rr.ReconcileRunID] {
+				t.Fatalf("duplicate row %s across pages", rr.ReconcileRunID)
+			}
+			seen[rr.ReconcileRunID] = true
+			got = append(got, rr.ReconcileRunID)
+		}
+		token = next
+		if token == "" {
+			break
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows across all pages, got %d (want order %v, got order %v)", len(want), len(got), want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("position %d: expected %s (ground-truth ORDER BY), got %s", i, want[i], got[i])
+		}
+	}
+}
+
+// TestListReconcileRuns_SinceComposesWithPagination_Postgres confirms since
+// composes correctly with pagination: filtering excludes rows before the
+// boundary on the first page, and every row across every subsequent page
+// still satisfies the filter.
+func TestListReconcileRuns_SinceComposesWithPagination_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	// 3 rows strictly before `since`, 5 at/after it.
+	for i := 0; i < 3; i++ {
+		seedReconcileRunRow(t, pool, uuid.NewString(), base.Add(time.Duration(i)*time.Hour), 1, 1)
+	}
+	since := base.Add(10 * time.Hour)
+	for i := 0; i < 5; i++ {
+		seedReconcileRunRow(t, pool, uuid.NewString(), since.Add(time.Duration(i)*time.Hour), 1, 1)
+	}
+
+	var got []repository.ReconcileRun
+	token := ""
+	for page := 0; page < 10; page++ {
+		runs, next, err := reg.Apps().ListReconcileRuns(ctx, since, 2, token)
+		if err != nil {
+			t.Fatalf("ListReconcileRuns page %d: %v", page, err)
+		}
+		got = append(got, runs...)
+		token = next
+		if token == "" {
+			break
+		}
+	}
+
+	if len(got) != 5 {
+		t.Fatalf("expected 5 runs at/after since across all pages, got %d", len(got))
+	}
+	for _, rr := range got {
+		if rr.AppliedAt.Before(since) {
+			t.Fatalf("row %s has applied_at %v before since %v -- since did not compose correctly with pagination", rr.ReconcileRunID, rr.AppliedAt, since)
+		}
+	}
+}
+
+// --- 13. ListBuilds pagination/since/recorded_at ordering (issue #611) -----
+
+// seedBuildRow inserts a build row directly with an exact, caller-chosen
+// recorded_at (and optionally a nil started_at) -- there is no repository
+// write path exercised by this test file that lets a caller pin an exact
+// recorded_at (RecordBuild always stamps it from the clock, see
+// postgres/artifact.go's buildRepo.RecordBuild), and this test specifically
+// needs duplicate recorded_at values plus a NULL started_at row, neither of
+// which a real write can reliably construct without racing the clock.
+func seedBuildRow(t *testing.T, pool *pgxpool.Pool, workflowRunID string, recordedAt time.Time, startedAt *time.Time) string {
+	t.Helper()
+	var buildID string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO build (git_sha, workflow_run_id, started_at, recorded_at)
+		VALUES ('deadbeef', $1, $2, $3)
+		RETURNING build_id`, workflowRunID, startedAt, recordedAt).Scan(&buildID)
+	if err != nil {
+		t.Fatalf("seed build %s: %v", workflowRunID, err)
+	}
+	return buildID
+}
+
+// TestListBuilds_Pagination_MatchesFullOrderedScan_Postgres is the "real
+// Postgres ordering/index-free full sort" behavior the fake cannot exercise:
+// pages through with a small page_size and confirms the full traversal
+// matches a single unfiltered `ORDER BY recorded_at DESC, build_id DESC`
+// scan exactly, in order, with no duplicates and no omissions -- including
+// across a duplicate-recorded_at pair (the case a naive `ORDER BY
+// recorded_at DESC LIMIT n` keyset implementation, missing the build_id
+// tie-break, gets wrong) and a NULL-started_at row, which must sort by its
+// own recorded_at position, not float to either end the way a naive `ORDER
+// BY started_at` would place it.
+func TestListBuilds_Pagination_MatchesFullOrderedScan_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	started := base.Add(-time.Minute)
+
+	// tie: two rows sharing the exact same recorded_at -- the
+	// duplicate-timestamp pair the keyset tie-break must still order
+	// deterministically.
+	tie := base.Add(3 * time.Hour)
+	seedBuildRow(t, pool, "run-13-0", base, &started)
+	seedBuildRow(t, pool, "run-13-1", base.Add(1*time.Hour), &started)
+	seedBuildRow(t, pool, "run-13-2", tie, &started)
+	seedBuildRow(t, pool, "run-13-3", tie, &started)
+	// noStartedID has no started_at at all, and a recorded_at that lands
+	// in the MIDDLE of the ordering (not first, not last) -- if ordering
+	// ever fell back to started_at, this row would sort at either
+	// extreme instead of here.
+	noStartedID := seedBuildRow(t, pool, "run-13-4", base.Add(4*time.Hour), nil)
+	seedBuildRow(t, pool, "run-13-5", base.Add(5*time.Hour), &started)
+	seedBuildRow(t, pool, "run-13-6", base.Add(6*time.Hour), &started)
+
+	// Ground truth: a single unfiltered scan in the same order the
+	// repository contract promises.
+	rows, err := pool.Query(ctx, `SELECT build_id FROM build ORDER BY recorded_at DESC, build_id DESC`)
+	if err != nil {
+		t.Fatalf("ground-truth scan: %v", err)
+	}
+	var want []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan ground-truth row: %v", err)
+		}
+		want = append(want, id)
+	}
+	rows.Close()
+	if len(want) != 7 {
+		t.Fatalf("expected 7 rows in ground-truth scan, got %d", len(want))
+	}
+
+	// The NULL-started_at row must land at position 2 (0-indexed,
+	// most-recent-first): after run-13-6/run-13-5, before the tied pair --
+	// exactly where its own recorded_at (base+4h) places it, not first (as
+	// a naive NULLS-FIRST ORDER BY started_at would put it) and not last.
+	wantNullPos := -1
+	for i, id := range want {
+		if id == noStartedID {
+			wantNullPos = i
+		}
+	}
+	if wantNullPos != 2 {
+		t.Fatalf("test setup sanity check failed: expected the NULL-started_at row at ground-truth position 2, got %d (want order %v)", wantNullPos, want)
+	}
+
+	var got []string
+	seen := map[string]bool{}
+	token := ""
+	for page := 0; page < 8; page++ {
+		builds, next, err := reg.Builds().ListBuilds(ctx, time.Time{}, 2, token)
+		if err != nil {
+			t.Fatalf("ListBuilds page %d: %v", page, err)
+		}
+		if len(builds) == 0 {
+			t.Fatalf("page %d: got 0 rows", page)
+		}
+		if len(builds) > 2 {
+			t.Fatalf("page %d: expected at most page_size=2 rows, got %d", page, len(builds))
+		}
+		for _, b := range builds {
+			if seen[b.BuildID] {
+				t.Fatalf("duplicate row %s across pages", b.BuildID)
+			}
+			seen[b.BuildID] = true
+			got = append(got, b.BuildID)
+		}
+		token = next
+		if token == "" {
+			break
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows across all pages, got %d (want order %v, got order %v)", len(want), len(got), want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("position %d: expected %s (ground-truth ORDER BY), got %s", i, want[i], got[i])
+		}
+	}
+}
+
+// TestListBuilds_SinceComposesWithPagination_Postgres confirms since
+// composes correctly with pagination -- filtering excludes rows before the
+// boundary on the first page, and every row across every subsequent page
+// still satisfies the filter -- including a row whose started_at is NULL,
+// proving a NULL-started_at row is not silently excluded by a since filter
+// it should satisfy (per the architect's open question 3 resolution on
+// #601).
+func TestListBuilds_SinceComposesWithPagination_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	started := base.Add(-time.Minute)
+	// 3 rows strictly before `since`, all with a started_at.
+	for i := 0; i < 3; i++ {
+		seedBuildRow(t, pool, fmt.Sprintf("run-13-since-before-%d", i), base.Add(time.Duration(i)*time.Hour), &started)
+	}
+	since := base.Add(10 * time.Hour)
+	// The row recorded exactly at `since` has NO started_at -- the boundary
+	// case must still be included.
+	noStartedID := seedBuildRow(t, pool, "run-13-since-boundary", since, nil)
+	for i := 1; i < 5; i++ {
+		seedBuildRow(t, pool, fmt.Sprintf("run-13-since-after-%d", i), since.Add(time.Duration(i)*time.Hour), &started)
+	}
+
+	var got []repository.Build
+	token := ""
+	for page := 0; page < 10; page++ {
+		builds, next, err := reg.Builds().ListBuilds(ctx, since, 2, token)
+		if err != nil {
+			t.Fatalf("ListBuilds page %d: %v", page, err)
+		}
+		got = append(got, builds...)
+		token = next
+		if token == "" {
+			break
+		}
+	}
+
+	if len(got) != 5 {
+		t.Fatalf("expected 5 builds at/after since across all pages, got %d", len(got))
+	}
+	foundBoundary := false
+	for _, b := range got {
+		if b.RecordedAt.Before(since) {
+			t.Fatalf("row %s has recorded_at %v before since %v -- since did not compose correctly with pagination", b.BuildID, b.RecordedAt, since)
+		}
+		if b.BuildID == noStartedID {
+			foundBoundary = true
+			if b.StartedAt != nil {
+				t.Fatalf("expected the boundary row's StartedAt to be nil, got %v", *b.StartedAt)
+			}
+		}
+	}
+	if !foundBoundary {
+		t.Fatalf("expected the NULL-started_at boundary row to be included (recorded_at == since), but it was excluded")
+	}
+}

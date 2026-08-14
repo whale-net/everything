@@ -69,6 +69,12 @@ type state struct {
 	// GitSHA=="" sentinel value. reconcile.go's use of it must still agree
 	// with repository.ShouldApplyReconcile's semantics for nil.
 	Watermark *repository.ReconcileWatermark
+	// ReconcileRuns mirrors the `reconcile_run` table (migration 010,
+	// AR-8), keyed by reconcile_run_id. reconcile.go's reconcile() appends
+	// one row here on every call that actually applies (never dry-run,
+	// never SkippedStale) -- see postgres/app.go's Reconcile for the same
+	// bookkeeping expressed in SQL.
+	ReconcileRuns map[string]repository.ReconcileRun
 }
 
 func newState() *state {
@@ -83,6 +89,7 @@ func newState() *state {
 		PromotionEvents: map[string]repository.PromotionEvent{},
 		WritebackOutbox: map[string]repository.WritebackOutbox{},
 		DomainAdoption:  map[string]repository.DomainAdoptionStage{},
+		ReconcileRuns:   map[string]repository.ReconcileRun{},
 	}
 }
 
@@ -121,6 +128,36 @@ func (r *Registry) SetDomainAdoptionStage(domain string, stage repository.Domain
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.state.DomainAdoption[domain] = stage
+}
+
+// SeedReconcileRun is a test-only fixture setter, the same shape as
+// SetDomainAdoptionStage above: ListReconcileRuns's duplicate-applied_at
+// tie-break case needs two rows with the exact same AppliedAt, which the
+// real write path (reconcile.go's reconcile(), via uuid.NewString() +
+// time.Now()) cannot reliably construct without racing a clock -- so tests
+// that need that exact shape reach in here directly instead.
+func (r *Registry) SeedReconcileRun(run repository.ReconcileRun) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.state.ReconcileRuns[run.ReconcileRunID] = run
+}
+
+// SeedBuild is the ListBuilds analogue of SeedReconcileRun above (#611):
+// ListBuilds's duplicate-recorded_at tie-break and NULL-started_at ordering
+// cases both need an exact, caller-chosen RecordedAt (and, for the second
+// case, a nil StartedAt) that the real write path (RecordBuild, whose
+// postgres counterpart stamps RecordedAt = time.Now().UTC() itself -- see
+// postgres/artifact.go's buildRepo.RecordBuild) cannot reliably construct
+// without racing the clock. If BuildID is unset, one is generated so callers
+// that don't care about the exact ID (most of them) can omit it.
+func (r *Registry) SeedBuild(b repository.Build) repository.Build {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if b.BuildID == "" {
+		b.BuildID = uuid.NewString()
+	}
+	r.state.Builds[b.BuildID] = b
+	return b
 }
 
 func (r *Registry) Apps() repository.AppRepository                { return r }
@@ -292,6 +329,60 @@ func (r *Registry) SetAppStatus(ctx context.Context, appID string, target reposi
 	return &a, nil
 }
 
+// defaultReconcileRunPageSize matches postgres's appRepo default -- see that
+// package's doc comment on the same constant.
+const defaultReconcileRunPageSize = 50
+
+// ListReconcileRuns mirrors postgres's appRepo.ListReconcileRuns: same
+// ordering (applied_at DESC, reconcile_run_id DESC), same since filter, same
+// real LIMIT + keyset cursor pagination contract -- see
+// repository.AppRepository.ListReconcileRuns's doc comment. The fake's
+// cursor format is its own implementation detail (see keyset_cursor.go in
+// this package): only this fake's own round-trip needs to hold, not
+// cross-compatibility with postgres's token format, since fake and postgres
+// are never both queried with the same token.
+func (r *Registry) ListReconcileRuns(ctx context.Context, since time.Time, pageSize int32, pageToken string) ([]repository.ReconcileRun, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultReconcileRunPageSize
+	}
+
+	var all []repository.ReconcileRun
+	for _, rr := range r.state.ReconcileRuns {
+		if !since.IsZero() && rr.AppliedAt.Before(since) {
+			continue
+		}
+		all = append(all, rr)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].AppliedAt.Equal(all[j].AppliedAt) {
+			return all[i].AppliedAt.After(all[j].AppliedAt)
+		}
+		return all[i].ReconcileRunID > all[j].ReconcileRunID
+	})
+
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeFakeCursor(pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		var resumed []repository.ReconcileRun
+		for _, rr := range all {
+			if rr.AppliedAt.Before(cursorTS) || (rr.AppliedAt.Equal(cursorTS) && rr.ReconcileRunID < cursorID) {
+				resumed = append(resumed, rr)
+			}
+		}
+		all = resumed
+	}
+
+	var nextPageToken string
+	if int32(len(all)) > pageSize {
+		last := all[pageSize-1]
+		nextPageToken = encodeFakeCursor(last.AppliedAt, last.ReconcileRunID)
+		all = all[:pageSize]
+	}
+	return all, nextPageToken, nil
+}
+
 // ============================================================================
 // BuildRepository
 // ============================================================================
@@ -339,6 +430,62 @@ func (r *Registry) GetBuildByWorkflowRun(ctx context.Context, workflowRunID stri
 		return nil, repository.ErrNotFound
 	}
 	return best, nil
+}
+
+// defaultBuildPageSize matches postgres's buildRepo default -- see that
+// package's doc comment on the same constant.
+const defaultBuildPageSize = 50
+
+// ListBuilds mirrors postgres's buildRepo.ListBuilds: same ordering
+// (recorded_at DESC, build_id DESC), same since filter, same real LIMIT +
+// keyset cursor pagination contract -- see
+// repository.BuildRepository.ListBuilds's doc comment. r.state.Builds is
+// already fully populated by RecordBuild, so no new bookkeeping is needed
+// here (unlike ListReconcileRuns, which needed a dedicated ReconcileRuns
+// slice on state). Cursor format reuses this package's own
+// encodeFakeCursor/decodeFakeCursor (keyset_cursor.go) -- only this fake's
+// own round-trip needs to hold, not cross-compatibility with postgres's
+// token format.
+func (r *Registry) ListBuilds(ctx context.Context, since time.Time, pageSize int32, pageToken string) ([]repository.Build, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultBuildPageSize
+	}
+
+	var all []repository.Build
+	for _, b := range r.state.Builds {
+		if !since.IsZero() && b.RecordedAt.Before(since) {
+			continue
+		}
+		all = append(all, b)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].RecordedAt.Equal(all[j].RecordedAt) {
+			return all[i].RecordedAt.After(all[j].RecordedAt)
+		}
+		return all[i].BuildID > all[j].BuildID
+	})
+
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeFakeCursor(pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		var resumed []repository.Build
+		for _, b := range all {
+			if b.RecordedAt.Before(cursorTS) || (b.RecordedAt.Equal(cursorTS) && b.BuildID < cursorID) {
+				resumed = append(resumed, b)
+			}
+		}
+		all = resumed
+	}
+
+	var nextPageToken string
+	if int32(len(all)) > pageSize {
+		last := all[pageSize-1]
+		nextPageToken = encodeFakeCursor(last.RecordedAt, last.BuildID)
+		all = all[:pageSize]
+	}
+	return all, nextPageToken, nil
 }
 
 // ============================================================================
@@ -869,6 +1016,36 @@ func (r *Registry) ResolveArtifact(ctx context.Context, lookup repository.Artifa
 		}
 	}
 	return &cp, images, builds, nil
+}
+
+// ListArtifactPins is ResolveArtifact's mirror image: given an image
+// artifact lookup, returns the chart artifacts whose Contains links back to
+// it. The fake has no separate artifact_link table to walk (see
+// linkContains above), so this scans chart artifacts' Contains slices
+// instead of joining.
+func (r *Registry) ListArtifactPins(ctx context.Context, lookup repository.ArtifactLookup) ([]repository.Artifact, error) {
+	a, err := r.findArtifact(lookup)
+	if err != nil {
+		return nil, err
+	}
+	if a.Kind != repository.ArtifactKindImage {
+		// Mirrors postgres/artifact.go's ListArtifactPins.
+		return nil, fmt.Errorf("%w: artifact %s is not an image", repository.ErrInvalidArgument, a.ArtifactID)
+	}
+
+	var chartArtifacts []repository.Artifact
+	for _, candidate := range r.state.Artifacts {
+		if candidate.Kind != repository.ArtifactKindChart {
+			continue
+		}
+		for _, link := range candidate.Contains {
+			if link.ImageArtifactID == a.ArtifactID {
+				chartArtifacts = append(chartArtifacts, candidate)
+				break
+			}
+		}
+	}
+	return chartArtifacts, nil
 }
 
 func (r *Registry) ownerFullName(a repository.Artifact) string {
