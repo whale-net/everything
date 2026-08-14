@@ -209,3 +209,4 @@ Areas that could be enhanced:
 - **Enhanced Go Support**: Enable gazelle rules for better Go dependency management
 - **Testing Strategy**: Expand test utilities and integration testing capabilities
 - **Documentation**: Auto-generation from code for better consistency
+- see github issues page
