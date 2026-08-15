@@ -18,6 +18,7 @@ go_library(
         "//tools/helm:helm_lib",
         "@com_github_spf13_cobra//:cobra",
         "@in_gopkg_yaml_v3//:yaml_v3",
+        "@org_golang_google_grpc//:grpc",
         "@org_golang_google_protobuf//encoding/protojson",
     ],
 )
