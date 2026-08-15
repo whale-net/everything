@@ -141,16 +141,13 @@ no separate mode branch needed here.
 
 ## Generated templ files
 
-Like `manmanv2/ui`, this package **commits** the generated `*_templ.go`
-files (`components/layout_templ.go`, `components/badges_templ.go`,
-`components/digest_templ.go`, `components/banner_templ.go`,
-`components/gate_templ.go`, `pages/home_templ.go`) alongside their
-`.templ` sources, for IDE/`gopls` support without invoking Bazel. Bazel
-itself regenerates these files at build time via the `templ_library` macro
-(`tools/templ.bzl`) regardless of what's checked in — the committed copies
-are for human/editor convenience only, and must be regenerated (`bazel
-build //tools/app_registry/ui/...` and copy the `bazel-bin` output back)
-whenever the corresponding `.templ` file changes.
+This package does **not** commit the generated `*_templ.go` files.
+Bazel regenerates them at build time via the `templ_library` macro
+(`tools/templ.bzl`), which runs `templ generate` in a genrule regardless
+of what's on disk — `*_templ.go` is gitignored. For IDE/`gopls` support
+outside Bazel, run `bazel build //tools/app_registry/ui/...` and copy the
+`bazel-bin` output back locally, or run `templ generate` directly; either
+way, do not check the result in.
 
 ## Local development
 
