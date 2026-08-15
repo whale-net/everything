@@ -24,6 +24,7 @@ cold; this file only indexes where things live.
 | [OPERATIONS.md](OPERATIONS.md) | Day-2 operations — the release → record → promote → verify → rollback lifecycle, how to spot a silently failed recording, how to check drift, and how to tell whether the registry is actually in use yet. Start here once DEPLOY.md is done and you need to ship something through it. |
 | [.mcp.json](.mcp.json) | Claude Code plugin (`app-registry`, see `.claude-plugin/plugin.json`) — three crystaldba `postgres-mcp` servers (`app-registry-pg-{tilt,dev,prod}`) for querying the database directly; see ENV.md "Postgres MCP" |
 | [design/USER_STORIES.md](design/USER_STORIES.md) | Designing or reviewing the admin UI — the persona and stories the wireframes answer to |
+| [design/RELEASE_PROMOTE_STORIES.md](design/RELEASE_PROMOTE_STORIES.md) | Scoping AR-5+/AR-8+ release-path work — domain-owner stories for image-only/chart-only builds, one image shared across charts, and redundant (no-op digest) builds; marks what's shipped vs. still a gap |
 | [design/PRINCIPLES.md](design/PRINCIPLES.md) | Designing or reviewing the admin UI — the guiding principles behind screen and interaction choices |
 | [design/CONCEPTS_AUDIT.md](design/CONCEPTS_AUDIT.md) | Before building any wireframe screen for real — which UI concepts have no backing RPC/CLI today, are schema-only, or are out of this API's scope entirely |
 | [design/wireframes/](design/wireframes/README.md) | Iterating on the admin UI wireframes themselves (`bazel run //tools/wireframe`) |
