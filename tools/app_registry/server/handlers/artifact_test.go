@@ -73,24 +73,32 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 
 	cases := []struct {
 		appName string
+		kind    pb.ArtifactKind
 		want    pb.Promotability
 	}{
-		{"chart-app", pb.Promotability_PROMOTABILITY_VIA_CHART},
-		{"image-app", pb.Promotability_PROMOTABILITY_PROMOTABLE},
-		{"none-app", pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, pb.Promotability_PROMOTABILITY_VIA_CHART},
+		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, pb.Promotability_PROMOTABILITY_PROMOTABLE},
+		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
 	}
 	for _, tc := range cases {
-		t.Run(tc.appName, func(t *testing.T) {
+		name := fmt.Sprintf("%s-%v", tc.appName, tc.kind)
+		t.Run(name, func(t *testing.T) {
 			resp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
-				BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-				OwnerFullName: "demo-" + tc.appName, Digest: "sha256:" + tc.appName, Version: "v1.0.0",
-				IdempotencyKey: "record-" + tc.appName,
+				BuildId: build.BuildId, Kind: tc.kind,
+				OwnerFullName: "demo-" + tc.appName, Digest: "sha256:" + tc.appName + "-" + tc.kind.String(), Version: "v1.0.0",
+				IdempotencyKey: "record-" + tc.appName + "-" + tc.kind.String(),
 			})
 			if err != nil {
-				t.Fatalf("RecordArtifact(%s): %v", tc.appName, err)
+				t.Fatalf("RecordArtifact(%s, %v): %v", tc.appName, tc.kind, err)
 			}
 			if resp.Artifact.Promotability != tc.want {
-				t.Fatalf("%s: expected promotability %v, got %v", tc.appName, tc.want, resp.Artifact.Promotability)
+				t.Fatalf("%s (%v): expected promotability %v, got %v", tc.appName, tc.kind, tc.want, resp.Artifact.Promotability)
 			}
 		})
 	}

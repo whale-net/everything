@@ -14,6 +14,7 @@ This generates:
   {name}_lib  — cc_library with your sources + Arduino core + board_pins
   {name}_elf  — cc_binary (ELF, inspect with readelf / objdump)
   {name}_bin  — genrule → flashable .bin (via esptool elf2image)
+  {name}_merged_bin — genrule → merged flashable .bin at 0x0 (via esptool merge_bin)
   flash       — sh_binary: bazel run //{pkg}:flash -- /dev/ttyUSB0
 """
 
@@ -27,7 +28,7 @@ ESP32_COMPAT = [
 ]
 
 def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, flash_name = "flash", **kwargs):
-    """Creates {name}_lib, {name}_elf, {name}_bin, and :flash targets.
+    """Creates {name}_lib, {name}_elf, {name}_bin, {name}_merged_bin, and :flash targets.
 
     Args:
         name:         Target name prefix.
@@ -148,6 +149,25 @@ def esp32_firmware(name, srcs, deps = [], copts = [], flash_config = None, flash
             "-o $@",
             "$<",
         ]),
+        target_compatible_with = ESP32_COMPAT,
+        tools = ["//tools/firmware/esp32:esptool_wrapper"],
+    )
+
+    merged_cmd_parts = [
+        "$(location //tools/firmware/esp32:esptool_wrapper)",
+        "--chip esp32 merge_bin",
+        flash_config.write_flash_args,
+        "-o $@",
+    ]
+    for seg in flash_config.pre_segments:
+        merged_cmd_parts.append("{} $(location {})".format(seg.addr, seg.label))
+    merged_cmd_parts.append("{} $(location :{})".format(flash_config.app_offset, name + "_bin"))
+
+    native.genrule(
+        name = name + "_merged_bin",
+        srcs = [seg.label for seg in flash_config.pre_segments] + [":" + name + "_bin"],
+        outs = [name + "_merged.bin"],
+        cmd = " ".join(merged_cmd_parts),
         target_compatible_with = ESP32_COMPAT,
         tools = ["//tools/firmware/esp32:esptool_wrapper"],
     )

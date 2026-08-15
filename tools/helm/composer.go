@@ -297,8 +297,24 @@ func formatYAML(v interface{}, indent int) string {
 	}
 }
 
+// shouldIgnoreApp returns true if the app should be ignored by the Helm composer.
+// Manifests with deploy_unit == DEPLOY_UNIT_NONE or app_type in ["cli", "firmware", "binary"]
+// are non-container / non-Kubernetes applications and must not have Helm charts generated.
+func shouldIgnoreApp(m *AppMetadata) bool {
+	if m.DeployUnit == appmetapb.DeployUnit_DEPLOY_UNIT_NONE {
+		return true
+	}
+	switch m.AppType {
+	case "cli", "binary", "firmware":
+		return true
+	}
+	return false
+}
+
 // LoadMetadata loads app metadata from JSON files, decoding each against
 // appmetapb.AppManifest — the schema of record for what app_metadata emits.
+// Manifests with deploy_unit == DEPLOY_UNIT_NONE or app_type in ["cli", "firmware", "binary"]
+// are ignored so the Helm composer does not package charts for non-container apps.
 func (c *Composer) LoadMetadata(metadataFiles []string) error {
 	for _, file := range metadataFiles {
 		data, err := os.ReadFile(file)
@@ -309,6 +325,10 @@ func (c *Composer) LoadMetadata(metadataFiles []string) error {
 		metadata := &AppMetadata{}
 		if err := protojson.Unmarshal(data, metadata); err != nil {
 			return fmt.Errorf("failed to parse metadata file %s: %w", file, err)
+		}
+
+		if shouldIgnoreApp(metadata) {
+			continue
 		}
 
 		c.apps = append(c.apps, metadata)

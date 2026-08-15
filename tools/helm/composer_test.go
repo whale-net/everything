@@ -1058,3 +1058,151 @@ func TestGenerateLockfile_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadMetadata_IgnoresNoneDeployUnit tests that apps with deploy_unit == DEPLOY_UNIT_NONE are ignored
+func TestLoadMetadata_IgnoresNoneDeployUnit(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "composer-ignore-none-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	testMetadata := &AppMetadata{
+		Name:        "none-app",
+		AppType:     "worker",
+		DeployUnit:  appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
+		Version:     "1.0.0",
+		Description: "Non-deployed application",
+		Registry:    "ghcr.io",
+		RepoName:    "none-app",
+	}
+
+	metadataFile := filepath.Join(tmpDir, "none-app.json")
+	data, err := protojson.Marshal(testMetadata)
+	if err != nil {
+		t.Fatalf("Failed to marshal metadata: %v", err)
+	}
+	if err := os.WriteFile(metadataFile, data, 0644); err != nil {
+		t.Fatalf("Failed to write metadata file: %v", err)
+	}
+
+	config := ChartConfig{
+		ChartName: "test-chart",
+		Version:   "1.0.0",
+		OutputDir: tmpDir,
+	}
+	composer := NewComposer(config, "/templates")
+
+	err = composer.LoadMetadata([]string{metadataFile})
+	if err != nil {
+		t.Fatalf("LoadMetadata failed: %v", err)
+	}
+
+	if len(composer.apps) != 0 {
+		t.Errorf("Expected 0 apps loaded (ignored), got %d", len(composer.apps))
+	}
+}
+
+// TestLoadMetadata_IgnoresCLIAndFirmware tests that cli, binary, and firmware app types are ignored
+func TestLoadMetadata_IgnoresCLIAndFirmware(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "composer-ignore-types-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	appTypes := []string{"cli", "binary", "firmware"}
+	var files []string
+
+	for _, at := range appTypes {
+		metadata := &AppMetadata{
+			Name:        "app-" + at,
+			AppType:     at,
+			DeployUnit:  appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
+			Version:     "1.0.0",
+			Description: "Test " + at + " application",
+			Domain:      "tools",
+		}
+		filename := filepath.Join(tmpDir, "app-"+at+".json")
+		data, err := protojson.Marshal(metadata)
+		if err != nil {
+			t.Fatalf("Failed to marshal metadata: %v", err)
+		}
+		if err := os.WriteFile(filename, data, 0644); err != nil {
+			t.Fatalf("Failed to write metadata file: %v", err)
+		}
+		files = append(files, filename)
+	}
+
+	config := ChartConfig{
+		ChartName: "test-chart",
+		Version:   "1.0.0",
+		OutputDir: tmpDir,
+	}
+	composer := NewComposer(config, "/templates")
+
+	err = composer.LoadMetadata(files)
+	if err != nil {
+		t.Fatalf("LoadMetadata failed: %v", err)
+	}
+
+	if len(composer.apps) != 0 {
+		t.Errorf("Expected 0 apps loaded (all ignored), got %d", len(composer.apps))
+	}
+}
+
+// TestLoadMetadata_MixedApps tests that deployable apps are kept while cli/firmware are skipped
+func TestLoadMetadata_MixedApps(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "composer-mixed-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	deployable := &AppMetadata{
+		Name:        "server-api",
+		AppType:     "external-api",
+		DeployUnit:  appmetapb.DeployUnit_DEPLOY_UNIT_CHART,
+		Version:     "1.0.0",
+		Domain:      "demo",
+		Registry:    "ghcr.io",
+		RepoName:    "demo-server-api",
+		ImageTarget: ":server_image",
+	}
+	cliApp := &AppMetadata{
+		Name:        "my-tool",
+		AppType:     "cli",
+		DeployUnit:  appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
+		Version:     "1.0.0",
+		Domain:      "tools",
+	}
+
+	f1 := filepath.Join(tmpDir, "server.json")
+	f2 := filepath.Join(tmpDir, "cli.json")
+
+	d1, _ := protojson.Marshal(deployable)
+	d2, _ := protojson.Marshal(cliApp)
+
+	os.WriteFile(f1, d1, 0644)
+	os.WriteFile(f2, d2, 0644)
+
+	config := ChartConfig{
+		ChartName: "test-chart",
+		Version:   "1.0.0",
+		OutputDir: tmpDir,
+	}
+	composer := NewComposer(config, "/templates")
+
+	err = composer.LoadMetadata([]string{f1, f2})
+	if err != nil {
+		t.Fatalf("LoadMetadata failed: %v", err)
+	}
+
+	if len(composer.apps) != 1 {
+		t.Fatalf("Expected 1 app loaded, got %d", len(composer.apps))
+	}
+	if composer.apps[0].Name != "server-api" {
+		t.Errorf("Expected server-api, got %s", composer.apps[0].Name)
+	}
+}
+

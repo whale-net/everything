@@ -49,3 +49,20 @@ def define_platforms():
             "@platforms//cpu:arm64",
         ],
     )
+
+    # Darwin/macOS platform aliases for CLI binary cross-compilation
+    native.platform(
+        name = "darwin_arm64",
+        constraint_values = [
+            "@platforms//os:macos",
+            "@platforms//cpu:arm64",
+        ],
+    )
+
+    native.platform(
+        name = "darwin_x86_64",
+        constraint_values = [
+            "@platforms//os:macos",
+            "@platforms//cpu:x86_64",
+        ],
+    )

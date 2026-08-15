@@ -511,8 +511,12 @@ func parseArtifactKind(s string) (pb.ArtifactKind, error) {
 		return pb.ArtifactKind_ARTIFACT_KIND_IMAGE, nil
 	case "chart":
 		return pb.ArtifactKind_ARTIFACT_KIND_CHART, nil
+	case "binary":
+		return pb.ArtifactKind_ARTIFACT_KIND_BINARY, nil
+	case "firmware":
+		return pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, nil
 	default:
-		return pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED, fmt.Errorf("unknown kind %q (want image|chart)", s)
+		return pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED, fmt.Errorf("unknown kind %q (want image|chart|binary|firmware)", s)
 	}
 }
 

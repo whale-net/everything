@@ -28,8 +28,8 @@ def _app_metadata_impl(ctx):
     metadata = {
         "name": ctx.attr.app_name,
         "version": ctx.attr.version,
-        "binary_target": str(ctx.attr.binary_target.label),
-        "image_target": str(ctx.attr.image_target.label),
+        "binary_target": str(ctx.attr.binary_target.label) if ctx.attr.binary_target else "",
+        "image_target": str(ctx.attr.image_target.label) if ctx.attr.image_target else "",
         "description": ctx.attr.description,
         "language": ctx.attr.language,
         "registry": ctx.attr.registry,
@@ -105,7 +105,7 @@ app_metadata = rule(
         "app_name": attr.string(mandatory = True),
         "version": attr.string(default = "latest"),
         "binary_target": attr.label(mandatory = True),
-        "image_target": attr.label(mandatory = True),
+        "image_target": attr.label(default = None),
         "description": attr.string(default = ""),
         "language": attr.string(mandatory = True),
         "registry": attr.string(default = "ghcr.io"),
@@ -141,12 +141,12 @@ app_metadata = rule(
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = "chart"):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
     ensuring consistency between the two systems. Works with standard py_binary
-    and go_binary targets.
+    and go_binary targets, as well as CLI and firmware release targets.
     
     The binaries are built for different platforms using Bazel's --platforms flag.
     Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
@@ -157,14 +157,14 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
                      - Simple name: "my_app" -> looks for :my_app
                      - Full label: "//path/to:binary" -> uses that binary
                      Defaults to name if not provided.
-        language: Programming language ("python" or "go")
+        language: Programming language ("python", "go", "cpp", "c++", etc.)
         domain: Domain/category for the app (e.g., "demo", "api", "web")
         description: Optional description of the app
         version: Default version (can be overridden at release time)
         registry: Container registry (defaults to ghcr.io)
         organization: Container registry organization (defaults to whale-net)
         custom_repo_name: Custom repository name (defaults to name)
-        app_type: Application type (external-api, internal-api, worker, job)
+        app_type: Application type (external-api, internal-api, worker, job, cli, binary, firmware)
         port: Port the application listens on (0 = not specified)
         replicas: Default number of replicas (0 = use composer default based on app_type)
         health_check_enabled: Whether to enable health checks (default: False)
@@ -180,17 +180,26 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         fastapi_app: For FastAPI apps, specify the module path and variable name (e.g., "main:app")
                      to auto-generate OpenAPI specs. Creates a {name}_openapi_spec target.
         additional_tars: Additional tar layers to include in the image (e.g., ["//tools/steamcmd:steamcmd"])
-        deploy_unit: How the app reaches an environment: "chart" (default, bundled into a Helm
-                     chart and not independently promotable), "image" (deployed by moving an image
+        deploy_unit: How the app reaches an environment: "chart" (default for containerized apps, bundled
+                     into a Helm chart and not independently promotable), "image" (deployed by moving an image
                      reference directly, no chart involved, e.g. manmanv2-host-manager), or "none"
-                     (built and published but never deployed).
+                     (default for cli/firmware apps, built and published but never deployed to K8s).
     """
     # Validate name format - must use dashes, not underscores
     if "_" in name:
         fail("App name '{}' contains underscores. Use dashes instead (e.g., 'my-app' not 'my_app')".format(name))
     
-    if language not in ["python", "go"]:
-        fail("Unsupported language: {}. Must be 'python' or 'go'".format(language))
+    is_container_app = app_type not in ["cli", "binary", "firmware"]
+
+    if deploy_unit == None:
+        deploy_unit = "chart" if is_container_app else "none"
+
+    if is_container_app:
+        if language not in ["python", "go"]:
+            fail("Unsupported language: {}. Must be 'python' or 'go' for containerized apps".format(language))
+    else:
+        if not language:
+            fail("language is required for release_app")
     
     # Single binary target - no platform suffixes needed
     # Binary will be built for different platforms using --platforms flag
@@ -200,27 +209,31 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     
     # Image name uses domain-app format (e.g., "demo-hello-python")
     image_name = domain + "-" + name
-    image_target = name + "_image"
-    
-    # Create multiplatform OCI image using SINGLE binary target
-    # Bazel will build it for different platforms based on --platforms flag
-    # Inject default environment variables for logging auto-detection
-    default_env = {
-        "APP_NAME": name,
-        "APP_DOMAIN": domain,
-        "APP_TYPE": app_type,
-    }
-    multiplatform_image(
-        name = image_target,
-        binary = base_label,  # Single binary, built for different platforms
-        registry = registry,
-        repository = organization,
-        image_name = image_name,
-        language = language,
-        env = default_env,  # Bake default environment variables
-        cmd = args if args else [],  # Pass container args if specified
-        additional_tars = additional_tars,  # Pass additional tar layers if specified
-    )
+    image_target_ref = None
+
+    if is_container_app:
+        image_target = name + "_image"
+        
+        # Create multiplatform OCI image using SINGLE binary target
+        # Bazel will build it for different platforms based on --platforms flag
+        # Inject default environment variables for logging auto-detection
+        default_env = {
+            "APP_NAME": name,
+            "APP_DOMAIN": domain,
+            "APP_TYPE": app_type,
+        }
+        multiplatform_image(
+            name = image_target,
+            binary = base_label,  # Single binary, built for different platforms
+            registry = registry,
+            repository = organization,
+            image_name = image_name,
+            language = language,
+            env = default_env,  # Bake default environment variables
+            cmd = args if args else [],  # Pass container args if specified
+            additional_tars = additional_tars,  # Pass additional tar layers if specified
+        )
+        image_target_ref = ":" + image_target
     
     # Use the binary directly for change detection
     # All platforms are built from the same sources, so one reference is enough
@@ -228,7 +241,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     
     # Auto-generate OpenAPI spec for FastAPI apps (before metadata creation)
     openapi_spec_target_ref = None
-    if fastapi_app and language == "python":
+    if is_container_app and fastapi_app and language == "python":
         # Parse module:variable syntax
         if ":" in fastapi_app:
             module_path, app_var = fastapi_app.split(":", 1)
@@ -261,7 +274,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         name = name + "_metadata",
         app_name = name,
         binary_target = binary_target_ref,
-        image_target = image_target,
+        image_target = image_target_ref,
         description = description,
         version = version,
         language = language,
@@ -312,6 +325,24 @@ def get_image_targets(app_name):
     return {
         "base": "//" + app_name + ":" + base_name,
         "push": "//" + app_name + ":" + base_name + "_push",
+    }
+
+def get_binary_targets(app_name):
+    """Get binary target and platform references for a CLI app.
+    
+    Args:
+        app_name: Name of the app
+        
+    Returns:
+        Dict with binary target reference and platform identifiers
+    """
+    return {
+        "target": "//" + app_name + ":" + app_name,
+        "platforms": {
+            "linux_x86_64": "//tools:linux_x86_64",
+            "linux_arm64": "//tools:linux_arm64",
+            "darwin_arm64": "//tools:darwin_arm64",
+        },
     }
 
 HelmChartMetadataInfo = provider(
