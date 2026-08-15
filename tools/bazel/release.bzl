@@ -141,7 +141,7 @@ app_metadata = rule(
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None):
     """Convenience macro to set up release metadata and OCI images for an app.
     
     This macro consolidates the creation of OCI images and release metadata,
@@ -152,7 +152,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
     
     Args:
-        name: App name (MUST use dashes, not underscores: 'my-app' not 'my_app')
+        name: Target name / App identifier
         binary_name: Target label for the binary. Can be:
                      - Simple name: "my_app" -> looks for :my_app
                      - Full label: "//path/to:binary" -> uses that binary
@@ -184,12 +184,14 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
                      into a Helm chart and not independently promotable), "image" (deployed by moving an image
                      reference directly, no chart involved, e.g. manmanv2-host-manager), or "none"
                      (default for cli/firmware apps, built and published but never deployed to K8s).
+        app_name: Override app name for metadata if different from target name.
     """
-    # Validate name format - must use dashes, not underscores
-    if "_" in name:
-        fail("App name '{}' contains underscores. Use dashes instead (e.g., 'my-app' not 'my_app')".format(name))
-    
+    effective_name = app_name if app_name else name
     is_container_app = app_type not in ["cli", "binary", "firmware"]
+
+    # Validate name format - must use dashes, not underscores for container apps
+    if is_container_app and "_" in effective_name:
+        fail("App name '{}' contains underscores. Use dashes instead (e.g., 'my-app' not 'my_app')".format(effective_name))
 
     if deploy_unit == None:
         deploy_unit = "chart" if is_container_app else "none"
@@ -203,12 +205,12 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     
     # Single binary target - no platform suffixes needed
     # Binary will be built for different platforms using --platforms flag
-    base_label = binary_name if binary_name else name
+    base_label = binary_name if binary_name else effective_name
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
     
     # Image name uses domain-app format (e.g., "demo-hello-python")
-    image_name = domain + "-" + name
+    image_name = (domain + "-" + effective_name) if domain else effective_name
     image_target_ref = None
 
     if is_container_app:
@@ -272,7 +274,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
-        app_name = name,
+        app_name = effective_name,
         binary_target = binary_target_ref,
         image_target = image_target_ref,
         description = description,

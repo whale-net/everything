@@ -41,5 +41,6 @@ func init() {
 		newCreateCombinedGithubReleaseCmd(),
 		newManifestSetCmd(),
 		newReadChartLockfileCmd(),
+		newPackageAssetsCmd(),
 	)
 }

@@ -37,6 +37,10 @@ func newTestRoot() *cobra.Command {
 		newChangesCmd(),
 		newManifestSetCmd(),
 		newReadChartLockfileCmd(),
+		newPackageAssetsCmd(),
+		newBuildCmd(),
+		newReleaseMultiarchCmd(),
+		newCreateCombinedGithubReleaseCmd(),
 	)
 	return root
 }
@@ -219,6 +223,13 @@ func withWorkspace(root string, fn func()) {
 	old := defaultWorkspaceRoot
 	defaultWorkspaceRoot = func() (string, error) { return root, nil }
 	defer func() { defaultWorkspaceRoot = old }()
+	fn()
+}
+
+func withArtifactRecorder(ar ArtifactRecorder, fn func()) {
+	old := defaultArtifactRecorder
+	defaultArtifactRecorder = ar
+	defer func() { defaultArtifactRecorder = old }()
 	fn()
 }
 
