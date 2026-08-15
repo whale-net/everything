@@ -123,7 +123,7 @@ func New() *Registry {
 // AR-5 status — AR-5a ships the gate but no cutover mechanism), so handler
 // tests that need to exercise the "allocate" path reach in here directly,
 // the same way postgres integration tests do via a raw
-// `INSERT INTO domain_adoption` (see postgres_integration_test.go).
+// `INSERT INTO domain_adoption` (see postgres_integration_artifact_test.go).
 func (r *Registry) SetDomainAdoptionStage(domain string, stage repository.DomainAdoptionStage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -88,7 +88,7 @@ different, simpler mechanism than SCD2.
 *Is the deploy-time idempotency worry real?* **No — traced and verified with
 a real-Postgres regression test
 (`TestChartArtifact_CompositionPinnedAtRecordTime_SurvivesLaterReconcile`,
-`server/repository/postgres/postgres_integration_test.go`).** The chart
+`server/repository/postgres/postgres_integration_artifact_test.go`).** The chart
 → image lockfile mechanism built for AR-2c (see "Chart → image lockfile"
 above) already solves this, incidentally, for the exact case the issue
 raises:

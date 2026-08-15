@@ -264,8 +264,10 @@ they need the Postgres tier, not this one:
 
 ### Running the Postgres integration tier (AR-2d)
 
-`server/repository/postgres/postgres_integration_test.go` (behind
-`//go:build integration`) starts a real Postgres container via
+`server/repository/postgres/postgres_integration_*_test.go` (behind
+`//go:build integration`; split by which repository file each group of tests
+exercises -- see `postgres_integration_helpers_test.go`'s doc comment)
+starts a real Postgres container via
 `libs/go/dbtest`, applies the real migrations from `migrate/schema` (the same
 embedded SQL `app-registry-migration` runs — not hand-written DDL), and
 exercises transaction-abort rollback, idempotency-key replay, real
@@ -305,5 +307,5 @@ completion with no duplicate publish. Not verified: the real gitops/S3
 publish path (explicitly out of scope for AR-4b) and a true concurrent
 two-workers-racing-one-claim scenario (the `FOR UPDATE SKIP LOCKED` claim
 query's correctness is asserted against real Postgres in
-`postgres_integration_test.go`, not exercised by two live worker
+`postgres_integration_promotion_test.go`, not exercised by two live worker
 processes).

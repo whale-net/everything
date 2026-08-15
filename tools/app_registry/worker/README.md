@@ -51,7 +51,7 @@ worker/
    inside one Postgres transaction (see `AGENTS.md` "SCD2" and
    `enqueueWriteback`'s doc comment). If any of the three fails, none of them
    commit — verified against real Postgres in
-   `server/repository/postgres/postgres_integration_test.go`
+   `server/repository/postgres/postgres_integration_promotion_test.go`
    (`TestWriteback_EnqueueCommitsAtomicallyWithPromotion` and
    `TestWriteback_EnqueueFailureRollsBackWholeTransaction`).
 2. `outbox.Drainer` polls `writeback_outbox` directly against Postgres (a
@@ -176,7 +176,7 @@ bazel test //tools/app_registry/worker/...
   `go.temporal.io/sdk/mocks.Client` and a fake `WritebackRepository`.
 
 Real-Postgres coverage for the outbox's atomicity and claim-locking lives in
-`server/repository/postgres/postgres_integration_test.go` (see
+`server/repository/postgres/postgres_integration_promotion_test.go` (see
 [`../TESTING.md`](../TESTING.md#running-the-postgres-integration-tier-ar-2d)).
 
 For exercising the worker as a running process — locally via Tilt, or a

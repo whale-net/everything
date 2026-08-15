@@ -137,7 +137,7 @@ picking this up cold, read those three before starting anything.
 
 - **`server/repository/postgres/*.go` has no automated test coverage.** ~~Handler
   logic is tested against the in-memory fake; the SQL is compile-checked only.~~
-  **Resolved by AR-2d** — see `postgres_integration_test.go`. The SCD2
+  **Resolved by AR-2d** — see `server/repository/postgres/postgres_integration_*_test.go`. The SCD2
   `promotion` table's partial unique index is still untested; it doesn't
   exist until AR-3's migration `002` lands (see AR-2d's scope note above).
 - **Auth is unimplemented.** ~~Handlers check no claims; the Tiltfile runs
@@ -402,7 +402,7 @@ the legibility complaint in issue #581 and the unbounded growth of
   manifests carry `app_refs` on the open `chart_manifest` row.
 
 **Testing note:** every acceptance criterion below is covered by new
-`postgres_integration_test.go` tests (real-Postgres tier, tag
+`postgres_integration_*_test.go` tests (real-Postgres tier, tag
 `integration`/`manual`) — this repo's dev sandbox has no Docker available to
 run that tier locally; it needs CI's `Test Database Integration` job (or a
 local run with a working Docker daemon) before merge.
