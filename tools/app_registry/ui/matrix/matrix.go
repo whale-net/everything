@@ -117,7 +117,16 @@ func buildCell(col ColumnResult, key string) *Cell {
 	return cell
 }
 
-func cellsForKey(environments []*pb.Environment, columns map[string]ColumnResult, key string) []*Cell {
+// CellsForKey builds one Cell per environment (aligned index-for-index with
+// environments) for the entity identified by key ("chart:<id>" or
+// "app:<id>", matching Row.Key's convention). Exported so callers outside
+// this package — e.g. the apps catalog (screen 20) and app detail (screen
+// 11), which need per-environment promotability for entities Build's own
+// row/child nesting doesn't surface flat (a DEPLOY_UNIT_NONE app, or a
+// VIA_CHART app looked up on its own rather than as a chart's child) — can
+// reuse the same columns data Build consumes instead of re-deriving cell
+// semantics.
+func CellsForKey(environments []*pb.Environment, columns map[string]ColumnResult, key string) []*Cell {
 	cells := make([]*Cell, 0, len(environments))
 	for _, env := range environments {
 		col, ok := columns[env.GetKey()]
@@ -164,7 +173,7 @@ func Build(charts []*pb.Chart, apps []*pb.App, environments []*pb.Environment, c
 			Key:      key,
 			Domain:   c.GetDomain(),
 			FullName: c.GetFullName(),
-			Cells:    cellsForKey(environments, columns, key),
+			Cells:    CellsForKey(environments, columns, key),
 		}
 		row.AnyDrift = anyDrift(row.Cells)
 
@@ -181,7 +190,7 @@ func Build(charts []*pb.Chart, apps []*pb.App, environments []*pb.Environment, c
 				Key:      childKey,
 				Domain:   app.GetDomain(),
 				FullName: app.GetFullName(),
-				Cells:    cellsForKey(environments, columns, childKey),
+				Cells:    CellsForKey(environments, columns, childKey),
 			}
 			row.Children = append(row.Children, child)
 		}
@@ -206,7 +215,7 @@ func Build(charts []*pb.Chart, apps []*pb.App, environments []*pb.Environment, c
 			Key:      key,
 			Domain:   app.GetDomain(),
 			FullName: app.GetFullName(),
-			Cells:    cellsForKey(environments, columns, key),
+			Cells:    CellsForKey(environments, columns, key),
 		})
 	}
 

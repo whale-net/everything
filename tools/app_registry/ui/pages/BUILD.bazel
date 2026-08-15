@@ -10,5 +10,6 @@ templ_library(
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/ui/components",
         "//tools/app_registry/ui/matrix",
+        "//tools/appmeta/proto:appmetapb",
     ],
 )

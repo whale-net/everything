@@ -39,6 +39,20 @@ func (app *App) buildDeploymentMatrix(ctx context.Context, at int64) (*matrix.Ma
 		return nil, fmt.Errorf("ListApps: %w", err)
 	}
 
+	columns := app.fetchEnvironmentColumns(ctx, environments, at)
+
+	m := matrix.Build(chartsResp.GetCharts(), appsResp.GetApps(), environments, columns)
+	m.AsOf = at
+	return m, nil
+}
+
+// fetchEnvironmentColumns fans out one GetEnvironmentState call per
+// environment, concurrently, bounded by environmentStateFanoutTimeout — the
+// shared read primitive behind buildDeploymentMatrix (screens 01/10) and the
+// apps catalog / app detail (screens 20/11, see apps_data.go), so both stay
+// unable to disagree about what's promoted where and neither re-derives its
+// own fanout/timeout/error-shape policy.
+func (app *App) fetchEnvironmentColumns(ctx context.Context, environments []*pb.Environment, at int64) map[string]matrix.ColumnResult {
 	fetchCtx, cancel := context.WithTimeout(ctx, environmentStateFanoutTimeout)
 	defer cancel()
 
@@ -61,8 +75,5 @@ func (app *App) buildDeploymentMatrix(ctx context.Context, at int64) (*matrix.Ma
 		}()
 	}
 	wg.Wait()
-
-	m := matrix.Build(chartsResp.GetCharts(), appsResp.GetApps(), environments, columns)
-	m.AsOf = at
-	return m, nil
+	return columns
 }

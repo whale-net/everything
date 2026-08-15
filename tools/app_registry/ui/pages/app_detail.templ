@@ -1,0 +1,211 @@
+package pages
+
+import (
+	"time"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
+)
+
+// promotionActionLabel renders PromotionEvent.action for the timeline —
+// screen-11-local since no other screen (yet) needs the full verb set.
+func promotionActionLabel(a pb.PromotionAction) string {
+	switch a {
+	case pb.PromotionAction_PROMOTION_ACTION_PROMOTE:
+		return "promote"
+	case pb.PromotionAction_PROMOTION_ACTION_ROLLBACK:
+		return "rollback"
+	case pb.PromotionAction_PROMOTION_ACTION_OVERRIDE:
+		return "override"
+	case pb.PromotionAction_PROMOTION_ACTION_RETIRE:
+		return "retire"
+	case pb.PromotionAction_PROMOTION_ACTION_APPROVE:
+		return "approve"
+	case pb.PromotionAction_PROMOTION_ACTION_REJECT:
+		return "reject"
+	default:
+		return "unknown"
+	}
+}
+
+// actorDisplay is the FR-19 "actor column reality" rule: render exactly
+// what the API stored on promotion_event.actor (an OIDC subject or GitHub
+// actor), with the one free/worthwhile exception of resolving the CURRENT
+// user's own subject to their session preferred_username for a "that was
+// you" affordance. Never invent a display name for anyone else's subject —
+// there is no user-directory RPC to resolve one from.
+func actorDisplay(user *htmxauth.UserInfo, actor string) string {
+	if user != nil && actor != "" && actor == user.Sub {
+		return user.PreferredUsername + " (you)"
+	}
+	return actor
+}
+
+// AppDetail is screen 11-app-detail (FR-19/FR-25/FR-21 link): one app across
+// every environment plus its promotion timeline, with the "part of chart"
+// link (FR-25) and version-history link (FR-21, delivered separately) kept
+// visually distinct from the timeline.
+templ AppDetail(user *htmxauth.UserInfo, data *matrix.AppDetailData) {
+	@components.Shell("App: "+data.App.GetFullName(), user) {
+		<div class="breadcrumbs text-sm mb-4">
+			<ul>
+				<li><a href="/apps">Apps</a></li>
+				<li>{ data.App.GetFullName() }</li>
+			</ul>
+		</div>
+		<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+			<div class="flex items-center gap-3 flex-wrap">
+				<h1 class="text-2xl md:text-3xl font-bold">{ data.App.GetFullName() }</h1>
+				@components.DeployUnitBadge(false, data.App.GetDeployUnit())
+				if data.OwningChart != nil {
+					<a href={ templ.URL("/charts/" + data.OwningChart.GetFullName()) } class="badge badge-soft badge-neutral hover:badge-primary">
+						📦 part of chart: { data.OwningChart.GetFullName() }
+					</a>
+				}
+			</div>
+			<div class="flex gap-2">
+				<a href={ templ.URL("/apps/" + data.App.GetFullName() + "/history") } class="btn btn-secondary">Version history</a>
+			</div>
+		</div>
+		<div class="grid md:grid-cols-3 gap-4 mb-6">
+			for _, s := range data.States {
+				@appEnvStatCard(s)
+			}
+		</div>
+		<div class="grid md:grid-cols-2 gap-6 mb-6">
+			@appDriftCard(data.App.GetFullName(), data.States)
+			@promotionTimelineCard(user, data)
+		</div>
+	}
+}
+
+templ appEnvStatCard(s matrix.AppEnvState) {
+	<div class="stat bg-base-100 rounded-box shadow-md">
+		<div class="stat-title">{ s.Env.GetKey() }</div>
+		if s.ColumnErr != nil {
+			<div class="stat-desc" title={ s.ColumnErr.Error() }>could not load state</div>
+			<div class="stat-desc"><span class="badge badge-soft badge-warning badge-sm">Unknown</span></div>
+		} else if !s.Promoted {
+			<div class="stat-value text-lg opacity-50">—</div>
+			<div class="stat-desc"><span class="text-xs opacity-50">not promoted</span></div>
+		} else {
+			<div class="stat-value text-lg font-mono">{ s.Version }</div>
+			<div class="stat-desc flex flex-wrap gap-1">
+				if s.Override && s.Drifted {
+					<span class="badge badge-soft badge-error badge-sm">Override · Drift</span>
+				} else if s.Override {
+					<span class="badge badge-soft badge-warning badge-sm">Override</span>
+				} else if s.ViaChart {
+					<span class="badge badge-soft badge-info badge-sm">Via chart</span>
+				} else {
+					<span class="badge badge-soft badge-success badge-sm">Promotable</span>
+				}
+			</div>
+		}
+	</div>
+}
+
+// appDriftCard is the wireframe's "Current artifact" card, generalized to
+// every environment at once (rather than one arbitrarily-picked env) so
+// FR-19's "one app across every environment" holds here too — each row
+// names its own environment plus digest, provenance, build link, and the
+// "chart pin says … (mismatch)" drift line when it applies.
+templ appDriftCard(fullName string, states []matrix.AppEnvState) {
+	<div class="card bg-base-100 shadow-md">
+		<div class="card-body">
+			<h2 class="card-title text-lg">Current artifact by environment</h2>
+			<table class="table table-sm">
+				<tbody>
+					for _, s := range states {
+						if s.ColumnErr == nil && s.Promoted {
+							<tr>
+								<td class="opacity-60 align-top">{ s.Env.GetKey() }</td>
+								<td>
+									<div class="flex flex-col gap-1">
+										@components.DigestDisplay(s.Version, s.Digest)
+										if s.Artifact != nil {
+											<div class="flex items-center gap-2">
+												@components.ProvenanceBadge(s.Artifact.GetProvenance())
+												if s.Artifact.GetBuildId() != "" {
+													<a href={ templ.URL("/builds/" + s.Artifact.GetBuildId()) } class="link font-mono text-xs">build { s.Artifact.GetBuildId() }</a>
+												}
+											</div>
+										}
+										if s.Drifted {
+											<div class="text-xs text-error">
+												Chart pin says <span class="font-mono">{ digestShort(s.ChartPinnedDigest) }</span> (mismatch)
+											</div>
+										}
+									</div>
+								</td>
+							</tr>
+						}
+					}
+				</tbody>
+			</table>
+			if !anyPromoted(states) {
+				<p class="text-sm opacity-60">Not currently promoted to any environment.</p>
+			}
+		</div>
+	</div>
+}
+
+func anyPromoted(states []matrix.AppEnvState) bool {
+	for _, s := range states {
+		if s.ColumnErr == nil && s.Promoted {
+			return true
+		}
+	}
+	return false
+}
+
+func digestShort(digest string) string {
+	const prefix = "sha256:"
+	if len(digest) > len(prefix)+12 {
+		return digest[:len(prefix)+12] + "…"
+	}
+	return digest
+}
+
+// promotionTimelineCard is FR-19's promotion timeline — actor, reason,
+// timestamp and environment per event, via ListPromotionEvents — kept
+// visually distinct (its own card, its own heading, no version-history link
+// inline) from the "Version history" button up in AppDetail's header
+// (FR-21 link).
+templ promotionTimelineCard(user *htmxauth.UserInfo, data *matrix.AppDetailData) {
+	<div class="card bg-base-100 shadow-md">
+		<div class="card-body">
+			<h2 class="card-title text-lg">Promotion history</h2>
+			if data.EventsErr != nil {
+				<div role="alert" class="alert alert-error">
+					<span>Failed to load promotion history: { data.EventsErr.Error() }</span>
+				</div>
+			} else if len(data.Events) == 0 {
+				<p class="text-sm opacity-60">No promotion events recorded for this app.</p>
+			} else {
+				<ul class="timeline timeline-vertical timeline-compact">
+					for i, e := range data.Events {
+						<li>
+							if i > 0 {
+								<hr/>
+							}
+							<div class="timeline-start text-xs opacity-60">{ time.Unix(e.GetOccurredAt(), 0).UTC().Format(time.RFC3339) }</div>
+							<div class="timeline-middle"><span class="badge badge-soft badge-neutral badge-xs"></span></div>
+							<div class="timeline-end timeline-box text-sm">
+								{ promotionActionLabel(e.GetAction()) } — { actorDisplay(user, e.GetActor()) }
+								if e.GetReason() != "" {
+									, "{ e.GetReason() }"
+								}
+							</div>
+							if i < len(data.Events)-1 {
+								<hr/>
+							}
+						</li>
+					}
+				</ul>
+			}
+		</div>
+	</div>
+}

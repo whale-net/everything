@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "matrix",
-    srcs = ["matrix.go"],
+    srcs = [
+        "catalog.go",
+        "matrix.go",
+    ],
     importpath = "github.com/whale-net/everything/tools/app_registry/ui/matrix",
     visibility = ["//tools/app_registry/ui:__subpackages__"],
     deps = [

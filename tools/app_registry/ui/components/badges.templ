@@ -2,6 +2,7 @@ package components
 
 import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 // This file is the single source of truth (NFR-11) for the badge colour +
@@ -60,6 +61,37 @@ func provenanceLabel(p pb.ArtifactProvenance) (label, class string) {
 	default:
 		return "Unknown", "badge-warning"
 	}
+}
+
+// deployUnitLabel returns the display label + daisyUI badge modifier class
+// for a DEPLOY_UNIT value, matching the vocabulary the apps catalog (screen
+// 20) and app detail (screen 11) wireframes use: a Chart entity itself is
+// always "chart"; an App's own deploy_unit distinguishes a VIA_CHART app
+// ("image (via chart)") from a standalone-promotable one ("image") from a
+// build-only one ("none (build-only)", never deployed).
+func deployUnitLabel(isChart bool, u appmetapb.DeployUnit) (label, class string) {
+	if isChart {
+		return "chart", "badge-success"
+	}
+	switch u {
+	case appmetapb.DeployUnit_DEPLOY_UNIT_CHART:
+		return "image (via chart)", "badge-info"
+	case appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE:
+		return "image", "badge-success"
+	case appmetapb.DeployUnit_DEPLOY_UNIT_NONE:
+		return "none (build-only)", "badge-neutral"
+	default:
+		// Never render an unknown/partial state as healthy (NFR-6).
+		return "unknown", "badge-warning"
+	}
+}
+
+// DeployUnitBadge is the one place deploy unit renders anywhere in this UI
+// (catalog rows and the app detail header both call this rather than
+// re-deriving the label/colour pair).
+templ DeployUnitBadge(isChart bool, u appmetapb.DeployUnit) {
+	{{ label, class := deployUnitLabel(isChart, u) }}
+	<span class={ "badge badge-soft badge-sm", class }>{ label }</span>
 }
 
 // PromotabilityBadge is the one place promotability renders anywhere in

@@ -8,5 +8,6 @@ templ_library(
     deps = [
         "//libs/go/htmxauth",
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/appmeta/proto:appmetapb",
     ],
 )
