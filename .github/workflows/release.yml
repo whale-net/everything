@@ -141,7 +141,21 @@ jobs:
       with:
         fetch-depth: 0
         fetch-tags: true
-        
+
+    # No Setup Build Environment step here, deliberately (issue #597).
+    # release_helper_go's `plan` command does still shell out to `bazel
+    # query` + `bazel cquery` (ListAllApps in metadata.go) to discover
+    # every app_metadata target, and the runner has no prior Bazel cache --
+    # but that cold query already runs in ~60-90s (measured across recent
+    # runs), which is about what the Setup Build Environment step itself
+    # costs elsewhere in this workflow to download/restore (~40-60s, see
+    # e.g. the `release` job's per-leg timings). Adding it here would trade
+    # one cost for a similar one instead of saving anything, while also
+    # adding a GitHub Actions cache download -- the opposite of the network
+    # usage this issue was trying to cut. Bazel caching earns its keep only
+    # where an actual `bazel build` runs (build-release-tools,
+    # build-openapi-specs, release, release-helm-charts) -- see #621/#623
+    # for where that was verified empirically for the `release` job.
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
 
@@ -314,6 +328,10 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    # No Setup Build Environment here either, for the same reason as
+    # plan-release above (issue #597): this job's own ListAllApps call
+    # (bazel query + cquery) is cheap enough on a cold runner that the
+    # cache-download cost would be a wash, not a win.
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
 
@@ -928,6 +946,11 @@ jobs:
         fetch-depth: 0
         fetch-tags: true
 
+    # No Setup Build Environment here either, for the same reason as
+    # plan-release/plan-openapi-builds above (issue #597):
+    # create-combined-github-release-with-notes below also calls
+    # ListAllApps (bazel query + cquery), but on a cold runner that alone
+    # measures comparable to what a cache download here would cost.
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
 
