@@ -654,6 +654,91 @@ jobs:
           echo "Successfully released multiarch $FULL_APP_NAME $VERSION"
         fi
 
+    # Digest-idempotent tagging (issue #628; complements #617/#585/#600).
+    # release-multiarch above just pushed $VERSION's image unconditionally
+    # -- Bazel's image builds are content-addressed, so a no-op rebuild (no
+    # source change since the app's last release) produces an image digest
+    # byte-identical to whatever the most recent existing tag already
+    # points at. App Registry can never mark a duplicate-digest artifact
+    # "published" (see issue #617), so a real git tag/image that nothing
+    # can ever promote is exactly what unconditional tag creation used to
+    # produce here. This step decides whether that happened BEFORE this
+    # job mints a new tag or tells App Registry about a "new" version that
+    # was never actually built.
+    - name: Check image digest for no-op rebuild
+      if: ${{ github.event.inputs.dry_run == 'false' }}
+      id: digest-check
+      env:
+        APP: ${{ matrix.app }}
+        DOMAIN: ${{ matrix.domain }}
+        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
+        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+      run: |
+        FULL_APP_NAME="${DOMAIN}-${APP}"
+        TAG_NAME="${FULL_APP_NAME}.${VERSION}"
+        OWNER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+        REPO="ghcr.io/${OWNER}/${FULL_APP_NAME}"
+
+        # Most recent EXISTING tag for this app, excluding the tag this run
+        # would mint -- the "re-running the exact same version" case is
+        # already handled by "Create git tag for release"'s own
+        # `git rev-parse "$TAG_NAME"` check; this only looks at genuinely
+        # older tags to compare against.
+        PREV_TAG=$(git tag --sort=-version:refname --list "${FULL_APP_NAME}.v*" | grep -vFx "$TAG_NAME" | head -n1 || true)
+
+        DIGEST_UNCHANGED=false
+        EFFECTIVE_VERSION="$VERSION"
+        EFFECTIVE_TAG="$TAG_NAME"
+
+        if [[ -n "$PREV_TAG" ]]; then
+          PREV_VERSION="${PREV_TAG#${FULL_APP_NAME}.}"
+          # docker buildx imagetools inspect reads straight from the
+          # registry -- the same tool release-helm-charts already uses to
+          # resolve pinned image digests (see that job's "Record chart
+          # artifacts in App Registry" step). No new dependency needed.
+          # `|| true` on both: this step runs with the shell's default `-e`
+          # -o pipefail, and this step is NOT continue-on-error (its output
+          # gates real tag creation below) -- a transient registry hiccup
+          # here must fall through to "proceed with new tag" (the
+          # NEW_DIGEST/PREV_DIGEST-empty branch below), not abort the step
+          # and skip tag creation entirely.
+          NEW_DIGEST=$(docker buildx imagetools inspect "${REPO}:${VERSION}" 2>/dev/null | awk '/^Digest:/ {print $2; exit}') || true
+          PREV_DIGEST=$(docker buildx imagetools inspect "${REPO}:${PREV_VERSION}" 2>/dev/null | awk '/^Digest:/ {print $2; exit}') || true
+
+          if [[ -n "$NEW_DIGEST" && -n "$PREV_DIGEST" && "$NEW_DIGEST" == "$PREV_DIGEST" ]]; then
+            DIGEST_UNCHANGED=true
+            EFFECTIVE_VERSION="$PREV_VERSION"
+            EFFECTIVE_TAG="$PREV_TAG"
+            echo "::notice title=No-op rebuild ($FULL_APP_NAME)::${VERSION} has the same image digest ($NEW_DIGEST) as existing tag $PREV_TAG. Skipping new git tag and App Registry record -- reusing $PREV_TAG."
+          else
+            echo "Digest check for $FULL_APP_NAME: new($VERSION)=${NEW_DIGEST:-<unresolved>} prev($PREV_TAG)=${PREV_DIGEST:-<unresolved>} -- proceeding with new tag $TAG_NAME"
+          fi
+        else
+          echo "No previous tag found for $FULL_APP_NAME -- proceeding with new tag $TAG_NAME"
+        fi
+
+        echo "digest-unchanged=$DIGEST_UNCHANGED" >> "$GITHUB_OUTPUT"
+        echo "effective-version=$EFFECTIVE_VERSION" >> "$GITHUB_OUTPUT"
+        echo "effective-tag=$EFFECTIVE_TAG" >> "$GITHUB_OUTPUT"
+        echo "previous-tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+
+        # Written for the create-github-releases job below, which runs
+        # after this matrix has fanned in and only has plan-time (not
+        # per-leg) version info -- see that job's "Apply digest-check
+        # overrides to release matrix" step for why.
+        mkdir -p /tmp/digest-check
+        jq -n --arg domain "$DOMAIN" --arg app "$APP" --argjson unchanged "$DIGEST_UNCHANGED" --arg version "$EFFECTIVE_VERSION" \
+          '{domain: $domain, app: $app, digest_unchanged: $unchanged, effective_version: $version}' \
+          > "/tmp/digest-check/${DOMAIN}-${APP}.json"
+
+    - name: Upload digest-check result
+      if: ${{ github.event.inputs.dry_run == 'false' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: digest-check-${{ matrix.domain }}-${{ matrix.app }}
+        path: /tmp/digest-check/${{ matrix.domain }}-${{ matrix.app }}.json
+        if-no-files-found: warn
+
     # AR-7b (issue #558): publishing -> failed on the error path, so the
     # row doesn't sit as "publishing" until the reaper times it out. Gated
     # on the per-leg "Begin publish (image)" step above actually succeeding
@@ -677,8 +762,35 @@ jobs:
         reason: 'image push failed (workflow run ${{ github.run_id }}, attempt ${{ github.run_attempt }})'
         idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-fail
 
+    # Mirrors "Fail publish (image)" above, but for the opposite reason: the
+    # job is NOT failing -- "Check image digest for no-op rebuild" above
+    # just determined this run's image is byte-identical to an
+    # already-published version. "Begin publish (image)" earlier in this
+    # job already put $VERSION's row in 'publishing' before the push
+    # (AR-7b's ordering requirement -- see that step's comment); nothing
+    # below this point will ever record or publish that row (the tag isn't
+    # minted and "Record image artifact" is skipped too, both gated on
+    # digest-check below), so fail it explicitly here instead of leaving it
+    # for the stale-row reaper to eventually clean up as 'stale'.
+    - name: Fail abandoned publish (image, no-op rebuild) in App Registry
+      if: ${{ steps.digest-check.outputs.digest-unchanged == 'true' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-begin-publish.outcome == 'success' }}
+      id: app-registry-fail-publish-noop
+      continue-on-error: true
+      timeout-minutes: 5
+      uses: ./.github/actions/app-registry-fail-publish
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        kind: image
+        owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
+        version: ${{ matrix.version || needs.plan-release.outputs.version }}
+        reason: 'digest unchanged from existing tag ${{ steps.digest-check.outputs.previous-tag }} -- no-op rebuild, no new artifact to record (workflow run ${{ github.run_id }}, attempt ${{ github.run_attempt }})'
+        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-fail-noop
+
     - name: Create git tag for release
-      if: ${{ github.event.inputs.dry_run == 'false' }}
+      if: ${{ github.event.inputs.dry_run == 'false' && steps.digest-check.outputs.digest-unchanged != 'true' }}
       env:
         APP: ${{ matrix.app }}
         DOMAIN: ${{ matrix.domain }}
@@ -698,7 +810,7 @@ jobs:
         fi
 
     - name: Record image artifact in App Registry
-      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' }}
+      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' && steps.digest-check.outputs.digest-unchanged != 'true' }}
       id: app-registry-record-image
       continue-on-error: true
       timeout-minutes: 5
@@ -739,6 +851,7 @@ jobs:
         check "Assert apps/charts" "${{ steps.app-registry-assert.outcome }}"
         check "Begin publish (image)" "${{ steps.app-registry-begin-publish.outcome }}"
         check "Fail publish (image)" "${{ steps.app-registry-fail-publish.outcome }}"
+        check "Fail abandoned publish (image, no-op rebuild)" "${{ steps.app-registry-fail-publish-noop.outcome }}"
         check "Record image artifact" "${{ steps.app-registry-record-image.outcome }}"
         if [[ "$FAILED" -eq 1 ]]; then
           echo "One or more App Registry recording steps failed. The image release itself is NOT affected -- these steps never block a real push. See tools/app_registry/OPERATIONS.md."
@@ -758,10 +871,14 @@ jobs:
         # Use full domain-app format to avoid ambiguity
         FULL_APP_NAME="${DOMAIN}-${APP}"
         echo "Generating release notes for $FULL_APP_NAME version $VERSION"
-        
-        # Tag format uses domain-appname.version
-        TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
-        
+
+        # Tag format uses domain-appname.version -- reuse digest-check's
+        # effective tag (that step always runs before this one, gated on
+        # the same dry_run=='false' condition) so a no-op rebuild's notes
+        # reference the existing tag it reused rather than a version that
+        # was never minted.
+        TAG_NAME="${{ steps.digest-check.outputs.effective-tag }}"
+
         # Output domain for use in upload step
         echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
         
@@ -823,10 +940,54 @@ jobs:
         path: /tmp/openapi-specs
         merge-multiple: true
       continue-on-error: true
-      
-    - name: Create GitHub releases for all apps
+
+    # One file per matrix leg from the release job's "Upload digest-check
+    # result" step. This job fans back in from that matrix and only has
+    # plan-time version info (needs.plan-release.outputs), not each leg's
+    # own step outputs -- GitHub Actions doesn't propagate matrix step
+    # outputs to a downstream job -- so the per-leg digest-check verdict has
+    # to travel as an artifact instead.
+    - name: Download digest-check artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: digest-check-*
+        path: /tmp/digest-check
+        merge-multiple: true
+      continue-on-error: true
+
+    # For any app whose digest-check found a no-op rebuild, "Create git tag
+    # for release" never minted matrix.version's tag -- overriding its
+    # version here to the existing tag it reused stops the GitHub Release
+    # API below from auto-creating a lightweight tag for a version that was
+    # deliberately never released (see "Check image digest for no-op
+    # rebuild" in the release job for the full rationale).
+    - name: Apply digest-check overrides to release matrix
+      id: matrix-override
       env:
         MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+      run: |
+        OVERRIDDEN_MATRIX="$MATRIX"
+
+        if compgen -G "/tmp/digest-check/*.json" > /dev/null; then
+          for f in /tmp/digest-check/*.json; do
+            DOMAIN=$(jq -r '.domain' "$f")
+            APP=$(jq -r '.app' "$f")
+            UNCHANGED=$(jq -r '.digest_unchanged' "$f")
+            EFF_VERSION=$(jq -r '.effective_version' "$f")
+            if [[ "$UNCHANGED" == "true" ]]; then
+              echo "Overriding ${DOMAIN}-${APP} to reused version $EFF_VERSION (no-op rebuild)"
+              OVERRIDDEN_MATRIX=$(echo "$OVERRIDDEN_MATRIX" | jq -c \
+                --arg domain "$DOMAIN" --arg app "$APP" --arg version "$EFF_VERSION" \
+                '.include |= map(if .domain == $domain and .app == $app then .version = $version else . end)')
+            fi
+          done
+        fi
+
+        echo "matrix=$OVERRIDDEN_MATRIX" >> "$GITHUB_OUTPUT"
+
+    - name: Create GitHub releases for all apps
+      env:
+        MATRIX: ${{ steps.matrix-override.outputs.matrix }}
         VERSION: ${{ needs.plan-release.outputs.version }}
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
         GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
@@ -1162,6 +1323,78 @@ jobs:
         echo "Generated versioned charts:"
         ls -lh /tmp/helm-charts/
 
+    # Digest-idempotent tagging for charts (issue #628; same rationale as
+    # the image release job's "Check image digest for no-op rebuild" -- see
+    # that step's comment for the full writeup). Unlike images, chart
+    # packaging (above) and every App Registry / ChartMuseum / git-tag call
+    # below are separate steps in this same job, so this can run BEFORE any
+    # of them -- a no-op chart never gets a 'publishing' row opened in the
+    # first place, so there's no abandoned-row cleanup step needed here the
+    # way the image job needs "Fail abandoned publish (image, no-op
+    # rebuild)".
+    #
+    # Note this fires less often than the image check: a packaged chart's
+    # .tgz embeds its own version string (Chart.yaml, values.yaml imageTag)
+    # via packageChartWithVersion, so two DIFFERENT version numbers will
+    # almost never package to a byte-identical digest even when nothing
+    # meaningful changed. It's kept anyway for structural symmetry with the
+    # image fix and to safety-net a chart whose packaging stops embedding a
+    # version stamp; the vast majority of the reported bug (issue #617) is
+    # the image side above.
+    #
+    # Charts found to be no-op rebuilds have their .tgz moved out of
+    # /tmp/helm-charts/ into /tmp/helm-charts-noop/ -- every step below
+    # globs /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz per chart and already
+    # has a "file not found, skip this chart" path (it previously only
+    # existed to tolerate a genuine build failure), so removing the file
+    # here is what makes every downstream step (tag creation, Begin
+    # publish, Record chart artifacts, ChartMuseum upload) skip a no-op
+    # chart without any further plumbing.
+    - name: Check helm chart digests for no-op rebuilds
+      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
+      env:
+        CHARTS: ${{ steps.plan.outputs.charts }}
+        CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
+        CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
+      run: |
+        mkdir -p /tmp/helm-charts-noop
+
+        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
+        for CHART in "${CHART_ARRAY[@]}"; do
+          PUBLISHED_NAME="${CHART#helm-}"
+          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
+          if [[ ! -f "$CHART_FILE" ]]; then
+            echo "::warning::Could not find chart file for $CHART, skipping digest check"
+            continue
+          fi
+          CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
+          TAG_NAME="${CHART}.${CHART_VERSION}"
+
+          PREV_TAG=$(git tag --sort=-version:refname --list "${CHART}.v*" | grep -vFx "$TAG_NAME" | head -n1 || true)
+          if [[ -z "$PREV_TAG" ]]; then
+            echo "No previous tag found for $CHART -- proceeding with new tag $TAG_NAME"
+            continue
+          fi
+          PREV_VERSION="${PREV_TAG#${CHART}.}"
+
+          NEW_DIGEST="sha256:$(sha256sum "$CHART_FILE" | awk '{print $1}')"
+          PREV_DIGEST=""
+          PREV_TGZ=$(mktemp)
+          if curl -fsSL -u "${CHART_REPO_USER}:${CHART_REPO_PASS}" \
+              "${CHART_REPO_URL}/charts/${PUBLISHED_NAME}-${PREV_VERSION}.tgz" -o "$PREV_TGZ" 2>/dev/null; then
+            PREV_DIGEST="sha256:$(sha256sum "$PREV_TGZ" | awk '{print $1}')"
+          fi
+          rm -f "$PREV_TGZ"
+
+          if [[ -n "$PREV_DIGEST" && "$NEW_DIGEST" == "$PREV_DIGEST" ]]; then
+            echo "::notice title=No-op chart rebuild ($CHART)::${CHART_VERSION} packages byte-identical to existing tag $PREV_TAG. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing $PREV_TAG."
+            echo "$PREV_TAG" > "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason"
+            mv "$CHART_FILE" "/tmp/helm-charts-noop/"
+          else
+            echo "Digest check for $CHART: new($CHART_VERSION)=$NEW_DIGEST prev($PREV_TAG)=${PREV_DIGEST:-<unresolved>} -- proceeding with new tag $TAG_NAME"
+          fi
+        done
+
     # AR-7b (issue #558): Record chart build + Begin publish MOVED ahead of
     # the actual ChartMuseum push below -- see the image release job's
     # matching comment. Best-effort, same APP_REGISTRY_CICD_OPT_IN /
@@ -1222,7 +1455,11 @@ jobs:
           PUBLISHED_NAME="${CHART#helm-}"
           CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
           if [[ ! -f "$CHART_FILE" ]]; then
-            echo "::warning::Could not find chart file for $CHART, skipping App Registry begin-publish"
+            if [[ -f "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason" ]]; then
+              echo "ℹ️  Skipping App Registry begin-publish for $CHART -- no-op rebuild, reusing $(cat "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason")"
+            else
+              echo "::warning::Could not find chart file for $CHART, skipping App Registry begin-publish"
+            fi
             continue
           fi
           CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
@@ -1310,11 +1547,13 @@ jobs:
               
               echo "✅ Created and pushed tag: $TAG_NAME"
             fi
+          elif [[ -f "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason" ]]; then
+            echo "ℹ️  Skipping tag for $CHART -- no-op rebuild, reusing $(cat "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason") (see \"Check helm chart digests for no-op rebuilds\" step above)"
           else
             echo "⚠️ Warning: Could not find chart file for $CHART (looking for ${PUBLISHED_NAME}-*.tgz)"
           fi
         done
-        
+
         echo "✅ All helm chart tags created and pushed"
         
     - name: Publish charts to ChartMuseum
@@ -1327,9 +1566,18 @@ jobs:
         
         REPO_URL="$CHART_REPO_URL"
         
-        # Verify chart files exist before attempting upload
+        # Verify chart files exist before attempting upload. Zero files here
+        # is only benign when every planned chart was moved to
+        # /tmp/helm-charts-noop/ by "Check helm chart digests for no-op
+        # rebuilds" above (nothing new to publish) -- any other cause of
+        # zero files is a genuine build failure and should still fail loud.
         CHART_COUNT=$(ls -1 /tmp/helm-charts/*.tgz 2>/dev/null | wc -l)
+        NOOP_COUNT=$(ls -1 /tmp/helm-charts-noop/*.tgz 2>/dev/null | wc -l)
         if [ "$CHART_COUNT" -eq 0 ]; then
+          if [ "$NOOP_COUNT" -gt 0 ]; then
+            echo "ℹ️  No chart files to publish -- all $NOOP_COUNT planned chart(s) were no-op rebuilds (see \"Check helm chart digests for no-op rebuilds\" step above)."
+            exit 0
+          fi
           echo "❌ Error: No chart files found in /tmp/helm-charts/"
           exit 1
         fi
@@ -1464,7 +1712,11 @@ jobs:
           PUBLISHED_NAME="${CHART#helm-}"
           CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
           if [[ ! -f "$CHART_FILE" ]]; then
-            echo "::warning::Could not find chart file for $CHART, skipping App Registry recording"
+            if [[ -f "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason" ]]; then
+              echo "ℹ️  Skipping App Registry recording for $CHART -- no-op rebuild, reusing $(cat "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason")"
+            else
+              echo "::warning::Could not find chart file for $CHART, skipping App Registry recording"
+            fi
             continue
           fi
           CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
@@ -1609,4 +1861,10 @@ jobs:
       with:
         name: helm-charts-auto-versioned
         path: /tmp/helm-charts/*.tgz
-        if-no-files-found: error
+        # warn, not error: zero files here is expected (not a failure) when
+        # every planned chart was a no-op rebuild -- see "Check helm chart
+        # digests for no-op rebuilds" above. A genuine build failure is
+        # still caught earlier, by "Build helm charts with versioning"
+        # itself failing or by "Publish charts to ChartMuseum"'s
+        # CHART_COUNT/NOOP_COUNT check.
+        if-no-files-found: warn
