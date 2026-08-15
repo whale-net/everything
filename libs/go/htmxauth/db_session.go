@@ -20,6 +20,10 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// migration032 is a one-line reference to the owning migration file for use in
+// error messages that point the operator at the right schema change.
+const migration032 = "-- see manmanv2/migrate/migrations/032_ui_sessions.up.sql"
+
 // DBSessionManager is a session store backed by PostgreSQL.
 // The browser cookie contains only an opaque random session ID.
 // User info, access tokens, and encrypted refresh tokens are stored in ui_sessions.
@@ -59,16 +63,25 @@ func NewDBSessionManager(ctx context.Context, pool *pgxpool.Pool, secret, name s
 		sessionTTL: 24 * time.Hour,
 	}
 
+	// Boot-time preflight: verify the session table is accessible via its
+	// unqualified name (the same name every runtime query uses).  If this
+	// fails the operator gets a clear message instead of a silent cookie
+	// fallback after deploy looks "healthy".
+	if _, err := pool.Exec(ctx, "SELECT 1 FROM ui_sessions WHERE false"); err != nil {
+		panic(fmt.Sprintf("ui_sessions table is NOT accessible at startup — ensure migration %s has run", migration032))
+	}
+
 	go sm.cleanupLoop(ctx)
 	return sm
 }
 
 // userInfoRecord mirrors what we store as JSONB in the DB.
 type userInfoRecord struct {
-	Sub               string `json:"sub"`
-	PreferredUsername string `json:"preferred_username"`
-	Name              string `json:"name"`
-	Email             string `json:"email"`
+	Sub               string   `json:"sub"`
+	PreferredUsername string   `json:"preferred_username"`
+	Name              string   `json:"name"`
+	Email             string   `json:"email"`
+	Roles             []string `json:"roles,omitempty"`
 }
 
 // ── sessionStore interface ────────────────────────────────────────────────────
@@ -86,6 +99,7 @@ func (s *DBSessionManager) SetUserInfo(w http.ResponseWriter, r *http.Request, t
 		PreferredUsername: stringClaim(rawClaims, "preferred_username"),
 		Name:              stringClaim(rawClaims, "name"),
 		Email:             stringClaim(rawClaims, "email"),
+		Roles:             rolesFromClaims(rawClaims),
 	}
 	userInfoJSON, err := json.Marshal(rec)
 	if err != nil {
@@ -147,6 +161,7 @@ func (s *DBSessionManager) GetUserInfo(r *http.Request) (*UserInfo, error) {
 		Name:              rec.Name,
 		Email:             rec.Email,
 		RawClaims:         map[string]interface{}{},
+		Roles:             rec.Roles, // nil → absent; []string{} → empty
 	}, nil
 }
 
@@ -355,6 +370,31 @@ func generateSessionID() (string, error) {
 func stringClaim(claims map[string]interface{}, key string) string {
 	v, _ := claims[key].(string)
 	return v
+}
+
+// rolesFromClaims extracts realm_access.roles from raw ID-token claims.
+// Returns nil when the claim is absent or empty (len == 0), matching Go's
+// json.Unmarshal semantics so that "persist → reload" preserves nil vs [] distinction.
+func rolesFromClaims(rawClaims map[string]interface{}) []string {
+	if rawClaims == nil {
+		return nil
+	}
+	ra, ok := rawClaims["realm_access"]
+	if !ok {
+		return nil
+	}
+	obj, ok := ra.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	roles, ok := obj["roles"].([]string)
+	if !ok {
+		return nil
+	}
+	if len(roles) == 0 {
+		return roles // non-nil empty slice — claim was present but empty
+	}
+	return roles
 }
 
 // cleanupLoop deletes expired sessions hourly until ctx is cancelled.

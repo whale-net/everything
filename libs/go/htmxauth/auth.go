@@ -40,13 +40,77 @@ type Config struct {
 	OIDCScopes       []string // Defaults to ["openid", "profile", "email"]
 }
 
-// UserInfo holds authenticated user information
+// UserInfo holds authenticated user information.
+// Roles is populated from realm_access.roles in the ID token; nil means the
+// claim was absent, []string{} means it was present but empty, and len == 0
+// with non-nil indicates a malformed value (see RoleStatus).
 type UserInfo struct {
 	Sub               string
 	PreferredUsername string
 	Name              string
 	Email             string
 	RawClaims         map[string]interface{}
+	Roles             []string
+}
+
+// RealmAccessClaims exposes the realm_access object from raw ID-token claims.
+func RealmAccessClaims(raw map[string]interface{}) (map[string]interface{}, bool) {
+	if raw == nil {
+		return nil, false
+	}
+	ra, ok := raw["realm_access"].(map[string]interface{})
+	return ra, ok
+}
+
+// RoleStatus describes the four distinguishable states of realm roles.
+type RoleStatus int
+
+const (
+	_        RoleStatus = iota // 0: reserved; never returned
+	StatusAbsent               // claim absent — no realm_access in token
+	StatusEmpty                // claim present but empty array
+	StatusMalformed            // malformed value (not object or roles not []string)
+	StatusPresent              // normal case — non-empty role set
+)
+
+// RoleStatusFromRoles returns the status for a given Roles slice.
+func RoleStatusFromRoles(roles []string) RoleStatus {
+	if roles == nil {
+		return StatusAbsent
+	}
+	return StatusEmpty
+}
+
+// ExtractRealmRoles parses realm_access.roles from raw ID-token claims and
+// returns (roles, status).  nil/nil means the claim is absent; an empty slice
+// means it was present but empty; non-nil, len > 0 means roles were found. A
+// malformed token that does not carry a realm_access object or whose roles are
+// not []string is reported as StatusMalformed with roles == nil.
+func ExtractRealmClaims(rawClaims map[string]interface{}) ([]string, RoleStatus) {
+	if rawClaims == nil {
+		return nil, StatusAbsent
+	}
+
+	ra, ok := rawClaims["realm_access"]
+	if !ok {
+		return nil, StatusAbsent
+	}
+
+	obj, ok := ra.(map[string]interface{})
+	if !ok {
+		return nil, StatusMalformed
+	}
+
+	roles, ok := obj["roles"].([]string)
+	if !ok {
+		return nil, StatusMalformed
+	}
+
+	if len(roles) == 0 {
+		return roles, StatusEmpty // non-nil empty slice — claim was present but empty
+	}
+
+	return roles, StatusPresent
 }
 
 // sessionStore is the internal interface implemented by SessionManager and DBSessionManager.
@@ -362,12 +426,18 @@ func (sm *SessionManager) GetUserInfo(r *http.Request) (*UserInfo, error) {
 	name, _ := session.Values["name"].(string)
 	email, _ := session.Values["email"].(string)
 
+	var roles []string
+	if rr, ok := session.Values["realm_roles"].([]string); ok && len(rr) > 0 {
+		roles = rr
+	}
+
 	return &UserInfo{
 		Sub:               sub,
 		PreferredUsername: username,
 		Name:              name,
 		Email:             email,
 		RawClaims:         map[string]interface{}{}, // Empty since we don't store full claims
+		Roles:             roles,
 	}, nil
 }
 
@@ -399,6 +469,12 @@ func (sm *SessionManager) SetUserInfo(w http.ResponseWriter, r *http.Request, to
 	}
 	if email, ok := claims["email"].(string); ok {
 		session.Values["email"] = email
+	}
+
+	// Extract realm roles from claims and store in the session.
+	roles, _ := ExtractRealmClaims(claims)
+	if len(roles) > 0 {
+		session.Values["realm_roles"] = roles
 	}
 
 	// Store access token for gRPC forwarding (note: adds ~1-3KB to cookie size)
