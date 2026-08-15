@@ -38,6 +38,7 @@ func NewRootCmd() *cobra.Command {
 		newCreateCombinedGithubReleaseCmd(),
 		newManifestSetCmd(),
 		newReadChartLockfileCmd(),
+		newPackageAssetsCmd(),
 	)
 	return c
 }

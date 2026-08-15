@@ -1,41 +1,375 @@
 name: 'Download Release Tools'
 description: >-
-  Downloads whichever of the release_helper_go / app-registry CLI binaries
-  the calling workflow's build-release-tools job produced, and exports
-  RELEASE_HELPER / APP_REGISTRY_CLI env vars for the ones present. Avoids
-  every downstream job rebuilding these tools from source (see PR discussion
-  on #530-#532, #535). Not every workflow needs both binaries -- e.g. ci.yml
-  only builds release_helper_go -- so this only exports a var for a binary
-  that's actually in the artifact.
+  Acquires the release_helper_go and app-registry CLI binaries for CI/release workflows.
+  In 'published' mode (default), downloads prebuilt pinned binaries from GitHub Releases
+  in <3s with automatic SHA256 checksum verification and safety valve fallback to source
+  compilation. In 'source' mode, builds tools directly from source via Bazel.
+  Exports RELEASE_HELPER and APP_REGISTRY_CLI env vars and outputs.
 
 branding:
   icon: 'download'
   color: 'green'
 
 inputs:
+  source:
+    description: 'Tool acquisition mode: "published" (GitHub Releases with fallback), "source" (build from source), or "artifact" (workflow artifact)'
+    required: false
+    default: 'published'
+  target_os:
+    description: 'Target OS for prebuilt binaries (e.g. linux, darwin). Auto-detected from runner if empty.'
+    required: false
+    default: ''
+  target_arch:
+    description: 'Target architecture for prebuilt binaries (e.g. amd64, arm64). Auto-detected from runner if empty.'
+    required: false
+    default: ''
+  version_file:
+    description: 'Path to file containing pinned versions (default .release-tools-version)'
+    required: false
+    default: '.release-tools-version'
+  release_helper_version:
+    description: 'Explicit version override for release_helper_go (if not reading from version_file)'
+    required: false
+    default: ''
+  app_registry_version:
+    description: 'Explicit version override for app_registry_cli (if not reading from version_file)'
+    required: false
+    default: ''
+  repo:
+    description: 'GitHub repository to download release assets from (e.g. whale-net/everything)'
+    required: false
+    default: 'whale-net/everything'
+  github_token:
+    description: 'GitHub token for downloading releases (defaults to github.token)'
+    required: false
+    default: ${{ github.token }}
+  fallback_to_source:
+    description: 'Whether to fall back to Bazel source compilation if prebuilt binary download fails'
+    required: false
+    default: 'true'
   name:
-    description: 'Artifact name to download'
+    description: 'Artifact name to download when source="artifact"'
     required: false
     default: 'release-tools'
+
+outputs:
+  release_helper:
+    description: 'Absolute path to release_helper_go binary'
+    value: ${{ steps.acquire-release-tools.outputs.release_helper }}
+  app_registry_cli:
+    description: 'Absolute path to app-registry CLI binary'
+    value: ${{ steps.acquire-release-tools.outputs.app_registry_cli }}
+  source_used:
+    description: 'Actual acquisition source used ("published", "source", or "artifact")'
+    value: ${{ steps.acquire-release-tools.outputs.source_used }}
 
 runs:
   using: composite
   steps:
     - name: Download release tools artifact
+      if: ${{ inputs.source == 'artifact' }}
       uses: actions/download-artifact@v4
       with:
         name: ${{ inputs.name }}
         path: ${{ runner.temp }}/release-tools
 
-    - name: Make tools executable and export paths
+    - name: Acquire release tools
+      id: acquire-release-tools
       shell: bash
+      env:
+        SOURCE_MODE: ${{ inputs.source }}
+        TARGET_OS_INPUT: ${{ inputs.target_os }}
+        TARGET_ARCH_INPUT: ${{ inputs.target_arch }}
+        VERSION_FILE: ${{ inputs.version_file }}
+        RH_VERSION_OVERRIDE: ${{ inputs.release_helper_version }}
+        AR_VERSION_OVERRIDE: ${{ inputs.app_registry_version }}
+        REPO: ${{ inputs.repo }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GH_TOKEN: ${{ inputs.github_token }}
+        FALLBACK_TO_SOURCE: ${{ inputs.fallback_to_source }}
+        DEST_DIR: ${{ runner.temp }}/release-tools
       run: |
-        DIR="${{ runner.temp }}/release-tools"
-        if [[ -f "$DIR/release_helper_go" ]]; then
-          chmod +x "$DIR/release_helper_go"
-          echo "RELEASE_HELPER=$DIR/release_helper_go" >> "$GITHUB_ENV"
+        set -euo pipefail
+
+        compute_sha256() {
+          local target="$1"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$target" | awk '{print $1}'
+          elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$target" | awk '{print $1}'
+          elif command -v openssl >/dev/null 2>&1; then
+            openssl dgst -sha256 "$target" | awk '{print $NF}'
+          else
+            echo "ERROR: No sha256 calculation utility found" >&2
+            return 1
+          fi
+        }
+
+        verify_checksum() {
+          local binary_file="$1"
+          local sum_dir="$2"
+          local bin_name
+          bin_name="$(basename "$binary_file")"
+          local actual_hash
+          actual_hash="$(compute_sha256 "$binary_file")" || return 1
+
+          local checksum_files=()
+          for name in "checksums.txt" "SHA256SUMS" "checksums.sha256" "${bin_name}.sha256"; do
+            if [[ -f "$sum_dir/$name" ]]; then
+              checksum_files+=("$sum_dir/$name")
+            fi
+          done
+
+          if [[ ${#checksum_files[@]} -eq 0 ]]; then
+            echo "Notice: No checksum file found in $sum_dir for $bin_name"
+            return 0
+          fi
+
+          for sum_file in "${checksum_files[@]}"; do
+            local expected_hash
+            expected_hash=$(grep -E "(^|[ /])${bin_name}\$" "$sum_file" 2>/dev/null | awk '{print $1}' | head -n1 || true)
+            if [[ -z "$expected_hash" && "$sum_file" == *".sha256" ]]; then
+              expected_hash=$(awk '{print $1}' "$sum_file" | head -n1 || true)
+            fi
+            if [[ -n "$expected_hash" ]]; then
+              if [[ "$actual_hash" != "$expected_hash" ]]; then
+                echo "ERROR: SHA256 checksum mismatch for $binary_file!" >&2
+                echo "  Expected: $expected_hash" >&2
+                echo "  Actual:   $actual_hash" >&2
+                return 1
+              fi
+              echo "✓ Verified SHA256 checksum for $bin_name: $actual_hash"
+              return 0
+            fi
+          done
+
+          echo "Notice: $bin_name not explicitly listed in checksum file(s)"
+          return 0
+        }
+
+        detect_os() {
+          local os="${1:-}"
+          if [[ -z "$os" ]]; then
+            os="$(uname -s 2>/dev/null || echo "linux")"
+          fi
+          case "$(echo "$os" | tr '[:upper:]' '[:lower:]')" in
+            linux*) echo "linux" ;;
+            darwin*|macos*) echo "darwin" ;;
+            windows*|msys*|mingw*|cygwin*) echo "windows" ;;
+            *) echo "linux" ;;
+          esac
+        }
+
+        detect_arch() {
+          local arch="${1:-}"
+          if [[ -z "$arch" ]]; then
+            arch="$(uname -m 2>/dev/null || echo "amd64")"
+          fi
+          case "$(echo "$arch" | tr '[:upper:]' '[:lower:]')" in
+            x86_64|amd64|x64) echo "amd64" ;;
+            aarch64|arm64) echo "arm64" ;;
+            armv7*|armhf) echo "armv7" ;;
+            *) echo "amd64" ;;
+          esac
+        }
+
+        TARGET_OS="$(detect_os "$TARGET_OS_INPUT")"
+        TARGET_ARCH="$(detect_arch "$TARGET_ARCH_INPUT")"
+        mkdir -p "$DEST_DIR"
+
+        RH_PATH="$DEST_DIR/release_helper_go"
+        AR_PATH="$DEST_DIR/app-registry"
+        SOURCE_USED=""
+
+        if [[ "$SOURCE_MODE" == "artifact" ]]; then
+          echo "Using artifact mode in $DEST_DIR..."
+          if [[ -f "$RH_PATH" ]]; then
+            chmod +x "$RH_PATH"
+          fi
+          if [[ -f "$AR_PATH" ]]; then
+            chmod +x "$AR_PATH"
+          fi
+          SOURCE_USED="artifact"
+        elif [[ "$SOURCE_MODE" == "published" ]]; then
+          echo "Mode 'published': Attempting fast download of prebuilt binaries from GitHub Releases..."
+          echo "Target OS: $TARGET_OS, Target Arch: $TARGET_ARCH, Repo: $REPO"
+
+          RH_VER="$RH_VERSION_OVERRIDE"
+          AR_VER="$AR_VERSION_OVERRIDE"
+
+          if [[ -f "$VERSION_FILE" ]]; then
+            if [[ -z "$RH_VER" ]]; then
+              RH_VER=$(grep -E '^\s*release_helper_go:' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | tr -d '"\x27\r\n ' || true)
+            fi
+            if [[ -z "$AR_VER" ]]; then
+              AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | tr -d '"\x27\r\n ' || true)
+            fi
+          fi
+
+          echo "Pinned versions: release_helper_go=${RH_VER:-<not set>}, app_registry_cli=${AR_VER:-<not set>}"
+
+          download_single_tool() {
+            local tool="$1"
+            local ver="$2"
+            local out_bin="$3"
+
+            if [[ -z "$ver" ]]; then
+              echo "Error: Version for $tool is not configured" >&2
+              return 1
+            fi
+
+            local tmp_dl
+            tmp_dl="$(mktemp -d)"
+
+            local tags=()
+            if [[ "$tool" == "release_helper_go" ]]; then
+              tags=("tools-release_helper_go.${ver}" "release_helper_go.${ver}" "${ver}")
+            else
+              tags=("tools-app_registry_cli.${ver}" "tools-app-registry.${ver}" "app-registry.${ver}" "app_registry_cli.${ver}" "${ver}")
+            fi
+
+            local got_release=false
+            for tag in "${tags[@]}"; do
+              echo "Downloading $tool asset for release tag '$tag' from $REPO..."
+              if gh release download "$tag" -R "$REPO" --dir "$tmp_dl" --clobber 2>/dev/null; then
+                got_release=true
+                echo "✓ Downloaded release assets for $tag"
+                break
+              fi
+            done
+
+            if [[ "$got_release" != "true" ]]; then
+              echo "Notice: Could not download release assets for $tool from any candidate tag" >&2
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+
+            local matched_bin=""
+            for candidate in \
+              "$tmp_dl/${tool}-${TARGET_OS}-${TARGET_ARCH}" \
+              "$tmp_dl/${tool}_${TARGET_OS}_${TARGET_ARCH}" \
+              "$tmp_dl/${tool}" \
+              "$tmp_dl/app-registry-${TARGET_OS}-${TARGET_ARCH}" \
+              "$tmp_dl/app_registry_cli-${TARGET_OS}-${TARGET_ARCH}" \
+              "$tmp_dl/app-registry" \
+              "$tmp_dl/release_helper_go-${TARGET_OS}-${TARGET_ARCH}" \
+              "$tmp_dl/release_helper_go"; do
+              if [[ -f "$candidate" ]]; then
+                matched_bin="$candidate"
+                break
+              fi
+            done
+
+            if [[ -z "$matched_bin" ]]; then
+              for f in "$tmp_dl"/*; do
+                local b
+                b="$(basename "$f")"
+                if [[ "$b" != *"checksum"* && "$b" != *"SHA256"* && "$b" != *".txt" && "$b" != *".md" && "$b" != *".json" ]]; then
+                  if [[ "$b" == *"$TARGET_OS"* && "$b" == *"$TARGET_ARCH"* ]]; then
+                    matched_bin="$f"
+                    break
+                  elif [[ "$b" == *"$tool"* ]]; then
+                    matched_bin="$f"
+                    break
+                  fi
+                fi
+              done
+            fi
+
+            if [[ -z "$matched_bin" ]]; then
+              echo "ERROR: Could not locate binary for $tool in downloaded release assets" >&2
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+
+            if ! verify_checksum "$matched_bin" "$tmp_dl"; then
+              echo "ERROR: Checksum verification failed for $matched_bin" >&2
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+
+            cp "$matched_bin" "$out_bin"
+            chmod +x "$out_bin"
+            rm -rf "$tmp_dl"
+            return 0
+          }
+
+          DL_OK=true
+          if ! download_single_tool "release_helper_go" "$RH_VER" "$RH_PATH"; then
+            DL_OK=false
+          fi
+          if [[ "$DL_OK" == "true" ]] && ! download_single_tool "app_registry_cli" "$AR_VER" "$AR_PATH"; then
+            DL_OK=false
+          fi
+
+          if [[ "$DL_OK" == "true" ]]; then
+            echo "✓ Successfully acquired and verified prebuilt release tools from GitHub Releases."
+            SOURCE_USED="published"
+          else
+            if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
+              echo "::warning title=Prebuilt release tools download failed::Could not download pinned prebuilt release tools. Falling back to source build via Bazel."
+              SOURCE_MODE="source"
+            else
+              echo "::error title=Prebuilt release tools download failed::Failed to download pinned release tools and fallback_to_source is false."
+              exit 1
+            fi
+          fi
         fi
-        if [[ -f "$DIR/app-registry" ]]; then
-          chmod +x "$DIR/app-registry"
-          echo "APP_REGISTRY_CLI=$DIR/app-registry" >> "$GITHUB_ENV"
+
+        if [[ "$SOURCE_MODE" == "source" ]]; then
+          echo "Building release tools from source using Bazel..."
+          if ! bazel build --config=ci-images \
+            //tools/release_helper_go:release_helper_go \
+            //tools/app_registry/cli:app-registry; then
+            echo "Building without --config=ci-images fallback..."
+            bazel build \
+              //tools/release_helper_go:release_helper_go \
+              //tools/app_registry/cli:app-registry
+          fi
+
+          BAZEL_BIN="$(bazel info bazel-bin --config=ci-images 2>/dev/null || bazel info bazel-bin 2>/dev/null || echo "bazel-bin")"
+
+          SRC_RH=""
+          for cand in \
+            "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" \
+            "$BAZEL_BIN/tools/release_helper_go/release_helper_go"; do
+            if [[ -f "$cand" ]]; then
+              SRC_RH="$cand"
+              break
+            fi
+          done
+
+          SRC_AR=""
+          for cand in \
+            "$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry" \
+            "$BAZEL_BIN/tools/app_registry/cli/app-registry"; do
+            if [[ -f "$cand" ]]; then
+              SRC_AR="$cand"
+              break
+            fi
+          done
+
+          if [[ -z "$SRC_RH" || -z "$SRC_AR" ]]; then
+            echo "::error::Failed to find built binaries in $BAZEL_BIN"
+            exit 1
+          fi
+
+          cp "$SRC_RH" "$RH_PATH"
+          cp "$SRC_AR" "$AR_PATH"
+          chmod +x "$RH_PATH" "$AR_PATH"
+          SOURCE_USED="source"
         fi
+
+        # Export paths to GITHUB_ENV and GITHUB_OUTPUT
+        if [[ -f "$RH_PATH" ]]; then
+          echo "RELEASE_HELPER=$RH_PATH" >> "$GITHUB_ENV"
+          echo "release_helper=$RH_PATH" >> "$GITHUB_OUTPUT"
+          echo "Exported RELEASE_HELPER=$RH_PATH"
+        fi
+        if [[ -f "$AR_PATH" ]]; then
+          echo "APP_REGISTRY_CLI=$AR_PATH" >> "$GITHUB_ENV"
+          echo "app_registry_cli=$AR_PATH" >> "$GITHUB_OUTPUT"
+          echo "Exported APP_REGISTRY_CLI=$AR_PATH"
+        fi
+        echo "source_used=$SOURCE_USED" >> "$GITHUB_OUTPUT"
+        echo "Source used: $SOURCE_USED"

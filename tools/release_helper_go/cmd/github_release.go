@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
 type ghReleasePayload struct {
@@ -109,6 +111,13 @@ func (c *ghReleaseClient) uploadAsset(releaseID int, filePath, assetName string)
 		return fmt.Errorf("read asset %s: %w", filePath, err)
 	}
 
+	contentType := "application/octet-stream"
+	if strings.HasSuffix(assetName, ".json") {
+		contentType = "application/json"
+	} else if strings.HasSuffix(assetName, ".txt") || assetName == "SHA256SUMS" {
+		contentType = "text/plain"
+	}
+
 	url := fmt.Sprintf(
 		"https://uploads.github.com/repos/%s/%s/releases/%d/assets?name=%s",
 		c.owner, c.repo, releaseID, assetName,
@@ -119,21 +128,78 @@ func (c *ghReleaseClient) uploadAsset(releaseID int, filePath, assetName string)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 
-	uploadClient := &http.Client{Timeout: 60 * time.Second}
+	uploadClient := &http.Client{Timeout: 120 * time.Second}
 	resp, err := uploadClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 201 {
-		var errBody map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
-		return fmt.Errorf("upload asset %s: HTTP %d", assetName, resp.StatusCode)
+	if resp.StatusCode == 201 {
+		fmt.Printf("✓ Uploaded asset: %s\n", assetName)
+		return nil
 	}
-	fmt.Printf("✓ Uploaded asset: %s\n", assetName)
+	if resp.StatusCode == 422 {
+		fmt.Printf("ℹ Asset %s already exists on release %d, skipping\n", assetName, releaseID)
+		return nil
+	}
+	var errBody map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&errBody) //nolint:errcheck
+	return fmt.Errorf("upload asset %s: HTTP %d", assetName, resp.StatusCode)
+}
+
+// recordPublishedArtifact records a published binary or firmware artifact in App Registry.
+func recordPublishedArtifact(ctx context.Context, warn func(string), meta AppMetadata, version, digest, repoOwner, repoName, buildID string) error {
+	if defaultEnv("APP_REGISTRY_CICD_OPT_IN") != "true" {
+		return nil
+	}
+	var kind pb.ArtifactKind
+	switch meta.AppType {
+	case "firmware":
+		kind = pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE
+	case "cli", "binary":
+		kind = pb.ArtifactKind_ARTIFACT_KIND_BINARY
+	default:
+		return nil
+	}
+
+	if repoOwner == "" {
+		repoOwner = "whale-net"
+	}
+	if repoName == "" {
+		repoName = "everything"
+	}
+	repository := fmt.Sprintf("github.com/%s/%s", repoOwner, repoName)
+	if digest != "" && !strings.HasPrefix(digest, "sha256:") {
+		digest = "sha256:" + digest
+	}
+
+	idempotencyKey := fmt.Sprintf("%s-%s-%s", buildID, meta.FullName(), strings.ToLower(kind.String()))
+	if buildID == "" {
+		idempotencyKey = fmt.Sprintf("%s-%s-%s", meta.FullName(), version, strings.ToLower(kind.String()))
+	}
+
+	req := &pb.RecordArtifactRequest{
+		BuildId:        buildID,
+		Kind:           kind,
+		OwnerFullName:  meta.FullName(),
+		Repository:     repository,
+		Version:        version,
+		Digest:         digest,
+		PublishedAt:    time.Now().Unix(),
+		IdempotencyKey: idempotencyKey,
+	}
+
+	resp, err := defaultArtifactRecorder.RecordArtifact(ctx, req)
+	if err != nil {
+		warn(fmt.Sprintf("App Registry record artifact skipped (registry error): %v", err))
+		return nil
+	}
+	if resp != nil && resp.Artifact != nil {
+		fmt.Printf("✓ Recorded %s artifact in App Registry: %s (id: %s)\n", meta.AppType, meta.FullName(), resp.Artifact.ArtifactId)
+	}
 	return nil
 }
 
@@ -146,6 +212,7 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 		apps            string
 		releaseNotesDir string
 		openapiSpecsDir string
+		assetsDir       string
 	)
 
 	cmd := &cobra.Command{
@@ -314,6 +381,53 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 						}
 					}
 				}
+
+				// Upload release assets (binaries, checksums) if present.
+				var primaryDigest string
+				candidateAssetDirs := []string{}
+				if assetsDir != "" {
+					candidateAssetDirs = append(candidateAssetDirs,
+						filepath.Join(assetsDir, fullName),
+						filepath.Join(assetsDir, meta.Name),
+						assetsDir,
+					)
+				}
+				candidateAssetDirs = append(candidateAssetDirs,
+					filepath.Join(os.TempDir(), "release-assets", fullName),
+					filepath.Join(os.TempDir(), "release-assets", meta.Name),
+				)
+
+				for _, ad := range candidateAssetDirs {
+					entries, readErr := os.ReadDir(ad)
+					if readErr == nil && len(entries) > 0 {
+						for _, e := range entries {
+							if e.IsDir() {
+								continue
+							}
+							filePath := filepath.Join(ad, e.Name())
+							if releaseResp != nil && releaseResp.ID != 0 {
+								if uploadErr := gh.uploadAsset(releaseResp.ID, filePath, e.Name()); uploadErr != nil {
+									fmt.Fprintf(cmd.ErrOrStderr(), "⚠ Failed to upload asset %s for %s: %v\n", e.Name(), fullName, uploadErr)
+								}
+							}
+							if primaryDigest == "" && !strings.Contains(e.Name(), "checksum") && !strings.Contains(e.Name(), "SHA256") {
+								if hash, _, err := computeFileSHA256(filePath); err == nil {
+									primaryDigest = hash
+								}
+							}
+						}
+						break
+					}
+				}
+
+				// Record in App Registry if opt-in is enabled
+				if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
+					warn := func(msg string) { fmt.Fprintf(cmd.ErrOrStderr(), "::warning::%s\n", msg) }
+					buildID := defaultEnv("APP_REGISTRY_BUILD_ID")
+					if recordErr := recordPublishedArtifact(cmd.Context(), warn, meta, appVer, primaryDigest, owner, repo, buildID); recordErr != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "⚠ App Registry record failed for %s: %v\n", fullName, recordErr)
+					}
+				}
 			}
 
 			if len(failed) > 0 {
@@ -332,5 +446,6 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&apps, "apps", "", "Comma-separated list of apps")
 	cmd.Flags().StringVar(&releaseNotesDir, "release-notes-dir", "", "Directory containing pre-generated release notes")
 	cmd.Flags().StringVar(&openapiSpecsDir, "openapi-specs-dir", "", "Directory containing OpenAPI spec files")
+	cmd.Flags().StringVar(&assetsDir, "assets-dir", "", "Directory containing release assets to upload")
 	return cmd
 }
