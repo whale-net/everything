@@ -182,6 +182,8 @@ func TestParseArtifactKind_PromoteRollbackFlag(t *testing.T) {
 	}{
 		{in: "image", want: pb.ArtifactKind_ARTIFACT_KIND_IMAGE},
 		{in: "chart", want: pb.ArtifactKind_ARTIFACT_KIND_CHART},
+		{in: "binary", want: pb.ArtifactKind_ARTIFACT_KIND_BINARY},
+		{in: "firmware", want: pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE},
 		{in: "bogus", wantErr: true},
 		{in: "", wantErr: true},
 	}

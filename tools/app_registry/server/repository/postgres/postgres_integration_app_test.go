@@ -1325,8 +1325,8 @@ func TestMigration010DownRestoresPreMigrationShape(t *testing.T) {
 	defer sqlDB.Close()
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	if err := runner.Up(); err != nil {
-		t.Fatalf("apply all migrations including 010: %v", err)
+	if err := runner.Steps(10); err != nil {
+		t.Fatalf("apply migrations 001-010: %v", err)
 	}
 
 	// Write real post-010 data through the actual repository, not raw SQL,
