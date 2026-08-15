@@ -115,5 +115,29 @@ spec:
               value: {{ $value | quote }}
             {{- end }}
             {{- end }}
+            {{- if $app.secretEnv }}
+            # Secret-sourced environment variables (valueFrom.secretKeyRef)
+            {{- range $app.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .key }}
+            {{- end }}
+            {{- end }}
+          {{- if $app.envFrom }}
+          # Bulk env-var sources (envFrom)
+          envFrom:
+            {{- range $app.envFrom }}
+            {{- if .secretRef }}
+            - secretRef:
+                name: {{ .secretRef }}
+            {{- end }}
+            {{- if .configMapRef }}
+            - configMapRef:
+                name: {{ .configMapRef }}
+            {{- end }}
+            {{- end }}
+          {{- end }}
 {{- end }}
 {{- end }}

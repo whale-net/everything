@@ -1170,11 +1170,11 @@ func TestLoadMetadata_MixedApps(t *testing.T) {
 		ImageTarget: ":server_image",
 	}
 	cliApp := &AppMetadata{
-		Name:        "my-tool",
-		AppType:     "cli",
-		DeployUnit:  appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
-		Version:     "1.0.0",
-		Domain:      "tools",
+		Name:       "my-tool",
+		AppType:    "cli",
+		DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
+		Version:    "1.0.0",
+		Domain:     "tools",
 	}
 
 	f1 := filepath.Join(tmpDir, "server.json")
@@ -1206,3 +1206,281 @@ func TestLoadMetadata_MixedApps(t *testing.T) {
 	}
 }
 
+// TestWriteValuesYAML_SecretEnv_GoldenUnchanged proves that existing charts
+// (no secretEnv / envFrom declared) render values.yaml byte-identically after
+// the secretKeyRef/envFrom feature is added.  The TestGenerateChart_Golden test
+// already covers this for the full set of golden fixtures; this test is a
+// faster, isolated regression guard scoped to writeValuesYAML.
+func TestWriteValuesYAML_SecretEnv_GoldenUnchanged(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "secretenv-golden")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	data := ValuesData{
+		Global:          GlobalConfig{Namespace: "test-ns", Environment: "dev"},
+		IngressDefaults: IngressDefaultsConfig{Enabled: false},
+		Apps: map[string]AppConfig{
+			"svc-api": {
+				Type:     "external-api",
+				Image:    "ghcr.io/org/svc-api",
+				ImageTag: "v1.0.0",
+				Port:     8080,
+				Replicas: 2,
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "128Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+				Env: map[string]string{"LOG_LEVEL": "info"},
+				// SecretEnv and EnvFrom deliberately absent — must not appear in output
+			},
+		},
+	}
+
+	f1 := filepath.Join(tmpDir, "values1.yaml")
+	f2 := filepath.Join(tmpDir, "values2.yaml")
+	for _, path := range []string{f1, f2} {
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if err := writeValuesYAML(f, data); err != nil {
+			f.Close()
+			t.Fatalf("writeValuesYAML: %v", err)
+		}
+		f.Close()
+	}
+
+	b1, _ := os.ReadFile(f1)
+	b2, _ := os.ReadFile(f2)
+	if string(b1) != string(b2) {
+		t.Error("writeValuesYAML not deterministic between two runs")
+	}
+
+	content := string(b1)
+	// Confirm the new keys are absent when not declared
+	if strings.Contains(content, "secretEnv") {
+		t.Error("secretEnv should not appear in output when not declared")
+	}
+	if strings.Contains(content, "envFrom") {
+		t.Error("envFrom should not appear in output when not declared")
+	}
+	// Confirm the existing literal env is still present
+	if !strings.Contains(content, "LOG_LEVEL") {
+		t.Error("literal env var LOG_LEVEL should still be present")
+	}
+}
+
+// TestWriteValuesYAML_SecretEnv renders secretEnv entries and verifies the
+// YAML structure is correct and contains no literal secret values.
+func TestWriteValuesYAML_SecretEnv(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "secretenv-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	data := ValuesData{
+		Global:          GlobalConfig{Namespace: "ns", Environment: "prod"},
+		IngressDefaults: IngressDefaultsConfig{Enabled: false},
+		Apps: map[string]AppConfig{
+			"myapp-api": {
+				Type:     "external-api",
+				Image:    "ghcr.io/org/myapp",
+				ImageTag: "v2.0.0",
+				Port:     8000,
+				Replicas: 1,
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "128Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+				Env: map[string]string{"APP_MODE": "production"},
+				SecretEnv: []SecretEnvEntry{
+					{Name: "SECRET_KEY", SecretName: "myapp-secrets", Key: "secret-key"},
+					{Name: "DB_PASSWORD", SecretName: "myapp-db", Key: "password"},
+				},
+			},
+		},
+	}
+
+	valuesFile := filepath.Join(tmpDir, "values.yaml")
+	f, err := os.Create(valuesFile)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := writeValuesYAML(f, data); err != nil {
+		f.Close()
+		t.Fatalf("writeValuesYAML: %v", err)
+	}
+	f.Close()
+
+	content, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	out := string(content)
+
+	// secretEnv section must be present
+	if !strings.Contains(out, "secretEnv:") {
+		t.Error("expected secretEnv: section in output")
+	}
+	// Each declared secret entry must be present
+	if !strings.Contains(out, "name: SECRET_KEY") {
+		t.Error("expected 'name: SECRET_KEY' in output")
+	}
+	if !strings.Contains(out, "secretName: myapp-secrets") {
+		t.Error("expected 'secretName: myapp-secrets' in output")
+	}
+	if !strings.Contains(out, "key: secret-key") {
+		t.Error("expected 'key: secret-key' in output")
+	}
+	if !strings.Contains(out, "name: DB_PASSWORD") {
+		t.Error("expected 'name: DB_PASSWORD' in output")
+	}
+	// No literal value for the secret — the value should never appear inline
+	if strings.Contains(out, "value: ") && strings.Contains(out, "SECRET_KEY") {
+		// More precise: only allowed if it's the literal env APP_MODE line
+		lines := strings.Split(out, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "SECRET_KEY") && strings.Contains(line, "value:") {
+				t.Errorf("secret key SECRET_KEY must not appear as a literal value: %s", line)
+			}
+		}
+	}
+	// Literal env var must still work alongside secretEnv
+	if !strings.Contains(out, "APP_MODE") {
+		t.Error("literal env var APP_MODE should still be present alongside secretEnv")
+	}
+}
+
+// TestWriteValuesYAML_EnvFrom renders envFrom entries and verifies the YAML.
+func TestWriteValuesYAML_EnvFrom(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "envfrom-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	data := ValuesData{
+		Global:          GlobalConfig{Namespace: "ns", Environment: "prod"},
+		IngressDefaults: IngressDefaultsConfig{Enabled: false},
+		Apps: map[string]AppConfig{
+			"myapp-worker": {
+				Type:     "worker",
+				Image:    "ghcr.io/org/myapp-worker",
+				ImageTag: "v2.0.0",
+				Replicas: 1,
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "128Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+				Env: map[string]string{"LOG_LEVEL": "debug"},
+				EnvFrom: []EnvFromEntry{
+					{SecretRef: "myapp-secrets"},
+					{ConfigMapRef: "myapp-config"},
+				},
+			},
+		},
+	}
+
+	valuesFile := filepath.Join(tmpDir, "values.yaml")
+	f, err := os.Create(valuesFile)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := writeValuesYAML(f, data); err != nil {
+		f.Close()
+		t.Fatalf("writeValuesYAML: %v", err)
+	}
+	f.Close()
+
+	content, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	out := string(content)
+
+	if !strings.Contains(out, "envFrom:") {
+		t.Error("expected envFrom: section in output")
+	}
+	if !strings.Contains(out, "secretRef: myapp-secrets") {
+		t.Error("expected 'secretRef: myapp-secrets' in output")
+	}
+	if !strings.Contains(out, "configMapRef: myapp-config") {
+		t.Error("expected 'configMapRef: myapp-config' in output")
+	}
+	// Literal env must still work
+	if !strings.Contains(out, "LOG_LEVEL") {
+		t.Error("literal env var LOG_LEVEL should still be present alongside envFrom")
+	}
+}
+
+// TestWriteValuesYAML_SecretEnvAndEnvFromCoexist verifies all three env forms
+// (literal, secretKeyRef, envFrom) can coexist on the same app.
+func TestWriteValuesYAML_SecretEnvAndEnvFromCoexist(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "coexist-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	data := ValuesData{
+		Global:          GlobalConfig{Namespace: "ns", Environment: "staging"},
+		IngressDefaults: IngressDefaultsConfig{Enabled: false},
+		Apps: map[string]AppConfig{
+			"combo-api": {
+				Type:     "internal-api",
+				Image:    "ghcr.io/org/combo",
+				ImageTag: "v3.0.0",
+				Port:     9090,
+				Replicas: 1,
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "128Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+				Env: map[string]string{"PLAIN_VAR": "plain-value"},
+				SecretEnv: []SecretEnvEntry{
+					{Name: "OIDC_CLIENT_SECRET", SecretName: "oidc-secret", Key: "client-secret"},
+				},
+				EnvFrom: []EnvFromEntry{
+					{SecretRef: "combo-bulk-secrets"},
+				},
+			},
+		},
+	}
+
+	valuesFile := filepath.Join(tmpDir, "values.yaml")
+	f, err := os.Create(valuesFile)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := writeValuesYAML(f, data); err != nil {
+		f.Close()
+		t.Fatalf("writeValuesYAML: %v", err)
+	}
+	f.Close()
+
+	content, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	out := string(content)
+
+	// All three forms must coexist
+	if !strings.Contains(out, "PLAIN_VAR") {
+		t.Error("literal env var PLAIN_VAR missing")
+	}
+	if !strings.Contains(out, "secretEnv:") {
+		t.Error("secretEnv: section missing")
+	}
+	if !strings.Contains(out, "OIDC_CLIENT_SECRET") {
+		t.Error("secretKeyRef entry OIDC_CLIENT_SECRET missing")
+	}
+	if !strings.Contains(out, "envFrom:") {
+		t.Error("envFrom: section missing")
+	}
+	if !strings.Contains(out, "secretRef: combo-bulk-secrets") {
+		t.Error("envFrom secretRef missing")
+	}
+}

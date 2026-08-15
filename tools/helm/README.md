@@ -524,7 +524,42 @@ bazel run //tools/helm:composer -- --help
 A: Yes, templates are in `tools/helm/templates/`. See [TEMPLATES.md](./TEMPLATES.md).
 
 **Q: How do I add environment variables?**  
-A: Set them in deploy-time values or add to `release_app` metadata.
+A: Three forms are available and may be combined on the same app:
+
+1. **Literal** — set a plain string value (suits non-sensitive config):
+```yaml
+# In values.yaml (auto-generated from release_app metadata)
+apps:
+  my_api:
+    env:
+      LOG_LEVEL: "info"
+      PORT: "8080"
+```
+
+2. **secretKeyRef** — source a single env var from a named key in a Kubernetes Secret (suits passwords, tokens, API keys):
+```yaml
+apps:
+  my_api:
+    secretEnv:
+      - name: SECRET_KEY        # env var name inside the container
+        secretName: my-secrets  # K8s Secret resource name
+        key: secret-key         # key inside the Secret
+      - name: DB_PASSWORD
+        secretName: my-db-secret
+        key: password
+```
+Renders in the manifest as `valueFrom.secretKeyRef` — no literal value ever appears in the chart.
+
+3. **envFrom** — bulk-import all keys from a Secret or ConfigMap:
+```yaml
+apps:
+  my_api:
+    envFrom:
+      - secretRef: my-bulk-secrets      # injects every key in the Secret as an env var
+      - configMapRef: my-app-configmap  # injects every key in the ConfigMap
+```
+
+All three forms may coexist on the same app. Ordering within each section is deterministic across renders.
 
 **Q: Can multiple external-apis share one Ingress?**  
 A: No, each external-api gets its own Ingress (1:1 mapping). This allows independent hosts and TLS configs.
