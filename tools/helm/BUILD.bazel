@@ -32,11 +32,18 @@ go_test(
 # Unit tests for composer
 go_test(
     name = "composer_test",
-    srcs = ["composer_test.go"],
-    data = glob(["testdata/**"]),
+    srcs = [
+        "composer_test.go",
+        "render_test.go",
+    ],
+    data = glob([
+        "testdata/**",
+        "templates/**/*.tmpl",
+    ]),
     embed = [":helm_lib"],
     deps = [
         "//tools/appmeta/proto:appmetapb",
+        "@in_gopkg_yaml_v3//:yaml_v3",
         "@org_golang_google_protobuf//encoding/protojson",
     ],
 )
