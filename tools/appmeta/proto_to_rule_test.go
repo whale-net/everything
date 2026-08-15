@@ -79,3 +79,55 @@ func assertNoFieldUnset(t *testing.T, m protoreflect.Message) {
 		}
 	}
 }
+
+// TestCliAndFirmwareManifestsDecodeCleanly tests that non-container CLI and firmware
+// manifests decode with DiscardUnknown: false and correct AppType and DeployUnit.
+func TestCliAndFirmwareManifestsDecodeCleanly(t *testing.T) {
+	cases := []struct {
+		name       string
+		json       string
+		wantType   string
+		wantDeploy appmetapb.DeployUnit
+	}{
+		{
+			name: "cli_app",
+			json: `{
+				"domain": "tools",
+				"name": "release_helper_go",
+				"app_type": "cli",
+				"deploy_unit": "DEPLOY_UNIT_NONE"
+			}`,
+			wantType:   "cli",
+			wantDeploy: appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
+		},
+		{
+			name: "firmware_app",
+			json: `{
+				"domain": "firmware",
+				"name": "sensorboard",
+				"app_type": "firmware",
+				"deploy_unit": "DEPLOY_UNIT_NONE"
+			}`,
+			wantType:   "firmware",
+			wantDeploy: appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
+		},
+
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var manifest appmetapb.AppManifest
+			if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal([]byte(tc.json), &manifest); err != nil {
+				t.Fatalf("failed to unmarshal %s: %v", tc.name, err)
+			}
+			if manifest.GetAppType() != tc.wantType {
+				t.Errorf("got app_type %q, want %q", manifest.GetAppType(), tc.wantType)
+			}
+			if manifest.GetDeployUnit() != tc.wantDeploy {
+				t.Errorf("got deploy_unit %v, want %v", manifest.GetDeployUnit(), tc.wantDeploy)
+			}
+		})
+	}
+}
+
+

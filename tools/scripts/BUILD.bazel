@@ -38,3 +38,20 @@ py_binary(
     main = "version_resolver.py",
     visibility = ["//visibility:public"],
 )
+
+sh_test(
+    name = "test_download_release_tools",
+    size = "medium",
+    srcs = ["test_download_release_tools.sh"],
+    data = [
+        "//:.release-tools-version",
+        "//tools/app_registry/cli:app-registry",
+        "//tools/release_helper_go",
+    ],
+    tags = [
+        "integration",
+        "manual",
+        "no-cache",
+    ],
+)
+

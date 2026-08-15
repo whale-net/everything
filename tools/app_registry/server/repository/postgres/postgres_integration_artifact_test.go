@@ -2242,3 +2242,60 @@ func TestListArtifacts_PromotableOnlyComposesWithPagination_Postgres(t *testing.
 		t.Fatalf("expected %d promotable rows across all pages, got %d", len(wantIDs), len(got))
 	}
 }
+
+func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
+	ctx := context.Background()
+	reg, pool := newTestRegistry(t)
+
+	cliAppID := seedApp(t, pool, "tools", "cli-test-app", "none")
+	firmwareAppID := seedApp(t, pool, "firmware", "fw-test-app", "none")
+	buildID := seedBuild(t, pool, "run-bin-fw")
+
+	// Record binary artifact
+	binArt := repository.Artifact{
+		Kind:          repository.ArtifactKindBinary,
+		AppID:         cliAppID,
+		Digest:        "sha256:binary-test-digest-123",
+		Version:       "v0.1.0",
+		BuildID:       buildID,
+		Promotability: repository.PromotabilityNotPromotable,
+	}
+	recordedBin, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, binArt, nil, repository.DomainAdoptionStageObserve)
+	if err != nil {
+		t.Fatalf("RecordArtifact binary: %v", err)
+	}
+	if alreadyRecorded {
+		t.Fatalf("expected binary artifact to be newly created, not already recorded")
+	}
+	if recordedBin.Kind != repository.ArtifactKindBinary {
+		t.Errorf("got kind %v, want %v", recordedBin.Kind, repository.ArtifactKindBinary)
+	}
+	if recordedBin.Promotability != repository.PromotabilityNotPromotable {
+		t.Errorf("got promotability %v, want %v", recordedBin.Promotability, repository.PromotabilityNotPromotable)
+	}
+
+	// Record firmware artifact
+	fwArt := repository.Artifact{
+		Kind:          repository.ArtifactKindFirmware,
+		AppID:         firmwareAppID,
+		Digest:        "sha256:firmware-test-digest-456",
+		Version:       "v0.1.0",
+		BuildID:       buildID,
+		Promotability: repository.PromotabilityNotPromotable,
+	}
+	recordedFw, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, fwArt, nil, repository.DomainAdoptionStageObserve)
+	if err != nil {
+		t.Fatalf("RecordArtifact firmware: %v", err)
+	}
+	if alreadyRecorded {
+		t.Fatalf("expected firmware artifact to be newly created, not already recorded")
+	}
+	if recordedFw.Kind != repository.ArtifactKindFirmware {
+		t.Errorf("got kind %v, want %v", recordedFw.Kind, repository.ArtifactKindFirmware)
+	}
+	if recordedFw.Promotability != repository.PromotabilityNotPromotable {
+		t.Errorf("got promotability %v, want %v", recordedFw.Promotability, repository.PromotabilityNotPromotable)
+	}
+}
+
+
