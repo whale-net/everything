@@ -108,12 +108,12 @@ To check whether a specific release actually got recorded:
      [ARCHITECTURE.md](ARCHITECTURE.md#version-skew-vs-outage-issue-570).
    - **`::warning:: App Registry: <owner> not registered yet`** — as of AR-7c
      (issue #558), this should no longer happen in normal operation:
-     `release.yml` now calls `AssertApps` as the first App Registry step of
-     every job that later resolves an owner by full name (see "AR-7c:
-     AssertApps closed issue #547" below). If you see it anyway, the
-     `AssertApps` step itself probably failed too (a registry outage fails
-     every App Registry step in the same job, `AssertApps` included) — check
-     that step's log first.
+     `release.yml` now calls `AssertApps` from a dedicated `app-registry-assert`
+     job that runs once, before every job that later resolves an owner by
+     full name (see "AR-7c: AssertApps closed issue #547" below). If you see
+     it anyway, check that job's `Assert apps/charts in App Registry` step
+     log first — a registry outage there means every downstream App
+     Registry step this run depends on it will likely fail the same way.
    - **`::warning:: App Registry: recording skipped (registry error)`** — a
      genuine, transient outage: connectivity, auth, or a timeout. Check the
      step log for the underlying gRPC error (`Unauthenticated`,
@@ -194,25 +194,33 @@ or accept the identity self-healing while the specific artifact stayed
 unrecorded).
 
 As of AR-7c, `release.yml` calls the new `AppRegistry.AssertApps` RPC (via
-`.github/actions/app-registry-assert`) as the **first** App Registry step of
-both the `release` matrix job and `release-helm-charts` — before any
-`Record build`/`Begin publish`/`Record artifact` call that resolves an owner
-by full name. `AssertApps` is additive and safe from any ref (see
-ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps (absence sweep)"),
-so by the time those calls run, the owner's identity already exists.
-`ReasonOwnerNotReconciled` / exit code 3 should no longer be reachable from
-a normal `release.yml` run.
+`.github/actions/app-registry-assert`) as the **first** App Registry call of
+a release run — before any `Record build`/`Begin publish`/`Record artifact`
+call that resolves an owner by full name. `AssertApps` is additive and safe
+from any ref (see ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps
+(absence sweep)"), so by the time those calls run, the owner's identity
+already exists. `ReasonOwnerNotReconciled` / exit code 3 should no longer be
+reachable from a normal `release.yml` run.
 
-**If you still see it:** the `AssertApps` step itself likely failed first —
-a registry outage fails every App Registry step in the same job, this one
-included. `AssertApps` is still `continue-on-error` (an outage there must not
-block the release), but that job's **App Registry recording health** step
-will have gone red, so this is visible rather than silent. Check the
-`Assert apps/charts in App Registry` step's log before assuming this is the
-old #547 gap reopening. The underlying mechanism
-(exit code 3, `apierrors.ReasonOwnerNotReconciled`) is unchanged and still
-fires if `resolveOwner` (`server/handlers/artifact.go`) genuinely can't find
-the owner — it is just no longer reachable through the intended path.
+Originally this ran as a step inside each of the `release` matrix job and
+`release-helm-charts` — repeating the exact same repo-wide manifest
+discovery + RPC once per app plus once more for charts. Issue #622 hoisted
+it into its own `app-registry-assert` job that runs once, upfront; `release`
+and `release-helm-charts` `needs:` it, which preserves the same
+before-any-owner-lookup ordering guarantee at a fraction of the cost.
+
+**If you still see it:** the `app-registry-assert` job itself likely failed
+— a registry outage fails every App Registry step it touches, this one
+included. It is still `continue-on-error` (an outage there must not block
+the release), but its own **App Registry recording health**-equivalent (the
+job's `Assert apps/charts in App Registry` step going red, which every
+downstream job's own health-check step also surfaces via
+`needs.app-registry-assert.outputs.outcome`) makes this visible rather than
+silent. Check that job's log before assuming this is the old #547 gap
+reopening. The underlying mechanism (exit code 3,
+`apierrors.ReasonOwnerNotReconciled`) is unchanged and still fires if
+`resolveOwner` (`server/handlers/artifact.go`) genuinely can't find the
+owner — it is just no longer reachable through the intended path.
 
 To confirm a specific artifact recorded, from the registry side rather than
 the log:
