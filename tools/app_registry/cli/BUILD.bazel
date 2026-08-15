@@ -10,18 +10,14 @@ go_binary(
     ],
 )
 
-# Release metadata for the CLI. domain "app-registry" + name "cli" produces
-# the "app-registry-cli" image identity, published so it can be run as
-# `docker run ghcr.io/whale-net/app-registry-cli:<version>` instead of
-# requiring a local build. deploy_unit = "none": it is never deployed, only
-# published for people and CI to pull.
+# Release metadata for the CLI.
 release_app(
-    name = "cli",
-    app_type = "job",
+    name = "app_registry_cli",
+    app_name = "app-registry",
+    app_type = "cli",
     binary_name = ":app-registry",
-    deploy_unit = "none",
     description = "App Registry CLI",
-    domain = "app-registry",
+    domain = "tools",
     language = "go",
 )
 
