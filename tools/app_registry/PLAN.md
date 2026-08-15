@@ -18,10 +18,9 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated after verifying release run
-[31660476677](https://github.com/whale-net/everything/actions/runs/31660476677)
-against `dev` (2026-08-13). **AR-M through AR-7f are all merged to `main`**
-— see the table below.*
+*Last updated after PR
+[#630](https://github.com/whale-net/everything/pull/630) merged (2026-08-15).
+**AR-M through AR-7f are all merged to `main`** — see the table below.*
 
 | Phase | PR | State |
 |---|---|---|
@@ -264,19 +263,31 @@ forward-looking, not historical, which is why it lives here and not there.
   by moving its stage back.
 
 **Do not start** until AR-2's parity check has been clean across a meaningful
-number of real releases. Issue
-[#585](https://github.com/whale-net/everything/issues/585) is fixed —
-`RecordArtifact`'s digest-replay lookup no longer ignores `(owner, kind,
-version)`, so it can no longer silently strand a reproducible no-op
-rebuild's row in `publishing`. That fix surfaces the underlying tension
-instead of hiding it: a same-digest/different-version request now hard-fails
-on `artifact_digest_idx`'s real uniqueness constraint. That's harmless at
-`observe` (recording is best-effort) but **will hard-fail routine releases
-the moment a domain reaches `promote`**, where recording becomes mandatory —
-reproducible no-op rebuilds are routine in this monorepo. Design how AR-5's
-cutover accommodates this (e.g. treating a digest collision against an
-older version of the same owner as an idempotent success rather than a
-conflict) before promoting any domain past `observe`.
+number of real releases — that check has not been run even once (no
+script/CLI/scheduled job implements it yet), so this gate remains open
+regardless of the fix below.
+
+The digest-collision accommodation this section previously asked AR-5 to
+design is now handled, but at the release-pipeline layer rather than inside
+App Registry. Issue [#585](https://github.com/whale-net/everything/issues/585)
+(fixed by PR #600) scoped `RecordArtifact`'s digest-replay lookup to
+`(owner, kind, version)` instead of digest alone, so it can no longer
+silently strand a reproducible no-op rebuild's row in `publishing` — but that
+surfaced the underlying tension instead of hiding it: a same-digest/
+different-version request now hard-fails on `artifact_digest_idx`'s real
+uniqueness constraint, which reproduced for real in `dev` as issues
+[#617](https://github.com/whale-net/everything/issues/617) and
+[#628](https://github.com/whale-net/everything/issues/628) — a release could
+report full success (tag + pushed image) while its App Registry artifact row
+silently stranded as `failed`/`stale`. PR
+[#630](https://github.com/whale-net/everything/pull/630) (merged 2026-08-15)
+fixed this upstream of App Registry entirely: `release.yml`'s tag-creation
+steps now check the just-built digest against the most recent existing
+tag's digest before minting a new version tag, and skip tag creation (and
+the App Registry record call) on a match — so a no-op rebuild never reaches
+App Registry as a "new" artifact in the first place. This closes the gap
+this section previously called out as open design work; it does not affect
+the AR-2 parity gate above.
 
 ### Addendum — semver semantics (decided)
 
