@@ -8,7 +8,9 @@ exports_files([
     "uv.lock",
     "MODULE.bazel",
     "MODULE.bazel.lock",
+    ".release-tools-version",
 ])
+
 
 # CRITICAL: This prefix must match the module name in go.mod
 # gazelle:prefix github.com/whale-net/everything
