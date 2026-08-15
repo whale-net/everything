@@ -22,7 +22,7 @@ gitops repo.
 - Not a replacement for GHCR. The OCI registry still holds the bits; this holds
   the metadata and the promotion state.
 - Not an approval workflow engine (yet). The schema leaves room — see
-  [ARCHITECTURE.md](ARCHITECTURE.md#future-approval-gate) — but AR-3 promotes
+  [ARCHITECTURE.md's "Future: approval gate"](architecture/18-future-approval-gate.md) — but AR-3 promotes
   immediately.
 
 ## Core concepts
@@ -131,7 +131,7 @@ sequenceDiagram
 The transactional outbox matters: the promotion row and the intent to write
 back commit together, so the registry can never believe something was promoted
 without a writeback eventually happening. See
-[ARCHITECTURE.md](ARCHITECTURE.md#writeback-outbox--temporal).
+[ARCHITECTURE.md's "Writeback: outbox → Temporal"](architecture/12-writeback-outbox-temporal.md).
 
 ### Incident-time query
 

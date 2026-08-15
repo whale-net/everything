@@ -1818,7 +1818,7 @@ jobs:
             {
               echo "### ❌ App Registry: version skew"
               echo ""
-              echo "\`${PUBLISHED_NAME}\` \`${CHART_VERSION}\` was **not recorded** -- the deployed server does not implement this RPC. This will not clear on retry. See tools/app_registry/ARCHITECTURE.md#availability-and-bootstrap and OPERATIONS.md."
+              echo "\`${PUBLISHED_NAME}\` \`${CHART_VERSION}\` was **not recorded** -- the deployed server does not implement this RPC. This will not clear on retry. See tools/app_registry/architecture/16-availability-and-bootstrap.md and OPERATIONS.md."
             } >> "$GITHUB_STEP_SUMMARY"
             RECORDING_HAD_FAILURE=1
           else
