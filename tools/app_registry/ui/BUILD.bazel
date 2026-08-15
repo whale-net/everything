@@ -1,0 +1,87 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools:templ.bzl", "templ_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+# Generated _templ.go files are committed alongside .templ sources.
+# This matches the //manmanv2/ui pattern so an agent never has to guess
+# whether it must run templ or can rely on source control.
+# See manmanv2/ui/README.md for the rationale (commit after every edit).
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "grpc_client.go",
+        "main.go",
+        "templ_render.go",
+        "templates.go",
+    ],
+    importpath = "github.com/whale-net/everything/tools/app_registry/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//libs/go/logging",
+        "//tools/app_registry/protos",
+        "//tools/wireframe",
+        "@com_github_a_h_templ//:templ",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+templ_library(
+    name = "ui_templates",
+    srcs = [
+        "layout/layout.templ",
+        "pages/home.templ",
+    ],
+    deps = [
+        "//libs/go/htmxauth",
+        "@com_github_a_h_templ//:templ",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+go_library(
+    name = "ui_templates_lib",
+    importpath = "github.com/whale-net/everything/tools/app_registry/ui/pages",
+    srcs = glob(["pages/*_templ.go"]),
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/htmxauth",
+        "@com_github_a_h_templ//:templ",
+    ],
+)
+
+go_library(
+    name = "ui_layout_lib",
+    importpath = "github.com/whale-net/everything/tools/app_registry/ui/layout",
+    srcs = glob(["layout/*_templ.go"]),
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/htmxauth",
+        "@com_github_a_h_templ//:templ",
+        "@com_github_a_h_templ//runtime",
+    ],
+)
+
+go_binary(
+    name = "app-registry-ui",
+    embed = [":ui_lib", ":ui_templates_lib", ":ui_layout_lib"],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "app-registry-ui",
+    app_type = "external-api",
+    binary_name = ":app-registry-ui",
+    description = "App Registry admin UI — HTMX + daisyUI interface for environment and promotion triage",
+    domain = "app-registry",
+    ingress_host = "ar-admin.whalenet.dev",
+    ingress_tls_secret = "app-registry-ui-tls",
+    language = "go",
+    port = 8001,
+    replicas = 1,
+)

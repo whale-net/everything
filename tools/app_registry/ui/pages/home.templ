@@ -1,0 +1,56 @@
+package pages
+
+import (
+	"strings"
+
+	"github.com/a-h/templ"
+)
+
+templ Home(user *UserInfo, environments []Environment) {
+	<div>
+		<h1 class="text-2xl font-bold mb-4">Welcome to App Registry Admin</h1>
+
+		if user != nil && len(user.Roles) > 0 {
+			<p class="mb-6 text-sm text-base-content/70">
+				Roles: <span class="font-medium">{ strings.Join(user.Roles, ", ") }</span>
+			</p>
+		}
+
+		if user == nil {
+			<div class="alert alert-info mb-4">
+				<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-8 h-8">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4a.997.997 0 00-1-1h-.586a1 1 0 00-.707.293l-1.414 1.414M12 2a10 10 0 100 20 10 10 0 000-20z"></path>
+				</svg>
+				<div class="text-sm">Development mode (AUTH_MODE=none) — no auth, all roles assumed.</div>
+			</div>
+		}
+
+		if len(environments) == 0 {
+			<div class="alert alert-warning mb-4">
+				<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-8 h-8">
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"></path>
+				</svg>
+				<div>No environments found.</div>
+			</div>
+		} else {
+			<h2 class="text-lg font-semibold mb-3">Environments ({ len(environments) })</h2>
+			<div class="overflow-x-auto">
+				<table class="table table-compact w-full">
+					<thead><tr><th>Name</th><th>Status</th></tr></thead>
+					<tbody>
+						for _, env := range environments {
+							<tr>
+								<td>{ env.Name }</td>
+								<td><span class="badge badge-primary badge-sm">{ env.Status }</span></td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		}
+
+		<div class="mt-8 text-xs text-base-content/50">
+			gRPC endpoint: app-registry-api (via environment registry client)
+		</div>
+	</div>
+}

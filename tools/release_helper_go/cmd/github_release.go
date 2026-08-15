@@ -158,8 +158,8 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 
 			token := defaultEnv("GITHUB_TOKEN")
 			if token == "" {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: GITHUB_TOKEN environment variable not set\n")
-				return fmt.Errorf("missing GITHUB_TOKEN")
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: GITHUB_TOKEN not set, skipping GitHub release creation.\n")
+				return nil
 			}
 
 			// Parse per-app versions and domains from MATRIX env var.
