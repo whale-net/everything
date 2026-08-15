@@ -42,6 +42,7 @@ go_test(
         "chart_hermeticity_test.go",
         "environment_test.go",
         "list_builds_test.go",
+        "list_pagination_test.go",
         "promotion_test.go",
     ],
     embed = [":handlers"],

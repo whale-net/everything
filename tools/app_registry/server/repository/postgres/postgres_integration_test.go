@@ -3841,7 +3841,7 @@ func TestListArtifacts_BuildIDFilter_AcrossAllFourStates(t *testing.T) {
 		t.Fatalf("FailPublish: %v", err)
 	}
 
-	artifacts, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: buildID})
+	artifacts, _, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: buildID}, 0, "")
 	if err != nil {
 		t.Fatalf("ListArtifacts(BuildID=...): %v", err)
 	}
@@ -3903,7 +3903,7 @@ func TestGetReleaseRun_Postgres_AppNeverReachedStillReportsIncomplete(t *testing
 	if err != nil {
 		t.Fatalf("GetBuildByWorkflowRun: %v", err)
 	}
-	artifacts, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: build.BuildID})
+	artifacts, _, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: build.BuildID}, 0, "")
 	if err != nil {
 		t.Fatalf("ListArtifacts(BuildID=...): %v", err)
 	}
@@ -4213,7 +4213,7 @@ func TestAdoptArtifact_UnblocksChartPin_Postgres(t *testing.T) {
 
 	// "distinguishable in one query": the image is ADOPTED, the chart is
 	// OBSERVED, in one ListArtifacts(Provenance=ADOPTED) call.
-	adoptedOnly, err := reg.Artifacts().ListArtifacts(context.Background(), repository.ArtifactListFilter{Provenance: repository.ArtifactProvenanceAdopted})
+	adoptedOnly, _, err := reg.Artifacts().ListArtifacts(context.Background(), repository.ArtifactListFilter{Provenance: repository.ArtifactProvenanceAdopted}, 0, "")
 	if err != nil {
 		t.Fatalf("ListArtifacts(Provenance=adopted): %v", err)
 	}
@@ -4712,5 +4712,346 @@ func TestListBuilds_SinceComposesWithPagination_Postgres(t *testing.T) {
 	}
 	if !foundBoundary {
 		t.Fatalf("expected the NULL-started_at boundary row to be included (recorded_at == since), but it was excluded")
+	}
+}
+
+// seedArtifactRow inserts one `artifact` row directly, in state "published",
+// bypassing the BeginPublish/RecordArtifact lifecycle -- issue #603's
+// pagination tests need exact, caller-chosen state_changed_at values (and,
+// for the PromotableOnly case, an exact promotability) that the real write
+// path stamps from the clock/from a manifest join respectively.
+func seedArtifactRow(t *testing.T, pool *pgxpool.Pool, appID, version, digest string, stateChangedAt time.Time, promotability repository.Promotability) string {
+	t.Helper()
+	buildID := seedBuild(t, pool, "run-artifact-page-"+uuid.NewString())
+	var artifactID string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id, published_at,
+		                       state, provenance, version_source, state_changed_at, promotability)
+		VALUES ('image', $1, 'ghcr.io/acme/artifact-page-test', $2, $3, $4, $5,
+		        'published', 'observed', 'tag', $5, $6)
+		RETURNING artifact_id`,
+		appID, version, digest, buildID, stateChangedAt, string(promotability)).Scan(&artifactID)
+	if err != nil {
+		t.Fatalf("seed artifact %s: %v", digest, err)
+	}
+	return artifactID
+}
+
+// TestListArtifacts_Pagination_MatchesFullOrderedScan_Postgres is the real-
+// Postgres analogue of TestListBuilds_Pagination_MatchesFullOrderedScan_Postgres
+// for ListArtifacts (issue #603): pages through with a small page_size and
+// confirms the full traversal matches a single unfiltered `ORDER BY
+// state_changed_at DESC, artifact_id DESC` scan exactly, in order, with no
+// duplicates and no omissions -- including across a duplicate-state_changed_at
+// pair, the case a naive keyset implementation missing the artifact_id
+// tie-break gets wrong.
+func TestListArtifacts_Pagination_MatchesFullOrderedScan_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+	appID := seedApp(t, pool, "acme", "artifact-page-app", "image")
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tie := base.Add(3 * time.Hour)
+	seedArtifactRow(t, pool, appID, "v1.0.0", "sha256:page-0", base, repository.PromotabilityPromotable)
+	seedArtifactRow(t, pool, appID, "v1.0.1", "sha256:page-1", base.Add(1*time.Hour), repository.PromotabilityPromotable)
+	seedArtifactRow(t, pool, appID, "v1.0.2", "sha256:page-2", tie, repository.PromotabilityPromotable)
+	seedArtifactRow(t, pool, appID, "v1.0.3", "sha256:page-3", tie, repository.PromotabilityPromotable)
+	seedArtifactRow(t, pool, appID, "v1.0.4", "sha256:page-4", base.Add(4*time.Hour), repository.PromotabilityPromotable)
+
+	rows, err := pool.Query(ctx, `SELECT artifact_id FROM artifact WHERE repository = 'ghcr.io/acme/artifact-page-test' ORDER BY state_changed_at DESC, artifact_id DESC`)
+	if err != nil {
+		t.Fatalf("ground-truth scan: %v", err)
+	}
+	var want []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan ground-truth row: %v", err)
+		}
+		want = append(want, id)
+	}
+	rows.Close()
+	if len(want) != 5 {
+		t.Fatalf("expected 5 rows in ground-truth scan, got %d", len(want))
+	}
+
+	var got []string
+	seen := map[string]bool{}
+	token := ""
+	for page := 0; page < 6; page++ {
+		artifacts, next, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{OwnerFullName: "acme-artifact-page-app"}, 2, token)
+		if err != nil {
+			t.Fatalf("ListArtifacts page %d: %v", page, err)
+		}
+		if len(artifacts) == 0 {
+			t.Fatalf("page %d: got 0 rows", page)
+		}
+		if len(artifacts) > 2 {
+			t.Fatalf("page %d: expected at most page_size=2 rows, got %d", page, len(artifacts))
+		}
+		for _, a := range artifacts {
+			if seen[a.ArtifactID] {
+				t.Fatalf("duplicate row %s across pages", a.ArtifactID)
+			}
+			seen[a.ArtifactID] = true
+			got = append(got, a.ArtifactID)
+		}
+		token = next
+		if token == "" {
+			break
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows across all pages, got %d (want order %v, got order %v)", len(want), len(got), want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("position %d: expected %s (ground-truth ORDER BY), got %s", i, want[i], got[i])
+		}
+	}
+}
+
+// TestListArtifacts_PromotableOnlyComposesWithPagination_Postgres proves
+// PromotableOnly is enforced in SQL, not filtered client-side after the
+// page's LIMIT (issue #603): with non-promotable rows interleaved among
+// promotable ones in state_changed_at order, paging with PromotableOnly must
+// still surface every promotable row, none of the non-promotable ones, and
+// no short pages.
+func TestListArtifacts_PromotableOnlyComposesWithPagination_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+	appID := seedApp(t, pool, "acme", "artifact-promotable-page-app", "image")
+
+	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	var wantIDs []string
+	for i := 0; i < 6; i++ {
+		promotability := repository.PromotabilityNotPromotable
+		if i%2 == 0 {
+			promotability = repository.PromotabilityPromotable
+		}
+		id := seedArtifactRow(t, pool, appID, fmt.Sprintf("v1.0.%d", i), fmt.Sprintf("sha256:promotable-page-%d", i), base.Add(time.Duration(i)*time.Hour), promotability)
+		if promotability == repository.PromotabilityPromotable {
+			wantIDs = append(wantIDs, id)
+		}
+	}
+
+	var got []string
+	token := ""
+	for page := 0; page < 4; page++ {
+		artifacts, next, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{
+			OwnerFullName:  "acme-artifact-promotable-page-app",
+			PromotableOnly: true,
+		}, 2, token)
+		if err != nil {
+			t.Fatalf("ListArtifacts page %d: %v", page, err)
+		}
+		if len(artifacts) == 0 {
+			t.Fatalf("page %d: got 0 rows", page)
+		}
+		if remaining := len(wantIDs) - len(got); remaining >= 2 && len(artifacts) != 2 {
+			t.Fatalf("page %d: expected exactly page_size=2 rows (PromotableOnly must not produce a short page while %d promotable rows remain), got %d", page, remaining, len(artifacts))
+		}
+		for _, a := range artifacts {
+			if a.Promotability != repository.PromotabilityPromotable {
+				t.Fatalf("returned non-promotable artifact %s (promotability=%s)", a.ArtifactID, a.Promotability)
+			}
+			got = append(got, a.ArtifactID)
+		}
+		token = next
+		if token == "" {
+			break
+		}
+	}
+
+	if len(got) != len(wantIDs) {
+		t.Fatalf("expected %d promotable rows across all pages, got %d", len(wantIDs), len(got))
+	}
+}
+
+// seedHistoricalPromotionRow inserts one already-superseded `promotion` row
+// directly (valid_to set, so promotion_current_idx's partial uniqueness --
+// at most one "current" row per (environment_id, target_key) -- never
+// applies), for issue #603's ListPromotions pagination tests, which need
+// many rows sharing one target and exact, caller-chosen valid_from values.
+func seedHistoricalPromotionRow(t *testing.T, pool *pgxpool.Pool, envID, targetKey, artifactID string, validFrom time.Time) string {
+	t.Helper()
+	var promotionID string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO promotion (environment_id, target_key, artifact_id, valid_from, valid_to)
+		VALUES ($1, $2, $3, $4, $5) RETURNING promotion_id`,
+		envID, targetKey, artifactID, validFrom, validFrom.Add(time.Second)).Scan(&promotionID)
+	if err != nil {
+		t.Fatalf("seed historical promotion: %v", err)
+	}
+	return promotionID
+}
+
+// TestListPromotions_Pagination_MatchesFullOrderedScan_Postgres is the
+// real-Postgres analogue of TestListBuilds_Pagination_MatchesFullOrderedScan_Postgres
+// for ListPromotions (issue #603): pages through with a small page_size and
+// confirms the full traversal matches a single unfiltered `ORDER BY
+// valid_from DESC, promotion_id DESC` scan exactly, in order, with no
+// duplicates and no omissions -- including across a duplicate-valid_from
+// pair, the case a naive keyset implementation missing the promotion_id
+// tie-break gets wrong.
+func TestListPromotions_Pagination_MatchesFullOrderedScan_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "promotion-page-app", "image")
+	buildID := seedBuild(t, pool, "run-promotion-page")
+	artifactID := seedArtifact(t, pool, appID, buildID, "sha256:promotion-page", "v1.0.0")
+	targetKey := "image:acme-promotion-page-app"
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tie := base.Add(3 * time.Hour)
+	seedHistoricalPromotionRow(t, pool, envID, targetKey, artifactID, base)
+	seedHistoricalPromotionRow(t, pool, envID, targetKey, artifactID, base.Add(1*time.Hour))
+	seedHistoricalPromotionRow(t, pool, envID, targetKey, artifactID, tie)
+	seedHistoricalPromotionRow(t, pool, envID, targetKey, artifactID, tie)
+	seedHistoricalPromotionRow(t, pool, envID, targetKey, artifactID, base.Add(4*time.Hour))
+
+	rows, err := pool.Query(ctx, `SELECT promotion_id FROM promotion WHERE target_key = $1 ORDER BY valid_from DESC, promotion_id DESC`, targetKey)
+	if err != nil {
+		t.Fatalf("ground-truth scan: %v", err)
+	}
+	var want []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan ground-truth row: %v", err)
+		}
+		want = append(want, id)
+	}
+	rows.Close()
+	if len(want) != 5 {
+		t.Fatalf("expected 5 rows in ground-truth scan, got %d", len(want))
+	}
+
+	var got []string
+	seen := map[string]bool{}
+	token := ""
+	for page := 0; page < 6; page++ {
+		promotions, next, err := reg.Promotions().ListPromotions(ctx, repository.PromotionListFilter{EnvironmentKey: "dev", IncludeHistory: true}, 2, token)
+		if err != nil {
+			t.Fatalf("ListPromotions page %d: %v", page, err)
+		}
+		if len(promotions) == 0 {
+			t.Fatalf("page %d: got 0 rows", page)
+		}
+		if len(promotions) > 2 {
+			t.Fatalf("page %d: expected at most page_size=2 rows, got %d", page, len(promotions))
+		}
+		for _, p := range promotions {
+			if seen[p.PromotionID] {
+				t.Fatalf("duplicate row %s across pages", p.PromotionID)
+			}
+			seen[p.PromotionID] = true
+			got = append(got, p.PromotionID)
+		}
+		token = next
+		if token == "" {
+			break
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows across all pages, got %d (want order %v, got order %v)", len(want), len(got), want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("position %d: expected %s (ground-truth ORDER BY), got %s", i, want[i], got[i])
+		}
+	}
+}
+
+// TestListPromotionEvents_Pagination_MatchesFullOrderedScan_Postgres is the
+// real-Postgres analogue for ListEvents (issue #603): pages through with a
+// small page_size and confirms the full traversal matches a single
+// unfiltered `ORDER BY occurred_at DESC, event_id DESC` scan exactly, in
+// order, with no duplicates and no omissions -- including across a
+// duplicate-occurred_at pair, the case a naive keyset implementation missing
+// the event_id tie-break gets wrong.
+func TestListPromotionEvents_Pagination_MatchesFullOrderedScan_Postgres(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "promotion-event-page-app", "image")
+	buildID := seedBuild(t, pool, "run-promotion-event-page")
+	artifactID := seedArtifact(t, pool, appID, buildID, "sha256:promotion-event-page", "v1.0.0")
+	targetKey := "image:acme-promotion-event-page-app"
+	promotionID := seedHistoricalPromotionRow(t, pool, envID, targetKey, artifactID, time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	tie := base.Add(3 * time.Hour)
+	seedEvent := func(occurredAt time.Time) string {
+		var eventID string
+		err := pool.QueryRow(ctx, `
+			INSERT INTO promotion_event (promotion_id, action, actor, occurred_at)
+			VALUES ($1, 'promote', 'integration-test', $2) RETURNING event_id`,
+			promotionID, occurredAt).Scan(&eventID)
+		if err != nil {
+			t.Fatalf("seed promotion event: %v", err)
+		}
+		return eventID
+	}
+	seedEvent(base)
+	seedEvent(base.Add(1 * time.Hour))
+	seedEvent(tie)
+	seedEvent(tie)
+	seedEvent(base.Add(4 * time.Hour))
+
+	rows, err := pool.Query(ctx, `SELECT event_id FROM promotion_event WHERE promotion_id = $1 ORDER BY occurred_at DESC, event_id DESC`, promotionID)
+	if err != nil {
+		t.Fatalf("ground-truth scan: %v", err)
+	}
+	var want []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("scan ground-truth row: %v", err)
+		}
+		want = append(want, id)
+	}
+	rows.Close()
+	if len(want) != 5 {
+		t.Fatalf("expected 5 rows in ground-truth scan, got %d", len(want))
+	}
+
+	var got []string
+	seen := map[string]bool{}
+	token := ""
+	for page := 0; page < 6; page++ {
+		events, next, err := reg.Promotions().ListEvents(ctx, repository.PromotionEventListFilter{PromotionID: promotionID}, 2, token)
+		if err != nil {
+			t.Fatalf("ListEvents page %d: %v", page, err)
+		}
+		if len(events) == 0 {
+			t.Fatalf("page %d: got 0 rows", page)
+		}
+		if len(events) > 2 {
+			t.Fatalf("page %d: expected at most page_size=2 rows, got %d", page, len(events))
+		}
+		for _, e := range events {
+			if seen[e.EventID] {
+				t.Fatalf("duplicate row %s across pages", e.EventID)
+			}
+			seen[e.EventID] = true
+			got = append(got, e.EventID)
+		}
+		token = next
+		if token == "" {
+			break
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("expected %d rows across all pages, got %d (want order %v, got order %v)", len(want), len(got), want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("position %d: expected %s (ground-truth ORDER BY), got %s", i, want[i], got[i])
+		}
 	}
 }

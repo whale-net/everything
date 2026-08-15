@@ -201,18 +201,22 @@ func (s *ArtifactServer) ListArtifacts(ctx context.Context, req *pb.ListArtifact
 	if err := auth.RequireAuthenticated(ctx); err != nil {
 		return nil, err
 	}
-	artifacts, err := s.repo.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{
+	artifacts, nextToken, err := s.repo.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{
 		OwnerFullName:  req.OwnerFullName,
 		Kind:           artifactKindFromPB(req.Kind),
 		PromotableOnly: req.PromotableOnly,
 		Provenance:     artifactProvenanceFromPB(req.Provenance),
-	})
+	}, req.GetPage().GetPageSize(), req.GetPage().GetPageToken())
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
 	return &pb.ListArtifactsResponse{
 		Artifacts: artifactsToPB(artifacts),
-		Page:      &pb.PageResponse{TotalSize: int32(len(artifacts))},
+		// total_size is a PAGE-LOCAL count (len(artifacts) <= page_size), not
+		// the true total row count across all pages -- same tradeoff as
+		// ListReconcileRuns/ListBuilds (see ARCHITECTURE.md's pagination
+		// note).
+		Page: &pb.PageResponse{NextPageToken: nextToken, TotalSize: int32(len(artifacts))},
 	}, nil
 }
 
@@ -669,7 +673,11 @@ func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRu
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
-	artifacts, err := s.repo.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: build.BuildID})
+	// pageSize 0 (server default, 50) is always enough here: this lists
+	// every artifact hanging off ONE build, which release.yml's matrix
+	// bounds to a small, fixed number of targets, nowhere near the default
+	// page size -- so there is no next page to chase.
+	artifacts, _, err := s.repo.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{BuildID: build.BuildID}, 0, "")
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}

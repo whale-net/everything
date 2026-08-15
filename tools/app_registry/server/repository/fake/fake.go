@@ -160,6 +160,50 @@ func (r *Registry) SeedBuild(b repository.Build) repository.Build {
 	return b
 }
 
+// SeedArtifact is the ListArtifacts analogue of SeedBuild above (issue
+// #603): pagination tie-break/ordering cases need an exact, caller-chosen
+// StateChangedAt that the real write paths (RecordArtifact et al., which
+// stamp it from the clock) cannot reliably construct without racing it. If
+// ArtifactID is unset, one is generated so callers that don't care about the
+// exact ID can omit it.
+func (r *Registry) SeedArtifact(a repository.Artifact) repository.Artifact {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if a.ArtifactID == "" {
+		a.ArtifactID = uuid.NewString()
+	}
+	r.state.Artifacts[a.ArtifactID] = a
+	return a
+}
+
+// SeedPromotion is the ListPromotions analogue of SeedBuild above (issue
+// #603): pagination tie-break/ordering cases need an exact, caller-chosen
+// ValidFrom that the real write path (Promote) stamps from the clock. If
+// PromotionID is unset, one is generated.
+func (r *Registry) SeedPromotion(p repository.Promotion) repository.Promotion {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if p.PromotionID == "" {
+		p.PromotionID = uuid.NewString()
+	}
+	r.state.Promotions[p.PromotionID] = p
+	return p
+}
+
+// SeedPromotionEvent is the ListPromotionEvents analogue of SeedBuild above
+// (issue #603): pagination tie-break/ordering cases need an exact,
+// caller-chosen OccurredAt that the real write path (RecordEvent) stamps
+// from the clock. If EventID is unset, one is generated.
+func (r *Registry) SeedPromotionEvent(e repository.PromotionEvent) repository.PromotionEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e.EventID == "" {
+		e.EventID = uuid.NewString()
+	}
+	r.state.PromotionEvents[e.EventID] = e
+	return e
+}
+
 func (r *Registry) Apps() repository.AppRepository                { return r }
 func (r *Registry) Builds() repository.BuildRepository            { return r }
 func (r *Registry) Artifacts() repository.ArtifactRepository      { return r }
@@ -908,8 +952,23 @@ func (r *Registry) findImageByDigest(digest string) (*repository.Artifact, error
 	return nil, fmt.Errorf("%w: chart pins unrecorded image digest %s", repository.ErrInvalidArgument, digest)
 }
 
-func (r *Registry) ListArtifacts(ctx context.Context, filter repository.ArtifactListFilter) ([]repository.Artifact, error) {
-	var out []repository.Artifact
+// defaultArtifactPageSize matches postgres's artifactRepo default -- see
+// that package's doc comment on the same constant.
+const defaultArtifactPageSize = 50
+
+// ListArtifacts mirrors postgres's artifactRepo.ListArtifacts: same
+// ordering (state_changed_at DESC, artifact_id DESC), same filters, same
+// real LIMIT + keyset cursor pagination contract -- see
+// repository.ArtifactRepository.ListArtifacts's doc comment. Cursor format
+// reuses this package's own encodeFakeCursor/decodeFakeCursor
+// (keyset_cursor.go) -- only this fake's own round-trip needs to hold, not
+// cross-compatibility with postgres's token format.
+func (r *Registry) ListArtifacts(ctx context.Context, filter repository.ArtifactListFilter, pageSize int32, pageToken string) ([]repository.Artifact, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultArtifactPageSize
+	}
+
+	var all []repository.Artifact
 	for _, a := range r.state.Artifacts {
 		if filter.Kind != "" && a.Kind != filter.Kind {
 			continue
@@ -937,24 +996,38 @@ func (r *Registry) ListArtifacts(ctx context.Context, filter repository.Artifact
 		if filter.PromotableOnly && a.Promotability != repository.PromotabilityPromotable {
 			continue
 		}
-		out = append(out, a)
+		all = append(all, a)
 	}
-	if filter.BuildID != "" {
-		// Mirrors postgres's build_id-filtered ORDER BY state_changed_at --
-		// published_at is empty for everything short of "published", which
-		// sortArtifacts's default ordering would otherwise bunch together
-		// in an arbitrary relative order.
-		sort.Slice(out, func(i, j int) bool {
-			if out[i].StateChangedAt.Equal(out[j].StateChangedAt) {
-				return out[i].ArtifactID < out[j].ArtifactID
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].StateChangedAt.Equal(all[j].StateChangedAt) {
+			return all[i].StateChangedAt.After(all[j].StateChangedAt)
+		}
+		return all[i].ArtifactID > all[j].ArtifactID
+	})
+
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeFakeCursor(pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		var resumed []repository.Artifact
+		for _, a := range all {
+			if a.StateChangedAt.Before(cursorTS) || (a.StateChangedAt.Equal(cursorTS) && a.ArtifactID < cursorID) {
+				resumed = append(resumed, a)
 			}
-			return out[i].StateChangedAt.Before(out[j].StateChangedAt)
-		})
-	} else {
-		sortArtifacts(out)
+		}
+		all = resumed
 	}
-	return out, nil
+
+	var nextPageToken string
+	if int32(len(all)) > pageSize {
+		last := all[pageSize-1]
+		nextPageToken = encodeFakeCursor(last.StateChangedAt, last.ArtifactID)
+		all = all[:pageSize]
+	}
+	return all, nextPageToken, nil
 }
+
 
 func (r *Registry) GetArtifact(ctx context.Context, lookup repository.ArtifactLookup) (*repository.Artifact, error) {
 	a, err := r.findArtifact(lookup)
@@ -1257,8 +1330,23 @@ func (f promotionFake) StateAt(ctx context.Context, environmentID string, at *ti
 	return out, nil
 }
 
-func (f promotionFake) ListPromotions(ctx context.Context, filter repository.PromotionListFilter) ([]repository.Promotion, error) {
-	var out []repository.Promotion
+// defaultPromotionPageSize matches postgres's promotionRepo default -- see
+// that package's doc comment on the same constant.
+const defaultPromotionPageSize = 50
+
+// ListPromotions mirrors postgres's promotionRepo.ListPromotions: same
+// ordering (valid_from DESC, promotion_id DESC), same filters, same real
+// LIMIT + keyset cursor pagination contract -- see
+// repository.PromotionRepository.ListPromotions's doc comment. Cursor
+// format reuses this package's own encodeFakeCursor/decodeFakeCursor
+// (keyset_cursor.go) -- only this fake's own round-trip needs to hold, not
+// cross-compatibility with postgres's token format.
+func (f promotionFake) ListPromotions(ctx context.Context, filter repository.PromotionListFilter, pageSize int32, pageToken string) ([]repository.Promotion, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultPromotionPageSize
+	}
+
+	var all []repository.Promotion
 	for _, p := range f.r.state.Promotions {
 		if filter.EnvironmentKey != "" && p.EnvironmentKey != filter.EnvironmentKey {
 			continue
@@ -1269,10 +1357,31 @@ func (f promotionFake) ListPromotions(ctx context.Context, filter repository.Pro
 		if !filter.IncludeHistory && p.ValidTo != nil {
 			continue
 		}
-		out = append(out, p)
+		all = append(all, p)
 	}
-	sortPromotions(out)
-	return out, nil
+	sortPromotions(all)
+
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeFakeCursor(pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		var resumed []repository.Promotion
+		for _, p := range all {
+			if p.ValidFrom.Before(cursorTS) || (p.ValidFrom.Equal(cursorTS) && p.PromotionID < cursorID) {
+				resumed = append(resumed, p)
+			}
+		}
+		all = resumed
+	}
+
+	var nextPageToken string
+	if int32(len(all)) > pageSize {
+		last := all[pageSize-1]
+		nextPageToken = encodeFakeCursor(last.ValidFrom, last.PromotionID)
+		all = all[:pageSize]
+	}
+	return all, nextPageToken, nil
 }
 
 func (f promotionFake) RecordEvent(ctx context.Context, e repository.PromotionEvent) (*repository.PromotionEvent, error) {
@@ -1284,8 +1393,23 @@ func (f promotionFake) RecordEvent(ctx context.Context, e repository.PromotionEv
 	return &e, nil
 }
 
-func (f promotionFake) ListEvents(ctx context.Context, filter repository.PromotionEventListFilter) ([]repository.PromotionEvent, error) {
-	var out []repository.PromotionEvent
+// defaultPromotionEventPageSize matches postgres's promotionRepo default --
+// see that package's doc comment on the same constant.
+const defaultPromotionEventPageSize = 50
+
+// ListEvents mirrors postgres's promotionRepo.ListEvents: same ordering
+// (occurred_at DESC, event_id DESC), same filters, same real LIMIT +
+// keyset cursor pagination contract -- see
+// repository.PromotionRepository.ListEvents's doc comment. Cursor format
+// reuses this package's own encodeFakeCursor/decodeFakeCursor
+// (keyset_cursor.go) -- only this fake's own round-trip needs to hold, not
+// cross-compatibility with postgres's token format.
+func (f promotionFake) ListEvents(ctx context.Context, filter repository.PromotionEventListFilter, pageSize int32, pageToken string) ([]repository.PromotionEvent, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultPromotionEventPageSize
+	}
+
+	var all []repository.PromotionEvent
 	for _, e := range f.r.state.PromotionEvents {
 		if filter.PromotionID != "" && e.PromotionID != filter.PromotionID {
 			continue
@@ -1308,10 +1432,36 @@ func (f promotionFake) ListEvents(ctx context.Context, filter repository.Promoti
 				continue
 			}
 		}
-		out = append(out, e)
+		all = append(all, e)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].OccurredAt.After(out[j].OccurredAt) })
-	return out, nil
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].OccurredAt.Equal(all[j].OccurredAt) {
+			return all[i].OccurredAt.After(all[j].OccurredAt)
+		}
+		return all[i].EventID > all[j].EventID
+	})
+
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeFakeCursor(pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		var resumed []repository.PromotionEvent
+		for _, e := range all {
+			if e.OccurredAt.Before(cursorTS) || (e.OccurredAt.Equal(cursorTS) && e.EventID < cursorID) {
+				resumed = append(resumed, e)
+			}
+		}
+		all = resumed
+	}
+
+	var nextPageToken string
+	if int32(len(all)) > pageSize {
+		last := all[pageSize-1]
+		nextPageToken = encodeFakeCursor(last.OccurredAt, last.EventID)
+		all = all[:pageSize]
+	}
+	return all, nextPageToken, nil
 }
 
 func (f promotionFake) findCurrent(environmentID, targetKey string) (repository.Promotion, bool) {
@@ -1422,7 +1572,12 @@ func (f writebackFake) Get(ctx context.Context, outboxID string) (*repository.Wr
 }
 
 func sortPromotions(promotions []repository.Promotion) {
-	sort.Slice(promotions, func(i, j int) bool { return promotions[i].ValidFrom.After(promotions[j].ValidFrom) })
+	sort.Slice(promotions, func(i, j int) bool {
+		if !promotions[i].ValidFrom.Equal(promotions[j].ValidFrom) {
+			return promotions[i].ValidFrom.After(promotions[j].ValidFrom)
+		}
+		return promotions[i].PromotionID > promotions[j].PromotionID
+	})
 }
 
 // timeNow is a thin indirection so a future test could freeze it; today it's
@@ -1478,11 +1633,3 @@ func sortCharts(charts []repository.Chart) {
 	sort.Slice(charts, func(i, j int) bool { return charts[i].FullName() < charts[j].FullName() })
 }
 
-func sortArtifacts(artifacts []repository.Artifact) {
-	sort.Slice(artifacts, func(i, j int) bool {
-		if artifacts[i].PublishedAt.Equal(artifacts[j].PublishedAt) {
-			return artifacts[i].Digest < artifacts[j].Digest
-		}
-		return artifacts[i].PublishedAt.Before(artifacts[j].PublishedAt)
-	})
-}

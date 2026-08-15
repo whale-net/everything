@@ -476,17 +476,21 @@ func (s *PromotionServer) ListPromotions(ctx context.Context, req *pb.ListPromot
 	if err := auth.RequireAuthenticated(ctx); err != nil {
 		return nil, err
 	}
-	promotions, err := s.repo.Promotions().ListPromotions(ctx, repository.PromotionListFilter{
+	promotions, nextToken, err := s.repo.Promotions().ListPromotions(ctx, repository.PromotionListFilter{
 		EnvironmentKey: req.EnvironmentKey,
 		OwnerFullName:  req.OwnerFullName,
 		IncludeHistory: req.IncludeHistory,
-	})
+	}, req.GetPage().GetPageSize(), req.GetPage().GetPageToken())
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
 	return &pb.ListPromotionsResponse{
 		Promotions: promotionsToPB(promotions),
-		Page:       &pb.PageResponse{TotalSize: int32(len(promotions))},
+		// total_size is a PAGE-LOCAL count (len(promotions) <= page_size),
+		// not the true total row count across all pages -- same tradeoff as
+		// ListReconcileRuns/ListBuilds (see ARCHITECTURE.md's pagination
+		// note).
+		Page: &pb.PageResponse{NextPageToken: nextToken, TotalSize: int32(len(promotions))},
 	}, nil
 }
 
@@ -498,19 +502,23 @@ func (s *PromotionServer) ListPromotionEvents(ctx context.Context, req *pb.ListP
 	if req.Since != 0 {
 		since = unixToTime(req.Since)
 	}
-	events, err := s.repo.Promotions().ListEvents(ctx, repository.PromotionEventListFilter{
+	events, nextToken, err := s.repo.Promotions().ListEvents(ctx, repository.PromotionEventListFilter{
 		PromotionID:    req.PromotionId,
 		EnvironmentKey: req.EnvironmentKey,
 		OwnerFullName:  req.OwnerFullName,
 		Actor:          req.Actor,
 		Since:          since,
-	})
+	}, req.GetPage().GetPageSize(), req.GetPage().GetPageToken())
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
 	return &pb.ListPromotionEventsResponse{
 		Events: promotionEventsToPB(events),
-		Page:   &pb.PageResponse{TotalSize: int32(len(events))},
+		// total_size is a PAGE-LOCAL count (len(events) <= page_size), not
+		// the true total row count across all pages -- same tradeoff as
+		// ListReconcileRuns/ListBuilds (see ARCHITECTURE.md's pagination
+		// note).
+		Page: &pb.PageResponse{NextPageToken: nextToken, TotalSize: int32(len(events))},
 	}, nil
 }
 
