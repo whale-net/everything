@@ -39,6 +39,7 @@ func init() {
 		newBuildCmd(),
 		newReleaseMultiarchCmd(),
 		newReleaseAppCmd(),
+		newReleaseChartsCmd(),
 		newCreateCombinedGithubReleaseCmd(),
 		newManifestSetCmd(),
 		newReadChartLockfileCmd(),

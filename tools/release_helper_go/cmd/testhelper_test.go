@@ -36,6 +36,7 @@ func newTestRoot() *cobra.Command {
 		newListCmd(),
 		newChangesCmd(),
 		newReleaseAppCmd(),
+		newReleaseChartsCmd(),
 		newManifestSetCmd(),
 		newReadChartLockfileCmd(),
 	)
