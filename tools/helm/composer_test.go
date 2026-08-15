@@ -1484,3 +1484,120 @@ func TestWriteValuesYAML_SecretEnvAndEnvFromCoexist(t *testing.T) {
 		t.Error("envFrom secretRef missing")
 	}
 }
+
+// TestWriteValuesYAML_SecretEnv_MalformedFailsRender proves that an
+// incomplete secretEnv entry (missing name, secretName, or key) fails the
+// render with a clear error instead of silently emitting a blank field.
+// Regression test for #642's gap: previously this round-tripped with no
+// error and emitted "key: " in values.yaml.
+func TestWriteValuesYAML_SecretEnv_MalformedFailsRender(t *testing.T) {
+	cases := []struct {
+		name  string
+		entry SecretEnvEntry
+	}{
+		{"missing name", SecretEnvEntry{SecretName: "app-secrets", Key: "secret-key"}},
+		{"missing secretName", SecretEnvEntry{Name: "SECRET_KEY", Key: "secret-key"}},
+		{"missing key", SecretEnvEntry{Name: "SECRET_KEY", SecretName: "app-secrets"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "secretenv-malformed-test")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			data := ValuesData{
+				Global:          GlobalConfig{Namespace: "ns", Environment: "prod"},
+				IngressDefaults: IngressDefaultsConfig{Enabled: false},
+				Apps: map[string]AppConfig{
+					"myapp-api": {
+						Type:     "external-api",
+						Image:    "ghcr.io/org/myapp",
+						ImageTag: "v2.0.0",
+						Port:     8000,
+						Replicas: 1,
+						Resources: ValuesResourceConfig{
+							Requests: ResourceValues{CPU: "50m", Memory: "128Mi"},
+							Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+						},
+						SecretEnv: []SecretEnvEntry{tc.entry},
+					},
+				},
+			}
+
+			valuesFile := filepath.Join(tmpDir, "values.yaml")
+			f, err := os.Create(valuesFile)
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			defer f.Close()
+
+			err = writeValuesYAML(f, data)
+			if err == nil {
+				t.Fatalf("expected writeValuesYAML to fail for malformed secretEnv entry %+v, got nil error", tc.entry)
+			}
+			if !strings.Contains(err.Error(), "secretEnv") {
+				t.Errorf("expected error to mention 'secretEnv', got: %v", err)
+			}
+		})
+	}
+}
+
+// TestWriteValuesYAML_EnvFrom_MalformedFailsRender proves that an envFrom
+// entry with neither secretRef nor configMapRef set (or with both set)
+// fails the render with a clear error. Regression test for #642's gap.
+func TestWriteValuesYAML_EnvFrom_MalformedFailsRender(t *testing.T) {
+	cases := []struct {
+		name  string
+		entry EnvFromEntry
+	}{
+		{"neither set", EnvFromEntry{}},
+		{"both set", EnvFromEntry{SecretRef: "app-secrets", ConfigMapRef: "app-config"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "envfrom-malformed-test")
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			data := ValuesData{
+				Global:          GlobalConfig{Namespace: "ns", Environment: "prod"},
+				IngressDefaults: IngressDefaultsConfig{Enabled: false},
+				Apps: map[string]AppConfig{
+					"myapp-api": {
+						Type:     "external-api",
+						Image:    "ghcr.io/org/myapp",
+						ImageTag: "v2.0.0",
+						Port:     8000,
+						Replicas: 1,
+						Resources: ValuesResourceConfig{
+							Requests: ResourceValues{CPU: "50m", Memory: "128Mi"},
+							Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+						},
+						EnvFrom: []EnvFromEntry{tc.entry},
+					},
+				},
+			}
+
+			valuesFile := filepath.Join(tmpDir, "values.yaml")
+			f, err := os.Create(valuesFile)
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			defer f.Close()
+
+			err = writeValuesYAML(f, data)
+			if err == nil {
+				t.Fatalf("expected writeValuesYAML to fail for malformed envFrom entry %+v, got nil error", tc.entry)
+			}
+			if !strings.Contains(err.Error(), "envFrom") {
+				t.Errorf("expected error to mention 'envFrom', got: %v", err)
+			}
+		})
+	}
+}
