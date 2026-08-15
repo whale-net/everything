@@ -217,13 +217,19 @@ func validateLabels(labels []string, bazel BazelRunner) []string {
 	if len(labels) == 0 {
 		return nil
 	}
-	// Try batch first
+	// Try batch query with --keep_going first
 	expr := strings.Join(labels, " + ")
-	out, err := bazel.Run("query", expr, "--output=label")
+	out, err := bazel.Run("query", expr, "--output=label", "--keep_going")
 	if err == nil {
-		return strings.Split(strings.TrimSpace(out), "\n")
+		return splitNonEmpty(out)
 	}
-	// Fall back to individual validation
+
+	// If batch failed with non-zero exit code, keep_going may still have emitted valid targets
+	if valid := splitNonEmpty(out); len(valid) > 0 {
+		return valid
+	}
+
+	// Fall back to individual validation only if nothing was parsed
 	var valid []string
 	for _, label := range labels {
 		if out, err := bazel.Run("query", label, "--output=label"); err == nil {
@@ -238,8 +244,16 @@ func validateLabels(labels []string, bazel BazelRunner) []string {
 // validatePackages drops packages that no longer exist (e.g. a deleted
 // directory whose BUILD file was among the changed files).
 func validatePackages(packages map[string]struct{}, bazel BazelRunner) []string {
-	var valid []string
+	if len(packages) == 0 {
+		return nil
+	}
+	var pkgList []string
 	for pkg := range packages {
+		pkgList = append(pkgList, pkg)
+	}
+
+	var valid []string
+	for _, pkg := range pkgList {
 		expr := pkg + "/..."
 		if pkg == "//" {
 			expr = "//..."
