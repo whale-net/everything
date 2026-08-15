@@ -83,6 +83,21 @@ Update documentation as part of the same task that changes the code — not as a
 
 **New files:** If you create a doc that isn't one of the four standard files (e.g. a component-specific guide or style doc), add an entry to the domain's `TOC.md` so it is discoverable.
 
+### Size Limits & Splitting
+
+**When to split.** If a doc can't be read in one pass — roughly 800–1000 lines / ~20K tokens — split it before adding more. That threshold sits under the ~25K-token single-`Read` an agent gets by default; past it, agents fall back to grep/search instead of reading cold. Re-check this every time a doc grows during review — a file that was fine at 600 lines can silently cross the line months later, and "length alone wasn't a reason" the last time someone looked doesn't mean it still isn't.
+
+**How to split, by file type:**
+- **Planning / status docs (`PLAN.md` and similar):** split current-state from history. Keep only what's true right now — status, open items, forward-looking scope — in the live file; move the as-built record of completed phases to a `*-HISTORY.md` sibling, linked from the live file's status table and not meant to be read start-to-finish. See `tools/app_registry/PLAN.md` / `PLAN-HISTORY.md`.
+- **Reference docs with heavy internal cross-referencing (`ARCHITECTURE.md` and similar):** if sections are cited by heading name from other docs or from code comments, a physical split risks breaking more links than the size problem it solves. Add a navigational index at the top instead, so an agent can jump to the ~100–200 line section it needs instead of reading serially or grepping cold. See `tools/app_registry/ARCHITECTURE.md`.
+- **Code modules:** split along the boundary the language already uses for imports — one package/module per concern. Watch for circular or stale imports introduced by the split (notably in Python, where circular imports fail late and confusingly).
+- **Persona / role docs:** one file per persona or actor, cross-linked from an index, rather than one file describing every persona serially.
+
+**Split mechanics:**
+- The split boundary must be algorithmic, not ad hoc — pick something an agent can predict without reading the whole doc first (chronological phase, one-file-per-concern, current vs. historical), not an arbitrary line-count cut.
+- Fix every intra-doc cross-reference the split touches (other docs, `TOC.md`, code comments citing a heading or file) before merging — do not leave dangling references.
+- Minimize impact on consumers: a reader who only wants current state shouldn't need to open the history file, and vice versa.
+
 ## SCD2 (Slowly Changing Dimensions Type 2)
 
 **Column convention — always use `valid_from` / `valid_to`:**
