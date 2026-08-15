@@ -40,18 +40,52 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Build release_helper_go from source when use_source_tools is requested (safety valve).
-  # In standard pinned mode (default), downstream jobs fetch pinned binaries directly via
-  # .github/actions/download-release-tools, skipping this job entirely.
+  # Probe for prebuilt release tools or build from source if missing / requested.
+  # When prebuilt releases exist and use_source_tools is false, this job completes in seconds.
+  # If prebuilt releases do not exist or use_source_tools is true, this builds the tools ONCE
+  # via Bazel and uploads them as a workflow artifact for all downstream jobs to reuse.
   build-release-tools:
     name: Build Release Tools
     runs-on: ubuntu-latest
-    if: ${{ inputs.use_source_tools == true || github.event.inputs.use_source_tools == 'true' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Check prebuilt tool availability
+        id: probe
+        env:
+          USE_SOURCE: ${{ inputs.use_source_tools == true || github.event.inputs.use_source_tools == 'true' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ "$USE_SOURCE" == "true" ]]; then
+            echo "Explicit use_source_tools requested. Building from source."
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Read pinned versions
+          RH_VER=$(grep -E '^\s*release_helper_go:' .release-tools-version 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | tr -d '"\x27\r\n ' || true)
+          AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' .release-tools-version 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | tr -d '"\x27\r\n ' || true)
+
+          RH_EXISTS=false
+          AR_EXISTS=false
+          if [[ -n "$RH_VER" ]] && gh release view "tools-release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1; then
+            RH_EXISTS=true
+          fi
+          if [[ -n "$AR_VER" ]] && gh release view "tools-app_registry_cli.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1; then
+            AR_EXISTS=true
+          fi
+
+          if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
+            echo "Prebuilt release tools exist on GitHub Releases. Downstream jobs will download prebuilt binaries directly."
+            echo "needs_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Prebuilt release tools not found on GitHub Releases. Building once as workflow artifact for this run."
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Build Environment
+        if: steps.probe.outputs.needs_build == 'true'
         uses: ./.github/actions/setup-build-env
         with:
           cache-suffix: 'release-tools'
@@ -59,14 +93,19 @@ jobs:
           bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
 
-      - name: Build release helper
+      - name: Build release helper & app registry
+        if: steps.probe.outputs.needs_build == 'true'
         run: |
-          bazel build --config=ci-images //tools/release_helper_go:release_helper_go
+          bazel build --config=ci-images \
+            //tools/release_helper_go:release_helper_go \
+            //tools/app_registry/cli:app-registry
           BAZEL_BIN="$(bazel info bazel-bin --config=ci-images)"
           mkdir -p /tmp/release-tools
           cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
+          cp "$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry" /tmp/release-tools/app-registry
 
       - name: Upload release tools artifact
+        if: steps.probe.outputs.needs_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: release-tools
