@@ -45,7 +45,7 @@ const exitOwnerNotReconciled = 3
 // Composite actions use this to escalate their annotation from `::warning::`
 // (transient, best-effort-and-move-on) to `::error::` (deployment defect,
 // loud at every adoption stage) -- see
-// tools/app_registry/ARCHITECTURE.md#availability-and-bootstrap.
+// tools/app_registry/architecture/16-availability-and-bootstrap.md.
 //
 // Keep this constant's value in sync with every GitHub Actions call site
 // that checks for it literally, since a shell script can't import this

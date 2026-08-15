@@ -47,7 +47,7 @@ app-registry env list | upsert | archive                       # admin
 
 `--promotable` on `artifacts list` is the answer to "what can I actually
 promote?" — it filters by the derived promotability described in
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md#promotability). `--provenance
+[ARCHITECTURE.md "Promotability"](../architecture/09-promotability.md). `--provenance
 adopted` (AR-7e) answers "which rows did we take on faith?" — see
 `../OPERATIONS.md`'s "Adoption and disaster recovery". The `[domain-name]`
 positional argument is optional specifically so that query can span every
@@ -56,7 +56,7 @@ owner in one call, not just one.
 ### `adopt`
 
 Admin-only (never the builder credential CI holds) — see
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md#authorization). Records a
+[ARCHITECTURE.md "Authorization"](../architecture/13-authorization.md). Records a
 pre-existing GHCR image or chart as `published` with `provenance = adopted`,
 for when there is no CI run to resume: a chart pinning an image published
 before the registry existed, or a registry restored behind/lost. `--reason`
@@ -123,4 +123,4 @@ is for). Each remaining entry is tagged `only_a`, `only_b`, or `different`.
 - `--format json|table`; JSON output is what CI parses.
 - Client auth via `libs/go/grpcauth` client credentials. Promotion commands use
   a different credential than recording commands — see the auth split in
-  [`../ARCHITECTURE.md`](../ARCHITECTURE.md#authorization).
+  [ARCHITECTURE.md "Authorization"](../architecture/13-authorization.md).

@@ -95,7 +95,7 @@ runs:
           {
             echo "### ❌ App Registry: version skew"
             echo ""
-            echo "RecordBuild failed for workflow run \`${WORKFLOW_RUN_ID}\` (attempt \`${WORKFLOW_ATTEMPT}\`) -- the deployed server does not implement this RPC. This will not clear on retry. See tools/app_registry/ARCHITECTURE.md#availability-and-bootstrap and OPERATIONS.md."
+            echo "RecordBuild failed for workflow run \`${WORKFLOW_RUN_ID}\` (attempt \`${WORKFLOW_ATTEMPT}\`) -- the deployed server does not implement this RPC. This will not clear on retry. See tools/app_registry/architecture/16-availability-and-bootstrap.md and OPERATIONS.md."
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
         elif [[ $RECORD_EXIT -ne 0 ]]; then
