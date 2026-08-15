@@ -4,8 +4,10 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "ui_lib",
     srcs = [
+        "deployments_data.go",
         "grpc_client.go",
-        "handlers_home.go",
+        "handlers_dashboard.go",
+        "handlers_deployments.go",
         "main.go",
         "templ_render.go",
     ],
@@ -21,6 +23,7 @@ go_library(
         "//libs/go/logging",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/ui/components",
+        "//tools/app_registry/ui/matrix",
         "//tools/app_registry/ui/pages",
         "@com_github_a_h_templ//:templ",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",

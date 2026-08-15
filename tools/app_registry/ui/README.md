@@ -10,19 +10,24 @@ deliberately differs from `manmanv2/ui`'s Tailwind-only approach.
 
 ```
 tools/app_registry/ui/
-  main.go            # config (env vars only), App wiring, HTTP server, graceful shutdown
-  grpc_client.go      # typed app-registry-api client forwarding the user's own token
-  templ_render.go     # wraps a templ.Component in libs/go/htmxbase's layout; also logs FR-59
-  handlers_home.go    # the one placeholder authenticated screen
-  themes.css           # synced copy of tools/wireframe/themes.css (see below)
-  components/          # shared chrome, vocabulary, and role-gate helpers (see "Design system")
-    layout.templ         # Shell: navbar, nav items, FR-59 banner slot
-    badges.templ          # PromotabilityBadge / ArtifactStateBadge / ProvenanceBadge — the one definition of each
-    digest.templ           # DigestDisplay: truncated + copyable digest, shown alongside version
-    banner.templ            # MisconfigBanner: the FR-59 persistent banner
-    gate.templ               # GatedAction: standard "unavailable action" rendering
-    roles.go                  # HasRole, EnvironmentPromoterRole(s), RolesMisconfigured, Gate
-  pages/                # screen-level templ components
+  main.go                  # config (env vars only), App wiring, HTTP server, graceful shutdown
+  grpc_client.go            # typed app-registry-api client forwarding the user's own token
+  templ_render.go           # wraps a templ.Component in libs/go/htmxbase's layout; also logs FR-59
+  deployments_data.go       # buildDeploymentMatrix: the N concurrent GetEnvironmentState fan-out (FR-7)
+  handlers_dashboard.go     # screen 01-dashboard ("/")
+  handlers_deployments.go   # screen 10-environment-status ("/deployments")
+  themes.css                # synced copy of tools/wireframe/themes.css (see below)
+  components/                # shared chrome, vocabulary, and role-gate helpers (see "Design system")
+    layout.templ               # Shell: navbar, nav items, FR-59 banner slot
+    badges.templ                # PromotabilityBadge / ArtifactStateBadge / ProvenanceBadge — the one definition of each
+    digest.templ                 # DigestDisplay: truncated + copyable digest, shown alongside version
+    banner.templ                  # MisconfigBanner: the FR-59 persistent banner
+    gate.templ                     # GatedAction / GatedLinkAction: standard "unavailable action" rendering
+    roles.go                        # HasRole, EnvironmentPromoterRole(s), RolesMisconfigured, Gate, GateCellAction
+  matrix/                     # pure-data FR-4/FR-5 row/column shaping shared by dashboard + deployments (no gRPC calls)
+  pages/                      # screen-level templ components
+    dashboard.templ             # screen 01
+    deployments.templ           # screen 10 ("Deployments" in nav)
 ```
 
 ## Auth

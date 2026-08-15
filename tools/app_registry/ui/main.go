@@ -248,7 +248,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/logout", app.auth.HandleLogout)
 
 	// Protected routes.
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleHome)))
+	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDashboard)))
+	mux.HandleFunc("/deployments", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDeployments)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

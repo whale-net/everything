@@ -8,5 +8,6 @@ templ_library(
         "//libs/go/htmxauth",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/ui/components",
+        "//tools/app_registry/ui/matrix",
     ],
 )

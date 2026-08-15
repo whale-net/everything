@@ -25,3 +25,30 @@ templ GatedAction(decision GateDecision, label string, class string) {
 		</button>
 	}
 }
+
+// GatedLinkAction is GatedAction's link-shaped sibling, for the per-cell
+// promote/rollback affordances the deployments matrix (screen 10, FR-6)
+// opens pre-scoped to one (entity, environment) pair via href's query
+// string. When denied — including while an "as of" instant is active
+// (FR-8: mutating controls must be disabled whenever historical state is
+// shown) — this renders a disabled, non-navigating control with the missing
+// role or reason named, never a live link guaranteed to fail or silently
+// mutate against the wrong state (FR-44).
+templ GatedLinkAction(decision GateDecision, label string, class string, href string, title string) {
+	if decision.Allowed {
+		<a href={ templ.URL(href) } class={ "btn", class } title={ title }>{ label }</a>
+	} else {
+		{{ denyReason := decision.Reason }}
+		if denyReason == "" {
+			{{ denyReason = "Requires role: " + decision.MissingRole }}
+		}
+		<button
+			type="button"
+			class={ "btn", class, "btn-disabled" }
+			disabled
+			title={ denyReason }
+		>
+			{ label }
+		</button>
+	}
+}

@@ -1,0 +1,139 @@
+package pages
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
+)
+
+// Dashboard is screen 01-dashboard: cross-environment state, drift/health
+// alerts, and recent promotions, read-only (every action links out to the
+// screen that owns it — FR-10). promotionsErr is rendered as an inline
+// card-level error rather than failing the whole page: the environment
+// overview above it is independently useful even when the recent-
+// promotions read fails (NFR-6 still applies — the failure is explicit,
+// never presented as "no recent promotions").
+templ Dashboard(user *htmxauth.UserInfo, m *matrix.Matrix, promotions []*pb.Promotion, promotionsErr error) {
+	@components.Shell("App Registry", user) {
+		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100">
+			<h1 class="text-2xl md:text-3xl font-bold mb-2">Dashboard</h1>
+			<p class="text-sm opacity-80">What's live, what drifted, what needs attention — across every environment.</p>
+		</div>
+		if m.TotalDrift() > 0 {
+			<div role="alert" class="alert alert-error shadow-md mb-6">
+				<span>
+					⚠️ <strong>{ fmt.Sprint(m.TotalDrift()) } drifted override(s)</strong> — an overridden image no
+					longer matches its chart's pin. <a href="/deployments" class="link link-error font-semibold">Review in Deployments</a>
+				</span>
+			</div>
+		}
+		<div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+			<div class="stat bg-base-100 rounded-box shadow-md">
+				<div class="stat-title">Environments</div>
+				<div class="stat-value text-primary">{ fmt.Sprint(len(m.Environments)) }</div>
+				<div class="stat-desc">
+					for i, env := range m.Environments {
+						if i > 0 {
+							{ " · " }
+						}
+						{ env.GetKey() }
+					}
+				</div>
+			</div>
+			<div class="stat bg-base-100 rounded-box shadow-md">
+				<div class="stat-title">Drifted overrides</div>
+				if m.TotalDrift() > 0 {
+					<div class="stat-value text-error">{ fmt.Sprint(m.TotalDrift()) }</div>
+				} else {
+					<div class="stat-value text-success">0</div>
+				}
+				<div class="stat-desc"><a href="/deployments" class="link">view matrix</a></div>
+			</div>
+			<div class="stat bg-base-100 rounded-box shadow-md">
+				<div class="stat-title">Currently promoted (all envs)</div>
+				<div class="stat-value text-success">{ fmt.Sprint(totalPromoted(m)) }</div>
+				<div class="stat-desc"><a href="/deployments" class="link">view matrix</a></div>
+			</div>
+		</div>
+		<div class="grid md:grid-cols-3 gap-6 mb-6">
+			for _, s := range m.EnvSummaries() {
+				<a href="/deployments" class="card bg-base-100 shadow-md hover:shadow-lg transition-shadow">
+					<div class="card-body">
+						<h2 class="card-title text-lg">{ s.Env.GetKey() }</h2>
+						if s.Err != nil {
+							<p class="text-sm opacity-70" title={ s.Err.Error() }>could not load state</p>
+							<span class="badge badge-soft badge-warning">Unknown</span>
+						} else {
+							<p class="text-sm opacity-70">
+								{ fmt.Sprint(s.PromotedCount) } promoted
+								if s.DriftCount > 0 {
+									{ " · " }{ fmt.Sprint(s.DriftCount) } drifted
+								}
+							</p>
+							if s.DriftCount > 0 {
+								<span class="badge badge-soft badge-error">Drift</span>
+							} else {
+								<span class="badge badge-soft badge-success">Healthy</span>
+							}
+						}
+					</div>
+				</a>
+			}
+		</div>
+		<div class="card bg-base-100 shadow-md">
+			<div class="card-body p-0">
+				<div class="flex justify-between items-center p-4 border-b border-base-300">
+					<h2 class="text-lg font-semibold">Recent promotions</h2>
+					<a href="/deployments" class="btn btn-sm btn-primary">All environments</a>
+				</div>
+				if promotionsErr != nil {
+					<div role="alert" class="alert alert-error m-4">
+						<span>Failed to load recent promotions: { promotionsErr.Error() }</span>
+					</div>
+				} else if len(promotions) == 0 {
+					<p class="p-4 text-sm opacity-70">No current promotions recorded.</p>
+				} else {
+					<table class="table">
+						<thead>
+							<tr><th>App</th><th>Env</th><th>Version</th><th class="text-right">Since</th></tr>
+						</thead>
+						<tbody>
+							for _, p := range promotions {
+								<tr class="hover">
+									<td class="font-mono text-sm">{ ownerName(m, p) }</td>
+									<td><span class="badge badge-neutral badge-sm">{ p.GetEnvironmentKey() }</span></td>
+									<td>@components.DigestDisplay(p.GetVersion(), p.GetDigest())</td>
+									<td class="text-right opacity-60">{ time.Unix(p.GetValidFrom(), 0).UTC().Format(time.RFC3339) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+		</div>
+		<p class="text-xs opacity-50 mt-4">Dashboard is read-only by design — every action here links out to the Deployments screen that owns it.</p>
+	}
+}
+
+func totalPromoted(m *matrix.Matrix) int {
+	total := 0
+	for _, s := range m.EnvSummaries() {
+		total += s.PromotedCount
+	}
+	return total
+}
+
+func ownerName(m *matrix.Matrix, p *pb.Promotion) string {
+	key := "app:" + p.GetAppId()
+	if p.GetChartId() != "" {
+		key = "chart:" + p.GetChartId()
+	}
+	if name := m.OwnerFullName(key); name != "" {
+		return name
+	}
+	return "(unknown)"
+}

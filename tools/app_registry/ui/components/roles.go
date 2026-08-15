@@ -66,6 +66,12 @@ func EnvironmentPromoterRoles(envs []*pb.Environment) []string {
 type GateDecision struct {
 	Allowed     bool
 	MissingRole string
+
+	// Reason overrides the "Requires role: <MissingRole>" default title
+	// when denial has nothing to do with a missing role — e.g. a mutating
+	// control disabled because an "as of" historical instant is active
+	// (FR-8). Empty means "use the default role-based message".
+	Reason string
 }
 
 // Gate evaluates whether user holds role and returns the decision plus the
@@ -75,6 +81,21 @@ func Gate(user *htmxauth.UserInfo, role string) GateDecision {
 		Allowed:     HasRole(user, role),
 		MissingRole: role,
 	}
+}
+
+// GateCellAction is Gate plus the FR-8 as-of rule the deployments matrix's
+// per-cell promote/rollback controls need: a control is only ever enabled
+// when the caller holds role AND the cell is showing current state, never
+// while asOfActive shows a historical snapshot — a mutation must never be
+// offered against state that isn't "now".
+func GateCellAction(user *htmxauth.UserInfo, role string, asOfActive bool) GateDecision {
+	if asOfActive {
+		return GateDecision{
+			Allowed: false,
+			Reason:  "Disabled while viewing historical state (\"as of\") — mutating actions only apply to the current state.",
+		}
+	}
+	return Gate(user, role)
 }
 
 // RolesMisconfigured implements the FR-59 distinction: true only when the

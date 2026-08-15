@@ -1,0 +1,232 @@
+package pages
+
+import (
+	"fmt"
+	"net/url"
+	"time"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
+)
+
+// asOfInputFormat matches HTML's <input type="datetime-local"> value format
+// ("2006-01-02T15:04"). Interpreted as UTC — see handlers_deployments.go's
+// parseAsOf, which is this function's inverse.
+const asOfInputFormat = "2006-01-02T15:04"
+
+func asOfInputValue(asOf int64) string {
+	if asOf == 0 {
+		return ""
+	}
+	return time.Unix(asOf, 0).UTC().Format(asOfInputFormat)
+}
+
+// rowArtifactKind returns the ArtifactKind string the /promote and
+// /rollback screens (delivered separately, FR-6) expect, matching the CLI's
+// own --kind flag values ("image"|"chart").
+func rowArtifactKind(k matrix.RowKind) string {
+	if k == matrix.RowKindChart {
+		return "chart"
+	}
+	return "image"
+}
+
+func entityActionHref(path, ownerFullName, kind, envKey string, allowOverride bool) string {
+	v := url.Values{}
+	v.Set("owner", ownerFullName)
+	v.Set("kind", kind)
+	v.Set("env", envKey)
+	if allowOverride {
+		v.Set("allow_override", "true")
+	}
+	return path + "?" + v.Encode()
+}
+
+// Deployments is screen 10-environment-status ("Deployments" in nav): one
+// row per PROMOTABLE entity, one column per environment, every
+// promote/rollback control scoped to the exact (entity, environment) cell
+// it acts on (FR-6). asOfActive reflects the FR-7/FR-3 "as of" URL
+// parameter — see handlers_deployments.go.
+templ Deployments(user *htmxauth.UserInfo, m *matrix.Matrix, asOfActive bool) {
+	@components.Shell("Deployments", user) {
+		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100">
+			<h1 class="text-2xl md:text-3xl font-bold mb-2">Deployments</h1>
+			<p class="text-sm opacity-80">
+				One row per promotable entity, one column per environment. Every
+				promote/rollback action lives inside the exact cell it acts on —
+				there is no environment picker to get wrong.
+			</p>
+		</div>
+		<form method="get" action="/deployments" class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-4">
+			<div class="flex items-center gap-2">
+				<label class="text-sm opacity-70" for="at">As of (UTC):</label>
+				<input type="datetime-local" id="at" name="at" class="input input-sm input-bordered" value={ asOfInputValue(m.AsOf) }/>
+				<button type="submit" class="btn btn-sm">Apply</button>
+				if asOfActive {
+					<a href="/deployments" class="btn btn-sm btn-ghost">Back to now</a>
+				}
+			</div>
+		</form>
+		if asOfActive {
+			<div role="alert" class="alert alert-warning shadow-md mb-4">
+				<span>
+					<strong>Viewing historical state as of { time.Unix(m.AsOf, 0).UTC().Format(time.RFC3339) } UTC.</strong>
+					Every column reflects that instant, not now. Promote/rollback
+					controls are disabled while a historical instant is active.
+				</span>
+			</div>
+		}
+		if len(m.ColumnErrors) > 0 {
+			<div role="alert" class="alert alert-error shadow-md mb-4">
+				<span>
+					⚠️ <strong>Failed to load state for { fmt.Sprint(len(m.ColumnErrors)) } environment(s).</strong>
+					Their columns below show an explicit error — never treat a blank
+					cell in an unreachable environment as "nothing deployed".
+				</span>
+			</div>
+		}
+		if hasAnyDrift(m) {
+			<div role="alert" class="alert alert-error shadow-md mb-4">
+				<span>⚠️ <strong>Drift detected</strong> — an overridden image no longer matches its chart's pin in at least one row/environment below.</span>
+			</div>
+		}
+		<div class="overflow-x-auto">
+			<div style="min-width: 760px;">
+				<div class="grid gap-2 px-4 py-2 text-xs font-semibold uppercase opacity-60 border-b-2 border-base-300" style={ gridTemplateColumns(len(m.Environments)) }>
+					<div>Promotable entity</div>
+					for _, env := range m.Environments {
+						<div>{ env.GetKey() }</div>
+					}
+				</div>
+				if len(m.Rows) == 0 {
+					<div class="p-4 text-sm opacity-60">No PROMOTABLE entities registered.</div>
+				}
+				for _, row := range m.Rows {
+					@matrixRow(user, m.Environments, row, asOfActive)
+				}
+			</div>
+		</div>
+	}
+}
+
+func hasAnyDrift(m *matrix.Matrix) bool {
+	for _, row := range m.Rows {
+		if row.AnyDrift {
+			return true
+		}
+	}
+	return false
+}
+
+// gridTemplateColumns renders the entity column plus one column per
+// environment as an inline style, rather than a static Tailwind class list —
+// this UI loads Tailwind's browser build from CDN and compiles on the fly
+// from whatever's present in the rendered HTML (NFR-20), so a fixed set of
+// literal grid-cols-N classes can't cover an arbitrary, operator-defined
+// environment count.
+func gridTemplateColumns(nEnvs int) string {
+	return fmt.Sprintf("grid-template-columns: minmax(220px,2fr) repeat(%d, minmax(170px,1fr));", nEnvs)
+}
+
+templ matrixRow(user *htmxauth.UserInfo, environments []*pb.Environment, row *matrix.Row, asOfActive bool) {
+	if row.Kind == matrix.RowKindChart {
+		<details class="collapse collapse-arrow bg-base-100 border-b border-base-300">
+			<summary class="collapse-title p-0 cursor-pointer">
+				<div class="grid gap-2 px-4 py-3 items-center" style={ gridTemplateColumns(len(environments)) }>
+					<div class="flex items-center gap-2 pl-6">
+						<span class="font-mono text-sm">{ row.FullName }</span>
+						<span class="badge badge-soft badge-success badge-xs">chart</span>
+						if row.AnyDrift {
+							<span class="badge badge-soft badge-error badge-xs">drift</span>
+						}
+					</div>
+					for i, env := range environments {
+						@matrixCell(user, env, row.Cells[i], row.FullName, rowArtifactKind(row.Kind), asOfActive, true)
+					}
+				</div>
+			</summary>
+			<div class="collapse-content p-0">
+				for _, child := range row.Children {
+					<div class={ "grid gap-2 px-4 py-2 items-center border-t border-base-300/60" } style={ gridTemplateColumns(len(environments)) }>
+						<div class="pl-12 flex items-center gap-2">
+							<span class="font-mono text-sm">{ child.FullName }</span>
+							<span class="badge badge-soft badge-info badge-xs">image</span>
+						</div>
+						for i, env := range environments {
+							@matrixCell(user, env, child.Cells[i], child.FullName, rowArtifactKind(matrix.RowKindViaChartApp), asOfActive, false)
+						}
+					</div>
+				}
+			</div>
+		</details>
+	} else {
+		<div class="bg-base-100 border-b border-base-300">
+			<div class="grid gap-2 px-4 py-3 items-center" style={ gridTemplateColumns(len(environments)) }>
+				<div class="flex items-center gap-2 pl-6">
+					<span class="inline-block w-4"></span>
+					<span class="font-mono text-sm">{ row.FullName }</span>
+					<span class="badge badge-soft badge-info badge-xs">image</span>
+				</div>
+				for i, env := range environments {
+					@matrixCell(user, env, row.Cells[i], row.FullName, rowArtifactKind(row.Kind), asOfActive, true)
+				}
+			</div>
+		</div>
+	}
+}
+
+templ matrixCell(user *htmxauth.UserInfo, env *pb.Environment, cell *matrix.Cell, ownerFullName string, kind string, asOfActive bool, showFullControls bool) {
+	<div class="flex items-center gap-1 flex-wrap">
+		if cell.ColumnErr != nil {
+			<span class="badge badge-error badge-sm" title={ cell.ColumnErr.Error() }>error loading { env.GetKey() }</span>
+		} else if cell.Entry == nil {
+			<span class="text-xs opacity-50">not promoted</span>
+			if showFullControls {
+				<span onclick="event.stopPropagation()">
+					@components.GatedLinkAction(
+						components.GateCellAction(user, components.EnvironmentPromoterRole(env.GetKey()), asOfActive),
+						"⬆",
+						"btn-xs btn-primary btn-square",
+						entityActionHref("/promote", ownerFullName, kind, env.GetKey(), false),
+						"Promote "+ownerFullName+" to "+env.GetKey(),
+					)
+				</span>
+			}
+		} else {
+			@components.DigestDisplay(cell.Entry.GetArtifact().GetVersion(), cell.Entry.GetArtifact().GetDigest())
+			if cell.Drifted {
+				<span class="badge badge-soft badge-error badge-xs">drift</span>
+			}
+			if showFullControls {
+				<span onclick="event.stopPropagation()" class="flex items-center gap-1">
+					@components.GatedLinkAction(
+						components.GateCellAction(user, components.EnvironmentPromoterRole(env.GetKey()), asOfActive),
+						"⬆",
+						"btn-xs btn-primary btn-square",
+						entityActionHref("/promote", ownerFullName, kind, env.GetKey(), false),
+						"Promote "+ownerFullName+" to "+env.GetKey(),
+					)
+					@components.GatedLinkAction(
+						components.GateCellAction(user, components.EnvironmentPromoterRole(env.GetKey()), asOfActive),
+						"↺",
+						"btn-xs btn-secondary btn-square",
+						entityActionHref("/rollback", ownerFullName, kind, env.GetKey(), false),
+						"Rollback "+env.GetKey(),
+					)
+				</span>
+			} else {
+				<span onclick="event.stopPropagation()">
+					@components.GatedLinkAction(
+						components.GateCellAction(user, components.EnvironmentPromoterRole(env.GetKey()), asOfActive),
+						"override…",
+						"btn-xs btn-ghost",
+						entityActionHref("/promote", ownerFullName, kind, env.GetKey(), true),
+						"Override "+ownerFullName+" in "+env.GetKey()+" (bypasses its chart)",
+					)
+				</span>
+			}
+		}
+	</div>
+}

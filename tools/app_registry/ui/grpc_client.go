@@ -15,13 +15,15 @@ import (
 // token via libs/go/grpcauth (userAuthOpt, set up in NewApp) — the UI holds
 // no service account credentials of its own for registry data (FR-40).
 //
-// Only EnvironmentRegistry is wired up so far, for the placeholder home
-// screen's ListEnvironments read. Screen-work issues add the other three
-// registry services (AppRegistry, ArtifactRegistry, PromotionRegistry) as
-// they need them.
+// EnvironmentRegistry, AppRegistry, and PromotionRegistry are wired up (the
+// dashboard/deployments-matrix screens, #643, need identity + state reads
+// from all three). ArtifactRegistry is added when a later screen-work issue
+// needs it.
 type RegistryClient struct {
 	conn        *grpcclient.Client
 	Environment pb.EnvironmentRegistryClient
+	App         pb.AppRegistryClient
+	Promotion   pb.PromotionRegistryClient
 }
 
 // NewRegistryClient dials app-registry-api at address. userAuthOpt must be
@@ -36,6 +38,8 @@ func NewRegistryClient(ctx context.Context, address string, userAuthOpt grpc.Dia
 	return &RegistryClient{
 		conn:        conn,
 		Environment: pb.NewEnvironmentRegistryClient(conn.GetConnection()),
+		App:         pb.NewAppRegistryClient(conn.GetConnection()),
+		Promotion:   pb.NewPromotionRegistryClient(conn.GetConnection()),
 	}, nil
 }
 
