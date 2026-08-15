@@ -7,6 +7,13 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
+// RoleAdmin is the realm role gating environment create/edit/archive
+// controls (FR-38) — must match
+// tools/app_registry/server/auth.RoleAdmin character for character. Per
+// HasRole's design note, admin implies nothing else and nothing implies
+// admin.
+const RoleAdmin = "app-registry-admin"
+
 // HasRole reports whether user holds role by literal membership. No role
 // implies another — this mirrors tools/app_registry/server/auth.Require's
 // design rationale (see that package's doc comment), except this check is

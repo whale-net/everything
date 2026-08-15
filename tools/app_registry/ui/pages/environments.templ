@@ -1,0 +1,133 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// Environments is screen 09-environments: the "Environments" nav item
+// (configuration) — deliberately a separate screen from "Deployments"
+// (state, screen 10); neither shows the other's content (FR-2).
+//
+// Create/edit controls in the Actions column are gated to app-registry-admin
+// (FR-38) via components.GatedLinkAction — a non-admin still reads every
+// row on this screen, they just see no live edit control.
+templ Environments(user *htmxauth.UserInfo, envs []*pb.Environment, includeArchived bool, loadErr error) {
+	@components.Shell("Environments", user) {
+		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100 flex flex-col md:flex-row justify-between md:items-center gap-4">
+			<div>
+				<h1 class="text-2xl md:text-3xl font-bold mb-2">Environments</h1>
+				<p class="text-sm opacity-80">
+					A row, not an enum — an environment is an insert, not a release.
+					Rare to add or archive; admin-only.
+				</p>
+			</div>
+			@components.GatedLinkAction(components.Gate(user, components.RoleAdmin), "+ Add environment", "btn-primary", "/environments/new", "Add environment")
+		</div>
+		if loadErr != nil {
+			<div role="alert" class="alert alert-error shadow-md mb-4">
+				<span>Failed to load environments from app-registry-api: { loadErr.Error() }</span>
+			</div>
+		}
+		<form method="get" action="/environments" class="mb-4">
+			<label class="label cursor-pointer gap-2 w-fit">
+				<input
+					type="checkbox"
+					name="include_archived"
+					value="true"
+					class="toggle toggle-sm"
+					if includeArchived {
+						checked
+					}
+					onchange="this.form.submit()"
+				/>
+				<span class="label-text text-sm">Show archived</span>
+			</label>
+		</form>
+		<div class="card bg-base-100 shadow-md">
+			<div class="card-body p-0">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Key</th>
+							<th>Display name</th>
+							<th>Rank</th>
+							<th>
+								Requires approval
+								<div class="text-xs font-normal opacity-60">stored, not enforced — Promote does not check it</div>
+							</th>
+							<th>
+								Allowed principals
+								<div class="text-xs font-normal opacity-60">does not restrict who can promote — the promoter role check is the only access control in force</div>
+							</th>
+							<th>GitOps path</th>
+							<th>
+								Promoter role
+								<div class="text-xs font-normal opacity-60">denied until it exists in Keycloak and is assigned</div>
+							</th>
+							<th class="text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(envs) == 0 {
+							<tr>
+								<td colspan="8" class="p-4 text-sm opacity-60">No environments registered.</td>
+							</tr>
+						}
+						for _, env := range envs {
+							@environmentRow(user, env)
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<p class="wf-note mt-4 text-sm opacity-70">
+			Note: "Requires approval" is a real, settable field today
+			(<span class="font-mono">environment.requires_approval</span>,
+			<span class="font-mono">PromotionState.PENDING_APPROVAL</span>) but the
+			approval gate itself is unbuilt — <span class="font-mono">Promote</span>
+			does not yet check it. "Allowed principals" is stored and read by
+			nothing outside the repository layer — it does not restrict who can
+			promote; the <span class="font-mono">app-registry-promoter-&lt;key&gt;</span>
+			realm role check is the only access control in force. "Rank" orders
+			promotion legality (higher = closer to prod) and drives the
+			environment column order on the Deployments matrix.
+		</p>
+	}
+}
+
+templ environmentRow(user *htmxauth.UserInfo, env *pb.Environment) {
+	<tr class={ "hover", templ.KV("opacity-50", env.GetArchived()) }>
+		<td class="font-mono text-sm">
+			{ env.GetKey() }
+			if env.GetArchived() {
+				<span class="badge badge-soft badge-neutral badge-xs ml-1">archived</span>
+			}
+		</td>
+		<td>{ env.GetDisplayName() }</td>
+		<td class="font-mono text-sm">{ fmt.Sprint(env.GetRank()) }</td>
+		<td>
+			if env.GetRequiresApproval() {
+				<span class="badge badge-soft badge-warning badge-sm">Yes <span class="opacity-60">(inert)</span></span>
+			} else {
+				<span class="badge badge-soft badge-neutral badge-sm">No</span>
+			}
+		</td>
+		<td class="text-sm opacity-70">
+			if len(env.GetAllowedPrincipals()) == 0 {
+				<span class="opacity-50">— (falls back to promoter role only)</span>
+			} else {
+				{ strings.Join(env.GetAllowedPrincipals(), ", ") }
+			}
+		</td>
+		<td class="font-mono text-xs opacity-70">{ env.GetGitopsPath() }</td>
+		<td class="font-mono text-xs opacity-70">{ components.EnvironmentPromoterRole(env.GetKey()) }</td>
+		<td class="text-right">
+			@components.GatedLinkAction(components.Gate(user, components.RoleAdmin), "Edit", "btn-xs btn-primary", "/environments/edit?key="+env.GetKey(), "Edit "+env.GetKey())
+		</td>
+	</tr>
+}

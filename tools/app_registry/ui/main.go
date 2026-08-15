@@ -250,6 +250,21 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Protected routes.
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDashboard)))
 	mux.HandleFunc("/deployments", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDeployments)))
+	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppsCatalog)))
+	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppDetail)))
+
+	// Screens 30/31/32 (#649): builds, build detail, reconcile runs.
+	mux.HandleFunc("/builds", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBuilds)))
+	mux.HandleFunc("/builds/lookup", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBuildLookup)))
+	mux.HandleFunc("/builds/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBuildDetail)))
+	mux.HandleFunc("/reconcile-runs", app.auth.RequireAuthFunc(app.withAccessToken(app.handleReconcileRuns)))
+
+	// Screens 09/53 (#646): environments list, create/edit/archive form.
+	mux.HandleFunc("/environments", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironments)))
+	mux.HandleFunc("/environments/new", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentNew)))
+	mux.HandleFunc("/environments/edit", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentEdit)))
+	mux.HandleFunc("/environments/save", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentSave)))
+	mux.HandleFunc("/environments/archive", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentArchive)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
