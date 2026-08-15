@@ -9,6 +9,15 @@
 - Do not patch production environments — rely on release actions and human inputs.
 - Read relevant docs before falling back to search or bash exploration.
 
+## Effective Subagent Usage
+
+Prompt-cache read cost per turn grows with a session's own turn count (roughly 9x higher in 300-500 turn sessions vs. under-50-turn sessions, measured across this account's history) — every turn re-sends and re-reads the full prior transcript, so cost compounds as a session's transcript grows. Subagents are one of the two effective levers against this (the other is starting a fresh session); use them to keep the *main* session's turn count down, not as an end in themselves.
+
+- **Fork/spawn a subagent for exploratory or investigative work whose intermediate output you don't need to keep**: multi-step searches, log/codebase investigations, research questions, broad reads across many files. This is the highest-leverage use — it keeps the heavy tool-output slog (grep noise, file reads, search results) out of the main transcript entirely, instead of dumping it into the parent session where it gets re-read on every subsequent turn.
+- **Don't defeat the purpose by pulling detail back in.** Spawning a subagent and then asking for its full transcript, or requesting verbose intermediate output, reintroduces the cost the fork was supposed to avoid. Ask for a synthesized result, not a raw dump.
+- **Don't chain many small one-off subagent calls** for trivial lookups — each spawn pays its own cache-write on shared context (system prompt, tool schemas) without meaningfully shrinking the parent transcript. Batch related exploration into one fork when possible.
+- **When a single session is running long from inline exploration** (not delegated work), prefer forking the next investigative step rather than continuing to accumulate turns in the main thread.
+
 ## Bazel — Default Build, Test, and Query Tool
 
 Use Bazel as the primary tool for building, running, testing, and exploring the codebase. Do not fall back to `go build`, `go test`, `python`, or direct binary invocations unless you have confirmed there is no Bazel target for the task.
@@ -89,7 +98,9 @@ Update documentation as part of the same task that changes the code — not as a
 
 **How to split, by file type:**
 - **Planning / status docs (`PLAN.md` and similar):** split current-state from history. Keep only what's true right now — status, open items, forward-looking scope — in the live file; move the as-built record of completed phases to a `*-HISTORY.md` sibling, linked from the live file's status table and not meant to be read start-to-finish. See `tools/app_registry/PLAN.md` / `PLAN-HISTORY.md`.
-- **Reference docs with heavy internal cross-referencing (`ARCHITECTURE.md` and similar):** if sections are cited by heading name from other docs or from code comments, a physical split risks breaking more links than the size problem it solves. Add a navigational index at the top instead, so an agent can jump to the ~100–200 line section it needs instead of reading serially or grepping cold. See `tools/app_registry/ARCHITECTURE.md`.
+- **Reference docs with heavy internal cross-referencing (`ARCHITECTURE.md` and similar):** two variants, same underlying rule — the file must stop being where content *accumulates*.
+  - **Under threshold, but growing:** an index-at-top (single file, `##` sections, a jump table by heading name) is enough — it costs nothing to maintain and there's no cross-reference risk yet, since nothing has moved.
+  - **Over threshold:** move to a directory — one file per `##` section under `<DOC>/<NN>-<slug>.md` (recursing into a subdirectory for any one section that's still oversized on its own, e.g. `<DOC>/<NN>-<slug>/<MM>-<slug>.md`), with `<DOC>.md` itself rewritten down to a real index (a jump table linking every file, plus whatever handful of principles are short and referenced by number/name from everywhere — keep those inline rather than forcing a one-line file). Sections keep their exact heading text as each file's `# ` title, so a citation like `ARCHITECTURE.md "Reconcile watermark"` in a code comment stays discoverable by grepping the directory even before anyone updates the comment to the new path — grep-discoverability from unchanged prose is what makes rule 5 below tractable at volume (a comment citing a section by name is not the same maintenance burden as a `[text](#anchor)` link, which is a hard break and must be fixed). Fix anchor-style links (rule 5) always; bare prose citations in code/CI comments are lower priority at high volume — call out in the change what was left and why. See `tools/app_registry/architecture/` (directory) and `tools/app_registry/ARCHITECTURE.md` (the index + design principles that stayed inline) for a worked example, including the recursive case (`architecture/08-release-lifecycle/`).
 - **Code modules:** split along the boundary the language already uses for imports — one package/module per concern. Watch for circular or stale imports introduced by the split (notably in Python, where circular imports fail late and confusingly).
 - **Persona / role docs:** one file per persona or actor, cross-linked from an index, rather than one file describing every persona serially.
 

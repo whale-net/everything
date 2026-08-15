@@ -121,10 +121,10 @@ serialize against. See the migration's own comments for the full rationale
 and how the sentinel row is distinguished from a "real" watermark.
 
 `domain_adoption` gates the per-domain cutover described in
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md#resolved-questions): one row per
+[ARCHITECTURE.md "Resolved questions"](../architecture/19-resolved-questions.md): one row per
 domain, with a stage of `observe` / `promote` / `allocate`. It ships in `001`
 even though only AR-5 enforces it, so no domain is left without a row when the
 gate turns on.
 
-See the SCD2 section of [`../ARCHITECTURE.md`](../ARCHITECTURE.md#scd2-on-promotion)
+See the SCD2 section of [ARCHITECTURE.md's "Data model"](../architecture/03-data-model.md#scd2-on-promotion)
 and the repo-wide convention in `AGENTS.md`.

@@ -25,7 +25,7 @@ answers none of them:
 |---|---|
 | Is CI recording builds/artifacts at all? | Repository variable `APP_REGISTRY_CICD_OPT_IN` in GitHub → Settings → Secrets and variables → Actions → Variables. `true` = recording steps run (best-effort); unset/anything else = CI makes zero registry calls. |
 | Is a given domain's promotion state tracked? | `app-registry status <env> --domain <domain>` returns real data only if that domain has been recording long enough to have artifacts; there is no per-domain "promotion tracked" flag distinct from having promotable artifacts. |
-| Does the registry allocate versions for a domain? | Query `domain_adoption.stage` for that domain (no admin RPC/CLI exists yet — this is a direct `SELECT` against Postgres, see [ARCHITECTURE.md](ARCHITECTURE.md#resolved-questions) → "3. No backfill; adopt by per-domain cutover"). No row = `observe` (implicit). Only `allocate` lets `AllocateVersion` succeed; `release_helper_go` doesn't call it regardless, so today this is always moot. |
+| Does the registry allocate versions for a domain? | Query `domain_adoption.stage` for that domain (no admin RPC/CLI exists yet — this is a direct `SELECT` against Postgres, see [ARCHITECTURE.md "Resolved questions"](architecture/19-resolved-questions.md) → "3. No backfill; adopt by per-domain cutover"). No row = `observe` (implicit). Only `allocate` lets `AllocateVersion` succeed; `release_helper_go` doesn't call it regardless, so today this is always moot. |
 
 If `APP_REGISTRY_CICD_OPT_IN` is unset, the honest answer to "is the registry
 in use" is **no** — the service may be deployed and healthy, but nothing is
@@ -105,7 +105,7 @@ To check whether a specific release actually got recorded:
      RPC, or set `APP_REGISTRY_CICD_OPT_IN=false` until it is deployed. This
      is an `::error::`, not a `::warning::`, specifically so it doesn't read
      as "try again later" — see
-     [ARCHITECTURE.md](ARCHITECTURE.md#version-skew-vs-outage-issue-570).
+     [ARCHITECTURE.md "Version skew vs. outage"](architecture/16-availability-and-bootstrap.md#version-skew-vs-outage-issue-570).
    - **`::warning:: App Registry: <owner> not registered yet`** — as of AR-7c
      (issue #558), this should no longer happen in normal operation:
      `release.yml` now calls `AssertApps` from a dedicated `app-registry-assert`
@@ -132,7 +132,7 @@ via `source_committed_at`) than one already applied — almost always a
 manually re-run workflow for an older commit, or a workflow run whose reconcile
 step got queued behind a later push's. **This is expected, correct behavior,
 not a bug**: applying it would have reverted registry state to match the
-older commit. See [ARCHITECTURE.md "Reconcile watermark"](ARCHITECTURE.md#reconcile-watermark-issue-545)
+older commit. See [ARCHITECTURE.md "Reconcile watermark"](architecture/05-reconcile-watermark-issue-545.md)
 for the full mechanism, and re-run `ci.yml` for the commit you actually want
 reflected if that's not what already ran.
 
@@ -147,7 +147,7 @@ app-registry reconcile-runs list [--since <unix-ts>] [--page-size N] [--page-tok
 Rows are most-recent-`applied_at`-first. Pass the previous response's
 `next_page_token` back in via `--page-token` to page further back; `--since`
 narrows to runs at or after a given time. See
-[ARCHITECTURE.md "ListReconcileRuns"](ARCHITECTURE.md#listreconcileruns-issue-607)
+[ARCHITECTURE.md "ListReconcileRuns"](architecture/06-list-reconcile-runs-issue-607.md)
 for the pagination contract.
 
 **Browsing build history (issue #608).** To scan recent CI builds rather than
@@ -161,7 +161,7 @@ Rows are most-recent-`recorded_at`-first. This is a browse, distinct from
 `app-registry builds status <workflow-run-id>` (a point lookup for one run's
 build plus its child artifacts, unchanged by this command) — reach for
 `builds list` when you don't already know which run you're looking for. See
-[ARCHITECTURE.md "ListBuilds"](ARCHITECTURE.md#listbuilds-issue-608) for the
+[ARCHITECTURE.md "ListBuilds"](architecture/08-release-lifecycle/05-list-builds-issue-608.md) for the
 pagination contract.
 
 **"What pins this image?" before removing or deprecating it (issue #609).**
@@ -178,7 +178,7 @@ consider for removal; an unknown digest/artifact-id is a `NotFound` error,
 not an empty result, so don't read "not found" as "safe to delete." This is
 `artifacts resolve`'s reverse: `resolve` walks a chart down to its pinned
 images, `pinned-by` walks an image up to the charts pinning it. See
-[ARCHITECTURE.md "ListArtifactPins"](ARCHITECTURE.md#listartifactpins-issue-609)
+[ARCHITECTURE.md "ListArtifactPins"](architecture/11-list-artifact-pins-issue-609.md)
 for the not-found-vs-empty contract.
 
 ### AR-7c: AssertApps closed issue #547
@@ -268,7 +268,7 @@ to exist.** Once they do:
 A promotion that is `VIA_CHART` (an image that only reaches an environment
 inside a chart) is rejected unless you pass `--allow-override` — passing it
 records the promotion as a drift-tracked override, not an invisible
-workaround. See [ARCHITECTURE.md](ARCHITECTURE.md#promotability).
+workaround. See [ARCHITECTURE.md "Promotability"](architecture/09-promotability.md).
 
 **`PermissionDenied desc = requires role "app-registry-promoter-<env>"`
 (issue #602):** the promoter client authenticated fine but its service
@@ -356,7 +356,7 @@ before the release matrix fans out, transitioning every planned app to
 even got around to scheduling still show up as an incomplete child here —
 without it (AR-7b's original, narrower behavior), that leg would have no row
 at all, indistinguishable from "not part of this run." See
-[ARCHITECTURE.md "The run log"](ARCHITECTURE.md#the-run-log-ci-orchestrates-the-registry-records)
+[ARCHITECTURE.md "The run log"](architecture/08-release-lifecycle/04-run-log.md)
 for the full mechanism.
 
 ### 2. Re-run the workflow
@@ -414,7 +414,7 @@ into a release path) — file it, don't keep reaching for `adopt`.
 `ArtifactRegistry.AdoptArtifact` records a pre-existing GHCR image or chart
 as `published` with `provenance = 'adopted'` and a required `reason`, for
 when there is genuinely no CI run to resume — see
-[ARCHITECTURE.md "Adoption and disaster recovery"](ARCHITECTURE.md#adoption-and-disaster-recovery)
+[ARCHITECTURE.md "Adoption and disaster recovery"](architecture/08-release-lifecycle/08-adoption-disaster-recovery.md)
 for the design and the exact state-collision rules. **Admin role only** —
 the builder credential every CI job holds cannot call this RPC; see
 ["Where each secret goes"](DEPLOY.md#4-ci-credentials) in DEPLOY.md for why
@@ -542,7 +542,7 @@ Drift, here, specifically means: an image was promoted directly
 (`--allow-override`) and its digest no longer matches what the chart that
 owns it has pinned. It is **not** a general "does the cluster match the
 registry" check — the registry has no visibility into the cluster at all
-(see [ARCHITECTURE.md](ARCHITECTURE.md#availability-and-bootstrap)).
+(see [ARCHITECTURE.md "Availability and bootstrap"](architecture/16-availability-and-bootstrap.md)).
 
 ```bash
 app-registry status <env>          # DriftEntry banner + JSON `drift` field
@@ -562,7 +562,7 @@ renders the environment's state — but the `Publish` activity is a stub that
 writes JSON to a local path (`WRITEBACK_OUTPUT_DIR`) inside the worker's own
 container. It does not commit to the gitops repo, does not write to S3, and
 ArgoCD does not read anything the registry produces. See
-[ARCHITECTURE.md "Writeback: outbox → Temporal"](ARCHITECTURE.md#writeback-outbox--temporal)
+[ARCHITECTURE.md "Writeback: outbox → Temporal"](architecture/12-writeback-outbox-temporal.md)
 for the full picture and exactly which activities exist versus which are
 still missing.
 
