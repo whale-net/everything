@@ -371,9 +371,12 @@ table for a field no caller (CLI or otherwise) reads today.
 > **Closed by AR-7c (merged, #566).** Issue #558 rejected "accept
 > the gap" as the end state — see "Release lifecycle (issue #558)" →
 > "AssertApps (additive) vs. ReconcileApps (absence sweep)" below.
-> `release.yml` now calls `AssertApps` as the first App Registry step of
-> every job that later resolves an owner by full name (both the `release`
-> matrix and `release-helm-charts`), so the window this section describes
+> `release.yml` now calls `AssertApps` from a dedicated `app-registry-assert`
+> job that runs once, before every job that later resolves an owner by full
+> name (`release` and `release-helm-charts` both `needs:` it — hoisted out
+> of each of those jobs by issue #622, which found the repo-wide discovery +
+> RPC being repeated once per matrix leg plus once more for charts), so the
+> window this section describes
 > — a release reaching `RecordArtifact`'s owner lookup before that commit's
 > `main`-push reconcile has run — can no longer produce
 > `ReasonOwnerNotReconciled` / exit code 3. Everything below this callout
@@ -819,10 +822,15 @@ split this heading names is now real: `AppRegistry.AssertApps`
 `ReconcileApps`, implemented identically in `postgres/app.go`'s
 `appRepo.AssertApps` and `fake/reconcile.go`'s `assertApps`. `release.yml`
 calls it (via the new `.github/actions/app-registry-assert` composite
-action) as the FIRST App Registry step of both the `release` matrix job and
-`release-helm-charts` — ahead of `Record build`/`Begin publish` — so every
-subsequent owner-resolving call in the same job succeeds. See "Release-vs-
-reconcile gap (issue #547)" above for the resulting status of that gap.
+action) from a dedicated `app-registry-assert` job that runs once, ahead of
+`Record build`/`Begin publish`, and that both the `release` matrix job and
+`release-helm-charts` `needs:` — so every subsequent owner-resolving call in
+either job succeeds. (Originally this ran as the first step inside each of
+those jobs instead; issue #622 hoisted it to a single upfront job once the
+per-job repetition — the exact same repo-wide discovery + RPC, once per
+matrix leg plus once more for charts — showed up as wasted CI time.) See
+"Release-vs-reconcile gap (issue #547)" above for the resulting status of
+that gap.
 
 `ReconcileApps` conflates two jobs: assert identity, and assert *absence*.
 Only absence needs a canonical complete tree, and it is identity that releases
