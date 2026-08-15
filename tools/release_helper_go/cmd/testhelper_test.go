@@ -35,6 +35,8 @@ func newTestRoot() *cobra.Command {
 		newListAppsCmd(),
 		newListCmd(),
 		newChangesCmd(),
+		newReleaseAppCmd(),
+		newReleaseChartsCmd(),
 		newManifestSetCmd(),
 		newReadChartLockfileCmd(),
 	)
@@ -185,6 +187,33 @@ func (f *fakeGitRunner) Run(args ...string) (string, error) {
 	return "", fmt.Errorf("fakeGitRunner: no match for args %v", args)
 }
 
+// ── fake Docker runner ────────────────────────────────────────────────────────
+
+type fakeDockerCall struct {
+	argsContain []string
+	output      string
+	err         error
+}
+
+type fakeDockerRunner struct {
+	calls    []fakeDockerCall
+	recorded [][]string
+}
+
+func newFakeDocker(calls ...fakeDockerCall) *fakeDockerRunner {
+	return &fakeDockerRunner{calls: calls}
+}
+
+func (f *fakeDockerRunner) Run(args ...string) (string, error) {
+	f.recorded = append(f.recorded, args)
+	for _, call := range f.calls {
+		if argsMatch(args, call.argsContain) {
+			return call.output, call.err
+		}
+	}
+	return "", fmt.Errorf("fakeDockerRunner: no match for args %v", args)
+}
+
 // ── injection helpers ────────────────────────────────────────────────────────
 
 func withFS(fs FileSystem, fn func()) {
@@ -212,6 +241,13 @@ func withGit(gr GitRunner, fn func()) {
 	old := defaultGit
 	defaultGit = gr
 	defer func() { defaultGit = old }()
+	fn()
+}
+
+func withDocker(dr DockerRunner, fn func()) {
+	old := defaultDocker
+	defaultDocker = dr
+	defer func() { defaultDocker = old }()
 	fn()
 }
 

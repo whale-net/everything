@@ -97,6 +97,15 @@ assert_output_contains "plan" "help lists plan command" \
 assert_output_contains "summary" "help lists summary command" \
     "$RELEASE_HELPER" --help
 
+assert_output_contains "release-charts" "help lists release-charts command" \
+    "$RELEASE_HELPER" --help
+
+assert_exit 0 "release-charts --help exits 0" \
+    "$RELEASE_HELPER" release-charts --help
+
+assert_output_contains "--chart-repo-url" "release-charts --help shows --chart-repo-url flag" \
+    "$RELEASE_HELPER" release-charts --help
+
 # ── plan: event-type validation ───────────────────────────────────────────────
 # Used in ci.yml and release.yml.  Validation fires before any Bazel call.
 

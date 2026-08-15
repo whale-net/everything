@@ -22,6 +22,10 @@ type HelmChartMetadata struct {
 	BazelTarget string `json:"bazel_target,omitempty"`
 }
 
+// FullName returns the canonical "domain-name" identifier for the helm chart.
+func (m HelmChartMetadata) FullName() string { return m.Domain + "-" + m.Name }
+
+
 // helmChartMetadataStarlarkExpr extracts helm chart metadata in one cquery
 // call by reading the HelmChartMetadataInfo provider.
 const helmChartMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(providers(target)["//tools/bazel:release.bzl%HelmChartMetadataInfo"].metadata)`
@@ -158,7 +162,9 @@ func selectHelmCharts(input string, allCharts []HelmChartMetadata, includeDemo b
 		if includeDemo {
 			return allCharts
 		}
-		fmt.Fprintln(cmd.ErrOrStderr(), "Excluding demo domain charts from 'all' (use --include-demo to include)")
+		if cmd != nil {
+			fmt.Fprintln(cmd.ErrOrStderr(), "Excluding demo domain charts from 'all' (use --include-demo to include)")
+		}
 		var result []HelmChartMetadata
 		for _, c := range allCharts {
 			if c.Domain != "demo" {

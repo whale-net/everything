@@ -12,6 +12,11 @@ type GitRunner interface {
 	Run(args ...string) (string, error)
 }
 
+// DockerRunner runs docker commands and returns stdout.
+type DockerRunner interface {
+	Run(args ...string) (string, error)
+}
+
 // FileSystem provides file system operations. Replaced in tests with a fake.
 type FileSystem interface {
 	Stat(path string) (os.FileInfo, error)
@@ -27,4 +32,6 @@ var defaultFS FileSystem = realFS{}
 var defaultEnv EnvLookup = os.Getenv
 var defaultBazel BazelRunner   // set in init() after realBazelRunner is defined
 var defaultGit GitRunner       // set in init() after realGitRunner is defined
+var defaultDocker DockerRunner // set in init() after realDockerRunner is defined
 var defaultWorkspaceRoot func() (string, error) = findWorkspaceRoot
+

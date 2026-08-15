@@ -44,13 +44,30 @@ func (r *realGitRunner) Run(args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+type realDockerRunner struct{}
+
+func (r *realDockerRunner) Run(args ...string) (string, error) {
+	cmd := exec.Command("docker", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	out := strings.TrimSpace(stdout.String())
+	if err != nil {
+		return out, fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
+	}
+	return out, nil
+}
+
 func init() {
 	// Lazily initialise real runners. They will call findWorkspaceRoot() on
 	// first use; here we just set up sentinel structs so the package-level vars
 	// are non-nil by the time any command runs.
 	defaultBazel = &lazyBazelRunner{}
 	defaultGit = &lazyGitRunner{}
+	defaultDocker = &realDockerRunner{}
 }
+
 
 // lazyBazelRunner resolves the workspace root on first call.
 type lazyBazelRunner struct{ inner *realBazelRunner }

@@ -31,327 +31,91 @@ on:
         type: boolean
         default: false
 
-# Global concurrency control for all release operations
-# Prevents race conditions across app releases, git tags, GitHub releases, and Helm repository
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  # Validate inputs and ensure mutual exclusivity
-  validate-inputs:
-    name: Validate Inputs
-    runs-on: ubuntu-latest
-    steps:
-    - name: Validate release targets
-      run: |
-        APPS="${{ github.event.inputs.apps }}"
-        HELM_CHARTS="${{ github.event.inputs.helm_charts }}"
-        
-        # Ensure at least one of apps or helm_charts is specified
-        if [[ -z "$APPS" && -z "$HELM_CHARTS" ]]; then
-          echo "Error: Must specify at least one of 'apps' or 'helm_charts'"
-          exit 1
-        fi
-        
-        echo "✅ Release targets validated: apps='$APPS', helm_charts='$HELM_CHARTS'"
-    
-    - name: Validate mutually exclusive version options
-      run: |
-        VERSION="${{ github.event.inputs.version }}"
-        INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
-        INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
-        
-        # Count how many version options are set
-        OPTION_COUNT=0
-        if [[ -n "$VERSION" ]]; then
-          OPTION_COUNT=$((OPTION_COUNT + 1))
-        fi
-        if [[ "$INCREMENT_MINOR" == "true" ]]; then
-          OPTION_COUNT=$((OPTION_COUNT + 1))
-        fi
-        if [[ "$INCREMENT_PATCH" == "true" ]]; then
-          OPTION_COUNT=$((OPTION_COUNT + 1))
-        fi
-        
-        # Ensure exactly one option is set
-        if [[ $OPTION_COUNT -eq 0 ]]; then
-          echo "Error: Must specify exactly one of: version, increment_minor, or increment_patch"
-          exit 1
-        elif [[ $OPTION_COUNT -gt 1 ]]; then
-          echo "Error: version, increment_minor, and increment_patch are mutually exclusive. Specify only one."
-          exit 1
-        fi
-        
-        echo "✅ Version input validation passed"
-
-  # Build release_helper_go and the app-registry CLI once and share them with
-  # every other job via upload-artifact/download-artifact (see .github/actions/
-  # download-release-tools), instead of every job rebuilding from source.
-  # ci-images, not ci-release: ci-release's --noremote_accept_cached forces a
-  # from-source rebuild of the whole exec-tool graph (protobuf C++ included)
-  # and buys nothing here -- release_helper_go's internal bazel calls pass no
-  # --config, so this binary's own build cache-hit-ness doesn't affect the
-  # published artifact.
   build-release-tools:
     name: Build Release Tools
     runs-on: ubuntu-latest
-    needs: validate-inputs
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'release-tools'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'release-tools'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
 
-    - name: Build release_helper_go and app-registry CLI
-      run: |
-        bazel build --config=ci-images \
-          //tools/release_helper_go:release_helper_go \
-          //tools/app_registry/cli:app-registry
-        BAZEL_BIN="$(bazel info bazel-bin --config=ci-images)"
-        mkdir -p /tmp/release-tools
-        cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
-        cp "$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry" /tmp/release-tools/app-registry
+      - name: Build release helper
+        run: |
+          bazel build --config=ci-images //tools/release_helper_go:release_helper_go
+          BAZEL_BIN="$(bazel info bazel-bin --config=ci-images)"
+          mkdir -p /tmp/release-tools
+          cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
 
-    - name: Upload release tools artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-tools
-        path: /tmp/release-tools/
-        retention-days: 1
+      - name: Upload release tools artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tools
+          path: /tmp/release-tools/
+          retention-days: 1
 
-  # AR-7c (issue #558) / issue #622: AssertApps discovers and asserts the
-  # FULL repo-wide manifest set every call -- that is deliberate (see
-  # app-registry-assert/action.yml's "Discovering the FULL manifest set...
-  # costs nothing" comment), but it used to run from INSIDE the `release`
-  # matrix job and again inside `release-helm-charts`, so one release run
-  # repeated the exact same repo-wide discovery + registry RPC once per
-  # app in the matrix, plus once more for charts -- each call costing
-  # 30-80s, almost all of it redundant. AssertApps is idempotent and keyed
-  # off the ref (github.sha), not off any one app/chart, so there is
-  # nothing app-specific about it to lose by hoisting it here: running it
-  # once, before the matrix fans out, gives `release` and
-  # `release-helm-charts` the exact same "every owner this release could
-  # touch already exists" guarantee at a fraction of the cost.
-  app-registry-assert:
-    name: Assert apps/charts in App Registry
-    runs-on: ubuntu-latest
-    needs: [validate-inputs, build-release-tools]
-    if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
-    outputs:
-      outcome: ${{ steps.app-registry-assert.outcome }}
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'release-tools'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-
-    - name: Download release tools
-      uses: ./.github/actions/download-release-tools
-
-    - name: Assert apps/charts in App Registry
-      id: app-registry-assert
-      continue-on-error: true
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-assert
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        git-sha: ${{ github.sha }}
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-assert
-
-  # Detect what apps have changed and build release plan
   plan-release:
     name: Plan Release
     runs-on: ubuntu-latest
-    needs: [validate-inputs, build-release-tools]
+    needs: [build-release-tools]
     outputs:
       release-matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
       apps: ${{ steps.plan.outputs.apps }}
+      chart-matrix: ${{ steps.plan.outputs.chart_matrix }}
+      charts: ${{ steps.plan.outputs.charts }}
+      openapi-matrix: ${{ steps.plan.outputs.openapi_matrix }}
+      has-specs: ${{ steps.plan.outputs.has_specs }}
+      build-id: ${{ steps.plan.outputs.build_id }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        fetch-tags: true
-        
-    - name: Download release tools
-      uses: ./.github/actions/download-release-tools
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
-    - name: Plan release using release helper tool
-      id: plan
-      run: |
-        # Determine version mode and build command
-        VERSION="${{ github.event.inputs.version }}"
-        INCREMENT_MINOR="${{ github.event.inputs.increment_minor }}"
-        INCREMENT_PATCH="${{ github.event.inputs.increment_patch }}"
-        EVENT_TYPE="workflow_dispatch"
-        APPS_INPUT="${{ github.event.inputs.apps }}"
-        INCLUDE_DEMO="${{ github.event.inputs.include_demo }}"
-        
-        # Only plan app release if apps are specified
-        if [[ -n "$APPS_INPUT" ]]; then
-          # Build the command based on the selected option
-          CMD="\"$RELEASE_HELPER\" plan --event-type \"$EVENT_TYPE\" --apps \"$APPS_INPUT\" --format github"
-          
-          # Add --include-demo flag if checkbox is selected
-          if [[ "$INCLUDE_DEMO" == "true" ]]; then
-            CMD="$CMD --include-demo"
-          fi
-          
-          if [[ -n "$VERSION" ]]; then
-            CMD="$CMD --version \"$VERSION\""
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-          elif [[ "$INCREMENT_MINOR" == "true" ]]; then
-            CMD="$CMD --increment-minor"
-            echo "Planning minor version increment"
-          elif [[ "$INCREMENT_PATCH" == "true" ]]; then
-            CMD="$CMD --increment-patch"
-            echo "Planning patch version increment"
-          fi
-          
-          # Use release helper to plan the release
-          echo "Planning release with command: $CMD"
-          PLAN_OUTPUT=$(eval $CMD)
-          
-          # Parse output from release helper
-          echo "$PLAN_OUTPUT" | while IFS= read -r line; do
-            if [[ "$line" == matrix=* ]]; then
-              echo "${line}" >> $GITHUB_OUTPUT
-            elif [[ "$line" == apps=* ]]; then
-              echo "${line}" >> $GITHUB_OUTPUT
-              APPS_LIST="${line#apps=}"
-              if [[ -n "$APPS_LIST" ]]; then
-                echo "Release plan: $APPS_LIST"
-              else
-                echo "No apps to release"
-              fi
-            fi
-          done
-        else
-          echo "No apps specified, skipping app release planning"
-          # Still need to output version for helm charts
-          if [[ -n "$VERSION" ]]; then
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
-          fi
-        fi
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'release-tools'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
 
-    # AR-7d (issue #558): the run log's up-front intent write. Record the
-    # build ONCE here (idempotent on workflow_run_id+attempt -- the matrix
-    # legs below re-call app-registry-record-build with the SAME
-    # idempotency key and get this exact build_id back, unchanged), then
-    # transition every planned app target to "publishing" before the
-    # matrix fans out. This is what makes a matrix leg that never gets
-    # scheduled at all still show up as an incomplete child in
-    # `app-registry builds status` -- see
-    # tools/app_registry/ARCHITECTURE.md "The run log" -> "As built
-    # (AR-7d)" and OPERATIONS.md "A release run didn't complete".
-    - name: Record build in App Registry
-      if: ${{ steps.plan.outputs.matrix != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
-      id: app-registry-build
-      continue-on-error: true
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-record-build
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        git-sha: ${{ github.sha }}
-        git-ref: ${{ github.ref }}
-        workflow-run-id: ${{ github.run_id }}
-        workflow-attempt: ${{ github.run_attempt }}
-        actor: ${{ github.actor }}
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
 
-    - name: Build begin-publish-batch targets file
-      if: ${{ steps.plan.outputs.matrix != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' }}
-      id: batch-targets
-      run: |
-        MATRIX='${{ steps.plan.outputs.matrix }}'
-        TARGETS_FILE=/tmp/app-registry-begin-publish-batch-targets.json
-        echo "$MATRIX" | jq -c '[.include[] | {kind: "image", owner: (.domain + "-" + .app), version: .version}]' > "$TARGETS_FILE"
-        echo "targets-file=$TARGETS_FILE" >> "$GITHUB_OUTPUT"
+      - name: Plan release
+        id: plan
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_MODE: oidc
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        run: |
+          ARGS=(plan --format github --event-type workflow_dispatch)
+          [[ -n "${{ github.event.inputs.apps }}" ]] && ARGS+=(--apps "${{ github.event.inputs.apps }}")
+          [[ -n "${{ github.event.inputs.helm_charts }}" ]] && ARGS+=(--charts "${{ github.event.inputs.helm_charts }}")
+          [[ -n "${{ github.event.inputs.version }}" ]] && ARGS+=(--version "${{ github.event.inputs.version }}")
+          [[ "${{ github.event.inputs.increment_minor }}" == "true" ]] && ARGS+=(--increment-minor)
+          [[ "${{ github.event.inputs.increment_patch }}" == "true" ]] && ARGS+=(--increment-patch)
+          [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
+          "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_OUTPUT"
 
-    - name: Begin publish batch in App Registry
-      if: ${{ steps.batch-targets.outcome == 'success' }}
-      id: app-registry-begin-publish-batch
-      continue-on-error: true
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-begin-publish-batch
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        build-id: ${{ steps.app-registry-build.outputs.build-id }}
-        targets-file: ${{ steps.batch-targets.outputs.targets-file }}
-        idempotency-key-prefix: ${{ github.run_id }}-${{ github.run_attempt }}
-
-    # App Registry steps in this job stay continue-on-error: a registry
-    # outage must never block planning (and therefore never block the real
-    # image builds/pushes downstream in the `release` job) -- see
-    # ARCHITECTURE.md "Availability, restated per adoption stage". What
-    # continue-on-error must NOT do is make a real failure invisible, which
-    # is what let the chart repository bug (see "Begin publish (charts)" in
-    # the release-helm-charts job) ship silently for as long as it did. This
-    # step runs LAST, after every real planning step above has already had
-    # its chance to run, and is deliberately NOT continue-on-error: it is
-    # the one place in this job that is allowed to turn the run red, and it
-    # does so without having blocked anything real to get there.
-    - name: App Registry recording health
-      if: always()
-      run: |
-        FAILED=0
-        check() {
-          if [[ "$2" == "failure" ]]; then
-            echo "::error::App Registry step '$1' failed this run -- see its own annotation above for detail. This does not mean planning failed; it means a release-run.md or begin-publish-batch call did not go through and the run's App Registry bookkeeping is incomplete."
-            FAILED=1
-          fi
-        }
-        check "Record build" "${{ steps.app-registry-build.outcome }}"
-        check "Begin publish batch" "${{ steps.app-registry-begin-publish-batch.outcome }}"
-        if [[ "$FAILED" -eq 1 ]]; then
-          echo "One or more App Registry recording steps failed. Nothing about the release plan itself is affected. See tools/app_registry/OPERATIONS.md."
-          exit 1
-        fi
-        echo "✅ App Registry recording steps in this job succeeded (or did not apply)."
-
-    # Full ReconcileApps (the absence sweep) deliberately does NOT run here.
-    # It requires the complete, current manifest set -- anything absent from
-    # what it's given gets flagged MISSING (api.proto's own comment) -- and
-    # this workflow can be dispatched against an arbitrary, possibly old ref
-    # (a hotfix release from an old tag, say). Reconciling that ref's
-    # manifest set would falsely flag every app added since as MISSING.
-    # Reconcile instead runs on every push to main (ci.yml's
-    # "Reconcile apps/charts in App Registry" job), so it only ever sees the
-    # current, complete tree. See ARCHITECTURE.md "Rejected alternatives"
-    # and DEPLOY.md "CI wiring (AR-3d)".
-    #
-    # AR-7c (issue #558) adds the ADDITIVE-only counterpart, AssertApps,
-    # which IS safe from this arbitrary ref -- see the "Assert apps/charts
-    # in App Registry" step in the `release`/`release-helm-charts` jobs
-    # below, and ARCHITECTURE.md "AssertApps (additive) vs. ReconcileApps
-    # (absence sweep)".
-
-  # Plan which apps need OpenAPI spec builds
   plan-openapi-builds:
     name: Plan OpenAPI Builds
     runs-on: ubuntu-latest
@@ -361,43 +125,22 @@ jobs:
       openapi-matrix: ${{ steps.plan-openapi.outputs.matrix }}
       has-specs: ${{ steps.plan-openapi.outputs.has-specs }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Download release tools
-      uses: ./.github/actions/download-release-tools
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
 
-    - name: Plan OpenAPI spec builds
-      id: plan-openapi
-      env:
-        APPS: ${{ needs.plan-release.outputs.apps }}
-      run: |
-        echo "Planning OpenAPI spec builds for apps: $APPS"
-
-        # Use release helper to identify apps with OpenAPI specs
-        PLAN_OUTPUT=$("$RELEASE_HELPER" plan-openapi-builds --apps "$APPS" --format github)
-        
-        # Parse output
-        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
-          if [[ "$line" == matrix=* ]]; then
-            echo "${line}" >> $GITHUB_OUTPUT
-            MATRIX_VALUE="${line#matrix=}"
-            # Check if matrix is empty
-            if [[ "$MATRIX_VALUE" == "{}" ]]; then
-              echo "has-specs=false" >> $GITHUB_OUTPUT
-            else
-              echo "has-specs=true" >> $GITHUB_OUTPUT
-            fi
+      - name: Plan OpenAPI spec builds
+        id: plan-openapi
+        run: |
+          "$RELEASE_HELPER" plan-openapi-builds --apps "${{ needs.plan-release.outputs.apps }}" --format github >> "$GITHUB_OUTPUT"
+          if grep -q "matrix={}" "$GITHUB_OUTPUT"; then
+            echo "has-specs=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-specs=true" >> "$GITHUB_OUTPUT"
           fi
-        done
-        
-        # If no matrix was set, mark as no specs
-        if ! grep -q "matrix=" <<< "$PLAN_OUTPUT"; then
-          echo "matrix={}" >> $GITHUB_OUTPUT
-          echo "has-specs=false" >> $GITHUB_OUTPUT
-        fi
 
-  # Build OpenAPI specs for FastAPI apps (only apps that have specs)
   build-openapi-specs:
     name: Build OpenAPI Spec for ${{ matrix.domain }}-${{ matrix.app }}
     runs-on: ubuntu-latest
@@ -407,92 +150,41 @@ jobs:
       matrix: ${{ fromJson(needs.plan-openapi-builds.outputs.openapi-matrix) }}
       fail-fast: false
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'docker'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-    
-    - name: Build OpenAPI spec
-      continue-on-error: true
-      env:
-        APP: ${{ matrix.app }}
-        DOMAIN: ${{ matrix.domain }}
-        OPENAPI_TARGET: ${{ matrix.openapi_target }}
-      run: |
-        echo "Building OpenAPI spec for $APP..."
-        echo "Target: $OPENAPI_TARGET"
-        
-        # Build the OpenAPI spec
-        if bazel build --config=ci-images "$OPENAPI_TARGET"; then
-          # Find the generated spec file - it's now named {domain}-{app}_openapi_spec.json
-          # Remove @@// or // prefix from target (Bazel 8.x uses @@ prefix for main repo)
-          TARGET_PATH="${OPENAPI_TARGET#@@//}"
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'docker'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+
+      - name: Build OpenAPI spec
+        run: |
+          bazel build --config=ci-images "${{ matrix.openapi_target }}"
+          TARGET_PATH="${{ matrix.openapi_target }}"
+          TARGET_PATH="${TARGET_PATH#@@//}"
           TARGET_PATH="${TARGET_PATH#//}"
-          
-          # The target name includes _openapi_spec suffix, and now the file includes domain prefix
-          # Format: bazel-bin/{path}/{domain}-{app}_openapi_spec.json
           BAZEL_BIN=$(bazel info bazel-bin --config=ci-images)
           TARGET_DIR=$(echo "$TARGET_PATH" | sed 's#:#/#' | sed 's#/[^/]*$##')
-          
-          # Try the new naming format with domain prefix first
-          SPEC_FILE="${BAZEL_BIN}/${TARGET_DIR}/${DOMAIN}-${APP}_openapi_spec.json"
-          
-          # Fallback to old format if the new format doesn't exist (for backward compatibility)
-          if [[ ! -f "$SPEC_FILE" ]]; then
-            SPEC_FILE="${BAZEL_BIN}/${TARGET_PATH}.json"
-            SPEC_FILE=$(echo "$SPEC_FILE" | sed 's#:#/#')
-          fi
-          
-          if [[ -f "$SPEC_FILE" ]]; then
-            # Create output directory
-            mkdir -p /tmp/openapi-specs
-            
-            # Copy spec with a descriptive name
-            cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
-            
-            echo "✅ OpenAPI spec saved to: /tmp/openapi-specs/${DOMAIN}-${APP}-openapi.json"
-          else
-            echo "⚠️ OpenAPI spec file not found at expected location: $SPEC_FILE"
-            exit 1
-          fi
-        else
-          echo "❌ Failed to build OpenAPI spec for $APP"
-          exit 1
-        fi
-    
-    - name: Upload OpenAPI spec artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: openapi-spec-${{ matrix.domain }}-${{ matrix.app }}
-        path: /tmp/openapi-specs/${{ matrix.domain }}-${{ matrix.app }}-openapi.json
-        if-no-files-found: warn
+          SPEC_FILE="${BAZEL_BIN}/${TARGET_DIR}/${{ matrix.domain }}-${{ matrix.app }}_openapi_spec.json"
+          [[ ! -f "$SPEC_FILE" ]] && SPEC_FILE="${BAZEL_BIN}/$(echo "$TARGET_PATH" | sed 's#:#/#').json"
+          mkdir -p /tmp/openapi-specs
+          cp "$SPEC_FILE" "/tmp/openapi-specs/${{ matrix.domain }}-${{ matrix.app }}_openapi_spec.json"
 
-  # Build and release selected apps
+      - name: Upload OpenAPI spec artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-spec-${{ matrix.domain }}-${{ matrix.app }}
+          path: /tmp/openapi-specs/${{ matrix.domain }}-${{ matrix.app }}_openapi_spec.json
+
   release:
     name: Release ${{ matrix.domain }}-${{ matrix.app }}
     runs-on: ubuntu-latest
-    needs: [plan-release, build-release-tools, app-registry-assert]
+    needs: [plan-release, build-release-tools]
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
-    # contents: write - checkout + the "Create git tag for release" step's `git push origin <tag>`.
-    # packages: write - "Log in to GitHub Container Registry" falls back to GITHUB_TOKEN when
-    #   secrets.GHCR_PAT is unset.
-    #
-    # NOTE (issue #626): GitHub separately rejects pushing a NEW ref (like this job's release
-    # tag) that points at a commit which itself modifies a file under .github/workflows/*, with
-    # "refusing to allow a GitHub App to create or update workflow ... without `workflows`
-    # permission" -- see https://github.com/whale-net/everything/actions/runs/31766386363. There
-    # is NO `permissions:` key that grants this to GITHUB_TOKEN ("workflows" is not a valid key
-    # here -- it's a GitHub App/fine-grained-PAT permission, not a GITHUB_TOKEN one; adding it
-    # makes this file fail to parse). Satisfying this for real requires pushing with a different
-    # credential (a classic PAT with the `workflow` scope, or a GitHub App installation token)
-    # instead of GITHUB_TOKEN for the tag-push step. Not yet implemented; this only bites a
-    # release that tags a commit whose own diff touches .github/workflows/*, which is rare.
     permissions:
       contents: write
       packages: write
@@ -500,456 +192,73 @@ jobs:
       matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
       fail-fast: false
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        fetch-tags: true
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        setup-docker: 'true'
-        cache-suffix: 'docker'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          setup-docker: 'true'
+          cache-suffix: 'docker'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
 
-    # release_helper_go still invokes Bazel itself to build the per-app
-    # images (release-multiarch), so Setup Build Environment above is still
-    # needed -- this just fetches the already-built release_helper_go /
-    # app-registry binaries instead of rebuilding them in every matrix leg.
-    - name: Download release tools
-      uses: ./.github/actions/download-release-tools
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
 
-    # AR-7c (issue #558), hoisted out of this matrix leg by issue #622: the
-    # `app-registry-assert` job above -- additive identity + manifest-
-    # snapshot assertion from THIS ref, closing issue #547's gap (a release
-    # running ahead of main's ReconcileApps) -- now runs ONCE, before this
-    # matrix fans out, rather than once per leg (see that job's comment for
-    # why repeating it per leg cost real CI time for zero benefit: it's the
-    # exact same repo-wide call every time). This `needs:` on
-    # `app-registry-assert` is what guarantees it has already run by the
-    # time RecordBuild/RecordArtifact/BeginPublish below resolve their
-    # owner -- `exit 3` / ReasonOwnerNotReconciled stays unreachable from
-    # here, same as before.
+      - name: Configure Git
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
 
-    # Configure Git for tagging
-    - name: Configure Git
-      run: |
-        git config --global user.name "${{ github.actor }}"
-        git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+      - name: Log in to GitHub Container Registry
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
-    # Login unless it's a manual dispatch with dry_run=true
-    # - Manual dispatch with dry_run=false: login (needed for publishing)
-    # - Manual dispatch with dry_run=true: skip login (no publishing)
-    # NOTE: GHCR_PAT secret should be created with write:packages and read:packages scopes
-    # Falls back to GITHUB_TOKEN if GHCR_PAT is not available (limited permissions)
-    - name: Log in to GitHub Container Registry
-      if: ${{ github.event.inputs.dry_run == 'false' }}
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+      - name: Release application
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_MODE: oidc
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        run: |
+          ARGS=(release-app --domain "${{ matrix.domain }}" --app "${{ matrix.app }}" --version "${{ matrix.version || needs.plan-release.outputs.version }}" --create-git-tag)
+          [[ -n "${{ needs.plan-release.outputs.build-id }}" ]] && ARGS+=(--build-id "${{ needs.plan-release.outputs.build-id }}")
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
+          "$RELEASE_HELPER" "${ARGS[@]}"
 
-    # Best-effort recording into the App Registry. See
-    # tools/app_registry/ARCHITECTURE.md -> "APP_REGISTRY_CICD_OPT_IN": with
-    # the variable unset (the default), this step is skipped entirely and CI
-    # makes no registry calls. continue-on-error so a registry outage never
-    # fails a release.
-    #
-    # This can run before main's ReconcileApps has caught up with this
-    # commit (issue #547) -- release.yml deliberately does NOT gate on that,
-    # and does NOT upsert app/chart identity itself; see
-    # tools/app_registry/ARCHITECTURE.md "Rejected alternatives" for the two
-    # options considered and rejected, and OPERATIONS.md for what an
-    # operator does when that happens. The recording actions below classify
-    # that specific failure into its own annotation instead of a generic
-    # registry-error one.
-    #
-    # AR-7b (issue #558): this step and "Begin publish" below MOVED ahead of
-    # the actual image push -- the artifact lifecycle
-    # (ARCHITECTURE.md "Artifact lifecycle: allocated -> publishing ->
-    # published") needs a build_id and a 'publishing' row to exist BEFORE
-    # anything is pushed, not after.
-    - name: Record build in App Registry
-      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
-      id: app-registry-build
-      continue-on-error: true
-      # Defense in depth against a hung dial (e.g. a misconfigured
-      # APP_REGISTRY_ADDRESS pointed at a TLS-only endpoint without a port --
-      # see issue #539): bound the whole step so a connectivity problem fails
-      # fast instead of blocking the release for hours.
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-record-build
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        # Builder credential -- repository secret, deliberately never an
-        # Environment secret (see DEPLOY.md "Where each secret goes"): this
-        # identity can record builds/artifacts but carries no promoter role,
-        # so it cannot promote regardless of who holds it. Without these,
-        # once the server runs GRPC_AUTH_MODE=oidc every call here fails
-        # Unauthenticated -- silently, because this step is
-        # continue-on-error (see DEPLOY.md section 4).
-        #
-        # The real Keycloak clients are environment-scoped
-        # (app-registry-builder-dev / app-registry-builder-prod), not a bare
-        # app-registry-builder -- see issue #539. APP_REGISTRY_BUILDER_ENV is
-        # a repository variable selecting which; only "dev" is wired up in
-        # CI today, hence the fallback.
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        git-sha: ${{ github.sha }}
-        git-ref: ${{ github.ref }}
-        workflow-run-id: ${{ github.run_id }}
-        workflow-attempt: ${{ github.run_attempt }}
-        actor: ${{ github.actor }}
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Generate release notes
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        run: |
+          TAG_NAME="${{ matrix.domain }}-${{ matrix.app }}.${{ matrix.version || needs.plan-release.outputs.version }}"
+          mkdir -p /tmp/release-notes
+          "$RELEASE_HELPER" release-notes "${{ matrix.domain }}-${{ matrix.app }}" --current-tag "$TAG_NAME" --format markdown > "/tmp/release-notes/${{ matrix.domain }}-${{ matrix.app }}.md" || true
 
-    # AR-7b (issue #558) wrote the allocated|failed|∅ -> publishing
-    # transition here, immediately before the push below, per matrix leg.
-    # AR-7d (issue #558) moved the INTENT write up front instead --
-    # plan-release's "Begin publish batch in App Registry" step already
-    # transitioned this target to "publishing" before the matrix fanned out
-    # (see this job's `needs: [plan-release, ...]` and ARCHITECTURE.md "The
-    # run log" -> "As built (AR-7d)") -- but that plan-time write stamps
-    # state_changed_at for every target ONCE, at plan time, not when each
-    # leg actually starts. Without this per-leg call, the stale-row
-    # reaper's ARTIFACT_REAPER_TIMEOUT would have to bound the WHOLE run
-    # rather than one leg (see ENV.md), and a leg the reaper got to first
-    # would push its image to GHCR and then fail to record it -- an
-    # unrecorded published image, exactly what ordering 3 and the rest of
-    # AR-7 exist to prevent. So this step is RESTORED, doing two jobs a
-    # single plan-time write cannot:
-    #   1. Re-arms the staleness clock right before the work it bounds,
-    #      restoring a one-leg budget (publishing -> publishing is a legal,
-    #      idempotent heartbeat -- see repository.ArtifactRepository.
-    #      BeginPublish's doc comment).
-    #   2. Revives (failed -> publishing) a row the reaper already expired
-    #      while this leg was still queued, so the push below still gets
-    #      recorded instead of landing on a dead row.
-    # Its idempotency key deliberately does NOT collide with the batch
-    # call's own key for this target (the batch call appends "-intent"
-    # server-side -- see BeginPublishBatchRequest.idempotency_key_prefix's
-    # doc comment) specifically so this call actually re-executes instead
-    # of replaying the batch's cached response.
-    #
-    # It also carries its own "-image-begin" suffix, distinct from "Record
-    # image artifact" below's "-image-record" (issue #575): these two calls
-    # used to share one "-image" key, so RecordArtifact's call replayed
-    # THIS step's already-committed BeginPublish response instead of
-    # actually running -- silently, because BeginPublishResponse and
-    # RecordArtifactResponse both put an Artifact at proto field 1, so
-    # unmarshaling one into the other's Go struct never errors. The row was
-    # left stuck in 'publishing' (no digest) until the stale-row reaper
-    # failed it, long after this job reported green. Distinct keys are the
-    # workflow-side half of the fix -- server/repository/postgres/
-    # idempotency.go now also scopes lookups to (key, method), so even a
-    # future accidental key reuse fails safe (re-executes) instead of
-    # silently replaying the wrong RPC's response. See ARCHITECTURE.md
-    # "Idempotency" and issue #575.
-    - name: Begin publish (image) in App Registry
-      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' }}
-      id: app-registry-begin-publish
-      continue-on-error: true
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-begin-publish
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        kind: image
-        owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
-        version: ${{ matrix.version || needs.plan-release.outputs.version }}
-        build-id: ${{ steps.app-registry-build.outputs.build-id }}
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-begin
+      - name: Upload release notes artifact
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-${{ matrix.domain }}-${{ matrix.app }}
+          path: /tmp/release-notes/${{ matrix.domain }}-${{ matrix.app }}.md
+          if-no-files-found: ignore
 
-    - name: Build and release app using multiarch release
-      env:
-        APP: ${{ matrix.app }}
-        DOMAIN: ${{ matrix.domain }}
-        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
-        DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-      run: |
-        # Use full domain-app format to avoid ambiguity
-        FULL_APP_NAME="${DOMAIN}-${APP}"
-        echo "Building and releasing $FULL_APP_NAME version $VERSION using multiarch release system"
-
-        # $RELEASE_HELPER comes from the "Download release tools" step (built
-        # once by build-release-tools, not per matrix leg). Executed directly,
-        # not via 'bazel run', to avoid nested-Bazel-invocation deadlocks --
-        # release-multiarch itself shells out to Bazel to build the images.
-
-        # Use release-multiarch with full domain-app name to ensure correct artifact is released
-        if [[ "$DRY_RUN" == "true" ]]; then
-          echo "DRY RUN: Building multiarch images without publishing"
-          "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}" --dry-run
-        else
-          echo "Building and publishing multiarch images for $FULL_APP_NAME $VERSION"
-          "$RELEASE_HELPER" release-multiarch "$FULL_APP_NAME" --version "$VERSION" --commit "${{ github.sha }}"
-          echo "Successfully released multiarch $FULL_APP_NAME $VERSION"
-        fi
-
-    # Digest-idempotent tagging (issue #628; complements #617/#585/#600).
-    # release-multiarch above just pushed $VERSION's image unconditionally
-    # -- Bazel's image builds are content-addressed, so a no-op rebuild (no
-    # source change since the app's last release) produces an image digest
-    # byte-identical to whatever the most recent existing tag already
-    # points at. App Registry can never mark a duplicate-digest artifact
-    # "published" (see issue #617), so a real git tag/image that nothing
-    # can ever promote is exactly what unconditional tag creation used to
-    # produce here. This step decides whether that happened BEFORE this
-    # job mints a new tag or tells App Registry about a "new" version that
-    # was never actually built.
-    - name: Check image digest for no-op rebuild
-      if: ${{ github.event.inputs.dry_run == 'false' }}
-      id: digest-check
-      env:
-        APP: ${{ matrix.app }}
-        DOMAIN: ${{ matrix.domain }}
-        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
-        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-      run: |
-        FULL_APP_NAME="${DOMAIN}-${APP}"
-        TAG_NAME="${FULL_APP_NAME}.${VERSION}"
-        OWNER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-        REPO="ghcr.io/${OWNER}/${FULL_APP_NAME}"
-
-        # Most recent EXISTING tag for this app, excluding the tag this run
-        # would mint -- the "re-running the exact same version" case is
-        # already handled by "Create git tag for release"'s own
-        # `git rev-parse "$TAG_NAME"` check; this only looks at genuinely
-        # older tags to compare against.
-        PREV_TAG=$(git tag --sort=-version:refname --list "${FULL_APP_NAME}.v*" | grep -vFx "$TAG_NAME" | head -n1 || true)
-
-        DIGEST_UNCHANGED=false
-        EFFECTIVE_VERSION="$VERSION"
-        EFFECTIVE_TAG="$TAG_NAME"
-
-        if [[ -n "$PREV_TAG" ]]; then
-          PREV_VERSION="${PREV_TAG#${FULL_APP_NAME}.}"
-          # docker buildx imagetools inspect reads straight from the
-          # registry -- the same tool release-helm-charts already uses to
-          # resolve pinned image digests (see that job's "Record chart
-          # artifacts in App Registry" step). No new dependency needed.
-          # `|| true` on both: this step runs with the shell's default `-e`
-          # -o pipefail, and this step is NOT continue-on-error (its output
-          # gates real tag creation below) -- a transient registry hiccup
-          # here must fall through to "proceed with new tag" (the
-          # NEW_DIGEST/PREV_DIGEST-empty branch below), not abort the step
-          # and skip tag creation entirely.
-          NEW_DIGEST=$(docker buildx imagetools inspect "${REPO}:${VERSION}" 2>/dev/null | awk '/^Digest:/ {print $2; exit}') || true
-          PREV_DIGEST=$(docker buildx imagetools inspect "${REPO}:${PREV_VERSION}" 2>/dev/null | awk '/^Digest:/ {print $2; exit}') || true
-
-          if [[ -n "$NEW_DIGEST" && -n "$PREV_DIGEST" && "$NEW_DIGEST" == "$PREV_DIGEST" ]]; then
-            DIGEST_UNCHANGED=true
-            EFFECTIVE_VERSION="$PREV_VERSION"
-            EFFECTIVE_TAG="$PREV_TAG"
-            echo "::notice title=No-op rebuild ($FULL_APP_NAME)::${VERSION} has the same image digest ($NEW_DIGEST) as existing tag $PREV_TAG. Skipping new git tag and App Registry record -- reusing $PREV_TAG."
-          else
-            echo "Digest check for $FULL_APP_NAME: new($VERSION)=${NEW_DIGEST:-<unresolved>} prev($PREV_TAG)=${PREV_DIGEST:-<unresolved>} -- proceeding with new tag $TAG_NAME"
-          fi
-        else
-          echo "No previous tag found for $FULL_APP_NAME -- proceeding with new tag $TAG_NAME"
-        fi
-
-        echo "digest-unchanged=$DIGEST_UNCHANGED" >> "$GITHUB_OUTPUT"
-        echo "effective-version=$EFFECTIVE_VERSION" >> "$GITHUB_OUTPUT"
-        echo "effective-tag=$EFFECTIVE_TAG" >> "$GITHUB_OUTPUT"
-        echo "previous-tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
-
-        # Written for the create-github-releases job below, which runs
-        # after this matrix has fanned in and only has plan-time (not
-        # per-leg) version info -- see that job's "Apply digest-check
-        # overrides to release matrix" step for why.
-        mkdir -p /tmp/digest-check
-        jq -n --arg domain "$DOMAIN" --arg app "$APP" --argjson unchanged "$DIGEST_UNCHANGED" --arg version "$EFFECTIVE_VERSION" \
-          '{domain: $domain, app: $app, digest_unchanged: $unchanged, effective_version: $version}' \
-          > "/tmp/digest-check/${DOMAIN}-${APP}.json"
-
-    - name: Upload digest-check result
-      if: ${{ github.event.inputs.dry_run == 'false' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: digest-check-${{ matrix.domain }}-${{ matrix.app }}
-        path: /tmp/digest-check/${{ matrix.domain }}-${{ matrix.app }}.json
-        if-no-files-found: warn
-
-    # AR-7b (issue #558): publishing -> failed on the error path, so the
-    # row doesn't sit as "publishing" until the reaper times it out. Gated
-    # on the per-leg "Begin publish (image)" step above actually succeeding
-    # (restored by AR-7d's reaper-hazard fix -- see that step's comment):
-    # only if this leg's own call put/confirmed the row in "publishing" is
-    # there a row here worth failing.
-    - name: Fail publish (image) in App Registry
-      if: ${{ failure() && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-begin-publish.outcome == 'success' }}
-      id: app-registry-fail-publish
-      continue-on-error: true
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-fail-publish
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        kind: image
-        owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
-        version: ${{ matrix.version || needs.plan-release.outputs.version }}
-        reason: 'image push failed (workflow run ${{ github.run_id }}, attempt ${{ github.run_attempt }})'
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-fail
-
-    # Mirrors "Fail publish (image)" above, but for the opposite reason: the
-    # job is NOT failing -- "Check image digest for no-op rebuild" above
-    # just determined this run's image is byte-identical to an
-    # already-published version. "Begin publish (image)" earlier in this
-    # job already put $VERSION's row in 'publishing' before the push
-    # (AR-7b's ordering requirement -- see that step's comment); nothing
-    # below this point will ever record or publish that row (the tag isn't
-    # minted and "Record image artifact" is skipped too, both gated on
-    # digest-check below), so fail it explicitly here instead of leaving it
-    # for the stale-row reaper to eventually clean up as 'stale'.
-    - name: Fail abandoned publish (image, no-op rebuild) in App Registry
-      if: ${{ steps.digest-check.outputs.digest-unchanged == 'true' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-begin-publish.outcome == 'success' }}
-      id: app-registry-fail-publish-noop
-      continue-on-error: true
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-fail-publish
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        kind: image
-        owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
-        version: ${{ matrix.version || needs.plan-release.outputs.version }}
-        reason: 'digest unchanged from existing tag ${{ steps.digest-check.outputs.previous-tag }} -- no-op rebuild, no new artifact to record (workflow run ${{ github.run_id }}, attempt ${{ github.run_attempt }})'
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-fail-noop
-
-    - name: Create git tag for release
-      if: ${{ github.event.inputs.dry_run == 'false' && steps.digest-check.outputs.digest-unchanged != 'true' }}
-      env:
-        APP: ${{ matrix.app }}
-        DOMAIN: ${{ matrix.domain }}
-        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
-      run: |
-        # Use domain from matrix (avoids ambiguity when apps share names across domains)
-        TAG_NAME="${DOMAIN}-${APP}.${VERSION}"
-
-        # Check if tag already exists
-        if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-          echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
-        else
-          echo "Creating git tag: $TAG_NAME"
-          git tag -a "$TAG_NAME" -m "Release ${DOMAIN}-${APP} version $VERSION" "${{ github.sha }}"
-          git push origin "$TAG_NAME"
-          echo "✅ Created and pushed git tag: $TAG_NAME"
-        fi
-
-    - name: Record image artifact in App Registry
-      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != '' && steps.digest-check.outputs.digest-unchanged != 'true' }}
-      id: app-registry-record-image
-      continue-on-error: true
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-record-image
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        build-id: ${{ steps.app-registry-build.outputs.build-id }}
-        owner-full-name: ${{ matrix.domain }}-${{ matrix.app }}
-        repository: ghcr.io/${{ github.repository_owner }}/${{ matrix.domain }}-${{ matrix.app }}
-        version: ${{ matrix.version || needs.plan-release.outputs.version }}
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.domain }}-${{ matrix.app }}-image-record
-
-    # Same posture as plan-release's own health-check step above: every
-    # App Registry step in this job stays continue-on-error (a registry
-    # outage must never block a real image push -- ARCHITECTURE.md
-    # "Availability, restated per adoption stage"), but this step runs LAST,
-    # after the real push and git tag above have already happened, and is
-    # deliberately NOT continue-on-error -- it is what turns a recording
-    # failure into a red run instead of an annotation nobody reads.
-    #
-    # "Fail publish" only ever runs when the job is already failing for a
-    # real reason (its own `if:` requires failure()); it is checked here too
-    # so a fail-publish that itself failed shows up explicitly rather than
-    # being one more thing folded into whatever the original failure was.
-    - name: App Registry recording health
-      if: always()
-      run: |
-        FAILED=0
-        check() {
-          if [[ "$2" == "failure" ]]; then
-            echo "::error::App Registry step '$1' failed this run -- see its own annotation above for detail."
-            FAILED=1
-          fi
-        }
-        check "Assert apps/charts" "${{ needs.app-registry-assert.outputs.outcome }}"
-        check "Begin publish (image)" "${{ steps.app-registry-begin-publish.outcome }}"
-        check "Fail publish (image)" "${{ steps.app-registry-fail-publish.outcome }}"
-        check "Fail abandoned publish (image, no-op rebuild)" "${{ steps.app-registry-fail-publish-noop.outcome }}"
-        check "Record image artifact" "${{ steps.app-registry-record-image.outcome }}"
-        if [[ "$FAILED" -eq 1 ]]; then
-          echo "One or more App Registry recording steps failed. The image release itself is NOT affected -- these steps never block a real push. See tools/app_registry/OPERATIONS.md."
-          exit 1
-        fi
-        echo "✅ App Registry recording steps in this job succeeded (or did not apply)."
-
-    - name: Generate release notes for app
-      if: ${{ github.event.inputs.dry_run == 'false' }}
-      id: release-notes
-      env:
-        APP: ${{ matrix.app }}
-        DOMAIN: ${{ matrix.domain }}
-        VERSION: ${{ matrix.version || needs.plan-release.outputs.version }}
-        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-      run: |
-        # Use full domain-app format to avoid ambiguity
-        FULL_APP_NAME="${DOMAIN}-${APP}"
-        echo "Generating release notes for $FULL_APP_NAME version $VERSION"
-
-        # Tag format uses domain-appname.version -- reuse digest-check's
-        # effective tag (that step always runs before this one, gated on
-        # the same dry_run=='false' condition) so a no-op rebuild's notes
-        # reference the existing tag it reused rather than a version that
-        # was never minted.
-        TAG_NAME="${{ steps.digest-check.outputs.effective-tag }}"
-
-        # Output domain for use in upload step
-        echo "domain=$DOMAIN" >> $GITHUB_OUTPUT
-        
-        echo "## 📝 Release Notes for $TAG_NAME" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Generate release notes using the release helper with full app name
-        RELEASE_NOTES=$("$RELEASE_HELPER" release-notes "$FULL_APP_NAME" \
-          --current-tag "$TAG_NAME" \
-          --format markdown 2>/dev/null || echo "Release notes generation skipped - no previous tags found")
-        
-        echo "Release notes generated for $FULL_APP_NAME:"
-        echo "$RELEASE_NOTES"
-        
-        # Add to GitHub step summary
-        echo "$RELEASE_NOTES" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        echo "✅ Release notes generated for $FULL_APP_NAME $VERSION"
-        
-        # Save release notes to a file for the GitHub release creation job
-        mkdir -p /tmp/release-notes
-        echo "$RELEASE_NOTES" > "/tmp/release-notes/${DOMAIN}-${APP}.md"
-    
-    - name: Upload release notes artifact
-      if: ${{ github.event.inputs.dry_run == 'false' }}
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-notes-${{ matrix.domain }}-${{ matrix.app }}
-        path: /tmp/release-notes/${{ steps.release-notes.outputs.domain }}-${{ matrix.app }}.md
-        if-no-files-found: ignore
+      - name: Upload digest-check artifact
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-check-${{ matrix.domain }}-${{ matrix.app }}
+          path: /tmp/digest-check/${{ matrix.domain }}-${{ matrix.app }}.json
+          if-no-files-found: ignore
 
   create-github-releases:
     name: Create GitHub Releases
@@ -957,114 +266,146 @@ jobs:
     needs: [plan-release, release, build-openapi-specs, build-release-tools]
     if: always() && !cancelled() && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false' && needs.release.result == 'success' && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        fetch-tags: true
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
-    - name: Download release tools
-      uses: ./.github/actions/download-release-tools
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
 
-    - name: Download release notes artifacts
-      uses: actions/download-artifact@v4
-      with:
-        pattern: release-notes-*
-        path: /tmp/release-notes
-        merge-multiple: true
-    
-    - name: Download OpenAPI spec artifacts
-      uses: actions/download-artifact@v4
-      with:
-        pattern: openapi-spec-*
-        path: /tmp/openapi-specs
-        merge-multiple: true
-      continue-on-error: true
+      - name: Download release notes artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-notes-*
+          path: /tmp/release-notes
+          merge-multiple: true
 
-    # One file per matrix leg from the release job's "Upload digest-check
-    # result" step. This job fans back in from that matrix and only has
-    # plan-time version info (needs.plan-release.outputs), not each leg's
-    # own step outputs -- GitHub Actions doesn't propagate matrix step
-    # outputs to a downstream job -- so the per-leg digest-check verdict has
-    # to travel as an artifact instead.
-    - name: Download digest-check artifacts
-      uses: actions/download-artifact@v4
-      with:
-        pattern: digest-check-*
-        path: /tmp/digest-check
-        merge-multiple: true
-      continue-on-error: true
+      - name: Download OpenAPI spec artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: openapi-spec-*
+          path: /tmp/openapi-specs
+          merge-multiple: true
+        continue-on-error: true
 
-    # For any app whose digest-check found a no-op rebuild, "Create git tag
-    # for release" never minted matrix.version's tag -- overriding its
-    # version here to the existing tag it reused stops the GitHub Release
-    # API below from auto-creating a lightweight tag for a version that was
-    # deliberately never released (see "Check image digest for no-op
-    # rebuild" in the release job for the full rationale).
-    - name: Apply digest-check overrides to release matrix
-      id: matrix-override
-      env:
-        MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
-      run: |
-        OVERRIDDEN_MATRIX="$MATRIX"
+      - name: Download digest-check artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-check-*
+          path: /tmp/digest-check
+          merge-multiple: true
+        continue-on-error: true
 
-        if compgen -G "/tmp/digest-check/*.json" > /dev/null; then
-          for f in /tmp/digest-check/*.json; do
-            DOMAIN=$(jq -r '.domain' "$f")
-            APP=$(jq -r '.app' "$f")
-            UNCHANGED=$(jq -r '.digest_unchanged' "$f")
-            EFF_VERSION=$(jq -r '.effective_version' "$f")
-            if [[ "$UNCHANGED" == "true" ]]; then
-              echo "Overriding ${DOMAIN}-${APP} to reused version $EFF_VERSION (no-op rebuild)"
-              OVERRIDDEN_MATRIX=$(echo "$OVERRIDDEN_MATRIX" | jq -c \
-                --arg domain "$DOMAIN" --arg app "$APP" --arg version "$EFF_VERSION" \
-                '.include |= map(if .domain == $domain and .app == $app then .version = $version else . end)')
-            fi
-          done
-        fi
-
-        echo "matrix=$OVERRIDDEN_MATRIX" >> "$GITHUB_OUTPUT"
-
-    - name: Create GitHub releases for all apps
-      env:
-        MATRIX: ${{ steps.matrix-override.outputs.matrix }}
-        VERSION: ${{ needs.plan-release.outputs.version }}
-        GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-        GITHUB_REPOSITORY_NAME: ${{ github.event.repository.name }}
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        echo "Creating GitHub releases for all apps in version $VERSION..."
-        
-        # Extract app names from matrix in full domain-app format to avoid ambiguity
-        APPS=$(echo "$MATRIX" | jq -r '.include[] | "\(.domain)-\(.app)"' | tr '\n' ',' | sed 's/,$//')
-        
-        if [[ -n "$APPS" && "$APPS" != "" ]]; then
-          echo "Creating releases for apps: $APPS"
-          
-          # List available release notes files
-          echo "Available release notes files:"
-          ls -la /tmp/release-notes/ || echo "No release notes files found"
-          
-          # List available OpenAPI spec files
-          echo "Available OpenAPI spec files:"
-          ls -la /tmp/openapi-specs/ || echo "No OpenAPI spec files found"
-          
-          # Create releases for all apps at once, using pre-generated release notes
-          if "$RELEASE_HELPER" create-combined-github-release-with-notes "$VERSION" \
-            --owner "$GITHUB_REPOSITORY_OWNER" \
-            --repo "$GITHUB_REPOSITORY_NAME" \
-            --commit "${{ github.sha }}" \
-            --apps "$APPS" \
-            --release-notes-dir "/tmp/release-notes" \
-            --openapi-specs-dir "/tmp/openapi-specs"; then
-            echo "✅ Successfully created GitHub releases for version $VERSION"
-          else
-            echo "❌ Failed to create GitHub releases for version $VERSION"
-            exit 1  # Fail the job if release creation fails
+      - name: Apply digest-check overrides to release matrix
+        id: matrix-override
+        env:
+          MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+        run: |
+          OVERRIDDEN_MATRIX="$MATRIX"
+          if compgen -G "/tmp/digest-check/*.json" > /dev/null; then
+            for f in /tmp/digest-check/*.json; do
+              DOMAIN=$(jq -r '.domain' "$f")
+              APP=$(jq -r '.app' "$f")
+              UNCHANGED=$(jq -r '.digest_unchanged' "$f")
+              EFF_VERSION=$(jq -r '.effective_version' "$f")
+              if [[ "$UNCHANGED" == "true" ]]; then
+                echo "Overriding ${DOMAIN}-${APP} to reused version $EFF_VERSION (no-op rebuild)"
+                OVERRIDDEN_MATRIX=$(echo "$OVERRIDDEN_MATRIX" | jq -c \
+                  --arg domain "$DOMAIN" --arg app "$APP" --arg version "$EFF_VERSION" \
+                  '.include |= map(if .domain == $domain and .app == $app then .version = $version else . end)')
+              fi
+            done
           fi
-        else
-          echo "No apps found in matrix, skipping release creation"
-        fi
+          echo "matrix=$OVERRIDDEN_MATRIX" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub releases for all apps
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APPS=$(echo '${{ steps.matrix-override.outputs.matrix }}' | jq -r '.include[] | "\(.domain)-\(.app)"' | paste -sd, -)
+          if [[ -n "$APPS" ]]; then
+            "$RELEASE_HELPER" create-combined-github-release-with-notes "${{ needs.plan-release.outputs.version }}" \
+              --owner "${{ github.repository_owner }}" \
+              --repo "${{ github.event.repository.name }}" \
+              --commit "${{ github.sha }}" \
+              --apps "$APPS" \
+              --release-notes-dir "/tmp/release-notes" \
+              --openapi-specs-dir "/tmp/openapi-specs"
+          fi
+
+  release-helm-charts:
+    name: Release Helm Charts
+    needs: [plan-release, release, create-github-releases, build-release-tools]
+    if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          setup-docker: 'true'
+          cache-suffix: 'helm'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
+
+      - name: Configure Git
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Log in to GitHub Container Registry
+        if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Release Helm charts
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_MODE: oidc
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+          CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
+          CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
+        run: |
+          ARGS=(release-charts --charts "${{ github.event.inputs.helm_charts }}" --chart-repo-url "$CHART_REPO_URL" --create-git-tag)
+          [[ -n "${{ needs.plan-release.outputs.version }}" ]] && ARGS+=(--version "${{ needs.plan-release.outputs.version }}")
+          [[ -n "${{ needs.plan-release.outputs.build-id }}" ]] && ARGS+=(--build-id "${{ needs.plan-release.outputs.build-id }}")
+          [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
+          "$RELEASE_HELPER" "${ARGS[@]}"
+
+      - name: Upload helm chart artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-charts
+          path: /tmp/helm-charts/*.tgz
+          if-no-files-found: ignore
 
   release-summary:
     name: Release Summary
@@ -1072,826 +413,19 @@ jobs:
     needs: [plan-release, release, create-github-releases, release-helm-charts, build-release-tools]
     if: always()
     env:
-      # Same value, same default, and the same override as the
-      # release-helm-charts job's -- see that job's CHART_REPO_URL comment.
-      # Repeated because `env` is per-job; the summary this job writes tells
-      # users where to `helm repo add` from, so it must not drift from where
-      # the charts were actually uploaded.
       CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    # This job runs with if: always(), including when build-release-tools
-    # itself failed/was skipped -- continue-on-error so a missing artifact
-    # degrades the summary instead of failing this always-run job.
-    - name: Download release tools
-      id: download-tools
-      continue-on-error: true
-      uses: ./.github/actions/download-release-tools
+      - name: Download release tools
+        id: download-tools
+        continue-on-error: true
+        uses: ./.github/actions/download-release-tools
 
-    - name: Generate summary using release helper
-      if: steps.download-tools.outcome == 'success'
-      run: |
-        # Use our release helper tool to generate the summary
-        MATRIX='${{ needs.plan-release.outputs.release-matrix }}'
-        EVENT_TYPE="workflow_dispatch"
-        DRY_RUN="${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}"
-
-        SUMMARY=$("$RELEASE_HELPER" summary \
-          --matrix "$MATRIX" \
-          --version "${{ needs.plan-release.outputs.version }}" \
-          --event-type "$EVENT_TYPE" \
-          --repository-owner "${{ github.repository_owner }}" \
-          $DRY_RUN)
-
-        echo "$SUMMARY" >> $GITHUB_STEP_SUMMARY
-
-    - name: Generate fallback summary
-      if: steps.download-tools.outcome != 'success'
-      run: |
-        echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "⚠️ release-tools artifact unavailable (an earlier job likely failed) -- see other job logs for details." >> $GITHUB_STEP_SUMMARY
-        
-    - name: Add helm chart summary
-      if: github.event.inputs.helm_charts != ''
-      run: |
-        HELM_CHARTS="${{ github.event.inputs.helm_charts }}"
-        VERSION="${{ needs.plan-release.outputs.version }}"
-        DRY_RUN="${{ github.event.inputs.dry_run }}"
-        HELM_JOB_RESULT="${{ needs.release-helm-charts.result }}"
-        REPO_OWNER="${{ github.repository_owner }}"
-        REPO_NAME="${{ github.event.repository.name }}"
-        
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "---" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "## 🎯 Helm Chart Release" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        if [[ "$HELM_JOB_RESULT" == "success" ]]; then
-          echo "**Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
-          echo "**Charts:** $HELM_CHARTS" >> $GITHUB_STEP_SUMMARY
-          echo "**Version:** $VERSION" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [[ "$DRY_RUN" != "true" ]]; then
-            echo "### 📚 Helm Repository" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Charts have been published to the Helm repository:" >> $GITHUB_STEP_SUMMARY
-            echo "- **Repository URL:** ${CHART_REPO_URL}/" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            echo "### 🏷️ Git Tags" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Git tags have been created for version tracking:" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            # List the created tags based on chart names
-            IFS=',' read -ra CHART_ARRAY <<< "$HELM_CHARTS"
-            for CHART in "${CHART_ARRAY[@]}"; do
-              CHART=$(echo "$CHART" | xargs) # trim whitespace
-              if [[ "$CHART" != "all" ]]; then
-                # Tags keep the helm- prefix to avoid collisions with app tags
-                echo "- \`${CHART}.v${VERSION}\`" >> $GITHUB_STEP_SUMMARY
-              fi
-            done
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            echo "**Add the repository:**" >> $GITHUB_STEP_SUMMARY
-            echo '```bash' >> $GITHUB_STEP_SUMMARY
-            echo "helm repo add whalenet ${CHART_REPO_URL}/" >> $GITHUB_STEP_SUMMARY
-            echo "helm repo update" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Install a chart:**" >> $GITHUB_STEP_SUMMARY
-            echo '```bash' >> $GITHUB_STEP_SUMMARY
-            echo "helm search repo whalenet" >> $GITHUB_STEP_SUMMARY
-            echo "helm install my-release whalenet/<chart-name>" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "📥 **Chart packages available as workflow artifacts**" >> $GITHUB_STEP_SUMMARY
-          
-          if [[ "$DRY_RUN" == "true" ]]; then
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "ℹ️ *Dry run mode - charts built but not published*" >> $GITHUB_STEP_SUMMARY
-          fi
-        elif [[ "$HELM_JOB_RESULT" == "skipped" ]]; then
-          echo "**Status:** ⏭️ Skipped (no charts specified)" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**Status:** ❌ Failed or Cancelled" >> $GITHUB_STEP_SUMMARY
-        fi
-
-  # Release helm charts (must run after app images are built and tagged)
-  release-helm-charts:
-    name: Release Helm Charts
-    needs: [plan-release, release, create-github-releases, build-release-tools, app-registry-assert]
-    if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write     # Push git tags and read repository content
-      # NOTE (issue #626): same GITHUB_TOKEN-can't-satisfy-this caveat as the `release` job
-      # above applies to this job's "Create and push helm chart tags" step -- see that job's
-      # `permissions:` comment for the full explanation.
-    env:
-      # The ChartMuseum this job uploads to, and the base of the
-      # artifact.repository value recorded in the App Registry for every
-      # chart ("$CHART_REPO_URL/<published-name>"). Defined once here rather
-      # than inline per step: the upload step, the App Registry
-      # begin-publish/record steps, and the summary output must all agree on
-      # it, and they only do by construction if they read one value. Override
-      # with a CHART_REPO_URL repository/environment variable to point a fork
-      # or a staging run at a different ChartMuseum.
-      CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        fetch-tags: true
-        # NOTE: If helm chart release fails with "refusing to allow a GitHub App to create or update workflow"
-        # this means the commit being tagged contains workflow changes. GitHub's default GITHUB_TOKEN
-        # cannot push tags pointing to commits that modify .github/workflows/*.
-        # Workaround: Push an empty commit after the workflow change, then run the release again:
-        #   git commit --allow-empty -m "Empty commit for helm chart release"
-        #   git push
-        
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        setup-docker: 'true'
-        cache-suffix: 'helm'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-
-    - name: Download release tools
-      uses: ./.github/actions/download-release-tools
-
-    # AR-7c (issue #558), hoisted out of this job by issue #622: see the
-    # top-level `app-registry-assert` job's comment. It now runs once for
-    # the whole release run instead of once per release job (this job used
-    # to repeat the exact same repo-wide assert the `release` matrix job
-    # already did); this job's `needs:` on it is what preserves the
-    # before-any-registry-call-below ordering guarantee.
-
-    # Needed to resolve pinned image tags to digests for App Registry
-    # recording below (docker buildx imagetools inspect reads from ghcr.io).
-    - name: Log in to GitHub Container Registry
-      if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
-
-    - name: Install Helm
-      uses: azure/setup-helm@v4
-      with:
-        version: 'latest'
-
-    - name: Plan helm chart release
-      id: plan
-      run: |
-        CHARTS_INPUT="${{ github.event.inputs.helm_charts }}"
-        VERSION="${{ needs.plan-release.outputs.version }}"
-        INCLUDE_DEMO="${{ github.event.inputs.include_demo }}"
-        
-        echo "Planning helm chart release for: $CHARTS_INPUT"
-        echo "Using version: $VERSION"
-        
-        # Build the command with optional --include-demo flag
-        CMD="\"$RELEASE_HELPER\" plan-helm-release --charts \"$CHARTS_INPUT\" --version \"$VERSION\" --format github"
-        
-        if [[ "$INCLUDE_DEMO" == "true" ]]; then
-          CMD="$CMD --include-demo"
-        fi
-        
-        echo "Planning with command: $CMD"
-        
-        # Use release helper to plan the helm chart release
-        PLAN_OUTPUT=$(eval $CMD)
-        
-        # Parse output from release helper
-        echo "$PLAN_OUTPUT" | while IFS= read -r line; do
-          if [[ "$line" == matrix=* ]]; then
-            echo "${line}" >> $GITHUB_OUTPUT
-          elif [[ "$line" == charts=* ]]; then
-            echo "${line}" >> $GITHUB_OUTPUT
-            CHARTS_LIST="${line#charts=}"
-            if [[ -n "$CHARTS_LIST" ]]; then
-              echo "Release plan: $CHARTS_LIST"
-            else
-              echo "No charts to release"
-            fi
-          fi
-        done
-        
-    - name: Build helm charts with versioning
-      if: steps.plan.outputs.charts != ''
-      env:
-        VERSION: ${{ needs.plan-release.outputs.version }}
-        DRY_RUN: ${{ github.event.inputs.dry_run }}
-        INCREMENT_MINOR: ${{ github.event.inputs.increment_minor }}
-        INCREMENT_PATCH: ${{ github.event.inputs.increment_patch }}
-        # AR-7f (issue #558): compose-time chart hermeticity. build-helm-chart
-        # is a no-op here unless APP_REGISTRY_CICD_OPT_IN is exactly "true" --
-        # see tools/release_helper_go/cmd/chart_hermeticity.go's doc comment
-        # and ARCHITECTURE.md "APP_REGISTRY_CICD_OPT_IN". Same builder
-        # credential and env var names as every other App Registry step in
-        # this job below, so this dials the same server.
-        APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
-        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-        GRPC_AUTH_MODE: oidc
-        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-      run: |
-        echo "Building helm charts with version $VERSION"
-        
-        # Determine bump type based on increment inputs
-        BUMP_TYPE="patch"  # Default to patch
-        if [[ "$INCREMENT_MINOR" == "true" ]]; then
-          BUMP_TYPE="minor"
-          echo "Using minor version bump for helm charts"
-        elif [[ "$INCREMENT_PATCH" == "true" ]]; then
-          BUMP_TYPE="patch"
-          echo "Using patch version bump for helm charts"
-        fi
-        
-        # Create output directory for charts
-        mkdir -p /tmp/helm-charts
-
-        # $RELEASE_HELPER comes from the "Download release tools" step above
-        # (built once by build-release-tools, not re-built in this job).
-
-        # Parse chart list and build each chart with proper versioning
-        CHARTS="${{ steps.plan.outputs.charts }}"
-        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
-        
-        for CHART in "${CHART_ARRAY[@]}"; do
-          echo "Building chart: $CHART with auto-versioning (bump: $BUMP_TYPE)"
-          
-          # Build the chart using release helper with auto-versioning
-          # Each chart maintains its own version based on git tags (helm/<chart-name>/v*)
-          # Note: --auto-version is the default, so we don't need to pass it explicitly
-          "$RELEASE_HELPER" build-helm-chart "$CHART" \
-            --output-dir /tmp/helm-charts \
-            --use-released \
-            --bump "$BUMP_TYPE"
-          
-          echo "✅ Chart $CHART built successfully with auto-versioning (bump: $BUMP_TYPE)"
-        done
-        
-        # List generated charts with versions
-        echo "Generated versioned charts:"
-        ls -lh /tmp/helm-charts/
-
-    # Digest-idempotent tagging for charts (issue #628; same rationale as
-    # the image release job's "Check image digest for no-op rebuild" -- see
-    # that step's comment for the full writeup). Unlike images, chart
-    # packaging (above) and every App Registry / ChartMuseum / git-tag call
-    # below are separate steps in this same job, so this can run BEFORE any
-    # of them -- a no-op chart never gets a 'publishing' row opened in the
-    # first place, so there's no abandoned-row cleanup step needed here the
-    # way the image job needs "Fail abandoned publish (image, no-op
-    # rebuild)".
-    #
-    # Note this fires less often than the image check: a packaged chart's
-    # .tgz embeds its own version string (Chart.yaml, values.yaml imageTag)
-    # via packageChartWithVersion, so two DIFFERENT version numbers will
-    # almost never package to a byte-identical digest even when nothing
-    # meaningful changed. It's kept anyway for structural symmetry with the
-    # image fix and to safety-net a chart whose packaging stops embedding a
-    # version stamp; the vast majority of the reported bug (issue #617) is
-    # the image side above.
-    #
-    # Charts found to be no-op rebuilds have their .tgz moved out of
-    # /tmp/helm-charts/ into /tmp/helm-charts-noop/ -- every step below
-    # globs /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz per chart and already
-    # has a "file not found, skip this chart" path (it previously only
-    # existed to tolerate a genuine build failure), so removing the file
-    # here is what makes every downstream step (tag creation, Begin
-    # publish, Record chart artifacts, ChartMuseum upload) skip a no-op
-    # chart without any further plumbing.
-    - name: Check helm chart digests for no-op rebuilds
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      env:
-        CHARTS: ${{ steps.plan.outputs.charts }}
-        CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
-        CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
-      run: |
-        mkdir -p /tmp/helm-charts-noop
-
-        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
-        for CHART in "${CHART_ARRAY[@]}"; do
-          PUBLISHED_NAME="${CHART#helm-}"
-          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
-          if [[ ! -f "$CHART_FILE" ]]; then
-            echo "::warning::Could not find chart file for $CHART, skipping digest check"
-            continue
-          fi
-          CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
-          TAG_NAME="${CHART}.${CHART_VERSION}"
-
-          PREV_TAG=$(git tag --sort=-version:refname --list "${CHART}.v*" | grep -vFx "$TAG_NAME" | head -n1 || true)
-          if [[ -z "$PREV_TAG" ]]; then
-            echo "No previous tag found for $CHART -- proceeding with new tag $TAG_NAME"
-            continue
-          fi
-          PREV_VERSION="${PREV_TAG#${CHART}.}"
-
-          NEW_DIGEST="sha256:$(sha256sum "$CHART_FILE" | awk '{print $1}')"
-          PREV_DIGEST=""
-          PREV_TGZ=$(mktemp)
-          if curl -fsSL -u "${CHART_REPO_USER}:${CHART_REPO_PASS}" \
-              "${CHART_REPO_URL}/charts/${PUBLISHED_NAME}-${PREV_VERSION}.tgz" -o "$PREV_TGZ" 2>/dev/null; then
-            PREV_DIGEST="sha256:$(sha256sum "$PREV_TGZ" | awk '{print $1}')"
-          fi
-          rm -f "$PREV_TGZ"
-
-          if [[ -n "$PREV_DIGEST" && "$NEW_DIGEST" == "$PREV_DIGEST" ]]; then
-            echo "::notice title=No-op chart rebuild ($CHART)::${CHART_VERSION} packages byte-identical to existing tag $PREV_TAG. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing $PREV_TAG."
-            echo "$PREV_TAG" > "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason"
-            mv "$CHART_FILE" "/tmp/helm-charts-noop/"
-          else
-            echo "Digest check for $CHART: new($CHART_VERSION)=$NEW_DIGEST prev($PREV_TAG)=${PREV_DIGEST:-<unresolved>} -- proceeding with new tag $TAG_NAME"
-          fi
-        done
-
-    # AR-7b (issue #558): Record chart build + Begin publish MOVED ahead of
-    # the actual ChartMuseum push below -- see the image release job's
-    # matching comment. Best-effort, same APP_REGISTRY_CICD_OPT_IN /
-    # continue-on-error posture as every other App Registry step in this
-    # workflow.
-    - name: Record chart build in App Registry
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true'
-      id: app-registry-build
-      continue-on-error: true
-      timeout-minutes: 5
-      uses: ./.github/actions/app-registry-record-build
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        git-sha: ${{ github.sha }}
-        git-ref: ${{ github.ref }}
-        workflow-run-id: ${{ github.run_id }}
-        workflow-attempt: ${{ github.run_attempt }}
-        actor: ${{ github.actor }}
-        idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}
-
-    # AR-7b: ∅|allocated|failed -> publishing, one call per chart, before
-    # ANY chart in this batch is pushed -- "Publish charts to ChartMuseum"
-    # below uploads every chart in one step, so this necessarily runs at
-    # batch granularity too (coarser than the image job's one-app-per-leg
-    # BeginPublish, which the matrix already gives for free).
-    #
-    # Uses its own "-chart-begin" idempotency-key suffix, distinct from
-    # "Record chart artifacts" below's "-chart-record" -- these two calls
-    # used to share one "-chart" key (issue #575), which meant the record
-    # call silently replayed this step's BeginPublish response instead of
-    # running (BeginPublishResponse and RecordArtifactResponse both put an
-    # Artifact at proto field 1, so the wrong unmarshal never errors),
-    # leaving the row stuck in 'publishing' until the stale-row reaper
-    # failed it. See the image job's "Begin publish (image)" step for the
-    # full writeup; same fix, same shape, applied to charts here.
-    - name: Begin publish (charts) in App Registry
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != ''
-      id: app-registry-begin-publish
-      continue-on-error: true
-      timeout-minutes: 10
-      env:
-        CHARTS: ${{ steps.plan.outputs.charts }}
-        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-        GRPC_AUTH_MODE: oidc
-        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        BUILD_ID: ${{ steps.app-registry-build.outputs.build-id }}
-      run: |
-        IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
-        BEGIN_HAD_FAILURE=0
-
-        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
-        for CHART in "${CHART_ARRAY[@]}"; do
-          PUBLISHED_NAME="${CHART#helm-}"
-          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
-          if [[ ! -f "$CHART_FILE" ]]; then
-            if [[ -f "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason" ]]; then
-              echo "ℹ️  Skipping App Registry begin-publish for $CHART -- no-op rebuild, reusing $(cat "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason")"
-            else
-              echo "::warning::Could not find chart file for $CHART, skipping App Registry begin-publish"
-            fi
-            continue
-          fi
-          CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
-
-          set +e
-          # --repository is REQUIRED here, unlike the image job's
-          # begin-publish, which can leave the server to fall back to the
-          # app's registered image_repository: chart.chart_repository has
-          # never been populated by any write path (migration 008 hardcodes
-          # it to '' in v_current_chart), so a chart's ∅ -> publishing
-          # branch has no server-side value to fall back to. Same URL the
-          # "Record chart artifacts" step below passes -- both write the one
-          # artifact.repository column, so they must agree.
-          BEGIN_OUTPUT=$("$APP_REGISTRY_CLI" artifacts begin-publish \
-            --kind chart \
-            --owner "$PUBLISHED_NAME" \
-            --repository "${CHART_REPO_URL}/${PUBLISHED_NAME}" \
-            --version "$CHART_VERSION" \
-            --build-id "$BUILD_ID" \
-            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart-begin" 2>&1)
-          BEGIN_EXIT=$?
-          set -e
-
-          if [[ $BEGIN_EXIT -eq 0 ]]; then
-            echo "✅ ${PUBLISHED_NAME} ${CHART_VERSION} is now 'publishing' in App Registry"
-          elif [[ $BEGIN_EXIT -eq 4 ]]; then
-            echo "$BEGIN_OUTPUT"
-            echo "::error title=App Registry: version skew (begin-publish not implemented)::The deployed app-registry-api does not implement BeginPublish. This is a CI/server version skew (issue #570), not an outage -- it will NOT clear on retry. ${PUBLISHED_NAME} ${CHART_VERSION} was not transitioned to 'publishing'."
-            BEGIN_HAD_FAILURE=1
-          else
-            echo "$BEGIN_OUTPUT"
-            echo "::warning title=App Registry: begin-publish skipped (registry error)::Could not transition ${PUBLISHED_NAME} ${CHART_VERSION} to 'publishing'."
-            BEGIN_HAD_FAILURE=1
-          fi
-        done
-
-        if [[ "$BEGIN_HAD_FAILURE" -eq 1 ]]; then
-          exit 1
-        fi
-
-    - name: Configure Git for tagging
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      run: |
-        git config --global user.name "${{ github.actor }}"
-        git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-
-    - name: Create and push helm chart tags
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      env:
-        VERSION: ${{ needs.plan-release.outputs.version }}
-        CHARTS: ${{ steps.plan.outputs.charts }}
-      run: |
-        echo "Creating git tags for helm chart releases..."
-        
-        # Parse chart list and create tags for each chart
-        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
-        
-        for CHART in "${CHART_ARRAY[@]}"; do
-          # Strip helm- prefix from chart name for file lookup
-          # Chart names internally use helm-namespace-name format,
-          # but published files use namespace-name format (without helm- prefix)
-          PUBLISHED_NAME="${CHART#helm-}"
-          
-          # Extract the actual version from the packaged chart filename
-          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
-          
-          if [[ -f "$CHART_FILE" ]]; then
-            # Extract version from filename (e.g., demo-hello-fastapi-v0.2.1.tgz -> v0.2.1)
-            CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
-            
-            # Format: {chart-name}.{version} (keep helm- prefix in tags to avoid collisions)
-            TAG_NAME="${CHART}.${CHART_VERSION}"
-            
-            echo "Creating tag: $TAG_NAME for chart $CHART (published as $PUBLISHED_NAME)"
-            
-            # Check if tag already exists
-            if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-              echo "ℹ️  Tag $TAG_NAME already exists, skipping creation"
-            else
-              # Create annotated tag
-              git tag -a "$TAG_NAME" -m "Release helm chart $CHART version ${CHART_VERSION}" "${{ github.sha }}"
-              
-              # Push the tag
-              git push origin "$TAG_NAME"
-              
-              echo "✅ Created and pushed tag: $TAG_NAME"
-            fi
-          elif [[ -f "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason" ]]; then
-            echo "ℹ️  Skipping tag for $CHART -- no-op rebuild, reusing $(cat "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason") (see \"Check helm chart digests for no-op rebuilds\" step above)"
-          else
-            echo "⚠️ Warning: Could not find chart file for $CHART (looking for ${PUBLISHED_NAME}-*.tgz)"
-          fi
-        done
-
-        echo "✅ All helm chart tags created and pushed"
-        
-    - name: Publish charts to ChartMuseum
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      env:
-        CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
-        CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
-      run: |
-        echo "Publishing charts to ${CHART_REPO_URL}/..."
-        
-        REPO_URL="$CHART_REPO_URL"
-        
-        # Verify chart files exist before attempting upload. Zero files here
-        # is only benign when every planned chart was moved to
-        # /tmp/helm-charts-noop/ by "Check helm chart digests for no-op
-        # rebuilds" above (nothing new to publish) -- any other cause of
-        # zero files is a genuine build failure and should still fail loud.
-        CHART_COUNT=$(ls -1 /tmp/helm-charts/*.tgz 2>/dev/null | wc -l)
-        NOOP_COUNT=$(ls -1 /tmp/helm-charts-noop/*.tgz 2>/dev/null | wc -l)
-        if [ "$CHART_COUNT" -eq 0 ]; then
-          if [ "$NOOP_COUNT" -gt 0 ]; then
-            echo "ℹ️  No chart files to publish -- all $NOOP_COUNT planned chart(s) were no-op rebuilds (see \"Check helm chart digests for no-op rebuilds\" step above)."
-            exit 0
-          fi
-          echo "❌ Error: No chart files found in /tmp/helm-charts/"
-          exit 1
-        fi
-        
-        echo "Found $CHART_COUNT chart(s) to publish"
-        
-        # Upload new chart packages using ChartMuseum API
-        # ChartMuseum will automatically regenerate index.yaml
-        # See: https://github.com/helm/chartmuseum#uploading-a-chart-package
-        UPLOAD_FAILED=0
-        for chart in /tmp/helm-charts/*.tgz; do
-          if [ -f "$chart" ]; then
-            chart_name=$(basename "$chart")
-            echo "Uploading $chart_name via ChartMuseum API..."
-            
-            # POST to /api/charts endpoint with error handling
-            # ChartMuseum will extract version from the chart package and update index
-            if curl --fail-with-body -u "${CHART_REPO_USER}:${CHART_REPO_PASS}" \
-                    --data-binary "@${chart}" \
-                    "${REPO_URL}/api/charts" 2>&1; then
-              echo "✅ Uploaded $chart_name"
-            else
-              echo "❌ Failed to upload $chart_name"
-              UPLOAD_FAILED=1
-            fi
-          fi
-        done
-        
-        if [ "$UPLOAD_FAILED" -eq 1 ]; then
-          echo "❌ One or more chart uploads failed"
-          exit 1
-        fi
-        
-        echo "✅ All charts published successfully"
-
-    # AR-7b (issue #558): publishing -> failed for every chart this batch
-    # began publishing, on the ChartMuseum push's error path -- mirrors the
-    # image job's "Fail publish" step, at the same batch granularity Begin
-    # publish above used. steps.*.outcome is unaffected by
-    # continue-on-error, so this only runs at all when Begin publish (charts)
-    # actually ran and produced 'publishing' rows to fail.
-    - name: Fail publish (charts) in App Registry
-      if: ${{ failure() && steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-begin-publish.outcome == 'success' }}
-      id: app-registry-fail-publish
-      continue-on-error: true
-      timeout-minutes: 10
-      env:
-        CHARTS: ${{ steps.plan.outputs.charts }}
-        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-        GRPC_AUTH_MODE: oidc
-        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-      run: |
-        IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
-
-        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
-        for CHART in "${CHART_ARRAY[@]}"; do
-          PUBLISHED_NAME="${CHART#helm-}"
-          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
-          if [[ ! -f "$CHART_FILE" ]]; then
-            continue
-          fi
-          CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
-
-          set +e
-          FAIL_OUTPUT=$("$APP_REGISTRY_CLI" artifacts fail-publish \
-            --kind chart \
-            --owner "$PUBLISHED_NAME" \
-            --version "$CHART_VERSION" \
-            --reason "chart push failed (workflow run ${{ github.run_id }}, attempt ${{ github.run_attempt }})" \
-            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart-fail" 2>&1)
-          FAIL_EXIT=$?
-          set -e
-
-          if [[ $FAIL_EXIT -eq 0 ]]; then
-            echo "⚠️ ${PUBLISHED_NAME} ${CHART_VERSION} marked 'failed' in App Registry"
-          elif [[ $FAIL_EXIT -eq 4 ]]; then
-            echo "$FAIL_OUTPUT"
-            echo "::error title=App Registry: version skew (fail-publish not implemented)::The deployed app-registry-api does not implement FailPublish. This is a CI/server version skew (issue #570), not an outage -- it will NOT clear on retry. ${PUBLISHED_NAME} ${CHART_VERSION} will sit as 'publishing' until the stale-row reaper expires it."
-          else
-            echo "$FAIL_OUTPUT"
-            echo "::warning title=App Registry: fail-publish skipped (registry error)::Could not transition ${PUBLISHED_NAME} ${CHART_VERSION} to 'failed'; it will sit as 'publishing' until the stale-row reaper expires it."
-          fi
-        done
-
-    # Best-effort recording into the App Registry. See
-    # tools/app_registry/ARCHITECTURE.md -> "APP_REGISTRY_CICD_OPT_IN": with
-    # the variable unset (the default), this step is skipped entirely and CI
-    # makes no registry calls. continue-on-error so a registry outage never
-    # fails a release.
-    #
-    # This can run before main's ReconcileApps has caught up with this
-    # commit (issue #547) -- release.yml deliberately does NOT gate on that,
-    # and does NOT upsert app/chart identity itself; see
-    # tools/app_registry/ARCHITECTURE.md "Rejected alternatives" for the two
-    # options considered and rejected, and OPERATIONS.md for what an
-    # operator does when that happens. The recording actions below classify
-    # that specific failure into its own annotation instead of a generic
-    # registry-error one. Resolves each chart's AR-2b compose-time image
-    # lockfile (repository+tag, no digests) to digests now that images and
-    # the chart have been pushed — see ARCHITECTURE.md "Chart -> image
-    # lockfile" for why that resolution can't happen inside the hermetic
-    # Bazel action that composes the chart.
-    #
-    # AR-7b: build-id comes from the "Record chart build in App Registry"
-    # step ABOVE (moved ahead of the push, alongside Begin publish) -- this
-    # step's own former build-recording call was removed, not duplicated.
-    - name: Record chart artifacts in App Registry
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' && steps.app-registry-build.outputs.build-id != ''
-      id: app-registry-record-charts
-      continue-on-error: true
-      # See the "Record build in App Registry" step above -- same hang risk
-      # (issue #539), same fix.
-      timeout-minutes: 5
-      env:
-        CHARTS: ${{ steps.plan.outputs.charts }}
-        APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-        # See the "Record build in App Registry" step above -- same builder
-        # credential, same repository-secret placement, same reason
-        # (DEPLOY.md section 4), same env-scoped client id.
-        GRPC_AUTH_MODE: oidc
-        GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        BUILD_ID: ${{ steps.app-registry-build.outputs.build-id }}
-      run: |
-        IDEMPOTENCY_PREFIX="${{ github.run_id }}-${{ github.run_attempt }}"
-
-        IFS=' ' read -ra CHART_ARRAY <<< "$CHARTS"
-        for CHART in "${CHART_ARRAY[@]}"; do
-          PUBLISHED_NAME="${CHART#helm-}"
-          CHART_FILE=$(ls /tmp/helm-charts/${PUBLISHED_NAME}-*.tgz 2>/dev/null | head -n1)
-          if [[ ! -f "$CHART_FILE" ]]; then
-            if [[ -f "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason" ]]; then
-              echo "ℹ️  Skipping App Registry recording for $CHART -- no-op rebuild, reusing $(cat "/tmp/helm-charts-noop/${PUBLISHED_NAME}.reason")"
-            else
-              echo "::warning::Could not find chart file for $CHART, skipping App Registry recording"
-            fi
-            continue
-          fi
-          CHART_VERSION=$(basename "$CHART_FILE" | sed -E "s/${PUBLISHED_NAME}-(.+)\.tgz/\1/")
-          CHART_DIGEST="sha256:$(sha256sum "$CHART_FILE" | awk '{print $1}')"
-
-          echo "Resolving pinned image digests for $CHART..."
-          CONTAINS_FILE=$(mktemp)
-          echo "[]" > "$CONTAINS_FILE"
-          LOCKFILE_JSON=$("$RELEASE_HELPER" read-chart-lockfile "$CHART" --skip-build)
-          while read -r img; do
-            [[ -z "$img" ]] && continue
-            IMG_REPO=$(echo "$img" | jq -r '.repository')
-            IMG_VERSION=$(echo "$img" | jq -r '.version')
-            IMG_DIGEST=$(docker buildx imagetools inspect "${IMG_REPO}:${IMG_VERSION}" | awk '/^Digest:/ {print $2; exit}')
-            if [[ -z "$IMG_DIGEST" ]]; then
-              echo "::warning::Could not resolve digest for ${IMG_REPO}:${IMG_VERSION}, omitting from $CHART's contains list"
-              continue
-            fi
-            ENTRY=$(echo "$img" | jq --arg d "$IMG_DIGEST" '. + {digest: $d}')
-            jq --argjson e "$ENTRY" '. + [$e]' "$CONTAINS_FILE" > "${CONTAINS_FILE}.tmp" && mv "${CONTAINS_FILE}.tmp" "$CONTAINS_FILE"
-          done < <(echo "$LOCKFILE_JSON" | jq -c '.images[]')
-
-          # issue #547 -- decision: keep recording best-effort/non-blocking
-          # (the whole step is continue-on-error above), but stop treating
-          # "app/chart not registered yet" the same as a genuine registry
-          # outage. The CLI exits 3 (exitOwnerNotReconciled, see
-          # cli/cmd/root.go) specifically for that case, backed by a
-          # structured gRPC status detail
-          # (apierrors.ReasonOwnerNotReconciled) rather than a parsed
-          # message -- see .github/actions/app-registry-record-image's same
-          # classification for the image side of this story, and
-          # tools/app_registry/ARCHITECTURE.md "Rejected alternatives" for
-          # why release.yml deliberately does not self-heal this.
-          #
-          # `continue` (not the step failing outright) after a warning here
-          # is deliberately different from the image action: this loop
-          # records one chart per iteration, and one chart's failure must
-          # not silently skip every chart queued after it under this
-          # step's default `set -e`.
-          set +e
-          RECORD_OUTPUT=$("$APP_REGISTRY_CLI" artifacts record \
-            --build-id "$BUILD_ID" \
-            --kind chart \
-            --owner "$PUBLISHED_NAME" \
-            --repository "${CHART_REPO_URL}/${PUBLISHED_NAME}" \
-            --version "$CHART_VERSION" \
-            --digest "$CHART_DIGEST" \
-            --contains "$CONTAINS_FILE" \
-            --idempotency-key "${IDEMPOTENCY_PREFIX}-${PUBLISHED_NAME}-chart-record" 2>&1)
-          RECORD_EXIT=$?
-          set -e
-          rm -f "$CONTAINS_FILE"
-
-          if [[ $RECORD_EXIT -eq 0 ]]; then
-            echo "✅ Recorded $PUBLISHED_NAME $CHART_VERSION ($CHART_DIGEST) in App Registry"
-          elif [[ $RECORD_EXIT -eq 3 ]]; then
-            echo "$RECORD_OUTPUT"
-            echo "::warning title=App Registry: ${PUBLISHED_NAME} not registered yet::${PUBLISHED_NAME} is not registered in the App Registry, so ${CHART_VERSION} was NOT recorded. This release ran ahead of ReconcileApps, which runs on push to main via ci.yml -- wait for main's CI to finish, then re-run this release job to record it (or accept the miss; the chart itself self-heals on the next reconcile, but this specific artifact record will not be backfilled). See tools/app_registry/OPERATIONS.md."
-            {
-              echo "### ⚠️ App Registry: \`${PUBLISHED_NAME}\` not registered yet"
-              echo ""
-              echo "\`${PUBLISHED_NAME}\` \`${CHART_VERSION}\` was **not recorded** in the App Registry."
-              echo ""
-              echo "This release ran ahead of \`ReconcileApps\`, which runs on push to \`main\` via \`ci.yml\`. This is an accepted, documented tradeoff -- see \`tools/app_registry/ARCHITECTURE.md\` (\"Release-vs-reconcile gap\") and \`tools/app_registry/OPERATIONS.md\` (\"Release ran ahead of reconcile\")."
-              echo ""
-              echo "**What to do:** wait for \`main\`'s CI to finish reconciling, then re-run this release job -- or accept the miss (the chart self-heals on the next reconcile; this specific artifact record does not get backfilled)."
-            } >> "$GITHUB_STEP_SUMMARY"
-            RECORDING_HAD_FAILURE=1
-          elif [[ $RECORD_EXIT -eq 4 ]]; then
-            echo "$RECORD_OUTPUT"
-            echo "::error title=App Registry: version skew (artifacts record not implemented)::The deployed app-registry-api does not implement recording a chart artifact. This is a CI/server version skew (issue #570), not an outage -- ${PUBLISHED_NAME} ${CHART_VERSION} was NOT recorded, and it will NOT clear on retry. Roll app-registry-api forward, or set APP_REGISTRY_CICD_OPT_IN to false until it is deployed."
-            {
-              echo "### ❌ App Registry: version skew"
-              echo ""
-              echo "\`${PUBLISHED_NAME}\` \`${CHART_VERSION}\` was **not recorded** -- the deployed server does not implement this RPC. This will not clear on retry. See tools/app_registry/architecture/16-availability-and-bootstrap.md and OPERATIONS.md."
-            } >> "$GITHUB_STEP_SUMMARY"
-            RECORDING_HAD_FAILURE=1
-          else
-            echo "$RECORD_OUTPUT"
-            echo "::warning title=App Registry: recording skipped (registry error)::Could not record ${PUBLISHED_NAME} ${CHART_VERSION} in the App Registry -- a registry outage, auth failure, or other transient error (NOT a missing-owner case). Recording is best-effort; the release still succeeded."
-            RECORDING_HAD_FAILURE=1
-          fi
-        done
-
-        # Fail this step's own exit status if any chart's recording failed,
-        # matching app-registry-record-image's behavior (a red X on the
-        # step, job still green thanks to this step's continue-on-error) --
-        # but only after every chart in the loop got its own attempt and
-        # its own annotation above, not just the first one.
-        if [[ "${RECORDING_HAD_FAILURE:-0}" -eq 1 ]]; then
-          exit 1
-        fi
-
-    # Same posture as the release job's own health-check step: every App
-    # Registry step in this job stays continue-on-error (a registry outage
-    # must never block a real chart push -- ARCHITECTURE.md "Availability,
-    # restated per adoption stage"), but this step runs LAST, after the real
-    # ChartMuseum upload and git tags above have already happened, and is
-    # deliberately NOT continue-on-error.
-    #
-    # This also surfaces "chart not registered yet" (release ran ahead of
-    # ReconcileApps -- an accepted, self-healing, documented gap, see
-    # OPERATIONS.md) as a red run, not just a warning nobody reads. That is
-    # intentional: the recommended response is the same either way (re-run
-    # this job after main's CI catches up, or accept the miss), and a red
-    # run is a much better prompt for that than an annotation.
-    - name: App Registry recording health
-      if: always()
-      run: |
-        FAILED=0
-        check() {
-          if [[ "$2" == "failure" ]]; then
-            echo "::error::App Registry step '$1' failed this run -- see its own annotation above for detail."
-            FAILED=1
-          fi
-        }
-        check "Assert apps/charts" "${{ needs.app-registry-assert.outputs.outcome }}"
-        check "Begin publish (charts)" "${{ steps.app-registry-begin-publish.outcome }}"
-        check "Fail publish (charts)" "${{ steps.app-registry-fail-publish.outcome }}"
-        check "Record chart artifacts" "${{ steps.app-registry-record-charts.outcome }}"
-        if [[ "$FAILED" -eq 1 ]]; then
-          echo "One or more App Registry recording steps failed. The chart release itself is NOT affected -- these steps never block a real push. See tools/app_registry/OPERATIONS.md."
-          exit 1
-        fi
-        echo "✅ App Registry recording steps in this job succeeded (or did not apply)."
-
-    - name: Report deployment URL
-      if: steps.plan.outputs.charts != '' && github.event.inputs.dry_run == 'false'
-      run: |
-        echo "✅ Helm charts deployed to ${CHART_REPO_URL}/!"
-        echo ""
-        echo "📦 Helm Repository URL:"
-        echo "  ${CHART_REPO_URL}/"
-        echo ""
-        echo "Users can add the repository with:"
-        echo "  helm repo add whalenet ${CHART_REPO_URL}/"
-        echo "  helm repo update"
-        
-    - name: Upload helm chart artifacts
-      if: steps.plan.outputs.charts != ''
-      uses: actions/upload-artifact@v4
-      with:
-        name: helm-charts-auto-versioned
-        path: /tmp/helm-charts/*.tgz
-        # warn, not error: zero files here is expected (not a failure) when
-        # every planned chart was a no-op rebuild -- see "Check helm chart
-        # digests for no-op rebuilds" above. A genuine build failure is
-        # still caught earlier, by "Build helm charts with versioning"
-        # itself failing or by "Publish charts to ChartMuseum"'s
-        # CHART_COUNT/NOOP_COUNT check.
-        if-no-files-found: warn
+      - name: Generate summary
+        if: steps.download-tools.outcome == 'success'
+        run: |
+          ARGS=(summary --matrix '${{ needs.plan-release.outputs.release-matrix }}' --version "${{ needs.plan-release.outputs.version }}" --event-type workflow_dispatch --repository-owner "${{ github.repository_owner }}")
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_STEP_SUMMARY"

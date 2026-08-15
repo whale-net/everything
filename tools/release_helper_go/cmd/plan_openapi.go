@@ -94,6 +94,8 @@ func newPlanOpenapiBuildsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&apps, "apps", "", "Space or comma-separated list of apps to check for OpenAPI specs")
 	cmd.Flags().StringVar(&format, "format", "github", "Output format (json or github)")
 
+	_ = cmd.MarkFlagRequired("apps")
+
 	return cmd
 }
 

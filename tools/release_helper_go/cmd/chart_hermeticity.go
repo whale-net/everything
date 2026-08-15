@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/whale-net/everything/libs/go/grpcauth"
-	"github.com/whale-net/everything/libs/go/grpcclient"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
@@ -56,28 +54,11 @@ var defaultHermeticityChecker ChartHermeticityChecker = grpcHermeticityChecker{}
 type grpcHermeticityChecker struct{}
 
 func (grpcHermeticityChecker) Check(ctx context.Context, chartDomain string, pins []ChartPin) (bool, []ChartPinViolation, error) {
-	address := defaultEnv("APP_REGISTRY_ADDRESS")
-	if address == "" {
-		return false, nil, fmt.Errorf("APP_REGISTRY_ADDRESS is not set")
-	}
-
-	authOpt, err := grpcauth.NewServiceAccountDialOption(grpcauth.ClientConfig{
-		Mode:         grpcauth.AuthMode(envOrDefault("GRPC_AUTH_MODE", "none")),
-		TokenURL:     defaultEnv("GRPC_AUTH_TOKEN_URL"),
-		ClientID:     defaultEnv("GRPC_AUTH_CLIENT_ID"),
-		ClientSecret: defaultEnv("GRPC_AUTH_CLIENT_SECRET"),
-	})
+	client, closeConn, err := NewArtifactRegistryClient(ctx)
 	if err != nil {
-		return false, nil, fmt.Errorf("app registry auth: %w", err)
+		return false, nil, err
 	}
-
-	conn, err := grpcclient.NewClient(ctx, address, authOpt)
-	if err != nil {
-		return false, nil, fmt.Errorf("dial app-registry-api at %s: %w", address, err)
-	}
-	defer conn.Close() //nolint:errcheck
-
-	client := pb.NewArtifactRegistryClient(conn.GetConnection())
+	defer closeConn() //nolint:errcheck
 
 	req := &pb.CheckChartHermeticityRequest{ChartDomain: chartDomain}
 	for _, p := range pins {
