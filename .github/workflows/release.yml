@@ -446,7 +446,6 @@ jobs:
     permissions:
       contents: write
       packages: write
-      workflows: write
     strategy:
       matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
       fail-fast: false
