@@ -20,9 +20,9 @@ secrets.
 Each step assumes the previous one. Step 4 is the one that changes behaviour;
 everything before it is inert.
 
-1. [Keycloak objects](#1-keycloak-objects)
-2. [Verify a token by hand](#2-verify-a-token-by-hand) ← before touching the deployment
-3. [Server configuration](#3-server-configuration)
+1. [Keycloak objects](#1-keycloak-objects) — interactive client, mappers, service accounts, roles, human assignments
+2. [Verify tokens by hand](#2-verify-tokens-by-hand) ← before touching the deployment (UI + service accounts)
+3. [Server configuration](#3-server-configuration) — API + UI env vars
 4. [CI credentials](#4-ci-credentials)
 5. [Turn CI recording on](#5-turn-ci-recording-on)
 6. [Promote via `promote.yml`](#6-promote-via-promoteyml)
@@ -38,6 +38,45 @@ for the console steps — in particular the **audience mapper**, without which
 every call returns `Unauthenticated`.
 
 ### Clients
+
+Create the interactive client first so you can verify its tokens by hand (see §2).
+
+#### Interactive UI client — `app-registry-ui`
+
+This is a normal login client: humans authenticate through it with a browser. It is **confidential** (`client_secret` set), has Standard flow enabled, and carries an audience mapper so its access tokens are accepted by the API.
+
+1. **Clients** → **Create client**
+2. **Client ID**: `app-registry-ui` → Next
+3. **Authentication flow**: check **Standard flow** (authorization-code) — leave **Direct access grants**, **Implicit flow** unchecked. Check **Service accounts roles** so the admin console shows a dedicated client scope; you do not need to assign anything to its service account yet.
+4. **Client authentication**: On ← generates a secret needed for PKCE and token refresh. → Next
+5. **Redirect URIs**:
+
+   | Environment | Redirect URI |
+   |---|---|---|
+   | Local / Tilt dev server | `http://localhost:8000/auth/callback` |
+   | Dev cluster (ingress) | `https://<dev-ingress-host>/auth/callback` |
+   | Stage cluster (ingress) | `https://<stage-ingress-host>/auth/callback` |
+   | Prod cluster (ingress) | `https://<prod-ingress-host>/auth/callback` |
+
+6. Leave **Root URL**, **Web origins** blank for now — add them if your OIDC library validates CORS origins later. → **Save**.
+
+##### Protocol mappers (both required on the dedicated scope `app-registry-ui-dedicated`)
+
+Go to **Client scopes** tab → click `app-registry-ui-dedicated` → **Add mapper** → **By configuration**:
+
+| Mapper | Type | Purpose | Failure if omitted |
+|---|---|---|---|
+| `api-audience` | **Audience** — adds `aud` claim to token | `libs/go/grpcauth`'s verifier checks `aud == clientID` (`libs/go/grpcauth/KEYCLOAK.md` §3-4). This is the same audience name as the `app-registry-api` client. | Every gRPC call from the UI fails with `Unauthenticated` — the token's `aud` stays `["account"]` and the API rejects it immediately. |
+| | **Included Client Audience** | `app-registry-api` |
+| | **Add to access token** | On |
+| `realm-roles` | **Realm roles** mapper with "Add to ID token" enabled | The UI's auth layer (`libs/go/htmxauth/auth.go:383`, `db_session.go:80`) reads claims from the **ID token**, not the access token. Keycloak's built-in realm-roles mapper targets the **access token** by default, so this custom one is required to surface roles in the ID token. | `realm_access` is simply absent from the ID token; every principal resolves to zero roles and every control disappears silently (the UI renders as empty/gray rather than broken). |
+| | **Add to** | ID token |
+
+##### Client secret
+
+After saving, go to the **Credentials** tab → copy **Client secret**. Store it in environment variables for your deployment (see §3b below) — do not commit it.
+
+#### Service-account clients (repeat-per-identity pattern from KEYCLOAK.md)
 
 | Client ID | Purpose | Config | Needed |
 |---|---|---|---|
@@ -81,19 +120,118 @@ write.
 grant builder. A principal that needs to both record and administer holds both
 roles. This is deliberate and pinned by a test.
 
-### Humans
+### Assigning roles to human users (the five existing realm roles)
 
-Assign roles via a **group**, not to individuals — e.g. a `registry-admins`
-group holding `app-registry-admin`. Membership then becomes the thing you audit
-and change.
+The five roles from §1's role table (`app-registry-builder`,
+`app-registry-promoter-dev`, `app-registry-promoter-stage`,
+`app-registry-promoter-prod`, `app-registry-admin`) must be **assignable to**
+and **assigned to** human users — not only service accounts. No new roles are
+needed; you reuse exactly the ones already listed above.
+
+#### Via admin console (one-time setup)
+
+1. Go to **Clients** → `app-registry-ui` → **Role mapping** tab (the dedicated
+   scope does *not* have a role-mapping UI — only the client itself does).
+2. Click **Add assigned roles** → switch the filter dropdown to **Filter by realm
+   roles** ← easy to miss; it defaults to client roles, which are invisible to
+   `grpcauth` and `htmxauth`.
+3. Tick all five role names:
+
+```
+app-registry-builder
+app-registry-promoter-dev
+app-registry-promoter-stage
+app-registry-promoter-prod
+app-registry-admin
+```
+
+4. Click **Assign**. This step is purely a console UI quirk — it registers the
+   realm roles as "available assigned roles" so they can be mapped to users and
+   groups later. After this one-time setup, every subsequent assignment only
+   requires steps 5–7 below.
+
+#### Assigning individual humans
+
+1. **Users** → select user → **Role mapping** tab.
+2. Click **Add selected roles**.
+3. Filter by realm roles → tick the role(s) to assign → **Assign**.
+
+#### Assigning via group (preferred for teams)
+
+1. **Groups** → **Create group**, e.g. `app-registry-admins`.
+2. The group's **Role mapping** tab → add selected roles (filter by realm roles) → tick the roles → **Assign**.
+3. Add members to the group. Membership changes require no role edits, and the
+   group is what you audit.
+
+#### Deriving the promoter role name from an environment key
+
+The promoter role for a given environment is derived as
+`app-registry-promoter-<environment_key>`, where `<environment_key>` is one of
+the lowercase strings `dev`, `stage`, or `prod`. This matches the constant
+`RolePromoterDev`, `RolePromoterStage`, and `RolePromoterProd` in
+`tools/app_registry/server/auth/auth.go`:
+
+```go
+// tools/app_registry/server/auth/auth.go
+const RolePromoterDev = "app-registry-promoter-dev"
+const RolePromoterStage = "app-registry-promoter-stage"
+const RolePromoterProd = "app-registry-promoter-prod"
+```
+
+The `RequirePromoter` helper in the same file does exactly this concatenation:
+
+```go
+func RequirePromoter(ctx context.Context, env string) error {
+    return Require(ctx, "app-registry-promoter-"+env)
+}
+```
+
+If an admin creates a new environment through the UI whose key is not one of
+`dev`, `stage`, or `prod`, **no corresponding role exists yet** and no human can
+promote to it. The admin must create the matching realm role in Keycloak before
+any promotion attempt will succeed — this is by design: roles are added only when
+the team has formalized who holds them.
+
+> **Note on `app-registry-builder` for humans.** A human user needs this role if
+> they run the CLI recording commands (e.g. `app-registry builds record`). In most
+> teams the builder credential is reserved for CI; granting it to a person is fine
+> but gives them write access to all apps, not just one environment's promotions.
 
 ---
 
-## 2. Verify a token by hand
+## 2. Verify tokens by hand
 
-Do this **before** changing the deployment. It separates a Keycloak
-misconfiguration from an application problem, and the two most common
-mistakes are both invisible until you look at a decoded token.
+### UI client — interactive login ID token
+
+After creating the `app-registry-ui` client and its two mappers, verify the user can complete an authorization-code (or password) login:
+
+```bash
+TOKEN=$(curl -s -X POST \
+  https://<host>/realms/<realm>/protocol/openid-connect/token \
+  -d grant_type=password \
+  -d username=<human-user> \
+  -d password=<password> \
+  -d client_id=app-registry-ui \
+  -d client_secret=<secret> | jq -r .id_token)
+
+echo "$TOKEN" | cut -d. -f2 | base64 -d 2>/dev/null | jq '{sub, aud, realm_access}'
+```
+
+Expected:
+
+```json
+{
+  "sub": "...",
+  "aud": ["app-registry-api"],               ← audience mapper worked (access tokens only)
+  "realm_access": { "roles": ["default-roles-...", ...] }  ← realm-roles mapper worked (ID token)
+}
+```
+
+Key differences from the service-account check below:
+- The `aud` claim contains only `["app-registry-api"]` — no `"account"` — because an interactive login does not use the account service.
+- `realm_access.roles` must be present in this **ID token** for the HTMX session to work. If it is missing, the realm-roles mapper's "Add to ID token" setting is off or the custom mapper is on the wrong client scope.
+
+### Service-account tokens — `client_credentials` (repeat from original §2)
 
 ```bash
 TOKEN=$(curl -s -X POST \
@@ -174,6 +312,32 @@ allows the pod to reach Keycloak before flipping the mode.
 `app-registry-api` is an `external-api`, so it needs an ingress host set per
 environment in a values override — no `ingress_host` is baked into the
 manifest, deliberately.
+
+#### UI client server configuration (§3b)
+
+Set on the UI deployment (see [ENV.md](ENV.md)):
+
+| Variable | Value |
+|---|---|
+| `AUTH_MODE` | `oidc` |
+| `OIDC_ISSUER` | `https://<host>/realms/<realm>` — same issuer as the API |
+| `OIDC_CLIENT_ID` | `app-registry-ui` |
+| `OIDC_CLIENT_SECRET` | the client secret from the Credentials tab above |
+| `OIDC_REDIRECT_URI` | matches one of the redirect URIs in §1 (e.g. `http://localhost:8000/auth/callback`) |
+| `SESSION_SECRET` | random 32+ character string; used to encrypt session cookies for the HTMX session store |
+
+The UI reads its ID token claims via `libs/go/htmxauth`, which stores an
+authenticated principal in a signed cookie. The same access token is kept in
+the session so it can be forwarded as a gRPC metadata header (via
+`libs/go/grpcauth`) to the API — this is why the audience mapper and realm-roles
+mapper are both required: one satisfies the gRPC verifier, the other populates
+the HTMX session with role data.
+
+> **Tilt note.** In local dev the UI runs on `localhost:8000` (see §1's redirect
+> table) while the API is forwarded to `localhost:50061`. Set both services to
+> `AUTH_MODE=none` / `GRPC_AUTH_MODE=none` so they work without Keycloak. The
+> UI injects a fake principal holding every app-registry role, matching what the
+> gRPC server's `AuthModeNone` does (see §3a above).
 
 ---
 
