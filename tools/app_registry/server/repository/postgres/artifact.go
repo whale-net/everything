@@ -329,7 +329,7 @@ func (r *artifactRepo) findByOwnerKindVersion(ctx context.Context, kind reposito
 }
 
 func ownerIDOf(a repository.Artifact) string {
-	if a.Kind == repository.ArtifactKindImage {
+	if a.Kind != repository.ArtifactKindChart {
 		return a.AppID
 	}
 	return a.ChartID
@@ -503,7 +503,7 @@ func (r *artifactRepo) insertArtifact(ctx context.Context, a repository.Artifact
 	}
 
 	var appID, chartID any
-	if a.Kind == repository.ArtifactKindImage {
+	if a.Kind != repository.ArtifactKindChart {
 		appID = a.AppID
 	} else {
 		chartID = a.ChartID
@@ -812,7 +812,7 @@ func (r *artifactRepo) BeginPublish(ctx context.Context, kind repository.Artifac
 			return nil, fmt.Errorf("%w: repository is required to begin publishing %s %s with no prior allocation", repository.ErrInvalidArgument, string(kind), version)
 		}
 		a := repository.Artifact{Kind: kind, Repository: repositoryHint, Version: version, BuildID: buildID}
-		if kind == repository.ArtifactKindImage {
+		if kind != repository.ArtifactKindChart {
 			a.AppID = ownerID
 		} else {
 			a.ChartID = ownerID
@@ -898,7 +898,7 @@ func (r *artifactRepo) ExpireStale(ctx context.Context, olderThan time.Duration)
 func (r *artifactRepo) ownerFullName(ctx context.Context, a repository.Artifact) string {
 	var row pgx.Row
 	var fallback string
-	if a.Kind == repository.ArtifactKindImage {
+	if a.Kind != repository.ArtifactKindChart {
 		row = r.ex.QueryRow(ctx, `SELECT domain || '-' || name FROM app WHERE app_id = $1`, a.AppID)
 		fallback = a.AppID
 	} else {
@@ -1201,7 +1201,7 @@ func (r *artifactRepo) AllocateVersion(ctx context.Context, kind repository.Arti
 
 	versionStr := next.String()
 	a := repository.Artifact{Kind: kind, Repository: repo, Version: versionStr}
-	if kind == repository.ArtifactKindImage {
+	if kind != repository.ArtifactKindChart {
 		a.AppID = ownerID
 	} else {
 		a.ChartID = ownerID

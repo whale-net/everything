@@ -20,6 +20,8 @@ enum ArtifactKind {
   ARTIFACT_KIND_UNSPECIFIED = 0;
   ARTIFACT_KIND_IMAGE = 1;
   ARTIFACT_KIND_CHART = 2;
+  ARTIFACT_KIND_BINARY = 3;
+  ARTIFACT_KIND_FIRMWARE = 4;
 }
 
 // Promotability is a DERIVED field the server computes from the owning app's

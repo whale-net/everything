@@ -110,7 +110,7 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 	if req.Version != "" && !semverRe.MatchString(req.Version) {
 		return nil, status.Errorf(codes.InvalidArgument, "version %q must match v<major>.<minor>.<patch>", req.Version)
 	}
-	if kind == repository.ArtifactKindImage && len(req.Contains) > 0 {
+	if kind != repository.ArtifactKindChart && len(req.Contains) > 0 {
 		return nil, status.Error(codes.InvalidArgument, "contains is only valid for kind == CHART")
 	}
 	if req.IdempotencyKey == "" {
@@ -142,7 +142,7 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 				BuildID:     req.BuildId,
 				PublishedAt: unixToTime(req.PublishedAt),
 			}
-			if kind == repository.ArtifactKindImage {
+			if kind != repository.ArtifactKindChart {
 				a.AppID = owner
 			} else {
 				a.ChartID = owner
@@ -173,7 +173,7 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 // sentinel (issue #547) so a caller can classify the failure without
 // parsing this message.
 func (s *ArtifactServer) resolveOwner(ctx context.Context, r repository.Registry, kind repository.ArtifactKind, ownerFullName string) (ownerID, domain string, err error) {
-	if kind == repository.ArtifactKindImage {
+	if kind != repository.ArtifactKindChart {
 		app, aerr := r.Apps().GetAppByFullName(ctx, ownerFullName)
 		if aerr != nil {
 			return "", "", fmt.Errorf("%w: app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", repository.ErrOwnerNotReconciled, ownerFullName)
@@ -413,7 +413,7 @@ func (s *ArtifactServer) AllocateVersion(ctx context.Context, req *pb.AllocateVe
 // resolveOwner but also needs Domain/repository, which resolveOwner's
 // caller (RecordArtifact) doesn't.
 func (s *ArtifactServer) resolveOwnerAndDomain(ctx context.Context, kind repository.ArtifactKind, ownerFullName string) (domain, ownerID, repo string, err error) {
-	if kind == repository.ArtifactKindImage {
+	if kind != repository.ArtifactKindChart {
 		app, aerr := s.repo.Apps().GetAppByFullName(ctx, ownerFullName)
 		if aerr != nil {
 			return "", "", "", status.Errorf(codes.InvalidArgument, "app %q not found -- has it been reconciled? (ReconcileApps runs on push to main via ci.yml)", ownerFullName)
@@ -743,7 +743,7 @@ func (s *ArtifactServer) AdoptArtifact(ctx context.Context, req *pb.AdoptArtifac
 	if req.Digest == "" || !strings.HasPrefix(req.Digest, "sha256:") {
 		return nil, status.Error(codes.InvalidArgument, `digest is required and must be "sha256:..."`)
 	}
-	if kind == repository.ArtifactKindImage && len(req.Contains) > 0 {
+	if kind != repository.ArtifactKindChart && len(req.Contains) > 0 {
 		return nil, status.Error(codes.InvalidArgument, "contains is only valid for kind == CHART")
 	}
 	// Required -- the audit trail for a deliberately rare, human-triggered
@@ -782,7 +782,7 @@ func (s *ArtifactServer) AdoptArtifact(ctx context.Context, req *pb.AdoptArtifac
 				Digest:      req.Digest,
 				PublishedAt: unixToTime(req.PublishedAt),
 			}
-			if kind == repository.ArtifactKindImage {
+			if kind != repository.ArtifactKindChart {
 				a.AppID = ownerID
 			} else {
 				a.ChartID = ownerID

@@ -53,6 +53,10 @@ func artifactKindToPB(k repository.ArtifactKind) pb.ArtifactKind {
 		return pb.ArtifactKind_ARTIFACT_KIND_IMAGE
 	case repository.ArtifactKindChart:
 		return pb.ArtifactKind_ARTIFACT_KIND_CHART
+	case repository.ArtifactKindBinary:
+		return pb.ArtifactKind_ARTIFACT_KIND_BINARY
+	case repository.ArtifactKindFirmware:
+		return pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE
 	default:
 		return pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED
 	}
@@ -64,6 +68,10 @@ func artifactKindFromPB(k pb.ArtifactKind) repository.ArtifactKind {
 		return repository.ArtifactKindImage
 	case pb.ArtifactKind_ARTIFACT_KIND_CHART:
 		return repository.ArtifactKindChart
+	case pb.ArtifactKind_ARTIFACT_KIND_BINARY:
+		return repository.ArtifactKindBinary
+	case pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE:
+		return repository.ArtifactKindFirmware
 	default:
 		return ""
 	}

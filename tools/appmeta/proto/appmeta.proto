@@ -43,6 +43,16 @@ enum DeployUnit {
   DEPLOY_UNIT_NONE = 3;
 }
 
+// ArtifactKind is the type of published, digest-addressable thing.
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_IMAGE = 1;
+  ARTIFACT_KIND_CHART = 2;
+  ARTIFACT_KIND_BINARY = 3;
+  ARTIFACT_KIND_FIRMWARE = 4;
+}
+
+
 // HealthCheck mirrors the "health_check" object in the manifest JSON.
 message HealthCheck {
   bool enabled = 1;

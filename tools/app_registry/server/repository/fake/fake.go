@@ -603,7 +603,7 @@ func (r *Registry) findByOwnerKindVersion(kind repository.ArtifactKind, owner, v
 }
 
 func ownerID(a repository.Artifact) string {
-	if a.Kind == repository.ArtifactKindImage {
+	if a.Kind != repository.ArtifactKindChart {
 		return a.AppID
 	}
 	return a.ChartID
@@ -849,7 +849,7 @@ func (r *Registry) AllocateVersion(ctx context.Context, kind repository.Artifact
 	}
 
 	a := repository.Artifact{Kind: kind, Repository: repo, Version: versionStr}
-	if kind == repository.ArtifactKindImage {
+	if kind != repository.ArtifactKindChart {
 		a.AppID = owner
 	} else {
 		a.ChartID = owner
@@ -874,7 +874,7 @@ func (r *Registry) BeginPublish(ctx context.Context, kind repository.ArtifactKin
 			return nil, fmt.Errorf("%w: repository is required to begin publishing %s %s with no prior allocation", repository.ErrInvalidArgument, string(kind), version)
 		}
 		a := repository.Artifact{Kind: kind, Repository: repositoryHint, Version: version, BuildID: buildID}
-		if kind == repository.ArtifactKindImage {
+		if kind != repository.ArtifactKindChart {
 			a.AppID = owner
 		} else {
 			a.ChartID = owner
@@ -1122,7 +1122,7 @@ func (r *Registry) ListArtifactPins(ctx context.Context, lookup repository.Artif
 }
 
 func (r *Registry) ownerFullName(a repository.Artifact) string {
-	if a.Kind == repository.ArtifactKindImage {
+	if a.Kind != repository.ArtifactKindChart {
 		if app, ok := r.state.Apps[a.AppID]; ok {
 			return app.FullName()
 		}
@@ -1138,7 +1138,7 @@ func (r *Registry) ownerFullName(a repository.Artifact) string {
 // shared repository.DerivePromotability rule.
 func (r *Registry) derivePromotability(a repository.Artifact) repository.Promotability {
 	var du appmetapb.DeployUnit
-	if a.Kind == repository.ArtifactKindImage {
+	if a.Kind != repository.ArtifactKindChart {
 		app, ok := r.state.Apps[a.AppID]
 		if !ok {
 			return repository.PromotabilityNotPromotable
@@ -1474,7 +1474,7 @@ func (f promotionFake) findCurrent(environmentID, targetKey string) (repository.
 }
 
 func (f promotionFake) ownerFullName(p repository.Promotion) string {
-	if p.Kind == repository.ArtifactKindImage {
+	if p.Kind != repository.ArtifactKindChart {
 		if app, ok := f.r.state.Apps[p.AppID]; ok {
 			return app.FullName()
 		}

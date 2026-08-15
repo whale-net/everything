@@ -21,8 +21,10 @@ const (
 type ArtifactKind string
 
 const (
-	ArtifactKindImage ArtifactKind = "image"
-	ArtifactKindChart ArtifactKind = "chart"
+	ArtifactKindImage    ArtifactKind = "image"
+	ArtifactKindChart    ArtifactKind = "chart"
+	ArtifactKindBinary   ArtifactKind = "binary"
+	ArtifactKindFirmware ArtifactKind = "firmware"
 )
 
 // Promotability mirrors Promotability in protos/messages.proto. Always
