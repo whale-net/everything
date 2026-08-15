@@ -432,11 +432,17 @@ jobs:
     # contents: write - checkout + the "Create git tag for release" step's `git push origin <tag>`.
     # packages: write - "Log in to GitHub Container Registry" falls back to GITHUB_TOKEN when
     #   secrets.GHCR_PAT is unset.
-    # workflows: write - required by GitHub whenever a NEW ref (this release tag) is pushed
-    #   pointing at a commit that itself modifies a file under .github/workflows/*; without it
-    #   the push is rejected with "refusing to allow a GitHub App to create or update workflow
-    #   ... without `workflows` permission" even though contents: write is already granted.
-    #   See https://github.com/whale-net/everything/actions/runs/31766386363.
+    #
+    # NOTE (issue #626): GitHub separately rejects pushing a NEW ref (like this job's release
+    # tag) that points at a commit which itself modifies a file under .github/workflows/*, with
+    # "refusing to allow a GitHub App to create or update workflow ... without `workflows`
+    # permission" -- see https://github.com/whale-net/everything/actions/runs/31766386363. There
+    # is NO `permissions:` key that grants this to GITHUB_TOKEN ("workflows" is not a valid key
+    # here -- it's a GitHub App/fine-grained-PAT permission, not a GITHUB_TOKEN one; adding it
+    # makes this file fail to parse). Satisfying this for real requires pushing with a different
+    # credential (a classic PAT with the `workflow` scope, or a GitHub App installation token)
+    # instead of GITHUB_TOKEN for the tag-push step. Not yet implemented; this only bites a
+    # release that tags a commit whose own diff touches .github/workflows/*, which is rare.
     permissions:
       contents: write
       packages: write
@@ -1153,11 +1159,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write     # Push git tags and read repository content
-      # workflows: write - same requirement as the `release` job above: pushing a NEW tag
-      # (this job's "Create and push helm chart tags" step) that points at a commit modifying
-      # .github/workflows/* is rejected by GitHub without this, even with contents: write.
-      # See https://github.com/whale-net/everything/actions/runs/31766386363.
-      workflows: write
+      # NOTE (issue #626): same GITHUB_TOKEN-can't-satisfy-this caveat as the `release` job
+      # above applies to this job's "Create and push helm chart tags" step -- see that job's
+      # `permissions:` comment for the full explanation.
     env:
       # The ChartMuseum this job uploads to, and the base of the
       # artifact.repository value recorded in the App Registry for every
