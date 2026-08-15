@@ -17,13 +17,14 @@ import (
 //
 // EnvironmentRegistry, AppRegistry, and PromotionRegistry are wired up (the
 // dashboard/deployments-matrix screens, #643, need identity + state reads
-// from all three). ArtifactRegistry is added when a later screen-work issue
-// needs it.
+// from all three). ArtifactRegistry is wired up for the builds/build-detail
+// screens (#649) — ListBuilds, GetReleaseRun.
 type RegistryClient struct {
 	conn        *grpcclient.Client
 	Environment pb.EnvironmentRegistryClient
 	App         pb.AppRegistryClient
 	Promotion   pb.PromotionRegistryClient
+	Artifact    pb.ArtifactRegistryClient
 }
 
 // NewRegistryClient dials app-registry-api at address. userAuthOpt must be
@@ -40,6 +41,7 @@ func NewRegistryClient(ctx context.Context, address string, userAuthOpt grpc.Dia
 		Environment: pb.NewEnvironmentRegistryClient(conn.GetConnection()),
 		App:         pb.NewAppRegistryClient(conn.GetConnection()),
 		Promotion:   pb.NewPromotionRegistryClient(conn.GetConnection()),
+		Artifact:    pb.NewArtifactRegistryClient(conn.GetConnection()),
 	}, nil
 }
 
