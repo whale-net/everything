@@ -38,7 +38,14 @@ type DBSessionManager struct {
 // secret must be the same SECRET_KEY used by the application.
 // Call this before NewAuthenticatorWithDB.
 // A background cleanup goroutine is started on ctx to prune expired sessions hourly.
-func NewDBSessionManager(ctx context.Context, pool *pgxpool.Pool, secret, name string) *DBSessionManager {
+//
+// Boot-time preflight: probes the ui_sessions table before returning so that
+// a missing or not-yet-migrated table surfaces immediately at startup rather
+// than at the first login. The probe uses the unqualified table name so it
+// exercises the same search_path resolution every runtime query uses. If the
+// probe fails, the error message names both the table and the migration file
+// that owns it so the operator knows exactly what to run.
+func NewDBSessionManager(ctx context.Context, pool *pgxpool.Pool, secret, name string) (*DBSessionManager, error) {
 	key := sha256.Sum256([]byte(secret))
 
 	oauthStore := sessions.NewCookieStore(key[:])
@@ -59,16 +66,55 @@ func NewDBSessionManager(ctx context.Context, pool *pgxpool.Pool, secret, name s
 		sessionTTL: 24 * time.Hour,
 	}
 
+	// Boot-time preflight: verify the session table exists and is reachable.
+	// Use the unqualified table name (same as every runtime query) so the probe
+	// exercises the same search_path that the runtime uses. A schema-qualified
+	// probe would pass while the runtime fails.
+	//
+	// Cookie-session fallback must NOT happen silently when DB sessions were
+	// requested — the caller must fix the schema and restart.
+	if err := sm.probeSessionTable(ctx); err != nil {
+		return nil, fmt.Errorf(
+			"htmxauth: session table preflight failed for table %q — "+
+				"ensure migration %q has been applied: %w",
+			ui_sessionsTable, ui_sessionsMigration, err,
+		)
+	}
+
 	go sm.cleanupLoop(ctx)
-	return sm
+	return sm, nil
+}
+
+// ui_sessionsTable is the unqualified table name used by every query in this file.
+// Changing it here changes it everywhere (preflight + runtime) in lockstep.
+const ui_sessionsTable = "ui_sessions"
+
+// ui_sessionsMigration is the migration file that owns the ui_sessions table.
+// Named in the preflight error message so the operator knows exactly what to run.
+const ui_sessionsMigration = "001_create_ui_sessions.sql"
+
+// probeSessionTable runs a minimal query against ui_sessions to confirm the
+// table exists and is accessible. It uses the same unqualified name as all
+// runtime queries so it exercises the same search_path resolution.
+func (s *DBSessionManager) probeSessionTable(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, "SELECT 1 FROM "+ui_sessionsTable+" LIMIT 0")
+	return err
 }
 
 // userInfoRecord mirrors what we store as JSONB in the DB.
+// Roles semantics (preserved through JSONB round-trip):
+//   - field absent in JSON (old rows before this change) → json.Unmarshal leaves Roles as nil → "absent"
+//   - field present as null → nil → "absent" (same treatment)
+//   - field present as [] → non-nil empty slice → "present but empty"
+//   - field present as [...] → non-nil non-empty slice → roles present
+//
+// IMPORTANT: never write len(rec.Roles)==0; always check rec.Roles==nil to test absence.
 type userInfoRecord struct {
-	Sub               string `json:"sub"`
-	PreferredUsername string `json:"preferred_username"`
-	Name              string `json:"name"`
-	Email             string `json:"email"`
+	Sub               string   `json:"sub"`
+	PreferredUsername string   `json:"preferred_username"`
+	Name              string   `json:"name"`
+	Email             string   `json:"email"`
+	Roles             []string `json:"roles"` // nil → absent; non-nil → present (may be empty)
 }
 
 // ── sessionStore interface ────────────────────────────────────────────────────
@@ -87,6 +133,12 @@ func (s *DBSessionManager) SetUserInfo(w http.ResponseWriter, r *http.Request, t
 		Name:              stringClaim(rawClaims, "name"),
 		Email:             stringClaim(rawClaims, "email"),
 	}
+
+	// Parse realm roles; on malformed claims we store nil (absent) rather than
+	// failing the login — the session is still valid, just without role data.
+	// The consuming app sees Roles==nil and can warn the user or operator.
+	roles, _ := parseRealmRoles(rawClaims)
+	rec.Roles = roles
 	userInfoJSON, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("failed to marshal user info: %w", err)
@@ -146,6 +198,7 @@ func (s *DBSessionManager) GetUserInfo(r *http.Request) (*UserInfo, error) {
 		PreferredUsername: rec.PreferredUsername,
 		Name:              rec.Name,
 		Email:             rec.Email,
+		Roles:             rec.Roles, // nil preserved from JSONB (absent); [] preserved (present-empty)
 		RawClaims:         map[string]interface{}{},
 	}, nil
 }
