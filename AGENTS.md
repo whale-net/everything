@@ -94,9 +94,16 @@ Update documentation as part of the same task that changes the code — not as a
 - **Persona / role docs:** one file per persona or actor, cross-linked from an index, rather than one file describing every persona serially.
 
 **Split mechanics:**
-- The split boundary must be algorithmic, not ad hoc — pick something an agent can predict without reading the whole doc first (chronological phase, one-file-per-concern, current vs. historical), not an arbitrary line-count cut.
-- Fix every intra-doc cross-reference the split touches (other docs, `TOC.md`, code comments citing a heading or file) before merging — do not leave dangling references.
-- Minimize impact on consumers: a reader who only wants current state shouldn't need to open the history file, and vice versa.
+
+Priority order when these pull against each other: an algorithmic, agent-navigable split always wins; only minimize consumer impact within whatever that split allows — a split that's easy on a human but forces an agent to grep to find the right file is the wrong split.
+
+1. **Pick an algorithmic boundary, not a line-count cut.** The boundary must be something an agent can name and predict *before* opening the doc — chronological phase, one-file-per-concern, current-vs-historical, one-per-persona. "First half" / "last N sections" / "wherever it got to 1000 lines" are not valid boundaries: they carry no meaning an agent can reason about on the next pass, so the doc will just need re-splitting on its own arbitrary terms next time.
+2. **Name split files predictably.** Use a fixed suffix/prefix an agent can guess without reading an index: `<DOC>-HISTORY.md` for a current/history split, `<DOC>/<NN>-<slug>.md` for a directory split ordered by the same boundary as rule 1. Never split into ambiguously-named files (`part2.md`, `notes.md`, `misc.md`) — the name must say *which* boundary-value lives there.
+3. **Keep one canonical entry point.** The original filename stays the file for "what's true now" / "where a cold read starts" — it must never become a content-free redirect stub. If a doc is fully superseded, delete it and repoint every inbound reference in the same change; don't leave a tombstone for an agent to open and bounce off of.
+4. **Make every split file discoverable.** Add or update the entry in the domain's `TOC.md` (per "New files" above) with a one-line description of what's in the file and when to read it — a split that isn't indexed just relocates the grep-cold problem instead of solving it.
+5. **Verify before merging, don't assume.** Grep the repo for the pre-split filename and any heading anchors that moved; fix every hit — other docs, `TOC.md`, code comments citing a heading or file, CI config — in the same change. A split that leaves dangling references is worse than not splitting.
+6. **Re-check the split's own size.** Each resulting file should independently clear the size trigger in "When to split" above. Don't stop at two files if a natural third boundary already exists — that's deferring the same problem, not solving it.
+7. **Only then, minimize consumer friction.** Within a boundary that satisfies 1–6, prefer the split that costs a normal reader the least — e.g. a reader who only wants current state shouldn't need to open the history file, and vice versa. This is a tiebreaker, not a reason to weaken the boundary itself.
 
 ## SCD2 (Slowly Changing Dimensions Type 2)
 
