@@ -8,6 +8,7 @@ APP_REGISTRY_APPS = [
     "//tools/app_registry/server:api_metadata",
     "//tools/app_registry/migrate:migration_metadata",
     "//tools/app_registry/worker:worker_metadata",
+    "//tools/app_registry/ui:ui_metadata",
 ]
 
 # App Registry Helm chart. Chart tags use the format
