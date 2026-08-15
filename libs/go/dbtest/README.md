@@ -10,13 +10,26 @@ This is a **proof of concept with a real deliverable**. It works, is documented 
 run, and is deliberately kept out of `bazel test //...` so a Docker-less machine (or CI runner
 without Docker) stays green.
 
+## One container, many isolated tests
+
+All tests in a single test binary (process) share **one** Postgres container per requested
+`Options.Image`, started lazily the first time `NewPostgres` is called. Each call to
+`NewPostgres` provisions its own Postgres database and login role inside that container —
+`CREATE ROLE ... LOGIN`, `CREATE DATABASE ... OWNER ...` — connects as that role to that
+database, and applies `Options.Schema` there. `t.Cleanup` drops the database and role (fast SQL,
+not a container stop) instead of terminating a container per test. This amortizes the ~2s
+container-start cost across the whole test binary while keeping tests fully isolated: a test can
+only see and modify its own database, connected as a role that owns nothing else, so tests are
+safe to run with `t.Parallel()`. The shared container itself is left running for the process's
+lifetime and is cleaned up by testcontainers' Ryuk reaper after the process exits.
+
 **Verified working** (WSL2 + Docker Desktop 28.4.0, `docker-desktop` k8s context):
-`bazel test //libs/go/dbtest:postgres_constraints_test --test_output=all` starts two real
-`postgres:16-alpine` containers (one per test function) plus one shared `testcontainers/ryuk:0.14.0`
-reaper container. Each Postgres container went from "Starting" to "database system is ready to
-accept connections" (occurrence 2) in ~2s; the whole `bazel test` invocation, including Bazel's
-own overhead, completed in 7.6s wall time on a warm image cache. Confirmed via container logs
-showing real container IDs (e.g. `92ac935e15d0`), not a mock.
+`bazel test //libs/go/dbtest:postgres_constraints_test --test_output=all` starts a **single**
+`postgres:16-alpine` container (shared by all three test functions, including a parallel
+`t.Run` isolation test with 5 subtests) plus one `testcontainers/ryuk:0.14.0` reaper container.
+The whole `bazel test` invocation, including Bazel's own overhead, completed in ~4s wall time on
+a warm image cache. Confirmed via container logs showing a single real container ID reused
+across tests, not a mock.
 
 ## Usage
 
@@ -31,8 +44,8 @@ func TestSomethingThatNeedsRealSQL(t *testing.T) {
             );
         `,
     })
-    // db.Pool is a *pgxpool.Pool, ready to use.
-    // db.Close() is registered with t.Cleanup automatically.
+    // db.Pool is a *pgxpool.Pool, ready to use, connected to a database and
+    // role that only this test can see.
 
     _, err := db.Pool.Exec(ctx, `INSERT INTO widget (name) VALUES ($1)`, "a")
     // ...
@@ -40,8 +53,8 @@ func TestSomethingThatNeedsRealSQL(t *testing.T) {
 ```
 
 `NewPostgres` fails the test immediately (`t.Fatalf`) on any setup error, so callers never need
-to handle an error return. `t.Cleanup` is registered for you; call `db.Close()` yourself only if
-you want to shut the container down early within a single test.
+to handle an error return. `t.Cleanup` is registered for you to close the pool and drop this
+test's database and role; there is nothing to close manually.
 
 `Options.Schema` should be self-contained DDL — do not depend on another package's migrations.
 Keep each test's schema scoped to only what it needs to prove.
