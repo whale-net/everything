@@ -128,6 +128,10 @@ func newReleaseAppCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&skipRegistry, "skip-registry", false, "Skip App Registry API interactions")
 	cmd.Flags().BoolVar(&createGitTag, "create-git-tag", false, "Create git tag upon successful publication")
 
+	_ = cmd.MarkFlagRequired("domain")
+	_ = cmd.MarkFlagRequired("app")
+	_ = cmd.MarkFlagRequired("version")
+
 	return cmd
 }
 

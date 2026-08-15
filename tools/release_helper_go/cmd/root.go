@@ -7,23 +7,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var rootCmd = &cobra.Command{
-	Use:          "release_helper",
-	Short:        "Release helper for Everything monorepo",
-	Long:         "Release helper for Everything monorepo — plan, build, and publish app releases.",
-	SilenceUsage: true,
-}
-
-func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+// NewRootCmd creates a fresh root command tree for release_helper_go.
+// Returning a fresh instance per call ensures tests and parsers do not share
+// closed-over state or mutated flag variables.
+func NewRootCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:           "release_helper",
+		Short:         "Release helper for Everything monorepo",
+		Long:          "Release helper for Everything monorepo — plan, build, and publish app releases.",
+		SilenceUsage:  true,
+		SilenceErrors: true,
 	}
-}
-
-func init() {
-	rootCmd.SilenceErrors = true
-	rootCmd.AddCommand(
+	c.AddCommand(
 		newPlanCmd(),
 		newPlanOpenapiBuildsCmd(),
 		newSummaryCmd(),
@@ -44,4 +39,12 @@ func init() {
 		newManifestSetCmd(),
 		newReadChartLockfileCmd(),
 	)
+	return c
+}
+
+func Execute() {
+	if err := NewRootCmd().Execute(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

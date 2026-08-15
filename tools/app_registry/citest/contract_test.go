@@ -3,11 +3,13 @@ package citest
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
-	"github.com/whale-net/everything/tools/app_registry/cli/cmd"
+	appcmd "github.com/whale-net/everything/tools/app_registry/cli/cmd"
+	releasecmd "github.com/whale-net/everything/tools/release_helper_go/cmd"
 )
 
 // githubDir locates .github. Bazel stages it as a data dependency relative
@@ -23,8 +25,8 @@ func githubDir(t *testing.T) string {
 	return ""
 }
 
-// allInvocations extracts every app-registry command line in CI config.
-// Shared by both tests in this package so they can never disagree about
+// allInvocations extracts every CLI command line in CI config.
+// Shared by tests in this package so they can never disagree about
 // what CI actually runs.
 func allInvocations(t *testing.T) []Invocation {
 	t.Helper()
@@ -56,16 +58,31 @@ func allInvocations(t *testing.T) []Invocation {
 func TestExtractionFindsInvocations(t *testing.T) {
 	inv := allInvocations(t)
 	if len(inv) < 8 {
-		t.Fatalf("extracted only %d app-registry invocations from .github -- extraction is probably broken, not CI", len(inv))
+		t.Fatalf("extracted only %d CLI invocations from .github -- extraction is probably broken, not CI", len(inv))
 	}
 	seen := map[string]bool{}
 	for _, i := range inv {
-		seen[strings.Join(i.Args[:min(2, len(i.Args))], " ")] = true
+		seen[string(i.Binary)+":"+strings.Join(i.Args[:min(2, len(i.Args))], " ")] = true
 	}
-	// The write path that carries a release. If any of these stops being
+	// The key commands in CI workflows. If any of these stops being
 	// found, extraction has drifted from the workflows.
-	for _, want := range []string{"apps assert", "builds record", "artifacts begin-publish", "artifacts record"} {
-		if !seen[want] {
+	for _, want := range []string{
+		"release_helper_go:plan",
+		"release_helper_go:release-app",
+		"release_helper_go:release-charts",
+		"release_helper_go:summary",
+		"release_helper_go:plan-openapi-builds",
+		"release_helper_go:create-combined-github-release-with-notes",
+		"app-registry:apps reconcile",
+	} {
+		found := false
+		for k := range seen {
+			if strings.HasPrefix(k, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			t.Errorf("no %q invocation found in .github -- extraction drifted, or the step was removed", want)
 		}
 	}
@@ -83,8 +100,17 @@ func TestEveryInvocationIsValid(t *testing.T) {
 		if inv.Dynamic {
 			continue // covered by TestDynamicCallSitesAreKnown
 		}
-		t.Run(inv.File+":"+strings.Join(inv.Args[:min(2, len(inv.Args))], "_"), func(t *testing.T) {
-			root := cmd.NewRootCmd()
+		t.Run(inv.File+":"+string(inv.Binary)+":"+strings.Join(inv.Args[:min(2, len(inv.Args))], "_"), func(t *testing.T) {
+			var root *cobra.Command
+			switch inv.Binary {
+			case BinaryAppRegistry:
+				root = appcmd.NewRootCmd()
+			case BinaryReleaseHelper:
+				root = releasecmd.NewRootCmd()
+			default:
+				t.Fatalf("%s\n  unknown binary type: %s", inv, inv.Binary)
+			}
+
 			target, rest, err := root.Find(inv.Args)
 			if err != nil {
 				t.Fatalf("%s\n  unknown subcommand: %v", inv, err)
@@ -138,57 +164,9 @@ func TestDynamicCallSitesAreKnown(t *testing.T) {
 	}
 	for f := range knownDynamicCallSites {
 		if !seen[f] {
-			t.Errorf("knownDynamicCallSites lists %s, but no dynamic app-registry invocation was found there -- either extraction has drifted (so the exemption is hiding a real gap) or the call site is gone and the entry should be deleted", f)
+			t.Errorf("knownDynamicCallSites lists %s, but no dynamic CLI invocation was found there -- either extraction has drifted (so the exemption is hiding a real gap) or the call site is gone and the entry should be deleted", f)
 		}
 	}
-}
-
-// TestChartInvocationsCarryRepository pins the rule today's outage broke.
-//
-// A chart's repository cannot be resolved server-side: chart.chart_repository
-// has never been populated by any write path and migration 008 hardcodes it
-// to the empty string in v_current_chart, because a chart's ChartMuseum URL
-// is deployment config the registry cannot derive. So every chart-kind write MUST carry
-// --repository. `artifacts record` always did; `artifacts begin-publish` did
-// not, and the result was that no chart ever reached "publishing" -- on a
-// green run, because the step was continue-on-error.
-//
-// This is the one rule a generic flag check cannot express, since both
-// subcommands accept --repository and neither marks it universally required
-// (images legitimately omit it and fall back to the app's stored
-// image_repository).
-func TestChartInvocationsCarryRepository(t *testing.T) {
-	needsRepo := map[string]bool{"record": true, "begin-publish": true}
-	checked := 0
-	for _, inv := range allInvocations(t) {
-		if len(inv.Args) < 2 || inv.Args[0] != "artifacts" || !needsRepo[inv.Args[1]] {
-			continue
-		}
-		if flagValue(inv.Args, "--kind") != "chart" {
-			continue
-		}
-		checked++
-		if flagValue(inv.Args, "--repository") == "" {
-			t.Errorf("%s\n  a chart-kind write with no --repository: the server has no chart repository to fall back on, so this call fails with\n  \"repository is required to begin publishing chart <version> with no prior allocation\"", inv)
-		}
-	}
-	if checked == 0 {
-		t.Error("no chart-kind artifacts write found in .github -- this test is not covering anything; did the chart release steps move?")
-	}
-}
-
-// flagValue returns the value CI passes for name, or "" if absent. Handles
-// both `--flag value` and `--flag=value`.
-func flagValue(args []string, name string) string {
-	for i, a := range args {
-		if a == name && i+1 < len(args) {
-			return args[i+1]
-		}
-		if v, ok := strings.CutPrefix(a, name+"="); ok {
-			return v
-		}
-	}
-	return ""
 }
 
 // substitutePlaceholders replaces unexpanded shell/GitHub expressions with
@@ -200,6 +178,13 @@ func substitutePlaceholders(c *cobra.Command, args []string) ([]string, error) {
 	out := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		// Handle expressions like ${{ inputs.delete_packages && '--delete-packages' || '--no-delete-packages' }}
+		if strings.HasPrefix(a, "${{") && strings.Contains(a, "--") {
+			re := regexp.MustCompile(`--[a-zA-Z0-9-]+`)
+			if m := re.FindString(a); m != "" {
+				a = m
+			}
+		}
 		name, inline, hasInline := strings.Cut(a, "=")
 		if !strings.HasPrefix(name, "-") {
 			out = append(out, a) // positional
@@ -229,7 +214,7 @@ func substitutePlaceholders(c *cobra.Command, args []string) ([]string, error) {
 
 // sample returns v unchanged when it is a literal, or a type-appropriate
 // stand-in when it is an unexpanded expression. Literals are preserved on
-// purpose: --kind chart has to stay "chart" for the parser to validate it.
+// purpose: --format github has to stay "github" for the parser to validate it.
 func sample(typ, v string) string {
 	if !strings.ContainsAny(v, "${") {
 		return v

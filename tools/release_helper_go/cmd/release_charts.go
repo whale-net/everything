@@ -245,6 +245,9 @@ func newReleaseChartsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartRepoUser, "chart-repo-user", "", "ChartMuseum username")
 	cmd.Flags().StringVar(&chartRepoPass, "chart-repo-pass", "", "ChartMuseum password")
 
+	_ = cmd.MarkFlagRequired("charts")
+	_ = cmd.MarkFlagRequired("chart-repo-url")
+
 	return cmd
 }
 
