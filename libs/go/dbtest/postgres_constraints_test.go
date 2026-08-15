@@ -10,6 +10,7 @@ package dbtest_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -122,5 +123,45 @@ func TestPartialUniqueIndex_OnlyGuardsCurrentRow(t *testing.T) {
 	// A current row for a *different* app_id must still be allowed.
 	if _, err := db.Pool.Exec(ctx, insertCurrent, "app-2"); err != nil {
 		t.Fatalf("current row for a different app_id should succeed: %v", err)
+	}
+}
+
+// TestParallelTestsGetIsolatedDatabases proves the container-sharing
+// changes (issue #616) didn't compromise isolation: many tests run
+// concurrently against the same shared container, but each gets its own
+// database, so a row inserted by one is invisible to the others.
+func TestParallelTestsGetIsolatedDatabases(t *testing.T) {
+	t.Parallel()
+
+	for i := 0; i < 5; i++ {
+		t.Run(fmt.Sprintf("case_%d", i), func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+
+			db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: `
+				CREATE TABLE marker (id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY);
+			`})
+
+			var count int
+			if err := db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM marker`).Scan(&count); err != nil {
+				t.Fatalf("count before insert: %v", err)
+			}
+			if count != 0 {
+				t.Fatalf("expected an empty, isolated database, found %d pre-existing rows", count)
+			}
+
+			if _, err := db.Pool.Exec(ctx, `INSERT INTO marker DEFAULT VALUES`); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+
+			if err := db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM marker`).Scan(&count); err != nil {
+				t.Fatalf("count after insert: %v", err)
+			}
+			if count != 1 {
+				t.Fatalf("expected exactly this test's own insert to be visible, got count=%d", count)
+			}
+		})
 	}
 }
