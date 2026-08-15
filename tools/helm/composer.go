@@ -119,8 +119,42 @@ type AppConfig struct {
 	Command       []string             `yaml:"command,omitempty"`
 	Args          []string             `yaml:"args,omitempty"`
 	Env           map[string]string    `yaml:"env,omitempty"`
+
+	// Secret-sourced environment variables (valueFrom.secretKeyRef). Each entry
+	// declares a variable whose value is read from a Kubernetes Secret at runtime.
+	SecretKeyRef []SecretKeyRefEntry `yaml:"secretKeyRef,omitempty"`
+
+	// envFrom entries: bulk-import all keys from a secret or configMap into the
+	// container's environment (no name/value pairs; just references).
+	EnvFrom []EnvSource `yaml:"envFrom,omitempty"`
+
 	ExposeIngress bool                 `yaml:"exposeIngress,omitempty"` // For internal-api: expose via ingress for debugging
 	Ingress       *AppIngressConfig    `yaml:"ingress,omitempty"`       // Per-app ingress config
+}
+
+// SecretKeyRefEntry declares a single environment variable whose value is
+// sourced from a Kubernetes Secret key at runtime (valueFrom.secretKeyRef).
+type SecretKeyRefEntry struct {
+	Name     string `json:"name" yaml:"name"`  // env var name
+	Key      string `json:"key" yaml:"key"`    // secret key to read
+	Secret   string `json:"secret" yaml:"secret"` // secret resource name
+}
+
+// EnvSource represents one entry in a container's envFrom list. Exactly one of
+// SecretRef or ConfigMapRef must be non-empty when used.
+type EnvSource struct {
+	SecretRef    *SecretRef    `yaml:"secretRef,omitempty"`
+	ConfigMapRef *ConfigMapRef `yaml:"configMapRef,omitempty"`
+}
+
+// SecretRef references a Kubernetes Secret for envFrom injection.
+type SecretRef struct {
+	Name string `json:"name" yaml:"name"` // secret resource name
+}
+
+// ConfigMapRef references a Kubernetes ConfigMap for envFrom injection.
+type ConfigMapRef struct {
+	Name string `json:"name" yaml:"name"` // configMap resource name
 }
 
 // AppIngressConfig represents per-app ingress configuration
@@ -776,6 +810,39 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 		w.WriteList("command", app.Command)
 		w.WriteList("args", app.Args)
 		w.WriteMap("env", app.Env)
+
+		// secretKeyRef (list of objects with name/key/secret keys)
+		if len(app.SecretKeyRef) > 0 {
+			w.WriteKey("secretKeyRef")
+			w.indent += 2
+			for _, entry := range app.SecretKeyRef {
+				prefix := strings.Repeat(" ", w.indent)
+				fmt.Fprintf(w.f, "%s- name: %q\n", prefix, entry.Name)
+				fmt.Fprintf(w.f, "%s  key: %q\n", prefix, entry.Key)
+				fmt.Fprintf(w.f, "%s  secret: %q\n", prefix, entry.Secret)
+			}
+			w.indent -= 2
+		}
+
+		// envFrom (list of objects with secretRef or configMapRef keys)
+		if len(app.EnvFrom) > 0 {
+			w.WriteKey("envFrom")
+			w.indent += 2
+			for _, src := range app.EnvFrom {
+				prefix := strings.Repeat(" ", w.indent)
+				if src.SecretRef != nil && src.SecretRef.Name != "" {
+					fmt.Fprintf(w.f, "%s- secretRef:\n", prefix)
+					subprefix := strings.Repeat(" ", w.indent+2)
+					fmt.Fprintf(w.f, "%sname: %q\n", subprefix, src.SecretRef.Name)
+				}
+				if src.ConfigMapRef != nil && src.ConfigMapRef.Name != "" {
+					fmt.Fprintf(w.f, "%s- configMapRef:\n", prefix)
+					subprefix := strings.Repeat(" ", w.indent+2)
+					fmt.Fprintf(w.f, "%sname: %q\n", subprefix, src.ConfigMapRef.Name)
+				}
+			}
+			w.indent -= 2
+		}
 
 		w.EndSection()
 		w.Newline()

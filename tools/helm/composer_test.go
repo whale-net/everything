@@ -1058,3 +1058,241 @@ func TestGenerateLockfile_Deterministic(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteValuesYAML_SecretKeyRefAndEnvFrom writes a minimal values.yaml that
+// includes secret-sourced env vars and envFrom entries, then asserts the output
+// contains the correct YAML keys for both.
+func TestWriteValuesYAML_SecretKeyRefAndEnvFrom(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "values-secret-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	valuesFile := filepath.Join(tmpDir, "values.yaml")
+	f, err := os.Create(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to create values file: %v", err)
+	}
+	defer f.Close()
+
+	data := ValuesData{
+		Global: GlobalConfig{
+			Namespace:   "test-ns",
+			Environment: "dev",
+		},
+		Apps: map[string]AppConfig{
+			"secret-app": {
+				Type:     "external-api",
+				Image:    "secret-app",
+				ImageTag: "latest",
+				Port:     8080,
+				Replicas: 2,
+				SecretKeyRef: []SecretKeyRefEntry{
+					{Name: "SECRET_KEY", Key: "api-key", Secret: "app-secrets"},
+					{Name: "DB_URL", Key: "database-url", Secret: "db-creds"},
+				},
+				EnvFrom: []EnvSource{
+					{SecretRef: &SecretRef{Name: "shared-env"}},
+					{ConfigMapRef: &ConfigMapRef{Name: "app-config"}},
+				},
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "64Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+			},
+		},
+		IngressDefaults: IngressDefaultsConfig{Enabled: true},
+	}
+
+	if err := writeValuesYAML(f, data); err != nil {
+		t.Fatalf("Failed to write values: %v", err)
+	}
+	f.Close()
+
+	content, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to read values file: %v", err)
+	}
+	output := string(content)
+
+	// Verify secretKeyRef section is present with correct entries.
+	if !strings.Contains(output, "secretKeyRef:") {
+		t.Error("Expected 'secretKeyRef:' in output")
+	}
+	if !contains(output, `name: "SECRET_KEY"`) {
+		t.Error("Expected SECRET_KEY entry in secretKeyRef")
+	}
+	if !contains(output, `key: "api-key"`) {
+		t.Error("Expected api-key key in secretKeyRef")
+	}
+	if !contains(output, `secret: "app-secrets"`) {
+		t.Error("Expected app-secrets secret name in secretKeyRef")
+	}
+	if !strings.Contains(output, "db-url:") && !contains(output, "DB_URL") {
+		t.Error("Expected DB_URL entry in secretKeyRef")
+	}
+
+	// Verify envFrom section is present.
+	if !strings.Contains(output, "envFrom:") {
+		t.Error("Expected 'envFrom:' in output")
+	}
+	if !contains(output, `name: "shared-env"`) {
+		t.Error("Expected shared-env secretRef in envFrom")
+	}
+	if !contains(output, `name: "app-config"`) {
+		t.Error("Expected app-config configMapRef in envFrom")
+	}
+}
+
+// TestWriteValuesYAML_NoSecretKeyRefEnvFrom ensures the golden test's apps (no
+// secret-sourced vars) render values.yaml with no extra keys — they must stay
+// byte-identical to the existing golden file.
+func TestWriteValuesYAML_NoSecretKeyRefEnvFrom_Clean(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "values-clean-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	valuesFile := filepath.Join(tmpDir, "values.yaml")
+	f, err := os.Create(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to create values file: %v", err)
+	}
+	defer f.Close()
+
+	data := ValuesData{
+		Global: GlobalConfig{
+			Namespace:   "golden-ns",
+			Environment: "production",
+		},
+		Apps: map[string]AppConfig{
+			"golden-api": {
+				Type:          "external-api",
+				Domain:        "golden",
+				Image:         "ghcr.io/whale-net/golden-api",
+				ImageTag:      "v1.2.3",
+				Port:          8080,
+				Replicas:      2,
+				Ingress:       &AppIngressConfig{Host: "api.golden.local", TLSSecretName: "golden-tls"},
+				ExposeIngress: false,
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "256Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "512Mi"},
+				},
+			},
+			"golden-worker": {
+				Type:     "worker",
+				Domain:   "golden",
+				Image:    "ghcr.io/whale-net/golden-worker",
+				ImageTag: "v1.2.3",
+				Replicas: 1,
+				Command:  []string{"python3"},
+				Args:     []string{"-m", "golden.worker"},
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "64Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+			},
+			"golden-migrate": {
+				Type:     "job",
+				Domain:   "golden",
+				Image:    "ghcr.io/whale-net/golden-migrate",
+				ImageTag: "v1.2.3",
+				Replicas: 1,
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "100m", Memory: "256Mi"},
+					Limits:   ResourceValues{CPU: "200m", Memory: "512Mi"},
+				},
+			},
+		},
+		IngressDefaults: IngressDefaultsConfig{Enabled: true},
+	}
+
+	if err := writeValuesYAML(f, data); err != nil {
+		t.Fatalf("Failed to write values: %v", err)
+	}
+	f.Close()
+
+	content, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to read values file: %v", err)
+	}
+	output := string(content)
+
+	// Verify no secretKeyRef or envFrom sections appear for apps that don't use them.
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		lower := strings.ToLower(strings.TrimSpace(line))
+		if strings.HasPrefix(lower, "secretkeyref:") || strings.HasPrefix(lower, "envfrom:") {
+			t.Errorf("Found unexpected '%s' in values.yaml for apps with no secret-sourced env", line)
+		}
+	}
+
+	// Verify the output matches the existing golden file.
+	goldenPath := "testdata/golden_values.yaml"
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden file: %v", err)
+	}
+	if string(output) != string(want) {
+		t.Errorf("clean values.yaml does not match golden file.\n--- got ---\n%s\n--- want ---\n%s", output, want)
+	}
+}
+
+// TestSecretKeyRefEntry_Rendering verifies that the SecretKeyRefEntry and EnvSource
+// types marshal correctly into YAML when passed through writeValuesYAML.
+func TestSecretKeyRefEntry_Rendering(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "values-secret-render-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	valuesFile := filepath.Join(tmpDir, "values.yaml")
+	f, err := os.Create(valuesFile)
+	if err != nil {
+		t.Fatalf("Failed to create values file: %v", err)
+	}
+	defer f.Close()
+
+	data := ValuesData{
+		Global: GlobalConfig{Namespace: "ns", Environment: "dev"},
+		Apps: map[string]AppConfig{
+			"app": {
+				Type:     "external-api",
+				Image:    "app",
+				ImageTag: "latest",
+				Port:     8080,
+				Replicas: 1,
+				SecretKeyRef: []SecretKeyRefEntry{
+					{Name: "X", Key: "k", Secret: "s"},
+				},
+				EnvFrom: []EnvSource{
+					{SecretRef: &SecretRef{Name: "sr"}},
+				},
+				Resources: ValuesResourceConfig{
+					Requests: ResourceValues{CPU: "50m", Memory: "64Mi"},
+					Limits:   ResourceValues{CPU: "100m", Memory: "256Mi"},
+				},
+			},
+		},
+		IngressDefaults: IngressDefaultsConfig{Enabled: true},
+	}
+
+	if err := writeValuesYAML(f, data); err != nil {
+		t.Fatalf("writeValuesYAML: %v", err)
+	}
+	f.Close()
+
+	content, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	output := string(content)
+
+	if !strings.Contains(output, "secretKeyRef:") || !strings.Contains(output, "envFrom:") {
+		t.Errorf("expected secretKeyRef and envFrom sections in output:\n%s", output)
+	}
+}

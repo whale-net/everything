@@ -149,11 +149,34 @@ spec:
               value: "amd64"  # Can be templated based on node selector
             
             {{- if $app.env }}
-            # Additional app-specific environment variables
+            # Additional app-specific environment variables (literal values)
             {{- range $key, $value := $app.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
             {{- end }}
+
+          {{- if $app.secretKeyRef }}
+            # Environment variables sourced from Kubernetes Secrets (no literal values)
+            {{- range $item in $app.secretKeyRef }}
+            - name: {{ $item.name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $item.secret }}
+                  key: {{ $item.key }}
+            {{- end }}
+          {{- end }}
+
+          {{- if and (gt (len $app.envFrom) 0) }}
+        envFrom:
+          {{- range $src in $app.envFrom }}
+          {{- if $src.secretRef }}
+          - secretRef:
+              name: {{ $src.secretRef.name }}
+          {{- end }}
+          {{- if $src.configMapRef }}
+          - configMapRef:
+              name: {{ $src.configMapRef.name }}
+          {{- end }}
 {{- end }}
 {{- end }}
