@@ -8,48 +8,6 @@ on:
     branches: [ main ]
 
 jobs:
-  # Build release_helper_go (and, for the main-only reconcile job below, the
-  # app-registry CLI) once and share via upload-artifact/download-artifact
-  # (see .github/actions/download-release-tools) instead of every job that
-  # needs one -- plan-docker, every leg of the docker matrix, reconcile --
-  # rebuilding from source independently. ci-images (not ci-release): these
-  # are throwaway CI-only Docker builds, never pushed, so there's no "must
-  # not read from a possibly-stale cache" concern the way there is for
-  # release.yml's actual published artifacts -- cache reads are pure upside
-  # here. No `needs:` -- runs in parallel with the test jobs below.
-  build-release-tools:
-    name: Build Release Tools
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'release-tools'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
-
-    - name: Build release_helper_go and app-registry CLI
-      run: |
-        bazel build --config=ci-images \
-          //tools/release_helper_go:release_helper_go \
-          //tools/app_registry/cli:app-registry
-        BAZEL_BIN="$(bazel info bazel-bin --config=ci-images)"
-        mkdir -p /tmp/release-tools
-        cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
-        cp "$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry" /tmp/release-tools/app-registry
-        bazel shutdown
-
-    - name: Upload release tools artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-tools
-        path: /tmp/release-tools/
-        retention-days: 1
-
   # Registers/updates every release_app and helm_chart manifest as an
   # app/chart row in the App Registry. Runs on every push to main only
   # (never on pull_request, never from release.yml) so it always reconciles
@@ -72,7 +30,6 @@ jobs:
   reconcile-app-registry:
     name: Reconcile apps/charts in App Registry
     runs-on: ubuntu-latest
-    needs: build-release-tools
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     # Serializes reconcile runs so an older main push's ReconcileApps call
     # gets cancelled instead of racing a newer one. This job only runs on
@@ -91,6 +48,8 @@ jobs:
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: published
 
     - name: Reconcile apps/charts in App Registry
       if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
@@ -295,7 +254,7 @@ jobs:
   plan-docker:
     name: Plan Docker Builds
     runs-on: ubuntu-latest
-    needs: [test, test-container-arch, build-release-tools]
+    needs: [test, test-container-arch]
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       apps: ${{ steps.plan.outputs.apps }}
@@ -307,6 +266,8 @@ jobs:
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: published
 
     - name: Plan Docker builds using release tool
       id: plan
@@ -359,7 +320,7 @@ jobs:
   docker:
     name: Build ${{ matrix.domain }}-${{ matrix.app }} Image
     runs-on: ubuntu-latest
-    needs: [plan-docker, build-release-tools]
+    needs: plan-docker
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan-docker.outputs.apps && needs.plan-docker.outputs.apps != 'null'
     strategy:
       matrix: ${{ fromJson(needs.plan-docker.outputs.matrix) }}
@@ -382,10 +343,12 @@ jobs:
 
     # release_helper_go's `build` subcommand still shells out to Bazel itself
     # to build the image, so Setup Build Environment above is still needed --
-    # this just fetches the already-built release_helper_go binary instead of
+    # this just fetches the release_helper_go binary instead of
     # rebuilding it in every matrix leg.
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: published
 
     - name: Build Docker image for ${{ matrix.domain }}-${{ matrix.app }}
       env:

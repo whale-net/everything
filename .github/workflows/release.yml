@@ -30,6 +30,10 @@ on:
         description: 'Include demo domain when using "all" for apps or helm charts'
         type: boolean
         default: false
+      use_source_tools:
+        description: 'Build release tools from source instead of downloading pinned prebuilt binaries (safety valve)'
+        type: boolean
+        default: false
 
 # Global concurrency control for all release operations
 # Prevents race conditions across app releases, git tags, GitHub releases, and Helm repository
@@ -85,18 +89,15 @@ jobs:
         
         echo "✅ Version input validation passed"
 
-  # Build release_helper_go and the app-registry CLI once and share them with
-  # every other job via upload-artifact/download-artifact (see .github/actions/
-  # download-release-tools), instead of every job rebuilding from source.
-  # ci-images, not ci-release: ci-release's --noremote_accept_cached forces a
-  # from-source rebuild of the whole exec-tool graph (protobuf C++ included)
-  # and buys nothing here -- release_helper_go's internal bazel calls pass no
-  # --config, so this binary's own build cache-hit-ness doesn't affect the
-  # published artifact.
+  # Build release_helper_go and the app-registry CLI from source when
+  # use_source_tools is requested (safety valve). In standard pinned mode
+  # (default), downstream jobs fetch pinned binaries directly via
+  # .github/actions/download-release-tools in <3s, skipping this job entirely.
   build-release-tools:
     name: Build Release Tools
     runs-on: ubuntu-latest
     needs: validate-inputs
+    if: ${{ inputs.use_source_tools == true || github.event.inputs.use_source_tools == 'true' }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -142,7 +143,7 @@ jobs:
   app-registry-assert:
     name: Assert apps/charts in App Registry
     runs-on: ubuntu-latest
-    needs: [validate-inputs, build-release-tools]
+    needs: validate-inputs
     if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
     outputs:
       outcome: ${{ steps.app-registry-assert.outcome }}
@@ -162,6 +163,8 @@ jobs:
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
 
     - name: Assert apps/charts in App Registry
       id: app-registry-assert
@@ -180,7 +183,7 @@ jobs:
   plan-release:
     name: Plan Release
     runs-on: ubuntu-latest
-    needs: [validate-inputs, build-release-tools]
+    needs: validate-inputs
     outputs:
       release-matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
@@ -194,6 +197,8 @@ jobs:
         
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
 
     - name: Plan release using release helper tool
       id: plan
@@ -355,7 +360,7 @@ jobs:
   plan-openapi-builds:
     name: Plan OpenAPI Builds
     runs-on: ubuntu-latest
-    needs: [plan-release, build-release-tools]
+    needs: plan-release
     if: needs.plan-release.outputs.apps != ''
     outputs:
       openapi-matrix: ${{ steps.plan-openapi.outputs.matrix }}
@@ -366,6 +371,8 @@ jobs:
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
 
     - name: Plan OpenAPI spec builds
       id: plan-openapi
@@ -477,7 +484,7 @@ jobs:
   release:
     name: Release ${{ matrix.domain }}-${{ matrix.app }}
     runs-on: ubuntu-latest
-    needs: [plan-release, build-release-tools, app-registry-assert]
+    needs: [plan-release, app-registry-assert]
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
     # contents: write - checkout + the "Create git tag for release" step's `git push origin <tag>`.
     # packages: write - "Log in to GitHub Container Registry" falls back to GITHUB_TOKEN when
@@ -517,10 +524,12 @@ jobs:
 
     # release_helper_go still invokes Bazel itself to build the per-app
     # images (release-multiarch), so Setup Build Environment above is still
-    # needed -- this just fetches the already-built release_helper_go /
-    # app-registry binaries instead of rebuilding them in every matrix leg.
+    # needed -- this just fetches the release_helper_go / app-registry binaries
+    # instead of rebuilding them in every matrix leg.
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
 
     # AR-7c (issue #558), hoisted out of this matrix leg by issue #622: the
     # `app-registry-assert` job above -- additive identity + manifest-
@@ -954,7 +963,7 @@ jobs:
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
-    needs: [plan-release, release, build-openapi-specs, build-release-tools]
+    needs: [plan-release, release, build-openapi-specs]
     if: always() && !cancelled() && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null && github.event.inputs.dry_run == 'false' && needs.release.result == 'success' && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
     - name: Checkout code
@@ -965,6 +974,8 @@ jobs:
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
 
     - name: Download release notes artifacts
       uses: actions/download-artifact@v4
@@ -1069,7 +1080,7 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [plan-release, release, create-github-releases, release-helm-charts, build-release-tools]
+    needs: [plan-release, release, create-github-releases, release-helm-charts]
     if: always()
     env:
       # Same value, same default, and the same override as the
@@ -1082,13 +1093,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # This job runs with if: always(), including when build-release-tools
-    # itself failed/was skipped -- continue-on-error so a missing artifact
+    # This job runs with if: always(), including when tool download
+    # failed/was skipped -- continue-on-error so a missing artifact
     # degrades the summary instead of failing this always-run job.
     - name: Download release tools
       id: download-tools
       continue-on-error: true
       uses: ./.github/actions/download-release-tools
+      with:
+        source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
 
     - name: Generate summary using release helper
       if: steps.download-tools.outcome == 'success'
@@ -1188,7 +1201,7 @@ jobs:
   # Release helm charts (must run after app images are built and tagged)
   release-helm-charts:
     name: Release Helm Charts
-    needs: [plan-release, release, create-github-releases, build-release-tools, app-registry-assert]
+    needs: [plan-release, release, create-github-releases, app-registry-assert]
     if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
     runs-on: ubuntu-latest
     permissions:
@@ -1230,6 +1243,8 @@ jobs:
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
+      with:
+        source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
 
     # AR-7c (issue #558), hoisted out of this job by issue #622: see the
     # top-level `app-registry-assert` job's comment. It now runs once for
