@@ -414,7 +414,7 @@ func TestGetEnvironmentState_ReportsDrift(t *testing.T) {
 
 // The "GetEnvironmentState --at <T> returns correct historical state"
 // exit criterion is deliberately proven at the repository layer against
-// real Postgres (see postgres_integration_test.go's
+// real Postgres (see postgres_integration_promotion_test.go's
 // TestPromotionRepo_StateAt_HistoricalWindow), not here: wall-clock time at
 // second resolution (Promotion.valid_from/valid_to are Unix seconds) makes
 // a handler-level "promote twice, query between them" test flaky by

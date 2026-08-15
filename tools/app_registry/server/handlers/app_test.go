@@ -411,7 +411,7 @@ func TestReconcileApps_ChartNameStripsHelmDomainPrefix(t *testing.T) {
 
 // ============================================================================
 // Reconcile watermark (issue #545) -- fake-backed handler coverage.
-// See postgres_integration_test.go's "Reconcile watermark" section for the
+// See postgres_integration_app_test.go's "Reconcile watermark" section for the
 // same scenarios exercised against real Postgres (real FOR UPDATE locking,
 // real transaction rollback). These fake-backed versions exist so the
 // business logic (repository.ShouldApplyReconcile and its wiring through
@@ -516,7 +516,7 @@ func TestReconcileApps_EqualOrderingKeyDifferentGitShaApplies(t *testing.T) {
 
 // TestReconcileApps_DryRunNeverConsultsOrAdvancesWatermark proves dry_run
 // is unaffected by the watermark in either direction, mirroring
-// postgres_integration_test.go's version of this proof against real
+// postgres_integration_app_test.go's version of this proof against real
 // Postgres.
 func TestReconcileApps_DryRunNeverConsultsOrAdvancesWatermark(t *testing.T) {
 	ctx := authedCtx()

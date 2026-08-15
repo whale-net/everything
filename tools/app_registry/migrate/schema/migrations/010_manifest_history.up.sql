@@ -80,7 +80,7 @@ ALTER TABLE chart_manifest RENAME TO chart_manifest_old;
 -- session settings the way e.g. timestamptz::text does, and md5(text) is
 -- itself IMMUTABLE -- both are catalogued IMMUTABLE in Postgres, confirmed
 -- against real Postgres via this package's own
--- postgres_integration_test.go (CI's `Test Database Integration` job).
+-- postgres_integration_app_test.go (CI's `Test Database Integration` job).
 CREATE TABLE app_manifest (
     app_manifest_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id            UUID NOT NULL REFERENCES app (app_id),

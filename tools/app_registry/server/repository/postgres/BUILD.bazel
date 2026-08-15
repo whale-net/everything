@@ -42,12 +42,12 @@ go_test(
 )
 
 # Real-Postgres integration coverage for this package -- see
-# postgres_integration_test.go's doc comment and ../../../TESTING.md.
+# postgres_integration_helpers_test.go's doc comment and ../../../TESTING.md.
 #
-# Gazelle does not generate this target: postgres_integration_test.go is
-# gated behind `//go:build integration`, which gazelle skips when scanning
-# for go_test srcs. This go_test is hand-written, with EXACTLY the tag set
-# from //libs/go/dbtest:postgres_constraints_test (see that package's
+# Gazelle does not generate this target: these postgres_integration_*_test.go
+# files are gated behind `//go:build integration`, which gazelle skips when
+# scanning for go_test srcs. This go_test is hand-written, with EXACTLY the
+# tag set from //libs/go/dbtest:postgres_constraints_test (see that package's
 # BUILD.bazel/README.md for why each tag is required). `# keep` markers tell
 # a later `bazel run //:gazelle` not to touch or remove this rule.
 #
@@ -58,7 +58,14 @@ go_test(
     name = "postgres_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["postgres_integration_test.go"],
+    srcs = [
+        "postgres_integration_adoption_test.go",
+        "postgres_integration_app_test.go",
+        "postgres_integration_artifact_test.go",
+        "postgres_integration_environment_test.go",
+        "postgres_integration_helpers_test.go",
+        "postgres_integration_promotion_test.go",
+    ],
     embed = [":postgres"],
     gotags = ["integration"],
     tags = [

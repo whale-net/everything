@@ -783,7 +783,7 @@ func TestAllocateVersion_UnknownOwnerNamesTheOwnerAndHintsAtReconcile(t *testing
 // and only after the fixture explicitly cuts "demo" over does the same
 // request succeed. This is the mechanism a future phase would use to cut a
 // real domain over — see fake.Registry.SetDomainAdoptionStage's doc comment
-// and postgres_integration_test.go's version of this same proof against a
+// and postgres_integration_artifact_test.go's version of this same proof against a
 // real domain_adoption row.
 func TestAllocateVersion_AdoptionStageGate(t *testing.T) {
 	repo, artifactSrv := setupAllocate(t)

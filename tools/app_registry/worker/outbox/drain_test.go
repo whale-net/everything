@@ -19,7 +19,7 @@ import (
 // fakeStore is a minimal in-memory repository.WritebackRepository double,
 // scoped to exactly what Drainer needs -- ClaimBatch/MarkDone/MarkFailed.
 // The real atomicity/claim-locking guarantees are covered against real
-// Postgres in server/repository/postgres/postgres_integration_test.go; this
+// Postgres in server/repository/postgres/postgres_integration_promotion_test.go; this
 // fake exists only to observe what Drainer *does* with a claimed row.
 type doneCall struct {
 	WorkflowID string

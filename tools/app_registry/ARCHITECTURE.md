@@ -803,7 +803,7 @@ no way to represent "A was current, then wasn't, then was again" without
 either merging the two A-periods into one interval spanning B (wrong) or
 losing the second occurrence entirely. A separate history table represents
 A → B → A as three non-overlapping intervals in commit order, which is the
-truth; `postgres_integration_test.go`'s
+truth; `postgres_integration_app_test.go`'s
 `TestReconcile_AThenBThenAProducesThreeNonOverlappingIntervals_Postgres`
 proves this directly against real Postgres.
 
@@ -1892,7 +1892,7 @@ different, simpler mechanism than SCD2.
 *Is the deploy-time idempotency worry real?* **No — traced and verified with
 a real-Postgres regression test
 (`TestChartArtifact_CompositionPinnedAtRecordTime_SurvivesLaterReconcile`,
-`server/repository/postgres/postgres_integration_test.go`).** The chart
+`server/repository/postgres/postgres_integration_artifact_test.go`).** The chart
 → image lockfile mechanism built for AR-2c (see "Chart → image lockfile"
 above) already solves this, incidentally, for the exact case the issue
 raises:
