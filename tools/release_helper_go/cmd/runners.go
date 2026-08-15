@@ -3,8 +3,10 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 type realBazelRunner struct {
@@ -17,7 +19,14 @@ func (r *realBazelRunner) Run(args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	start := time.Now()
 	err := cmd.Run()
+	elapsed := time.Since(start)
+	subcommand, rest := "", []string{}
+	if len(args) > 0 {
+		subcommand, rest = args[0], args[1:]
+	}
+	fmt.Fprintf(os.Stderr, "bazel-timing: %s %v took %.1fs\n", subcommand, rest, elapsed.Seconds())
 	out := strings.TrimSpace(stdout.String())
 	if err != nil {
 		// Surface any stdout Bazel produced before failing (e.g. partial
