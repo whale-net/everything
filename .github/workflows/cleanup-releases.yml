@@ -38,12 +38,9 @@ jobs:
         with:
           fetch-depth: 0  # Fetch all history and tags
       
-      - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.8.5
-        with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
-          repository-cache: true
+      - name: Download release tools
+        id: download_tools
+        uses: ./.github/actions/download-release-tools
       
       - name: Configure Git
         run: |
@@ -57,7 +54,7 @@ jobs:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          bazel run //tools/release_helper_go:release_helper_go -- cleanup-releases \
+          "$RELEASE_HELPER" cleanup-releases \
             --keep-minor-versions ${{ inputs.keep_minor_versions }} \
             --min-age-days ${{ inputs.min_age_days }} \
             --dry-run \
@@ -70,7 +67,7 @@ jobs:
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          bazel run //tools/release_helper_go:release_helper_go -- cleanup-releases \
+          "$RELEASE_HELPER" cleanup-releases \
             --keep-minor-versions ${{ inputs.keep_minor_versions }} \
             --min-age-days ${{ inputs.min_age_days }} \
             --no-dry-run \
