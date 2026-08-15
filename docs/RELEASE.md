@@ -136,6 +136,29 @@ Versions must follow the `v{major}.{minor}.{patch}` format, with the special exc
 - **`latest` exception**: The `latest` tag can always be overwritten (main branch workflow)
 - **Override option**: Use `--allow-overwrite` flag for emergency situations with versioned releases (not recommended)
 
+### No-op Rebuild Detection (Digest-Idempotent Tagging)
+
+Before `release.yml` mints a new version tag for an app image or a helm
+chart, it compares the digest of what was just built against the digest
+the app/chart's most recent existing tag already points at (`docker buildx
+imagetools inspect` for images; the packaged `.tgz` for charts). Bazel's
+image builds are content-addressed, so a no-op rebuild — no source change
+since the app's last release, routine when a release batch rebuilds every
+app in a domain even though only one changed — produces a byte-identical
+digest. When that happens:
+
+- No new git tag is created; the existing tag is reused instead.
+- No App Registry recording happens for the "new" version (there is
+  nothing new to record).
+- This is reported via a `::notice::` in the job output, not silently.
+
+This exists because App Registry can never mark a duplicate-digest
+artifact `published` — see
+[`tools/app_registry/PLAN.md`](../tools/app_registry/PLAN.md) and issue
+[#617](https://github.com/whale-net/everything/issues/617) — so without
+this check, a no-op rebuild used to mint a real git tag and push a real
+image that App Registry could never resolve as promotable.
+
 ### Version Validation Commands
 
 ```bash
