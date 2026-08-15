@@ -7,11 +7,17 @@ set -euo pipefail
 # 3. Source-mode fallback and tool execution verification
 
 echo "=== Test 1: Pinned version file parsing ==="
-VERSION_FILE=".release-tools-version"
+if [ -n "${TEST_SRCDIR:-}" ]; then
+    VERSION_FILE="${TEST_SRCDIR}/_main/.release-tools-version"
+else
+    VERSION_FILE=".release-tools-version"
+fi
+
 if [ ! -f "$VERSION_FILE" ]; then
     echo "FAIL: $VERSION_FILE not found"
     exit 1
 fi
+
 
 HELPER_VER=$(grep 'release_helper_go:' "$VERSION_FILE" | awk '{print $2}')
 REGISTRY_VER=$(grep 'app_registry_cli:' "$VERSION_FILE" | awk '{print $2}')
@@ -48,19 +54,37 @@ else
 fi
 
 echo "=== Test 3: Binary execution test ==="
-# Test that release_helper_go and app-registry build from source can be invoked with --help
-echo "Building release tools from source..."
-bazel build //tools/release_helper_go:release_helper_go //tools/app_registry/cli:app-registry
+# Locate release_helper_go and app-registry binaries either via runfiles or bazel build
+HELPER_BIN=""
+REGISTRY_BIN=""
 
-BAZEL_BIN=$(bazel info bazel-bin)
-HELPER_BIN="$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go"
-REGISTRY_BIN="$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry"
+if [ -n "${TEST_SRCDIR:-}" ]; then
+    # Running inside Bazel test environment
+    HELPER_BIN="${TEST_SRCDIR}/_main/tools/release_helper_go/release_helper_go_/release_helper_go"
+    REGISTRY_BIN="${TEST_SRCDIR}/_main/tools/app_registry/cli/app-registry_/app-registry"
+else
+    # Running standalone outside Bazel
+    echo "Building release tools from source..."
+    bazel build //tools/release_helper_go:release_helper_go //tools/app_registry/cli:app-registry
+    BAZEL_BIN=$(bazel info bazel-bin)
+    HELPER_BIN="$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go"
+    REGISTRY_BIN="$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry"
+fi
 
 if [ ! -x "$HELPER_BIN" ] && [ -f "$HELPER_BIN" ]; then
     chmod +x "$HELPER_BIN"
 fi
 if [ ! -x "$REGISTRY_BIN" ] && [ -f "$REGISTRY_BIN" ]; then
     chmod +x "$REGISTRY_BIN"
+fi
+
+if [ ! -f "$HELPER_BIN" ]; then
+    echo "FAIL: $HELPER_BIN not found"
+    exit 1
+fi
+if [ ! -f "$REGISTRY_BIN" ]; then
+    echo "FAIL: $REGISTRY_BIN not found"
+    exit 1
 fi
 
 "$HELPER_BIN" --help > /dev/null
@@ -70,3 +94,4 @@ echo "PASS: release_helper_go binary executed successfully"
 echo "PASS: app-registry CLI executed successfully"
 
 echo "=== All download-release-tools tests passed ==="
+
