@@ -101,13 +101,9 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'app-registry-cli'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+    - name: Download release tools
+      id: download_tools
+      uses: ./.github/actions/download-release-tools
 
     # Read from *this job's* Environment secrets (scoped by `environment:`
     # above), never from repository secrets. See DEPLOY.md "Where each
@@ -144,7 +140,7 @@ jobs:
           ARGS+=(--dry-run)
         fi
 
-        bazel run --config=ci //tools/app_registry/cli:app-registry -- "${ARGS[@]}"
+        "$APP_REGISTRY_CLI" "${ARGS[@]}"
 
     - name: App Registry Auth
       if: inputs.action == 'rollback'
@@ -172,7 +168,7 @@ jobs:
           ARGS+=(--dry-run)
         fi
 
-        bazel run --config=ci //tools/app_registry/cli:app-registry -- "${ARGS[@]}"
+        "$APP_REGISTRY_CLI" "${ARGS[@]}"
 
     # No continue-on-error anywhere above: a failed promotion must fail the
     # job loudly, unlike the best-effort recording steps in release.yml.

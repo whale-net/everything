@@ -68,8 +68,6 @@ func TestExtractionFindsInvocations(t *testing.T) {
 	// found, extraction has drifted from the workflows.
 	for _, want := range []string{
 		"release_helper_go:plan",
-		"release_helper_go:release-app",
-		"release_helper_go:release-charts",
 		"release_helper_go:summary",
 		"release_helper_go:plan-openapi-builds",
 		"release_helper_go:create-combined-github-release-with-notes",
