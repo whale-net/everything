@@ -1,0 +1,27 @@
+// Package components holds daisyUI-based shell/chrome shared by every page
+// in this UI — this is the repo's first daisyUI adopter (see ../README.md
+// "Styling"). Screen-specific markup belongs in ../pages, not here.
+package components
+
+import "github.com/whale-net/everything/libs/go/htmxauth"
+
+// Shell wraps page content in the App Registry UI's navbar chrome. It shows
+// the signed-in user's identity so every screen — not just the placeholder
+// home page — makes "who am I" visible.
+templ Shell(title string, user *htmxauth.UserInfo) {
+	<div class="navbar bg-neutral text-neutral-content shadow-sm">
+		<div class="flex-1">
+			<a href="/" class="btn btn-ghost text-xl">App Registry</a>
+		</div>
+		<div class="flex-none">
+			if user != nil {
+				<span class="mr-2 text-sm opacity-90">{ user.PreferredUsername }</span>
+			}
+		</div>
+	</div>
+	<main class="min-h-screen bg-base-200 p-6">
+		<div class="mx-auto max-w-4xl space-y-6">
+			{ children... }
+		</div>
+	</main>
+}

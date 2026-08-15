@@ -37,6 +37,7 @@ cold; this file only indexes where things live.
 | [server/](server/) | gRPC server — `app-registry-api` |
 | [worker/](worker/) | Temporal worker — gitops writeback (`app-registry-worker`) |
 | [cli/](cli/) | Thin gRPC client — `app-registry` |
+| [ui/](ui/README.md) | HTMX admin UI — `app-registry-ui`. `ui/README.md` for structure/styling, `ui/ENV.md` for its own env vars |
 | [migrate/](migrate/) | Schema migrations — `app-registry-migration` |
 | [citest/](citest/) | Tests the CI ↔ CLI seam: extracts the real `app-registry ...` command lines from `.github/workflows`/`.github/actions` and validates them against the live cobra tree and an in-process server, in the canonical release ordering. Read this before changing a CLI flag, a workflow's App Registry step, or a composite action — a mismatch between them is exactly what this package exists to catch before merge. |
 | [Tiltfile](Tiltfile) | Local dev — `tilt up` from `tools/app_registry/` |

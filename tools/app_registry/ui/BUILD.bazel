@@ -1,0 +1,50 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "grpc_client.go",
+        "handlers_home.go",
+        "main.go",
+        "roles.go",
+        "templ_render.go",
+    ],
+    embedsrcs = ["themes.css"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//libs/go/logging",
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/ui/pages",
+        "@com_github_a_h_templ//:templ",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+go_binary(
+    name = "ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata. domain "app-registry" + name "ui" produces the
+# "app-registry-ui" image/app identity, matching server/BUILD.bazel's
+# "api" and migrate/BUILD.bazel's "migration" naming. Not yet added to
+# APP_REGISTRY_APPS in //tools/app_registry:BUILD.bazel — chart/ingress
+# wiring is deployment integration, left to a later issue on this plan.
+release_app(
+    name = "ui",
+    app_type = "external-api",
+    binary_name = ":ui",
+    description = "HTMX-based admin UI for the App Registry (records promotions; never deploys — NFR-1)",
+    domain = "app-registry",
+    language = "go",
+    port = 8000,
+)

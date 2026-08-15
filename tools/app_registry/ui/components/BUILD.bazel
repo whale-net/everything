@@ -1,0 +1,10 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "components",
+    srcs = glob(["*.templ"]),
+    visibility = ["//tools/app_registry/ui:__subpackages__"],
+    deps = [
+        "//libs/go/htmxauth",
+    ],
+)

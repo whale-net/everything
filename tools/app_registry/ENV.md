@@ -3,6 +3,8 @@
 > All environment variables read by `app-registry-api`,
 > `app-registry-migration`, and `app-registry-worker`.
 >
+> `app-registry-ui` has its own env vars — see [`ui/ENV.md`](ui/ENV.md).
+>
 > **AR-4a** added `libs/go/temporal` (client/worker bootstrap) and a
 > Temporal dev server in Tilt. **AR-4b** adds the first real consumer:
 > `app-registry-worker`, which drains `writeback_outbox` and runs
