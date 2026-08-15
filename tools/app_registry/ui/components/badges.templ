@@ -1,0 +1,84 @@
+package components
+
+import (
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+)
+
+// This file is the single source of truth (NFR-11) for the badge colour +
+// label pair of every promotability, artifact-state, and provenance value.
+// No screen may define a second, inline mapping of any of these — import
+// and reuse PromotabilityBadge / ArtifactStateBadge / ProvenanceBadge
+// instead. Colours map through daisyUI 5 semantic classes, themed by
+// tools/wireframe/themes.css (NFR-10).
+
+// promotabilityLabel returns the display label + daisyUI badge modifier
+// class for p. A VIA_CHART promotion is deliberately a distinct colour from
+// PROMOTABLE — it is a legal promotion target, but reaching it directly
+// instead of through its owning chart is recorded as an override.
+func promotabilityLabel(p pb.Promotability) (label, class string) {
+	switch p {
+	case pb.Promotability_PROMOTABILITY_PROMOTABLE:
+		return "Promotable", "badge-success"
+	case pb.Promotability_PROMOTABILITY_VIA_CHART:
+		return "Via chart", "badge-info"
+	case pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE:
+		return "Not promotable", "badge-neutral"
+	default:
+		// Never render an unknown/partial state as healthy (NFR-6).
+		return "Unknown", "badge-warning"
+	}
+}
+
+// artifactStateLabel returns the display label + daisyUI badge modifier
+// class for s, per the AR-7b lifecycle (allocated -> publishing ->
+// published; failed is terminal-but-distinct).
+func artifactStateLabel(s pb.ArtifactState) (label, class string) {
+	switch s {
+	case pb.ArtifactState_ARTIFACT_STATE_ALLOCATED:
+		return "Allocated", "badge-neutral"
+	case pb.ArtifactState_ARTIFACT_STATE_PUBLISHING:
+		return "Publishing", "badge-info"
+	case pb.ArtifactState_ARTIFACT_STATE_PUBLISHED:
+		return "Published", "badge-success"
+	case pb.ArtifactState_ARTIFACT_STATE_FAILED:
+		return "Failed", "badge-error"
+	default:
+		return "Unknown", "badge-warning"
+	}
+}
+
+// provenanceLabel returns the display label + daisyUI badge modifier class
+// for p. ADOPTED must be visually tagged on every screen an artifact
+// appears on (FR-33), not just an audit screen — callers must render
+// ProvenanceBadge wherever an artifact is shown, not only in audit views.
+func provenanceLabel(p pb.ArtifactProvenance) (label, class string) {
+	switch p {
+	case pb.ArtifactProvenance_ARTIFACT_PROVENANCE_OBSERVED:
+		return "Observed", "badge-ghost"
+	case pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED:
+		return "Adopted", "badge-warning"
+	default:
+		return "Unknown", "badge-warning"
+	}
+}
+
+// PromotabilityBadge is the one place promotability renders anywhere in
+// this UI.
+templ PromotabilityBadge(p pb.Promotability) {
+	{{ label, class := promotabilityLabel(p) }}
+	<span class={ "badge", class }>{ label }</span>
+}
+
+// ArtifactStateBadge is the one place artifact state renders anywhere in
+// this UI.
+templ ArtifactStateBadge(s pb.ArtifactState) {
+	{{ label, class := artifactStateLabel(s) }}
+	<span class={ "badge", class }>{ label }</span>
+}
+
+// ProvenanceBadge is the one place artifact provenance renders anywhere in
+// this UI. Render it next to every artifact, not only on the audit screen.
+templ ProvenanceBadge(p pb.ArtifactProvenance) {
+	{{ label, class := provenanceLabel(p) }}
+	<span class={ "badge", class }>{ label }</span>
+}

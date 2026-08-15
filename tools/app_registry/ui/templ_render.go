@@ -5,11 +5,14 @@ import (
 	_ "embed"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
 
 	"github.com/a-h/templ"
 
+	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxbase"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
 
 // themesCSS is a synced copy of tools/wireframe/themes.css — Go's //go:embed
@@ -32,6 +35,15 @@ var themesCSS string
 // and the themes.css <style> live in CustomHead (which renders last), in
 // that exact order. Never split them across CustomCSS/CustomHead.
 func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component templ.Component) error {
+	// FR-59: log the misconfiguration at error level on every render, in
+	// addition to components.MisconfigBanner's on-page banner (rendered by
+	// Shell for every screen) — derived from the loaded session user, not
+	// from auth middleware, so AUTH_MODE=none never false-positives here
+	// (see components.RolesMisconfigured).
+	if user := htmxauth.GetUser(r.Context()); components.RolesMisconfigured(user) {
+		log.Printf("ERROR: FR-59 misconfiguration: realm_access.roles claim absent for user %q — likely a missing Keycloak \"Add to ID token\" realm-roles mapper", user.Sub)
+	}
+
 	var buf bytes.Buffer
 	if err := component.Render(r.Context(), &buf); err != nil {
 		return err

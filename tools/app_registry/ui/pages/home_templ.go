@@ -86,7 +86,7 @@ func Home(user *htmxauth.UserInfo, environments []*pb.Environment) templ.Compone
 					return templ_7745c5c3_Err
 				}
 				if user.Roles == nil {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<p class=\"text-warning\">No realm_access.roles claim on this session — likely a Keycloak client-scope misconfiguration (FR-59).</p>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "<p class=\"text-base-content/70\">See the misconfiguration banner above (FR-59).</p>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
@@ -108,7 +108,7 @@ func Home(user *htmxauth.UserInfo, environments []*pb.Environment) templ.Compone
 						var templ_7745c5c3_Var4 string
 						templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(role)
 						if templ_7745c5c3_Err != nil {
-							return templ.Error{Err: templ_7745c5c3_Err, FileName: `tools/app_registry/ui/pages/home.templ`, Line: 36, Col: 48}
+							return templ.Error{Err: templ_7745c5c3_Err, FileName: `tools/app_registry/ui/pages/home.templ`, Line: 35, Col: 48}
 						}
 						_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 						if templ_7745c5c3_Err != nil {
@@ -147,7 +147,7 @@ func Home(user *htmxauth.UserInfo, environments []*pb.Environment) templ.Compone
 					var templ_7745c5c3_Var5 string
 					templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(env.GetKey())
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `tools/app_registry/ui/pages/home.templ`, Line: 56, Col: 46}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `tools/app_registry/ui/pages/home.templ`, Line: 55, Col: 46}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 					if templ_7745c5c3_Err != nil {
@@ -160,7 +160,7 @@ func Home(user *htmxauth.UserInfo, environments []*pb.Environment) templ.Compone
 					var templ_7745c5c3_Var6 string
 					templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(env.GetDisplayName())
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `tools/app_registry/ui/pages/home.templ`, Line: 57, Col: 45}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `tools/app_registry/ui/pages/home.templ`, Line: 56, Col: 45}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 					if templ_7745c5c3_Err != nil {

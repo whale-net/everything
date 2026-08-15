@@ -19,6 +19,14 @@ import "github.com/whale-net/everything/libs/go/htmxauth"
 // Shell wraps page content in the App Registry UI's navbar chrome. It shows
 // the signed-in user's identity so every screen — not just the placeholder
 // home page — makes "who am I" visible.
+//
+// Nav deliberately keeps "Environments" (configuration, screen 09) and
+// "Deployments" (state, screen 10) as two separate items rather than one
+// combined entry (FR-2) — they answer different questions ("what's the
+// pair topology / config" vs. "what's actually deployed right now").
+//
+// MisconfigBanner renders here, once, so every screen gets the FR-59
+// banner for free instead of each page having to remember to include it.
 func Shell(title string, user *htmxauth.UserInfo) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -40,7 +48,7 @@ func Shell(title string, user *htmxauth.UserInfo) templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"navbar bg-neutral text-neutral-content shadow-sm\"><div class=\"flex-1\"><a href=\"/\" class=\"btn btn-ghost text-xl\">App Registry</a></div><div class=\"flex-none\">")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<div class=\"navbar bg-neutral text-neutral-content shadow-sm\"><div class=\"flex-1 flex items-center gap-4\"><a href=\"/\" class=\"btn btn-ghost text-xl\">App Registry</a><ul class=\"menu menu-horizontal px-1\"><li><a href=\"/environments\">Environments</a></li><li><a href=\"/deployments\">Deployments</a></li></ul></div><div class=\"flex-none\">")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -52,7 +60,7 @@ func Shell(title string, user *htmxauth.UserInfo) templ.Component {
 			var templ_7745c5c3_Var2 string
 			templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(user.PreferredUsername)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `tools/app_registry/ui/components/layout.templ`, Line: 18, Col: 66}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `tools/app_registry/ui/components/layout.templ`, Line: 30, Col: 66}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 			if templ_7745c5c3_Err != nil {
@@ -64,6 +72,10 @@ func Shell(title string, user *htmxauth.UserInfo) templ.Component {
 			}
 		}
 		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "</div></div><main class=\"min-h-screen bg-base-200 p-6\"><div class=\"mx-auto max-w-4xl space-y-6\">")
+		if templ_7745c5c3_Err != nil {
+			return templ_7745c5c3_Err
+		}
+		templ_7745c5c3_Err = MisconfigBanner(user).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

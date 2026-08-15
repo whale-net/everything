@@ -12,11 +12,16 @@ deliberately differs from `manmanv2/ui`'s Tailwind-only approach.
 tools/app_registry/ui/
   main.go            # config (env vars only), App wiring, HTTP server, graceful shutdown
   grpc_client.go      # typed app-registry-api client forwarding the user's own token
-  roles.go            # HasRole: literal, presentation-only role membership check
-  templ_render.go     # wraps a templ.Component in libs/go/htmxbase's layout
+  templ_render.go     # wraps a templ.Component in libs/go/htmxbase's layout; also logs FR-59
   handlers_home.go    # the one placeholder authenticated screen
   themes.css           # synced copy of tools/wireframe/themes.css (see below)
-  components/          # shared chrome (navbar shell)
+  components/          # shared chrome, vocabulary, and role-gate helpers (see "Design system")
+    layout.templ         # Shell: navbar, nav items, FR-59 banner slot
+    badges.templ          # PromotabilityBadge / ArtifactStateBadge / ProvenanceBadge — the one definition of each
+    digest.templ           # DigestDisplay: truncated + copyable digest, shown alongside version
+    banner.templ            # MisconfigBanner: the FR-59 persistent banner
+    gate.templ               # GatedAction: standard "unavailable action" rendering
+    roles.go                  # HasRole, EnvironmentPromoterRole(s), RolesMisconfigured, Gate
   pages/                # screen-level templ components
 ```
 
@@ -30,7 +35,7 @@ fails startup with a message naming the table and the migration that owns
 it (`tools/app_registry/migrate/schema/migrations/011_ui_sessions.up.sql`).
 
 `AUTH_MODE=none` runs without Keycloak; the developer is treated as
-holding every role (`htmxauth.AllRoles` sentinel). See `ENV.md`.
+holding every role (`htmxauth.AllRoles` sentinel). See `../ENV.md`.
 
 ## gRPC
 
@@ -43,11 +48,78 @@ storage — it never issues SQL against registry domain tables.
 ## Roles
 
 `libs/go/htmxauth` surfaces the session's realm roles on `UserInfo.Roles`.
-`roles.go`'s `HasRole` is a literal-membership check — no role implies
-another, matching `tools/app_registry/server/auth`'s enforcement-side
-design. This check is presentation-only; the server (`libs/go/grpcauth`,
-`tools/app_registry/server/auth`) remains the sole enforcement path
-(NFR-14).
+`components/roles.go`'s `HasRole` is a literal-membership check — no role
+implies another, matching `tools/app_registry/server/auth`'s
+enforcement-side design. This check is presentation-only; the server
+(`libs/go/grpcauth`, `tools/app_registry/server/auth`) remains the sole
+enforcement path (NFR-14).
+
+`EnvironmentPromoterRole(envKey)` derives the per-environment promoter role
+(`app-registry-promoter-<environment_key>`) — always call it with a key
+from a live `ListEnvironments` result (`EnvironmentPromoterRoles` does this
+for a whole response), never a hardcoded dev/stage/prod list, since
+environments are operator-defined data.
+
+`Gate(user, role)` returns a `GateDecision{Allowed, MissingRole}`. Screens
+render denied actions with `components.GatedAction` (disabled, with the
+missing role named) or omit them outright — never as an enabled control
+guaranteed to be denied (FR-44).
+
+## Design system (NFR-10, NFR-11)
+
+`components/` is the single source of truth for the value vocabulary every
+screen reuses — no screen may define a second, inline badge mapping:
+
+- **`badges.templ`**: one colour + label per `Promotability`,
+  `ArtifactState`, and `ArtifactProvenance` value. `ProvenanceBadge` must be
+  rendered next to every artifact shown on any screen, not only an audit
+  screen — `ADOPTED` is a visually distinct badge from `OBSERVED` (FR-33).
+  `VIA_CHART` promotability is a visually distinct colour from
+  `PROMOTABLE` — a `VIA_CHART` promotion is a legal but different kind of
+  promotion (direct-vs-through-chart), not a lesser one.
+- **`digest.templ`**: `DigestDisplay(version, digest)` is the one place a
+  digest renders anywhere "what's deployed" is shown — truncated for
+  density, full value on hover (`title`) and via a one-click copy button
+  (NFR-4).
+- **`banner.templ`**: `MisconfigBanner` — see "FR-59 misconfiguration
+  banner" below.
+- **`gate.templ`**: `GatedAction` — see "Roles" above.
+
+**Density convention:** troubleshooting screens (artifact/promotion audit,
+run logs) use dense monospace tables — pack information, minimize
+whitespace, favour `DigestDisplay`'s truncated form. Calm-day screens
+(dashboard, deployments) use daisyUI cards with generous spacing —
+`components.Shell`'s default `max-w-4xl space-y-6` wrapper is that calm-day
+baseline; a troubleshooting screen should widen the container and drop the
+vertical `space-y` rhythm rather than reuse the card-per-section layout.
+
+Badge/status colours map through daisyUI 5 semantic classes (`badge-
+success`, `badge-error`, etc.), themed by `tools/wireframe/themes.css` (see
+"Styling" below) — never a raw hex colour or a Tailwind colour utility, so
+a theme change updates every badge for free.
+
+## FR-59 misconfiguration banner
+
+`components.RolesMisconfigured(user)` distinguishes:
+
+- **roles claim absent** (`user.Roles == nil`) — almost always a deployment
+  misconfiguration (missing Keycloak "Add to ID token" realm-roles mapper).
+  `components.MisconfigBanner` renders a persistent, explicit error banner
+  naming the probable cause on **every** screen (it's rendered once, inside
+  `components.Shell`), `templ_render.go`'s `RenderTempl` logs it at error
+  level on every render, and every read screen still renders underneath the
+  banner — an admin can diagnose without being locked out. This must never
+  render as a read-only session.
+- **roles claim present but empty** (`user.Roles != nil, len == 0`) — a
+  legitimate read-only viewer. No banner.
+
+**Trap (do not rediscover):** this is derived from the loaded
+session/`UserInfo` record at render time, not from auth middleware.
+`AuthModeNone` short-circuits inside the authenticator
+(`libs/go/htmxauth/auth.go:158`, `:206`) and sets `Roles` to the non-nil
+`AllRoles` sentinel, so deriving the check from the loaded record (as
+`RolesMisconfigured` does) gets the `AUTH_MODE=none` exemption for free —
+no separate mode branch needed here.
 
 ## Styling
 
@@ -70,7 +142,9 @@ design. This check is presentation-only; the server (`libs/go/grpcauth`,
 ## Generated templ files
 
 Like `manmanv2/ui`, this package **commits** the generated `*_templ.go`
-files (`components/layout_templ.go`, `pages/home_templ.go`) alongside their
+files (`components/layout_templ.go`, `components/badges_templ.go`,
+`components/digest_templ.go`, `components/banner_templ.go`,
+`components/gate_templ.go`, `pages/home_templ.go`) alongside their
 `.templ` sources, for IDE/`gopls` support without invoking Bazel. Bazel
 itself regenerates these files at build time via the `templ_library` macro
 (`tools/templ.bzl`) regardless of what's checked in — the committed copies
@@ -88,4 +162,4 @@ REGISTRY_API_URL=localhost:50051
 PG_DATABASE_URL=postgres://user:pass@localhost:5432/app_registry?sslmode=disable
 ```
 
-See `ENV.md` for the full variable list.
+See `../ENV.md` for the full variable list.

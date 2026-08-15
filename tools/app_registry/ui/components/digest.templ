@@ -1,0 +1,53 @@
+package components
+
+import "strings"
+
+// digestTruncated shortens a "sha256:<64 hex chars>" digest to a dense,
+// scannable prefix ("sha256:abcdef012345…") for table density (NFR-10),
+// while DigestDisplay still carries the full value for copy/expand.
+func digestTruncated(digest string) string {
+	const prefix = "sha256:"
+	if !strings.HasPrefix(digest, prefix) {
+		if len(digest) <= 19 {
+			return digest
+		}
+		return digest[:19] + "…"
+	}
+	hash := digest[len(prefix):]
+	if len(hash) <= 12 {
+		return digest
+	}
+	return prefix + hash[:12] + "…"
+}
+
+// copyDigest is a templ script template: a self-contained JS function templ
+// generates and dedupes across every call site, so DigestDisplay needs no
+// hand-written inline-script wiring (and no new client-side JS dependency —
+// this stays within the CDN Tailwind/daisyUI-only toolchain, NFR-20).
+script copyDigest(digest string) {
+	navigator.clipboard.writeText(digest);
+}
+
+// DigestDisplay is the one place a digest renders anywhere "what's
+// deployed" is shown, alongside its version (NFR-4). It shows a truncated
+// digest for density but keeps the full value available on hover
+// (title attribute, works everywhere with zero JS) and via a copy-to-
+// clipboard button so an admin never has to fall back to view-source to
+// get the real value.
+templ DigestDisplay(version string, digest string) {
+	<span class="inline-flex items-center gap-1 font-mono text-sm">
+		if version != "" {
+			<span>{ version }</span>
+			<span class="opacity-50">{ "@" }</span>
+		}
+		<span title={ digest }>{ digestTruncated(digest) }</span>
+		<button
+			type="button"
+			class="btn btn-ghost btn-xs px-1"
+			title="Copy full digest"
+			onclick={ copyDigest(digest) }
+		>
+			⧉
+		</button>
+	</span>
+}

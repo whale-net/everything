@@ -24,9 +24,8 @@ templ Home(user *htmxauth.UserInfo, environments []*pb.Environment) {
 					<p><span class="font-semibold">User:</span> { user.PreferredUsername }</p>
 					<p class="mt-2 font-semibold">Roles</p>
 					if user.Roles == nil {
-						<p class="text-warning">
-							No realm_access.roles claim on this session — likely a
-							Keycloak client-scope misconfiguration (FR-59).
+						<p class="text-base-content/70">
+							See the misconfiguration banner above (FR-59).
 						</p>
 					} else if len(user.Roles) == 0 {
 						<p class="text-base-content/70">No roles assigned (read-only viewer).</p>

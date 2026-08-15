@@ -3,8 +3,10 @@ load("//tools:templ.bzl", "templ_library")
 templ_library(
     name = "components",
     srcs = glob(["*.templ"]),
+    go_srcs = ["roles.go"],
     visibility = ["//tools/app_registry/ui:__subpackages__"],
     deps = [
         "//libs/go/htmxauth",
+        "//tools/app_registry/protos:appregistrypb",
     ],
 )
