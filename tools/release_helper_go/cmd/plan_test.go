@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -31,8 +32,8 @@ func TestPlanInvalidFormat(t *testing.T) {
 	}
 }
 
-func TestPlanMutuallyExclusiveVersionAndMinor(t *testing.T) {
-	_, stderr, err := runTest([]string{"plan", "--event-type", "workflow_dispatch", "--version", "v1.0.0", "--increment-minor"})
+func TestPlanMutuallyExclusiveVersionAndMajor(t *testing.T) {
+	_, stderr, err := runTest([]string{"plan", "--event-type", "workflow_dispatch", "--version", "v1.0.0", "--increment-major"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -41,8 +42,8 @@ func TestPlanMutuallyExclusiveVersionAndMinor(t *testing.T) {
 	}
 }
 
-func TestPlanMutuallyExclusiveVersionAndPatch(t *testing.T) {
-	_, stderr, err := runTest([]string{"plan", "--event-type", "workflow_dispatch", "--version", "v1.0.0", "--increment-patch"})
+func TestPlanMutuallyExclusiveMajorAndMinor(t *testing.T) {
+	_, stderr, err := runTest([]string{"plan", "--event-type", "workflow_dispatch", "--increment-major", "--increment-minor"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -51,13 +52,41 @@ func TestPlanMutuallyExclusiveVersionAndPatch(t *testing.T) {
 	}
 }
 
-func TestPlanMutuallyExclusiveMinorAndPatch(t *testing.T) {
-	_, stderr, err := runTest([]string{"plan", "--event-type", "workflow_dispatch", "--increment-minor", "--increment-patch"})
+func TestPlanMutuallyExclusiveMajorAndPatch(t *testing.T) {
+	_, stderr, err := runTest([]string{"plan", "--event-type", "workflow_dispatch", "--increment-major", "--increment-patch"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if !strings.Contains(stderr, "mutually exclusive") {
 		t.Errorf("want 'mutually exclusive' in stderr, got: %q", stderr)
+	}
+}
+
+func TestPlanMissingVersionOptionWorkflowDispatch(t *testing.T) {
+	_, stderr, err := runTest([]string{"plan", "--event-type", "workflow_dispatch", "--apps", "all"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(stderr, "manual releases require --version, --increment-major, --increment-minor, or --increment-patch") {
+		t.Errorf("want missing version option error, got: %q", stderr)
+	}
+}
+
+func TestPlanInvalidSemver(t *testing.T) {
+	_, stderr, err := runTest([]string{"plan", "--event-type", "workflow_dispatch", "--apps", "all", "--version", "1.0.0"})
+	if err == nil {
+		t.Fatal("expected error for version missing 'v' prefix")
+	}
+	if !strings.Contains(stderr, "does not follow semantic versioning") {
+		t.Errorf("want semver error in stderr, got: %q", stderr)
+	}
+
+	_, stderr, err = runTest([]string{"plan", "--event-type", "workflow_dispatch", "--apps", "all", "--version", "invalid"})
+	if err == nil {
+		t.Fatal("expected error for non-semver version")
+	}
+	if !strings.Contains(stderr, "does not follow semantic versioning") {
+		t.Errorf("want semver error in stderr, got: %q", stderr)
 	}
 }
 
@@ -317,6 +346,8 @@ func TestIncrementVersion(t *testing.T) {
 		incrementType string
 		want          string
 	}{
+		{"v1.2.3", "major", "v2.0.0"},
+		{"v0.1.0", "major", "v1.0.0"},
 		{"v1.2.3", "minor", "v1.3.0"},
 		{"v1.2.3", "patch", "v1.2.4"},
 		{"v0.0.0", "minor", "v0.1.0"},
@@ -332,6 +363,19 @@ func TestIncrementVersion(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("incrementVersion(%q, %q) = %q, want %q", tt.input, tt.incrementType, got, tt.want)
 		}
+	}
+}
+
+func TestAutoIncrementVersionMajor(t *testing.T) {
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--sort"}, output: "demo-hello-go.v1.3.0\ndemo-hello-go.v1.2.0"},
+	)
+	ver, err := autoIncrementVersion("demo", "hello-go", "major", git)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ver != "v2.0.0" {
+		t.Errorf("got %q, want %q", ver, "v2.0.0")
 	}
 }
 
@@ -358,6 +402,32 @@ func TestAutoIncrementVersionWithTags(t *testing.T) {
 	}
 	if ver != "v1.3.1" {
 		t.Errorf("got %q, want %q", ver, "v1.3.1")
+	}
+}
+
+func TestPlanReleaseWorkflowDispatchIncrementMajor(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--sort"}, output: "manmanv2-control-api.v1.2.3"},
+	)
+
+	result, err := planRelease(planParams{
+		eventType:      "workflow_dispatch",
+		requestedApps:  "control-api",
+		incrementMajor: true,
+		bazel:          bazel,
+		git:            git,
+		fs:             fs,
+		workspaceRoot:  fakeWorkspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Apps) != 1 || result.Apps[0] != "manmanv2-control-api" {
+		t.Fatalf("expected [manmanv2-control-api], got %v", result.Apps)
+	}
+	if result.Versions["manmanv2-control-api"] != "v2.0.0" {
+		t.Errorf("expected version v2.0.0, got %s", result.Versions["manmanv2-control-api"])
 	}
 }
 
@@ -436,6 +506,30 @@ func TestPlanTypedValidationErrors(t *testing.T) {
 	}
 	if !errors.As(err, &valErr) || valErr.Field != "version_options" {
 		t.Errorf("expected version_options validation error, got %v", err)
+	}
+
+	_, _, err = runTest([]string{"plan", "--event-type", "workflow_dispatch", "--apps", "all", "--format", "yaml"})
+	if err == nil {
+		t.Fatal("expected error for format")
+	}
+	if !errors.As(err, &valErr) || valErr.Field != "format" {
+		t.Errorf("expected format validation error, got %v", err)
+	}
+
+	_, _, err = runTest([]string{"plan", "--event-type", "workflow_dispatch", "--apps", "all"})
+	if err == nil {
+		t.Fatal("expected error for missing version option")
+	}
+	if !errors.As(err, &valErr) || valErr.Field != "version_options" {
+		t.Errorf("expected version_options validation error, got %v", err)
+	}
+
+	_, _, err = runTest([]string{"plan", "--event-type", "workflow_dispatch", "--apps", "all", "--version", "bad-ver"})
+	if err == nil {
+		t.Fatal("expected error for invalid version")
+	}
+	if !errors.As(err, &valErr) || valErr.Field != "version" {
+		t.Errorf("expected version validation error, got %v", err)
 	}
 }
 
@@ -664,4 +758,107 @@ func TestPlanDryRunAndSkipRegistry(t *testing.T) {
 		t.Errorf("expected 0 registry calls during skip registry")
 	}
 }
+
+// ── CLI Matrix Generation Tests ──────────────────────────────────────────────
+
+func TestPlanCmd_MatrixJSONOutput(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit()
+
+	withFS(fs, func() {
+		withBazel(bazel, func() {
+			withGit(git, func() {
+				withWorkspace(fakeWorkspaceRoot, func() {
+					stdout, stderr, err := runTest([]string{
+						"plan",
+						"--event-type", "workflow_dispatch",
+						"--apps", "control-api",
+						"--version", "v1.0.0",
+						"--format", "json",
+						"--dry-run",
+					})
+					if err != nil {
+						t.Fatalf("unexpected error: %v (stderr: %s)", err, stderr)
+					}
+
+					var res PlanResult
+					if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+						t.Fatalf("failed to unmarshal plan JSON output %q: %v", stdout, err)
+					}
+
+					if len(res.Apps) != 1 || res.Apps[0] != "manmanv2-control-api" {
+						t.Errorf("expected Apps [manmanv2-control-api], got %v", res.Apps)
+					}
+					if res.Version == nil || *res.Version != "v1.0.0" {
+						t.Errorf("expected Version 'v1.0.0', got %v", res.Version)
+					}
+					if res.EventType != "workflow_dispatch" {
+						t.Errorf("expected EventType 'workflow_dispatch', got %q", res.EventType)
+					}
+					if res.Matrix == nil {
+						t.Fatal("expected matrix in JSON output")
+					}
+					include, ok := res.Matrix["include"].([]interface{})
+					if !ok || len(include) != 1 {
+						t.Fatalf("expected 1 item in matrix include, got %+v", res.Matrix["include"])
+					}
+					item := include[0].(map[string]interface{})
+					if item["app"] != "control-api" || item["domain"] != "manmanv2" || item["version"] != "v1.0.0" {
+						t.Errorf("unexpected matrix item: %+v", item)
+					}
+				})
+			})
+		})
+	})
+}
+
+func TestPlanCmd_MatrixGitHubOutput(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit()
+
+	withFS(fs, func() {
+		withBazel(bazel, func() {
+			withGit(git, func() {
+				withWorkspace(fakeWorkspaceRoot, func() {
+					stdout, stderr, err := runTest([]string{
+						"plan",
+						"--event-type", "workflow_dispatch",
+						"--apps", "control-api",
+						"--version", "v1.0.0",
+						"--format", "github",
+						"--dry-run",
+					})
+					if err != nil {
+						t.Fatalf("unexpected error: %v (stderr: %s)", err, stderr)
+					}
+
+					lines := strings.Split(strings.TrimSpace(stdout), "\n")
+					outputMap := make(map[string]string)
+					for _, line := range lines {
+						parts := strings.SplitN(line, "=", 2)
+						if len(parts) == 2 {
+							outputMap[parts[0]] = parts[1]
+						}
+					}
+
+					if outputMap["apps"] != "manmanv2-control-api" {
+						t.Errorf("expected apps=manmanv2-control-api, got %q", outputMap["apps"])
+					}
+					if outputMap["version"] != "v1.0.0" {
+						t.Errorf("expected version=v1.0.0, got %q", outputMap["version"])
+					}
+					if outputMap["matrix"] == "" {
+						t.Errorf("expected non-empty matrix output, got %q", outputMap["matrix"])
+					}
+
+					var matrixObj map[string]interface{}
+					if err := json.Unmarshal([]byte(outputMap["matrix"]), &matrixObj); err != nil {
+						t.Fatalf("failed to parse matrix JSON string: %v", err)
+					}
+				})
+			})
+		})
+	})
+}
+
 

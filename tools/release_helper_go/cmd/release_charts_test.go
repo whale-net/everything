@@ -463,3 +463,124 @@ func TestReleaseChartsCmd_CLIExecution(t *testing.T) {
 	}
 }
 
+func TestExecuteReleaseCharts_HermeticityRegistryError_Proceeds(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	artClient := NewFakeArtifactRegistryClient()
+
+	fakeHermeticity := &fakeHermeticityChecker{
+		err: fmt.Errorf("registry connection refused"),
+	}
+
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+			Charts:         "demo-hello-fastapi",
+			Version:        "v0.2.0",
+			BuildID:        "build-999",
+			ChartRepoURL:   "https://charts.whalenet.dev",
+			Bazel:          bazel,
+			Git:            git,
+			Docker:         docker,
+			FS:             fs,
+			Packager:       packager,
+			Uploader:       uploader,
+			Hermeticity:    fakeHermeticity,
+			WorkspaceRoot:  workspaceRoot,
+			ArtifactClient: artClient,
+		})
+		if err != nil {
+			t.Fatalf("expected release to proceed despite hermeticity registry error, got: %v", err)
+		}
+		if len(res.Charts) != 1 || !res.Charts[0].Published {
+			t.Errorf("expected chart to be published, got %+v", res.Charts)
+		}
+	})
+}
+
+func TestExecuteReleaseCharts_BazelBuildFailure(t *testing.T) {
+	_, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+
+	chartQueryOutput := "//demo:hello-fastapi_chart_metadata"
+	chartCqueryOutput := "//demo:hello-fastapi_chart_metadata\t{\"name\":\"helm-demo-hello-fastapi\",\"domain\":\"demo\",\"apps\":[\"hello-fastapi\"],\"namespace\":\"demo\",\"environment\":\"production\"}"
+	appQueryOutput := "//demo/hello_fastapi:hello-fastapi_metadata"
+	appCqueryOutput := "//demo/hello_fastapi:hello-fastapi_metadata\t" + string(sampleMetaJSON("hello-fastapi", "demo"))
+
+	failingBazel := newFakeBazel(
+		fakeBazelCall{argsContain: []string{"query", "kind(helm_chart_metadata"}, output: chartQueryOutput},
+		fakeBazelCall{argsContain: []string{"cquery", "hello-fastapi_chart_metadata"}, output: chartCqueryOutput},
+		fakeBazelCall{argsContain: []string{"query", "kind(app_metadata"}, output: appQueryOutput},
+		fakeBazelCall{argsContain: []string{"cquery", "hello-fastapi_metadata"}, output: appCqueryOutput},
+		fakeBazelCall{argsContain: []string{"build"}, err: fmt.Errorf("helm_chart target build failed")},
+	)
+
+	_, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:        "demo-hello-fastapi",
+		Version:       "v0.2.0",
+		ChartRepoURL:  "https://charts.whalenet.dev",
+		Bazel:         failingBazel,
+		Git:           git,
+		Docker:        docker,
+		FS:            fs,
+		Packager:      packager,
+		Uploader:      uploader,
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "helm_chart target build failed") {
+		t.Errorf("expected bazel build error, got: %v", err)
+	}
+	if packager.calls != 0 {
+		t.Errorf("expected 0 packager calls on build failure, got %d", packager.calls)
+	}
+}
+
+func TestExecuteReleaseCharts_PackagerFailure(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	failingPackager := &fakeHelmPackager{packageErr: fmt.Errorf("chart packaging error")}
+
+	_, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:        "demo-hello-fastapi",
+		Version:       "v0.2.0",
+		ChartRepoURL:  "https://charts.whalenet.dev",
+		Bazel:         bazel,
+		Git:           git,
+		Docker:        docker,
+		FS:            fs,
+		Packager:      failingPackager,
+		Uploader:      uploader,
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "chart packaging error") {
+		t.Errorf("expected packager error, got: %v", err)
+	}
+	if uploader.uploadCalls != 0 {
+		t.Errorf("expected 0 uploader calls on packaging failure, got %d", uploader.uploadCalls)
+	}
+}
+
+func TestExecuteReleaseCharts_NonExistentChart(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+
+	_, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:        "nonexistent-chart-xyz",
+		Version:       "v0.2.0",
+		ChartRepoURL:  "https://charts.whalenet.dev",
+		Bazel:         bazel,
+		Git:           git,
+		Docker:        docker,
+		FS:            fs,
+		Packager:      packager,
+		Uploader:      uploader,
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err == nil || !strings.Contains(err.Error(), "no helm charts matched") {
+		t.Errorf("expected no matched charts error, got: %v", err)
+	}
+}
+
+
