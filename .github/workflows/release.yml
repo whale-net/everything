@@ -323,6 +323,7 @@ jobs:
       - name: Create GitHub releases for all apps
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATRIX: ${{ steps.matrix-override.outputs.matrix }}
         run: |
           APPS=$(echo '${{ steps.matrix-override.outputs.matrix }}' | jq -r '.include[] | "\(.domain)-\(.app)"' | paste -sd, -)
           if [[ -n "$APPS" ]]; then
