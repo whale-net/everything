@@ -2,6 +2,8 @@
 
 Shared conventions all `project-manager` personas follow. Everything lives in GitHub — no external tracker. Personas interact via `gh` CLI (Bash): Issues for the root plan, a **Discussion** for intake, and a **Project (v2)** board for task tracking. `OWNER` below is this repo's org, `whale-net` (repo `whale-net/everything`).
 
+**This is the canonical reference, not required reading for every dispatch.** Each persona's own agent file (`tools/project-manager/agents/*.md`) inlines the mechanics it needs for routine execution, so a subagent shouldn't normally need to open this doc. It exists for: (a) mechanics too infrequently exercised or too easy to typo to duplicate safely (e.g. the Project field GraphQL mutation), and (b) as the fallback when a persona hits a situation its own file doesn't cover. The inlined copies can drift from this doc over time — that's an accepted tradeoff for keeping routine dispatches cheap and unambiguous, not an invitation to let them diverge carelessly; when you touch a mechanic here, check whether the same mechanic is duplicated in an agent file and update both.
+
 ## Where things live
 
 | What | Lives in | Created by |
@@ -159,6 +161,34 @@ Unblocking dependents needs no action — the next worker's readiness check re-r
 **Tester finds a bug in the dependency, not the test:** comment on both issues; do **not** close, do not touch `Status`, do not unassign.
 
 **Verification discipline.** A Testing task issue is not done because a test exists and passes — it's done because the test was *seen* to catch the thing it guards. Before closing: deliberately break the behavior under test, confirm the test fails with the expected message, then revert. Note this in the close comment (e.g. "verified by breaking X, confirmed red, reverted"). A test nobody watched fail is not verified, regardless of whether it's green now.
+
+## Git hygiene
+
+All code-touching work for a plan happens on one shared branch, not the primary checkout's default branch, and not one branch per task — task issues are too fine-grained for that and the whole point is an incremental, reviewable trail on a single branch.
+
+1. **Branch creation.** Before dispatching any worker, `/project-manager:implement` ensures the plan's branch exists and is checked out in the working tree it will dispatch workers from:
+   ```sh
+   git fetch origin main
+   git checkout plan/<root-issue-number>-<short-slug> 2>/dev/null || git checkout -b plan/<root-issue-number>-<short-slug> origin/main
+   ```
+   Resuming a plan (implement invoked again later) must reuse the same branch name, not create a second one — derive `<short-slug>` from the root issue title deterministically (lowercase, hyphenated, first few words) so re-derivation is stable.
+2. **Per-task commits.** Worker commits its changes as the last step before closing its issue — every Scaffold/Implementation/Testing task leaves the branch in a state that reflects everything `Done` so far:
+   ```sh
+   git add -A
+   git commit -m "<phase>: <short summary>
+
+   Part of #<root-issue-number>"
+   ```
+   Commit, never push — the branch stays local to the session/worktree doing the work until a PR is opened in step 4. Validator never commits (it doesn't edit files).
+   If there is nothing to commit (e.g. a Testing task that only ran existing tests), skip the commit rather than creating an empty one.
+3. **Safety net, not a substitute for review.** These commits exist so multi-hour agent work is never sitting only as uncommitted tree state — they are not a replacement for the PR review the human actually reads.
+4. **PR creation.** Once `/project-manager:validate` finds every FR/NFR passing (§ System validation), it pushes the plan branch and opens a **draft PR** against `main`:
+   ```sh
+   git push -u origin plan/<root-issue-number>-<short-slug>
+   gh pr create --draft --title "<root plan title> (#<root-issue-number>)" \
+     --body "Closes #<root-issue-number>" --head plan/<root-issue-number>-<short-slug>
+   ```
+   Post `gh issue comment <root-issue-number> --body "PR: <pr-url>"` on the root issue. If validation finds blocking findings instead, no PR is opened yet — the branch keeps accumulating follow-up commits until a later `/project-manager:validate` pass is clean.
 
 ## System validation
 
