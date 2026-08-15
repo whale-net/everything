@@ -9,6 +9,15 @@
 - Do not patch production environments — rely on release actions and human inputs.
 - Read relevant docs before falling back to search or bash exploration.
 
+## Effective Subagent Usage
+
+Prompt-cache read cost per turn grows with a session's own turn count (roughly 9x higher in 300-500 turn sessions vs. under-50-turn sessions, measured across this account's history) — every turn re-sends and re-reads the full prior transcript, so cost compounds as a session's transcript grows. Subagents are one of the two effective levers against this (the other is starting a fresh session); use them to keep the *main* session's turn count down, not as an end in themselves.
+
+- **Fork/spawn a subagent for exploratory or investigative work whose intermediate output you don't need to keep**: multi-step searches, log/codebase investigations, research questions, broad reads across many files. This is the highest-leverage use — it keeps the heavy tool-output slog (grep noise, file reads, search results) out of the main transcript entirely, instead of dumping it into the parent session where it gets re-read on every subsequent turn.
+- **Don't defeat the purpose by pulling detail back in.** Spawning a subagent and then asking for its full transcript, or requesting verbose intermediate output, reintroduces the cost the fork was supposed to avoid. Ask for a synthesized result, not a raw dump.
+- **Don't chain many small one-off subagent calls** for trivial lookups — each spawn pays its own cache-write on shared context (system prompt, tool schemas) without meaningfully shrinking the parent transcript. Batch related exploration into one fork when possible.
+- **When a single session is running long from inline exploration** (not delegated work), prefer forking the next investigative step rather than continuing to accumulate turns in the main thread.
+
 ## Bazel — Default Build, Test, and Query Tool
 
 Use Bazel as the primary tool for building, running, testing, and exploring the codebase. Do not fall back to `go build`, `go test`, `python`, or direct binary invocations unless you have confirmed there is no Bazel target for the task.
