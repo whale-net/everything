@@ -429,6 +429,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: [plan-release, build-release-tools]
     if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    # contents: write - checkout + the "Create git tag for release" step's `git push origin <tag>`.
+    # packages: write - "Log in to GitHub Container Registry" falls back to GITHUB_TOKEN when
+    #   secrets.GHCR_PAT is unset.
+    # workflows: write - required by GitHub whenever a NEW ref (this release tag) is pushed
+    #   pointing at a commit that itself modifies a file under .github/workflows/*; without it
+    #   the push is rejected with "refusing to allow a GitHub App to create or update workflow
+    #   ... without `workflows` permission" even though contents: write is already granted.
+    #   See https://github.com/whale-net/everything/actions/runs/31766386363.
+    permissions:
+      contents: write
+      packages: write
+      workflows: write
     strategy:
       matrix: ${{ fromJson(needs.plan-release.outputs.release-matrix) }}
       fail-fast: false
@@ -980,6 +992,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write     # Push git tags and read repository content
+      # workflows: write - same requirement as the `release` job above: pushing a NEW tag
+      # (this job's "Create and push helm chart tags" step) that points at a commit modifying
+      # .github/workflows/* is rejected by GitHub without this, even with contents: write.
+      # See https://github.com/whale-net/everything/actions/runs/31766386363.
+      workflows: write
     env:
       # The ChartMuseum this job uploads to, and the base of the
       # artifact.repository value recorded in the App Registry for every
