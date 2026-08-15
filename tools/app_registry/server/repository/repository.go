@@ -225,7 +225,16 @@ type ArtifactRepository interface {
 	// chart may not pin an unknown or not-yet-published artifact.
 	RecordArtifact(ctx context.Context, a Artifact, contains []ContainedImageInput, domainStage DomainAdoptionStage) (artifact *Artifact, alreadyRecorded bool, err error)
 
-	ListArtifacts(ctx context.Context, filter ArtifactListFilter) ([]Artifact, error)
+	// ListArtifacts returns `artifact` rows matching filter, ordered
+	// most-recent-state-change-first by state_changed_at, tie-broken by
+	// artifact_id, with real LIMIT + keyset cursor pagination (the cursor
+	// encodes state_changed_at + artifact_id -- see
+	// postgres/keyset_cursor.go). pageSize <= 0 means the server default
+	// (50, matching AppRepository.ListReconcileRuns/
+	// BuildRepository.ListBuilds). A malformed pageToken returns an error
+	// wrapping ErrInvalidArgument. nextPageToken is "" when there is no next
+	// page.
+	ListArtifacts(ctx context.Context, filter ArtifactListFilter, pageSize int32, pageToken string) (artifacts []Artifact, nextPageToken string, err error)
 	GetArtifact(ctx context.Context, lookup ArtifactLookup) (*Artifact, error)
 
 	// ResolveArtifact walks a chart artifact to its pinned image artifacts
@@ -459,16 +468,28 @@ type PromotionRepository interface {
 	StateAt(ctx context.Context, environmentID string, at *time.Time) ([]Promotion, error)
 
 	// ListPromotions supports ListPromotionsRequest's filters. Ordered by
-	// valid_from descending.
-	ListPromotions(ctx context.Context, filter PromotionListFilter) ([]Promotion, error)
+	// valid_from descending, tie-broken by promotion_id, with real LIMIT +
+	// keyset cursor pagination (the cursor encodes valid_from + promotion_id
+	// -- see postgres/keyset_cursor.go). pageSize <= 0 means the server
+	// default (50, matching AppRepository.ListReconcileRuns/
+	// BuildRepository.ListBuilds). A malformed pageToken returns an error
+	// wrapping ErrInvalidArgument. nextPageToken is "" when there is no next
+	// page.
+	ListPromotions(ctx context.Context, filter PromotionListFilter, pageSize int32, pageToken string) (promotions []Promotion, nextPageToken string, err error)
 
 	// RecordEvent appends one row to promotion_event. Not SCD2 — see
 	// AGENTS.md, event logs get their own shape.
 	RecordEvent(ctx context.Context, e PromotionEvent) (*PromotionEvent, error)
 
 	// ListEvents supports ListPromotionEventsRequest's filters. Ordered by
-	// occurred_at descending.
-	ListEvents(ctx context.Context, filter PromotionEventListFilter) ([]PromotionEvent, error)
+	// occurred_at descending, tie-broken by event_id, with real LIMIT +
+	// keyset cursor pagination (the cursor encodes occurred_at + event_id --
+	// see postgres/keyset_cursor.go). pageSize <= 0 means the server default
+	// (50, matching AppRepository.ListReconcileRuns/
+	// BuildRepository.ListBuilds). A malformed pageToken returns an error
+	// wrapping ErrInvalidArgument. nextPageToken is "" when there is no next
+	// page.
+	ListEvents(ctx context.Context, filter PromotionEventListFilter, pageSize int32, pageToken string) (events []PromotionEvent, nextPageToken string, err error)
 }
 
 // WritebackRepository covers `writeback_outbox` (AR-4b) -- see

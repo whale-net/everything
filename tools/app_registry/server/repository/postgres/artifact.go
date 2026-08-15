@@ -929,7 +929,28 @@ func (r *artifactRepo) loadContains(ctx context.Context, chartArtifactID string)
 	return out, rows.Err()
 }
 
-func (r *artifactRepo) ListArtifacts(ctx context.Context, filter repository.ArtifactListFilter) ([]repository.Artifact, error) {
+// defaultArtifactPageSize is what ListArtifacts falls back to when the
+// caller passes pageSize <= 0. Matches defaultBuildPageSize/
+// defaultReconcileRunPageSize so every real-pagination RPC in this package
+// behaves consistently (issue #603).
+const defaultArtifactPageSize = 50
+
+// ListArtifacts implements repository.ArtifactRepository.ListArtifacts --
+// see that doc comment for the pagination contract. Ordered by
+// state_changed_at DESC, tie-broken by artifact_id DESC: state_changed_at
+// (unlike published_at) is NOT NULL for every row regardless of state (see
+// artifact_state_shape, migration 007), which is what makes it safe as a
+// keyset-pagination cursor column -- a NULL published_at on an
+// allocated/publishing/failed row would otherwise never satisfy the "<"
+// keyset predicate below and could silently drop rows from every page after
+// the first. This also folds the old BuildID-only special case (previously
+// the only caller ordered by state_changed_at, precisely to avoid the same
+// NULL hazard -- see GetReleaseRun) into the general path.
+func (r *artifactRepo) ListArtifacts(ctx context.Context, filter repository.ArtifactListFilter, pageSize int32, pageToken string) ([]repository.Artifact, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultArtifactPageSize
+	}
+
 	query := artifactSelectBase + ` WHERE 1=1`
 	var args []any
 
@@ -948,35 +969,63 @@ func (r *artifactRepo) ListArtifacts(ctx context.Context, filter repository.Arti
 		query += fmt.Sprintf(" AND a.provenance = $%d", len(args))
 	}
 	// GetReleaseRun's (AR-7d, issue #558) query: every artifact hanging off
-	// one build, any state. Ordered by state_changed_at rather than
-	// published_at -- published_at is NULL for everything short of
-	// "published" (see artifact_state_shape, migration 007), so it would
-	// leave every in-flight row in an arbitrary relative order.
-	orderBy := "a.published_at"
+	// one build, any state.
 	if filter.BuildID != "" {
 		args = append(args, filter.BuildID)
 		query += fmt.Sprintf(" AND a.build_id = $%d", len(args))
-		orderBy = "a.state_changed_at"
 	}
-	query += " ORDER BY " + orderBy
+	// Pushed into SQL (rather than filtered client-side after the LIMIT
+	// below) so it composes correctly with real pagination -- a client-side
+	// filter after LIMIT pageSize+1 could drop a page below pageSize rows
+	// while more matching rows exist further down the table.
+	if filter.PromotableOnly {
+		args = append(args, string(repository.PromotabilityPromotable))
+		query += fmt.Sprintf(" AND a.promotability = $%d", len(args))
+	}
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeKeysetCursor(pageToken)
+		if err != nil {
+			return nil, "", fmt.Errorf("list artifacts: %w", err)
+		}
+		// Keyset predicate for "resume strictly after (ts, id)" on an
+		// ORDER BY state_changed_at DESC, artifact_id DESC query -- explicit
+		// casts because the row-value comparison below gives Postgres
+		// nothing else to infer $N's type from.
+		args = append(args, cursorTS, cursorID)
+		query += fmt.Sprintf(" AND (a.state_changed_at, a.artifact_id) < ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+	}
+	// Fetch one extra row so we can tell whether there is a next page
+	// without a separate COUNT(*) query.
+	args = append(args, pageSize+1)
+	query += fmt.Sprintf(" ORDER BY a.state_changed_at DESC, a.artifact_id DESC LIMIT $%d", len(args))
 
 	rows, err := r.ex.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer rows.Close()
 	var out []repository.Artifact
 	for rows.Next() {
 		a, err := scanArtifact(rows)
 		if err != nil {
-			return nil, err
-		}
-		if filter.PromotableOnly && a.Promotability != repository.PromotabilityPromotable {
-			continue
+			return nil, "", err
 		}
 		out = append(out, a)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	var nextPageToken string
+	if int32(len(out)) > pageSize {
+		// The extra row proves a next page exists; the cursor resumes
+		// after the LAST row of THIS page (the pageSize-th, not the
+		// extra one), which is then dropped.
+		last := out[pageSize-1]
+		nextPageToken = encodeKeysetCursor(last.StateChangedAt, last.ArtifactID)
+		out = out[:pageSize]
+	}
+	return out, nextPageToken, nil
 }
 
 func (r *artifactRepo) GetArtifact(ctx context.Context, lookup repository.ArtifactLookup) (*repository.Artifact, error) {

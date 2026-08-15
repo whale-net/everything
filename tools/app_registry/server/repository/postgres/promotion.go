@@ -160,7 +160,19 @@ func (r *promotionRepo) StateAt(ctx context.Context, environmentID string, at *t
 	return scanPromotions(rows)
 }
 
-func (r *promotionRepo) ListPromotions(ctx context.Context, filter repository.PromotionListFilter) ([]repository.Promotion, error) {
+// defaultPromotionPageSize is what ListPromotions falls back to when the
+// caller passes pageSize <= 0. Matches the other real-pagination RPCs in
+// this package (issue #603).
+const defaultPromotionPageSize = 50
+
+// ListPromotions implements repository.PromotionRepository.ListPromotions --
+// see that doc comment for the pagination contract. Ordered by valid_from
+// DESC, tie-broken by promotion_id DESC (both NOT NULL columns).
+func (r *promotionRepo) ListPromotions(ctx context.Context, filter repository.PromotionListFilter, pageSize int32, pageToken string) ([]repository.Promotion, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultPromotionPageSize
+	}
+
 	base := promotionSelectBase + `
 		LEFT JOIN app ON a.app_id = app.app_id
 		LEFT JOIN chart ON a.chart_id = chart.chart_id
@@ -177,14 +189,43 @@ func (r *promotionRepo) ListPromotions(ctx context.Context, filter repository.Pr
 	if !filter.IncludeHistory {
 		base += " AND p.valid_to IS NULL"
 	}
-	base += " ORDER BY p.valid_from DESC"
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeKeysetCursor(pageToken)
+		if err != nil {
+			return nil, "", fmt.Errorf("list promotions: %w", err)
+		}
+		// Keyset predicate for "resume strictly after (ts, id)" on an
+		// ORDER BY valid_from DESC, promotion_id DESC query -- explicit
+		// casts because the row-value comparison below gives Postgres
+		// nothing else to infer $N's type from.
+		args = append(args, cursorTS, cursorID)
+		base += fmt.Sprintf(" AND (p.valid_from, p.promotion_id) < ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+	}
+	// Fetch one extra row so we can tell whether there is a next page
+	// without a separate COUNT(*) query.
+	args = append(args, pageSize+1)
+	base += fmt.Sprintf(" ORDER BY p.valid_from DESC, p.promotion_id DESC LIMIT $%d", len(args))
 
 	rows, err := r.ex.Query(ctx, base, args...)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer rows.Close()
-	return scanPromotions(rows)
+	out, err := scanPromotions(rows)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var nextPageToken string
+	if int32(len(out)) > pageSize {
+		// The extra row proves a next page exists; the cursor resumes
+		// after the LAST row of THIS page (the pageSize-th, not the
+		// extra one), which is then dropped.
+		last := out[pageSize-1]
+		nextPageToken = encodeKeysetCursor(last.ValidFrom, last.PromotionID)
+		out = out[:pageSize]
+	}
+	return out, nextPageToken, nil
 }
 
 func scanPromotions(rows pgx.Rows) ([]repository.Promotion, error) {
@@ -225,7 +266,19 @@ func scanPromotionEvent(row pgx.Row) (repository.PromotionEvent, error) {
 	return e, nil
 }
 
-func (r *promotionRepo) ListEvents(ctx context.Context, filter repository.PromotionEventListFilter) ([]repository.PromotionEvent, error) {
+// defaultPromotionEventPageSize is what ListEvents falls back to when the
+// caller passes pageSize <= 0. Matches the other real-pagination RPCs in
+// this package (issue #603).
+const defaultPromotionEventPageSize = 50
+
+// ListEvents implements repository.PromotionRepository.ListEvents -- see
+// that doc comment for the pagination contract. Ordered by occurred_at
+// DESC, tie-broken by event_id DESC (both NOT NULL columns).
+func (r *promotionRepo) ListEvents(ctx context.Context, filter repository.PromotionEventListFilter, pageSize int32, pageToken string) ([]repository.PromotionEvent, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultPromotionEventPageSize
+	}
+
 	query := `SELECT ` + promotionEventColumns + `
 		FROM promotion_event pe
 		JOIN promotion p ON p.promotion_id = pe.promotion_id
@@ -255,20 +308,48 @@ func (r *promotionRepo) ListEvents(ctx context.Context, filter repository.Promot
 		args = append(args, filter.Since)
 		query += fmt.Sprintf(" AND pe.occurred_at >= $%d", len(args))
 	}
-	query += " ORDER BY pe.occurred_at DESC"
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeKeysetCursor(pageToken)
+		if err != nil {
+			return nil, "", fmt.Errorf("list promotion events: %w", err)
+		}
+		// Keyset predicate for "resume strictly after (ts, id)" on an
+		// ORDER BY occurred_at DESC, event_id DESC query -- explicit casts
+		// because the row-value comparison below gives Postgres nothing
+		// else to infer $N's type from.
+		args = append(args, cursorTS, cursorID)
+		query += fmt.Sprintf(" AND (pe.occurred_at, pe.event_id) < ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+	}
+	// Fetch one extra row so we can tell whether there is a next page
+	// without a separate COUNT(*) query.
+	args = append(args, pageSize+1)
+	query += fmt.Sprintf(" ORDER BY pe.occurred_at DESC, pe.event_id DESC LIMIT $%d", len(args))
 
 	rows, err := r.ex.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer rows.Close()
 	var out []repository.PromotionEvent
 	for rows.Next() {
 		e, err := scanPromotionEvent(rows)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	var nextPageToken string
+	if int32(len(out)) > pageSize {
+		// The extra row proves a next page exists; the cursor resumes
+		// after the LAST row of THIS page (the pageSize-th, not the
+		// extra one), which is then dropped.
+		last := out[pageSize-1]
+		nextPageToken = encodeKeysetCursor(last.OccurredAt, last.EventID)
+		out = out[:pageSize]
+	}
+	return out, nextPageToken, nil
 }
