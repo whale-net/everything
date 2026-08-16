@@ -2296,6 +2296,27 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 	if recordedFw.Promotability != repository.PromotabilityNotPromotable {
 		t.Errorf("got promotability %v, want %v", recordedFw.Promotability, repository.PromotabilityNotPromotable)
 	}
+
+	// Record binary artifact for an app with deploy_unit = "image" (promotable binary tool)
+	toolAppID := seedApp(t, pool, "tools", "promotable-tool", "image")
+	toolBinArt := repository.Artifact{
+		Kind:          repository.ArtifactKindBinary,
+		AppID:         toolAppID,
+		Digest:        "sha256:tool-test-digest-789",
+		Version:       "v0.1.0",
+		BuildID:       buildID,
+		Promotability: repository.PromotabilityPromotable,
+	}
+	recordedToolBin, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, toolBinArt, nil, repository.DomainAdoptionStageObserve)
+	if err != nil {
+		t.Fatalf("RecordArtifact tool binary: %v", err)
+	}
+	if alreadyRecorded {
+		t.Fatalf("expected tool binary artifact to be newly created, not already recorded")
+	}
+	if recordedToolBin.Promotability != repository.PromotabilityPromotable {
+		t.Errorf("got promotability %v, want %v", recordedToolBin.Promotability, repository.PromotabilityPromotable)
+	}
 }
 
 

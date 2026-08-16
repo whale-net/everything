@@ -35,6 +35,10 @@ inputs:
     description: 'Explicit version override for app_registry_cli (if not reading from version_file)'
     required: false
     default: ''
+  target_env:
+    description: 'Target environment name for environment-specific release tag lookups (e.g. dev, builder, prod)'
+    required: false
+    default: ''
   repo:
     description: 'GitHub repository to download release assets from (e.g. whale-net/everything)'
     required: false
@@ -80,6 +84,7 @@ runs:
         SOURCE_MODE: ${{ inputs.source }}
         TARGET_OS_INPUT: ${{ inputs.target_os }}
         TARGET_ARCH_INPUT: ${{ inputs.target_arch }}
+        TARGET_ENV_INPUT: ${{ inputs.target_env }}
         VERSION_FILE: ${{ inputs.version_file }}
         RH_VERSION_OVERRIDE: ${{ inputs.release_helper_version }}
         AR_VERSION_OVERRIDE: ${{ inputs.app_registry_version }}
@@ -207,25 +212,36 @@ runs:
           fi
 
           echo "Pinned versions: release_helper_go=${RH_VER:-<not set>}, app_registry_cli=${AR_VER:-<not set>}"
+          [[ -n "$TARGET_ENV_INPUT" ]] && echo "Target environment for tag lookup: $TARGET_ENV_INPUT"
 
           download_single_tool() {
             local tool="$1"
             local ver="$2"
             local out_bin="$3"
 
-            if [[ -z "$ver" ]]; then
-              echo "Error: Version for $tool is not configured" >&2
-              return 1
-            fi
-
             local tmp_dl
             tmp_dl="$(mktemp -d)"
 
             local tags=()
-            if [[ "$tool" == "release_helper_go" ]]; then
-              tags=("tools-release_helper_go.${ver}" "release_helper_go.${ver}" "${ver}")
-            else
-              tags=("tools-app_registry_cli.${ver}" "tools-app-registry.${ver}" "app-registry.${ver}" "app_registry_cli.${ver}" "${ver}")
+            if [[ -n "$TARGET_ENV_INPUT" ]]; then
+              if [[ "$tool" == "release_helper_go" ]]; then
+                tags+=("tools-release_helper_go.${TARGET_ENV_INPUT}" "env-${TARGET_ENV_INPUT}-tools-release_helper_go" "release_helper_go.${TARGET_ENV_INPUT}")
+              else
+                tags+=("tools-app-registry.${TARGET_ENV_INPUT}" "tools-app_registry_cli.${TARGET_ENV_INPUT}" "env-${TARGET_ENV_INPUT}-tools-app-registry" "app-registry.${TARGET_ENV_INPUT}")
+              fi
+            fi
+
+            if [[ -n "$ver" ]]; then
+              if [[ "$tool" == "release_helper_go" ]]; then
+                tags+=("tools-release_helper_go.${ver}" "release_helper_go.${ver}" "${ver}")
+              else
+                tags+=("tools-app-registry.${ver}" "tools-app_registry_cli.${ver}" "app-registry.${ver}" "app_registry_cli.${ver}" "${ver}")
+              fi
+            fi
+
+            if [[ ${#tags[@]} -eq 0 ]]; then
+              echo "Error: No version or target environment configured for $tool" >&2
+              return 1
             fi
 
             local got_release=false

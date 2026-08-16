@@ -8,12 +8,12 @@ import appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 // the artifact itself. Shared by every repository implementation so the rule has
 // exactly one definition.
 //
-//	App/Chart deploy_unit | Image artifacts | Chart artifacts | Binary / Firmware
-//	chart                 | VIA_CHART       | PROMOTABLE      | NOT_PROMOTABLE
-//	image                 | PROMOTABLE      | n/a             | NOT_PROMOTABLE
-//	none                  | NOT_PROMOTABLE  | n/a             | NOT_PROMOTABLE
+//	App/Chart deploy_unit | Image artifacts | Chart artifacts | Binary artifacts | Firmware
+//	chart                 | VIA_CHART       | PROMOTABLE      | NOT_PROMOTABLE   | NOT_PROMOTABLE
+//	image                 | PROMOTABLE      | n/a             | PROMOTABLE       | NOT_PROMOTABLE
+//	none                  | NOT_PROMOTABLE  | n/a             | NOT_PROMOTABLE   | NOT_PROMOTABLE
 func DerivePromotability(kind ArtifactKind, ownerDeployUnit appmetapb.DeployUnit) Promotability {
-	if kind == ArtifactKindBinary || kind == ArtifactKindFirmware {
+	if kind == ArtifactKindFirmware {
 		return PromotabilityNotPromotable
 	}
 	switch ownerDeployUnit {
@@ -21,7 +21,10 @@ func DerivePromotability(kind ArtifactKind, ownerDeployUnit appmetapb.DeployUnit
 		if kind == ArtifactKindImage {
 			return PromotabilityViaChart
 		}
-		return PromotabilityPromotable
+		if kind == ArtifactKindChart {
+			return PromotabilityPromotable
+		}
+		return PromotabilityNotPromotable
 	case appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE:
 		return PromotabilityPromotable
 	default: // DEPLOY_UNIT_NONE, DEPLOY_UNIT_UNSPECIFIED

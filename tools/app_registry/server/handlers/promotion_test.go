@@ -551,6 +551,46 @@ func TestRollback_EnqueuesWritebackOutbox(t *testing.T) {
 	}
 }
 
+func TestPromote_BinaryArtifact(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+
+	// Record a binary artifact for image-app (which has deploy_unit = image)
+	build := recordBuild(t, f.art, "run-binary-promo")
+	recResp, err := f.art.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Digest:         "sha256:binary-digest-1",
+		IdempotencyKey: "record-binary-promo",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(binary): %v", err)
+	}
+	if recResp.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("expected PROMOTABILITY_PROMOTABLE, got %v", recResp.Artifact.Promotability)
+	}
+
+	// Promote binary to dev
+	pResp, err := f.promo.Promote(ctx, &pb.PromoteRequest{
+		EnvironmentKey: "dev",
+		OwnerFullName:  "demo-image-app",
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		Version:        "v1.0.0",
+		IdempotencyKey: "promo-binary-dev",
+	})
+	if err != nil {
+		t.Fatalf("Promote(binary): %v", err)
+	}
+	if pResp.Promotion.Version != "v1.0.0" {
+		t.Fatalf("expected v1.0.0, got %s", pResp.Promotion.Version)
+	}
+	if pResp.Promotion.Digest != "sha256:binary-digest-1" {
+		t.Fatalf("expected sha256:binary-digest-1, got %s", pResp.Promotion.Digest)
+	}
+}
+
 // claimAllOutbox drains every pending/claimable outbox row from repo via
 // the same WritebackRepository.ClaimBatch a real worker uses -- there is no
 // dedicated "list" RPC for the outbox (it is an internal work queue, not a

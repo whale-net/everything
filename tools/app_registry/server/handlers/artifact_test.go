@@ -80,7 +80,7 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, pb.Promotability_PROMOTABILITY_PROMOTABLE},
 		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
 		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
-		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_PROMOTABLE},
 		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
 		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
 		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},

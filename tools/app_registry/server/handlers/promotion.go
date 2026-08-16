@@ -180,7 +180,7 @@ func (s *PromotionServer) buildCandidatePromotion(ctx context.Context, env repos
 }
 
 func (s *PromotionServer) ownerFullName(ctx context.Context, a repository.Artifact) (string, error) {
-	if a.Kind == repository.ArtifactKindImage {
+	if a.Kind != repository.ArtifactKindChart {
 		app, err := s.repo.Apps().GetAppByID(ctx, a.AppID)
 		if err != nil {
 			return "", err
