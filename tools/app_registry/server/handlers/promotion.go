@@ -119,7 +119,7 @@ func (s *PromotionServer) Promote(ctx context.Context, req *pb.PromoteRequest) (
 			if eerr != nil {
 				return nil, eerr
 			}
-			if werr := s.enqueueWriteback(ctx, r, *env, current.PromotionID, event.EventID); werr != nil {
+			if werr := s.enqueueWriteback(ctx, r, *env, *current, current.PromotionID, event.EventID); werr != nil {
 				return nil, werr
 			}
 			out := &pb.PromoteResponse{Promotion: promotionToPB(*current), Event: promotionEventToPB(*event)}
@@ -285,7 +285,7 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 			if eerr != nil {
 				return nil, eerr
 			}
-			if werr := s.enqueueWriteback(ctx, r, *env, current.PromotionID, event.EventID); werr != nil {
+			if werr := s.enqueueWriteback(ctx, r, *env, *current, current.PromotionID, event.EventID); werr != nil {
 				return nil, werr
 			}
 			out := &pb.RollbackResponse{Promotion: promotionToPB(*current), Event: promotionEventToPB(*event)}
@@ -413,7 +413,18 @@ func (s *PromotionServer) GetEnvironmentState(ctx context.Context, req *pb.GetEn
 // after this transaction commits. This is what lets the Writeback
 // activity's Publish step (AR-4b, tools/app_registry/worker) detect a
 // no-op without a second registry round trip.
-func (s *PromotionServer) enqueueWriteback(ctx context.Context, r repository.Registry, env repository.Environment, promotionID, eventID string) error {
+//
+// current is the just-written promotion (its own PromotionID/EventID are
+// passed separately since callers already have both close at hand) -- it's
+// what ownerDomain needs to resolve the row's Domain, the denormalized
+// column that lets the worker render/publish per (domain, environment)
+// without a join -- see 014_writeback_outbox_domain.up.sql and
+// tools/app_registry/architecture/12-writeback-outbox-temporal.md.
+func (s *PromotionServer) enqueueWriteback(ctx context.Context, r repository.Registry, env repository.Environment, current repository.Promotion, promotionID, eventID string) error {
+	domain, err := s.ownerDomain(ctx, current)
+	if err != nil {
+		return fmt.Errorf("enqueue writeback for promotion %s: resolve domain: %w", promotionID, err)
+	}
 	promotions, err := r.Promotions().StateAt(ctx, env.EnvironmentID, nil)
 	if err != nil {
 		return fmt.Errorf("enqueue writeback for promotion %s: read state for hash: %w", promotionID, err)
@@ -422,6 +433,7 @@ func (s *PromotionServer) enqueueWriteback(ctx context.Context, r repository.Reg
 		PromotionID:    promotionID,
 		EnvironmentID:  env.EnvironmentID,
 		EnvironmentKey: env.Key,
+		Domain:         domain,
 		EventID:        eventID,
 		StateHash:      stateHash(promotions),
 	}); err != nil {
@@ -430,8 +442,13 @@ func (s *PromotionServer) enqueueWriteback(ctx context.Context, r repository.Reg
 	return nil
 }
 
+// ownerDomain resolves p's owning app's/chart's domain. Only
+// ArtifactKindChart is chart-owned -- every other kind (image, binary,
+// firmware) is app-owned, matching ownerFullName's own `!= Chart` grouping
+// above rather than a `== Image` check, which would wrongly try (and fail)
+// a chart lookup for a binary/firmware promotion's empty ChartID.
 func (s *PromotionServer) ownerDomain(ctx context.Context, p repository.Promotion) (string, error) {
-	if p.Kind == repository.ArtifactKindImage {
+	if p.Kind != repository.ArtifactKindChart {
 		app, err := s.repo.Apps().GetAppByID(ctx, p.AppID)
 		if err != nil {
 			return "", err

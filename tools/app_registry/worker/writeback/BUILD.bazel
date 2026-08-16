@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "writeback",
     srcs = [
+        "gitops.go",
         "stub.go",
         "workflow.go",
     ],
@@ -10,6 +11,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//tools/app_registry/protos:appregistrypb",
+        "@in_gopkg_yaml_v3//:yaml_v3",
         "@io_temporal_go_sdk//temporal",
         "@io_temporal_go_sdk//workflow",
         "@org_golang_google_protobuf//encoding/protojson",
@@ -19,6 +21,7 @@ go_library(
 go_test(
     name = "writeback_test",
     srcs = [
+        "gitops_test.go",
         "stub_test.go",
         "workflow_test.go",
     ],
