@@ -278,6 +278,11 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// handles both the dry-run and commit submit buttons.
 	mux.HandleFunc("/promote", app.auth.RequireAuthFunc(app.withAccessToken(app.handlePromote)))
 
+	// Screen 51 (#648): rollback, opened pre-scoped to (entity,
+	// environment) from a deployments-matrix cell (FR-6) — GET renders the
+	// SCD2-derived confirmation (FR-17), POST handles the commit.
+	mux.HandleFunc("/rollback", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRollback)))
+
 	// Screen 40 (#650): drift and adoption audit — read-side only, no
 	// write control (the adopt action, screen 52, is deferred).
 	mux.HandleFunc("/drift-audit", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDriftAudit)))
