@@ -102,8 +102,7 @@ func run() error {
 	// working with zero config against StubActivities -- see issue #798's
 	// sequencing and worker/writeback/gitops.go's package doc comment.
 	if gitopsRepo := os.Getenv("WRITEBACK_GITOPS_REPO"); gitopsRepo != "" {
-		appClient := pb.NewAppRegistryClient(conn.GetConnection())
-		gitops, gerr := writeback.NewGitOpsActivities(registryClient, appClient, writeback.GitOpsConfig{
+		gitops, gerr := writeback.NewGitOpsActivities(registryClient, writeback.GitOpsConfig{
 			Repo:           gitopsRepo,
 			Branch:         os.Getenv("WRITEBACK_GITOPS_BRANCH"),
 			AppID:          os.Getenv("WRITEBACK_GITHUB_APP_ID"),

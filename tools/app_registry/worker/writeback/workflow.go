@@ -72,7 +72,7 @@ type WritebackInput struct {
 	// to GetEnvironmentState as the domain filter, so a real (non-stub)
 	// Writeback implementation renders one small per-domain document
 	// (<domain>/versions/<env>.yaml) instead of the whole environment --
-	// see worker/writeback/gitops.go and issue #798's "Contract v1".
+	// see worker/writeback/gitops.go and whale-net/argok8s#68.
 	Domain string
 	// StateHash is the outbox row's state_hash, computed by the server
 	// inside the promotion transaction (see

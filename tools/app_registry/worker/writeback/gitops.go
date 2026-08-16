@@ -1,7 +1,7 @@
 // gitops.go implements Writeback for real: RenderEnvironmentState renders a
-// domain-scoped `apps.<name>.imageTag`-only Helm values fragment (issue
-// #798's "Contract v1"), and Publish commits it to the gitops repo
-// (whale-net/argok8s) over HTTPS using a GitHub App installation token.
+// domain-scoped `targetRevision: <version>` YAML document (whale-net/argok8s#68),
+// and Publish commits it to the gitops repo (whale-net/argok8s) over HTTPS
+// using a GitHub App installation token.
 //
 // See the package doc comment in workflow.go ("Swapping the stub for a real
 // implementation") for how this fits alongside StubActivities, which stays
@@ -25,7 +25,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -93,12 +92,7 @@ type GitOpsActivities struct {
 	// Client reads current promotion state, same role as
 	// StubActivities.Client.
 	Client pb.PromotionRegistryClient
-	// AppClient resolves an app_id to its full_name ("<domain>-<name>"),
-	// the key RenderEnvironmentState writes under `apps.<name>` -- see
-	// issue #798's "Contract v1" example. Any authenticated credential
-	// works; AppRegistry.GetApp only requires auth.RequireAuthenticated.
-	AppClient pb.AppRegistryClient
-	Config    GitOpsConfig
+	Config GitOpsConfig
 
 	// HTTPClient issues the installation-token exchange request. Defaults
 	// to http.DefaultClient; overridable in tests to point at an
@@ -117,7 +111,7 @@ type GitOpsActivities struct {
 // (never silently falls back to a baked-in value) if any required field is
 // empty or the key doesn't parse -- see GitOpsConfig's doc comment and
 // issue #798's "do not hardcode" requirement.
-func NewGitOpsActivities(client pb.PromotionRegistryClient, appClient pb.AppRegistryClient, cfg GitOpsConfig) (*GitOpsActivities, error) {
+func NewGitOpsActivities(client pb.PromotionRegistryClient, cfg GitOpsConfig) (*GitOpsActivities, error) {
 	var missing []string
 	if cfg.Repo == "" {
 		missing = append(missing, "WRITEBACK_GITOPS_REPO")
@@ -149,7 +143,6 @@ func NewGitOpsActivities(client pb.PromotionRegistryClient, appClient pb.AppRegi
 	}
 	return &GitOpsActivities{
 		Client:           client,
-		AppClient:        appClient,
 		Config:           cfg,
 		HTTPClient:       http.DefaultClient,
 		GitHubAPIBaseURL: "https://api.github.com",
@@ -158,15 +151,9 @@ func NewGitOpsActivities(client pb.PromotionRegistryClient, appClient pb.AppRegi
 	}, nil
 }
 
-// RenderEnvironmentState implements Writeback. Renders only
-// `apps.<name>.imageTag` per issue #798's "Contract v1" -- one entry per
-// app in scope for in.Domain's promotions in in.EnvironmentKey, NOT the
-// full protojson dump stub.go writes. A chart promotion contributes one
-// entry per image it pins (EnvironmentStateEntry.Images); a direct image
-// promotion (including an allow_override promotion) contributes its own
-// entry and always wins over a chart's pin for the same app, matching
-// EnvironmentStateEntry.Drift's "the override is what's actually running"
-// semantics.
+// RenderEnvironmentState implements Writeback. Renders top-level
+// `targetRevision: <version>` per argok8s#68 -- matching the chart version
+// promoted to in.EnvironmentKey in in.Domain.
 func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in WritebackInput) (RenderedState, error) {
 	resp, err := a.Client.GetEnvironmentState(ctx, &pb.GetEnvironmentStateRequest{
 		EnvironmentKey: in.EnvironmentKey,
@@ -176,47 +163,18 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s (promotion %s): %w", in.Domain, in.EnvironmentKey, in.PromotionID, err)
 	}
 
-	apps := map[string]string{} // app full_name -> imageTag (artifact version)
-	fullNames := map[string]string{}
-	resolveFullName := func(appID string) (string, error) {
-		if fn, ok := fullNames[appID]; ok {
-			return fn, nil
+	var targetRevision string
+	for _, entry := range resp.Entries {
+		if entry.Artifact != nil && entry.Artifact.Kind == pb.ArtifactKind_ARTIFACT_KIND_CHART {
+			targetRevision = entry.Artifact.Version
+			break
 		}
-		appResp, err := a.AppClient.GetApp(ctx, &pb.GetAppRequest{AppId: appID})
-		if err != nil {
-			return "", fmt.Errorf("resolve app %s: %w", appID, err)
-		}
-		fullNames[appID] = appResp.App.FullName
-		return appResp.App.FullName, nil
+	}
+	if targetRevision == "" {
+		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: no chart artifact found in environment state", in.Domain, in.EnvironmentKey)
 	}
 
-	// Chart entries first, so a direct/override image entry for the same
-	// app (processed below) always overwrites the chart's pin -- see this
-	// method's doc comment.
-	for _, entry := range resp.Entries {
-		if entry.Artifact == nil || entry.Artifact.Kind != pb.ArtifactKind_ARTIFACT_KIND_CHART {
-			continue
-		}
-		for _, img := range entry.Images {
-			fn, err := resolveFullName(img.AppId)
-			if err != nil {
-				return RenderedState{}, fmt.Errorf("render environment state for %s/%s: %w", in.Domain, in.EnvironmentKey, err)
-			}
-			apps[fn] = img.Version
-		}
-	}
-	for _, entry := range resp.Entries {
-		if entry.Artifact == nil || entry.Artifact.Kind != pb.ArtifactKind_ARTIFACT_KIND_IMAGE {
-			continue
-		}
-		fn, err := resolveFullName(entry.Artifact.AppId)
-		if err != nil {
-			return RenderedState{}, fmt.Errorf("render environment state for %s/%s: %w", in.Domain, in.EnvironmentKey, err)
-		}
-		apps[fn] = entry.Artifact.Version
-	}
-
-	doc, err := renderAppsDocument(apps)
+	doc, err := renderTargetRevisionDocument(targetRevision)
 	if err != nil {
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: marshal: %w", in.Domain, in.EnvironmentKey, err)
 	}
@@ -230,34 +188,18 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 	}, nil
 }
 
-// renderAppsDocument builds the `apps.<name>.imageTag` YAML document, key
-// order sorted for determinism -- see workflow.go's "Determinism" doc
-// comment and this package's replay requirements. Built via yaml.Node
-// (rather than yaml.Marshal(map[string]...)) so key order is guaranteed by
-// this function, not left to gopkg.in/yaml.v3's own map-marshaling
-// behavior.
-func renderAppsDocument(apps map[string]string) ([]byte, error) {
-	names := make([]string, 0, len(apps))
-	for name := range apps {
-		names = append(names, name)
+// renderTargetRevisionDocument builds the `targetRevision: <version>` YAML
+// document for the domain's versions/<env>.yaml file in argok8s (see
+// argok8s#68).
+func renderTargetRevisionDocument(targetRevision string) ([]byte, error) {
+	root := &yaml.Node{
+		Kind: yaml.MappingNode,
+		Tag:  "!!map",
+		Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "targetRevision"},
+			{Kind: yaml.ScalarNode, Tag: "!!str", Value: targetRevision},
+		},
 	}
-	sort.Strings(names)
-
-	appsNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	for _, name := range names {
-		entryNode := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: "imageTag"},
-			{Kind: yaml.ScalarNode, Tag: "!!str", Value: apps[name]},
-		}}
-		appsNode.Content = append(appsNode.Content,
-			&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name},
-			entryNode,
-		)
-	}
-	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: []*yaml.Node{
-		{Kind: yaml.ScalarNode, Tag: "!!str", Value: "apps"},
-		appsNode,
-	}}
 	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{root}}
 
 	var buf bytes.Buffer
@@ -275,7 +217,7 @@ func renderAppsDocument(apps map[string]string) ([]byte, error) {
 // Publish implements Writeback: mint a GitHub App installation token,
 // clone the gitops repo, and commit+push the rendered document to
 // `<domain>/versions/<environment>.yaml` if it differs from what's already
-// there -- see issue #798's "Contract v1" for the path convention and
+// there -- see argok8s#68 for the path convention and
 // ../../architecture/12-writeback-outbox-temporal.md for why
 // Environment.gitops_path is not used.
 func (a *GitOpsActivities) Publish(ctx context.Context, state RenderedState) (PublishResult, error) {

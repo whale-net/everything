@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"google.golang.org/grpc"
 )
 
 // TestSignAppJWT_VerifiesWithPublicKey is a table test over the RS256 JWT
@@ -92,7 +95,7 @@ func TestMintInstallationToken_TokenExchange(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a, err := NewGitOpsActivities(nil, nil, GitOpsConfig{
+	a, err := NewGitOpsActivities(nil, GitOpsConfig{
 		Repo:           "whale-net/argok8s",
 		AppID:          "123456",
 		InstallationID: "67890",
@@ -121,7 +124,7 @@ func TestMintInstallationToken_ErrorStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a, err := NewGitOpsActivities(nil, nil, GitOpsConfig{
+	a, err := NewGitOpsActivities(nil, GitOpsConfig{
 		Repo:           "whale-net/argok8s",
 		AppID:          "1",
 		InstallationID: "1",
@@ -150,7 +153,7 @@ func TestNewGitOpsActivities_RequiresEveryEnvVar(t *testing.T) {
 		PrivateKeyPEM:  pemStr,
 	}
 
-	if _, err := NewGitOpsActivities(nil, nil, full); err != nil {
+	if _, err := NewGitOpsActivities(nil, full); err != nil {
 		t.Fatalf("expected a fully-populated config to succeed, got %v", err)
 	}
 
@@ -165,7 +168,7 @@ func TestNewGitOpsActivities_RequiresEveryEnvVar(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewGitOpsActivities(nil, nil, tc.mutate(full))
+			_, err := NewGitOpsActivities(nil, tc.mutate(full))
 			require.Error(t, err)
 		})
 	}
@@ -186,7 +189,7 @@ func TestGitOpsActivities_Publish_FirstWriteThenNoOp(t *testing.T) {
 	state := RenderedState{
 		EnvironmentKey: "dev",
 		Domain:         "app-registry",
-		Document:       []byte("apps:\n  app-registry-api:\n    imageTag: v0.0.1\n"),
+		Document:       []byte("targetRevision: v0.0.1\n"),
 	}
 
 	first, err := a.Publish(context.Background(), state)
@@ -240,7 +243,7 @@ func TestGitOpsActivities_Publish_ConflictRetry(t *testing.T) {
 	runTestGit(t, otherDir, "-c", "user.name=other", "-c", "user.email=other@example.com", "commit", "-m", "concurrent write")
 	runTestGit(t, otherDir, "push", "origin", "HEAD:main")
 
-	doc := []byte("apps:\n  app-registry-api:\n    imageTag: v0.0.2\n")
+	doc := []byte("targetRevision: v0.0.2\n")
 	relPath := filepath.Join("app-registry", "versions", "dev.yaml")
 	result, err := a.publishToClone(context.Background(), staleDir, "main", relPath, doc, "")
 	require.NoError(t, err)
@@ -253,6 +256,70 @@ func TestGitOpsActivities_Publish_ConflictRetry(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(checkDir, relPath))
 	require.NoError(t, err)
 	require.Equal(t, doc, got)
+}
+
+type fakePromotionClient struct {
+	pb.PromotionRegistryClient
+	getEnvState func(ctx context.Context, in *pb.GetEnvironmentStateRequest) (*pb.GetEnvironmentStateResponse, error)
+}
+
+func (f *fakePromotionClient) GetEnvironmentState(ctx context.Context, in *pb.GetEnvironmentStateRequest, opts ...grpc.CallOption) (*pb.GetEnvironmentStateResponse, error) {
+	if f.getEnvState != nil {
+		return f.getEnvState(ctx, in)
+	}
+	return nil, errors.New("unimplemented")
+}
+
+func TestGitOpsActivities_RenderEnvironmentState(t *testing.T) {
+	fakeClient := &fakePromotionClient{
+		getEnvState: func(ctx context.Context, in *pb.GetEnvironmentStateRequest) (*pb.GetEnvironmentStateResponse, error) {
+			require.Equal(t, "dev", in.EnvironmentKey)
+			require.Equal(t, "app-registry", in.Domain)
+			return &pb.GetEnvironmentStateResponse{
+				StateHash: "hash-123",
+				Entries: []*pb.EnvironmentStateEntry{
+					{
+						Artifact: &pb.Artifact{
+							Kind:    pb.ArtifactKind_ARTIFACT_KIND_CHART,
+							Version: "v0.0.39",
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	a := &GitOpsActivities{Client: fakeClient}
+	rendered, err := a.RenderEnvironmentState(context.Background(), WritebackInput{
+		PromotionID:    "promo-1",
+		EnvironmentKey: "dev",
+		Domain:         "app-registry",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "dev", rendered.EnvironmentKey)
+	require.Equal(t, "app-registry", rendered.Domain)
+	require.Equal(t, "hash-123", rendered.StateHash)
+	require.Equal(t, "targetRevision: v0.0.39\n", string(rendered.Document))
+}
+
+func TestGitOpsActivities_RenderEnvironmentState_MissingChartError(t *testing.T) {
+	fakeClient := &fakePromotionClient{
+		getEnvState: func(ctx context.Context, in *pb.GetEnvironmentStateRequest) (*pb.GetEnvironmentStateResponse, error) {
+			return &pb.GetEnvironmentStateResponse{
+				StateHash: "hash-123",
+				Entries:   []*pb.EnvironmentStateEntry{},
+			}, nil
+		},
+	}
+
+	a := &GitOpsActivities{Client: fakeClient}
+	_, err := a.RenderEnvironmentState(context.Background(), WritebackInput{
+		PromotionID:    "promo-1",
+		EnvironmentKey: "dev",
+		Domain:         "app-registry",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no chart artifact found")
 }
 
 // --- test helpers ---
@@ -295,7 +362,7 @@ func newTestGitOpsActivities(t *testing.T, bareRepoDir string) *GitOpsActivities
 	}))
 	t.Cleanup(server.Close)
 
-	a, err := NewGitOpsActivities(nil, nil, GitOpsConfig{
+	a, err := NewGitOpsActivities(nil, GitOpsConfig{
 		Repo:           bareRepoDir,
 		Branch:         "main",
 		AppID:          "1",

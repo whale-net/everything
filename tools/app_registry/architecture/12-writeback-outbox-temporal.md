@@ -73,9 +73,9 @@ state" only** — the render and publish steps exist, the S3 put does not
   `GitOpsActivities` (`worker/writeback/gitops.go`) instead, implementing
   the same `Writeback` interface against the real gitops repo:
   `RenderEnvironmentState` calls `GetEnvironmentState` with the promotion's
-  `Domain` set (see above) and renders only `apps.<name>.imageTag` per
-  contract v1 (issue #798), one entry per in-scope app, map keys sorted for
-  determinism. `Publish` mints a GitHub App installation token (a hand-rolled
+  `Domain` set (see above) and renders the domain's chart `targetRevision`
+  per whale-net/argok8s#68 (e.g. `targetRevision: v0.0.39`). `Publish` mints a
+  GitHub App installation token (a hand-rolled
   RS256 JWT signed with `WRITEBACK_GITHUB_APP_PRIVATE_KEY`, exchanged via
   `POST /app/installations/{id}/access_tokens`), shallow-clones
   `WRITEBACK_GITOPS_REPO`@`WRITEBACK_GITOPS_BRANCH` by shelling out to the
