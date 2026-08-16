@@ -164,6 +164,26 @@ service account (KEYCLOAK.md §5):
   or `prod-promoters` holding `app-registry-promoter-prod`. Membership then
   becomes the thing you audit and change, not a role edit per person.
 
+**Full-access humans use the `app-registry-admin-group` + composite bundle
+role**, provisioned in argok8s (whale-net/argok8s#45) rather than by hand:
+
+- `app-registry-admin-bundle` is a **composite realm role** wrapping
+  `app-registry-admin` + `app-registry-promoter-dev` +
+  `app-registry-promoter-prod` — a human holding it gets full admin plus
+  promotion rights to every seeded environment in one grant.
+- `app-registry-admin-group` is a group with that one composite role mapped
+  to it. OpenTofu owns the group and role definitions only; **group
+  membership is added by hand in the Keycloak console** — put trusted humans
+  in this group rather than assigning `app-registry-admin-bundle` to
+  individuals.
+- **Keycloak group nesting inherits parent→child, not the reverse** — a
+  subgroup's members inherit the parent's roles, the parent does not inherit
+  a subgroup's roles. Groups are also single-parent, not a DAG. This is why
+  `app-registry-admin-bundle` is a *composite role* bundling several roles
+  onto one group, rather than nesting several single-role groups — nesting
+  groups can't combine roles the way a composite role can, and it's easy to
+  get this backwards from "normal" hierarchy intuition.
+
 Role names must match `tools/app_registry/server/auth/auth.go` **character
 for character** — the five names in the block above are copied verbatim from
 that file's `Role*` constants. A typo (`App-Registry-Admin`, trailing
