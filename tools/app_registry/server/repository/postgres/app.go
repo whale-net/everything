@@ -37,6 +37,14 @@ func scanApp(row pgx.Row) (repository.App, error) {
 
 const chartColumns = `chart_id, domain, name, description, chart_repository, deploy_unit, status, first_seen_at, last_seen_at`
 
+// chartColumnsQualified is chartColumns with the v_current_chart alias
+// prefixed on every column, for use in queries that join v_current_chart
+// (aliased c) against another table with its own chart_id column (e.g.
+// chart_app), where an unqualified `chart_id` in the SELECT list is
+// ambiguous to Postgres (SQLSTATE 42702). Column order matches chartColumns
+// so scanChart can be reused unchanged.
+const chartColumnsQualified = `c.chart_id, c.domain, c.name, c.description, c.chart_repository, c.deploy_unit, c.status, c.first_seen_at, c.last_seen_at`
+
 func scanChart(row pgx.Row) (repository.Chart, error) {
 	var c repository.Chart
 	var deployUnit, status string
@@ -976,7 +984,7 @@ func (r *appRepo) GetAppByFullName(ctx context.Context, fullName string) (*repos
 
 func (r *appRepo) ChartsForApp(ctx context.Context, appID string) ([]repository.Chart, error) {
 	rows, err := r.ex.Query(ctx, `
-		SELECT `+chartColumns+` FROM v_current_chart c
+		SELECT `+chartColumnsQualified+` FROM v_current_chart c
 		JOIN chart_app ca ON ca.chart_id = c.chart_id
 		WHERE ca.app_id = $1
 		ORDER BY c.domain, c.name`, appID)
