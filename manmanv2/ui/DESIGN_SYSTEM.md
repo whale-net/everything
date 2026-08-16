@@ -504,9 +504,20 @@ When updating a page to the design system:
 
 ## Future Direction: daisyUI
 
-daisyUI is the agreed future styling layer for this UI — adoption is
-pending a go decision, and no production code uses it yet. Until then this
-document describes the current utility-class implementation.
+**The go decision has been made: daisyUI is adopted.** Its first adopter
+is `tools/app_registry/ui/` (App Registry admin UI, #629), which ships
+with daisyUI from the start rather than migrating onto it — see that
+package's `ARCHITECTURE.md`/`README.md` "Design system" and "Styling"
+sections for the load-order constraint and value vocabulary that decision
+produced.
+
+**`manmanv2/ui` itself is explicitly out of scope for this decision and is
+unchanged** — it stays on the current Tailwind-only utility-class
+implementation described above. Migrating it is a separate, not-yet-
+scheduled effort; do not treat App Registry UI's adoption as authorization
+to start migrating this package's components.
+
+For reference, if/when `manmanv2/ui` is migrated:
 
 - The wireframes (`design/wireframes/`) are already written in daisyUI
   semantic classes and are the reference for what adoption looks like.

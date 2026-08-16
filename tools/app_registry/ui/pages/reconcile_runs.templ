@@ -1,0 +1,67 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// ReconcileRuns is screen 32 (FR-31): every ReconcileApps sweep that
+// actually applied, backed by ListReconcileRuns(since, page), on its own
+// screen separate from Builds — this tracks app/chart identity, not
+// published artifacts. ReconcileRun rows exist only for sweeps that
+// applied (never dry-run, never stale-rejected — see
+// api_messages_app.proto's ReconcileRun doc comment), so a sweep rejected
+// as stale never appears as a row here; the info banner states that
+// absence is expected watermark behaviour, not a failure or an omission
+// bug.
+templ ReconcileRuns(user *htmxauth.UserInfo, runs []*pb.ReconcileRun) {
+	@components.Shell("Reconcile Runs", user) {
+		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100">
+			<h1 class="text-2xl md:text-3xl font-bold mb-2">Reconcile Runs</h1>
+			<p class="text-sm opacity-80">
+				The identity pipeline — <span class="font-mono">ReconcileApps</span>
+				from <span class="font-mono">ci.yml</span>, on every push to main.
+				Separate from Builds: this tracks app/chart identity, not published
+				artifacts.
+			</p>
+		</div>
+		<div role="alert" class="alert alert-info shadow-md mb-6">
+			<span>
+				A sweep rejected by the reconcile watermark as <strong>stale</strong>
+				is expected, correct behaviour, not a bug — it means state already
+				reflects a commit newer than that one in history. A stale-rejected
+				sweep writes nothing and therefore has no row below.
+			</span>
+		</div>
+		<div class="card bg-base-100 shadow-md">
+			<div class="card-body p-0">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Sweep (commit)</th>
+							<th>Applied</th>
+							<th class="text-right">Apps seen</th>
+							<th class="text-right">Charts seen</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(runs) == 0 {
+							<tr>
+								<td colspan="4" class="text-sm opacity-60 p-4">No reconcile runs recorded yet.</td>
+							</tr>
+						}
+						for _, run := range runs {
+							<tr class="hover">
+								<td class="font-mono text-sm">{ gitShaShort(run.GetGitSha()) }</td>
+								<td class="text-right opacity-60">{ timeAgo(run.GetAppliedAt()) }</td>
+								<td class="text-right text-sm">{ intToStr(run.GetAppsSeen()) }</td>
+								<td class="text-right text-sm">{ intToStr(run.GetChartsSeen()) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	}
+}

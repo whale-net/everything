@@ -1,0 +1,106 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "app_history_data.go",
+        "apps_data.go",
+        "artifact_data.go",
+        "artifact_lookup.go",
+        "chart_data.go",
+        "deployments_data.go",
+        "drift_data.go",
+        "environment_diff_data.go",
+        "grpc_client.go",
+        "handlers_apps.go",
+        "handlers_artifacts.go",
+        "handlers_builds.go",
+        "handlers_charts.go",
+        "handlers_dashboard.go",
+        "handlers_deployments.go",
+        "handlers_drift.go",
+        "handlers_environment_diff.go",
+        "handlers_environments.go",
+        "handlers_promote.go",
+        "handlers_rollback.go",
+        "main.go",
+        "templ_render.go",
+    ],
+    embedsrcs = ["themes.css"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//libs/go/logging",
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/appmeta/proto:appmetapb",
+        "//tools/app_registry/ui/components",
+        "//tools/app_registry/ui/matrix",
+        "//tools/app_registry/ui/pages",
+        "//tools/app_registry/ui/viewdata",
+        "@com_github_a_h_templ//:templ",
+        "@com_github_google_uuid//:uuid",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+go_binary(
+    name = "ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Screens 30/31/32 (#655): builds, build detail, and reconcile runs.
+# Handler tests only — mocks pb.ArtifactRegistryClient/pb.AppRegistryClient
+# in-process, no real gRPC server or DB required.
+go_test(
+    name = "ui_test",
+    size = "small",
+    srcs = [
+        "handlers_builds_test.go",
+        "handlers_promote_rollback_test.go",
+        "handlers_read_screens_test.go",
+        "role_gating_test.go",
+    ],
+    embed = [":ui_lib"],
+    deps = [
+        "//libs/go/htmxauth",
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/appmeta/proto:appmetapb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+# Release metadata. domain "app-registry" + name "ui" produces the
+# "app-registry-ui" image/app identity, matching server/BUILD.bazel's
+# "api" and migrate/BUILD.bazel's "migration" naming. Not yet added to
+# APP_REGISTRY_APPS in //tools/app_registry:BUILD.bazel — chart/ingress
+# wiring is deployment integration, left to a later issue on this plan.
+release_app(
+    name = "ui",
+    app_type = "external-api",
+    binary_name = ":ui",
+    description = "HTMX-based admin UI for the App Registry (records promotions; never deploys — NFR-1)",
+    domain = "app-registry",
+    language = "go",
+    port = 8000,
+)
+
+# Source + doc files exposed to //tools/app_registry/conformance's NFR-3
+# static-analysis and ENV.md-coverage tests (#656). Scoped, not public --
+# nothing outside this domain should depend on raw UI source text.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go", "*.md"]),
+    visibility = ["//tools/app_registry:__subpackages__"],
+)

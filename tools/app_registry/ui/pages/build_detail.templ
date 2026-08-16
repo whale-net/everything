@@ -1,0 +1,223 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// buildVerdictKind is App Registry recording health for a run — always its
+// own labelled status, never merged with any notion of overall
+// release/run status (FR-30). Derived client-side (well, here, at render
+// time) purely from the per-artifact states GetReleaseRun returned.
+type buildVerdictKind int
+
+const (
+	// buildVerdictIndeterminate: zero recorded artifacts. The registry
+	// cannot distinguish "opt-in was off" from "recording failed
+	// silently" — never assert healthy OR failed here (NFR-6).
+	buildVerdictIndeterminate buildVerdictKind = iota
+	buildVerdictHealthy
+	buildVerdictFailed
+)
+
+func buildVerdict(artifacts []*pb.Artifact) buildVerdictKind {
+	if len(artifacts) == 0 {
+		return buildVerdictIndeterminate
+	}
+	for _, a := range artifacts {
+		if a.GetState() != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+			return buildVerdictFailed
+		}
+	}
+	return buildVerdictHealthy
+}
+
+func verdictLabelClass(v buildVerdictKind) (label, class string) {
+	switch v {
+	case buildVerdictHealthy:
+		return "Healthy", "badge-success"
+	case buildVerdictFailed:
+		return "Failed", "badge-error"
+	default:
+		// NFR-6: never render an unknown/partial state as healthy.
+		return "Indeterminate", "badge-warning"
+	}
+}
+
+func artifactKindLabel(k pb.ArtifactKind) string {
+	switch k {
+	case pb.ArtifactKind_ARTIFACT_KIND_IMAGE:
+		return "image"
+	case pb.ArtifactKind_ARTIFACT_KIND_CHART:
+		return "chart"
+	default:
+		return "unknown"
+	}
+}
+
+// artifactOwnerID returns whichever of app_id/chart_id is set, matching
+// Artifact's "exactly one of these is set, depending on kind" contract
+// (messages.proto) — the key into domainByOwnerID.
+func artifactOwnerID(a *pb.Artifact) string {
+	if a.GetAppId() != "" {
+		return a.GetAppId()
+	}
+	return a.GetChartId()
+}
+
+func isIncomplete(a *pb.Artifact) bool {
+	return a.GetState() != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED
+}
+
+func incompleteCount(artifacts []*pb.Artifact) int {
+	n := 0
+	for _, a := range artifacts {
+		if isIncomplete(a) {
+			n++
+		}
+	}
+	return n
+}
+
+// BuildDetail is screen 31 (FR-27, FR-28, FR-29, FR-30): every artifact a
+// run touched, its state, and an "incomplete only" filter. FAILED rows show
+// fail_reason verbatim. domainByOwnerID maps app_id/chart_id -> domain (see
+// handlers_builds.go's ownerDomainIndex) — domain is shown here, unlike
+// screen 30, because an app/chart identity is actually in hand per
+// artifact. githubActionsRunURL is a deep link only (NFR-15: no GitHub API
+// calls from this UI) for the zero-artifact indeterminate case.
+templ BuildDetail(user *htmxauth.UserInfo, build *pb.Build, artifacts []*pb.Artifact, domainByOwnerID map[string]string, incompleteOnly bool, githubActionsRunURL string) {
+	@components.Shell("Run #"+build.GetWorkflowRunId(), user) {
+		<div class="breadcrumbs text-sm mb-4">
+			<ul>
+				<li><a href="/builds">Builds</a></li>
+				<li>#{ build.GetWorkflowRunId() }</li>
+			</ul>
+		</div>
+		<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+			<div>
+				<h1 class="text-2xl md:text-3xl font-bold">Run #{ build.GetWorkflowRunId() }</h1>
+				<p class="text-sm opacity-70 font-mono">
+					{ gitShaShort(build.GetGitSha()) } · attempt { strconv.Itoa(int(build.GetWorkflowAttempt())) } · { build.GetActor() }
+				</p>
+			</div>
+			@recordingHealthBadge(buildVerdict(artifacts))
+		</div>
+		{{ verdict := buildVerdict(artifacts) }}
+		if verdict == buildVerdictIndeterminate {
+			<div role="alert" class="alert alert-warning shadow-md mb-6">
+				<span>
+					<strong>No artifacts recorded for this run.</strong>
+					This registry cannot tell whether recording opt-in was off for
+					every target, or whether recording failed silently — resolve it
+					by checking the run itself:
+					<a href={ templ.URL(githubActionsRunURL) } target="_blank" rel="noopener" class="link link-hover font-semibold">
+						open on GitHub Actions →
+					</a>
+				</span>
+			</div>
+		} else if verdict == buildVerdictFailed {
+			<div role="alert" class="alert alert-warning shadow-md mb-6">
+				<span>
+					{ strconv.Itoa(incompleteCount(artifacts)) } of { strconv.Itoa(len(artifacts)) } artifacts { pluralIsAre(incompleteCount(artifacts)) } incomplete.
+					The release itself may still have succeeded — check the artifact
+					states below before assuming otherwise.
+				</span>
+			</div>
+		}
+		<div class="card bg-base-100 shadow-md">
+			<div class="card-body p-0">
+				<div class="flex justify-between items-center p-4 border-b border-base-300">
+					<h2 class="text-lg font-semibold">Artifacts in this run</h2>
+					<form method="get" class="flex items-center">
+						<label class="label cursor-pointer gap-2">
+							<span class="label-text text-sm">Incomplete only</span>
+							<input
+								type="checkbox"
+								name="incomplete"
+								value="1"
+								class="toggle toggle-sm toggle-warning"
+								checked?={ incompleteOnly }
+								onchange="this.form.submit()"
+							/>
+						</label>
+					</form>
+				</div>
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Owner</th>
+							<th>Domain</th>
+							<th>Kind</th>
+							<th>Version</th>
+							<th>State</th>
+							<th>Detail</th>
+						</tr>
+					</thead>
+					<tbody>
+						{{ shown := 0 }}
+						for _, a := range artifacts {
+							if !incompleteOnly || isIncomplete(a) {
+								{{ shown++ }}
+								@artifactRow(a, domainByOwnerID)
+							}
+						}
+						if shown == 0 {
+							<tr>
+								<td colspan="6" class="text-sm opacity-60 p-4">
+									if incompleteOnly {
+										No incomplete artifacts in this run.
+									} else {
+										No artifacts recorded for this run.
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	}
+}
+
+func pluralIsAre(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
+}
+
+templ recordingHealthBadge(v buildVerdictKind) {
+	{{ label, class := verdictLabelClass(v) }}
+	<span class={ "badge", "badge-soft", "badge-lg", class }>App Registry recording health: { label }</span>
+}
+
+templ artifactRow(a *pb.Artifact, domainByOwnerID map[string]string) {
+	<tr class={ "hover", templ.KV("bg-error/5", isIncomplete(a)) }>
+		<td class="font-mono text-sm">{ ownerFullNameFallback(a) }</td>
+		<td class="text-sm">{ domainByOwnerID[artifactOwnerID(a)] }</td>
+		<td class="text-sm">{ artifactKindLabel(a.GetKind()) }</td>
+		<td class="font-mono text-sm">{ a.GetVersion() }</td>
+		<td>@components.ArtifactStateBadge(a.GetState())</td>
+		<td class="text-sm opacity-70 font-mono">
+			if a.GetState() == pb.ArtifactState_ARTIFACT_STATE_FAILED {
+				fail_reason: "{ a.GetFailReason() }"
+			} else {
+				<span class="opacity-50">—</span>
+			}
+		</td>
+	</tr>
+}
+
+// ownerFullNameFallback shows the artifact_id when neither owner id is
+// resolvable to a name in-band (Artifact carries only app_id/chart_id, not
+// a full name) — never blank.
+func ownerFullNameFallback(a *pb.Artifact) string {
+	if id := artifactOwnerID(a); id != "" {
+		return id
+	}
+	return a.GetArtifactId()
+}

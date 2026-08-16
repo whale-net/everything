@@ -1,0 +1,11 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "viewdata",
+    srcs = ["viewdata.go"],
+    importpath = "github.com/whale-net/everything/tools/app_registry/ui/viewdata",
+    visibility = ["//tools/app_registry/ui:__subpackages__"],
+    deps = [
+        "//tools/app_registry/protos:appregistrypb",
+    ],
+)

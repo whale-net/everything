@@ -1,0 +1,152 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/viewdata"
+)
+
+// ChartDetail is screen 22-chart-detail (FR-24/FR-25): the chart's current
+// version per environment and the apps published at that artifact's
+// version (a build-time artifact_link pin, per environment — a chart can
+// legitimately be at a different version in each environment). The chart's
+// currently DECLARED composition (chart_app) renders in its own,
+// distinctly-labelled card below, per FR-24: the two answer different
+// questions and must never be merged into one table.
+templ ChartDetail(user *htmxauth.UserInfo, data *viewdata.ChartDetailData) {
+	@components.Shell("Chart: "+data.Chart.GetFullName(), user) {
+		<div class="breadcrumbs text-sm mb-4">
+			<ul>
+				<li><a href="/apps">Apps</a></li>
+				<li>{ data.Chart.GetFullName() } (chart)</li>
+			</ul>
+		</div>
+		<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-2">
+			<div class="flex items-center gap-3 flex-wrap">
+				<h1 class="text-2xl md:text-3xl font-bold">{ data.Chart.GetFullName() }</h1>
+				<span class="badge badge-soft badge-success">chart</span>
+			</div>
+		</div>
+		if data.Chart.GetDescription() != "" {
+			<p class="text-sm opacity-70 mb-6">{ data.Chart.GetDescription() }</p>
+		}
+		<div class="grid md:grid-cols-3 gap-4 mb-6">
+			for _, pin := range data.EnvPins {
+				@chartEnvStatCard(pin)
+			}
+		</div>
+		for _, pin := range data.EnvPins {
+			if pin.ColumnErr == nil && pin.Promoted {
+				@chartEnvPinsCard(data.Chart.GetFullName(), pin)
+			}
+		}
+		@chartDeclaredCompositionCard(data)
+	}
+}
+
+templ chartEnvStatCard(pin viewdata.ChartEnvPins) {
+	<div class="stat bg-base-100 rounded-box shadow-md">
+		<div class="stat-title">{ pin.Env.GetKey() }</div>
+		if pin.ColumnErr != nil {
+			<div class="stat-desc" title={ pin.ColumnErr.Error() }>could not load state</div>
+			<div class="stat-desc"><span class="badge badge-soft badge-warning badge-sm">Unknown</span></div>
+		} else if !pin.Promoted {
+			<div class="stat-value text-lg opacity-50">—</div>
+			<div class="stat-desc"><span class="text-xs opacity-50">not promoted</span></div>
+		} else {
+			<div class="stat-value text-lg font-mono">{ pin.Version }</div>
+			<div class="stat-desc">promoted { timeAgo(pin.PromotedAt) }</div>
+			if len(pin.Drift) > 0 {
+				<div class="stat-desc text-error">
+					for i, d := range pin.Drift {
+						if i > 0 {
+							,
+						}
+						{ d.GetAppFullName() } overridden — drift
+					}
+				</div>
+			}
+		}
+	</div>
+}
+
+templ chartEnvPinsCard(chartFullName string, pin viewdata.ChartEnvPins) {
+	<div class="card bg-base-100 shadow-md mb-6">
+		<div class="card-body p-0">
+			<div class="p-4 border-b border-base-300">
+				<h2 class="text-lg font-semibold">Apps published in { chartFullName } { pin.Version } ({ pin.Env.GetKey() })</h2>
+				<p class="text-sm opacity-60">Every app image this chart version pins (artifact_link) — each links to its own app page.</p>
+			</div>
+			if len(pin.Images) == 0 {
+				<p class="text-sm opacity-60 p-4">This chart version pins no images.</p>
+			} else {
+				<table class="table">
+					<thead>
+						<tr>
+							<th>App</th>
+							<th>Version</th>
+							<th>Digest</th>
+							<th>Provenance</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, img := range pin.Images {
+							<tr class="hover">
+								<td class="font-mono text-sm">
+									<a href={ templ.URL("/apps/" + img.AppFullName) } class="link link-hover">{ img.AppFullName }</a>
+								</td>
+								<td class="font-mono text-sm">{ img.Version }</td>
+								<td class="font-mono text-xs">
+									<a href={ templ.URL("/artifacts/" + img.Digest) } class="link">{ digestShort(img.Digest) }</a>
+								</td>
+								<td>@components.ProvenanceBadge(img.Provenance)</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</div>
+	</div>
+}
+
+// chartDeclaredCompositionCard renders chart.app_ids (FR-24's "currently
+// DECLARED composition") — deliberately its own card, its own heading, and
+// never merged with chartEnvPinsCard's build-time artifact_link pins above:
+// the two can legitimately disagree (a chart's manifest can list an app the
+// most recently pinned/promoted version doesn't happen to contain, or vice
+// versa after a manifest change).
+templ chartDeclaredCompositionCard(data *viewdata.ChartDetailData) {
+	<div class="card bg-base-100 shadow-md">
+		<div class="card-body p-0">
+			<div class="p-4 border-b border-base-300">
+				<h2 class="text-lg font-semibold">Currently declared composition (chart_app)</h2>
+				<p class="text-sm opacity-60">
+					What { data.Chart.GetFullName() }'s manifest says it composes right now — independent of what
+					any promoted version actually pins above.
+				</p>
+			</div>
+			if len(data.DeclaredApps) == 0 {
+				<p class="text-sm opacity-60 p-4">No apps declared in this chart's manifest.</p>
+			} else {
+				<table class="table">
+					<thead>
+						<tr>
+							<th>App</th>
+							<th>Domain</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, a := range data.DeclaredApps {
+							<tr class="hover">
+								<td class="font-mono text-sm">
+									<a href={ templ.URL("/apps/" + a.GetFullName()) } class="link link-hover">{ a.GetFullName() }</a>
+								</td>
+								<td class="text-sm opacity-70">{ a.GetDomain() }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</div>
+	</div>
+}

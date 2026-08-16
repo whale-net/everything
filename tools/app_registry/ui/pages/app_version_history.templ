@@ -1,0 +1,116 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/viewdata"
+)
+
+// AppVersionHistory is screen 13-app-version-history (FR-21): every
+// artifact CI has recorded for one app, independent of what's currently
+// promoted anywhere — kept on its own screen, reachable in one click from
+// app detail (pages.AppDetail's "Version history" button), and visually
+// distinct from the promotion timeline that stays on app detail (this
+// screen's only overlap with promotion state is the "Currently live in"
+// column, an anchor back to it, per the wireframe note).
+templ AppVersionHistory(user *htmxauth.UserInfo, data *viewdata.AppHistoryData) {
+	@components.Shell("Version history: "+data.App.GetFullName(), user) {
+		<div class="breadcrumbs text-sm mb-4">
+			<ul>
+				<li><a href="/apps">Apps</a></li>
+				<li><a href={ templ.URL("/apps/" + data.App.GetFullName()) }>{ data.App.GetFullName() }</a></li>
+				<li>Version history</li>
+			</ul>
+		</div>
+		<div class="flex flex-col md:flex-row justify-between md:items-center gap-3 mb-6">
+			<div>
+				<h1 class="text-2xl md:text-3xl font-bold">Version history</h1>
+				<p class="text-sm opacity-70">
+					Every artifact CI has recorded for { data.App.GetFullName() } — independent of what's
+					currently promoted anywhere.
+				</p>
+			</div>
+		</div>
+		<form method="get" class="flex flex-col md:flex-row gap-3 mb-4">
+			<select name="provenance" class="select select-sm select-bordered" onchange="this.form.submit()">
+				<option value="" selected?={ data.ProvenanceFilter == "" }>All provenance</option>
+				<option value="observed" selected?={ data.ProvenanceFilter == "observed" }>observed</option>
+				<option value="adopted" selected?={ data.ProvenanceFilter == "adopted" }>adopted</option>
+			</select>
+			<label class="label cursor-pointer gap-2">
+				<span class="label-text text-sm">Currently live only</span>
+				<input
+					type="checkbox"
+					name="live"
+					value="1"
+					class="toggle toggle-sm"
+					checked?={ data.LiveOnly }
+					onchange="this.form.submit()"
+				/>
+			</label>
+		</form>
+		<div class="card bg-base-100 shadow-md">
+			<div class="card-body p-0">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Version</th>
+							<th>Digest</th>
+							<th>Provenance</th>
+							<th>Built from</th>
+							<th>Published</th>
+							<th>Currently live in</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(data.Artifacts) == 0 {
+							<tr>
+								<td colspan="6" class="text-sm opacity-60 p-4">No artifacts recorded for this app.</td>
+							</tr>
+						}
+						for _, row := range data.Artifacts {
+							@appHistoryRow(row)
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	}
+}
+
+templ appHistoryRow(row viewdata.AppHistoryArtifact) {
+	<tr class="hover">
+		<td class="font-mono text-sm">{ row.Artifact.GetVersion() }</td>
+		<td class="font-mono text-xs">
+			<a href={ templ.URL("/artifacts/" + row.Artifact.GetDigest()) } class="link">{ digestShort(row.Artifact.GetDigest()) }</a>
+		</td>
+		<td>@components.ProvenanceBadge(row.Artifact.GetProvenance())</td>
+		<td>
+			if row.Build != nil && row.Build.GetWorkflowRunId() != "" {
+				<a href={ templ.URL("/builds/" + row.Build.GetWorkflowRunId()) } class="link font-mono text-sm">
+					run #{ row.Build.GetWorkflowRunId() }
+					if row.Build.GetWorkflowAttempt() > 1 {
+						, attempt { strconv.Itoa(int(row.Build.GetWorkflowAttempt())) }
+					}
+				</a>
+			} else {
+				<span class="text-sm opacity-50">no CI run — see reason</span>
+			}
+		</td>
+		<td class="text-sm opacity-60">{ timeAgo(row.Artifact.GetPublishedAt()) }</td>
+		<td>
+			if len(row.LiveIn) == 0 {
+				<span class="text-sm opacity-40">not live anywhere</span>
+			} else {
+				for _, live := range row.LiveIn {
+					<span class="badge badge-neutral badge-sm">{ live.EnvKey }</span>
+					if live.Override {
+						<span class="badge badge-soft badge-error badge-xs">override</span>
+					}
+				}
+			}
+		</td>
+	</tr>
+}

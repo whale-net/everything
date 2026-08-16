@@ -1,0 +1,217 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// RollbackOutcome is the post-write confirmation state for screen
+// 51-rollback (FR-52), built entirely from RollbackResponse's own identity
+// fields -- never an echo of the submitted form.
+type RollbackOutcome struct {
+	Promotion  *pb.Promotion // the newly current promotion (the rollback target, now live)
+	Superseded *pb.Promotion // what was live immediately before this rollback
+	Event      *pb.PromotionEvent
+}
+
+// RollbackViewState is screen 51-rollback's full render state. It opens
+// pre-scoped to (entity, environment) from a matrix cell (FR-6) -- there is
+// no environment picker, and no version input anywhere on this screen
+// (FR-17: the user never supplies a version).
+type RollbackViewState struct {
+	Owner  string
+	Kind   string // "image" | "chart"
+	EnvKey string
+	Env    *pb.Environment // nil if the environment lookup itself failed
+	EnvErr string
+
+	// Denied is FR-43/44/45: a principal without this environment's
+	// promoter role never sees the confirmation itself, per the issue's
+	// "unreachable by a read-only principal" note -- enforced by
+	// auth.RequirePromoter on the server, checked here first so the denied
+	// principal never even triggers the informational dry run.
+	Denied     bool
+	DenyReason string
+
+	// NoHistory is FR-18: no prior promotion to roll back to. The control
+	// must be disabled with NoHistoryReason stated inline, never a silent
+	// no-op.
+	NoHistory       bool
+	NoHistoryReason string
+
+	// LoadErr covers everything else the informational dry run or the
+	// environment lookup could fail with (including a PermissionDenied
+	// that slips past the client-side Denied check above -- grpcErrorMessage
+	// renders that distinctly, FR-45).
+	LoadErr string
+
+	// Target and Current are FR-17's SCD2-derived confirmation data, both
+	// taken directly from a RollbackRequest.dry_run response: Target is
+	// what this rollback would make current again (app/version/digest);
+	// Current is what's live right now, about to be superseded. Target's
+	// own ValidFrom/ValidTo are NOT rendered -- the dry-run response
+	// overwrites them to represent the state-that-would-result, not
+	// Target's actual prior live window. The one exact SCD2 timestamp this
+	// screen renders for "when it was last live" is Current.GetValidFrom():
+	// the SCD2 close-and-open invariant means that is exactly the instant
+	// Target's own previous live window ended.
+	Target  *pb.Promotion
+	Current *pb.Promotion
+
+	// Reason is echoed across a validation re-render (FR-16).
+	Reason string
+
+	// Idempotency-key lifecycle (FR-51), same shape as promote.templ's
+	// PromoteViewState: IdemKey is what the next submit should send;
+	// IntentFP is the fingerprint of the intent (owner/kind/env/reason)
+	// this render represents.
+	IdemKey  string
+	IntentFP string
+
+	FormErr string
+
+	// Committed switches the whole screen to the confirmation view once
+	// the rollback has been written.
+	Committed *RollbackOutcome
+}
+
+// Rollback is screen 51-rollback.
+templ Rollback(user *htmxauth.UserInfo, s RollbackViewState) {
+	@components.Shell("Rollback", user) {
+		<div class="flex justify-between items-center mb-4">
+			if s.Env != nil {
+				<h2 class="text-xl font-bold">Rollback { s.Owner } on { s.Env.GetKey() }</h2>
+			} else {
+				<h2 class="text-xl font-bold">Rollback { s.Owner } on { s.EnvKey }</h2>
+			}
+			<a href="/deployments" class="btn btn-sm btn-circle btn-ghost">✕</a>
+		</div>
+		if s.Committed != nil {
+			@rollbackOutcome(s)
+		} else if s.EnvErr != "" {
+			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.EnvErr }</span></div>
+		} else if s.Denied {
+			<div role="alert" class="alert alert-warning shadow-md mb-4">
+				<span><strong>Read-only.</strong> { s.DenyReason }</span>
+			</div>
+		} else if s.LoadErr != "" {
+			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
+		} else if s.NoHistory {
+			<div role="alert" class="alert alert-warning shadow-md mb-4">
+				<span>
+					<strong>Nothing to roll back to.</strong> { s.NoHistoryReason }
+				</span>
+			</div>
+			<div class="flex gap-2 justify-end">
+				<button type="button" class="btn btn-error btn-disabled" disabled title={ s.NoHistoryReason }>Confirm rollback</button>
+			</div>
+		} else {
+			@rollbackForm(s)
+		}
+	}
+}
+
+templ rollbackForm(s RollbackViewState) {
+	if s.FormErr != "" {
+		<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.FormErr }</span></div>
+	}
+	<p class="text-sm opacity-70 mb-4">
+		Rollback has no version argument — it reverts to whatever the history
+		shows as the immediately preceding promotion. That target is shown
+		below before you confirm.
+	</p>
+	<div class="grid md:grid-cols-2 gap-4 mb-6">
+		<div class="card bg-base-100 border border-base-300">
+			<div class="card-body">
+				<span class="text-xs uppercase opacity-50">Currently live</span>
+				if s.Current != nil {
+					@components.DigestDisplay(s.Current.GetVersion(), s.Current.GetDigest())
+					<span class="text-sm opacity-60">live since { timeAgo(s.Current.GetValidFrom()) }</span>
+				} else {
+					<span class="text-sm opacity-60">unavailable</span>
+				}
+			</div>
+		</div>
+		<div class="card bg-base-100 border-2 border-success">
+			<div class="card-body">
+				<span class="text-xs uppercase opacity-50">Will roll back to</span>
+				if s.Target != nil {
+					@components.DigestDisplay(s.Target.GetVersion(), s.Target.GetDigest())
+					if s.Current != nil {
+						<span class="text-sm opacity-60">live until { timeAgo(s.Current.GetValidFrom()) }</span>
+					}
+				} else {
+					<span class="text-sm opacity-60">unavailable</span>
+				}
+			</div>
+		</div>
+	</div>
+	<form method="post" action="/rollback">
+		<input type="hidden" name="owner" value={ s.Owner }/>
+		<input type="hidden" name="kind" value={ s.Kind }/>
+		<input type="hidden" name="env" value={ s.EnvKey }/>
+		<input type="hidden" name="idem_key" value={ s.IdemKey }/>
+		<input type="hidden" name="intent_fp" value={ s.IntentFP }/>
+
+		<div class="form-control mb-6">
+			<label class="label">
+				<span class="label-text">
+					Reason <span class="text-error">*</span> — required for every
+					environment (UI policy; the server itself only requires it above
+					dev/rank 0), becomes part of the permanent history
+				</span>
+			</label>
+			<textarea name="reason" class="textarea textarea-bordered" rows="2" required placeholder="e.g. v1.4.0 causing elevated 5xx on /sessions">{ s.Reason }</textarea>
+		</div>
+
+		<div class="flex gap-2 justify-end">
+			<a href="/deployments" class="btn btn-secondary">Cancel</a>
+			if s.Target != nil {
+				<button type="submit" class="btn btn-error">Confirm rollback to { s.Target.GetVersion() }</button>
+			} else {
+				<button type="submit" class="btn btn-error">Confirm rollback</button>
+			}
+		</div>
+	</form>
+}
+
+// rollbackOutcome renders the FR-52 post-write confirmation, built entirely
+// from s.Committed's own fields (which in turn came from the RollbackResponse's
+// identity fields, never the submitted form).
+templ rollbackOutcome(s RollbackViewState) {
+	{{ c := s.Committed }}
+	<div role="alert" class="alert alert-success shadow-md mb-4">
+		<span class="font-semibold">Rollback recorded.</span>
+	</div>
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+		<div class="card-body">
+			<h3 class="card-title text-base">Current recorded state of this target</h3>
+			<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+				<dt class="opacity-60">Promotion ID</dt><dd class="font-mono">{ c.Promotion.GetPromotionId() }</dd>
+				<dt class="opacity-60">Environment</dt><dd>{ c.Promotion.GetEnvironmentKey() }</dd>
+				<dt class="opacity-60">Target</dt><dd class="font-mono">{ s.Owner }</dd>
+				<dt class="opacity-60">Version / digest</dt><dd>@components.DigestDisplay(c.Promotion.GetVersion(), c.Promotion.GetDigest())</dd>
+				<dt class="opacity-60">Valid from</dt><dd>{ unixToRFC3339(c.Promotion.GetValidFrom()) } UTC</dd>
+				if c.Superseded != nil && c.Superseded.GetPromotionId() != "" {
+					<dt class="opacity-60">Superseded</dt><dd>{ c.Superseded.GetVersion() } (valid until { unixToRFC3339(c.Superseded.GetValidTo()) } UTC)</dd>
+				}
+			</dl>
+		</div>
+	</div>
+	if c.Event != nil {
+		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+			<div class="card-body">
+				<h3 class="card-title text-base">This submission's event</h3>
+				<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+					<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.Event.GetActor() }</dd>
+					<dt class="opacity-60">Reason</dt><dd>{ c.Event.GetReason() }</dd>
+					<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.Event.GetOccurredAt()) } UTC</dd>
+				</dl>
+			</div>
+		</div>
+	}
+	<div class="flex gap-2 justify-end">
+		<a href="/deployments" class="btn btn-primary">Back to deployments</a>
+	</div>
+}

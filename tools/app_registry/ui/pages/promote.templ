@@ -1,0 +1,328 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// CommitOutcome is the post-write confirmation state for screen 50-promote
+// (FR-52). It is built entirely from the RPC response's own identity
+// fields -- never an echo of the submitted form -- per the issue's "every
+// post-write confirmation renders the promotion identity returned in the
+// response" rule.
+type CommitOutcome struct {
+	Promotion  *pb.Promotion
+	Superseded *pb.Promotion
+
+	// Event is set only on a genuine committed write. already_promoted
+	// responses carry no event (promotion.go:99) -- see EarlierEvent below
+	// for how that case is attributed instead.
+	Event *pb.PromotionEvent
+
+	AlreadyPromoted bool
+
+	// EarlierEvent is the most recent PromotionEvent for Promotion.PromotionId,
+	// resolved via ListPromotionEvents when AlreadyPromoted is true. It is
+	// the EARLIER promotion's event, never this submission's -- rendered
+	// with an explicit "earlier promotion" label, never as "promoted by you,
+	// just now" (see the issue's FR-52 note on this exact failure mode).
+	EarlierEvent *pb.PromotionEvent
+	// EarlierEventUnavailable is set when AlreadyPromoted is true but the
+	// ListPromotionEvents lookup itself failed or returned nothing -- FR-52
+	// requires the UI to say so explicitly rather than render a blank actor.
+	EarlierEventUnavailable bool
+}
+
+// PromoteViewState is screen 50-promote's full render state -- covers every
+// branch the issue requires: not-promotable, nothing-published, the live
+// form (with an inline dry-run result or validation error), and the final
+// committed/already-promoted confirmation.
+type PromoteViewState struct {
+	Owner  string
+	Kind   string // "image" | "chart" -- matches the CLI's --kind values
+	EnvKey string
+	Env    *pb.Environment // nil if the environment lookup itself failed
+	EnvErr string
+
+	// Candidates is the FR-11 offer list: only artifacts the caller could
+	// legally promote. Empty together with NotPromotable/NoArtifacts false
+	// only in the load-error case (LoadErr set).
+	Candidates      []*pb.Artifact
+	RequireOverride bool // true when Candidates are PROMOTABILITY_VIA_CHART
+	NotPromotable   bool // entity's artifacts are PROMOTABILITY_NOT_PROMOTABLE (FR-11)
+	NoArtifacts     bool // entity has no published artifacts of this kind at all
+	LoadErr         string
+
+	// Echoed form values -- preserved across a validation re-render (FR-16).
+	SelectedArtifactID string
+	Reason             string
+	OverrideAck        bool
+
+	// Idempotency-key lifecycle (FR-51). IdemKey is the key the NEXT submit
+	// from this render should send. IntentFP is the fingerprint of the
+	// intent this render represents (owner/kind/env/artifact/override/
+	// reason) -- the handler recomputes a fresh fingerprint from whatever
+	// the next POST actually contains and compares it to IntentFP to decide
+	// whether to keep IdemKey or mint a new one. DryRunFP is the
+	// fingerprint of the form state the most recent successful dry run
+	// verified; empty means "no verified dry run yet". Never rendered as
+	// visible UI, only round-tripped as hidden fields.
+	IdemKey  string
+	IntentFP string
+	DryRunFP string
+
+	FormErr      string
+	DryRunResult *pb.PromoteResponse // set right after a successful dry run (FR-15)
+
+	// Committed switches the whole screen to the confirmation view once a
+	// commit (real write or already_promoted) has succeeded.
+	Committed *CommitOutcome
+}
+
+// candidateOptionLabel matches the wireframe's dense "version — digest ·
+// build" option text.
+func candidateOptionLabel(a *pb.Artifact) string {
+	return fmt.Sprintf("%s — %s", a.GetVersion(), digestTruncatedForOption(a.GetDigest()))
+}
+
+func digestTruncatedForOption(digest string) string {
+	const prefix = "sha256:"
+	if len(digest) > len(prefix)+12 {
+		return digest[:len(prefix)+12] + "…"
+	}
+	return digest
+}
+
+// Promote is screen 50-promote. It opens pre-scoped to (entity, environment)
+// from a matrix cell (FR-6) -- there is no environment picker anywhere on
+// this screen.
+templ Promote(user *htmxauth.UserInfo, s PromoteViewState) {
+	@components.Shell("Promote", user) {
+		<div class="flex justify-between items-center mb-4">
+			if s.Env != nil {
+				<h2 class="text-xl font-bold">Promote { s.Owner } → { s.Env.GetKey() }</h2>
+			} else {
+				<h2 class="text-xl font-bold">Promote { s.Owner } → { s.EnvKey }</h2>
+			}
+			<a href="/deployments" class="btn btn-sm btn-circle btn-ghost">✕</a>
+		</div>
+		if s.Committed != nil {
+			@commitOutcome(s)
+		} else if s.EnvErr != "" {
+			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.EnvErr }</span></div>
+		} else if s.LoadErr != "" {
+			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
+		} else if s.NotPromotable {
+			<div role="alert" class="alert alert-warning shadow-md mb-4">
+				<span>
+					<strong>{ s.Owner }</strong> is <span class="font-mono">PROMOTABILITY_NOT_PROMOTABLE</span> —
+					it is never deployed, so there is nothing here to promote.
+				</span>
+			</div>
+		} else if s.NoArtifacts {
+			<div role="alert" class="alert alert-warning shadow-md mb-4">
+				<span>{ s.Owner } has no published artifacts of this kind yet — nothing to promote.</span>
+			</div>
+		} else {
+			@promoteForm(user, s)
+		}
+	}
+}
+
+templ promoteForm(user *htmxauth.UserInfo, s PromoteViewState) {
+	{{ decision := components.GateCellAction(user, components.EnvironmentPromoterRole(s.EnvKey), false) }}
+	{{ aboveDev := s.Env != nil && s.Env.GetRank() > 0 }}
+	if s.RequireOverride {
+		<div class="alert alert-info shadow-md mb-4">
+			<span>
+				This app reaches <strong>{ s.EnvKey }</strong> only inside its
+				chart's pin (<span class="badge badge-soft badge-info badge-xs">Via chart</span>).
+				Promoting it directly here will be recorded as an <strong>override</strong>
+				and tracked as drift the moment the chart's pin moves.
+			</span>
+		</div>
+	}
+	if !decision.Allowed {
+		<div role="alert" class="alert alert-warning shadow-md mb-4">
+			<span><strong>Read-only.</strong> { decision.MissingRole } — this session does not hold it. A submit will be rejected by app-registry-api.</span>
+		</div>
+	}
+	if s.FormErr != "" {
+		<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.FormErr }</span></div>
+	}
+	if s.DryRunResult != nil {
+		@dryRunResultBanner(s.DryRunResult)
+	}
+	<form method="post" action="/promote">
+		<input type="hidden" name="owner" value={ s.Owner }/>
+		<input type="hidden" name="kind" value={ s.Kind }/>
+		<input type="hidden" name="env" value={ s.EnvKey }/>
+		<input type="hidden" name="idem_key" value={ s.IdemKey }/>
+		<input type="hidden" name="intent_fp" value={ s.IntentFP }/>
+		<input type="hidden" name="dryrun_fp" value={ s.DryRunFP }/>
+
+		<div class="form-control mb-4">
+			<label class="label"><span class="label-text">Version</span></label>
+			<select name="artifact_id" class="select select-bordered">
+				for _, a := range s.Candidates {
+					<option value={ a.GetArtifactId() } selected?={ a.GetArtifactId() == s.SelectedArtifactID }>{ candidateOptionLabel(a) }</option>
+				}
+			</select>
+		</div>
+
+		if s.RequireOverride {
+			<div class="form-control mb-4">
+				<label class="label cursor-pointer justify-start gap-3">
+					<input type="checkbox" name="override_ack" value="true" class="checkbox checkbox-error" checked?={ s.OverrideAck }/>
+					<span class="label-text">I understand this is an override and will be flagged as drift when the chart's pin changes.</span>
+				</label>
+			</div>
+		}
+
+		<div class="form-control mb-4">
+			<label class="label">
+				<span class="label-text">
+					Reason <span class="text-error">*</span> — required for every
+					environment (UI policy; the server itself only requires it above
+					dev/rank 0), becomes part of the permanent history
+				</span>
+			</label>
+			<textarea name="reason" class="textarea textarea-bordered" rows="2" required placeholder="e.g. verify sensor batch fix ahead of chart's next cut">{ s.Reason }</textarea>
+		</div>
+
+		if aboveDev {
+			<div role="alert" class="alert alert-warning shadow-md mb-4">
+				<span>
+					<strong>{ s.EnvKey }</strong> is above dev (rank { fmt.Sprint(s.Env.GetRank()) }).
+					"Promote for real" is a UI policy requirement:
+					disabled until a dry run has been run against exactly the form
+					state below — changing any field re-arms this requirement.
+				</span>
+			</div>
+		}
+
+		<div class="flex gap-2 justify-end">
+			<a href="/deployments" class="btn btn-secondary">Cancel</a>
+			<button type="submit" name="action" value="dry_run" class="btn btn-warning">Run dry run</button>
+			if !decision.Allowed {
+				<button type="submit" class="btn btn-primary btn-disabled" disabled title={ "Requires role: " + decision.MissingRole }>Promote for real</button>
+			} else if aboveDev && s.DryRunFP != s.IntentFP {
+				<button type="submit" class="btn btn-primary btn-disabled" disabled title="Run a dry run against the current form state first.">Promote for real</button>
+			} else {
+				<button type="submit" name="action" value="commit" class="btn btn-primary">Promote for real</button>
+			}
+		</div>
+	</form>
+}
+
+// dryRunResultBanner frames a dry-run result so it cannot be mistaken for a
+// committed write (FR-15) -- distinct alert-warning styling plus an
+// explicit "no write performed" statement, never rendered inside a
+// success/confirmation-styled container.
+templ dryRunResultBanner(resp *pb.PromoteResponse) {
+	<div role="alert" class="alert alert-warning shadow-md mb-4">
+		<div>
+			<span class="font-semibold">Dry run only — no write performed.</span>
+			<div class="text-sm mt-1">
+				if resp.GetAlreadyPromoted() {
+					This would be a no-op: the selected artifact is already current for this target.
+				} else {
+					Would promote to
+					@components.DigestDisplay(resp.GetPromotion().GetVersion(), resp.GetPromotion().GetDigest())
+					if resp.GetPromotion().GetIsOverride() {
+						<span class="badge badge-soft badge-error badge-xs ml-1">override</span>
+					}
+					if resp.GetSuperseded() != nil && resp.GetSuperseded().GetPromotionId() != "" {
+						<span class="ml-1">(supersedes { resp.GetSuperseded().GetVersion() })</span>
+					}
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// commitOutcome renders the FR-52 post-write confirmation. It is built
+// entirely from s.Committed's own fields, which in turn came from the RPC
+// response's identity fields -- never the submitted form.
+templ commitOutcome(s PromoteViewState) {
+	{{ c := s.Committed }}
+	if c.AlreadyPromoted {
+		<div role="alert" class="alert alert-info shadow-md mb-4">
+			<div>
+				<span class="font-semibold">No change written.</span>
+				<div class="text-sm mt-1">
+					The selected artifact was already current for this target — this
+					submission recorded nothing new.
+				</div>
+			</div>
+		</div>
+	} else {
+		<div role="alert" class="alert alert-success shadow-md mb-4">
+			<span class="font-semibold">Promotion recorded.</span>
+		</div>
+	}
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+		<div class="card-body">
+			<h3 class="card-title text-base">Current recorded state of this target</h3>
+			<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+				<dt class="opacity-60">Promotion ID</dt><dd class="font-mono">{ c.Promotion.GetPromotionId() }</dd>
+				<dt class="opacity-60">Environment</dt><dd>{ c.Promotion.GetEnvironmentKey() }</dd>
+				<dt class="opacity-60">Target</dt><dd class="font-mono">{ s.Owner }</dd>
+				<dt class="opacity-60">Version / digest</dt><dd>@components.DigestDisplay(c.Promotion.GetVersion(), c.Promotion.GetDigest())</dd>
+				<dt class="opacity-60">Override</dt>
+				<dd>
+					if c.Promotion.GetIsOverride() {
+						<span class="badge badge-soft badge-error badge-xs">override</span>
+					} else {
+						<span class="opacity-60">no</span>
+					}
+				</dd>
+				<dt class="opacity-60">Valid from</dt><dd>{ unixToRFC3339(c.Promotion.GetValidFrom()) } UTC</dd>
+				if c.Superseded != nil && c.Superseded.GetPromotionId() != "" {
+					<dt class="opacity-60">Superseded</dt><dd>{ c.Superseded.GetVersion() } (valid until { unixToRFC3339(c.Superseded.GetValidTo()) } UTC)</dd>
+				}
+			</dl>
+		</div>
+	</div>
+	if c.Event != nil {
+		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+			<div class="card-body">
+				<h3 class="card-title text-base">This submission's event</h3>
+				<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+					<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.Event.GetActor() }</dd>
+					<dt class="opacity-60">Reason</dt><dd>{ c.Event.GetReason() }</dd>
+					<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.Event.GetOccurredAt()) } UTC</dd>
+				</dl>
+			</div>
+		</div>
+	} else if c.AlreadyPromoted {
+		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+			<div class="card-body">
+				<h3 class="card-title text-base">Earlier promotion's event</h3>
+				if c.EarlierEventUnavailable || c.EarlierEvent == nil {
+					<p class="text-sm opacity-70">
+						Actor and reason are unavailable for this response — this is the
+						EARLIER promotion's attribution, not this submission's, and could
+						not be resolved.
+					</p>
+				} else {
+					<p class="text-xs opacity-60 mb-1">
+						Attributed to the EARLIER promotion that first set this state —
+						not this submission.
+					</p>
+					<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+						<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.EarlierEvent.GetActor() }</dd>
+						<dt class="opacity-60">Reason</dt><dd>{ c.EarlierEvent.GetReason() }</dd>
+						<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.EarlierEvent.GetOccurredAt()) } UTC</dd>
+					</dl>
+				}
+			</div>
+		</div>
+	}
+	<div class="flex gap-2 justify-end">
+		<a href="/deployments" class="btn btn-primary">Back to deployments</a>
+	</div>
+}

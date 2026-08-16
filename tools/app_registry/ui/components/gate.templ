@@ -1,0 +1,54 @@
+package components
+
+// GatedAction is the standard "unavailable action" rendering (FR-42/FR-44):
+// never render an enabled control guaranteed to be denied. When the gate
+// decision denies the action, the control renders disabled with the
+// missing role named directly in its label and title — never silently
+// omitted with no explanation, and never enabled-but-doomed-to-fail.
+//
+// Screens that would rather omit the control entirely instead of showing
+// it disabled may do so by simply not calling GatedAction when
+// !decision.Allowed — both are sanctioned by FR-44; this component covers
+// the "render disabled" half of that choice.
+templ GatedAction(decision GateDecision, label string, class string) {
+	if decision.Allowed {
+		<button type="button" class={ "btn", class }>{ label }</button>
+	} else {
+		<button
+			type="button"
+			class={ "btn", class, "btn-disabled" }
+			disabled
+			title={ "Requires role: " + decision.MissingRole }
+		>
+			{ label }
+			<span class="badge badge-outline badge-sm ml-1">{ decision.MissingRole }</span>
+		</button>
+	}
+}
+
+// GatedLinkAction is GatedAction's link-shaped sibling, for the per-cell
+// promote/rollback affordances the deployments matrix (screen 10, FR-6)
+// opens pre-scoped to one (entity, environment) pair via href's query
+// string. When denied — including while an "as of" instant is active
+// (FR-8: mutating controls must be disabled whenever historical state is
+// shown) — this renders a disabled, non-navigating control with the missing
+// role or reason named, never a live link guaranteed to fail or silently
+// mutate against the wrong state (FR-44).
+templ GatedLinkAction(decision GateDecision, label string, class string, href string, title string) {
+	if decision.Allowed {
+		<a href={ templ.URL(href) } class={ "btn", class } title={ title }>{ label }</a>
+	} else {
+		{{ denyReason := decision.Reason }}
+		if denyReason == "" {
+			{{ denyReason = "Requires role: " + decision.MissingRole }}
+		}
+		<button
+			type="button"
+			class={ "btn", class, "btn-disabled" }
+			disabled
+			title={ denyReason }
+		>
+			{ label }
+		</button>
+	}
+}

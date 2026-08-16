@@ -1,0 +1,90 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// gitShaShort truncates a git sha to a dense, scannable prefix (NFR-10),
+// matching digest.templ's digestTruncated convention for identifiers.
+func gitShaShort(sha string) string {
+	if len(sha) <= 10 {
+		return sha
+	}
+	return sha[:10]
+}
+
+// Builds is screen 30 (FR-26, FR-56): recent CI runs, backed by a single
+// ListBuilds(since, page) call per page load, plus a direct workflow-run-id
+// lookup box that needs no attempt input — GetReleaseRun(workflow_run_id, 0)
+// already means "the highest attempt recorded" (repository/repository.go),
+// so there is nothing for an attempt field to disambiguate here.
+//
+// Deliberately does NOT show: a recording-health badge, an artifact count
+// column, row tinting, or a domain label. Build (messages.proto) carries no
+// artifact states, counts, or domain — showing any of those would mean an
+// N+1 GetReleaseRun fan-out per row, which this screen must never do (see
+// issue #649). "Open this run" is the only affordance into that detail;
+// screen 31 (BuildDetail) is where recording health actually lives.
+templ Builds(user *htmxauth.UserInfo, builds []*pb.Build, lookupErr string) {
+	@components.Shell("Builds", user) {
+		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100 flex flex-col md:flex-row justify-between md:items-center gap-4">
+			<div>
+				<h1 class="text-2xl md:text-3xl font-bold mb-2">Builds</h1>
+				<p class="text-sm opacity-80">CI run recording status — find out exactly what did and didn't finish.</p>
+			</div>
+			<a href="/reconcile-runs" class="btn btn-outline">Reconcile runs →</a>
+		</div>
+		<form method="get" action="/builds/lookup" class="flex flex-col md:flex-row gap-3 mb-4">
+			<input type="text" name="run" placeholder="Workflow run id…" class="input input-bordered input-sm w-full md:w-64"/>
+			<button type="submit" class="btn btn-sm btn-primary">Look up</button>
+		</form>
+		if lookupErr != "" {
+			<div role="alert" class="alert alert-error shadow-md mb-4">
+				<span>{ lookupErr }</span>
+			</div>
+		}
+		<div class="card bg-base-100 shadow-md">
+			<div class="card-body p-0">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Run</th>
+							<th>Commit</th>
+							<th>Actor</th>
+							<th class="text-right">Started</th>
+							<th class="text-right">Recorded</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(builds) == 0 {
+							<tr>
+								<td colspan="5" class="text-sm opacity-60 p-4">No builds recorded yet.</td>
+							</tr>
+						}
+						for _, b := range builds {
+							<tr class="hover">
+								<td class="font-mono text-sm">
+									<a href={ templ.URL("/builds/" + b.GetWorkflowRunId()) } class="link link-hover">
+										#{ b.GetWorkflowRunId() }
+										if b.GetWorkflowAttempt() > 1 {
+											<span class="opacity-60">(attempt { strconv.Itoa(int(b.GetWorkflowAttempt())) })</span>
+										}
+									</a>
+								</td>
+								<td class="font-mono text-xs">{ gitShaShort(b.GetGitSha()) }</td>
+								<td class="text-sm">{ b.GetActor() }</td>
+								<td class="text-right opacity-60">{ timeAgo(b.GetStartedAt()) }</td>
+								<td class="text-right opacity-60">{ timeAgo(b.GetRecordedAt()) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+		<p class="text-xs opacity-60 mt-4">Recording health, artifact counts, and domain are not shown here — Build carries no artifact data. Open a run to see its recording health.</p>
+	}
+}

@@ -1,7 +1,9 @@
 # App Registry — Environment Variables
 
 > All environment variables read by `app-registry-api`,
-> `app-registry-migration`, and `app-registry-worker`.
+> `app-registry-migration`, `app-registry-worker`, and `app-registry-ui` —
+> one `ENV.md` per domain per `AGENTS.md`; the UI does **not** get its own
+> file. See "UI (`app-registry-ui`)" below.
 >
 > **AR-4a** added `libs/go/temporal` (client/worker bootstrap) and a
 > Temporal dev server in Tilt. **AR-4b** adds the first real consumer:
@@ -159,6 +161,75 @@ drainer, sweeping `artifact` rows stuck in `allocated`/`publishing` to
 | `ARTIFACT_REAPER_TIMEOUT` | `30m` | How long an `artifact` row may sit in `allocated` or `publishing` (measured from `state_changed_at`) before the next sweep moves it to `failed` with `fail_reason = 'stale'`. Go duration syntax. **AR-7d (issue #558): `state_changed_at` is stamped once, at plan time, for every target in a release run** — `release.yml`'s `plan-release` job calls `BeginPublishBatch` for the whole matrix before it fans out (see ARCHITECTURE.md "The run log" -> "As built (AR-7d)"), so a target whose matrix leg hasn't started yet has been "publishing" since plan time, not since its own push began. `release.yml`'s per-leg `Begin publish (image)` step re-arms this clock (a `publishing -> publishing` heartbeat) immediately before that leg's own push, and revives (`failed -> publishing`) a row the reaper already expired while the leg was still queued — so a reap that races a slow-to-schedule leg does not lose the eventual push, but it does cost that leg a transient, misleading `failed` state in `app-registry builds status` until it runs. **Set this comfortably longer than the WHOLE release run** (every matrix leg's cross-arch image build, end to end, plus queueing delay) **, not just the slowest individual leg** — a value sized only for one leg reaps every target that hasn't started yet almost immediately after plan time. |
 | `ARTIFACT_REAPER_POLL_INTERVAL` | `5m` | Delay between sweep passes (Go duration syntax). Coarser than `WRITEBACK_POLL_INTERVAL` — this is a background hygiene sweep, not a redelivery loop reacting to a worker crash. |
 
+## UI (`app-registry-ui`)
+
+HTMX admin UI (FR-47/48/49). Records promotions; never deploys anything
+(NFR-1). Reads from `os.Getenv` only, no config files — see `ui/README.md`
+for structure/styling and `ui/main.go`'s `LoadConfig`, the source of record
+for defaults below.
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `HOST` | `0.0.0.0` | Bind address |
+| `PORT` | `8000` | HTTP port |
+| `AUTH_MODE` | `none` | HTTP authentication mode: `none` or `oidc` |
+| `SECRET_KEY` | `dev-secret-key-change-in-production` | Session encryption key; also derives the AES key used to encrypt refresh tokens at rest |
+| `REGISTRY_API_URL` | `app-registry-api:50051` | `app-registry-api` gRPC endpoint |
+| `GRPC_AUTH_MODE` | `none` | gRPC token-forwarding mode: `none` or `oidc` — should match `app-registry-api`'s own `GRPC_AUTH_MODE` |
+| `PG_DATABASE_URL` | *(required, no fallback)* | PostgreSQL connection string for `htmxauth`'s DB-backed session store (the `ui_sessions` table) — **same variable name as the rest of App Registry** (see Database above), deliberately not `DATABASE_URL` |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URI` | `""` | Required when `AUTH_MODE=oidc` — OIDC provider URL, client ID/secret, and callback URL |
+
+**`PG_DATABASE_URL` points at the same database as the registry's
+`PG_DATABASE_URL` above, and is used *solely* for session storage.** The
+UI never issues SQL against registry domain tables (`apps`, `environments`,
+`promotions`, etc.) — all registry domain data comes over gRPC from
+`app-registry-api`, forwarding the logged-in user's own access token
+(FR-40, `libs/go/grpcauth`). The UI's only direct database use is
+`libs/go/htmxauth`'s session store.
+
+Because `htmxauth` names the `ui_sessions` table **unqualified** (no schema
+prefix in any query — see `libs/go/htmxauth/db_session.go`), the connection
+string's `search_path` is part of the contract: `PG_DATABASE_URL` must
+resolve to the **same schema** `app-registry-migration`'s `011_...` migration
+writes `ui_sessions` into, or every session read/write silently misses the
+table (or, worse, hits an unrelated same-named table on a different
+schema-per-tenant setup). Don't point the UI at the registry database via a
+role/search_path that differs from the migration runner's.
+
+**An unset `PG_DATABASE_URL` is a hard failure, not a degraded mode.**
+`NewApp` in `ui/main.go` refuses to start without it — this UI always uses
+DB-backed sessions and never falls back to cookie-only sessions (unlike
+`manmanv2/ui`), because cookie sessions cannot refresh OIDC access tokens.
+A missing `ui_sessions` table (migration not yet run) also fails boot, via
+`htmxauth.NewDBSessionManager`'s preflight probe, rather than surfacing as a
+mysterious runtime 500 on first login.
+
+**Deploying for real:** `SECRET_KEY`, `OIDC_CLIENT_SECRET`, and
+`PG_DATABASE_URL` must never be set as literal `env:` values in a values.yaml
+override that ships to a real cluster — source them via `secretKeyRef`
+(`tools/helm`'s `secretEnv`, added in #635) instead:
+
+```yaml
+apps:
+  app-registry-ui:
+    secretEnv:
+      - name: SECRET_KEY
+        secretName: app-registry-ui-secrets
+        key: secret-key
+      - name: OIDC_CLIENT_SECRET
+        secretName: app-registry-ui-secrets
+        key: oidc-client-secret
+      - name: PG_DATABASE_URL
+        secretName: app-registry-ui-secrets
+        key: database-url
+```
+
+`tools/app_registry:app_registry_chart`'s app key for the UI is
+`app-registry-ui` (`<domain>-<name>`, matching every other app in this
+chart). See `tools/helm/README.md`'s "How do I add environment variables?"
+FAQ for the full secretEnv/envFrom mechanism, and DEPLOY.md for the rest of
+this service's deployment checklist.
+
 ## Local Development (Tilt)
 
 ```bash
@@ -166,6 +237,7 @@ drainer, sweeping `artifact` rows stuck in `allocated`/`publishing` to
 ENABLE_APP_REGISTRY_MIGRATION=true
 ENABLE_APP_REGISTRY_API=true
 ENABLE_APP_REGISTRY_WORKER=true
+ENABLE_APP_REGISTRY_UI=true
 ENABLE_TEMPORAL=true
 
 # Infrastructure — set to 'custom' to use an external Postgres
@@ -174,8 +246,12 @@ PG_DATABASE_URL=postgres://...   # if BUILD_POSTGRES_ENV=custom
 ```
 
 Local access (`tilt up` from `tools/app_registry/`): API forwarded to
-`localhost:50061`, Postgres to `localhost:5432`, Temporal gRPC to
-`localhost:7233` and Web UI to `localhost:8233`. The worker has no forwarded
+`localhost:50061`, UI forwarded to `localhost:8090`, Postgres to
+`localhost:5432`, Temporal gRPC to `localhost:7233` and Web UI to
+`localhost:8233`. The UI's `PG_DATABASE_URL` is set by the Tiltfile from the
+**same** `pg_database_url` value fed to the API/migration/worker above — one
+local database, not two (see "UI" above). `AUTH_MODE=none` and
+`GRPC_AUTH_MODE=none` in Tilt, same as the API. The worker has no forwarded
 port (it serves nothing) — inspect it via `tilt logs app-registry-worker` or
 a shell into its pod (`WRITEBACK_OUTPUT_DIR` lives inside the container).
 `ENABLE_APP_REGISTRY_WORKER=true` with `ENABLE_TEMPORAL=false` skips the

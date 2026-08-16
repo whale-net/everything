@@ -1520,3 +1520,94 @@ func TestListReconcileRuns_SinceComposesWithPagination_Postgres(t *testing.T) {
 		}
 	}
 }
+
+// TestChartsForApp_ChartLinkedApp_Postgres proves ChartsForApp (exercised
+// here both directly and via the GetApp RPC) runs against real Postgres for
+// an app that IS referenced by a chart -- the SELECT joins v_current_chart
+// to chart_app, and a real Postgres parser is what previously rejected an
+// unqualified `chart_id` in that SELECT list as ambiguous (both tables have
+// a chart_id column). A mocked repository never parses SQL, so this class
+// of bug is invisible without a real database.
+func TestChartsForApp_ChartLinkedApp_Postgres(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-747-1", 30000, 30000,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "linked-app")},
+			[]*appmetapb.ChartManifest{{Domain: "acme", Name: "linked-chart", Apps: []string{"linked-app"}}},
+		),
+		IdempotencyKey: "issue747-1",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(resp.CreatedApps) != 1 || len(resp.CreatedCharts) != 1 {
+		t.Fatalf("expected 1 created app and 1 created chart, got apps=%+v charts=%+v", resp.CreatedApps, resp.CreatedCharts)
+	}
+	appID := resp.CreatedApps[0].AppId
+
+	// Direct repository call: exercises ChartsForApp's real SQL query
+	// (the ambiguous-column bug site) against Postgres.
+	charts, err := reg.Apps().ChartsForApp(ctx, appID)
+	if err != nil {
+		t.Fatalf("ChartsForApp must not error for a chart-linked app: %v", err)
+	}
+	if len(charts) != 1 || charts[0].Name != "linked-chart" {
+		t.Fatalf("expected exactly [linked-chart], got %+v", charts)
+	}
+
+	// GetApp RPC: the actual caller-facing path that AR-7a's validation
+	// finding (#744) showed broke for every app.
+	getResp, err := srv.GetApp(ctx, &pb.GetAppRequest{AppId: appID})
+	if err != nil {
+		t.Fatalf("GetApp must not error for a chart-linked app: %v", err)
+	}
+	if len(getResp.Charts) != 1 || getResp.Charts[0].Name != "linked-chart" {
+		t.Fatalf("expected GetApp to return exactly [linked-chart], got %+v", getResp.Charts)
+	}
+}
+
+// TestChartsForApp_StandaloneApp_Postgres proves ChartsForApp/GetApp return
+// an empty chart list -- not an error -- for a standalone app with zero
+// chart_app rows. This is the case that previously failed even though it
+// has no chart join result to speak of: the ambiguous-column error fires
+// during SQL parsing/planning, before any rows are considered, so it broke
+// this case just as much as the chart-linked case.
+func TestChartsForApp_StandaloneApp_Postgres(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+	ctx := authedCtx()
+	srv := handlers.NewAppServer(reg)
+
+	resp, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-747-2", 31000, 31000,
+			[]*appmetapb.AppManifest{oneAppManifest("acme", "standalone-app")},
+			nil, // no charts at all -- standalone-app has zero chart_app rows.
+		),
+		IdempotencyKey: "issue747-2",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(resp.CreatedApps) != 1 {
+		t.Fatalf("expected 1 created app, got %+v", resp.CreatedApps)
+	}
+	appID := resp.CreatedApps[0].AppId
+
+	charts, err := reg.Apps().ChartsForApp(ctx, appID)
+	if err != nil {
+		t.Fatalf("ChartsForApp must not error for a standalone app: %v", err)
+	}
+	if len(charts) != 0 {
+		t.Fatalf("expected an empty chart list for a standalone app, got %+v", charts)
+	}
+
+	getResp, err := srv.GetApp(ctx, &pb.GetAppRequest{AppId: appID})
+	if err != nil {
+		t.Fatalf("GetApp must not error for a standalone app: %v", err)
+	}
+	if len(getResp.Charts) != 0 {
+		t.Fatalf("expected GetApp to return an empty chart list for a standalone app, got %+v", getResp.Charts)
+	}
+}

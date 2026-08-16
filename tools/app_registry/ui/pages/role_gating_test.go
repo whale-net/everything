@@ -1,0 +1,278 @@
+package pages
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/a-h/templ"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+)
+
+// This file covers #652 (NFR-17, FR-42-46, FR-59): role gating over
+// representative role subsets, exercised directly against the templ page
+// components that actually branch on role (components.HasRole/Gate is only
+// ever called from pages.Deployments, pages.Environments, and
+// pages.EnvironmentForm -- every other read screen (01/11/12/13/20/21/22/
+// 30/31/32/40) passes user through to components.Shell only for chrome and
+// never branches on Roles; that is asserted structurally by
+// components/roles_test.go and components/banner_test.go covering Shell's
+// one role-sensitive piece, MisconfigBanner, plus a grep-verifiable absence
+// of components.HasRole/Gate calls in every other pages/*.templ file).
+
+// --- Representative role subsets (issue's four required principals) -------
+
+func noRolesUser() *htmxauth.UserInfo     { return &htmxauth.UserInfo{Roles: []string{}} }
+func absentRolesUser() *htmxauth.UserInfo { return &htmxauth.UserInfo{Roles: nil} }
+func promoterDevUser() *htmxauth.UserInfo {
+	return &htmxauth.UserInfo{Roles: []string{components.EnvironmentPromoterRole("dev")}}
+}
+func adminUser() *htmxauth.UserInfo    { return &htmxauth.UserInfo{Roles: []string{components.RoleAdmin}} }
+func allRolesUser() *htmxauth.UserInfo { return &htmxauth.UserInfo{Roles: htmxauth.AllRoles} }
+
+func renderComponent(t *testing.T, comp templ.Component) string {
+	t.Helper()
+	var buf strings.Builder
+	if err := comp.Render(context.Background(), &buf); err != nil {
+		t.Fatalf("render failed: %v", err)
+	}
+	return buf.String()
+}
+
+// buildTestMatrix constructs a matrix with one standalone-image row
+// ("platform-worker") not currently promoted to any environment -- so every
+// cell renders the "not promoted" promote affordance
+// (pages/deployments.templ's matrixCell), the shape every role-subset
+// assertion below inspects.
+func buildTestMatrix(envs []*pb.Environment) *matrix.Matrix {
+	apps := []*pb.App{
+		{AppId: "app-1", Domain: "platform", FullName: "platform-worker", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+	}
+	return matrix.Build(nil, apps, envs, map[string]matrix.ColumnResult{})
+}
+
+// promoteHref matches entityActionHref's exact rendering (url.Values.Encode
+// sorts query params alphabetically, and templ HTML-escapes "&" to "&amp;"
+// in an href attribute) for the fixed owner/kind buildTestMatrix's row
+// uses.
+func promoteHref(envKey string) string {
+	return `href="/promote?env=` + envKey + `&amp;kind=image&amp;owner=platform-worker"`
+}
+
+func devStageProdEnvs() []*pb.Environment {
+	return []*pb.Environment{
+		{Key: "dev", DisplayName: "Dev", Rank: 0},
+		{Key: "stage", DisplayName: "Stage", Rank: 1},
+		{Key: "prod", DisplayName: "Prod", Rank: 2},
+	}
+}
+
+// --- Subset 1: no roles (read-only viewer) --------------------------------
+
+// FR-46: the deployments matrix is fully usable for a no-roles principal --
+// every row/column renders (no empty regions), and FR-44: no enabled write
+// control anywhere; every promote affordance is present but disabled, with
+// the missing role named.
+func TestDeployments_NoRoles_FullyReadableNoEnabledWriteControls(t *testing.T) {
+	envs := devStageProdEnvs()
+	m := buildTestMatrix(envs)
+	body := renderComponent(t, Deployments(noRolesUser(), m, false))
+
+	if !strings.Contains(body, "platform-worker") {
+		t.Fatalf("expected the row to render (no empty region); body = %s", body)
+	}
+	for _, env := range envs {
+		if !strings.Contains(body, env.GetKey()) {
+			t.Errorf("expected environment column %q to render; body = %s", env.GetKey(), body)
+		}
+	}
+	// FR-44: every promote control must render disabled, naming the
+	// missing per-environment promoter role.
+	for _, env := range envs {
+		role := components.EnvironmentPromoterRole(env.GetKey())
+		if !strings.Contains(body, `title="Requires role: `+role+`"`) {
+			t.Errorf("expected a disabled control naming %q; body = %s", role, body)
+		}
+	}
+	if strings.Contains(body, `href="/promote?`) {
+		t.Errorf("no-roles viewer must never see a live, enabled promote link; body = %s", body)
+	}
+}
+
+// FR-38/FR-44: environments screen (09) is fully readable for a no-roles
+// principal; the Add/Edit admin controls render disabled, naming
+// app-registry-admin, never omitted with no explanation.
+func TestEnvironments_NoRoles_FullyReadableAdminControlsDisabled(t *testing.T) {
+	envs := devStageProdEnvs()
+	body := renderComponent(t, Environments(noRolesUser(), envs, false, nil))
+
+	for _, env := range envs {
+		if !strings.Contains(body, env.GetKey()) {
+			t.Errorf("expected environment row %q to render; body = %s", env.GetKey(), body)
+		}
+	}
+	if !strings.Contains(body, `title="Requires role: `+components.RoleAdmin+`"`) {
+		t.Errorf("expected the disabled 'Add environment'/'Edit' controls to name %q; body = %s", components.RoleAdmin, body)
+	}
+	if strings.Contains(body, `href="/environments/new"`) || strings.Contains(body, `href="/environments/edit?`) {
+		t.Errorf("no-roles viewer must never see a live, enabled admin control; body = %s", body)
+	}
+}
+
+// --- Subset 2: app-registry-promoter-dev only ------------------------------
+
+// FR-43: promote/rollback controls appear ONLY in the dev column --
+// nowhere else, including stage, prod, and a newly created (non-dev/
+// stage/prod) environment. No environment-admin control appears either.
+func TestDeployments_PromoterDevOnly_OnlyDevColumnEnabled(t *testing.T) {
+	envs := append(devStageProdEnvs(), &pb.Environment{Key: "canary-us-east", DisplayName: "Canary", Rank: 3})
+	m := buildTestMatrix(envs)
+	body := renderComponent(t, Deployments(promoterDevUser(), m, false))
+
+	if strings.Contains(body, promoteHref("stage")) {
+		t.Errorf("promoter-dev must not gain a live promote link into stage; body = %s", body)
+	}
+	if strings.Contains(body, promoteHref("prod")) {
+		t.Errorf("promoter-dev must not gain a live promote link into prod; body = %s", body)
+	}
+	if strings.Contains(body, promoteHref("canary-us-east")) {
+		t.Errorf("promoter-dev must not gain a live promote link into a newly created environment; body = %s", body)
+	}
+	if !strings.Contains(body, promoteHref("dev")) {
+		t.Errorf("promoter-dev must have a live promote link into dev; body = %s", body)
+	}
+	for _, env := range []string{"stage", "prod", "canary-us-east"} {
+		role := components.EnvironmentPromoterRole(env)
+		if !strings.Contains(body, `title="Requires role: `+role+`"`) {
+			t.Errorf("expected a disabled control naming %q for env %q; body = %s", role, env, body)
+		}
+	}
+}
+
+// FR-42: promoter-dev holds no environment-admin control.
+func TestEnvironments_PromoterDevOnly_NoAdminControls(t *testing.T) {
+	envs := devStageProdEnvs()
+	body := renderComponent(t, Environments(promoterDevUser(), envs, false, nil))
+	if strings.Contains(body, `href="/environments/new"`) || strings.Contains(body, `href="/environments/edit?`) {
+		t.Errorf("promoter-dev must never see a live environment-admin control; body = %s", body)
+	}
+	if !strings.Contains(body, `title="Requires role: `+components.RoleAdmin+`"`) {
+		t.Errorf("expected the disabled admin controls naming %q; body = %s", components.RoleAdmin, body)
+	}
+}
+
+// --- Subset 3: app-registry-admin only --------------------------------------
+
+// Environment create/edit/archive controls (09/53) are available; no role
+// implies another, so an admin holds no promote/rollback control anywhere.
+func TestEnvironments_AdminOnly_AdminControlsLiveNoPromoteImplied(t *testing.T) {
+	envs := devStageProdEnvs()
+	body := renderComponent(t, Environments(adminUser(), envs, false, nil))
+	if !strings.Contains(body, `href="/environments/new"`) {
+		t.Errorf("admin must see a live 'Add environment' control; body = %s", body)
+	}
+	for _, env := range envs {
+		if !strings.Contains(body, `href="/environments/edit?key=`+env.GetKey()+`"`) {
+			t.Errorf("admin must see a live 'Edit' control for %q; body = %s", env.GetKey(), body)
+		}
+	}
+}
+
+func TestDeployments_AdminOnly_NoPromoteControlInAnyColumn(t *testing.T) {
+	envs := devStageProdEnvs()
+	m := buildTestMatrix(envs)
+	body := renderComponent(t, Deployments(adminUser(), m, false))
+	if strings.Contains(body, `href="/promote?`) {
+		t.Errorf("admin-only (no promoter role) must not gain any live promote link; body = %s", body)
+	}
+	for _, env := range envs {
+		role := components.EnvironmentPromoterRole(env.GetKey())
+		if !strings.Contains(body, `title="Requires role: `+role+`"`) {
+			t.Errorf("expected a disabled control naming %q for env %q; body = %s", role, env.GetKey(), body)
+		}
+	}
+}
+
+// admin holds no promoter role even for the environment it just created --
+// screen 53's promote-eligibility note is informational, not a grant.
+func TestEnvironmentForm_AdminOnly_SaveAndArchiveLiveNoPromoterImplied(t *testing.T) {
+	body := renderComponent(t, EnvironmentForm(adminUser(), "edit", EnvironmentFormInput{Key: "dev"}, false, ""))
+	if !strings.Contains(body, `<button type="submit" class="btn btn-primary">Save environment</button>`) {
+		t.Errorf("admin must see a live, enabled Save control; body = %s", body)
+	}
+	if strings.Contains(body, "Read-only.") {
+		t.Errorf("admin must not see the read-only warning banner; body = %s", body)
+	}
+}
+
+// --- Subset 4: all roles ----------------------------------------------------
+
+func TestDeployments_AllRoles_EveryColumnEnabled(t *testing.T) {
+	envs := append(devStageProdEnvs(), &pb.Environment{Key: "canary-us-east", Rank: 3})
+	m := buildTestMatrix(envs)
+	body := renderComponent(t, Deployments(allRolesUser(), m, false))
+	for _, env := range envs {
+		if !strings.Contains(body, promoteHref(env.GetKey())) {
+			t.Errorf("all-roles principal must have a live promote link into %q; body = %s", env.GetKey(), body)
+		}
+	}
+	if strings.Contains(body, "Requires role:") {
+		t.Errorf("all-roles principal must see no disabled/missing-role control; body = %s", body)
+	}
+}
+
+func TestEnvironments_AllRoles_AdminControlsLive(t *testing.T) {
+	envs := devStageProdEnvs()
+	body := renderComponent(t, Environments(allRolesUser(), envs, false, nil))
+	if strings.Contains(body, "Requires role:") {
+		t.Errorf("all-roles principal must see no disabled/missing-role control; body = %s", body)
+	}
+	if !strings.Contains(body, `href="/environments/new"`) {
+		t.Errorf("all-roles principal must have a live 'Add environment' control; body = %s", body)
+	}
+}
+
+// --- FR-59: absent vs empty (both distinct from AUTH_MODE=none) ------------
+
+// A no-roles (present, empty) principal never sees the misconfiguration
+// banner -- this is a legitimate read-only viewer, not a deployment error.
+func TestShell_EmptyRoles_NoMisconfigBanner(t *testing.T) {
+	body := renderComponent(t, Environments(noRolesUser(), nil, false, nil))
+	if strings.Contains(body, "Roles claim missing from this session") {
+		t.Errorf("empty (present) roles must never trigger the FR-59 banner; body = %s", body)
+	}
+}
+
+// Absent roles (nil claim) trips the persistent banner on every screen that
+// goes through components.Shell -- asserted here via one representative
+// read-sensitive screen; the banner itself (including its exact wording and
+// alert-error styling) is covered directly in
+// components/banner_test.go, and read content still renders underneath it.
+func TestShell_AbsentRoles_MisconfigBannerAndReadContentBothRender(t *testing.T) {
+	envs := devStageProdEnvs()
+	body := renderComponent(t, Environments(absentRolesUser(), envs, false, nil))
+	if !strings.Contains(body, "Roles claim missing from this session") {
+		t.Errorf("absent roles claim must trigger the FR-59 banner; body = %s", body)
+	}
+	for _, env := range envs {
+		if !strings.Contains(body, env.GetKey()) {
+			t.Errorf("read content must still render underneath the banner (FR-59: never lock out diagnosis); body = %s", body)
+		}
+	}
+}
+
+func TestShell_AuthModeNoneSentinel_NoMisconfigBannerEverythingAvailable(t *testing.T) {
+	envs := devStageProdEnvs()
+	body := renderComponent(t, Environments(allRolesUser(), envs, false, nil))
+	if strings.Contains(body, "Roles claim missing from this session") {
+		t.Errorf("AUTH_MODE=none must never show the FR-59 banner; body = %s", body)
+	}
+	if !strings.Contains(body, `href="/environments/new"`) {
+		t.Errorf("AUTH_MODE=none must have every control available; body = %s", body)
+	}
+}

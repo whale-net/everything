@@ -1,0 +1,44 @@
+// Package components holds daisyUI-based shell/chrome shared by every page
+// in this UI — this is the repo's first daisyUI adopter (see ../README.md
+// "Styling"). Screen-specific markup belongs in ../pages, not here.
+package components
+
+import "github.com/whale-net/everything/libs/go/htmxauth"
+
+// Shell wraps page content in the App Registry UI's navbar chrome. It shows
+// the signed-in user's identity so every screen — not just the placeholder
+// home page — makes "who am I" visible.
+//
+// Nav deliberately keeps "Environments" (configuration, screen 09) and
+// "Deployments" (state, screen 10) as two separate items rather than one
+// combined entry (FR-2) — they answer different questions ("what's the
+// pair topology / config" vs. "what's actually deployed right now").
+//
+// MisconfigBanner renders here, once, so every screen gets the FR-59
+// banner for free instead of each page having to remember to include it.
+templ Shell(title string, user *htmxauth.UserInfo) {
+	<div class="navbar bg-neutral text-neutral-content shadow-sm">
+		<div class="flex-1 flex items-center gap-4">
+			<a href="/" class="btn btn-ghost text-xl">App Registry</a>
+			<ul class="menu menu-horizontal px-1">
+				<li><a href="/environments">Environments</a></li>
+				<li><a href="/deployments">Deployments</a></li>
+				<li><a href="/apps">Apps</a></li>
+				<li><a href="/builds">Builds</a></li>
+				<li><a href="/reconcile-runs">Reconcile Runs</a></li>
+				<li><a href="/drift-audit">Drift &amp; Audit</a></li>
+			</ul>
+		</div>
+		<div class="flex-none">
+			if user != nil {
+				<span class="mr-2 text-sm opacity-90">{ user.PreferredUsername }</span>
+			}
+		</div>
+	</div>
+	<main class="min-h-screen bg-base-200 p-6">
+		<div class="mx-auto max-w-4xl space-y-6">
+			@MisconfigBanner(user)
+			{ children... }
+		</div>
+	</main>
+}

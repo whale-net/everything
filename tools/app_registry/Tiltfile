@@ -83,6 +83,11 @@ APPS = {
         'bazel_target': '//tools/app_registry/worker:worker_image_load',
         'image_name': 'app-registry-worker',
     },
+    'ui': {
+        'enabled_env': 'ENABLE_APP_REGISTRY_UI',
+        'bazel_target': '//tools/app_registry/ui:ui_image_load',
+        'image_name': 'app-registry-ui',
+    },
 }
 
 # ===========================
@@ -256,6 +261,83 @@ spec:
 elif get_env_bool('ENABLE_APP_REGISTRY_WORKER', default='true'):
     print("⚠️  ENABLE_APP_REGISTRY_WORKER is set but Temporal is disabled (ENABLE_TEMPORAL=false) -- worker skipped")
 
+# HTMX admin UI (app-registry-ui). DATABASE_URL is deliberately built from
+# the same pg_database_url as every other App Registry component above --
+# the UI's only direct DB use is htmxauth session storage (ui_sessions),
+# never registry domain tables (see ui/ENV.md and NFR-3), so it must live in
+# the same app_registry database, not a second one. Local dev runs with
+# AUTH_MODE=none / GRPC_AUTH_MODE=none, same as the API above.
+if get_env_bool('ENABLE_APP_REGISTRY_UI', default='true'):
+    k8s_yaml(blob("""
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-registry-ui
+  namespace: {namespace}
+spec:
+  selector:
+    app: app-registry-ui
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-registry-ui
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-registry-ui
+  template:
+    metadata:
+      labels:
+        app: app-registry-ui
+    spec:
+      containers:
+      - name: ui
+        image: app-registry-ui
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: PORT
+          value: "8000"
+        - name: AUTH_MODE
+          value: "none"
+        - name: GRPC_AUTH_MODE
+          value: "none"
+        - name: SECRET_KEY
+          value: "dev-secret-key-change-in-production"
+        - name: REGISTRY_API_URL
+          value: "app-registry-api:50051"
+        - name: PG_DATABASE_URL
+          value: "{pg_database_url}"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "{otel_endpoint}"
+""".format(
+        namespace=namespace,
+        pg_database_url=pg_database_url,
+        otel_endpoint=otel_endpoint,
+    )))
+
+    ui_deps = []
+    if get_env_bool('ENABLE_APP_REGISTRY_MIGRATION', default='true'):
+        ui_deps.append('app-registry-migration')
+    if get_env_bool('ENABLE_APP_REGISTRY_API', default='true'):
+        ui_deps.append('app-registry-api')
+
+    k8s_resource(
+        'app-registry-ui',
+        resource_deps=ui_deps,
+        port_forwards=['8090:8000'],
+        labels=['app-registry'],
+    )
+    print("🖥️  UI forwarded to localhost:8090")
+
 # ===========================
 # Access Information
 # ===========================
@@ -265,6 +347,7 @@ print("📡 Access Information")
 print("="*60)
 print("  PostgreSQL:  localhost:5432 (user: postgres, pass: password)")
 print("  API (gRPC):  localhost:50061")
+print("  UI (HTTP):   localhost:8090")
 if temporal_info:
     print("  Temporal:    localhost:7233 (gRPC), {} (Web UI)".format(temporal_info['ui_service_info']))
 print("="*60)
@@ -272,7 +355,8 @@ print("="*60)
 print_footer_info('app-registry')
 
 print("\n🚀 Quick Start:")
-print("  1. tilt up                       # Start migration + API + worker (this)")
+print("  1. tilt up                       # Start migration + API + worker + UI (this)")
 print("  2. grpcurl -plaintext localhost:50061 list   # Confirm reflection")
-print("  3. app-registry promote ...      # Promote something, then check the")
+print("  3. Open http://localhost:8090    # UI reaches app-registry-api + the local database")
+print("  4. app-registry promote ...      # Promote something, then check the")
 print("     worker's logs and /tmp/app-registry-writeback/<env>.json inside its pod")

@@ -1,0 +1,185 @@
+package pages
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+)
+
+// AppsCatalogFilter is the FR-22 search/domain/deploy-unit filter, applied
+// server-side via GET query params (?q=&domain=&unit=) since this UI has no
+// client-side filtering JS (NFR-20).
+type AppsCatalogFilter struct {
+	Query      string
+	Domain     string
+	DeployUnit string // "" (all) | "chart" | "image" | "none"
+}
+
+// rowDeployUnitFilterValue returns the filter value ("chart"/"image"/"none")
+// a row matches against — the same three buckets deployUnitLabel renders,
+// so the dropdown and the badge can never disagree about what a row "is".
+func rowDeployUnitFilterValue(row matrix.AppCatalogRow) string {
+	if row.IsChart {
+		return "chart"
+	}
+	switch row.DeployUnit {
+	case appmetapb.DeployUnit_DEPLOY_UNIT_CHART:
+		return "image"
+	case appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE:
+		return "image"
+	case appmetapb.DeployUnit_DEPLOY_UNIT_NONE:
+		return "none"
+	default:
+		return ""
+	}
+}
+
+func matchesFilter(row matrix.AppCatalogRow, f AppsCatalogFilter) bool {
+	if f.Query != "" && !strings.Contains(strings.ToLower(row.FullName), strings.ToLower(f.Query)) {
+		return false
+	}
+	if f.Domain != "" && row.Domain != f.Domain {
+		return false
+	}
+	if f.DeployUnit != "" && rowDeployUnitFilterValue(row) != f.DeployUnit {
+		return false
+	}
+	return true
+}
+
+// filteredRows applies f to rows, preserving order.
+func filteredRows(rows []matrix.AppCatalogRow, f AppsCatalogFilter) []matrix.AppCatalogRow {
+	out := make([]matrix.AppCatalogRow, 0, len(rows))
+	for _, row := range rows {
+		if matchesFilter(row, f) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+// catalogDomains returns the distinct domains present in rows, sorted, for
+// the domain filter dropdown — never a hardcoded domain list (domains are
+// operator/monorepo-defined data, not a fixed enum, same rationale as
+// EnvironmentPromoterRoles for environments).
+func catalogDomains(rows []matrix.AppCatalogRow) []string {
+	seen := make(map[string]bool)
+	var domains []string
+	for _, row := range rows {
+		if !seen[row.Domain] {
+			seen[row.Domain] = true
+			domains = append(domains, row.Domain)
+		}
+	}
+	for i := 1; i < len(domains); i++ {
+		for j := i; j > 0 && domains[j-1] > domains[j]; j-- {
+			domains[j-1], domains[j] = domains[j], domains[j-1]
+		}
+	}
+	return domains
+}
+
+func rowDetailHref(row matrix.AppCatalogRow) string {
+	if row.IsChart {
+		// Chart detail (screen 22) is delivered separately (#645) — the
+		// link is still wired here per FR-25 ("one click in both
+		// directions") so it lights up the moment that screen lands,
+		// without this issue needing to re-touch this file. full_name
+		// (not chart_id) to match /apps/{full_name}'s convention below.
+		return "/charts/" + row.FullName
+	}
+	return "/apps/" + row.FullName
+}
+
+// AppsCatalog is screen 20-apps-catalog (FR-22): every registered app/chart,
+// its domain, deploy unit, and current promotability per environment,
+// without drilling in.
+templ AppsCatalog(user *htmxauth.UserInfo, environments []*pb.Environment, rows []matrix.AppCatalogRow, filter AppsCatalogFilter) {
+	@components.Shell("Apps Catalog", user) {
+		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100 flex flex-col md:flex-row justify-between md:items-center gap-4">
+			<div>
+				<h1 class="text-2xl md:text-3xl font-bold mb-2">Apps Catalog</h1>
+				<p class="text-sm opacity-80">Every registered app and chart, and what "promotable" means for each.</p>
+			</div>
+			<a href="/reconcile-runs" class="btn btn-primary">Reconcile runs →</a>
+		</div>
+		<form method="get" action="/apps" class="flex flex-col md:flex-row gap-3 mb-4">
+			<input type="text" name="q" placeholder="Search apps…" value={ filter.Query } class="input input-bordered input-sm w-full md:w-72"/>
+			<select name="domain" class="select select-sm select-bordered">
+				<option value="" selected?={ filter.Domain == "" }>All domains</option>
+				for _, d := range catalogDomains(rows) {
+					<option value={ d } selected?={ filter.Domain == d }>{ d }</option>
+				}
+			</select>
+			<select name="unit" class="select select-sm select-bordered">
+				<option value="" selected?={ filter.DeployUnit == "" }>All deploy units</option>
+				<option value="chart" selected?={ filter.DeployUnit == "chart" }>chart</option>
+				<option value="image" selected?={ filter.DeployUnit == "image" }>image</option>
+				<option value="none" selected?={ filter.DeployUnit == "none" }>none</option>
+			</select>
+			<button type="submit" class="btn btn-sm">Filter</button>
+			if filter.Query != "" || filter.Domain != "" || filter.DeployUnit != "" {
+				<a href="/apps" class="btn btn-sm btn-ghost">Clear</a>
+			}
+		</form>
+		<div class="card bg-base-100 shadow-md">
+			<div class="card-body p-0">
+				<table class="table">
+					<thead>
+						<tr>
+							<th>App</th>
+							<th>Domain</th>
+							<th>Deploy unit</th>
+							for _, env := range environments {
+								<th>{ env.GetKey() }</th>
+							}
+						</tr>
+					</thead>
+					<tbody>
+						{{ visible := filteredRows(rows, filter) }}
+						if len(visible) == 0 {
+							<tr>
+								<td colspan={ fmt.Sprint(3 + len(environments)) } class="p-4 text-sm opacity-60">
+									No apps or charts match this filter.
+								</td>
+							</tr>
+						}
+						for _, row := range visible {
+							<tr class="hover">
+								<td class="font-mono text-sm">
+									<a href={ templ.URL(rowDetailHref(row)) } class="link link-hover">{ row.FullName }</a>
+								</td>
+								<td class="text-sm opacity-70">{ row.Domain }</td>
+								<td>@components.DeployUnitBadge(row.IsChart, row.DeployUnit)</td>
+								for _, cell := range row.Cells {
+									<td>@catalogCell(cell)</td>
+								}
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	}
+}
+
+templ catalogCell(cell *matrix.Cell) {
+	if cell.ColumnErr != nil {
+		<span class="badge badge-error badge-sm" title={ cell.ColumnErr.Error() }>error</span>
+	} else if cell.Entry == nil {
+		<span class="text-xs opacity-50">not promoted</span>
+	} else {
+		<span class="font-mono text-xs">{ cell.Entry.GetArtifact().GetVersion() }</span>
+		if cell.Entry.GetArtifact().GetProvenance() == pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED {
+			@components.ProvenanceBadge(cell.Entry.GetArtifact().GetProvenance())
+		}
+		if cell.Drifted {
+			<span class="badge badge-soft badge-error badge-xs ml-1">drift</span>
+		}
+	}
+}

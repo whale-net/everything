@@ -18,7 +18,7 @@ cold; this file only indexes where things live.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Before changing the data model, promotability rules, auth split, or writeback mechanism. Index + design principles only — the actual sections live one-per-file under [architecture/](architecture/); jump straight to the file you need via ARCHITECTURE.md's table rather than grepping the old monolith. Contains rejected alternatives and open questions. |
 | [PLAN.md](PLAN.md) | Before starting work — current status, what's deployed, deferred/carry-over work, what's next |
 | [PLAN-HISTORY.md](PLAN-HISTORY.md) | As-built detail for a specific completed phase (AR-0 … AR-7f) — goal, scope, exit criteria, what shipped. Not meant to be read start to finish; follow a link from PLAN.md's status table. |
-| [ENV.md](ENV.md) | Configuring, deploying, or debugging server/migration runtime behavior |
+| [ENV.md](ENV.md) | Configuring, deploying, or debugging server/migration/worker/UI runtime behavior |
 | [TESTING.md](TESTING.md) | Running the registry locally in Tilt for manual integration testing; which checks belong in unit vs Postgres vs Tilt tiers |
 | [DEPLOY.md](DEPLOY.md) | Deploying for real — which Keycloak clients and roles to create, server env vars, and where each CI secret goes. Start here when standing the service up in an environment. |
 | [OPERATIONS.md](OPERATIONS.md) | Day-2 operations — the release → record → promote → verify → rollback lifecycle, how to spot a silently failed recording, how to check drift, and how to tell whether the registry is actually in use yet. Start here once DEPLOY.md is done and you need to ship something through it. |
@@ -37,6 +37,8 @@ cold; this file only indexes where things live.
 | [server/](server/) | gRPC server — `app-registry-api` |
 | [worker/](worker/) | Temporal worker — gitops writeback (`app-registry-worker`) |
 | [cli/](cli/) | Thin gRPC client — `app-registry` |
+| [ui/](ui/README.md) | HTMX admin UI — `app-registry-ui`. `ui/README.md` for structure/styling; env vars live in the main [ENV.md](ENV.md) "UI" section, not a second file |
+| [ui/ARCHITECTURE.md](ui/ARCHITECTURE.md) | Before changing the UI's data-access pattern, role gating, or before adding a new deviation from a wireframe — a **real** doc (unlike `manmanv2/ui/README.md`'s dangling link to the same filename). Covers gRPC-only access with the one `htmxauth` session-DB exception, token forwarding, presentation-only role gating, the as-of/SCD2 read pattern, the FR-13/FR-14 UI-layer policies, the FR-19 actor-identity note, and every recorded wireframe deviation (NFR-19) with its reason |
 | [migrate/](migrate/) | Schema migrations — `app-registry-migration` |
 | [citest/](citest/) | Tests the CI ↔ CLI seam: extracts the real `app-registry ...` command lines from `.github/workflows`/`.github/actions` and validates them against the live cobra tree and an in-process server, in the canonical release ordering. Read this before changing a CLI flag, a workflow's App Registry step, or a composite action — a mismatch between them is exactly what this package exists to catch before merge. |
 | [Tiltfile](Tiltfile) | Local dev — `tilt up` from `tools/app_registry/` |

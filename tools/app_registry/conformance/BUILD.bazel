@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# NFR-3 data-access conformance and deployment/local-stack rendering tests
+# for the App Registry UI (#656). See paths_test.go's package doc comment.
+go_test(
+    name = "conformance_test",
+    srcs = [
+        "chart_membership_test.go",
+        "env_doc_test.go",
+        "nfr3_test.go",
+        "paths_test.go",
+        "tiltfile_test.go",
+    ],
+    data = [
+        "//tools/app_registry:build_file",
+        "//tools/app_registry:docs",
+        "//tools/app_registry:tiltfile",
+        "//tools/app_registry/ui:conformance_srcs",
+        "//tools/app_registry/ui/components:conformance_srcs",
+        "//tools/app_registry/ui/matrix:conformance_srcs",
+        "//tools/app_registry/ui/pages:conformance_srcs",
+    ],
+)

@@ -823,6 +823,13 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 		if len(app.SecretEnv) > 0 {
 			w.StartSection("secretEnv")
 			for _, se := range app.SecretEnv {
+				if se.Name == "" || se.SecretName == "" || se.Key == "" {
+					return fmt.Errorf(
+						"app %q: secretEnv entry is malformed (name=%q, secretName=%q, key=%q): "+
+							"name, secretName, and key are all required",
+						name, se.Name, se.SecretName, se.Key,
+					)
+				}
 				prefix := strings.Repeat(" ", w.indent)
 				fmt.Fprintf(w.f, "%s- name: %s\n", prefix, se.Name)
 				fmt.Fprintf(w.f, "%s  secretName: %s\n", prefix, se.SecretName)
@@ -835,10 +842,17 @@ func writeValuesYAML(f *os.File, data ValuesData) error {
 		if len(app.EnvFrom) > 0 {
 			w.StartSection("envFrom")
 			for _, ef := range app.EnvFrom {
+				if (ef.SecretRef == "") == (ef.ConfigMapRef == "") {
+					return fmt.Errorf(
+						"app %q: envFrom entry is malformed (secretRef=%q, configMapRef=%q): "+
+							"exactly one of secretRef or configMapRef must be set",
+						name, ef.SecretRef, ef.ConfigMapRef,
+					)
+				}
 				prefix := strings.Repeat(" ", w.indent)
 				if ef.SecretRef != "" {
 					fmt.Fprintf(w.f, "%s- secretRef: %s\n", prefix, ef.SecretRef)
-				} else if ef.ConfigMapRef != "" {
+				} else {
 					fmt.Fprintf(w.f, "%s- configMapRef: %s\n", prefix, ef.ConfigMapRef)
 				}
 			}
