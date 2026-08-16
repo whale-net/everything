@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "matrix",
@@ -8,6 +8,21 @@ go_library(
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/ui/matrix",
     visibility = ["//tools/app_registry/ui:__subpackages__"],
+    deps = [
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/appmeta/proto:appmetapb",
+    ],
+)
+
+# Screen 01/10/40 read-surface tests (#654): promotability guardrail
+# (FR-5/NFR-12), drift rollup (FR-9), and column-error-never-blank (NFR-6),
+# tested directly against the pure data-shaping package rather than through
+# rendered HTML.
+go_test(
+    name = "matrix_test",
+    size = "small",
+    srcs = ["matrix_test.go"],
+    embed = [":matrix"],
     deps = [
         "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",

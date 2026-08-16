@@ -64,11 +64,19 @@ go_binary(
 go_test(
     name = "ui_test",
     size = "small",
-    srcs = ["handlers_builds_test.go"],
+    srcs = [
+        "handlers_builds_test.go",
+        "handlers_promote_rollback_test.go",
+        "handlers_read_screens_test.go",
+    ],
     embed = [":ui_lib"],
     deps = [
+        "//libs/go/htmxauth",
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/appmeta/proto:appmetapb",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )
 
