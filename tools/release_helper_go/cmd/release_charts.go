@@ -79,7 +79,8 @@ func (u *defaultChartUploader) UploadChart(ctx context.Context, repoURL, usernam
 }
 
 func (u *defaultChartUploader) FetchChart(ctx context.Context, repoURL, username, password, publishedName, version string) ([]byte, error) {
-	url := fmt.Sprintf("%s/charts/%s-%s.tgz", strings.TrimRight(repoURL, "/"), publishedName, version)
+	// Query ChartMuseum api/charts endpoint (e.g. /api/charts/app-registry-app-registry/v0.0.30)
+	url := fmt.Sprintf("%s/api/charts/%s/%s", strings.TrimRight(repoURL, "/"), publishedName, version)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -95,6 +96,22 @@ func (u *defaultChartUploader) FetchChart(ctx context.Context, repoURL, username
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Fallback to /charts/<name>-<ver>.tgz direct download if api/charts not supported
+		fallbackURL := fmt.Sprintf("%s/charts/%s-%s.tgz", strings.TrimRight(repoURL, "/"), publishedName, version)
+		fReq, fErr := http.NewRequestWithContext(ctx, http.MethodGet, fallbackURL, nil)
+		if fErr == nil {
+			if username != "" || password != "" {
+				fReq.SetBasicAuth(username, password)
+			}
+			fResp, fDoErr := u.getClient().Do(fReq)
+			if fDoErr == nil && fResp.StatusCode == http.StatusOK {
+				defer fResp.Body.Close()
+				return io.ReadAll(fResp.Body)
+			}
+			if fResp != nil {
+				fResp.Body.Close()
+			}
+		}
 		return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
@@ -471,7 +488,10 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 		effectiveTag := tagName
 
 		if prevTag != "" && uploader != nil {
-			prevVersion := strings.TrimPrefix(prevTag, chart.Name+".")
+			prevVersion := prevTag
+			if idx := strings.LastIndex(prevTag, "."); idx != -1 {
+				prevVersion = prevTag[idx+1:]
+			}
 			prevData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, prevVersion)
 			if err == nil && len(prevData) > 0 {
 				prevDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(prevData))
@@ -627,8 +647,12 @@ func getPreviousChartTag(git GitRunner, chartName, currentTag string) string {
 	if git == nil {
 		return ""
 	}
-	pattern := fmt.Sprintf("%s.*", chartName)
-	out, err := git.Run("tag", "--sort=-version:refname", "--list", pattern)
+	patterns := []string{fmt.Sprintf("%s.*", chartName)}
+	if !strings.HasPrefix(chartName, "helm-") {
+		patterns = append(patterns, fmt.Sprintf("helm-%s.*", chartName))
+	}
+	args := append([]string{"tag", "--sort=-version:refname", "--list"}, patterns...)
+	out, err := git.Run(args...)
 	if err != nil {
 		return ""
 	}
@@ -637,8 +661,11 @@ func getPreviousChartTag(git GitRunner, chartName, currentTag string) string {
 		if tag == "" || tag == currentTag {
 			continue
 		}
-		if strings.HasPrefix(tag, chartName+".") {
-			return tag
+		for _, p := range patterns {
+			pfx := strings.TrimSuffix(p, "*")
+			if strings.HasPrefix(tag, pfx) {
+				return tag
+			}
 		}
 	}
 	return ""
