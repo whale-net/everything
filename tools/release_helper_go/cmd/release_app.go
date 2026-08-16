@@ -419,29 +419,14 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	prevTag := getPreviousAppTag(git, fullName, tagName)
 
 	digestUnchanged := false
-	effectiveVersion := p.Version
-	effectiveTag := tagName
 
 	if prevTag != "" {
 		prevVersion := strings.TrimPrefix(prevTag, fullName+".")
 		prevDigest := extractImageDigest(docker, repoPath, prevVersion)
 		if newDigest != "" && prevDigest != "" && newDigest == prevDigest {
 			digestUnchanged = true
-			effectiveVersion = prevVersion
-			effectiveTag = prevTag
-			fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same image digest (%s) as existing tag %s. Skipping new git tag and App Registry record -- reusing %s.\n",
-				fullName, p.Version, newDigest, prevTag, prevTag)
-
-			if beginPublishSucceeded && artifactClient != nil {
-				failReq := &pb.FailPublishRequest{
-					Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-					OwnerFullName:  fullName,
-					Version:        p.Version,
-					Reason:         fmt.Sprintf("digest unchanged from existing tag %s -- no-op rebuild, no new artifact to record (workflow run %s, attempt %s)", prevTag, runID, attempt),
-					IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail-noop", idempotencyPrefix, p.Domain, p.App),
-				}
-				_, _ = artifactClient.FailPublish(ctx, failReq)
-			}
+			fmt.Printf("::notice title=Reused digest (%s)::%s has the same image digest (%s) as existing tag %s. Registering new version %s with shared digest.\n",
+				fullName, p.Version, newDigest, prevTag, p.Version)
 		} else {
 			fmt.Printf("Digest check for %s: new(%s)=%s prev(%s)=%s -- proceeding with new tag %s\n",
 				fullName, p.Version, defaultStr(newDigest, "<unresolved>"), prevTag, defaultStr(prevDigest, "<unresolved>"), tagName)
@@ -452,33 +437,31 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	}
 
 	// 4. Git tag & RecordArtifact on success
-	if !digestUnchanged {
-		if p.CreateGitTag && git != nil && sha != "" {
-			if _, err := git.Run("rev-parse", tagName); err != nil {
-				fmt.Printf("Creating git tag %s...\n", tagName)
-				_, _ = git.Run("tag", "-a", tagName, "-m", fmt.Sprintf("Release %s version %s", fullName, p.Version), sha)
-			}
+	if p.CreateGitTag && git != nil && sha != "" {
+		if _, err := git.Run("rev-parse", tagName); err != nil {
+			fmt.Printf("Creating git tag %s...\n", tagName)
+			_, _ = git.Run("tag", "-a", tagName, "-m", fmt.Sprintf("Release %s version %s", fullName, p.Version), sha)
 		}
+	}
 
-		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
-			if newDigest == "" {
-				fmt.Printf("::warning::Could not resolve digest for %s:%s; skipping App Registry recording\n", repoPath, p.Version)
+	if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
+		if newDigest == "" {
+			fmt.Printf("::warning::Could not resolve digest for %s:%s; skipping App Registry recording\n", repoPath, p.Version)
+		} else {
+			recReq := &pb.RecordArtifactRequest{
+				BuildId:        p.BuildID,
+				Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+				OwnerFullName:  fullName,
+				Repository:     repoPath,
+				Version:        p.Version,
+				Digest:         newDigest,
+				PublishedAt:    time.Now().Unix(),
+				IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-record", idempotencyPrefix, p.Domain, p.App),
+			}
+			if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
+				fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
 			} else {
-				recReq := &pb.RecordArtifactRequest{
-					BuildId:        p.BuildID,
-					Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-					OwnerFullName:  fullName,
-					Repository:     repoPath,
-					Version:        p.Version,
-					Digest:         newDigest,
-					PublishedAt:    time.Now().Unix(),
-					IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-record", idempotencyPrefix, p.Domain, p.App),
-				}
-				if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
-					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
-				} else {
-					fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, newDigest)
-				}
+				fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, newDigest)
 			}
 		}
 	}
@@ -487,12 +470,12 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 		Domain:           p.Domain,
 		App:              p.App,
 		Version:          p.Version,
-		EffectiveVersion: effectiveVersion,
-		EffectiveTag:     effectiveTag,
+		EffectiveVersion: p.Version,
+		EffectiveTag:     tagName,
 		PreviousTag:      prevTag,
 		Digest:           newDigest,
 		DigestUnchanged:  digestUnchanged,
-		Published:        !digestUnchanged,
+		Published:        true,
 	}
 
 	// Write digest check JSON artifact if /tmp/digest-check is accessible

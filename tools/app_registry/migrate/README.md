@@ -77,11 +77,10 @@ CREATE UNIQUE INDEX promotion_current_idx
 CREATE INDEX promotion_window_idx
   ON promotion (environment_id, target_key, valid_from DESC);
 
--- digest is the real artifact identity. As of migration 007 (AR-7b), NULL
--- for every allocated/publishing/failed row (they have no digest yet) --
--- WHERE digest IS NOT NULL says what is meant: unique among artifacts that
--- HAVE one.
-CREATE UNIQUE INDEX artifact_digest_idx ON artifact (digest) WHERE digest IS NOT NULL;
+-- artifact digest lookup index. As of migration 013 (issue #784), this index is non-unique
+-- to allow distinct version tags (e.g. v0.1.5 and v0.2.0) to reference the same content digest.
+-- NULL for allocated/publishing/failed rows. Version uniqueness is enforced by artifact_version_idx.
+CREATE INDEX artifact_digest_idx ON artifact (digest) WHERE digest IS NOT NULL;
 
 -- version allocation collision guard (AR-5 depends on this). As of
 -- migration 007, this ALSO spans allocated/publishing/failed rows (the

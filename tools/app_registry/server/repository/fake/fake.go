@@ -547,7 +547,7 @@ func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, co
 		// 007's artifact_state_shape CHECK) -- guard explicitly rather than
 		// relying on a.Digest never being "" too, which happens to be true
 		// today but shouldn't be load-bearing.
-		if existing.Digest != "" && existing.Digest == a.Digest {
+		if existing.Digest != "" && existing.Digest == a.Digest && existing.Version == a.Version && existing.Kind == a.Kind && ownerID(existing) == ownerID(a) {
 			// Promotability is STORED as of AR-7c (migration 008, mirrored
 			// here without a real snapshot table) -- see insertArtifact/
 			// completePublish below, which set it ONCE at publish time.
@@ -687,10 +687,10 @@ func (r *Registry) completePublish(existing, a repository.Artifact, contains []r
 // repository.ArtifactRepository.AdoptArtifact's doc comment for the full
 // state-collision contract.
 func (r *Registry) AdoptArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, reason, actor string) (*repository.Artifact, bool, error) {
-	// 1. Idempotent replay by digest -- see postgres's AdoptArtifact step 1
-	// for why Provenance/State are never rewritten here.
+	// 1. Idempotent replay by (digest, owner, kind, version) -- see postgres's
+	// AdoptArtifact step 1 for why Provenance/State are never rewritten here.
 	for _, existing := range r.state.Artifacts {
-		if existing.Digest != "" && existing.Digest == a.Digest {
+		if existing.Digest != "" && existing.Digest == a.Digest && existing.Version == a.Version && existing.Kind == a.Kind && ownerID(existing) == ownerID(a) {
 			out := existing
 			return &out, true, nil
 		}

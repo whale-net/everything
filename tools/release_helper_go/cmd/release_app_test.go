@@ -272,31 +272,26 @@ func TestExecuteReleaseApp_NoOpDigestDetection(t *testing.T) {
 	if !res.DigestUnchanged {
 		t.Errorf("expected DigestUnchanged=true, got false")
 	}
-	if res.Published {
-		t.Errorf("expected Published=false on no-op rebuild, got true")
+	if !res.Published {
+		t.Errorf("expected Published=true for shared digest release, got false")
 	}
-	if res.EffectiveVersion != "v0.9.0" {
-		t.Errorf("expected EffectiveVersion='v0.9.0', got %q", res.EffectiveVersion)
+	if res.EffectiveVersion != "v1.0.0" {
+		t.Errorf("expected EffectiveVersion='v1.0.0', got %q", res.EffectiveVersion)
 	}
-	if res.EffectiveTag != "demo-hello-go.v0.9.0" {
-		t.Errorf("expected EffectiveTag='demo-hello-go.v0.9.0', got %q", res.EffectiveTag)
+	if res.EffectiveTag != "demo-hello-go.v1.0.0" {
+		t.Errorf("expected EffectiveTag='demo-hello-go.v1.0.0', got %q", res.EffectiveTag)
 	}
 	if res.PreviousTag != "demo-hello-go.v0.9.0" {
 		t.Errorf("expected PreviousTag='demo-hello-go.v0.9.0', got %q", res.PreviousTag)
 	}
 
-	// FailPublish should be called to record no-op rebuild status in the registry
-	if len(fakeArtifactClient.FailPublishCalls) != 1 {
-		t.Fatalf("expected 1 FailPublish call for no-op rebuild, got %d", len(fakeArtifactClient.FailPublishCalls))
+	// RecordArtifact SHOULD be called for the new version with the shared digest
+	if len(fakeArtifactClient.RecordArtifactCalls) != 1 {
+		t.Fatalf("expected 1 RecordArtifact call for shared digest release, got %d", len(fakeArtifactClient.RecordArtifactCalls))
 	}
-	failReq := fakeArtifactClient.FailPublishCalls[0]
-	if !strings.Contains(failReq.Reason, "digest unchanged") {
-		t.Errorf("expected reason to mention digest unchanged, got %q", failReq.Reason)
-	}
-
-	// RecordArtifact should NOT be called on no-op
-	if len(fakeArtifactClient.RecordArtifactCalls) != 0 {
-		t.Errorf("expected 0 RecordArtifact calls on no-op rebuild, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	recReq := fakeArtifactClient.RecordArtifactCalls[0]
+	if recReq.Version != "v1.0.0" || recReq.Digest != sharedDigest {
+		t.Errorf("expected RecordArtifact for v1.0.0 and sharedDigest, got version=%q digest=%q", recReq.Version, recReq.Digest)
 	}
 }
 

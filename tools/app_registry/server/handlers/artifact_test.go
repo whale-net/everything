@@ -9,6 +9,7 @@ import (
 
 	"github.com/whale-net/everything/tools/app_registry/apierrors"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
@@ -1745,5 +1746,67 @@ func TestGetReleaseRun_DefaultsToLatestAttempt(t *testing.T) {
 	}
 	if runAttempt1.Build.BuildId != build1.BuildId {
 		t.Fatalf("expected attempt 1's own build when explicitly requested, got %s want %s", runAttempt1.Build.BuildId, build1.BuildId)
+	}
+}
+
+// TestRecordArtifact_SameDigestMultipleVersions covers Issue #784:
+// Multiple versions (e.g. v1.0.0 and v2.0.0) of the same app with identical digests
+// are recorded and adopted successfully without collision.
+func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-same-digest")
+
+	const sharedDigest = "sha256:identical-digest-for-all-versions"
+
+	// 1. Record v1.0.0 with sharedDigest
+	resp1, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         sharedDigest,
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-same-digest-v1",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v1.0.0): %v", err)
+	}
+	if resp1.Artifact.Version != "v1.0.0" || resp1.Artifact.Digest != sharedDigest {
+		t.Fatalf("unexpected resp1: version=%s digest=%s", resp1.Artifact.Version, resp1.Artifact.Digest)
+	}
+
+	// 2. Record v2.0.0 with the same sharedDigest
+	resp2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         sharedDigest,
+		Version:        "v2.0.0",
+		IdempotencyKey: "record-same-digest-v2",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v2.0.0 with sharedDigest): %v", err)
+	}
+	if resp2.Artifact.Version != "v2.0.0" || resp2.Artifact.Digest != sharedDigest {
+		t.Fatalf("unexpected resp2: version=%s digest=%s", resp2.Artifact.Version, resp2.Artifact.Digest)
+	}
+	if resp2.Artifact.ArtifactId == resp1.Artifact.ArtifactId {
+		t.Fatalf("expected distinct artifact rows for distinct versions")
+	}
+
+	// 3. Adopt v3.0.0 with the same sharedDigest
+	adoptResp, err := artifactSrv.AdoptArtifact(ctxWithRoles(auth.RoleAdmin), &pb.AdoptArtifactRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         sharedDigest,
+		Version:        "v3.0.0",
+		Reason:         "bumping minor version baseline",
+		IdempotencyKey: "adopt-same-digest-v3",
+	})
+	if err != nil {
+		t.Fatalf("AdoptArtifact(v3.0.0 with sharedDigest): %v", err)
+	}
+	if adoptResp.Artifact.Version != "v3.0.0" || adoptResp.Artifact.Digest != sharedDigest {
+		t.Fatalf("unexpected adoptResp: version=%s digest=%s", adoptResp.Artifact.Version, adoptResp.Artifact.Digest)
 	}
 }

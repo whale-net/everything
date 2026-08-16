@@ -2319,4 +2319,70 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 	}
 }
 
+func TestRecordArtifact_Postgres_SameDigestMultipleVersions(t *testing.T) {
+	ctx := context.Background()
+	reg, pool := setupPostgresTest(t)
+	defer pool.Close()
+
+	appID := seedApp(t, pool, "demo", "multi-ver-app", "image")
+	buildID := seedBuild(t, pool, "run-multi-ver")
+	const sharedDigest = "sha256:same-digest-across-versions-test-12345"
+
+	// 1. Record v1.0.0
+	art1 := repository.Artifact{
+		Kind:          repository.ArtifactKindImage,
+		AppID:         appID,
+		Digest:        sharedDigest,
+		Version:       "v1.0.0",
+		BuildID:       buildID,
+		Promotability: repository.PromotabilityPromotable,
+	}
+	rec1, already1, err := reg.Artifacts().RecordArtifact(ctx, art1, nil, repository.DomainAdoptionStageObserve)
+	if err != nil {
+		t.Fatalf("RecordArtifact(v1.0.0): %v", err)
+	}
+	if already1 {
+		t.Fatalf("expected v1.0.0 to be newly created")
+	}
+
+	// 2. Record v2.0.0 with the same digest
+	art2 := repository.Artifact{
+		Kind:          repository.ArtifactKindImage,
+		AppID:         appID,
+		Digest:        sharedDigest,
+		Version:       "v2.0.0",
+		BuildID:       buildID,
+		Promotability: repository.PromotabilityPromotable,
+	}
+	rec2, already2, err := reg.Artifacts().RecordArtifact(ctx, art2, nil, repository.DomainAdoptionStageObserve)
+	if err != nil {
+		t.Fatalf("RecordArtifact(v2.0.0 with same digest): %v", err)
+	}
+	if already2 {
+		t.Fatalf("expected v2.0.0 to be newly created")
+	}
+	if rec2.ArtifactID == rec1.ArtifactID {
+		t.Fatalf("expected distinct artifact IDs for distinct versions")
+	}
+
+	// 3. Adopt v3.0.0 with the same digest
+	art3 := repository.Artifact{
+		Kind:          repository.ArtifactKindImage,
+		AppID:         appID,
+		Digest:        sharedDigest,
+		Version:       "v3.0.0",
+		Promotability: repository.PromotabilityPromotable,
+	}
+	rec3, already3, err := reg.Artifacts().AdoptArtifact(ctx, art3, nil, "bumping baseline", "test-actor")
+	if err != nil {
+		t.Fatalf("AdoptArtifact(v3.0.0 with same digest): %v", err)
+	}
+	if already3 {
+		t.Fatalf("expected v3.0.0 to be newly adopted")
+	}
+	if rec3.ArtifactID == rec1.ArtifactID || rec3.ArtifactID == rec2.ArtifactID {
+		t.Fatalf("expected distinct artifact ID for adopted v3.0.0")
+	}
+}
+
 
