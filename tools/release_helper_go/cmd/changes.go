@@ -66,6 +66,12 @@ func DetectChangedApps(baseCommit string, bazel BazelRunner, git GitRunner, fs F
 		return nil, nil
 	}
 
+	// If workspace root build configuration or shared Starlark macros change,
+	// all apps are affected.
+	if hasGlobalBuildChanges(changedFiles) {
+		return allApps, nil
+	}
+
 	relevant := filterBuildFiles(changedFiles)
 	if len(relevant) == 0 {
 		return nil, nil
@@ -159,6 +165,22 @@ func getPreviousTag(git GitRunner) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// hasGlobalBuildChanges returns true if the changed files touch workspace-level build
+// configuration or shared Starlark macro definitions that can transitively affect all targets.
+func hasGlobalBuildChanges(files []string) bool {
+	for _, f := range files {
+		switch f {
+		case "MODULE.bazel", "MODULE.bazel.lock",
+			"WORKSPACE", "WORKSPACE.bzlmod", "WORKSPACE.bazel", ".bazelrc", ".bazelversion":
+			return true
+		}
+		if strings.HasSuffix(f, ".bzl") || strings.HasSuffix(f, ".lock") {
+			return true
+		}
+	}
+	return false
+}
+
 // filterBuildFiles removes files that cannot affect any build (docs, CI, etc.).
 func filterBuildFiles(files []string) []string {
 	var out []string
@@ -172,7 +194,7 @@ func filterBuildFiles(files []string) []string {
 		}
 		switch f {
 		case "MODULE.bazel", "MODULE.bazel.lock",
-			"WORKSPACE", "WORKSPACE.bzlmod", "WORKSPACE.bazel":
+			"WORKSPACE", "WORKSPACE.bzlmod", "WORKSPACE.bazel", ".bazelrc", ".bazelversion":
 			continue
 		}
 		if strings.HasPrefix(f, ".bazel") || strings.HasSuffix(f, ".bzl") ||
