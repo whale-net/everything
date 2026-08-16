@@ -181,3 +181,42 @@ func TestGetPreviousTagError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestHasGlobalBuildChanges(t *testing.T) {
+	tests := []struct {
+		files []string
+		want  bool
+	}{
+		{files: []string{"MODULE.bazel"}, want: true},
+		{files: []string{"tools/bazel/release.bzl"}, want: true},
+		{files: []string{".bazelrc"}, want: true},
+		{files: []string{".bazelversion"}, want: true},
+		{files: []string{"Cargo.lock"}, want: true},
+		{files: []string{"manmanv2/api/main.go"}, want: false},
+		{files: []string{"README.md", "docs/RELEASE.md"}, want: false},
+	}
+	for _, tt := range tests {
+		if got := hasGlobalBuildChanges(tt.files); got != tt.want {
+			t.Errorf("hasGlobalBuildChanges(%v) = %v, want %v", tt.files, got, tt.want)
+		}
+	}
+}
+
+func TestDetectChangedAppsGlobalBuildFiles(t *testing.T) {
+	apps := []fakeApp{
+		{pkg: "demo/hello_go", targetSuffix: "hello-go_metadata", name: "hello-go", domain: "demo"},
+		{pkg: "manmanv2/api", targetSuffix: "control-api_metadata", name: "control-api", domain: "manmanv2"},
+	}
+	fs, bazel := buildFakeInfra(apps)
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"diff", "--name-only"}, output: "tools/bazel/release.bzl\n"},
+	)
+
+	result, err := DetectChangedApps("abc123", bazel, git, fs, fakeWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected all apps (2) to be returned when .bzl changes, got %d", len(result))
+	}
+}
