@@ -61,3 +61,34 @@ func (app *App) handleAppDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
+
+// handleAppHistory is screen 13-app-version-history (FR-21): every artifact
+// ever recorded for one app, independent of what's currently promoted
+// anywhere — reachable in one click from app detail (the "Version history"
+// button in pages.AppDetail's header) and kept visually distinct from the
+// promotion timeline that stays on app detail. ?provenance=observed|adopted
+// and ?live=1 mirror the wireframe's own filters (see
+// app_history_data.go's buildAppVersionHistory).
+func (app *App) handleAppHistory(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+	fullName := r.PathValue("id")
+	if fullName == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	provenance := r.URL.Query().Get("provenance")
+	liveOnly := r.URL.Query().Get("live") == "1"
+
+	data, err := app.buildAppVersionHistory(r.Context(), fullName, provenance, liveOnly)
+	if err != nil {
+		log.Printf("buildAppVersionHistory(%q) failed: %v", fullName, err)
+		http.Error(w, "Failed to load version history for "+fullName+" from app-registry-api: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	if err := RenderTempl(w, r, "Version history: "+fullName, pages.AppVersionHistory(user, data)); err != nil {
+		log.Printf("Failed to render app version history page: %v", err)
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}

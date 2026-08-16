@@ -10,6 +10,7 @@ templ_library(
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/ui/components",
         "//tools/app_registry/ui/matrix",
+        "//tools/app_registry/ui/viewdata",
         "//tools/appmeta/proto:appmetapb",
     ],
 )

@@ -1,0 +1,173 @@
+package pages
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/viewdata"
+)
+
+func artifactKindTitle(k pb.ArtifactKind) string {
+	if k == pb.ArtifactKind_ARTIFACT_KIND_CHART {
+		return "Chart artifact"
+	}
+	return "Image artifact"
+}
+
+// ArtifactDetail is screen 21-artifact-detail (FR-23): one artifact by
+// digest — the "resolve" view: given any digest, show what it is. For an
+// image artifact this shows who pins it ("Pinned by", backed by the
+// deliberately-unpaginated ListArtifactPins); for a chart artifact this
+// same layout instead shows what it pins ("Pins"), per the wireframe's
+// note. Every digest elsewhere in this UI that links here does so via
+// "/artifacts/" + digest.
+templ ArtifactDetail(user *htmxauth.UserInfo, data *viewdata.ArtifactDetailData) {
+	@components.Shell("Artifact: "+data.Artifact.GetDigest(), user) {
+		<div class="breadcrumbs text-sm mb-4">
+			<ul>
+				<li><a href="/apps">Apps</a></li>
+				if data.OwnerFullName != "" {
+					<li>
+						if data.Artifact.GetKind() == pb.ArtifactKind_ARTIFACT_KIND_CHART {
+							<a href={ templ.URL("/charts/" + data.OwnerFullName) }>{ data.OwnerFullName }</a>
+						} else {
+							<a href={ templ.URL("/apps/" + data.OwnerFullName) }>{ data.OwnerFullName }</a>
+						}
+					</li>
+				}
+				<li>artifact</li>
+			</ul>
+		</div>
+		<div class="flex items-center gap-3 mb-6 flex-wrap">
+			<h1 class="text-2xl md:text-3xl font-bold">{ artifactKindTitle(data.Artifact.GetKind()) }</h1>
+			@components.ProvenanceBadge(data.Artifact.GetProvenance())
+			@components.ArtifactStateBadge(data.Artifact.GetState())
+		</div>
+		<div class="card bg-base-100 shadow-md mb-6">
+			<div class="card-body">
+				<table class="table table-sm">
+					<tbody>
+						<tr>
+							<td class="opacity-60 w-40">Owner</td>
+							<td class="font-mono">
+								if data.OwnerFullName != "" {
+									if data.Artifact.GetKind() == pb.ArtifactKind_ARTIFACT_KIND_CHART {
+										<a href={ templ.URL("/charts/" + data.OwnerFullName) } class="link">{ data.OwnerFullName }</a>
+									} else {
+										<a href={ templ.URL("/apps/" + data.OwnerFullName) } class="link">{ data.OwnerFullName }</a>
+									}
+								} else {
+									<span class="opacity-50">unknown</span>
+								}
+							</td>
+						</tr>
+						<tr><td class="opacity-60">Kind</td><td>{ artifactKindLabel(data.Artifact.GetKind()) }</td></tr>
+						<tr><td class="opacity-60">Version</td><td class="font-mono">{ data.Artifact.GetVersion() }</td></tr>
+						<tr><td class="opacity-60">Digest</td><td class="font-mono text-sm">{ data.Artifact.GetDigest() }</td></tr>
+						<tr>
+							<td class="opacity-60">Built from</td>
+							<td>
+								if data.Build != nil && data.Build.GetWorkflowRunId() != "" {
+									<a href={ templ.URL("/builds/" + data.Build.GetWorkflowRunId()) } class="link font-mono">
+										run #{ data.Build.GetWorkflowRunId() }
+										if data.Build.GetWorkflowAttempt() > 1 {
+											, attempt { strconv.Itoa(int(data.Build.GetWorkflowAttempt())) }
+										}
+									</a>
+								} else {
+									<span class="opacity-50">unknown</span>
+								}
+							</td>
+						</tr>
+						<tr>
+							<td class="opacity-60">Provenance</td>
+							<td>
+								@components.ProvenanceBadge(data.Artifact.GetProvenance())
+								if data.Artifact.GetProvenance() == pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED {
+									— recorded after the fact by an admin, not observed by CI
+								} else {
+									— recorded by CI, not adopted
+								}
+							</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+		</div>
+		if data.Artifact.GetKind() == pb.ArtifactKind_ARTIFACT_KIND_CHART {
+			@artifactPinsCard(data)
+		} else {
+			@artifactPinnedByCard(data)
+		}
+	}
+}
+
+templ artifactPinnedByCard(data *viewdata.ArtifactDetailData) {
+	<div class="card bg-base-100 shadow-md">
+		<div class="card-body p-0">
+			<div class="p-4 border-b border-base-300">
+				<h2 class="text-lg font-semibold">Pinned by</h2>
+				<p class="text-sm opacity-60">Charts that pin this app's image — an image artifact is contained, it doesn't contain.</p>
+			</div>
+			if data.PinnedByErr != nil {
+				<div role="alert" class="alert alert-error m-4">
+					<span>Failed to load pins: { data.PinnedByErr.Error() }</span>
+				</div>
+			} else if len(data.PinnedBy) == 0 {
+				<p class="text-sm opacity-60 p-4">Nothing currently pins this image.</p>
+			} else {
+				<table class="table">
+					<thead>
+						<tr><th>Chart</th><th>Chart version</th></tr>
+					</thead>
+					<tbody>
+						for _, row := range data.PinnedBy {
+							<tr class="hover">
+								<td class="font-mono text-sm">
+									<a href={ templ.URL("/charts/" + row.ChartFullName) } class="link link-hover">{ row.ChartFullName }</a>
+								</td>
+								<td class="font-mono text-sm">{ row.ChartVersion }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</div>
+	</div>
+}
+
+templ artifactPinsCard(data *viewdata.ArtifactDetailData) {
+	<div class="card bg-base-100 shadow-md">
+		<div class="card-body p-0">
+			<div class="p-4 border-b border-base-300">
+				<h2 class="text-lg font-semibold">Pins (contains)</h2>
+				<p class="text-sm opacity-60">Image artifacts this chart version pins, resolved to digests at publish time.</p>
+			</div>
+			if len(data.Contains) == 0 {
+				<p class="text-sm opacity-60 p-4">This chart version pins no images.</p>
+			} else {
+				<table class="table">
+					<thead>
+						<tr><th>App</th><th>Version</th><th>Digest</th><th>Provenance</th></tr>
+					</thead>
+					<tbody>
+						for _, img := range data.Contains {
+							<tr class="hover">
+								<td class="font-mono text-sm">
+									<a href={ templ.URL("/apps/" + img.AppFullName) } class="link link-hover">{ img.AppFullName }</a>
+								</td>
+								<td class="font-mono text-sm">{ img.Version }</td>
+								<td class="font-mono text-xs">
+									<a href={ templ.URL("/artifacts/" + img.Digest) } class="link">{ digestShort(img.Digest) }</a>
+								</td>
+								<td>@components.ProvenanceBadge(img.Provenance)</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			}
+		</div>
+	</div>
+}

@@ -253,6 +253,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppsCatalog)))
 	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppDetail)))
 
+	// Screens 12/13/21/22 (#645): environment diff, app version history,
+	// artifact detail, chart detail.
+	mux.HandleFunc("/environments/diff", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentDiff)))
+	mux.HandleFunc("/apps/{id}/history", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppHistory)))
+	mux.HandleFunc("/artifacts/{digest}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleArtifactDetail)))
+	mux.HandleFunc("/charts/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleChartDetail)))
+
 	// Screens 30/31/32 (#649): builds, build detail, reconcile runs.
 	mux.HandleFunc("/builds", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBuilds)))
 	mux.HandleFunc("/builds/lookup", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBuildLookup)))

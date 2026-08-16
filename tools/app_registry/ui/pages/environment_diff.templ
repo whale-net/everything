@@ -1,0 +1,154 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/viewdata"
+)
+
+// diffStatusLabelClass returns the display label + daisyUI badge modifier
+// class for one diff row's status. "from ahead"/"to ahead" deliberately get
+// different, but equally non-alarming, colours (badge-warning/badge-info,
+// matching the wireframe) — this diff never assumes either direction is the
+// "healthy" one (see viewdata.DiffStatus's doc comment).
+func diffStatusLabelClass(s viewdata.DiffStatus, fromKey, toKey string) (label, class string) {
+	switch s {
+	case viewdata.DiffInSync:
+		return "In sync", "badge-success"
+	case viewdata.DiffFromOnly:
+		return fromKey + " only", "badge-neutral"
+	case viewdata.DiffToOnly:
+		return toKey + " only", "badge-neutral"
+	case viewdata.DiffFromAhead:
+		return fromKey + " ahead", "badge-warning"
+	case viewdata.DiffToAhead:
+		return toKey + " ahead", "badge-info"
+	default:
+		return "Mismatch", "badge-warning"
+	}
+}
+
+func diffRowHighlighted(s viewdata.DiffStatus) bool {
+	return s == viewdata.DiffFromAhead || s == viewdata.DiffToAhead || s == viewdata.DiffMismatch
+}
+
+// EnvironmentDiff is screen 12-environment-diff (FR-20): every entity
+// present in either environment, at an optional "as of" instant (FR-7),
+// with the selected pair and instant carried in the URL (FR-3) so a pasted
+// link reproduces exactly. data is nil when the pair hasn't resolved yet —
+// either fewer than two environments are configured, or from/to don't (yet)
+// name known environments; the picker still renders in that case.
+templ EnvironmentDiff(user *htmxauth.UserInfo, environments []*pb.Environment, fromKey, toKey string, at int64, data *viewdata.EnvironmentDiffData) {
+	@components.Shell("Environment diff", user) {
+		<div class="breadcrumbs text-sm mb-4">
+			<ul>
+				<li><a href="/deployments">Deployments</a></li>
+				<li>Diff</li>
+			</ul>
+		</div>
+		<div class="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+			<h1 class="text-2xl md:text-3xl font-bold">
+				if fromKey != "" && toKey != "" {
+					Is { fromKey } ahead of { toKey }?
+				} else {
+					Environment diff
+				}
+			</h1>
+			<form method="get" action="/environments/diff" class="flex flex-wrap items-center gap-2">
+				<select name="from" class="select select-sm select-bordered">
+					for _, env := range environments {
+						<option value={ env.GetKey() } selected?={ env.GetKey() == fromKey }>{ env.GetKey() }</option>
+					}
+				</select>
+				<span class="opacity-60">vs</span>
+				<select name="to" class="select select-sm select-bordered">
+					for _, env := range environments {
+						<option value={ env.GetKey() } selected?={ env.GetKey() == toKey }>{ env.GetKey() }</option>
+					}
+				</select>
+				<label class="text-sm opacity-70" for="diff-at">As of (UTC):</label>
+				<input type="datetime-local" id="diff-at" name="at" class="input input-sm input-bordered" value={ asOfInputValue(at) }/>
+				<button type="submit" class="btn btn-sm btn-primary">Diff</button>
+			</form>
+		</div>
+		if len(environments) < 2 {
+			<div role="alert" class="alert alert-warning shadow-md mb-4">
+				<span>Need at least two environments configured to diff.</span>
+			</div>
+		} else if data == nil {
+			<div role="alert" class="alert alert-info shadow-md mb-4">
+				<span>Select two environments above to diff.</span>
+			</div>
+		} else {
+			if data.FromErr != nil {
+				<div role="alert" class="alert alert-error shadow-md mb-4">
+					<span>Failed to load { fromKey }: { data.FromErr.Error() }</span>
+				</div>
+			}
+			if data.ToErr != nil {
+				<div role="alert" class="alert alert-error shadow-md mb-4">
+					<span>Failed to load { toKey }: { data.ToErr.Error() }</span>
+				</div>
+			}
+			<div class="card bg-base-100 shadow-md">
+				<div class="card-body p-0">
+					<table class="table">
+						<thead>
+							<tr>
+								<th>Entity</th>
+								<th>{ fromKey }</th>
+								<th>{ toKey }</th>
+								<th>Status</th>
+							</tr>
+						</thead>
+						<tbody>
+							if len(data.Rows) == 0 {
+								<tr>
+									<td colspan="4" class="text-sm opacity-60 p-4">Nothing is promoted in either environment.</td>
+								</tr>
+							}
+							for _, row := range data.Rows {
+								@diffRow(row, fromKey, toKey)
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		}
+	}
+}
+
+templ diffRow(row viewdata.DiffRow, fromKey, toKey string) {
+	<tr class={ "hover", templ.KV("bg-warning/5", diffRowHighlighted(row.Status)) }>
+		<td class="font-mono text-sm">
+			if row.IsChart {
+				<a href={ templ.URL("/charts/" + row.FullName) } class="link link-hover">{ row.FullName }</a>
+			} else {
+				<a href={ templ.URL("/apps/" + row.FullName) } class="link link-hover">{ row.FullName }</a>
+			}
+		</td>
+		<td class="font-mono text-sm">
+			if row.FromVersion != "" {
+				{ row.FromVersion }
+			} else {
+				<span class="opacity-50">not present</span>
+			}
+		</td>
+		<td class="font-mono text-sm">
+			if row.ToVersion != "" {
+				{ row.ToVersion }
+			} else {
+				<span class="opacity-50">not present</span>
+			}
+		</td>
+		<td>
+			@diffStatusBadge(row, fromKey, toKey)
+		</td>
+	</tr>
+}
+
+templ diffStatusBadge(row viewdata.DiffRow, fromKey, toKey string) {
+	{{ label, class := diffStatusLabelClass(row.Status, fromKey, toKey) }}
+	<span class={ "badge badge-soft badge-sm", class }>{ label }</span>
+}
