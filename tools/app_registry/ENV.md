@@ -147,6 +147,13 @@ needs `PG_DATABASE_URL` to drain the outbox and `TEMPORAL_HOST` to run
 | `WRITEBACK_POLL_INTERVAL` | `5s` | Delay between drain passes (Go duration syntax, e.g. `5s`, `500ms`). |
 | `WRITEBACK_CLAIM_STALE_AFTER` | `2m` | How long a `'claimed'` outbox row is left alone before a later pass reclaims it — must exceed `WritebackWorkflow`'s activity `StartToCloseTimeout` (30s) comfortably, or a still-healthy claim gets needlessly reclaimed. This is the knob that makes "worker killed mid-run" recoverable — see `worker/README.md`'s verification section. |
 | `WORKER_ID` | `app-registry-worker-<hostname>` | Recorded in `writeback_outbox.claimed_by`, for operator visibility into which process holds a claim. |
+| `WRITEBACK_GITOPS_REPO` | *(unset)*, required for the real `GitOpsActivities` | e.g. `whale-net/argok8s` — no default. Selects the real gitops-committing `Publish` implementation over `StubActivities` when non-empty; see `worker/writeback/gitops.go` and ARCHITECTURE.md "Writeback: outbox → Temporal". |
+| `WRITEBACK_GITOPS_BRANCH` | `main` | Branch of `WRITEBACK_GITOPS_REPO` to clone/commit/push against. Only read when `WRITEBACK_GITOPS_REPO` is set. |
+| `WRITEBACK_GITHUB_APP_ID` | *(unset)*, required when `WRITEBACK_GITOPS_REPO` is set | GitHub App ID used to mint an installation token for pushes — no default, deliberately not hardcoded (see "do not hardcode" in the writeback tracking issue). |
+| `WRITEBACK_GITHUB_APP_INSTALLATION_ID` | *(unset)*, required when `WRITEBACK_GITOPS_REPO` is set | GitHub App installation ID for `WRITEBACK_GITOPS_REPO` — no default. |
+| `WRITEBACK_GITHUB_APP_PRIVATE_KEY` | *(unset)*, required when `WRITEBACK_GITOPS_REPO` is set | Raw multi-line PEM private key for the GitHub App, used to sign the installation-token JWT — no default. Delivered via chart `secretEnv` in argok8s's own `<env>/values.yaml`, never committed here (there is no volume-mount path in `tools/helm` — see `tools/helm/README.md`'s `secretEnv` FAQ). |
+| `WRITEBACK_GIT_AUTHOR_NAME` | `app-registry-writeback[bot]` | Git commit author name for gitops writes. |
+| `WRITEBACK_GIT_AUTHOR_EMAIL` | `app-registry-writeback[bot]@users.noreply.github.com` | Git commit author email for gitops writes. |
 
 ### Artifact reaper (AR-7b, issue #558)
 
