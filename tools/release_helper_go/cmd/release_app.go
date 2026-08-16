@@ -202,17 +202,39 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	repoPath := fmt.Sprintf("%s/%s/%s", reg, owner, fullName)
 	pushTarget := imagePushTarget(*matchedApp)
 
+	sha := p.GitSHA
+	if sha == "" {
+		sha = defaultEnv("GITHUB_SHA")
+	}
+	if sha == "" && git != nil {
+		if out, err := git.Run("rev-parse", "HEAD"); err == nil {
+			sha = strings.TrimSpace(out)
+		}
+	}
+
+	isImageApp := matchedApp.ImageTarget != "" && matchedApp.AppType != "cli" && matchedApp.AppType != "binary"
+
 	if p.DryRun {
 		fmt.Println(strings.Repeat("=", 80))
-		fmt.Printf("DRY RUN: Image release plan for %s\n", fullName)
-		fmt.Println(strings.Repeat("=", 80))
-		fmt.Printf("Domain:      %s\n", p.Domain)
-		fmt.Printf("App:         %s\n", p.App)
-		fmt.Printf("Version:     %s\n", p.Version)
-		fmt.Printf("Target:      %s\n", pushTarget)
-		fmt.Printf("Repository:  %s\n", repoPath)
-		fmt.Printf("Tags:        %s:%s, %s:latest\n", repoPath, p.Version, repoPath)
-		fmt.Println("DRY RUN: No images were built or pushed, App Registry was not mutated.")
+		if isImageApp {
+			fmt.Printf("DRY RUN: Image release plan for %s\n", fullName)
+			fmt.Println(strings.Repeat("=", 80))
+			fmt.Printf("Domain:      %s\n", p.Domain)
+			fmt.Printf("App:         %s\n", p.App)
+			fmt.Printf("Version:     %s\n", p.Version)
+			fmt.Printf("Target:      %s\n", pushTarget)
+			fmt.Printf("Repository:  %s\n", repoPath)
+			fmt.Printf("Tags:        %s:%s, %s:latest\n", repoPath, p.Version, repoPath)
+			fmt.Println("DRY RUN: No images were built or pushed, App Registry was not mutated.")
+		} else {
+			fmt.Printf("DRY RUN: Non-image release plan for %s (%s)\n", fullName, matchedApp.AppType)
+			fmt.Println(strings.Repeat("=", 80))
+			fmt.Printf("Domain:      %s\n", p.Domain)
+			fmt.Printf("App:         %s\n", p.App)
+			fmt.Printf("Version:     %s\n", p.Version)
+			fmt.Printf("Target:      %s\n", matchedApp.BinaryTarget)
+			fmt.Println("DRY RUN: No binaries were built or tags created.")
+		}
 		return &ReleaseAppResult{
 			Domain:           p.Domain,
 			App:              p.App,
@@ -220,6 +242,31 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 			EffectiveVersion: p.Version,
 			EffectiveTag:     tagName,
 			Published:        false,
+		}, nil
+	}
+
+	if !isImageApp {
+		fmt.Printf("Building non-image application %s (%s)...\n", fullName, matchedApp.AppType)
+		if matchedApp.BinaryTarget != "" {
+			if _, err := bazel.Run("build", matchedApp.BinaryTarget); err != nil {
+				return nil, fmt.Errorf("bazel build %s: %w", matchedApp.BinaryTarget, err)
+			}
+		}
+
+		if p.CreateGitTag && git != nil && sha != "" {
+			if _, err := git.Run("rev-parse", tagName); err != nil {
+				fmt.Printf("Creating git tag %s...\n", tagName)
+				_, _ = git.Run("tag", "-a", tagName, "-m", fmt.Sprintf("Release %s version %s", fullName, p.Version), sha)
+			}
+		}
+
+		return &ReleaseAppResult{
+			Domain:           p.Domain,
+			App:              p.App,
+			Version:          p.Version,
+			EffectiveVersion: p.Version,
+			EffectiveTag:     tagName,
+			Published:        true,
 		}, nil
 	}
 
@@ -271,15 +318,6 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	}
 
 	// 2. Build and push image via Bazel
-	sha := p.GitSHA
-	if sha == "" {
-		sha = defaultEnv("GITHUB_SHA")
-	}
-	if sha == "" && git != nil {
-		if out, err := git.Run("rev-parse", "HEAD"); err == nil {
-			sha = strings.TrimSpace(out)
-		}
-	}
 
 	tags := []string{p.Version, "latest"}
 	if sha != "" {

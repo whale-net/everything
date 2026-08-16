@@ -63,13 +63,32 @@ Runs all unit and integration tests
 Verifies cross-compilation for multi-architecture containers (critical for ARM64 support). Runs on main branch builds only to reduce CI overhead on feature branches.
 
 ### Plan Docker
-Determines which apps need Docker images built based on changes
+Determines which apps need Docker images built based on changes (runs as a lightweight planning job without Bazel cache or Docker Buildx overhead).
 
 ### Docker
-Builds container images to verify they compile correctly (only runs on main branch commits). Images are not pushed to the registry; use the Release workflow for publishing images.
+Builds container images for all changed applications sequentially in a single runner to verify compilation (only runs on main branch commits). Images are not pushed to the registry; use the Release workflow for publishing images.
 
 ### Build Summary
-Collects and reports the status of all CI jobs
+Collects and reports the status of all CI jobs.
+
+## Runner Architecture & Bazel Server Warming
+
+CI image verification ([`ci.yml`](../.github/workflows/ci.yml)) and release publishing ([`release.yml`](../.github/workflows/release.yml)) prioritize **single-runner sequential execution with a warm Bazel daemon** over GitHub Actions matrix fanout.
+
+### Empirical Rationale
+
+Production telemetry and workflow benchmarks showed that matrix fanout across individual applications incurred substantial overhead:
+
+- **Fixed Setup Overhead (~60–90s per runner)**: GitHub Actions runner provisioning, repository checkout (`fetch-depth: 0`), [`setup-build-env`](../.github/actions/setup-build-env/action.yml) (Bazel installation, external repository cache restore, remote cache auth), and Docker Buildx initialization.
+- **Actual Build / Check Time (~10–30s)**: With Bazel remote caching and layer reuse, building or checking image digests is fast. In typical release runs where digests are unchanged, no-op checks complete in under 20 seconds.
+- **Overhead Multiplier**: Fanning out across $N$ apps spent 80–90% of total runner minutes repeating identical environment initialization and downloading toolchains on separate cold runners.
+
+### Benefits of Single-Runner Execution
+
+1. **Bazel Server Warming**: Executing sequential app builds on one runner keeps the local Bazel daemon alive in memory. Subsequent target evaluations reuse loaded repository rules, external dependency graphs, Python/Go toolchains, and common library compilations without re-analysis.
+2. **Internal Parallelism**: Bazel natively parallelizes action execution across all CPU cores on the runner (`--jobs`).
+3. **Decoupled Planning**: Planning jobs (`plan-docker`, `plan-release`) remain separate lightweight steps that execute in seconds using prebuilt release tools, outputting the change plan before build runners start.
+4. **Reduced Churn**: Eliminates inter-job artifact coordination and race conditions across fanned-out matrix legs.
 
 ## App Registry
 
