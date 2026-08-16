@@ -248,10 +248,36 @@ func validatePackages(packages map[string]struct{}, bazel BazelRunner) []string 
 		return nil
 	}
 	var pkgList []string
+	var queryExprs []string
 	for pkg := range packages {
 		pkgList = append(pkgList, pkg)
+		if pkg == "//" {
+			queryExprs = append(queryExprs, "//...")
+		} else {
+			queryExprs = append(queryExprs, pkg+"/...")
+		}
 	}
 
+	// Try batch query with --keep_going first
+	expr := strings.Join(queryExprs, " + ")
+	if out, err := bazel.Run("query", expr, "--output=package", "--keep_going"); err == nil || out != "" {
+		validSet := labelSet(out)
+		var valid []string
+		for _, pkg := range pkgList {
+			cleanPkg := strings.TrimPrefix(pkg, "//")
+			if cleanPkg == "" {
+				cleanPkg = "//"
+			}
+			if validSet[cleanPkg] || validSet[pkg] {
+				valid = append(valid, pkg)
+			}
+		}
+		if len(valid) > 0 {
+			return valid
+		}
+	}
+
+	// Fall back to individual validation if batch didn't return any packages
 	var valid []string
 	for _, pkg := range pkgList {
 		expr := pkg + "/..."
