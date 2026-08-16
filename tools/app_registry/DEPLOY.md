@@ -57,6 +57,72 @@ every call returns `Unauthenticated`.
 | `app-registry-promoter-stage` | Promote to `stage` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-stage` | **now** — needed before `promote.yml` can run against `stage` |
 | `app-registry-promoter-prod` | Promote to `prod` (via `promote.yml`) | Same shape, realm role `app-registry-promoter-prod` | **now** — needed before `promote.yml` can run against `prod` |
 | `app-registry-worker` | The writeback worker's own calls back into the API (`GetEnvironmentState`) | Confidential, **Service accounts roles** only, audience mapper → `app-registry-api`. **No realm role** — those reads only require an authenticated caller | **now, if you run the worker** |
+| `app-registry-ui` | The admin UI (FR-47/48/49) — the only client a human logs into interactively | Confidential, **Standard flow (authorization code)** checked, **Direct access grants** and **Service accounts roles** unchecked, redirect URIs below, two protocol mappers below | **now, if you deploy the UI** |
+
+#### The interactive UI client (`app-registry-ui`)
+
+Unlike every other client in this table, `app-registry-ui` is not a machine
+identity — it's the client a human's browser authenticates through. Create it
+separately from the audience client (`app-registry-api`) and the
+service-account clients above:
+
+1. **Clients** → **Create client** → Client ID `app-registry-ui` → Next
+2. **Client authentication**: **On** (confidential — the UI's backend holds
+   the secret, exchanges the code server-side, and never exposes it to the
+   browser)
+3. Authentication flow: check **Standard flow** only. Uncheck **Direct access
+   grants** and **Service accounts roles** — this client logs a human in via
+   the browser redirect and does nothing else.
+4. **Valid redirect URIs** — one entry per deployment that runs the UI:
+   - Local/Tilt: `http://localhost:8000/*` (the UI's default `PORT` is
+     `8000`; see [ENV.md](ENV.md) "UI (`app-registry-ui`)")
+   - Each deployed environment: `https://<ui-ingress-host>/*` for that
+     environment (e.g. `https://dev-app-registry-ui.whalenet.dev/*` for
+     `dev`, and the equivalent for `stage`/`prod`) — match the actual
+     `ingress_host` set in that environment's values override, not a
+     placeholder
+5. **Save**, then copy the **Client secret** from the **Credentials** tab —
+   this is `OIDC_CLIENT_SECRET` (see ENV.md)
+
+**Two protocol mappers, both required** — **Client scopes** tab → the
+`app-registry-ui-dedicated` scope → **Add mapper** → **By configuration**:
+
+1. **Audience mapper** — same reason and same shape as every other client in
+   this file (KEYCLOAK.md §3–4): the UI forwards the logged-in user's own
+   access token to `app-registry-api` over gRPC (`libs/go/grpcauth`), and
+   `grpcauth`'s verifier checks `aud == GRPC_OIDC_CLIENT_ID` (i.e.
+   `app-registry-api`). Configure:
+   - Mapper type: **Audience**
+   - **Included Client Audience**: `app-registry-api`
+   - **Add to access token**: **On**
+   - **Failure mode if omitted**: every gRPC call the UI forwards on the
+     user's behalf comes back `Unauthenticated`, and the UI is dead on
+     arrival — no page that reads registry data will render.
+2. **Realm roles mapper, "Add to ID token" enabled** — this is the one gotcha
+   specific to this client and not covered by KEYCLOAK.md, because
+   `libs/go/htmxauth` (unlike `grpcauth`) reads role claims from the **ID
+   token**, not the access token. `SetUserInfo` (`libs/go/htmxauth/auth.go`,
+   `db_session.go`) calls `idToken.Claims(&claims)` and then
+   `parseRealmRoles` extracts `realm_access.roles` from *that* claim set.
+   Keycloak's built-in "realm roles" mapper (from the `roles` client scope)
+   defaults to **access token only** — it does not add `realm_access` to the
+   ID token unless you turn that on explicitly. Configure:
+   - Mapper type: **User Realm Role** (or edit the built-in `realm roles`
+     mapper already present in the `roles` client scope, if `app-registry-ui`
+     has that scope assigned)
+   - **Multivalued**: On
+   - **Token Claim Name**: `realm_access.roles`
+   - **Add to ID token**: **On**
+   - **Add to access token**: leave as-is (not required for this client —
+     the UI never presents its own access token to anything that checks
+     roles; it forwards the *user's* token, and role checks happen server-side
+     in `app-registry-api`)
+   - **Failure mode if omitted**: `realm_access` is simply absent from the ID
+     token. `parseRealmRoles` returns `(nil, nil)` — not an error — so every
+     signed-in principal silently resolves to zero roles. No error, no log
+     line by default; every role-gated control in the UI just disappears as
+     if the user held no roles at all (see `auth.go`'s doc comment on
+     `parseRealmRoles`).
 
 ### Realm roles
 
@@ -83,9 +149,37 @@ roles. This is deliberate and pinned by a test.
 
 ### Humans
 
-Assign roles via a **group**, not to individuals — e.g. a `registry-admins`
-group holding `app-registry-admin`. Membership then becomes the thing you audit
-and change.
+All five realm roles above are assignable to **human users**, not only to the
+service-account clients in the table above — a human logging in through the
+`app-registry-ui` client (above) needs one or more of them to see anything
+past read-only pages. Assignment mechanics are the same for a human as for a
+service account (KEYCLOAK.md §5):
+
+- **One person:** Users → select user → **Role mapping** tab → **Assign
+  role** → filter dropdown to **Filter by realm roles** (easy to miss; it
+  defaults to client roles, which `grpcauth`/`htmxauth` both ignore) → tick
+  the role(s) → **Assign**.
+- **A team (preferred):** assign roles via a **group** instead of to
+  individuals — e.g. a `registry-admins` group holding `app-registry-admin`,
+  or `prod-promoters` holding `app-registry-promoter-prod`. Membership then
+  becomes the thing you audit and change, not a role edit per person.
+
+Role names must match `tools/app_registry/server/auth/auth.go` **character
+for character** — the five names in the block above are copied verbatim from
+that file's `Role*` constants. A typo (`App-Registry-Admin`, trailing
+whitespace, etc.) creates a role that assigns cleanly in the Keycloak console
+but that no server-side check ever matches.
+
+**The promoter role for an environment is derived, not free-standing:** it is
+always `app-registry-promoter-<environment_key>`, where `<environment_key>`
+is the environment's key in the registry (`dev`, `stage`, `prod`, or any
+environment an admin later creates via `EnvironmentRegistry`). This file only
+lists `-dev`/`-stage`/`-prod` because those are the three environments seeded
+today — **an admin-created environment has no promoter role until one is
+created in Keycloak with the matching derived name.** Creating the
+environment in the registry does not create its Keycloak role; that's a
+separate manual step, and until it's done nobody (human or CI) can promote to
+that environment regardless of what other roles they hold.
 
 ---
 
