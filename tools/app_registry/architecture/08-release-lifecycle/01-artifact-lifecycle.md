@@ -3,25 +3,10 @@
 The registry stops learning about an artifact *after* the fact. It records the
 intent to publish **before** the push, and completes the record after.
 
-> **Fixed: issue [#585](https://github.com/whale-net/everything/issues/585).**
-> `RecordArtifact`'s idempotent-replay step used to match an existing row by
-> `digest` alone, with no `(owner, kind, version)` scoping. A reproducible,
-> no-op rebuild (routine in this monorepo) can produce a digest identical to
-> an *older* published version of the same app; the lookup matched that
-> older row, reported success, and never transitioned the new version's
-> `publishing` row — it sat until the reaper reaped it to `failed`. Confirmed
-> live against `dev`: every image released by run
-> [31660476677](https://github.com/whale-net/everything/actions/runs/31660476677)
-> hit this. The lookup is now scoped to the request's own `(owner, kind,
-> version)` identity, so a same-digest/different-version request no longer
-> short-circuits against the wrong row — it falls through to `artifact_digest_idx`'s
-> real uniqueness constraint instead, which correctly rejects it (`digest` is
-> globally unique by design — see the `artifact` row in "Data model" above).
-> That rejection is still a live problem for AR-5: it's harmless at
-> adoption stage `observe` (recording is best-effort) but will hard-fail a
-> routine no-op rebuild's release the moment a domain reaches `promote` or
-> `allocate`, where recording becomes mandatory — see PLAN.md's "AR-5" for
-> the design work still needed before that cutover.
+> **Fixed: issue [#585](https://github.com/whale-net/everything/issues/585) & issue [#784](https://github.com/whale-net/everything/issues/784).**
+> `RecordArtifact` and `AdoptArtifact` idempotent-replay steps are scoped by `(digest, owner, kind, version)`.
+> Within a single minor release series (`vX.Y`), content digests must remain unique (`UNIQUE (owner_id, kind, version_major, version_minor, digest)` in migration 013), preventing redundant patch releases with identical digests.
+> However, across distinct minor or major version promotions/releases (e.g. `v0.1.5` -> `v0.2.0`), content digests may be shared to establish new version baselines for unchanged subcomponents. Version uniqueness remains strictly guarded by `UNIQUE (owner_id, kind, version)`. Replays for the exact same `(owner, kind, version, digest)` return the existing published row, while a new minor/major version with a shared digest creates a distinct artifact record.
 
 | State | Written by | version | build_id | digest |
 |---|---|---|---|---|

@@ -269,11 +269,91 @@ func TestExecuteReleaseApp_NoOpDigestDetection(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if res.DigestUnchanged {
+		t.Errorf("expected DigestUnchanged=false for major bump with shared digest, got true")
+	}
+	if !res.Published {
+		t.Errorf("expected Published=true for major/minor shared digest release, got false")
+	}
+	if res.EffectiveVersion != "v1.0.0" {
+		t.Errorf("expected EffectiveVersion='v1.0.0', got %q", res.EffectiveVersion)
+	}
+	if res.EffectiveTag != "demo-hello-go.v1.0.0" {
+		t.Errorf("expected EffectiveTag='demo-hello-go.v1.0.0', got %q", res.EffectiveTag)
+	}
+	if res.PreviousTag != "demo-hello-go.v0.9.0" {
+		t.Errorf("expected PreviousTag='demo-hello-go.v0.9.0', got %q", res.PreviousTag)
+	}
+
+	// RecordArtifact SHOULD be called for the new major/minor version with the shared digest
+	if len(fakeArtifactClient.RecordArtifactCalls) != 1 {
+		t.Fatalf("expected 1 RecordArtifact call for shared digest release, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	}
+	recReq := fakeArtifactClient.RecordArtifactCalls[0]
+	if recReq.Version != "v1.0.0" || recReq.Digest != sharedDigest {
+		t.Errorf("expected RecordArtifact for v1.0.0 and sharedDigest, got version=%q digest=%q", recReq.Version, recReq.Digest)
+	}
+}
+
+func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
+	apps := []fakeApp{
+		{
+			pkg:          "demo/hello_go",
+			targetSuffix: "hello-go_metadata",
+			name:         "hello-go",
+			domain:       "demo",
+		},
+	}
+	fs, bazel := buildFakeInfra(apps)
+	allBazelCalls := append(bazel.calls,
+		fakeBazelCall{
+			argsContain: []string{"run"},
+			output:      "Successfully pushed",
+		},
+	)
+	bazelRunner := newFakeBazel(allBazelCalls...)
+
+	// Previous tag exists: demo-hello-go.v0.9.0
+	gitRunner := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "sha123456789"},
+		fakeGitCall{argsContain: []string{"tag", "--list", "demo-hello-go.v*"}, output: "demo-hello-go.v0.9.0"},
+	)
+
+	// Docker inspect returns the identical digest for v0.9.1 (same major.minor as v0.9.0)
+	const sharedDigest = "sha256:9999888877776666555544443333222211110000aaaa"
+	dockerRunner := newFakeDocker(
+		fakeDockerCall{
+			argsContain: []string{"buildx", "imagetools", "inspect"},
+			output:      fmt.Sprintf("Digest: %s", sharedDigest),
+		},
+	)
+
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+
+	res, err := ExecuteReleaseApp(ReleaseAppParams{
+		Domain:               "demo",
+		App:                  "hello-go",
+		Version:              "v0.9.1",
+		BuildID:              "build-101",
+		IdempotencyKeyPrefix: "run-1-1",
+		GitSHA:               "sha123456789",
+		CreateGitTag:         true,
+		Bazel:                bazelRunner,
+		Git:                  gitRunner,
+		Docker:               dockerRunner,
+		FS:                   fs,
+		WorkspaceRoot:        fakeWorkspaceRoot,
+		ArtifactClient:       fakeArtifactClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
 	if !res.DigestUnchanged {
 		t.Errorf("expected DigestUnchanged=true, got false")
 	}
 	if res.Published {
-		t.Errorf("expected Published=false on no-op rebuild, got true")
+		t.Errorf("expected Published=false on patch no-op rebuild, got true")
 	}
 	if res.EffectiveVersion != "v0.9.0" {
 		t.Errorf("expected EffectiveVersion='v0.9.0', got %q", res.EffectiveVersion)
@@ -281,22 +361,14 @@ func TestExecuteReleaseApp_NoOpDigestDetection(t *testing.T) {
 	if res.EffectiveTag != "demo-hello-go.v0.9.0" {
 		t.Errorf("expected EffectiveTag='demo-hello-go.v0.9.0', got %q", res.EffectiveTag)
 	}
-	if res.PreviousTag != "demo-hello-go.v0.9.0" {
-		t.Errorf("expected PreviousTag='demo-hello-go.v0.9.0', got %q", res.PreviousTag)
-	}
 
-	// FailPublish should be called to record no-op rebuild status in the registry
+	// FailPublish should be called to record no-op status
 	if len(fakeArtifactClient.FailPublishCalls) != 1 {
-		t.Fatalf("expected 1 FailPublish call for no-op rebuild, got %d", len(fakeArtifactClient.FailPublishCalls))
+		t.Fatalf("expected 1 FailPublish call for patch no-op rebuild, got %d", len(fakeArtifactClient.FailPublishCalls))
 	}
-	failReq := fakeArtifactClient.FailPublishCalls[0]
-	if !strings.Contains(failReq.Reason, "digest unchanged") {
-		t.Errorf("expected reason to mention digest unchanged, got %q", failReq.Reason)
-	}
-
-	// RecordArtifact should NOT be called on no-op
+	// RecordArtifact should NOT be called on patch no-op
 	if len(fakeArtifactClient.RecordArtifactCalls) != 0 {
-		t.Errorf("expected 0 RecordArtifact calls on no-op rebuild, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+		t.Errorf("expected 0 RecordArtifact calls on patch no-op rebuild, got %d", len(fakeArtifactClient.RecordArtifactCalls))
 	}
 }
 

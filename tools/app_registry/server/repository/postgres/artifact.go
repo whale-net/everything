@@ -623,14 +623,11 @@ func (r *artifactRepo) completePublish(ctx context.Context, existing, a reposito
 // the admin-only adoption / disaster-recovery path. See the interface doc
 // comment for the full state-collision contract this method enforces.
 func (r *artifactRepo) AdoptArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, reason, actor string) (*repository.Artifact, bool, error) {
-	// 1. Idempotent replay by digest, same shape as RecordArtifact's step 1:
-	// an existing PUBLISHED row (observed OR previously adopted) with this
-	// EXACT digest is "already recorded" -- returned completely unchanged.
-	// Provenance/State are never rewritten here, on purpose: adopting a
-	// digest that turns out to already be an "observed" row must not
-	// downgrade it to "adopted" -- that would corrupt the exact audit trail
-	// this RPC exists to provide.
-	row := r.ex.QueryRow(ctx, artifactSelectBase+` WHERE a.digest = $1`, a.Digest)
+	// 1. Idempotent replay: an existing PUBLISHED row with this EXACT digest
+	// AND the SAME (owner, kind, version) identity as the request.
+	row := r.ex.QueryRow(ctx, artifactSelectBase+`
+		WHERE a.digest = $1 AND a.owner_id = $2 AND a.kind = $3 AND a.version = $4`,
+		a.Digest, ownerIDOf(a), string(a.Kind), a.Version)
 	if existing, err := scanArtifact(row); err == nil {
 		if existing.Kind == repository.ArtifactKindChart {
 			links, lerr := r.loadContains(ctx, existing.ArtifactID)

@@ -68,8 +68,8 @@ jobs:
           fi
 
           # Read pinned versions
-          RH_VER=$(grep -E '^\s*release_helper_go:' .release-tools-version 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | tr -d '"\x27\r\n ' || true)
-          AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' .release-tools-version 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | tr -d '"\x27\r\n ' || true)
+          RH_VER=$(grep -E '^\s*release_helper_go:' .release-tools-version 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
+          AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' .release-tools-version 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | sed -E "s/['\"[:space:]]//g" || true)
 
           RH_EXISTS=false
           AR_EXISTS=false

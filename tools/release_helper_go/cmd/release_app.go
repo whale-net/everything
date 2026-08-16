@@ -426,21 +426,30 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 		prevVersion := strings.TrimPrefix(prevTag, fullName+".")
 		prevDigest := extractImageDigest(docker, repoPath, prevVersion)
 		if newDigest != "" && prevDigest != "" && newDigest == prevDigest {
-			digestUnchanged = true
-			effectiveVersion = prevVersion
-			effectiveTag = prevTag
-			fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same image digest (%s) as existing tag %s. Skipping new git tag and App Registry record -- reusing %s.\n",
-				fullName, p.Version, newDigest, prevTag, prevTag)
+			prevMaj, prevMin, _, prevOK := parseSemverTriple(prevVersion)
+			newMaj, newMin, _, newOK := parseSemverTriple(p.Version)
+			if prevOK && newOK && prevMaj == newMaj && prevMin == newMin {
+				// Same major.minor: patch bump with unchanged digest is a no-op rebuild
+				digestUnchanged = true
+				effectiveVersion = prevVersion
+				effectiveTag = prevTag
+				fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same image digest (%s) as existing tag %s in same minor release. Skipping new git tag and App Registry record -- reusing %s.\n",
+					fullName, p.Version, newDigest, prevTag, prevTag)
 
-			if beginPublishSucceeded && artifactClient != nil {
-				failReq := &pb.FailPublishRequest{
-					Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-					OwnerFullName:  fullName,
-					Version:        p.Version,
-					Reason:         fmt.Sprintf("digest unchanged from existing tag %s -- no-op rebuild, no new artifact to record (workflow run %s, attempt %s)", prevTag, runID, attempt),
-					IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail-noop", idempotencyPrefix, p.Domain, p.App),
+				if beginPublishSucceeded && artifactClient != nil {
+					failReq := &pb.FailPublishRequest{
+						Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+						OwnerFullName:  fullName,
+						Version:        p.Version,
+						Reason:         fmt.Sprintf("digest unchanged from existing tag %s in same minor release -- no-op rebuild (workflow run %s, attempt %s)", prevTag, runID, attempt),
+						IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail-noop", idempotencyPrefix, p.Domain, p.App),
+					}
+					_, _ = artifactClient.FailPublish(ctx, failReq)
 				}
-				_, _ = artifactClient.FailPublish(ctx, failReq)
+			} else {
+				// Major or minor bump: allow recording and tagging to establish new version baseline
+				fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same image digest (%s) as %s. Registering new version baseline %s with shared digest.\n",
+					fullName, p.Version, newDigest, prevTag, p.Version)
 			}
 		} else {
 			fmt.Printf("Digest check for %s: new(%s)=%s prev(%s)=%s -- proceeding with new tag %s\n",
@@ -594,4 +603,23 @@ func defaultStr(s, def string) string {
 		return def
 	}
 	return s
+}
+
+func parseSemverTriple(v string) (major, minor, patch int, ok bool) {
+	v = strings.TrimPrefix(v, "v")
+	parts := strings.Split(v, ".")
+	if len(parts) < 3 {
+		return 0, 0, 0, false
+	}
+	var maj, min, pat int
+	if _, err := fmt.Sscanf(parts[0], "%d", &maj); err != nil {
+		return 0, 0, 0, false
+	}
+	if _, err := fmt.Sscanf(parts[1], "%d", &min); err != nil {
+		return 0, 0, 0, false
+	}
+	if _, err := fmt.Sscanf(parts[2], "%d", &pat); err != nil {
+		return 0, 0, 0, false
+	}
+	return maj, min, pat, true
 }

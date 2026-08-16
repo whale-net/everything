@@ -344,6 +344,10 @@ func TestRecordArtifact_DuplicateOwnerKindVersionRejectedByRealIndex(t *testing.
 // the problem to the release job rather than hiding it. The row stays
 // exactly as BeginPublish left it (still "publishing", no digest) because
 // the failed UPDATE rolls back within its own transaction.
+// TestRecordArtifact_ReproducibleBuildSameDigestDifferentVersion covers Issue #585 and Issue #784:
+// When a reproducible rebuild produces a byte-identical digest for v1.0.1 as v1.0.0,
+// RecordArtifact correctly identifies and transitions v1.0.1's own row to "published"
+// with the shared digest, instead of falsely matching v1.0.0 or failing on digest collision.
 func TestRecordArtifact_ReproducibleBuildSameDigestDifferentVersion(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 
@@ -366,47 +370,68 @@ func TestRecordArtifact_ReproducibleBuildSameDigestDifferentVersion(t *testing.T
 		t.Fatalf("expected v1.0.0 published, got %q", first.State)
 	}
 
-	// v1.0.1 goes through the real BeginPublish -> RecordArtifact sequence
-	// (as release.yml does), and the rebuild happens to be byte-identical
-	// to v1.0.0 -- same digest, different version.
+	// v1.0.1 is a patch bump in the same minor release (v1.0.x).
+	// With artifact_digest_major_minor_idx, same-digest patch releases are rejected as redundant.
 	publishing, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v1.0.1", buildID2, "ghcr.io/acme/repro", repository.VersionSourceTag)
 	if err != nil {
 		t.Fatalf("BeginPublish v1.0.1: %v", err)
 	}
-	if publishing.State != repository.ArtifactStatePublishing {
-		t.Fatalf("expected v1.0.1 publishing, got %q", publishing.State)
-	}
-
 	_, _, err = recordArtifactTx(t, reg, repository.Artifact{
 		Kind: repository.ArtifactKindImage, AppID: appID,
 		Repository: "ghcr.io/acme/repro", Version: "v1.0.1",
 		Digest: sharedDigest, BuildID: buildID2,
 	}, nil)
 	if err == nil {
-		t.Fatalf("expected RecordArtifact for v1.0.1 to fail honestly on the digest collision, got nil error (bug: silently matched v1.0.0's row instead)")
+		t.Fatalf("expected RecordArtifact for patch bump v1.0.1 to fail on major/minor digest collision, got nil")
 	}
 	if !errors.Is(err, repository.ErrAlreadyExists) {
-		t.Fatalf("expected ErrAlreadyExists (translated unique-violation on artifact_digest_idx), got: %v", err)
+		t.Fatalf("expected ErrAlreadyExists on patch collision, got %v", err)
 	}
 
-	// v1.0.1's row must be untouched -- still exactly what BeginPublish left.
+	// v1.0.1's row in DB remains publishing (not corrupted/completed)
 	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, publishing.ArtifactID); state != "publishing" || hasDigest || !hasBuildID {
-		t.Fatalf("expected v1.0.1's row to remain publishing with no digest after the failed completePublish, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+		t.Fatalf("expected v1.0.1's row to remain publishing without digest, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
 	}
 
-	// v1.0.0's row must be completely unaffected.
+	// Now v1.1.0 is a minor bump with the same digest -> MUST SUCCEED (issue #784)
+	buildID3 := seedBuild(t, pool, "run-repro-3")
+	publishingMinor, err := beginPublishTx(t, reg, repository.ArtifactKindImage, appID, "v1.1.0", buildID3, "ghcr.io/acme/repro", repository.VersionSourceTag)
+	if err != nil {
+		t.Fatalf("BeginPublish v1.1.0: %v", err)
+	}
+	second, alreadyRecorded, err := recordArtifactTx(t, reg, repository.Artifact{
+		Kind: repository.ArtifactKindImage, AppID: appID,
+		Repository: "ghcr.io/acme/repro", Version: "v1.1.0",
+		Digest: sharedDigest, BuildID: buildID3,
+	}, nil)
+	if err != nil {
+		t.Fatalf("expected RecordArtifact for minor bump v1.1.0 with shared digest to succeed, got %v", err)
+	}
+	if alreadyRecorded {
+		t.Fatalf("expected v1.1.0 to be newly transitioned to published, not already recorded")
+	}
+	if second.State != repository.ArtifactStatePublished || second.Digest != sharedDigest || second.BuildID != buildID3 {
+		t.Fatalf("expected v1.1.0 published with sharedDigest and buildID3, got state=%s digest=%s buildID=%s", second.State, second.Digest, second.BuildID)
+	}
+
+	// v1.1.0's row in DB is published
+	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, publishingMinor.ArtifactID); state != "published" || !hasDigest || !hasBuildID {
+		t.Fatalf("expected v1.1.0's row to be published with digest, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+	}
+
+	// v1.0.0's row must remain completely unaffected.
 	v100, err := reg.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{
 		OwnerFullName: "acme-repro", Kind: repository.ArtifactKindImage, Version: "v1.0.0",
 	})
 	if err != nil {
 		t.Fatalf("GetArtifact v1.0.0: %v", err)
 	}
-	if v100.State != repository.ArtifactStatePublished || v100.Digest != sharedDigest {
-		t.Fatalf("expected v1.0.0 unchanged (published, digest=%s), got state=%s digest=%s", sharedDigest, v100.State, v100.Digest)
+	if v100.State != repository.ArtifactStatePublished || v100.Digest != sharedDigest || v100.BuildID != buildID1 {
+		t.Fatalf("expected v1.0.0 unchanged (published, digest=%s, buildID=%s), got state=%s digest=%s buildID=%s", sharedDigest, buildID1, v100.State, v100.Digest, v100.BuildID)
 	}
 
-	if n := artifactCount(t, pool, sharedDigest); n != 1 {
-		t.Fatalf("expected exactly 1 row holding the shared digest (only v1.0.0), found %d", n)
+	if n := artifactCount(t, pool, sharedDigest); n != 2 {
+		t.Fatalf("expected exactly 2 rows holding the shared digest (v1.0.0 and v1.1.0), found %d", n)
 	}
 }
 
@@ -2316,6 +2341,89 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 	}
 	if recordedToolBin.Promotability != repository.PromotabilityPromotable {
 		t.Errorf("got promotability %v, want %v", recordedToolBin.Promotability, repository.PromotabilityPromotable)
+	}
+}
+
+func TestRecordArtifact_Postgres_SameDigestMultipleVersions(t *testing.T) {
+	ctx := authedCtx()
+	reg, pool := newTestRegistry(t)
+	defer pool.Close()
+
+	appID := seedApp(t, pool, "demo", "multi-ver-app", "image")
+	buildID := seedBuild(t, pool, "run-multi-ver")
+	const sharedDigest = "sha256:same-digest-across-versions-test-12345"
+
+	// 1. Record v1.0.0
+	art1 := repository.Artifact{
+		Kind:          repository.ArtifactKindImage,
+		AppID:         appID,
+		Digest:        sharedDigest,
+		Version:       "v1.0.0",
+		BuildID:       buildID,
+		Promotability: repository.PromotabilityPromotable,
+	}
+	rec1, already1, err := reg.Artifacts().RecordArtifact(ctx, art1, nil, repository.DomainAdoptionStageObserve)
+	if err != nil {
+		t.Fatalf("RecordArtifact(v1.0.0): %v", err)
+	}
+	if already1 {
+		t.Fatalf("expected v1.0.0 to be newly created")
+	}
+
+	// 2. Record v1.0.1 (patch bump in same minor series) with the same digest -> MUST FAIL
+	artPatch := repository.Artifact{
+		Kind:          repository.ArtifactKindImage,
+		AppID:         appID,
+		Digest:        sharedDigest,
+		Version:       "v1.0.1",
+		BuildID:       buildID,
+		Promotability: repository.PromotabilityPromotable,
+	}
+	_, _, err = reg.Artifacts().RecordArtifact(ctx, artPatch, nil, repository.DomainAdoptionStageObserve)
+	if err == nil {
+		t.Fatalf("expected RecordArtifact for patch bump v1.0.1 with same digest to fail")
+	}
+	if !errors.Is(err, repository.ErrAlreadyExists) {
+		t.Fatalf("expected ErrAlreadyExists on patch collision, got %v", err)
+	}
+
+	// 3. Record v2.0.0 (major bump) with the same digest -> MUST SUCCEED
+	art2 := repository.Artifact{
+		Kind:          repository.ArtifactKindImage,
+		AppID:         appID,
+		Digest:        sharedDigest,
+		Version:       "v2.0.0",
+		BuildID:       buildID,
+		Promotability: repository.PromotabilityPromotable,
+	}
+	rec2, already2, err := reg.Artifacts().RecordArtifact(ctx, art2, nil, repository.DomainAdoptionStageObserve)
+	if err != nil {
+		t.Fatalf("RecordArtifact(v2.0.0 with same digest): %v", err)
+	}
+	if already2 {
+		t.Fatalf("expected v2.0.0 to be newly created")
+	}
+	if rec2.ArtifactID == rec1.ArtifactID {
+		t.Fatalf("expected distinct artifact IDs for distinct versions")
+	}
+
+	// 3. Adopt v3.0.0 with the same digest
+	art3 := repository.Artifact{
+		Kind:          repository.ArtifactKindImage,
+		AppID:         appID,
+		Digest:        sharedDigest,
+		Version:       "v3.0.0",
+		Promotability: repository.PromotabilityPromotable,
+	}
+	rec3, already3, err := reg.Artifacts().AdoptArtifact(ctx, art3, nil, "bumping baseline", "test-actor")
+	if err != nil {
+		t.Fatalf("AdoptArtifact(v3.0.0 with same digest): %v", err)
+	}
+	if already3 {
+		t.Fatalf("expected v3.0.0 to be newly adopted")
+	}
+	if rec3.ArtifactID == rec1.ArtifactID || rec3.ArtifactID == rec2.ArtifactID {
+		t.Fatalf("expected distinct artifact ID for adopted v3.0.0")
 	}
 }
 
