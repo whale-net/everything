@@ -8,6 +8,7 @@ release_app(
     app_name = "release_helper_go",
     app_type = "cli",
     binary_name = ":release_helper_go",
+    deploy_unit = "image",
     description = "Release helper CLI for Everything monorepo",
     domain = "tools",
     language = "go",
