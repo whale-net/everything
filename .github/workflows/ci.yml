@@ -117,9 +117,9 @@ jobs:
         # and analysis time. On main we keep the full //... scope so any
         # untested target whose build breaks still gets caught before release.
         if [ "$EVENT_NAME" = "pull_request" ]; then
-          bazel test --config=ci --build_tests_only //...
+          bazel coverage --config=ci --build_tests_only //...
         else
-          bazel test --config=ci //...
+          bazel coverage --config=ci //...
         fi
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
@@ -135,6 +135,14 @@ jobs:
         # silently — the exact failure the contract test exists to prevent.
         bazel run --config=ci //tools/appmeta:manifest_contract_test
         bazel shutdown
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v5
+      if: always()
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+        flags: unittests
 
     - name: Upload test results
       uses: actions/upload-artifact@v4
@@ -238,9 +246,17 @@ jobs:
         echo "::group::Database Integration Tests"
         # No --test_tag_filters: combining it with explicit labels makes Bazel
         # report "No test targets were found" (see libs/go/dbtest/README.md).
-        bazel test --config=ci $TARGETS --test_output=streamed
+        bazel coverage --config=ci $TARGETS --test_output=streamed
         echo "::endgroup::"
         bazel shutdown
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v5
+      if: always()
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        fail_ci_if_error: false
+        flags: integration
 
     - name: Upload test results
       uses: actions/upload-artifact@v4
