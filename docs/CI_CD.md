@@ -121,7 +121,7 @@ triggers that environment's required reviewers — this declaration is the
 entire security model, not a formality. Unlike the recording steps above, it
 is **not** `continue-on-error`: a failed promotion fails the run.
 
-**Status: built, never run.** No Keycloak clients and no GitHub Environments
-(`dev`/`stage`/`prod`) exist yet, so `promote.yml` cannot currently succeed.
+**Status: deprecated / disabled for now.** No Keycloak clients and no GitHub Environments
+(`dev`/`stage`/`prod`) exist yet, and the workflow job is disabled with `if: false`.
 See [`tools/app_registry/DEPLOY.md`](../tools/app_registry/DEPLOY.md) for
 what has to exist first.

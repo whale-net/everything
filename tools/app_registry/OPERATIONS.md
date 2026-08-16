@@ -513,12 +513,13 @@ shipped:
 **Do not re-run the workflow to fix an already-fixed-forward run** — a re-run
 would push a new (probably identical, if the build is reproducible) image
 under the same version, which `RecordArtifact` may reject as a
-digest mismatch on an already-`publishing` row, or which just wastes a
-build. Re-running only helps when the run is still recent enough to safely
 redo (see ["A release run didn't complete"](#a-release-run-didnt-complete)
-above); for one that finished and reported green a while ago, treat it like
-Case 1: confirm the digest actually exists in GHCR/the chart repository,
-then `app-registry artifacts adopt` it with a `reason` citing issue #575.
+above); for one that finished, failed recording, or reported green a while ago,
+treat it like Case 1: confirm the digest actually exists in GHCR/the chart
+repository, then `app-registry artifacts adopt` it with a `reason` citing the
+issue or run. `AdoptArtifact` directly adopts over both `publishing` and `failed`
+states, immediately completing disaster recovery without waiting for reaper
+timeouts.
 **This is a human decision against the live registry, not something to run
 speculatively or automate** — see this repo's `AGENTS.md` ("do not patch
 production environments") and "It is lazy and per-artifact" above.
