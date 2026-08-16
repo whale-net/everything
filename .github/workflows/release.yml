@@ -132,6 +132,14 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'release-tools'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
