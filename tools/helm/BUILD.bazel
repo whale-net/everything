@@ -33,6 +33,7 @@ go_test(
 go_test(
     name = "composer_test",
     srcs = [
+        "app_registry_ui_render_test.go",
         "composer_test.go",
         "render_test.go",
     ],

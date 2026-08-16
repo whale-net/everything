@@ -33,3 +33,13 @@ filegroup(
     srcs = glob(["*.md"]),
     visibility = ["//visibility:public"],
 )
+
+# This BUILD.bazel itself, as text data for //tools/app_registry/conformance's
+# chart-membership test (#656) -- it asserts APP_REGISTRY_APPS includes
+# //tools/app_registry/ui:ui_metadata and that exactly one
+# release_helm_chart(...) is declared in this domain.
+filegroup(
+    name = "build_file",
+    srcs = ["BUILD.bazel"],
+    visibility = ["//tools/app_registry:__subpackages__"],
+)

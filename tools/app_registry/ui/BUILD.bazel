@@ -60,3 +60,12 @@ release_app(
     language = "go",
     port = 8000,
 )
+
+# Source + doc files exposed to //tools/app_registry/conformance's NFR-3
+# static-analysis and ENV.md-coverage tests (#656). Scoped, not public --
+# nothing outside this domain should depend on raw UI source text.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go", "*.md"]),
+    visibility = ["//tools/app_registry:__subpackages__"],
+)

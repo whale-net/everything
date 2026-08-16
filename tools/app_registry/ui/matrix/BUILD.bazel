@@ -13,3 +13,11 @@ go_library(
         "//tools/appmeta/proto:appmetapb",
     ],
 )
+
+# Source files exposed to //tools/app_registry/conformance's NFR-3
+# static-analysis test (#656).
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go"]),
+    visibility = ["//tools/app_registry:__subpackages__"],
+)
