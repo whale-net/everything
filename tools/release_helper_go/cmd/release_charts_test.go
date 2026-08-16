@@ -10,6 +10,7 @@ import (
 
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"google.golang.org/grpc"
 )
 
 type fakeHelmPackager struct {
@@ -582,5 +583,49 @@ func TestExecuteReleaseCharts_NonExistentChart(t *testing.T) {
 		t.Errorf("expected no matched charts error, got: %v", err)
 	}
 }
+
+func TestExecuteReleaseCharts_RecordArtifactFails_TriggersFailPublish(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	fakeArtifactClient.RecordArtifactFn = func(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error) {
+		return nil, fmt.Errorf("chart pins unrecorded image digest")
+	}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:         "demo-hello-fastapi",
+		Version:        "v0.2.0",
+		ChartRepoURL:   "https://charts.whalenet.dev",
+		BuildID:        "test-build-id-123",
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		Packager:       packager,
+		Uploader:       uploader,
+		WorkspaceRoot:  workspaceRoot,
+		ArtifactClient: fakeArtifactClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected ExecuteReleaseCharts error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+	if len(fakeArtifactClient.BeginPublishCalls) != 1 {
+		t.Errorf("expected 1 BeginPublish call, got %d", len(fakeArtifactClient.BeginPublishCalls))
+	}
+	if len(fakeArtifactClient.RecordArtifactCalls) != 1 {
+		t.Errorf("expected 1 RecordArtifact call, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	}
+	if len(fakeArtifactClient.FailPublishCalls) != 1 {
+		t.Fatalf("expected 1 FailPublish call on RecordArtifact error, got %d", len(fakeArtifactClient.FailPublishCalls))
+	}
+	if !strings.Contains(fakeArtifactClient.FailPublishCalls[0].Reason, "chart record artifact failed") {
+		t.Errorf("expected fail reason to mention chart record artifact failed, got: %s", fakeArtifactClient.FailPublishCalls[0].Reason)
+	}
+}
+
 
 

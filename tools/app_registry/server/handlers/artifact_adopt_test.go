@@ -196,9 +196,10 @@ func TestAdoptArtifact_RejectsAllocatedRow(t *testing.T) {
 	}
 }
 
-// TestAdoptArtifact_RejectsPublishingRow proves adoption does not race a
-// live in-flight publish.
-func TestAdoptArtifact_RejectsPublishingRow(t *testing.T) {
+// TestAdoptArtifact_PublishingRowBecomesPublished_ReusesBuildID proves adoption
+// can recover an in-progress / abandoned publishing row, transitioning it to
+// published and preserving the real build_id from BeginPublish.
+func TestAdoptArtifact_PublishingRowBecomesPublished_ReusesBuildID(t *testing.T) {
 	// setupAllocate, not setup: BeginPublish's ∅ -> publishing branch needs
 	// a real ImageRepository (Registry/Organization/RepoName) to stamp onto
 	// the fresh row -- setup()'s "demo-image-app" doesn't set those.
@@ -213,13 +214,22 @@ func TestAdoptArtifact_RejectsPublishingRow(t *testing.T) {
 		t.Fatalf("BeginPublish: %v", err)
 	}
 
-	_, err := artifactSrv.AdoptArtifact(ctx, &pb.AdoptArtifactRequest{
+	adopted, err := artifactSrv.AdoptArtifact(ctx, &pb.AdoptArtifactRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
 		Version: "v1.0.0", Digest: "sha256:adopt-over-publishing",
-		Reason: "should be rejected", IdempotencyKey: "adopt-publishing-adopt",
+		Reason: "recover abandoned publish", IdempotencyKey: "adopt-publishing-adopt",
 	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition adopting over a publishing row, got %v (%v)", status.Code(err), err)
+	if err != nil {
+		t.Fatalf("AdoptArtifact over publishing row failed: %v", err)
+	}
+	if adopted.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("expected PUBLISHED, got %v", adopted.Artifact.State)
+	}
+	if adopted.Artifact.Provenance != pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED {
+		t.Fatalf("expected ADOPTED, got %v", adopted.Artifact.Provenance)
+	}
+	if adopted.Artifact.BuildId != build.BuildId {
+		t.Fatalf("expected build_id %s preserved, got %s", build.BuildId, adopted.Artifact.BuildId)
 	}
 }
 

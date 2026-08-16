@@ -624,6 +624,16 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			}
 			if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
 				fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
+				if beginPublishSucceeded {
+					failReq := &pb.FailPublishRequest{
+						Kind:           pb.ArtifactKind_ARTIFACT_KIND_CHART,
+						OwnerFullName:  publishedName,
+						Version:        ver,
+						Reason:         fmt.Sprintf("chart record artifact failed (workflow run %s, attempt %s): %v", runID, attempt, err),
+						IdempotencyKey: fmt.Sprintf("%s-%s-chart-fail-record", idempotencyPrefix, publishedName),
+					}
+					_, _ = artifactClient.FailPublish(ctx, failReq)
+				}
 			} else {
 				fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", publishedName, ver, chartDigest)
 			}
