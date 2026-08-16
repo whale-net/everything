@@ -175,6 +175,9 @@ templ catalogCell(cell *matrix.Cell) {
 		<span class="text-xs opacity-50">not promoted</span>
 	} else {
 		<span class="font-mono text-xs">{ cell.Entry.GetArtifact().GetVersion() }</span>
+		if cell.Entry.GetArtifact().GetProvenance() == pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED {
+			@components.ProvenanceBadge(cell.Entry.GetArtifact().GetProvenance())
+		}
 		if cell.Drifted {
 			<span class="badge badge-soft badge-error badge-xs ml-1">drift</span>
 		}

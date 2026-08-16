@@ -196,6 +196,9 @@ templ matrixCell(user *htmxauth.UserInfo, env *pb.Environment, cell *matrix.Cell
 			}
 		} else {
 			@components.DigestDisplay(cell.Entry.GetArtifact().GetVersion(), cell.Entry.GetArtifact().GetDigest())
+			if cell.Entry.GetArtifact().GetProvenance() == pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED {
+				@components.ProvenanceBadge(cell.Entry.GetArtifact().GetProvenance())
+			}
 			if cell.Drifted {
 				<span class="badge badge-soft badge-error badge-xs">drift</span>
 			}

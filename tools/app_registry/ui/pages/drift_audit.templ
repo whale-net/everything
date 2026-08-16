@@ -1,0 +1,161 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
+)
+
+// driftOwnerHref links a matrix.DriftRow's app back to app detail (screen
+// 11) — "every drifted entry links to the entity/environment that explains
+// it" (#650 acceptance criteria). AppFullName always names the drifted app
+// itself (never the owning chart), matching /apps/{full_name}'s convention.
+func driftOwnerHref(row matrix.DriftRow) string {
+	if row.AppFullName == "" {
+		return ""
+	}
+	return "/apps/" + row.AppFullName
+}
+
+// adoptedOwnerFullName resolves an adopted Artifact's owner (app_id or
+// chart_id, exactly one set per messages.proto) to a display/link name via
+// the same Matrix already loaded for the drift section, so this screen
+// never issues an extra lookup RPC just to label a row.
+func adoptedOwnerFullName(m *matrix.Matrix, a *pb.Artifact) string {
+	if a.GetChartId() != "" {
+		return m.OwnerFullName("chart:" + a.GetChartId())
+	}
+	return m.OwnerFullName("app:" + a.GetAppId())
+}
+
+// DriftAudit is screen 40-drift-audit ("Drift & Audit" in nav, FR-32/FR-33/
+// FR-9/NFR-6/NFR-10): two distinct, separately labelled sections —
+// drifted overrides (a client-side rollup of the same Matrix the
+// dashboard/deployments screens read, so the three can never disagree) and
+// artifacts a human adopted rather than CI observed, optionally scoped to
+// one owner. Read-side audit only: the adopt action (screen 52) is
+// deferred, so this screen has no write control.
+templ DriftAudit(user *htmxauth.UserInfo, m *matrix.Matrix, driftRows []matrix.DriftRow, adopted []*pb.Artifact, adoptedErr error, ownerFilter string) {
+	@components.Shell("Drift & Audit", user) {
+		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100">
+			<h1 class="text-2xl md:text-3xl font-bold mb-2">Drift &amp; Audit</h1>
+			<p class="text-sm opacity-80">
+				Overridden promotions that no longer match their chart's pin, and
+				every artifact a human asserted rather than CI observed.
+			</p>
+		</div>
+		<div class="card bg-base-100 shadow-md mb-6">
+			<div class="card-body p-0">
+				<div class="p-4 border-b border-base-300">
+					<h2 class="text-lg font-semibold">
+						Drifted overrides
+						if m.TotalDrift() > 0 {
+							<span class="badge badge-error ml-2">{ fmt.Sprint(m.TotalDrift()) }</span>
+						} else {
+							<span class="badge badge-success ml-2">0</span>
+						}
+					</h2>
+					<p class="text-sm opacity-60">
+						Not a cluster check — the registry only knows about its own
+						promotion + chart-pin records. Count matches the dashboard's
+						drifted-override badge (same underlying Matrix, FR-9).
+					</p>
+				</div>
+				if len(driftRows) == 0 {
+					<p class="p-4 text-sm opacity-60">No drifted overrides.</p>
+				} else {
+					<table class="table">
+						<thead>
+							<tr><th>Env</th><th>App</th><th>Promoted (override)</th><th>Chart currently pins</th><th>Since</th></tr>
+						</thead>
+						<tbody>
+							for _, d := range driftRows {
+								<tr class="hover bg-error/5">
+									<td><span class="badge badge-neutral badge-sm">{ d.EnvKey }</span></td>
+									<td class="font-mono text-sm">
+										if href := driftOwnerHref(d); href != "" {
+											<a href={ templ.URL(href) } class="link link-hover">{ d.AppFullName }</a>
+										} else {
+											{ d.AppFullName }
+										}
+									</td>
+									<td class="font-mono text-sm text-error">
+										if d.PromotedVersion != "" {
+											{ d.PromotedVersion }{ " " }
+										}
+										{ digestShort(d.PromotedDigest) }
+									</td>
+									<td class="font-mono text-sm">{ digestShort(d.ChartPinnedDigest) }</td>
+									<td class="text-sm opacity-60">{ unixToRFC3339(d.Since) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+		</div>
+		<div class="card bg-base-100 shadow-md">
+			<div class="card-body p-0">
+				<div class="p-4 border-b border-base-300">
+					<h2 class="text-lg font-semibold">Adopted artifacts</h2>
+					<p class="text-sm opacity-60">
+						Recorded by a human via <span class="font-mono">AdoptArtifact</span>,
+						not observed by CI. Reason is logged server-side; cross-reference
+						server logs for the full "why".
+					</p>
+				</div>
+				<form method="get" action="/drift-audit" class="flex flex-col md:flex-row gap-3 p-4 border-b border-base-300">
+					<input type="text" name="owner" placeholder="Scope to app/chart full name…" value={ ownerFilter } class="input input-bordered input-sm w-full md:w-72"/>
+					<button type="submit" class="btn btn-sm">Filter</button>
+					if ownerFilter != "" {
+						<a href="/drift-audit" class="btn btn-sm btn-ghost">Clear</a>
+					}
+				</form>
+				if adoptedErr != nil {
+					<div role="alert" class="alert alert-error m-4">
+						<span>Failed to load adopted artifacts: { adoptedErr.Error() }</span>
+					</div>
+				} else if len(adopted) == 0 {
+					<p class="p-4 text-sm opacity-70">No adopted artifacts match this filter.</p>
+				} else {
+					<table class="table">
+						<thead>
+							<tr><th>Owner</th><th>Kind</th><th>Version</th><th>Digest</th><th>Adopted</th></tr>
+						</thead>
+						<tbody>
+							for _, a := range adopted {
+								{{ ownerName := adoptedOwnerFullName(m, a) }}
+								<tr class="hover">
+									<td class="font-mono text-sm">
+										if ownerName != "" {
+											<a href={ templ.URL(adoptedArtifactOwnerHref(a, ownerName)) } class="link link-hover">{ ownerName }</a>
+										} else {
+											(unknown)
+										}
+									</td>
+									<td class="text-sm">{ artifactKindLabel(a.GetKind()) } @components.ProvenanceBadge(a.GetProvenance())</td>
+									<td class="font-mono text-sm">{ a.GetVersion() }</td>
+									<td class="font-mono text-xs opacity-70" title={ a.GetDigest() }>{ digestShort(a.GetDigest()) }</td>
+									<td class="text-sm">{ unixToRFC3339(a.GetStateChangedAt()) }</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+		</div>
+		<p class="text-xs opacity-50 mt-4">No adopt control lives here — recording a new adoption is screen 52, delivered separately. This screen is read-side audit only.</p>
+	}
+}
+
+// adoptedArtifactOwnerHref links an adopted artifact's owner row to its
+// detail screen: charts at /charts/{full_name}, apps at /apps/{full_name}.
+func adoptedArtifactOwnerHref(a *pb.Artifact, ownerFullName string) string {
+	if a.GetChartId() != "" {
+		return "/charts/" + ownerFullName
+	}
+	return "/apps/" + ownerFullName
+}

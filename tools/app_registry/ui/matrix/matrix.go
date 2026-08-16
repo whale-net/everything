@@ -308,3 +308,81 @@ func (m *Matrix) OwnerFullName(key string) string {
 	}
 	return find(m.Rows)
 }
+
+// DriftRow is one flattened entry for the screen-40 (#650) drift-audit
+// table: a single DriftEntry, resolved to the chart/app/environment it
+// belongs to plus (when the drifted app's own override cell is resolvable)
+// the version and promotion timestamp behind the override. Built only from
+// data already loaded into Matrix — the same Cell.Drifted/Entry.GetDrift()
+// the dashboard rollup and the deployments-matrix screen read — so this
+// table can never disagree with either about which (chart, env) pairs are
+// drifted (FR-9 consistency). The headline *count* screen 40 shows is
+// m.TotalDrift(), not len(DriftRows()), specifically so it is always the
+// literal same number as the dashboard badge even in the (currently
+// theoretical, single-app-per-chart-per-env in practice) case where one
+// drifted cell carries more than one DriftEntry.
+type DriftRow struct {
+	EnvKey string
+
+	ChartKey      string // "chart:<id>" — Row.Key convention, for linking
+	ChartFullName string
+
+	AppKey      string // "app:<id>" — Row.Key convention, for linking
+	AppID       string
+	AppFullName string
+
+	// PromotedVersion/Since are resolved from the drifted app's own child
+	// row/cell (its override promotion) when present; zero values when the
+	// override's own row can't be found (e.g. composed-app resolution
+	// skipped it — see Build's "Composed app not (yet) resolved" case).
+	PromotedVersion string
+	PromotedDigest  string
+	Since           int64
+
+	ChartPinnedDigest string
+}
+
+// DriftRows flattens every DriftEntry across every chart row's cells into
+// one row per (env, drifted app) pair, sorted by environment then app name
+// for a stable, scannable table.
+func (m *Matrix) DriftRows() []DriftRow {
+	var out []DriftRow
+	for _, row := range m.Rows {
+		if row.Kind != RowKindChart {
+			continue
+		}
+		for i, cell := range row.Cells {
+			if !cell.Drifted || cell.Entry == nil {
+				continue
+			}
+			for _, d := range cell.Entry.GetDrift() {
+				dr := DriftRow{
+					EnvKey:            cell.EnvKey,
+					ChartKey:          row.Key,
+					ChartFullName:     row.FullName,
+					AppKey:            "app:" + d.GetAppId(),
+					AppID:             d.GetAppId(),
+					AppFullName:       d.GetAppFullName(),
+					PromotedDigest:    d.GetPromotedDigest(),
+					ChartPinnedDigest: d.GetChartPinnedDigest(),
+				}
+				for _, child := range row.Children {
+					if child.Key != dr.AppKey || i >= len(child.Cells) || child.Cells[i].Entry == nil {
+						continue
+					}
+					dr.PromotedVersion = child.Cells[i].Entry.GetArtifact().GetVersion()
+					dr.Since = child.Cells[i].Entry.GetPromotion().GetValidFrom()
+					break
+				}
+				out = append(out, dr)
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].EnvKey != out[j].EnvKey {
+			return out[i].EnvKey < out[j].EnvKey
+		}
+		return out[i].AppFullName < out[j].AppFullName
+	})
+	return out
+}

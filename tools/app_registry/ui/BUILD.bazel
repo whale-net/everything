@@ -6,11 +6,13 @@ go_library(
     srcs = [
         "apps_data.go",
         "deployments_data.go",
+        "drift_data.go",
         "grpc_client.go",
         "handlers_apps.go",
         "handlers_builds.go",
         "handlers_dashboard.go",
         "handlers_deployments.go",
+        "handlers_drift.go",
         "handlers_environments.go",
         "handlers_promote.go",
         "main.go",
