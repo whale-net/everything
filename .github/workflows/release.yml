@@ -47,6 +47,9 @@ jobs:
   build-release-tools:
     name: Build Release Tools
     runs-on: ubuntu-latest
+    outputs:
+      needs_build: ${{ steps.probe.outputs.needs_build }}
+      source: ${{ steps.probe.outputs.source }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -60,6 +63,7 @@ jobs:
           if [[ "$USE_SOURCE" == "true" ]]; then
             echo "Explicit use_source_tools requested. Building from source."
             echo "needs_build=true" >> "$GITHUB_OUTPUT"
+            echo "source=artifact" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -79,9 +83,11 @@ jobs:
           if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
             echo "Prebuilt release tools exist on GitHub Releases. Downstream jobs will download prebuilt binaries directly."
             echo "needs_build=false" >> "$GITHUB_OUTPUT"
+            echo "source=published" >> "$GITHUB_OUTPUT"
           else
             echo "Prebuilt release tools not found on GitHub Releases. Building once as workflow artifact for this run."
             echo "needs_build=true" >> "$GITHUB_OUTPUT"
+            echo "source=artifact" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup Build Environment
@@ -143,7 +149,7 @@ jobs:
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
 
       - name: Plan release
         id: plan
@@ -239,7 +245,7 @@ jobs:
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
 
       - name: Configure Git
         run: |
@@ -326,7 +332,7 @@ jobs:
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
 
       - name: Download release notes artifacts
         uses: actions/download-artifact@v4
@@ -418,7 +424,7 @@ jobs:
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
 
       - name: Configure Git
         if: ${{ github.event.inputs.dry_run == 'false' }}
@@ -480,7 +486,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ (inputs.use_source_tools || github.event.inputs.use_source_tools == 'true') && 'source' || 'published' }}
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
 
       - name: Generate summary
         if: steps.download-tools.outcome == 'success'

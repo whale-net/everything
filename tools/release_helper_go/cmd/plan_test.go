@@ -711,6 +711,52 @@ func TestPlanAppRegistryUpfrontCalls(t *testing.T) {
 	}
 }
 
+func TestPlanAppRegistryIntegration_SkipsNonImageAppsInBatch(t *testing.T) {
+	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
+	apps := []fakeApp{
+		{
+			pkg:          "tools/app_registry/cli",
+			targetSuffix: "app_registry_cli_metadata",
+			name:         "app-registry",
+			domain:       "tools",
+			customJSON:   cliJSON,
+		},
+	}
+	fs, bazel := buildFakeInfra(apps)
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "test-sha"},
+		fakeGitCall{argsContain: []string{"rev-parse", "--abbrev-ref", "HEAD"}, output: "main"},
+	)
+
+	fakeAppClient := NewFakeAppRegistryClient()
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+
+	_, err := planRelease(planParams{
+		eventType:              "workflow_dispatch",
+		requestedApps:          "app-registry",
+		version:                "v1.0.0",
+		gitSHA:                 "test-sha",
+		workflowRunID:          "run-100",
+		actor:                  "ci-bot",
+		bazel:                  bazel,
+		git:                    git,
+		fs:                     fs,
+		workspaceRoot:          fakeWorkspaceRoot,
+		appRegistryClient:      fakeAppClient,
+		artifactRegistryClient: fakeArtifactClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected planRelease error: %v", err)
+	}
+
+	if len(fakeArtifactClient.RecordBuildCalls) != 1 {
+		t.Fatalf("expected 1 RecordBuild call, got %d", len(fakeArtifactClient.RecordBuildCalls))
+	}
+	if len(fakeArtifactClient.BeginPublishBatchCalls) != 0 {
+		t.Errorf("expected 0 BeginPublishBatch calls for non-image CLI app, got %d", len(fakeArtifactClient.BeginPublishBatchCalls))
+	}
+}
+
 func TestPlanDryRunAndSkipRegistry(t *testing.T) {
 	_, fs, bazel := makeTestApps()
 	git := newFakeGit()

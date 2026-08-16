@@ -499,6 +499,9 @@ func executeAppRegistryUpfront(ctx context.Context, p planParams, releaseApps []
 		if result.BuildID != "" && (len(releaseApps) > 0 || len(selectedCharts) > 0) {
 			var batchTargets []*pb.BeginPublishBatchTarget
 			for _, app := range releaseApps {
+				if app.ImageTarget == "" || app.AppType == "cli" || app.AppType == "binary" {
+					continue
+				}
 				v := perAppVersions[app.FullName()]
 				if v == "" && p.version != "" {
 					v = p.version
