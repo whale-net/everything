@@ -117,7 +117,10 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to session DB: %w", err)
 		}
-		store := htmxauth.NewDBSessionManager(ctx, pool, config.SessionSecret, "manmanv2_ui_session")
+		store, err := htmxauth.NewDBSessionManager(ctx, pool, config.SessionSecret, "manmanv2_ui_session")
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize session store: %w", err)
+		}
 		auth, err = htmxauth.NewAuthenticatorWithDB(ctx, authConfig, store)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize authenticator: %w", err)

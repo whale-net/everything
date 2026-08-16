@@ -40,13 +40,72 @@ type Config struct {
 	OIDCScopes       []string // Defaults to ["openid", "profile", "email"]
 }
 
-// UserInfo holds authenticated user information
+// UserInfo holds authenticated user information.
+//
+// Roles semantics:
+//   - nil   → realm_access claim was absent from the token (deployment
+//             misconfiguration; consumed by FR-59 checks).
+//   - non-nil, len==0 → claim was present but carried zero roles
+//             (the read-only viewer).
+//   - non-nil, len>0  → claim present with at least one role.
+//
+// In AuthModeNone, Roles is set to AllRoles (a non-nil slice) so a
+// consuming app can treat the dev user as holding every role.
 type UserInfo struct {
 	Sub               string
 	PreferredUsername string
 	Name              string
 	Email             string
+	Roles             []string               // nil = absent; non-nil = present (may be empty)
 	RawClaims         map[string]interface{}
+}
+
+// AllRoles is the canonical Roles value placed on the UserInfo produced by
+// AuthModeNone. A consuming app that needs to distinguish
+// "dev mode (all roles)" from "token with specific roles" can check
+// whether the slice is exactly this value, but most callers just check
+// len(user.Roles) > 0 or do a role-name lookup.
+var AllRoles = []string{"*"}
+
+// parseRealmRoles extracts the realm_access.roles slice from a flat
+// claims map. It returns:
+//
+//	(nil, nil)             – realm_access key absent (deployment misconfiguration)
+//	([]string{}, nil)      – realm_access present but roles is empty array
+//	([]string{...}, nil)   – roles present and non-empty
+//	(nil, err)             – realm_access present but structurally malformed
+func parseRealmRoles(claims map[string]interface{}) ([]string, error) {
+	raw, ok := claims["realm_access"]
+	if !ok {
+		// Claim absent — return nil slice to signal "absent"
+		return nil, nil
+	}
+
+	ra, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("realm_access is not an object")
+	}
+
+	rolesRaw, ok := ra["roles"]
+	if !ok {
+		// realm_access present but no "roles" key → treat as empty
+		return nil, nil
+	}
+
+	rolesSlice, ok := rolesRaw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("realm_access.roles is not an array")
+	}
+
+	roles := make([]string, 0, len(rolesSlice))
+	for i, r := range rolesSlice {
+		s, ok := r.(string)
+		if !ok {
+			return nil, fmt.Errorf("realm_access.roles[%d] is not a string", i)
+		}
+		roles = append(roles, s)
+	}
+	return roles, nil
 }
 
 // sessionStore is the internal interface implemented by SessionManager and DBSessionManager.
@@ -154,13 +213,14 @@ func (a *Authenticator) initOIDC(ctx context.Context) error {
 // RequireAuth is a middleware that requires authentication
 func (a *Authenticator) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// In no-auth mode, create a default user
+		// In no-auth mode, create a default user treated as holding all roles.
 		if a.config.Mode == AuthModeNone {
 			user := &UserInfo{
 				Sub:               "dev-user",
 				PreferredUsername: "developer",
 				Name:              "Development User",
 				Email:             "dev@localhost",
+				Roles:             AllRoles,
 				RawClaims:         map[string]interface{}{},
 			}
 			ctx := context.WithValue(r.Context(), userContextKey, user)
@@ -403,6 +463,9 @@ func (sm *SessionManager) SetUserInfo(w http.ResponseWriter, r *http.Request, to
 
 	// Store access token for gRPC forwarding (note: adds ~1-3KB to cookie size)
 	session.Values["access_token"] = token.AccessToken
+
+	// Roles: cookie-session path does not persist roles (cookie size limits).
+	// Roles are absent (nil) for cookie-backed sessions.
 
 	return session.Save(r, w)
 }
