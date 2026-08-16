@@ -23,7 +23,7 @@ second copy of the data model.
 
 The **one exception** is `libs/go/htmxauth`'s DB-backed session manager:
 `PG_DATABASE_URL` is required at boot to store UI login sessions
-(`ui_sessions` table, `tools/app_registry/migrate/schema/migrations/011_ui_sessions.up.sql`).
+(`ui_sessions` table, `tools/app_registry/migrate/schema/migrations/012_ui_sessions.up.sql`).
 This is session storage, not registry domain data — it never appears in a
 handler that also talks to `app-registry-api`. Unlike `manmanv2/ui`, this
 UI never falls back to cookie sessions; if the DB session manager's
