@@ -344,6 +344,10 @@ func TestRecordArtifact_DuplicateOwnerKindVersionRejectedByRealIndex(t *testing.
 // the problem to the release job rather than hiding it. The row stays
 // exactly as BeginPublish left it (still "publishing", no digest) because
 // the failed UPDATE rolls back within its own transaction.
+// TestRecordArtifact_ReproducibleBuildSameDigestDifferentVersion covers Issue #585 and Issue #784:
+// When a reproducible rebuild produces a byte-identical digest for v1.0.1 as v1.0.0,
+// RecordArtifact correctly identifies and transitions v1.0.1's own row to "published"
+// with the shared digest, instead of falsely matching v1.0.0 or failing on digest collision.
 func TestRecordArtifact_ReproducibleBuildSameDigestDifferentVersion(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 
@@ -377,36 +381,39 @@ func TestRecordArtifact_ReproducibleBuildSameDigestDifferentVersion(t *testing.T
 		t.Fatalf("expected v1.0.1 publishing, got %q", publishing.State)
 	}
 
-	_, _, err = recordArtifactTx(t, reg, repository.Artifact{
+	second, alreadyRecorded, err := recordArtifactTx(t, reg, repository.Artifact{
 		Kind: repository.ArtifactKindImage, AppID: appID,
 		Repository: "ghcr.io/acme/repro", Version: "v1.0.1",
 		Digest: sharedDigest, BuildID: buildID2,
 	}, nil)
-	if err == nil {
-		t.Fatalf("expected RecordArtifact for v1.0.1 to fail honestly on the digest collision, got nil error (bug: silently matched v1.0.0's row instead)")
+	if err != nil {
+		t.Fatalf("expected RecordArtifact for v1.0.1 with shared digest to succeed (issue #784), got %v", err)
 	}
-	if !errors.Is(err, repository.ErrAlreadyExists) {
-		t.Fatalf("expected ErrAlreadyExists (translated unique-violation on artifact_digest_idx), got: %v", err)
+	if alreadyRecorded {
+		t.Fatalf("expected v1.0.1 to be newly transitioned to published, not already recorded")
 	}
-
-	// v1.0.1's row must be untouched -- still exactly what BeginPublish left.
-	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, publishing.ArtifactID); state != "publishing" || hasDigest || !hasBuildID {
-		t.Fatalf("expected v1.0.1's row to remain publishing with no digest after the failed completePublish, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+	if second.State != repository.ArtifactStatePublished || second.Digest != sharedDigest || second.BuildID != buildID2 {
+		t.Fatalf("expected v1.0.1 published with sharedDigest and buildID2, got state=%s digest=%s buildID=%s", second.State, second.Digest, second.BuildID)
 	}
 
-	// v1.0.0's row must be completely unaffected.
+	// v1.0.1's row in DB is published
+	if state, _, hasDigest, hasBuildID := artifactStateRow(t, pool, publishing.ArtifactID); state != "published" || !hasDigest || !hasBuildID {
+		t.Fatalf("expected v1.0.1's row to be published with digest, got state=%s hasDigest=%v hasBuildID=%v", state, hasDigest, hasBuildID)
+	}
+
+	// v1.0.0's row must remain completely unaffected.
 	v100, err := reg.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{
 		OwnerFullName: "acme-repro", Kind: repository.ArtifactKindImage, Version: "v1.0.0",
 	})
 	if err != nil {
 		t.Fatalf("GetArtifact v1.0.0: %v", err)
 	}
-	if v100.State != repository.ArtifactStatePublished || v100.Digest != sharedDigest {
-		t.Fatalf("expected v1.0.0 unchanged (published, digest=%s), got state=%s digest=%s", sharedDigest, v100.State, v100.Digest)
+	if v100.State != repository.ArtifactStatePublished || v100.Digest != sharedDigest || v100.BuildID != buildID1 {
+		t.Fatalf("expected v1.0.0 unchanged (published, digest=%s, buildID=%s), got state=%s digest=%s buildID=%s", sharedDigest, buildID1, v100.State, v100.Digest, v100.BuildID)
 	}
 
-	if n := artifactCount(t, pool, sharedDigest); n != 1 {
-		t.Fatalf("expected exactly 1 row holding the shared digest (only v1.0.0), found %d", n)
+	if n := artifactCount(t, pool, sharedDigest); n != 2 {
+		t.Fatalf("expected exactly 2 rows holding the shared digest (v1.0.0 and v1.0.1), found %d", n)
 	}
 }
 
@@ -2320,8 +2327,8 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 }
 
 func TestRecordArtifact_Postgres_SameDigestMultipleVersions(t *testing.T) {
-	ctx := context.Background()
-	reg, pool := setupPostgresTest(t)
+	ctx := authedCtx()
+	reg, pool := newTestRegistry(t)
 	defer pool.Close()
 
 	appID := seedApp(t, pool, "demo", "multi-ver-app", "image")
