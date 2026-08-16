@@ -306,12 +306,32 @@ runs:
             echo "✓ Successfully acquired and verified prebuilt release tools from GitHub Releases."
             SOURCE_USED="published"
           else
-            if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-              echo "::warning title=Prebuilt release tools download failed::Could not download pinned prebuilt release tools. Falling back to source build via Bazel."
-              SOURCE_MODE="source"
-            else
-              echo "::error title=Prebuilt release tools download failed::Failed to download pinned release tools and fallback_to_source is false."
-              exit 1
+            echo "Notice: Prebuilt release tools download from GitHub Releases did not succeed."
+            # Attempt to download workflow artifact if available (e.g. from build-release-tools job)
+            if command -v gh >/dev/null 2>&1 && [[ -n "${GITHUB_RUN_ID:-}" ]]; then
+              echo "Attempting to retrieve 'release-tools' artifact from current workflow run..."
+              if gh run download "$GITHUB_RUN_ID" -n "release-tools" --dir "$DEST_DIR" 2>/dev/null; then
+                if [[ -f "$RH_PATH" ]]; then
+                  chmod +x "$RH_PATH"
+                fi
+                if [[ -f "$AR_PATH" ]]; then
+                  chmod +x "$AR_PATH"
+                fi
+                if [[ -x "$RH_PATH" || -x "$AR_PATH" ]]; then
+                  echo "✓ Successfully retrieved release tools from workflow artifact."
+                  SOURCE_USED="artifact"
+                fi
+              fi
+            fi
+
+            if [[ -z "$SOURCE_USED" ]]; then
+              if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
+                echo "::warning title=Prebuilt release tools download failed::Could not download pinned prebuilt release tools or workflow artifact. Falling back to source build via Bazel."
+                SOURCE_MODE="source"
+              else
+                echo "::error title=Prebuilt release tools download failed::Failed to download pinned release tools and fallback_to_source is false."
+                exit 1
+              fi
             fi
           fi
         fi
