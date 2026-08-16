@@ -41,9 +41,9 @@ func newBuildCmd() *cobra.Command {
 	var platform string
 
 	cmd := &cobra.Command{
-		Use:          "build <app-name>",
+		Use:          "build <app-name>...",
 		Short:        "Build binary or container image for a specific platform",
-		Args:         cobra.ExactArgs(1),
+		Args:         cobra.MinimumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workspaceRoot, err := defaultWorkspaceRoot()
@@ -55,69 +55,70 @@ func newBuildCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			apps, err := resolveApps([]string{args[0]}, allApps)
+			apps, err := resolveApps(args, allApps)
 			if err != nil {
 				return err
 			}
-			app := apps[0]
 
-			if app.AppType == "cli" || app.AppType == "binary" {
-				bazelArgs := []string{"build"}
+			for _, app := range apps {
+				if app.AppType == "cli" || app.AppType == "binary" {
+					bazelArgs := []string{"build"}
+					switch platform {
+					case "arm64", "linux_arm64":
+						bazelArgs = append(bazelArgs, "--platforms=//tools:linux_arm64")
+					case "amd64", "linux_amd64":
+						bazelArgs = append(bazelArgs, "--platforms=//tools:linux_x86_64")
+					case "darwin_arm64", "macos_arm64":
+						bazelArgs = append(bazelArgs, "--platforms=//tools:darwin_arm64")
+					case "darwin_amd64", "macos_amd64":
+						bazelArgs = append(bazelArgs, "--platforms=//tools:darwin_x86_64")
+					case "":
+						// default host platform
+					default:
+						return fmt.Errorf("unknown platform %q", platform)
+					}
+					bazelArgs = append(bazelArgs, app.BinaryTarget)
+
+					fmt.Fprintf(cmd.OutOrStdout(), "Building %s binary (%s) for platform %q...\n", app.FullName(), app.BinaryTarget, platform)
+					if err := runBazelLive(workspaceRoot, bazelArgs...); err != nil {
+						return fmt.Errorf("bazel build %s: %w", app.BinaryTarget, err)
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "Binary built: %s\n", app.BinaryTarget)
+					continue
+				}
+
+				if app.AppType == "firmware" {
+					fwTarget := firmwareTarget(app)
+					bazelArgs := []string{"build", "--config=esp32", fwTarget}
+					fmt.Fprintf(cmd.OutOrStdout(), "Building %s firmware (%s)...\n", app.FullName(), fwTarget)
+					if err := runBazelLive(workspaceRoot, bazelArgs...); err != nil {
+						return fmt.Errorf("bazel build %s: %w", fwTarget, err)
+					}
+					fmt.Fprintf(cmd.OutOrStdout(), "Firmware built: %s\n", fwTarget)
+					continue
+				}
+
+				loadTarget := imageLoadTarget(app)
+
+				bazelArgs := []string{"run"}
 				switch platform {
-				case "arm64", "linux_arm64":
+				case "arm64":
 					bazelArgs = append(bazelArgs, "--platforms=//tools:linux_arm64")
-				case "amd64", "linux_amd64":
+				case "amd64":
 					bazelArgs = append(bazelArgs, "--platforms=//tools:linux_x86_64")
-				case "darwin_arm64", "macos_arm64":
-					bazelArgs = append(bazelArgs, "--platforms=//tools:darwin_arm64")
-				case "darwin_amd64", "macos_amd64":
-					bazelArgs = append(bazelArgs, "--platforms=//tools:darwin_x86_64")
 				case "":
-					// default host platform
+					// no platform flag
 				default:
-					return fmt.Errorf("unknown platform %q", platform)
+					return fmt.Errorf("unknown platform %q: must be amd64 or arm64", platform)
 				}
-				bazelArgs = append(bazelArgs, app.BinaryTarget)
+				bazelArgs = append(bazelArgs, loadTarget)
 
-				fmt.Fprintf(cmd.OutOrStdout(), "Building %s binary (%s) for platform %q...\n", app.FullName(), app.BinaryTarget, platform)
+				fmt.Fprintf(cmd.OutOrStdout(), "Building %s for platform %q...\n", app.FullName(), platform)
 				if err := runBazelLive(workspaceRoot, bazelArgs...); err != nil {
-					return fmt.Errorf("bazel build %s: %w", app.BinaryTarget, err)
+					return fmt.Errorf("bazel run %s: %w", loadTarget, err)
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Binary built: %s\n", app.BinaryTarget)
-				return nil
+				fmt.Fprintf(cmd.OutOrStdout(), "Image loaded as: %s:latest\n", app.FullName())
 			}
-
-			if app.AppType == "firmware" {
-				fwTarget := firmwareTarget(app)
-				bazelArgs := []string{"build", "--config=esp32", fwTarget}
-				fmt.Fprintf(cmd.OutOrStdout(), "Building %s firmware (%s)...\n", app.FullName(), fwTarget)
-				if err := runBazelLive(workspaceRoot, bazelArgs...); err != nil {
-					return fmt.Errorf("bazel build %s: %w", fwTarget, err)
-				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Firmware built: %s\n", fwTarget)
-				return nil
-			}
-
-			loadTarget := imageLoadTarget(app)
-
-			bazelArgs := []string{"run"}
-			switch platform {
-			case "arm64":
-				bazelArgs = append(bazelArgs, "--platforms=//tools:linux_arm64")
-			case "amd64":
-				bazelArgs = append(bazelArgs, "--platforms=//tools:linux_x86_64")
-			case "":
-				// no platform flag
-			default:
-				return fmt.Errorf("unknown platform %q: must be amd64 or arm64", platform)
-			}
-			bazelArgs = append(bazelArgs, loadTarget)
-
-			fmt.Fprintf(cmd.OutOrStdout(), "Building %s for platform %q...\n", app.FullName(), platform)
-			if err := runBazelLive(workspaceRoot, bazelArgs...); err != nil {
-				return fmt.Errorf("bazel run %s: %w", loadTarget, err)
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Image loaded as: %s:latest\n", app.FullName())
 			return nil
 		},
 	}
