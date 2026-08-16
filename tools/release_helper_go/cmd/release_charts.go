@@ -79,39 +79,38 @@ func (u *defaultChartUploader) UploadChart(ctx context.Context, repoURL, usernam
 }
 
 func (u *defaultChartUploader) FetchChart(ctx context.Context, repoURL, username, password, publishedName, version string) ([]byte, error) {
-	// Query ChartMuseum api/charts endpoint (e.g. /api/charts/app-registry-app-registry/v0.0.30)
-	url := fmt.Sprintf("%s/api/charts/%s/%s", strings.TrimRight(repoURL, "/"), publishedName, version)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// Try downloading the chart tarball directly (e.g. /charts/app-registry-app-registry-v0.0.31.tgz)
+	tarURL := fmt.Sprintf("%s/charts/%s-%s.tgz", strings.TrimRight(repoURL, "/"), publishedName, version)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tarURL, nil)
+	if err == nil {
+		if username != "" || password != "" {
+			req.SetBasicAuth(username, password)
+		}
+		resp, err := u.getClient().Do(req)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return io.ReadAll(resp.Body)
+			}
+		}
+	}
+
+	// Fallback to /api/charts/:name/:version endpoint
+	apiURL := fmt.Sprintf("%s/api/charts/%s/%s", strings.TrimRight(repoURL, "/"), publishedName, version)
+	req, err = http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	if username != "" || password != "" {
 		req.SetBasicAuth(username, password)
 	}
-
 	resp, err := u.getClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetch previous chart from %s: %w", url, err)
+		return nil, fmt.Errorf("fetch chart from %s: %w", apiURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Fallback to /charts/<name>-<ver>.tgz direct download if api/charts not supported
-		fallbackURL := fmt.Sprintf("%s/charts/%s-%s.tgz", strings.TrimRight(repoURL, "/"), publishedName, version)
-		fReq, fErr := http.NewRequestWithContext(ctx, http.MethodGet, fallbackURL, nil)
-		if fErr == nil {
-			if username != "" || password != "" {
-				fReq.SetBasicAuth(username, password)
-			}
-			fResp, fDoErr := u.getClient().Do(fReq)
-			if fDoErr == nil && fResp.StatusCode == http.StatusOK {
-				defer fResp.Body.Close()
-				return io.ReadAll(fResp.Body)
-			}
-			if fResp != nil {
-				fResp.Body.Close()
-			}
-		}
 		return nil, fmt.Errorf("HTTP status %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
@@ -487,20 +486,34 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 		effectiveVersion := ver
 		effectiveTag := tagName
 
-		if prevTag != "" && uploader != nil {
-			prevVersion := prevTag
-			if idx := strings.LastIndex(prevTag, "."); idx != -1 {
-				prevVersion = prevTag[idx+1:]
-			}
-			prevData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, prevVersion)
-			if err == nil && len(prevData) > 0 {
-				prevDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(prevData))
-				if chartDigest == prevDigest {
+		if uploader != nil {
+			// First check if this exact version already exists on ChartMuseum (e.g. from a previous failed run)
+			existingData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, ver)
+			if err == nil && len(existingData) > 0 {
+				existingDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(existingData))
+				if chartDigest == existingDigest {
 					digestUnchanged = true
-					effectiveVersion = prevVersion
-					effectiveTag = prevTag
-					fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
-						chart.Name, ver, prevTag, prevTag)
+					fmt.Printf("::notice title=Chart package already published (%s)::%s is already present on ChartMuseum with identical digest (%s). Skipping re-upload.\n",
+						chart.Name, ver, chartDigest)
+				}
+			}
+
+			// If not matching current version, check previous tag for no-op rebuild
+			if !digestUnchanged && prevTag != "" {
+				prevVersion := prevTag
+				if idx := strings.LastIndex(prevTag, "."); idx != -1 {
+					prevVersion = prevTag[idx+1:]
+				}
+				prevData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, prevVersion)
+				if err == nil && len(prevData) > 0 {
+					prevDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(prevData))
+					if chartDigest == prevDigest {
+						digestUnchanged = true
+						effectiveVersion = prevVersion
+						effectiveTag = prevTag
+						fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
+							chart.Name, ver, prevTag, prevTag)
+					}
 				}
 			}
 		}

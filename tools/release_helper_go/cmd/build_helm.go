@@ -163,6 +163,9 @@ func findHelmChartByName(name string, charts []HelmChartMetadata) (HelmChartMeta
 
 func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string, error) {
 	out, err := git.Run("tag", "--sort=-version:refname", "--list", chartName+".*")
+	if (err != nil || strings.TrimSpace(out) == "") && !strings.HasPrefix(chartName, "helm-") {
+		out, err = git.Run("tag", "--sort=-version:refname", "--list", "helm-"+chartName+".*")
+	}
 	if err != nil || strings.TrimSpace(out) == "" {
 		if bumpType == "minor" {
 			return "v0.1.0", nil
@@ -172,11 +175,15 @@ func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string
 	tags := strings.Split(strings.TrimSpace(out), "\n")
 	prefix := chartName + "."
 	for _, tag := range tags {
-		if !strings.HasPrefix(tag, prefix) {
-			continue
+		tag = strings.TrimSpace(tag)
+		if strings.HasPrefix(tag, prefix) {
+			ver := tag[len(prefix):]
+			return incrementVersion(ver, bumpType)
 		}
-		ver := tag[len(prefix):]
-		return incrementVersion(ver, bumpType)
+		if !strings.HasPrefix(chartName, "helm-") && strings.HasPrefix(tag, "helm-"+prefix) {
+			ver := tag[len("helm-"+prefix):]
+			return incrementVersion(ver, bumpType)
+		}
 	}
 	if bumpType == "minor" {
 		return "v0.1.0", nil
