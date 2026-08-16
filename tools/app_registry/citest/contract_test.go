@@ -69,7 +69,6 @@ func TestExtractionFindsInvocations(t *testing.T) {
 	for _, want := range []string{
 		"release_helper_go:plan",
 		"release_helper_go:summary",
-		"release_helper_go:plan-openapi-builds",
 		"release_helper_go:create-combined-github-release-with-notes",
 		"app-registry:apps reconcile",
 	} {

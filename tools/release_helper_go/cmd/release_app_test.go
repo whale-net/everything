@@ -485,3 +485,69 @@ func TestReleaseAppCmd_CLI(t *testing.T) {
 		})
 	})
 }
+
+func TestExecuteReleaseApp_NonImageCLIApp(t *testing.T) {
+	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
+	apps := []fakeApp{
+		{
+			pkg:          "tools/app_registry/cli",
+			targetSuffix: "app_registry_cli_metadata",
+			name:         "app-registry",
+			domain:       "tools",
+			customJSON:   cliJSON,
+		},
+	}
+	fs, bazel := buildFakeInfra(apps)
+
+	// Add build target handling to fakeBazel for non-image CLI binary
+	allBazelCalls := append(bazel.calls,
+		fakeBazelCall{
+			argsContain: []string{"build"},
+			output:      "Built binary target",
+		},
+	)
+	bazelRunner := newFakeBazel(allBazelCalls...)
+
+	gitRunner := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "sha123456789"},
+		fakeGitCall{argsContain: []string{"rev-parse", "tools-app-registry.v0.1.0"}, err: fmt.Errorf("not found")},
+		fakeGitCall{argsContain: []string{"tag", "-a"}, output: ""},
+	)
+
+	dockerRunner := newFakeDocker()
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+
+	res, err := ExecuteReleaseApp(ReleaseAppParams{
+		Domain:         "tools",
+		App:            "app-registry",
+		Version:        "v0.1.0",
+		BuildID:        "build-123",
+		CreateGitTag:   true,
+		Bazel:          bazelRunner,
+		Git:            gitRunner,
+		Docker:         dockerRunner,
+		FS:             fs,
+		WorkspaceRoot:  fakeWorkspaceRoot,
+		ArtifactClient: fakeArtifactClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected ExecuteReleaseApp error: %v", err)
+	}
+
+	if !res.Published {
+		t.Errorf("expected Published true, got false")
+	}
+	if res.Digest != "" {
+		t.Errorf("expected empty Digest for non-image app, got %s", res.Digest)
+	}
+	if len(fakeArtifactClient.BeginPublishCalls) != 0 {
+		t.Errorf("expected 0 BeginPublishCalls for non-image app, got %d", len(fakeArtifactClient.BeginPublishCalls))
+	}
+	if len(fakeArtifactClient.RecordArtifactCalls) != 0 {
+		t.Errorf("expected 0 RecordArtifactCalls for non-image app, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	}
+	if len(dockerRunner.recorded) != 0 {
+		t.Errorf("expected 0 docker calls for non-image app, got %d", len(dockerRunner.recorded))
+	}
+}
+
