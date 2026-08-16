@@ -537,14 +537,18 @@ func TestExecuteReleaseApp_NonImageCLIApp(t *testing.T) {
 	if !res.Published {
 		t.Errorf("expected Published true, got false")
 	}
-	if res.Digest != "" {
-		t.Errorf("expected empty Digest for non-image app, got %s", res.Digest)
+	if res.Digest == "" {
+		t.Errorf("expected non-empty Digest for non-image app, got empty")
 	}
-	if len(fakeArtifactClient.BeginPublishCalls) != 0 {
-		t.Errorf("expected 0 BeginPublishCalls for non-image app, got %d", len(fakeArtifactClient.BeginPublishCalls))
+	if len(fakeArtifactClient.BeginPublishCalls) != 1 {
+		t.Errorf("expected 1 BeginPublishCall for non-image app, got %d", len(fakeArtifactClient.BeginPublishCalls))
+	} else if fakeArtifactClient.BeginPublishCalls[0].Kind != pb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		t.Errorf("expected ARTIFACT_KIND_BINARY in BeginPublish, got %v", fakeArtifactClient.BeginPublishCalls[0].Kind)
 	}
-	if len(fakeArtifactClient.RecordArtifactCalls) != 0 {
-		t.Errorf("expected 0 RecordArtifactCalls for non-image app, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	if len(fakeArtifactClient.RecordArtifactCalls) != 1 {
+		t.Errorf("expected 1 RecordArtifactCall for non-image app, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	} else if fakeArtifactClient.RecordArtifactCalls[0].Kind != pb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		t.Errorf("expected ARTIFACT_KIND_BINARY in RecordArtifact, got %v", fakeArtifactClient.RecordArtifactCalls[0].Kind)
 	}
 	if len(dockerRunner.recorded) != 0 {
 		t.Errorf("expected 0 docker calls for non-image app, got %d", len(dockerRunner.recorded))

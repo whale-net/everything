@@ -212,7 +212,36 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 		}
 	}
 
-	isImageApp := matchedApp.ImageTarget != "" && matchedApp.AppType != "cli" && matchedApp.AppType != "binary"
+	// Determine idempotency prefix
+	runID := defaultEnv("GITHUB_RUN_ID")
+	if runID == "" {
+		runID = "local"
+	}
+	attempt := defaultEnv("GITHUB_RUN_ATTEMPT")
+	if attempt == "" {
+		attempt = "1"
+	}
+	idempotencyPrefix := p.IdempotencyKeyPrefix
+	if idempotencyPrefix == "" {
+		idempotencyPrefix = fmt.Sprintf("%s-%s", runID, attempt)
+	}
+
+	// App Registry client setup
+	var artifactClient pb.ArtifactRegistryClient
+	if p.ArtifactClient != nil {
+		artifactClient = p.ArtifactClient
+	} else if !p.SkipRegistry {
+		c, closeFn, err := NewArtifactRegistryClient(ctx)
+		if err == nil {
+			artifactClient = c
+			if closeFn != nil {
+				defer closeFn() //nolint:errcheck
+			}
+		}
+	}
+
+	kind := determineArtifactKind(*matchedApp)
+	isImageApp := kind == pb.ArtifactKind_ARTIFACT_KIND_IMAGE
 
 	if p.DryRun {
 		fmt.Println(strings.Repeat("=", 80))
@@ -246,11 +275,61 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	}
 
 	if !isImageApp {
+		repoPath = fmt.Sprintf("github.com/%s/everything", owner)
+
+		// 1. BeginPublish (Heartbeat)
+		beginPublishSucceeded := false
+		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
+			beginReq := &pb.BeginPublishRequest{
+				Kind:           kind,
+				OwnerFullName:  fullName,
+				Version:        p.Version,
+				BuildId:        p.BuildID,
+				IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-begin", idempotencyPrefix, p.Domain, p.App),
+				Repository:     repoPath,
+			}
+			_, err := artifactClient.BeginPublish(ctx, beginReq)
+			if err != nil {
+				fmt.Printf("::warning title=App Registry BeginPublish failed::%v\n", err)
+			} else {
+				beginPublishSucceeded = true
+			}
+		}
+
 		fmt.Printf("Building non-image application %s (%s)...\n", fullName, matchedApp.AppType)
 		if matchedApp.BinaryTarget != "" {
 			if _, err := bazel.Run("build", matchedApp.BinaryTarget); err != nil {
+				if beginPublishSucceeded && artifactClient != nil {
+					failReq := &pb.FailPublishRequest{
+						Kind:           kind,
+						OwnerFullName:  fullName,
+						Version:        p.Version,
+						Reason:         fmt.Sprintf("binary build failed (workflow run %s, attempt %s): %v", runID, attempt, err),
+						IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-fail", idempotencyPrefix, p.Domain, p.App),
+					}
+					_, _ = artifactClient.FailPublish(ctx, failReq)
+				}
 				return nil, fmt.Errorf("bazel build %s: %w", matchedApp.BinaryTarget, err)
 			}
+		}
+
+		// Compute binary digest from built target
+		pkg, binName := binaryTargetPkgAndName(*matchedApp)
+		candidatePaths := []string{
+			filepath.Join(workspaceRoot, "bazel-bin", pkg, binName+"_", binName),
+			filepath.Join(workspaceRoot, "bazel-bin", pkg, binName),
+			filepath.Join(workspaceRoot, "bazel-bin", pkg, matchedApp.Name+"_", matchedApp.Name),
+			filepath.Join(workspaceRoot, "bazel-bin", pkg, matchedApp.Name),
+		}
+		var binaryDigest string
+		for _, cp := range candidatePaths {
+			if h, _, err := computeFileSHA256(cp); err == nil {
+				binaryDigest = "sha256:" + h
+				break
+			}
+		}
+		if binaryDigest == "" && sha != "" {
+			binaryDigest = "sha256:" + sha
 		}
 
 		if p.CreateGitTag && git != nil && sha != "" {
@@ -260,42 +339,33 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 			}
 		}
 
+		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
+			recReq := &pb.RecordArtifactRequest{
+				BuildId:        p.BuildID,
+				Kind:           kind,
+				OwnerFullName:  fullName,
+				Repository:     repoPath,
+				Version:        p.Version,
+				Digest:         binaryDigest,
+				PublishedAt:    time.Now().Unix(),
+				IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-record", idempotencyPrefix, p.Domain, p.App),
+			}
+			if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
+				fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
+			} else {
+				fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, binaryDigest)
+			}
+		}
+
 		return &ReleaseAppResult{
 			Domain:           p.Domain,
 			App:              p.App,
 			Version:          p.Version,
 			EffectiveVersion: p.Version,
 			EffectiveTag:     tagName,
+			Digest:           binaryDigest,
 			Published:        true,
 		}, nil
-	}
-
-	// Determine idempotency prefix
-	runID := defaultEnv("GITHUB_RUN_ID")
-	if runID == "" {
-		runID = "local"
-	}
-	attempt := defaultEnv("GITHUB_RUN_ATTEMPT")
-	if attempt == "" {
-		attempt = "1"
-	}
-	idempotencyPrefix := p.IdempotencyKeyPrefix
-	if idempotencyPrefix == "" {
-		idempotencyPrefix = fmt.Sprintf("%s-%s", runID, attempt)
-	}
-
-	// App Registry client setup
-	var artifactClient pb.ArtifactRegistryClient
-	if p.ArtifactClient != nil {
-		artifactClient = p.ArtifactClient
-	} else if !p.SkipRegistry {
-		c, closeFn, err := NewArtifactRegistryClient(ctx)
-		if err == nil {
-			artifactClient = c
-			if closeFn != nil {
-				defer closeFn() //nolint:errcheck
-			}
-		}
 	}
 
 	// 1. BeginPublish (Heartbeat)

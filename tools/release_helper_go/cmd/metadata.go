@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/protobuf/encoding/protojson"
 
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
@@ -24,6 +25,18 @@ type AppMetadata struct {
 
 // FullName returns the canonical "domain-name" identifier.
 func (m AppMetadata) FullName() string { return m.Domain + "-" + m.Name }
+
+// determineArtifactKind returns the ArtifactKind protobuf enum for an application.
+func determineArtifactKind(meta AppMetadata) pb.ArtifactKind {
+	switch meta.AppType {
+	case "cli", "binary":
+		return pb.ArtifactKind_ARTIFACT_KIND_BINARY
+	case "firmware":
+		return pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE
+	default:
+		return pb.ArtifactKind_ARTIFACT_KIND_IMAGE
+	}
+}
 
 // appMetadataStarlarkExpr emits "<label>\t<json>" per matched target,
 // pulling metadata from the AppMetadataInfo provider so no actions run.

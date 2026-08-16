@@ -711,7 +711,7 @@ func TestPlanAppRegistryUpfrontCalls(t *testing.T) {
 	}
 }
 
-func TestPlanAppRegistryIntegration_SkipsNonImageAppsInBatch(t *testing.T) {
+func TestPlanAppRegistryIntegration_IncludesBinaryKindInBatch(t *testing.T) {
 	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
 	apps := []fakeApp{
 		{
@@ -752,8 +752,18 @@ func TestPlanAppRegistryIntegration_SkipsNonImageAppsInBatch(t *testing.T) {
 	if len(fakeArtifactClient.RecordBuildCalls) != 1 {
 		t.Fatalf("expected 1 RecordBuild call, got %d", len(fakeArtifactClient.RecordBuildCalls))
 	}
-	if len(fakeArtifactClient.BeginPublishBatchCalls) != 0 {
-		t.Errorf("expected 0 BeginPublishBatch calls for non-image CLI app, got %d", len(fakeArtifactClient.BeginPublishBatchCalls))
+	if len(fakeArtifactClient.BeginPublishBatchCalls) != 1 {
+		t.Fatalf("expected 1 BeginPublishBatch call for non-image CLI app, got %d", len(fakeArtifactClient.BeginPublishBatchCalls))
+	}
+	batchReq := fakeArtifactClient.BeginPublishBatchCalls[0]
+	if len(batchReq.Targets) != 1 {
+		t.Fatalf("expected 1 target in batch, got %d", len(batchReq.Targets))
+	}
+	if batchReq.Targets[0].Kind != pb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		t.Errorf("expected ARTIFACT_KIND_BINARY, got %v", batchReq.Targets[0].Kind)
+	}
+	if batchReq.Targets[0].OwnerFullName != "tools-app-registry" {
+		t.Errorf("expected tools-app-registry, got %s", batchReq.Targets[0].OwnerFullName)
 	}
 }
 
