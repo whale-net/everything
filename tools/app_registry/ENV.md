@@ -258,12 +258,13 @@ a shell into its pod (`WRITEBACK_OUTPUT_DIR` lives inside the container).
 worker (it has nothing to poll) with a printed warning rather than deploying
 into a guaranteed-crash loop.
 
-## Postgres MCP (Claude Code plugin)
+## Postgres MCP (AGY and Claude Code plugin)
 
-`.mcp.json` at the plugin root (`tools/app_registry/.mcp.json`, part of the
-`app-registry` Claude Code plugin — see `.claude-plugin/marketplace.json`)
-wires up three read-restricted (`--access-mode=restricted`) crystaldba
-`postgres-mcp` servers via `uvx`, one per environment:
+`mcp_config.json` at the plugin root (`tools/app_registry/mcp_config.json`, exposed
+for AGY via `.agents/plugins/app-registry` and symlinked to `.mcp.json` for Claude
+Code — see `.claude-plugin/marketplace.json`) wires up three read-restricted
+(`--access-mode=restricted`) crystaldba `postgres-mcp` servers via `uvx`, one
+per environment:
 
 | Server | Connection |
 |---|---|
@@ -273,7 +274,7 @@ wires up three read-restricted (`--access-mode=restricted`) crystaldba
 
 These are separate from `PG_DATABASE_URL` above (which the server/migration
 processes read) so that dev and prod can be queried side by side from the
-same Claude Code session without swapping a single variable.
+same AGY or Claude Code session without swapping a single variable.
 
 `postgres-mcp`'s `pyproject.toml` declares an unpinned `mcp[cli]>=1.25.0`
 dependency; `uvx` resolves that to `mcp==2.x`, which dropped

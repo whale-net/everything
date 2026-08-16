@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "app-registry-pg-tilt": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:password@localhost:5432/app_registry"
+      }
+    },
+    "app-registry-pg-dev": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${APP_REGISTRY_DEV_DATABASE_URI}"
+      }
+    },
+    "app-registry-pg-prod": {
+      "command": "uvx",
+      "args": ["--with", "mcp<2", "postgres-mcp", "--access-mode=restricted"],
+      "env": {
+        "DATABASE_URI": "${APP_REGISTRY_PROD_DATABASE_URI}"
+      }
+    }
+  }
+}
