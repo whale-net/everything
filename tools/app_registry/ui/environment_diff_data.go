@@ -140,10 +140,12 @@ func (app *App) buildEnvironmentDiff(ctx context.Context, fromEnv, toEnv *pb.Env
 		if fe != nil {
 			row.FromVersion = fe.GetArtifact().GetVersion()
 			row.FromDigest = fe.GetArtifact().GetDigest()
+			row.FromProvenance = fe.GetArtifact().GetProvenance()
 		}
 		if te != nil {
 			row.ToVersion = te.GetArtifact().GetVersion()
 			row.ToDigest = te.GetArtifact().GetDigest()
+			row.ToProvenance = te.GetArtifact().GetProvenance()
 		}
 		switch {
 		case fe != nil && te == nil:

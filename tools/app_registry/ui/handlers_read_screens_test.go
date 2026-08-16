@@ -460,3 +460,61 @@ func TestHandleEnvironmentDiff_URLRoundTrip_AsOfPairAndFiltersReproduceView(t *t
 		t.Errorf("expected the as-of input to echo the URL's instant, body: %s", body)
 	}
 }
+
+// TestHandleEnvironmentDiff_RendersDigestAndProvenance guards NFR-4 (digest
+// alongside version) and FR-33 (provenance badge on every screen showing an
+// artifact) on screen 12 -- the digest and provenance values are already
+// captured in viewdata.DiffRow, but were previously silently dropped at
+// render time (see #658).
+func TestHandleEnvironmentDiff_RendersDigestAndProvenance(t *testing.T) {
+	envs := []*pb.Environment{
+		{EnvironmentId: "e1", Key: "dev", Rank: 0},
+		{EnvironmentId: "e2", Key: "prod", Rank: 10},
+	}
+	apps := []*pb.App{{AppId: "app-1", Domain: "platform", FullName: "platform-worker"}}
+	promo := &rsPromotionClient{
+		stateByEnv: map[string]*pb.GetEnvironmentStateResponse{
+			"dev": {Entries: []*pb.EnvironmentStateEntry{
+				{Artifact: &pb.Artifact{
+					AppId:      "app-1",
+					Version:    "v1.0.0",
+					Digest:     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+					Provenance: pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED,
+				}},
+			}},
+			"prod": {Entries: []*pb.EnvironmentStateEntry{
+				{Artifact: &pb.Artifact{
+					AppId:      "app-1",
+					Version:    "v1.0.0",
+					Digest:     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					Provenance: pb.ArtifactProvenance_ARTIFACT_PROVENANCE_OBSERVED,
+				}},
+			}},
+		},
+	}
+	env := &rsEnvClient{environments: envs}
+	appc := &rsAppClient{apps: apps}
+	app := rsTestApp(env, appc, promo, &rsArtifactClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/environments/diff?from=dev&to=prod", nil)
+	w := httptest.NewRecorder()
+	app.handleEnvironmentDiff(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// NFR-4: digest renders alongside version, truncated.
+	if !strings.Contains(body, "sha256:aaaaaaaaaaaa") {
+		t.Errorf("expected the from side's truncated digest to render, body: %s", body)
+	}
+	if !strings.Contains(body, "sha256:bbbbbbbbbbbb") {
+		t.Errorf("expected the to side's truncated digest to render, body: %s", body)
+	}
+	// FR-33: adopted provenance is tagged; observed is not (matching every
+	// other screen's convention of only flagging the ADOPTED case).
+	if strings.Count(body, "Adopted") != 1 {
+		t.Errorf("expected exactly one 'Adopted' provenance badge (from side only), body: %s", body)
+	}
+}

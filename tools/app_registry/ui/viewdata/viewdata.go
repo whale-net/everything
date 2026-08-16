@@ -73,6 +73,8 @@ type DiffRow struct {
 
 	FromVersion, FromDigest string
 	ToVersion, ToDigest     string
+	FromProvenance          pb.ArtifactProvenance
+	ToProvenance            pb.ArtifactProvenance
 
 	Status DiffStatus
 }

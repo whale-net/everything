@@ -130,14 +130,20 @@ templ diffRow(row viewdata.DiffRow, fromKey, toKey string) {
 		</td>
 		<td class="font-mono text-sm">
 			if row.FromVersion != "" {
-				{ row.FromVersion }
+				@components.DigestDisplay(row.FromVersion, row.FromDigest)
+				if row.FromProvenance == pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED {
+					@components.ProvenanceBadge(row.FromProvenance)
+				}
 			} else {
 				<span class="opacity-50">not present</span>
 			}
 		</td>
 		<td class="font-mono text-sm">
 			if row.ToVersion != "" {
-				{ row.ToVersion }
+				@components.DigestDisplay(row.ToVersion, row.ToDigest)
+				if row.ToProvenance == pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED {
+					@components.ProvenanceBadge(row.ToProvenance)
+				}
 			} else {
 				<span class="opacity-50">not present</span>
 			}
