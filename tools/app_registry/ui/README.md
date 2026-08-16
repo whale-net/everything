@@ -6,6 +6,14 @@ deploys anything (NFR-1). Structural pattern mirrors `manmanv2/ui/`
 Bazel macro), but this is the repo's **first daisyUI adopter**; styling
 deliberately differs from `manmanv2/ui`'s Tailwind-only approach.
 
+See [ARCHITECTURE.md](ARCHITECTURE.md) for data-access patterns (gRPC-only
+with the one `htmxauth` session-DB exception, token forwarding, the
+as-of/SCD2 read pattern), presentation-only role gating, the FR-13/FR-14
+UI-layer policies, the FR-19 actor-identity note, and every recorded
+wireframe deviation with its reason — that's a **real** doc, unlike
+`manmanv2/ui/README.md`'s link to the same filename, which resolves to
+nothing.
+
 ## Layout
 
 ```

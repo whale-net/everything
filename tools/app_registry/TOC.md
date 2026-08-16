@@ -38,6 +38,7 @@ cold; this file only indexes where things live.
 | [worker/](worker/) | Temporal worker — gitops writeback (`app-registry-worker`) |
 | [cli/](cli/) | Thin gRPC client — `app-registry` |
 | [ui/](ui/README.md) | HTMX admin UI — `app-registry-ui`. `ui/README.md` for structure/styling; env vars live in the main [ENV.md](ENV.md) "UI" section, not a second file |
+| [ui/ARCHITECTURE.md](ui/ARCHITECTURE.md) | Before changing the UI's data-access pattern, role gating, or before adding a new deviation from a wireframe — a **real** doc (unlike `manmanv2/ui/README.md`'s dangling link to the same filename). Covers gRPC-only access with the one `htmxauth` session-DB exception, token forwarding, presentation-only role gating, the as-of/SCD2 read pattern, the FR-13/FR-14 UI-layer policies, the FR-19 actor-identity note, and every recorded wireframe deviation (NFR-19) with its reason |
 | [migrate/](migrate/) | Schema migrations — `app-registry-migration` |
 | [citest/](citest/) | Tests the CI ↔ CLI seam: extracts the real `app-registry ...` command lines from `.github/workflows`/`.github/actions` and validates them against the live cobra tree and an in-process server, in the canonical release ordering. Read this before changing a CLI flag, a workflow's App Registry step, or a composite action — a mismatch between them is exactly what this package exists to catch before merge. |
 | [Tiltfile](Tiltfile) | Local dev — `tilt up` from `tools/app_registry/` |
