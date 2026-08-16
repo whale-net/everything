@@ -1,5 +1,9 @@
-name: Promote
+name: Promote (Deprecated)
 
+# DEPRECATED / DISABLED: The promote workflow is disabled for now.
+# Keycloak promoter clients and promotion GitHub Environments (dev/stage/prod)
+# are not active.
+#
 # Human-triggered promotion / rollback against the App Registry. See
 # tools/app_registry/PLAN.md -> "AR-3 -> Credential model (decided)" and
 # ARCHITECTURE.md -> "Authorization": the `environment:` declaration on the
@@ -74,6 +78,7 @@ jobs:
   promote:
     name: ${{ inputs.action }} ${{ inputs.owner_full_name }} -> ${{ inputs.registry_environment }} (${{ inputs.environment }})
     runs-on: ubuntu-latest
+    if: false
     # This is the security-critical line -- see the header comment above.
     # It scopes the job to the named GitHub Environment's secrets and
     # required reviewers. Deliberately the GitHub Environment name, NOT
