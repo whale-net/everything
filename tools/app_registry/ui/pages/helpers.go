@@ -10,6 +10,17 @@ func intToStr(n int32) string {
 	return fmt.Sprintf("%d", n)
 }
 
+// unixToRFC3339 renders a Unix timestamp (UTC) for the promote screen's
+// (50) post-write confirmation (FR-52) — a full, unambiguous timestamp
+// rather than timeAgo's relative form, since this is an audit-facing
+// record, not a dense list.
+func unixToRFC3339(timestamp int64) string {
+	if timestamp == 0 {
+		return "—"
+	}
+	return time.Unix(timestamp, 0).UTC().Format(time.RFC3339)
+}
+
 // timeAgo renders a Unix timestamp as a short relative duration for dense,
 // scannable tables (NFR-10) — the builds (30), build-detail (31), and
 // reconcile-runs (32) screens all use this instead of a full timestamp.

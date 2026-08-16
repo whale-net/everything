@@ -265,6 +265,11 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/environments/edit", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentEdit)))
 	mux.HandleFunc("/environments/save", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentSave)))
 	mux.HandleFunc("/environments/archive", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentArchive)))
+
+	// Screen 50 (#647): promote, opened pre-scoped to (entity, environment)
+	// from a deployments-matrix cell (FR-6) — GET renders the form, POST
+	// handles both the dry-run and commit submit buttons.
+	mux.HandleFunc("/promote", app.auth.RequireAuthFunc(app.withAccessToken(app.handlePromote)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
