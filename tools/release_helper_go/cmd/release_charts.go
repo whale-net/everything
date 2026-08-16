@@ -495,6 +495,35 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 					digestUnchanged = true
 					fmt.Printf("::notice title=Chart package already published (%s)::%s is already present on ChartMuseum with identical digest (%s). Skipping re-upload.\n",
 						chart.Name, ver, chartDigest)
+				} else if p.Version == "" {
+					// Different content already exists at `ver` in ChartMuseum (e.g. orphaned upload).
+					// Auto-advance to next available version.
+					for {
+						nextVer, incErr := incrementVersion(ver, "patch")
+						if incErr != nil {
+							break
+						}
+						ver = nextVer
+						tagName = fmt.Sprintf("%s.%s", chart.Name, ver)
+						effectiveVersion = ver
+						effectiveTag = tagName
+						checkData, checkErr := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, ver)
+						if checkErr != nil || len(checkData) == 0 {
+							// Repackage with new version
+							newChartPath, pkgErr := packager.Package(chartDir, chart.Name, ver, outDir, appVersions)
+							if pkgErr == nil {
+								chartPath = newChartPath
+								if newBytes, readErr := os.ReadFile(chartPath); readErr == nil {
+									hasher := sha256.New()
+									hasher.Write(newBytes)
+									chartDigest = fmt.Sprintf("sha256:%x", hasher.Sum(nil))
+								}
+							}
+							fmt.Printf("::notice title=Chart version collision resolved (%s)::Advanced to %s to avoid collision with orphaned ChartMuseum package.\n",
+								chart.Name, ver)
+							break
+						}
+					}
 				}
 			}
 
