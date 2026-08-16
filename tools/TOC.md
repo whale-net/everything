@@ -19,7 +19,7 @@ Build, release, and development tooling.
 - [serial-mcp/README.md](serial-mcp/README.md) — ESP32 serial monitor MCP server (serial_tail, serial_grep, serial_status)
 - [project-manager/README.md](project-manager/README.md) — Claude Code plugin: multi-persona GitHub-tracked planning pipeline (producer/architect/planner/writer/tester/validator/system-validator)
 - [project-manager/CONVENTIONS.md](project-manager/CONVENTIONS.md) — the plugin's GitHub label/workflow contract (issue kinds, lifecycle, worker unblock procedure) — every persona file follows this exactly
-- [app_registry/TOC.md](app_registry/TOC.md) — includes the `app-registry` Claude Code plugin: three crystaldba `postgres-mcp` servers (`app-registry-pg-{tilt,dev,prod}`)
+- [app_registry/TOC.md](app_registry/TOC.md) — includes the `app-registry` AGY/Claude Code plugin: three crystaldba `postgres-mcp` servers (`app-registry-pg-{tilt,dev,prod}`)
 
 ## Code Generation
 
