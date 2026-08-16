@@ -419,14 +419,38 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	prevTag := getPreviousAppTag(git, fullName, tagName)
 
 	digestUnchanged := false
+	effectiveVersion := p.Version
+	effectiveTag := tagName
 
 	if prevTag != "" {
 		prevVersion := strings.TrimPrefix(prevTag, fullName+".")
 		prevDigest := extractImageDigest(docker, repoPath, prevVersion)
 		if newDigest != "" && prevDigest != "" && newDigest == prevDigest {
-			digestUnchanged = true
-			fmt.Printf("::notice title=Reused digest (%s)::%s has the same image digest (%s) as existing tag %s. Registering new version %s with shared digest.\n",
-				fullName, p.Version, newDigest, prevTag, p.Version)
+			prevMaj, prevMin, _, prevOK := parseSemverTriple(prevVersion)
+			newMaj, newMin, _, newOK := parseSemverTriple(p.Version)
+			if prevOK && newOK && prevMaj == newMaj && prevMin == newMin {
+				// Same major.minor: patch bump with unchanged digest is a no-op rebuild
+				digestUnchanged = true
+				effectiveVersion = prevVersion
+				effectiveTag = prevTag
+				fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same image digest (%s) as existing tag %s in same minor release. Skipping new git tag and App Registry record -- reusing %s.\n",
+					fullName, p.Version, newDigest, prevTag, prevTag)
+
+				if beginPublishSucceeded && artifactClient != nil {
+					failReq := &pb.FailPublishRequest{
+						Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+						OwnerFullName:  fullName,
+						Version:        p.Version,
+						Reason:         fmt.Sprintf("digest unchanged from existing tag %s in same minor release -- no-op rebuild (workflow run %s, attempt %s)", prevTag, runID, attempt),
+						IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail-noop", idempotencyPrefix, p.Domain, p.App),
+					}
+					_, _ = artifactClient.FailPublish(ctx, failReq)
+				}
+			} else {
+				// Major or minor bump: allow recording and tagging to establish new version baseline
+				fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same image digest (%s) as %s. Registering new version baseline %s with shared digest.\n",
+					fullName, p.Version, newDigest, prevTag, p.Version)
+			}
 		} else {
 			fmt.Printf("Digest check for %s: new(%s)=%s prev(%s)=%s -- proceeding with new tag %s\n",
 				fullName, p.Version, defaultStr(newDigest, "<unresolved>"), prevTag, defaultStr(prevDigest, "<unresolved>"), tagName)
@@ -437,31 +461,33 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	}
 
 	// 4. Git tag & RecordArtifact on success
-	if p.CreateGitTag && git != nil && sha != "" {
-		if _, err := git.Run("rev-parse", tagName); err != nil {
-			fmt.Printf("Creating git tag %s...\n", tagName)
-			_, _ = git.Run("tag", "-a", tagName, "-m", fmt.Sprintf("Release %s version %s", fullName, p.Version), sha)
-		}
-	}
-
-	if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
-		if newDigest == "" {
-			fmt.Printf("::warning::Could not resolve digest for %s:%s; skipping App Registry recording\n", repoPath, p.Version)
-		} else {
-			recReq := &pb.RecordArtifactRequest{
-				BuildId:        p.BuildID,
-				Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-				OwnerFullName:  fullName,
-				Repository:     repoPath,
-				Version:        p.Version,
-				Digest:         newDigest,
-				PublishedAt:    time.Now().Unix(),
-				IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-record", idempotencyPrefix, p.Domain, p.App),
+	if !digestUnchanged {
+		if p.CreateGitTag && git != nil && sha != "" {
+			if _, err := git.Run("rev-parse", tagName); err != nil {
+				fmt.Printf("Creating git tag %s...\n", tagName)
+				_, _ = git.Run("tag", "-a", tagName, "-m", fmt.Sprintf("Release %s version %s", fullName, p.Version), sha)
 			}
-			if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
-				fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
+		}
+
+		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
+			if newDigest == "" {
+				fmt.Printf("::warning::Could not resolve digest for %s:%s; skipping App Registry recording\n", repoPath, p.Version)
 			} else {
-				fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, newDigest)
+				recReq := &pb.RecordArtifactRequest{
+					BuildId:        p.BuildID,
+					Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+					OwnerFullName:  fullName,
+					Repository:     repoPath,
+					Version:        p.Version,
+					Digest:         newDigest,
+					PublishedAt:    time.Now().Unix(),
+					IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-record", idempotencyPrefix, p.Domain, p.App),
+				}
+				if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
+					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
+				} else {
+					fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, newDigest)
+				}
 			}
 		}
 	}
@@ -470,12 +496,12 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 		Domain:           p.Domain,
 		App:              p.App,
 		Version:          p.Version,
-		EffectiveVersion: p.Version,
-		EffectiveTag:     tagName,
+		EffectiveVersion: effectiveVersion,
+		EffectiveTag:     effectiveTag,
 		PreviousTag:      prevTag,
 		Digest:           newDigest,
 		DigestUnchanged:  digestUnchanged,
-		Published:        true,
+		Published:        !digestUnchanged,
 	}
 
 	// Write digest check JSON artifact if /tmp/digest-check is accessible
@@ -577,4 +603,23 @@ func defaultStr(s, def string) string {
 		return def
 	}
 	return s
+}
+
+func parseSemverTriple(v string) (major, minor, patch int, ok bool) {
+	v = strings.TrimPrefix(v, "v")
+	parts := strings.Split(v, ".")
+	if len(parts) < 3 {
+		return 0, 0, 0, false
+	}
+	var maj, min, pat int
+	if _, err := fmt.Sscanf(parts[0], "%d", &maj); err != nil {
+		return 0, 0, 0, false
+	}
+	if _, err := fmt.Sscanf(parts[1], "%d", &min); err != nil {
+		return 0, 0, 0, false
+	}
+	if _, err := fmt.Sscanf(parts[2], "%d", &pat); err != nil {
+		return 0, 0, 0, false
+	}
+	return maj, min, pat, true
 }

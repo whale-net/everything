@@ -19,15 +19,29 @@ if [ ! -f "$VERSION_FILE" ]; then
 fi
 
 
-HELPER_VER=$(grep 'release_helper_go:' "$VERSION_FILE" | awk '{print $2}')
-REGISTRY_VER=$(grep 'app_registry_cli:' "$VERSION_FILE" | awk '{print $2}')
+HELPER_VER=$(grep -E '^\s*release_helper_go:' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
+REGISTRY_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | sed -E "s/['\"[:space:]]//g" || true)
 
 if [ -z "$HELPER_VER" ] || [ -z "$REGISTRY_VER" ]; then
     echo "FAIL: Could not parse versions from $VERSION_FILE"
     exit 1
 fi
+if [ "$HELPER_VER" != "v0.2.2" ] || [ "$REGISTRY_VER" != "v0.2.2" ]; then
+    echo "FAIL: Expected v0.2.2, got helper=$HELPER_VER, registry=$REGISTRY_VER"
+    exit 1
+fi
 echo "Parsed release_helper_go version: $HELPER_VER"
 echo "Parsed app_registry_cli version: $REGISTRY_VER"
+
+# Test various quoting and whitespace styles to ensure digits are preserved
+for sample in "v0.2.2" "\"v0.2.2\"" "'v0.2.2'" "  v0.2.2  "; do
+    parsed=$(echo "$sample" | sed -E "s/['\"[:space:]]//g")
+    if [ "$parsed" != "v0.2.2" ]; then
+        echo "FAIL: Version parsing corrupted $sample -> $parsed"
+        exit 1
+    fi
+done
+echo "PASS: Version parsing correctly handles all quotation and whitespace forms without digit stripping"
 
 echo "=== Test 2: SHA256 integrity verification discipline ==="
 TEST_DIR=$(mktemp -d)

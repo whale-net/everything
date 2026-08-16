@@ -619,7 +619,34 @@ func ownerID(a repository.Artifact) string {
 // when state is reaching ArtifactStatePublished -- never re-derived on a
 // later read. See repository.Artifact.Promotability's doc comment for why
 // this is the retroactivity fix, not just a refactor.
+func (r *Registry) checkMajorMinorDigestCollision(a repository.Artifact) error {
+	if a.Digest == "" {
+		return nil
+	}
+	v, err := semver.Parse(a.Version)
+	if err != nil {
+		return nil
+	}
+	owner := ownerID(a)
+	for _, existing := range r.state.Artifacts {
+		if existing.ArtifactID == a.ArtifactID || existing.Digest != a.Digest || existing.Kind != a.Kind || ownerID(existing) != owner {
+			continue
+		}
+		ev, err := semver.Parse(existing.Version)
+		if err == nil && ev.Major == v.Major && ev.Minor == v.Minor {
+			return fmt.Errorf("%w: artifact %s %s already published with digest %s in minor release v%d.%d",
+				repository.ErrAlreadyExists, r.ownerFullName(existing), existing.Version, existing.Digest, ev.Major, ev.Minor)
+		}
+	}
+	return nil
+}
+
 func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.ContainedImageInput, state repository.ArtifactState, versionSource repository.VersionSource, provenance repository.ArtifactProvenance) (*repository.Artifact, error) {
+	if state == repository.ArtifactStatePublished {
+		if err := r.checkMajorMinorDigestCollision(a); err != nil {
+			return nil, err
+		}
+	}
 	a.ArtifactID = uuid.NewString()
 	a.State = state
 	a.Provenance = provenance
@@ -654,6 +681,9 @@ func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.C
 func (r *Registry) completePublish(existing, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, error) {
 	updated := existing
 	updated.Digest = a.Digest
+	if err := r.checkMajorMinorDigestCollision(updated); err != nil {
+		return nil, err
+	}
 	if a.BuildID != "" {
 		updated.BuildID = a.BuildID
 	}

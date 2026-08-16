@@ -46,7 +46,7 @@ inputs:
   github_token:
     description: 'GitHub token for downloading releases (defaults to github.token)'
     required: false
-    default: ${{ github.token }}
+    default: ''
   fallback_to_source:
     description: 'Whether to fall back to Bazel source compilation if prebuilt binary download fails'
     required: false
@@ -89,8 +89,8 @@ runs:
         RH_VERSION_OVERRIDE: ${{ inputs.release_helper_version }}
         AR_VERSION_OVERRIDE: ${{ inputs.app_registry_version }}
         REPO: ${{ inputs.repo }}
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-        GH_TOKEN: ${{ inputs.github_token }}
+        GITHUB_TOKEN: ${{ inputs.github_token || github.token }}
+        GH_TOKEN: ${{ inputs.github_token || github.token }}
         FALLBACK_TO_SOURCE: ${{ inputs.fallback_to_source }}
         DEST_DIR: ${{ runner.temp }}/release-tools
       run: |
@@ -204,10 +204,10 @@ runs:
 
           if [[ -f "$VERSION_FILE" ]]; then
             if [[ -z "$RH_VER" ]]; then
-              RH_VER=$(grep -E '^\s*release_helper_go:' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | tr -d '"\x27\r\n ' || true)
+              RH_VER=$(grep -E '^\s*release_helper_go:' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
             fi
             if [[ -z "$AR_VER" ]]; then
-              AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | tr -d '"\x27\r\n ' || true)
+              AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | sed -E "s/['\"[:space:]]//g" || true)
             fi
           fi
 
@@ -245,17 +245,23 @@ runs:
             fi
 
             local got_release=false
+            local last_err=""
             for tag in "${tags[@]}"; do
               echo "Downloading $tool asset for release tag '$tag' from $REPO..."
-              if gh release download "$tag" -R "$REPO" --dir "$tmp_dl" --clobber 2>/dev/null; then
+              if dl_output=$(gh release download "$tag" -R "$REPO" --dir "$tmp_dl" --clobber 2>&1); then
                 got_release=true
                 echo "✓ Downloaded release assets for $tag"
                 break
+              else
+                last_err="$dl_output"
               fi
             done
 
             if [[ "$got_release" != "true" ]]; then
               echo "Notice: Could not download release assets for $tool from any candidate tag" >&2
+              if [[ -n "$last_err" ]]; then
+                echo "  Last download error: $last_err" >&2
+              fi
               rm -rf "$tmp_dl"
               return 1
             fi

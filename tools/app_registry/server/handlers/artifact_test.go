@@ -1775,7 +1775,36 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 		t.Fatalf("unexpected resp1: version=%s digest=%s", resp1.Artifact.Version, resp1.Artifact.Digest)
 	}
 
-	// 2. Record v2.0.0 with the same sharedDigest
+	// 2. Record v1.0.1 (patch bump in same minor series) with the same sharedDigest -> MUST FAIL
+	_, err = artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         sharedDigest,
+		Version:        "v1.0.1",
+		IdempotencyKey: "record-same-digest-v101",
+	})
+	if err == nil {
+		t.Fatalf("expected RecordArtifact for patch bump v1.0.1 with same digest to fail on collision")
+	}
+
+	// 3. Record v1.1.0 (minor bump) with the same sharedDigest -> MUST SUCCEED
+	respMinor, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         sharedDigest,
+		Version:        "v1.1.0",
+		IdempotencyKey: "record-same-digest-v110",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v1.1.0 minor bump with sharedDigest): %v", err)
+	}
+	if respMinor.Artifact.Version != "v1.1.0" || respMinor.Artifact.Digest != sharedDigest {
+		t.Fatalf("unexpected respMinor: version=%s digest=%s", respMinor.Artifact.Version, respMinor.Artifact.Digest)
+	}
+
+	// 4. Record v2.0.0 (major bump) with the same sharedDigest -> MUST SUCCEED
 	resp2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -1794,7 +1823,7 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 		t.Fatalf("expected distinct artifact rows for distinct versions")
 	}
 
-	// 3. Adopt v3.0.0 with the same sharedDigest
+	// 5. Adopt v3.0.0 (major bump) with the same sharedDigest -> MUST SUCCEED
 	adoptResp, err := artifactSrv.AdoptArtifact(ctxWithRoles(auth.RoleAdmin), &pb.AdoptArtifactRequest{
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",

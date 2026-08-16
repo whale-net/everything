@@ -5,8 +5,8 @@ intent to publish **before** the push, and completes the record after.
 
 > **Fixed: issue [#585](https://github.com/whale-net/everything/issues/585) & issue [#784](https://github.com/whale-net/everything/issues/784).**
 > `RecordArtifact` and `AdoptArtifact` idempotent-replay steps are scoped by `(digest, owner, kind, version)`.
-> Bazel's hermetic builds routinely produce a byte-identical image/binary for an app when a domain-wide version bump occurs without code changes in that subcomponent.
-> To support registering new SemVer baseline tags pointing to existing content (mirroring OCI registries and Git tags), migration 013 relaxed `artifact_digest_idx` from `UNIQUE` to a standard non-unique index. Version uniqueness remains strictly guarded by `UNIQUE (owner_id, kind, version)`. Replays for the exact same `(owner, kind, version, digest)` return the existing published row, while a new version with a shared digest creates a distinct artifact record.
+> Within a single minor release series (`vX.Y`), content digests must remain unique (`UNIQUE (owner_id, kind, version_major, version_minor, digest)` in migration 013), preventing redundant patch releases with identical digests.
+> However, across distinct minor or major version promotions/releases (e.g. `v0.1.5` -> `v0.2.0`), content digests may be shared to establish new version baselines for unchanged subcomponents. Version uniqueness remains strictly guarded by `UNIQUE (owner_id, kind, version)`. Replays for the exact same `(owner, kind, version, digest)` return the existing published row, while a new minor/major version with a shared digest creates a distinct artifact record.
 
 | State | Written by | version | build_id | digest |
 |---|---|---|---|---|
