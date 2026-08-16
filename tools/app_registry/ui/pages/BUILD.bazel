@@ -1,3 +1,4 @@
+load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
 templ_library(
@@ -12,6 +13,29 @@ templ_library(
         "//tools/app_registry/ui/matrix",
         "//tools/app_registry/ui/viewdata",
         "//tools/appmeta/proto:appmetapb",
+    ],
+)
+
+# #652 (NFR-17, FR-42-46, FR-59): role gating over representative role
+# subsets (no roles / promoter-dev-only / admin-only / all roles), FR-43's
+# per-environment derivation (including a non-dev/stage/prod environment
+# key), and the FR-59 absent-vs-empty-vs-AUTH_MODE=none distinction,
+# exercised directly against the two role-sensitive screens
+# (pages.Deployments, pages.Environments, pages.EnvironmentForm) -- every
+# other read screen never branches on Roles at all (see this file's header
+# comment).
+go_test(
+    name = "role_gating_test",
+    size = "small",
+    srcs = ["role_gating_test.go"],
+    embed = [":pages"],
+    deps = [
+        "//libs/go/htmxauth",
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/app_registry/ui/components",
+        "//tools/app_registry/ui/matrix",
+        "//tools/appmeta/proto:appmetapb",
+        "@com_github_a_h_templ//:templ",
     ],
 )
 

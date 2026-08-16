@@ -13,6 +13,25 @@ templ_library(
     ],
 )
 
+# Role-gating unit tests (#652, NFR-17/FR-42-46/FR-59): HasRole literal
+# membership (including the AllRoles sentinel and "no role implies
+# another"), EnvironmentPromoterRole(s) derivation, Gate/GateCellAction, the
+# RolesMisconfigured absent-vs-empty distinction, and MisconfigBanner's
+# rendered output for each of those states.
+go_test(
+    name = "role_gating_test",
+    size = "small",
+    srcs = [
+        "banner_test.go",
+        "roles_test.go",
+    ],
+    embed = [":components"],
+    deps = [
+        "//libs/go/htmxauth",
+        "//tools/app_registry/protos:appregistrypb",
+    ],
+)
+
 # Vocabulary (NFR-11, FR-33) and digest (NFR-4) read-surface tests (#654):
 # each promotability/artifact-state/provenance value renders exactly one
 # badge label+colour, and a digest stays fully recoverable despite being

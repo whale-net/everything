@@ -68,6 +68,7 @@ go_test(
         "handlers_builds_test.go",
         "handlers_promote_rollback_test.go",
         "handlers_read_screens_test.go",
+        "role_gating_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
