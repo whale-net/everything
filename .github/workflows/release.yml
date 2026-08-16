@@ -73,10 +73,10 @@ jobs:
 
           RH_EXISTS=false
           AR_EXISTS=false
-          if [[ -n "$RH_VER" ]] && gh release view "tools-release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1; then
+          if [[ -n "$RH_VER" ]] && (gh release view "tools-release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1); then
             RH_EXISTS=true
           fi
-          if [[ -n "$AR_VER" ]] && gh release view "tools-app_registry_cli.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1; then
+          if [[ -n "$AR_VER" ]] && (gh release view "tools-app-registry.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "tools-app_registry_cli.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "app-registry.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1); then
             AR_EXISTS=true
           fi
 
@@ -298,6 +298,10 @@ jobs:
             if [[ "$DRY_RUN" != "true" ]]; then
               TAG_NAME="${FULL_NAME}.${VER}"
               "$RELEASE_HELPER" release-notes "$FULL_NAME" --current-tag "$TAG_NAME" --format markdown > "/tmp/release-notes/${FULL_NAME}.md" || true
+
+              # Package binary / firmware release assets if applicable
+              mkdir -p "/tmp/assets/${FULL_NAME}"
+              "$RELEASE_HELPER" package-assets "$FULL_NAME" --version "$VER" --output-dir "/tmp/assets/${FULL_NAME}" || true
             fi
           done
 
@@ -315,6 +319,14 @@ jobs:
         with:
           name: digest-check
           path: /tmp/digest-check/*.json
+          if-no-files-found: ignore
+
+      - name: Upload release assets artifact
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: /tmp/assets/
           if-no-files-found: ignore
 
   create-github-releases:
@@ -358,6 +370,14 @@ jobs:
           merge-multiple: true
         continue-on-error: true
 
+      - name: Download release assets artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets*
+          path: /tmp/assets
+          merge-multiple: true
+        continue-on-error: true
+
       - name: Apply digest-check overrides to release matrix
         id: matrix-override
         env:
@@ -393,7 +413,8 @@ jobs:
               --commit "${{ github.sha }}" \
               --apps "$APPS" \
               --release-notes-dir "/tmp/release-notes" \
-              --openapi-specs-dir "/tmp/openapi-specs"
+              --openapi-specs-dir "/tmp/openapi-specs" \
+              --assets-dir "/tmp/assets"
           fi
 
   release-helm-charts:
