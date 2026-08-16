@@ -236,11 +236,10 @@ func TestAdoptArtifact_DifferentDigestConflict_Postgres(t *testing.T) {
 	}
 }
 
-// TestAdoptArtifact_RejectsLiveStateRows_Postgres proves adoption rejects
-// both an "allocated" row (a live version reservation) and a "publishing"
-// row (a live in-flight publish) -- adoption is for when there is NO row,
-// or a "failed" one, never a race against something still live.
-func TestAdoptArtifact_RejectsLiveStateRows_Postgres(t *testing.T) {
+// TestAdoptArtifact_RejectsAllocated_AdoptsPublishing_Postgres proves adoption
+// rejects an "allocated" row (a live version reservation without push) while
+// successfully adopting an in-flight/orphaned "publishing" row (reusing its build_id).
+func TestAdoptArtifact_RejectsAllocated_AdoptsPublishing_Postgres(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	appID := seedApp(t, pool, "acme", "adopt-live", "image")
 	buildID := seedBuild(t, pool, "run-adopt-live")
@@ -259,13 +258,25 @@ func TestAdoptArtifact_RejectsLiveStateRows_Postgres(t *testing.T) {
 
 	t.Run("publishing", func(t *testing.T) {
 		seedRawArtifact(t, pool, appID, repository.ArtifactStatePublishing, "v2.0.0", buildID)
-		_, _, err := adoptArtifactTx(t, reg, repository.Artifact{
+		out, already, err := adoptArtifactTx(t, reg, repository.Artifact{
 			Kind: repository.ArtifactKindImage, AppID: appID,
 			Repository: "ghcr.io/acme/adopt-live", Version: "v2.0.0",
 			Digest: "sha256:adopt-over-publishing-pg",
-		}, nil, "should be rejected", "admin@example.com")
-		if !errors.Is(err, repository.ErrFailedPrecondition) {
-			t.Fatalf("expected ErrFailedPrecondition adopting over a publishing row, got %v", err)
+		}, nil, "recover orphaned publish", "admin@example.com")
+		if err != nil {
+			t.Fatalf("unexpected error adopting over a publishing row: %v", err)
+		}
+		if already {
+			t.Fatalf("expected alreadyRecorded false")
+		}
+		if out.State != repository.ArtifactStatePublished {
+			t.Fatalf("expected state PUBLISHED, got %v", out.State)
+		}
+		if out.Provenance != repository.ArtifactProvenanceAdopted {
+			t.Fatalf("expected provenance ADOPTED, got %v", out.Provenance)
+		}
+		if out.BuildID != buildID {
+			t.Fatalf("expected build_id %s preserved, got %s", buildID, out.BuildID)
 		}
 	})
 }

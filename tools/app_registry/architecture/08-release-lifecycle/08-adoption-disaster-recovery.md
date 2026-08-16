@@ -34,12 +34,12 @@ the implementation had to make explicit:
   Provenance/State are never rewritten, so adoption can never downgrade an
   `observed` row to `adopted` after the fact. A DIFFERENT digest on an
   already-`published` row is `ErrAlreadyExists`, mirroring
-  `RecordArtifact`'s identical conflict rule. An `allocated` or `publishing`
-  row is `ErrFailedPrecondition` — a live reservation or in-flight publish
-  is not what adoption is for. A `failed` row is the one NEW legal starting
-  state adoption alone can complete (`failed → published(adopted)`) — the
-  disaster-recovery case: a run already tried and gave up, but the artifact
-  demonstrably exists.
+  `RecordArtifact`'s identical conflict rule. An `allocated` row is
+  `ErrFailedPrecondition` — a live reservation is not what adoption is for.
+  A `failed` or in-progress/abandoned `publishing` row can be completed by
+  adoption (`failed|publishing → published(adopted)`) — the disaster-recovery
+  case: an existing attempt was interrupted, failed recording, or gave up,
+  but the artifact demonstrably exists in the container/chart registry.
 - **`artifact.build_id` is a real foreign key, and migration 007's
   `artifact_state_shape` CHECK requires it `NOT NULL` once `published` —
   but by definition there is no CI run behind a pre-registry artifact.**

@@ -656,10 +656,10 @@ func (r *artifactRepo) AdoptArtifact(ctx context.Context, a repository.Artifact,
 	}
 
 	switch existing.State {
-	case repository.ArtifactStateFailed:
-		// failed -> published (adopted): the disaster-recovery case -- a run
-		// already tried and gave up (or the reaper reaped it), but the
-		// artifact demonstrably exists. See ArtifactRepository.AdoptArtifact's
+	case repository.ArtifactStateFailed, repository.ArtifactStatePublishing:
+		// failed/publishing -> published (adopted): the disaster-recovery case --
+		// a run already tried and gave up, was interrupted, or failed to record,
+		// but the artifact demonstrably exists. See ArtifactRepository.AdoptArtifact's
 		// doc comment for why the existing build_id is reused when present.
 		out, err := r.completeAdoption(ctx, existing, a, contains, actor)
 		return out, false, err
@@ -670,8 +670,8 @@ func (r *artifactRepo) AdoptArtifact(ctx context.Context, a repository.Artifact,
 		// must not silently overwrite a different recorded digest.
 		return nil, false, fmt.Errorf("%w: artifact %s %s already published with digest %s",
 			repository.ErrAlreadyExists, r.ownerFullName(ctx, existing), a.Version, existing.Digest)
-	default: // allocated, publishing
-		return nil, false, fmt.Errorf("%w: artifact %s %s is %q -- AdoptArtifact only applies when there is no row, or the row is \"failed\"; a live allocation/publish must be let run its course (or explicitly failed via FailPublish) before it can be adopted",
+	default: // allocated
+		return nil, false, fmt.Errorf("%w: artifact %s %s is %q -- AdoptArtifact only applies when there is no row, or the row is \"failed\" or \"publishing\"; a live allocation must be let run its course (or explicitly failed via FailPublish) before it can be adopted",
 			repository.ErrFailedPrecondition, r.ownerFullName(ctx, existing), a.Version, existing.State)
 	}
 }

@@ -703,14 +703,14 @@ func (r *Registry) AdoptArtifact(ctx context.Context, a repository.Artifact, con
 	}
 
 	switch existing.State {
-	case repository.ArtifactStateFailed:
+	case repository.ArtifactStateFailed, repository.ArtifactStatePublishing:
 		out, err := r.completeAdoption(existing, a, contains, actor)
 		return out, false, err
 	case repository.ArtifactStatePublished:
 		return nil, false, fmt.Errorf("%w: artifact %s %s already published with digest %s",
 			repository.ErrAlreadyExists, r.ownerFullName(existing), a.Version, existing.Digest)
-	default: // allocated, publishing
-		return nil, false, fmt.Errorf("%w: artifact %s %s is %q -- AdoptArtifact only applies when there is no row, or the row is \"failed\"; a live allocation/publish must be let run its course (or explicitly failed via FailPublish) before it can be adopted",
+	default: // allocated
+		return nil, false, fmt.Errorf("%w: artifact %s %s is %q -- AdoptArtifact only applies when there is no row, or the row is \"failed\" or \"publishing\"; a live allocation must be let run its course (or explicitly failed via FailPublish) before it can be adopted",
 			repository.ErrFailedPrecondition, r.ownerFullName(existing), a.Version, existing.State)
 	}
 }
