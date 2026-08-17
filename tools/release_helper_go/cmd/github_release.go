@@ -150,7 +150,15 @@ func (c *ghReleaseClient) uploadAsset(releaseID int, filePath, assetName string)
 	return fmt.Errorf("upload asset %s: HTTP %d", assetName, resp.StatusCode)
 }
 
-// recordPublishedArtifact records a published binary or firmware artifact in App Registry.
+// recordPublishedArtifact records a published binary or firmware artifact in
+// App Registry. It intentionally stops at RecordArtifact and never calls
+// PromotionRegistry.Promote: this CLI runs in release.yml under
+// app-registry-builder credentials, and Promote requires the distinct
+// app-registry-promoter-<env> role (server/auth/auth.go RequirePromoter).
+// Promotion for every artifact kind -- image, chart, and now binary (#780,
+// see promote.yml's `kind` input) -- is exclusively human-triggered via the
+// (currently disabled, pending live Keycloak promoter clients) promote.yml
+// workflow. Recording an artifact here just makes it a promotable candidate.
 func recordPublishedArtifact(ctx context.Context, warn func(string), meta AppMetadata, version, digest, repoOwner, repoName, buildID string) error {
 	if defaultEnv("APP_REGISTRY_CICD_OPT_IN") != "true" {
 		return nil

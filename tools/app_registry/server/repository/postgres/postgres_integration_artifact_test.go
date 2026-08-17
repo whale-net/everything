@@ -2276,14 +2276,17 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 	firmwareAppID := seedApp(t, pool, "firmware", "fw-test-app", "none")
 	buildID := seedBuild(t, pool, "run-bin-fw")
 
-	// Record binary artifact
+	// Record binary artifact owned by a deploy_unit=none app (e.g. a CLI tool
+	// binary). Binaries are PROMOTABLE regardless of owner deploy_unit -- see
+	// #780 -- while remaining fully excluded from Helm/K8s chart composition,
+	// which is a separate, untouched concern (composer.go).
 	binArt := repository.Artifact{
 		Kind:          repository.ArtifactKindBinary,
 		AppID:         cliAppID,
 		Digest:        "sha256:binary-test-digest-123",
 		Version:       "v0.1.0",
 		BuildID:       buildID,
-		Promotability: repository.PromotabilityNotPromotable,
+		Promotability: repository.PromotabilityPromotable,
 	}
 	recordedBin, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, binArt, nil, repository.DomainAdoptionStageObserve)
 	if err != nil {
@@ -2295,8 +2298,8 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 	if recordedBin.Kind != repository.ArtifactKindBinary {
 		t.Errorf("got kind %v, want %v", recordedBin.Kind, repository.ArtifactKindBinary)
 	}
-	if recordedBin.Promotability != repository.PromotabilityNotPromotable {
-		t.Errorf("got promotability %v, want %v", recordedBin.Promotability, repository.PromotabilityNotPromotable)
+	if recordedBin.Promotability != repository.PromotabilityPromotable {
+		t.Errorf("got promotability %v, want %v", recordedBin.Promotability, repository.PromotabilityPromotable)
 	}
 
 	// Record firmware artifact

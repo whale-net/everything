@@ -266,10 +266,17 @@ func artifactToPB(a repository.Artifact) *pb.Artifact {
 		StateChangedAt: timeToUnix(a.StateChangedAt),
 		FailReason:     a.FailReason,
 	}
-	if a.Kind == repository.ArtifactKindImage {
-		out.AppId = a.AppID
-	} else {
+	// RecordArtifact (handlers/artifact.go) resolves owner_full_name to
+	// AppID for every kind except CHART -- IMAGE, BINARY, and FIRMWARE all
+	// have an owning App, not just IMAGE (#780). Branch on ChartID's
+	// absence rather than Kind == IMAGE so BINARY artifacts actually carry
+	// app_id on the wire; GetEnvironmentState's entries[].artifact.app_id
+	// is how a caller identifies which app (e.g. tools-release_helper_go
+	// vs tools-app_registry_cli) a promoted binary belongs to.
+	if a.Kind == repository.ArtifactKindChart {
 		out.ChartId = a.ChartID
+	} else {
+		out.AppId = a.AppID
 	}
 	for _, l := range a.Contains {
 		out.Contains = append(out.Contains, artifactLinkToPB(l))
@@ -364,10 +371,12 @@ func promotionToPB(p repository.Promotion) *pb.Promotion {
 		IsOverride:     p.IsOverride,
 		ValidFrom:      timeToUnix(p.ValidFrom),
 	}
-	if p.Kind == repository.ArtifactKindImage {
-		out.AppId = p.AppID
-	} else {
+	// Same non-CHART-owner rule as artifactToPB above (#780): BINARY/FIRMWARE
+	// promotions have an AppID, not a ChartID.
+	if p.Kind == repository.ArtifactKindChart {
 		out.ChartId = p.ChartID
+	} else {
+		out.AppId = p.AppID
 	}
 	if p.ValidTo != nil {
 		out.ValidTo = timeToUnix(*p.ValidTo)

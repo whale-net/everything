@@ -66,7 +66,9 @@ func recordBuild(t *testing.T, srv *ArtifactServer, runID string) *pb.Build {
 
 // TestRecordArtifact_PromotabilityDerivation covers all three DeployUnit
 // rows of ARCHITECTURE.md's promotability table for image artifacts, plus
-// charts always being PROMOTABLE.
+// charts always being PROMOTABLE and binaries always being PROMOTABLE
+// regardless of owner deploy_unit (#780 -- tool binaries are packaged with
+// DEPLOY_UNIT_NONE but must still be promotable).
 func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 	_, artifactSrv, apps := setup(t)
 	ctx := authedCtx()
@@ -80,9 +82,9 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, pb.Promotability_PROMOTABILITY_VIA_CHART},
 		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, pb.Promotability_PROMOTABILITY_PROMOTABLE},
 		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
-		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_PROMOTABLE},
 		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_PROMOTABLE},
-		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
+		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.Promotability_PROMOTABILITY_PROMOTABLE},
 		{"chart-app", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
 		{"image-app", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
 		{"none-app", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE},
@@ -100,6 +102,19 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 			}
 			if resp.Artifact.Promotability != tc.want {
 				t.Fatalf("%s (%v): expected promotability %v, got %v", tc.appName, tc.kind, tc.want, resp.Artifact.Promotability)
+			}
+			// #780: non-CHART kinds (IMAGE, BINARY, FIRMWARE) must carry
+			// app_id on the wire so a caller (e.g. a CI script resolving a
+			// tool binary's promoted version) can identify the owning app.
+			// Regression check for the artifactToPB bug where only IMAGE
+			// got app_id and BINARY/FIRMWARE got neither field populated.
+			if tc.kind != pb.ArtifactKind_ARTIFACT_KIND_CHART {
+				if resp.Artifact.GetAppId() == "" {
+					t.Errorf("%s (%v): expected non-empty app_id on wire, got empty", tc.appName, tc.kind)
+				}
+				if resp.Artifact.GetChartId() != "" {
+					t.Errorf("%s (%v): expected empty chart_id, got %q", tc.appName, tc.kind, resp.Artifact.GetChartId())
+				}
 			}
 		})
 	}

@@ -50,14 +50,15 @@ on:
           - rollback
         default: promote
       owner_full_name:
-        description: 'App or chart identity, as <domain>-<name> (e.g. manmanv2-host-manager)'
+        description: 'App, chart, or tool binary identity, as <domain>-<name> (e.g. manmanv2-host-manager, or tools-release_helper_go for a tool binary)'
         required: true
       kind:
-        description: 'Which artifact kind owner_full_name refers to. Charts and images can share a name, so this is what disambiguates them.'
+        description: 'Which artifact kind owner_full_name refers to. Charts, images, and binaries can share a name, so this is what disambiguates them.'
         type: choice
         options:
           - image
           - chart
+          - binary
         default: image
       version:
         description: 'Version to promote, e.g. v1.4.0. Required for action=promote; ignored for action=rollback.'
