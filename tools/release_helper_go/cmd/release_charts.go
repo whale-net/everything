@@ -123,6 +123,9 @@ type ReleaseChartsParams struct {
 	Ctx                  context.Context
 	Charts               string
 	Version              string
+	IncrementMajor       bool
+	IncrementMinor       bool
+	IncrementPatch       bool
 	BuildID              string
 	ChartRepoURL         string
 	IdempotencyKeyPrefix string
@@ -170,6 +173,9 @@ func newReleaseChartsCmd() *cobra.Command {
 	var (
 		charts               string
 		version              string
+		incrementMajor       bool
+		incrementMinor       bool
+		incrementPatch       bool
 		buildID              string
 		chartRepoURL         string
 		idempotencyKeyPrefix string
@@ -213,6 +219,9 @@ func newReleaseChartsCmd() *cobra.Command {
 				Ctx:                  cmd.Context(),
 				Charts:               charts,
 				Version:              version,
+				IncrementMajor:       incrementMajor,
+				IncrementMinor:       incrementMinor,
+				IncrementPatch:       incrementPatch,
 				BuildID:              buildID,
 				ChartRepoURL:         repoURL,
 				IdempotencyKeyPrefix: idempotencyKeyPrefix,
@@ -250,6 +259,9 @@ func newReleaseChartsCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&charts, "charts", "", "Comma- or space-separated list of charts, domain names, or 'all'")
 	cmd.Flags().StringVar(&version, "version", "", "Explicit release version for charts")
+	cmd.Flags().BoolVar(&incrementMajor, "increment-major", false, "Auto-increment major version")
+	cmd.Flags().BoolVar(&incrementMinor, "increment-minor", false, "Auto-increment minor version")
+	cmd.Flags().BoolVar(&incrementPatch, "increment-patch", false, "Auto-increment patch version")
 	cmd.Flags().StringVar(&buildID, "build-id", "", "App Registry Build ID")
 	cmd.Flags().StringVar(&chartRepoURL, "chart-repo-url", "", "ChartMuseum repository URL (default: https://charts.whalenet.dev)")
 	cmd.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Prefix for idempotency keys")
@@ -390,8 +402,15 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 
 		ver := p.Version
 		if ver == "" {
+			bumpType := "patch"
+			switch {
+			case p.IncrementMajor:
+				bumpType = "major"
+			case p.IncrementMinor:
+				bumpType = "minor"
+			}
 			var err error
-			ver, err = autoIncrementHelmVersion(chart.Name, "patch", git)
+			ver, err = autoIncrementHelmVersion(chart.Name, bumpType, git)
 			if err != nil {
 				return nil, fmt.Errorf("auto-version for chart %s: %w", chart.Name, err)
 			}

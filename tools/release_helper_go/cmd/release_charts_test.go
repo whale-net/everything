@@ -627,5 +627,64 @@ func TestExecuteReleaseCharts_RecordArtifactFails_TriggersFailPublish(t *testing
 	}
 }
 
+func TestExecuteReleaseCharts_AutoIncrementMinor(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
 
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:         "helm-demo-hello-fastapi",
+		IncrementMinor: true,
+		ChartRepoURL:   "https://charts.whalenet.dev",
+		DryRun:         true,
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		Packager:       packager,
+		Uploader:       uploader,
+		WorkspaceRoot:  workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error in dry run: %v", err)
+	}
 
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+	// Initial tag fixture was helm-demo-hello-fastapi.v0.1.0 -> minor bump should be v0.2.0
+	if res.Charts[0].EffectiveVersion != "v0.2.0" {
+		t.Errorf("expected EffectiveVersion 'v0.2.0', got %q", res.Charts[0].EffectiveVersion)
+	}
+}
+
+func TestExecuteReleaseCharts_AutoIncrementMajor(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:         "helm-demo-hello-fastapi",
+		IncrementMajor: true,
+		ChartRepoURL:   "https://charts.whalenet.dev",
+		DryRun:         true,
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		Packager:       packager,
+		Uploader:       uploader,
+		WorkspaceRoot:  workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error in dry run: %v", err)
+	}
+
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+	// Initial tag fixture was helm-demo-hello-fastapi.v0.1.0 -> major bump should be v1.0.0
+	if res.Charts[0].EffectiveVersion != "v1.0.0" {
+		t.Errorf("expected EffectiveVersion 'v1.0.0', got %q", res.Charts[0].EffectiveVersion)
+	}
+}

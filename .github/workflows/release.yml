@@ -478,6 +478,8 @@ jobs:
         run: |
           ARGS=(release-charts --charts "${{ github.event.inputs.helm_charts }}" --chart-repo-url "$CHART_REPO_URL" --create-git-tag)
           [[ -n "${{ needs.plan-release.outputs.version }}" ]] && ARGS+=(--version "${{ needs.plan-release.outputs.version }}")
+          [[ "${{ github.event.inputs.increment_minor }}" == "true" ]] && ARGS+=(--increment-minor)
+          [[ "${{ github.event.inputs.increment_patch }}" == "true" ]] && ARGS+=(--increment-patch)
           [[ -n "${{ needs.plan-release.outputs.build-id }}" ]] && ARGS+=(--build-id "${{ needs.plan-release.outputs.build-id }}")
           [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
