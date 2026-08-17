@@ -106,6 +106,12 @@ assert_exit 0 "release-charts --help exits 0" \
 assert_output_contains "--chart-repo-url" "release-charts --help shows --chart-repo-url flag" \
     "$RELEASE_HELPER" release-charts --help
 
+assert_output_contains "--increment-minor" "release-charts --help shows --increment-minor flag" \
+    "$RELEASE_HELPER" release-charts --help
+
+assert_output_contains "--increment-patch" "release-charts --help shows --increment-patch flag" \
+    "$RELEASE_HELPER" release-charts --help
+
 # ── plan: event-type validation ───────────────────────────────────────────────
 # Used in ci.yml and release.yml.  Validation fires before any Bazel call.
 
