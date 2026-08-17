@@ -17,14 +17,24 @@ import (
 
 // promoteKindFromQuery maps the "kind" query/form value the deployments
 // matrix (screen 10) and this screen's own hidden field use ("image" |
-// "chart", matching the CLI's --kind flag) to the proto enum. An unknown or
-// empty value is rejected rather than silently defaulting to IMAGE.
+// "chart" | "binary", matching the CLI's --kind flag) to the proto enum. An
+// unknown or empty value is rejected rather than silently defaulting to
+// IMAGE. "binary" was added alongside tool-binary promotability (#780) --
+// before that, tools-release_helper_go/tools-app-registry had no reachable
+// kind value here at all, so every promote attempt against them 404'd on
+// "invalid kind" or (with kind=image, since that was the only kind anyone
+// thought to try) rendered NOT_PROMOTABLE for the wrong artifact kind.
+// "firmware" is deliberately not included: DerivePromotability always
+// returns NOT_PROMOTABLE for it, so a promote screen for it would never have
+// anything to show.
 func promoteKindFromQuery(raw string) (pb.ArtifactKind, error) {
 	switch raw {
 	case "image":
 		return pb.ArtifactKind_ARTIFACT_KIND_IMAGE, nil
 	case "chart":
 		return pb.ArtifactKind_ARTIFACT_KIND_CHART, nil
+	case "binary":
+		return pb.ArtifactKind_ARTIFACT_KIND_BINARY, nil
 	default:
 		return pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED, &kindError{raw: raw}
 	}
@@ -33,7 +43,7 @@ func promoteKindFromQuery(raw string) (pb.ArtifactKind, error) {
 type kindError struct{ raw string }
 
 func (e *kindError) Error() string {
-	return "invalid or missing 'kind' (expected 'image' or 'chart'), got " + e.raw
+	return "invalid or missing 'kind' (expected 'image', 'chart', or 'binary'), got " + e.raw
 }
 
 // promoteFingerprint is FR-51's intent identity: a hash of every field a
