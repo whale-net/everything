@@ -2,6 +2,9 @@
   "entries": [
     {
       "path": "tools/app_registry"
+    },
+    {
+      "path": "tools/project-manager"
     }
   ]
 }

@@ -1,6 +1,6 @@
 # project-manager
 
-Claude Code plugin providing a multi-persona project-management pipeline for the
+AGY and Claude Code plugin providing a multi-persona project-management pipeline for the
 `everything` monorepo, tracked entirely in GitHub: intake in a Discussion, the root
 plan as an Issue, and task execution on a GitHub Project (v2) board. See
 [`CONVENTIONS.md`](CONVENTIONS.md) for the full contract.
@@ -64,13 +64,21 @@ You don't have to invoke each persona by hand — five skills orchestrate the pi
 
 Typical flow: `plan` → `review` → `implement` → `validate` → (if findings) `implement` again.
 
-## Try it locally
+## Setup & Usage
+
+### Antigravity (AGY)
+
+Discovered automatically via `.agents/plugins.json` and `.agents/plugins/project-manager`.
+
+### Claude Code
+
+#### Try it locally
 
 ```bash
 claude --plugin-dir tools/project-manager
 ```
 
-## Install from the repo marketplace
+#### Install from the repo marketplace
 
 ```
 /plugin marketplace add ./.claude-plugin/marketplace.json
