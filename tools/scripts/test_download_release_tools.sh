@@ -5,6 +5,7 @@ set -euo pipefail
 # 1. Pinned version resolution from .release-tools-version
 # 2. SHA256 integrity verification (succeeds on matching checksum, fails on mismatch)
 # 3. Source-mode fallback and tool execution verification
+# 4. App Registry GetEnvironmentState JSON parsing (#780) and fallback-on-failure behavior
 
 echo "=== Test 1: Pinned version file parsing ==="
 if [ -n "${TEST_SRCDIR:-}" ]; then
@@ -106,6 +107,117 @@ echo "PASS: release_helper_go binary executed successfully"
 
 "$REGISTRY_BIN" --help > /dev/null
 echo "PASS: app-registry CLI executed successfully"
+
+echo "=== Test 4: App Registry GetEnvironmentState JSON parsing ==="
+# Mirrors the jq filter used by resolve_registry_version() in
+# .github/actions/download-release-tools/action.yml: given a
+# GetEnvironmentState-shaped response and a target app_id, extract the
+# promoted binary version, or nothing if there's no matching entry.
+FIXTURE_DIR=$(mktemp -d)
+trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
+
+extract_version() {
+    local json_file="$1"
+    local app_id="$2"
+    jq -r --arg app_id "$app_id" '
+      [.entries[]?
+        | select((.artifact.appId // .artifact.app_id) == $app_id)
+        | select((.artifact.kind // "") == "ARTIFACT_KIND_BINARY")
+      ][0].artifact.version // empty
+    ' "$json_file" 2>/dev/null || true
+}
+
+# 4a: well-formed response with a matching binary entry (camelCase, as
+# grpcurl's default protojson output would render it)
+cat > "$FIXTURE_DIR/match.json" <<'EOF'
+{
+  "environment": {"environmentKey": "dev"},
+  "entries": [
+    {
+      "artifact": {
+        "appId": "app-123",
+        "kind": "ARTIFACT_KIND_BINARY",
+        "version": "v1.4.0"
+      }
+    },
+    {
+      "artifact": {
+        "appId": "app-999",
+        "kind": "ARTIFACT_KIND_BINARY",
+        "version": "v9.9.9"
+      }
+    }
+  ]
+}
+EOF
+GOT=$(extract_version "$FIXTURE_DIR/match.json" "app-123")
+if [ "$GOT" != "v1.4.0" ]; then
+    echo "FAIL: expected v1.4.0 for matching entry, got '$GOT'"
+    exit 1
+fi
+echo "PASS: extracted promoted version from matching entry"
+
+# 4b: snake_case field rendering (original proto names) also parses
+cat > "$FIXTURE_DIR/snake_case.json" <<'EOF'
+{"entries": [{"artifact": {"app_id": "app-123", "kind": "ARTIFACT_KIND_BINARY", "version": "v2.0.0"}}]}
+EOF
+GOT=$(extract_version "$FIXTURE_DIR/snake_case.json" "app-123")
+if [ "$GOT" != "v2.0.0" ]; then
+    echo "FAIL: expected v2.0.0 for snake_case entry, got '$GOT'"
+    exit 1
+fi
+echo "PASS: extracted promoted version from snake_case entry"
+
+# 4c: non-binary kind (e.g. an image) for the same app_id must not match
+cat > "$FIXTURE_DIR/wrong_kind.json" <<'EOF'
+{"entries": [{"artifact": {"appId": "app-123", "kind": "ARTIFACT_KIND_IMAGE", "version": "v1.4.0"}}]}
+EOF
+GOT=$(extract_version "$FIXTURE_DIR/wrong_kind.json" "app-123")
+if [ -n "$GOT" ]; then
+    echo "FAIL: expected no match for non-binary kind, got '$GOT'"
+    exit 1
+fi
+echo "PASS: non-binary artifact kind correctly excluded"
+
+# 4d: no entries for the requested app_id -> falls through to file/source fallback
+cat > "$FIXTURE_DIR/no_match.json" <<'EOF'
+{"entries": [{"artifact": {"appId": "app-999", "kind": "ARTIFACT_KIND_BINARY", "version": "v9.9.9"}}]}
+EOF
+GOT=$(extract_version "$FIXTURE_DIR/no_match.json" "app-123")
+if [ -n "$GOT" ]; then
+    echo "FAIL: expected no match when app_id is absent, got '$GOT'"
+    exit 1
+fi
+echo "PASS: no matching entry correctly yields empty (falls back)"
+
+# 4e: empty entries array -> falls through
+echo '{"entries": []}' > "$FIXTURE_DIR/empty_entries.json"
+GOT=$(extract_version "$FIXTURE_DIR/empty_entries.json" "app-123")
+if [ -n "$GOT" ]; then
+    echo "FAIL: expected no match for empty entries array, got '$GOT'"
+    exit 1
+fi
+echo "PASS: empty entries array correctly yields empty (falls back)"
+
+# 4f: malformed JSON (e.g. a truncated/garbled grpcurl error response) must
+# not crash the parser and must yield empty, exactly like a genuinely empty
+# response -- both drive the same fallback path in the action.
+echo '{not valid json' > "$FIXTURE_DIR/malformed.json"
+GOT=$(extract_version "$FIXTURE_DIR/malformed.json" "app-123")
+if [ -n "$GOT" ]; then
+    echo "FAIL: expected no match for malformed JSON, got '$GOT'"
+    exit 1
+fi
+echo "PASS: malformed JSON correctly yields empty (falls back)"
+
+# 4g: missing/empty response body (e.g. grpcurl produced no output at all)
+: > "$FIXTURE_DIR/missing.json"
+GOT=$(extract_version "$FIXTURE_DIR/missing.json" "app-123")
+if [ -n "$GOT" ]; then
+    echo "FAIL: expected no match for empty response body, got '$GOT'"
+    exit 1
+fi
+echo "PASS: empty response body correctly yields empty (falls back)"
 
 echo "=== All download-release-tools tests passed ==="
 
