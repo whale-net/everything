@@ -802,3 +802,44 @@ func TestRollback_ConfirmationRendersResponseIdentityNotForm(t *testing.T) {
 		t.Errorf("confirmation must never echo the submitted form's reason; response's own event.reason is what renders")
 	}
 }
+
+// TestPromoteKindFromQuery covers the "kind" query/form value accepted by
+// both the promote and rollback handlers (they share this parser). "binary"
+// was added alongside tool-binary promotability (#780) -- before that,
+// there was no reachable kind value for tools-release_helper_go/
+// tools-app-registry at all, so promote attempts against them either 404'd
+// on "invalid kind" or (with kind=image, the only value anyone thought to
+// try) rendered NOT_PROMOTABLE for the wrong artifact kind. "firmware" is
+// deliberately still rejected: DerivePromotability always returns
+// NOT_PROMOTABLE for it, so a promote screen for it would never have
+// anything to show.
+func TestPromoteKindFromQuery(t *testing.T) {
+	cases := []struct {
+		raw     string
+		want    pb.ArtifactKind
+		wantErr bool
+	}{
+		{"image", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, false},
+		{"chart", pb.ArtifactKind_ARTIFACT_KIND_CHART, false},
+		{"binary", pb.ArtifactKind_ARTIFACT_KIND_BINARY, false},
+		{"firmware", pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED, true},
+		{"", pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED, true},
+		{"bogus", pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED, true},
+	}
+	for _, c := range cases {
+		got, err := promoteKindFromQuery(c.raw)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("promoteKindFromQuery(%q): expected error, got nil (kind=%v)", c.raw, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("promoteKindFromQuery(%q): unexpected error: %v", c.raw, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("promoteKindFromQuery(%q) = %v, want %v", c.raw, got, c.want)
+		}
+	}
+}

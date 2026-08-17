@@ -627,3 +627,206 @@ func TestExecuteReleaseApp_NonImageCLIApp(t *testing.T) {
 	}
 }
 
+// TestExecuteReleaseApp_NonImageNoOpDigestDetection reproduces the class of
+// bug behind tools-app-registry v0.2.3 getting stuck "publishing" with no
+// digest in prod: a CLI/binary patch bump whose binary content is
+// byte-identical to the previous version in the same minor series used to
+// go straight to RecordArtifact, which collides with
+// artifact_digest_major_minor_idx (owner_id, kind, version_major,
+// version_minor, digest) and fails with ErrAlreadyExists -- leaving the row
+// BeginPublish created stranded forever. This asserts the no-op is now
+// detected up front (via GetArtifact, since binaries have no container
+// registry to query the way the image branch queries docker) and the
+// "publishing" row is cleaned up via FailPublish instead of ever calling
+// RecordArtifact.
+func TestExecuteReleaseApp_NonImageNoOpDigestDetection(t *testing.T) {
+	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
+	apps := []fakeApp{
+		{
+			pkg:          "tools/app_registry/cli",
+			targetSuffix: "app_registry_cli_metadata",
+			name:         "app-registry",
+			domain:       "tools",
+			customJSON:   cliJSON,
+		},
+	}
+	fs, bazel := buildFakeInfra(apps)
+
+	allBazelCalls := append(bazel.calls,
+		fakeBazelCall{
+			argsContain: []string{"build"},
+			output:      "Built binary target",
+		},
+	)
+	bazelRunner := newFakeBazel(allBazelCalls...)
+
+	// Previous tag exists: tools-app-registry.v0.2.2, same major.minor (0.2)
+	// as the v0.2.3 release under test.
+	gitRunner := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "sha123456789"},
+		fakeGitCall{argsContain: []string{"tag", "--list", "tools-app-registry.v*"}, output: "tools-app-registry.v0.2.2"},
+	)
+
+	dockerRunner := newFakeDocker()
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+
+	// No built binary exists on disk in this fake filesystem, so
+	// binaryDigest falls back to "sha256:" + gitSHA (see computeFileSHA256
+	// candidate-path fallback in the app-registry-cli branch of
+	// ExecuteReleaseApp). Make GetArtifact report that exact digest as
+	// already recorded for the previous version, simulating a no-op rebuild.
+	const noOpDigest = "sha256:sha123456789"
+	fakeArtifactClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		if in.Version != "v0.2.2" {
+			t.Errorf("expected GetArtifact lookup for previous version v0.2.2, got %q", in.Version)
+		}
+		return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Digest: noOpDigest, Version: "v0.2.2"}}, nil
+	}
+
+	res, err := ExecuteReleaseApp(ReleaseAppParams{
+		Domain:               "tools",
+		App:                  "app-registry",
+		Version:              "v0.2.3",
+		BuildID:              "build-101",
+		IdempotencyKeyPrefix: "run-1-1",
+		GitSHA:               "sha123456789",
+		CreateGitTag:         true,
+		Bazel:                bazelRunner,
+		Git:                  gitRunner,
+		Docker:               dockerRunner,
+		FS:                   fs,
+		WorkspaceRoot:        fakeWorkspaceRoot,
+		ArtifactClient:       fakeArtifactClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !res.DigestUnchanged {
+		t.Errorf("expected DigestUnchanged=true, got false")
+	}
+	if res.Published {
+		t.Errorf("expected Published=false on no-op rebuild, got true")
+	}
+	if res.EffectiveVersion != "v0.2.2" {
+		t.Errorf("expected EffectiveVersion='v0.2.2', got %q", res.EffectiveVersion)
+	}
+	if res.EffectiveTag != "tools-app-registry.v0.2.2" {
+		t.Errorf("expected EffectiveTag='tools-app-registry.v0.2.2', got %q", res.EffectiveTag)
+	}
+
+	// BeginPublish still runs as the heartbeat/allocation for the new version...
+	if len(fakeArtifactClient.BeginPublishCalls) != 1 {
+		t.Fatalf("expected 1 BeginPublish call, got %d", len(fakeArtifactClient.BeginPublishCalls))
+	}
+	// ...but RecordArtifact must NOT be attempted once the no-op is detected --
+	// attempting it is exactly what produced the stuck-in-"publishing" row.
+	if len(fakeArtifactClient.RecordArtifactCalls) != 0 {
+		t.Errorf("expected 0 RecordArtifact calls on no-op rebuild, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	}
+	// FailPublish must be called to resolve the "publishing" row BeginPublish created.
+	if len(fakeArtifactClient.FailPublishCalls) != 1 {
+		t.Fatalf("expected 1 FailPublish call for no-op rebuild, got %d", len(fakeArtifactClient.FailPublishCalls))
+	}
+	failReq := fakeArtifactClient.FailPublishCalls[0]
+	if failReq.Kind != pb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		t.Errorf("expected ARTIFACT_KIND_BINARY in FailPublish, got %v", failReq.Kind)
+	}
+	if failReq.Version != "v0.2.3" {
+		t.Errorf("expected FailPublish version 'v0.2.3', got %q", failReq.Version)
+	}
+	if !strings.Contains(failReq.Reason, "no-op rebuild") {
+		t.Errorf("expected FailPublish reason to mention no-op rebuild, got %q", failReq.Reason)
+	}
+}
+
+// TestExecuteReleaseApp_NonImageRecordArtifactFailureCleansUpPublishing is
+// the direct regression test for the prod incident: RecordArtifact fails
+// for the binary/CLI path (e.g. a genuine unique-constraint conflict the
+// no-op check above didn't catch -- no previous tag/digest info available)
+// and, pre-fix, nothing ever called FailPublish to resolve the "publishing"
+// row BeginPublish created, leaving it stuck forever with no digest. This
+// asserts FailPublish is now always called when RecordArtifact fails.
+func TestExecuteReleaseApp_NonImageRecordArtifactFailureCleansUpPublishing(t *testing.T) {
+	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
+	apps := []fakeApp{
+		{
+			pkg:          "tools/app_registry/cli",
+			targetSuffix: "app_registry_cli_metadata",
+			name:         "app-registry",
+			domain:       "tools",
+			customJSON:   cliJSON,
+		},
+	}
+	fs, bazel := buildFakeInfra(apps)
+
+	allBazelCalls := append(bazel.calls,
+		fakeBazelCall{
+			argsContain: []string{"build"},
+			output:      "Built binary target",
+		},
+	)
+	bazelRunner := newFakeBazel(allBazelCalls...)
+
+	// No previous tag at all, so the up-front no-op check never fires and
+	// RecordArtifact is attempted directly.
+	gitRunner := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "sha123456789"},
+		fakeGitCall{argsContain: []string{"tag", "--list", "tools-app-registry.v*"}, output: ""},
+		fakeGitCall{argsContain: []string{"rev-parse", "tools-app-registry.v0.2.3"}, err: fmt.Errorf("not found")},
+		fakeGitCall{argsContain: []string{"tag", "-a"}, output: ""},
+	)
+
+	dockerRunner := newFakeDocker()
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	fakeArtifactClient.RecordArtifactFn = func(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error) {
+		return nil, fmt.Errorf("already exists: artifact tools-app-registry v0.2.3 already published with digest sha256:...")
+	}
+
+	res, err := ExecuteReleaseApp(ReleaseAppParams{
+		Domain:               "tools",
+		App:                  "app-registry",
+		Version:              "v0.2.3",
+		BuildID:              "build-101",
+		IdempotencyKeyPrefix: "run-1-1",
+		GitSHA:               "sha123456789",
+		CreateGitTag:         true,
+		Bazel:                bazelRunner,
+		Git:                  gitRunner,
+		Docker:               dockerRunner,
+		FS:                   fs,
+		WorkspaceRoot:        fakeWorkspaceRoot,
+		ArtifactClient:       fakeArtifactClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error (RecordArtifact failure must be non-fatal): %v", err)
+	}
+	if !res.Published {
+		t.Errorf("expected Published=true (build itself succeeded), got false")
+	}
+
+	if len(fakeArtifactClient.RecordArtifactCalls) != 1 {
+		t.Fatalf("expected 1 RecordArtifact call, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	}
+	// This is the core regression assertion: before the fix, a
+	// RecordArtifact failure here was only ever logged as a warning, and
+	// FailPublish was never called -- leaving the row BeginPublish created
+	// stuck in "publishing" with no digest forever.
+	if len(fakeArtifactClient.FailPublishCalls) != 1 {
+		t.Fatalf("expected 1 FailPublish call to clean up the stuck 'publishing' row after RecordArtifact failure, got %d", len(fakeArtifactClient.FailPublishCalls))
+	}
+	failReq := fakeArtifactClient.FailPublishCalls[0]
+	if failReq.Kind != pb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		t.Errorf("expected ARTIFACT_KIND_BINARY in FailPublish, got %v", failReq.Kind)
+	}
+	if failReq.OwnerFullName != "tools-app-registry" {
+		t.Errorf("expected owner 'tools-app-registry', got %q", failReq.OwnerFullName)
+	}
+	if failReq.Version != "v0.2.3" {
+		t.Errorf("expected FailPublish version 'v0.2.3', got %q", failReq.Version)
+	}
+	if !strings.Contains(failReq.Reason, "RecordArtifact failed") {
+		t.Errorf("expected FailPublish reason to mention RecordArtifact failure, got %q", failReq.Reason)
+	}
+}
+
