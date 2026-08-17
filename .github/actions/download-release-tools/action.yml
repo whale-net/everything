@@ -2,7 +2,9 @@ name: 'Download Release Tools'
 description: >-
   Acquires the release_helper_go and app-registry CLI binaries for CI/release workflows.
   In 'published' mode (default), downloads prebuilt pinned binaries from GitHub Releases
-  in <3s with automatic SHA256 checksum verification and safety valve fallback to source
+  in <3s with automatic SHA256 checksum verification, a staleness check against each
+  tool's own source directory (falls back to source build if the pinned release predates
+  a merged change under that path -- see issue #804), and safety valve fallback to source
   compilation. In 'source' mode, builds tools directly from source via Bazel.
   Exports RELEASE_HELPER and APP_REGISTRY_CLI env vars and outputs.
 
@@ -214,10 +216,34 @@ runs:
           echo "Pinned versions: release_helper_go=${RH_VER:-<not set>}, app_registry_cli=${AR_VER:-<not set>}"
           [[ -n "$TARGET_ENV_INPUT" ]] && echo "Target environment for tag lookup: $TARGET_ENV_INPUT"
 
+          # Returns 0 (stale) if $tag's commit predates a later commit under
+          # $src_path_prefix at $GITHUB_SHA -- i.e. the pinned binary was built
+          # before a since-merged change to its own source, so it cannot contain
+          # that fix. Returns 1 (not stale / unknown) otherwise, including when
+          # GITHUB_SHA or the GitHub API compare call is unavailable.
+          is_pinned_tool_stale() {
+            local tag="$1"
+            local src_path_prefix="$2"
+            [[ -z "${GITHUB_SHA:-}" || -z "$src_path_prefix" ]] && return 1
+
+            local tag_sha
+            tag_sha="$(gh api "repos/${REPO}/commits/${tag}" --jq '.sha' 2>/dev/null || true)"
+            [[ -z "$tag_sha" || "$tag_sha" == "$GITHUB_SHA" ]] && return 1
+
+            local changed_files
+            changed_files="$(gh api "repos/${REPO}/compare/${tag_sha}...${GITHUB_SHA}" --jq '.files[]?.filename' 2>/dev/null | grep -E "^${src_path_prefix}" || true)"
+            if [[ -n "$changed_files" ]]; then
+              echo "::warning title=Pinned ${tag} binary is stale::Release '${tag}' was built from ${tag_sha:0:12}, but source under ${src_path_prefix} has changed since then (e.g. $(echo "$changed_files" | head -n1)). Falling back to source build for this run. Cut a new release for the tool and bump .release-tools-version once merged." >&2
+              return 0
+            fi
+            return 1
+          }
+
           download_single_tool() {
             local tool="$1"
             local ver="$2"
             local out_bin="$3"
+            local src_path_prefix="$4"
 
             local tmp_dl
             tmp_dl="$(mktemp -d)"
@@ -262,6 +288,11 @@ runs:
               if [[ -n "$last_err" ]]; then
                 echo "  Last download error: $last_err" >&2
               fi
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+
+            if is_pinned_tool_stale "$tag" "$src_path_prefix"; then
               rm -rf "$tmp_dl"
               return 1
             fi
@@ -317,10 +348,10 @@ runs:
           }
 
           DL_OK=true
-          if ! download_single_tool "release_helper_go" "$RH_VER" "$RH_PATH"; then
+          if ! download_single_tool "release_helper_go" "$RH_VER" "$RH_PATH" "tools/release_helper_go/"; then
             DL_OK=false
           fi
-          if [[ "$DL_OK" == "true" ]] && ! download_single_tool "app_registry_cli" "$AR_VER" "$AR_PATH"; then
+          if [[ "$DL_OK" == "true" ]] && ! download_single_tool "app_registry_cli" "$AR_VER" "$AR_PATH" "tools/app_registry/cli/"; then
             DL_OK=false
           fi
 
