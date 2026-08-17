@@ -190,8 +190,10 @@ message Artifact {
   string artifact_id = 1;
   ArtifactKind kind = 2;
 
-  // Exactly one of these is set, depending on kind.
-  string app_id = 3;    // set when kind == IMAGE
+  // Exactly one of these is set, depending on kind: chart_id for CHART,
+  // app_id for everything else (IMAGE, BINARY, FIRMWARE all have an owning
+  // App -- see RecordArtifact's resolveOwner and #780).
+  string app_id = 3;    // set when kind != CHART
   string chart_id = 4;  // set when kind == CHART
 
   string repository = 5;  // e.g. "ghcr.io/whale-net/manmanv2-control-api"
