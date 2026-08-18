@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"log"
 	"net/http"
@@ -16,11 +17,15 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxbase"
 	"github.com/whale-net/everything/libs/go/logging"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
+
+//go:embed favicon.ico
+var faviconIco []byte
 
 // Config holds the application configuration
 type Config struct {
@@ -236,6 +241,7 @@ func (app *App) withAccessToken(next http.HandlerFunc) http.HandlerFunc {
 
 func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Public routes
+	mux.HandleFunc("/favicon.ico", htmxbase.FaviconHandler(faviconIco))
 	mux.HandleFunc("/health", app.handleHealth)
 	mux.HandleFunc("/auth/login", app.auth.HandleLogin)
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)

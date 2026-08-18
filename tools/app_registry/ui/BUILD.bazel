@@ -27,7 +27,10 @@ go_library(
         "main.go",
         "templ_render.go",
     ],
-    embedsrcs = ["themes.css"],
+    embedsrcs = [
+        "favicon.ico",
+        "themes.css",
+    ],
     importpath = "github.com/whale-net/everything/tools/app_registry/ui",
     visibility = ["//visibility:private"],
     deps = [

@@ -93,10 +93,32 @@ func renderWithLayout(w http.ResponseWriter, contentTemplate string, contentData
 }
 ```
 
+### Favicon Support
+
+By default, the layout includes `<link rel="icon" href="/favicon.ico">`. You can override the favicon URL via `FaviconURL`:
+
+```go
+data := htmxbase.LayoutData{
+    Title:      "My Page",
+    FaviconURL: "/static/custom-favicon.svg",
+    Content:    "<h1>Hello World</h1>",
+}
+```
+
+To serve an embedded favicon, use `FaviconHandler`:
+
+```go
+//go:embed favicon.ico
+var faviconIco []byte
+
+mux.HandleFunc("/favicon.ico", htmxbase.FaviconHandler(faviconIco))
+```
+
 ## LayoutData Fields
 
 - **Title** (string): The page title
 - **TitleSuffix** (string, optional): Appended to title with " - " separator
+- **FaviconURL** (string, optional): Favicon URL (defaults to `/favicon.ico` if omitted)
 - **CustomCSS** (template.CSS, optional): Custom CSS to inject in head
 - **CustomHead** (template.HTML, optional): Additional HTML for the head section
 - **Content** (template.HTML): The main page content
@@ -109,3 +131,4 @@ func renderWithLayout(w http.ResponseWriter, contentTemplate string, contentData
 - **Alpine.js**: https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js
 
 Both are loaded from reliable CDNs with integrity checks handled by the CDN providers.
+
