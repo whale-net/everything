@@ -142,6 +142,7 @@ jobs:
       if: always()
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
+        files: bazel-out/_coverage/_coverage_report.dat
         fail_ci_if_error: false
         flags: unittests
 
@@ -259,6 +260,7 @@ jobs:
       if: always()
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
+        files: bazel-out/_coverage/_coverage_report.dat
         fail_ci_if_error: false
         flags: integration
 
