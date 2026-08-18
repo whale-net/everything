@@ -629,18 +629,40 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 
 			// If not matching current version, check previous tag for no-op rebuild
 			if !digestUnchanged && prevTag != "" {
+				// Strip the "<chart tag prefix>." prefix to recover the full
+				// version (e.g. "v0.1.0"), mirroring the prefix patterns
+				// getPreviousChartTag matched the tag against. A naive
+				// last-dot split here would truncate a dotted semver like
+				// "v0.1.0" down to just "0" and break parseSemverTriple below.
 				prevVersion := prevTag
-				if idx := strings.LastIndex(prevTag, "."); idx != -1 {
-					prevVersion = prevTag[idx+1:]
+				prevPrefixes := []string{chart.Name + "."}
+				if !strings.HasPrefix(chart.Name, "helm-") {
+					prevPrefixes = append(prevPrefixes, "helm-"+chart.Name+".")
+				}
+				for _, pfx := range prevPrefixes {
+					if strings.HasPrefix(prevTag, pfx) {
+						prevVersion = strings.TrimPrefix(prevTag, pfx)
+						break
+					}
 				}
 				prevData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, prevVersion)
 				if err == nil && len(prevData) > 0 {
 					if chartArchivesContentEqual(chartBytes, prevData) {
-						digestUnchanged = true
-						effectiveVersion = prevVersion
-						effectiveTag = prevTag
-						fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
-							chart.Name, ver, prevTag, prevTag)
+						prevMaj, prevMin, _, prevOK := parseSemverTriple(prevVersion)
+						newMaj, newMin, _, newOK := parseSemverTriple(ver)
+						if prevOK && newOK && prevMaj == newMaj && prevMin == newMin {
+							// Same major.minor: patch-level retry with unchanged content is a no-op rebuild.
+							digestUnchanged = true
+							effectiveVersion = prevVersion
+							effectiveTag = prevTag
+							fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
+								chart.Name, ver, prevTag, prevTag)
+						} else {
+							// Major or minor bump: allow recording and tagging to establish new version baseline,
+							// even though the packaged content happens to match the previous version's.
+							fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same packaged content as %s. Registering new version baseline %s with shared digest.\n",
+								chart.Name, ver, prevTag, ver)
+						}
 					}
 				}
 			}

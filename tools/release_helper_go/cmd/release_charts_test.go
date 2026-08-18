@@ -998,3 +998,137 @@ func TestExecuteReleaseCharts_RealContentChangeStillAdvancesVersion(t *testing.T
 		t.Errorf("expected exactly 1 upload at the advanced version, got %d", uploader.uploadCalls)
 	}
 }
+
+// TestExecuteReleaseCharts_MinorBumpWithSharedDigestNotCollapsed guards
+// against a specific regression on top of #814: the "no-op rebuild against
+// previous tag" check (release_charts.go's prevTag block, just below the
+// orphan-collision loop) must not silently collapse an explicit minor bump
+// back onto the previous (lower-minor) version just because the freshly
+// packaged chart happens to produce identical content. Before this fix, the
+// check only compared digests -- an intentional `IncrementMinor` release
+// whose rendered chart content is unchanged from the prior minor release
+// would be discarded entirely, reusing the old version and never
+// tagging/publishing/recording the new one. This mirrors the equivalent
+// major/minor gate already present in release_app.go for images and
+// binaries (see parseSemverTriple usage there).
+func TestExecuteReleaseCharts_MinorBumpWithSharedDigestNotCollapsed(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	artClient := NewFakeArtifactRegistryClient()
+
+	files := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.0\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.0\n",
+	}
+	order := []string{"demo-hello-fastapi/Chart.yaml", "demo-hello-fastapi/values.yaml"}
+	sharedArchive := buildTestChartArchive(t, files, order, time.Unix(0, 0), time.Unix(0, 0))
+
+	packager := &fakeHelmPackager{content: sharedArchive}
+	uploader := &versionedFakeUploader{data: map[string][]byte{
+		// Fixture's previous chart tag is helm-demo-hello-fastapi.v0.1.0.
+		// Nothing exists yet at the new minor candidate (v0.2.0) -- only the
+		// packaged content, not the version, happens to be unchanged.
+		"v0.1.0": sharedArchive,
+	}}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:               "helm-demo-hello-fastapi",
+		IncrementMinor:       true,
+		BuildID:              "build-999",
+		ChartRepoURL:         "https://charts.whalenet.dev",
+		IdempotencyKeyPrefix: "run-42-5",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		Packager:             packager,
+		Uploader:             uploader,
+		WorkspaceRoot:        workspaceRoot,
+		ArtifactClient:       artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+
+	c := res.Charts[0]
+	// Must NOT collapse back to v0.1.0 -- the explicit minor bump has to be
+	// recorded and tagged as v0.2.0, even though its content digest matches
+	// the previous minor release.
+	if c.EffectiveVersion != "v0.2.0" {
+		t.Errorf("expected explicit minor bump to be preserved as 'v0.2.0', got %q (collapsed back to previous version)", c.EffectiveVersion)
+	}
+	if !c.Published {
+		t.Errorf("expected Published true -- a major/minor bump with a shared digest still establishes a new version baseline, got false")
+	}
+	if uploader.uploadCalls != 1 {
+		t.Errorf("expected exactly 1 upload for the new minor version, got %d", uploader.uploadCalls)
+	}
+	if len(uploader.uploadedVer) != 1 || !strings.Contains(uploader.uploadedVer[0], "v0.2.0") {
+		t.Errorf("expected upload at v0.2.0, got %v", uploader.uploadedVer)
+	}
+}
+
+// TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion locks in
+// the legitimate no-op case the major/minor gate above must not break: a
+// same-minor patch-level retry (e.g. re-running release-charts after a
+// transient failure, with no explicit version bump requested) whose
+// repackaged content is unchanged from the immediately previous published
+// version must still be recognized as a no-op and reuse that previous
+// version, rather than tagging/publishing a new one.
+func TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	artClient := NewFakeArtifactRegistryClient()
+
+	files := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.0\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.0\n",
+	}
+	order := []string{"demo-hello-fastapi/Chart.yaml", "demo-hello-fastapi/values.yaml"}
+	sharedArchive := buildTestChartArchive(t, files, order, time.Unix(0, 0), time.Unix(0, 0))
+
+	packager := &fakeHelmPackager{content: sharedArchive}
+	uploader := &versionedFakeUploader{data: map[string][]byte{
+		// Fixture's previous chart tag is helm-demo-hello-fastapi.v0.1.0.
+		// Nothing exists yet at the freshly computed patch candidate
+		// (v0.1.1) -- this is a same-minor retry, not a real republish.
+		"v0.1.0": sharedArchive,
+	}}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:               "helm-demo-hello-fastapi",
+		IncrementPatch:       true,
+		BuildID:              "build-999",
+		ChartRepoURL:         "https://charts.whalenet.dev",
+		IdempotencyKeyPrefix: "run-42-6",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		Packager:             packager,
+		Uploader:             uploader,
+		WorkspaceRoot:        workspaceRoot,
+		ArtifactClient:       artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+
+	c := res.Charts[0]
+	if !c.DigestUnchanged {
+		t.Errorf("expected DigestUnchanged true for same-minor no-op retry, got false")
+	}
+	if c.EffectiveVersion != "v0.1.0" {
+		t.Errorf("expected same-minor retry to reuse previous version 'v0.1.0', got %q", c.EffectiveVersion)
+	}
+	if c.Published {
+		t.Errorf("expected Published false for no-op retry, got true")
+	}
+	if uploader.uploadCalls != 0 {
+		t.Errorf("expected 0 uploads for no-op retry, got %d", uploader.uploadCalls)
+	}
+}
