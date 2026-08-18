@@ -26,17 +26,17 @@ if [ -z "$HELPER_VER" ] || [ -z "$REGISTRY_VER" ]; then
     echo "FAIL: Could not parse versions from $VERSION_FILE"
     exit 1
 fi
-if [ "$HELPER_VER" != "v0.2.2" ] || [ "$REGISTRY_VER" != "v0.2.2" ]; then
-    echo "FAIL: Expected v0.2.2, got helper=$HELPER_VER, registry=$REGISTRY_VER"
+if [ "$HELPER_VER" != "v0.3.0" ] || [ "$REGISTRY_VER" != "v0.3.0" ]; then
+    echo "FAIL: Expected v0.3.0, got helper=$HELPER_VER, registry=$REGISTRY_VER"
     exit 1
 fi
 echo "Parsed release_helper_go version: $HELPER_VER"
 echo "Parsed app_registry_cli version: $REGISTRY_VER"
 
 # Test various quoting and whitespace styles to ensure digits are preserved
-for sample in "v0.2.2" "\"v0.2.2\"" "'v0.2.2'" "  v0.2.2  "; do
+for sample in "v0.3.0" "\"v0.3.0\"" "'v0.3.0'" "  v0.3.0  "; do
     parsed=$(echo "$sample" | sed -E "s/['\"[:space:]]//g")
-    if [ "$parsed" != "v0.2.2" ]; then
+    if [ "$parsed" != "v0.3.0" ]; then
         echo "FAIL: Version parsing corrupted $sample -> $parsed"
         exit 1
     fi
