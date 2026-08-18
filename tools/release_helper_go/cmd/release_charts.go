@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -18,6 +20,72 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/helm"
 )
+
+// chartArchiveContentDigest computes a digest over the canonical, decoded
+// contents of a packaged chart .tgz archive (sorted file path + bytes),
+// rather than the raw compressed tarball bytes. `helm package` output is not
+// byte-reproducible across separate invocations of identical chart source --
+// gzip header timestamps and tar entry ordering/mtimes are non-deterministic
+// even with SOURCE_DATE_EPOCH set -- so comparing raw tarball digests
+// misclassifies every retry of truly-unchanged content as a real content
+// change, minting an orphaned ChartMuseum version each time. See issue #814.
+// Returns an error if data is not a valid gzip+tar archive.
+func chartArchiveContentDigest(data []byte) (string, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("gzip: %w", err)
+	}
+	defer gz.Close()
+
+	type fileEntry struct {
+		name string
+		data []byte
+	}
+	var entries []fileEntry
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("tar: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			return "", fmt.Errorf("tar read %s: %w", hdr.Name, err)
+		}
+		entries = append(entries, fileEntry{name: hdr.Name, data: content})
+	}
+
+	sort.Slice(entries, func(i, j int) bool { return entries[i].name < entries[j].name })
+
+	h := sha256.New()
+	for _, e := range entries {
+		fmt.Fprintf(h, "%s\x00%d\x00", e.name, len(e.data))
+		h.Write(e.data)
+	}
+	return fmt.Sprintf("sha256:%x", h.Sum(nil)), nil
+}
+
+// chartArchivesContentEqual reports whether two packaged chart archives are
+// semantically identical -- same file paths and file contents once decoded
+// -- rather than comparing raw tarball bytes, which differ across
+// `helm package` invocations even for unchanged chart source (see
+// chartArchiveContentDigest). Falls back to raw-byte equality if either
+// input can't be parsed as gzip+tar, preserving prior behavior for
+// non-chart-archive inputs (e.g. test fixtures).
+func chartArchivesContentEqual(a, b []byte) bool {
+	digestA, errA := chartArchiveContentDigest(a)
+	digestB, errB := chartArchiveContentDigest(b)
+	if errA == nil && errB == nil {
+		return digestA == digestB
+	}
+	return bytes.Equal(a, b)
+}
 
 // HelmPackager abstracts packaging a Helm chart for testing.
 type HelmPackager interface {
@@ -509,10 +577,9 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			// First check if this exact version already exists on ChartMuseum (e.g. from a previous failed run)
 			existingData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, ver)
 			if err == nil && len(existingData) > 0 {
-				existingDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(existingData))
-				if chartDigest == existingDigest {
+				if chartArchivesContentEqual(chartBytes, existingData) {
 					digestUnchanged = true
-					fmt.Printf("::notice title=Chart package already published (%s)::%s is already present on ChartMuseum with identical digest (%s). Skipping re-upload.\n",
+					fmt.Printf("::notice title=Chart package already published (%s)::%s is already present on ChartMuseum with identical content (%s). Skipping re-upload.\n",
 						chart.Name, ver, chartDigest)
 				} else if p.Version == "" {
 					// Different content already exists at `ver` in ChartMuseum (e.g. orphaned upload).
@@ -524,12 +591,12 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 					// `ver` (the FetchChart above returns no data), this branch never
 					// runs and `ver` -- freshly recomputed from git tags by
 					// autoIncrementHelmVersion, which only sees a tag once a run has
-					// actually succeeded -- is reused as-is. The residual version gaps
-					// this collision check can still produce (a same-content retry
-					// whose repackaged tarball digest doesn't match byte-for-byte due to
-					// helm package's non-deterministic output) are expected and
-					// documented rather than fixed here -- see docs/HELM_RELEASE.md
-					// "Known Limitations" and GitHub issue #814.
+					// actually succeeded -- is reused as-is. Content is compared
+					// canonically (chartArchivesContentEqual), not by raw tarball
+					// digest, so a same-content retry whose repackaged tarball differs
+					// only in non-deterministic `helm package` metadata (gzip
+					// timestamps, tar entry ordering) is recognized as a no-op above
+					// instead of reaching this advance loop -- see issue #814.
 					for {
 						nextVer, incErr := incrementVersion(ver, "patch")
 						if incErr != nil {
@@ -546,6 +613,7 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 							if pkgErr == nil {
 								chartPath = newChartPath
 								if newBytes, readErr := os.ReadFile(chartPath); readErr == nil {
+									chartBytes = newBytes
 									hasher := sha256.New()
 									hasher.Write(newBytes)
 									chartDigest = fmt.Sprintf("sha256:%x", hasher.Sum(nil))
@@ -561,19 +629,40 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 
 			// If not matching current version, check previous tag for no-op rebuild
 			if !digestUnchanged && prevTag != "" {
+				// Strip the "<chart tag prefix>." prefix to recover the full
+				// version (e.g. "v0.1.0"), mirroring the prefix patterns
+				// getPreviousChartTag matched the tag against. A naive
+				// last-dot split here would truncate a dotted semver like
+				// "v0.1.0" down to just "0" and break parseSemverTriple below.
 				prevVersion := prevTag
-				if idx := strings.LastIndex(prevTag, "."); idx != -1 {
-					prevVersion = prevTag[idx+1:]
+				prevPrefixes := []string{chart.Name + "."}
+				if !strings.HasPrefix(chart.Name, "helm-") {
+					prevPrefixes = append(prevPrefixes, "helm-"+chart.Name+".")
+				}
+				for _, pfx := range prevPrefixes {
+					if strings.HasPrefix(prevTag, pfx) {
+						prevVersion = strings.TrimPrefix(prevTag, pfx)
+						break
+					}
 				}
 				prevData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, prevVersion)
 				if err == nil && len(prevData) > 0 {
-					prevDigest := fmt.Sprintf("sha256:%x", sha256.Sum256(prevData))
-					if chartDigest == prevDigest {
-						digestUnchanged = true
-						effectiveVersion = prevVersion
-						effectiveTag = prevTag
-						fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
-							chart.Name, ver, prevTag, prevTag)
+					if chartArchivesContentEqual(chartBytes, prevData) {
+						prevMaj, prevMin, _, prevOK := parseSemverTriple(prevVersion)
+						newMaj, newMin, _, newOK := parseSemverTriple(ver)
+						if prevOK && newOK && prevMaj == newMaj && prevMin == newMin {
+							// Same major.minor: patch-level retry with unchanged content is a no-op rebuild.
+							digestUnchanged = true
+							effectiveVersion = prevVersion
+							effectiveTag = prevTag
+							fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
+								chart.Name, ver, prevTag, prevTag)
+						} else {
+							// Major or minor bump: allow recording and tagging to establish new version baseline,
+							// even though the packaged content happens to match the previous version's.
+							fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same packaged content as %s. Registering new version baseline %s with shared digest.\n",
+								chart.Name, ver, prevTag, ver)
+						}
 					}
 				}
 			}

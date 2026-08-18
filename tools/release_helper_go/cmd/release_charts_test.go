@@ -1,21 +1,87 @@
 package cmd
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc"
 )
+
+// buildTestChartArchive packages files into a gzip+tar archive, writing
+// entries in the given order with the given timestamps -- letting tests
+// synthesize two archives with identical decoded content but different raw
+// bytes, mimicking helm package's non-deterministic output (issue #814).
+func buildTestChartArchive(t *testing.T, files map[string]string, order []string, gzipModTime, tarModTime time.Time) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		t.Fatalf("gzip writer: %v", err)
+	}
+	gz.ModTime = gzipModTime
+	tw := tar.NewWriter(gz)
+	for _, name := range order {
+		content := files[name]
+		hdr := &tar.Header{
+			Name:    name,
+			Mode:    0644,
+			Size:    int64(len(content)),
+			ModTime: tarModTime,
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("write tar header: %v", err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("write tar content: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// versionedFakeUploader is a ChartUploader whose FetchChart response varies
+// by requested version, needed for tests that exercise the orphan-collision
+// advance loop (which probes multiple candidate versions in sequence).
+type versionedFakeUploader struct {
+	data        map[string][]byte
+	uploadCalls int
+	uploadedVer []string
+}
+
+func (u *versionedFakeUploader) UploadChart(ctx context.Context, repoURL, username, password, chartPath string) error {
+	u.uploadCalls++
+	base := filepath.Base(chartPath)
+	u.uploadedVer = append(u.uploadedVer, base)
+	return nil
+}
+
+func (u *versionedFakeUploader) FetchChart(ctx context.Context, repoURL, username, password, publishedName, version string) ([]byte, error) {
+	data, ok := u.data[version]
+	if !ok {
+		return nil, fmt.Errorf("404 not found")
+	}
+	return data, nil
+}
 
 type fakeHelmPackager struct {
 	packagedPath string
 	packageErr   error
+	content      []byte // when set, written verbatim instead of the literal fake bytes
 	calls        int
 }
 
@@ -27,10 +93,14 @@ func (f *fakeHelmPackager) Package(chartDir, chartName, version, outDir string, 
 	if f.packagedPath != "" {
 		return f.packagedPath, nil
 	}
+	body := f.content
+	if body == nil {
+		body = []byte("fake-chart-bytes-v1")
+	}
 	// Create dummy packaged file in outDir
 	published := strings.TrimPrefix(chartName, "helm-")
 	path := filepath.Join(outDir, fmt.Sprintf("%s-%s.tgz", published, version))
-	if err := os.WriteFile(path, []byte("fake-chart-bytes-v1"), 0644); err != nil {
+	if err := os.WriteFile(path, body, 0644); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -744,5 +814,321 @@ func TestExecuteReleaseCharts_RetryAfterFailureReusesCandidateVersion(t *testing
 	}
 	if uploader.uploadCalls != 1 {
 		t.Errorf("expected exactly 1 upload at the reused candidate version, got %d", uploader.uploadCalls)
+	}
+}
+
+// TestChartArchivesContentEqual_IdenticalContentDifferentBytes reproduces
+// the exact #814 bug at the unit level: two packaging runs of the same
+// unchanged chart source produce archives with identical decoded content
+// but different raw bytes (different tar entry order, different gzip/tar
+// timestamps -- exactly what non-deterministic `helm package` output looks
+// like). chartArchivesContentEqual must treat them as equal.
+func TestChartArchivesContentEqual_IdenticalContentDifferentBytes(t *testing.T) {
+	files := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.1\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.0\n",
+	}
+
+	archiveA := buildTestChartArchive(t, files,
+		[]string{"demo-hello-fastapi/Chart.yaml", "demo-hello-fastapi/values.yaml"},
+		time.Unix(0, 0), time.Unix(0, 0))
+	archiveB := buildTestChartArchive(t, files,
+		[]string{"demo-hello-fastapi/values.yaml", "demo-hello-fastapi/Chart.yaml"}, // reversed order
+		time.Now(), time.Now()) // different timestamps
+
+	if bytes.Equal(archiveA, archiveB) {
+		t.Fatalf("test setup invalid: archives must differ at the raw byte level")
+	}
+	if !chartArchivesContentEqual(archiveA, archiveB) {
+		t.Errorf("expected archives with identical decoded content but different raw bytes to compare equal")
+	}
+}
+
+// TestChartArchivesContentEqual_RealContentChangeDetected confirms the
+// widened comparison doesn't become a rubber stamp: an archive with a
+// genuinely modified file must still be reported as different.
+func TestChartArchivesContentEqual_RealContentChangeDetected(t *testing.T) {
+	order := []string{"demo-hello-fastapi/Chart.yaml", "demo-hello-fastapi/values.yaml"}
+	base := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.1\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.0\n",
+	}
+	changed := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  base["demo-hello-fastapi/Chart.yaml"],
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.1\n", // real change
+	}
+
+	archiveA := buildTestChartArchive(t, base, order, time.Unix(0, 0), time.Unix(0, 0))
+	archiveB := buildTestChartArchive(t, changed, order, time.Unix(0, 0), time.Unix(0, 0))
+
+	if chartArchivesContentEqual(archiveA, archiveB) {
+		t.Errorf("expected archives with genuinely different file content to compare unequal")
+	}
+}
+
+// TestExecuteReleaseCharts_NonDeterministicRepackageStillReusesVersion is the
+// end-to-end reproduction of #814: ChartMuseum already holds a chart at the
+// candidate version, packaged in a prior (failed/retried) run. The freshly
+// repackaged chart has identical decoded content but different raw tarball
+// bytes (as real `helm package` invocations produce). The release must
+// recognize this as a no-op and must NOT advance to a new orphaned version.
+func TestExecuteReleaseCharts_NonDeterministicRepackageStillReusesVersion(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	artClient := NewFakeArtifactRegistryClient()
+
+	files := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.1\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.0\n",
+	}
+	// What ChartMuseum already has, published by an earlier run of this
+	// exact chart content.
+	publishedArchive := buildTestChartArchive(t, files,
+		[]string{"demo-hello-fastapi/Chart.yaml", "demo-hello-fastapi/values.yaml"},
+		time.Unix(0, 0), time.Unix(0, 0))
+	// What this run's fresh `helm package` invocation produces for the same,
+	// unchanged chart source: identical content, different bytes.
+	repackagedArchive := buildTestChartArchive(t, files,
+		[]string{"demo-hello-fastapi/values.yaml", "demo-hello-fastapi/Chart.yaml"},
+		time.Now(), time.Now())
+
+	packager := &fakeHelmPackager{content: repackagedArchive}
+	uploader := &versionedFakeUploader{data: map[string][]byte{
+		"v0.1.1": publishedArchive,
+	}}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:               "helm-demo-hello-fastapi",
+		IncrementPatch:       true,
+		BuildID:              "build-999",
+		ChartRepoURL:         "https://charts.whalenet.dev",
+		IdempotencyKeyPrefix: "run-42-3",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		Packager:             packager,
+		Uploader:             uploader,
+		WorkspaceRoot:        workspaceRoot,
+		ArtifactClient:       artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+
+	c := res.Charts[0]
+	if c.EffectiveVersion != "v0.1.1" {
+		t.Errorf("expected version to be reused as 'v0.1.1' (no orphan advance from non-deterministic repackage), got %q", c.EffectiveVersion)
+	}
+	if !c.DigestUnchanged {
+		t.Errorf("expected DigestUnchanged true for semantically-identical repackage, got false")
+	}
+	if c.Published {
+		t.Errorf("expected Published false for no-op repackage, got true")
+	}
+	if uploader.uploadCalls != 0 {
+		t.Errorf("expected no upload for a no-op repackage, got %d", uploader.uploadCalls)
+	}
+}
+
+// TestExecuteReleaseCharts_RealContentChangeStillAdvancesVersion confirms
+// the widened no-op detection doesn't break legitimate collision handling:
+// when ChartMuseum holds genuinely different content at the candidate
+// version (a real orphaned upload, not just non-deterministic repackaging),
+// the release must still advance past it and publish at a new version.
+func TestExecuteReleaseCharts_RealContentChangeStillAdvancesVersion(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	artClient := NewFakeArtifactRegistryClient()
+
+	order := []string{"demo-hello-fastapi/Chart.yaml", "demo-hello-fastapi/values.yaml"}
+	orphaned := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.1\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v0.9.0\n", // different real content
+	}
+	fresh := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.1\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.0\n",
+	}
+
+	orphanedArchive := buildTestChartArchive(t, orphaned, order, time.Unix(0, 0), time.Unix(0, 0))
+	freshArchive := buildTestChartArchive(t, fresh, order, time.Unix(0, 0), time.Unix(0, 0))
+
+	packager := &fakeHelmPackager{content: freshArchive}
+	uploader := &versionedFakeUploader{data: map[string][]byte{
+		// v0.1.1 (the natural patch-bump candidate) is occupied by
+		// genuinely different, orphaned content; v0.1.2 is free.
+		"v0.1.1": orphanedArchive,
+	}}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:               "helm-demo-hello-fastapi",
+		IncrementPatch:       true,
+		BuildID:              "build-999",
+		ChartRepoURL:         "https://charts.whalenet.dev",
+		IdempotencyKeyPrefix: "run-42-4",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		Packager:             packager,
+		Uploader:             uploader,
+		WorkspaceRoot:        workspaceRoot,
+		ArtifactClient:       artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+
+	c := res.Charts[0]
+	if c.EffectiveVersion != "v0.1.2" {
+		t.Errorf("expected version to advance to 'v0.1.2' for genuine content collision, got %q", c.EffectiveVersion)
+	}
+	if c.DigestUnchanged {
+		t.Errorf("expected DigestUnchanged false for genuine content collision, got true")
+	}
+	if !c.Published {
+		t.Errorf("expected Published true after advancing past real collision, got false")
+	}
+	if uploader.uploadCalls != 1 {
+		t.Errorf("expected exactly 1 upload at the advanced version, got %d", uploader.uploadCalls)
+	}
+}
+
+// TestExecuteReleaseCharts_MinorBumpWithSharedDigestNotCollapsed guards
+// against a specific regression on top of #814: the "no-op rebuild against
+// previous tag" check (release_charts.go's prevTag block, just below the
+// orphan-collision loop) must not silently collapse an explicit minor bump
+// back onto the previous (lower-minor) version just because the freshly
+// packaged chart happens to produce identical content. Before this fix, the
+// check only compared digests -- an intentional `IncrementMinor` release
+// whose rendered chart content is unchanged from the prior minor release
+// would be discarded entirely, reusing the old version and never
+// tagging/publishing/recording the new one. This mirrors the equivalent
+// major/minor gate already present in release_app.go for images and
+// binaries (see parseSemverTriple usage there).
+func TestExecuteReleaseCharts_MinorBumpWithSharedDigestNotCollapsed(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	artClient := NewFakeArtifactRegistryClient()
+
+	files := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.0\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.0\n",
+	}
+	order := []string{"demo-hello-fastapi/Chart.yaml", "demo-hello-fastapi/values.yaml"}
+	sharedArchive := buildTestChartArchive(t, files, order, time.Unix(0, 0), time.Unix(0, 0))
+
+	packager := &fakeHelmPackager{content: sharedArchive}
+	uploader := &versionedFakeUploader{data: map[string][]byte{
+		// Fixture's previous chart tag is helm-demo-hello-fastapi.v0.1.0.
+		// Nothing exists yet at the new minor candidate (v0.2.0) -- only the
+		// packaged content, not the version, happens to be unchanged.
+		"v0.1.0": sharedArchive,
+	}}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:               "helm-demo-hello-fastapi",
+		IncrementMinor:       true,
+		BuildID:              "build-999",
+		ChartRepoURL:         "https://charts.whalenet.dev",
+		IdempotencyKeyPrefix: "run-42-5",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		Packager:             packager,
+		Uploader:             uploader,
+		WorkspaceRoot:        workspaceRoot,
+		ArtifactClient:       artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+
+	c := res.Charts[0]
+	// Must NOT collapse back to v0.1.0 -- the explicit minor bump has to be
+	// recorded and tagged as v0.2.0, even though its content digest matches
+	// the previous minor release.
+	if c.EffectiveVersion != "v0.2.0" {
+		t.Errorf("expected explicit minor bump to be preserved as 'v0.2.0', got %q (collapsed back to previous version)", c.EffectiveVersion)
+	}
+	if !c.Published {
+		t.Errorf("expected Published true -- a major/minor bump with a shared digest still establishes a new version baseline, got false")
+	}
+	if uploader.uploadCalls != 1 {
+		t.Errorf("expected exactly 1 upload for the new minor version, got %d", uploader.uploadCalls)
+	}
+	if len(uploader.uploadedVer) != 1 || !strings.Contains(uploader.uploadedVer[0], "v0.2.0") {
+		t.Errorf("expected upload at v0.2.0, got %v", uploader.uploadedVer)
+	}
+}
+
+// TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion locks in
+// the legitimate no-op case the major/minor gate above must not break: a
+// same-minor patch-level retry (e.g. re-running release-charts after a
+// transient failure, with no explicit version bump requested) whose
+// repackaged content is unchanged from the immediately previous published
+// version must still be recognized as a no-op and reuse that previous
+// version, rather than tagging/publishing a new one.
+func TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	artClient := NewFakeArtifactRegistryClient()
+
+	files := map[string]string{
+		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.0\n",
+		"demo-hello-fastapi/values.yaml": "apps:\n  demo-hello-fastapi:\n    imageTag: v1.0.0\n",
+	}
+	order := []string{"demo-hello-fastapi/Chart.yaml", "demo-hello-fastapi/values.yaml"}
+	sharedArchive := buildTestChartArchive(t, files, order, time.Unix(0, 0), time.Unix(0, 0))
+
+	packager := &fakeHelmPackager{content: sharedArchive}
+	uploader := &versionedFakeUploader{data: map[string][]byte{
+		// Fixture's previous chart tag is helm-demo-hello-fastapi.v0.1.0.
+		// Nothing exists yet at the freshly computed patch candidate
+		// (v0.1.1) -- this is a same-minor retry, not a real republish.
+		"v0.1.0": sharedArchive,
+	}}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:               "helm-demo-hello-fastapi",
+		IncrementPatch:       true,
+		BuildID:              "build-999",
+		ChartRepoURL:         "https://charts.whalenet.dev",
+		IdempotencyKeyPrefix: "run-42-6",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		Packager:             packager,
+		Uploader:             uploader,
+		WorkspaceRoot:        workspaceRoot,
+		ArtifactClient:       artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+
+	c := res.Charts[0]
+	if !c.DigestUnchanged {
+		t.Errorf("expected DigestUnchanged true for same-minor no-op retry, got false")
+	}
+	if c.EffectiveVersion != "v0.1.0" {
+		t.Errorf("expected same-minor retry to reuse previous version 'v0.1.0', got %q", c.EffectiveVersion)
+	}
+	if c.Published {
+		t.Errorf("expected Published false for no-op retry, got true")
+	}
+	if uploader.uploadCalls != 0 {
+		t.Errorf("expected 0 uploads for no-op retry, got %d", uploader.uploadCalls)
 	}
 }
