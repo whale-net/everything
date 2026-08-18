@@ -240,6 +240,15 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 		}
 	}
 
+	isAllocate := false
+	if artifactClient != nil && !p.SkipRegistry {
+		var aerr error
+		isAllocate, aerr = isDomainAtAllocateStage(ctx, artifactClient, p.Domain)
+		if aerr != nil {
+			return nil, aerr
+		}
+	}
+
 	kind := determineArtifactKind(*matchedApp)
 	isImageApp := kind == pb.ArtifactKind_ARTIFACT_KIND_IMAGE
 
@@ -290,6 +299,9 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 			}
 			_, err := artifactClient.BeginPublish(ctx, beginReq)
 			if err != nil {
+				if isAllocate {
+					return nil, fmt.Errorf("App Registry BeginPublish failed for %s (domain %q at stage 'allocate'): %w", fullName, p.Domain, err)
+				}
 				fmt.Printf("::warning title=App Registry BeginPublish failed::%v\n", err)
 			} else {
 				beginPublishSucceeded = true
@@ -406,7 +418,6 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 					IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-record", idempotencyPrefix, p.Domain, p.App),
 				}
 				if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
-					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
 					// Clean up the "publishing" row BeginPublish created
 					// above -- otherwise it's stuck there forever with no
 					// digest and no automatic retry ever revisiting it.
@@ -420,6 +431,10 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 						}
 						_, _ = artifactClient.FailPublish(ctx, failReq)
 					}
+					if isAllocate {
+						return nil, fmt.Errorf("App Registry RecordArtifact failed for %s (domain %q at stage 'allocate'): %w", fullName, p.Domain, err)
+					}
+					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
 				} else {
 					fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, binaryDigest)
 				}
@@ -454,6 +469,9 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 		}
 		_, err := artifactClient.BeginPublish(ctx, beginReq)
 		if err != nil {
+			if isAllocate {
+				return nil, fmt.Errorf("App Registry BeginPublish failed for %s (domain %q at stage 'allocate'): %w", fullName, p.Domain, err)
+			}
 			fmt.Printf("::warning title=App Registry BeginPublish failed::%v\n", err)
 		} else {
 			beginPublishSucceeded = true
@@ -543,6 +561,9 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 
 		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
 			if newDigest == "" {
+				if isAllocate {
+					return nil, fmt.Errorf("could not resolve image digest for %s:%s (domain %q at stage 'allocate')", repoPath, p.Version, p.Domain)
+				}
 				fmt.Printf("::warning::Could not resolve digest for %s:%s; skipping App Registry recording\n", repoPath, p.Version)
 			} else {
 				recReq := &pb.RecordArtifactRequest{
@@ -556,7 +577,6 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 					IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-record", idempotencyPrefix, p.Domain, p.App),
 				}
 				if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
-					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
 					// Clean up the "publishing" row BeginPublish created
 					// above -- otherwise it's stuck there forever with no
 					// digest and no automatic retry ever revisiting it.
@@ -570,6 +590,10 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 						}
 						_, _ = artifactClient.FailPublish(ctx, failReq)
 					}
+					if isAllocate {
+						return nil, fmt.Errorf("App Registry RecordArtifact failed for %s (domain %q at stage 'allocate'): %w", fullName, p.Domain, err)
+					}
+					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
 				} else {
 					fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, newDigest)
 				}

@@ -830,3 +830,198 @@ func TestExecuteReleaseApp_NonImageRecordArtifactFailureCleansUpPublishing(t *te
 	}
 }
 
+// TestExecuteReleaseApp_AllocateStage_NonImageRecordArtifactFailureIsFatal proves
+// that for a domain at adoption stage "allocate" (issue #834), RecordArtifact
+// failures are fatal: FailPublish is called to clean up the publishing row, and
+// ExecuteReleaseApp returns a fatal error failing the release.
+func TestExecuteReleaseApp_AllocateStage_NonImageRecordArtifactFailureIsFatal(t *testing.T) {
+	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
+	apps := []fakeApp{
+		{
+			pkg:          "tools/app_registry/cli",
+			targetSuffix: "app_registry_cli_metadata",
+			name:         "app-registry",
+			domain:       "tools",
+			customJSON:   cliJSON,
+		},
+	}
+	fs, bazel := buildFakeInfra(apps)
+
+	allBazelCalls := append(bazel.calls,
+		fakeBazelCall{
+			argsContain: []string{"build"},
+			output:      "Built binary target",
+		},
+	)
+	bazelRunner := newFakeBazel(allBazelCalls...)
+
+	gitRunner := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "sha123456789"},
+		fakeGitCall{argsContain: []string{"tag", "--list", "tools-app-registry.v*"}, output: ""},
+		fakeGitCall{argsContain: []string{"rev-parse", "tools-app-registry.v0.2.3"}, err: fmt.Errorf("not found")},
+		fakeGitCall{argsContain: []string{"tag", "-a"}, output: ""},
+	)
+
+	dockerRunner := newFakeDocker()
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	fakeArtifactClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeArtifactClient.RecordArtifactFn = func(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error) {
+		return nil, fmt.Errorf("already exists: artifact tools-app-registry v0.2.3 already published")
+	}
+
+	_, err := ExecuteReleaseApp(ReleaseAppParams{
+		Domain:               "tools",
+		App:                  "app-registry",
+		Version:              "v0.2.3",
+		BuildID:              "build-101",
+		IdempotencyKeyPrefix: "run-1-1",
+		GitSHA:               "sha123456789",
+		CreateGitTag:         true,
+		Bazel:                bazelRunner,
+		Git:                  gitRunner,
+		Docker:               dockerRunner,
+		FS:                   fs,
+		WorkspaceRoot:        fakeWorkspaceRoot,
+		ArtifactClient:       fakeArtifactClient,
+	})
+	if err == nil {
+		t.Fatal("expected fatal error for RecordArtifact failure on allocate-stage domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "RecordArtifact failed") {
+		t.Errorf("expected error message to mention RecordArtifact failed, got: %v", err)
+	}
+
+	if len(fakeArtifactClient.RecordArtifactCalls) != 1 {
+		t.Fatalf("expected 1 RecordArtifact call, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	}
+	if len(fakeArtifactClient.FailPublishCalls) != 1 {
+		t.Fatalf("expected 1 FailPublish call after RecordArtifact failure, got %d", len(fakeArtifactClient.FailPublishCalls))
+	}
+}
+
+// TestExecuteReleaseApp_AllocateStage_NonImageBeginPublishFailureIsFatal proves
+// that for a domain at adoption stage "allocate" (issue #834), BeginPublish
+// failure is fatal and aborts the release before building.
+func TestExecuteReleaseApp_AllocateStage_NonImageBeginPublishFailureIsFatal(t *testing.T) {
+	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
+	apps := []fakeApp{
+		{
+			pkg:          "tools/app_registry/cli",
+			targetSuffix: "app_registry_cli_metadata",
+			name:         "app-registry",
+			domain:       "tools",
+			customJSON:   cliJSON,
+		},
+	}
+	fs, bazel := buildFakeInfra(apps)
+	bazelRunner := newFakeBazel(bazel.calls...)
+	gitRunner := newFakeGit(fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "sha123456789"})
+	dockerRunner := newFakeDocker()
+
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	fakeArtifactClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeArtifactClient.BeginPublishFn = func(ctx context.Context, in *pb.BeginPublishRequest, opts ...grpc.CallOption) (*pb.BeginPublishResponse, error) {
+		return nil, fmt.Errorf("connection refused")
+	}
+
+	_, err := ExecuteReleaseApp(ReleaseAppParams{
+		Domain:               "tools",
+		App:                  "app-registry",
+		Version:              "v0.2.3",
+		BuildID:              "build-101",
+		IdempotencyKeyPrefix: "run-1-1",
+		GitSHA:               "sha123456789",
+		Bazel:                bazelRunner,
+		Git:                  gitRunner,
+		Docker:               dockerRunner,
+		FS:                   fs,
+		WorkspaceRoot:        fakeWorkspaceRoot,
+		ArtifactClient:       fakeArtifactClient,
+	})
+	if err == nil {
+		t.Fatal("expected fatal error for BeginPublish failure on allocate-stage domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "BeginPublish failed") {
+		t.Errorf("expected error message to mention BeginPublish failed, got: %v", err)
+	}
+}
+
+// TestExecuteReleaseApp_AllocateStage_ImageRecordArtifactFailureIsFatal proves
+// that for an image app in an allocate-stage domain, RecordArtifact failure
+// cleans up publishing row and returns a fatal error.
+func TestExecuteReleaseApp_AllocateStage_ImageRecordArtifactFailureIsFatal(t *testing.T) {
+	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
+
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	fakeArtifactClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeArtifactClient.RecordArtifactFn = func(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error) {
+		return nil, fmt.Errorf("database constraint violation")
+	}
+
+	_, err := ExecuteReleaseApp(ReleaseAppParams{
+		Domain:               "demo",
+		App:                  "hello-go",
+		Version:              "v1.0.0",
+		BuildID:              "build-101",
+		IdempotencyKeyPrefix: "run-1-1",
+		GitSHA:               "sha123456789",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		WorkspaceRoot:        ws,
+		ArtifactClient:       fakeArtifactClient,
+	})
+	if err == nil {
+		t.Fatal("expected fatal error on image RecordArtifact failure for allocate domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "RecordArtifact failed") {
+		t.Errorf("expected error message to mention RecordArtifact failed, got: %v", err)
+	}
+	if len(fakeArtifactClient.FailPublishCalls) != 1 {
+		t.Fatalf("expected 1 FailPublish call, got %d", len(fakeArtifactClient.FailPublishCalls))
+	}
+}
+
+// TestExecuteReleaseApp_AllocateStage_ImageBeginPublishFailureIsFatal proves
+// that for an image app in an allocate-stage domain, BeginPublish failure is fatal.
+func TestExecuteReleaseApp_AllocateStage_ImageBeginPublishFailureIsFatal(t *testing.T) {
+	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
+
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	fakeArtifactClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeArtifactClient.BeginPublishFn = func(ctx context.Context, in *pb.BeginPublishRequest, opts ...grpc.CallOption) (*pb.BeginPublishResponse, error) {
+		return nil, fmt.Errorf("registry network timeout")
+	}
+
+	_, err := ExecuteReleaseApp(ReleaseAppParams{
+		Domain:               "demo",
+		App:                  "hello-go",
+		Version:              "v1.0.0",
+		BuildID:              "build-101",
+		IdempotencyKeyPrefix: "run-1-1",
+		GitSHA:               "sha123456789",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		WorkspaceRoot:        ws,
+		ArtifactClient:       fakeArtifactClient,
+	})
+	if err == nil {
+		t.Fatal("expected fatal error on image BeginPublish failure for allocate domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "BeginPublish failed") {
+		t.Errorf("expected error message to mention BeginPublish failed, got: %v", err)
+	}
+}
+
+

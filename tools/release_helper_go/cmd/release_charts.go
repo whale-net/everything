@@ -688,6 +688,15 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			continue
 		}
 
+		isAllocate := false
+		if artifactClient != nil && !p.SkipRegistry {
+			var aerr error
+			isAllocate, aerr = isDomainAtAllocateStage(ctx, artifactClient, chart.Domain)
+			if aerr != nil {
+				return nil, aerr
+			}
+		}
+
 		// 7. BeginPublish (Heartbeat) in App Registry
 		beginPublishSucceeded := false
 		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
@@ -701,6 +710,9 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			}
 			_, err := artifactClient.BeginPublish(ctx, beginReq)
 			if err != nil {
+				if isAllocate {
+					return nil, fmt.Errorf("App Registry BeginPublish failed for chart %s (domain %q at stage 'allocate'): %w", publishedName, chart.Domain, err)
+				}
 				fmt.Printf("::warning title=App Registry BeginPublish failed::%v\n", err)
 			} else {
 				beginPublishSucceeded = true
@@ -747,7 +759,6 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 				IdempotencyKey: fmt.Sprintf("%s-%s-chart-record", idempotencyPrefix, publishedName),
 			}
 			if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
-				fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
 				if beginPublishSucceeded {
 					failReq := &pb.FailPublishRequest{
 						Kind:           pb.ArtifactKind_ARTIFACT_KIND_CHART,
@@ -758,6 +769,10 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 					}
 					_, _ = artifactClient.FailPublish(ctx, failReq)
 				}
+				if isAllocate {
+					return nil, fmt.Errorf("App Registry RecordArtifact failed for chart %s (domain %q at stage 'allocate'): %w", publishedName, chart.Domain, err)
+				}
+				fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
 			} else {
 				fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", publishedName, ver, chartDigest)
 			}

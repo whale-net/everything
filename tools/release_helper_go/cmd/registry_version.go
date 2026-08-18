@@ -69,3 +69,25 @@ func dialVersioningClient(ctx context.Context, injected pb.ArtifactRegistryClien
 	}
 	return c, closeConn, nil
 }
+
+// isDomainAtAllocateStage queries App Registry to determine if the given domain
+// is at adoption stage "allocate" (issue #834).
+//
+// When the registry client is nil (not opted in or skipped), it returns false, nil.
+// When a client is provided, it calls CheckChartHermeticity with chart_domain set
+// to domain. The server evaluates domain_adoption.stage for this domain:
+// if stage is "allocate", Enforced is true; otherwise Enforced is false.
+//
+// If the registry RPC itself fails, the error is returned so callers can fail
+// the release when the registry is unreachable or returns an error.
+func isDomainAtAllocateStage(ctx context.Context, client pb.ArtifactRegistryClient, domain string) (bool, error) {
+	if client == nil {
+		return false, nil
+	}
+	resp, err := client.CheckChartHermeticity(ctx, &pb.CheckChartHermeticityRequest{ChartDomain: domain})
+	if err != nil {
+		return false, fmt.Errorf("check adoption stage for domain %q: %w", domain, err)
+	}
+	return resp.Enforced, nil
+}
+
