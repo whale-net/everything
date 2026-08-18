@@ -54,8 +54,25 @@ func TestAllManifestsDecodeAgainstProto(t *testing.T) {
 			"run this target with `bazel run //tools/appmeta:manifest_contract_test` instead of `bazel test`: %v", err)
 	}
 
+	var (
+		discoveryUniversePackages = []string{
+			"//demo/...",
+			"//firmware/...",
+			"//friendly_computing_machine/...",
+			"//leaflab/...",
+			"//libs/...",
+			"//manman/...",
+			"//manmanv2/...",
+			"//tools/...",
+		}
+		discoveryPackagesPattern = strings.Join(discoveryUniversePackages, " + ")
+		discoveryUniverseScope   = "--universe_scope=" + strings.Join(discoveryUniversePackages, ",")
+	)
+
 	t.Run("app_metadata", func(t *testing.T) {
-		lines := discoverMetadata(t, bazelBin, workspaceRoot, "kind(app_metadata, //...)",
+		lines := discoverMetadata(t, bazelBin, workspaceRoot,
+			"kind(app_metadata, "+discoveryPackagesPattern+")",
+			discoveryUniverseScope,
 			"//tools/bazel:release.bzl%AppMetadataInfo")
 		for label, jsonPart := range lines {
 			if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(
@@ -65,7 +82,9 @@ func TestAllManifestsDecodeAgainstProto(t *testing.T) {
 		}
 	})
 	t.Run("helm_chart_metadata", func(t *testing.T) {
-		lines := discoverMetadata(t, bazelBin, workspaceRoot, "kind(helm_chart_metadata, //...)",
+		lines := discoverMetadata(t, bazelBin, workspaceRoot,
+			"kind(helm_chart_metadata, "+discoveryPackagesPattern+")",
+			discoveryUniverseScope,
 			"//tools/bazel:release.bzl%HelmChartMetadataInfo")
 		for label, jsonPart := range lines {
 			if err := (protojson.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(
@@ -79,10 +98,10 @@ func TestAllManifestsDecodeAgainstProto(t *testing.T) {
 // discoverMetadata mirrors ListAllApps/ListAllHelmCharts: a loading-phase
 // query lists target labels, then a single cquery scoped to those labels
 // reads the provider's metadata dict as JSON. Returns label -> raw JSON.
-func discoverMetadata(t *testing.T, bazelBin, workspaceRoot, queryExpr, providerExpr string) map[string]string {
+func discoverMetadata(t *testing.T, bazelBin, workspaceRoot, queryExpr, universeScope, providerExpr string) map[string]string {
 	t.Helper()
 
-	labelsOut := runBazel(t, bazelBin, workspaceRoot, "query", queryExpr, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
+	labelsOut := runBazel(t, bazelBin, workspaceRoot, "query", queryExpr, universeScope, "--noimplicit_deps", "--nodep_deps", "--output=label")
 	labels := splitNonEmptyLines(labelsOut)
 	if len(labels) == 0 {
 		t.Skip("no targets found for " + queryExpr)

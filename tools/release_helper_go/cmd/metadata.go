@@ -42,12 +42,31 @@ func determineArtifactKind(meta AppMetadata) pb.ArtifactKind {
 // pulling metadata from the AppMetadataInfo provider so no actions run.
 const appMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(providers(target)["//tools/bazel:release.bzl%AppMetadataInfo"].metadata)`
 
-// appMetadataQuery discovers every app_metadata target that is eligible for
-// release. `except attr(testonly, 1, //...)` excludes fixtures like
-// //tools/appmeta/testdata:fixture-app_metadata — testonly is how a fixture
-// opts out of release discovery, so this covers any future fixture too,
-// without hardcoding a domain name next to the "demo" exclusion below.
-const appMetadataQuery = "kind(app_metadata, //...) except attr(testonly, 1, //...)"
+// discoveryUniversePackages lists the top-level package patterns in the monorepo
+// containing releasable applications, libraries, firmware, and tooling.
+// Scoping --universe_scope and queries to these specific packages prevents Bazel
+// from evaluating //generated/... which would otherwise trigger eager external
+// repository downloads (e.g. @openapi_generator_cli jar from Maven Central).
+var discoveryUniversePackages = []string{
+	"//demo/...",
+	"//firmware/...",
+	"//friendly_computing_machine/...",
+	"//leaflab/...",
+	"//libs/...",
+	"//manman/...",
+	"//manmanv2/...",
+	"//tools/...",
+}
+
+var (
+	discoveryPackagesPattern = strings.Join(discoveryUniversePackages, " + ")
+	discoveryUniverseScope   = "--universe_scope=" + strings.Join(discoveryUniversePackages, ",")
+	// appMetadataQuery discovers every app_metadata target that is eligible for
+	// release. `except attr(testonly, 1, ...)` excludes fixtures like
+	// //tools/appmeta/testdata:fixture-app_metadata — testonly is how a fixture
+	// opts out of release discovery, so this covers any future fixture too.
+	appMetadataQuery = fmt.Sprintf("kind(app_metadata, %s) except attr(testonly, 1, %s)", discoveryPackagesPattern, discoveryPackagesPattern)
+)
 
 // ListAllApps discovers every releasable app_metadata target via a two-step
 // Bazel call:
@@ -60,7 +79,7 @@ const appMetadataQuery = "kind(app_metadata, //...) except attr(testonly, 1, //.
 //
 // No metadata JSON files are produced — analysis alone yields the data.
 func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, error) {
-	labelsOut, err := bazel.Run("query", appMetadataQuery, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
+	labelsOut, err := bazel.Run("query", appMetadataQuery, discoveryUniverseScope, "--noimplicit_deps", "--nodep_deps", "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query app_metadata: %w", err)
 	}

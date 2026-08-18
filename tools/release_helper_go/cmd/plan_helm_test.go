@@ -120,6 +120,27 @@ func TestListAllHelmChartsExcludesTestOnly(t *testing.T) {
 	}
 }
 
+func TestListAllHelmChartsUniverseScopeNarrowed(t *testing.T) {
+	bazel := newFakeBazel(
+		fakeBazelCall{
+			argsContain:    []string{"query", discoveryUniverseScope, "except attr(testonly, 1"},
+			argsNotContain: []string{"cquery", "//generated/..."},
+			output:         "//manmanv2:manmanv2_chart_chart_metadata",
+		},
+		fakeBazelCall{argsContain: []string{"cquery"}, output: "@@//manmanv2:manmanv2_chart_chart_metadata\t" +
+			`{"name":"manmanv2-control-services","domain":"manmanv2"}`},
+	)
+	fs := newFakeFS()
+
+	result, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("ListAllHelmCharts failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("unexpected result: %v", result)
+	}
+}
+
 func TestListAllHelmChartsSorted(t *testing.T) {
 	_, fs, bazel := makeTestHelmCharts()
 	result, err := ListAllHelmCharts(bazel, fs, fakeWorkspaceRoot)
