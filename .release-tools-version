@@ -1,4 +1,6 @@
 # Pinned release tooling versions for CI/workflow consumption.
-# Sourced by .github/actions/download-release-tools.
+# Sourced by .github/actions/download-release-tools when target_env is not specified.
+# When target_env is set, download-release-tools resolves tool versions directly
+# from App Registry environment promotion state instead of using these pinned constants.
 release_helper_go: v0.3.0
 app_registry_cli: v0.3.0

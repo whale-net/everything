@@ -74,6 +74,11 @@ on:
         description: 'Compute the resulting state without writing'
         type: boolean
         default: false
+      use_source_tools:
+        description: 'Build release tools from source instead of downloading pinned prebuilt binaries (safety valve)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   promote:
@@ -107,22 +112,24 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Download release tools
-      id: download_tools
-      uses: ./.github/actions/download-release-tools
-
     # Read from *this job's* Environment secrets (scoped by `environment:`
     # above), never from repository secrets. See DEPLOY.md "Where each
     # secret goes" -- each GitHub Environment holds the promoter client
     # secret matching whatever registry_environment its operators pass.
     - name: App Registry Auth
-      if: inputs.action == 'promote'
       uses: ./.github/actions/app-registry-auth
       with:
         address: ${{ vars.APP_REGISTRY_ADDRESS }}
         token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
         client-id: app-registry-promoter-${{ inputs.registry_environment }}
         client-secret: ${{ secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET }}
+
+    - name: Download release tools
+      id: download_tools
+      uses: ./.github/actions/download-release-tools
+      with:
+        source: ${{ (inputs.use_source_tools == true || inputs.use_source_tools == 'true') && 'source' || 'published' }}
+        target_env: ${{ inputs.registry_environment }}
 
     - name: Promote
       if: inputs.action == 'promote'
@@ -147,15 +154,6 @@ jobs:
         fi
 
         "$APP_REGISTRY_CLI" "${ARGS[@]}"
-
-    - name: App Registry Auth
-      if: inputs.action == 'rollback'
-      uses: ./.github/actions/app-registry-auth
-      with:
-        address: ${{ vars.APP_REGISTRY_ADDRESS }}
-        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-        client-id: app-registry-promoter-${{ inputs.registry_environment }}
-        client-secret: ${{ secrets.APP_REGISTRY_PROMOTER_CLIENT_SECRET }}
 
     - name: Rollback
       if: inputs.action == 'rollback'
