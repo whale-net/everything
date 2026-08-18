@@ -368,6 +368,43 @@ git push
 
 This is a security feature, not a bug, and only affects releases where the commit itself modified workflow files.
 
+**Version gaps after a failed release (expected, safe-by-design; see #814)**: If a
+`release-charts` run fails partway through, the *next* run may compute a
+higher version than the one that failed, rather than retrying it — e.g.
+`0.0.1 -> 0.0.2` fails, and the next run produces `0.0.3` instead of
+retrying `0.0.2`. This is intentional and safe, not a bug to patch around:
+
+- `autoIncrementHelmVersion` (`tools/release_helper_go/cmd/build_helm.go`)
+  always recomputes the candidate version fresh from git tags. A git tag is
+  only created *after* a chart upload to ChartMuseum succeeds
+  (`ExecuteReleaseCharts` in `release_charts.go` uploads first, tags second),
+  so a run that fails before uploading leaves no tag behind, and the next
+  run's freshly-computed candidate is naturally the same version — no gap in
+  that case.
+- A gap only appears when `ExecuteReleaseCharts`'s orphan-collision check
+  (around release_charts.go:508-547) finds a *different* chart package
+  already sitting at the candidate version in ChartMuseum and advances past
+  it rather than overwriting. That's the deliberately conservative choice:
+  once something is genuinely on ChartMuseum at a version, silently
+  clobbering it is unsafe, so the version is advanced instead.
+- The collision check leans on a byte-for-byte digest comparison to tell
+  "identical retry, safe to reuse" apart from "different content, do not
+  clobber" — but `helm package` does not produce byte-identical output
+  across separate invocations of the same source tree (verified locally:
+  two back-to-back `helm package` runs on an unchanged chart, even with
+  `SOURCE_DATE_EPOCH` set, produced different tarball digests, presumably
+  from embedded per-invocation timestamps/ordering in the tar/gzip
+  container). That means even a genuinely-safe retry can look like "different
+  content" and trigger an advance. Closing that gap for real would mean
+  making `helm package`'s output reproducible (or replacing it with a
+  hand-rolled deterministic tar/gzip step) — a structural change to shared
+  chart-packaging code, not a small localized fix, so it's out of scope for
+  now.
+- Net effect: chart version numbers are not guaranteed contiguous. A gap
+  after a failed release is expected and does not indicate data loss or a
+  broken chart — it only means ChartMuseum already had *something* at the
+  version that would otherwise have been retried.
+
 ## Future Enhancements
 
 The following features are planned for future iterations:

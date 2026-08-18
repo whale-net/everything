@@ -688,3 +688,61 @@ func TestExecuteReleaseCharts_AutoIncrementMajor(t *testing.T) {
 		t.Errorf("expected EffectiveVersion 'v1.0.0', got %q", res.Charts[0].EffectiveVersion)
 	}
 }
+
+// TestExecuteReleaseCharts_RetryAfterFailureReusesCandidateVersion locks in
+// the safety property behind #814: when a prior run failed before anything
+// was actually published (no git tag created -- tags are only created after
+// a successful ChartMuseum upload -- and no chart present at the candidate
+// version in ChartMuseum), the next run's freshly auto-incremented candidate
+// must be used as-is rather than advanced past. autoIncrementHelmVersion
+// always recomputes from git tags, so a retry naturally proposes the same
+// candidate the failed run would have used; this test asserts the
+// orphan-collision check (release_charts.go's FetchChart-at-candidate
+// branch) leaves that candidate alone when ChartMuseum has nothing there,
+// and does not advance the version or skip the publish.
+func TestExecuteReleaseCharts_RetryAfterFailureReusesCandidateVersion(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	packager := &fakeHelmPackager{}
+	artClient := NewFakeArtifactRegistryClient()
+
+	// Nothing exists at the candidate version yet -- simulates a retry after
+	// a run that failed before ever reaching the ChartMuseum upload step.
+	uploader := &fakeChartUploader{fetchErr: fmt.Errorf("404 not found")}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:               "helm-demo-hello-fastapi",
+		IncrementPatch:       true,
+		BuildID:              "build-999",
+		ChartRepoURL:         "https://charts.whalenet.dev",
+		IdempotencyKeyPrefix: "run-42-2",
+		Bazel:                bazel,
+		Git:                  git,
+		Docker:               docker,
+		FS:                   fs,
+		Packager:             packager,
+		Uploader:             uploader,
+		WorkspaceRoot:        workspaceRoot,
+		ArtifactClient:       artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+
+	c := res.Charts[0]
+	// Initial tag fixture is helm-demo-hello-fastapi.v0.1.0 -> patch bump
+	// (the same candidate a failed run and its retry both compute) is
+	// v0.1.1. It must NOT have been advanced past (e.g. to v0.1.2) by the
+	// orphan-collision logic, since nothing was actually published at v0.1.1.
+	if c.EffectiveVersion != "v0.1.1" {
+		t.Errorf("expected candidate version to be reused as 'v0.1.1' (no orphan advance), got %q", c.EffectiveVersion)
+	}
+	if !c.Published {
+		t.Errorf("expected the reused candidate to be published, got Published=false")
+	}
+	if uploader.uploadCalls != 1 {
+		t.Errorf("expected exactly 1 upload at the reused candidate version, got %d", uploader.uploadCalls)
+	}
+}
