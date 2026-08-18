@@ -77,15 +77,11 @@ runs:
             
             # Check if CACHE_URL is gRPC (grpc:// or grpcs://) vs HTTP (http:// or https://)
             if [[ "$CACHE_URL" =~ ^grpcs?:// ]]; then
-              cat >> .bazelrc.remote << EOF
-build --remote_cache=${CACHE_URL}
-build --remote_upload_local_results=true
-EOF
+              echo "build --remote_cache=${CACHE_URL}" >> .bazelrc.remote
+              echo "build --remote_upload_local_results=true" >> .bazelrc.remote
               if [[ -n "${{ inputs.bazel-remote-cache-user }}" && -n "${{ inputs.bazel-remote-cache-password }}" ]]; then
                 AUTH_BASE64=$(echo -n "${{ inputs.bazel-remote-cache-user }}:${{ inputs.bazel-remote-cache-password }}" | base64 -w 0)
-                cat >> .bazelrc.remote << EOF
-build --remote_header=Authorization="Basic ${AUTH_BASE64}"
-EOF
+                echo "build --remote_header=Authorization=\"Basic ${AUTH_BASE64}\"" >> .bazelrc.remote
               fi
             else
               # HTTP-based remote cache: embed credentials in URL
@@ -94,10 +90,8 @@ EOF
                 HOST_PATH=$(echo "$CACHE_URL" | sed -n 's#^[^:]*://\(.*\)#\1#p')
                 CACHE_URL="${PROTOCOL}://${{ inputs.bazel-remote-cache-user }}:${{ inputs.bazel-remote-cache-password }}@${HOST_PATH}"
               fi
-              cat >> .bazelrc.remote << EOF
-build --remote_cache=${CACHE_URL}
-build --remote_upload_local_results=true
-EOF
+              echo "build --remote_cache=${CACHE_URL}" >> .bazelrc.remote
+              echo "build --remote_upload_local_results=true" >> .bazelrc.remote
             fi
             
             echo "✅ Remote cache configured at: ${{ inputs.bazel-remote-cache-url }}"
@@ -107,15 +101,11 @@ EOF
             echo "Setting up Bazel remote asset downloader..."
             DOWNLOADER_URL="${{ inputs.bazel-remote-downloader-url }}"
 
-            cat >> .bazelrc.remote << EOF
-build --experimental_remote_downloader=${DOWNLOADER_URL}
-EOF
+            echo "build --experimental_remote_downloader=${DOWNLOADER_URL}" >> .bazelrc.remote
 
             if [[ -n "${{ inputs.bazel-remote-cache-user }}" && -n "${{ inputs.bazel-remote-cache-password }}" ]]; then
               AUTH_BASE64=$(echo -n "${{ inputs.bazel-remote-cache-user }}:${{ inputs.bazel-remote-cache-password }}" | base64 -w 0)
-              cat >> .bazelrc.remote << EOF
-build --remote_downloader_header=Authorization="Basic ${AUTH_BASE64}"
-EOF
+              echo "build --remote_downloader_header=Authorization=\"Basic ${AUTH_BASE64}\"" >> .bazelrc.remote
             fi
 
             echo "✅ Remote asset downloader configured at: ${{ inputs.bazel-remote-downloader-url }}"
