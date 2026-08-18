@@ -53,6 +53,8 @@ jobs:
     outputs:
       needs_build: ${{ steps.probe.outputs.needs_build }}
       source: ${{ steps.probe.outputs.source }}
+      release_helper_version: ${{ steps.probe.outputs.release_helper_version }}
+      app_registry_version: ${{ steps.probe.outputs.app_registry_version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -67,6 +69,10 @@ jobs:
             echo "Explicit use_source_tools requested. Building from source."
             echo "needs_build=true" >> "$GITHUB_OUTPUT"
             echo "source=artifact" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Release Tools Acquisition"
+              echo "**Acquisition Mode:** 🛠️ Source Build (\`use_source_tools: true\` requested)"
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -74,24 +80,50 @@ jobs:
           RH_VER=$(grep -E '^\s*release_helper_go:' .release-tools-version 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
           AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' .release-tools-version 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | sed -E "s/['\"[:space:]]//g" || true)
 
+          echo "Resolved release tooling versions from .release-tools-version:"
+          echo "  release_helper_go: ${RH_VER:-<not set>}"
+          echo "  app_registry_cli:  ${AR_VER:-<not set>}"
+          echo "release_helper_version=$RH_VER" >> "$GITHUB_OUTPUT"
+          echo "app_registry_version=$AR_VER" >> "$GITHUB_OUTPUT"
+
           RH_EXISTS=false
           AR_EXISTS=false
           if [[ -n "$RH_VER" ]] && (gh release view "tools-release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1); then
             RH_EXISTS=true
+            echo "✓ Found prebuilt release_helper_go (${RH_VER}) on GitHub Releases"
+          else
+            echo "✗ Prebuilt release_helper_go (${RH_VER:-<unset>}) not found on GitHub Releases"
           fi
           if [[ -n "$AR_VER" ]] && (gh release view "tools-app-registry.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "tools-app_registry_cli.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "app-registry.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1); then
             AR_EXISTS=true
+            echo "✓ Found prebuilt app_registry_cli (${AR_VER}) on GitHub Releases"
+          else
+            echo "✗ Prebuilt app_registry_cli (${AR_VER:-<unset>}) not found on GitHub Releases"
           fi
 
           if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
-            echo "Prebuilt release tools exist on GitHub Releases. Downstream jobs will download prebuilt binaries directly."
+            echo "Prebuilt release tools exist on GitHub Releases (release_helper_go: $RH_VER, app_registry_cli: $AR_VER). Downstream jobs will download prebuilt binaries directly."
             echo "needs_build=false" >> "$GITHUB_OUTPUT"
             echo "source=published" >> "$GITHUB_OUTPUT"
           else
-            echo "Prebuilt release tools not found on GitHub Releases. Building once as workflow artifact for this run."
+            echo "Prebuilt release tools not found on GitHub Releases (release_helper_go: ${RH_VER:-<unset>} [exists=$RH_EXISTS], app_registry_cli: ${AR_VER:-<unset>} [exists=$AR_EXISTS]). Building once as workflow artifact for this run."
             echo "needs_build=true" >> "$GITHUB_OUTPUT"
             echo "source=artifact" >> "$GITHUB_OUTPUT"
           fi
+
+          {
+            echo "### Release Tools Acquisition"
+            echo "| Tool | Version | Status |"
+            echo "| --- | --- | --- |"
+            echo "| \`release_helper_go\` | \`${RH_VER:-<not set>}\` | $([[ "$RH_EXISTS" == "true" ]] && echo "✅ Found on GitHub Releases" || echo "⚠️ Not found (will build)") |"
+            echo "| \`app_registry_cli\` | \`${AR_VER:-<not set>}\` | $([[ "$AR_EXISTS" == "true" ]] && echo "✅ Found on GitHub Releases" || echo "⚠️ Not found (will build)") |"
+            echo ""
+            if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
+              echo "**Acquisition Mode:** ⚡ Prebuilt Binaries (Downloaded from GitHub Releases)"
+            else
+              echo "**Acquisition Mode:** 🛠️ Source Build (Artifact uploaded for downstream jobs)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Build Environment
         if: steps.probe.outputs.needs_build == 'true'
