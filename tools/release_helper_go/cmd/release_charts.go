@@ -517,6 +517,19 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 				} else if p.Version == "" {
 					// Different content already exists at `ver` in ChartMuseum (e.g. orphaned upload).
 					// Auto-advance to next available version.
+					//
+					// This deliberately does NOT try to reuse `ver` here: something is
+					// genuinely already published under this version, so silently
+					// overwriting it would be unsafe. When nothing was published for
+					// `ver` (the FetchChart above returns no data), this branch never
+					// runs and `ver` -- freshly recomputed from git tags by
+					// autoIncrementHelmVersion, which only sees a tag once a run has
+					// actually succeeded -- is reused as-is. The residual version gaps
+					// this collision check can still produce (a same-content retry
+					// whose repackaged tarball digest doesn't match byte-for-byte due to
+					// helm package's non-deterministic output) are expected and
+					// documented rather than fixed here -- see docs/HELM_RELEASE.md
+					// "Known Limitations" and GitHub issue #814.
 					for {
 						nextVer, incErr := incrementVersion(ver, "patch")
 						if incErr != nil {
