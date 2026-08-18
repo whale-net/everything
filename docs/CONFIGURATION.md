@@ -44,7 +44,7 @@ The repository supports optional Bazel remote caching for improved CI performanc
 
 ### Secrets and Variables
 
-- `BAZEL_REMOTE_CACHE_URL`: HTTP URL of the remote cache server (required for remote action/output caching)
+- `BAZEL_REMOTE_CACHE_URL`: URL of the remote cache server (HTTP or gRPC; must be `grpc://` or `grpcs://` if remote downloader is enabled)
 - `BAZEL_REMOTE_DOWNLOADER_URL`: gRPC URL of the remote asset downloader (e.g. `grpc://cache.example.com:9092` or `grpcs://cache.example.com:443`, optional; can be set as secret or repository variable)
 - `BAZEL_REMOTE_CACHE_USER`: Username for basic authentication (optional)
 - `BAZEL_REMOTE_CACHE_PASSWORD`: Password for basic authentication (optional)
