@@ -10,10 +10,16 @@ import (
 )
 
 func artifactKindTitle(k pb.ArtifactKind) string {
-	if k == pb.ArtifactKind_ARTIFACT_KIND_CHART {
+	switch k {
+	case pb.ArtifactKind_ARTIFACT_KIND_CHART:
 		return "Chart artifact"
+	case pb.ArtifactKind_ARTIFACT_KIND_BINARY:
+		return "Binary artifact"
+	case pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE:
+		return "Firmware artifact"
+	default:
+		return "Image artifact"
 	}
-	return "Image artifact"
 }
 
 // ArtifactDetail is screen 21-artifact-detail (FR-23): one artifact by

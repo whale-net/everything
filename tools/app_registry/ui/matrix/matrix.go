@@ -28,14 +28,16 @@ type ColumnResult struct {
 
 // RowKind distinguishes a chart row (a Helm chart, itself PROMOTABLE) from a
 // standalone-image row (an app whose own deploy_unit is
-// DEPLOY_UNIT_IMAGE — no owning chart). Both are top-level PROMOTABLE rows.
-// A VIA_CHART app is never either of these at the top level — it only ever
+// DEPLOY_UNIT_IMAGE — no owning chart) or standalone-binary row (a CLI or
+// binary tool). All are top-level PROMOTABLE rows.
+// A VIA_CHART app is never any of these at the top level — it only ever
 // appears as a Row.Children entry under its owning chart.
 type RowKind int
 
 const (
 	RowKindChart RowKind = iota
 	RowKindStandaloneImage
+	RowKindStandaloneBinary
 	RowKindViaChartApp
 )
 
@@ -200,18 +202,23 @@ func Build(charts []*pb.Chart, apps []*pb.App, environments []*pb.Environment, c
 	}
 
 	for _, app := range apps {
-		if app.GetDeployUnit() != appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE {
+		isBinaryTool := app.GetAppType() == "cli" || app.GetAppType() == "binary"
+		if app.GetDeployUnit() != appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE && !isBinaryTool {
 			continue
 		}
-		// Guard against inconsistent data: an IMAGE-deploy-unit app should
+		// Guard against inconsistent data: a standalone app should
 		// never also be a chart's composed member (that combination
 		// implies DEPLOY_UNIT_CHART), but never render it twice if it is.
 		if chartAppIDs[app.GetAppId()] {
 			continue
 		}
+		rowKind := RowKindStandaloneImage
+		if isBinaryTool {
+			rowKind = RowKindStandaloneBinary
+		}
 		key := "app:" + app.GetAppId()
 		rows = append(rows, &Row{
-			Kind:     RowKindStandaloneImage,
+			Kind:     rowKind,
 			Key:      key,
 			Domain:   app.GetDomain(),
 			FullName: app.GetFullName(),

@@ -60,6 +60,11 @@ func (app *App) buildArtifactDetail(ctx context.Context, digest string) (*viewda
 			})
 		}
 
+	case pb.ArtifactKind_ARTIFACT_KIND_BINARY, pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE:
+		if appResp, err := app.registry.App.GetApp(ctx, &pb.GetAppRequest{AppId: artifact.GetAppId()}); err == nil {
+			data.OwnerFullName = appResp.GetApp().GetFullName()
+		}
+
 	case pb.ArtifactKind_ARTIFACT_KIND_CHART:
 		// The wireframe note: for a chart-kind artifact this same layout
 		// instead shows "Pins (contains)" -- Artifact.contains resolved to

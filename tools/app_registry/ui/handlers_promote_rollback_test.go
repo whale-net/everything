@@ -914,3 +914,31 @@ func TestPromote_DefaultSelectionIsHighestSemverNotFirstInList(t *testing.T) {
 		t.Errorf("selected artifact_id = %q, want %q (highest semver v0.1.0, not the recency-first v0.0.42)", m[1], "art-older-high")
 	}
 }
+
+func TestPromote_BinaryToolApp_RendersCandidatesAndAllowsPromotion(t *testing.T) {
+	artifact := &promoteArtifactClient{
+		fakeArtifactClient: &fakeArtifactClient{},
+		listArtifactsResp: &pb.ListArtifactsResponse{
+			Artifacts: []*pb.Artifact{
+				{ArtifactId: "art-bin-1", Version: "v0.3.0", Digest: "sha256:cccccccccccccccccccccccccccccccc", Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY, Promotability: pb.Promotability_PROMOTABILITY_PROMOTABLE},
+			},
+		},
+	}
+	promoClient := &fakePromotionClient{
+		promoteResp: &pb.PromoteResponse{
+			Promotion: &pb.Promotion{
+				PromotionId: "promo-1",
+				Version:     "v0.3.0",
+			},
+		},
+	}
+	app := newPromoteTestApp(&fakeEnvironmentClient{}, artifact, promoClient)
+	code, body := getPromote(t, app, "tools-app-registry", "binary", "dev")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", code, body)
+	}
+
+	if !strings.Contains(body, "v0.3.0") {
+		t.Errorf("expected candidate version v0.3.0 in promote form, got: %s", body)
+	}
+}

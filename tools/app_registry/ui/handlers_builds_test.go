@@ -236,6 +236,42 @@ func TestHandleBuildDetail_EveryArtifactStateRendersOwnBadge_FailReasonVerbatim(
 	}
 }
 
+func TestHandleBuildDetail_BinaryArtifact_RendersBinaryKindBadge(t *testing.T) {
+	artifacts := []*pb.Artifact{
+		{ArtifactId: "a-bin", AppId: "app-cli", Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED, Digest: "sha256:binarydigest", Version: "v0.3.0"},
+	}
+	artifact := &fakeArtifactClient{
+		getReleaseRunResp: &pb.GetReleaseRunResponse{
+			Build:     &pb.Build{BuildId: "build-1", WorkflowRunId: "32115682858"},
+			Artifacts: artifacts,
+		},
+	}
+	app := newTestApp(artifact, &fakeAppClient{
+		listAppsResp: &pb.ListAppsResponse{
+			Apps: []*pb.App{
+				{AppId: "app-cli", Domain: "tools", Name: "app-registry", FullName: "tools-app-registry"},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/builds/32115682858", nil)
+	req.SetPathValue("id", "32115682858")
+	w := httptest.NewRecorder()
+	app.handleBuildDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, ">binary<") {
+		t.Errorf("expected binary kind label in body, got body: %s", body)
+	}
+	if strings.Contains(body, ">unknown<") {
+		t.Errorf("binary artifact should not render as 'unknown' kind, got body: %s", body)
+	}
+}
+
 func TestHandleBuildDetail_IncompleteOnlyFilterExcludesOnlyPublished(t *testing.T) {
 	// AppId doubles as the row's owner text (ownerFullNameFallback prefers
 	// app_id over artifact_id), so give each row a distinct AppId to tell

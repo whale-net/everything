@@ -25,12 +25,16 @@ func asOfInputValue(asOf int64) string {
 
 // rowArtifactKind returns the ArtifactKind string the /promote and
 // /rollback screens (delivered separately, FR-6) expect, matching the CLI's
-// own --kind flag values ("image"|"chart").
+// own --kind flag values ("image"|"chart"|"binary").
 func rowArtifactKind(k matrix.RowKind) string {
-	if k == matrix.RowKindChart {
+	switch k {
+	case matrix.RowKindChart:
 		return "chart"
+	case matrix.RowKindStandaloneBinary:
+		return "binary"
+	default:
+		return "image"
 	}
-	return "image"
 }
 
 func entityActionHref(path, ownerFullName, kind, envKey string, allowOverride bool) string {
