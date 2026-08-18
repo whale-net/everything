@@ -32,22 +32,25 @@ The repository supports optional Bazel remote caching for improved CI performanc
     bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
     bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
     bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+    bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 ```
 
 ### Configuration Details
 
-- Remote cache is enabled when `bazel-remote-cache-url` input is provided
-- Credentials are passed from GitHub secrets to action inputs
-- Automatically sets `--remote_upload_local_results=true` for cache population
+- Remote cache is enabled when `bazel-remote-cache-url` input is provided.
+- Remote asset downloader (Remote Asset API for caching `http_file` and `http_archive` dependencies) is enabled when `bazel-remote-downloader-url` is provided.
+- Credentials (`BAZEL_REMOTE_CACHE_USER` and `BAZEL_REMOTE_CACHE_PASSWORD`) are passed to both the remote cache and remote downloader authorization headers if provided.
+- Automatically sets `--remote_upload_local_results=true` for cache population.
 
-### Required Secrets
+### Secrets and Variables
 
-- `BAZEL_REMOTE_CACHE_URL`: HTTP URL of the remote cache server (required for remote caching)
-- `BAZEL_REMOTE_CACHE_USER`: Username for basic HTTP authentication (optional)
-- `BAZEL_REMOTE_CACHE_PASSWORD`: Password for basic HTTP authentication (optional)
+- `BAZEL_REMOTE_CACHE_URL`: HTTP URL of the remote cache server (required for remote action/output caching)
+- `BAZEL_REMOTE_DOWNLOADER_URL`: gRPC URL of the remote asset downloader (e.g. `grpc://cache.example.com:9092` or `grpcs://cache.example.com:443`, optional; can be set as secret or repository variable)
+- `BAZEL_REMOTE_CACHE_USER`: Username for basic authentication (optional)
+- `BAZEL_REMOTE_CACHE_PASSWORD`: Password for basic authentication (optional)
 
 ### Security Notes
 
-- Secrets are passed from workflow to action via inputs for proper access control
+- Secrets and variables are passed from workflow to action via inputs for proper access control
 - Generated `.bazelrc.remote` file is excluded from git via `.gitignore`
-- Basic HTTP authentication is embedded in the cache URL during configuration
+- Basic authentication is embedded in the cache URL and passed as an Authorization header to the remote downloader during configuration

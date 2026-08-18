@@ -98,6 +98,7 @@ jobs:
           bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
           bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Build release helper & app registry
         if: steps.probe.outputs.needs_build == 'true'
@@ -145,6 +146,7 @@ jobs:
           bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
           bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
@@ -187,6 +189,7 @@ jobs:
           bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
           bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Build OpenAPI specs
         env:
@@ -241,6 +244,7 @@ jobs:
           bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
           bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
@@ -459,6 +463,7 @@ jobs:
           bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
           bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
