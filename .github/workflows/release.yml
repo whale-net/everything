@@ -39,6 +39,9 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
+
 jobs:
   # Probe for prebuilt release tools or build from source if missing / requested.
   # When prebuilt releases exist and use_source_tools is false, this job completes in seconds.
@@ -156,6 +159,7 @@ jobs:
       - name: Plan release
         id: plan
         env:
+          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
@@ -266,6 +270,7 @@ jobs:
 
       - name: Release applications
         env:
+          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
@@ -275,7 +280,6 @@ jobs:
           DEFAULT_VERSION: ${{ needs.plan-release.outputs.version }}
           BUILD_ID: ${{ needs.plan-release.outputs.build-id }}
           DRY_RUN: ${{ github.event.inputs.dry_run }}
-          APP_REGISTRY_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
         run: |
           mkdir -p /tmp/release-notes /tmp/digest-check
 
@@ -295,7 +299,7 @@ jobs:
             ARGS=(release-app --domain "$DOMAIN" --app "$APP" --version "$VER" --create-git-tag)
             [[ -n "$BUILD_ID" ]] && ARGS+=(--build-id "$BUILD_ID")
             [[ "$DRY_RUN" == "true" ]] && ARGS+=(--dry-run)
-            [[ "$APP_REGISTRY_OPT_IN" != "true" ]] && ARGS+=(--skip-registry)
+            [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
 
             "$RELEASE_HELPER" "${ARGS[@]}"
 
@@ -491,6 +495,7 @@ jobs:
 
       - name: Release Helm charts
         env:
+          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
