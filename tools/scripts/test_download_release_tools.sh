@@ -179,7 +179,7 @@ if [ -n "$GOT" ]; then
 fi
 echo "PASS: non-binary artifact kind correctly excluded"
 
-# 4d: no entries for the requested app_id -> falls through to file/source fallback
+# 4d: no entries for the requested app_id -> yields empty (action fails and asks user to build from source)
 cat > "$FIXTURE_DIR/no_match.json" <<'EOF'
 {"entries": [{"artifact": {"appId": "app-999", "kind": "ARTIFACT_KIND_BINARY", "version": "v9.9.9"}}]}
 EOF
@@ -188,27 +188,27 @@ if [ -n "$GOT" ]; then
     echo "FAIL: expected no match when app_id is absent, got '$GOT'"
     exit 1
 fi
-echo "PASS: no matching entry correctly yields empty (falls back)"
+echo "PASS: no matching entry correctly yields empty (no promoted version)"
 
-# 4e: empty entries array -> falls through
+# 4e: empty entries array -> yields empty
 echo '{"entries": []}' > "$FIXTURE_DIR/empty_entries.json"
 GOT=$(extract_version "$FIXTURE_DIR/empty_entries.json" "app-123")
 if [ -n "$GOT" ]; then
     echo "FAIL: expected no match for empty entries array, got '$GOT'"
     exit 1
 fi
-echo "PASS: empty entries array correctly yields empty (falls back)"
+echo "PASS: empty entries array correctly yields empty"
 
 # 4f: malformed JSON (e.g. a truncated/garbled grpcurl error response) must
 # not crash the parser and must yield empty, exactly like a genuinely empty
-# response -- both drive the same fallback path in the action.
+# response -- both drive the failure path in the action.
 echo '{not valid json' > "$FIXTURE_DIR/malformed.json"
 GOT=$(extract_version "$FIXTURE_DIR/malformed.json" "app-123")
 if [ -n "$GOT" ]; then
     echo "FAIL: expected no match for malformed JSON, got '$GOT'"
     exit 1
 fi
-echo "PASS: malformed JSON correctly yields empty (falls back)"
+echo "PASS: malformed JSON correctly yields empty"
 
 # 4g: missing/empty response body (e.g. grpcurl produced no output at all)
 : > "$FIXTURE_DIR/missing.json"
@@ -217,7 +217,61 @@ if [ -n "$GOT" ]; then
     echo "FAIL: expected no match for empty response body, got '$GOT'"
     exit 1
 fi
-echo "PASS: empty response body correctly yields empty (falls back)"
+echo "PASS: empty response body correctly yields empty"
+
+echo "=== Test 5: Fallback policy and target_env resolution discipline ==="
+# Test that when target_env is set, resolution failure does NOT fall back to
+# .release-tools-version, but instead fails explicitly.
+
+resolve_tool_version_sim() {
+    local target_env="$1"
+    local simulated_registry_ver="$2"
+    local version_file="$3"
+
+    local rh_ver=""
+    if [ -n "$target_env" ]; then
+        if [ -n "$simulated_registry_ver" ]; then
+            rh_ver="$simulated_registry_ver"
+        else
+            echo "ERROR: Could not resolve promoted version for 'release_helper_go' in environment '$target_env'. Fallback to hardcoded constants is disabled. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') or ensure the tool is promoted in App Registry." >&2
+            return 1
+        fi
+    elif [ -f "$version_file" ]; then
+        rh_ver=$(grep -E '^\s*release_helper_go:' "$version_file" 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
+    fi
+
+    echo "$rh_ver"
+    return 0
+}
+
+# 5a: target_env set with registry match -> returns registry version
+RES=$(resolve_tool_version_sim "dev" "v1.4.0" "$VERSION_FILE")
+if [ "$RES" != "v1.4.0" ]; then
+    echo "FAIL: expected v1.4.0, got '$RES'"
+    exit 1
+fi
+echo "PASS: target_env with registry match resolves correctly"
+
+# 5b: target_env set with NO registry match -> fails without falling back to file
+ERR_OUTPUT=""
+if RES=$(resolve_tool_version_sim "dev" "" "$VERSION_FILE" 2>&1); then
+    echo "FAIL: target_env without registry match should have failed, but returned '$RES'"
+    exit 1
+else
+    if [[ "$RES" != *"Fallback to hardcoded constants is disabled"* ]]; then
+        echo "FAIL: expected error message regarding disabled fallback, got '$RES'"
+        exit 1
+    fi
+fi
+echo "PASS: target_env without registry match fails cleanly without falling back to pinned file"
+
+# 5c: target_env unset -> resolves from pinned version file
+RES=$(resolve_tool_version_sim "" "" "$VERSION_FILE")
+if [ "$RES" != "v0.3.0" ]; then
+    echo "FAIL: expected v0.3.0 from version file when target_env unset, got '$RES'"
+    exit 1
+fi
+echo "PASS: unset target_env correctly falls back to pinned version file"
 
 echo "=== All download-release-tools tests passed ==="
 
