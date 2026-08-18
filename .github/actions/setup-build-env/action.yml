@@ -75,19 +75,35 @@ runs:
             echo "Setting up Bazel remote cache..."
             CACHE_URL="${{ inputs.bazel-remote-cache-url }}"
             
-            # Add basic auth credentials if provided via inputs from secrets
-            if [[ -n "${{ inputs.bazel-remote-cache-user }}" && -n "${{ inputs.bazel-remote-cache-password }}" ]]; then
-              PROTOCOL=$(echo "$CACHE_URL" | sed -n 's#^\([^:]*\)://.*#\1#p')
-              HOST_PATH=$(echo "$CACHE_URL" | sed -n 's#^[^:]*://\(.*\)#\1#p')
-              CACHE_URL="${PROTOCOL}://${{ inputs.bazel-remote-cache-user }}:${{ inputs.bazel-remote-cache-password }}@${HOST_PATH}"
-            fi
-            
-            cat >> .bazelrc.remote << EOF
+            # Check if CACHE_URL is gRPC (grpc:// or grpcs://) vs HTTP (http:// or https://)
+            if [[ "$CACHE_URL" =~ ^grpcs?:// ]]; then
+              cat >> .bazelrc.remote << EOF
         build --remote_cache=${CACHE_URL}
         build --remote_upload_local_results=true
         build:ci --remote_cache=${CACHE_URL}
         build:ci --remote_upload_local_results=true
         EOF
+              if [[ -n "${{ inputs.bazel-remote-cache-user }}" && -n "${{ inputs.bazel-remote-cache-password }}" ]]; then
+                AUTH_BASE64=$(echo -n "${{ inputs.bazel-remote-cache-user }}:${{ inputs.bazel-remote-cache-password }}" | base64 -w 0)
+                cat >> .bazelrc.remote << EOF
+        build --remote_header=Authorization="Basic ${AUTH_BASE64}"
+        build:ci --remote_header=Authorization="Basic ${AUTH_BASE64}"
+        EOF
+              fi
+            else
+              # HTTP-based remote cache: embed credentials in URL
+              if [[ -n "${{ inputs.bazel-remote-cache-user }}" && -n "${{ inputs.bazel-remote-cache-password }}" ]]; then
+                PROTOCOL=$(echo "$CACHE_URL" | sed -n 's#^\([^:]*\)://.*#\1#p')
+                HOST_PATH=$(echo "$CACHE_URL" | sed -n 's#^[^:]*://\(.*\)#\1#p')
+                CACHE_URL="${PROTOCOL}://${{ inputs.bazel-remote-cache-user }}:${{ inputs.bazel-remote-cache-password }}@${HOST_PATH}"
+              fi
+              cat >> .bazelrc.remote << EOF
+        build --remote_cache=${CACHE_URL}
+        build --remote_upload_local_results=true
+        build:ci --remote_cache=${CACHE_URL}
+        build:ci --remote_upload_local_results=true
+        EOF
+            fi
             
             echo "✅ Remote cache configured at: ${{ inputs.bazel-remote-cache-url }}"
           fi
