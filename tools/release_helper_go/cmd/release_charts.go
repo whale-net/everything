@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	sharedsemver "github.com/whale-net/everything/libs/go/semver"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/helm"
 )
@@ -477,8 +478,18 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			case p.IncrementMinor:
 				bumpType = "minor"
 			}
+			registryHighest := ""
+			if artifactClient != nil {
+				rv, rerr := highestRecordedChartVersion(ctx, artifactClient, publishedName)
+				if rerr != nil {
+					fmt.Printf("::warning title=App Registry version lookup failed (%s)::Falling back to git-tag-only auto-versioning: %v\n", chart.Name, rerr)
+				} else {
+					registryHighest = rv
+				}
+			}
+
 			var err error
-			ver, err = autoIncrementHelmVersion(chart.Name, bumpType, git)
+			ver, err = autoIncrementHelmVersionFrom(chart.Name, bumpType, git, registryHighest)
 			if err != nil {
 				return nil, fmt.Errorf("auto-version for chart %s: %w", chart.Name, err)
 			}
@@ -789,6 +800,80 @@ func filterHelmCharts(input string, allCharts []HelmChartMetadata, includeDemo b
 		}
 	}
 	return result
+}
+
+// highestRecordedChartVersionPageSize bounds each ListArtifacts page while
+// walking a chart's full artifact history below. Artifacts are returned
+// ordered by state_changed_at DESC (not by version), so the highest version
+// can be on any page -- this must walk every page rather than just the
+// first, unlike a "most recent N" query.
+const highestRecordedChartVersionPageSize = 100
+
+// highestRecordedChartVersionMaxPages bounds how many pages
+// highestRecordedChartVersion will walk, so a runaway artifact history (or
+// a server bug that never returns an empty next_page_token) can't hang a
+// release. 100 pages * 100/page = 10,000 artifacts, far beyond any chart's
+// real history.
+const highestRecordedChartVersionMaxPages = 100
+
+// highestRecordedChartVersion returns the highest chart version App
+// Registry has genuinely recorded for ownerFullName (a "<domain>-<chart>"
+// published name), or "" if it has none. This is the fix for issue #814:
+// autoIncrementHelmVersion previously only consulted git tags to find the
+// "current" version to bump from, so a bump could continue off a stale,
+// lower base when git-tag/App-Registry drift left App Registry holding a
+// higher recorded version (e.g. a git tag creation failing after an App
+// Registry record succeeded).
+//
+// Only artifacts with a real recorded digest count -- an
+// ARTIFACT_STATE_FAILED row, or an ARTIFACT_STATE_ALLOCATED/PUBLISHING row
+// with no digest yet, is not a genuinely-published version (see #817's
+// OPERATIONS.md runbook for the same allocated/publishing-vs-published
+// distinction). client == nil returns ("", nil): the caller is expected to
+// skip the lookup entirely in that case, matching this file's existing
+// `if artifactClient != nil` defensive style.
+func highestRecordedChartVersion(ctx context.Context, client pb.ArtifactRegistryClient, ownerFullName string) (string, error) {
+	if client == nil {
+		return "", nil
+	}
+
+	var highest string
+	var highestParsed sharedsemver.Version
+	pageToken := ""
+	for page := 0; page < highestRecordedChartVersionMaxPages; page++ {
+		resp, err := client.ListArtifacts(ctx, &pb.ListArtifactsRequest{
+			OwnerFullName: ownerFullName,
+			Kind:          pb.ArtifactKind_ARTIFACT_KIND_CHART,
+			Page: &pb.PageRequest{
+				PageSize:  highestRecordedChartVersionPageSize,
+				PageToken: pageToken,
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+
+		for _, a := range resp.GetArtifacts() {
+			if a.GetDigest() == "" || a.GetState() == pb.ArtifactState_ARTIFACT_STATE_FAILED {
+				continue
+			}
+			v, perr := sharedsemver.Parse(a.GetVersion())
+			if perr != nil {
+				continue
+			}
+			if highest == "" || sharedsemver.Compare(v, highestParsed) > 0 {
+				highest = a.GetVersion()
+				highestParsed = v
+			}
+		}
+
+		pageToken = resp.GetPage().GetNextPageToken()
+		if pageToken == "" {
+			break
+		}
+	}
+
+	return highest, nil
 }
 
 func extractChartVersionFromTag(chartName, tag string) string {

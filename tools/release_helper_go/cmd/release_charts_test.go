@@ -759,6 +759,100 @@ func TestExecuteReleaseCharts_AutoIncrementMajor(t *testing.T) {
 	}
 }
 
+// TestExecuteReleaseCharts_AutoIncrementUsesAppRegistryHighestBase locks in
+// issue #814's requirement: "if we have v0.1.x and v0.0.45 and I choose
+// bump, we should do v0.1.x+1". Here App Registry has a chart artifact
+// recorded at v1.2.0 (as could happen from git-tag/App-Registry drift, e.g.
+// a git tag creation failing after an App Registry record succeeded) while
+// the highest git tag is only v0.1.0. A requested patch bump must land on
+// v1.2.1 -- built on the true highest known version -- not v0.1.1, which is
+// what git-tag-only history would produce.
+func TestExecuteReleaseCharts_AutoIncrementUsesAppRegistryHighestBase(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.ListArtifactsFn = func(ctx context.Context, in *pb.ListArtifactsRequest, opts ...grpc.CallOption) (*pb.ListArtifactsResponse, error) {
+		if in.GetOwnerFullName() != "demo-hello-fastapi" || in.GetKind() != pb.ArtifactKind_ARTIFACT_KIND_CHART {
+			return &pb.ListArtifactsResponse{}, nil
+		}
+		return &pb.ListArtifactsResponse{
+			Artifacts: []*pb.Artifact{
+				{Version: "v1.2.0", Digest: "sha256:aaaa", State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED},
+				// A failed row and an allocated/publishing row with no
+				// digest must not count as recorded versions -- if they
+				// did, this would (wrongly) push the base to v9.9.9.
+				{Version: "v9.9.9", State: pb.ArtifactState_ARTIFACT_STATE_FAILED, Digest: "sha256:bbbb"},
+				{Version: "v9.9.8", State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHING, Digest: ""},
+			},
+		}, nil
+	}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:         "helm-demo-hello-fastapi",
+		IncrementPatch: true,
+		ChartRepoURL:   "https://charts.whalenet.dev",
+		DryRun:         true,
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		Packager:       packager,
+		Uploader:       uploader,
+		WorkspaceRoot:  workspaceRoot,
+		ArtifactClient: artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+	if res.Charts[0].EffectiveVersion != "v1.2.1" {
+		t.Errorf("expected EffectiveVersion 'v1.2.1' (bumped from App Registry's higher recorded v1.2.0, not git tag v0.1.0), got %q", res.Charts[0].EffectiveVersion)
+	}
+}
+
+// TestExecuteReleaseCharts_AutoIncrement_AppRegistryErrorFallsBackToGitTags
+// asserts the defensive fallback: when the App Registry lookup itself
+// errors (registry unavailable, etc.), auto-versioning must not hard-fail
+// the release -- it falls back to git-tag-only behavior exactly as before
+// this fix.
+func TestExecuteReleaseCharts_AppRegistryErrorFallsBackToGitTags(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.ListArtifactsFn = func(ctx context.Context, in *pb.ListArtifactsRequest, opts ...grpc.CallOption) (*pb.ListArtifactsResponse, error) {
+		return nil, fmt.Errorf("app registry unavailable")
+	}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:         "helm-demo-hello-fastapi",
+		IncrementPatch: true,
+		ChartRepoURL:   "https://charts.whalenet.dev",
+		DryRun:         true,
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		Packager:       packager,
+		Uploader:       uploader,
+		WorkspaceRoot:  workspaceRoot,
+		ArtifactClient: artClient,
+	})
+	if err != nil {
+		t.Fatalf("expected App Registry lookup failure to be non-fatal, got error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+	// Fixture git tag is helm-demo-hello-fastapi.v0.1.0 -> patch bump should be v0.1.1
+	if res.Charts[0].EffectiveVersion != "v0.1.1" {
+		t.Errorf("expected EffectiveVersion 'v0.1.1' (git-tag-only fallback), got %q", res.Charts[0].EffectiveVersion)
+	}
+}
+
 // TestExecuteReleaseCharts_RetryAfterFailureReusesCandidateVersion locks in
 // the safety property behind #814: when a prior run failed before anything
 // was actually published (no git tag created -- tags are only created after

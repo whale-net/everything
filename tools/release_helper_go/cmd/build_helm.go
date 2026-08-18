@@ -10,6 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
+
+	sharedsemver "github.com/whale-net/everything/libs/go/semver"
 )
 
 func newBuildHelmChartCmd() *cobra.Command {
@@ -161,34 +163,72 @@ func findHelmChartByName(name string, charts []HelmChartMetadata) (HelmChartMeta
 	return HelmChartMetadata{}, fmt.Errorf("helm chart %q not found", name)
 }
 
+// autoIncrementHelmVersion bumps chartName's version by bumpType using only
+// git tags to find the current version. Kept for callers (e.g. the
+// build-helm-chart CLI command above) that have no App Registry lookup
+// available; release_charts.go's release-charts command uses
+// autoIncrementHelmVersionFrom instead so an App Registry client can widen
+// the base beyond git-tag history (see issue #814).
 func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string, error) {
+	return autoIncrementHelmVersionFrom(chartName, bumpType, git, "")
+}
+
+// gitDerivedHelmVersionBase returns the highest chart version recorded in
+// git tags for chartName (bare, e.g. "v0.0.45"), or "" if no matching tag
+// exists. It does not increment -- callers combine this with other sources
+// (e.g. App Registry) before bumping.
+func gitDerivedHelmVersionBase(chartName string, git GitRunner) string {
 	out, err := git.Run("tag", "--sort=-version:refname", "--list", chartName+".*")
 	if (err != nil || strings.TrimSpace(out) == "") && !strings.HasPrefix(chartName, "helm-") {
 		out, err = git.Run("tag", "--sort=-version:refname", "--list", "helm-"+chartName+".*")
 	}
 	if err != nil || strings.TrimSpace(out) == "" {
-		if bumpType == "minor" {
-			return "v0.1.0", nil
-		}
-		return "v0.0.1", nil
+		return ""
 	}
 	tags := strings.Split(strings.TrimSpace(out), "\n")
 	prefix := chartName + "."
 	for _, tag := range tags {
 		tag = strings.TrimSpace(tag)
 		if strings.HasPrefix(tag, prefix) {
-			ver := tag[len(prefix):]
-			return incrementVersion(ver, bumpType)
+			return tag[len(prefix):]
 		}
 		if !strings.HasPrefix(chartName, "helm-") && strings.HasPrefix(tag, "helm-"+prefix) {
-			ver := tag[len("helm-"+prefix):]
-			return incrementVersion(ver, bumpType)
+			return tag[len("helm-"+prefix):]
 		}
 	}
-	if bumpType == "minor" {
-		return "v0.1.0", nil
+	return ""
+}
+
+// autoIncrementHelmVersionFrom bumps chartName's version by bumpType, using
+// the higher of the git-tag-derived version and registryHighest (the
+// highest version App Registry has recorded for this chart). This is the
+// fix for issue #814: git tags and App Registry can drift -- e.g. a git tag
+// creation failing after an App Registry record succeeded -- and a
+// requested bump must land on top of the chart's TRUE highest known
+// version, not just whatever git tag history shows. registryHighest may be
+// "" (App Registry unavailable, errored, or has no recorded artifacts for
+// this chart), in which case this degrades exactly to the prior
+// git-tag-only behavior.
+func autoIncrementHelmVersionFrom(chartName, bumpType string, git GitRunner, registryHighest string) (string, error) {
+	base := gitDerivedHelmVersionBase(chartName, git)
+
+	if registryHighest != "" {
+		if base == "" {
+			base = registryHighest
+		} else if gv, gerr := sharedsemver.Parse(base); gerr == nil {
+			if rv, rerr := sharedsemver.Parse(registryHighest); rerr == nil && sharedsemver.Compare(rv, gv) > 0 {
+				base = registryHighest
+			}
+		}
 	}
-	return "v0.0.1", nil
+
+	if base == "" {
+		if bumpType == "minor" {
+			return "v0.1.0", nil
+		}
+		return "v0.0.1", nil
+	}
+	return incrementVersion(base, bumpType)
 }
 
 func resolveChartAppVersions(chart HelmChartMetadata, allApps []AppMetadata, git GitRunner) (map[string]string, error) {
