@@ -548,13 +548,12 @@ func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, co
 		// relying on a.Digest never being "" too, which happens to be true
 		// today but shouldn't be load-bearing.
 		if existing.Digest != "" && existing.Digest == a.Digest && existing.Version == a.Version && existing.Kind == a.Kind && ownerID(existing) == ownerID(a) {
-			// Promotability is STORED as of AR-7c (migration 008, mirrored
-			// here without a real snapshot table) -- see insertArtifact/
-			// completePublish below, which set it ONCE at publish time.
-			// Never re-derived here, which is the whole point: the value on
-			// existing is what a caller gets, unaffected by any deploy_unit
-			// edit made since.
-			out := existing
+			// Promotability is derived LIVE (issue #833) -- re-derived here
+			// from the owner's CURRENT deploy_unit rather than replayed
+			// verbatim from the stored row, so a replay reflects any
+			// deploy_unit edit (or DerivePromotability rule change) made
+			// since the original publish, same as every other read path.
+			out := r.livePromotability(existing)
 			return &out, true, nil
 		}
 	}
@@ -614,11 +613,10 @@ func ownerID(a repository.Artifact) string {
 // provenance -- shared by RecordArtifact's direct-create path (always
 // ArtifactProvenanceObserved), BeginPublish's ∅ -> publishing branch,
 // AllocateVersion's ∅ -> allocated write, and AdoptArtifact's (AR-7e, issue
-// #558) ∅ -> published branch (ArtifactProvenanceAdopted). As of AR-7c
-// (migration 008), Promotability is resolved and STORED here -- once, only
-// when state is reaching ArtifactStatePublished -- never re-derived on a
-// later read. See repository.Artifact.Promotability's doc comment for why
-// this is the retroactivity fix, not just a refactor.
+// #558) ∅ -> published branch (ArtifactProvenanceAdopted). Promotability is
+// derived live (issue #833) via livePromotability below, not stored --
+// every read path re-derives it again anyway, so what is set here only
+// matters for THIS call's own return value.
 func (r *Registry) checkMajorMinorDigestCollision(a repository.Artifact) error {
 	if a.Digest == "" {
 		return nil
@@ -652,14 +650,10 @@ func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.C
 	a.Provenance = provenance
 	a.VersionSource = versionSource
 	a.StateChangedAt = timeNow()
-	if state == repository.ArtifactStatePublished {
-		if a.PublishedAt.IsZero() {
-			a.PublishedAt = timeNow()
-		}
-		a.Promotability = r.derivePromotability(a)
-	} else {
-		a.Promotability = ""
+	if state == repository.ArtifactStatePublished && a.PublishedAt.IsZero() {
+		a.PublishedAt = timeNow()
 	}
+	a = r.livePromotability(a)
 
 	if a.Kind == repository.ArtifactKindChart && state == repository.ArtifactStatePublished {
 		links, err := r.linkContains(contains)
@@ -676,8 +670,7 @@ func (r *Registry) insertArtifact(a repository.Artifact, contains []repository.C
 
 // completePublish mirrors postgres's artifactRepo.completePublish: the
 // publishing -> published transition against an EXISTING row. Promotability
-// is resolved and stored HERE, at the instant state actually reaches
-// "published" -- see insertArtifact's doc comment above.
+// is derived live (issue #833) -- see insertArtifact's doc comment above.
 func (r *Registry) completePublish(existing, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, error) {
 	updated := existing
 	updated.Digest = a.Digest
@@ -693,7 +686,7 @@ func (r *Registry) completePublish(existing, a repository.Artifact, contains []r
 	}
 	updated.State = repository.ArtifactStatePublished
 	updated.StateChangedAt = timeNow()
-	updated.Promotability = r.derivePromotability(updated)
+	updated = r.livePromotability(updated)
 
 	if updated.Kind == repository.ArtifactKindChart {
 		links, err := r.linkContains(contains)
@@ -719,9 +712,11 @@ func (r *Registry) completePublish(existing, a repository.Artifact, contains []r
 func (r *Registry) AdoptArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, reason, actor string) (*repository.Artifact, bool, error) {
 	// 1. Idempotent replay by (digest, owner, kind, version) -- see postgres's
 	// AdoptArtifact step 1 for why Provenance/State are never rewritten here.
+	// Promotability is re-derived live (issue #833), same as RecordArtifact's
+	// matching replay branch above.
 	for _, existing := range r.state.Artifacts {
 		if existing.Digest != "" && existing.Digest == a.Digest && existing.Version == a.Version && existing.Kind == a.Kind && ownerID(existing) == ownerID(a) {
-			out := existing
+			out := r.livePromotability(existing)
 			return &out, true, nil
 		}
 	}
@@ -788,7 +783,7 @@ func (r *Registry) completeAdoption(existing, a repository.Artifact, contains []
 	updated.Provenance = repository.ArtifactProvenanceAdopted
 	updated.StateChangedAt = timeNow()
 	updated.FailReason = ""
-	updated.Promotability = r.derivePromotability(updated)
+	updated = r.livePromotability(updated)
 
 	if updated.Kind == repository.ArtifactKindChart {
 		links, err := r.linkContains(contains)
@@ -1018,11 +1013,12 @@ func (r *Registry) ListArtifacts(ctx context.Context, filter repository.Artifact
 		if filter.Provenance != "" && a.Provenance != filter.Provenance {
 			continue
 		}
-		// Promotability is read directly off the stored row -- see
-		// insertArtifact/completePublish, which set it once at publish time
-		// (AR-7c). Deliberately NOT re-derived here: re-deriving is the
-		// retroactivity bug AR-7c fixed (editing a release_app rule would
-		// change the promotability of artifacts published before the edit).
+		// Promotability is derived LIVE (issue #833) from the owner's
+		// CURRENT deploy_unit, not read off a stored value -- so an edit to
+		// an app's deploy_unit (or a DerivePromotability rule change) is
+		// reflected in this filter immediately, for every artifact
+		// regardless of when it was published.
+		a = r.livePromotability(a)
 		if filter.PromotableOnly && a.Promotability != repository.PromotabilityPromotable {
 			continue
 		}
@@ -1058,7 +1054,6 @@ func (r *Registry) ListArtifacts(ctx context.Context, filter repository.Artifact
 	return all, nextPageToken, nil
 }
 
-
 func (r *Registry) GetArtifact(ctx context.Context, lookup repository.ArtifactLookup) (*repository.Artifact, error) {
 	a, err := r.findArtifact(lookup)
 	if err != nil {
@@ -1068,17 +1063,24 @@ func (r *Registry) GetArtifact(ctx context.Context, lookup repository.ArtifactLo
 	return &cp, nil
 }
 
+// findArtifact is the single choke point every read path (GetArtifact,
+// ResolveArtifact's primary lookup, ListArtifactPins' primary lookup) goes
+// through, so livePromotability only needs applying here to cover all of
+// them -- issue #833: Promotability is derived live, never read off a
+// stored value.
 func (r *Registry) findArtifact(lookup repository.ArtifactLookup) (*repository.Artifact, error) {
 	if lookup.ArtifactID != "" {
 		a, ok := r.state.Artifacts[lookup.ArtifactID]
 		if !ok {
 			return nil, repository.ErrNotFound
 		}
+		a = r.livePromotability(a)
 		return &a, nil
 	}
 	if lookup.Digest != "" {
 		for _, a := range r.state.Artifacts {
 			if a.Digest == lookup.Digest {
+				a = r.livePromotability(a)
 				return &a, nil
 			}
 		}
@@ -1087,6 +1089,7 @@ func (r *Registry) findArtifact(lookup repository.ArtifactLookup) (*repository.A
 	if lookup.OwnerFullName != "" {
 		for _, a := range r.state.Artifacts {
 			if a.Kind == lookup.Kind && a.Version == lookup.Version && r.ownerFullName(a) == lookup.OwnerFullName {
+				a = r.livePromotability(a)
 				return &a, nil
 			}
 		}
@@ -1113,7 +1116,7 @@ func (r *Registry) ResolveArtifact(ctx context.Context, lookup repository.Artifa
 		if !ok {
 			continue
 		}
-		images = append(images, img)
+		images = append(images, r.livePromotability(img))
 		if b, ok := r.state.Builds[img.BuildID]; ok {
 			builds = append(builds, b)
 		}
@@ -1143,7 +1146,7 @@ func (r *Registry) ListArtifactPins(ctx context.Context, lookup repository.Artif
 		}
 		for _, link := range candidate.Contains {
 			if link.ImageArtifactID == a.ArtifactID {
-				chartArtifacts = append(chartArtifacts, candidate)
+				chartArtifacts = append(chartArtifacts, r.livePromotability(candidate))
 				break
 			}
 		}
@@ -1182,6 +1185,25 @@ func (r *Registry) derivePromotability(a repository.Artifact) repository.Promota
 		du = c.DeployUnit
 	}
 	return repository.DerivePromotability(a.Kind, du)
+}
+
+// livePromotability derives a's Promotability live from the owner's CURRENT
+// deploy_unit (issue #833) and returns the updated copy. Applied at every
+// point an Artifact leaves the registry -- read paths (findArtifact,
+// ListArtifacts, ResolveArtifact, ListArtifactPins) and write-path replay
+// branches (RecordArtifact/AdoptArtifact's idempotent digest match) alike --
+// so a deploy_unit edit (or a DerivePromotability rule change, e.g. #810) is
+// reflected on the very next call, including for an artifact published
+// before the edit. Mirrors postgres/artifact.go's scanArtifact: only
+// published rows get a derived value; allocated/publishing/failed rows
+// report "" (nothing to derive it from until publish).
+func (r *Registry) livePromotability(a repository.Artifact) repository.Artifact {
+	if a.State == repository.ArtifactStatePublished {
+		a.Promotability = r.derivePromotability(a)
+	} else {
+		a.Promotability = ""
+	}
+	return a
 }
 
 // ============================================================================
@@ -1662,4 +1684,3 @@ func sortApps(apps []repository.App) {
 func sortCharts(charts []repository.Chart) {
 	sort.Slice(charts, func(i, j int) bool { return charts[i].FullName() < charts[j].FullName() })
 }
-

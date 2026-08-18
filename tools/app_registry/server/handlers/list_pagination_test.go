@@ -7,6 +7,7 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -134,27 +135,52 @@ func TestListArtifacts_InvalidPageToken(t *testing.T) {
 // client-side after the page's LIMIT) -- a full page of promotable-only
 // results must still be reachable even when non-promotable rows sit between
 // them in state_changed_at order.
+//
+// Promotability is derived live (issue #833) from the owning app's
+// deploy_unit -- SeedArtifact can no longer set it directly (that field is
+// overwritten by ListArtifacts' live derivation before the PromotableOnly
+// filter runs, same as every other read path). Artifacts are seeded against
+// two real apps instead: "image-app" (DEPLOY_UNIT_IMAGE -> PROMOTABLE) and
+// "none-app" (DEPLOY_UNIT_NONE -> NOT_PROMOTABLE).
 func TestListArtifacts_PromotableOnly_ComposesWithPagination(t *testing.T) {
 	repo := fake.New()
+	appSrv := NewAppServer(repo)
 	srv := NewArtifactServer(repo)
 	ctx := authedCtx()
+
+	reconcile, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet([]*appmetapb.AppManifest{
+			{Domain: "demo", Name: "image-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+			{Domain: "demo", Name: "none-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
+		}, nil),
+		IdempotencyKey: "promotable-only-setup",
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	apps := map[string]string{}
+	for _, a := range reconcile.CreatedApps {
+		apps[a.Name] = a.AppId
+	}
 
 	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 	var wantIDs []string
 	for i := 0; i < 6; i++ {
-		promotability := repository.PromotabilityNotPromotable
+		ownerAppID := apps["none-app"]
+		wantPromotable := false
 		if i%2 == 0 {
-			promotability = repository.PromotabilityPromotable
+			ownerAppID = apps["image-app"]
+			wantPromotable = true
 		}
 		a := repo.SeedArtifact(repository.Artifact{
 			Kind:           repository.ArtifactKindImage,
+			AppID:          ownerAppID,
 			Repository:     "ghcr.io/acme/promotable-test",
 			Version:        "v1.0.0",
 			State:          repository.ArtifactStatePublished,
 			StateChangedAt: base.Add(time.Duration(i) * time.Second),
-			Promotability:  promotability,
 		})
-		if promotability == repository.PromotabilityPromotable {
+		if wantPromotable {
 			wantIDs = append(wantIDs, a.ArtifactID)
 		}
 	}

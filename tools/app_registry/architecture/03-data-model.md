@@ -39,8 +39,11 @@ erDiagram
 `artifact` gained `state`/`provenance`/`version_source` with nullable
 `digest`/`build_id` in AR-7b (migration 007), absorbing `version_allocation`,
 which was dropped, and gained `manifest_id`/`promotability` in AR-7c
-(migration 008). AR-7 (issue #558) is fully merged — see "Release lifecycle
-(issue #558)" below.
+(migration 008). `promotability` was dropped again by issue #833 (migration
+014) — it is derived live on every read (joined against the owning app's/
+chart's CURRENT `deploy_unit`), not stored; `manifest_id` is unaffected and
+remains a stored column. AR-7 (issue #558) is fully merged — see "Release
+lifecycle (issue #558)" below.
 
 ## SCD2 on `promotion`
 

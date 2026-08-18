@@ -1136,9 +1136,62 @@ Implemented on branch `ar-7c-manifest-snapshot`, stacked on
 - Editing an app's `deploy_unit` does not change the promotability of an
   artifact published before the edit (the retroactivity bug, proven by test)
   — `TestRecordArtifact_PromotabilityIsNotRetroactive[_Postgres]`.
+  **Reversed by issue #833 — see below.**
 - `exit 3` / `ReasonOwnerNotReconciled` becomes unreachable from
   `release.yml` — `AssertApps` runs as the first App Registry step of both
   jobs that later resolve an owner by full name, before any such call.
+
+**Reversed by issue #833 (migration `014`) — "store once" undone for
+`promotability` only.** This phase's `artifact.promotability`
+store-once-at-publish-time design, and its exit criterion above, were
+deliberately reversed roughly six months later. What changed and why:
+
+- **The bug this section's exit criterion was fixing was real** — editing a
+  `release_app`'s `deploy_unit` used to silently change the promotability of
+  artifacts published years earlier, because `scanArtifact` re-derived it
+  from a *live* join on every read. Freezing it at publish time fixed that.
+- **In production, the fix created a mirror-image bug that was judged
+  worse.** PR #810 fixed `DerivePromotability` itself — a real bug where
+  binary artifacts weren't always `PROMOTABLE` regardless of `deploy_unit`.
+  Because promotability was stored, not derived, every artifact published
+  *before* #810 merged stayed wrong forever: `tools-app-registry`'s two
+  `published` binary artifacts (`v0.2.1`, `v0.2.2`, published 2026-08-16,
+  one day before #810 merged on 2026-08-17) were found permanently
+  stranded at `promotability = not_promotable` in prod, queried directly.
+  There is no general "fix forward" for a stored value — only a one-off
+  manual DB edit per stuck row, and the same class of bug recurs every time
+  the derivation rule OR a `deploy_unit` correction lands. That
+  operational cost, discovered empirically rather than anticipated at
+  AR-7c design time, was judged worse than the retroactivity this phase
+  set out to prevent.
+- **As built (issue #833):** `artifact.promotability` and its
+  `artifact_promotability_shape` CHECK are dropped (migration `014`);
+  `artifact.manifest_id` is untouched — it stays stored, as build-commit
+  provenance, a genuinely historical fact rather than a live-changing
+  property. `postgres/artifact.go`'s `scanArtifact` derives `Promotability`
+  live again, joined against `v_current_app`/`v_current_chart` (with an
+  `app_manifest_release`-observation fallback for an owner that has only
+  ever been `AssertApps`-asserted, never `ReconcileApps`-swept — needed to
+  keep THIS phase's OTHER exit criterion, "a release from a branch that
+  never merges records ... a manifest snapshot" and
+  `TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres`, intact;
+  see `architecture/08-release-lifecycle/02-manifest-snapshot.md`'s "As
+  built (issue #833, migration `014`)" for the exact mechanism).
+  `TestRecordArtifact_PromotabilityIsNotRetroactive[_Postgres]` are replaced
+  by `TestRecordArtifact_PromotabilityIsRetroactive[_Postgres]`, proving the
+  opposite property. No backfill was needed for the stranded prod rows —
+  deriving live means they resolve correctly automatically on their next
+  read.
+- **Lesson for future phases weighing this same tradeoff:** "store once,
+  never recompute" trades retroactive drift for permanent staleness under
+  future rule/config fixes. For a derivation rule that is expected to be
+  edited again (either the input data, like `deploy_unit`, or the function
+  itself, like `DerivePromotability`), staleness is the worse failure mode
+  in practice — it is silent, unbounded in duration, and has no general
+  remedy short of a bespoke backfill. Prefer deriving live and paying the
+  read-time join cost, unless the retroactivity being prevented is itself
+  the greater risk (e.g. a legal/compliance value that must never appear to
+  change after the fact).
 
 ### AR-7d — Run log and resume — no schema change — done, merged (#567)
 
