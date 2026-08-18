@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -567,215 +566,43 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			continue
 		}
 
-		// 3. Build chart target with Bazel
-		chartTarget, chartDir := chartOutputPaths(workspaceRoot, chart)
-		fmt.Printf("Building bazel target: %s\n", chartTarget)
-		if _, err := bazel.Run("build", chartTarget); err != nil {
-			return nil, fmt.Errorf("bazel build %s: %w", chartTarget, err)
+		chartReleaser := &ChartReleaser{
+			Chart:         chart,
+			AllApps:       allApps,
+			RepoURL:       repoURL,
+			RepoUser:      repoUser,
+			RepoPass:      repoPass,
+			AppVersions:   appVersions,
+			WorkspaceRoot: workspaceRoot,
+			Bazel:         bazel,
+			Docker:        docker,
+			FS:            fs,
+			Packager:      packager,
+			Uploader:      uploader,
 		}
 
-		// 4. Package chart into temp directory
-		outDir, err := os.MkdirTemp("", "helm-release-*")
+		execRes, err := ExecuteRelease(ReleaseParams{
+			Ctx:                  ctx,
+			Domain:               chart.Domain,
+			OwnerFullName:        publishedName,
+			Version:              ver,
+			AllowAutoAdvance:     (p.Version == ""),
+			BuildID:              p.BuildID,
+			IdempotencyKeyPrefix: idempotencyPrefix,
+			GitSHA:               sha,
+			Repository:           fmt.Sprintf("%s/%s", strings.TrimRight(repoURL, "/"), publishedName),
+			SkipRegistry:         p.SkipRegistry,
+			CreateGitTag:         p.CreateGitTag,
+			TagName:              tagName,
+			TagPrefix:            chart.Name + ".",
+			PreviousTagPatterns:  []string{chart.Name + ".*"},
+			PreviousTagPrefixes:  []string{chart.Name + ".", publishedName + "."},
+			Releaser:             chartReleaser,
+			Git:                  git,
+			ArtifactClient:       artifactClient,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("create temp dir: %w", err)
-		}
-		defer os.RemoveAll(outDir)
-
-		chartPath, err := packager.Package(chartDir, chart.Name, ver, outDir, appVersions)
-		if err != nil {
-			return nil, fmt.Errorf("package chart %s: %w", chart.Name, err)
-		}
-
-		// 5. Compute chart archive digest
-		chartBytes, err := os.ReadFile(chartPath)
-		if err != nil {
-			return nil, fmt.Errorf("read packaged chart %s: %w", chartPath, err)
-		}
-		hasher := sha256.New()
-		hasher.Write(chartBytes)
-		chartDigest := fmt.Sprintf("sha256:%x", hasher.Sum(nil))
-
-		// 6. Check for no-op rebuild against previous tag
-		prevTag := getPreviousChartTag(git, chart.Name, tagName)
-		digestUnchanged := false
-		effectiveVersion := ver
-		effectiveTag := tagName
-
-		if uploader != nil {
-			// First check if this exact version already exists on ChartMuseum (e.g. from a previous failed run)
-			collisionRes, colErr := ResolveCandidateCollision(
-				ver,
-				chart.Name+".",
-				p.Version == "",
-				func(v string) (bool, bool, error) {
-					data, fetchErr := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, v)
-					if fetchErr != nil || len(data) == 0 {
-						return false, false, fetchErr
-					}
-					return true, chartArchivesContentEqual(chartBytes, data), nil
-				},
-				func(newVer string) error {
-					newChartPath, pkgErr := packager.Package(chartDir, chart.Name, newVer, outDir, appVersions)
-					if pkgErr != nil {
-						return pkgErr
-					}
-					chartPath = newChartPath
-					newBytes, readErr := os.ReadFile(chartPath)
-					if readErr != nil {
-						return readErr
-					}
-					chartBytes = newBytes
-					hasher := sha256.New()
-					hasher.Write(newBytes)
-					chartDigest = fmt.Sprintf("sha256:%x", hasher.Sum(nil))
-					return nil
-				},
-			)
-			if colErr == nil && collisionRes != nil {
-				if collisionRes.DigestUnchanged {
-					digestUnchanged = true
-					fmt.Printf("::notice title=Chart package already published (%s)::%s is already present on ChartMuseum with identical content (%s). Skipping re-upload.\n",
-						chart.Name, ver, chartDigest)
-				} else if collisionRes.Advanced {
-					ver = collisionRes.Version
-					tagName = collisionRes.Tag
-					effectiveVersion = ver
-					effectiveTag = tagName
-					fmt.Printf("::notice title=Chart version collision resolved (%s)::Advanced to %s to avoid collision with orphaned ChartMuseum package.\n",
-						chart.Name, ver)
-				}
-			}
-
-			// If not matching current version, check previous tag for no-op rebuild
-			if !digestUnchanged && prevTag != "" {
-				prevVersion := extractChartVersionFromTag(chart.Name, prevTag)
-				var prevMatches bool
-				prevData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, prevVersion)
-				if err == nil && len(prevData) > 0 {
-					prevMatches = chartArchivesContentEqual(chartBytes, prevData)
-				}
-
-				decision := EvaluateNoOpDecision(ver, tagName, prevVersion, prevTag, prevMatches)
-				digestUnchanged = decision.DigestUnchanged
-				effectiveVersion = decision.EffectiveVersion
-				effectiveTag = decision.EffectiveTag
-
-				switch decision.Outcome {
-				case OutcomeNoOpRebuild:
-					fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
-						chart.Name, ver, prevTag, prevTag)
-				case OutcomeNewBaseline:
-					fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same packaged content as %s. Registering new version baseline %s with shared digest.\n",
-						chart.Name, ver, prevTag, ver)
-				}
-			}
-		}
-
-		if digestUnchanged {
-			result.Charts = append(result.Charts, &SingleChartResult{
-				ChartName:        chart.Name,
-				PublishedName:    publishedName,
-				Domain:           chart.Domain,
-				Version:          ver,
-				EffectiveVersion: effectiveVersion,
-				EffectiveTag:     effectiveTag,
-				PreviousTag:      prevTag,
-				Digest:           chartDigest,
-				DigestUnchanged:  true,
-				Published:        false,
-				ChartPath:        chartPath,
-			})
-			continue
-		}
-
-		isAllocate := false
-		if artifactClient != nil && !p.SkipRegistry {
-			var aerr error
-			isAllocate, aerr = isDomainAtAllocateStage(ctx, artifactClient, chart.Domain)
-			if aerr != nil {
-				return nil, aerr
-			}
-		}
-
-		// 7. BeginPublish (Heartbeat) in App Registry
-		beginPublishSucceeded := false
-		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
-			beginReq := &pb.BeginPublishRequest{
-				Kind:           pb.ArtifactKind_ARTIFACT_KIND_CHART,
-				OwnerFullName:  publishedName,
-				Version:        ver,
-				BuildId:        p.BuildID,
-				IdempotencyKey: fmt.Sprintf("%s-%s-chart-begin", idempotencyPrefix, publishedName),
-				Repository:     fmt.Sprintf("%s/%s", strings.TrimRight(repoURL, "/"), publishedName),
-			}
-			_, err := artifactClient.BeginPublish(ctx, beginReq)
-			if err != nil {
-				if isAllocate {
-					return nil, fmt.Errorf("App Registry BeginPublish failed for chart %s (domain %q at stage 'allocate'): %w", publishedName, chart.Domain, err)
-				}
-				fmt.Printf("::warning title=App Registry BeginPublish failed::%v\n", err)
-			} else {
-				beginPublishSucceeded = true
-			}
-		}
-
-		// 8. Upload chart package to ChartMuseum
-		fmt.Printf("Uploading %s version %s to %s...\n", publishedName, ver, repoURL)
-		if uploadErr := uploader.UploadChart(ctx, repoURL, repoUser, repoPass, chartPath); uploadErr != nil {
-			if beginPublishSucceeded && artifactClient != nil {
-				failReq := &pb.FailPublishRequest{
-					Kind:           pb.ArtifactKind_ARTIFACT_KIND_CHART,
-					OwnerFullName:  publishedName,
-					Version:        ver,
-					Reason:         fmt.Sprintf("chart upload failed (workflow run %s, attempt %s): %v", runID, attempt, uploadErr),
-					IdempotencyKey: fmt.Sprintf("%s-%s-chart-fail", idempotencyPrefix, publishedName),
-				}
-				_, _ = artifactClient.FailPublish(ctx, failReq)
-			}
-			return nil, fmt.Errorf("upload chart %s to ChartMuseum: %w", publishedName, uploadErr)
-		}
-
-		// 9. Create git tag on success
-		if p.CreateGitTag && git != nil && sha != "" {
-			if _, err := git.Run("rev-parse", tagName); err != nil {
-				fmt.Printf("Creating git tag %s...\n", tagName)
-				_, _ = git.Run("tag", "-a", tagName, "-m", fmt.Sprintf("Release helm chart %s version %s", chart.Name, ver), sha)
-			}
-		}
-
-		// 10. Resolve Contained Image Digests & Record Artifact
-		containedImages := resolveContainedImages(chartDir, appVersions, chart, allApps, docker, fs)
-
-		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
-			recReq := &pb.RecordArtifactRequest{
-				BuildId:        p.BuildID,
-				Kind:           pb.ArtifactKind_ARTIFACT_KIND_CHART,
-				OwnerFullName:  publishedName,
-				Repository:     fmt.Sprintf("%s/%s", strings.TrimRight(repoURL, "/"), publishedName),
-				Version:        ver,
-				Digest:         chartDigest,
-				Contains:       containedImages,
-				PublishedAt:    time.Now().Unix(),
-				IdempotencyKey: fmt.Sprintf("%s-%s-chart-record", idempotencyPrefix, publishedName),
-			}
-			if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
-				if beginPublishSucceeded {
-					failReq := &pb.FailPublishRequest{
-						Kind:           pb.ArtifactKind_ARTIFACT_KIND_CHART,
-						OwnerFullName:  publishedName,
-						Version:        ver,
-						Reason:         fmt.Sprintf("chart record artifact failed (workflow run %s, attempt %s): %v", runID, attempt, err),
-						IdempotencyKey: fmt.Sprintf("%s-%s-chart-fail-record", idempotencyPrefix, publishedName),
-					}
-					_, _ = artifactClient.FailPublish(ctx, failReq)
-				}
-				if isAllocate {
-					return nil, fmt.Errorf("App Registry RecordArtifact failed for chart %s (domain %q at stage 'allocate'): %w", publishedName, chart.Domain, err)
-				}
-				fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
-			} else {
-				fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", publishedName, ver, chartDigest)
-			}
+			return nil, err
 		}
 
 		result.Charts = append(result.Charts, &SingleChartResult{
@@ -783,14 +610,14 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			PublishedName:    publishedName,
 			Domain:           chart.Domain,
 			Version:          ver,
-			EffectiveVersion: effectiveVersion,
-			EffectiveTag:     effectiveTag,
-			PreviousTag:      prevTag,
-			Digest:           chartDigest,
-			DigestUnchanged:  false,
-			Published:        true,
-			ChartPath:        chartPath,
-			ContainedImages:  containedImages,
+			EffectiveVersion: execRes.EffectiveVersion,
+			EffectiveTag:     execRes.EffectiveTag,
+			PreviousTag:      execRes.PreviousTag,
+			Digest:           execRes.Digest,
+			DigestUnchanged:  execRes.DigestUnchanged,
+			Published:        execRes.Published,
+			ChartPath:        chartReleaser.ChartPath(),
+			ContainedImages:  execRes.ContainedImages,
 		})
 	}
 
