@@ -294,6 +294,37 @@ func TestHandleArtifactDetail_PinsLookupFails_IsExplicitErrorNotBlank(t *testing
 	}
 }
 
+func TestHandleArtifactDetail_BinaryArtifact_RendersBinaryTitleAndOwner(t *testing.T) {
+	artifactClient := &rsArtifactClient{
+		getArtifactResp: &pb.GetArtifactResponse{
+			Artifact: &pb.Artifact{ArtifactId: "art-bin", Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY, Digest: "sha256:bin123", AppId: "app-cli", Version: "v0.3.0"},
+		},
+	}
+	appClient := &rsAppClient{
+		apps: []*pb.App{
+			{AppId: "app-cli", Domain: "tools", Name: "app-registry", FullName: "tools-app-registry"},
+		},
+	}
+	app := rsTestApp(&rsEnvClient{}, appClient, &rsPromotionClient{}, artifactClient)
+
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/sha256:bin123", nil)
+	req.SetPathValue("digest", "sha256:bin123")
+	w := httptest.NewRecorder()
+	app.handleArtifactDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "Binary artifact") {
+		t.Errorf("expected 'Binary artifact' title, got body: %s", body)
+	}
+	if !strings.Contains(body, "tools-app-registry") {
+		t.Errorf("expected owner 'tools-app-registry' in body, got body: %s", body)
+	}
+}
+
 // --- Drift rollup cross-screen agreement (FR-9) -----------------------------
 
 func TestDashboardAndDriftAudit_DriftCountsAgree(t *testing.T) {

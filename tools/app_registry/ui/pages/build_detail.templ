@@ -53,6 +53,10 @@ func artifactKindLabel(k pb.ArtifactKind) string {
 		return "image"
 	case pb.ArtifactKind_ARTIFACT_KIND_CHART:
 		return "chart"
+	case pb.ArtifactKind_ARTIFACT_KIND_BINARY:
+		return "binary"
+	case pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE:
+		return "firmware"
 	default:
 		return "unknown"
 	}
