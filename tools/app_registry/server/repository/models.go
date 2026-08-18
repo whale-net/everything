@@ -322,8 +322,13 @@ type Artifact struct {
 
 	// ManifestID is the app_manifest/chart_manifest CONTENT row (migration
 	// 010, AR-8; originally a per-commit snapshot row, migration 008, AR-7c)
-	// this row's Promotability was derived from -- set once, at the instant
-	// State reaches ArtifactStatePublished, never touched again. Empty for
+	// this row was published against -- build-commit provenance, set once,
+	// at the instant State reaches ArtifactStatePublished, never touched
+	// again. Unlike Promotability (see below), this remains stored rather
+	// than derived: it is a historical fact about which manifest content
+	// existed at publish time, not a live-changing property of the owner's
+	// current state -- issue #833 only reversed the "store once" tradeoff
+	// for Promotability. Empty for
 	// allocated/publishing/failed rows, and for any row published before
 	// migration 008 (no content row exists that honestly corresponds to what
 	// was live when those were originally published -- see migration 008's
@@ -336,16 +341,23 @@ type Artifact struct {
 	// from.
 	ManifestID string
 
-	// Promotability is now STORED (migration 008, AR-7c) -- computed ONCE by
-	// repository.DerivePromotability at the instant State reaches
-	// ArtifactStatePublished, from ManifestID's content (or, absent one,
-	// the owner's current v_current_app/v_current_chart deploy_unit -- see
-	// postgres/artifact.go's resolveManifestForPublish). Never recomputed on
-	// read. This is the fix for the retroactivity bug ARCHITECTURE.md
-	// documents: editing an app's deploy_unit after a build was published no
-	// longer changes that build's promotability. Empty/unset for
-	// allocated/publishing/failed rows -- there is nothing to derive it from
-	// until publish.
+	// Promotability is derived LIVE, on every read (issue #833; previously
+	// STORED once at publish time, migration 008/AR-7c) -- computed by
+	// repository.DerivePromotability from the owner's CURRENT
+	// v_current_app/v_current_chart deploy_unit, not from ManifestID's
+	// content. This means editing an app's deploy_unit, or fixing a
+	// DerivePromotability rule (e.g. #810), changes what is read back for
+	// artifacts published before the edit -- AR-7c had deliberately frozen
+	// this to avoid exactly that, but in production that traded one
+	// correctness problem for another: a rule fix could never reach
+	// artifacts published before the fix landed, permanently stranding them
+	// on the old, wrong value with no way to self-correct short of a manual
+	// DB edit. Staleness-under-rule-changes was judged worse than the extra
+	// read-time join this reintroduces -- see ARCHITECTURE.md "Promotability"
+	// and architecture/08-release-lifecycle/02-manifest-snapshot.md "As
+	// built (issue #833, migration 014)". Empty/unset for allocated/
+	// publishing/failed rows -- there is nothing to derive it from until
+	// publish.
 	Promotability Promotability
 
 	// Contains is populated only for Kind == ArtifactKindChart.

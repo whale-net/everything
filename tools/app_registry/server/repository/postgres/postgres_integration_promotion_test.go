@@ -81,19 +81,19 @@ func TestPromotion_CurrentIdxRejectsConcurrentCurrentRows(t *testing.T) {
 // version_source are NOT NULL as of migration 007 (AR-7b) -- state and
 // version_source have no safe default (see that migration's comments), so
 // every raw INSERT in this file must set them explicitly.
-// seedArtifact seeds a 'published' image artifact directly. As of migration
-// 008 (AR-7c), artifact_promotability_shape requires promotability
-// NOT NULL whenever state = 'published' -- 'promotable' here matches
-// seedApp's default "image" deploy_unit (DerivePromotability(IMAGE, IMAGE)
-// = PROMOTABLE). manifest_id is left NULL: these promotion/writeback tests
-// don't exercise manifest attribution, only that an artifact row exists to
-// promote.
+// seedArtifact seeds a 'published' image artifact directly. Promotability
+// is no longer a column to seed (issue #833, migration 014) -- it is
+// derived live from appID's deploy_unit on read; callers of this helper
+// pass an appID created via seedApp(..., "image") when they need
+// DerivePromotability(IMAGE, IMAGE) = PROMOTABLE. manifest_id is left
+// NULL: these promotion/writeback tests don't exercise manifest
+// attribution, only that an artifact row exists to promote.
 func seedArtifact(t *testing.T, pool *pgxpool.Pool, appID, buildID, digest, version string) string {
 	t.Helper()
 	var artifactID string
 	err := pool.QueryRow(context.Background(), `
-		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id, state, provenance, version_source, promotability)
-		VALUES ('image', $1, 'ghcr.io/acme/widget', $2, $3, $4, 'published', 'observed', 'tag', 'promotable')
+		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id, state, provenance, version_source)
+		VALUES ('image', $1, 'ghcr.io/acme/widget', $2, $3, $4, 'published', 'observed', 'tag')
 		RETURNING artifact_id`, appID, version, digest, buildID).Scan(&artifactID)
 	if err != nil {
 		t.Fatalf("seed artifact %s: %v", digest, err)

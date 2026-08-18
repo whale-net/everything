@@ -22,6 +22,20 @@ but that promotability never makes a binary eligible for chart composition.
 Firmware stays `NOT_PROMOTABLE` unconditionally — it has no CI
 version-resolution use case analogous to tool binaries.
 
+**Derived live, not stored (issue #833).** Every read (`GetArtifact`,
+`ListArtifacts`, `ResolveArtifact`, ...) computes `Promotability` fresh, by
+joining the artifact's owning app/chart to its CURRENT `deploy_unit` and
+calling `DerivePromotability` at that moment — `postgres/artifact.go`'s
+`scanArtifact`, mirrored by `fake.Registry`'s `livePromotability`. There is no
+`artifact.promotability` column; `Promotability` is not part of the artifact
+row at all, on either backend. This means editing an app's `deploy_unit`, or
+fixing a bug in `DerivePromotability` itself (e.g. #810), changes what is read
+back for an artifact published before the edit/fix. A brief phase (AR-7c,
+migration 008) instead stored this value once at publish time specifically to
+prevent that; #833 reverses it after that tradeoff proved worse in practice —
+see `architecture/08-release-lifecycle/02-manifest-snapshot.md` "As built
+(issue #833, migration 014)" for the full history and reasoning.
+
 **Override.** Promoting a `VIA_CHART` image directly is rejected unless the
 caller passes `allow_override`. When allowed, the promotion is stored with
 `is_override = true` and `GetEnvironmentState` reports it as a `DriftEntry`

@@ -178,40 +178,85 @@ func (r *buildRepo) ListBuilds(ctx context.Context, since time.Time, pageSize in
 
 type artifactRepo struct{ ex dbtx }
 
-// artifactRow is what every artifact SELECT returns. As of migration 008
-// (AR-7c), promotability/manifest_id are STORED columns on `artifact`
-// itself -- read directly here, never re-derived from a live join to
-// app.deploy_unit/chart.deploy_unit the way this query did before AR-7c
-// (that live join is exactly the retroactivity bug ARCHITECTURE.md
-// documents: editing an app's deploy_unit after publish used to silently
-// change every past artifact's promotability). digest/build_id/
-// published_at/manifest_id/promotability are all nullable -- an "allocated"
-// row has none of them yet; see migration 007's artifact_state_shape and
-// migration 008's artifact_promotability_shape CHECK constraints for
-// exactly which states may have which.
-// The LEFT JOINs to app/chart exist ONLY so lookups by owner full name
-// (findArtifact's OwnerFullName branch, ListArtifacts' OwnerFullName
-// filter, below) can match "domain-name" against the right owner -- NOT to
-// source promotability, which is why scanArtifact selects no columns off
-// them: as of migration 008 (AR-7c), a.manifest_id/a.promotability are
-// stored on `artifact` itself.
+// artifactRow is what every artifact SELECT returns. As of issue #833,
+// Promotability is derived LIVE on every read -- joined against the owning
+// app's/chart's CURRENT deploy_unit (v_current_app/v_current_chart, the
+// same views ListApps/GetApp/ListCharts/scanApp/scanChart in postgres/app.go
+// already read) and passed through repository.DerivePromotability, exactly
+// the way this query worked before migration 008 (AR-7c). AR-7c had changed
+// this to a column stored once at publish time, to fix a retroactivity bug
+// (editing an app's deploy_unit after publish silently changed past
+// artifacts' promotability); in production that traded one correctness
+// problem for another -- a DerivePromotability rule fix (#810) could never
+// reach artifacts published before the fix landed, permanently stranding
+// them on the old, wrong value. See ARCHITECTURE.md "Promotability" and
+// architecture/08-release-lifecycle/02-manifest-snapshot.md "As built
+// (issue #833, migration 014)" for the full tradeoff writeup.
+// manifest_id remains a STORED column (unaffected by this change -- it is
+// build-commit provenance, not promotability). digest/build_id/
+// published_at/manifest_id are all nullable -- an "allocated" row has none
+// of them yet; see migration 007's artifact_state_shape CHECK constraint
+// for exactly which states may have which. Promotability itself is derived
+// only for state == published (mirroring the old artifact_promotability_shape
+// CHECK's nullability); allocated/publishing/failed rows report "" (see
+// scanArtifact below), matching repository.Artifact.Promotability's doc
+// comment.
+// The LEFT JOINs now target v_current_app/v_current_chart (not the bare
+// app/chart identity tables) so this one join serves BOTH purposes: owner
+// full-name lookups (findArtifact's OwnerFullName branch, ListArtifacts'
+// OwnerFullName filter, below) AND sourcing deploy_unit for promotability
+// derivation. Same aliases (app/chart), same column names/order as the
+// bare tables used to have, so every existing app.domain/chart.domain
+// filter clause below is unchanged.
+//
+// app_release_fallback: v_current_app deliberately reads ONLY
+// provenance = 'sweep' snapshots (migration 008/010's "what does this app
+// look like today is a main-tree question" -- a release-time AssertApps
+// snapshot from a divergent/unmerged ref must never leak into ListApps/
+// GetApp), and COALESCEs to 'chart' when no sweep snapshot exists at all.
+// That default would silently break AR-7c's own exit criterion (issue
+// #547 / TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres): a
+// release from a ref that NEVER merges -- AssertApps only, ReconcileApps
+// never having run for this owner -- must still get a CORRECT promotability
+// from ITS OWN deploy_unit, not a 'chart' default manufactured by the
+// absence of sweep data. This LATERAL join supplies that fallback: the
+// most recently recorded app_manifest_release observation for this owner,
+// but ONLY consulted (the NOT EXISTS guard) when no CURRENT sweep interval
+// exists -- an owner that HAS been reconciled always uses the sweep value,
+// live-updating exactly as issue #833 intends; an owner that has ONLY ever
+// been asserted falls back to its own release content instead of a
+// meaningless default. No such fallback is needed for chart: v_current_chart's
+// deploy_unit is a hardcoded 'chart' constant that never depends on manifest
+// content existing at all (see migration 008's "Why chart_manifest has no
+// generated columns").
 const artifactSelectBase = `
 	SELECT a.artifact_id, a.kind, a.app_id, a.chart_id, a.repository, a.version, a.digest, a.build_id, a.published_at,
 	       a.state, a.provenance, a.version_source, a.state_changed_at, a.fail_reason,
-	       a.manifest_id, a.promotability
+	       a.manifest_id, COALESCE(app_release_fallback.deploy_unit, app.deploy_unit), chart.deploy_unit
 	FROM artifact a
-	LEFT JOIN app ON a.app_id = app.app_id
-	LEFT JOIN chart ON a.chart_id = chart.chart_id`
+	LEFT JOIN v_current_app app ON a.app_id = app.app_id
+	LEFT JOIN LATERAL (
+		SELECT m.deploy_unit
+		FROM app_manifest_release r
+		JOIN app_manifest m ON m.app_manifest_id = r.app_manifest_id
+		WHERE r.owner_id = a.app_id
+		  AND NOT EXISTS (
+		      SELECT 1 FROM app_manifest_history h WHERE h.owner_id = a.app_id AND h.valid_to IS NULL
+		  )
+		ORDER BY r.recorded_at DESC
+		LIMIT 1
+	) app_release_fallback ON true
+	LEFT JOIN v_current_chart chart ON a.chart_id = chart.chart_id`
 
 func scanArtifact(row pgx.Row) (repository.Artifact, error) {
 	var a repository.Artifact
 	var kind, state, provenance, versionSource string
-	var appID, chartID, digest, buildID, manifestID, promotability *string
+	var appID, chartID, digest, buildID, manifestID, appDeployUnit, chartDeployUnit *string
 	var publishedAt *time.Time
 	if err := row.Scan(
 		&a.ArtifactID, &kind, &appID, &chartID, &a.Repository, &a.Version, &digest, &buildID, &publishedAt,
 		&state, &provenance, &versionSource, &a.StateChangedAt, &a.FailReason,
-		&manifestID, &promotability,
+		&manifestID, &appDeployUnit, &chartDeployUnit,
 	); err != nil {
 		return repository.Artifact{}, err
 	}
@@ -237,8 +282,22 @@ func scanArtifact(row pgx.Row) (repository.Artifact, error) {
 	if manifestID != nil {
 		a.ManifestID = *manifestID
 	}
-	if promotability != nil {
-		a.Promotability = repository.Promotability(*promotability)
+	// Live derivation (issue #833): only for published rows -- nothing to
+	// derive promotability from until publish, matching the old (pre-#833)
+	// stored column's nullability. A chart artifact's owner join is
+	// v_current_chart (deploy_unit hardcoded 'chart'); every other kind
+	// (image, binary, firmware) owns via app_id (migration 011) and joins
+	// v_current_app.
+	if a.State == repository.ArtifactStatePublished {
+		var du string
+		if a.Kind == repository.ArtifactKindChart {
+			if chartDeployUnit != nil {
+				du = *chartDeployUnit
+			}
+		} else if appDeployUnit != nil {
+			du = *appDeployUnit
+		}
+		a.Promotability = repository.DerivePromotability(a.Kind, deployUnitFromDB(du))
 	}
 	return a, nil
 }
@@ -341,12 +400,16 @@ func ownerIDOf(a repository.Artifact) string {
 // ============================================================================
 
 // resolveManifestForPublish resolves the app_manifest/chart_manifest
-// CONTENT row to attribute a NEWLY published artifact to, and derives its
-// Promotability from that content -- see ARCHITECTURE.md "App identity vs.
-// per-build manifest snapshot". Called from insertArtifact/completePublish
-// at the exact instant a row reaches "published", and ONLY then -- the
-// result is stored and never recomputed, which is what fixes the
-// retroactivity bug (repository.Artifact.Promotability's doc comment).
+// CONTENT row to attribute a NEWLY published artifact to -- see
+// ARCHITECTURE.md "App identity vs. per-build manifest snapshot". Called
+// from insertArtifact/completePublish at the exact instant a row reaches
+// "published", and ONLY then -- manifest_id is provenance (which build-time
+// content a row was published against) and is stored, same as always.
+//
+// Promotability is NOT resolved here as of issue #833: it is derived LIVE
+// on every read from the owner's CURRENT deploy_unit (scanArtifact, this
+// package), not from the manifest content a build happened to be resolved
+// against at publish time -- see scanArtifact's doc comment for why.
 //
 // Prefers the content recorded at the EXACT commit buildID's build was built
 // from -- typically the one release.yml's AssertApps step just wrote, at
@@ -355,7 +418,7 @@ func ownerIDOf(a repository.Artifact) string {
 // interval) when no exact release match exists (a domain that hasn't wired
 // AssertApps into its release path yet, or a build whose commit predates
 // AR-7c/AR-8) -- this is the same deliberate simplification migration 008
-// documented: "derived at publish time" means "from the best content known
+// documented: "attributed at publish time" means "the best content known
 // at publish time," not "guaranteed to be the exact build commit."
 //
 // Errors (ErrFailedPrecondition) only if NEITHER a release row NOR a current
@@ -367,7 +430,7 @@ func ownerIDOf(a repository.Artifact) string {
 // before RecordArtifact/BeginPublish ever calls this, so a missing content
 // row here would mean that invariant broke, not a normal operational
 // condition.
-func (r *artifactRepo) resolveManifestForPublish(ctx context.Context, kind repository.ArtifactKind, ownerID, buildID string) (manifestID string, promotability repository.Promotability, err error) {
+func (r *artifactRepo) resolveManifestForPublish(ctx context.Context, kind repository.ArtifactKind, ownerID, buildID string) (manifestID string, err error) {
 	var buildGitSHA string
 	if buildID != "" {
 		row := r.ex.QueryRow(ctx, `SELECT git_sha FROM build WHERE build_id = $1`, buildID)
@@ -375,23 +438,14 @@ func (r *artifactRepo) resolveManifestForPublish(ctx context.Context, kind repos
 	}
 
 	if kind == repository.ArtifactKindChart {
-		id, ferr := r.currentChartManifestID(ctx, ownerID, buildGitSHA)
-		if ferr != nil {
-			return "", "", ferr
-		}
-		// A chart artifact's Promotability never depends on its own
-		// content: chart.deploy_unit is always the hardcoded 'chart'
-		// constant (migration 008's "Why chart_manifest has no generated
-		// columns"), so DerivePromotability(CHART, CHART) is always
-		// PROMOTABLE -- no data-dependent branch needed.
-		return id, repository.DerivePromotability(kind, appmetapb.DeployUnit_DEPLOY_UNIT_CHART), nil
+		return r.currentChartManifestID(ctx, ownerID, buildGitSHA)
 	}
 
-	id, deployUnit, ferr := r.currentAppManifest(ctx, ownerID, buildGitSHA)
+	id, _, ferr := r.currentAppManifest(ctx, ownerID, buildGitSHA)
 	if ferr != nil {
-		return "", "", ferr
+		return "", ferr
 	}
-	return id, repository.DerivePromotability(kind, deployUnit), nil
+	return id, nil
 }
 
 // currentAppManifest resolves the app_manifest content row to use, in three
@@ -526,29 +580,28 @@ func (r *artifactRepo) insertArtifact(ctx context.Context, a repository.Artifact
 	ownerName := r.ownerFullName(ctx, a)
 	versionMajor, versionMinor, versionPatch := parseVersionTriple(a.Version)
 
-	// AR-7c (migration 008): manifest_id/promotability are resolved and
-	// STORED here, ONCE, only at the instant this row reaches "published" --
-	// never for allocated/publishing (nothing to derive them from yet, and
-	// migration 008's artifact_promotability_shape CHECK enforces that).
-	// This is the retroactivity fix -- see
-	// repository.Artifact.Promotability's doc comment.
-	var manifestID, promotability any
+	// manifest_id is resolved and STORED here, ONCE, only at the instant
+	// this row reaches "published" -- never for allocated/publishing
+	// (nothing to attribute a manifest to yet). Promotability is no longer
+	// resolved/stored at write time (issue #833) -- it is derived live on
+	// every read, see scanArtifact.
+	var manifestID any
 	if state == repository.ArtifactStatePublished {
-		mid, promo, err := r.resolveManifestForPublish(ctx, a.Kind, ownerIDOf(a), a.BuildID)
+		mid, err := r.resolveManifestForPublish(ctx, a.Kind, ownerIDOf(a), a.BuildID)
 		if err != nil {
 			return nil, false, err
 		}
-		manifestID, promotability = mid, string(promo)
+		manifestID = mid
 	}
 
 	if _, err := r.ex.Exec(ctx, `
 		INSERT INTO artifact (artifact_id, kind, app_id, chart_id, repository, version, digest, build_id, published_at,
 		                       version_major, version_minor, version_patch, state, provenance, version_source, state_changed_at,
-		                       manifest_id, promotability)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+		                       manifest_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		a.ArtifactID, string(a.Kind), appID, chartID, a.Repository, a.Version, digest, buildID, publishedAt,
 		versionMajor, versionMinor, versionPatch, string(a.State), string(a.Provenance), string(a.VersionSource), a.StateChangedAt,
-		manifestID, promotability); err != nil {
+		manifestID); err != nil {
 		msg := fmt.Sprintf("artifact %s %s already recorded", ownerName, a.Version)
 		if de, ok := translatePgError(err, msg); ok {
 			return nil, false, de
@@ -585,20 +638,20 @@ func (r *artifactRepo) completePublish(ctx context.Context, existing, a reposito
 	}
 	now := time.Now().UTC()
 
-	// AR-7c (migration 008): resolved and stored ONCE, right here, at the
-	// instant this row actually transitions to "published" -- see
-	// insertArtifact's matching comment and repository.Artifact.
-	// Promotability's doc comment for why this fixes the retroactivity bug.
-	manifestID, promotability, err := r.resolveManifestForPublish(ctx, existing.Kind, ownerIDOf(existing), buildID)
+	// manifest_id is resolved and stored ONCE, right here, at the instant
+	// this row actually transitions to "published" -- see insertArtifact's
+	// matching comment. Promotability is derived live on read (issue #833),
+	// not resolved/stored here.
+	manifestID, err := r.resolveManifestForPublish(ctx, existing.Kind, ownerIDOf(existing), buildID)
 	if err != nil {
 		return nil, err
 	}
 
 	if _, err := r.ex.Exec(ctx, `
 		UPDATE artifact SET digest = $1, build_id = $2, published_at = $3, state = 'published', state_changed_at = $4,
-		                     manifest_id = $5, promotability = $6
-		WHERE artifact_id = $7`,
-		a.Digest, buildID, publishedAt, now, manifestID, string(promotability), existing.ArtifactID); err != nil {
+		                     manifest_id = $5
+		WHERE artifact_id = $6`,
+		a.Digest, buildID, publishedAt, now, manifestID, existing.ArtifactID); err != nil {
 		msg := fmt.Sprintf("artifact %s already recorded", a.Digest)
 		if de, ok := translatePgError(err, msg); ok {
 			return nil, de
@@ -730,16 +783,16 @@ func (r *artifactRepo) completeAdoption(ctx context.Context, existing, a reposit
 	}
 	now := time.Now().UTC()
 
-	manifestID, promotability, err := r.resolveManifestForPublish(ctx, existing.Kind, ownerIDOf(existing), buildID)
+	manifestID, err := r.resolveManifestForPublish(ctx, existing.Kind, ownerIDOf(existing), buildID)
 	if err != nil {
 		return nil, err
 	}
 
 	if _, err := r.ex.Exec(ctx, `
 		UPDATE artifact SET digest = $1, build_id = $2, published_at = $3, state = 'published', state_changed_at = $4,
-		                     provenance = 'adopted', manifest_id = $5, promotability = $6, fail_reason = ''
-		WHERE artifact_id = $7`,
-		a.Digest, buildID, publishedAt, now, manifestID, string(promotability), existing.ArtifactID); err != nil {
+		                     provenance = 'adopted', manifest_id = $5, fail_reason = ''
+		WHERE artifact_id = $6`,
+		a.Digest, buildID, publishedAt, now, manifestID, existing.ArtifactID); err != nil {
 		msg := fmt.Sprintf("artifact %s already recorded", a.Digest)
 		if de, ok := translatePgError(err, msg); ok {
 			return nil, de
@@ -974,10 +1027,24 @@ func (r *artifactRepo) ListArtifacts(ctx context.Context, filter repository.Arti
 	// Pushed into SQL (rather than filtered client-side after the LIMIT
 	// below) so it composes correctly with real pagination -- a client-side
 	// filter after LIMIT pageSize+1 could drop a page below pageSize rows
-	// while more matching rows exist further down the table.
+	// while more matching rows exist further down the table. As of issue
+	// #833 there is no stored a.promotability column left to filter on, so
+	// this predicate is a hand-inlined copy of repository.DerivePromotability
+	// restricted to exactly the PROMOTABLE outcome (VIA_CHART/NOT_PROMOTABLE
+	// never match "promotable only", same as the old stored-column
+	// comparison): chart and binary artifacts are unconditionally
+	// PROMOTABLE; an image artifact is PROMOTABLE only when its owning app's
+	// CURRENT deploy_unit (including the app_release_fallback tier -- see
+	// artifactSelectBase's doc comment) is 'image'; firmware is never
+	// PROMOTABLE. Must be kept in sync with promotability.go's
+	// DerivePromotability by hand -- there are only four ArtifactKind values
+	// and this rule changes rarely (see #810's history), so a shared SQL/Go
+	// rule representation was not judged worth the complexity here.
+	// state = 'published' is required explicitly: scanArtifact only derives
+	// Promotability for published rows, and this predicate must match that
+	// same nullability.
 	if filter.PromotableOnly {
-		args = append(args, string(repository.PromotabilityPromotable))
-		query += fmt.Sprintf(" AND a.promotability = $%d", len(args))
+		query += ` AND a.state = 'published' AND (a.kind = 'binary' OR a.kind = 'chart' OR (a.kind = 'image' AND COALESCE(app_release_fallback.deploy_unit, app.deploy_unit) = 'image'))`
 	}
 	if pageToken != "" {
 		cursorTS, cursorID, err := decodeKeysetCursor(pageToken)
