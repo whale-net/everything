@@ -18,7 +18,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated for AR-5b (issue #829, pending merge). PR
+*Last updated for AR-5b ([issue #829](https://github.com/whale-net/everything/issues/829), [PR #831](https://github.com/whale-net/everything/pull/831), pending merge). PR
 [#630](https://github.com/whale-net/everything/pull/630) merged (2026-08-15).
 **AR-M through AR-7f are all merged to `main`** — see the table below.*
 
@@ -34,7 +34,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 | AR-3a…AR-3d | [#504](https://github.com/whale-net/everything/pull/504), [#508](https://github.com/whale-net/everything/pull/508), [#509](https://github.com/whale-net/everything/pull/509), [#511](https://github.com/whale-net/everything/pull/511) | merged |
 | AR-4a / AR-4b | [#512](https://github.com/whale-net/everything/pull/512), [#514](https://github.com/whale-net/everything/pull/514) | merged — writeback `Publish` is still the stub |
 | AR-5a | [#513](https://github.com/whale-net/everything/pull/513) | merged — **inert**: no domain at stage `allocate`, `plan.go`'s tag path untouched |
-| AR-5b (issue #829) | pending | `AllocateVersion` wired into every real version-resolution call site (`plan.go`'s `assignVersions`/`assignChartVersions`, `release_charts.go`'s `releaseCharts`, `build_helm.go`'s `build-helm-chart`) via `resolveVersion` — see "AR-5" below |
+| AR-5b (issue #829) | [#831](https://github.com/whale-net/everything/pull/831) | pending — `AllocateVersion` wired into every real version-resolution call site (`plan.go`'s `assignVersions`/`assignChartVersions`, `release_charts.go`'s `releaseCharts`, `build_helm.go`'s `build-helm-chart`) via `resolveVersion` — see "AR-5" below |
 | AR-6a / AR-6b | [#516](https://github.com/whale-net/everything/pull/516), [#515](https://github.com/whale-net/everything/pull/515) | merged |
 | AR-7 (design) | [#559](https://github.com/whale-net/everything/pull/559) | merged — design + delivery plan only, no implementation |
 | AR-7a | [#561](https://github.com/whale-net/everything/pull/561) | merged — sweep robustness, no schema change |
