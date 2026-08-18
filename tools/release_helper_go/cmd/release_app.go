@@ -346,38 +346,44 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 		// FailPublish + reuse, mirroring the image branch's digest-unchanged
 		// handling.
 		prevTag := getPreviousAppTag(git, fullName, tagName)
-		digestUnchanged := false
-		effectiveVersion := p.Version
-		effectiveTag := tagName
+		prevVersion := ExtractVersionFromTag(prevTag, fullName+".")
 
-		if prevTag != "" && artifactClient != nil && binaryDigest != "" {
-			prevVersion := strings.TrimPrefix(prevTag, fullName+".")
-			prevMaj, prevMin, _, prevOK := parseSemverTriple(prevVersion)
-			newMaj, newMin, _, newOK := parseSemverTriple(p.Version)
-			if prevOK && newOK && prevMaj == newMaj && prevMin == newMin {
-				if getResp, gerr := artifactClient.GetArtifact(ctx, &pb.GetArtifactRequest{
-					OwnerFullName: fullName,
-					Kind:          kind,
-					Version:       prevVersion,
-				}); gerr == nil && getResp.Artifact != nil && getResp.Artifact.Digest == binaryDigest {
-					digestUnchanged = true
-					effectiveVersion = prevVersion
-					effectiveTag = prevTag
-					fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same binary digest (%s) as existing version %s in same minor release. Skipping new git tag and App Registry record -- reusing %s.\n",
-						fullName, p.Version, binaryDigest, prevVersion, prevVersion)
-
-					if beginPublishSucceeded {
-						failReq := &pb.FailPublishRequest{
-							Kind:           kind,
-							OwnerFullName:  fullName,
-							Version:        p.Version,
-							Reason:         fmt.Sprintf("digest unchanged from existing version %s in same minor release -- no-op rebuild (workflow run %s, attempt %s)", prevVersion, runID, attempt),
-							IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-fail-noop", idempotencyPrefix, p.Domain, p.App),
-						}
-						_, _ = artifactClient.FailPublish(ctx, failReq)
-					}
-				}
+		var prevDigest string
+		if prevTag != "" && artifactClient != nil {
+			if getResp, gerr := artifactClient.GetArtifact(ctx, &pb.GetArtifactRequest{
+				OwnerFullName: fullName,
+				Kind:          kind,
+				Version:       prevVersion,
+			}); gerr == nil && getResp.Artifact != nil {
+				prevDigest = getResp.Artifact.Digest
 			}
+		}
+
+		contentMatches := (binaryDigest != "" && prevDigest != "" && binaryDigest == prevDigest)
+		decision := EvaluateNoOpDecision(p.Version, tagName, prevVersion, prevTag, contentMatches)
+
+		digestUnchanged := decision.DigestUnchanged
+		effectiveVersion := decision.EffectiveVersion
+		effectiveTag := decision.EffectiveTag
+
+		switch decision.Outcome {
+		case OutcomeNoOpRebuild:
+			fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same binary digest (%s) as existing version %s in same minor release. Skipping new git tag and App Registry record -- reusing %s.\n",
+				fullName, p.Version, binaryDigest, prevVersion, prevVersion)
+
+			if beginPublishSucceeded && artifactClient != nil {
+				failReq := &pb.FailPublishRequest{
+					Kind:           kind,
+					OwnerFullName:  fullName,
+					Version:        p.Version,
+					Reason:         fmt.Sprintf("digest unchanged from existing version %s in same minor release -- no-op rebuild (workflow run %s, attempt %s)", prevVersion, runID, attempt),
+					IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-fail-noop", idempotencyPrefix, p.Domain, p.App),
+				}
+				_, _ = artifactClient.FailPublish(ctx, failReq)
+			}
+		case OutcomeNewBaseline:
+			fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same binary digest (%s) as %s. Registering new version baseline %s with shared digest.\n",
+				fullName, p.Version, binaryDigest, prevVersion, p.Version)
 		}
 
 		if !digestUnchanged {
@@ -484,47 +490,46 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	// 3. Digest resolution & no-op rebuild check
 	newDigest := extractImageDigest(docker, repoPath, p.Version)
 	prevTag := getPreviousAppTag(git, fullName, tagName)
+	prevVersion := ExtractVersionFromTag(prevTag, fullName+".")
 
-	digestUnchanged := false
-	effectiveVersion := p.Version
-	effectiveTag := tagName
-
+	var prevDigest string
 	if prevTag != "" {
-		prevVersion := strings.TrimPrefix(prevTag, fullName+".")
-		prevDigest := extractImageDigest(docker, repoPath, prevVersion)
-		if newDigest != "" && prevDigest != "" && newDigest == prevDigest {
-			prevMaj, prevMin, _, prevOK := parseSemverTriple(prevVersion)
-			newMaj, newMin, _, newOK := parseSemverTriple(p.Version)
-			if prevOK && newOK && prevMaj == newMaj && prevMin == newMin {
-				// Same major.minor: patch bump with unchanged digest is a no-op rebuild
-				digestUnchanged = true
-				effectiveVersion = prevVersion
-				effectiveTag = prevTag
-				fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same image digest (%s) as existing tag %s in same minor release. Skipping new git tag and App Registry record -- reusing %s.\n",
-					fullName, p.Version, newDigest, prevTag, prevTag)
+		prevDigest = extractImageDigest(docker, repoPath, prevVersion)
+	}
 
-				if beginPublishSucceeded && artifactClient != nil {
-					failReq := &pb.FailPublishRequest{
-						Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-						OwnerFullName:  fullName,
-						Version:        p.Version,
-						Reason:         fmt.Sprintf("digest unchanged from existing tag %s in same minor release -- no-op rebuild (workflow run %s, attempt %s)", prevTag, runID, attempt),
-						IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail-noop", idempotencyPrefix, p.Domain, p.App),
-					}
-					_, _ = artifactClient.FailPublish(ctx, failReq)
-				}
-			} else {
-				// Major or minor bump: allow recording and tagging to establish new version baseline
-				fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same image digest (%s) as %s. Registering new version baseline %s with shared digest.\n",
-					fullName, p.Version, newDigest, prevTag, p.Version)
+	contentMatches := (newDigest != "" && prevDigest != "" && newDigest == prevDigest)
+	decision := EvaluateNoOpDecision(p.Version, tagName, prevVersion, prevTag, contentMatches)
+
+	digestUnchanged := decision.DigestUnchanged
+	effectiveVersion := decision.EffectiveVersion
+	effectiveTag := decision.EffectiveTag
+
+	switch decision.Outcome {
+	case OutcomeNoOpRebuild:
+		fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same image digest (%s) as existing tag %s in same minor release. Skipping new git tag and App Registry record -- reusing %s.\n",
+			fullName, p.Version, newDigest, prevTag, prevTag)
+
+		if beginPublishSucceeded && artifactClient != nil {
+			failReq := &pb.FailPublishRequest{
+				Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+				OwnerFullName:  fullName,
+				Version:        p.Version,
+				Reason:         fmt.Sprintf("digest unchanged from existing tag %s in same minor release -- no-op rebuild (workflow run %s, attempt %s)", prevTag, runID, attempt),
+				IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail-noop", idempotencyPrefix, p.Domain, p.App),
 			}
-		} else {
+			_, _ = artifactClient.FailPublish(ctx, failReq)
+		}
+	case OutcomeNewBaseline:
+		fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same image digest (%s) as %s. Registering new version baseline %s with shared digest.\n",
+			fullName, p.Version, newDigest, prevTag, p.Version)
+	case OutcomeProceed:
+		if prevTag != "" {
 			fmt.Printf("Digest check for %s: new(%s)=%s prev(%s)=%s -- proceeding with new tag %s\n",
 				fullName, p.Version, defaultStr(newDigest, "<unresolved>"), prevTag, defaultStr(prevDigest, "<unresolved>"), tagName)
+		} else {
+			fmt.Printf("No previous tag found for %s -- proceeding with new tag %s (digest: %s)\n",
+				fullName, tagName, defaultStr(newDigest, "<unresolved>"))
 		}
-	} else {
-		fmt.Printf("No previous tag found for %s -- proceeding with new tag %s (digest: %s)\n",
-			fullName, tagName, defaultStr(newDigest, "<unresolved>"))
 	}
 
 	// 4. Git tag & RecordArtifact on success
@@ -638,24 +643,8 @@ func extractImageDigest(docker DockerRunner, repo, version string) string {
 }
 
 func getPreviousAppTag(git GitRunner, fullName, currentTag string) string {
-	if git == nil {
-		return ""
-	}
 	pattern := fmt.Sprintf("%s.v*", fullName)
-	out, err := git.Run("tag", "--sort=-version:refname", "--list", pattern)
-	if err != nil {
-		return ""
-	}
-	for _, tag := range strings.Split(strings.TrimSpace(out), "\n") {
-		tag = strings.TrimSpace(tag)
-		if tag == "" || tag == currentTag {
-			continue
-		}
-		if strings.HasPrefix(tag, fullName+".") {
-			return tag
-		}
-	}
-	return ""
+	return GetPreviousGitTag(git, currentTag, []string{pattern}, []string{fullName + "."})
 }
 
 func writeDigestCheckJSON(domain, app string, result *ReleaseAppResult) {
@@ -683,23 +672,4 @@ func defaultStr(s, def string) string {
 		return def
 	}
 	return s
-}
-
-func parseSemverTriple(v string) (major, minor, patch int, ok bool) {
-	v = strings.TrimPrefix(v, "v")
-	parts := strings.Split(v, ".")
-	if len(parts) < 3 {
-		return 0, 0, 0, false
-	}
-	var maj, min, pat int
-	if _, err := fmt.Sscanf(parts[0], "%d", &maj); err != nil {
-		return 0, 0, 0, false
-	}
-	if _, err := fmt.Sscanf(parts[1], "%d", &min); err != nil {
-		return 0, 0, 0, false
-	}
-	if _, err := fmt.Sscanf(parts[2], "%d", &pat); err != nil {
-		return 0, 0, 0, false
-	}
-	return maj, min, pat, true
 }

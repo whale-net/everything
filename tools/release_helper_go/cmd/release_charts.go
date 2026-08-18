@@ -575,95 +575,70 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 
 		if uploader != nil {
 			// First check if this exact version already exists on ChartMuseum (e.g. from a previous failed run)
-			existingData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, ver)
-			if err == nil && len(existingData) > 0 {
-				if chartArchivesContentEqual(chartBytes, existingData) {
+			collisionRes, colErr := ResolveCandidateCollision(
+				ver,
+				chart.Name+".",
+				p.Version == "",
+				func(v string) (bool, bool, error) {
+					data, fetchErr := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, v)
+					if fetchErr != nil || len(data) == 0 {
+						return false, false, fetchErr
+					}
+					return true, chartArchivesContentEqual(chartBytes, data), nil
+				},
+				func(newVer string) error {
+					newChartPath, pkgErr := packager.Package(chartDir, chart.Name, newVer, outDir, appVersions)
+					if pkgErr != nil {
+						return pkgErr
+					}
+					chartPath = newChartPath
+					newBytes, readErr := os.ReadFile(chartPath)
+					if readErr != nil {
+						return readErr
+					}
+					chartBytes = newBytes
+					hasher := sha256.New()
+					hasher.Write(newBytes)
+					chartDigest = fmt.Sprintf("sha256:%x", hasher.Sum(nil))
+					return nil
+				},
+			)
+			if colErr == nil && collisionRes != nil {
+				if collisionRes.DigestUnchanged {
 					digestUnchanged = true
 					fmt.Printf("::notice title=Chart package already published (%s)::%s is already present on ChartMuseum with identical content (%s). Skipping re-upload.\n",
 						chart.Name, ver, chartDigest)
-				} else if p.Version == "" {
-					// Different content already exists at `ver` in ChartMuseum (e.g. orphaned upload).
-					// Auto-advance to next available version.
-					//
-					// This deliberately does NOT try to reuse `ver` here: something is
-					// genuinely already published under this version, so silently
-					// overwriting it would be unsafe. When nothing was published for
-					// `ver` (the FetchChart above returns no data), this branch never
-					// runs and `ver` -- freshly recomputed from git tags by
-					// autoIncrementHelmVersion, which only sees a tag once a run has
-					// actually succeeded -- is reused as-is. Content is compared
-					// canonically (chartArchivesContentEqual), not by raw tarball
-					// digest, so a same-content retry whose repackaged tarball differs
-					// only in non-deterministic `helm package` metadata (gzip
-					// timestamps, tar entry ordering) is recognized as a no-op above
-					// instead of reaching this advance loop -- see issue #814.
-					for {
-						nextVer, incErr := incrementVersion(ver, "patch")
-						if incErr != nil {
-							break
-						}
-						ver = nextVer
-						tagName = fmt.Sprintf("%s.%s", chart.Name, ver)
-						effectiveVersion = ver
-						effectiveTag = tagName
-						checkData, checkErr := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, ver)
-						if checkErr != nil || len(checkData) == 0 {
-							// Repackage with new version
-							newChartPath, pkgErr := packager.Package(chartDir, chart.Name, ver, outDir, appVersions)
-							if pkgErr == nil {
-								chartPath = newChartPath
-								if newBytes, readErr := os.ReadFile(chartPath); readErr == nil {
-									chartBytes = newBytes
-									hasher := sha256.New()
-									hasher.Write(newBytes)
-									chartDigest = fmt.Sprintf("sha256:%x", hasher.Sum(nil))
-								}
-							}
-							fmt.Printf("::notice title=Chart version collision resolved (%s)::Advanced to %s to avoid collision with orphaned ChartMuseum package.\n",
-								chart.Name, ver)
-							break
-						}
-					}
+				} else if collisionRes.Advanced {
+					ver = collisionRes.Version
+					tagName = collisionRes.Tag
+					effectiveVersion = ver
+					effectiveTag = tagName
+					fmt.Printf("::notice title=Chart version collision resolved (%s)::Advanced to %s to avoid collision with orphaned ChartMuseum package.\n",
+						chart.Name, ver)
 				}
 			}
 
 			// If not matching current version, check previous tag for no-op rebuild
 			if !digestUnchanged && prevTag != "" {
-				// Strip the "<chart tag prefix>." prefix to recover the full
-				// version (e.g. "v0.1.0"), mirroring the prefix patterns
-				// getPreviousChartTag matched the tag against. A naive
-				// last-dot split here would truncate a dotted semver like
-				// "v0.1.0" down to just "0" and break parseSemverTriple below.
-				prevVersion := prevTag
-				prevPrefixes := []string{chart.Name + "."}
-				if !strings.HasPrefix(chart.Name, "helm-") {
-					prevPrefixes = append(prevPrefixes, "helm-"+chart.Name+".")
-				}
-				for _, pfx := range prevPrefixes {
-					if strings.HasPrefix(prevTag, pfx) {
-						prevVersion = strings.TrimPrefix(prevTag, pfx)
-						break
-					}
-				}
+				prevVersion := extractChartVersionFromTag(chart.Name, prevTag)
+				var prevMatches bool
 				prevData, err := uploader.FetchChart(ctx, repoURL, repoUser, repoPass, publishedName, prevVersion)
 				if err == nil && len(prevData) > 0 {
-					if chartArchivesContentEqual(chartBytes, prevData) {
-						prevMaj, prevMin, _, prevOK := parseSemverTriple(prevVersion)
-						newMaj, newMin, _, newOK := parseSemverTriple(ver)
-						if prevOK && newOK && prevMaj == newMaj && prevMin == newMin {
-							// Same major.minor: patch-level retry with unchanged content is a no-op rebuild.
-							digestUnchanged = true
-							effectiveVersion = prevVersion
-							effectiveTag = prevTag
-							fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
-								chart.Name, ver, prevTag, prevTag)
-						} else {
-							// Major or minor bump: allow recording and tagging to establish new version baseline,
-							// even though the packaged content happens to match the previous version's.
-							fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same packaged content as %s. Registering new version baseline %s with shared digest.\n",
-								chart.Name, ver, prevTag, ver)
-						}
-					}
+					prevMatches = chartArchivesContentEqual(chartBytes, prevData)
+				}
+
+				decision := EvaluateNoOpDecision(ver, tagName, prevVersion, prevTag, prevMatches)
+				digestUnchanged = decision.DigestUnchanged
+				effectiveVersion = decision.EffectiveVersion
+				effectiveTag = decision.EffectiveTag
+
+				switch decision.Outcome {
+				case OutcomeNoOpRebuild:
+					fmt.Printf("::notice title=No-op chart rebuild (%s)::%s packages byte-identical to existing tag %s. Skipping new git tag, ChartMuseum upload, and App Registry record -- reusing %s.\n",
+						chart.Name, ver, prevTag, prevTag)
+				case OutcomeNewBaseline:
+					fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same packaged content as %s. Registering new version baseline %s with shared digest.\n",
+						chart.Name, ver, prevTag, ver)
 				}
 			}
 		}
@@ -816,32 +791,22 @@ func filterHelmCharts(input string, allCharts []HelmChartMetadata, includeDemo b
 	return result
 }
 
-func getPreviousChartTag(git GitRunner, chartName, currentTag string) string {
-	if git == nil {
-		return ""
+func extractChartVersionFromTag(chartName, tag string) string {
+	prefixes := []string{chartName + "."}
+	if !strings.HasPrefix(chartName, "helm-") {
+		prefixes = append(prefixes, "helm-"+chartName+".")
 	}
+	return ExtractVersionFromTag(tag, prefixes...)
+}
+
+func getPreviousChartTag(git GitRunner, chartName, currentTag string) string {
 	patterns := []string{fmt.Sprintf("%s.*", chartName)}
+	prefixes := []string{chartName + "."}
 	if !strings.HasPrefix(chartName, "helm-") {
 		patterns = append(patterns, fmt.Sprintf("helm-%s.*", chartName))
+		prefixes = append(prefixes, fmt.Sprintf("helm-%s.", chartName))
 	}
-	args := append([]string{"tag", "--sort=-version:refname", "--list"}, patterns...)
-	out, err := git.Run(args...)
-	if err != nil {
-		return ""
-	}
-	for _, tag := range strings.Split(strings.TrimSpace(out), "\n") {
-		tag = strings.TrimSpace(tag)
-		if tag == "" || tag == currentTag {
-			continue
-		}
-		for _, p := range patterns {
-			pfx := strings.TrimSuffix(p, "*")
-			if strings.HasPrefix(tag, pfx) {
-				return tag
-			}
-		}
-	}
-	return ""
+	return GetPreviousGitTag(git, currentTag, patterns, prefixes)
 }
 
 func resolveContainedImages(chartDir string, appVersions map[string]string, chart HelmChartMetadata, allApps []AppMetadata, docker DockerRunner, fs FileSystem) []*pb.ContainedImage {
