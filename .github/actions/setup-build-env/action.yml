@@ -97,8 +97,8 @@ runs:
         # directories are cached; combined with --noexperimental_check_external_repository_files
         # in .bazelrc:ci, Bazel skips all repo-rule re-evaluation on cache hits.
         external-cache: true
-        # Disk cache - isolated by cache suffix for better hit rates
-        disk-cache: ${{ inputs.cache-suffix || 'true' }}
+        # Disk cache - disabled to avoid duplicating the Bazel remote cache into GHA's 10GB cache limit
+        disk-cache: false
 
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}
