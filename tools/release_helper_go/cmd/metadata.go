@@ -60,7 +60,7 @@ const appMetadataQuery = "kind(app_metadata, //...) except attr(testonly, 1, //.
 //
 // No metadata JSON files are produced — analysis alone yields the data.
 func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, error) {
-	labelsOut, err := bazel.Run("query", appMetadataQuery, "--output=label")
+	labelsOut, err := bazel.Run("query", appMetadataQuery, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query app_metadata: %w", err)
 	}

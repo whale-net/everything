@@ -152,9 +152,8 @@ testing nothing.
 
 Two gotchas that cost a debugging cycle when this job was written:
 
-- **`bazel query` cannot take `--config=ci`.** Only `build:ci` and `test:ci` are defined in
-  `.bazelrc`, so `bazel query --config=ci` hard-errors with `Config value 'ci' is not defined
-  in any .rc file`. Pass it to `bazel test`, not to the discovery query.
+- **`bazel query` takes `--config=ci`.** Configured with `--noimplicit_deps` in
+  `.bazelrc` to strip toolchains during discovery.
 - **Do not add `--test_tag_filters`.** Combined with explicit labels, Bazel reports
   `No test targets were found, yet testing was requested` — see the "Running it" section above.
 
