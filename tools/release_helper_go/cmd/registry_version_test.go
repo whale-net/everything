@@ -125,3 +125,62 @@ func TestDialVersioningClient_DialFailureIsFatal(t *testing.T) {
 		t.Fatal("expected dial failure to be returned as an error, not silently swallowed")
 	}
 }
+
+func TestIsDomainAtAllocateStage_NilClient(t *testing.T) {
+	isAlloc, err := isDomainAtAllocateStage(context.Background(), nil, "tools")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if isAlloc {
+		t.Error("expected isAlloc=false for nil client")
+	}
+}
+
+func TestIsDomainAtAllocateStage_EnforcedTrue(t *testing.T) {
+	fake := &FakeArtifactRegistryClient{
+		CheckChartHermeticityFn: func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+			if in.ChartDomain != "tools" {
+				t.Errorf("expected chart_domain 'tools', got %q", in.ChartDomain)
+			}
+			return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+		},
+	}
+	isAlloc, err := isDomainAtAllocateStage(context.Background(), fake, "tools")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !isAlloc {
+		t.Error("expected isAlloc=true when CheckChartHermeticity returns Enforced=true")
+	}
+	if len(fake.CheckChartHermeticityCalls) != 1 {
+		t.Fatalf("expected 1 CheckChartHermeticity call, got %d", len(fake.CheckChartHermeticityCalls))
+	}
+}
+
+func TestIsDomainAtAllocateStage_EnforcedFalse(t *testing.T) {
+	fake := &FakeArtifactRegistryClient{
+		CheckChartHermeticityFn: func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+			return &pb.CheckChartHermeticityResponse{Enforced: false}, nil
+		},
+	}
+	isAlloc, err := isDomainAtAllocateStage(context.Background(), fake, "demo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if isAlloc {
+		t.Error("expected isAlloc=false when CheckChartHermeticity returns Enforced=false")
+	}
+}
+
+func TestIsDomainAtAllocateStage_RPCError(t *testing.T) {
+	fake := &FakeArtifactRegistryClient{
+		CheckChartHermeticityFn: func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+			return nil, errors.New("registry unavailable")
+		},
+	}
+	_, err := isDomainAtAllocateStage(context.Background(), fake, "tools")
+	if err == nil {
+		t.Fatal("expected error on CheckChartHermeticity RPC failure, got nil")
+	}
+}
+

@@ -1261,3 +1261,87 @@ func TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion(t *testin
 		t.Errorf("expected 0 uploads for no-op retry, got %d", uploader.uploadCalls)
 	}
 }
+
+// TestExecuteReleaseCharts_AllocateStage_RecordArtifactFailureIsFatal proves
+// that for a chart in an allocate-stage domain (issue #834), RecordArtifact
+// failure calls FailPublish to clean up the publishing row AND returns a fatal error.
+func TestExecuteReleaseCharts_AllocateStage_RecordArtifactFailureIsFatal(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	fakeArtifactClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeArtifactClient.RecordArtifactFn = func(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error) {
+		return nil, fmt.Errorf("database constraint violation")
+	}
+
+	_, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:         "demo-hello-fastapi",
+		Version:        "v0.2.0",
+		ChartRepoURL:   "https://charts.whalenet.dev",
+		BuildID:        "test-build-id-123",
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		Packager:       packager,
+		Uploader:       uploader,
+		WorkspaceRoot:  workspaceRoot,
+		ArtifactClient: fakeArtifactClient,
+	})
+	if err == nil {
+		t.Fatal("expected fatal error for chart RecordArtifact failure on allocate domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "RecordArtifact failed") {
+		t.Errorf("expected error to mention RecordArtifact failed, got: %v", err)
+	}
+	if len(fakeArtifactClient.RecordArtifactCalls) != 1 {
+		t.Errorf("expected 1 RecordArtifact call, got %d", len(fakeArtifactClient.RecordArtifactCalls))
+	}
+	if len(fakeArtifactClient.FailPublishCalls) != 1 {
+		t.Fatalf("expected 1 FailPublish call on RecordArtifact failure, got %d", len(fakeArtifactClient.FailPublishCalls))
+	}
+}
+
+// TestExecuteReleaseCharts_AllocateStage_BeginPublishFailureIsFatal proves
+// that for a chart in an allocate-stage domain (issue #834), BeginPublish
+// failure returns a fatal error and aborts chart release.
+func TestExecuteReleaseCharts_AllocateStage_BeginPublishFailureIsFatal(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	fakeArtifactClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeArtifactClient.BeginPublishFn = func(ctx context.Context, in *pb.BeginPublishRequest, opts ...grpc.CallOption) (*pb.BeginPublishResponse, error) {
+		return nil, fmt.Errorf("connection refused")
+	}
+
+	_, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:         "demo-hello-fastapi",
+		Version:        "v0.2.0",
+		ChartRepoURL:   "https://charts.whalenet.dev",
+		BuildID:        "test-build-id-123",
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		Packager:       packager,
+		Uploader:       uploader,
+		WorkspaceRoot:  workspaceRoot,
+		ArtifactClient: fakeArtifactClient,
+	})
+	if err == nil {
+		t.Fatal("expected fatal error for chart BeginPublish failure on allocate domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "BeginPublish failed") {
+		t.Errorf("expected error to mention BeginPublish failed, got: %v", err)
+	}
+	if uploader.uploadCalls != 0 {
+		t.Errorf("expected 0 uploads when BeginPublish fails, got %d", uploader.uploadCalls)
+	}
+}
+
