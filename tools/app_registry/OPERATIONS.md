@@ -524,6 +524,93 @@ timeouts.
 speculatively or automate** — see this repo's `AGENTS.md` ("do not patch
 production environments") and "It is lazy and per-artifact" above.
 
+### Case 4: rows stuck `publishing`/`failed` with no digest from a no-op rebuild (issue #817, fixed forward by ca55c682)
+
+Before the fix in commit `ca55c682` (issue #817's root cause), the
+binary/CLI/firmware release path in `release-app` did not call `FailPublish`
+when `RecordArtifact` itself returned an error — it only logged a
+`::warning` and moved on. The trigger was a **no-op rebuild**: when a
+binary/CLI/firmware artifact is byte-identical to the previous release in
+the same `major.minor` series, its digest collides with
+`artifact_digest_major_minor_idx (owner_id, kind, version_major,
+version_minor, digest)` and `RecordArtifact` returns `ErrAlreadyExists`. The
+row `BeginPublish` had already created for the new version was left behind
+in `publishing` with no digest — exactly like Case 3, except the underlying
+cause is a digest collision, not a replayed idempotency key. The reaper
+(`worker/reaper`, `ARTIFACT_REAPER_TIMEOUT`) eventually flips these to
+`failed` with `fail_reason = "stale"`, same as Case 3; they do not stay
+`publishing` forever, but they never gain a digest and can never be
+promoted.
+
+`ca55c682` stops this from recurring — it detects a same-`major.minor` no-op
+rebuild up front and resolves it with `FailPublish` instead of ever calling
+`RecordArtifact`, and makes both release paths call `FailPublish` whenever
+`RecordArtifact` fails for any reason. It does **not** repair rows left
+behind before it shipped. Known example: `tools-app-registry v0.2.3`,
+build `32065667768`.
+
+**Finding stuck rows (read-only).** There is no CLI filter for artifact
+state across every owner (`artifacts list` only filters by owner/kind/
+provenance/promotability — see `cli/cmd/artifacts.go`), so — same as the
+`domain_adoption.stage` lookup earlier in this doc — this is a direct
+`SELECT` against Postgres, safe to run at any time:
+
+```sql
+SELECT artifact_id, kind, app_id, chart_id, version, state, digest,
+       build_id, fail_reason, state_changed_at, created_at
+FROM artifact
+WHERE state IN ('publishing', 'failed')
+  AND digest IS NULL
+ORDER BY state_changed_at ASC;
+```
+
+Every row this returns is a dead end by construction: `publishing`/`failed`
+with no digest means it was never (and, in `failed`'s case, can never
+again under the same version) recorded as published. `published` rows
+always carry a digest (`artifact_state_shape` CHECK), so this query cannot
+false-positive on a healthy row.
+
+**Remediation is the same `adopt` path as Case 1/3 — per row, by a human,
+against the live registry. There is deliberately no bulk/sweep command for
+this** (see "It is lazy and per-artifact" above, and
+`cli/cmd/artifacts.go`'s `newArtifactsAdoptCmd` doc comment) — a bulk delete
+or bulk fabricate-and-adopt script would either destroy the audit trail of
+what actually happened, or manufacture digests the registry never observed,
+exactly what this design rejects (ARCHITECTURE.md "Resolved questions" #3).
+For each row the query above returns:
+
+1. Confirm what actually happened for that version. For the no-op-rebuild
+   case specifically, the fix's own diagnosis tells you the answer: the
+   build was byte-identical to the previous version in the same
+   `major.minor` series, so the digest that collided is that previous
+   version's already-`published` digest. Look it up:
+   ```sql
+   SELECT version, digest FROM artifact
+   WHERE app_id = (SELECT app_id FROM artifact WHERE artifact_id = '<stuck-artifact_id>')
+     AND kind = 'binary' AND state = 'published'
+   ORDER BY version_major DESC, version_minor DESC, version_patch DESC
+   LIMIT 1;
+   ```
+   If the CI run's own logs are still available, cross-check against the
+   "Record ... artifact in App Registry" step's reported digest instead of
+   trusting the DB alone.
+2. If the digest cannot be confirmed by either path (build logs expired,
+   genuinely unclear whether anything was ever pushed) — **do nothing**.
+   Leave the row as the reaper left it. A `failed`/no-digest row is inert:
+   it cannot be promoted, is not returned by `--promotable`, and does not
+   block the next release (version uniqueness only blocks a *repeat* of the
+   exact same version string). Deleting it would erase the only record that
+   this happened; re-running the release for a new version is the correct
+   forward fix, not clawing back the old one.
+3. Otherwise, adopt it with the recovered digest, citing the issue:
+   ```bash
+   app-registry artifacts adopt \
+     --kind binary --owner tools-app-registry \
+     --repository <the binary's storage location, e.g. GHCR release asset URL> \
+     --version v0.2.3 --digest sha256:<digest recovered in step 1> \
+     --reason "no-op rebuild digest collision left this row stuck publishing before ca55c682 (issue #817); digest confirmed identical to v0.2.2"
+   ```
+
 ### Auditing what was adopted
 
 ```bash
