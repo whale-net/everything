@@ -82,7 +82,7 @@ func TestAllManifestsDecodeAgainstProto(t *testing.T) {
 func discoverMetadata(t *testing.T, bazelBin, workspaceRoot, queryExpr, providerExpr string) map[string]string {
 	t.Helper()
 
-	labelsOut := runBazel(t, bazelBin, workspaceRoot, "query", queryExpr, "--output=label")
+	labelsOut := runBazel(t, bazelBin, workspaceRoot, "query", queryExpr, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
 	labels := splitNonEmptyLines(labelsOut)
 	if len(labels) == 0 {
 		t.Skip("no targets found for " + queryExpr)

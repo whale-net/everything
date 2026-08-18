@@ -39,7 +39,7 @@ const helmChartMetadataQuery = "kind(helm_chart_metadata, //...) except attr(tes
 // so cquery analysis can be scoped, keeping discovery robust to unrelated
 // analysis failures elsewhere in `//...`.
 func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, _ string) ([]HelmChartMetadata, error) {
-	labelsOut, err := bazel.Run("query", helmChartMetadataQuery, "--output=label")
+	labelsOut, err := bazel.Run("query", helmChartMetadataQuery, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query helm_chart_metadata: %w", err)
 	}

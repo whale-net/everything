@@ -224,11 +224,12 @@ jobs:
         # Scoped to the subtrees that can contain them; a bare //... fails to
         # load unrelated external repositories in this workspace.
         #
-        # No --config=ci here: only build:ci and test:ci are defined in
-        # .bazelrc, and `bazel query --config=ci` hard-errors with
-        # "Config value 'ci' is not defined in any .rc file".
+        # Uses --config=ci (defined in .bazelrc with --noimplicit_deps) and
+        # --universe_scope to accelerate target discovery.
         SCOPE='//libs/... + //tools/... + //manmanv2/...'
         TARGETS=$(bazel query \
+          --config=ci \
+          --universe_scope=//... \
           "tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)" \
           | tr '\n' ' ')
         echo "Targets: ${TARGETS:-<none>}"
