@@ -15,6 +15,8 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // buildTestChartArchive packages files into a gzip+tar archive, writing
@@ -756,6 +758,133 @@ func TestExecuteReleaseCharts_AutoIncrementMajor(t *testing.T) {
 	// Initial tag fixture was helm-demo-hello-fastapi.v0.1.0 -> major bump should be v1.0.0
 	if res.Charts[0].EffectiveVersion != "v1.0.0" {
 		t.Errorf("expected EffectiveVersion 'v1.0.0', got %q", res.Charts[0].EffectiveVersion)
+	}
+}
+
+// TestExecuteReleaseCharts_AllocateDomainUsesRegistryNotTags is issue #829's
+// fix for the real production chart call site: with the domain opted into
+// App Registry and AllocateVersion succeeding, the allocated version must be
+// used verbatim -- ignoring the git-tag fixture entirely (which would have
+// produced v0.2.0 via a minor bump from helm-demo-hello-fastapi.v0.1.0).
+func TestExecuteReleaseCharts_AllocateDomainUsesRegistryNotTags(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
+		if in.OwnerFullName != "demo-hello-fastapi" || in.Kind != pb.ArtifactKind_ARTIFACT_KIND_CHART || in.Increment != "minor" {
+			t.Errorf("unexpected AllocateVersionRequest: %+v", in)
+		}
+		return &pb.AllocateVersionResponse{Version: "v5.0.0"}, nil
+	}
+	fakeHermeticity := &fakeHermeticityChecker{enforced: false}
+
+	var res *ReleaseChartsResult
+	var err error
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		res, err = ExecuteReleaseCharts(ReleaseChartsParams{
+			Charts:               "demo-hello-fastapi",
+			IncrementMinor:       true,
+			BuildID:              "build-999",
+			ChartRepoURL:         "https://charts.whalenet.dev",
+			IdempotencyKeyPrefix: "run-42-1",
+			Bazel:                bazel,
+			Git:                  git,
+			Docker:               docker,
+			FS:                   fs,
+			Packager:             packager,
+			Uploader:             uploader,
+			Hermeticity:          fakeHermeticity,
+			WorkspaceRoot:        workspaceRoot,
+			ArtifactClient:       artClient,
+		})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(artClient.AllocateVersionCalls) != 1 {
+		t.Fatalf("expected 1 AllocateVersion call, got %d", len(artClient.AllocateVersionCalls))
+	}
+	if len(res.Charts) != 1 || res.Charts[0].EffectiveVersion != "v5.0.0" {
+		t.Fatalf("expected registry-allocated version 'v5.0.0', got %+v", res.Charts)
+	}
+}
+
+// TestExecuteReleaseCharts_NotAllocatedFallsBackToTags proves domains not yet
+// cut over to adoption stage "allocate" are unaffected: AllocateVersion's
+// FailedPrecondition falls back to the pre-#829 tag-based bump, unchanged.
+func TestExecuteReleaseCharts_NotAllocatedFallsBackToTags(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
+		return nil, status.Error(codes.FailedPrecondition, `domain "demo" is at adoption stage "observe"`)
+	}
+	fakeHermeticity := &fakeHermeticityChecker{enforced: false}
+
+	var res *ReleaseChartsResult
+	var err error
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		res, err = ExecuteReleaseCharts(ReleaseChartsParams{
+			Charts:               "demo-hello-fastapi",
+			IncrementMinor:       true,
+			BuildID:              "build-999",
+			ChartRepoURL:         "https://charts.whalenet.dev",
+			IdempotencyKeyPrefix: "run-42-1",
+			Bazel:                bazel,
+			Git:                  git,
+			Docker:               docker,
+			FS:                   fs,
+			Packager:             packager,
+			Uploader:             uploader,
+			Hermeticity:          fakeHermeticity,
+			WorkspaceRoot:        workspaceRoot,
+			ArtifactClient:       artClient,
+		})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Initial tag fixture was helm-demo-hello-fastapi.v0.1.0 -> minor bump should be v0.2.0
+	if len(res.Charts) != 1 || res.Charts[0].EffectiveVersion != "v0.2.0" {
+		t.Fatalf("expected tag-based fallback version 'v0.2.0', got %+v", res.Charts)
+	}
+}
+
+// TestExecuteReleaseCharts_DryRunNeverCallsAllocateVersion proves a dry run
+// never reserves a real version: AllocateVersion has a write side effect (it
+// inserts an "allocated" artifact row), unlike the read-only hermeticity
+// check, so it must stay off even when opted in with a live client.
+func TestExecuteReleaseCharts_DryRunNeverCallsAllocateVersion(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	artClient := NewFakeArtifactRegistryClient()
+	fakeHermeticity := &fakeHermeticityChecker{enforced: false}
+
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		_, err := ExecuteReleaseCharts(ReleaseChartsParams{
+			Charts:         "demo-hello-fastapi",
+			IncrementMinor: true,
+			ChartRepoURL:   "https://charts.whalenet.dev",
+			DryRun:         true,
+			Bazel:          bazel,
+			Git:            git,
+			Docker:         docker,
+			FS:             fs,
+			Packager:       packager,
+			Uploader:       uploader,
+			Hermeticity:    fakeHermeticity,
+			WorkspaceRoot:  workspaceRoot,
+			ArtifactClient: artClient,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error in dry run: %v", err)
+		}
+	})
+	if len(artClient.AllocateVersionCalls) != 0 {
+		t.Errorf("expected AllocateVersion to never be called during a dry run, got %d calls", len(artClient.AllocateVersionCalls))
 	}
 }
 

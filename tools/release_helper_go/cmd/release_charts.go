@@ -477,8 +477,36 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			case p.IncrementMinor:
 				bumpType = "minor"
 			}
+
+			// versionClient is resolved independently of the best-effort
+			// artifactClient above: that dial silently leaves artifactClient
+			// nil on failure (registry integration elsewhere in this
+			// function is soft/continue-on-error), but version resolution
+			// for a domain opted into App Registry must not silently fall
+			// back to tag-scanning just because the dial failed -- see
+			// resolveVersion's doc comment and issue #829. DryRun is excluded
+			// here (unlike the read-only hermeticity check below): unlike
+			// CheckChartHermeticity, AllocateVersion has a real side effect
+			// -- it reserves the version by inserting an "allocated" artifact
+			// row -- so a dry run must never call it.
+			var versionClient pb.ArtifactRegistryClient
+			if !p.DryRun && defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" && !p.SkipRegistry {
+				if artifactClient != nil {
+					versionClient = artifactClient
+				} else {
+					c, closeFn, derr := dialVersioningClient(ctx, nil)
+					if derr != nil {
+						return nil, derr
+					}
+					defer closeFn() //nolint:errcheck
+					versionClient = c
+				}
+			}
 			var err error
-			ver, err = autoIncrementHelmVersion(chart.Name, bumpType, git)
+			ver, _, err = resolveVersion(ctx, versionClient, pb.ArtifactKind_ARTIFACT_KIND_CHART, publishedName, bumpType,
+				fmt.Sprintf("%s-%s-allocate", idempotencyPrefix, publishedName),
+				func() (string, error) { return autoIncrementHelmVersion(chart.Name, bumpType, git) },
+			)
 			if err != nil {
 				return nil, fmt.Errorf("auto-version for chart %s: %w", chart.Name, err)
 			}

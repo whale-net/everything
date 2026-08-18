@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,7 +56,23 @@ func newBuildHelmChartCmd() *cobra.Command {
 			// Determine version
 			version := chartVersion
 			if autoVersion && version == "" {
-				version, err = autoIncrementHelmVersion(chart.Name, bumpType, defaultGit)
+				ctx := cmd.Context()
+				publishedName := strings.TrimPrefix(chart.Name, "helm-")
+
+				var client pb.ArtifactRegistryClient
+				if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
+					c, closeFn, derr := dialVersioningClient(ctx, nil)
+					if derr != nil {
+						return derr
+					}
+					defer closeFn() //nolint:errcheck
+					client = c
+				}
+
+				version, _, err = resolveVersion(ctx, client, pb.ArtifactKind_ARTIFACT_KIND_CHART, publishedName, bumpType,
+					fmt.Sprintf("build-helm-chart-%s-%s", envOrDefault("GITHUB_RUN_ID", "local"), publishedName),
+					func() (string, error) { return autoIncrementHelmVersion(chart.Name, bumpType, defaultGit) },
+				)
 				if err != nil {
 					return fmt.Errorf("auto-version: %w", err)
 				}
