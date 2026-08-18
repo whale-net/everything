@@ -448,18 +448,22 @@ func (s *PromotionServer) enqueueWriteback(ctx context.Context, r repository.Reg
 // above rather than a `== Image` check, which would wrongly try (and fail)
 // a chart lookup for a binary/firmware promotion's empty ChartID.
 func (s *PromotionServer) ownerDomain(ctx context.Context, p repository.Promotion) (string, error) {
-	if p.Kind != repository.ArtifactKindChart {
-		app, err := s.repo.Apps().GetAppByID(ctx, p.AppID)
+	// Same non-CHART-owner rule as convert.go's artifactToPB/promotionToPB
+	// (#780): IMAGE, BINARY, and FIRMWARE promotions all key off AppID, not
+	// just IMAGE. Using Kind == Image here left BINARY promotions looking up
+	// GetChartByID(ctx, "") and failing whenever a domain filter was applied.
+	if p.Kind == repository.ArtifactKindChart {
+		chart, err := s.repo.Apps().GetChartByID(ctx, p.ChartID)
 		if err != nil {
 			return "", err
 		}
-		return app.Domain, nil
+		return chart.Domain, nil
 	}
-	chart, err := s.repo.Apps().GetChartByID(ctx, p.ChartID)
+	app, err := s.repo.Apps().GetAppByID(ctx, p.AppID)
 	if err != nil {
 		return "", err
 	}
-	return chart.Domain, nil
+	return app.Domain, nil
 }
 
 // stateHash is a stable content hash of promotions' promoted-artifact

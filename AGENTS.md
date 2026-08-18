@@ -41,6 +41,8 @@ bazel query 'deps(//some:target)'                 # transitive deps
 bazel query 'rdeps(//..., //some:lib)'            # reverse deps (who uses this?)
 bazel query 'kind(go_binary, //...)'              # find targets by rule type
 bazel query 'attr(name, foo, //...)'              # find by attribute
+# For fast kind() discovery across //...:
+#   bazel query 'kind("foo", //...)' --universe_scope=//... --noimplicit_deps --nodep_deps --output=label
 ```
 
 **When to break out of Bazel:** Only use raw shell commands, `go` tooling, or direct interpreters when a task explicitly requires it (e.g. interacting with a live process, running a one-off script with no BUILD target, or debugging a Bazel configuration issue itself).

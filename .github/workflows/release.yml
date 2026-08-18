@@ -400,6 +400,24 @@ jobs:
           fi
           echo "matrix=$OVERRIDDEN_MATRIX" >> "$GITHUB_OUTPUT"
 
+      # This step's create-combined-github-release-with-notes command records
+      # every released app/binary/firmware artifact in App Registry via
+      # recordPublishedArtifact (tools/release_helper_go/cmd/github_release.go),
+      # including release_helper_go and the app-registry CLI itself when they
+      # are among the released apps -- see #780. It deliberately stops at
+      # RecordArtifact and does NOT also call PromotionRegistry.Promote:
+      # this workflow only holds `app-registry-builder-*` credentials, and
+      # Promote requires the distinct `app-registry-promoter-<env>` role
+      # (server/auth/auth.go RequirePromoter) -- builder creds cannot call it
+      # regardless. Promotion for images and charts is exclusively human-
+      # triggered via promote.yml, and that workflow is itself fully disabled
+      # (`if: false`) pending live Keycloak promoter clients / GitHub
+      # Environments. Auto-promoting binaries here would both require
+      # inventing new credential wiring this workflow doesn't have and skip
+      # the human-approval gate every other artifact kind goes through.
+      # promote.yml's `kind` input now accepts `binary` so tool binaries can
+      # be promoted through that same manual, human-gated path once it's
+      # re-enabled -- see that workflow's header comment.
       - name: Create GitHub releases for all apps
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -478,6 +496,8 @@ jobs:
         run: |
           ARGS=(release-charts --charts "${{ github.event.inputs.helm_charts }}" --chart-repo-url "$CHART_REPO_URL" --create-git-tag)
           [[ -n "${{ needs.plan-release.outputs.version }}" ]] && ARGS+=(--version "${{ needs.plan-release.outputs.version }}")
+          [[ "${{ github.event.inputs.increment_minor }}" == "true" ]] && ARGS+=(--increment-minor)
+          [[ "${{ github.event.inputs.increment_patch }}" == "true" ]] && ARGS+=(--increment-patch)
           [[ -n "${{ needs.plan-release.outputs.build-id }}" ]] && ARGS+=(--build-id "${{ needs.plan-release.outputs.build-id }}")
           [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)

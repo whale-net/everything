@@ -1,0 +1,7 @@
+{
+  "name": "project-manager",
+  "description": "Multi-persona, GitHub-tracked project management pipeline (producer/architect/planner/workers/system-validator)",
+  "author": {
+    "name": "whale_net"
+  }
+}
