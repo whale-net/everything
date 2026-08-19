@@ -59,11 +59,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: App Registry Auth
+        if: inputs.use_source_tools != true && github.event.inputs.use_source_tools != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/app-registry-auth
+        with:
+          address: ${{ vars.APP_REGISTRY_ADDRESS }}
+          token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
       - name: Check prebuilt tool availability
         id: probe
         env:
           USE_SOURCE: ${{ inputs.use_source_tools == true || github.event.inputs.use_source_tools == 'true' }}
           GH_TOKEN: ${{ github.token }}
+          TARGET_ENV: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
         run: |
           if [[ "$USE_SOURCE" == "true" ]]; then
             echo "Explicit use_source_tools requested. Building from source."
@@ -76,13 +91,133 @@ jobs:
             exit 0
           fi
 
-          # Read pinned versions
-          RH_VER=$(grep -E '^\s*release_helper_go:' .release-tools-version 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
-          AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' .release-tools-version 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | sed -E "s/['\"[:space:]]//g" || true)
+          echo "Resolving release tooling versions from App Registry (env=$TARGET_ENV)..."
 
-          echo "Resolved release tooling versions from .release-tools-version:"
-          echo "  release_helper_go: ${RH_VER:-<not set>}"
-          echo "  app_registry_cli:  ${AR_VER:-<not set>}"
+          GRPCURL_VERSION="1.9.3"
+          grpcurl_checksum() {
+            case "$1" in
+              linux_x86_64) echo "a926b62a85787ccf73ef8736b3ae554f1242e39d92bb8767a79d6dd23b11d1d5" ;;
+              linux_arm64)  echo "b20a00c1cb82ab81ec32696766d4076e99b4cb5ca0823a71767ba64dbea0f263" ;;
+              osx_x86_64)   echo "246a6669e58c282dcaf0e9dcb06dd1c8681833d59df24eb83d3123ec64c2d2e5" ;;
+              osx_arm64)    echo "d8391485e99a728a3a4e82af3fd621f9fdea0c417a74e5122803ad20b207b623" ;;
+              *) return 1 ;;
+            esac
+          }
+
+          install_grpcurl() {
+            if command -v grpcurl >/dev/null 2>&1; then
+              GRPCURL_BIN="$(command -v grpcurl)"
+              return 0
+            fi
+            local cache_root="${RUNNER_TOOL_CACHE:-${RUNNER_TEMP:-/tmp}}/grpcurl/${GRPCURL_VERSION}"
+            local cached_bin="$cache_root/grpcurl"
+            if [[ -x "$cached_bin" ]]; then
+              GRPCURL_BIN="$cached_bin"
+              return 0
+            fi
+            local host_os host_arch key
+            host_os="$(uname -s)"
+            host_arch="$(uname -m)"
+            [[ "$host_os" == "Linux" ]] && host_os="linux" || host_os="osx"
+            [[ "$host_arch" == "x86_64" || "$host_arch" == "amd64" ]] && host_arch="x86_64" || host_arch="arm64"
+            key="${host_os}_${host_arch}"
+            if ! expected_sha="$(grpcurl_checksum "$key")"; then
+              return 1
+            fi
+            local tmp_dl
+            tmp_dl="$(mktemp -d)"
+            local url="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_${key}.tar.gz"
+            if ! curl -sSL -m 30 -o "$tmp_dl/grpcurl.tar.gz" "$url"; then
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+            local actual_sha
+            actual_sha="$(sha256sum "$tmp_dl/grpcurl.tar.gz" | awk '{print $1}')"
+            if [[ "$actual_sha" != "$expected_sha" ]]; then
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+            if ! tar -xzf "$tmp_dl/grpcurl.tar.gz" -C "$tmp_dl" grpcurl; then
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+            mkdir -p "$cache_root"
+            cp "$tmp_dl/grpcurl" "$cached_bin"
+            chmod +x "$cached_bin"
+            rm -rf "$tmp_dl"
+            GRPCURL_BIN="$cached_bin"
+            return 0
+          }
+
+          resolve_registry_version() {
+            local app_full_name="$1"
+            local grpc_target="$APP_REGISTRY_ADDRESS"
+            grpc_target="${grpc_target#https://}"
+            grpc_target="${grpc_target#http://}"
+
+            local use_tls=false
+            if [[ "$APP_REGISTRY_ADDRESS" == https://* || "$APP_REGISTRY_ADDRESS" == *:443* ]]; then
+              use_tls=true
+            fi
+            if [[ -n "${GRPC_USE_TLS:-}" ]]; then
+              [[ "$GRPC_USE_TLS" == "true" ]] && use_tls=true || use_tls=false
+            fi
+            local -a tls_opt=()
+            [[ "$use_tls" == "false" ]] && tls_opt=(-plaintext)
+
+            local get_app_json app_id
+            get_app_json="$("$GRPCURL_BIN" "${tls_opt[@]}" -max-time 15 \
+              -H "authorization: Bearer $REGISTRY_TOKEN" \
+              -d "{\"full_name\":\"${app_full_name}\"}" \
+              "$grpc_target" appregistry.v1.AppRegistry/GetApp 2>/dev/null)" || true
+            app_id="$(echo "$get_app_json" | jq -r '.app.appId // .app.app_id // empty' 2>/dev/null)" || true
+            if [[ -z "$app_id" ]]; then
+              return 1
+            fi
+
+            local env_state_json version
+            env_state_json="$("$GRPCURL_BIN" "${tls_opt[@]}" -max-time 15 \
+              -H "authorization: Bearer $REGISTRY_TOKEN" \
+              -d "{\"environment_key\":\"${TARGET_ENV}\"}" \
+              "$grpc_target" appregistry.v1.PromotionRegistry/GetEnvironmentState 2>/dev/null)" || true
+            if [[ -z "$env_state_json" ]]; then
+              return 1
+            fi
+
+            version="$(echo "$env_state_json" | jq -r --arg app_id "$app_id" '
+              [.entries[]?
+                | select((.artifact.appId // .artifact.app_id) == $app_id)
+                | select((.artifact.kind // "") == "ARTIFACT_KIND_BINARY")
+              ][0].artifact.version // empty
+            ' 2>/dev/null)" || true
+            if [[ -z "$version" || "$version" == "null" ]]; then
+              return 1
+            fi
+
+            echo "$version"
+            return 0
+          }
+
+          REGISTRY_TOKEN=""
+          if [[ -n "${GRPC_AUTH_TOKEN_URL:-}" && -n "${GRPC_AUTH_CLIENT_ID:-}" && -n "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
+            if token_json=$(curl -sS -m 15 -X POST "$GRPC_AUTH_TOKEN_URL" \
+                  -d grant_type=client_credentials \
+                  -d client_id="$GRPC_AUTH_CLIENT_ID" \
+                  -d client_secret="$GRPC_AUTH_CLIENT_SECRET" 2>/dev/null); then
+              REGISTRY_TOKEN="$(echo "$token_json" | jq -r '.access_token // empty' 2>/dev/null)" || REGISTRY_TOKEN=""
+            fi
+          fi
+
+          RH_VER=""
+          AR_VER=""
+          if [[ -n "$REGISTRY_TOKEN" && -n "${APP_REGISTRY_ADDRESS:-}" ]] && install_grpcurl; then
+            RH_VER="$(resolve_registry_version "tools-release_helper_go" || true)"
+            AR_VER="$(resolve_registry_version "tools-app-registry" || resolve_registry_version "tools-app_registry_cli" || true)"
+          fi
+
+          echo "Resolved release tooling versions from App Registry (env=$TARGET_ENV):"
+          echo "  release_helper_go: ${RH_VER:-<not resolved>}"
+          echo "  app_registry_cli:  ${AR_VER:-<not resolved>}"
           echo "release_helper_version=$RH_VER" >> "$GITHUB_OUTPUT"
           echo "app_registry_version=$AR_VER" >> "$GITHUB_OUTPUT"
 
@@ -187,6 +322,9 @@ jobs:
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
       - name: Plan release
         id: plan
@@ -286,6 +424,9 @@ jobs:
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
       - name: Configure Git
         run: |
@@ -385,6 +526,9 @@ jobs:
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
       - name: Download release notes artifacts
         uses: actions/download-artifact@v4
@@ -505,6 +649,9 @@ jobs:
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
       - name: Configure Git
         if: ${{ github.event.inputs.dry_run == 'false' }}
@@ -570,6 +717,9 @@ jobs:
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
       - name: Generate summary
         if: steps.download-tools.outcome == 'success'

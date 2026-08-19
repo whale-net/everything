@@ -2,38 +2,13 @@
 set -euo pipefail
 
 # Test download-release-tools logic:
-# 1. Pinned version resolution from .release-tools-version
+# 1. Version string quoting & whitespace preservation
 # 2. SHA256 integrity verification (succeeds on matching checksum, fails on mismatch)
 # 3. Source-mode fallback and tool execution verification
-# 4. App Registry GetEnvironmentState JSON parsing (#780) and fallback-on-failure behavior
+# 4. App Registry GetEnvironmentState JSON parsing (#780, #859)
+# 5. App Registry target_env resolution and fallback discipline
 
-echo "=== Test 1: Pinned version file parsing ==="
-if [ -n "${TEST_SRCDIR:-}" ]; then
-    VERSION_FILE="${TEST_SRCDIR}/_main/.release-tools-version"
-else
-    VERSION_FILE=".release-tools-version"
-fi
-
-if [ ! -f "$VERSION_FILE" ]; then
-    echo "FAIL: $VERSION_FILE not found"
-    exit 1
-fi
-
-
-HELPER_VER=$(grep -E '^\s*release_helper_go:' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
-REGISTRY_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | sed -E "s/['\"[:space:]]//g" || true)
-
-if [ -z "$HELPER_VER" ] || [ -z "$REGISTRY_VER" ]; then
-    echo "FAIL: Could not parse versions from $VERSION_FILE"
-    exit 1
-fi
-if [ "$HELPER_VER" != "v0.3.0" ] || [ "$REGISTRY_VER" != "v0.3.0" ]; then
-    echo "FAIL: Expected v0.3.0, got helper=$HELPER_VER, registry=$REGISTRY_VER"
-    exit 1
-fi
-echo "Parsed release_helper_go version: $HELPER_VER"
-echo "Parsed app_registry_cli version: $REGISTRY_VER"
-
+echo "=== Test 1: Version string quoting and whitespace preservation ==="
 # Test various quoting and whitespace styles to ensure digits are preserved
 for sample in "v0.3.0" "\"v0.3.0\"" "'v0.3.0'" "  v0.3.0  "; do
     parsed=$(echo "$sample" | sed -E "s/['\"[:space:]]//g")
@@ -220,58 +195,57 @@ fi
 echo "PASS: empty response body correctly yields empty"
 
 echo "=== Test 5: Fallback policy and target_env resolution discipline ==="
-# Test that when target_env is set, resolution failure does NOT fall back to
-# .release-tools-version, but instead fails explicitly.
+# Test that resolution from App Registry handles success, failure without fallback,
+# and failure with fallback_to_source cleanly.
 
 resolve_tool_version_sim() {
     local target_env="$1"
     local simulated_registry_ver="$2"
-    local version_file="$3"
+    local fallback_to_source="$3"
 
     local rh_ver=""
-    if [ -n "$target_env" ]; then
-        if [ -n "$simulated_registry_ver" ]; then
-            rh_ver="$simulated_registry_ver"
-        else
-            echo "ERROR: Could not resolve promoted version for 'release_helper_go' in environment '$target_env'. Fallback to hardcoded constants is disabled. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') or ensure the tool is promoted in App Registry." >&2
-            return 1
-        fi
-    elif [ -f "$version_file" ]; then
-        rh_ver=$(grep -E '^\s*release_helper_go:' "$version_file" 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
+    if [ -n "$simulated_registry_ver" ]; then
+        rh_ver="$simulated_registry_ver"
+        echo "$rh_ver"
+        return 0
     fi
 
-    echo "$rh_ver"
-    return 0
+    if [ "$fallback_to_source" = "true" ]; then
+        echo "source"
+        return 0
+    else
+        echo "ERROR: Could not resolve promoted version for 'release_helper_go' in environment '$target_env'. Fallback to source compilation is disabled. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') or ensure the tool is promoted in App Registry." >&2
+        return 1
+    fi
 }
 
 # 5a: target_env set with registry match -> returns registry version
-RES=$(resolve_tool_version_sim "dev" "v1.4.0" "$VERSION_FILE")
+RES=$(resolve_tool_version_sim "dev" "v1.4.0" "false")
 if [ "$RES" != "v1.4.0" ]; then
     echo "FAIL: expected v1.4.0, got '$RES'"
     exit 1
 fi
 echo "PASS: target_env with registry match resolves correctly"
 
-# 5b: target_env set with NO registry match -> fails without falling back to file
-ERR_OUTPUT=""
-if RES=$(resolve_tool_version_sim "dev" "" "$VERSION_FILE" 2>&1); then
-    echo "FAIL: target_env without registry match should have failed, but returned '$RES'"
+# 5b: target_env set with NO registry match and fallback_to_source=false -> fails explicitly
+if RES=$(resolve_tool_version_sim "dev" "" "false" 2>&1); then
+    echo "FAIL: target_env without registry match and fallback=false should have failed, but returned '$RES'"
     exit 1
 else
-    if [[ "$RES" != *"Fallback to hardcoded constants is disabled"* ]]; then
+    if [[ "$RES" != *"Fallback to source compilation is disabled"* ]]; then
         echo "FAIL: expected error message regarding disabled fallback, got '$RES'"
         exit 1
     fi
 fi
-echo "PASS: target_env without registry match fails cleanly without falling back to pinned file"
+echo "PASS: target_env without registry match and fallback=false fails cleanly"
 
-# 5c: target_env unset -> resolves from pinned version file
-RES=$(resolve_tool_version_sim "" "" "$VERSION_FILE")
-if [ "$RES" != "v0.3.0" ]; then
-    echo "FAIL: expected v0.3.0 from version file when target_env unset, got '$RES'"
+# 5c: target_env set with NO registry match and fallback_to_source=true -> falls back to source
+RES=$(resolve_tool_version_sim "dev" "" "true")
+if [ "$RES" != "source" ]; then
+    echo "FAIL: expected source fallback, got '$RES'"
     exit 1
 fi
-echo "PASS: unset target_env correctly falls back to pinned version file"
+echo "PASS: fallback_to_source=true correctly falls back to source"
 
 echo "=== All download-release-tools tests passed ==="
 
