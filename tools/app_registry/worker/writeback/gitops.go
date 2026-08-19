@@ -92,7 +92,12 @@ type GitOpsActivities struct {
 	// Client reads current promotion state, same role as
 	// StubActivities.Client.
 	Client pb.PromotionRegistryClient
-	Config GitOpsConfig
+	// AppClient resolves a chart_id to its full_name ("<domain>-<chart>"),
+	// the path segment Publish writes under `<domain>/<chart-name>/versions/<env>.yaml`.
+	// Any authenticated credential works; AppRegistry.ListCharts only requires
+	// auth.RequireAuthenticated.
+	AppClient pb.AppRegistryClient
+	Config    GitOpsConfig
 
 	// HTTPClient issues the installation-token exchange request. Defaults
 	// to http.DefaultClient; overridable in tests to point at an
@@ -111,7 +116,7 @@ type GitOpsActivities struct {
 // (never silently falls back to a baked-in value) if any required field is
 // empty or the key doesn't parse -- see GitOpsConfig's doc comment and
 // issue #798's "do not hardcode" requirement.
-func NewGitOpsActivities(client pb.PromotionRegistryClient, cfg GitOpsConfig) (*GitOpsActivities, error) {
+func NewGitOpsActivities(client pb.PromotionRegistryClient, appClient pb.AppRegistryClient, cfg GitOpsConfig) (*GitOpsActivities, error) {
 	var missing []string
 	if cfg.Repo == "" {
 		missing = append(missing, "WRITEBACK_GITOPS_REPO")
@@ -143,6 +148,7 @@ func NewGitOpsActivities(client pb.PromotionRegistryClient, cfg GitOpsConfig) (*
 	}
 	return &GitOpsActivities{
 		Client:           client,
+		AppClient:        appClient,
 		Config:           cfg,
 		HTTPClient:       http.DefaultClient,
 		GitHubAPIBaseURL: "https://api.github.com",
@@ -163,15 +169,36 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s (promotion %s): %w", in.Domain, in.EnvironmentKey, in.PromotionID, err)
 	}
 
-	var targetRevision string
+	var (
+		targetRevision string
+		chartID        string
+	)
 	for _, entry := range resp.Entries {
 		if entry.Artifact != nil && entry.Artifact.Kind == pb.ArtifactKind_ARTIFACT_KIND_CHART {
 			targetRevision = entry.Artifact.Version
+			chartID = entry.Artifact.ChartId
 			break
 		}
 	}
 	if targetRevision == "" {
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: no chart artifact found in environment state", in.Domain, in.EnvironmentKey)
+	}
+
+	var chartName string
+	if a.AppClient != nil {
+		chartResp, err := a.AppClient.ListCharts(ctx, &pb.ListChartsRequest{Domain: in.Domain})
+		if err != nil {
+			return RenderedState{}, fmt.Errorf("render environment state for %s/%s: list charts: %w", in.Domain, in.EnvironmentKey, err)
+		}
+		for _, c := range chartResp.Charts {
+			if c.ChartId == chartID || (chartID == "" && len(chartResp.Charts) == 1) {
+				chartName = c.FullName
+				break
+			}
+		}
+	}
+	if chartName == "" {
+		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: chart %q not found in domain %q", in.Domain, in.EnvironmentKey, chartID, in.Domain)
 	}
 
 	doc, err := renderTargetRevisionDocument(targetRevision)
@@ -182,6 +209,7 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 	return RenderedState{
 		EnvironmentKey: in.EnvironmentKey,
 		Domain:         in.Domain,
+		ChartName:      chartName,
 		StateHash:      resp.StateHash,
 		RenderedAt:     time.Now().UTC(),
 		Document:       doc,
@@ -189,7 +217,7 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 }
 
 // renderTargetRevisionDocument builds the `targetRevision: <version>` YAML
-// document for the domain's versions/<env>.yaml file in argok8s (see
+// document for the domain's <chart-name>/versions/<env>.yaml file in argok8s (see
 // argok8s#68).
 func renderTargetRevisionDocument(targetRevision string) ([]byte, error) {
 	root := &yaml.Node{
@@ -216,7 +244,7 @@ func renderTargetRevisionDocument(targetRevision string) ([]byte, error) {
 
 // Publish implements Writeback: mint a GitHub App installation token,
 // clone the gitops repo, and commit+push the rendered document to
-// `<domain>/versions/<environment>.yaml` if it differs from what's already
+// `<domain>/<chart-name>/versions/<environment>.yaml` if it differs from what's already
 // there -- see argok8s#68 for the path convention and
 // ../../architecture/12-writeback-outbox-temporal.md for why
 // Environment.gitops_path is not used.
@@ -224,28 +252,31 @@ func (a *GitOpsActivities) Publish(ctx context.Context, state RenderedState) (Pu
 	if state.Domain == "" {
 		return PublishResult{}, fmt.Errorf("publish %s: RenderedState has no domain -- GitOpsActivities requires domain-scoped rendering (see WritebackInput.Domain)", state.EnvironmentKey)
 	}
+	if state.ChartName == "" {
+		return PublishResult{}, fmt.Errorf("publish %s/%s: RenderedState has no chart name", state.Domain, state.EnvironmentKey)
+	}
 
 	token, err := a.mintInstallationToken(ctx)
 	if err != nil {
-		return PublishResult{}, fmt.Errorf("publish %s/%s: %w", state.Domain, state.EnvironmentKey, err)
+		return PublishResult{}, fmt.Errorf("publish %s/%s/%s: %w", state.Domain, state.ChartName, state.EnvironmentKey, err)
 	}
 
 	dir, err := os.MkdirTemp("", "app-registry-writeback-")
 	if err != nil {
-		return PublishResult{}, fmt.Errorf("publish %s/%s: create temp clone dir: %w", state.Domain, state.EnvironmentKey, err)
+		return PublishResult{}, fmt.Errorf("publish %s/%s/%s: create temp clone dir: %w", state.Domain, state.ChartName, state.EnvironmentKey, err)
 	}
 	defer os.RemoveAll(dir) //nolint:errcheck
 
 	branch := a.Config.Branch
 	remote := a.remoteURL(token)
 	if err := cloneRepo(ctx, remote, branch, dir, token); err != nil {
-		return PublishResult{}, fmt.Errorf("publish %s/%s: %w", state.Domain, state.EnvironmentKey, err)
+		return PublishResult{}, fmt.Errorf("publish %s/%s/%s: %w", state.Domain, state.ChartName, state.EnvironmentKey, err)
 	}
 
-	relPath := filepath.Join(state.Domain, "versions", state.EnvironmentKey+".yaml")
+	relPath := filepath.Join(state.Domain, state.ChartName, "versions", state.EnvironmentKey+".yaml")
 	result, err := a.publishToClone(ctx, dir, branch, relPath, state.Document, token)
 	if err != nil {
-		return PublishResult{}, fmt.Errorf("publish %s/%s: %w", state.Domain, state.EnvironmentKey, err)
+		return PublishResult{}, fmt.Errorf("publish %s/%s/%s: %w", state.Domain, state.ChartName, state.EnvironmentKey, err)
 	}
 	return result, nil
 }

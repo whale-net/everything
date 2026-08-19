@@ -27,9 +27,10 @@ content — see below) to skip no-op commits, and retries on push conflict by
 re-reading state — last writer wins on a per-environment file, which is
 correct because the registry is the source of truth for that file.
 
-The gitops-committed path is `<domain>/versions/<environment.key>.yaml`,
+The gitops-committed path is `<domain>/<chart-name>/versions/<environment.key>.yaml`,
 computed at render/publish time from the promotion's `domain` (threaded
-through the outbox row and `WritebackInput`, see below) and the target
+through the outbox row and `WritebackInput`, see below), the chart's `full_name`
+(resolved via `AppRegistry.ListCharts`), and the target
 environment's `key`. **`Environment.gitops_path`** (the stored column on
 `environment`, `protos/messages.proto`'s `gitops_path` field,
 `ui/pages/environment_form.templ`'s form field) **is confirmed dead for
@@ -81,7 +82,7 @@ state" only** — the render and publish steps exist, the S3 put does not
   `WRITEBACK_GITOPS_REPO`@`WRITEBACK_GITOPS_BRANCH` by shelling out to the
   `git` CLI using the token as the HTTPS credential, and no-ops
   (`PublishResult{Skipped: true}`) when the rendered document already
-  matches the current content of `<domain>/versions/<env>.yaml` in the
+  matches the current content of `<domain>/<chart-name>/versions/<env>.yaml` in the
   clone — the remote file is the source of truth here, so this replaces
   `StubActivities`'s local sidecar-hash file rather than porting it.
   Otherwise it writes the file, commits as `WRITEBACK_GIT_AUTHOR_NAME`

@@ -81,6 +81,7 @@ func run() error {
 	}
 	defer conn.Close() //nolint:errcheck
 	registryClient := pb.NewPromotionRegistryClient(conn.GetConnection())
+	appClient := pb.NewAppRegistryClient(conn.GetConnection())
 
 	// Temporal client + worker, via libs/go/temporal -- see AR-4a.
 	temporalCfg := temporallib.ConfigFromEnv()
@@ -102,7 +103,7 @@ func run() error {
 	// working with zero config against StubActivities -- see issue #798's
 	// sequencing and worker/writeback/gitops.go's package doc comment.
 	if gitopsRepo := os.Getenv("WRITEBACK_GITOPS_REPO"); gitopsRepo != "" {
-		gitops, gerr := writeback.NewGitOpsActivities(registryClient, writeback.GitOpsConfig{
+		gitops, gerr := writeback.NewGitOpsActivities(registryClient, appClient, writeback.GitOpsConfig{
 			Repo:           gitopsRepo,
 			Branch:         os.Getenv("WRITEBACK_GITOPS_BRANCH"),
 			AppID:          os.Getenv("WRITEBACK_GITHUB_APP_ID"),

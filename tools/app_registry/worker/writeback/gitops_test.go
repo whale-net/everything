@@ -95,7 +95,7 @@ func TestMintInstallationToken_TokenExchange(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a, err := NewGitOpsActivities(nil, GitOpsConfig{
+	a, err := NewGitOpsActivities(nil, nil, GitOpsConfig{
 		Repo:           "whale-net/argok8s",
 		AppID:          "123456",
 		InstallationID: "67890",
@@ -124,7 +124,7 @@ func TestMintInstallationToken_ErrorStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a, err := NewGitOpsActivities(nil, GitOpsConfig{
+	a, err := NewGitOpsActivities(nil, nil, GitOpsConfig{
 		Repo:           "whale-net/argok8s",
 		AppID:          "1",
 		InstallationID: "1",
@@ -153,7 +153,7 @@ func TestNewGitOpsActivities_RequiresEveryEnvVar(t *testing.T) {
 		PrivateKeyPEM:  pemStr,
 	}
 
-	if _, err := NewGitOpsActivities(nil, full); err != nil {
+	if _, err := NewGitOpsActivities(nil, nil, full); err != nil {
 		t.Fatalf("expected a fully-populated config to succeed, got %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestNewGitOpsActivities_RequiresEveryEnvVar(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewGitOpsActivities(nil, tc.mutate(full))
+			_, err := NewGitOpsActivities(nil, nil, tc.mutate(full))
 			require.Error(t, err)
 		})
 	}
@@ -176,7 +176,7 @@ func TestNewGitOpsActivities_RequiresEveryEnvVar(t *testing.T) {
 
 // TestGitOpsActivities_Publish_FirstWriteThenNoOp exercises Publish end to
 // end against a local `git init --bare` repo (no network): the first
-// publish writes and commits/pushes `<domain>/versions/<env>.yaml`; a
+// publish writes and commits/pushes `<domain>/<chart-name>/versions/<env>.yaml`; a
 // second publish of byte-identical content is a no-op (Skipped=true),
 // checked against the git-committed file itself, not a sidecar hash file
 // (stub.go's mechanism) -- see Publish's doc comment.
@@ -189,13 +189,14 @@ func TestGitOpsActivities_Publish_FirstWriteThenNoOp(t *testing.T) {
 	state := RenderedState{
 		EnvironmentKey: "dev",
 		Domain:         "app-registry",
+		ChartName:      "app-registry-app-registry",
 		Document:       []byte("targetRevision: v0.0.1\n"),
 	}
 
 	first, err := a.Publish(context.Background(), state)
 	require.NoError(t, err)
 	require.False(t, first.Skipped)
-	require.Equal(t, filepath.Join("app-registry", "versions", "dev.yaml"), first.Location)
+	require.Equal(t, filepath.Join("app-registry", "app-registry-app-registry", "versions", "dev.yaml"), first.Location)
 
 	second, err := a.Publish(context.Background(), state)
 	require.NoError(t, err)
@@ -203,7 +204,7 @@ func TestGitOpsActivities_Publish_FirstWriteThenNoOp(t *testing.T) {
 
 	checkDir := t.TempDir()
 	runTestGit(t, "", "clone", bareDir, checkDir)
-	got, err := os.ReadFile(filepath.Join(checkDir, "app-registry", "versions", "dev.yaml"))
+	got, err := os.ReadFile(filepath.Join(checkDir, "app-registry", "app-registry-app-registry", "versions", "dev.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, state.Document, got)
 }
@@ -244,7 +245,7 @@ func TestGitOpsActivities_Publish_ConflictRetry(t *testing.T) {
 	runTestGit(t, otherDir, "push", "origin", "HEAD:main")
 
 	doc := []byte("targetRevision: v0.0.2\n")
-	relPath := filepath.Join("app-registry", "versions", "dev.yaml")
+	relPath := filepath.Join("app-registry", "app-registry-app-registry", "versions", "dev.yaml")
 	result, err := a.publishToClone(context.Background(), staleDir, "main", relPath, doc, "")
 	require.NoError(t, err)
 	require.False(t, result.Skipped)
@@ -270,6 +271,18 @@ func (f *fakePromotionClient) GetEnvironmentState(ctx context.Context, in *pb.Ge
 	return nil, errors.New("unimplemented")
 }
 
+type fakeAppClient struct {
+	pb.AppRegistryClient
+	listCharts func(ctx context.Context, in *pb.ListChartsRequest) (*pb.ListChartsResponse, error)
+}
+
+func (f *fakeAppClient) ListCharts(ctx context.Context, in *pb.ListChartsRequest, opts ...grpc.CallOption) (*pb.ListChartsResponse, error) {
+	if f.listCharts != nil {
+		return f.listCharts(ctx, in)
+	}
+	return nil, errors.New("unimplemented")
+}
+
 func TestGitOpsActivities_RenderEnvironmentState(t *testing.T) {
 	fakeClient := &fakePromotionClient{
 		getEnvState: func(ctx context.Context, in *pb.GetEnvironmentStateRequest) (*pb.GetEnvironmentStateResponse, error) {
@@ -281,6 +294,7 @@ func TestGitOpsActivities_RenderEnvironmentState(t *testing.T) {
 					{
 						Artifact: &pb.Artifact{
 							Kind:    pb.ArtifactKind_ARTIFACT_KIND_CHART,
+							ChartId: "chart-123",
 							Version: "v0.0.39",
 						},
 					},
@@ -288,8 +302,23 @@ func TestGitOpsActivities_RenderEnvironmentState(t *testing.T) {
 			}, nil
 		},
 	}
+	fakeApp := &fakeAppClient{
+		listCharts: func(ctx context.Context, in *pb.ListChartsRequest) (*pb.ListChartsResponse, error) {
+			require.Equal(t, "app-registry", in.Domain)
+			return &pb.ListChartsResponse{
+				Charts: []*pb.Chart{
+					{
+						ChartId:  "chart-123",
+						Domain:   "app-registry",
+						Name:     "app-registry",
+						FullName: "app-registry-app-registry",
+					},
+				},
+			}, nil
+		},
+	}
 
-	a := &GitOpsActivities{Client: fakeClient}
+	a := &GitOpsActivities{Client: fakeClient, AppClient: fakeApp}
 	rendered, err := a.RenderEnvironmentState(context.Background(), WritebackInput{
 		PromotionID:    "promo-1",
 		EnvironmentKey: "dev",
@@ -298,6 +327,7 @@ func TestGitOpsActivities_RenderEnvironmentState(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "dev", rendered.EnvironmentKey)
 	require.Equal(t, "app-registry", rendered.Domain)
+	require.Equal(t, "app-registry-app-registry", rendered.ChartName)
 	require.Equal(t, "hash-123", rendered.StateHash)
 	require.Equal(t, "targetRevision: v0.0.39\n", string(rendered.Document))
 }
@@ -312,7 +342,7 @@ func TestGitOpsActivities_RenderEnvironmentState_MissingChartError(t *testing.T)
 		},
 	}
 
-	a := &GitOpsActivities{Client: fakeClient}
+	a := &GitOpsActivities{Client: fakeClient, AppClient: &fakeAppClient{}}
 	_, err := a.RenderEnvironmentState(context.Background(), WritebackInput{
 		PromotionID:    "promo-1",
 		EnvironmentKey: "dev",
@@ -362,7 +392,7 @@ func newTestGitOpsActivities(t *testing.T, bareRepoDir string) *GitOpsActivities
 	}))
 	t.Cleanup(server.Close)
 
-	a, err := NewGitOpsActivities(nil, GitOpsConfig{
+	a, err := NewGitOpsActivities(nil, nil, GitOpsConfig{
 		Repo:           bareRepoDir,
 		Branch:         "main",
 		AppID:          "1",

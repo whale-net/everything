@@ -4,7 +4,7 @@
 -- environment_key on the same table (see 004_writeback_outbox.up.sql's
 -- doc comment on that column for the rationale this copies): the worker's
 -- Publish activity needs to know which argok8s directory
--- (<domain>/versions/<env>.yaml, see
+-- (<domain>/<chart-name>/versions/<env>.yaml, see
 -- tools/app_registry/architecture/12-writeback-outbox-temporal.md) a row's
 -- rendered document belongs to without a join back through
 -- promotion -> artifact -> app/chart on every drain pass.
