@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
-	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,9 +24,6 @@ import (
 // surface with that work is the repository.Registry interface, not any line
 // of artifact.go itself -- see PLAN.md AR-7f's "Constraints" note.
 func (s *ArtifactServer) CheckChartHermeticity(ctx context.Context, req *pb.CheckChartHermeticityRequest) (*pb.CheckChartHermeticityResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	if req.ChartDomain == "" {
 		return nil, status.Error(codes.InvalidArgument, "chart_domain is required")
 	}

@@ -51,7 +51,11 @@ func NewServerInterceptors(ctx context.Context, config ServerConfig) (grpc.Unary
 	return unary, stream, nil
 }
 
-// authenticate extracts and verifies the token, returning an enriched context
+// authenticate extracts and verifies the token, returning an enriched context.
+// In AuthModeNone, dev Claims are injected without verification.
+// In AuthModeOIDC:
+//   - If authorization metadata is omitted or empty, the request proceeds anonymously (no claims in context).
+//   - If authorization metadata is present, it MUST be a valid "Bearer <token>"; invalid or expired tokens are rejected with codes.Unauthenticated.
 func authenticate(ctx context.Context, mode AuthMode, verifier TokenVerifier, devClaims *Claims) (context.Context, error) {
 	if mode == AuthModeNone {
 		return context.WithValue(ctx, claimsKey{}, devClaims), nil
@@ -59,12 +63,12 @@ func authenticate(ctx context.Context, mode AuthMode, verifier TokenVerifier, de
 
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "missing metadata")
+		return ctx, nil
 	}
 
 	authValues := md.Get("authorization")
-	if len(authValues) == 0 {
-		return nil, status.Error(codes.Unauthenticated, "missing authorization header")
+	if len(authValues) == 0 || strings.TrimSpace(authValues[0]) == "" {
+		return ctx, nil
 	}
 
 	rawToken := authValues[0]
