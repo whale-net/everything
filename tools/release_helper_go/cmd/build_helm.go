@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -86,7 +87,7 @@ func newBuildHelmChartCmd() *cobra.Command {
 			}
 			var appVersions map[string]string
 			if useReleasedVersions {
-				appVersions, err = resolveChartAppVersions(chart, allApps, defaultGit)
+				appVersions, err = resolveChartAppVersions(cmd.Context(), chart, allApps, defaultGit, nil)
 				if err != nil {
 					return err
 				}
@@ -208,21 +209,51 @@ func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string
 	return "v0.0.1", nil
 }
 
-func resolveChartAppVersions(chart HelmChartMetadata, allApps []AppMetadata, git GitRunner) (map[string]string, error) {
+// resolveChartAppVersions returns the latest published version for each app
+// in the chart. For domains at adoption stage "allocate", versions are
+// resolved exclusively from the App Registry (GetArtifact with
+// latest_published=true). Falling back to git tags for an allocate-stage
+// domain is the exact bug that caused issue #876, so any registry failure
+// hard-errors rather than silently reverting to tag scanning.
+//
+// When client is nil or the domain is not yet at "allocate" stage, git tags
+// are used as they always were.
+func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allApps []AppMetadata, git GitRunner, client pb.ArtifactRegistryClient) (map[string]string, error) {
+	allocate, err := isDomainAtAllocateStage(ctx, client, chart.Domain)
+	if err != nil {
+		return nil, fmt.Errorf("resolve chart app versions: check adoption stage for domain %q: %w", chart.Domain, err)
+	}
+
 	versions := map[string]string{}
 	for _, appName := range chart.Apps {
 		matched, err := findChartApp(appName, chart.Domain, allApps)
 		if err != nil {
 			return nil, err
 		}
-		ver, err := getLatestAppVersion(matched.Domain, matched.Name, git)
-		if err != nil || ver == "" {
-			return nil, fmt.Errorf("no released version for app %q in domain %q", matched.Name, matched.Domain)
+		if allocate {
+			resp, err := client.GetArtifact(ctx, &pb.GetArtifactRequest{
+				OwnerFullName:    matched.FullName(),
+				Kind:             pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+				LatestPublished:  true,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("resolve version for app %q (domain %q at allocate stage): App Registry GetArtifact failed: %w", matched.Name, chart.Domain, err)
+			}
+			if resp.Artifact == nil || resp.Artifact.Version == "" {
+				return nil, fmt.Errorf("resolve version for app %q (domain %q at allocate stage): App Registry returned no published artifact", matched.Name, chart.Domain)
+			}
+			versions[matched.FullName()] = resp.Artifact.Version
+		} else {
+			ver, err := getLatestAppVersion(matched.Domain, matched.Name, git)
+			if err != nil || ver == "" {
+				return nil, fmt.Errorf("no released version for app %q in domain %q", matched.Name, matched.Domain)
+			}
+			versions[matched.FullName()] = ver
 		}
-		versions[matched.FullName()] = ver
 	}
 	return versions, nil
 }
+
 
 // findChartApp resolves one of a chart's declared app names to its full
 // AppMetadata, preferring a match within the chart's own domain. The

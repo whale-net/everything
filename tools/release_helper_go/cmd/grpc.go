@@ -306,7 +306,21 @@ func (f *FakeArtifactRegistryClient) GetArtifact(ctx context.Context, in *pb.Get
 	if f.GetArtifactFn != nil {
 		return f.GetArtifactFn(ctx, in, opts...)
 	}
-	return &pb.GetArtifactResponse{}, nil
+	if in.BeforeVersion != "" {
+		return &pb.GetArtifactResponse{}, nil
+	}
+	ver := in.Version
+	if ver == "" {
+		ver = "v1.0.0"
+	}
+	return &pb.GetArtifactResponse{
+		Artifact: &pb.Artifact{
+			ArtifactId: "test-artifact-id",
+			Version:    ver,
+			Digest:     "sha256:testartifactdigest",
+			State:      pb.ArtifactState_ARTIFACT_STATE_PUBLISHED,
+		},
+	}, nil
 }
 
 func (f *FakeArtifactRegistryClient) GetReleaseRun(ctx context.Context, in *pb.GetReleaseRunRequest, opts ...grpc.CallOption) (*pb.GetReleaseRunResponse, error) {

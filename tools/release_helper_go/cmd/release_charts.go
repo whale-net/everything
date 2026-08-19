@@ -513,7 +513,7 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 		tagName := fmt.Sprintf("%s.%s", chart.Name, ver)
 
 		// 1. Resolve member app versions
-		appVersions, err := resolveChartAppVersions(chart, allApps, git)
+		appVersions, err := resolveChartAppVersions(ctx, chart, allApps, git, artifactClient)
 		if err != nil {
 			return nil, fmt.Errorf("resolve app versions for chart %s: %w", chart.Name, err)
 		}
