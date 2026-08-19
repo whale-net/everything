@@ -544,6 +544,12 @@ type WritebackOutbox struct {
 	PromotionID    string
 	EnvironmentID  string
 	EnvironmentKey string // denormalized at write time, for worker logging without a join
+	// Domain is the owning app's/chart's domain (repository.App.Domain /
+	// repository.Chart.Domain), denormalized at write time exactly like
+	// EnvironmentKey above -- see 015_writeback_outbox_domain.up.sql's doc
+	// comment. Lets the worker render/publish per (domain, environment)
+	// without a join back through promotion -> artifact -> app/chart.
+	Domain string
 	// EventID is the promotion_event this row corresponds to, so the
 	// worker can stamp temporal_workflow_id/temporal_run_id back onto the
 	// audit row once the workflow starts.

@@ -52,6 +52,7 @@ func (a *StubActivities) RenderEnvironmentState(ctx context.Context, in Writebac
 	}
 	return RenderedState{
 		EnvironmentKey: in.EnvironmentKey,
+		Domain:         in.Domain,
 		StateHash:      resp.StateHash,
 		RenderedAt:     time.Now().UTC(),
 		Document:       doc,

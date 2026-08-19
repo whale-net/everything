@@ -312,8 +312,11 @@ func TestPromotionRepo_Promote_TransactionAbortLeavesNoPartialWrite(t *testing.T
 // non-empty, is used as the outbox row's event_id instead of the real
 // event's id, so the INSERT trips the event_id foreign key -- used by
 // TestWriteback_EnqueueFailureRollsBackWholeTransaction below to prove the
-// promotion does not survive when the outbox insert fails.
-func promoteWithOutboxTx(t *testing.T, reg *Registry, p repository.Promotion, forceBadEventID string) (*repository.Promotion, *repository.WritebackOutbox, error) {
+// promotion does not survive when the outbox insert fails. domain is
+// passed straight through to the Enqueue call, standing in for what
+// enqueueWriteback's real ownerDomain lookup would resolve -- see
+// 015_writeback_outbox_domain.up.sql.
+func promoteWithOutboxTx(t *testing.T, reg *Registry, p repository.Promotion, domain, forceBadEventID string) (*repository.Promotion, *repository.WritebackOutbox, error) {
 	t.Helper()
 	var current *repository.Promotion
 	var outbox *repository.WritebackOutbox
@@ -340,6 +343,7 @@ func promoteWithOutboxTx(t *testing.T, reg *Registry, p repository.Promotion, fo
 			PromotionID:    current.PromotionID,
 			EnvironmentID:  p.EnvironmentID,
 			EnvironmentKey: p.EnvironmentKey,
+			Domain:         domain,
 			EventID:        eventID,
 			StateHash:      "test-hash",
 		})
@@ -364,7 +368,7 @@ func TestWriteback_EnqueueCommitsAtomicallyWithPromotion(t *testing.T) {
 
 	current, outbox, err := promoteWithOutboxTx(t, reg, repository.Promotion{
 		EnvironmentID: envID, EnvironmentKey: envKey, TargetKey: "image:acme-widget", ArtifactID: art,
-	}, "")
+	}, "acme", "")
 	if err != nil {
 		t.Fatalf("promote+enqueue: %v", err)
 	}
@@ -374,18 +378,28 @@ func TestWriteback_EnqueueCommitsAtomicallyWithPromotion(t *testing.T) {
 	if outbox.Status != repository.WritebackOutboxStatusPending {
 		t.Fatalf("expected a freshly enqueued outbox row to be pending, got %q", outbox.Status)
 	}
+	// Domain round-trips through Enqueue exactly like EnvironmentKey does --
+	// see 015_writeback_outbox_domain.up.sql and enqueueWriteback's
+	// ownerDomain call.
+	if outbox.Domain != "acme" {
+		t.Fatalf("expected outbox row domain %q, got %q", "acme", outbox.Domain)
+	}
 
 	// Read back with a fresh query against the pool (not through Registry),
 	// confirming the row genuinely committed rather than only existing in
 	// the transaction-scoped Go struct returned above.
 	var count int
+	var domain string
 	if err := pool.QueryRow(context.Background(), `
-		SELECT count(*) FROM writeback_outbox WHERE promotion_id = $1 AND status = 'pending'`,
-		current.PromotionID).Scan(&count); err != nil {
+		SELECT count(*), max(domain) FROM writeback_outbox WHERE promotion_id = $1 AND status = 'pending'`,
+		current.PromotionID).Scan(&count, &domain); err != nil {
 		t.Fatalf("count outbox rows: %v", err)
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly 1 committed pending outbox row for promotion %s, found %d", current.PromotionID, count)
+	}
+	if domain != "acme" {
+		t.Fatalf("expected the committed row's domain to be %q, got %q", "acme", domain)
 	}
 }
 
@@ -408,7 +422,7 @@ func TestWriteback_EnqueueFailureRollsBackWholeTransaction(t *testing.T) {
 
 	_, _, err := promoteWithOutboxTx(t, reg, repository.Promotion{
 		EnvironmentID: envID, EnvironmentKey: "dev", TargetKey: targetKey, ArtifactID: art,
-	}, "00000000-0000-0000-0000-000000000000")
+	}, "acme", "00000000-0000-0000-0000-000000000000")
 	if err == nil {
 		t.Fatalf("expected the outbox insert (bad event_id) to fail the transaction, got nil error")
 	}
@@ -450,7 +464,7 @@ func TestWritebackOutbox_ClaimBatch_SkipsLockedAndReclaimsStale(t *testing.T) {
 
 	current, _, err := promoteWithOutboxTx(t, reg, repository.Promotion{
 		EnvironmentID: envID, EnvironmentKey: "dev", TargetKey: "image:acme-widget", ArtifactID: art,
-	}, "")
+	}, "acme", "")
 	if err != nil {
 		t.Fatalf("promote+enqueue: %v", err)
 	}

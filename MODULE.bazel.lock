@@ -2936,7 +2936,7 @@
     "@@rules_oci+//oci:extensions.bzl%oci": {
       "general": {
         "bzlTransitiveDigest": "QFOEeZuFT+oxdKHdAkb5iuXkL8+dtGOMtF7akO6+dKQ=",
-        "usagesDigest": "UCQz651P4MtdS+yOiO/0Zv6Q5XkCBSgmfscke0++Vp0=",
+        "usagesDigest": "fxAmBK1yHXzavi2cT1jCKq1SnRmrP+B1WrC6ApvJ0i0=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -3036,6 +3036,49 @@
                 "@@platforms//cpu:s390x": "@ubuntu_base_linux_s390x"
               },
               "bzlmod_repository": "ubuntu_base",
+              "reproducible": true
+            }
+          },
+          "git_base_linux_amd64": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/buildpack-deps",
+              "identifier": "sha256:3c3ab48c77f822ce98f61dd7e41d81df0bafeeecfa18dd6306d1ec238ad095f1",
+              "platform": "linux/amd64",
+              "target_name": "git_base_linux_amd64",
+              "bazel_tags": []
+            }
+          },
+          "git_base_linux_arm64_v8": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_pull",
+            "attributes": {
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/buildpack-deps",
+              "identifier": "sha256:3c3ab48c77f822ce98f61dd7e41d81df0bafeeecfa18dd6306d1ec238ad095f1",
+              "platform": "linux/arm64/v8",
+              "target_name": "git_base_linux_arm64_v8",
+              "bazel_tags": []
+            }
+          },
+          "git_base": {
+            "repoRuleId": "@@rules_oci+//oci/private:pull.bzl%oci_alias",
+            "attributes": {
+              "target_name": "git_base",
+              "www_authenticate_challenges": {},
+              "scheme": "https",
+              "registry": "index.docker.io",
+              "repository": "library/buildpack-deps",
+              "identifier": "sha256:3c3ab48c77f822ce98f61dd7e41d81df0bafeeecfa18dd6306d1ec238ad095f1",
+              "platforms": {
+                "@@platforms//cpu:x86_64": "@git_base_linux_amd64",
+                "@@platforms//cpu:arm64": "@git_base_linux_arm64_v8"
+              },
+              "bzlmod_repository": "git_base",
               "reproducible": true
             }
           },
@@ -3161,7 +3204,10 @@
             "ubuntu_base_linux_arm64_v8",
             "ubuntu_base_linux_ppc64le",
             "ubuntu_base_linux_riscv64",
-            "ubuntu_base_linux_s390x"
+            "ubuntu_base_linux_s390x",
+            "git_base",
+            "git_base_linux_amd64",
+            "git_base_linux_arm64_v8"
           ],
           "explicitRootModuleDirectDevDeps": [],
           "useAllRepos": "NO",

@@ -2490,8 +2490,8 @@ func TestMigration014DownRestoresPromotabilityColumn(t *testing.T) {
 	defer sqlDB.Close()
 
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
-	if err := runner.Up(); err != nil {
-		t.Fatalf("apply all migrations: %v", err)
+	if err := runner.Steps(14); err != nil {
+		t.Fatalf("apply migrations 001-014: %v", err)
 	}
 
 	// Write real post-014 data through the actual repository -- a published

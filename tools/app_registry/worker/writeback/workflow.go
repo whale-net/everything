@@ -66,6 +66,14 @@ const (
 type WritebackInput struct {
 	PromotionID    string
 	EnvironmentKey string
+	// Domain is the promotion's owning app's/chart's domain (see
+	// server/repository/models.go's WritebackOutbox.Domain and
+	// 015_writeback_outbox_domain.up.sql). RenderEnvironmentState passes it
+	// to GetEnvironmentState as the domain filter, so a real (non-stub)
+	// Writeback implementation renders one small per-domain document
+	// (<domain>/<chart-name>/versions/<env>.yaml) instead of the whole environment --
+	// see worker/writeback/gitops.go and whale-net/argok8s#68.
+	Domain string
 	// StateHash is the outbox row's state_hash, computed by the server
 	// inside the promotion transaction (see
 	// server/handlers/promotion.go's stateHash). Passed through so a
@@ -81,6 +89,16 @@ type WritebackInput struct {
 // works doesn't change the activity boundary between the two steps.
 type RenderedState struct {
 	EnvironmentKey string
+	// Domain identifies the target gitops domain directory
+	// (<domain>/<chart-name>/versions/<EnvironmentKey>.yaml) for a real
+	// Publish implementation. Carried forward from WritebackInput.Domain
+	// rather than re-derived.
+	Domain string
+	// ChartName identifies the target gitops chart directory
+	// (<domain>/<chart-name>/versions/<EnvironmentKey>.yaml) for a real
+	// Publish implementation. Resolved by RenderEnvironmentState via
+	// AppRegistry.ListCharts.
+	ChartName string
 	// StateHash is read back from the GetEnvironmentState response itself
 	// (not copied from WritebackInput), so Publish's no-op check reflects
 	// what was actually rendered just now, not what the outbox row

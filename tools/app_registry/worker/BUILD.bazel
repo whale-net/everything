@@ -35,9 +35,14 @@ go_binary(
 # run-to-completion job like migrate/cli.
 release_app(
     name = "worker",
-    binary_name = ":worker",
-    language = "go",
-    domain = "app-registry",
-    description = "App Registry writeback worker (Temporal)",
     app_type = "worker",
+    # The real (non-stub) Writeback implementation shells out to `git` --
+    # see worker/writeback/gitops.go. The default base image doesn't carry
+    # it, so use the git-enabled base instead (see MODULE.bazel's
+    # "git_base" oci.pull for why).
+    base = "@git_base",
+    binary_name = ":worker",
+    description = "App Registry writeback worker (Temporal)",
+    domain = "app-registry",
+    language = "go",
 )

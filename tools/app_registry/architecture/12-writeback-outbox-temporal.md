@@ -15,20 +15,32 @@ graph LR
     DB --> D["worker: drain outbox"]
     D --> W["WritebackWorkflow<br/>id = promotion_id"]
     W --> A1["activity: render env state"]
-    A1 --> A2["activity: commit to gitops repo"]
+    A1 --> A2["activity: commit to gitops repo<br/>(GitOpsActivities.Publish,<br/>StubActivities.Publish in dev)"]
     A2 --> A3["activity: put S3 snapshot"]
     A3 --> A4["activity: mark outbox done"]
 ```
 
-Activities are individually retryable and idempotent. The (future) gitops
-commit activity is expected to use `state_hash` from `GetEnvironmentState`
-to skip no-op commits, and retry on push conflict by re-reading state — last
-writer wins on a per-environment file, which is correct because the
-registry is the source of truth for that file.
+Activities are individually retryable and idempotent. The gitops commit
+activity uses `state_hash` from `GetEnvironmentState` (or, for the real
+`GitOpsActivities` path, a comparison against the remote file's current
+content — see below) to skip no-op commits, and retries on push conflict by
+re-reading state — last writer wins on a per-environment file, which is
+correct because the registry is the source of truth for that file.
+
+The gitops-committed path is `<domain>/<chart-name>/versions/<environment.key>.yaml`,
+computed at render/publish time from the promotion's `domain` (threaded
+through the outbox row and `WritebackInput`, see below), the chart's `full_name`
+(resolved via `AppRegistry.ListCharts`), and the target
+environment's `key`. **`Environment.gitops_path`** (the stored column on
+`environment`, `protos/messages.proto`'s `gitops_path` field,
+`ui/pages/environment_form.templ`'s form field) **is confirmed dead for
+this purpose** — nothing in the writeback path reads it. It remains present
+in the schema/proto/UI as a leftover from before this convention was
+settled; do not add a reader for it here.
 
 **As of AR-4b, the diagram above is built through "activity: render env
-state" only** — the render and publish steps exist, the gitops commit and S3
-put do not (see PLAN-HISTORY.md's AR-4b "Explicitly not in scope"). Concretely:
+state" only** — the render and publish steps exist, the S3 put does not
+(see PLAN-HISTORY.md's AR-4b "Explicitly not in scope"). Concretely:
 
 - `server/handlers/promotion.go`'s `enqueueWriteback` writes the
   `writeback_outbox` row inside the exact same transaction as the SCD2
@@ -54,7 +66,32 @@ put do not (see PLAN-HISTORY.md's AR-4b "Explicitly not in scope"). Concretely:
   file shows the state_hash already matches — the no-op detection a real
   gitops-committer `Publish` implementation inherits by satisfying the same
   `Writeback` interface. See `worker/README.md` for the full mechanism and
-  how "killed mid-run" was verified.
+  how "killed mid-run" was verified. `StubActivities` remains the no-config
+  dev/test fallback: `worker/main.go` registers it whenever
+  `WRITEBACK_GITOPS_REPO` is unset, so `bazel test`, local dev, and Tilt keep
+  working with zero writeback config.
+- When `WRITEBACK_GITOPS_REPO` is set, `worker/main.go` registers
+  `GitOpsActivities` (`worker/writeback/gitops.go`) instead, implementing
+  the same `Writeback` interface against the real gitops repo:
+  `RenderEnvironmentState` calls `GetEnvironmentState` with the promotion's
+  `Domain` set (see above) and renders the domain's chart `targetRevision`
+  per whale-net/argok8s#68 (e.g. `targetRevision: v0.0.39`). `Publish` mints a
+  GitHub App installation token (a hand-rolled
+  RS256 JWT signed with `WRITEBACK_GITHUB_APP_PRIVATE_KEY`, exchanged via
+  `POST /app/installations/{id}/access_tokens`), shallow-clones
+  `WRITEBACK_GITOPS_REPO`@`WRITEBACK_GITOPS_BRANCH` by shelling out to the
+  `git` CLI using the token as the HTTPS credential, and no-ops
+  (`PublishResult{Skipped: true}`) when the rendered document already
+  matches the current content of `<domain>/<chart-name>/versions/<env>.yaml` in the
+  clone — the remote file is the source of truth here, so this replaces
+  `StubActivities`'s local sidecar-hash file rather than porting it.
+  Otherwise it writes the file, commits as `WRITEBACK_GIT_AUTHOR_NAME`
+  /`WRITEBACK_GIT_AUTHOR_EMAIL`, and pushes, retrying once (re-fetch,
+  re-check no-op, re-push) on a non-fast-forward rejection before returning
+  an error for Temporal's own activity retry policy to handle. The push
+  itself sits behind a small internal seam so a later switch from
+  direct-push to PR-based writes (still undecided upstream per issue #798)
+  doesn't touch the render/no-op/JWT logic.
 - A row claimed by a worker that then dies is recovered by the *next*
   worker's `ClaimBatch` once the claim exceeds `WRITEBACK_CLAIM_STALE_AFTER`
   — Temporal's own workflow-id collision handling (an in-flight execution

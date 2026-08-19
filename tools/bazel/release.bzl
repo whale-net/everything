@@ -24,6 +24,7 @@ _DEPLOY_UNIT_TO_PROTO_ENUM = {
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
+
     # Create a JSON file with app metadata
     metadata = {
         "name": ctx.attr.app_name,
@@ -37,34 +38,34 @@ def _app_metadata_impl(ctx):
         "repo_name": ctx.attr.repo_name,
         "domain": ctx.attr.domain,
     }
-    
+
     # Add metadata directly from attributes
     if ctx.attr.app_type:
         metadata["app_type"] = ctx.attr.app_type
     if ctx.attr.port:
         metadata["port"] = ctx.attr.port
     metadata["replicas"] = ctx.attr.replicas
-    
+
     # Add optional health check configuration if provided
     if ctx.attr.health_check_enabled:
         metadata["health_check"] = {
             "enabled": ctx.attr.health_check_enabled,
             "path": ctx.attr.health_check_path,
         }
-    
+
     # Add optional ingress configuration if provided
     if ctx.attr.ingress_host:
         metadata["ingress"] = {
             "host": ctx.attr.ingress_host,
             "tls_secret_name": ctx.attr.ingress_tls_secret,
         }
-    
+
     # Add command and args
     if ctx.attr.command:
         metadata["command"] = ctx.attr.command
     if ctx.attr.args:
         metadata["args"] = ctx.attr.args
-    
+
     # Add resource configuration if provided
     if ctx.attr.resources_requests_cpu or ctx.attr.resources_requests_memory or ctx.attr.resources_limits_cpu or ctx.attr.resources_limits_memory:
         metadata["resources"] = {
@@ -73,7 +74,7 @@ def _app_metadata_impl(ctx):
             "limits_cpu": ctx.attr.resources_limits_cpu,
             "limits_memory": ctx.attr.resources_limits_memory,
         }
-    
+
     # Add OpenAPI spec target if provided
     if ctx.attr.openapi_spec_target:
         metadata["openapi_spec_target"] = str(ctx.attr.openapi_spec_target.label)
@@ -141,16 +142,16 @@ app_metadata = rule(
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None, base = None):
     """Convenience macro to set up release metadata and OCI images for an app.
-    
+
     This macro consolidates the creation of OCI images and release metadata,
     ensuring consistency between the two systems. Works with standard py_binary
     and go_binary targets, as well as CLI and firmware release targets.
-    
+
     The binaries are built for different platforms using Bazel's --platforms flag.
     Cross-compilation is handled automatically by rules_pycross (Python) and rules_go (Go).
-    
+
     Args:
         name: Target name / App identifier
         binary_name: Target label for the binary. Can be:
@@ -185,6 +186,15 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
                      reference directly, no chart involved, e.g. manmanv2-host-manager), or "none"
                      (default for cli/firmware apps, built and published but never deployed to K8s).
         app_name: Override app name for metadata if different from target name.
+        base: Override the container base image label (defaults to
+              multiplatform_image's own default, "@ubuntu_base"). Use this
+              when the app needs a tool the default base doesn't carry --
+              e.g. app_registry's worker uses a git-enabled base so its
+              writeback activity can shell out to `git` (see
+              tools/app_registry/worker/BUILD.bazel and
+              MODULE.bazel's "git_base" oci.pull). Go binaries here are
+              built pure/static, so swapping the base image never affects
+              the binary itself -- only what's available on $PATH.
     """
     effective_name = app_name if app_name else name
     is_container_app = app_type not in ["cli", "binary", "firmware"]
@@ -199,23 +209,22 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
     if is_container_app:
         if language not in ["python", "go"]:
             fail("Unsupported language: {}. Must be 'python' or 'go' for containerized apps".format(language))
-    else:
-        if not language:
-            fail("language is required for release_app")
-    
+    elif not language:
+        fail("language is required for release_app")
+
     # Single binary target - no platform suffixes needed
     # Binary will be built for different platforms using --platforms flag
     base_label = binary_name if binary_name else effective_name
     if not base_label.startswith("//") and not base_label.startswith(":"):
         base_label = ":" + base_label
-    
+
     # Image name uses domain-app format (e.g., "demo-hello-python")
     image_name = (domain + "-" + effective_name) if domain else effective_name
     image_target_ref = None
 
     if is_container_app:
         image_target = name + "_image"
-        
+
         # Create multiplatform OCI image using SINGLE binary target
         # Bazel will build it for different platforms based on --platforms flag
         # Inject default environment variables for logging auto-detection
@@ -224,6 +233,9 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
             "APP_DOMAIN": domain,
             "APP_TYPE": app_type,
         }
+        image_kwargs = {}
+        if base:
+            image_kwargs["base"] = base
         multiplatform_image(
             name = image_target,
             binary = base_label,  # Single binary, built for different platforms
@@ -234,13 +246,14 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
             env = default_env,  # Bake default environment variables
             cmd = args if args else [],  # Pass container args if specified
             additional_tars = additional_tars,  # Pass additional tar layers if specified
+            **image_kwargs
         )
         image_target_ref = ":" + image_target
-    
+
     # Use the binary directly for change detection
     # All platforms are built from the same sources, so one reference is enough
     binary_target_ref = base_label
-    
+
     # Auto-generate OpenAPI spec for FastAPI apps (before metadata creation)
     openapi_spec_target_ref = None
     if is_container_app and fastapi_app and language == "python":
@@ -250,7 +263,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         else:
             module_path = fastapi_app
             app_var = "app"
-        
+
         # For OpenAPI generation, we need a library target, not a binary
         # Try to find a corresponding _lib target, or use the binary if that's all we have
         lib_target = base_label
@@ -258,7 +271,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
             # Check if there's a {name}_lib or main_lib target we should use instead
             # For now, just use the binary target - it will work but might be less efficient
             pass
-        
+
         # Use the openapi_spec rule to generate spec with proper dependencies
         openapi_spec_target_name = name + "_openapi_spec"
         openapi_spec(
@@ -270,7 +283,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
             visibility = ["//visibility:public"],
         )
         openapi_spec_target_ref = ":" + openapi_spec_target_name
-    
+
     # Create release metadata
     app_metadata(
         name = name + "_metadata",
@@ -305,10 +318,10 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
 
 def get_release_metadata_target(app_name):
     """Get the metadata target name for an app.
-    
+
     Args:
         app_name: Name of the app
-        
+
     Returns:
         Target name for the app's metadata
     """
@@ -316,10 +329,10 @@ def get_release_metadata_target(app_name):
 
 def get_image_targets(app_name):
     """Get all image target names for an app.
-    
+
     Args:
         app_name: Name of the app
-        
+
     Returns:
         Dict with image target names including platform-specific push targets
     """
@@ -331,10 +344,10 @@ def get_image_targets(app_name):
 
 def get_binary_targets(app_name):
     """Get binary target and platform references for a CLI app.
-    
+
     Args:
         app_name: Name of the app
-        
+
     Returns:
         Dict with binary target reference and platform identifiers
     """
@@ -416,35 +429,34 @@ helm_chart_metadata = rule(
 )
 
 def release_helm_chart(
-    name,
-    apps,
-    chart_name = None,
-    chart_version = "0.0.0-dev",
-    namespace = None,
-    environment = "production",
-    domain = None,
-    manual_manifests = [],
-    **kwargs
-):
+        name,
+        apps,
+        chart_name = None,
+        chart_version = "0.0.0-dev",
+        namespace = None,
+        environment = "production",
+        domain = None,
+        manual_manifests = [],
+        **kwargs):
     """Convenience macro to set up a releasable Helm chart.
-    
+
     This macro wraps helm_chart and creates release metadata for CI/CD integration.
     The actual chart name will be prefixed with "helm-{domain}-" to make artifacts
     clearly identifiable (e.g., "helm-demo-hello-fastapi").
-    
+
     **Performance Optimization**: Helm chart targets are tagged with `manual`, `no_test`,
     and `helm-chart`. This prevents `bazel test //...` from building chart tarball outputs,
     avoiding unnecessary genrule executions in test runs. Charts can still be:
     - Manually built: `bazel build //demo:fastapi_chart`
     - Discovered: `bazel query "kind('helm_chart', //)"`
     - Released: Release system queries with tag filters find them automatically
-    
+
     Args:
         name: Target name for the chart
         apps: List of app_metadata targets to include (e.g., ["//demo/hello_python:hello-python_metadata"])
-        chart_name: Base name of the Helm chart (defaults to name, MUST use dashes not underscores). 
+        chart_name: Base name of the Helm chart (defaults to name, MUST use dashes not underscores).
                    Will be prefixed with "helm-{domain}-" automatically.
-        chart_version: Version for local builds (default: "0.0.0-dev"). 
+        chart_version: Version for local builds (default: "0.0.0-dev").
                       This is overridden during release by auto-versioning from git tags.
                       Only affects local/development builds.
         namespace: Kubernetes namespace for the chart
@@ -452,7 +464,7 @@ def release_helm_chart(
         domain: Domain/category for the chart (e.g., "demo", "api", required)
         manual_manifests: List of k8s_manifests targets or direct YAML files
         **kwargs: Additional arguments passed to helm_chart
-        
+
     Example:
         release_helm_chart(
             name = "fastapi_chart",
@@ -464,19 +476,19 @@ def release_helm_chart(
     """
     if not domain:
         fail("domain is required for release_helm_chart")
-    
+
     if not namespace:
         fail("namespace is required for release_helm_chart")
-    
+
     # Validate chart_name format - must use dashes, not underscores
     base_chart_name = chart_name or name
     if "_" in base_chart_name:
         fail("Chart name '{}' contains underscores. Use dashes instead (e.g., 'my-chart' not 'my_chart')".format(base_chart_name))
-    
+
     # Construct the actual chart name with helm-domain- prefix
     # This makes chart artifacts clearly identifiable (e.g., helm-demo-hello-fastapi)
     actual_chart_name = "helm-{}-{}".format(domain, base_chart_name)
-    
+
     # Create the helm_chart target
     # Tags: manual - not built by default, no_test - excludes from test runs, helm-chart - for discovery
     helm_chart(
@@ -490,7 +502,7 @@ def release_helm_chart(
         tags = ["manual", "no_test", "helm-chart"],
         **kwargs
     )
-    
+
     # Create release metadata for the chart. `apps` is passed straight
     # through as the label list of app_metadata targets -- helm_chart_metadata
     # reads each app's real `domain` attr off its AppMetadataInfo provider to

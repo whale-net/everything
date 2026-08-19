@@ -81,6 +81,7 @@ func run() error {
 	}
 	defer conn.Close() //nolint:errcheck
 	registryClient := pb.NewPromotionRegistryClient(conn.GetConnection())
+	appClient := pb.NewAppRegistryClient(conn.GetConnection())
 
 	// Temporal client + worker, via libs/go/temporal -- see AR-4a.
 	temporalCfg := temporallib.ConfigFromEnv()
@@ -97,10 +98,32 @@ func run() error {
 	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(writeback.WritebackWorkflow)
 
-	outDir := getEnv("WRITEBACK_OUTPUT_DIR", "/tmp/app-registry-writeback")
-	stub := writeback.NewStubActivities(registryClient, outDir)
-	w.RegisterActivityWithOptions(stub.RenderEnvironmentState, activityOptions(writeback.ActivityRenderEnvironmentState))
-	w.RegisterActivityWithOptions(stub.Publish, activityOptions(writeback.ActivityPublish))
+	// Real (gitops) Writeback implementation is opt-in: only selected when
+	// WRITEBACK_GITOPS_REPO is set, so `bazel test`/local dev/Tilt keep
+	// working with zero config against StubActivities -- see issue #798's
+	// sequencing and worker/writeback/gitops.go's package doc comment.
+	if gitopsRepo := os.Getenv("WRITEBACK_GITOPS_REPO"); gitopsRepo != "" {
+		gitops, gerr := writeback.NewGitOpsActivities(registryClient, appClient, writeback.GitOpsConfig{
+			Repo:           gitopsRepo,
+			Branch:         os.Getenv("WRITEBACK_GITOPS_BRANCH"),
+			AppID:          os.Getenv("WRITEBACK_GITHUB_APP_ID"),
+			InstallationID: os.Getenv("WRITEBACK_GITHUB_APP_INSTALLATION_ID"),
+			PrivateKeyPEM:  os.Getenv("WRITEBACK_GITHUB_APP_PRIVATE_KEY"),
+			AuthorName:     os.Getenv("WRITEBACK_GIT_AUTHOR_NAME"),
+			AuthorEmail:    os.Getenv("WRITEBACK_GIT_AUTHOR_EMAIL"),
+		})
+		if gerr != nil {
+			return fmt.Errorf("configure gitops writeback activities: %w", gerr)
+		}
+		logger.Info("using real gitops Writeback implementation", "repo", gitopsRepo, "branch", gitops.Config.Branch)
+		w.RegisterActivityWithOptions(gitops.RenderEnvironmentState, activityOptions(writeback.ActivityRenderEnvironmentState))
+		w.RegisterActivityWithOptions(gitops.Publish, activityOptions(writeback.ActivityPublish))
+	} else {
+		outDir := getEnv("WRITEBACK_OUTPUT_DIR", "/tmp/app-registry-writeback")
+		stub := writeback.NewStubActivities(registryClient, outDir)
+		w.RegisterActivityWithOptions(stub.RenderEnvironmentState, activityOptions(writeback.ActivityRenderEnvironmentState))
+		w.RegisterActivityWithOptions(stub.Publish, activityOptions(writeback.ActivityPublish))
+	}
 
 	// Outbox drain loop, running alongside the Temporal worker in this same
 	// process -- see outbox.Drainer.

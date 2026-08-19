@@ -12,7 +12,7 @@ import (
 
 type writebackRepo struct{ ex dbtx }
 
-const writebackColumns = `outbox_id, promotion_id, environment_id, environment_key, event_id, state_hash,
+const writebackColumns = `outbox_id, promotion_id, environment_id, environment_key, domain, event_id, state_hash,
 	status, claimed_by, claimed_at, workflow_id, completed_at, last_error, attempts, created_at`
 
 func scanWriteback(row pgx.Row) (repository.WritebackOutbox, error) {
@@ -23,7 +23,7 @@ func scanWriteback(row pgx.Row) (repository.WritebackOutbox, error) {
 	// see 004_writeback_outbox.up.sql), so it needs a nullable scan target.
 	var claimedBy *string
 	if err := row.Scan(
-		&o.OutboxID, &o.PromotionID, &o.EnvironmentID, &o.EnvironmentKey, &o.EventID, &o.StateHash,
+		&o.OutboxID, &o.PromotionID, &o.EnvironmentID, &o.EnvironmentKey, &o.Domain, &o.EventID, &o.StateHash,
 		&status, &claimedBy, &o.ClaimedAt, &o.WorkflowID, &o.CompletedAt, &o.LastError, &o.Attempts, &o.CreatedAt,
 	); err != nil {
 		return repository.WritebackOutbox{}, err
@@ -41,10 +41,10 @@ func scanWriteback(row pgx.Row) (repository.WritebackOutbox, error) {
 // ARCHITECTURE.md "Writeback: outbox -> Temporal".
 func (r *writebackRepo) Enqueue(ctx context.Context, o repository.WritebackOutbox) (*repository.WritebackOutbox, error) {
 	row := r.ex.QueryRow(ctx, `
-		INSERT INTO writeback_outbox (promotion_id, environment_id, environment_key, event_id, state_hash)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO writeback_outbox (promotion_id, environment_id, environment_key, domain, event_id, state_hash)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING `+writebackColumns,
-		o.PromotionID, o.EnvironmentID, o.EnvironmentKey, o.EventID, o.StateHash)
+		o.PromotionID, o.EnvironmentID, o.EnvironmentKey, o.Domain, o.EventID, o.StateHash)
 	out, err := scanWriteback(row)
 	if err != nil {
 		return nil, fmt.Errorf("enqueue writeback for promotion %s: %w", o.PromotionID, err)

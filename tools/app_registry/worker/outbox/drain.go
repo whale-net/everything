@@ -133,6 +133,7 @@ func (d *Drainer) startWorkflow(ctx context.Context, row repository.WritebackOut
 	}, writeback.WritebackWorkflow, writeback.WritebackInput{
 		PromotionID:    row.PromotionID,
 		EnvironmentKey: row.EnvironmentKey,
+		Domain:         row.Domain,
 		StateHash:      row.StateHash,
 	})
 

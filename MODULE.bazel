@@ -66,6 +66,35 @@ oci.pull(
 )
 use_repo(oci, "ubuntu_base", "ubuntu_base_linux_amd64", "ubuntu_base_linux_arm64_v8", "ubuntu_base_linux_arm_v7", "ubuntu_base_linux_ppc64le", "ubuntu_base_linux_riscv64", "ubuntu_base_linux_s390x")
 
+# git-enabled base image, used only by app_registry's worker (needs the
+# `git` CLI on $PATH for its writeback activity's clone/commit/push --
+# see tools/app_registry/worker/writeback/gitops.go and
+# tools/app_registry/worker/BUILD.bazel's release_app(base = "@git_base")).
+#
+# MUST be glibc-based (Ubuntu/Debian), not musl-based (Alpine): this
+# repo's Go binaries are dynamically linked against glibc despite being
+# cross-compiled (confirmed via `ldd` on the worker binary -- it links
+# libc.so.6/libresolv.so.2 through /lib64/ld-linux-x86-64.so.2, which an
+# Alpine/musl base does not provide). An earlier version of this pull
+# used `alpine/git` on the assumption the binaries were static; that
+# assumption was wrong and the resulting image failed at container
+# startup with "exec: no such file or directory" -- exactly the
+# silent-at-build-time, runtime-only failure docs/DOCKER.md warns about.
+# `buildpack-deps:noble-scm` is the official multi-arch (amd64/arm64)
+# Ubuntu 24.04 (Noble) image with git preinstalled -- same libc family as
+# the default `@ubuntu_base`, so no ABI mismatch. Not used as the default
+# base for any other app.
+oci.pull(
+    name = "git_base",
+    digest = "sha256:3c3ab48c77f822ce98f61dd7e41d81df0bafeeecfa18dd6306d1ec238ad095f1",
+    image = "index.docker.io/library/buildpack-deps:noble-scm",
+    platforms = [
+        "linux/amd64",
+        "linux/arm64/v8",
+    ],
+)
+use_repo(oci, "git_base", "git_base_linux_amd64", "git_base_linux_arm64_v8")
+
 # CA certificates from Debian (architecture-independent .deb file)
 http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_file")
 
