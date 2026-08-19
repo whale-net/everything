@@ -267,6 +267,26 @@ assert_exit_with_output 1 "GITHUB_TOKEN environment variable not set" \
     "cleanup-releases fails without GITHUB_TOKEN" \
     env -i PATH="$PATH" "$RELEASE_HELPER" cleanup-releases --dry-run
 
+# ── create-combined-github-release-with-notes: validation ──────────────────────
+# Used in release.yml.
+
+assert_exit 0 "create-combined-github-release-with-notes --help exits 0" \
+    "$RELEASE_HELPER" create-combined-github-release-with-notes --help
+
+assert_output_contains "--charts" "create-combined-github-release-with-notes --help shows --charts flag" \
+    "$RELEASE_HELPER" create-combined-github-release-with-notes --help
+
+assert_output_contains "--helm-charts-dir" "create-combined-github-release-with-notes --help shows --helm-charts-dir flag" \
+    "$RELEASE_HELPER" create-combined-github-release-with-notes --help
+
+assert_exit_with_output 1 "GITHUB_TOKEN environment variable not set" \
+    "create-combined-github-release-with-notes fails without GITHUB_TOKEN" \
+    env -i PATH="$PATH" "$RELEASE_HELPER" create-combined-github-release-with-notes v1.0.0 --apps "some-app"
+
+assert_exit_with_output 1 "no apps or charts specified" \
+    "create-combined-github-release-with-notes fails with empty apps and charts" \
+    env -i PATH="$PATH" GITHUB_TOKEN="dummy" "$RELEASE_HELPER" create-combined-github-release-with-notes v1.0.0
+
 # ── unpublish-helm-chart: index file validation ───────────────────────────────
 # Takes a path to index.yaml as a positional argument; validates existence first.
 

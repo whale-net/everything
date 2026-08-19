@@ -218,14 +218,16 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 		commitSHA       string
 		prerelease      bool
 		apps            string
+		charts          string
 		releaseNotesDir string
 		openapiSpecsDir string
 		assetsDir       string
+		helmChartsDir   string
 	)
 
 	cmd := &cobra.Command{
 		Use:          "create-combined-github-release-with-notes <version>",
-		Short:        "Create GitHub releases for multiple apps using pre-generated release notes",
+		Short:        "Create GitHub releases for top-level entities (charts and standalone apps) using pre-generated release notes",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -260,20 +262,45 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 				}
 			}
 
-			// Resolve app list.
+			// Parse per-chart versions from CHART_MATRIX env var.
+			chartVersions := map[string]string{}
+			if chartMatrixEnv := defaultEnv("CHART_MATRIX"); chartMatrixEnv != "" {
+				var cmatrix struct {
+					Include []map[string]string `json:"include"`
+				}
+				if err := json.Unmarshal([]byte(chartMatrixEnv), &cmatrix); err == nil {
+					for _, item := range cmatrix.Include {
+						chartName := item["chart"]
+						chartVer := item["version"]
+						if chartName != "" {
+							if chartVer != "" {
+								chartVersions[chartName] = chartVer
+							}
+						}
+					}
+				}
+			}
+
+			// Resolve app list and chart list.
 			appList := parseAppList(apps)
-			if len(appList) == 0 {
-				// Collect from matrix if available.
+			if len(appList) == 0 && apps == "" {
 				for k := range appVersions {
 					appList = append(appList, k)
 				}
 			}
-			if len(appList) == 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: no apps specified\n")
-				return fmt.Errorf("no apps")
+
+			chartList := parseAppList(charts)
+			if len(chartList) == 0 && charts == "" {
+				for k := range chartVersions {
+					chartList = append(chartList, k)
+				}
 			}
 
-			// Load all apps for metadata resolution (domain lookup).
+			if len(appList) == 0 && len(chartList) == 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Error: no apps or charts specified\n")
+				return fmt.Errorf("no apps or charts")
+			}
+
 			workspaceRoot, err := defaultWorkspaceRoot()
 			if err != nil {
 				return fmt.Errorf("workspace root: %w", err)
@@ -282,14 +309,216 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			appsByFull := map[string]AppMetadata{}
-			for _, a := range allApps {
-				appsByFull[a.FullName()] = a
+			allCharts, err := ListAllHelmCharts(defaultBazel, defaultFS, workspaceRoot)
+			if err != nil {
+				return err
+			}
+
+			var artifactClient pb.ArtifactRegistryClient
+			if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
+				c, closeConn, err := NewArtifactRegistryClient(cmd.Context())
+				if err == nil && c != nil {
+					artifactClient = c
+					defer closeConn()
+				}
 			}
 
 			gh := newGHReleaseClient(owner, repo, token)
-
 			var failed []string
+
+			// Track member apps of released charts so we don't mint duplicate releases for them.
+			releasedChartMemberApps := make(map[string]bool)
+			for _, chartName := range chartList {
+				chartName = strings.TrimSpace(chartName)
+				if chartName == "" {
+					continue
+				}
+				var matchedChart *HelmChartMetadata
+				for i := range allCharts {
+					c := &allCharts[i]
+					published := strings.TrimPrefix(c.Name, "helm-")
+					if c.Name == chartName || published == chartName || c.FullName() == chartName {
+						matchedChart = c
+						break
+					}
+				}
+				if matchedChart != nil {
+					for _, ref := range matchedChart.AppRefs {
+						full := strings.ReplaceAll(ref, "/", "-")
+						releasedChartMemberApps[full] = true
+					}
+					for _, bareName := range matchedChart.Apps {
+						releasedChartMemberApps[matchedChart.Domain+"-"+bareName] = true
+						releasedChartMemberApps[bareName] = true
+					}
+				}
+			}
+
+			// 1. Process Helm charts (top-level releases)
+			for _, chartName := range chartList {
+				chartName = strings.TrimSpace(chartName)
+				if chartName == "" {
+					continue
+				}
+
+				var matchedChart *HelmChartMetadata
+				for i := range allCharts {
+					c := &allCharts[i]
+					published := strings.TrimPrefix(c.Name, "helm-")
+					if c.Name == chartName || published == chartName || c.FullName() == chartName {
+						matchedChart = c
+						break
+					}
+				}
+				if matchedChart == nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "✗ Could not resolve chart %s\n", chartName)
+					failed = append(failed, chartName)
+					continue
+				}
+
+				chartVer := version
+				if v, ok := chartVersions[matchedChart.Name]; ok && v != "" {
+					chartVer = v
+				} else if v, ok := chartVersions[matchedChart.FullName()]; ok && v != "" {
+					chartVer = v
+				}
+				if chartVer == "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "✗ No version for chart %s\n", matchedChart.Name)
+					failed = append(failed, matchedChart.Name)
+					continue
+				}
+
+				tagName := fmt.Sprintf("%s.%s", matchedChart.Name, chartVer)
+				publishedName := strings.TrimPrefix(matchedChart.Name, "helm-")
+				fmt.Printf("Processing chart %s (tag: %s)...\n", matchedChart.Name, tagName)
+
+				// Load pre-generated release notes.
+				releaseNotes := ""
+				if releaseNotesDir != "" {
+					for _, candidate := range []string{matchedChart.Name + ".md", publishedName + ".md", matchedChart.FullName() + ".md"} {
+						notesFile := filepath.Join(releaseNotesDir, candidate)
+						if data, err := os.ReadFile(notesFile); err == nil {
+							releaseNotes = string(data)
+							fmt.Printf("✓ Loaded pre-generated release notes for chart %s\n", matchedChart.Name)
+							break
+						}
+					}
+				}
+				if releaseNotes == "" {
+					releaseNotes, err = generateReleaseNotesForChart(
+						cmd.Context(),
+						*matchedChart,
+						chartVer,
+						tagName,
+						"",
+						"",
+						"markdown",
+						appVersions,
+						allApps,
+						defaultGit,
+						defaultDocker,
+						defaultFS,
+						artifactClient,
+						owner,
+						repo,
+					)
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "✗ Failed release notes for chart %s: %v\n", matchedChart.Name, err)
+						failed = append(failed, matchedChart.Name)
+						continue
+					}
+				}
+
+				// Check for existing release.
+				existing, err := gh.getByTag(tagName)
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "⚠ Could not check existing release for %s: %v\n", tagName, err)
+				}
+				var releaseResp *ghReleaseResponse
+				if existing != nil {
+					fmt.Printf("ℹ Release %s already exists: %s\n", tagName, existing.HTMLURL)
+					releaseResp = existing
+				} else {
+					payload := ghReleasePayload{
+						TagName:    tagName,
+						Name:       tagName,
+						Body:       releaseNotes,
+						Prerelease: prerelease,
+					}
+					if commitSHA != "" {
+						payload.TargetCommitish = commitSHA
+					}
+					releaseResp, err = gh.create(payload)
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "✗ Failed to create release for chart %s: %v\n", matchedChart.Name, err)
+						failed = append(failed, matchedChart.Name)
+						continue
+					}
+				}
+
+				// Upload Helm chart package (.tgz) if present
+				if releaseResp != nil && releaseResp.ID != 0 {
+					candidateChartDirs := []string{}
+					if helmChartsDir != "" {
+						candidateChartDirs = append(candidateChartDirs, helmChartsDir)
+					}
+					if assetsDir != "" {
+						candidateChartDirs = append(candidateChartDirs, assetsDir)
+					}
+					candidateChartDirs = append(candidateChartDirs,
+						"/tmp/helm-charts",
+						filepath.Join(os.TempDir(), "helm-charts"),
+					)
+
+					var uploadedChart bool
+					for _, cd := range candidateChartDirs {
+						entries, rErr := os.ReadDir(cd)
+						if rErr != nil {
+							continue
+						}
+						for _, e := range entries {
+							if e.IsDir() || !strings.HasSuffix(e.Name(), ".tgz") {
+								continue
+							}
+							if strings.HasPrefix(e.Name(), matchedChart.Name) || strings.HasPrefix(e.Name(), publishedName) {
+								chartFilePath := filepath.Join(cd, e.Name())
+								if uploadErr := gh.uploadAsset(releaseResp.ID, chartFilePath, e.Name()); uploadErr != nil {
+									fmt.Fprintf(cmd.ErrOrStderr(), "⚠ Failed to upload chart asset %s: %v\n", e.Name(), uploadErr)
+								} else {
+									uploadedChart = true
+								}
+								break
+							}
+						}
+						if uploadedChart {
+							break
+						}
+					}
+				}
+
+				// Upload OpenAPI specs for contained apps in this chart
+				if openapiSpecsDir != "" && releaseResp != nil && releaseResp.ID != 0 {
+					for _, appRef := range matchedChart.AppRefs {
+						parts := strings.SplitN(appRef, "/", 2)
+						if len(parts) != 2 {
+							continue
+						}
+						matchedApp, findErr := findAppByDomainAndName(parts[0], parts[1], allApps)
+						if findErr != nil || matchedApp.OpenapiSpecTarget == "" {
+							continue
+						}
+						specFile := filepath.Join(openapiSpecsDir, matchedApp.FullName()+"-openapi.json")
+						if _, statErr := os.Stat(specFile); statErr == nil {
+							assetName := matchedApp.FullName() + "-openapi.json"
+							if uploadErr := gh.uploadAsset(releaseResp.ID, specFile, assetName); uploadErr != nil {
+								fmt.Fprintf(cmd.ErrOrStderr(), "⚠ Failed to upload OpenAPI spec for %s: %v\n", matchedApp.FullName(), uploadErr)
+							}
+						}
+					}
+				}
+			}
+
+			// 2. Process standalone applications (skipping member apps of released charts)
 			for _, appName := range appList {
 				appName = strings.TrimSpace(appName)
 				if appName == "" {
@@ -306,7 +535,6 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 					continue
 				}
 
-				// Resolve canonical metadata.
 				resolved, err := resolveApps([]string{appName}, allApps)
 				if err != nil || len(resolved) == 0 {
 					fmt.Fprintf(cmd.ErrOrStderr(), "✗ Could not resolve %s: %v\n", appName, err)
@@ -315,8 +543,14 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 				}
 				meta := resolved[0]
 				fullName := meta.FullName()
-				tagName := fmt.Sprintf("%s.%s", fullName, appVer)
 
+				// If app is deployed via a chart and that chart was released, skip standalone release.
+				if releasedChartMemberApps[fullName] || releasedChartMemberApps[meta.Name] {
+					fmt.Printf("ℹ Skipping standalone release for %s (published as part of Helm chart)\n", fullName)
+					continue
+				}
+
+				tagName := fmt.Sprintf("%s.%s", fullName, appVer)
 				fmt.Printf("Processing %s (tag: %s)...\n", fullName, tagName)
 
 				// Load pre-generated release notes.
@@ -329,8 +563,19 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 					}
 				}
 				if releaseNotes == "" {
-					// Fall back to generating notes inline.
-					releaseNotes, err = generateReleaseNotes(meta, tagName, "", "markdown", defaultGit)
+					releaseNotes, err = generateReleaseNotesForApp(
+						cmd.Context(),
+						meta,
+						appVer,
+						tagName,
+						"",
+						"",
+						"markdown",
+						defaultGit,
+						artifactClient,
+						owner,
+						repo,
+					)
 					if err != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "✗ Failed release notes for %s: %v\n", fullName, err)
 						failed = append(failed, appName)
@@ -452,8 +697,10 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&commitSHA, "commit", "", "Commit SHA to target")
 	cmd.Flags().BoolVar(&prerelease, "prerelease", false, "Mark as prerelease")
 	cmd.Flags().StringVar(&apps, "apps", "", "Comma-separated list of apps")
+	cmd.Flags().StringVar(&charts, "charts", "", "Comma-separated list of charts")
 	cmd.Flags().StringVar(&releaseNotesDir, "release-notes-dir", "", "Directory containing pre-generated release notes")
 	cmd.Flags().StringVar(&openapiSpecsDir, "openapi-specs-dir", "", "Directory containing OpenAPI spec files")
 	cmd.Flags().StringVar(&assetsDir, "assets-dir", "", "Directory containing release assets to upload")
+	cmd.Flags().StringVar(&helmChartsDir, "helm-charts-dir", "", "Directory containing packaged helm charts (.tgz)")
 	return cmd
 }

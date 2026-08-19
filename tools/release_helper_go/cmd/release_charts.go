@@ -619,6 +619,43 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			ChartPath:        chartReleaser.ChartPath(),
 			ContainedImages:  execRes.ContainedImages,
 		})
+
+		if !p.DryRun {
+			notesDir := "/tmp/release-notes"
+			if err := os.MkdirAll(notesDir, 0755); err == nil {
+				chartNotes, nErr := generateReleaseNotesForChart(
+					ctx,
+					chart,
+					execRes.EffectiveVersion,
+					execRes.EffectiveTag,
+					"",
+					execRes.PreviousTag,
+					"markdown",
+					appVersions,
+					allApps,
+					git,
+					docker,
+					fs,
+					artifactClient,
+					repoUser,
+					"",
+				)
+				if nErr == nil && chartNotes != "" {
+					_ = os.WriteFile(filepath.Join(notesDir, chart.Name+".md"), []byte(chartNotes), 0644)
+					_ = os.WriteFile(filepath.Join(notesDir, publishedName+".md"), []byte(chartNotes), 0644)
+				}
+			}
+
+			if chartPath := chartReleaser.ChartPath(); chartPath != "" {
+				helmChartsDir := "/tmp/helm-charts"
+				if err := os.MkdirAll(helmChartsDir, 0755); err == nil {
+					destFile := filepath.Join(helmChartsDir, filepath.Base(chartPath))
+					if data, rErr := os.ReadFile(chartPath); rErr == nil {
+						_ = os.WriteFile(destFile, data, 0644)
+					}
+				}
+			}
+		}
 	}
 
 	return result, nil
