@@ -115,9 +115,9 @@ func TestSetAppStatus_Authorization(t *testing.T) {
 	})
 }
 
-// TestAppReads_RequireAuthenticationOnly covers ListApps, GetApp, and
-// ListCharts: any authenticated principal may call them, no specific role.
-func TestAppReads_RequireAuthenticationOnly(t *testing.T) {
+// TestAppReads_Public covers ListApps, GetApp, and ListCharts:
+// public read endpoints that succeed with or without authentication (#853).
+func TestAppReads_Public(t *testing.T) {
 	srv := NewAppServer(fake.New())
 	reconciled, err := srv.ReconcileApps(ctxWithRoles(auth.RoleBuilder), &pb.ReconcileAppsRequest{
 		Manifests:      manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")}, nil),
@@ -128,34 +128,32 @@ func TestAppReads_RequireAuthenticationOnly(t *testing.T) {
 	}
 	appID := reconciled.CreatedApps[0].AppId
 
-	// A principal with an unrelated single role still passes — reads check
-	// authentication, not any particular role.
 	readerCtx := ctxWithRoles(auth.RolePromoterDev)
 
 	t.Run("ListApps", func(t *testing.T) {
 		if _, err := srv.ListApps(readerCtx, &pb.ListAppsRequest{}); err != nil {
-			t.Fatalf("expected any authenticated principal to list apps, got %v", err)
+			t.Fatalf("expected authenticated principal to list apps, got %v", err)
 		}
-		if _, err := srv.ListApps(context.Background(), &pb.ListAppsRequest{}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.ListApps(context.Background(), &pb.ListAppsRequest{}); err != nil {
+			t.Fatalf("expected unauthenticated access to list apps, got %v", err)
 		}
 	})
 
 	t.Run("GetApp", func(t *testing.T) {
 		if _, err := srv.GetApp(readerCtx, &pb.GetAppRequest{AppId: appID}); err != nil {
-			t.Fatalf("expected any authenticated principal to get an app, got %v", err)
+			t.Fatalf("expected authenticated principal to get an app, got %v", err)
 		}
-		if _, err := srv.GetApp(context.Background(), &pb.GetAppRequest{AppId: appID}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.GetApp(context.Background(), &pb.GetAppRequest{AppId: appID}); err != nil {
+			t.Fatalf("expected unauthenticated access to get an app, got %v", err)
 		}
 	})
 
 	t.Run("ListCharts", func(t *testing.T) {
 		if _, err := srv.ListCharts(readerCtx, &pb.ListChartsRequest{}); err != nil {
-			t.Fatalf("expected any authenticated principal to list charts, got %v", err)
+			t.Fatalf("expected authenticated principal to list charts, got %v", err)
 		}
-		if _, err := srv.ListCharts(context.Background(), &pb.ListChartsRequest{}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.ListCharts(context.Background(), &pb.ListChartsRequest{}); err != nil {
+			t.Fatalf("expected unauthenticated access to list charts, got %v", err)
 		}
 	})
 }
@@ -321,10 +319,9 @@ func TestAdoptArtifact_Authorization(t *testing.T) {
 	})
 }
 
-// TestArtifactReads_RequireAuthenticationOnly covers ListArtifacts,
-// GetArtifact, and ResolveArtifact: any authenticated principal, no
-// specific role.
-func TestArtifactReads_RequireAuthenticationOnly(t *testing.T) {
+// TestArtifactReads_Public covers ListArtifacts, GetArtifact, and ResolveArtifact:
+// public read endpoints that succeed with or without authentication (#853).
+func TestArtifactReads_Public(t *testing.T) {
 	srv := NewArtifactServer(fake.New())
 	build, err := srv.RecordBuild(ctxWithRoles(auth.RoleBuilder), &pb.RecordBuildRequest{
 		GitSha: "abc123", WorkflowRunId: "run-authz-reads", IdempotencyKey: "authz-reads-build",
@@ -337,10 +334,10 @@ func TestArtifactReads_RequireAuthenticationOnly(t *testing.T) {
 
 	t.Run("ListArtifacts", func(t *testing.T) {
 		if _, err := srv.ListArtifacts(readerCtx, &pb.ListArtifactsRequest{}); err != nil {
-			t.Fatalf("expected any authenticated principal to list artifacts, got %v", err)
+			t.Fatalf("expected authenticated principal to list artifacts, got %v", err)
 		}
-		if _, err := srv.ListArtifacts(context.Background(), &pb.ListArtifactsRequest{}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.ListArtifacts(context.Background(), &pb.ListArtifactsRequest{}); err != nil {
+			t.Fatalf("expected unauthenticated access to list artifacts, got %v", err)
 		}
 	})
 
@@ -350,8 +347,8 @@ func TestArtifactReads_RequireAuthenticationOnly(t *testing.T) {
 			t.Fatalf("expected authorization to pass (NotFound expected next), got %v", err)
 		}
 		_, err = srv.GetArtifact(context.Background(), &pb.GetArtifactRequest{ArtifactId: "nonexistent"})
-		if status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.PermissionDenied {
+			t.Fatalf("expected unauthenticated access to pass (NotFound expected next), got %v", err)
 		}
 	})
 
@@ -361,8 +358,8 @@ func TestArtifactReads_RequireAuthenticationOnly(t *testing.T) {
 			t.Fatalf("expected authorization to pass (NotFound expected next), got %v", err)
 		}
 		_, err = srv.ResolveArtifact(context.Background(), &pb.ResolveArtifactRequest{ArtifactId: "nonexistent"})
-		if status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.PermissionDenied {
+			t.Fatalf("expected unauthenticated access to pass (NotFound expected next), got %v", err)
 		}
 	})
 
@@ -433,33 +430,31 @@ func TestArchiveEnvironment_Authorization(t *testing.T) {
 	})
 }
 
-// TestEnvironmentReads_RequireAuthenticationOnly covers GetEnvironment and
-// ListEnvironments: any authenticated principal, no specific role -- not
-// even RoleAdmin, matching every other service's read RPCs.
-func TestEnvironmentReads_RequireAuthenticationOnly(t *testing.T) {
+// TestEnvironmentReads_Public covers GetEnvironment and ListEnvironments:
+// public read endpoints that succeed with or without authentication (#853).
+func TestEnvironmentReads_Public(t *testing.T) {
 	srv := NewEnvironmentServer(fake.New())
 	if _, err := srv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "dev"}); err != nil {
 		t.Fatalf("seed environment: %v", err)
 	}
 
-	// A principal with an unrelated single role still passes.
 	readerCtx := ctxWithRoles(auth.RoleBuilder)
 
 	t.Run("GetEnvironment", func(t *testing.T) {
 		if _, err := srv.GetEnvironment(readerCtx, &pb.GetEnvironmentRequest{Key: "dev"}); err != nil {
-			t.Fatalf("expected any authenticated principal to get an environment, got %v", err)
+			t.Fatalf("expected authenticated principal to get an environment, got %v", err)
 		}
-		if _, err := srv.GetEnvironment(context.Background(), &pb.GetEnvironmentRequest{Key: "dev"}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.GetEnvironment(context.Background(), &pb.GetEnvironmentRequest{Key: "dev"}); err != nil {
+			t.Fatalf("expected unauthenticated access to get an environment, got %v", err)
 		}
 	})
 
 	t.Run("ListEnvironments", func(t *testing.T) {
 		if _, err := srv.ListEnvironments(readerCtx, &pb.ListEnvironmentsRequest{}); err != nil {
-			t.Fatalf("expected any authenticated principal to list environments, got %v", err)
+			t.Fatalf("expected authenticated principal to list environments, got %v", err)
 		}
-		if _, err := srv.ListEnvironments(context.Background(), &pb.ListEnvironmentsRequest{}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.ListEnvironments(context.Background(), &pb.ListEnvironmentsRequest{}); err != nil {
+			t.Fatalf("expected unauthenticated access to list environments, got %v", err)
 		}
 	})
 }
@@ -541,10 +536,9 @@ func TestRollback_Authorization(t *testing.T) {
 	})
 }
 
-// TestPromotionReads_RequireAuthenticationOnly covers GetEnvironmentState,
-// ListPromotions, and ListPromotionEvents: any authenticated principal, no
-// specific (let alone environment-scoped) role.
-func TestPromotionReads_RequireAuthenticationOnly(t *testing.T) {
+// TestPromotionReads_Public covers GetEnvironmentState, ListPromotions,
+// and ListPromotionEvents: public read endpoints that succeed with or without authentication (#853).
+func TestPromotionReads_Public(t *testing.T) {
 	repo := fake.New()
 	envSrv := NewEnvironmentServer(repo)
 	if _, err := envSrv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "dev"}); err != nil {
@@ -555,28 +549,28 @@ func TestPromotionReads_RequireAuthenticationOnly(t *testing.T) {
 
 	t.Run("GetEnvironmentState", func(t *testing.T) {
 		if _, err := srv.GetEnvironmentState(readerCtx, &pb.GetEnvironmentStateRequest{EnvironmentKey: "dev"}); err != nil {
-			t.Fatalf("expected any authenticated principal to read environment state, got %v", err)
+			t.Fatalf("expected authenticated principal to read environment state, got %v", err)
 		}
-		if _, err := srv.GetEnvironmentState(context.Background(), &pb.GetEnvironmentStateRequest{EnvironmentKey: "dev"}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.GetEnvironmentState(context.Background(), &pb.GetEnvironmentStateRequest{EnvironmentKey: "dev"}); err != nil {
+			t.Fatalf("expected unauthenticated access to read environment state, got %v", err)
 		}
 	})
 
 	t.Run("ListPromotions", func(t *testing.T) {
 		if _, err := srv.ListPromotions(readerCtx, &pb.ListPromotionsRequest{}); err != nil {
-			t.Fatalf("expected any authenticated principal to list promotions, got %v", err)
+			t.Fatalf("expected authenticated principal to list promotions, got %v", err)
 		}
-		if _, err := srv.ListPromotions(context.Background(), &pb.ListPromotionsRequest{}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.ListPromotions(context.Background(), &pb.ListPromotionsRequest{}); err != nil {
+			t.Fatalf("expected unauthenticated access to list promotions, got %v", err)
 		}
 	})
 
 	t.Run("ListPromotionEvents", func(t *testing.T) {
 		if _, err := srv.ListPromotionEvents(readerCtx, &pb.ListPromotionEventsRequest{}); err != nil {
-			t.Fatalf("expected any authenticated principal to list promotion events, got %v", err)
+			t.Fatalf("expected authenticated principal to list promotion events, got %v", err)
 		}
-		if _, err := srv.ListPromotionEvents(context.Background(), &pb.ListPromotionEventsRequest{}); status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated with no claims, got %v", err)
+		if _, err := srv.ListPromotionEvents(context.Background(), &pb.ListPromotionEventsRequest{}); err != nil {
+			t.Fatalf("expected unauthenticated access to list promotion events, got %v", err)
 		}
 	})
 }

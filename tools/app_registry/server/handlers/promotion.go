@@ -307,9 +307,6 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 // was separately promoted with allow_override, so the chart's pin no longer
 // matches what's actually live. See ARCHITECTURE.md "Promotability".
 func (s *PromotionServer) GetEnvironmentState(ctx context.Context, req *pb.GetEnvironmentStateRequest) (*pb.GetEnvironmentStateResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	if req.EnvironmentKey == "" {
 		return nil, status.Error(codes.InvalidArgument, "environment_key is required")
 	}
@@ -477,9 +474,6 @@ func stateHash(promotions []repository.Promotion) string {
 }
 
 func (s *PromotionServer) ListPromotions(ctx context.Context, req *pb.ListPromotionsRequest) (*pb.ListPromotionsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	promotions, nextToken, err := s.repo.Promotions().ListPromotions(ctx, repository.PromotionListFilter{
 		EnvironmentKey: req.EnvironmentKey,
 		OwnerFullName:  req.OwnerFullName,
@@ -499,9 +493,6 @@ func (s *PromotionServer) ListPromotions(ctx context.Context, req *pb.ListPromot
 }
 
 func (s *PromotionServer) ListPromotionEvents(ctx context.Context, req *pb.ListPromotionEventsRequest) (*pb.ListPromotionEventsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	var since time.Time
 	if req.Since != 0 {
 		since = unixToTime(req.Since)

@@ -212,12 +212,12 @@ runs:
                 echo "::error title=target_env missing::No target_env or version overrides provided. Please specify target_env or re-run with build tools (e.g. 'use_source_tools: true' or 'source: source')."
                 exit 1
               fi
-            elif [[ -z "${APP_REGISTRY_ADDRESS:-}" || -z "${GRPC_AUTH_TOKEN_URL:-}" || -z "${GRPC_AUTH_CLIENT_ID:-}" || -z "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
+            elif [[ -z "${APP_REGISTRY_ADDRESS:-}" ]]; then
               if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                echo "Notice: App Registry auth env vars not present. Falling back to source build."
+                echo "Notice: APP_REGISTRY_ADDRESS env var not present. Falling back to source build."
                 SOURCE_MODE="source"
               else
-                echo "::error title=App Registry auth missing::target_env='$TARGET_ENV_INPUT' was specified, but APP_REGISTRY_ADDRESS or GRPC_AUTH_* env vars are missing. Please run app-registry-auth before download-release-tools, or re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source')."
+                echo "::error title=App Registry address missing::target_env='$TARGET_ENV_INPUT' was specified, but APP_REGISTRY_ADDRESS env var is missing. Please set APP_REGISTRY_ADDRESS or re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source')."
                 exit 1
               fi
             else
@@ -259,34 +259,33 @@ runs:
                 case "$host_arch" in
                   x86_64|amd64) host_arch="x86_64" ;;
                   aarch64|arm64) host_arch="arm64" ;;
-                  *) echo "Notice: unsupported arch for grpcurl install: $host_arch" >&2; return 1 ;;
+                  *) echo "Notice: unsupported architecture for grpcurl install: $host_arch" >&2; return 1 ;;
                 esac
                 key="${host_os}_${host_arch}"
                 if ! expected_sha="$(grpcurl_checksum "$key")"; then
-                  echo "Notice: no pinned grpcurl checksum for platform $key" >&2
+                  echo "Notice: no known sha256 checksum for grpcurl $GRPCURL_VERSION on $key" >&2
                   return 1
                 fi
 
-                local tmp_dl tarball url actual_sha
+                local tmp_dl url actual_sha
                 tmp_dl="$(mktemp -d)"
-                tarball="grpcurl_${GRPCURL_VERSION}_${key}.tar.gz"
-                url="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/${tarball}"
-
-                if ! curl -sSL -m 30 -o "$tmp_dl/$tarball" "$url"; then
-                  echo "Notice: failed to download grpcurl from $url" >&2
+                url="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_${key}.tar.gz"
+                echo "Downloading grpcurl v${GRPCURL_VERSION} from $url..."
+                if ! curl -sSL -m 30 -o "$tmp_dl/grpcurl.tar.gz" "$url"; then
+                  echo "Notice: failed to download grpcurl archive" >&2
                   rm -rf "$tmp_dl"
                   return 1
                 fi
 
-                actual_sha="$(compute_sha256 "$tmp_dl/$tarball")" || { rm -rf "$tmp_dl"; return 1; }
+                actual_sha="$(compute_sha256 "$tmp_dl/grpcurl.tar.gz")" || { rm -rf "$tmp_dl"; return 1; }
                 if [[ "$actual_sha" != "$expected_sha" ]]; then
-                  echo "Notice: grpcurl checksum mismatch for $key (expected $expected_sha, got $actual_sha)" >&2
+                  echo "Notice: grpcurl checksum mismatch (expected $expected_sha, got $actual_sha)" >&2
                   rm -rf "$tmp_dl"
                   return 1
                 fi
 
-                if ! tar -xzf "$tmp_dl/$tarball" -C "$tmp_dl" grpcurl; then
-                  echo "Notice: failed to extract grpcurl archive" >&2
+                if ! tar -xzf "$tmp_dl/grpcurl.tar.gz" -C "$tmp_dl" grpcurl; then
+                  echo "Notice: failed to extract grpcurl binary" >&2
                   rm -rf "$tmp_dl"
                   return 1
                 fi
@@ -315,9 +314,13 @@ runs:
                 local -a tls_opt=()
                 [[ "$use_tls" == "false" ]] && tls_opt=(-plaintext)
 
+                local -a auth_opt=()
+                if [[ -n "$REGISTRY_TOKEN" ]]; then
+                  auth_opt=(-H "authorization: Bearer $REGISTRY_TOKEN")
+                fi
+
                 local get_app_json app_id
-                get_app_json="$("$GRPCURL_BIN" "${tls_opt[@]}" -max-time 15 \
-                  -H "authorization: Bearer $REGISTRY_TOKEN" \
+                get_app_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
                   -d "{\"full_name\":\"${app_full_name}\"}" \
                   "$grpc_target" appregistry.v1.AppRegistry/GetApp 2>/dev/null)" || true
                 app_id="$(echo "$get_app_json" | jq -r '.app.appId // .app.app_id // empty' 2>/dev/null)" || true
@@ -327,8 +330,7 @@ runs:
                 fi
 
                 local env_state_json version
-                env_state_json="$("$GRPCURL_BIN" "${tls_opt[@]}" -max-time 15 \
-                  -H "authorization: Bearer $REGISTRY_TOKEN" \
+                env_state_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
                   -d "{\"environment_key\":\"${TARGET_ENV_INPUT}\"}" \
                   "$grpc_target" appregistry.v1.PromotionRegistry/GetEnvironmentState 2>/dev/null)" || true
                 if [[ -z "$env_state_json" ]]; then
@@ -352,22 +354,16 @@ runs:
               }
 
               REGISTRY_TOKEN=""
-              if token_json=$(curl -sS -m 15 -X POST "$GRPC_AUTH_TOKEN_URL" \
-                    -d grant_type=client_credentials \
-                    -d client_id="$GRPC_AUTH_CLIENT_ID" \
-                    -d client_secret="$GRPC_AUTH_CLIENT_SECRET" 2>/dev/null); then
-                REGISTRY_TOKEN="$(echo "$token_json" | jq -r '.access_token // empty' 2>/dev/null)" || REGISTRY_TOKEN=""
+              if [[ -n "${GRPC_AUTH_TOKEN_URL:-}" && -n "${GRPC_AUTH_CLIENT_ID:-}" && -n "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
+                if token_json=$(curl -sS -m 15 -X POST "$GRPC_AUTH_TOKEN_URL" \
+                      -d grant_type=client_credentials \
+                      -d client_id="$GRPC_AUTH_CLIENT_ID" \
+                      -d client_secret="$GRPC_AUTH_CLIENT_SECRET" 2>/dev/null); then
+                  REGISTRY_TOKEN="$(echo "$token_json" | jq -r '.access_token // empty' 2>/dev/null)" || REGISTRY_TOKEN=""
+                fi
               fi
 
-              if [[ -z "$REGISTRY_TOKEN" ]]; then
-                if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                  echo "Notice: Could not obtain bearer token from GRPC_AUTH_TOKEN_URL. Falling back to source build."
-                  SOURCE_MODE="source"
-                else
-                  echo "::error title=App Registry auth failed::Could not obtain a bearer token from GRPC_AUTH_TOKEN_URL for target_env='$TARGET_ENV_INPUT'. Please check credentials or re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source')."
-                  exit 1
-                fi
-              elif ! install_grpcurl; then
+              if ! install_grpcurl; then
                 if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
                   echo "Notice: Could not install grpcurl. Falling back to source build."
                   SOURCE_MODE="source"
