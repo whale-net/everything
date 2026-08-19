@@ -46,10 +46,21 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: App Registry Auth
+      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      uses: ./.github/actions/app-registry-auth
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
       with:
         source: published
+        target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        fallback_to_source: 'true'
 
     - name: Reconcile apps/charts in App Registry
       if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
@@ -299,6 +310,8 @@ jobs:
       uses: ./.github/actions/download-release-tools
       with:
         source: published
+        target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        fallback_to_source: 'true'
 
     - name: Plan Docker builds using release tool
       id: plan
@@ -373,6 +386,8 @@ jobs:
       uses: ./.github/actions/download-release-tools
       with:
         source: published
+        target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        fallback_to_source: 'true'
 
     - name: Build Docker images
       env:
