@@ -1,13 +1,70 @@
 package cmd
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+	"google.golang.org/grpc"
 )
+
+// fakeClientBuilder is a thin builder over FakeArtifactRegistryClient so tests
+// can express their stubs inline without setting function fields directly.
+type fakeClientBuilder struct {
+	*FakeArtifactRegistryClient
+}
+
+func newFakeArtifactClient() *fakeClientBuilder {
+	return &fakeClientBuilder{FakeArtifactRegistryClient: NewFakeArtifactRegistryClient()}
+}
+
+func (b *fakeClientBuilder) withCheckChartHermeticity(domain string, enforced bool) *fakeClientBuilder {
+	prev := b.CheckChartHermeticityFn
+	b.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		if in.ChartDomain == domain {
+			return &pb.CheckChartHermeticityResponse{Enforced: enforced}, nil
+		}
+		if prev != nil {
+			return prev(ctx, in, opts...)
+		}
+		return &pb.CheckChartHermeticityResponse{Enforced: false}, nil
+	}
+	return b
+}
+
+func (b *fakeClientBuilder) withGetArtifact(ownerFullName string, kind pb.ArtifactKind, version string) *fakeClientBuilder {
+	prev := b.GetArtifactFn
+	b.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		if in.OwnerFullName == ownerFullName && in.Kind == kind && in.LatestPublished {
+			return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Version: version}}, nil
+		}
+		if prev != nil {
+			return prev(ctx, in, opts...)
+		}
+		return &pb.GetArtifactResponse{}, nil
+	}
+	return b
+}
+
+func (b *fakeClientBuilder) withGetArtifactError(ownerFullName string, kind pb.ArtifactKind, retErr error) *fakeClientBuilder {
+	prev := b.GetArtifactFn
+	b.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		if in.OwnerFullName == ownerFullName && in.Kind == kind {
+			return nil, retErr
+		}
+		if prev != nil {
+			return prev(ctx, in, opts...)
+		}
+		return &pb.GetArtifactResponse{}, nil
+	}
+	return b
+}
+
 
 // ── findChartApp / resolveChartAppVersions ─────────────────────────────────
 
@@ -35,7 +92,7 @@ func TestResolveChartAppVersionsKeysByFullName(t *testing.T) {
 		fakeGitCall{argsContain: []string{"tag", "--list", "manmanv2-event-processor.*"}, output: "manmanv2-event-processor.v0.2.18"},
 	)
 
-	versions, err := resolveChartAppVersions(chart, testApps(), git)
+	versions, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -54,6 +111,54 @@ func TestResolveChartAppVersionsKeysByFullName(t *testing.T) {
 		t.Errorf("versions must be keyed by FullName(), not bare app name; got bare-name key in %v", versions)
 	}
 }
+
+// TestResolveChartAppVersionsAllocateUsesRegistry verifies that an
+// allocate-stage domain resolves app versions from the App Registry, not git.
+func TestResolveChartAppVersionsAllocateUsesRegistry(t *testing.T) {
+	chart := HelmChartMetadata{ChartManifest: &appmetapb.ChartManifest{
+		Name: "helm-manmanv2-control-services", Domain: "manmanv2",
+		Apps: []string{"control-api"},
+	}}
+	// git would return v0.0.1, registry returns v1.9.0 — registry must win.
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--list", "manmanv2-control-api.*"}, output: "manmanv2-control-api.v0.0.1"},
+	)
+	client := newFakeArtifactClient().
+		withCheckChartHermeticity("manmanv2", true). // domain is at allocate
+		withGetArtifact("manmanv2-control-api", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "v1.9.0")
+
+	versions, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := versions["manmanv2-control-api"]; got != "v1.9.0" {
+		t.Errorf("expected registry version v1.9.0, got %q", got)
+	}
+}
+
+// TestResolveChartAppVersionsAllocateRegistryErrorFails verifies that a
+// registry error for an allocate-stage domain is a hard failure — no git fallback.
+func TestResolveChartAppVersionsAllocateRegistryErrorFails(t *testing.T) {
+	chart := HelmChartMetadata{ChartManifest: &appmetapb.ChartManifest{
+		Name: "helm-manmanv2-control-services", Domain: "manmanv2",
+		Apps: []string{"control-api"},
+	}}
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--list", "manmanv2-control-api.*"}, output: "manmanv2-control-api.v0.0.1"},
+	)
+	client := newFakeArtifactClient().
+		withCheckChartHermeticity("manmanv2", true). // domain is at allocate
+		withGetArtifactError("manmanv2-control-api", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, fmt.Errorf("registry unavailable"))
+
+	_, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client)
+	if err == nil {
+		t.Fatal("expected error when registry fails for allocate-stage domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "allocate stage") {
+		t.Errorf("error should mention allocate stage, got: %v", err)
+	}
+}
+
 
 func TestFindChartAppNotFound(t *testing.T) {
 	if _, err := findChartApp("nonexistent", "manmanv2", testApps()); err == nil {
