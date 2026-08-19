@@ -294,6 +294,37 @@ func TestHandleArtifactDetail_PinsLookupFails_IsExplicitErrorNotBlank(t *testing
 	}
 }
 
+func TestHandleArtifactDetail_BinaryArtifact_RendersBinaryTitleAndOwner(t *testing.T) {
+	artifactClient := &rsArtifactClient{
+		getArtifactResp: &pb.GetArtifactResponse{
+			Artifact: &pb.Artifact{ArtifactId: "art-bin", Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY, Digest: "sha256:bin123", AppId: "app-cli", Version: "v0.3.0"},
+		},
+	}
+	appClient := &rsAppClient{
+		apps: []*pb.App{
+			{AppId: "app-cli", Domain: "tools", Name: "app-registry", FullName: "tools-app-registry"},
+		},
+	}
+	app := rsTestApp(&rsEnvClient{}, appClient, &rsPromotionClient{}, artifactClient)
+
+	req := httptest.NewRequest(http.MethodGet, "/artifacts/sha256:bin123", nil)
+	req.SetPathValue("digest", "sha256:bin123")
+	w := httptest.NewRecorder()
+	app.handleArtifactDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "Binary artifact") {
+		t.Errorf("expected 'Binary artifact' title, got body: %s", body)
+	}
+	if !strings.Contains(body, "tools-app-registry") {
+		t.Errorf("expected owner 'tools-app-registry' in body, got body: %s", body)
+	}
+}
+
 // --- Drift rollup cross-screen agreement (FR-9) -----------------------------
 
 func TestDashboardAndDriftAudit_DriftCountsAgree(t *testing.T) {
@@ -516,5 +547,28 @@ func TestHandleEnvironmentDiff_RendersDigestAndProvenance(t *testing.T) {
 	// other screen's convention of only flagging the ADOPTED case).
 	if strings.Count(body, "Adopted") != 1 {
 		t.Errorf("expected exactly one 'Adopted' provenance badge (from side only), body: %s", body)
+	}
+}
+
+func TestFaviconRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	app := &App{}
+	app.setupRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if got := w.Header().Get("Content-Type"); got != "image/x-icon" {
+		t.Errorf("Content-Type = %q, want image/x-icon", got)
+	}
+	if got := w.Header().Get("Cache-Control"); got != "public, max-age=86400" {
+		t.Errorf("Cache-Control = %q, want public, max-age=86400", got)
+	}
+	if len(w.Body.Bytes()) == 0 {
+		t.Errorf("expected non-empty favicon body")
 	}
 }

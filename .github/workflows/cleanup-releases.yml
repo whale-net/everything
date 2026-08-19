@@ -23,6 +23,11 @@ on:
         required: false
         default: true
         type: boolean
+      use_source_tools:
+        description: 'Build release tools from source instead of downloading pinned prebuilt binaries (safety valve)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write  # Required for deleting Git tags
@@ -41,6 +46,10 @@ jobs:
       - name: Download release tools
         id: download_tools
         uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ (inputs.use_source_tools == true || inputs.use_source_tools == 'true') && 'source' || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          fallback_to_source: 'true'
       
       - name: Configure Git
         run: |

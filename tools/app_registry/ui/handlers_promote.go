@@ -119,6 +119,30 @@ func loadPromoteCandidates(ctx context.Context, registry *RegistryClient, owner 
 	}
 }
 
+// defaultPromoteCandidate picks the pre-selected candidate for the promote
+// form. candidates arrives ordered state_changed_at DESC (recency, for
+// cursor-safe keyset pagination -- see loadPromoteCandidates/ListArtifacts)
+// which is NOT semver order: the version-advance-on-failure behavior (#814)
+// can make a lower semver more recently touched than an existing higher
+// one, so defaulting to candidates[0] can silently pre-select a downgrade
+// (#815). This picks the highest (major, minor, patch) instead, using
+// compareSemver so the comparison is numeric, never lexicographic. Falls
+// back to candidates[0] when no version parses, so the form still has some
+// default. s.Candidates (the rendered dropdown) is untouched -- display
+// order is intentionally unchanged.
+func defaultPromoteCandidate(candidates []*pb.Artifact) *pb.Artifact {
+	if len(candidates) == 0 {
+		return nil
+	}
+	best := candidates[0]
+	for _, c := range candidates[1:] {
+		if cmp, ok := compareSemver(best.GetVersion(), c.GetVersion()); ok && cmp < 0 {
+			best = c
+		}
+	}
+	return best
+}
+
 // handlePromote serves both screen 50-promote's GET (render, pre-scoped to
 // (entity, environment) per FR-6) and POST (dry-run / commit) requests.
 func (app *App) handlePromote(w http.ResponseWriter, r *http.Request) {
@@ -175,8 +199,8 @@ func (app *App) handlePromoteShow(w http.ResponseWriter, r *http.Request) {
 	s.NotPromotable = notPromotable
 	s.NoArtifacts = noArtifacts
 
-	if len(candidates) > 0 {
-		s.SelectedArtifactID = candidates[0].GetArtifactId()
+	if def := defaultPromoteCandidate(candidates); def != nil {
+		s.SelectedArtifactID = def.GetArtifactId()
 	}
 	// FR-51: mint exactly one key, at the moment this commit-capable form is
 	// first rendered for this intent (no reason/override yet — those are

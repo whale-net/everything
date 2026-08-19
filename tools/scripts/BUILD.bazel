@@ -44,7 +44,6 @@ sh_test(
     size = "medium",
     srcs = ["test_download_release_tools.sh"],
     data = [
-        "//:.release-tools-version",
         "//tools/app_registry/cli:app-registry",
         "//tools/release_helper_go",
     ],

@@ -15,7 +15,9 @@ is removed rather than answered:
   and whether it came from the `main` sweep or a release run.
 - `artifact.manifest_id` records which snapshot an artifact was built from,
   and **`artifact.promotability` becomes a stored column** derived from that
-  snapshot at publish time.
+  snapshot at publish time. *(Reversed by issue #833, migration `014` — see
+  "As built (issue #833, migration `014`)" below. `manifest_id` remains
+  stored/unchanged; only `promotability` went back to a live join.)*
 
 Consequences, in order of importance:
 
@@ -29,7 +31,10 @@ Consequences, in order of importance:
    "re-derive promotability against the freshly-read owner deploy_unit"), so
    editing a `release_app` rule today silently changes the promotability of
    artifacts published years ago. Deriving from the build's own snapshot is a
-   correctness fix, not a refactor.
+   correctness fix, not a refactor. *(No longer true as of issue #833 — see
+   "As built (issue #833, migration `014`)" below: this consequence was
+   judged, in production, to be a worse tradeoff than the retroactivity it
+   was meant to prevent.)*
 3. **The `main` sweep shrinks to what only it can do**: existence and absence.
 4. **"Value at time T" without SCD2 on `app`.** The per-build snapshot *is*
    the history, append-only, matching how the rest of this schema works. (This
@@ -147,4 +152,75 @@ same `(owner_id, manifest_json)`, in place. Many artifacts built from
 byte-identical manifests now legitimately share one `manifest_id`; that is
 content-addressing's natural consequence, not a signal to read anything
 into.
+
+**As built (issue #833, migration `014`).** AR-7c's "store once, no live
+join" tradeoff for `artifact.promotability` (consequence #2 above) is
+reversed. `tools-app-registry`'s two `published` binary artifacts (`v0.2.1`,
+`v0.2.2`, published 2026-08-16) were permanently stranded on
+`promotability = not_promotable` after #810 fixed `DerivePromotability`
+(binary artifacts should always be `PROMOTABLE` regardless of `deploy_unit`)
+on 2026-08-17 — the fix could never reach rows published before it landed,
+because the value was frozen at publish time and nothing ever recomputed
+it. Every future rule fix or `deploy_unit` correction would strand a new
+batch of rows the same way, each needing its own one-off manual DB
+backfill — there is no general "fix forward" for a stored value. Staleness
+under rule/config changes was judged worse than the extra read-time join
+this reintroduces, so:
+
+- `artifact.promotability` and its `artifact_promotability_shape` CHECK
+  constraint (migration 008) are dropped. `artifact.manifest_id` is
+  untouched — it remains stored, still recording build-commit provenance
+  (which content an artifact was published against), a genuinely historical
+  fact rather than a live-changing property of the owner's current state.
+- `postgres/artifact.go`'s `scanArtifact` derives `Promotability` on every
+  read: `artifactSelectBase` joins `v_current_app`/`v_current_chart` (the
+  same views `ListApps`/`GetApp`/`ListCharts` already read) and calls
+  `repository.DerivePromotability(kind, deployUnit)` in Go, for `published`
+  rows only (matching the dropped column's old nullability).
+  `resolveManifestForPublish` (and `insertArtifact`/`completePublish`/
+  `completeAdoption`) no longer resolve or write a `promotability` value at
+  all — only `manifest_id`.
+- **`v_current_app` alone is not enough.** It deliberately reads only
+  `provenance = 'sweep'` snapshots (AR-8's "what does this app look like
+  today is a main-tree question") and defaults to `'chart'` when no sweep
+  snapshot exists yet — correct for `ListApps`/`GetApp`, but it would have
+  silently broken AR-7c's own exit criterion (issue #547,
+  `TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres`): a release
+  from a ref that never merges — `AssertApps` only, `ReconcileApps` never
+  having run for that owner — must still get a *correct* promotability from
+  its *own* `deploy_unit`, not a `'chart'` default manufactured by the
+  absence of sweep data. `artifactSelectBase` therefore adds a
+  `app_release_fallback` `LATERAL` join: the most recently recorded
+  `app_manifest_release` observation for the owner, consulted (via a
+  `NOT EXISTS` guard) only when no current sweep interval exists yet. An
+  owner that HAS been reconciled always uses the live sweep value — edits
+  are picked up on the next read, exactly as this issue intends. An owner
+  that has ONLY ever been asserted falls back to its own release content
+  instead of a meaningless default. No equivalent fallback is needed on the
+  chart side: `v_current_chart.deploy_unit` is a hardcoded `'chart'`
+  constant that never depends on manifest content existing at all.
+- `fake.Registry` mirrors this with `livePromotability`, applied at every
+  point an `Artifact` leaves the registry (`findArtifact`, `ListArtifacts`,
+  `ResolveArtifact`, `ListArtifactPins`, and the `RecordArtifact`/
+  `AdoptArtifact` idempotent-replay branches) instead of persisting the
+  value at write time. The fake never modeled manifest snapshots at all
+  (`state.Apps[id].DeployUnit` is written directly by both `Reconcile` and
+  `AssertApps`), so it needs no equivalent of the release-fallback join —
+  an `AssertApps`-only app's `DeployUnit` is already live in `state.Apps`.
+- `ListArtifacts`' `PromotableOnly` filter, previously `a.promotability =
+  'promotable'`, is now a hand-inlined copy of `DerivePromotability`
+  restricted to the `PROMOTABLE` outcome (`a.kind = 'binary' OR a.kind =
+  'chart' OR (a.kind = 'image' AND` the same
+  `COALESCE(app_release_fallback.deploy_unit, app.deploy_unit)` `= 'image')`),
+  since there is no stored column left to filter on. Must be kept in sync
+  with `promotability.go` by hand.
+- `TestRecordArtifact_PromotabilityIsNotRetroactive[_Postgres]` — AR-7c's
+  exit criterion, and until this issue the test proving the property this
+  section describes — are replaced by
+  `TestRecordArtifact_PromotabilityIsRetroactive[_Postgres]`, proving the
+  opposite: editing an app's `deploy_unit` after publish DOES change what
+  `GetArtifact` reads back for an artifact published before the edit.
+- No backfill was needed for the stranded prod rows: deriving live means
+  they resolve correctly automatically on their very next read, once this
+  migration and code change ship.
 

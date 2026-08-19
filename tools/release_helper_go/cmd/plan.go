@@ -246,6 +246,44 @@ type planParams struct {
 	artifactRegistryClient pb.ArtifactRegistryClient
 }
 
+// resolvedAttempt is workflowAttempt, falling back to GITHUB_RUN_ATTEMPT and
+// then 1 -- shared by idempotencyPrefix and RecordBuild's WorkflowAttempt so
+// both agree on the same value.
+func (p planParams) resolvedAttempt() int {
+	if p.workflowAttempt > 0 {
+		return p.workflowAttempt
+	}
+	if a := envOrDefault("GITHUB_RUN_ATTEMPT", ""); a != "" {
+		if v, err := strconv.Atoi(a); err == nil && v > 0 {
+			return v
+		}
+	}
+	return 1
+}
+
+// idempotencyPrefix is the base idempotency key every App Registry call in
+// a plan run derives its own key from -- registry-backed version resolution
+// (assignVersions/assignChartVersions) included, so a retried plan step
+// replays the same allocation rather than reserving a second version.
+func (p planParams) idempotencyPrefix() string {
+	if p.idempotencyKeyPrefix != "" {
+		return p.idempotencyKeyPrefix
+	}
+	runID := p.workflowRunID
+	if runID == "" {
+		runID = envOrDefault("GITHUB_RUN_ID", "local")
+	}
+	return fmt.Sprintf("%s-%d", runID, p.resolvedAttempt())
+}
+
+// registryOptedIn reports whether this plan run may call App Registry RPCs
+// with side effects (AllocateVersion included): opted into CI/CD via
+// APP_REGISTRY_CICD_OPT_IN, and neither a dry run (which must not allocate
+// a real version, an AllocateVersion side effect) nor --skip-registry.
+func (p planParams) registryOptedIn() bool {
+	return !p.dryRun && !p.skipRegistry && defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true"
+}
+
 func planRelease(p planParams) (*PlanResult, error) {
 	ctx := p.ctx
 	if ctx == nil {
@@ -279,7 +317,7 @@ func planRelease(p planParams) (*PlanResult, error) {
 					return nil, err
 				}
 			}
-			if err := assignVersions(releaseApps, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, p.git, perAppVersions); err != nil {
+			if err := assignVersions(ctx, p, releaseApps, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, perAppVersions); err != nil {
 				return nil, err
 			}
 		}
@@ -290,7 +328,7 @@ func planRelease(p planParams) (*PlanResult, error) {
 				return nil, err
 			}
 			selectedCharts = selectHelmCharts(p.requestedCharts, allCharts, p.includeDemo, nil)
-			if err := assignChartVersions(selectedCharts, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, p.git, perChartVersions); err != nil {
+			if err := assignChartVersions(ctx, p, selectedCharts, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, perChartVersions); err != nil {
 				return nil, err
 			}
 		}
@@ -350,7 +388,18 @@ func planRelease(p planParams) (*PlanResult, error) {
 	return result, nil
 }
 
-func assignChartVersions(charts []HelmChartMetadata, version string, major, minor, patch bool, git GitRunner, out map[string]string) error {
+func assignChartVersions(ctx context.Context, p planParams, charts []HelmChartMetadata, version string, major, minor, patch bool, out map[string]string) error {
+	var client pb.ArtifactRegistryClient
+	if p.registryOptedIn() {
+		c, closeFn, err := dialVersioningClient(ctx, p.artifactRegistryClient)
+		if err != nil {
+			return err
+		}
+		defer closeFn() //nolint:errcheck
+		client = c
+	}
+	idemPrefix := p.idempotencyPrefix()
+
 	for i := range charts {
 		fullName := charts[i].FullName()
 		if version != "" {
@@ -365,7 +414,11 @@ func assignChartVersions(charts []HelmChartMetadata, version string, major, mino
 			case minor:
 				bumpType = "minor"
 			}
-			newVer, err := autoIncrementHelmVersion(charts[i].Name, bumpType, git)
+			publishedName := strings.TrimPrefix(charts[i].Name, "helm-")
+			newVer, _, err := resolveVersion(ctx, client, pb.ArtifactKind_ARTIFACT_KIND_CHART, publishedName, bumpType,
+				fmt.Sprintf("%s-%s-allocate", idemPrefix, publishedName),
+				func() (string, error) { return autoIncrementHelmVersion(charts[i].Name, bumpType, p.git) },
+			)
 			if err != nil {
 				return fmt.Errorf("auto-increment for chart %s: %w", charts[i].Name, err)
 			}
@@ -407,27 +460,12 @@ func executeAppRegistryUpfront(ctx context.Context, p planParams, releaseApps []
 		runID = envOrDefault("GITHUB_RUN_ID", "local")
 	}
 
-	attempt := p.workflowAttempt
-	if attempt <= 0 {
-		if a := envOrDefault("GITHUB_RUN_ATTEMPT", ""); a != "" {
-			if v, err := strconv.Atoi(a); err == nil && v > 0 {
-				attempt = v
-			}
-		}
-		if attempt <= 0 {
-			attempt = 1
-		}
-	}
-
 	act := p.actor
 	if act == "" {
 		act = envOrDefault("GITHUB_ACTOR", "release-helper")
 	}
 
-	idemPrefix := p.idempotencyKeyPrefix
-	if idemPrefix == "" {
-		idemPrefix = fmt.Sprintf("%s-%d", runID, attempt)
-	}
+	idemPrefix := p.idempotencyPrefix()
 
 	// 1. AssertApps
 	var appClient pb.AppRegistryClient
@@ -486,7 +524,7 @@ func executeAppRegistryUpfront(ctx context.Context, p planParams, releaseApps []
 			GitSha:          sha,
 			GitRef:          ref,
 			WorkflowRunId:   runID,
-			WorkflowAttempt: int32(attempt),
+			WorkflowAttempt: int32(p.resolvedAttempt()),
 			Actor:           act,
 			StartedAt:       time.Now().Unix(),
 			IdempotencyKey:  idemPrefix,
@@ -621,7 +659,18 @@ func buildPlanResult(
 // (keyed by the app's FullName). AppManifest.Version — the manifest's own
 // declared default (normally "latest") — is left untouched: it describes
 // the app definition, not the version being planned for this release.
-func assignVersions(apps []AppMetadata, version string, major, minor, patch bool, git GitRunner, out map[string]string) error {
+func assignVersions(ctx context.Context, p planParams, apps []AppMetadata, version string, major, minor, patch bool, out map[string]string) error {
+	var client pb.ArtifactRegistryClient
+	if p.registryOptedIn() {
+		c, closeFn, err := dialVersioningClient(ctx, p.artifactRegistryClient)
+		if err != nil {
+			return err
+		}
+		defer closeFn() //nolint:errcheck
+		client = c
+	}
+	idemPrefix := p.idempotencyPrefix()
+
 	for i := range apps {
 		if version != "" {
 			out[apps[i].FullName()] = version
@@ -635,11 +684,16 @@ func assignVersions(apps []AppMetadata, version string, major, minor, patch bool
 			case minor:
 				incrementType = "minor"
 			}
-			newVer, err := autoIncrementVersion(apps[i].Domain, apps[i].Name, incrementType, git)
+			fullName := apps[i].FullName()
+			domain, name := apps[i].Domain, apps[i].Name
+			newVer, _, err := resolveVersion(ctx, client, determineArtifactKind(apps[i]), fullName, incrementType,
+				fmt.Sprintf("%s-%s-allocate", idemPrefix, fullName),
+				func() (string, error) { return autoIncrementVersion(domain, name, incrementType, p.git) },
+			)
 			if err != nil {
-				return fmt.Errorf("auto-increment for %s: %w", apps[i].FullName(), err)
+				return fmt.Errorf("auto-increment for %s: %w", fullName, err)
 			}
-			out[apps[i].FullName()] = newVer
+			out[fullName] = newVer
 		}
 	}
 	return nil

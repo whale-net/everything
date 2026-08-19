@@ -8,7 +8,6 @@ exports_files([
     "uv.lock",
     "MODULE.bazel",
     "MODULE.bazel.lock",
-    ".release-tools-version",
 ])
 
 

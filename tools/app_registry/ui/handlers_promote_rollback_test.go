@@ -843,3 +843,102 @@ func TestPromoteKindFromQuery(t *testing.T) {
 		}
 	}
 }
+
+// TestDefaultPromoteCandidate_HighestSemverNotFirst covers #815: the
+// candidate list stays ordered state_changed_at DESC (recency), so the
+// highest-semver artifact is not necessarily candidates[0]. The default
+// selection must still be the highest semver, compared numerically
+// (major, then minor, then patch) -- never candidates[0] and never a
+// lexicographic string compare (which would also get "0.0.42" vs "0.1.0"
+// wrong, just in the other direction).
+func TestDefaultPromoteCandidate_HighestSemverNotFirst(t *testing.T) {
+	// v0.0.42 is listed first (most recently state-changed, e.g. due to
+	// the version-advance-on-failure behavior in #814) even though v0.1.0
+	// is the higher real version.
+	candidates := []*pb.Artifact{
+		{ArtifactId: "art-recent-low", Version: "v0.0.42"},
+		{ArtifactId: "art-older-high", Version: "v0.1.0"},
+		{ArtifactId: "art-mid", Version: "v0.0.9"},
+	}
+	got := defaultPromoteCandidate(candidates)
+	if got == nil || got.GetArtifactId() != "art-older-high" {
+		t.Fatalf("defaultPromoteCandidate() = %v, want art-older-high (v0.1.0)", got)
+	}
+}
+
+func TestDefaultPromoteCandidate_Empty(t *testing.T) {
+	if got := defaultPromoteCandidate(nil); got != nil {
+		t.Fatalf("defaultPromoteCandidate(nil) = %v, want nil", got)
+	}
+}
+
+func TestDefaultPromoteCandidate_UnparseableFallsBackToFirst(t *testing.T) {
+	candidates := []*pb.Artifact{
+		{ArtifactId: "art-a", Version: "not-a-semver"},
+		{ArtifactId: "art-b", Version: "also-bad"},
+	}
+	got := defaultPromoteCandidate(candidates)
+	if got == nil || got.GetArtifactId() != "art-a" {
+		t.Fatalf("defaultPromoteCandidate() = %v, want art-a (fallback to first when nothing parses)", got)
+	}
+}
+
+// TestPromote_DefaultSelectionIsHighestSemverNotFirstInList is the
+// HTTP-level counterpart of TestDefaultPromoteCandidate_HighestSemverNotFirst:
+// it confirms handlePromoteShow actually wires the highest-semver candidate
+// into the rendered form's pre-selected option, not candidates[0]. The
+// dropdown's own display order (state_changed_at DESC) is untouched --
+// this only asserts which option carries the `selected` attribute.
+func TestPromote_DefaultSelectionIsHighestSemverNotFirstInList(t *testing.T) {
+	artifact := &promoteArtifactClient{
+		fakeArtifactClient: &fakeArtifactClient{},
+		listArtifactsResp: &pb.ListArtifactsResponse{
+			Artifacts: []*pb.Artifact{
+				{ArtifactId: "art-recent-low", Version: "v0.0.42", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Promotability: pb.Promotability_PROMOTABILITY_PROMOTABLE},
+				{ArtifactId: "art-older-high", Version: "v0.1.0", Digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Promotability: pb.Promotability_PROMOTABILITY_PROMOTABLE},
+			},
+		},
+	}
+	app := newPromoteTestApp(&fakeEnvironmentClient{}, artifact, &fakePromotionClient{})
+	code, body := getPromote(t, app, "platform-app", "image", "dev")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", code, body)
+	}
+
+	selectedRe := regexp.MustCompile(`<option value="([^"]+)"[^>]*\sselected[^>]*>`)
+	m := selectedRe.FindStringSubmatch(body)
+	if m == nil {
+		t.Fatalf("no selected <option> found in body:\n%s", body)
+	}
+	if m[1] != "art-older-high" {
+		t.Errorf("selected artifact_id = %q, want %q (highest semver v0.1.0, not the recency-first v0.0.42)", m[1], "art-older-high")
+	}
+}
+
+func TestPromote_BinaryToolApp_RendersCandidatesAndAllowsPromotion(t *testing.T) {
+	artifact := &promoteArtifactClient{
+		fakeArtifactClient: &fakeArtifactClient{},
+		listArtifactsResp: &pb.ListArtifactsResponse{
+			Artifacts: []*pb.Artifact{
+				{ArtifactId: "art-bin-1", Version: "v0.3.0", Digest: "sha256:cccccccccccccccccccccccccccccccc", Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY, Promotability: pb.Promotability_PROMOTABILITY_PROMOTABLE},
+			},
+		},
+	}
+	promoClient := &fakePromotionClient{
+		promoteResp: &pb.PromoteResponse{
+			Promotion: &pb.Promotion{
+				PromotionId: "promo-1",
+				Version:     "v0.3.0",
+			},
+		},
+	}
+	app := newPromoteTestApp(&fakeEnvironmentClient{}, artifact, promoClient)
+	code, body := getPromote(t, app, "tools-app-registry", "binary", "dev")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", code, body)
+	}
+
+	if !strings.Contains(body, "v0.3.0") {
+		t.Errorf("expected candidate version v0.3.0 in promote form, got: %s", body)
+	}
+}

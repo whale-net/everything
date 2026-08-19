@@ -68,7 +68,7 @@ type WritebackInput struct {
 	EnvironmentKey string
 	// Domain is the promotion's owning app's/chart's domain (see
 	// server/repository/models.go's WritebackOutbox.Domain and
-	// 014_writeback_outbox_domain.up.sql). RenderEnvironmentState passes it
+	// 015_writeback_outbox_domain.up.sql). RenderEnvironmentState passes it
 	// to GetEnvironmentState as the domain filter, so a real (non-stub)
 	// Writeback implementation renders one small per-domain document
 	// (<domain>/<chart-name>/versions/<env>.yaml) instead of the whole environment --

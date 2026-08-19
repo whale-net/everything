@@ -307,9 +307,6 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 // was separately promoted with allow_override, so the chart's pin no longer
 // matches what's actually live. See ARCHITECTURE.md "Promotability".
 func (s *PromotionServer) GetEnvironmentState(ctx context.Context, req *pb.GetEnvironmentStateRequest) (*pb.GetEnvironmentStateResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	if req.EnvironmentKey == "" {
 		return nil, status.Error(codes.InvalidArgument, "environment_key is required")
 	}
@@ -418,7 +415,7 @@ func (s *PromotionServer) GetEnvironmentState(ctx context.Context, req *pb.GetEn
 // passed separately since callers already have both close at hand) -- it's
 // what ownerDomain needs to resolve the row's Domain, the denormalized
 // column that lets the worker render/publish per (domain, environment)
-// without a join -- see 014_writeback_outbox_domain.up.sql and
+// without a join -- see 015_writeback_outbox_domain.up.sql and
 // tools/app_registry/architecture/12-writeback-outbox-temporal.md.
 func (s *PromotionServer) enqueueWriteback(ctx context.Context, r repository.Registry, env repository.Environment, current repository.Promotion, promotionID, eventID string) error {
 	domain, err := s.ownerDomain(ctx, current)
@@ -494,9 +491,6 @@ func stateHash(promotions []repository.Promotion) string {
 }
 
 func (s *PromotionServer) ListPromotions(ctx context.Context, req *pb.ListPromotionsRequest) (*pb.ListPromotionsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	promotions, nextToken, err := s.repo.Promotions().ListPromotions(ctx, repository.PromotionListFilter{
 		EnvironmentKey: req.EnvironmentKey,
 		OwnerFullName:  req.OwnerFullName,
@@ -516,9 +510,6 @@ func (s *PromotionServer) ListPromotions(ctx context.Context, req *pb.ListPromot
 }
 
 func (s *PromotionServer) ListPromotionEvents(ctx context.Context, req *pb.ListPromotionEventsRequest) (*pb.ListPromotionEventsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	var since time.Time
 	if req.Since != 0 {
 		since = unixToTime(req.Since)

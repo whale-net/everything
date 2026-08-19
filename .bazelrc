@@ -36,7 +36,7 @@ build:ci --remote_download_minimal
 # this regex they'd stay remote and the upload would find an empty directory.
 # Matches every file under any `testlogs/` directory, which is where Bazel
 # places test.log, test.xml, test.outputs/, coverage.dat, etc.
-build:ci --remote_download_regex=.*/testlogs/.*
+build:ci --remote_download_regex=.*/(testlogs|_coverage)/.*
 # Skip checking external repo files for modifications - deps are pinned by lockfiles
 build:ci --noexperimental_check_external_repository_files
 # Hardlink from repository cache instead of copying - reduces I/O on CI runners
@@ -48,6 +48,7 @@ build:ci --tool_java_runtime_version=remotejdk_11
 build:ci --java_runtime_version=remotejdk_11
 test:ci --cache_test_results=yes
 test:ci --test_timeout_filters=-eternal
+coverage:ci --combined_report=lcov
 coverage:ci --instrumentation_filter=//...
 query:ci --noimplicit_deps
 

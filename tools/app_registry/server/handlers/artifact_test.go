@@ -121,14 +121,21 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 	_ = apps
 }
 
-// TestRecordArtifact_PromotabilityIsNotRetroactive is AR-7c's (issue #558)
-// headline correctness fix, and PLAN.md's AR-7c exit criterion, proven
-// here: editing an app's deploy_unit AFTER an artifact has been published
-// must NOT change that artifact's promotability. Before AR-7c,
-// scanArtifact/derivePromotability re-joined the owner's CURRENT deploy_unit
-// on every read, so this test would have failed -- the published artifact's
-// promotability would have silently flipped from PROMOTABLE to VIA_CHART.
-func TestRecordArtifact_PromotabilityIsNotRetroactive(t *testing.T) {
+// TestRecordArtifact_PromotabilityIsRetroactive is issue #833's headline
+// correctness fix, proven here: editing an app's deploy_unit AFTER an
+// artifact has been published DOES change what is read back for that
+// artifact -- the opposite of AR-7c's (issue #558) old "store once, never
+// recompute" behavior, which this issue deliberately reverses. AR-7c froze
+// promotability at publish time specifically to stop a deploy_unit edit
+// from silently changing an old artifact's promotability; in production
+// that traded one correctness problem for another (PR #810's
+// DerivePromotability rule fix could never reach artifacts published
+// before it landed, permanently stranding them on the old, wrong value --
+// see PLAN-HISTORY.md's AR-7c entry and architecture/08-release-lifecycle/
+// 02-manifest-snapshot.md "As built (issue #833, migration 014)"). Live
+// derivation means that class of bug can no longer happen: a rule fix or a
+// deploy_unit correction is visible on the very next read.
+func TestRecordArtifact_PromotabilityIsRetroactive(t *testing.T) {
 	appSrv, artifactSrv, _ := setup(t)
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-retro")
@@ -162,19 +169,19 @@ func TestRecordArtifact_PromotabilityIsNotRetroactive(t *testing.T) {
 	}
 
 	// GetArtifact (a fresh read, not the RecordArtifact response we already
-	// have) must still report PROMOTABLE -- the value stored at publish
-	// time, unaffected by the edit above.
+	// have) must now report VIA_CHART -- derived live from image-app's
+	// CURRENT deploy_unit, not the PROMOTABLE value that was true at
+	// publish time.
 	reread, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{ArtifactId: published.Artifact.ArtifactId})
 	if err != nil {
 		t.Fatalf("GetArtifact: %v", err)
 	}
-	if reread.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
-		t.Fatalf("retroactivity bug: expected the already-published artifact to STAY PROMOTABLE after image-app's deploy_unit changed, got %v", reread.Artifact.Promotability)
+	if reread.Artifact.Promotability != pb.Promotability_PROMOTABILITY_VIA_CHART {
+		t.Fatalf("expected the already-published artifact's promotability to follow image-app's edited deploy_unit (VIA_CHART), got %v", reread.Artifact.Promotability)
 	}
 
 	// A NEW artifact for the SAME (now-edited) app, published after the
-	// edit, correctly reflects the new deploy_unit -- proving the fix is
-	// "frozen at publish time," not "never updates at all."
+	// edit, also reflects the new deploy_unit.
 	build2 := recordBuild(t, artifactSrv, "run-retro-2")
 	newPub, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build2.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -1136,7 +1143,7 @@ func TestBeginPublish_NoPriorAllocation_TagPath(t *testing.T) {
 
 // TestBeginPublish_Chart_RepositoryComesFromRequest proves a chart's
 // ∅ -> publishing branch cannot lean on its owner row the way an image's
-// can. chart.chart_repository is structurally always '' -- no write path has
+// can. chart.chart_repository is structurally always ” -- no write path has
 // ever populated it, and migration 008 hardcodes it in v_current_chart --
 // so there is nothing server-side to fall back to and the caller must supply
 // the repository itself.
@@ -1852,5 +1859,139 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 	}
 	if adoptResp.Artifact.Version != "v3.0.0" || adoptResp.Artifact.Digest != sharedDigest {
 		t.Fatalf("unexpected adoptResp: version=%s digest=%s", adoptResp.Artifact.Version, adoptResp.Artifact.Digest)
+	}
+}
+
+func TestGetArtifact_LatestPublished(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := ctxWithRoles(auth.RoleBuilder)
+
+	// 1. Initial state: nothing published -> NotFound
+	_, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for empty registry, got %v", err)
+	}
+
+	// Validation checks
+	_, err = artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		LatestPublished: true,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for missing kind, got %v", err)
+	}
+
+	_, err = artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+		BeforeVersion:   "not-semver",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for invalid before_version, got %v", err)
+	}
+
+	// 2. Publish several versions
+	build1 := recordBuild(t, artifactSrv, "run-pub-1")
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build1.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:digest-v1.0.0",
+		Version:        "v1.0.0",
+		IdempotencyKey: "pub-1",
+	}); err != nil {
+		t.Fatalf("RecordArtifact v1.0.0: %v", err)
+	}
+
+	build2 := recordBuild(t, artifactSrv, "run-pub-2")
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build2.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:digest-v1.1.0",
+		Version:        "v1.1.0",
+		IdempotencyKey: "pub-2",
+	}); err != nil {
+		t.Fatalf("RecordArtifact v1.1.0: %v", err)
+	}
+
+	build3 := recordBuild(t, artifactSrv, "run-pub-3")
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build3.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:digest-v1.0.1",
+		Version:        "v1.0.1",
+		IdempotencyKey: "pub-3",
+	}); err != nil {
+		t.Fatalf("RecordArtifact v1.0.1: %v", err)
+	}
+
+	build4 := recordBuild(t, artifactSrv, "run-pub-4")
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build4.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:digest-v1.10.0",
+		Version:        "v1.10.0",
+		IdempotencyKey: "pub-4",
+	}); err != nil {
+		t.Fatalf("RecordArtifact v1.10.0: %v", err)
+	}
+
+	// 3. BeginPublish for v2.0.0 (state = publishing) - must NOT be returned as published
+	_, err = artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v2.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build4.BuildId,
+		IdempotencyKey: "begin-pub-v2",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish v2.0.0: %v", err)
+	}
+
+	// 4. Query latest published -> must be v1.10.0 (numerically highest published, not lexical, not publishing v2.0.0)
+	resp, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(latest_published): %v", err)
+	}
+	if resp.Artifact.Version != "v1.10.0" || resp.Artifact.Digest != "sha256:digest-v1.10.0" {
+		t.Fatalf("expected v1.10.0 (sha256:digest-v1.10.0), got version=%s digest=%s", resp.Artifact.Version, resp.Artifact.Digest)
+	}
+
+	// 5. Query with before_version = "v1.10.0" -> must return v1.1.0
+	respBefore, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+		BeforeVersion:   "v1.10.0",
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(before_version=v1.10.0): %v", err)
+	}
+	if respBefore.Artifact.Version != "v1.1.0" {
+		t.Fatalf("expected v1.1.0, got %s", respBefore.Artifact.Version)
+	}
+
+	// 6. Query with before_version = "v1.0.0" -> must return NotFound
+	_, err = artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+		BeforeVersion:   "v1.0.0",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for before_version=v1.0.0, got %v", err)
 	}
 }

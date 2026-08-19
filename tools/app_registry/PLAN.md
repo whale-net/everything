@@ -18,7 +18,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 
 ## Current status
 
-*Last updated after PR
+*Last updated for AR-5b ([issue #829](https://github.com/whale-net/everything/issues/829), [PR #831](https://github.com/whale-net/everything/pull/831), pending merge). PR
 [#630](https://github.com/whale-net/everything/pull/630) merged (2026-08-15).
 **AR-M through AR-7f are all merged to `main`** — see the table below.*
 
@@ -34,6 +34,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 | AR-3a…AR-3d | [#504](https://github.com/whale-net/everything/pull/504), [#508](https://github.com/whale-net/everything/pull/508), [#509](https://github.com/whale-net/everything/pull/509), [#511](https://github.com/whale-net/everything/pull/511) | merged |
 | AR-4a / AR-4b | [#512](https://github.com/whale-net/everything/pull/512), [#514](https://github.com/whale-net/everything/pull/514) | merged — writeback `Publish` is still the stub |
 | AR-5a | [#513](https://github.com/whale-net/everything/pull/513) | merged — **inert**: no domain at stage `allocate`, `plan.go`'s tag path untouched |
+| AR-5b (issue #829) | [#831](https://github.com/whale-net/everything/pull/831) | pending — `AllocateVersion` wired into every real version-resolution call site (`plan.go`'s `assignVersions`/`assignChartVersions`, `release_charts.go`'s `releaseCharts`, `build_helm.go`'s `build-helm-chart`) via `resolveVersion` — see "AR-5" below |
 | AR-6a / AR-6b | [#516](https://github.com/whale-net/everything/pull/516), [#515](https://github.com/whale-net/everything/pull/515) | merged |
 | AR-7 (design) | [#559](https://github.com/whale-net/everything/pull/559) | merged — design + delivery plan only, no implementation |
 | AR-7a | [#561](https://github.com/whale-net/everything/pull/561) | merged — sweep robustness, no schema change |
@@ -92,8 +93,9 @@ still in flight and say "not merged" in places; the table above is
 authoritative.
 
 **AR-5a (inert foundations) is merged** — `AllocateVersion` is fully
-implemented and tested, wired to nothing. See "AR-5" below for what remains
-before any domain can be cut over.
+implemented and tested. **AR-5b (issue #829) wires it into every real
+version-resolution call site** — see "AR-5" below for the as-implemented
+detail and what is still deliberately deferred.
 
 **AR-7 (issue #558): every sub-phase, AR-7a through AR-7f, is merged to
 `main`.** The full phase makes a release run
@@ -215,57 +217,85 @@ third manifest representation to the two that already disagree.
 
 ---
 
-## AR-5 — remaining work
+## AR-5 — cutover status
 
 **AR-5a (inert foundations) is merged (#513)** — full as-built record in
-[PLAN-HISTORY.md](PLAN-HISTORY.md). Everything below is what's left before
-any domain can actually cut over to registry-allocated versions; it is
-forward-looking, not historical, which is why it lives here and not there.
+[PLAN-HISTORY.md](PLAN-HISTORY.md). **AR-5b (issue #829) wires `AllocateVersion`
+into every real version-resolution call site**, described below.
 
-**Deliberately NOT done — the actual cutover remains AR-5b+**
-- `plan.go`'s `autoIncrementVersion` call site is untouched: the git-tag
-  path is the only one any release can reach, byte-for-byte identical to
-  before this change, for every domain.
-- No domain's `domain_adoption.stage` is set to `allocate` — the table has
-  no rows written by this change at all.
-- No CLI/admin path exists yet to move a domain to `allocate`; that is
-  real, separate scope (probably its own small RPC/CLI surface) before a
-  real cutover can happen without hand-editing the database.
-- Seeding a domain's starting version from its existing tags at cutover
-  time (this section's original scope item) is not implemented — nothing
-  calls it yet, so building it now would be untested and unused.
+**How AR-5b actually landed, and why it differs from this section's original
+plan:** the gate below ("do not start until AR-2's parity check is clean")
+was never satisfied — no parity-check tooling has ever been built or run.
+Despite that, `app-registry` and `tools` were independently promoted to
+`domain_adoption.stage = 'allocate'` directly against the `dev`/prod
+database (there is still no CLI/admin RPC for this — see "Deliberately NOT
+done" below), which made `AllocateVersion`'s adoption gate reject every real
+release for those two domains from that point on with no caller ever
+noticing, because nothing called it: every domain, allocated or not, was
+silently still resolving its version from git tags. Issue #829 is that gap.
+AR-5b is the fix, treated as closing an already-live production gap rather
+than the originally-planned, soak-gated rollout — see the issue for the full
+story.
+
+**What's wired:** `resolveVersion` (`tools/release_helper_go/cmd/registry_version.go`)
+is the shared decision every call site now goes through instead of calling
+`autoIncrementVersion`/`autoIncrementHelmVersion` directly:
+- `plan.go`'s `assignVersions` (apps) and `assignChartVersions` (charts,
+  `--charts` on the `plan` command — not the path `release.yml` actually
+  drives for charts, see next bullet).
+- `release_charts.go`'s `releaseCharts` — **the real production chart call
+  site.** `release.yml`'s `release-helm-charts` job never uses `plan`'s
+  `chart-matrix` output (that output is computed and emitted but nothing
+  ever reads it); it invokes `release-charts` once for every requested
+  chart, which has its own independent auto-increment call. This section
+  previously cited `build_helm.go:164` as the live chart call site — that
+  command is real but is exercised only by
+  `tools/release_helper_go/test_cli_integration.sh`, never by `release.yml`.
+- `build_helm.go`'s `build-helm-chart` command, for consistency/completeness
+  even though it is not on the production path (previous bullet).
+
+When the calling domain is at stage `allocate`, `AllocateVersion`'s result is
+used verbatim — git tags are never consulted. When it is not (the RPC's own
+adoption gate returns `FailedPrecondition`, its only use of that code),
+`resolveVersion` falls back to the pre-#829 tag-scanning path, byte-for-byte
+unchanged. Any other registry error (dial failure included) is fatal, not a
+fallback: silently reverting to tag-scanning for a domain that is actually at
+`allocate` is exactly the bug #829 reports, so a broken registry must fail
+the release rather than mask itself as a tag-based one.
+
+**Deliberately NOT done**
+- No CLI/admin RPC exists to move a domain to/from `allocate` — both live
+  domains were cut over by hand-editing `domain_adoption` directly. Real,
+  separate scope before a future domain can be cut over without doing the
+  same.
+- Git tags are still created for allocate-domain releases (`--create-git-tag`
+  is unchanged) — deliberately kept as this section's originally-planned
+  "redundant record and disaster-recovery path": neither `release-app` nor
+  `release-charts` ever pushes a tag to origin (apps' tags only reach origin
+  as an accidental side effect of `create-combined-github-release-with-notes`;
+  charts' never do at all), so a local tag object in an ephemeral CI
+  checkout costs nothing to keep. No-op/digest-collision detection for
+  `allocate`-stage domains (issue #832) queries App Registry directly via
+  `GetArtifact(latest_published=true)`, moving off tag-scanning while keeping
+  git-tag fallback for domains not yet at `allocate`.
+- Seeding a domain's starting version from its existing tags at cutover time
+  is moot for the two domains already cut over (done by hand) and remains
+  unbuilt for a future domain's cutover.
 - The "allocated versions match tag-scanning" parity check against AR-2 soak
-  data has not been run (the soak itself, gating AR-5's start per this
-  section's own note below, has not happened).
+  data has still never been run — this predates #829 and is not resolved by
+  it.
 - The release workflow's version-allocation concurrency group is untouched.
 
-**Scope**
-- Implement `ArtifactRegistry.AllocateVersion` against a unique
-  `(owner, kind, version)` constraint.
-- Replace `autoIncrementVersion` in `tools/release_helper_go/cmd/plan.go`,
-  gated on the calling domain's adoption stage.
-- **Per-domain cutover.** `AllocateVersion` serves only domains at stage
-  `allocate` and rejects the rest, so a misconfigured CI job fails loudly
-  rather than silently allocating against the wrong source of truth. Cut over
-  one low-traffic domain first, then widen.
-- **Keep writing git tags** as a redundant record and disaster-recovery path.
-- Seed each domain's starting version from its existing tags at the moment it
-  is promoted to `allocate`, so numbering stays continuous.
-- Remove the release workflow's version-allocation concurrency group once every
-  domain has cut over — not before.
-
-**Exit criteria**
-- Concurrent releases of the same app cannot receive the same version.
-- Allocated versions match what tag-scanning would have produced, verified
-  against the AR-2 soak data.
+**Exit criteria (met by AR-5b)**
+- Concurrent releases of the same app cannot receive the same version, for a
+  domain at `allocate` (`AllocateVersion`'s transactional unique constraint).
 - A domain not at `allocate` still releases through the tag path, unchanged.
-- A documented, rehearsed fallback to tag-based allocation exists — per domain,
-  by moving its stage back.
-
-**Do not start** until AR-2's parity check has been clean across a meaningful
-number of real releases — that check has not been run even once (no
-script/CLI/scheduled job implements it yet), so this gate remains open
-regardless of the fix below.
+- A fallback to tag-based allocation exists per domain, by moving its stage
+  back to `observe`/`promote` (untested against a real hand-edit, since no
+  admin RPC exists yet to make the switch — see above).
+- **Not met:** allocated versions matching tag-scanning, verified against AR-2
+  soak data — the soak/parity tooling this depended on still does not exist
+  (see above).
 
 The digest-collision accommodation this section previously asked AR-5 to
 design is now handled, but at the release-pipeline layer rather than inside
@@ -289,70 +319,46 @@ App Registry as a "new" artifact in the first place. This closes the gap
 this section previously called out as open design work; it does not affect
 the AR-2 parity gate above.
 
-### Addendum — semver semantics (decided)
+### Addendum — semver semantics (implemented)
 
-Added after an audit of the existing version path found three gaps between
-what `tools/release_helper_go` does today and what the registry needs in order
-to *replace* git tags. These are decided; implement them as specified.
+An audit of the existing version path found three gaps between what
+`tools/release_helper_go` did at the time and what the registry needed in
+order to *replace* git tags. **All three are implemented as of AR-5b**
+(they had already landed, undocumented, by the time issue #829 was
+investigated — this addendum was stale; kept below for the rationale, not
+as a to-do list).
 
-Today `plan.go` parses semver with a regex and bumps by splitting on dots, but
-the "which version is latest" question is answered entirely by
-`git tag --sort=-version:refname` — **git supplies the semver ordering, and it
-disappears along with the tags.**
+Before this work, `plan.go` parsed semver with a regex and bumped by
+splitting on dots, but the "which version is latest" question was answered
+entirely by `git tag --sort=-version:refname` — git supplied the semver
+ordering, and it would have disappeared along with the tags.
 
-**1. Major bumps become first-class.** `incrementVersion`'s switch handles only
-`minor` and `patch`; `major` returns `unknown increment type`, and `plan.go`
-exposes only `--increment-minor` / `--increment-patch`. Chart bumping
-(`build_helm.go`) already accepts all three, so the two halves of the release
-system disagree. `AllocateVersionRequest.increment` is already documented as
-`"major" | "minor" | "patch"`.
-
-Add `major` to `incrementVersion` and an `--increment-major` flag to `plan.go`,
-so the tag path and the registry path agree. Note the consequence for AR-5's
-parity exit criterion: allocation is now a **superset** of what tag-scanning
-produced, since the tag path could not express a major bump at all. That is
-intentional — parity is asserted for minor/patch, not for a capability that
+**1. Major bumps are first-class.** `incrementVersion` (now backed by
+`libs/go/semver`) handles `major`/`minor`/`patch` uniformly, and `plan.go`
+exposes `--increment-major` alongside `--increment-minor`/`--increment-patch`
+— matching chart bumping (`build_helm.go`), which already accepted all
+three. `AllocateVersionRequest.increment` accepts the same three values.
+Consequence for AR-5's parity exit criterion: allocation is a **superset** of
+what tag-scanning produced, since the tag path could not express a major
+bump at all — parity is asserted for minor/patch, not for a capability that
 did not previously exist.
 
-**2. Versions get a sortable representation. This is the load-bearing change.**
-`artifact.version` is `TEXT` and the only index is
-`UNIQUE (owner_id, kind, version)` — there is no ordering at all. Once tags are
-gone, "what is the next patch?" is a SQL query, and `ORDER BY version DESC` on
-`TEXT` is **wrong**: lexically `v1.9.0` sorts above `v1.10.0`, so the release
-after `v1.10.0` would be computed as `v1.10.0` again — colliding with the
-unique constraint, or silently renumbering.
+**2. Versions have a sortable representation.** `artifact` carries
+`version_major`, `version_minor`, `version_patch` (`INT NOT NULL`, migration
+`005_version_allocation`) alongside the `TEXT` `version`, indexed
+`(owner_id, kind, version_major DESC, version_minor DESC, version_patch DESC)`
+so "latest" and "next major/minor/patch" are one indexed lookup with correct
+ordering — seen live in `AllocateVersion`'s postgres implementation
+(`server/repository/postgres/artifact.go`), which queries exactly this index
+rather than sorting the text column. The `UNIQUE (owner_id, kind, version)`
+constraint stays on the text form as the collision guard.
 
-Store the parsed version alongside the text:
-
-- `version_major`, `version_minor`, `version_patch` — `INT NOT NULL`,
-  populated at record/allocate time from the same parse.
-- Index `(owner_id, kind, version_major DESC, version_minor DESC,
-  version_patch DESC)` so "latest" and "next major/minor/patch" are one
-  indexed lookup with correct ordering.
-- The `UNIQUE (owner_id, kind, version)` constraint stays on the **text** form
-  — it is the collision guard and must keep matching what is published.
-
-A zero-padded sort key was rejected: it caps each component and reads badly in
-`psql`. The integer triple also makes range queries ("every 1.x of this app")
-expressible, which tags cannot answer without a client-side scan.
-
-Existing rows must be backfilled by the migration. A row whose version does not
-parse is a real condition, not a theoretical one (`plan.go` already tolerates
-unparseable tags by falling back to `v0.0.1`) — the migration must decide
-explicitly and say so in a comment rather than failing the deploy.
-
-**3. Prereleases are not supported, but the door is left open.** The regex
-accepts `v1.2.3-alpha.1` and `incrementVersion` strips the prerelease before
-bumping; build metadata (`+build`) is not accepted at all. Real semver also
-sorts a prerelease *before* its release, which nothing here implements.
-
-Patch releases cover the actual need. Therefore: **`AllocateVersion` rejects a
-prerelease or build-metadata version explicitly**, with an error saying it is
-unsupported — rather than half-accepting one and sorting it wrongly. Leave room
-for it: a later `version_prerelease TEXT` column can be added without changing
-the constraint or the integer triple, and the ordering index would gain a
-trailing term. Do not add the column now; do note the extension point in
-`ARCHITECTURE.md`.
+**3. Prereleases are rejected, not half-accepted.** `AllocateVersion` rejects
+an explicit prerelease or build-metadata version via
+`libs/go/semver.ParseRelease`, with an error naming it unsupported, rather
+than sorting one wrongly. The extension point (a future
+`version_prerelease TEXT` column plus a trailing ordering-index term) is
+noted in `ARCHITECTURE.md` and was not added, per the original decision.
 
 ---
 

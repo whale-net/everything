@@ -1,9 +1,12 @@
 name: 'Download Release Tools'
 description: >-
   Acquires the release_helper_go and app-registry CLI binaries for CI/release workflows.
-  In 'published' mode (default), downloads prebuilt pinned binaries from GitHub Releases
-  in <3s with automatic SHA256 checksum verification and safety valve fallback to source
-  compilation. In 'source' mode, builds tools directly from source via Bazel.
+  In 'published' mode (default), resolves versions in precedence order: explicit
+  version overrides, then the version currently promoted to target_env via the App Registry
+  gRPC API, then downloads the matching prebuilt binaries from GitHub Releases in <3s with automatic
+  SHA256 checksum verification. If prebuilt acquisition fails, fails and prompts the user
+  to re-run with build tools per pipeline (or builds from source if fallback_to_source is true).
+  In 'source' mode, builds tools directly from source via Bazel.
   Exports RELEASE_HELPER and APP_REGISTRY_CLI env vars and outputs.
 
 branding:
@@ -23,22 +26,18 @@ inputs:
     description: 'Target architecture for prebuilt binaries (e.g. amd64, arm64). Auto-detected from runner if empty.'
     required: false
     default: ''
-  version_file:
-    description: 'Path to file containing pinned versions (default .release-tools-version)'
-    required: false
-    default: '.release-tools-version'
   release_helper_version:
-    description: 'Explicit version override for release_helper_go (if not reading from version_file)'
+    description: 'Explicit version override for release_helper_go (if not resolving from App Registry)'
     required: false
     default: ''
   app_registry_version:
-    description: 'Explicit version override for app_registry_cli (if not reading from version_file)'
+    description: 'Explicit version override for app_registry_cli (if not resolving from App Registry)'
     required: false
     default: ''
   target_env:
-    description: 'Target environment name for environment-specific release tag lookups (e.g. dev, builder, prod)'
+    description: 'Target environment name for App Registry resolution and tag lookups (e.g. dev, builder, prod)'
     required: false
-    default: ''
+    default: 'dev'
   repo:
     description: 'GitHub repository to download release assets from (e.g. whale-net/everything)'
     required: false
@@ -48,9 +47,9 @@ inputs:
     required: false
     default: ''
   fallback_to_source:
-    description: 'Whether to fall back to Bazel source compilation if prebuilt binary download fails'
+    description: 'Whether to fall back to Bazel source compilation if prebuilt binary download fails (default false; pipelines should fail and request source build)'
     required: false
-    default: 'true'
+    default: 'false'
   name:
     description: 'Artifact name to download when source="artifact"'
     required: false
@@ -85,7 +84,6 @@ runs:
         TARGET_OS_INPUT: ${{ inputs.target_os }}
         TARGET_ARCH_INPUT: ${{ inputs.target_arch }}
         TARGET_ENV_INPUT: ${{ inputs.target_env }}
-        VERSION_FILE: ${{ inputs.version_file }}
         RH_VERSION_OVERRIDE: ${{ inputs.release_helper_version }}
         AR_VERSION_OVERRIDE: ${{ inputs.app_registry_version }}
         REPO: ${{ inputs.repo }}
@@ -202,16 +200,207 @@ runs:
           RH_VER="$RH_VERSION_OVERRIDE"
           AR_VER="$AR_VERSION_OVERRIDE"
 
-          if [[ -f "$VERSION_FILE" ]]; then
-            if [[ -z "$RH_VER" ]]; then
-              RH_VER=$(grep -E '^\s*release_helper_go:' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*release_helper_go:\s*//' | sed -E "s/['\"[:space:]]//g" || true)
-            fi
-            if [[ -z "$AR_VER" ]]; then
-              AR_VER=$(grep -E '^\s*(app_registry_cli|app_registry|app-registry):' "$VERSION_FILE" 2>/dev/null | sed -E 's/^\s*(app_registry_cli|app_registry|app-registry):\s*//' | sed -E "s/['\"[:space:]]//g" || true)
+          # --- App Registry resolution (#780, #859) ---
+          # When versions are not explicitly provided, resolve tool versions directly
+          # from the version currently promoted to target_env in App Registry.
+          if [[ -z "$RH_VER" || -z "$AR_VER" ]]; then
+            if [[ -z "$TARGET_ENV_INPUT" ]]; then
+              if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
+                echo "Notice: No target_env or version override specified. Falling back to source build."
+                SOURCE_MODE="source"
+              else
+                echo "::error title=target_env missing::No target_env or version overrides provided. Please specify target_env or re-run with build tools (e.g. 'use_source_tools: true' or 'source: source')."
+                exit 1
+              fi
+            elif [[ -z "${APP_REGISTRY_ADDRESS:-}" ]]; then
+              if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
+                echo "Notice: APP_REGISTRY_ADDRESS env var not present. Falling back to source build."
+                SOURCE_MODE="source"
+              else
+                echo "::error title=App Registry address missing::target_env='$TARGET_ENV_INPUT' was specified, but APP_REGISTRY_ADDRESS env var is missing. Please set APP_REGISTRY_ADDRESS or re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source')."
+                exit 1
+              fi
+            else
+              echo "Attempting App Registry resolution for target_env='$TARGET_ENV_INPUT'..."
+
+              GRPCURL_VERSION="1.9.3"
+
+              grpcurl_checksum() {
+                case "$1" in
+                  linux_x86_64) echo "a926b62a85787ccf73ef8736b3ae554f1242e39d92bb8767a79d6dd23b11d1d5" ;;
+                  linux_arm64)  echo "b20a00c1cb82ab81ec32696766d4076e99b4cb5ca0823a71767ba64dbea0f263" ;;
+                  osx_x86_64)   echo "246a6669e58c282dcaf0e9dcb06dd1c8681833d59df24eb83d3123ec64c2d2e5" ;;
+                  osx_arm64)    echo "d8391485e99a728a3a4e82af3fd621f9fdea0c417a74e5122803ad20b207b623" ;;
+                  *) return 1 ;;
+                esac
+              }
+
+              install_grpcurl() {
+                if command -v grpcurl >/dev/null 2>&1; then
+                  GRPCURL_BIN="$(command -v grpcurl)"
+                  return 0
+                fi
+
+                local cache_root="${RUNNER_TOOL_CACHE:-${RUNNER_TEMP:-/tmp}}/grpcurl/${GRPCURL_VERSION}"
+                local cached_bin="$cache_root/grpcurl"
+                if [[ -x "$cached_bin" ]]; then
+                  GRPCURL_BIN="$cached_bin"
+                  return 0
+                fi
+
+                local host_os host_arch key expected_sha
+                host_os="$(uname -s)"
+                host_arch="$(uname -m)"
+                case "$host_os" in
+                  Linux) host_os="linux" ;;
+                  Darwin) host_os="osx" ;;
+                  *) echo "Notice: unsupported OS for grpcurl install: $host_os" >&2; return 1 ;;
+                esac
+                case "$host_arch" in
+                  x86_64|amd64) host_arch="x86_64" ;;
+                  aarch64|arm64) host_arch="arm64" ;;
+                  *) echo "Notice: unsupported architecture for grpcurl install: $host_arch" >&2; return 1 ;;
+                esac
+                key="${host_os}_${host_arch}"
+                if ! expected_sha="$(grpcurl_checksum "$key")"; then
+                  echo "Notice: no known sha256 checksum for grpcurl $GRPCURL_VERSION on $key" >&2
+                  return 1
+                fi
+
+                local tmp_dl url actual_sha
+                tmp_dl="$(mktemp -d)"
+                url="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_${key}.tar.gz"
+                echo "Downloading grpcurl v${GRPCURL_VERSION} from $url..."
+                if ! curl -sSL -m 30 -o "$tmp_dl/grpcurl.tar.gz" "$url"; then
+                  echo "Notice: failed to download grpcurl archive" >&2
+                  rm -rf "$tmp_dl"
+                  return 1
+                fi
+
+                actual_sha="$(compute_sha256 "$tmp_dl/grpcurl.tar.gz")" || { rm -rf "$tmp_dl"; return 1; }
+                if [[ "$actual_sha" != "$expected_sha" ]]; then
+                  echo "Notice: grpcurl checksum mismatch (expected $expected_sha, got $actual_sha)" >&2
+                  rm -rf "$tmp_dl"
+                  return 1
+                fi
+
+                if ! tar -xzf "$tmp_dl/grpcurl.tar.gz" -C "$tmp_dl" grpcurl; then
+                  echo "Notice: failed to extract grpcurl binary" >&2
+                  rm -rf "$tmp_dl"
+                  return 1
+                fi
+
+                mkdir -p "$cache_root"
+                cp "$tmp_dl/grpcurl" "$cached_bin"
+                chmod +x "$cached_bin"
+                rm -rf "$tmp_dl"
+                GRPCURL_BIN="$cached_bin"
+                return 0
+              }
+
+              resolve_registry_version() {
+                local app_full_name="$1"
+                local grpc_target="$APP_REGISTRY_ADDRESS"
+                grpc_target="${grpc_target#https://}"
+                grpc_target="${grpc_target#http://}"
+
+                local use_tls=false
+                if [[ "$APP_REGISTRY_ADDRESS" == https://* || "$APP_REGISTRY_ADDRESS" == *:443* ]]; then
+                  use_tls=true
+                fi
+                if [[ -n "${GRPC_USE_TLS:-}" ]]; then
+                  [[ "$GRPC_USE_TLS" == "true" ]] && use_tls=true || use_tls=false
+                fi
+                local -a tls_opt=()
+                [[ "$use_tls" == "false" ]] && tls_opt=(-plaintext)
+
+                local -a auth_opt=()
+                if [[ -n "$REGISTRY_TOKEN" ]]; then
+                  auth_opt=(-H "authorization: Bearer $REGISTRY_TOKEN")
+                fi
+
+                local get_app_json app_id
+                get_app_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
+                  -d "{\"full_name\":\"${app_full_name}\"}" \
+                  "$grpc_target" appregistry.v1.AppRegistry/GetApp 2>/dev/null)" || true
+                app_id="$(echo "$get_app_json" | jq -r '.app.appId // .app.app_id // empty' 2>/dev/null)" || true
+                if [[ -z "$app_id" ]]; then
+                  echo "Notice: could not resolve app_id for $app_full_name from App Registry" >&2
+                  return 1
+                fi
+
+                local env_state_json version
+                env_state_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
+                  -d "{\"environment_key\":\"${TARGET_ENV_INPUT}\"}" \
+                  "$grpc_target" appregistry.v1.PromotionRegistry/GetEnvironmentState 2>/dev/null)" || true
+                if [[ -z "$env_state_json" ]]; then
+                  echo "Notice: empty GetEnvironmentState response for environment '$TARGET_ENV_INPUT'" >&2
+                  return 1
+                fi
+
+                version="$(echo "$env_state_json" | jq -r --arg app_id "$app_id" '
+                  [.entries[]?
+                    | select((.artifact.appId // .artifact.app_id) == $app_id)
+                    | select((.artifact.kind // "") == "ARTIFACT_KIND_BINARY")
+                  ][0].artifact.version // empty
+                ' 2>/dev/null)" || true
+                if [[ -z "$version" || "$version" == "null" ]]; then
+                  echo "Notice: no promoted binary version found for $app_full_name in environment '$TARGET_ENV_INPUT'" >&2
+                  return 1
+                fi
+
+                echo "$version"
+                return 0
+              }
+
+              REGISTRY_TOKEN=""
+              if [[ -n "${GRPC_AUTH_TOKEN_URL:-}" && -n "${GRPC_AUTH_CLIENT_ID:-}" && -n "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
+                if token_json=$(curl -sS -m 15 -X POST "$GRPC_AUTH_TOKEN_URL" \
+                      -d grant_type=client_credentials \
+                      -d client_id="$GRPC_AUTH_CLIENT_ID" \
+                      -d client_secret="$GRPC_AUTH_CLIENT_SECRET" 2>/dev/null); then
+                  REGISTRY_TOKEN="$(echo "$token_json" | jq -r '.access_token // empty' 2>/dev/null)" || REGISTRY_TOKEN=""
+                fi
+              fi
+
+              if ! install_grpcurl; then
+                if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
+                  echo "Notice: Could not install grpcurl. Falling back to source build."
+                  SOURCE_MODE="source"
+                else
+                  echo "::error title=grpcurl install failed::Could not install grpcurl to resolve release tool versions from App Registry. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source')."
+                  exit 1
+                fi
+              else
+                if [[ -z "$RH_VER" ]]; then
+                  if v="$(resolve_registry_version "tools-release_helper_go")"; then
+                    RH_VER="$v"
+                    echo "Resolved release_helper_go version from App Registry (env=$TARGET_ENV_INPUT): $RH_VER"
+                  elif [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
+                    echo "Notice: Could not resolve promoted version for release_helper_go. Falling back to source build."
+                    SOURCE_MODE="source"
+                  else
+                    echo "::error title=App Registry resolution failed::Could not resolve promoted version for 'release_helper_go' in environment '$TARGET_ENV_INPUT'. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') or ensure the tool is promoted in App Registry."
+                    exit 1
+                  fi
+                fi
+                if [[ -z "$AR_VER" && "$SOURCE_MODE" == "published" ]]; then
+                  if v="$(resolve_registry_version "tools-app-registry")" || v="$(resolve_registry_version "tools-app_registry_cli")"; then
+                    AR_VER="$v"
+                    echo "Resolved app_registry_cli version from App Registry (env=$TARGET_ENV_INPUT): $AR_VER"
+                  elif [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
+                    echo "Notice: Could not resolve promoted version for app_registry_cli. Falling back to source build."
+                    SOURCE_MODE="source"
+                  else
+                    echo "::error title=App Registry resolution failed::Could not resolve promoted version for 'app_registry_cli' in environment '$TARGET_ENV_INPUT'. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') or ensure the tool is promoted in App Registry."
+                    exit 1
+                  fi
+                fi
+              fi
             fi
           fi
 
-          echo "Pinned versions: release_helper_go=${RH_VER:-<not set>}, app_registry_cli=${AR_VER:-<not set>}"
+          echo "Release tooling versions: release_helper_go=${RH_VER:-<not set>}, app_registry_cli=${AR_VER:-<not set>}"
           [[ -n "$TARGET_ENV_INPUT" ]] && echo "Target environment for tag lookup: $TARGET_ENV_INPUT"
 
           download_single_tool() {
@@ -348,10 +537,10 @@ runs:
 
             if [[ -z "$SOURCE_USED" ]]; then
               if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                echo "::warning title=Prebuilt release tools download failed::Could not download pinned prebuilt release tools or workflow artifact. Falling back to source build via Bazel."
+                echo "::warning title=Prebuilt release tools download failed::Could not download prebuilt release tools or workflow artifact. Falling back to source build via Bazel."
                 SOURCE_MODE="source"
               else
-                echo "::error title=Prebuilt release tools download failed::Failed to download pinned release tools and fallback_to_source is false."
+                echo "::error title=Prebuilt release tools download failed::Failed to acquire prebuilt release tools. Fallback to inline source compilation is disabled. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') to build release tools from source."
                 exit 1
               fi
             fi

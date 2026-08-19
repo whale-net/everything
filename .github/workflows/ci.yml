@@ -46,10 +46,21 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: App Registry Auth
+      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      uses: ./.github/actions/app-registry-auth
+      with:
+        address: ${{ vars.APP_REGISTRY_ADDRESS }}
+        token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+        client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
       with:
         source: published
+        target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        fallback_to_source: 'true'
 
     - name: Reconcile apps/charts in App Registry
       if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
@@ -103,9 +114,10 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         cache-suffix: 'ci'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
         
     - name: Build and test all targets
       env:
@@ -141,6 +153,7 @@ jobs:
       if: always()
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
+        files: bazel-out/_coverage/_coverage_report.dat
         fail_ci_if_error: false
         flags: unittests
 
@@ -171,9 +184,10 @@ jobs:
       with:
         cache-suffix: 'ci'
         setup-docker: 'true'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
         
     - name: Verify Cross-Compilation (Critical)
       run: |
@@ -212,9 +226,10 @@ jobs:
       with:
         cache-suffix: 'ci'
         setup-docker: 'true'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
     - name: Run container-backed database tests
       run: |
@@ -256,6 +271,7 @@ jobs:
       if: always()
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
+        files: bazel-out/_coverage/_coverage_report.dat
         fail_ci_if_error: false
         flags: integration
 
@@ -285,14 +301,17 @@ jobs:
       uses: ./.github/actions/setup-build-env
       with:
         cache-suffix: 'ci'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
       with:
         source: published
+        target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        fallback_to_source: 'true'
 
     - name: Plan Docker builds using release tool
       id: plan
@@ -358,14 +377,17 @@ jobs:
       with:
         setup-docker: 'true'
         cache-suffix: 'ci'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
     - name: Download release tools
       uses: ./.github/actions/download-release-tools
       with:
         source: published
+        target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        fallback_to_source: 'true'
 
     - name: Build Docker images
       env:

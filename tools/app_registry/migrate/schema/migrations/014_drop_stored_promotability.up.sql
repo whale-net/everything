@@ -1,0 +1,33 @@
+-- App Registry — derive promotability live instead of storing it (issue #833)
+--
+-- Reverses AR-7c's (migration 008) "store once at publish time" decision for
+-- artifact.promotability ONLY -- manifest_id and every other part of AR-7c's
+-- app-identity/manifest-snapshot split are untouched.
+--
+-- Why: AR-7c froze promotability at publish time specifically to fix a
+-- retroactivity bug (editing an app's deploy_unit silently changed the
+-- promotability of artifacts published years ago). In production that
+-- traded one correctness problem for another: PR #810 fixed a bug in
+-- DerivePromotability itself (binary artifacts should always be PROMOTABLE
+-- regardless of deploy_unit), and every artifact published before #810
+-- merged is now PERMANENTLY stranded on the old, wrong stored value --
+-- tools-app-registry's v0.2.1/v0.2.2 (published 2026-08-16, one day before
+-- #810 merged) are stuck at 'not_promotable' forever, with no way to
+-- self-correct short of a manual DB edit. This will recur every time the
+-- derivation rule or an app's declared deploy_unit changes, and there is no
+-- way to "fix forward" a stored value -- only a backfill script per
+-- incident. Staleness-under-rule-and-config-changes was judged worse than
+-- the extra read-time join this reintroduces. See
+-- architecture/08-release-lifecycle/02-manifest-snapshot.md "As built
+-- (issue #833, migration 014)" and PLAN-HISTORY.md's AR-7c entry for the
+-- full tradeoff writeup.
+--
+-- No backfill needed going the other way (dropping the column): once
+-- postgres/artifact.go's read paths join v_current_app/v_current_chart and
+-- call repository.DerivePromotability live (this migration's Go-side
+-- companion change), every existing row -- including the stranded
+-- tools-app-registry ones -- resolves correctly on its very next read,
+-- automatically.
+
+ALTER TABLE artifact DROP CONSTRAINT artifact_promotability_shape;
+ALTER TABLE artifact DROP COLUMN promotability;

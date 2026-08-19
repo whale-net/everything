@@ -148,3 +148,24 @@ func TestBuild_ColumnError_NeverRendersAsNotPromoted(t *testing.T) {
 		t.Fatalf("expected buildErr to also be summarized in Matrix.ColumnErrors, got %+v", m.ColumnErrors)
 	}
 }
+
+func TestBuild_BinaryToolApp_StandaloneBinaryRow(t *testing.T) {
+	apps := []*pb.App{
+		{AppId: "cli-1", Domain: "tools", FullName: "tools-app-registry", AppType: "cli", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
+		{AppId: "cli-2", Domain: "tools", FullName: "tools-release_helper_go", AppType: "cli", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+		{AppId: "none-app", Domain: "demo", FullName: "demo-build-only", AppType: "job", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
+	}
+	environments := []*pb.Environment{{EnvironmentId: "e1", Key: "dev", Rank: 0}}
+	columns := map[string]ColumnResult{"dev": {Env: environments[0], Resp: &pb.GetEnvironmentStateResponse{}}}
+
+	m := Build(nil, apps, environments, columns)
+
+	if len(m.Rows) != 2 {
+		t.Fatalf("expected 2 rows for binary tools (build-only job excluded), got %d: %+v", len(m.Rows), m.Rows)
+	}
+	for _, row := range m.Rows {
+		if row.Kind != RowKindStandaloneBinary {
+			t.Errorf("expected row %s to have Kind=RowKindStandaloneBinary, got %v", row.FullName, row.Kind)
+		}
+	}
+}

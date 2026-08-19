@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -8,6 +9,9 @@ import (
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ── input validation ──────────────────────────────────────────────────────────
@@ -270,7 +274,7 @@ func TestPlanReleaseTagPushWithChanges(t *testing.T) {
 			argsNotContain: []string{"rdeps"},
 			output:         "//demo/hello_go:main.go",
 		},
-		fakeBazelCall{argsContain: []string{"rdeps(//...,"},  output: target},
+		fakeBazelCall{argsContain: []string{"rdeps(//...,"}, output: target},
 		fakeBazelCall{
 			argsContain:    []string{"rdeps(", target},
 			argsNotContain: []string{"rdeps(//...,"},
@@ -431,6 +435,118 @@ func TestPlanReleaseWorkflowDispatchIncrementMajor(t *testing.T) {
 	}
 }
 
+// TestPlanReleaseWorkflowDispatch_AllocateDomainUsesRegistry is issue #829's
+// fix for the real production app call site: with the domain opted into App
+// Registry and AllocateVersion succeeding, the allocated version must be
+// used verbatim -- ignoring the git-tag fixture entirely (which would have
+// produced v2.0.0 via a major bump from manmanv2-control-api.v1.2.3).
+func TestPlanReleaseWorkflowDispatch_AllocateDomainUsesRegistry(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--sort"}, output: "manmanv2-control-api.v1.2.3"},
+	)
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
+		if in.OwnerFullName != "manmanv2-control-api" || in.Increment != "major" {
+			t.Errorf("unexpected AllocateVersionRequest: %+v", in)
+		}
+		return &pb.AllocateVersionResponse{Version: "v9.0.0"}, nil
+	}
+
+	var result *PlanResult
+	var err error
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		result, err = planRelease(planParams{
+			eventType:              "workflow_dispatch",
+			requestedApps:          "control-api",
+			incrementMajor:         true,
+			bazel:                  bazel,
+			git:                    git,
+			fs:                     fs,
+			workspaceRoot:          fakeWorkspaceRoot,
+			artifactRegistryClient: artClient,
+		})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(artClient.AllocateVersionCalls) != 1 {
+		t.Fatalf("expected 1 AllocateVersion call, got %d", len(artClient.AllocateVersionCalls))
+	}
+	if result.Versions["manmanv2-control-api"] != "v9.0.0" {
+		t.Errorf("expected registry-allocated version v9.0.0, got %s", result.Versions["manmanv2-control-api"])
+	}
+}
+
+// TestPlanReleaseWorkflowDispatch_NotAllocatedFallsBackToTags proves domains
+// not yet cut over to adoption stage "allocate" are unaffected: a
+// FailedPrecondition from AllocateVersion falls back to the pre-#829
+// tag-based bump, unchanged.
+func TestPlanReleaseWorkflowDispatch_NotAllocatedFallsBackToTags(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--sort"}, output: "manmanv2-control-api.v1.2.3"},
+	)
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
+		return nil, status.Error(codes.FailedPrecondition, `domain "manmanv2" is at adoption stage "observe"`)
+	}
+
+	var result *PlanResult
+	var err error
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		result, err = planRelease(planParams{
+			eventType:              "workflow_dispatch",
+			requestedApps:          "control-api",
+			incrementMajor:         true,
+			bazel:                  bazel,
+			git:                    git,
+			fs:                     fs,
+			workspaceRoot:          fakeWorkspaceRoot,
+			artifactRegistryClient: artClient,
+		})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Versions["manmanv2-control-api"] != "v2.0.0" {
+		t.Errorf("expected tag-based fallback version v2.0.0, got %s", result.Versions["manmanv2-control-api"])
+	}
+}
+
+// TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal proves the safety
+// property issue #829 actually asks for: once a domain is opted in and
+// AllocateVersion fails for any reason other than "not at stage allocate",
+// the release must fail loudly rather than silently reverting to
+// tag-scanning -- the exact bug this issue reports.
+func TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--sort"}, output: "manmanv2-control-api.v1.2.3"},
+	)
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
+		return nil, status.Error(codes.Unavailable, "registry down")
+	}
+
+	var err error
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		_, err = planRelease(planParams{
+			eventType:              "workflow_dispatch",
+			requestedApps:          "control-api",
+			incrementMajor:         true,
+			bazel:                  bazel,
+			git:                    git,
+			fs:                     fs,
+			workspaceRoot:          fakeWorkspaceRoot,
+			artifactRegistryClient: artClient,
+		})
+	})
+	if err == nil {
+		t.Fatal("expected planRelease to fail when AllocateVersion errors for a reason other than adoption stage")
+	}
+}
+
 func TestResolveApps(t *testing.T) {
 	allApps := []AppMetadata{
 		{AppManifest: &appmetapb.AppManifest{Name: "hello-go", Domain: "demo"}, BazelTarget: "//demo/hello_go:hello-go_metadata"},
@@ -443,10 +559,10 @@ func TestResolveApps(t *testing.T) {
 		wantCount int
 		wantErr   bool
 	}{
-		{[]string{"demo-hello-go"}, 1, false},           // full name
-		{[]string{"demo"}, 2, false},                    // domain
-		{[]string{"control-api"}, 1, false},             // short (unambiguous)
-		{[]string{"nonexistent"}, 0, true},              // invalid
+		{[]string{"demo-hello-go"}, 1, false}, // full name
+		{[]string{"demo"}, 2, false},          // domain
+		{[]string{"control-api"}, 1, false},   // short (unambiguous)
+		{[]string{"nonexistent"}, 0, true},    // invalid
 		{[]string{"demo-hello-go", "control-api"}, 2, false},
 	}
 	for _, tt := range tests {
@@ -916,5 +1032,3 @@ func TestPlanCmd_MatrixGitHubOutput(t *testing.T) {
 		})
 	})
 }
-
-

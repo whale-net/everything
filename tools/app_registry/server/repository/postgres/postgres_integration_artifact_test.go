@@ -1473,13 +1473,19 @@ func TestRecordArtifact_RejectsArchivedOwner_Postgres(t *testing.T) {
 	}
 }
 
-// TestRecordArtifact_PromotabilityIsNotRetroactive_Postgres is PLAN.md's
-// central AR-7c exit criterion against real Postgres: editing an app's
-// deploy_unit after an artifact was published must not change that
-// artifact's promotability. Mirrors
-// handlers.TestRecordArtifact_PromotabilityIsNotRetroactive but exercised
-// through the real scanArtifact/artifact.promotability column, not the fake.
-func TestRecordArtifact_PromotabilityIsNotRetroactive_Postgres(t *testing.T) {
+// TestRecordArtifact_PromotabilityIsRetroactive_Postgres is issue #833's
+// central exit criterion against real Postgres, and the deliberate reversal
+// of AR-7c's (issue #558) old exit criterion of the same shape: editing an
+// app's deploy_unit after an artifact was published DOES change what is
+// read back for that artifact. Mirrors
+// handlers.TestRecordArtifact_PromotabilityIsRetroactive but exercised
+// through the real scanArtifact live join, not the fake. AR-7c had frozen
+// this value specifically to prevent this from happening; in production
+// that meant PR #810's DerivePromotability rule fix could never reach
+// artifacts published before it landed (tools-app-registry's v0.2.1/v0.2.2
+// were permanently stuck on the old, wrong value) -- see PLAN-HISTORY.md's
+// AR-7c entry for the full history.
+func TestRecordArtifact_PromotabilityIsRetroactive_Postgres(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	ctx := authedCtx()
 	appSrv := handlers.NewAppServer(reg)
@@ -1518,38 +1524,37 @@ func TestRecordArtifact_PromotabilityIsNotRetroactive_Postgres(t *testing.T) {
 		t.Fatalf("reconcile with edited deploy_unit: %v", err)
 	}
 
-	// The stored artifact.promotability column, read directly, must be
-	// unaffected.
-	var storedPromotability string
-	if err := pool.QueryRow(ctx, `SELECT promotability FROM artifact WHERE artifact_id = $1`, published.Artifact.ArtifactId).Scan(&storedPromotability); err != nil {
-		t.Fatalf("read stored promotability: %v", err)
-	}
-	if storedPromotability != "promotable" {
-		t.Fatalf("retroactivity bug: expected the stored artifact.promotability column to STAY 'promotable' after image-app's deploy_unit changed, got %q", storedPromotability)
-	}
-
-	// GetArtifact (the read path) must agree.
+	// There is no stored artifact.promotability column left to read
+	// directly (migration 014 dropped it) -- GetArtifact (the live-join
+	// read path) must now report VIA_CHART, derived from retro-app's
+	// CURRENT deploy_unit, not the PROMOTABLE value that was true at
+	// publish time.
 	reread, err := artSrv.GetArtifact(ctx, &pb.GetArtifactRequest{ArtifactId: published.Artifact.ArtifactId})
 	if err != nil {
 		t.Fatalf("GetArtifact: %v", err)
 	}
-	if reread.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
-		t.Fatalf("retroactivity bug via GetArtifact: expected PROMOTABLE, got %v", reread.Artifact.Promotability)
+	if reread.Artifact.Promotability != pb.Promotability_PROMOTABILITY_VIA_CHART {
+		t.Fatalf("expected the already-published artifact's promotability to follow retro-app's edited deploy_unit (VIA_CHART), got %v", reread.Artifact.Promotability)
 	}
 }
 
 // TestResolveManifestForPublish_PrefersExactBuildCommit_Postgres proves
 // currentAppManifest's tier-1 fallback (postgres/artifact.go): a build whose
 // commit has an exact app_manifest_release observation is attributed to
-// THAT content, not the owner's newest `main`-sweep content -- a build's
-// promotability must derive from its OWN manifest.
+// THAT content for manifest_id (build-commit provenance), not the owner's
+// newest `main`-sweep content -- even though, as of issue #833, promotability
+// itself no longer derives from manifest_id's content (it is derived live
+// from the owner's CURRENT deploy_unit instead, so this test asserts
+// manifest_id attribution directly via SQL rather than through
+// resp.Artifact.Promotability, which is not what this function is proving
+// anymore).
 func TestResolveManifestForPublish_PrefersExactBuildCommit_Postgres(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	ctx := authedCtx()
 	appSrv := handlers.NewAppServer(reg)
 	artSrv := handlers.NewArtifactServer(reg)
 
-	// main's current sweep content: CHART (not promotable on its own).
+	// main's current sweep content: CHART.
 	created, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
 		Manifests: reconcileManifests("sha-exact-main", 100, 100,
 			[]*appmetapb.AppManifest{{Domain: "acme", Name: "exact-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART}}, nil),
@@ -1569,9 +1574,9 @@ func TestResolveManifestForPublish_PrefersExactBuildCommit_Postgres(t *testing.T
 		t.Fatalf("assert: %v", err)
 	}
 
-	// A build recorded at the RELEASE branch's commit must resolve to that
-	// release's IMAGE manifest (PROMOTABLE), not main's current CHART one
-	// (VIA_CHART).
+	// A build recorded at the RELEASE branch's commit must resolve
+	// manifest_id to that release's app_manifest_release row, not main's
+	// current sweep content.
 	var buildID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO build (git_sha, workflow_run_id) VALUES ('sha-exact-release', 'run-exact')
@@ -1586,8 +1591,27 @@ func TestResolveManifestForPublish_PrefersExactBuildCommit_Postgres(t *testing.T
 	if err != nil {
 		t.Fatalf("RecordArtifact: %v", err)
 	}
-	if resp.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
-		t.Fatalf("expected PROMOTABLE (the release commit's own IMAGE manifest), got %v -- resolveManifestForPublish did not prefer the exact build commit", resp.Artifact.Promotability)
+	// Promotability is now derived live from main's CURRENT deploy_unit
+	// (CHART), regardless of which manifest content this build resolved
+	// to -- VIA_CHART, not the release branch's own IMAGE-derived
+	// PROMOTABLE.
+	if resp.Artifact.Promotability != pb.Promotability_PROMOTABILITY_VIA_CHART {
+		t.Fatalf("expected VIA_CHART (derived live from acme-exact-svc's current CHART deploy_unit), got %v", resp.Artifact.Promotability)
+	}
+
+	var wantManifestID, gotManifestID string
+	if err := pool.QueryRow(ctx, `
+		SELECT r.app_manifest_id
+		FROM app_manifest_release r
+		JOIN app a ON a.app_id = r.owner_id
+		WHERE a.domain = 'acme' AND a.name = 'exact-svc' AND r.git_sha = 'sha-exact-release'`).Scan(&wantManifestID); err != nil {
+		t.Fatalf("read expected app_manifest_release row: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT manifest_id FROM artifact WHERE artifact_id = $1`, resp.Artifact.ArtifactId).Scan(&gotManifestID); err != nil {
+		t.Fatalf("read stored manifest_id: %v", err)
+	}
+	if gotManifestID != wantManifestID {
+		t.Fatalf("resolveManifestForPublish did not prefer the exact build commit: manifest_id = %q, want the release commit's app_manifest_id %q", gotManifestID, wantManifestID)
 	}
 }
 
@@ -2116,20 +2140,23 @@ func TestListBuilds_SinceComposesWithPagination_Postgres(t *testing.T) {
 
 // seedArtifactRow inserts one `artifact` row directly, in state "published",
 // bypassing the BeginPublish/RecordArtifact lifecycle -- issue #603's
-// pagination tests need exact, caller-chosen state_changed_at values (and,
-// for the PromotableOnly case, an exact promotability) that the real write
-// path stamps from the clock/from a manifest join respectively.
-func seedArtifactRow(t *testing.T, pool *pgxpool.Pool, appID, version, digest string, stateChangedAt time.Time, promotability repository.Promotability) string {
+// pagination tests need exact, caller-chosen state_changed_at values that
+// the real write path stamps from the clock. Promotability is no longer a
+// column to seed (issue #833, migration 014) -- it is derived live from
+// appID's deploy_unit on every read; callers that need a specific
+// promotability outcome pick appID accordingly (see
+// TestListArtifacts_PromotableOnlyComposesWithPagination_Postgres).
+func seedArtifactRow(t *testing.T, pool *pgxpool.Pool, appID, version, digest string, stateChangedAt time.Time) string {
 	t.Helper()
 	buildID := seedBuild(t, pool, "run-artifact-page-"+uuid.NewString())
 	var artifactID string
 	err := pool.QueryRow(context.Background(), `
 		INSERT INTO artifact (kind, app_id, repository, version, digest, build_id, published_at,
-		                       state, provenance, version_source, state_changed_at, promotability)
+		                       state, provenance, version_source, state_changed_at)
 		VALUES ('image', $1, 'ghcr.io/acme/artifact-page-test', $2, $3, $4, $5,
-		        'published', 'observed', 'tag', $5, $6)
+		        'published', 'observed', 'tag', $5)
 		RETURNING artifact_id`,
-		appID, version, digest, buildID, stateChangedAt, string(promotability)).Scan(&artifactID)
+		appID, version, digest, buildID, stateChangedAt).Scan(&artifactID)
 	if err != nil {
 		t.Fatalf("seed artifact %s: %v", digest, err)
 	}
@@ -2151,11 +2178,11 @@ func TestListArtifacts_Pagination_MatchesFullOrderedScan_Postgres(t *testing.T) 
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	tie := base.Add(3 * time.Hour)
-	seedArtifactRow(t, pool, appID, "v1.0.0", "sha256:page-0", base, repository.PromotabilityPromotable)
-	seedArtifactRow(t, pool, appID, "v1.0.1", "sha256:page-1", base.Add(1*time.Hour), repository.PromotabilityPromotable)
-	seedArtifactRow(t, pool, appID, "v1.0.2", "sha256:page-2", tie, repository.PromotabilityPromotable)
-	seedArtifactRow(t, pool, appID, "v1.0.3", "sha256:page-3", tie, repository.PromotabilityPromotable)
-	seedArtifactRow(t, pool, appID, "v1.0.4", "sha256:page-4", base.Add(4*time.Hour), repository.PromotabilityPromotable)
+	seedArtifactRow(t, pool, appID, "v1.0.0", "sha256:page-0", base)
+	seedArtifactRow(t, pool, appID, "v1.0.1", "sha256:page-1", base.Add(1*time.Hour))
+	seedArtifactRow(t, pool, appID, "v1.0.2", "sha256:page-2", tie)
+	seedArtifactRow(t, pool, appID, "v1.0.3", "sha256:page-3", tie)
+	seedArtifactRow(t, pool, appID, "v1.0.4", "sha256:page-4", base.Add(4*time.Hour))
 
 	rows, err := pool.Query(ctx, `SELECT artifact_id FROM artifact WHERE repository = 'ghcr.io/acme/artifact-page-test' ORDER BY state_changed_at DESC, artifact_id DESC`)
 	if err != nil {
@@ -2217,20 +2244,31 @@ func TestListArtifacts_Pagination_MatchesFullOrderedScan_Postgres(t *testing.T) 
 // promotable ones in state_changed_at order, paging with PromotableOnly must
 // still surface every promotable row, none of the non-promotable ones, and
 // no short pages.
+//
+// Promotability is derived live (issue #833) from the owning app's
+// deploy_unit, so "promotable" vs. "not promotable" rows are interleaved by
+// alternating which of TWO real apps each artifact is seeded against --
+// "artifact-promotable-page-app-image" (deploy_unit 'image' -> PROMOTABLE)
+// and "artifact-promotable-page-app-none" (deploy_unit 'none' ->
+// NOT_PROMOTABLE) -- rather than by setting a promotability column directly
+// (that column no longer exists).
 func TestListArtifacts_PromotableOnlyComposesWithPagination_Postgres(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	ctx := context.Background()
-	appID := seedApp(t, pool, "acme", "artifact-promotable-page-app", "image")
+	promotableAppID := seedApp(t, pool, "acme", "artifact-promotable-page-app-image", "image")
+	notPromotableAppID := seedApp(t, pool, "acme", "artifact-promotable-page-app-none", "none")
 
 	base := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	var wantIDs []string
 	for i := 0; i < 6; i++ {
-		promotability := repository.PromotabilityNotPromotable
+		appID := notPromotableAppID
+		wantPromotable := false
 		if i%2 == 0 {
-			promotability = repository.PromotabilityPromotable
+			appID = promotableAppID
+			wantPromotable = true
 		}
-		id := seedArtifactRow(t, pool, appID, fmt.Sprintf("v1.0.%d", i), fmt.Sprintf("sha256:promotable-page-%d", i), base.Add(time.Duration(i)*time.Hour), promotability)
-		if promotability == repository.PromotabilityPromotable {
+		id := seedArtifactRow(t, pool, appID, fmt.Sprintf("v1.0.%d", i), fmt.Sprintf("sha256:promotable-page-%d", i), base.Add(time.Duration(i)*time.Hour))
+		if wantPromotable {
 			wantIDs = append(wantIDs, id)
 		}
 	}
@@ -2238,8 +2276,12 @@ func TestListArtifacts_PromotableOnlyComposesWithPagination_Postgres(t *testing.
 	var got []string
 	token := ""
 	for page := 0; page < 4; page++ {
+		// No OwnerFullName filter: rows are seeded against TWO different
+		// owner apps above (that's the point -- promotability must be
+		// derived per-row from each artifact's OWN owner), and newTestRegistry
+		// gives this test an isolated database, so there is nothing else in
+		// it to filter out.
 		artifacts, next, err := reg.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{
-			OwnerFullName:  "acme-artifact-promotable-page-app",
 			PromotableOnly: true,
 		}, 2, token)
 		if err != nil {
@@ -2430,4 +2472,174 @@ func TestRecordArtifact_Postgres_SameDigestMultipleVersions(t *testing.T) {
 	}
 }
 
+// TestMigration014DownRestoresPromotabilityColumn is the migration-014
+// analogue of TestMigration010DownRestoresPreMigrationShape
+// (postgres_integration_app_test.go): applies every migration through the
+// real repository write path, rolls back ONLY migration 014 (issue #833),
+// and confirms `.down.sql` restores `artifact.promotability` -- column,
+// CHECK constraint, and a correct backfilled value -- rather than just
+// checking the up-migration leaves the schema in the expected state.
+func TestMigration014DownRestoresPromotabilityColumn(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
 
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	if err != nil {
+		t.Fatalf("open database/sql handle: %v", err)
+	}
+	defer sqlDB.Close()
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	if err := runner.Steps(14); err != nil {
+		t.Fatalf("apply migrations 001-014: %v", err)
+	}
+
+	// Write real post-014 data through the actual repository -- a published
+	// image artifact owned by a DEPLOY_UNIT_IMAGE app, i.e. PROMOTABLE --
+	// not raw SQL, so the round-trip exercises the real write path (which,
+	// as of migration 014, never touches a promotability column at all).
+	reg := NewRepository(db.Pool)
+	ctxAuthed := authedCtx()
+	appSrv := handlers.NewAppServer(reg)
+	artSrv := handlers.NewArtifactServer(reg)
+	if _, err := appSrv.ReconcileApps(ctxAuthed, &pb.ReconcileAppsRequest{
+		Manifests: reconcileManifests("sha-mig014-down", 100, 100,
+			[]*appmetapb.AppManifest{{Domain: "acme", Name: "mig014-down-svc", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE}}, nil),
+		IdempotencyKey: "mig014-down-reconcile",
+	}); err != nil {
+		t.Fatalf("seed via real ReconcileApps: %v", err)
+	}
+	build, err := artSrv.RecordBuild(ctxAuthed, &pb.RecordBuildRequest{
+		GitSha: "sha-mig014-down", WorkflowRunId: "run-mig014-down", IdempotencyKey: "mig014-down-build",
+	})
+	if err != nil {
+		t.Fatalf("RecordBuild: %v", err)
+	}
+	published, err := artSrv.RecordArtifact(ctxAuthed, &pb.RecordArtifactRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-mig014-down-svc", Version: "v1.0.0", Digest: "sha256:mig014down1",
+		IdempotencyKey: "mig014-down-artifact",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+	if published.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("expected PROMOTABLE before rollback, got %v", published.Artifact.Promotability)
+	}
+
+	if err := runner.Steps(-1); err != nil {
+		t.Fatalf("roll back migration 014: %v", err)
+	}
+
+	var promotabilityColumnExists bool
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'artifact' AND column_name = 'promotability')`).
+		Scan(&promotabilityColumnExists); err != nil {
+		t.Fatalf("check artifact.promotability column existence: %v", err)
+	}
+	if !promotabilityColumnExists {
+		t.Fatalf("expected the down migration to restore artifact.promotability")
+	}
+
+	var constraintExists bool
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'artifact_promotability_shape')`).
+		Scan(&constraintExists); err != nil {
+		t.Fatalf("check artifact_promotability_shape constraint existence: %v", err)
+	}
+	if !constraintExists {
+		t.Fatalf("expected the down migration to restore artifact_promotability_shape")
+	}
+
+	var storedPromotability string
+	if err := db.Pool.QueryRow(ctx, `SELECT promotability FROM artifact WHERE artifact_id = $1`, published.Artifact.ArtifactId).Scan(&storedPromotability); err != nil {
+		t.Fatalf("read backfilled promotability: %v", err)
+	}
+	if storedPromotability != "promotable" {
+		t.Fatalf("expected the down migration to backfill promotability='promotable' (DEPLOY_UNIT_IMAGE image artifact), got %q", storedPromotability)
+	}
+}
+
+func TestGetArtifact_LatestPublished_Integration(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	appID := seedApp(t, pool, "acme", "latest-app", "image")
+	buildID := seedBuild(t, pool, "run-latest")
+
+	// 1. Initial state: nothing published -> ErrNotFound
+	_, err := reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName:   "acme-latest-app",
+		Kind:            repository.ArtifactKindImage,
+		LatestPublished: true,
+	})
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for empty registry, got %v", err)
+	}
+
+	// 2. Publish v1.0.0, v1.1.0, v1.0.1, v1.10.0
+	for _, tc := range []struct {
+		ver    string
+		digest string
+	}{
+		{"v1.0.0", "sha256:d-1.0.0"},
+		{"v1.1.0", "sha256:d-1.1.0"},
+		{"v1.0.1", "sha256:d-1.0.1"},
+		{"v1.10.0", "sha256:d-1.10.0"},
+	} {
+		art := repository.Artifact{
+			Kind:       repository.ArtifactKindImage,
+			AppID:      appID,
+			Repository: "ghcr.io/acme/latest-app",
+			Version:    tc.ver,
+			Digest:     tc.digest,
+			BuildID:    buildID,
+		}
+		if _, _, err := reg.Artifacts().RecordArtifact(ctx, art, nil, repository.DomainAdoptionStageObserve); err != nil {
+			t.Fatalf("RecordArtifact(%s): %v", tc.ver, err)
+		}
+	}
+
+	// 3. Allocate v2.0.0 (state = allocated)
+	if _, err := reg.Artifacts().AllocateVersion(ctx, repository.ArtifactKindImage, appID, "ghcr.io/acme/latest-app", "major", "v2.0.0"); err != nil {
+		t.Fatalf("AllocateVersion: %v", err)
+	}
+
+	// 4. Query latest published -> must be v1.10.0 (numeric sorting, excludes allocated v2.0.0)
+	got, err := reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName:   "acme-latest-app",
+		Kind:            repository.ArtifactKindImage,
+		LatestPublished: true,
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(LatestPublished): %v", err)
+	}
+	if got.Version != "v1.10.0" || got.Digest != "sha256:d-1.10.0" {
+		t.Fatalf("expected v1.10.0 (sha256:d-1.10.0), got %s (%s)", got.Version, got.Digest)
+	}
+
+	// 5. Query with BeforeVersion = "v1.10.0" -> must return v1.1.0
+	gotBefore, err := reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName:   "acme-latest-app",
+		Kind:            repository.ArtifactKindImage,
+		LatestPublished: true,
+		BeforeVersion:   "v1.10.0",
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(BeforeVersion=v1.10.0): %v", err)
+	}
+	if gotBefore.Version != "v1.1.0" {
+		t.Fatalf("expected v1.1.0, got %s", gotBefore.Version)
+	}
+
+	// 6. Query with BeforeVersion = "v1.0.0" -> must return ErrNotFound
+	_, err = reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName:   "acme-latest-app",
+		Kind:            repository.ArtifactKindImage,
+		LatestPublished: true,
+		BeforeVersion:   "v1.0.0",
+	})
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for BeforeVersion=v1.0.0, got %v", err)
+	}
+}

@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -135,7 +134,7 @@ func newReleaseAppCmd() *cobra.Command {
 	return cmd
 }
 
-// ExecuteReleaseApp executes the full container image release flow for a matrix leg.
+// ExecuteReleaseApp executes the full container image or binary release flow for a matrix leg.
 func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 	if p.Domain == "" {
 		return nil, fmt.Errorf("domain is required")
@@ -274,324 +273,69 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 		}, nil
 	}
 
-	if !isImageApp {
-		repoPath = fmt.Sprintf("github.com/%s/everything", owner)
-
-		// 1. BeginPublish (Heartbeat)
-		beginPublishSucceeded := false
-		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
-			beginReq := &pb.BeginPublishRequest{
-				Kind:           kind,
-				OwnerFullName:  fullName,
-				Version:        p.Version,
-				BuildId:        p.BuildID,
-				IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-begin", idempotencyPrefix, p.Domain, p.App),
-				Repository:     repoPath,
-			}
-			_, err := artifactClient.BeginPublish(ctx, beginReq)
-			if err != nil {
-				fmt.Printf("::warning title=App Registry BeginPublish failed::%v\n", err)
-			} else {
-				beginPublishSucceeded = true
-			}
+	var releaser ArtifactReleaser
+	var artifactRepo string
+	if isImageApp {
+		artifactRepo = repoPath
+		releaser = &ImageReleaser{
+			Domain:     p.Domain,
+			App:        matchedApp,
+			PushTarget: pushTarget,
+			RepoPath:   repoPath,
+			GitSHA:     sha,
+			Bazel:      bazel,
+			Docker:     docker,
 		}
-
-		fmt.Printf("Building non-image application %s (%s)...\n", fullName, matchedApp.AppType)
-		if matchedApp.BinaryTarget != "" {
-			if _, err := bazel.Run("build", matchedApp.BinaryTarget); err != nil {
-				if beginPublishSucceeded && artifactClient != nil {
-					failReq := &pb.FailPublishRequest{
-						Kind:           kind,
-						OwnerFullName:  fullName,
-						Version:        p.Version,
-						Reason:         fmt.Sprintf("binary build failed (workflow run %s, attempt %s): %v", runID, attempt, err),
-						IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-fail", idempotencyPrefix, p.Domain, p.App),
-					}
-					_, _ = artifactClient.FailPublish(ctx, failReq)
-				}
-				return nil, fmt.Errorf("bazel build %s: %w", matchedApp.BinaryTarget, err)
-			}
-		}
-
-		// Compute binary digest from built target
-		pkg, binName := binaryTargetPkgAndName(*matchedApp)
-		candidatePaths := []string{
-			filepath.Join(workspaceRoot, "bazel-bin", pkg, binName+"_", binName),
-			filepath.Join(workspaceRoot, "bazel-bin", pkg, binName),
-			filepath.Join(workspaceRoot, "bazel-bin", pkg, matchedApp.Name+"_", matchedApp.Name),
-			filepath.Join(workspaceRoot, "bazel-bin", pkg, matchedApp.Name),
-		}
-		var binaryDigest string
-		for _, cp := range candidatePaths {
-			if h, _, err := computeFileSHA256(cp); err == nil {
-				binaryDigest = "sha256:" + h
-				break
-			}
-		}
-		if binaryDigest == "" && sha != "" {
-			binaryDigest = "sha256:" + sha
-		}
-
-		// No-op rebuild check: a patch bump whose binary content is
-		// byte-identical to the previous version in the same minor series
-		// would collide with artifact_digest_major_minor_idx on
-		// RecordArtifact below (ErrAlreadyExists) -- this is exactly how
-		// tools-app-registry v0.2.3 got stuck "publishing" with no digest
-		// in prod (issue: no-op CLI rebuild after #780's changes only
-		// touched release_helper_go, not the app-registry CLI itself).
-		// Detect it up front via the previous version's recorded digest --
-		// there's no container registry to query for binaries the way the
-		// image branch below queries docker, so App Registry itself
-		// (GetArtifact) is the source of truth here -- and skip straight to
-		// FailPublish + reuse, mirroring the image branch's digest-unchanged
-		// handling.
-		prevTag := getPreviousAppTag(git, fullName, tagName)
-		prevVersion := ExtractVersionFromTag(prevTag, fullName+".")
-
-		var prevDigest string
-		if prevTag != "" && artifactClient != nil {
-			if getResp, gerr := artifactClient.GetArtifact(ctx, &pb.GetArtifactRequest{
-				OwnerFullName: fullName,
-				Kind:          kind,
-				Version:       prevVersion,
-			}); gerr == nil && getResp.Artifact != nil {
-				prevDigest = getResp.Artifact.Digest
-			}
-		}
-
-		contentMatches := (binaryDigest != "" && prevDigest != "" && binaryDigest == prevDigest)
-		decision := EvaluateNoOpDecision(p.Version, tagName, prevVersion, prevTag, contentMatches)
-
-		digestUnchanged := decision.DigestUnchanged
-		effectiveVersion := decision.EffectiveVersion
-		effectiveTag := decision.EffectiveTag
-
-		switch decision.Outcome {
-		case OutcomeNoOpRebuild:
-			fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same binary digest (%s) as existing version %s in same minor release. Skipping new git tag and App Registry record -- reusing %s.\n",
-				fullName, p.Version, binaryDigest, prevVersion, prevVersion)
-
-			if beginPublishSucceeded && artifactClient != nil {
-				failReq := &pb.FailPublishRequest{
-					Kind:           kind,
-					OwnerFullName:  fullName,
-					Version:        p.Version,
-					Reason:         fmt.Sprintf("digest unchanged from existing version %s in same minor release -- no-op rebuild (workflow run %s, attempt %s)", prevVersion, runID, attempt),
-					IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-fail-noop", idempotencyPrefix, p.Domain, p.App),
-				}
-				_, _ = artifactClient.FailPublish(ctx, failReq)
-			}
-		case OutcomeNewBaseline:
-			fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same binary digest (%s) as %s. Registering new version baseline %s with shared digest.\n",
-				fullName, p.Version, binaryDigest, prevVersion, p.Version)
-		}
-
-		if !digestUnchanged {
-			if p.CreateGitTag && git != nil && sha != "" {
-				if _, err := git.Run("rev-parse", tagName); err != nil {
-					fmt.Printf("Creating git tag %s...\n", tagName)
-					_, _ = git.Run("tag", "-a", tagName, "-m", fmt.Sprintf("Release %s version %s", fullName, p.Version), sha)
-				}
-			}
-
-			if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
-				recReq := &pb.RecordArtifactRequest{
-					BuildId:        p.BuildID,
-					Kind:           kind,
-					OwnerFullName:  fullName,
-					Repository:     repoPath,
-					Version:        p.Version,
-					Digest:         binaryDigest,
-					PublishedAt:    time.Now().Unix(),
-					IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-record", idempotencyPrefix, p.Domain, p.App),
-				}
-				if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
-					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
-					// Clean up the "publishing" row BeginPublish created
-					// above -- otherwise it's stuck there forever with no
-					// digest and no automatic retry ever revisiting it.
-					if beginPublishSucceeded {
-						failReq := &pb.FailPublishRequest{
-							Kind:           kind,
-							OwnerFullName:  fullName,
-							Version:        p.Version,
-							Reason:         fmt.Sprintf("RecordArtifact failed (workflow run %s, attempt %s): %v", runID, attempt, err),
-							IdempotencyKey: fmt.Sprintf("%s-%s-%s-binary-fail-record", idempotencyPrefix, p.Domain, p.App),
-						}
-						_, _ = artifactClient.FailPublish(ctx, failReq)
-					}
-				} else {
-					fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, binaryDigest)
-				}
-			}
-		}
-
-		result := &ReleaseAppResult{
-			Domain:           p.Domain,
-			App:              p.App,
-			Version:          p.Version,
-			EffectiveVersion: effectiveVersion,
-			EffectiveTag:     effectiveTag,
-			PreviousTag:      prevTag,
-			Digest:           binaryDigest,
-			DigestUnchanged:  digestUnchanged,
-			Published:        !digestUnchanged,
-		}
-		writeDigestCheckJSON(p.Domain, p.App, result)
-		return result, nil
-	}
-
-	// 1. BeginPublish (Heartbeat)
-	beginPublishSucceeded := false
-	if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
-		beginReq := &pb.BeginPublishRequest{
-			Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-			OwnerFullName:  fullName,
-			Version:        p.Version,
-			BuildId:        p.BuildID,
-			IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-begin", idempotencyPrefix, p.Domain, p.App),
-			Repository:     repoPath,
-		}
-		_, err := artifactClient.BeginPublish(ctx, beginReq)
-		if err != nil {
-			fmt.Printf("::warning title=App Registry BeginPublish failed::%v\n", err)
-		} else {
-			beginPublishSucceeded = true
+	} else {
+		artifactRepo = fmt.Sprintf("github.com/%s/everything", owner)
+		releaser = &BinaryReleaser{
+			Domain:         p.Domain,
+			App:            matchedApp,
+			WorkspaceRoot:  workspaceRoot,
+			GitSHA:         sha,
+			KindType:       kind,
+			Bazel:          bazel,
+			ArtifactClient: artifactClient,
 		}
 	}
 
-	// 2. Build and push image via Bazel
-
-	tags := []string{p.Version, "latest"}
-	if sha != "" {
-		tags = append(tags, sha)
-	}
-
-	bazelArgs := []string{"run", pushTarget, "--"}
-	for _, t := range tags {
-		bazelArgs = append(bazelArgs, "--tag", t)
-	}
-
-	fmt.Printf("Building and releasing %s version %s via %s...\n", fullName, p.Version, pushTarget)
-	if _, pushErr := bazel.Run(bazelArgs...); pushErr != nil {
-		if beginPublishSucceeded && artifactClient != nil {
-			failReq := &pb.FailPublishRequest{
-				Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-				OwnerFullName:  fullName,
-				Version:        p.Version,
-				Reason:         fmt.Sprintf("image push failed (workflow run %s, attempt %s): %v", runID, attempt, pushErr),
-				IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail", idempotencyPrefix, p.Domain, p.App),
-			}
-			_, _ = artifactClient.FailPublish(ctx, failReq)
-		}
-		return nil, fmt.Errorf("bazel run %s: %w", pushTarget, pushErr)
-	}
-
-	// 3. Digest resolution & no-op rebuild check
-	newDigest := extractImageDigest(docker, repoPath, p.Version)
-	prevTag := getPreviousAppTag(git, fullName, tagName)
-	prevVersion := ExtractVersionFromTag(prevTag, fullName+".")
-
-	var prevDigest string
-	if prevTag != "" {
-		prevDigest = extractImageDigest(docker, repoPath, prevVersion)
-	}
-
-	contentMatches := (newDigest != "" && prevDigest != "" && newDigest == prevDigest)
-	decision := EvaluateNoOpDecision(p.Version, tagName, prevVersion, prevTag, contentMatches)
-
-	digestUnchanged := decision.DigestUnchanged
-	effectiveVersion := decision.EffectiveVersion
-	effectiveTag := decision.EffectiveTag
-
-	switch decision.Outcome {
-	case OutcomeNoOpRebuild:
-		fmt.Printf("::notice title=No-op rebuild (%s)::%s has the same image digest (%s) as existing tag %s in same minor release. Skipping new git tag and App Registry record -- reusing %s.\n",
-			fullName, p.Version, newDigest, prevTag, prevTag)
-
-		if beginPublishSucceeded && artifactClient != nil {
-			failReq := &pb.FailPublishRequest{
-				Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-				OwnerFullName:  fullName,
-				Version:        p.Version,
-				Reason:         fmt.Sprintf("digest unchanged from existing tag %s in same minor release -- no-op rebuild (workflow run %s, attempt %s)", prevTag, runID, attempt),
-				IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail-noop", idempotencyPrefix, p.Domain, p.App),
-			}
-			_, _ = artifactClient.FailPublish(ctx, failReq)
-		}
-	case OutcomeNewBaseline:
-		fmt.Printf("::notice title=Major/Minor bump with shared digest (%s)::%s has the same image digest (%s) as %s. Registering new version baseline %s with shared digest.\n",
-			fullName, p.Version, newDigest, prevTag, p.Version)
-	case OutcomeProceed:
-		if prevTag != "" {
-			fmt.Printf("Digest check for %s: new(%s)=%s prev(%s)=%s -- proceeding with new tag %s\n",
-				fullName, p.Version, defaultStr(newDigest, "<unresolved>"), prevTag, defaultStr(prevDigest, "<unresolved>"), tagName)
-		} else {
-			fmt.Printf("No previous tag found for %s -- proceeding with new tag %s (digest: %s)\n",
-				fullName, tagName, defaultStr(newDigest, "<unresolved>"))
-		}
-	}
-
-	// 4. Git tag & RecordArtifact on success
-	if !digestUnchanged {
-		if p.CreateGitTag && git != nil && sha != "" {
-			if _, err := git.Run("rev-parse", tagName); err != nil {
-				fmt.Printf("Creating git tag %s...\n", tagName)
-				_, _ = git.Run("tag", "-a", tagName, "-m", fmt.Sprintf("Release %s version %s", fullName, p.Version), sha)
-			}
-		}
-
-		if artifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
-			if newDigest == "" {
-				fmt.Printf("::warning::Could not resolve digest for %s:%s; skipping App Registry recording\n", repoPath, p.Version)
-			} else {
-				recReq := &pb.RecordArtifactRequest{
-					BuildId:        p.BuildID,
-					Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-					OwnerFullName:  fullName,
-					Repository:     repoPath,
-					Version:        p.Version,
-					Digest:         newDigest,
-					PublishedAt:    time.Now().Unix(),
-					IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-record", idempotencyPrefix, p.Domain, p.App),
-				}
-				if _, err := artifactClient.RecordArtifact(ctx, recReq); err != nil {
-					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
-					// Clean up the "publishing" row BeginPublish created
-					// above -- otherwise it's stuck there forever with no
-					// digest and no automatic retry ever revisiting it.
-					if beginPublishSucceeded {
-						failReq := &pb.FailPublishRequest{
-							Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-							OwnerFullName:  fullName,
-							Version:        p.Version,
-							Reason:         fmt.Sprintf("RecordArtifact failed (workflow run %s, attempt %s): %v", runID, attempt, err),
-							IdempotencyKey: fmt.Sprintf("%s-%s-%s-image-fail-record", idempotencyPrefix, p.Domain, p.App),
-						}
-						_, _ = artifactClient.FailPublish(ctx, failReq)
-					}
-				} else {
-					fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", fullName, p.Version, newDigest)
-				}
-			}
-		}
+	execRes, err := ExecuteRelease(ReleaseParams{
+		Ctx:                  ctx,
+		Domain:               p.Domain,
+		OwnerFullName:        fullName,
+		Version:              p.Version,
+		AllowAutoAdvance:     false,
+		BuildID:              p.BuildID,
+		IdempotencyKeyPrefix: idempotencyPrefix,
+		GitSHA:               sha,
+		Repository:           artifactRepo,
+		SkipRegistry:         p.SkipRegistry,
+		CreateGitTag:         p.CreateGitTag,
+		TagName:              tagName,
+		TagPrefix:            fullName + ".",
+		PreviousTagPatterns:  []string{fullName + ".v*"},
+		PreviousTagPrefixes:  []string{fullName + "."},
+		Releaser:             releaser,
+		Git:                  git,
+		ArtifactClient:       artifactClient,
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	result := &ReleaseAppResult{
 		Domain:           p.Domain,
 		App:              p.App,
 		Version:          p.Version,
-		EffectiveVersion: effectiveVersion,
-		EffectiveTag:     effectiveTag,
-		PreviousTag:      prevTag,
-		Digest:           newDigest,
-		DigestUnchanged:  digestUnchanged,
-		Published:        !digestUnchanged,
+		EffectiveVersion: execRes.EffectiveVersion,
+		EffectiveTag:     execRes.EffectiveTag,
+		PreviousTag:      execRes.PreviousTag,
+		Digest:           execRes.Digest,
+		DigestUnchanged:  execRes.DigestUnchanged,
+		Published:        execRes.Published,
 	}
 
-	// Write digest check JSON artifact if /tmp/digest-check is accessible
 	writeDigestCheckJSON(p.Domain, p.App, result)
-
 	return result, nil
 }
 
@@ -640,11 +384,6 @@ func extractImageDigest(docker DockerRunner, repo, version string) string {
 		}
 	}
 	return ""
-}
-
-func getPreviousAppTag(git GitRunner, fullName, currentTag string) string {
-	pattern := fmt.Sprintf("%s.v*", fullName)
-	return GetPreviousGitTag(git, currentTag, []string{pattern}, []string{fullName + "."})
 }
 
 func writeDigestCheckJSON(domain, app string, result *ReleaseAppResult) {

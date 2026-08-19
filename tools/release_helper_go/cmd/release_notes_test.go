@@ -1,9 +1,12 @@
 package cmd
 
 import (
-	"fmt"
+	"context"
 	"strings"
 	"testing"
+
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"google.golang.org/grpc"
 )
 
 func TestParseTagInfo(t *testing.T) {
@@ -39,116 +42,195 @@ func TestParseTagInfo(t *testing.T) {
 	}
 }
 
-func TestFilterCommitsByApp(t *testing.T) {
-	commits := []releaseCommit{
-		{SHA: "abc", Message: "fix thing", FilesChanged: []string{"demo/hello_go/main.go"}},
-		{SHA: "def", Message: "update docs", FilesChanged: []string{"docs/README.md"}},
-		{SHA: "ghi", Message: "ci change", FilesChanged: []string{".github/workflows/ci.yml"}},
-	}
-
-	// Filter for demo/hello_go
-	got := filterCommitsByApp(commits, "demo/hello_go")
-	// "abc" matches app path, "ghi" matches .github infra prefix
-	if len(got) != 2 {
-		t.Errorf("expected 2 commits (app + infra), got %d: %v", len(got), got)
-	}
-}
-
-func TestFilterCommitsByAppEmptyPath(t *testing.T) {
-	commits := []releaseCommit{
-		{SHA: "abc", Message: "test", FilesChanged: []string{"anything/main.go"}},
-	}
-	got := filterCommitsByApp(commits, "")
-	if len(got) != 1 {
-		t.Errorf("empty appPath should return all commits, got %d", len(got))
-	}
-}
-
-func TestFormatMarkdown(t *testing.T) {
-	d := appReleaseData{
-		AppName:     "demo-hello-go",
-		CurrentTag:  "HEAD",
-		PreviousTag: "demo-hello-go.v1.0.0",
-		ReleasedAt:  "2026-01-01 00:00:00 UTC",
-		Commits: []releaseCommit{
-			{SHA: "abc12345", Message: "add feature", Author: "dev", Date: "2026-01-01", FilesChanged: []string{"main.go"}},
+func TestBuildCompareURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		owner   string
+		repo    string
+		prevRef string
+		currRef string
+		want    string
+	}{
+		{
+			name:    "valid refs",
+			owner:   "whale-net",
+			repo:    "everything",
+			prevRef: "abc1234",
+			currRef: "def5678",
+			want:    "https://github.com/whale-net/everything/compare/abc1234...def5678",
+		},
+		{
+			name:    "empty prevRef",
+			owner:   "whale-net",
+			repo:    "everything",
+			prevRef: "",
+			currRef: "def5678",
+			want:    "",
+		},
+		{
+			name:    "same refs",
+			owner:   "whale-net",
+			repo:    "everything",
+			prevRef: "abc1234",
+			currRef: "abc1234",
+			want:    "",
 		},
 	}
-	out := formatMarkdown(d)
-	if !strings.Contains(out, "## Changes") {
-		t.Error("expected '## Changes' heading")
-	}
-	if !strings.Contains(out, "add feature") {
-		t.Error("expected commit message in output")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildCompareURL(tt.owner, tt.repo, tt.prevRef, tt.currRef)
+			if got != tt.want {
+				t.Errorf("buildCompareURL() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestFormatMarkdownNoCommits(t *testing.T) {
-	d := appReleaseData{
-		AppName:     "demo-hello-go",
-		CurrentTag:  "HEAD",
-		PreviousTag: "v1.0.0",
-		ReleasedAt:  "2026-01-01 00:00:00 UTC",
-		Commits:     nil,
+func TestFormatAppMarkdown(t *testing.T) {
+	d := AppReleaseNotesData{
+		AppName:         "demo-hello-go",
+		Version:         "v1.2.0",
+		PreviousVersion: "v1.1.0",
+		ReleasedAt:      "2026-08-19 00:00:00 UTC",
+		DiffURL:         "https://github.com/whale-net/everything/compare/v1.1.0...v1.2.0",
 	}
-	out := formatMarkdown(d)
-	if !strings.Contains(out, "No changes") {
-		t.Error("expected 'No changes' message for empty commits")
+	out := formatAppMarkdown(d)
+	if !strings.Contains(out, "## Release `demo-hello-go` `v1.2.0`") {
+		t.Errorf("expected release heading in output: %s", out)
+	}
+	if !strings.Contains(out, "(Previous: `v1.1.0`)") {
+		t.Errorf("expected previous version in output: %s", out)
+	}
+	if !strings.Contains(out, "https://github.com/whale-net/everything/compare/v1.1.0...v1.2.0") {
+		t.Errorf("expected diff url in output: %s", out)
 	}
 }
 
-func TestFormatPlain(t *testing.T) {
-	d := appReleaseData{
-		AppName:     "demo-hello-go",
-		CurrentTag:  "demo-hello-go.v1.1.0",
-		PreviousTag: "demo-hello-go.v1.0.0",
-		ReleasedAt:  "2026-01-01 00:00:00 UTC",
-		Commits: []releaseCommit{
-			{SHA: "abc", Message: "fix bug", Author: "dev", Date: "2026-01-01"},
+func TestFormatAppMarkdownInitialRelease(t *testing.T) {
+	d := AppReleaseNotesData{
+		AppName:    "demo-hello-go",
+		Version:    "v1.0.0",
+		ReleasedAt: "2026-08-19 00:00:00 UTC",
+	}
+	out := formatAppMarkdown(d)
+	if !strings.Contains(out, "(Initial release)") {
+		t.Errorf("expected Initial release text in output: %s", out)
+	}
+}
+
+func TestFormatChartMarkdown(t *testing.T) {
+	d := ChartReleaseNotesData{
+		ChartName:       "helm-demo-hello-fastapi",
+		Version:         "v0.2.0",
+		PreviousVersion: "v0.1.0",
+		ReleasedAt:      "2026-08-19 00:00:00 UTC",
+		DiffURL:         "https://github.com/whale-net/everything/compare/prev...curr",
+		Images: []ContainedImageNote{
+			{
+				AppFullName:     "demo-hello-fastapi",
+				Version:         "v1.1.0",
+				PreviousVersion: "v1.0.0",
+				Digest:          "sha256:1234567890abcdef123456",
+				DiffURL:         "https://github.com/whale-net/everything/compare/appprev...appcurr",
+			},
 		},
 	}
-	out := formatPlain(d)
-	// Title parsed from tag: "demo hello-go v1.1.0"
-	if !strings.Contains(out, "hello-go") {
-		t.Error("expected app name in plain output")
+	out := formatChartMarkdown(d)
+	if !strings.Contains(out, "## Release `helm-demo-hello-fastapi` `v0.2.0`") {
+		t.Errorf("expected chart heading in output: %s", out)
 	}
-	if !strings.Contains(out, "fix bug") {
-		t.Error("expected commit message in plain output")
+	if !strings.Contains(out, "### Contained Images") {
+		t.Errorf("expected Contained Images heading in output: %s", out)
 	}
-}
-
-func TestFormatJSON(t *testing.T) {
-	d := appReleaseData{
-		AppName:     "demo-hello-go",
-		CurrentTag:  "HEAD",
-		PreviousTag: "v1.0.0",
-		ReleasedAt:  "2026-01-01",
-		Commits:     nil,
-	}
-	out, err := formatJSON(d)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(out, `"app"`) {
-		t.Error("expected 'app' field in JSON output")
-	}
-	if !strings.Contains(out, `"changes"`) {
-		t.Error("expected 'changes' field in JSON output")
+	if !strings.Contains(out, "| `demo-hello-fastapi` | `v1.1.0` *(from v1.0.0)* | `sha256:1234567890ab...` | [Compare](https://github.com/whale-net/everything/compare/appprev...appcurr) |") {
+		t.Errorf("expected contained image table row in output: %s", out)
 	}
 }
 
-func TestGetCommitsBetweenRefsNoBaseRef(t *testing.T) {
-	// When base ref doesn't exist, falls back to last 5 commits
-	git := newFakeGit(
-		fakeGitCall{argsContain: []string{"rev-parse", "--verify"}, err: fmt.Errorf("not found")},
-		fakeGitCall{argsContain: []string{"log", "-n", "5"}, output: "abc12345|add feature|dev|2026-01-01 00:00:00 +0000"},
-		fakeGitCall{argsContain: []string{"diff-tree"}, output: "main.go"},
+// fakeNotesRegistryClient implements pb.ArtifactRegistryClient for testing resolvePreviousRef
+type fakeNotesRegistryClient struct {
+	pb.ArtifactRegistryClient
+	getArtifactResp *pb.GetArtifactResponse
+	getArtifactErr  error
+	enforced        bool
+}
+
+func (f *fakeNotesRegistryClient) GetArtifact(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+	return f.getArtifactResp, f.getArtifactErr
+}
+
+func (f *fakeNotesRegistryClient) CheckChartHermeticity(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+	return &pb.CheckChartHermeticityResponse{Enforced: f.enforced}, nil
+}
+
+func TestResolvePreviousRefAppRegistry(t *testing.T) {
+	t.Setenv("APP_REGISTRY_CICD_OPT_IN", "true")
+	fakeClient := &fakeNotesRegistryClient{
+		enforced: true,
+		getArtifactResp: &pb.GetArtifactResponse{
+			Artifact: &pb.Artifact{
+				Version: "v1.2.0",
+			},
+			Build: &pb.Build{
+				GitSha: "deadbeef12345678",
+			},
+		},
+	}
+
+	prevVer, prevSHA, prevTag := resolvePreviousRef(
+		context.Background(),
+		"demo-hello-go",
+		"demo",
+		pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		"v1.3.0",
+		"demo-hello-go.v1.3.0",
+		nil,
+		fakeClient,
 	)
-	commits, err := getCommitsBetweenRefs("nonexistent-tag", "HEAD", git)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+
+	if prevVer != "v1.2.0" {
+		t.Errorf("resolvePreviousRef prevVer = %q, want v1.2.0", prevVer)
 	}
-	if len(commits) != 1 {
-		t.Errorf("expected 1 commit, got %d", len(commits))
+	if prevSHA != "deadbeef12345678" {
+		t.Errorf("resolvePreviousRef prevSHA = %q, want deadbeef12345678", prevSHA)
+	}
+	if prevTag != "demo-hello-go.v1.2.0" {
+		t.Errorf("resolvePreviousRef prevTag = %q, want demo-hello-go.v1.2.0", prevTag)
 	}
 }
+
+func TestResolvePreviousRefGitTagFallback(t *testing.T) {
+	git := newFakeGit(
+		fakeGitCall{
+			argsContain: []string{"tag", "--sort=-version:refname"},
+			output:      "demo-hello-go.v1.2.0\ndemo-hello-go.v1.1.0\ndemo-hello-go.v1.0.0",
+		},
+		fakeGitCall{
+			argsContain: []string{"rev-parse", "demo-hello-go.v1.1.0"},
+			output:      "1111222233334444\n",
+		},
+	)
+
+	prevVer, prevSHA, prevTag := resolvePreviousRef(
+		context.Background(),
+		"demo-hello-go",
+		"demo",
+		pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		"v1.2.0",
+		"demo-hello-go.v1.2.0",
+		git,
+		nil,
+	)
+
+	if prevVer != "v1.1.0" {
+		t.Errorf("resolvePreviousRef prevVer = %q, want v1.1.0", prevVer)
+	}
+	if prevSHA != "1111222233334444" {
+		t.Errorf("resolvePreviousRef prevSHA = %q, want 1111222233334444", prevSHA)
+	}
+	if prevTag != "demo-hello-go.v1.1.0" {
+		t.Errorf("resolvePreviousRef prevTag = %q, want demo-hello-go.v1.1.0", prevTag)
+	}
+}
+
