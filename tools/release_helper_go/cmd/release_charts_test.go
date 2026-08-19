@@ -435,8 +435,14 @@ func TestExecuteReleaseCharts_NoOpRebuild(t *testing.T) {
 	if uploader.uploadCalls != 0 {
 		t.Errorf("expected 0 uploads on no-op rebuild, got %d", uploader.uploadCalls)
 	}
-	if len(artClient.BeginPublishCalls) != 0 || len(artClient.RecordArtifactCalls) != 0 {
-		t.Errorf("expected 0 registry mutations on no-op rebuild")
+	if len(artClient.BeginPublishCalls) != 1 {
+		t.Errorf("expected 1 BeginPublish call on no-op rebuild, got %d", len(artClient.BeginPublishCalls))
+	}
+	if len(artClient.FailPublishCalls) != 1 {
+		t.Errorf("expected 1 FailPublish call on no-op rebuild, got %d", len(artClient.FailPublishCalls))
+	}
+	if len(artClient.RecordArtifactCalls) != 0 {
+		t.Errorf("expected 0 RecordArtifact calls on no-op rebuild, got %d", len(artClient.RecordArtifactCalls))
 	}
 }
 
