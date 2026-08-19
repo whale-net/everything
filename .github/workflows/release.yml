@@ -165,9 +165,13 @@ jobs:
             local -a tls_opt=()
             [[ "$use_tls" == "false" ]] && tls_opt=(-plaintext)
 
+            local -a auth_opt=()
+            if [[ -n "$REGISTRY_TOKEN" ]]; then
+              auth_opt=(-H "authorization: Bearer $REGISTRY_TOKEN")
+            fi
+
             local get_app_json app_id
-            get_app_json="$("$GRPCURL_BIN" "${tls_opt[@]}" -max-time 15 \
-              -H "authorization: Bearer $REGISTRY_TOKEN" \
+            get_app_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
               -d "{\"full_name\":\"${app_full_name}\"}" \
               "$grpc_target" appregistry.v1.AppRegistry/GetApp 2>/dev/null)" || true
             app_id="$(echo "$get_app_json" | jq -r '.app.appId // .app.app_id // empty' 2>/dev/null)" || true
@@ -176,8 +180,7 @@ jobs:
             fi
 
             local env_state_json version
-            env_state_json="$("$GRPCURL_BIN" "${tls_opt[@]}" -max-time 15 \
-              -H "authorization: Bearer $REGISTRY_TOKEN" \
+            env_state_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
               -d "{\"environment_key\":\"${TARGET_ENV}\"}" \
               "$grpc_target" appregistry.v1.PromotionRegistry/GetEnvironmentState 2>/dev/null)" || true
             if [[ -z "$env_state_json" ]]; then
@@ -210,7 +213,7 @@ jobs:
 
           RH_VER=""
           AR_VER=""
-          if [[ -n "$REGISTRY_TOKEN" && -n "${APP_REGISTRY_ADDRESS:-}" ]] && install_grpcurl; then
+          if [[ -n "${APP_REGISTRY_ADDRESS:-}" ]] && install_grpcurl; then
             RH_VER="$(resolve_registry_version "tools-release_helper_go" || true)"
             AR_VER="$(resolve_registry_version "tools-app-registry" || resolve_registry_version "tools-app_registry_cli" || true)"
           fi
