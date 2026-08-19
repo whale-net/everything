@@ -2595,7 +2595,7 @@ func TestGetArtifact_LatestPublished_Integration(t *testing.T) {
 			Digest:     tc.digest,
 			BuildID:    buildID,
 		}
-		if _, _, err := reg.Artifacts().RecordArtifact(ctx, art, nil); err != nil {
+		if _, _, err := reg.Artifacts().RecordArtifact(ctx, art, nil, repository.DomainAdoptionStageObserve); err != nil {
 			t.Fatalf("RecordArtifact(%s): %v", tc.ver, err)
 		}
 	}
