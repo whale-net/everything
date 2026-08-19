@@ -55,9 +55,6 @@ func (s *EnvironmentServer) UpsertEnvironment(ctx context.Context, req *pb.Upser
 }
 
 func (s *EnvironmentServer) GetEnvironment(ctx context.Context, req *pb.GetEnvironmentRequest) (*pb.GetEnvironmentResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	if req.Key == "" {
 		return nil, status.Error(codes.InvalidArgument, "key is required")
 	}
@@ -72,10 +69,6 @@ func (s *EnvironmentServer) GetEnvironment(ctx context.Context, req *pb.GetEnvir
 // ListEnvironments returns environments ordered by rank ascending, per
 // ListEnvironmentsResponse's doc comment.
 func (s *EnvironmentServer) ListEnvironments(ctx context.Context, req *pb.ListEnvironmentsRequest) (*pb.ListEnvironmentsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
-
 	envs, err := s.repo.Environments().List(ctx, req.IncludeArchived)
 	if err != nil {
 		return nil, mapRepoErr(err)

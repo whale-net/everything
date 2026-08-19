@@ -198,9 +198,6 @@ func (s *ArtifactServer) resolveOwner(ctx context.Context, r repository.Registry
 }
 
 func (s *ArtifactServer) ListArtifacts(ctx context.Context, req *pb.ListArtifactsRequest) (*pb.ListArtifactsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	artifacts, nextToken, err := s.repo.Artifacts().ListArtifacts(ctx, repository.ArtifactListFilter{
 		OwnerFullName:  req.OwnerFullName,
 		Kind:           artifactKindFromPB(req.Kind),
@@ -221,9 +218,6 @@ func (s *ArtifactServer) ListArtifacts(ctx context.Context, req *pb.ListArtifact
 }
 
 func (s *ArtifactServer) GetArtifact(ctx context.Context, req *pb.GetArtifactRequest) (*pb.GetArtifactResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	lookup, err := artifactLookupFromGetRequest(req)
 	if err != nil {
 		return nil, err
@@ -259,9 +253,6 @@ func artifactLookupFromGetRequest(req *pb.GetArtifactRequest) (repository.Artifa
 var errMissingArtifactLookup = status.Error(codes.InvalidArgument, "artifact_id, digest, or owner_full_name+kind+version is required")
 
 func (s *ArtifactServer) ResolveArtifact(ctx context.Context, req *pb.ResolveArtifactRequest) (*pb.ResolveArtifactResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	var lookup repository.ArtifactLookup
 	switch {
 	case req.ArtifactId != "":
@@ -288,9 +279,6 @@ func (s *ArtifactServer) ResolveArtifact(ctx context.Context, req *pb.ResolveArt
 // ARCHITECTURE.md "ListArtifactPins" for the not-found-vs-empty
 // distinction (FR3.2/FR3.3).
 func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtifactPinsRequest) (*pb.ListArtifactPinsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	var lookup repository.ArtifactLookup
 	switch {
 	case req.ArtifactId != "":
@@ -662,9 +650,6 @@ func (s *ArtifactServer) FailPublish(ctx context.Context, req *pb.FailPublishReq
 // call it (matches ListArtifacts/GetArtifact above), same as every other
 // query RPC in this service.
 func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRunRequest) (*pb.GetReleaseRunResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	if req.WorkflowRunId == "" {
 		return nil, status.Error(codes.InvalidArgument, "workflow_run_id is required")
 	}
@@ -692,9 +677,6 @@ func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRu
 // GetReleaseRun/GetBuildByWorkflowRun above and the CLI's `builds status`
 // (FR2.5) -- neither is changed by this RPC.
 func (s *ArtifactServer) ListBuilds(ctx context.Context, req *pb.ListBuildsRequest) (*pb.ListBuildsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	since := time.Time{}
 	if req.Since != 0 {
 		since = time.Unix(req.Since, 0)
