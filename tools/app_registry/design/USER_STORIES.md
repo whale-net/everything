@@ -236,3 +236,25 @@ ARCHITECTURE.md "Authorization").
       edit form, requires a reason, and states that promotion history is
       retained (nothing is hard-deleted). Maps to `app-registry env archive
       <key> --reason`.
+
+## Epic I — Unauthenticated CI & developer discovery (#853)
+
+Public / unauthenticated read paths allow CI workflows, local developer CLI
+tools, and deployment engines to discover catalog metadata, artifact digests,
+and environment states without Keycloak credentials.
+
+26. As a CI runner in a pull request or external fork, I want to query active
+    promoted artifact versions for an environment (`GetEnvironmentState`,
+    `GetApp`) without Keycloak OIDC client credentials, so release tools and
+    dependency resolvers work out of the box without requiring repo secrets.
+    - Acceptance: `GetApp`, `ListApps`, `GetEnvironmentState`, and
+      `ListPromotions` return valid responses when called with no `authorization`
+      header or bearer token.
+
+27. As a developer using the CLI locally, I want to browse the application
+    catalog (`ListApps`, `ListCharts`) and inspect artifact versions
+    (`GetArtifact`, `ListArtifacts`, `ResolveArtifact`) without setting up local
+    OIDC tokens, so read discovery is as frictionless as querying a public
+    container registry.
+    - Acceptance: all read RPCs succeed anonymously; mutation and promotion
+      endpoints return `codes.Unauthenticated` if no token is provided.

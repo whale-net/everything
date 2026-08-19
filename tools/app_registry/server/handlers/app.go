@@ -235,9 +235,6 @@ func rejectedOwnersToPB(rs []repository.RejectedOwner) []*pb.RejectedOwner {
 }
 
 func (s *AppServer) ListApps(ctx context.Context, req *pb.ListAppsRequest) (*pb.ListAppsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	apps, err := s.repo.Apps().ListApps(ctx, repository.AppListFilter{
 		Domain:     req.Domain,
 		Statuses:   appStatusesFromPB(req.Statuses),
@@ -253,9 +250,6 @@ func (s *AppServer) ListApps(ctx context.Context, req *pb.ListAppsRequest) (*pb.
 }
 
 func (s *AppServer) GetApp(ctx context.Context, req *pb.GetAppRequest) (*pb.GetAppResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	app, err := s.lookupApp(ctx, req.AppId, req.FullName)
 	if err != nil {
 		return nil, mapRepoErr(err)
@@ -282,9 +276,6 @@ func (s *AppServer) lookupApp(ctx context.Context, appID, fullName string) (*rep
 }
 
 func (s *AppServer) ListCharts(ctx context.Context, req *pb.ListChartsRequest) (*pb.ListChartsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	charts, err := s.repo.Apps().ListCharts(ctx, repository.ChartListFilter{
 		Domain:   req.Domain,
 		Statuses: appStatusesFromPB(req.Statuses),
@@ -326,9 +317,6 @@ func (s *AppServer) SetAppStatus(ctx context.Context, req *pb.SetAppStatusReques
 // ListReconcileRuns browses the `reconcile_run` table (migration 010, AR-8)
 // -- see ARCHITECTURE.md "ListReconcileRuns" for the pagination contract.
 func (s *AppServer) ListReconcileRuns(ctx context.Context, req *pb.ListReconcileRunsRequest) (*pb.ListReconcileRunsResponse, error) {
-	if err := auth.RequireAuthenticated(ctx); err != nil {
-		return nil, err
-	}
 	since := time.Time{}
 	if req.Since != 0 {
 		since = time.Unix(req.Since, 0)
