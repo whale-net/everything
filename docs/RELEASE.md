@@ -387,68 +387,60 @@ gh workflow run release.yml \
 
 ### Automatic Release Notes Generation
 
-Release notes are automatically generated as part of the release process when using Method 1 or 2. The notes are included in the GitHub Actions summary and show:
+Release notes are automatically generated as part of the release process. Release notes focus on top-level entities and provide direct GitHub comparison links:
 
-- **Commit History**: All commits since the previous tag affecting the app
-- **Author Information**: Who made each change
-- **File Changes**: Which files were modified
-- **Timestamp**: When each change was made
+- **Top-Level Releases**: For apps deployed via Helm charts, release notes are published on the Helm chart's GitHub Release. The chart release notes include a table of contained container image versions, digests, and commit comparison links.
+- **Standalone Releases**: Binaries, CLI tools, firmware, and standalone container images receive individual GitHub Releases with version comparison links.
+- **Compare Diff Links**: Each release includes a direct GitHub comparison URL (`https://github.com/<owner>/<repo>/compare/<prev>...<curr>`).
+- **Scoped Base Resolution**: The previous baseline commit/version is determined authoritatively from App Registry (for domains at `allocate` adoption stage) or via scoped git tags.
 
 ### Manual Release Notes Generation
 
-You can also generate release notes manually using the release helper CLI:
+You can generate release notes manually using the release helper CLI:
 
 ```bash
 # Generate release notes for a specific app
 bazel run //tools:release -- release-notes hello-python \
-  --current-tag v1.2.3 \
-  --previous-tag v1.2.2 \
+  --current-tag demo-hello-python.v1.2.3 \
   --format markdown
 
-# Generate release notes for all apps
+# Generate release notes for a Helm chart
+bazel run //tools:release -- release-notes helm-demo-hello-fastapi \
+  --current-tag helm-demo-hello-fastapi.v0.2.0 \
+  --format markdown
+
+# Generate release notes for all apps and charts
 bazel run //tools:release -- release-notes-all \
-  --current-tag v1.2.3 \
   --format markdown \
   --output-dir ./release-notes/
 
 # Available formats: markdown, plain, json
 ```
 
-**Features:**
-- **Smart Filtering**: Only includes commits that actually affect each app
-- **Multiple Formats**: Markdown, plain text, or JSON output  
-- **Automatic Previous Tag Detection**: Finds the previous tag if not specified
-- **Infrastructure Change Detection**: Includes infrastructure changes that affect all apps
-
 ### GitHub Release Creation
 
-The release system automatically creates GitHub releases when using the main release workflow (Method 1 or 2). You can also create releases manually:
+The release system automatically creates GitHub releases for top-level entities (Helm charts and standalone apps) during the release workflow:
 
 ```bash
-# Create GitHub release for a specific app
-bazel run //tools:release -- create-github-release hello-python \
-  --tag demo-hello-python.v1.2.3 \
-  --owner whale-net \
-  --repo everything \
-  --commit abc1234
-
-# Create GitHub releases for multiple apps
-bazel run //tools:release -- create-combined-github-release v1.2.3 \
+# Create GitHub releases using pre-generated release notes
+bazel run //tools:release -- create-combined-github-release-with-notes v1.2.3 \
   --owner whale-net \
   --repo everything \
   --commit abc1234 \
-  --apps hello-python,hello-go,hello-fastapi
+  --apps tools-release_helper_go \
+  --charts helm-demo-hello-fastapi \
+  --release-notes-dir /tmp/release-notes \
+  --helm-charts-dir /tmp/helm-charts \
+  --openapi-specs-dir /tmp/openapi-specs \
+  --assets-dir /tmp/assets
 ```
 
 **GitHub Release Features:**
-- **Automatic Release Creation**: Creates releases during the release workflow
-- **Individual App Releases**: Each app gets its own tagged release with specific release notes
-- **Multi-App Release Creation**: Create releases for multiple apps with a single command
-- **Rich Release Notes**: Generated from commit history and file changes for each app
-- **Existing Release Detection**: Skips creation if release already exists
-- **Permission Validation**: Checks GitHub token permissions before attempting creation
+- **Top-Level Entity Scoping**: Publishes Helm chart releases with nested member images, skipping duplicate individual releases for chart members.
+- **Asset Attachments**: Packages and attaches Helm chart `.tgz` archives, OpenAPI specifications, and binary assets.
+- **App Registry Recording**: Automatically records released artifacts in App Registry when opted in (`APP_REGISTRY_CICD_OPT_IN=true`).
+- **Existing Release Detection**: Idempotently skips creation if release already exists.
 
 **Requirements:**
 - `GITHUB_TOKEN` environment variable with `repo` scope
 - Write permissions to the target repository
-- Git tags must exist before creating releases
