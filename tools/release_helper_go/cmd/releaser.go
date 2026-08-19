@@ -7,6 +7,8 @@ import (
 	"time"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ArtifactReleaser defines the kind-specific packaging, fetching, and publication operations.
@@ -235,26 +237,57 @@ func ExecuteRelease(p ReleaseParams) (*ReleaseResult, error) {
 	var prevTag string
 
 	if !digestUnchanged {
-		patterns := p.PreviousTagPatterns
-		if len(patterns) == 0 {
-			patterns = []string{tagPrefix + "v*", tagPrefix + "*"}
-		}
-		prefixes := p.PreviousTagPrefixes
-		if len(prefixes) == 0 {
-			prefixes = []string{tagPrefix}
-		}
+		var prevVersion string
+		var prevMatches bool
+		var prevDigest string
 
-		prevTag = GetPreviousGitTag(git, currentTag, patterns, prefixes)
-		if prevTag != "" {
-			prevVersion := ExtractVersionFromTag(prevTag, prefixes...)
-			var prevMatches bool
-			var prevDigest string
-			exists, fDigest, matches, fErr := p.Releaser.FetchPublished(ctx, prevVersion)
-			if fErr == nil && exists {
-				prevDigest = fDigest
-				prevMatches = matches
+		if isAllocate && p.ArtifactClient != nil {
+			getResp, getErr := p.ArtifactClient.GetArtifact(ctx, &pb.GetArtifactRequest{
+				OwnerFullName:   p.OwnerFullName,
+				Kind:            kind,
+				LatestPublished: true,
+				BeforeVersion:   currentVersion,
+			})
+			if getErr != nil {
+				if status.Code(getErr) != codes.NotFound {
+					return nil, fmt.Errorf("App Registry GetArtifact (previous version) failed for %s (domain %q at stage 'allocate'): %w", p.OwnerFullName, p.Domain, getErr)
+				}
+				// codes.NotFound: first release / no previous published version in registry
+			} else if getResp != nil && getResp.Artifact != nil {
+				prevVersion = getResp.Artifact.Version
+				prevTag = tagPrefix + prevVersion
+				prevDigest = getResp.Artifact.Digest
+
+				exists, fDigest, matches, fErr := p.Releaser.FetchPublished(ctx, prevVersion)
+				if fErr == nil && exists {
+					prevDigest = fDigest
+					prevMatches = matches
+				} else if prevDigest != "" && digest != "" {
+					prevMatches = (digest == prevDigest)
+				}
+			}
+		} else {
+			patterns := p.PreviousTagPatterns
+			if len(patterns) == 0 {
+				patterns = []string{tagPrefix + "v*", tagPrefix + "*"}
+			}
+			prefixes := p.PreviousTagPrefixes
+			if len(prefixes) == 0 {
+				prefixes = []string{tagPrefix}
 			}
 
+			prevTag = GetPreviousGitTag(git, currentTag, patterns, prefixes)
+			if prevTag != "" {
+				prevVersion = ExtractVersionFromTag(prevTag, prefixes...)
+				exists, fDigest, matches, fErr := p.Releaser.FetchPublished(ctx, prevVersion)
+				if fErr == nil && exists {
+					prevDigest = fDigest
+					prevMatches = matches
+				}
+			}
+		}
+
+		if prevTag != "" {
 			decision := EvaluateNoOpDecision(currentVersion, currentTag, prevVersion, prevTag, prevMatches)
 			digestUnchanged = decision.DigestUnchanged
 			effectiveVersion = decision.EffectiveVersion

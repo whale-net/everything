@@ -669,16 +669,6 @@ func extractChartVersionFromTag(chartName, tag string) string {
 	return ExtractVersionFromTag(tag, prefixes...)
 }
 
-func getPreviousChartTag(git GitRunner, chartName, currentTag string) string {
-	patterns := []string{fmt.Sprintf("%s.*", chartName)}
-	prefixes := []string{chartName + "."}
-	if !strings.HasPrefix(chartName, "helm-") {
-		patterns = append(patterns, fmt.Sprintf("helm-%s.*", chartName))
-		prefixes = append(prefixes, fmt.Sprintf("helm-%s.", chartName))
-	}
-	return GetPreviousGitTag(git, currentTag, patterns, prefixes)
-}
-
 func resolveContainedImages(chartDir string, appVersions map[string]string, chart HelmChartMetadata, allApps []AppMetadata, docker DockerRunner, fs FileSystem) []*pb.ContainedImage {
 	var contained []*pb.ContainedImage
 	lockfilePath := filepath.Join(chartDir, helm.LockfileFileName)

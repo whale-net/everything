@@ -2559,3 +2559,87 @@ func TestMigration014DownRestoresPromotabilityColumn(t *testing.T) {
 		t.Fatalf("expected the down migration to backfill promotability='promotable' (DEPLOY_UNIT_IMAGE image artifact), got %q", storedPromotability)
 	}
 }
+
+func TestGetArtifact_LatestPublished_Integration(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	appID := seedApp(t, pool, "acme", "latest-app", "image")
+	buildID := seedBuild(t, pool, "run-latest")
+
+	// 1. Initial state: nothing published -> ErrNotFound
+	_, err := reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName:   "acme-latest-app",
+		Kind:            repository.ArtifactKindImage,
+		LatestPublished: true,
+	})
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for empty registry, got %v", err)
+	}
+
+	// 2. Publish v1.0.0, v1.1.0, v1.0.1, v1.10.0
+	for _, tc := range []struct {
+		ver    string
+		digest string
+	}{
+		{"v1.0.0", "sha256:d-1.0.0"},
+		{"v1.1.0", "sha256:d-1.1.0"},
+		{"v1.0.1", "sha256:d-1.0.1"},
+		{"v1.10.0", "sha256:d-1.10.0"},
+	} {
+		art := repository.Artifact{
+			Kind:       repository.ArtifactKindImage,
+			AppID:      appID,
+			Repository: "ghcr.io/acme/latest-app",
+			Version:    tc.ver,
+			Digest:     tc.digest,
+			BuildID:    buildID,
+		}
+		if _, _, err := reg.Artifacts().RecordArtifact(ctx, art, nil); err != nil {
+			t.Fatalf("RecordArtifact(%s): %v", tc.ver, err)
+		}
+	}
+
+	// 3. Allocate v2.0.0 (state = allocated)
+	if _, err := reg.Artifacts().AllocateVersion(ctx, repository.ArtifactKindImage, appID, "ghcr.io/acme/latest-app", "major", "v2.0.0"); err != nil {
+		t.Fatalf("AllocateVersion: %v", err)
+	}
+
+	// 4. Query latest published -> must be v1.10.0 (numeric sorting, excludes allocated v2.0.0)
+	got, err := reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName:   "acme-latest-app",
+		Kind:            repository.ArtifactKindImage,
+		LatestPublished: true,
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(LatestPublished): %v", err)
+	}
+	if got.Version != "v1.10.0" || got.Digest != "sha256:d-1.10.0" {
+		t.Fatalf("expected v1.10.0 (sha256:d-1.10.0), got %s (%s)", got.Version, got.Digest)
+	}
+
+	// 5. Query with BeforeVersion = "v1.10.0" -> must return v1.1.0
+	gotBefore, err := reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName:   "acme-latest-app",
+		Kind:            repository.ArtifactKindImage,
+		LatestPublished: true,
+		BeforeVersion:   "v1.10.0",
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(BeforeVersion=v1.10.0): %v", err)
+	}
+	if gotBefore.Version != "v1.1.0" {
+		t.Fatalf("expected v1.1.0, got %s", gotBefore.Version)
+	}
+
+	// 6. Query with BeforeVersion = "v1.0.0" -> must return ErrNotFound
+	_, err = reg.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName:   "acme-latest-app",
+		Kind:            repository.ArtifactKindImage,
+		LatestPublished: true,
+		BeforeVersion:   "v1.0.0",
+	})
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for BeforeVersion=v1.0.0, got %v", err)
+	}
+}

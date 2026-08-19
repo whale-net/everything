@@ -314,6 +314,13 @@ message GetArtifactRequest {
   string owner_full_name = 3;
   ArtifactKind kind = 4;
   string version = 5;
+
+  // When true, resolves the latest published artifact for owner_full_name + kind
+  // ordered numerically by (version_major, version_minor, version_patch) DESC.
+  // When before_version is also set, resolves the latest published version
+  // strictly preceding before_version.
+  bool latest_published = 6;
+  string before_version = 7;
 }
 
 message GetArtifactResponse {

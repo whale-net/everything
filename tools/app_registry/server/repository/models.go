@@ -395,11 +395,13 @@ type ArtifactListFilter struct {
 // ArtifactLookup identifies an artifact by exactly one of the supported
 // keys, matching GetArtifactRequest's oneof-by-convention shape.
 type ArtifactLookup struct {
-	ArtifactID    string
-	Digest        string
-	OwnerFullName string
-	Kind          ArtifactKind
-	Version       string
+	ArtifactID      string
+	Digest          string
+	OwnerFullName   string
+	Kind            ArtifactKind
+	Version         string
+	LatestPublished bool
+	BeforeVersion   string
 }
 
 // Environment is a promotion target, e.g. "dev"/"stage"/"prod". A row, not
