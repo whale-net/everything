@@ -1861,3 +1861,137 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 		t.Fatalf("unexpected adoptResp: version=%s digest=%s", adoptResp.Artifact.Version, adoptResp.Artifact.Digest)
 	}
 }
+
+func TestGetArtifact_LatestPublished(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := ctxWithRoles(auth.RoleBuilder)
+
+	// 1. Initial state: nothing published -> NotFound
+	_, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for empty registry, got %v", err)
+	}
+
+	// Validation checks
+	_, err = artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		LatestPublished: true,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for missing kind, got %v", err)
+	}
+
+	_, err = artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+		BeforeVersion:   "not-semver",
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for invalid before_version, got %v", err)
+	}
+
+	// 2. Publish several versions
+	build1 := recordBuild(t, artifactSrv, "run-pub-1")
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build1.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:digest-v1.0.0",
+		Version:        "v1.0.0",
+		IdempotencyKey: "pub-1",
+	}); err != nil {
+		t.Fatalf("RecordArtifact v1.0.0: %v", err)
+	}
+
+	build2 := recordBuild(t, artifactSrv, "run-pub-2")
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build2.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:digest-v1.1.0",
+		Version:        "v1.1.0",
+		IdempotencyKey: "pub-2",
+	}); err != nil {
+		t.Fatalf("RecordArtifact v1.1.0: %v", err)
+	}
+
+	build3 := recordBuild(t, artifactSrv, "run-pub-3")
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build3.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:digest-v1.0.1",
+		Version:        "v1.0.1",
+		IdempotencyKey: "pub-3",
+	}); err != nil {
+		t.Fatalf("RecordArtifact v1.0.1: %v", err)
+	}
+
+	build4 := recordBuild(t, artifactSrv, "run-pub-4")
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build4.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:digest-v1.10.0",
+		Version:        "v1.10.0",
+		IdempotencyKey: "pub-4",
+	}); err != nil {
+		t.Fatalf("RecordArtifact v1.10.0: %v", err)
+	}
+
+	// 3. BeginPublish for v2.0.0 (state = publishing) - must NOT be returned as published
+	_, err = artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v2.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build4.BuildId,
+		IdempotencyKey: "begin-pub-v2",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish v2.0.0: %v", err)
+	}
+
+	// 4. Query latest published -> must be v1.10.0 (numerically highest published, not lexical, not publishing v2.0.0)
+	resp, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(latest_published): %v", err)
+	}
+	if resp.Artifact.Version != "v1.10.0" || resp.Artifact.Digest != "sha256:digest-v1.10.0" {
+		t.Fatalf("expected v1.10.0 (sha256:digest-v1.10.0), got version=%s digest=%s", resp.Artifact.Version, resp.Artifact.Digest)
+	}
+
+	// 5. Query with before_version = "v1.10.0" -> must return v1.1.0
+	respBefore, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+		BeforeVersion:   "v1.10.0",
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(before_version=v1.10.0): %v", err)
+	}
+	if respBefore.Artifact.Version != "v1.1.0" {
+		t.Fatalf("expected v1.1.0, got %s", respBefore.Artifact.Version)
+	}
+
+	// 6. Query with before_version = "v1.0.0" -> must return NotFound
+	_, err = artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		LatestPublished: true,
+		BeforeVersion:   "v1.0.0",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for before_version=v1.0.0, got %v", err)
+	}
+}

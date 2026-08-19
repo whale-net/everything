@@ -8,6 +8,8 @@ import (
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type mockArtifactReleaser struct {
@@ -347,5 +349,198 @@ func TestExecuteRelease_ChartContainedImagesPassedToRecord(t *testing.T) {
 	recReq := fakeClient.RecordArtifactCalls[0]
 	if len(recReq.Contains) != 1 || recReq.Contains[0].AppFullName != "demo-api" {
 		t.Errorf("expected contained images in RecordArtifactRequest, got %+v", recReq.Contains)
+	}
+}
+
+func TestExecuteRelease_AllocateStage_NoOpRebuild(t *testing.T) {
+	fakeClient := NewFakeArtifactRegistryClient()
+	fakeClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		if in.ChartDomain == "tools" {
+			return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+		}
+		return &pb.CheckChartHermeticityResponse{Enforced: false}, nil
+	}
+	fakeClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		if in.OwnerFullName == "tools-release_helper_go" && in.LatestPublished {
+			return &pb.GetArtifactResponse{
+				Artifact: &pb.Artifact{
+					Version: "v0.3.0",
+					Digest:  "sha256:identical-digest",
+					State:   pb.ArtifactState_ARTIFACT_STATE_PUBLISHED,
+				},
+			}, nil
+		}
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+
+	// Git has NO tags listed -- proving git tag scanning is bypassed for allocate-stage domains
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "gitsha12345"},
+	)
+
+	releaser := &mockArtifactReleaser{
+		kind:        pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		buildDigest: "sha256:identical-digest",
+	}
+
+	res, err := ExecuteRelease(ReleaseParams{
+		Domain:               "tools",
+		OwnerFullName:        "tools-release_helper_go",
+		Version:              "v0.3.1",
+		BuildID:              "build-1",
+		IdempotencyKeyPrefix: "run-1",
+		Releaser:             releaser,
+		Git:                  git,
+		ArtifactClient:       fakeClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if res.Published {
+		t.Errorf("expected Published=false on no-op rebuild, got true")
+	}
+	if !res.DigestUnchanged {
+		t.Errorf("expected DigestUnchanged=true, got false")
+	}
+	if res.EffectiveVersion != "v0.3.0" {
+		t.Errorf("expected EffectiveVersion='v0.3.0', got %q", res.EffectiveVersion)
+	}
+	if releaser.publishCalls != 0 {
+		t.Errorf("expected 0 publish calls on no-op, got %d", releaser.publishCalls)
+	}
+	if len(fakeClient.FailPublishCalls) != 1 {
+		t.Fatalf("expected 1 FailPublish call on no-op, got %d", len(fakeClient.FailPublishCalls))
+	}
+	if !strings.Contains(fakeClient.FailPublishCalls[0].Reason, "no-op rebuild") {
+		t.Errorf("expected FailPublish reason to mention no-op rebuild, got %q", fakeClient.FailPublishCalls[0].Reason)
+	}
+}
+
+func TestExecuteRelease_AllocateStage_ProceedDifferentDigest(t *testing.T) {
+	fakeClient := NewFakeArtifactRegistryClient()
+	fakeClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		if in.OwnerFullName == "tools-release_helper_go" && in.LatestPublished {
+			return &pb.GetArtifactResponse{
+				Artifact: &pb.Artifact{
+					Version: "v0.3.0",
+					Digest:  "sha256:old-digest",
+					State:   pb.ArtifactState_ARTIFACT_STATE_PUBLISHED,
+				},
+			}, nil
+		}
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "gitsha12345"},
+	)
+
+	releaser := &mockArtifactReleaser{
+		kind:        pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		buildDigest: "sha256:new-digest",
+	}
+
+	res, err := ExecuteRelease(ReleaseParams{
+		Domain:               "tools",
+		OwnerFullName:        "tools-release_helper_go",
+		Version:              "v0.3.1",
+		BuildID:              "build-1",
+		IdempotencyKeyPrefix: "run-1",
+		Releaser:             releaser,
+		Git:                  git,
+		ArtifactClient:       fakeClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !res.Published {
+		t.Errorf("expected Published=true, got false")
+	}
+	if res.EffectiveVersion != "v0.3.1" {
+		t.Errorf("expected EffectiveVersion='v0.3.1', got %q", res.EffectiveVersion)
+	}
+	if len(fakeClient.RecordArtifactCalls) != 1 {
+		t.Fatalf("expected 1 RecordArtifact call")
+	}
+}
+
+func TestExecuteRelease_AllocateStage_FirstReleaseNotFound(t *testing.T) {
+	fakeClient := NewFakeArtifactRegistryClient()
+	fakeClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		return nil, status.Error(codes.NotFound, "not found")
+	}
+
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "gitsha12345"},
+	)
+
+	releaser := &mockArtifactReleaser{
+		kind:        pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		buildDigest: "sha256:first-digest",
+	}
+
+	res, err := ExecuteRelease(ReleaseParams{
+		Domain:               "tools",
+		OwnerFullName:        "tools-release_helper_go",
+		Version:              "v0.1.0",
+		BuildID:              "build-1",
+		IdempotencyKeyPrefix: "run-1",
+		Releaser:             releaser,
+		Git:                  git,
+		ArtifactClient:       fakeClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !res.Published {
+		t.Errorf("expected Published=true for first release, got false")
+	}
+	if res.EffectiveVersion != "v0.1.0" {
+		t.Errorf("expected EffectiveVersion='v0.1.0', got %q", res.EffectiveVersion)
+	}
+}
+
+func TestExecuteRelease_AllocateStage_RegistryErrorFailsLoudly(t *testing.T) {
+	fakeClient := NewFakeArtifactRegistryClient()
+	fakeClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
+		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
+	}
+	fakeClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		return nil, status.Error(codes.Unavailable, "database connection error")
+	}
+
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "gitsha12345"},
+	)
+
+	releaser := &mockArtifactReleaser{
+		kind:        pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		buildDigest: "sha256:some-digest",
+	}
+
+	_, err := ExecuteRelease(ReleaseParams{
+		Domain:               "tools",
+		OwnerFullName:        "tools-release_helper_go",
+		Version:              "v0.3.1",
+		BuildID:              "build-1",
+		IdempotencyKeyPrefix: "run-1",
+		Releaser:             releaser,
+		Git:                  git,
+		ArtifactClient:       fakeClient,
+	})
+	if err == nil {
+		t.Fatalf("expected error when App Registry GetArtifact fails for allocate domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "App Registry GetArtifact (previous version) failed") {
+		t.Errorf("expected error message to mention GetArtifact failure, got %v", err)
 	}
 }

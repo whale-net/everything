@@ -274,9 +274,10 @@ the release rather than mask itself as a tag-based one.
   `release-charts` ever pushes a tag to origin (apps' tags only reach origin
   as an accidental side effect of `create-combined-github-release-with-notes`;
   charts' never do at all), so a local tag object in an ephemeral CI
-  checkout costs nothing to keep. No-op/digest-collision detection
-  (`getPreviousAppTag`/`getPreviousChartTag`) is therefore also unchanged —
-  it still works because the tags it scans are still being written.
+  checkout costs nothing to keep. No-op/digest-collision detection for
+  `allocate`-stage domains (issue #832) queries App Registry directly via
+  `GetArtifact(latest_published=true)`, moving off tag-scanning while keeping
+  git-tag fallback for domains not yet at `allocate`.
 - Seeding a domain's starting version from its existing tags at cutover time
   is moot for the two domains already cut over (done by hand) and remains
   unbuilt for a future domain's cutover.

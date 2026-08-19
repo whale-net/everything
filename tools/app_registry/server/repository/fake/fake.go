@@ -1086,7 +1086,42 @@ func (r *Registry) findArtifact(lookup repository.ArtifactLookup) (*repository.A
 		}
 		return nil, repository.ErrNotFound
 	}
-	if lookup.OwnerFullName != "" {
+	if lookup.OwnerFullName != "" && lookup.LatestPublished {
+		var candidates []repository.Artifact
+		var beforeVer semver.Version
+		var hasBefore bool
+		if lookup.BeforeVersion != "" {
+			if v, err := semver.Parse(lookup.BeforeVersion); err == nil {
+				beforeVer = v
+				hasBefore = true
+			}
+		}
+		for _, a := range r.state.Artifacts {
+			if a.Kind == lookup.Kind && a.State == repository.ArtifactStatePublished && r.ownerFullName(a) == lookup.OwnerFullName {
+				if hasBefore {
+					v, err := semver.Parse(a.Version)
+					if err != nil || semver.Compare(v, beforeVer) >= 0 {
+						continue
+					}
+				}
+				candidates = append(candidates, a)
+			}
+		}
+		if len(candidates) == 0 {
+			return nil, repository.ErrNotFound
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			vi, erri := semver.Parse(candidates[i].Version)
+			vj, errj := semver.Parse(candidates[j].Version)
+			if erri != nil || errj != nil {
+				return candidates[i].Version > candidates[j].Version
+			}
+			return semver.Compare(vi, vj) > 0
+		})
+		best := r.livePromotability(candidates[0])
+		return &best, nil
+	}
+	if lookup.OwnerFullName != "" && lookup.Version != "" {
 		for _, a := range r.state.Artifacts {
 			if a.Kind == lookup.Kind && a.Version == lookup.Version && r.ownerFullName(a) == lookup.OwnerFullName {
 				a = r.livePromotability(a)

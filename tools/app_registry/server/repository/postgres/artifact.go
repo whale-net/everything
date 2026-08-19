@@ -1114,7 +1114,27 @@ func (r *artifactRepo) findArtifact(ctx context.Context, lookup repository.Artif
 		row = r.ex.QueryRow(ctx, artifactSelectBase+` WHERE a.artifact_id = $1`, lookup.ArtifactID)
 	case lookup.Digest != "":
 		row = r.ex.QueryRow(ctx, artifactSelectBase+` WHERE a.digest = $1`, lookup.Digest)
-	case lookup.OwnerFullName != "":
+	case lookup.OwnerFullName != "" && lookup.LatestPublished:
+		if lookup.BeforeVersion != "" {
+			bMajor, bMinor, bPatch := parseVersionTriple(lookup.BeforeVersion)
+			row = r.ex.QueryRow(ctx, artifactSelectBase+`
+				WHERE a.kind = $1 AND a.state = 'published'
+				  AND (app.domain || '-' || app.name = $2 OR chart.domain || '-' || chart.name = $2)
+				  AND (a.version_major < $3
+				       OR (a.version_major = $3 AND a.version_minor < $4)
+				       OR (a.version_major = $3 AND a.version_minor = $4 AND a.version_patch < $5))
+				ORDER BY a.version_major DESC, a.version_minor DESC, a.version_patch DESC
+				LIMIT 1`,
+				string(lookup.Kind), lookup.OwnerFullName, bMajor, bMinor, bPatch)
+		} else {
+			row = r.ex.QueryRow(ctx, artifactSelectBase+`
+				WHERE a.kind = $1 AND a.state = 'published'
+				  AND (app.domain || '-' || app.name = $2 OR chart.domain || '-' || chart.name = $2)
+				ORDER BY a.version_major DESC, a.version_minor DESC, a.version_patch DESC
+				LIMIT 1`,
+				string(lookup.Kind), lookup.OwnerFullName)
+		}
+	case lookup.OwnerFullName != "" && lookup.Version != "":
 		row = r.ex.QueryRow(ctx, artifactSelectBase+`
 			WHERE a.kind = $1 AND a.version = $2
 			  AND (app.domain || '-' || app.name = $3 OR chart.domain || '-' || chart.name = $3)`,

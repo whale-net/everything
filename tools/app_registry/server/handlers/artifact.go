@@ -240,9 +240,29 @@ func artifactLookupFromGetRequest(req *pb.GetArtifactRequest) (repository.Artifa
 	case req.Digest != "":
 		return repository.ArtifactLookup{Digest: req.Digest}, nil
 	case req.OwnerFullName != "":
+		kind := artifactKindFromPB(req.Kind)
+		if kind == "" {
+			return repository.ArtifactLookup{}, status.Error(codes.InvalidArgument, "kind is required when looking up by owner_full_name")
+		}
+		if req.LatestPublished {
+			if req.BeforeVersion != "" {
+				if _, err := semver.Parse(req.BeforeVersion); err != nil {
+					return repository.ArtifactLookup{}, status.Errorf(codes.InvalidArgument, "before_version: %v", err)
+				}
+			}
+			return repository.ArtifactLookup{
+				OwnerFullName:   req.OwnerFullName,
+				Kind:            kind,
+				LatestPublished: true,
+				BeforeVersion:   req.BeforeVersion,
+			}, nil
+		}
+		if req.Version == "" {
+			return repository.ArtifactLookup{}, status.Error(codes.InvalidArgument, "version is required when looking up by owner_full_name without latest_published")
+		}
 		return repository.ArtifactLookup{
 			OwnerFullName: req.OwnerFullName,
-			Kind:          artifactKindFromPB(req.Kind),
+			Kind:          kind,
 			Version:       req.Version,
 		}, nil
 	default:
@@ -250,7 +270,7 @@ func artifactLookupFromGetRequest(req *pb.GetArtifactRequest) (repository.Artifa
 	}
 }
 
-var errMissingArtifactLookup = status.Error(codes.InvalidArgument, "artifact_id, digest, or owner_full_name+kind+version is required")
+var errMissingArtifactLookup = status.Error(codes.InvalidArgument, "artifact_id, digest, or owner_full_name+kind+(version|latest_published) is required")
 
 func (s *ArtifactServer) ResolveArtifact(ctx context.Context, req *pb.ResolveArtifactRequest) (*pb.ResolveArtifactResponse, error) {
 	var lookup repository.ArtifactLookup

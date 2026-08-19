@@ -386,11 +386,6 @@ func extractImageDigest(docker DockerRunner, repo, version string) string {
 	return ""
 }
 
-func getPreviousAppTag(git GitRunner, fullName, currentTag string) string {
-	pattern := fmt.Sprintf("%s.v*", fullName)
-	return GetPreviousGitTag(git, currentTag, []string{pattern}, []string{fullName + "."})
-}
-
 func writeDigestCheckJSON(domain, app string, result *ReleaseAppResult) {
 	digestCheckDir := "/tmp/digest-check"
 	if err := os.MkdirAll(digestCheckDir, 0755); err != nil {
