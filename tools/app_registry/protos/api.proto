@@ -8,6 +8,7 @@ import "tools/app_registry/protos/api_messages_app.proto";
 import "tools/app_registry/protos/api_messages_artifact.proto";
 import "tools/app_registry/protos/api_messages_environment.proto";
 import "tools/app_registry/protos/api_messages_promotion.proto";
+import "tools/app_registry/protos/api_messages_release.proto";
 
 // The registry is split into four services along its authorization boundary,
 // not along its data model. `builder` (the CI service account) may call
@@ -114,6 +115,28 @@ service PromotionRegistry {
 
   rpc ListPromotions(ListPromotionsRequest) returns (ListPromotionsResponse);
   rpc ListPromotionEvents(ListPromotionEventsRequest) returns (ListPromotionEventsResponse);
+}
+
+// ============================================================================
+// ReleaseRegistry — triggering and observing releases (FR1-5, FR10, NFR4,
+// NFR5; issue #888). A clean seam separate from PromotionRegistry even
+// though it reuses the same permission (see server/auth.RequirePromoter):
+// triggering a release builds/publishes artifacts, it does not deploy to an
+// environment, so it does not belong on PromotionRegistry's environment-
+// scoped surface.
+// Role: promoter (writes -- same check Promote already requires, FR4/NFR5,
+// no new role), any (reads).
+// ============================================================================
+service ReleaseRegistry {
+  // Dedup-checks the batch against any already-non-terminal release
+  // covering the same targets (FR5 -- a UX-quality fast-fail; the
+  // authoritative NFR2 guarantee is Temporal's workflow-id dedup), persists
+  // the release_run/release_run_target rows, and starts the
+  // ReleaseWorkflow.
+  rpc TriggerRelease(TriggerReleaseRequest) returns (TriggerReleaseResponse);
+
+  rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse);
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
 }
 
 // ============================================================================

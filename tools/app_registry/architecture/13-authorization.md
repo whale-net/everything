@@ -11,8 +11,9 @@ in `server/auth`:
 | `app-registry-promoter-dev` | `PromotionRegistry` (writes), `dev` only | Keycloak service account scoped to the `dev` GitHub Environment; humans |
 | `app-registry-promoter-stage` | `PromotionRegistry` (writes), `stage` only | Keycloak service account scoped to the `stage` GitHub Environment; humans |
 | `app-registry-promoter-prod` | `PromotionRegistry` (writes), `prod` only | Keycloak service account scoped to the `prod` GitHub Environment; a small human group |
+| `app-registry-promoter-dev` | `ReleaseRegistry.TriggerRelease` (issue #888) | Same credential as above -- triggering a release builds/publishes artifacts rather than deploying to an environment, so it is checked against the `dev` promoter role rather than a per-environment one; see `server/handlers/release.go`'s `releaseTriggerEnv` doc comment |
 | `app-registry-admin` | `EnvironmentRegistry` (writes), `SetAppStatus`, `AdoptArtifact` (AR-7e) | Human only |
-| *(public / anonymous)* | All read RPCs (`GetApp`, `ListApps`, `ListCharts`, `GetArtifact`, `ListArtifacts`, `ResolveArtifact`, `ListArtifactPins`, `CheckChartHermeticity`, `GetEnvironmentState`, `ListPromotions`, `ListPromotionEvents`, `GetEnvironment`, `ListEnvironments`, `GetReleaseRun`, `ListBuilds`, `ListReconcileRuns`) | None (anonymous access permitted) |
+| *(public / anonymous)* | All read RPCs (`GetApp`, `ListApps`, `ListCharts`, `GetArtifact`, `ListArtifacts`, `ResolveArtifact`, `ListArtifactPins`, `CheckChartHermeticity`, `GetEnvironmentState`, `ListPromotions`, `ListPromotionEvents`, `GetEnvironment`, `ListEnvironments`, `GetReleaseRun`, `ListBuilds`, `ListReconcileRuns`, `GetRelease`, `ListReleases`) | None (anonymous access permitted) |
 
 Roles are flat and explicit — `app-registry-admin` does not imply
 `app-registry-builder` or any promoter role, and a promoter role for one
