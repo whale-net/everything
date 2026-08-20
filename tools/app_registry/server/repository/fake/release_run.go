@@ -45,9 +45,21 @@ func (f releaseRunFake) CreateReleaseRun(ctx context.Context, run repository.Rel
 	if len(targets) == 0 {
 		return nil, nil, fmt.Errorf("%w: release run must cover at least one target", repository.ErrInvalidArgument)
 	}
+	// Non-terminal-scoped duplicate check (issue #889, FR11, migration
+	// 017) mirroring postgres's releaseRunRepo.CreateReleaseRun -- a prior
+	// release_run sharing this workflow id only conflicts while at least
+	// one of its targets hasn't reached succeeded/failed yet.
 	for _, existing := range f.r.state.ReleaseRuns {
-		if existing.TemporalWorkflowID == run.TemporalWorkflowID {
-			return nil, nil, fmt.Errorf("%w: release run for workflow %s already exists", repository.ErrAlreadyExists, run.TemporalWorkflowID)
+		if existing.TemporalWorkflowID != run.TemporalWorkflowID {
+			continue
+		}
+		for _, t := range f.r.state.ReleaseRunTargets {
+			if t.ReleaseRunID != existing.ReleaseRunID {
+				continue
+			}
+			if t.State != repository.ReleaseRunTargetStateSucceeded && t.State != repository.ReleaseRunTargetStateFailed {
+				return nil, nil, fmt.Errorf("%w: release run for workflow %s already in progress", repository.ErrAlreadyExists, run.TemporalWorkflowID)
+			}
 		}
 	}
 

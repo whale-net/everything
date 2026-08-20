@@ -222,10 +222,10 @@ func TestReleaseRun_CreateReleaseRun_PartialTargetFailureRollsBackWholeBatch(t *
 	}
 }
 
-// TestReleaseRun_CreateReleaseRun_DuplicateWorkflowIDRejected proves the
-// unique index on temporal_workflow_id (FR5/NFR2's dedup key) rejects a
-// second CreateReleaseRun for the same workflow id at the audit-row layer
-// too, not just at Temporal's own dedup.
+// TestReleaseRun_CreateReleaseRun_DuplicateWorkflowIDRejected proves a
+// second CreateReleaseRun for the same workflow id is rejected at the
+// audit-row layer (issue #889, migration 017) while the first release_run's
+// targets are still non-terminal -- not just at Temporal's own dedup.
 func TestReleaseRun_CreateReleaseRun_DuplicateWorkflowIDRejected(t *testing.T) {
 	reg, _ := newTestRegistry(t)
 
@@ -237,6 +237,39 @@ func TestReleaseRun_CreateReleaseRun_DuplicateWorkflowIDRejected(t *testing.T) {
 	_, _, err := createReleaseRunTx(t, reg, newReleaseRun("wf-dup"), targets)
 	if !errors.Is(err, repository.ErrAlreadyExists) {
 		t.Fatalf("expected ErrAlreadyExists for duplicate workflow id, got: %v", err)
+	}
+}
+
+// TestReleaseRun_CreateReleaseRun_WorkflowIDReusableAfterTerminal proves
+// migration 017's fix (issue #889, FR11): once every release_run_target
+// row for a prior release_run under a workflow id has reached a terminal
+// state, a NEW release_run may reuse that same workflow id -- e.g. the same
+// apps/charts released again later. This would have failed against 016's
+// blanket UNIQUE index.
+func TestReleaseRun_CreateReleaseRun_WorkflowIDReusableAfterTerminal(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	targets := []repository.ReleaseRunTarget{{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage}}
+	first, firstTargets, err := createReleaseRunTx(t, reg, newReleaseRun("wf-reuse"), targets)
+	if err != nil {
+		t.Fatalf("first CreateReleaseRun: %v", err)
+	}
+	if err := reg.ReleaseRuns().UpdateTargetState(context.Background(), firstTargets[0].ReleaseRunTargetID, repository.ReleaseRunTargetStateBuilding, "", ""); err != nil {
+		t.Fatalf("advance to building: %v", err)
+	}
+	if err := reg.ReleaseRuns().UpdateTargetState(context.Background(), firstTargets[0].ReleaseRunTargetID, repository.ReleaseRunTargetStateFailed, "", "boom"); err != nil {
+		t.Fatalf("advance to failed: %v", err)
+	}
+
+	second, _, err := createReleaseRunTx(t, reg, newReleaseRun("wf-reuse"), targets)
+	if err != nil {
+		t.Fatalf("second CreateReleaseRun after first went terminal: %v", err)
+	}
+	if second.ReleaseRunID == first.ReleaseRunID {
+		t.Fatalf("expected a distinct release_run row, got the same id back")
+	}
+	if second.TemporalWorkflowID != first.TemporalWorkflowID {
+		t.Fatalf("expected both rows to share the reused workflow id, got %q vs %q", first.TemporalWorkflowID, second.TemporalWorkflowID)
 	}
 }
 

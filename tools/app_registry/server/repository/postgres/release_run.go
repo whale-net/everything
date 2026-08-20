@@ -97,6 +97,24 @@ func (r *releaseRunRepo) CreateReleaseRun(ctx context.Context, run repository.Re
 		return nil, nil, fmt.Errorf("%w: release run must cover at least one target", repository.ErrInvalidArgument)
 	}
 
+	// Non-terminal-scoped duplicate check (issue #889, FR11, migration
+	// 017) -- see this method's doc comment (repository.go) for why this
+	// replaces a blanket UNIQUE constraint on temporal_workflow_id: a prior
+	// release_run under the same workflow id is only a conflict while at
+	// least one of its targets hasn't reached succeeded/failed yet.
+	var inProgress bool
+	if err := r.ex.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM release_run rr
+			JOIN release_run_target rrt ON rrt.release_run_id = rr.release_run_id
+			WHERE rr.temporal_workflow_id = $1 AND rrt.state NOT IN ('succeeded', 'failed')
+		)`, run.TemporalWorkflowID).Scan(&inProgress); err != nil {
+		return nil, nil, fmt.Errorf("create release run for workflow %s: check in-progress: %w", run.TemporalWorkflowID, err)
+	}
+	if inProgress {
+		return nil, nil, fmt.Errorf("%w: release run for workflow %s already in progress", repository.ErrAlreadyExists, run.TemporalWorkflowID)
+	}
+
 	var digestInput any
 	if run.DigestInput != nil {
 		digestInput = string(run.DigestInput)

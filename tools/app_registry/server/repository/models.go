@@ -637,10 +637,15 @@ type ReleaseRun struct {
 	// ResolvedPlan is the single plan resolved for this release (FR7/FR8),
 	// serialized as JSON, written once at create time and never rewritten.
 	ResolvedPlan []byte
-	// TemporalWorkflowID is the workflow-id-based dedup key (FR5/NFR2). The
-	// actual "one non-terminal release per target" guarantee is Temporal's
-	// deterministic workflow-id dedup, not a DB constraint -- see
-	// ReleaseRunRepository.ListReleaseRunsByTarget's doc comment.
+	// TemporalWorkflowID is the workflow-id-based dedup key (FR5/NFR2),
+	// release.WorkflowID(targets) -- deterministic per target batch, with
+	// no time component (see that function's doc comment), so it is NOT
+	// unique across every release_run row over time: two release_run rows
+	// for the same batch, created weeks apart, legitimately share this
+	// value once the earlier one's targets are all terminal -- see
+	// ReleaseRunRepository.CreateReleaseRun's doc comment (migration 017)
+	// and ListReleaseRunsByTarget's doc comment for the read-side
+	// implication (most-recent-first, not "the" row for a workflow id).
 	TemporalWorkflowID string
 	// TemporalRunID is empty until the workflow named by TemporalWorkflowID
 	// actually starts running.

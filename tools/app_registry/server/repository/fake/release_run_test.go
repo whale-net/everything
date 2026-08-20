@@ -75,6 +75,35 @@ func TestReleaseRunFake_CreateReleaseRun_DuplicateWorkflowIDRejected(t *testing.
 	}
 }
 
+// TestReleaseRunFake_CreateReleaseRun_WorkflowIDReusableAfterTerminal
+// mirrors postgres's identically-named integration test (issue #889,
+// migration 017, FR11): a workflow id may be reused by a fresh
+// release_run once every target of the prior release_run under that id
+// has reached a terminal state.
+func TestReleaseRunFake_CreateReleaseRun_WorkflowIDReusableAfterTerminal(t *testing.T) {
+	r := New()
+	targets := []repository.ReleaseRunTarget{{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage}}
+	first, firstTargets, err := createReleaseRunTx(t, r, newReleaseRun("wf-reuse"), targets)
+	if err != nil {
+		t.Fatalf("first CreateReleaseRun: %v", err)
+	}
+	ctx := context.Background()
+	if err := r.ReleaseRuns().UpdateTargetState(ctx, firstTargets[0].ReleaseRunTargetID, repository.ReleaseRunTargetStateBuilding, "", ""); err != nil {
+		t.Fatalf("advance to building: %v", err)
+	}
+	if err := r.ReleaseRuns().UpdateTargetState(ctx, firstTargets[0].ReleaseRunTargetID, repository.ReleaseRunTargetStateFailed, "", "boom"); err != nil {
+		t.Fatalf("advance to failed: %v", err)
+	}
+
+	second, _, err := createReleaseRunTx(t, r, newReleaseRun("wf-reuse"), targets)
+	if err != nil {
+		t.Fatalf("second CreateReleaseRun after first went terminal: %v", err)
+	}
+	if second.ReleaseRunID == first.ReleaseRunID {
+		t.Fatalf("expected a distinct release_run row, got the same id back")
+	}
+}
+
 func TestReleaseRunFake_UpdateTargetState_LegalTransitionsRoundTrip(t *testing.T) {
 	r := New()
 	_, targets, err := createReleaseRunTx(t, r, newReleaseRun("wf-transitions"), []repository.ReleaseRunTarget{

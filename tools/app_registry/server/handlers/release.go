@@ -3,11 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
-	"github.com/google/uuid"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	"github.com/whale-net/everything/tools/app_registry/worker/release"
+	"go.temporal.io/api/serviceerror"
+	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -31,34 +34,59 @@ const releaseTriggerEnv = "dev"
 type ReleaseServer struct {
 	pb.UnimplementedReleaseRegistryServer
 	repo repository.Registry
+	// temporal starts the ReleaseWorkflow TriggerRelease creates a
+	// release_run row for -- see TriggerRelease's doc comment. May be nil
+	// in tests that only exercise the repository-write half of
+	// TriggerRelease (e.g. dedup-rejection paths that return before ever
+	// reaching the ExecuteWorkflow call); a real deployment (server/main.go)
+	// always provides one.
+	temporal client.Client
 }
 
-// NewReleaseServer constructs a ReleaseServer over repo.
-func NewReleaseServer(repo repository.Registry) *ReleaseServer {
-	return &ReleaseServer{repo: repo}
+// NewReleaseServer constructs a ReleaseServer over repo, starting
+// ReleaseWorkflow executions via temporalClient (see TriggerRelease).
+func NewReleaseServer(repo repository.Registry, temporalClient client.Client) *ReleaseServer {
+	return &ReleaseServer{repo: repo, temporal: temporalClient}
 }
 
 // TriggerRelease dedup-checks the batch against any already-non-terminal
 // release covering the same targets (FR5), persists the release_run/
-// release_run_target rows via repo.ReleaseRuns().CreateReleaseRun, and
-// returns the persisted ids. It deliberately does NOT resolve `all`/domain/
-// comma-list scope syntax (that's the caller's job, done before this RPC is
-// called -- see ReleaseTargetInput's doc comment) and does NOT itself
-// resolve a version plan (FR7/FR8's "resolved once, reused everywhere"
-// happens inside the Temporal ReleaseWorkflow -- issue #889 -- not here).
+// release_run_target rows via repo.ReleaseRuns().CreateReleaseRun, starts
+// the Temporal ReleaseWorkflow that owns the batch end to end (FR6, issue
+// #889), and returns the persisted ids. It deliberately does NOT resolve
+// `all`/domain/comma-list scope syntax (that's the caller's job, done
+// before this RPC is called -- see ReleaseTargetInput's doc comment) and
+// does NOT itself resolve a version plan (FR7/FR8's "resolved once, reused
+// everywhere" happens inside ReleaseWorkflow, not here).
 //
-// TODO(#889): this does not yet start the Temporal ReleaseWorkflow. Once
-// the workflow exists, TriggerRelease must: (1) derive the real
-// deterministic workflow id coordinated with the workflow's own dedup key
-// (replacing the release-<uuid> placeholder below, which is intentionally
-// unique-per-call so CreateReleaseRun's TemporalWorkflowID uniqueness
-// constraint never spuriously blocks a legitimate future release of the
-// same targets), (2) start the workflow via the Temporal client (see
-// worker/main.go's client construction pattern), and (3) translate a
-// WorkflowExecutionAlreadyStarted error into the same FailedPrecondition
-// "already releasing" response this handler's fast-fail check returns
-// below -- that error is the authoritative NFR2 guarantee, this check is
-// only a UX-quality fast-fail and can race.
+// The workflow id is release.WorkflowID(targets) -- deterministic per the
+// exact batch of targets (see that function's doc comment) -- used both as
+// release_run.temporal_workflow_id (CreateReleaseRun's own uniqueness
+// constraint on that column) and as the Temporal ExecuteWorkflow call's
+// WorkflowID. This is the authoritative FR5/NFR2 "at most one non-terminal
+// release per target" guarantee, not rejectIfAlreadyReleasing below (a
+// UX-quality fast-fail only, which can race): a second TriggerRelease call
+// for the identical batch fails at CreateReleaseRun's own uniqueness
+// constraint before ever reaching ExecuteWorkflow (translated to
+// codes.AlreadyExists by mapRepoErr), and -- as a second line of defense
+// for the narrow window where CreateReleaseRun's row exists but
+// ExecuteWorkflow has not yet been called (e.g. this process crashing
+// between the two) -- a WorkflowExecutionAlreadyStarted error from
+// ExecuteWorkflow itself is translated into the same FailedPrecondition
+// "already releasing" shape rejectIfAlreadyReleasing returns, mirroring
+// worker/outbox/drain.go's startWorkflow handling of the identical error.
+//
+// Known gap (not solved here, out of issue #889's listed scope): if
+// ExecuteWorkflow fails with anything other than WorkflowExecutionAlready
+// Started (e.g. Temporal itself unreachable) after CreateReleaseRun has
+// already committed, the release_run row is left permanently orphaned in
+// 'queued' -- WorkflowID's doc comment notes it is derived purely from the
+// target batch, with no time component, so a retried TriggerRelease call
+// for the same batch cannot create a second row either. A transactional-
+// outbox pattern (mirroring AR-4b's writeback_outbox, so a worker-side
+// drain loop retries the ExecuteWorkflow call instead of this RPC call
+// doing it inline and best-effort) would close this gap; documented as
+// follow-up rather than implemented here.
 func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerReleaseRequest) (*pb.TriggerReleaseResponse, error) {
 	if err := auth.RequirePromoter(ctx, releaseTriggerEnv); err != nil {
 		return nil, err
@@ -68,6 +96,7 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 	}
 
 	targets := make([]repository.ReleaseRunTarget, 0, len(req.GetTargets()))
+	releaseTargets := make([]release.ReleaseTarget, 0, len(req.GetTargets()))
 	digests := map[string]string{}
 	// seen guards against the same owner+kind appearing twice within a
 	// single TriggerRelease call. rejectIfAlreadyReleasing only checks
@@ -105,6 +134,11 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 			OwnerFullName: t.GetOwnerFullName(),
 			Kind:          kind,
 		})
+		releaseTargets = append(releaseTargets, release.ReleaseTarget{
+			OwnerFullName: t.GetOwnerFullName(),
+			Kind:          kind,
+			Digest:        t.GetDigest(),
+		})
 		if t.GetDigest() != "" {
 			digests[t.GetOwnerFullName()] = t.GetDigest()
 		}
@@ -119,14 +153,12 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 		digestInput = raw
 	}
 
+	workflowID := release.WorkflowID(releaseTargets)
 	run := repository.ReleaseRun{
-		TriggeredBy:    actorFromCtx(ctx),
-		RequestedScope: req.GetRequestedScope(),
-		DigestInput:    digestInput,
-		// TemporalWorkflowID: see TODO on this method's doc comment -- a
-		// placeholder until #889 wires the real Temporal client and
-		// coordinates a deterministic, batch-derived id.
-		TemporalWorkflowID: "release-" + uuid.NewString(),
+		TriggeredBy:        actorFromCtx(ctx),
+		RequestedScope:     req.GetRequestedScope(),
+		DigestInput:        digestInput,
+		TemporalWorkflowID: workflowID,
 	}
 
 	var created *repository.ReleaseRun
@@ -139,6 +171,27 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 		return nil
 	}); err != nil {
 		return nil, mapRepoErr(err)
+	}
+
+	if s.temporal != nil {
+		_, werr := s.temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+			ID:        workflowID,
+			TaskQueue: release.TaskQueue,
+		}, release.ReleaseWorkflow, release.ReleaseWorkflowInput{
+			ReleaseRunID: created.ReleaseRunID,
+			Targets:      releaseTargets,
+		})
+		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+		switch {
+		case werr == nil:
+			// Started (or, per Temporal's own dedup, already running under
+			// this exact workflow id) -- see this method's doc comment.
+		case errors.As(werr, &alreadyStarted):
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"a release for these exact targets is already in progress (workflow %s)", workflowID)
+		default:
+			return nil, status.Errorf(codes.Internal, "start release workflow %s: %v", workflowID, werr)
+		}
 	}
 
 	return &pb.TriggerReleaseResponse{

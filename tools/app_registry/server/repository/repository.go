@@ -544,6 +544,19 @@ type ReleaseRunRepository interface {
 	// `release_run_target` row per target in run.Targets, all starting in
 	// ReleaseRunTargetStateQueued, in a single transaction. Must be called
 	// inside Registry.WithTx.
+	//
+	// Rejects with ErrAlreadyExists (issue #889, FR11/migration 017) if any
+	// existing release_run sharing run.TemporalWorkflowID still has at
+	// least one non-terminal release_run_target row -- i.e. an in-flight
+	// retry of the same trigger, or a genuinely concurrent trigger of the
+	// same batch (release.WorkflowID is deterministic per target batch).
+	// Once every release_run_target row for a prior release_run under that
+	// same workflow id has reached succeeded/failed, a new release_run may
+	// reuse the id -- this is what lets the same apps/charts be released
+	// again later, matching Temporal's own default WorkflowIDReusePolicy
+	// (AllowDuplicate: a new execution may start under a previously-used id
+	// once the prior execution is terminal) rather than forbidding it
+	// forever.
 	CreateReleaseRun(ctx context.Context, run ReleaseRun, targets []ReleaseRunTarget) (*ReleaseRun, []ReleaseRunTarget, error)
 
 	// UpdateTargetState transitions releaseRunTargetID to newState,

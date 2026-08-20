@@ -16,12 +16,14 @@ import (
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
+	temporallib "github.com/whale-net/everything/libs/go/temporal"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	registryauth "github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/handlers"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/postgres"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -62,6 +64,16 @@ func run() error {
 	repo := postgres.NewRepository(pool)
 	log.Println("Database connection established")
 
+	// Temporal client, so ReleaseServer.TriggerRelease (issue #889) can
+	// start ReleaseWorkflow executions directly from this process -- see
+	// worker/main.go's identical NewClient construction (the worker
+	// process this client's workflow starts on; see release.TaskQueue).
+	temporalClient, err := temporallib.NewClient(temporallib.ConfigFromEnv(), temporallib.NewLogger("app-registry-api"))
+	if err != nil {
+		return fmt.Errorf("failed to connect to temporal: %w", err)
+	}
+	defer temporalClient.Close()
+
 	// Create auth interceptors. DevRoles matters only in AuthModeNone: it
 	// makes the injected dev Claims carry every app-registry role, not
 	// grpcauth's generic default of ["admin"] (which satisfies none of our
@@ -87,7 +99,7 @@ func run() error {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	healthServer := registerServices(grpcServer, repo)
+	healthServer := registerServices(grpcServer, repo, temporalClient)
 
 	// Start listening
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
@@ -125,18 +137,20 @@ func run() error {
 // the caller can flip it to NOT_SERVING on shutdown. Split out from run() so
 // it can be exercised directly against a bufconn listener in tests, with no
 // real database or gRPC auth setup required — see main_test.go, which passes
-// a fake repository.Registry.
-func registerServices(grpcServer *grpc.Server, repo repository.Registry) *health.Server {
+// a fake repository.Registry (and a nil temporalClient -- see
+// handlers.ReleaseServer's temporal field doc comment).
+func registerServices(grpcServer *grpc.Server, repo repository.Registry, temporalClient client.Client) *health.Server {
 	// AppRegistry and ArtifactRegistry are real as of AR-2a (AllocateVersion
 	// stays Unimplemented — that's AR-5). EnvironmentRegistry is real as of
-	// AR-3b. PromotionRegistry is real as of AR-3c. ReleaseRegistry is
-	// scaffolded as of issue #888 — every RPC returns Unimplemented until
-	// the Implementation phase lands.
+	// AR-3b. PromotionRegistry is real as of AR-3c. ReleaseRegistry is real
+	// as of issue #889 (TriggerRelease starts ReleaseWorkflow via
+	// temporalClient; #888 landed TriggerRelease/GetRelease's repository
+	// half first).
 	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer(repo))
 	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo))
 	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo))
 	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer(repo))
-	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo))
+	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo, temporalClient))
 
 	// Health check — reports SERVING once the process is up. AR-1 has no
 	// downstream dependency to gate on beyond the DB pool, which is already

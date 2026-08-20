@@ -443,13 +443,64 @@ func runGit(ctx context.Context, dir, token string, args ...string) error {
 // mintInstallationToken builds and signs a GitHub App JWT, then exchanges
 // it for a short-lived installation access token -- the standard GitHub App
 // git-auth flow (issue #798 point 3). The returned token is never logged.
+// Thin wrapper over the package-level MintInstallationToken, reusing
+// a.privateKey (already parsed once at NewGitOpsActivities construction
+// time) instead of reparsing Config.PrivateKeyPEM on every call.
 func (a *GitOpsActivities) mintInstallationToken(ctx context.Context) (string, error) {
-	jwtStr, err := signAppJWT(a.Config.AppID, a.privateKey, time.Now())
+	return mintInstallationToken(ctx, a.Config.AppID, a.Config.InstallationID, a.privateKey, a.httpClient(), a.baseURL())
+}
+
+// GitHubAppConfig is the GitHub App credential set used to mint an
+// installation access token -- shared by GitOpsActivities.Publish
+// (writeback, above) and worker/release's DispatchBuild/PollBuild (issue
+// #889), so both reuse exactly one JWT-sign + token-exchange
+// implementation rather than inventing a second one, per issue #889's
+// Summary: "reuse the GitHub App installation-token pattern already
+// implemented in worker/writeback/gitops.go ... rather than inventing a
+// second auth mechanism".
+type GitHubAppConfig struct {
+	// AppID is the GitHub App's numeric id (see GitOpsConfig.AppID).
+	AppID string
+	// InstallationID is the installation the token is scoped to (see
+	// GitOpsConfig.InstallationID).
+	InstallationID string
+	// PrivateKeyPEM is the GitHub App's RSA private key, PEM-encoded,
+	// PKCS#1 or PKCS#8 (see GitOpsConfig.PrivateKeyPEM). Never logged.
+	PrivateKeyPEM string
+}
+
+// MintInstallationToken signs a GitHub App JWT for cfg and exchanges it for
+// a short-lived installation access token via the standard GitHub App
+// git-auth flow (issue #798 point 3, same flow GitOpsActivities.Publish
+// uses). httpClient defaults to http.DefaultClient when nil; baseURL
+// defaults to "https://api.github.com" when empty -- override both in
+// tests to point at an httptest.Server, mirroring
+// GitOpsActivities.HTTPClient/GitHubAPIBaseURL. The returned token is never
+// logged.
+func MintInstallationToken(ctx context.Context, cfg GitHubAppConfig, httpClient *http.Client, baseURL string) (string, error) {
+	key, err := parsePrivateKeyPEM(cfg.PrivateKeyPEM)
+	if err != nil {
+		return "", fmt.Errorf("mint installation token: %w", err)
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	if baseURL == "" {
+		baseURL = "https://api.github.com"
+	}
+	return mintInstallationToken(ctx, cfg.AppID, cfg.InstallationID, key, httpClient, baseURL)
+}
+
+// mintInstallationToken is the shared implementation behind both
+// GitOpsActivities.mintInstallationToken and the exported
+// MintInstallationToken -- see both callers' doc comments.
+func mintInstallationToken(ctx context.Context, appID, installationID string, key *rsa.PrivateKey, httpClient *http.Client, baseURL string) (string, error) {
+	jwtStr, err := signAppJWT(appID, key, time.Now())
 	if err != nil {
 		return "", fmt.Errorf("mint installation token: sign app jwt: %w", err)
 	}
 
-	url := a.baseURL() + "/app/installations/" + a.Config.InstallationID + "/access_tokens"
+	url := baseURL + "/app/installations/" + installationID + "/access_tokens"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("mint installation token: build request: %w", err)
@@ -457,7 +508,7 @@ func (a *GitOpsActivities) mintInstallationToken(ctx context.Context) (string, e
 	req.Header.Set("Authorization", "Bearer "+jwtStr)
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := a.httpClient().Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("mint installation token: %w", err)
 	}

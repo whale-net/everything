@@ -155,6 +155,32 @@ needs `PG_DATABASE_URL` to drain the outbox and `TEMPORAL_HOST` to run
 | `WRITEBACK_GIT_AUTHOR_NAME` | `app-registry-writeback[bot]` | Git commit author name for gitops writes. |
 | `WRITEBACK_GIT_AUTHOR_EMAIL` | `app-registry-writeback[bot]@users.noreply.github.com` | Git commit author email for gitops writes. |
 
+### ReleaseWorkflow (issue #889)
+
+`ReleaseWorkflow` and its activities run on the same worker process and
+task queue as `WritebackWorkflow` above (`release.TaskQueue ==
+writeback.TaskQueue`) — see `worker/release/workflow.go`.
+`DispatchBuild`/`PollBuild` and `ResolvePlan` are each opt-in independently
+of the writeback vars above; unset, they return a clear "not configured"
+error rather than running with a silently-defaulted credential or
+workspace (see `worker/release/activities.go`).
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `RELEASE_GITHUB_APP_ID` | *(unset)*, required for `DispatchBuild`/`PollBuild` | GitHub App ID used to mint an installation token for the `workflow_dispatch` API call — no default. Setting this is what selects the real `GitHubDispatcher` over the "not configured" error; see `worker/release/github.go`. May reuse the same App as `WRITEBACK_GITHUB_APP_ID` (with `actions:write` permission added) or a dedicated one — implementation choice, not fixed by this repo. |
+| `RELEASE_GITHUB_APP_INSTALLATION_ID` | *(unset)*, required when `RELEASE_GITHUB_APP_ID` is set | GitHub App installation ID for the repo `RELEASE_GITHUB_REPO_OWNER`/`RELEASE_GITHUB_REPO_NAME` names — no default. |
+| `RELEASE_GITHUB_APP_PRIVATE_KEY` | *(unset)*, required when `RELEASE_GITHUB_APP_ID` is set | Raw multi-line PEM private key for the GitHub App above, used to sign the installation-token JWT — no default, same delivery convention as `WRITEBACK_GITHUB_APP_PRIVATE_KEY`. |
+| `RELEASE_GITHUB_REPO_OWNER` | `whale-net` | Owner of the repo `release.yml` lives in. |
+| `RELEASE_GITHUB_REPO_NAME` | `everything` | Repo `release.yml` lives in. |
+| `RELEASE_GITHUB_WORKFLOW_FILE` | `release.yml` | Workflow file `DispatchBuild`/`PollBuild` dispatch/poll. |
+| `RELEASE_GITHUB_REF` | `main` | Git ref `DispatchBuild` dispatches `RELEASE_GITHUB_WORKFLOW_FILE` against. |
+| `RELEASE_PLAN_BINARY_PATH` | `release_helper_go` (resolved via `PATH`) | Path to the `release_helper_go` binary `ResolvePlan`'s interim CLI shell-out invokes — see `worker/release/plan.go`'s package doc comment for why this is a shell-out rather than an in-process library call. |
+| `RELEASE_WORKSPACE_ROOT` | *(unset)*, required for `ResolvePlan` | Working directory `ResolvePlan` runs `RELEASE_PLAN_BINARY_PATH plan` from — must be a full monorepo checkout with `bazel`/`git` on `PATH`, since the CLI's version-resolution logic assumes it is running inside `release.yml`'s own environment. `ResolvePlan` fails fast with a clear error, rather than a confusing subprocess failure, when this is unset. |
+
+The API server (`app-registry-api`) also needs Temporal connectivity as of
+issue #889 (`TriggerRelease` starts `ReleaseWorkflow` directly) — the same
+Database/Temporal variables above apply there too, not just to the worker.
+
 ### Artifact reaper (AR-7b, issue #558)
 
 The stale-row reaper (`worker/reaper`) runs as a third loop in the same

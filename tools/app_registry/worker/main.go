@@ -129,10 +129,40 @@ func run() error {
 
 	// ReleaseWorkflow (issue #889), registered on the same task queue as
 	// WritebackWorkflow -- release.TaskQueue == writeback.TaskQueue, see
-	// that constant's doc comment. releaseActivities is scaffold-only: every
-	// method but CheckApproval returns an unimplemented error until #889's
-	// Implementation phase lands (see worker/release/activities.go).
-	releaseActivities := &release.Activities{}
+	// that constant's doc comment. Registry is the same direct-Postgres repo
+	// the outbox drainer uses (see release/record.go's package doc comment
+	// for why VerifyPublished/RecordTargetState bypass the gRPC API).
+	// GitHub/PlanBinaryPath/WorkspaceRoot are opt-in, like
+	// WRITEBACK_GITOPS_REPO above: DispatchBuild/PollBuild and ResolvePlan
+	// return a clear "not configured" error rather than running with a
+	// silently-defaulted credential or workspace when unset -- so `bazel
+	// test`/local dev/Tilt keep working with zero config, and only a real
+	// deployment that sets these env vars actually dispatches GitHub Actions
+	// runs or shells out to release_helper_go (see release/plan.go's
+	// package doc comment on that shell-out's operational requirement).
+	releaseActivities := &release.Activities{
+		Registry:       repo,
+		PlanBinaryPath: os.Getenv("RELEASE_PLAN_BINARY_PATH"),
+		WorkspaceRoot:  os.Getenv("RELEASE_WORKSPACE_ROOT"),
+	}
+	if appID := os.Getenv("RELEASE_GITHUB_APP_ID"); appID != "" {
+		dispatcher, derr := release.NewGitHubDispatcher(release.GitHubDispatcherConfig{
+			App: writeback.GitHubAppConfig{
+				AppID:          appID,
+				InstallationID: os.Getenv("RELEASE_GITHUB_APP_INSTALLATION_ID"),
+				PrivateKeyPEM:  os.Getenv("RELEASE_GITHUB_APP_PRIVATE_KEY"),
+			},
+			Owner:        getEnv("RELEASE_GITHUB_REPO_OWNER", "whale-net"),
+			Repo:         getEnv("RELEASE_GITHUB_REPO_NAME", "everything"),
+			WorkflowFile: getEnv("RELEASE_GITHUB_WORKFLOW_FILE", "release.yml"),
+			Ref:          getEnv("RELEASE_GITHUB_REF", "main"),
+		})
+		if derr != nil {
+			return fmt.Errorf("configure release github dispatcher: %w", derr)
+		}
+		logger.Info("using real GitHub dispatcher for ReleaseWorkflow", "owner", dispatcher.Config.Owner, "repo", dispatcher.Config.Repo, "workflow_file", dispatcher.Config.WorkflowFile)
+		releaseActivities.GitHub = dispatcher
+	}
 	w.RegisterWorkflow(release.ReleaseWorkflow)
 	w.RegisterActivityWithOptions(releaseActivities.CheckApproval, activityOptions(release.ActivityCheckApproval))
 	w.RegisterActivityWithOptions(releaseActivities.ResolvePlan, activityOptions(release.ActivityResolvePlan))

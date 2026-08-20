@@ -19,18 +19,19 @@
 // worker/writeback/workflow.go's identical discipline and AGENTS.md/PLAN.md's
 // "Workflow determinism" hazard.
 //
-// # Scaffold status
+// # Implementation status
 //
-// As of this package's introduction, CheckApproval (approval.go) is the
-// only activity with a real implementation -- FR14's true no-op, "always
-// approve" -- see architecture/18-future-approval-gate.md. ResolvePlan,
-// DispatchBuild, PollBuild, VerifyPublished, and RecordTargetState
-// (activities.go) return unimplemented errors; a later change (issue #889's
-// own Implementation phase) replaces each with the real logic described in
-// that issue. The workflow control flow itself (ReleaseWorkflow below) is
-// NOT a stub: its dispatch order and failure-propagation behavior are the
-// part of FR6/FR11 this scaffold settles, so Testing-phase work can assert
-// against it once real activities land.
+// Every ReleaseActivities method has a real implementation as of issue
+// #889's Implementation phase: CheckApproval (approval.go, FR14's true
+// no-op -- see architecture/18-future-approval-gate.md), ResolvePlan
+// (plan.go, an interim release_helper_go CLI shell-out -- see that file's
+// package doc comment), DispatchBuild/PollBuild (activities.go/github.go,
+// the GitHub Actions workflow_dispatch integration), and VerifyPublished/
+// RecordTargetState (record.go, direct repository.Registry reads/writes).
+// The workflow control flow itself (ReleaseWorkflow below) was fixed at
+// scaffold time and is unchanged here: its dispatch order and failure-
+// propagation behavior are the part of FR6/FR11 the scaffold settled, so
+// Testing-phase work asserts against it as-is.
 package release
 
 import (

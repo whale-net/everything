@@ -8,75 +8,122 @@ import (
 )
 
 // Activities is the concrete ReleaseActivities implementation
-// worker/main.go registers. CheckApproval (approval.go) is real as of this
-// package's introduction -- FR14's true no-op. Every other method here
-// returns an unimplemented error: issue #889's own phase breakdown defers
-// their real logic (GitHub Actions dispatch/poll, plan resolution,
-// GetReleaseRun verification, release_run_target writes) to that issue's
-// Implementation scope. See the package doc comment's "Scaffold status".
-//
-// Fields are added here as each activity gains a real implementation (e.g.
-// a GitHub App client for DispatchBuild/PollBuild, mirroring
-// worker/writeback/gitops.go's GitOpsConfig; an AppRegistry gRPC client for
-// VerifyPublished/RecordTargetState, mirroring worker/writeback/stub.go's
-// Client field).
-type Activities struct{}
+// worker/main.go registers. CheckApproval (approval.go) is real -- FR14's
+// true no-op. ResolvePlan (plan.go) and VerifyPublished/RecordTargetState
+// (record.go) are real. DispatchBuild/PollBuild (below) delegate to
+// GitHub, real once GitHub is configured (see NewGitHubDispatcher);
+// worker/main.go leaves GitHub nil (and DispatchBuild/PollBuild return an
+// explicit "not configured" error) unless the required GitHub App env vars
+// are set, mirroring worker/writeback's stub/gitops selection.
+type Activities struct {
+	// Registry is the direct Postgres-backed repository.Registry
+	// VerifyPublished/RecordTargetState read/write through -- see record.go's
+	// package doc comment for why this bypasses the gRPC API (which has no
+	// mutating RPC for release_run_target). Required for those two methods.
+	Registry repository.Registry
+
+	// GitHub dispatches/polls the GitHub Actions build job. Required for
+	// DispatchBuild/PollBuild.
+	GitHub *GitHubDispatcher
+
+	// PlanBinaryPath/WorkspaceRoot configure ResolvePlan's interim
+	// release_helper_go shell-out -- see plan.go's package doc comment.
+	PlanBinaryPath string
+	WorkspaceRoot  string
+}
 
 var _ ReleaseActivities = (*Activities)(nil)
 
-// ResolvePlan is unimplemented at scaffold time. See ReleaseActivities'
-// doc comment and issue #889's Implementation scope: the real
-// implementation calls tools/release_helper_go/cmd/plan.go's/plan_helm.go's
-// resolution logic (extracted to a library function, or shelled out to the
-// existing release_helper_go plan binary as an interim step) exactly once
-// per workflow execution.
-func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (ResolvedPlan, error) {
-	return ResolvedPlan{}, unimplemented(ActivityResolvePlan)
-}
-
-// DispatchBuild is unimplemented at scaffold time. See ReleaseActivities'
-// doc comment and issue #889's Implementation scope: the real
-// implementation invokes release.yml (or a dedicated workflow file) via the
-// GitHub Actions API, reusing worker/writeback/gitops.go's GitHub App
-// installation-token pattern. A non-empty digest override (FR2) must
-// return a clear unimplemented-style error rather than silently building
-// fresh or silently ignoring it -- this stub already satisfies that for
-// every input, real or not.
+// DispatchBuild implements ReleaseActivities.DispatchBuild: invokes
+// release.yml (or whatever workflow file a.GitHub.Config.WorkflowFile
+// names) via the GitHub Actions API with plan's resolved version, skipping
+// that workflow's own plan-release re-resolution for this trigger (its
+// explicit `version` input takes precedence over auto-increment -- see
+// tools/release_helper_go/cmd/plan.go's buildPlanResult) -- see this
+// package's github.go for the dispatch mechanics and its documented
+// version-uniformity limitation.
+//
+// digestOverrides (FR2, hotfix/re-release) is out of scope for this task's
+// implementation per issue #889's Implementation scope: a non-empty
+// digestOverrides returns a clear error rather than silently building
+// fresh or silently ignoring it.
+//
+// Idempotency (NFR3/FR11): DispatchBuild does not itself check-before-
+// dispatch against an in-flight build for this release run before calling
+// GitHub -- an accepted, narrow gap at this phase: workflow.go's
+// defaultActivityOptions gives DispatchBuild MaximumAttempts: 5, so a
+// retried DispatchBuild (e.g. after a transient network error on the
+// dispatch POST itself, or on findDispatchedRun's polling) could in
+// principle trigger a second GHA run for the same release. This is
+// mitigated, not eliminated, by two things already true at this phase: (1)
+// VerifyPublished treats already-published targets as satisfied regardless
+// of which of two concurrent runs published them first (see that method's
+// doc comment -- FR11's "retry after partial completion must not double-
+// publish" is enforced there, downstream, not by preventing a second
+// dispatch), and (2) the underlying GHA job's own BeginPublish/
+// RecordArtifact calls are already idempotent by digest/version
+// (architecture/08-release-lifecycle/04-run-log.md, unchanged by this
+// task) -- a second concurrent run publishing the same version is a no-op
+// or a detected conflict there, not a corrupted publish. A tighter
+// check-before-dispatch (e.g. recording BuildRef on the release_run row
+// before calling GitHub, and having a retried DispatchBuild read it back
+// first) is documented follow-up, not implemented here.
 func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, digestOverrides map[string]string) (BuildRef, error) {
-	return BuildRef{}, unimplemented(ActivityDispatchBuild)
+	if len(digestOverrides) > 0 {
+		return BuildRef{}, fmt.Errorf("dispatch build: digest overrides (FR2 hotfix/re-release input) not implemented yet -- see issue #889's Implementation scope")
+	}
+	if a.GitHub == nil {
+		return BuildRef{}, fmt.Errorf("dispatch build: GitHub dispatcher not configured")
+	}
+	if len(plan.Versions) == 0 {
+		return BuildRef{}, fmt.Errorf("dispatch build: resolved plan has no versions")
+	}
+
+	version, err := uniformVersion(plan.Versions)
+	if err != nil {
+		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
+	}
+	apps, charts, err := splitPlanTargets(plan.Versions)
+	if err != nil {
+		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
+	}
+
+	inputs := map[string]string{
+		"version": version,
+		"dry_run": "false",
+	}
+	if len(apps) > 0 {
+		inputs["apps"] = joinComma(apps)
+	}
+	if len(charts) > 0 {
+		inputs["helm_charts"] = joinComma(charts)
+	}
+
+	ref, err := a.GitHub.Dispatch(ctx, plan.ReleaseRunID, inputs)
+	if err != nil {
+		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
+	}
+	return ref, nil
 }
 
-// PollBuild is unimplemented at scaffold time. See ReleaseActivities' doc
-// comment and issue #889's Implementation scope: the real implementation
-// polls the GitHub Actions run identified by ref until it reaches success,
-// failure, or cancelled.
+// PollBuild implements ReleaseActivities.PollBuild: polls the GitHub
+// Actions run identified by ref until it reaches a terminal state. Read-
+// only, naturally idempotent under activity retry (NFR3) -- re-polling the
+// same run id produces the same answer.
 func (a *Activities) PollBuild(ctx context.Context, ref BuildRef) (BuildStatus, error) {
-	return BuildStatus{}, unimplemented(ActivityPollBuild)
+	if a.GitHub == nil {
+		return BuildStatus{}, fmt.Errorf("poll build: GitHub dispatcher not configured")
+	}
+	return a.GitHub.PollRun(ctx, ref)
 }
 
-// VerifyPublished is unimplemented at scaffold time. See ReleaseActivities'
-// doc comment and issue #889's Implementation scope: the real
-// implementation calls GetRelease/GetReleaseRun (or ListArtifacts) and
-// confirms every target reached published/succeeded.
-func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string) (VerifyResult, error) {
-	return VerifyResult{}, unimplemented(ActivityVerifyPublished)
-}
-
-// RecordTargetState is unimplemented at scaffold time. See
-// ReleaseActivities' doc comment and issue #889's Implementation scope: the
-// real implementation resolves target's release_run_target row (via
-// GetReleaseRun on releaseRunID, matching OwnerFullName+Kind) and calls
-// repository.ReleaseRunRepository.UpdateTargetState on it.
-func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string, target ReleaseTarget, newState repository.ReleaseRunTargetState, buildID, errorDetail string) error {
-	return unimplemented(ActivityRecordTargetState)
-}
-
-// unimplemented builds the scaffold-time error every not-yet-implemented
-// ReleaseActivities method returns. Not wrapped in temporal.NewApplicationError
-// as non-retryable: Temporal's default retry policy retrying an
-// unimplemented activity is harmless (it will keep failing until the real
-// implementation lands) and keeping it a plain error avoids importing
-// go.temporal.io/sdk/temporal here just for that one call.
-func unimplemented(activityName string) error {
-	return fmt.Errorf("release.%s: not implemented yet (scaffold only -- see issue #889's Implementation scope)", activityName)
+func joinComma(ss []string) string {
+	out := ""
+	for i, s := range ss {
+		if i > 0 {
+			out += ","
+		}
+		out += s
+	}
+	return out
 }

@@ -12,9 +12,15 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
+// newReleaseFixture builds a ReleaseServer with no Temporal client (nil) --
+// see ReleaseServer.temporal's doc comment: TriggerRelease treats a nil
+// client as "skip starting the workflow" so every test in this file that
+// only cares about the repository-write half of TriggerRelease (dedup
+// rejection, persisted rows, etc.) doesn't need a real or fake Temporal
+// server.
 func newReleaseFixture() (*ReleaseServer, repository.Registry) {
 	repo := fake.New()
-	return NewReleaseServer(repo), repo
+	return NewReleaseServer(repo, nil), repo
 }
 
 func triggerReq(scope string, targets ...*pb.ReleaseTargetInput) *pb.TriggerReleaseRequest {
