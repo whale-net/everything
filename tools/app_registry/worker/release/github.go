@@ -28,6 +28,25 @@
 // per-target version map) is documented follow-up work, matching this
 // file's other "interim implementation" precedent (see plan.go's
 // ResolvePlan doc comment).
+//
+// # Composed-app-pin plumbing (issue #901) -- distinct from the above
+//
+// The uniform-top-level-version limitation above is about the version
+// release.yml applies to each *explicit release target* (app or chart) and
+// remains open. Separately, issue #901 closed a different gap: a chart's
+// *composed member apps* (declared via HelmChartMetadata.Apps, resolved by
+// tools/release_helper_go/cmd/build_helm.go's resolveChartAppVersions) were
+// always re-resolved independently via App Registry
+// GetArtifact(latest_published: true), even when a member app was itself an
+// explicit target already pinned by this same batch's resolved plan --
+// see #878/#879/#884. DispatchBuild now forwards plan.Versions' image-kind
+// entries as a JSON `app_versions` workflow_dispatch input (via
+// appVersionsJSON below), which release.yml's release-helm-charts job
+// passes to `release-charts --app-versions`: a composed member app present
+// there uses its batch-resolved version directly, no registry call. A
+// composed member app NOT part of this batch still resolves independently,
+// unchanged -- this was never meant to pin every dependency forever, only
+// to close the drift within a single release batch.
 package release
 
 import (
@@ -383,6 +402,41 @@ func splitPlanTargets(versions map[string]string) (apps, charts []string, err er
 	sort.Strings(apps)
 	sort.Strings(charts)
 	return apps, charts, nil
+}
+
+// appVersionsJSON extracts the image-kind (app) entries from a
+// ResolvedPlan.Versions map (keyed by repository.TargetKey format) into a
+// JSON object keyed by bare OwnerFullName ("<domain>-<name>") -- the exact
+// shape release_helper_go's release-charts `--app-versions` flag expects
+// (matching AppMetadata.FullName(), see build_helm.go's
+// resolveChartAppVersions doc comment). This is how DispatchBuild carries
+// the release batch's own resolved app versions through to
+// release-helm-charts' chart-composition step, closing the FR7/FR8 gap
+// documented in this file's package doc comment (issue #901): a chart's
+// composed member app, when itself a target of this same release batch,
+// must be pinned to the version this batch actually resolved for it, not
+// re-queried independently. Charts themselves (kind "chart") are not
+// included -- a chart is never itself a composed member of another chart.
+// Returns "" (not an error) when there are no image-kind entries.
+func appVersionsJSON(versions map[string]string) (string, error) {
+	apps := map[string]string{}
+	for key, v := range versions {
+		kind, owner, ok := parseTargetKey(key)
+		if !ok {
+			return "", fmt.Errorf("malformed resolved-plan target key %q", key)
+		}
+		if kind == repository.ArtifactKindImage {
+			apps[owner] = v
+		}
+	}
+	if len(apps) == 0 {
+		return "", nil
+	}
+	b, err := json.Marshal(apps)
+	if err != nil {
+		return "", fmt.Errorf("marshal app_versions: %w", err)
+	}
+	return string(b), nil
 }
 
 // parseTargetKey reverses repository.TargetKey's "<kind>:<owner>" format.

@@ -98,6 +98,13 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 	if len(charts) > 0 {
 		inputs["helm_charts"] = joinComma(charts)
 	}
+	appVersions, err := appVersionsJSON(plan.Versions)
+	if err != nil {
+		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
+	}
+	if appVersions != "" {
+		inputs["app_versions"] = appVersions
+	}
 
 	ref, err := a.GitHub.Dispatch(ctx, plan.ReleaseRunID, inputs)
 	if err != nil {

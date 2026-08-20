@@ -1027,6 +1027,22 @@ func TestPlanCmd_MatrixGitHubOutput(t *testing.T) {
 					if err := json.Unmarshal([]byte(outputMap["matrix"]), &matrixObj); err != nil {
 						t.Fatalf("failed to parse matrix JSON string: %v", err)
 					}
+
+					// issue #901: --format github must also emit a `versions=`
+					// line carrying PlanResult.Versions as JSON, so
+					// release.yml's plan-release job can forward it (via a new
+					// `versions` output) to release-helm-charts' --app-versions
+					// flag for the manual/legacy dispatch fallback path.
+					if outputMap["versions"] == "" {
+						t.Fatalf("expected non-empty versions output, got outputs: %+v", outputMap)
+					}
+					var versionsObj map[string]string
+					if err := json.Unmarshal([]byte(outputMap["versions"]), &versionsObj); err != nil {
+						t.Fatalf("failed to parse versions JSON string %q: %v", outputMap["versions"], err)
+					}
+					if versionsObj["manmanv2-control-api"] != "v1.0.0" {
+						t.Errorf("expected versions[manmanv2-control-api]=v1.0.0, got %+v", versionsObj)
+					}
 				})
 			})
 		})

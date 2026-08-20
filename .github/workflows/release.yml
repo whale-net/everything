@@ -34,6 +34,10 @@ on:
         description: 'Build release tools from source instead of downloading pinned prebuilt binaries (safety valve)'
         type: boolean
         default: false
+      app_versions:
+        description: 'JSON object of resolved app versions from this release batch''s plan, keyed by "<domain>-<name>" (e.g. {"manmanv2-control-api":"v1.2.3"}). Set by App Registry''s Temporal-orchestrated DispatchBuild (issue #901) so a chart''s composed member apps that are themselves batch targets pin to the batch''s resolved version instead of an independent latest_published query. Leave empty for manual dispatch -- release-helm-charts falls back to plan-release''s own freshly-resolved versions.'
+        required: false
+        default: ''
 
 concurrency:
   group: release
@@ -340,6 +344,7 @@ jobs:
       openapi-matrix: ${{ steps.plan.outputs.openapi_matrix }}
       has-specs: ${{ steps.plan.outputs.has_specs }}
       build-id: ${{ steps.plan.outputs.build_id }}
+      versions: ${{ steps.plan.outputs.versions }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -620,6 +625,18 @@ jobs:
           [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
           [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
+          # Prefer the Temporal-dispatched batch's actual resolved plan
+          # (github.event.inputs.app_versions, set by DispatchBuild -- issue
+          # #901) over this job's own freshly-resolved plan-release output:
+          # the dispatch input is the release's literal locked plan, while
+          # plan-release's own versions output is this job independently
+          # re-resolving apps on a manual/legacy dispatch (still correct,
+          # just not "the" batch's plan).
+          if [[ -n "${{ github.event.inputs.app_versions }}" ]]; then
+            ARGS+=(--app-versions "${{ github.event.inputs.app_versions }}")
+          elif [[ -n "${{ needs.plan-release.outputs.versions }}" ]]; then
+            ARGS+=(--app-versions "${{ needs.plan-release.outputs.versions }}")
+          fi
           "$RELEASE_HELPER" "${ARGS[@]}"
 
       - name: Upload chart release notes artifact

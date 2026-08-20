@@ -99,4 +99,44 @@ func TestActivities_DispatchBuild_HappyPath_DispatchesUniformVersionWithSplitTar
 	require.Equal(t, "v1.2.3", sawInputs["version"])
 	require.Equal(t, "demo-widget", sawInputs["apps"])
 	require.Equal(t, "demo-achart", sawInputs["helm_charts"])
+
+	// issue #901: the image-kind entry from plan.Versions must also be
+	// forwarded as a JSON app_versions input, keyed by bare OwnerFullName
+	// (not the "image:" TargetKey-prefixed form) -- this is what
+	// release-helm-charts' --app-versions flag expects.
+	require.NotEmpty(t, sawInputs["app_versions"])
+	var gotAppVersions map[string]string
+	require.NoError(t, json.Unmarshal([]byte(sawInputs["app_versions"].(string)), &gotAppVersions))
+	require.Equal(t, map[string]string{"demo-widget": "v1.2.3"}, gotAppVersions)
+}
+
+// TestActivities_DispatchBuild_AppVersions_OmittedWhenNoImageTargets proves
+// a chart-only batch (no image-kind entries in plan.Versions) never emits
+// an app_versions input at all, rather than an empty/misleading one.
+func TestActivities_DispatchBuild_AppVersions_OmittedWhenNoImageTargets(t *testing.T) {
+	var sawInputs map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		sawInputs, _ = body["inputs"].(map[string]any)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":100,"html_url":"https://example/100","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
+	})
+
+	a := &Activities{GitHub: newTestDispatcher(t, mux)}
+	plan := ResolvedPlan{
+		ReleaseRunID: "release-run-2",
+		Versions:     map[string]string{"chart:demo-achart": "v1.2.3"},
+	}
+	_, err := a.DispatchBuild(context.Background(), plan, nil)
+	require.NoError(t, err)
+	_, ok := sawInputs["app_versions"]
+	require.False(t, ok, "expected no app_versions input for a chart-only batch, got %v", sawInputs["app_versions"])
 }

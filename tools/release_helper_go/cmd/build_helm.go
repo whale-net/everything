@@ -87,7 +87,7 @@ func newBuildHelmChartCmd() *cobra.Command {
 			}
 			var appVersions map[string]string
 			if useReleasedVersions {
-				appVersions, err = resolveChartAppVersions(cmd.Context(), chart, allApps, defaultGit, nil)
+				appVersions, err = resolveChartAppVersions(cmd.Context(), chart, allApps, defaultGit, nil, nil)
 				if err != nil {
 					return err
 				}
@@ -209,16 +209,26 @@ func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string
 	return "v0.0.1", nil
 }
 
-// resolveChartAppVersions returns the latest published version for each app
-// in the chart. For domains at adoption stage "allocate", versions are
-// resolved exclusively from the App Registry (GetArtifact with
-// latest_published=true). Falling back to git tags for an allocate-stage
-// domain is the exact bug that caused issue #876, so any registry failure
-// hard-errors rather than silently reverting to tag scanning.
+// resolveChartAppVersions returns the version to use for each app in the
+// chart. If resolvedPlanVersions is non-nil and contains an entry for a
+// composed member app (keyed by AppMetadata.FullName(), matching
+// findChartApp's return), that pinned version is used directly -- no
+// registry call, no git-tag fallback. This is issue #901's fix for the
+// FR7/FR8 gap: when a chart's member app is itself an explicit target of
+// the same release batch, its version must come from that release's
+// already-resolved plan, not from an independent query that can race or
+// drift from what the batch actually decided (see #878/#879/#884).
 //
-// When client is nil or the domain is not yet at "allocate" stage, git tags
-// are used as they always were.
-func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allApps []AppMetadata, git GitRunner, client pb.ArtifactRegistryClient) (map[string]string, error) {
+// For any app NOT present in resolvedPlanVersions (not part of this
+// release batch), the existing independent-resolution behavior applies
+// unchanged: for domains at adoption stage "allocate", versions are
+// resolved exclusively from the App Registry (GetArtifact with
+// latest_published=true) -- falling back to git tags for an allocate-stage
+// domain is the exact bug that caused issue #876, so any registry failure
+// hard-errors rather than silently reverting to tag scanning. When client
+// is nil or the domain is not yet at "allocate" stage, git tags are used as
+// they always were.
+func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allApps []AppMetadata, git GitRunner, client pb.ArtifactRegistryClient, resolvedPlanVersions map[string]string) (map[string]string, error) {
 	allocate, err := isDomainAtAllocateStage(ctx, client, chart.Domain)
 	if err != nil {
 		return nil, fmt.Errorf("resolve chart app versions: check adoption stage for domain %q: %w", chart.Domain, err)
@@ -230,11 +240,15 @@ func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allAp
 		if err != nil {
 			return nil, err
 		}
+		if pinned, ok := resolvedPlanVersions[matched.FullName()]; ok && pinned != "" {
+			versions[matched.FullName()] = pinned
+			continue
+		}
 		if allocate {
 			resp, err := client.GetArtifact(ctx, &pb.GetArtifactRequest{
-				OwnerFullName:    matched.FullName(),
-				Kind:             pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-				LatestPublished:  true,
+				OwnerFullName:   matched.FullName(),
+				Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+				LatestPublished: true,
 			})
 			if err != nil {
 				return nil, fmt.Errorf("resolve version for app %q (domain %q at allocate stage): App Registry GetArtifact failed: %w", matched.Name, chart.Domain, err)
@@ -253,7 +267,6 @@ func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allAp
 	}
 	return versions, nil
 }
-
 
 // findChartApp resolves one of a chart's declared app names to its full
 // AppMetadata, preferring a match within the chart's own domain. The
