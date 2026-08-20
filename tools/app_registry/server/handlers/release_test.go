@@ -205,6 +205,29 @@ func TestTriggerRelease_InvalidArgument(t *testing.T) {
 	}
 }
 
+// TestTriggerRelease_DuplicateTargetInBatch_Rejected confirms FR5's "at
+// most one non-terminal release per target" can't be violated by a single
+// batch request naming the same owner+kind twice -- rejectIfAlreadyReleasing
+// alone can't catch this (neither occurrence is persisted when the other is
+// checked), so this must be validated up front against the request itself.
+func TestTriggerRelease_DuplicateTargetInBatch_Rejected(t *testing.T) {
+	srv, repo := newReleaseFixture()
+
+	_, err := srv.TriggerRelease(authedCtx(), triggerReq("demo",
+		target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, ""),
+		target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, ""),
+	))
+	requireCode(t, err, codes.InvalidArgument, "TriggerRelease (duplicate target in batch)")
+
+	runs, lerr := repo.ReleaseRuns().ListReleaseRunsByTarget(context.Background(), "demo-svc")
+	if lerr != nil {
+		t.Fatalf("ListReleaseRunsByTarget: %v", lerr)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("expected no release_run to be created for a rejected batch, got %d", len(runs))
+	}
+}
+
 // TestGetRelease_ReadsBack confirms FR10: GetRelease returns real status
 // data straight from the repository, including per-target state.
 func TestGetRelease_ReadsBack(t *testing.T) {

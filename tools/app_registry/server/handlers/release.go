@@ -69,6 +69,20 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 
 	targets := make([]repository.ReleaseRunTarget, 0, len(req.GetTargets()))
 	digests := map[string]string{}
+	// seen guards against the same owner+kind appearing twice within a
+	// single TriggerRelease call. rejectIfAlreadyReleasing only checks
+	// against already-*persisted* release_run_target rows, so two
+	// occurrences of the same target within this one request would
+	// otherwise both pass that check (neither is persisted yet) and
+	// CreateReleaseRun would insert two 'queued' release_run_target rows
+	// for the same owner+kind in the same release_run -- violating FR5's
+	// "at most one non-terminal release per target" the instant the run is
+	// created. Caught here as a request-shape error, not a repository
+	// invariant, since no unique constraint enforces it at the DB layer
+	// (see migration 016's release_run_target -- intentionally, per that
+	// table's doc comment: CreateReleaseRun is trusted to insert at most
+	// one row per target).
+	seen := map[string]bool{}
 	for _, t := range req.GetTargets() {
 		if t.GetOwnerFullName() == "" {
 			return nil, status.Error(codes.InvalidArgument, "targets[].owner_full_name is required")
@@ -77,6 +91,11 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 		if kind != repository.ArtifactKindImage && kind != repository.ArtifactKindChart {
 			return nil, status.Errorf(codes.InvalidArgument, "targets[].kind must be IMAGE or CHART, got %v", t.GetKind())
 		}
+		key := t.GetOwnerFullName() + "\x00" + string(kind)
+		if seen[key] {
+			return nil, status.Errorf(codes.InvalidArgument, "targets[] contains %s (%s) more than once in the same request", t.GetOwnerFullName(), kind)
+		}
+		seen[key] = true
 
 		if err := s.rejectIfAlreadyReleasing(ctx, t.GetOwnerFullName(), kind); err != nil {
 			return nil, err
