@@ -292,6 +292,14 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Screen 40 (#650): drift and adoption audit — read-side only, no
 	// write control (the adopt action, screen 52, is deferred).
 	mux.HandleFunc("/drift-audit", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDriftAudit)))
+
+	// Release trigger + status (#890, FR1-5/FR10): GET renders the scope
+	// form, POST resolves it (FR1); status is a durable page keyed by
+	// release_run_id. "/releases/trigger" (a literal path) takes precedence
+	// over the "/releases/{id}" wildcard for that exact segment, the same
+	// precedent "/builds/lookup" vs. "/builds/{id}" already relies on above.
+	mux.HandleFunc("/releases/trigger", app.auth.RequireAuthFunc(app.withAccessToken(app.handleReleaseTrigger)))
+	mux.HandleFunc("/releases/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleReleaseStatus)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

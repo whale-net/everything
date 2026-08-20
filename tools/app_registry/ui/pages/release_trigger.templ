@@ -1,0 +1,143 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// ReleaseTriggerViewState is the release-trigger screen's render state
+// (FR1-5 scaffold, issue #890). Scope/IncludeDemo/Digest are the raw
+// submitted form fields, echoed back on every render (matches
+// promote.templ's validation-re-render pattern). ResolvedTargets is FR1's
+// real scope-expansion result (release_scope.go's resolveReleaseScope) --
+// nil on the initial GET, populated only after a POST that resolved
+// successfully.
+//
+// Scaffold note (issue #890): this state does not yet carry the
+// TriggerRelease submit outcome (success redirect / FR5 in-flight
+// rejection) or the FR4/NFR5 permission-gate decision -- those land in the
+// Implementation phase alongside the handler wiring that produces them
+// (see handlers_release.go's handleReleaseTriggerSubmit doc comment).
+type ReleaseTriggerViewState struct {
+	Scope       string
+	IncludeDemo bool
+	Digest      string
+
+	ScopeErr string
+
+	ResolvedTargets []*pb.ReleaseTargetInput
+}
+
+// releaseTargetKindLabel matches the CLI's --kind flag values ("image" |
+// "chart" | "binary"), plus "firmware" (which the promote screen never
+// shows -- see ui/ARCHITECTURE.md's promote-kind note -- but which a
+// release trigger, being about building/publishing rather than promoting,
+// legitimately can).
+func releaseTargetKindLabel(k pb.ArtifactKind) string {
+	switch k {
+	case pb.ArtifactKind_ARTIFACT_KIND_IMAGE:
+		return "image"
+	case pb.ArtifactKind_ARTIFACT_KIND_CHART:
+		return "chart"
+	case pb.ArtifactKind_ARTIFACT_KIND_BINARY:
+		return "binary"
+	case pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE:
+		return "firmware"
+	default:
+		return "unknown"
+	}
+}
+
+// ReleaseTrigger is the release-trigger screen: enter a batch scope ("all",
+// a domain name, or a comma-separated app/chart list -- FR1) and preview
+// the concrete target list it resolves to.
+templ ReleaseTrigger(user *htmxauth.UserInfo, s ReleaseTriggerViewState) {
+	@components.Shell("Trigger Release", user) {
+		<div class="flex justify-between items-center mb-4">
+			<h2 class="text-xl font-bold">Trigger release</h2>
+		</div>
+		if s.ScopeErr != "" {
+			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.ScopeErr }</span></div>
+		}
+		<form method="post" action="/releases/trigger">
+			<div class="form-control mb-4">
+				<label class="label">
+					<span class="label-text">
+						Scope <span class="text-error">*</span> — "all", a domain name
+						(e.g. "manmanv2"), or a comma-separated list of app/chart names
+					</span>
+				</label>
+				<input name="scope" class="input input-bordered font-mono" value={ s.Scope } required placeholder="all"/>
+			</div>
+			<div class="form-control mb-4">
+				<label class="label cursor-pointer justify-start gap-3">
+					<input type="checkbox" name="include_demo" value="true" class="toggle" checked?={ s.IncludeDemo }/>
+					<span class="label-text">Include demo domain when scope is "all" — excluded by default</span>
+				</label>
+			</div>
+			<div class="form-control mb-4">
+				<label class="label">
+					<span class="label-text">
+						Digest (optional) — pins the target to a pre-existing digest
+						instead of building fresh; only meaningful once scope resolves
+						to exactly one target
+					</span>
+				</label>
+				<input name="digest" class="input input-bordered font-mono" value={ s.Digest } placeholder="sha256:..."/>
+			</div>
+			<div class="flex gap-2 justify-end mb-6">
+				<button type="submit" class="btn btn-primary">Resolve scope</button>
+			</div>
+		</form>
+
+		if s.ResolvedTargets != nil {
+			@resolvedTargetsPreview(s.ResolvedTargets)
+		}
+	}
+}
+
+templ resolvedTargetsPreview(targets []*pb.ReleaseTargetInput) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+		<div class="card-body">
+			<h3 class="card-title text-base">Resolved targets ({ fmt.Sprint(len(targets)) })</h3>
+			if len(targets) == 0 {
+				<p class="text-sm opacity-70">No releasable targets matched this scope.</p>
+			} else {
+				<table class="table table-sm">
+					<thead>
+						<tr>
+							<th>Target</th>
+							<th>Kind</th>
+							<th>Digest</th>
+						</tr>
+					</thead>
+					<tbody>
+						for _, t := range targets {
+							<tr>
+								<td class="font-mono">{ t.GetOwnerFullName() }</td>
+								<td>{ releaseTargetKindLabel(t.GetKind()) }</td>
+								<td class="font-mono text-xs">
+									if t.GetDigest() != "" {
+										{ t.GetDigest() }
+									} else {
+										<span class="opacity-50">build fresh</span>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+				<div role="alert" class="alert alert-info shadow-md mt-4">
+					<span>
+						Triggering a release from this resolved list (the actual
+						TriggerRelease call, FR2-6) is wired in the Implementation phase
+						of this screen.
+					</span>
+				</div>
+			}
+		</div>
+	</div>
+}

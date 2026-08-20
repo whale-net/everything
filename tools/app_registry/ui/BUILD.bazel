@@ -23,8 +23,10 @@ go_library(
         "handlers_environment_diff.go",
         "handlers_environments.go",
         "handlers_promote.go",
+        "handlers_release.go",
         "handlers_rollback.go",
         "main.go",
+        "release_scope.go",
         "templ_render.go",
     ],
     embedsrcs = [
