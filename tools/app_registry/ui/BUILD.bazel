@@ -74,6 +74,7 @@ go_test(
         "handlers_promote_rollback_test.go",
         "handlers_read_screens_test.go",
         "handlers_release_test.go",
+        "release_scope_test.go",
         "role_gating_test.go",
     ],
     embed = [":ui_lib"],
