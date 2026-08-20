@@ -11,11 +11,33 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
+
+// assertJSONEqual compares two JSON documents structurally rather than
+// byte-for-byte -- JSONB round-trips through Postgres with normalized
+// whitespace (a space after ':'/',' that the literal we wrote doesn't have),
+// so a literal string comparison would fail on formatting alone even when
+// the two documents are semantically identical.
+func assertJSONEqual(t *testing.T, field string, got, want []byte) {
+	t.Helper()
+	var gotVal, wantVal any
+	if err := json.Unmarshal(got, &gotVal); err != nil {
+		t.Fatalf("%s: unmarshal got %s: %v", field, got, err)
+	}
+	if err := json.Unmarshal(want, &wantVal); err != nil {
+		t.Fatalf("%s: unmarshal want %s: %v", field, want, err)
+	}
+	gotNorm, _ := json.Marshal(gotVal)
+	wantNorm, _ := json.Marshal(wantVal)
+	if string(gotNorm) != string(wantNorm) {
+		t.Fatalf("%s = %s, want %s", field, got, want)
+	}
+}
 
 // newReleaseRun builds a minimal, valid repository.ReleaseRun for
 // CreateReleaseRun -- ResolvedPlan is NOT NULL (migration 016), so every
@@ -73,6 +95,130 @@ func TestReleaseRun_CreateReleaseRun_CreatesRunAndQueuedTargets(t *testing.T) {
 		if target.State != repository.ReleaseRunTargetStateQueued {
 			t.Fatalf("target %s state = %q, want %q", target.OwnerFullName, target.State, repository.ReleaseRunTargetStateQueued)
 		}
+	}
+}
+
+// TestReleaseRun_CreateReleaseRun_NoTargetsRejected mirrors the fake's
+// TestReleaseRunFake_CreateReleaseRun_NoTargetsRejected -- both
+// implementations share this length-zero guard in Go, not the DB, so both
+// need their own coverage rather than relying on the fake's.
+func TestReleaseRun_CreateReleaseRun_NoTargetsRejected(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+	_, _, err := createReleaseRunTx(t, reg, newReleaseRun("wf-empty"), nil)
+	if !errors.Is(err, repository.ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument for zero targets, got: %v", err)
+	}
+}
+
+// TestReleaseRun_CreateReleaseRun_FieldsRoundTripThroughGet proves NFR4's
+// "who, when, scope, digest-or-fresh, resolved plan" are actually
+// retrievable after the fact, not just accepted on write -- both the
+// CreateReleaseRun return value AND a fresh GetReleaseRun read confirm
+// TriggeredBy/RequestedScope/ResolvedPlan/DigestInput survive the round
+// trip byte-for-byte, including DigestInput's non-nil ("pinned digest")
+// case that every other test in this file leaves unset.
+func TestReleaseRun_CreateReleaseRun_FieldsRoundTripThroughGet(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	run := newReleaseRun("wf-roundtrip")
+	run.TriggeredBy = "alice@example.com"
+	run.RequestedScope = "acme,widgets-domain"
+	run.ResolvedPlan = []byte(`{"targets":[{"owner":"acme-widget","version":"1.2.3"}]}`)
+	run.DigestInput = []byte(`{"acme-widget":"sha256:deadbeef"}`)
+
+	created, _, err := createReleaseRunTx(t, reg, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	assertReleaseRunFields := func(t *testing.T, got repository.ReleaseRun) {
+		t.Helper()
+		if got.TriggeredBy != run.TriggeredBy {
+			t.Fatalf("TriggeredBy = %q, want %q", got.TriggeredBy, run.TriggeredBy)
+		}
+		if got.RequestedScope != run.RequestedScope {
+			t.Fatalf("RequestedScope = %q, want %q", got.RequestedScope, run.RequestedScope)
+		}
+		assertJSONEqual(t, "ResolvedPlan", got.ResolvedPlan, run.ResolvedPlan)
+		assertJSONEqual(t, "DigestInput", got.DigestInput, run.DigestInput)
+	}
+	assertReleaseRunFields(t, *created)
+
+	fetched, _, err := reg.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	assertReleaseRunFields(t, *fetched)
+}
+
+// TestReleaseRun_CreateReleaseRun_DigestInputNilMeansBuildFresh proves the
+// nil-vs-empty distinction migration 016's doc comment calls out: an unset
+// DigestInput scans back as nil, not an empty non-nil byte slice standing
+// in for "no digest given".
+func TestReleaseRun_CreateReleaseRun_DigestInputNilMeansBuildFresh(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	created, _, err := createReleaseRunTx(t, reg, newReleaseRun("wf-fresh"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	if created.DigestInput != nil {
+		t.Fatalf("expected DigestInput nil for a fresh build, got %s", created.DigestInput)
+	}
+
+	fetched, _, err := reg.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if fetched.DigestInput != nil {
+		t.Fatalf("expected DigestInput nil after GetReleaseRun, got %s", fetched.DigestInput)
+	}
+}
+
+// TestReleaseRun_CreateReleaseRun_PartialTargetFailureRollsBackWholeBatch
+// proves CreateReleaseRun's doc comment claim: a failure partway through
+// target inserts (here, a CHECK-constraint-violating kind on the second
+// target) rolls back the ENTIRE transaction, including the release_run row
+// and the first target's already-inserted row -- not just the failing
+// insert. This is the atomicity property NFR3 depends on: a caller retrying
+// after a failed CreateReleaseRun must never see a half-created release_run
+// sitting in the audit trail.
+func TestReleaseRun_CreateReleaseRun_PartialTargetFailureRollsBackWholeBatch(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+
+	run := newReleaseRun("wf-partial-fail")
+	_, _, err := createReleaseRunTx(t, reg, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+		// release_run_target_kind_check only allows 'image'/'chart'
+		// (migration 016) -- ArtifactKindBinary is a legal ArtifactKind
+		// elsewhere in the system but illegal here, so this insert fails.
+		{OwnerFullName: "acme-widget-firmware", Kind: repository.ArtifactKindBinary},
+	})
+	if !errors.Is(err, repository.ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument for an illegal kind, got: %v", err)
+	}
+
+	var runCount int
+	if scanErr := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM release_run WHERE temporal_workflow_id = $1`, run.TemporalWorkflowID,
+	).Scan(&runCount); scanErr != nil {
+		t.Fatalf("count release_run: %v", scanErr)
+	}
+	if runCount != 0 {
+		t.Fatalf("expected the release_run row to be rolled back, found %d", runCount)
+	}
+
+	var targetCount int
+	if scanErr := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM release_run_target WHERE owner_full_name = 'acme-widget'`,
+	).Scan(&targetCount); scanErr != nil {
+		t.Fatalf("count release_run_target: %v", scanErr)
+	}
+	if targetCount != 0 {
+		t.Fatalf("expected the first target's row to be rolled back too, found %d", targetCount)
 	}
 }
 

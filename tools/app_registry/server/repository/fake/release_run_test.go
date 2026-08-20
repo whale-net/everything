@@ -140,6 +140,76 @@ func TestReleaseRunFake_UpdateTargetState_IllegalTransitionRejected(t *testing.T
 	}
 }
 
+// TestReleaseRunFake_UpdateTargetState_TerminalStateRejectsFurtherTransitions
+// mirrors postgres's TestReleaseRun_UpdateTargetState_TerminalStateRejectsFurtherTransitions
+// -- succeeded/failed have no legal transition out, even to the other
+// terminal state, and this must hold in the fake too since handler unit
+// tests rely on the fake enforcing the same transition table as postgres.
+func TestReleaseRunFake_UpdateTargetState_TerminalStateRejectsFurtherTransitions(t *testing.T) {
+	r := New()
+	_, targets, err := createReleaseRunTx(t, r, newReleaseRun("wf-terminal"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	targetID := targets[0].ReleaseRunTargetID
+	ctx := context.Background()
+
+	if err := r.ReleaseRuns().UpdateTargetState(ctx, targetID, repository.ReleaseRunTargetStateFailed, "", "boom"); err != nil {
+		t.Fatalf("queued -> failed: %v", err)
+	}
+
+	err = r.ReleaseRuns().UpdateTargetState(ctx, targetID, repository.ReleaseRunTargetStateBuilding, "", "")
+	if !errors.Is(err, repository.ErrFailedPrecondition) {
+		t.Fatalf("expected ErrFailedPrecondition transitioning out of failed, got: %v", err)
+	}
+}
+
+// TestReleaseRunFake_CreateReleaseRun_FieldsRoundTripThroughGet mirrors
+// postgres's TestReleaseRun_CreateReleaseRun_FieldsRoundTripThroughGet --
+// same NFR4 "retrievable after the fact" contract, including a non-nil
+// DigestInput, must hold for the fake since handler unit tests read these
+// fields back through it.
+func TestReleaseRunFake_CreateReleaseRun_FieldsRoundTripThroughGet(t *testing.T) {
+	r := New()
+
+	run := newReleaseRun("wf-roundtrip")
+	run.TriggeredBy = "alice@example.com"
+	run.RequestedScope = "acme,widgets-domain"
+	run.ResolvedPlan = []byte(`{"targets":[{"owner":"acme-widget","version":"1.2.3"}]}`)
+	run.DigestInput = []byte(`{"acme-widget":"sha256:deadbeef"}`)
+
+	created, _, err := createReleaseRunTx(t, r, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	assertReleaseRunFields := func(t *testing.T, got repository.ReleaseRun) {
+		t.Helper()
+		if got.TriggeredBy != run.TriggeredBy {
+			t.Fatalf("TriggeredBy = %q, want %q", got.TriggeredBy, run.TriggeredBy)
+		}
+		if got.RequestedScope != run.RequestedScope {
+			t.Fatalf("RequestedScope = %q, want %q", got.RequestedScope, run.RequestedScope)
+		}
+		if string(got.ResolvedPlan) != string(run.ResolvedPlan) {
+			t.Fatalf("ResolvedPlan = %s, want %s", got.ResolvedPlan, run.ResolvedPlan)
+		}
+		if string(got.DigestInput) != string(run.DigestInput) {
+			t.Fatalf("DigestInput = %s, want %s", got.DigestInput, run.DigestInput)
+		}
+	}
+	assertReleaseRunFields(t, *created)
+
+	fetched, _, err := r.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	assertReleaseRunFields(t, *fetched)
+}
+
 func TestReleaseRunFake_UpdateTargetState_UnknownTargetNotFound(t *testing.T) {
 	r := New()
 	err := r.ReleaseRuns().UpdateTargetState(context.Background(), "does-not-exist", repository.ReleaseRunTargetStateBuilding, "", "")
