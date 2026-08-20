@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "session",
     srcs = [
+        "daemon_watcher.go",
         "manager.go",
         "recovery.go",
         "state.go",
@@ -23,10 +24,14 @@ go_library(
 go_test(
     name = "session_test",
     srcs = [
+        "daemon_watcher_test.go",
         "lifecycle_test.go",
         "manager_test.go",
         "state_test.go",
     ],
     embed = [":session"],
-    deps = ["//manmanv2/models:models"],
+    deps = [
+        "//manmanv2/host/rmq",
+        "//manmanv2/models:models",
+    ],
 )
