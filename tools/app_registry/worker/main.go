@@ -1,8 +1,9 @@
-// Command app-registry-worker is the AR-4b Temporal worker: it drains
+// Command app-registry-worker is the AR-4b/AR-5 Temporal worker: it drains
 // tools/app_registry's writeback_outbox table and runs WritebackWorkflow
 // executions against a stub Writeback activity implementation that renders
-// promotion state and writes it to a local path -- publishing nowhere. See
-// ../ARCHITECTURE.md "Writeback: outbox -> Temporal" and ./README.md.
+// promotion state and writes it to a local path -- publishing nowhere -- and
+// (issue #889) also runs ReleaseWorkflow executions on the same task queue.
+// See ../ARCHITECTURE.md "Writeback: outbox -> Temporal" and ./README.md.
 package main
 
 import (
@@ -26,6 +27,7 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/repository/postgres"
 	"github.com/whale-net/everything/tools/app_registry/worker/outbox"
 	"github.com/whale-net/everything/tools/app_registry/worker/reaper"
+	"github.com/whale-net/everything/tools/app_registry/worker/release"
 	"github.com/whale-net/everything/tools/app_registry/worker/writeback"
 )
 
@@ -124,6 +126,20 @@ func run() error {
 		w.RegisterActivityWithOptions(stub.RenderEnvironmentState, activityOptions(writeback.ActivityRenderEnvironmentState))
 		w.RegisterActivityWithOptions(stub.Publish, activityOptions(writeback.ActivityPublish))
 	}
+
+	// ReleaseWorkflow (issue #889), registered on the same task queue as
+	// WritebackWorkflow -- release.TaskQueue == writeback.TaskQueue, see
+	// that constant's doc comment. releaseActivities is scaffold-only: every
+	// method but CheckApproval returns an unimplemented error until #889's
+	// Implementation phase lands (see worker/release/activities.go).
+	releaseActivities := &release.Activities{}
+	w.RegisterWorkflow(release.ReleaseWorkflow)
+	w.RegisterActivityWithOptions(releaseActivities.CheckApproval, activityOptions(release.ActivityCheckApproval))
+	w.RegisterActivityWithOptions(releaseActivities.ResolvePlan, activityOptions(release.ActivityResolvePlan))
+	w.RegisterActivityWithOptions(releaseActivities.DispatchBuild, activityOptions(release.ActivityDispatchBuild))
+	w.RegisterActivityWithOptions(releaseActivities.PollBuild, activityOptions(release.ActivityPollBuild))
+	w.RegisterActivityWithOptions(releaseActivities.VerifyPublished, activityOptions(release.ActivityVerifyPublished))
+	w.RegisterActivityWithOptions(releaseActivities.RecordTargetState, activityOptions(release.ActivityRecordTargetState))
 
 	// Outbox drain loop, running alongside the Temporal worker in this same
 	// process -- see outbox.Drainer.

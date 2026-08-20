@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "release",
+    srcs = [
+        "activities.go",
+        "approval.go",
+        "workflow.go",
+    ],
+    importpath = "github.com/whale-net/everything/tools/app_registry/worker/release",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//tools/app_registry/server/repository",
+        "//tools/app_registry/worker/writeback",
+        "@io_temporal_go_sdk//temporal",
+        "@io_temporal_go_sdk//workflow",
+    ],
+)
