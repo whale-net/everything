@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 
+	"github.com/google/uuid"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -26,11 +28,6 @@ const releaseTriggerEnv = "dev"
 // ARCHITECTURE.md "The API is the write path" -- this is the seam both the
 // admin UI and the Temporal ReleaseWorkflow call through; neither talks to
 // Postgres directly.
-//
-// Scaffold (issue #888): every RPC enforces auth.RequirePromoter identically
-// to PromotionRegistry.Promote, then returns codes.Unimplemented. Business
-// logic (dedup-check, CreateReleaseRun, starting the Temporal workflow, and
-// the GetRelease/ListReleases read paths) lands in the Implementation phase.
 type ReleaseServer struct {
 	pb.UnimplementedReleaseRegistryServer
 	repo repository.Registry
@@ -41,11 +38,27 @@ func NewReleaseServer(repo repository.Registry) *ReleaseServer {
 	return &ReleaseServer{repo: repo}
 }
 
-// TriggerRelease will dedup-check the batch against any already-non-terminal
-// release covering the same targets (FR5), persist the release_run/
-// release_run_target rows via repo.ReleaseRuns().CreateReleaseRun, and start
-// the Temporal ReleaseWorkflow. Not yet implemented -- see this type's doc
-// comment.
+// TriggerRelease dedup-checks the batch against any already-non-terminal
+// release covering the same targets (FR5), persists the release_run/
+// release_run_target rows via repo.ReleaseRuns().CreateReleaseRun, and
+// returns the persisted ids. It deliberately does NOT resolve `all`/domain/
+// comma-list scope syntax (that's the caller's job, done before this RPC is
+// called -- see ReleaseTargetInput's doc comment) and does NOT itself
+// resolve a version plan (FR7/FR8's "resolved once, reused everywhere"
+// happens inside the Temporal ReleaseWorkflow -- issue #889 -- not here).
+//
+// TODO(#889): this does not yet start the Temporal ReleaseWorkflow. Once
+// the workflow exists, TriggerRelease must: (1) derive the real
+// deterministic workflow id coordinated with the workflow's own dedup key
+// (replacing the release-<uuid> placeholder below, which is intentionally
+// unique-per-call so CreateReleaseRun's TemporalWorkflowID uniqueness
+// constraint never spuriously blocks a legitimate future release of the
+// same targets), (2) start the workflow via the Temporal client (see
+// worker/main.go's client construction pattern), and (3) translate a
+// WorkflowExecutionAlreadyStarted error into the same FailedPrecondition
+// "already releasing" response this handler's fast-fail check returns
+// below -- that error is the authoritative NFR2 guarantee, this check is
+// only a UX-quality fast-fail and can race.
 func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerReleaseRequest) (*pb.TriggerReleaseResponse, error) {
 	if err := auth.RequirePromoter(ctx, releaseTriggerEnv); err != nil {
 		return nil, err
@@ -53,28 +66,190 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 	if len(req.GetTargets()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "targets is required")
 	}
-	return nil, status.Error(codes.Unimplemented, "TriggerRelease is not yet implemented")
+
+	targets := make([]repository.ReleaseRunTarget, 0, len(req.GetTargets()))
+	digests := map[string]string{}
+	for _, t := range req.GetTargets() {
+		if t.GetOwnerFullName() == "" {
+			return nil, status.Error(codes.InvalidArgument, "targets[].owner_full_name is required")
+		}
+		kind := artifactKindFromPB(t.GetKind())
+		if kind != repository.ArtifactKindImage && kind != repository.ArtifactKindChart {
+			return nil, status.Errorf(codes.InvalidArgument, "targets[].kind must be IMAGE or CHART, got %v", t.GetKind())
+		}
+
+		if err := s.rejectIfAlreadyReleasing(ctx, t.GetOwnerFullName(), kind); err != nil {
+			return nil, err
+		}
+
+		targets = append(targets, repository.ReleaseRunTarget{
+			OwnerFullName: t.GetOwnerFullName(),
+			Kind:          kind,
+		})
+		if t.GetDigest() != "" {
+			digests[t.GetOwnerFullName()] = t.GetDigest()
+		}
+	}
+
+	var digestInput []byte
+	if len(digests) > 0 {
+		raw, err := json.Marshal(digests)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "marshal digest input: %v", err)
+		}
+		digestInput = raw
+	}
+
+	run := repository.ReleaseRun{
+		TriggeredBy:    actorFromCtx(ctx),
+		RequestedScope: req.GetRequestedScope(),
+		DigestInput:    digestInput,
+		// TemporalWorkflowID: see TODO on this method's doc comment -- a
+		// placeholder until #889 wires the real Temporal client and
+		// coordinates a deterministic, batch-derived id.
+		TemporalWorkflowID: "release-" + uuid.NewString(),
+	}
+
+	var created *repository.ReleaseRun
+	if err := s.repo.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
+		out, _, cerr := r.ReleaseRuns().CreateReleaseRun(ctx, run, targets)
+		if cerr != nil {
+			return cerr
+		}
+		created = out
+		return nil
+	}); err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	return &pb.TriggerReleaseResponse{
+		ReleaseRunId:       created.ReleaseRunID,
+		TemporalWorkflowId: created.TemporalWorkflowID,
+	}, nil
 }
 
-// GetRelease will read straight from repo.ReleaseRuns().GetReleaseRun. Not
-// yet implemented -- see this type's doc comment. Unauthenticated, matching
-// every other read RPC in ARCHITECTURE.md's Authorization table (issue
-// #853) -- no auth.Require* check here is deliberate, not an oversight.
+// rejectIfAlreadyReleasing implements FR5's fast-fail check: it returns
+// codes.FailedPrecondition if ownerFullName+kind already has a
+// release_run_target row in a non-terminal state on any release_run --
+// ListReleaseRunsByTarget's doc comment is explicit that this method itself
+// only narrows to "runs touching this owner"; filtering by target state is
+// left to callers, which is what this does by re-reading each candidate
+// run's targets via GetReleaseRun. This is a UX-quality check only (it can
+// race under concurrent triggers) -- see this file's TODO(#889) for the
+// authoritative guarantee.
+func (s *ReleaseServer) rejectIfAlreadyReleasing(ctx context.Context, ownerFullName string, kind repository.ArtifactKind) error {
+	runs, err := s.repo.ReleaseRuns().ListReleaseRunsByTarget(ctx, ownerFullName)
+	if err != nil {
+		return mapRepoErr(err)
+	}
+	for _, run := range runs {
+		_, targets, gerr := s.repo.ReleaseRuns().GetReleaseRun(ctx, run.ReleaseRunID)
+		if gerr != nil {
+			return mapRepoErr(gerr)
+		}
+		for _, t := range targets {
+			if t.OwnerFullName != ownerFullName || t.Kind != kind {
+				continue
+			}
+			if !isTerminalReleaseRunTargetState(t.State) {
+				return status.Errorf(codes.FailedPrecondition,
+					"%s (%s) is already releasing under release_run %s (target state %q)",
+					ownerFullName, kind, run.ReleaseRunID, t.State)
+			}
+		}
+	}
+	return nil
+}
+
+// isTerminalReleaseRunTargetState reports whether state is one of the two
+// terminal states in ReleaseRunTargetState's legal-transition table
+// (succeeded/failed) -- see repository/models.go's doc comment.
+func isTerminalReleaseRunTargetState(state repository.ReleaseRunTargetState) bool {
+	return state == repository.ReleaseRunTargetStateSucceeded || state == repository.ReleaseRunTargetStateFailed
+}
+
+// GetRelease reads straight from repo.ReleaseRuns().GetReleaseRun (FR10).
+// Unauthenticated, matching every other read RPC in ARCHITECTURE.md's
+// Authorization table (issue #853) -- no auth.Require* check here is
+// deliberate, not an oversight.
 func (s *ReleaseServer) GetRelease(ctx context.Context, req *pb.GetReleaseRequest) (*pb.GetReleaseResponse, error) {
 	if req.GetReleaseRunId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "release_run_id is required")
 	}
-	return nil, status.Error(codes.Unimplemented, "GetRelease is not yet implemented")
+	run, targets, err := s.repo.ReleaseRuns().GetReleaseRun(ctx, req.GetReleaseRunId())
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return releaseRunToPB(*run, targets), nil
 }
 
-// ListReleases will read straight from
+// ListReleases reads straight from
 // repo.ReleaseRuns().ListReleaseRunsByTarget -- NFR4's full history,
-// including prior (not just current) attempts per target. Not yet
-// implemented -- see this type's doc comment. Unauthenticated, same
-// reasoning as GetRelease above.
+// including prior (not just current) attempts per target. Unauthenticated,
+// same reasoning as GetRelease above.
 func (s *ReleaseServer) ListReleases(ctx context.Context, req *pb.ListReleasesRequest) (*pb.ListReleasesResponse, error) {
 	if req.GetOwnerFullName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "owner_full_name is required")
 	}
-	return nil, status.Error(codes.Unimplemented, "ListReleases is not yet implemented")
+	runs, err := s.repo.ReleaseRuns().ListReleaseRunsByTarget(ctx, req.GetOwnerFullName())
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	out := make([]*pb.GetReleaseResponse, 0, len(runs))
+	for _, run := range runs {
+		_, targets, gerr := s.repo.ReleaseRuns().GetReleaseRun(ctx, run.ReleaseRunID)
+		if gerr != nil {
+			return nil, mapRepoErr(gerr)
+		}
+		out = append(out, releaseRunToPB(run, targets))
+	}
+	return &pb.ListReleasesResponse{Releases: out}, nil
+}
+
+// releaseRunToPB assembles a GetReleaseResponse from a repository.ReleaseRun
+// and its release_run_target rows. Shared by GetRelease and ListReleases so
+// both read the exact same shape (NFR4).
+func releaseRunToPB(run repository.ReleaseRun, targets []repository.ReleaseRunTarget) *pb.GetReleaseResponse {
+	pbTargets := make([]*pb.ReleaseRunTarget, 0, len(targets))
+	for _, t := range targets {
+		pbTargets = append(pbTargets, releaseRunTargetToPB(t))
+	}
+	return &pb.GetReleaseResponse{
+		ReleaseRunId:       run.ReleaseRunID,
+		TriggeredBy:        run.TriggeredBy,
+		RequestedScope:     run.RequestedScope,
+		ResolvedPlanJson:   string(run.ResolvedPlan),
+		Targets:            pbTargets,
+		TemporalWorkflowId: run.TemporalWorkflowID,
+	}
+}
+
+func releaseRunTargetToPB(t repository.ReleaseRunTarget) *pb.ReleaseRunTarget {
+	return &pb.ReleaseRunTarget{
+		OwnerFullName:  t.OwnerFullName,
+		Kind:           artifactKindToPB(t.Kind),
+		State:          releaseRunTargetStateToPB(t.State),
+		StateChangedAt: timeToUnix(t.StateChangedAt),
+		BuildId:        t.BuildID,
+		ErrorDetail:    t.ErrorDetail,
+	}
+}
+
+func releaseRunTargetStateToPB(s repository.ReleaseRunTargetState) pb.ReleaseRunTargetState {
+	switch s {
+	case repository.ReleaseRunTargetStateQueued:
+		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_QUEUED
+	case repository.ReleaseRunTargetStateBuilding:
+		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILDING
+	case repository.ReleaseRunTargetStatePublishing:
+		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUBLISHING
+	case repository.ReleaseRunTargetStateRecording:
+		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_RECORDING
+	case repository.ReleaseRunTargetStateSucceeded:
+		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_SUCCEEDED
+	case repository.ReleaseRunTargetStateFailed:
+		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_FAILED
+	default:
+		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_UNSPECIFIED
+	}
 }
