@@ -75,21 +75,31 @@ type state struct {
 	// never SkippedStale) -- see postgres/app.go's Reconcile for the same
 	// bookkeeping expressed in SQL.
 	ReconcileRuns map[string]repository.ReconcileRun
+	// ReleaseRuns mirrors `release_run` (migration 016, NFR4, issue #887),
+	// keyed by release_run_id.
+	ReleaseRuns map[string]repository.ReleaseRun
+	// ReleaseRunTargets mirrors `release_run_target`, keyed by
+	// release_run_target_id -- a flat map (not nested under ReleaseRuns) so
+	// UpdateTargetState can look a target up directly by its own id, the
+	// same shape Promotions/PromotionEvents use.
+	ReleaseRunTargets map[string]repository.ReleaseRunTarget
 }
 
 func newState() *state {
 	return &state{
-		Apps:            map[string]repository.App{},
-		Charts:          map[string]repository.Chart{},
-		Builds:          map[string]repository.Build{},
-		Artifacts:       map[string]repository.Artifact{},
-		Idempotency:     map[string]map[string]idemEntry{},
-		Environments:    map[string]repository.Environment{},
-		Promotions:      map[string]repository.Promotion{},
-		PromotionEvents: map[string]repository.PromotionEvent{},
-		WritebackOutbox: map[string]repository.WritebackOutbox{},
-		DomainAdoption:  map[string]repository.DomainAdoptionStage{},
-		ReconcileRuns:   map[string]repository.ReconcileRun{},
+		Apps:              map[string]repository.App{},
+		Charts:            map[string]repository.Chart{},
+		Builds:            map[string]repository.Build{},
+		Artifacts:         map[string]repository.Artifact{},
+		Idempotency:       map[string]map[string]idemEntry{},
+		Environments:      map[string]repository.Environment{},
+		Promotions:        map[string]repository.Promotion{},
+		PromotionEvents:   map[string]repository.PromotionEvent{},
+		WritebackOutbox:   map[string]repository.WritebackOutbox{},
+		DomainAdoption:    map[string]repository.DomainAdoptionStage{},
+		ReconcileRuns:     map[string]repository.ReconcileRun{},
+		ReleaseRuns:       map[string]repository.ReleaseRun{},
+		ReleaseRunTargets: map[string]repository.ReleaseRunTarget{},
 	}
 }
 
@@ -225,6 +235,10 @@ func (r *Registry) Writeback() repository.WritebackRepository { return writeback
 // DomainAdoption returns a distinct type for the same reason Environments
 // does.
 func (r *Registry) DomainAdoption() repository.DomainAdoptionRepository { return domainAdoptionFake{r} }
+
+// ReleaseRuns returns a distinct type for the same reason Environments
+// does.
+func (r *Registry) ReleaseRuns() repository.ReleaseRunRepository { return releaseRunFake{r} }
 
 // WithTx snapshots state, runs fn against a Registry sharing that snapshot,
 // and commits the snapshot back only if fn succeeds — giving the fake the

@@ -6,6 +6,7 @@ go_library(
         "fake.go",
         "keyset_cursor.go",
         "reconcile.go",
+        "release_run.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/fake",
     visibility = ["//visibility:public"],
