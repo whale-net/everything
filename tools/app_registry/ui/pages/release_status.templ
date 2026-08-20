@@ -2,7 +2,6 @@ package pages
 
 import (
 	"fmt"
-	"net/url"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -27,7 +26,16 @@ templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 	@components.Shell("Release Status", user) {
 		<div class="flex justify-between items-center mb-4">
 			<h2 class="text-xl font-bold">Release { s.ReleaseRunID }</h2>
-			<a href="/releases/trigger" class="btn btn-sm btn-circle btn-ghost">✕</a>
+			<div class="flex gap-1">
+				<a
+					href={ templ.URL("/releases/" + s.ReleaseRunID) }
+					class="btn btn-sm btn-ghost"
+					title="No auto-refresh/polling precedent exists elsewhere in this UI (issue #890) -- this is a manual reload of this same page."
+				>
+					↻ Refresh
+				</a>
+				<a href="/releases/trigger" class="btn btn-sm btn-circle btn-ghost">✕</a>
+			</div>
 		</div>
 		if s.LoadErr != "" {
 			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
@@ -87,21 +95,30 @@ templ releaseStatusDetail(rel *pb.GetReleaseResponse) {
 		</div>
 	}
 	<div class="flex gap-2 justify-end">
-		<a
-			href={ templ.URL(retryHref(rel)) }
-			class="btn btn-warning"
-			title="Prefills the trigger form with this run's scope -- one-click re-submit (FR6) lands in the Implementation phase"
-		>
-			Retry
-		</a>
+		<form method="post" action="/releases/trigger">
+			<input type="hidden" name="scope" value={ rel.GetRequestedScope() }/>
+			<input type="hidden" name="do" value="trigger"/>
+			<button
+				type="submit"
+				class="btn btn-warning"
+				title="Re-submits this run's original scope straight to TriggerRelease -- FR6/FR11: retry IS re-triggering, no separate resume/retry-from-step action."
+			>
+				Retry
+			</button>
+		</form>
 	</div>
 }
 
-// retryHref prefills the trigger form with this run's original scope (FR6
-// -- retry re-submits identical inputs, with no separate resume/
-// retry-from-step action per FR11). The one-click re-submit-straight-to-
-// TriggerRelease wiring lands in the Implementation phase; today this only
-// pre-populates the form for the operator to resubmit by hand.
-func retryHref(rel *pb.GetReleaseResponse) string {
-	return "/releases/trigger?scope=" + url.QueryEscape(rel.GetRequestedScope())
-}
+// Retry (FR6/FR11) posts directly to /releases/trigger with "do=trigger",
+// re-entering the exact same handleReleaseTriggerSubmit code path a fresh
+// trigger uses -- not a separate retry-specific action or handler. It
+// carries forward requested_scope (the one field GetReleaseResponse
+// actually preserves from the original trigger); include_demo and any
+// per-target digest are not recoverable from GetReleaseResponse today (the
+// wire message has no field for either -- see api_messages_release.proto),
+// so a retried "all" scope re-resolves with its default demo-exclusion and
+// a retried digest-pinned single-target release re-resolves to "build
+// fresh" rather than the original pinned digest. Documented limitation,
+// not a silent gap: closing it would mean widening TriggerReleaseRequest/
+// GetReleaseResponse, which is out of this issue's scope (protos are
+// #888/#889's surface).
