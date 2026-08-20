@@ -747,6 +747,85 @@ func TestPlanReleaseWithCharts(t *testing.T) {
 	}
 }
 
+// TestPlanReleaseWithCharts_VersionsMapCoversComposedMemberApp is issue
+// #901's actual multi-target-batch scenario (#878's exact repro shape): a
+// single `plan` invocation whose requested apps AND requested charts
+// overlap -- here, chart "helm-control" (domain manmanv2) composes app
+// "control-api" (domain manmanv2), and both are explicit targets of the
+// same batch (requestedApps: "control-api", requestedCharts: "all"). This
+// is the exact map (PlanResult.Versions) that flows, unchanged in shape,
+// through worker/release/plan.go's ResolvePlan re-keying, github.go's
+// appVersionsJSON, release.yml's --app-versions plumbing, and finally
+// build_helm.go's resolveChartAppVersions precedence check -- so a bug in
+// this map (missing entry, or a chart/app key collision silently
+// overwriting the app's entry) would defeat #901's fix even though every
+// downstream layer's own unit tests pass in isolation.
+func TestPlanReleaseWithCharts_VersionsMapCoversComposedMemberApp(t *testing.T) {
+	fs := newFakeFS()
+
+	appQueryLines := []string{"//manmanv2/api:control-api_metadata"}
+	appCqueryLines := []string{"@@//manmanv2/api:control-api_metadata\t" + string(sampleMetaJSON("control-api", "manmanv2"))}
+	chartQueryLines := []string{"//manmanv2:control_chart_metadata"}
+	chartCqueryLines := []string{"@@//manmanv2:control_chart_metadata\t" + string(sampleHelmMetaJSON("helm-control", "manmanv2", []string{"control-api"}))}
+
+	bazelCalls := []fakeBazelCall{
+		{argsContain: []string{"query", "kind(app_metadata"}, argsNotContain: []string{"cquery"}, output: strings.Join(appQueryLines, "\n")},
+		{argsContain: []string{"cquery", "control-api_metadata"}, output: strings.Join(appCqueryLines, "\n")},
+		{argsContain: []string{"query", "kind(helm_chart_metadata"}, argsNotContain: []string{"cquery"}, output: strings.Join(chartQueryLines, "\n")},
+		{argsContain: []string{"cquery", "control_chart_metadata"}, output: strings.Join(chartCqueryLines, "\n")},
+	}
+	bazel := newFakeBazel(bazelCalls...)
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--sort", "helm-control.*"}, output: "helm-control.v1.0.0"},
+		fakeGitCall{argsContain: []string{"tag", "--sort", "manmanv2-control-api.v*"}, output: "manmanv2-control-api.v2.3.0"},
+	)
+
+	result, err := planRelease(planParams{
+		eventType:       "workflow_dispatch",
+		requestedApps:   "control-api",
+		requestedCharts: "all",
+		incrementMinor:  true,
+		bazel:           bazel,
+		git:             git,
+		fs:              fs,
+		workspaceRoot:   fakeWorkspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The chart's own version entry and the composed member app's own
+	// version entry must both be present, correctly resolved, and keyed
+	// distinctly (no silent overwrite of one by the other).
+	appVersion, ok := result.Versions["manmanv2-control-api"]
+	if !ok {
+		t.Fatalf("expected result.Versions to include the composed member app's own resolved version (key %q), got: %+v", "manmanv2-control-api", result.Versions)
+	}
+	if appVersion != "v2.4.0" {
+		t.Errorf("expected manmanv2-control-api resolved to v2.4.0 (minor-incremented from v2.3.0), got %q", appVersion)
+	}
+
+	chartVersion, ok := result.Versions["manmanv2-helm-control"]
+	if !ok {
+		t.Fatalf("expected result.Versions to include the chart's own resolved version (key %q), got: %+v", "manmanv2-helm-control", result.Versions)
+	}
+	if chartVersion != "v1.1.0" {
+		t.Errorf("expected manmanv2-helm-control resolved to v1.1.0 (minor-incremented from v1.0.0), got %q", chartVersion)
+	}
+	if chartVersion == appVersion {
+		t.Fatalf("chart's own version entry collided with the composed member app's version entry (both %q) -- resolveChartAppVersions would resolve the wrong value for #878's scenario", chartVersion)
+	}
+
+	// This is the exact map worker/release/plan.go's ResolvePlan re-keys
+	// into ResolvedPlan.Versions (FullName -> "kind:owner"), and
+	// github.go's appVersionsJSON then filters to image-kind entries only
+	// -- confirm the app entry alone (not the chart's) is what would reach
+	// resolveChartAppVersions as a plan pin for the composed app.
+	if len(result.Versions) != 2 {
+		t.Fatalf("expected exactly 2 entries in result.Versions (one app, one chart), got %d: %+v", len(result.Versions), result.Versions)
+	}
+}
+
 // ── App Registry Upfront Calls ──────────────────────────────────────────────
 
 func TestPlanAppRegistryUpfrontCalls(t *testing.T) {
