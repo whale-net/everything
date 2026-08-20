@@ -35,7 +35,7 @@ cold; this file only indexes where things live.
 |------|---------|
 | [protos/](protos/) | Proto contracts for all four services (`AppRegistry`, `ArtifactRegistry`, `PromotionRegistry`, `EnvironmentRegistry`) |
 | [server/](server/) | gRPC server — `app-registry-api` |
-| [worker/](worker/) | Temporal worker — gitops writeback (`app-registry-worker`) |
+| [worker/](worker/) | Temporal worker — gitops writeback and release orchestration (`app-registry-worker`); `worker/writeback/` (`WritebackWorkflow`) and `worker/release/` (`ReleaseWorkflow`, #886/#889) share the binary and default task queue |
 | [cli/](cli/) | Thin gRPC client — `app-registry` |
 | [ui/](ui/README.md) | HTMX admin UI — `app-registry-ui`. `ui/README.md` for structure/styling; env vars live in the main [ENV.md](ENV.md) "UI" section, not a second file |
 | [ui/ARCHITECTURE.md](ui/ARCHITECTURE.md) | Before changing the UI's data-access pattern, role gating, or before adding a new deviation from a wireframe — a **real** doc (unlike `manmanv2/ui/README.md`'s dangling link to the same filename). Covers gRPC-only access with the one `htmxauth` session-DB exception, token forwarding, presentation-only role gating, the as-of/SCD2 read pattern, the FR-13/FR-14 UI-layer policies, the FR-19 actor-identity note, and every recorded wireframe deviation (NFR-19) with its reason |
