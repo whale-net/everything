@@ -54,6 +54,10 @@ var (
 		Field:   "targets",
 		Message: "manual releases require --apps or --charts to be specified",
 	}
+	ErrInvalidResolvedPlan = &PlanValidationError{
+		Field:   "from-resolved-plan",
+		Message: "must be valid JSON matching PlanResult's shape (release-helper plan --format=json's own output)",
+	}
 )
 
 type PlanResult struct {
@@ -96,6 +100,7 @@ func newPlanCmd() *cobra.Command {
 		actor                string
 		idempotencyKeyPrefix string
 		skipRegistry         bool
+		fromResolvedPlan     string
 	)
 
 	cmd := &cobra.Command{
@@ -103,66 +108,94 @@ func newPlanCmd() *cobra.Command {
 		Short:        "Plan a release and output CI matrix",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Input validation (no Bazel calls needed)
-			if !isValidEventType(eventType) {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: event-type must be one of: %s\n", joinStrings(validEventTypes))
-				return ErrInvalidEventType
-			}
 			if format != "json" && format != "github" {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error: format must be one of: json, github\n")
 				return ErrInvalidFormat
 			}
-			versionOpts := boolCount(version != "", incrementMajor, incrementMinor, incrementPatch)
-			if versionOpts > 1 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: --version, --increment-major, --increment-minor, and --increment-patch are mutually exclusive\n")
-				return ErrMutuallyExclusiveVersionOptions
-			}
-			if eventType == "workflow_dispatch" && versionOpts == 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: manual releases require --version, --increment-major, --increment-minor, or --increment-patch\n")
-				return ErrMissingVersionOption
-			}
-			if version != "" && version != "latest" && !semverRE.MatchString(version) {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: version %q does not follow semantic versioning (vMAJOR.MINOR.PATCH)\n", version)
-				return ErrInvalidVersion
-			}
 
-			workspaceRoot, err := defaultWorkspaceRoot()
-			if err != nil {
-				return fmt.Errorf("workspace root: %w", err)
-			}
+			var result *PlanResult
 
-			effectiveCharts := charts
-			if effectiveCharts == "" && helmCharts != "" {
-				effectiveCharts = helmCharts
-			}
+			if fromResolvedPlan != "" {
+				// Issue #929/#927: skip planRelease() entirely -- no bazel
+				// calls, no registry queries, no git operations, no
+				// workspace-root discovery. fromResolvedPlan is expected to
+				// be exactly `release-helper plan --format=json`'s own
+				// stdout (this file's PlanResult JSON shape), forwarded
+				// verbatim by App Registry's Temporal DispatchBuild as the
+				// `resolved_plan` workflow_dispatch input (see
+				// tools/app_registry/worker/release/activities.go's
+				// DispatchBuild and plan.go's ResolvePlan). Unmarshal it
+				// directly and fall through to the same --format json/github
+				// emission below, so this function stays the single place
+				// that knows PlanResult's field mapping -- eliminating
+				// release-v2.yml's hand-written jq mirror of the same
+				// mapping (which required checkout + bazel setup to run
+				// `release-helper plan` fresh just to re-derive an
+				// equivalent PlanResult).
+				var parsed PlanResult
+				if err := json.Unmarshal([]byte(fromResolvedPlan), &parsed); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Error: --from-resolved-plan is not valid JSON: %v\n", err)
+					return fmt.Errorf("%v: %w", err, ErrInvalidResolvedPlan)
+				}
+				result = &parsed
+			} else {
+				// Input validation (no Bazel calls needed)
+				if !isValidEventType(eventType) {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Error: event-type must be one of: %s\n", joinStrings(validEventTypes))
+					return ErrInvalidEventType
+				}
+				versionOpts := boolCount(version != "", incrementMajor, incrementMinor, incrementPatch)
+				if versionOpts > 1 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Error: --version, --increment-major, --increment-minor, and --increment-patch are mutually exclusive\n")
+					return ErrMutuallyExclusiveVersionOptions
+				}
+				if eventType == "workflow_dispatch" && versionOpts == 0 {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Error: manual releases require --version, --increment-major, --increment-minor, or --increment-patch\n")
+					return ErrMissingVersionOption
+				}
+				if version != "" && version != "latest" && !semverRE.MatchString(version) {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Error: version %q does not follow semantic versioning (vMAJOR.MINOR.PATCH)\n", version)
+					return ErrInvalidVersion
+				}
 
-			result, err := planRelease(planParams{
-				ctx:                  cmd.Context(),
-				eventType:            eventType,
-				requestedApps:        apps,
-				requestedCharts:      effectiveCharts,
-				version:              version,
-				incrementMajor:       incrementMajor,
-				incrementMinor:       incrementMinor,
-				incrementPatch:       incrementPatch,
-				baseCommit:           baseCommit,
-				includeDemo:          includeDemo,
-				dryRun:               dryRun,
-				gitSHA:               gitSHA,
-				gitRef:               gitRef,
-				workflowRunID:        workflowRunID,
-				workflowAttempt:      workflowAttempt,
-				actor:                actor,
-				idempotencyKeyPrefix: idempotencyKeyPrefix,
-				skipRegistry:         skipRegistry,
-				bazel:                defaultBazel,
-				git:                  defaultGit,
-				fs:                   defaultFS,
-				workspaceRoot:        workspaceRoot,
-			})
-			if err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Error: %v\n", err)
-				return err
+				workspaceRoot, err := defaultWorkspaceRoot()
+				if err != nil {
+					return fmt.Errorf("workspace root: %w", err)
+				}
+
+				effectiveCharts := charts
+				if effectiveCharts == "" && helmCharts != "" {
+					effectiveCharts = helmCharts
+				}
+
+				result, err = planRelease(planParams{
+					ctx:                  cmd.Context(),
+					eventType:            eventType,
+					requestedApps:        apps,
+					requestedCharts:      effectiveCharts,
+					version:              version,
+					incrementMajor:       incrementMajor,
+					incrementMinor:       incrementMinor,
+					incrementPatch:       incrementPatch,
+					baseCommit:           baseCommit,
+					includeDemo:          includeDemo,
+					dryRun:               dryRun,
+					gitSHA:               gitSHA,
+					gitRef:               gitRef,
+					workflowRunID:        workflowRunID,
+					workflowAttempt:      workflowAttempt,
+					actor:                actor,
+					idempotencyKeyPrefix: idempotencyKeyPrefix,
+					skipRegistry:         skipRegistry,
+					bazel:                defaultBazel,
+					git:                  defaultGit,
+					fs:                   defaultFS,
+					workspaceRoot:        workspaceRoot,
+				})
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Error: %v\n", err)
+					return err
+				}
 			}
 
 			if format == "github" {
@@ -220,6 +253,7 @@ func newPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&actor, "actor", "", "GitHub Actions actor")
 	cmd.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Idempotency key prefix")
 	cmd.Flags().BoolVar(&skipRegistry, "skip-registry", false, "Skip App Registry upfront operations")
+	cmd.Flags().StringVar(&fromResolvedPlan, "from-resolved-plan", "", "Skip planning and format a pre-resolved plan JSON (release-helper plan --format=json's own output shape, e.g. App Registry's resolved_plan) directly -- no bazel/registry/git calls")
 	return cmd
 }
 

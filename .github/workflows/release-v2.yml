@@ -367,48 +367,48 @@ jobs:
       build-id: ${{ steps.plan.outputs.build_id || steps.resolved-plan.outputs.build_id }}
       versions: ${{ steps.plan.outputs.versions || steps.resolved-plan.outputs.versions }}
     steps:
-      # Issue #927: when App Registry's Temporal DispatchBuild has already
-      # computed the full release plan (the normal case for this workflow's
-      # machine-only dispatch -- see authorize-trigger above), it forwards
-      # it verbatim as the resolved_plan input. Parse it straight into this
-      # job's outputs -- no checkout, no bazel setup, no `release-helper
-      # plan` re-invocation. Field names below mirror `release-helper plan
-      # --format github`'s own output construction exactly (tools/
-      # release_helper_go/cmd/plan.go), including which outputs are only
-      # emitted when the corresponding JSON field is present/non-empty, so
-      # this step's outputs are indistinguishable from that command's to
-      # every downstream job.
+      # Issue #927/#929: when App Registry's Temporal DispatchBuild has
+      # already computed the full release plan (the normal case for this
+      # workflow's machine-only dispatch -- see authorize-trigger above), it
+      # forwards it verbatim as the resolved_plan input. Rather than hand-
+      # parsing that JSON into this job's outputs field-by-field with jq (a
+      # second, hand-maintained mirror of the exact field mapping
+      # `release-helper plan --format github` already implements -- see
+      # tools/release_helper_go/cmd/plan.go), delegate to that same CLI via
+      # its --from-resolved-plan flag: it unmarshals resolved_plan directly
+      # into the same PlanResult struct `--format json` produces and falls
+      # through to the identical --format github emission code, so there is
+      # exactly one place (plan.go) that knows PlanResult's field mapping.
+      #
+      # This still needs a checkout -- `download-release-tools` is a local
+      # composite action, and GitHub Actions can only resolve `uses: ./...`
+      # against a checked-out repository -- but a plain shallow one (no
+      # fetch-depth:0, no fetch-tags: those are only needed by the
+      # `release-helper plan` re-derivation in the fallback path below), and
+      # no Bazel toolchain setup (setup-build-env): download-release-tools
+      # in its default 'published' source mode only downloads a prebuilt
+      # binary (see release-summary job below for the same shallow-checkout
+      # + download-release-tools pattern with no bazel setup).
+      - name: Checkout code (resolved plan)
+        if: github.event.inputs.resolved_plan != ''
+        uses: actions/checkout@v4
+
+      - name: Download release tools (resolved plan)
+        if: github.event.inputs.resolved_plan != ''
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+
       - name: Parse resolved plan
         id: resolved-plan
         if: github.event.inputs.resolved_plan != ''
         env:
           RESOLVED_PLAN: ${{ github.event.inputs.resolved_plan }}
         run: |
-          echo "matrix=$(jq -c '.matrix' <<<"$RESOLVED_PLAN")" >> "$GITHUB_OUTPUT"
-          echo "apps=$(jq -r '(.apps // []) | join(" ")' <<<"$RESOLVED_PLAN")" >> "$GITHUB_OUTPUT"
-
-          VERSION=$(jq -r 'if .version == null then "" else .version end' <<<"$RESOLVED_PLAN")
-          [[ -n "$VERSION" ]] && echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-          if jq -e '.chart_matrix != null' <<<"$RESOLVED_PLAN" >/dev/null; then
-            echo "chart_matrix=$(jq -c '.chart_matrix' <<<"$RESOLVED_PLAN")" >> "$GITHUB_OUTPUT"
-            echo "charts=$(jq -r '(.charts // []) | join(" ")' <<<"$RESOLVED_PLAN")" >> "$GITHUB_OUTPUT"
-          fi
-
-          if jq -e '.openapi_matrix != null' <<<"$RESOLVED_PLAN" >/dev/null; then
-            echo "openapi_matrix=$(jq -c '.openapi_matrix' <<<"$RESOLVED_PLAN")" >> "$GITHUB_OUTPUT"
-            if jq -e '.has_specs == true' <<<"$RESOLVED_PLAN" >/dev/null; then
-              echo "has_specs=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "has_specs=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
-          BUILD_ID=$(jq -r '.build_id // empty' <<<"$RESOLVED_PLAN")
-          [[ -n "$BUILD_ID" ]] && echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
-
-          VERSIONS=$(jq -c '.versions // {}' <<<"$RESOLVED_PLAN")
-          [[ "$VERSIONS" != "{}" ]] && echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
+          "$RELEASE_HELPER" plan --format github --from-resolved-plan "$RESOLVED_PLAN" >> "$GITHUB_OUTPUT"
 
       # Fallback path (resolved_plan not set): a dispatcher that hasn't
       # pre-computed a plan -- e.g. a bot-credentialed manual/test dispatch
