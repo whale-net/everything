@@ -31,8 +31,24 @@ type Activities struct {
 
 	// PlanBinaryPath/WorkspaceRoot configure ResolvePlan's interim
 	// release_helper_go shell-out -- see plan.go's package doc comment.
+	// FinalizePublish (issue #928, finalize.go) reuses both for its own
+	// release_helper_go finalize-app/finalize-chart shell-outs.
 	PlanBinaryPath string
 	WorkspaceRoot  string
+
+	// ChartRepoURL/ChartRepoUser/ChartRepoPass are ChartMuseum credentials
+	// for FinalizePublish's finalize-chart shell-out (issue #928).
+	// Required for FinalizePublish when the batch has any chart targets;
+	// this is the credential-locality move issue #928 asked for --
+	// ChartMuseum write access now lives here, on the Temporal worker,
+	// rather than in release-v2.yml's merged build job (which no longer
+	// uploads to ChartMuseum at all -- see finalize.go's package doc
+	// comment). GHCR retag auth needs no separate credential: finalize.go
+	// reuses GitHub's own installation token (see GitHubDispatcher.token)
+	// for that.
+	ChartRepoURL  string
+	ChartRepoUser string
+	ChartRepoPass string
 }
 
 var _ ReleaseActivities = (*Activities)(nil)

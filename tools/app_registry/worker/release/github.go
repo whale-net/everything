@@ -304,6 +304,77 @@ func (d *GitHubDispatcher) PollRun(ctx context.Context, ref BuildRef) (BuildStat
 	}
 }
 
+// RunArtifact is one workflow-run artifact's identity, as returned by
+// ListRunArtifacts.
+type RunArtifact struct {
+	ID   int64
+	Name string
+}
+
+// ListRunArtifacts lists the workflow-run artifacts uploaded by the GitHub
+// Actions run identified by ref (issue #928): the merged release-trigger
+// job's own build-manifest/chart-sources uploads (see
+// worker/release/finalize.go, and release-v2.yml's "build-release-
+// artifacts" job), the same actions/upload-artifact mechanism this
+// workflow already used for release-notes/digest-check/helm-charts
+// artifacts before this task. Only called after PollRun reports the run
+// terminal -- artifacts are not guaranteed to exist until the uploading
+// steps have completed.
+func (d *GitHubDispatcher) ListRunArtifacts(ctx context.Context, ref BuildRef) ([]RunArtifact, error) {
+	token, err := d.token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list run artifacts for run %s: %w", ref.RunID, err)
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%s/artifacts?per_page=100", d.baseURL(), d.Config.Owner, d.Config.Repo, ref.RunID)
+	var resp struct {
+		Artifacts []struct {
+			ID      int64  `json:"id"`
+			Name    string `json:"name"`
+			Expired bool   `json:"expired"`
+		} `json:"artifacts"`
+	}
+	if err := d.doJSON(ctx, http.MethodGet, url, token, nil, &resp); err != nil {
+		return nil, fmt.Errorf("list run artifacts for run %s: %w", ref.RunID, err)
+	}
+	out := make([]RunArtifact, 0, len(resp.Artifacts))
+	for _, a := range resp.Artifacts {
+		if a.Expired {
+			continue
+		}
+		out = append(out, RunArtifact{ID: a.ID, Name: a.Name})
+	}
+	return out, nil
+}
+
+// DownloadArtifact downloads artifactID's zip archive (the same format
+// actions/download-artifact consumes) and returns its raw bytes. The
+// GitHub API's download endpoint responds with a redirect to a
+// short-lived, pre-signed URL; Go's http.Client follows it automatically
+// and (since the redirect target is a different host) does not forward the
+// Authorization header there, which is the correct behavior -- the signed
+// URL needs no bearer token.
+func (d *GitHubDispatcher) DownloadArtifact(ctx context.Context, artifactID int64) ([]byte, error) {
+	token, err := d.token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("download artifact %d: %w", artifactID, err)
+	}
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/artifacts/%d/zip", d.baseURL(), d.Config.Owner, d.Config.Repo, artifactID)
+	req, err := d.newRequest(ctx, http.MethodGet, url, token, nil)
+	if err != nil {
+		return nil, fmt.Errorf("download artifact %d: %w", artifactID, err)
+	}
+	resp, err := d.httpClient().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download artifact %d: %w", artifactID, err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("download artifact %d: unexpected status %d: %s", artifactID, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return io.ReadAll(resp.Body)
+}
+
 // doRequest issues a GitHub API request and requires the response status
 // to equal wantStatus, discarding the response body.
 func (d *GitHubDispatcher) doRequest(ctx context.Context, method, url, token string, body []byte, wantStatus int) error {

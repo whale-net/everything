@@ -6,6 +6,7 @@ go_library(
         "activities.go",
         "approval.go",
         "buildref.go",
+        "finalize.go",
         "github.go",
         "plan.go",
         "record.go",
@@ -27,6 +28,7 @@ go_test(
     srcs = [
         "activities_test.go",
         "buildref_test.go",
+        "finalize_test.go",
         "github_test.go",
         "record_test.go",
         "workflow_test.go",

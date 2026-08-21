@@ -144,6 +144,14 @@ func run() error {
 		Registry:       repo,
 		PlanBinaryPath: os.Getenv("RELEASE_PLAN_BINARY_PATH"),
 		WorkspaceRoot:  os.Getenv("RELEASE_WORKSPACE_ROOT"),
+		// ChartMuseum credentials for FinalizePublish's finalize-chart
+		// shell-out (issue #928) -- credential-locality move: ChartMuseum
+		// write access now lives on this worker, not in release-v2.yml's
+		// merged build job. Optional like the vars above: a batch with no
+		// chart targets never needs them.
+		ChartRepoURL:  getEnv("RELEASE_CHART_REPO_URL", "https://charts.whalenet.dev"),
+		ChartRepoUser: os.Getenv("RELEASE_CHART_REPO_USER"),
+		ChartRepoPass: os.Getenv("RELEASE_CHART_REPO_PASS"),
 	}
 	if appID := os.Getenv("RELEASE_GITHUB_APP_ID"); appID != "" {
 		dispatcher, derr := release.NewGitHubDispatcher(release.GitHubDispatcherConfig{
@@ -169,6 +177,7 @@ func run() error {
 	w.RegisterActivityWithOptions(releaseActivities.RecordResolvedPlan, activityOptions(release.ActivityRecordResolvedPlan))
 	w.RegisterActivityWithOptions(releaseActivities.DispatchBuild, activityOptions(release.ActivityDispatchBuild))
 	w.RegisterActivityWithOptions(releaseActivities.PollBuild, activityOptions(release.ActivityPollBuild))
+	w.RegisterActivityWithOptions(releaseActivities.FinalizePublish, activityOptions(release.ActivityFinalizePublish))
 	w.RegisterActivityWithOptions(releaseActivities.VerifyPublished, activityOptions(release.ActivityVerifyPublished))
 	w.RegisterActivityWithOptions(releaseActivities.RecordTargetState, activityOptions(release.ActivityRecordTargetState))
 
