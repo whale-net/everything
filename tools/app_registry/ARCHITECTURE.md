@@ -43,7 +43,7 @@ was too large for one file:
 | [`01-artifact-lifecycle.md`](architecture/08-release-lifecycle/01-artifact-lifecycle.md) | `allocated → publishing → published` state machine |
 | [`02-manifest-snapshot.md`](architecture/08-release-lifecycle/02-manifest-snapshot.md) | App identity vs. per-build manifest snapshot |
 | [`03-assert-vs-reconcile.md`](architecture/08-release-lifecycle/03-assert-vs-reconcile.md) | `AssertApps` (additive) vs. `ReconcileApps` (absence sweep) |
-| [`04-run-log.md`](architecture/08-release-lifecycle/04-run-log.md) | CI orchestrates, the registry records; `BeginPublishBatch`, `GetReleaseRun` |
+| [`04-run-log.md`](architecture/08-release-lifecycle/04-run-log.md) | Temporal orchestrates (UI-triggered releases, #889), CI still pushes, the registry records; `BeginPublishBatch`, `GetReleaseRun` |
 | [`05-list-builds-issue-608.md`](architecture/08-release-lifecycle/05-list-builds-issue-608.md) | Real pagination over `build` |
 | [`06-pagination-issue-603.md`](architecture/08-release-lifecycle/06-pagination-issue-603.md) | Real pagination for `ListPromotionEvents`/`ListArtifacts`/`ListPromotions` |
 | [`07-availability-per-stage.md`](architecture/08-release-lifecycle/07-availability-per-stage.md) | Availability, restated per `domain_adoption.stage` |
@@ -67,3 +67,19 @@ was too large for one file:
    record permanently — they cost nothing and are the disaster-recovery path.
 5. **Record, don't act.** The registry mutates rows and emits writeback intents.
    It never touches a cluster.
+   **Clarifying note (#886/#889, App Registry v2 release job):** this
+   principle constrains the registry/gRPC server component specifically, not
+   every actor in this system. The Temporal `ReleaseWorkflow` introduced by
+   #889 is a distinct actor — the `app-registry-worker` binary, the same one
+   that already runs `WritebackWorkflow` — and it *does* orchestrate: it
+   drives a UI-triggered release's trigger→build→publish→record saga end to
+   end, invoking CI (`release.yml`) and polling it to completion. That does
+   not weaken principle 5: the registry/server itself still only mutates rows
+   and emits intents, and still never touches a cluster or calls out to
+   GitHub Actions directly. See
+   [`architecture/08-release-lifecycle/04-run-log.md`](architecture/08-release-lifecycle/04-run-log.md)
+   and
+   [`architecture/08-release-lifecycle/11-rejected-alternatives.md`](architecture/08-release-lifecycle/11-rejected-alternatives.md)
+   for the full account of what changed and why the original "Record, don't
+   act" rejection of an inbound Temporal workflow (#558-scoped) doesn't apply
+   to what #889 actually shipped.

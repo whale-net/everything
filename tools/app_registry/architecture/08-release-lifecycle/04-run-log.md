@@ -1,14 +1,36 @@
-# The run log: CI orchestrates, the registry records
+# The run log: Temporal orchestrates, CI still pushes, the registry records
 
-A release run spans real GHCR pushes, so it cannot be one database
-transaction, and it must not become one: re-pushing eight images because the
-ninth failed is exactly wrong. The saga shape is right, with one boundary held
-firmly — **the registry keeps the saga *log*; it does not *orchestrate* the
-saga.** CI stays the actor that pushes and reports transitions. The moment the
-registry drives steps, design principle 5 ("Record, don't act") breaks and it
-becomes a deployment system. Concretely: no Temporal workflow on the inbound
-path. `writeback_outbox` + Temporal stays what it is — the *outbound* path
-(registry → gitops). Inbound is a state log CI writes to.
+**Updated by #886/#889 (App Registry v2 release job).** This section
+originally argued that the registry keeps the saga *log* but never
+*orchestrates* it, and that no Temporal workflow sits on the inbound path.
+That claim is now **superseded for UI-triggered releases**: the Temporal
+`ReleaseWorkflow` (`worker/release/`, #889) is the actor that drives
+trigger→build→publish→record end to end for a release triggered from the App
+Registry UI (#890), replacing the human who used to run `gh workflow run
+release.yml`/fill in the Actions form (cutover, #891). See
+`architecture/08-release-lifecycle/11-rejected-alternatives.md`'s updated
+"Registry orchestrates the release saga" row and `ARCHITECTURE.md` design
+principle 5's clarifying note for why this does not violate "Record, don't
+act": the actor that now orchestrates is `app-registry-worker` (the same
+binary that already runs `WritebackWorkflow`), not the registry/gRPC server
+itself — the server component still only mutates rows and emits writeback
+intents.
+
+What did **not** change: CI (the GHA build job, `release.yml`) still performs
+every actual GHCR/chart-repo push and still calls
+`BeginPublish`/`BeginPublishBatch`/`RecordArtifact` exactly as the rest of
+this file describes — those RPC mechanics, the `allocated → publishing →
+published` state machine, and the run-log/resume semantics below are
+unchanged. What changed is *who calls CI and polls it to completion*: a
+Temporal workflow now sits above `release.yml` as its caller/poller instead
+of a human, and it resolves the release plan once (`ResolvePlan`) and passes
+that resolved plan into `release.yml` as a literal input (bypassing
+`plan-release`'s own independent resolution for that invocation) rather than
+`plan-release` resolving it itself — the "resolved once, reused everywhere"
+property FR7/FR8 describe. A release run still spans real GHCR pushes, so it
+still cannot be one database transaction, and it still must not become one:
+re-pushing eight images because the ninth failed is exactly wrong — the run
+log below is unaffected by any of this.
 
 **This needs no new tables either.** `build` is already the run aggregate
 (`(workflow_run_id, workflow_attempt)` unique); the artifact rows in

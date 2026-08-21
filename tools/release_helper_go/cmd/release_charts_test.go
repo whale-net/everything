@@ -85,10 +85,15 @@ type fakeHelmPackager struct {
 	packageErr   error
 	content      []byte // when set, written verbatim instead of the literal fake bytes
 	calls        int
+	// lastAppVersions captures the appVersions map passed on the most
+	// recent Package call, so tests can assert what resolveChartAppVersions
+	// actually resolved (issue #901's plan-pin precedence).
+	lastAppVersions map[string]string
 }
 
 func (f *fakeHelmPackager) Package(chartDir, chartName, version, outDir string, appVersions map[string]string) (string, error) {
 	f.calls++
+	f.lastAppVersions = appVersions
 	if f.packageErr != nil {
 		return "", f.packageErr
 	}
@@ -348,6 +353,50 @@ func TestExecuteReleaseCharts_SuccessfulRelease(t *testing.T) {
 	}
 }
 
+// TestExecuteReleaseCharts_AppVersionsPlanPinTakesPrecedence is issue #901's
+// end-to-end (ExecuteReleaseCharts, not just resolveChartAppVersions
+// directly) red/green case: ReleaseChartsParams.AppVersions, when it
+// carries the release batch's already-resolved plan version for a
+// composed member app, must reach the packager verbatim -- overriding the
+// git-tag fixture ("demo-hello-fastapi.v1.0.0") that would otherwise be
+// used.
+func TestExecuteReleaseCharts_AppVersionsPlanPinTakesPrecedence(t *testing.T) {
+	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
+	uploader := &fakeChartUploader{}
+	packager := &fakeHelmPackager{}
+	artClient := NewFakeArtifactRegistryClient()
+	fakeHermeticity := &fakeHermeticityChecker{enforced: false}
+
+	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+		Charts:               "demo-hello-fastapi",
+		Version:              "v0.2.0",
+		BuildID:              "build-999",
+		ChartRepoURL:         "https://charts.whalenet.dev",
+		IdempotencyKeyPrefix: "run-42-1",
+		AppVersions: map[string]string{
+			"demo-hello-fastapi": "v9.9.9", // this batch's resolved plan version -- must win over the v1.0.0 git tag
+		},
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		Packager:       packager,
+		Uploader:       uploader,
+		Hermeticity:    fakeHermeticity,
+		WorkspaceRoot:  workspaceRoot,
+		ArtifactClient: artClient,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Charts) != 1 {
+		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	}
+	if got := packager.lastAppVersions["demo-hello-fastapi"]; got != "v9.9.9" {
+		t.Errorf("expected packager to receive plan-pinned app version v9.9.9, got %q (full appVersions: %v)", got, packager.lastAppVersions)
+	}
+}
+
 func TestExecuteReleaseCharts_UploadFailure_CallsFailPublish(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
 	uploader := &fakeChartUploader{uploadErr: fmt.Errorf("connection refused")}
@@ -539,6 +588,26 @@ func TestReleaseChartsCmd_CLIExecution(t *testing.T) {
 	_, stderr, err := runTest([]string{"release-charts", "--help"})
 	if err != nil {
 		t.Fatalf("unexpected error running release-charts --help: %v (stderr: %s)", err, stderr)
+	}
+}
+
+// TestReleaseChartsCmd_AppVersionsFlag_MalformedJSON proves --app-versions
+// (issue #901) is parsed eagerly with a clear error, rather than silently
+// swallowing a malformed value that would otherwise leave AppVersions nil
+// and mask the caller's mistake.
+func TestReleaseChartsCmd_AppVersionsFlag_MalformedJSON(t *testing.T) {
+	_, stderr, err := runTest([]string{
+		"release-charts",
+		"--charts", "demo-hello-fastapi",
+		"--chart-repo-url", "https://charts.whalenet.dev",
+		"--dry-run",
+		"--app-versions", "{not valid json",
+	})
+	if err == nil {
+		t.Fatal("expected error for malformed --app-versions JSON, got nil")
+	}
+	if !strings.Contains(err.Error(), "--app-versions") && !strings.Contains(stderr, "--app-versions") {
+		t.Errorf("expected error to mention --app-versions, got err=%v stderr=%q", err, stderr)
 	}
 }
 
@@ -1350,4 +1419,3 @@ func TestExecuteReleaseCharts_AllocateStage_BeginPublishFailureIsFatal(t *testin
 		t.Errorf("expected 0 uploads when BeginPublish fails, got %d", uploader.uploadCalls)
 	}
 }
-

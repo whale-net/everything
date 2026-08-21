@@ -23,6 +23,7 @@ proto_library(
         "api_messages_artifact.proto",
         "api_messages_environment.proto",
         "api_messages_promotion.proto",
+        "api_messages_release.proto",
         "messages.proto",
     ],
     visibility = ["//visibility:public"],

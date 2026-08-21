@@ -119,8 +119,10 @@ func (s *PromotionServer) Promote(ctx context.Context, req *pb.PromoteRequest) (
 			if eerr != nil {
 				return nil, eerr
 			}
-			if werr := s.enqueueWriteback(ctx, r, *env, *current, current.PromotionID, event.EventID); werr != nil {
-				return nil, werr
+			if s.shouldEnqueueWriteback(*current) {
+				if werr := s.enqueueWriteback(ctx, r, *env, *current, current.PromotionID, event.EventID); werr != nil {
+					return nil, werr
+				}
 			}
 			out := &pb.PromoteResponse{Promotion: promotionToPB(*current), Event: promotionEventToPB(*event)}
 			if superseded != nil {
@@ -285,8 +287,10 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 			if eerr != nil {
 				return nil, eerr
 			}
-			if werr := s.enqueueWriteback(ctx, r, *env, *current, current.PromotionID, event.EventID); werr != nil {
-				return nil, werr
+			if s.shouldEnqueueWriteback(*current) {
+				if werr := s.enqueueWriteback(ctx, r, *env, *current, current.PromotionID, event.EventID); werr != nil {
+					return nil, werr
+				}
 			}
 			out := &pb.RollbackResponse{Promotion: promotionToPB(*current), Event: promotionEventToPB(*event)}
 			if superseded != nil {
@@ -393,6 +397,35 @@ func (s *PromotionServer) GetEnvironmentState(ctx context.Context, req *pb.GetEn
 		AsOf:        asOf,
 		StateHash:   stateHash(hashed),
 	}, nil
+}
+
+// shouldEnqueueWriteback implements FR9/#881's DeployUnit-aware writeback
+// guard (folded into this plan per issue #893's scope note -- #881: "we
+// shouldn't be attempting to deploy unless it's chart"). Only a CHART
+// artifact promotion ever changes a domain's rendered `targetRevision`
+// file (see worker/writeback/gitops.go's RenderEnvironmentState, which
+// looks for a CHART entry in GetEnvironmentState and errors if none
+// exists) -- so this is the one condition that ever needs a writeback_
+// outbox row.
+//
+// Before this guard, every successful Promote/Rollback unconditionally
+// enqueued a writeback, including for IMAGE artifacts belonging to a
+// direct-deploy app (deploy_unit=image, Promotability PROMOTABLE, no chart
+// composes it at all) and for VIA_CHART override promotions (deploy_unit=
+// chart, allow_override=true: the promoted image's digest changes but the
+// chart's own target revision does not). Both cases produced a doomed
+// WritebackWorkflow execution: RenderEnvironmentState either found no
+// CHART entry in that domain's environment state at all (image-only
+// domain -- fails outright, the bug #881 reports) or found an unrelated
+// chart's already-current version (multi-app domain -- rendered/committed
+// a no-op at best, or the wrong chart's state at worst, per #881's "will
+// writeback something invalid"). Gating on Kind == ArtifactKindChart here
+// means neither case reaches the outbox: an IMAGE promotion's drift
+// (VIA_CHART override) is still tracked and visible via
+// GetEnvironmentState's DriftEntry (see that method's doc comment above),
+// just not via a redundant writeback attempt.
+func (s *PromotionServer) shouldEnqueueWriteback(current repository.Promotion) bool {
+	return current.Kind == repository.ArtifactKindChart
 }
 
 // enqueueWriteback writes one writeback_outbox row inside the caller's

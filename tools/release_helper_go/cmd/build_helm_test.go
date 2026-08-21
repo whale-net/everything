@@ -65,7 +65,6 @@ func (b *fakeClientBuilder) withGetArtifactError(ownerFullName string, kind pb.A
 	return b
 }
 
-
 // ── findChartApp / resolveChartAppVersions ─────────────────────────────────
 
 func testApps() []AppMetadata {
@@ -92,7 +91,7 @@ func TestResolveChartAppVersionsKeysByFullName(t *testing.T) {
 		fakeGitCall{argsContain: []string{"tag", "--list", "manmanv2-event-processor.*"}, output: "manmanv2-event-processor.v0.2.18"},
 	)
 
-	versions, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, nil)
+	versions, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,7 +126,7 @@ func TestResolveChartAppVersionsAllocateUsesRegistry(t *testing.T) {
 		withCheckChartHermeticity("manmanv2", true). // domain is at allocate
 		withGetArtifact("manmanv2-control-api", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "v1.9.0")
 
-	versions, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client)
+	versions, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -150,7 +149,7 @@ func TestResolveChartAppVersionsAllocateRegistryErrorFails(t *testing.T) {
 		withCheckChartHermeticity("manmanv2", true). // domain is at allocate
 		withGetArtifactError("manmanv2-control-api", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, fmt.Errorf("registry unavailable"))
 
-	_, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client)
+	_, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client, nil)
 	if err == nil {
 		t.Fatal("expected error when registry fails for allocate-stage domain, got nil")
 	}
@@ -159,6 +158,68 @@ func TestResolveChartAppVersionsAllocateRegistryErrorFails(t *testing.T) {
 	}
 }
 
+// TestResolveChartAppVersionsPlanPinTakesPrecedence is issue #901's
+// red/green case: a composed member app present in resolvedPlanVersions
+// (i.e. it was itself resolved as part of this release batch's plan) must
+// use that pinned version directly, skipping both the App Registry query
+// and the git-tag fallback entirely. The fake client is wired to error if
+// GetArtifact is called for this app at all, so any regression that still
+// queries the registry fails loudly rather than just happening to pick a
+// different version.
+func TestResolveChartAppVersionsPlanPinTakesPrecedence(t *testing.T) {
+	chart := HelmChartMetadata{ChartManifest: &appmetapb.ChartManifest{
+		Name: "helm-manmanv2-control-services", Domain: "manmanv2",
+		Apps: []string{"control-api"},
+	}}
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--list", "manmanv2-control-api.*"}, output: "manmanv2-control-api.v0.0.1"},
+	)
+	client := newFakeArtifactClient().
+		withCheckChartHermeticity("manmanv2", true). // domain is at allocate
+		withGetArtifactError("manmanv2-control-api", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, fmt.Errorf("GetArtifact must not be called when a plan pin is present"))
+
+	resolvedPlanVersions := map[string]string{
+		"manmanv2-control-api": "v2.5.0", // the release batch's actual resolved version
+	}
+
+	versions, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client, resolvedPlanVersions)
+	if err != nil {
+		t.Fatalf("unexpected error (plan pin should have bypassed the registry call): %v", err)
+	}
+	if got := versions["manmanv2-control-api"]; got != "v2.5.0" {
+		t.Errorf("versions[manmanv2-control-api] = %q, want plan-pinned %q", got, "v2.5.0")
+	}
+}
+
+// TestResolveChartAppVersionsPlanPinAbsentFallsBackUnchanged verifies that a
+// composed member app NOT present in resolvedPlanVersions (not part of this
+// release batch) still resolves via the existing independent-query path —
+// no regression to the common case where resolvedPlanVersions is non-nil
+// but simply doesn't cover every composed app.
+func TestResolveChartAppVersionsPlanPinAbsentFallsBackUnchanged(t *testing.T) {
+	chart := HelmChartMetadata{ChartManifest: &appmetapb.ChartManifest{
+		Name: "helm-manmanv2-control-services", Domain: "manmanv2",
+		Apps: []string{"control-api"},
+	}}
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--list", "manmanv2-control-api.*"}, output: "manmanv2-control-api.v0.0.1"},
+	)
+	client := newFakeArtifactClient().
+		withCheckChartHermeticity("manmanv2", true). // domain is at allocate
+		withGetArtifact("manmanv2-control-api", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "v1.9.0")
+
+	resolvedPlanVersions := map[string]string{
+		"manmanv2-event-processor": "v9.9.9", // a different app entirely; control-api is absent
+	}
+
+	versions, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client, resolvedPlanVersions)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := versions["manmanv2-control-api"]; got != "v1.9.0" {
+		t.Errorf("expected unpinned app to fall back to registry version v1.9.0, got %q", got)
+	}
+}
 
 func TestFindChartAppNotFound(t *testing.T) {
 	if _, err := findChartApp("nonexistent", "manmanv2", testApps()); err == nil {

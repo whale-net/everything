@@ -189,6 +189,10 @@ func newPlanCmd() *cobra.Command {
 				if result.BuildID != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "build_id=%s\n", result.BuildID)
 				}
+				if len(result.Versions) > 0 {
+					versionsJSON, _ := json.Marshal(result.Versions)
+					fmt.Fprintf(cmd.OutOrStdout(), "versions=%s\n", versionsJSON)
+				}
 				return nil
 			}
 			enc := json.NewEncoder(cmd.OutOrStdout())

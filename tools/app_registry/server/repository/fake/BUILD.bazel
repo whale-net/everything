@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "fake",
@@ -6,6 +6,7 @@ go_library(
         "fake.go",
         "keyset_cursor.go",
         "reconcile.go",
+        "release_run.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/fake",
     visibility = ["//visibility:public"],
@@ -15,4 +16,11 @@ go_library(
         "//tools/appmeta/proto:appmetapb",
         "@com_github_google_uuid//:uuid",
     ],
+)
+
+go_test(
+    name = "fake_test",
+    srcs = ["release_run_test.go"],
+    embed = [":fake"],
+    deps = ["//tools/app_registry/server/repository"],
 )

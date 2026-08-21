@@ -29,6 +29,22 @@ supersedes "Release-vs-reconcile gap (issue #547)" above — AR-7c closes that
 gap for real, see the callout there — and changes what "Availability and
 bootstrap" below promises; both are cross-referenced where that happens.
 
+**Updated by #886/#889 (App Registry v2 release job).** For a release
+triggered from the App Registry UI, the Temporal `ReleaseWorkflow`
+(`worker/release/`, #889) is now the actor that resolves the release plan and
+invokes `release.yml`'s matrix, replacing the human who used to run `gh
+workflow run` (cutover, #891) and replacing `release.yml`'s own `plan-release`
+job's independent resolution for that invocation. What this section describes
+below — the `build`/`artifact` state machine, the four cross-run orderings,
+and how each is (or isn't) enforced — is unchanged: this is a change in *who
+drives ordering 1's plan resolution and who invokes the matrix*, not a change
+to the ordering guarantees themselves or to the state machine that enforces
+them. CI (the GHA build job) still performs every push and still calls
+`BeginPublish`/`BeginPublishBatch`/`RecordArtifact` exactly as "The run log"
+below describes. See `architecture/08-release-lifecycle/04-run-log.md`'s
+updated framing and `ARCHITECTURE.md` design principle 5's clarifying note
+for the full account.
+
 ## The problem: four cross-run orderings, three of them unenforced
 
 A release run and a `main`-push reconcile are separate CI runs with no

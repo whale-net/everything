@@ -12,7 +12,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/whale-net/everything/libs/go/htmxauth"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
 
 // This file covers #652 (NFR-17, FR-42-46, FR-59) at the handler layer:
@@ -241,5 +243,46 @@ func TestHandleRollbackShow_DoesNotReachAPIWhenClientSideGateDenies(t *testing.T
 	}
 	if !strings.Contains(w.Body.String(), "Requires role") {
 		t.Errorf("expected the denied state to name the missing role; body = %s", w.Body.String())
+	}
+}
+
+// --- issue #890 FR4/NFR5: release trigger requires the same permission as
+// promote ---------------------------------------------------------------
+//
+// The submit/show gate-denial behaviour itself (a denied caller never
+// reaches TriggerRelease, both GET and POST) is covered in
+// handlers_release_test.go (mirroring
+// TestHandleRollbackShow_DoesNotReachAPIWhenClientSideGateDenies above --
+// same pattern, kept in that file alongside the rest of the release-trigger
+// handler tests rather than duplicated here). What belongs here is the
+// role-identity assertion: releaseTriggerGate (handlers_release.go) must
+// evaluate to the *exact* same GateDecision promote.templ's own gate line
+// (`components.GateCellAction(user, components.EnvironmentPromoterRole(s.EnvKey), false)`)
+// would produce for the "dev" environment -- i.e. release trigger reuses
+// promote's gate function and role-naming scheme verbatim, not a
+// parallel/independent check that merely happens to behave similarly today.
+func TestReleaseTriggerGate_MatchesPromoteScreensGateForDevEnvironment(t *testing.T) {
+	promoteGateForDev := func(user *htmxauth.UserInfo) components.GateDecision {
+		return components.GateCellAction(user, components.EnvironmentPromoterRole("dev"), false)
+	}
+
+	cases := []struct {
+		name string
+		user *htmxauth.UserInfo
+	}{
+		{"no user", nil},
+		{"user with no roles", &htmxauth.UserInfo{Roles: []string{}}},
+		{"user missing the dev promoter role", &htmxauth.UserInfo{Roles: []string{"app-registry-promoter-prod"}}},
+		{"user holding the dev promoter role", &htmxauth.UserInfo{Roles: []string{"app-registry-promoter-dev"}}},
+		{"dev sentinel (AuthModeNone)", &htmxauth.UserInfo{Roles: htmxauth.AllRoles}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := releaseTriggerGate(c.user)
+			want := promoteGateForDev(c.user)
+			if got != want {
+				t.Errorf("releaseTriggerGate(%+v) = %+v, want %+v (must match promote's own gate for the dev environment)", c.user, got, want)
+			}
+		})
 	}
 }

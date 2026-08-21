@@ -1,0 +1,27 @@
+-- App Registry — allow a release_run.temporal_workflow_id to be reused
+-- across separate, non-overlapping releases of the exact same target
+-- batch (issue #889, FR11: "retry-by-re-trigger after a failure must not
+-- double-publish")
+--
+-- release.WorkflowID (tools/app_registry/worker/release/workflow.go) is a
+-- pure function of the batch's target keys, with no time component --
+-- deliberately, so Temporal's own workflow-id dedup (which by default
+-- allows a new execution to start under a previously-used id once the
+-- prior execution has reached a terminal state -- WorkflowIDReusePolicy
+-- AllowDuplicate) is the authoritative "at most one non-terminal release
+-- per target batch" guarantee (FR5/NFR2), not a DB constraint.
+--
+-- 016's blanket UNIQUE index on temporal_workflow_id was stricter than
+-- that: it permanently forbade ever creating a second release_run row for
+-- the same batch, even weeks later once the first was fully succeeded --
+-- 016's own comment said the intent was only to "catch a retried
+-- CreateReleaseRun call for the same workflow id [layer] too" (an
+-- in-flight retry), not to block every future legitimate re-release of the
+-- same apps/charts. Replaced with a non-unique lookup index; the
+-- retried-call and concurrent-trigger cases 016 meant to catch are instead
+-- enforced by CreateReleaseRun checking for a non-terminal
+-- release_run_target under a matching temporal_workflow_id itself (see
+-- postgres/release_run.go and fake/release_run.go), which correctly scopes
+-- the guarantee to "non-terminal" the way Temporal's own dedup does.
+DROP INDEX IF EXISTS release_run_temporal_workflow_id_idx;
+CREATE INDEX release_run_temporal_workflow_id_idx ON release_run (temporal_workflow_id);

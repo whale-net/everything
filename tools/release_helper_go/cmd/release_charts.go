@@ -203,6 +203,12 @@ type ReleaseChartsParams struct {
 	CreateGitTag         bool
 	ChartRepoUser        string
 	ChartRepoPass        string
+	// AppVersions carries the release batch's already-resolved plan
+	// versions (keyed by AppMetadata.FullName(), "<domain>-<name>") for
+	// composed member apps -- see resolveChartAppVersions's doc comment
+	// (issue #901). Absent/empty is a no-op: every composed app resolves
+	// via the existing independent-query path unchanged.
+	AppVersions map[string]string
 
 	Bazel          BazelRunner
 	Git            GitRunner
@@ -253,6 +259,7 @@ func newReleaseChartsCmd() *cobra.Command {
 		createGitTag         bool
 		chartRepoUser        string
 		chartRepoPass        string
+		appVersionsJSON      string
 	)
 
 	cmd := &cobra.Command{
@@ -260,6 +267,13 @@ func newReleaseChartsCmd() *cobra.Command {
 		Short:        "Execute Helm chart composition, hermeticity check, packaging, ChartMuseum upload, and artifact recording",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var appVersions map[string]string
+			if strings.TrimSpace(appVersionsJSON) != "" {
+				if err := json.Unmarshal([]byte(appVersionsJSON), &appVersions); err != nil {
+					return fmt.Errorf("parse --app-versions: %w", err)
+				}
+			}
+
 			workspaceRoot, err := defaultWorkspaceRoot()
 			if err != nil {
 				return fmt.Errorf("workspace root: %w", err)
@@ -299,6 +313,7 @@ func newReleaseChartsCmd() *cobra.Command {
 				CreateGitTag:         createGitTag,
 				ChartRepoUser:        user,
 				ChartRepoPass:        pass,
+				AppVersions:          appVersions,
 				Bazel:                defaultBazel,
 				Git:                  defaultGit,
 				Docker:               defaultDocker,
@@ -339,6 +354,7 @@ func newReleaseChartsCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&createGitTag, "create-git-tag", false, "Create git tag upon successful publication")
 	cmd.Flags().StringVar(&chartRepoUser, "chart-repo-user", "", "ChartMuseum username")
 	cmd.Flags().StringVar(&chartRepoPass, "chart-repo-pass", "", "ChartMuseum password")
+	cmd.Flags().StringVar(&appVersionsJSON, "app-versions", "", `JSON object of the release batch's resolved plan versions, keyed by app FullName ("<domain>-<name>"), e.g. {"manmanv2-control-api":"v1.2.3"}. A composed member app present here uses this pinned version instead of an independent latest_published query (issue #901). Absent/empty is a no-op.`)
 
 	_ = cmd.MarkFlagRequired("charts")
 	_ = cmd.MarkFlagRequired("chart-repo-url")
@@ -513,7 +529,7 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 		tagName := fmt.Sprintf("%s.%s", chart.Name, ver)
 
 		// 1. Resolve member app versions
-		appVersions, err := resolveChartAppVersions(ctx, chart, allApps, git, artifactClient)
+		appVersions, err := resolveChartAppVersions(ctx, chart, allApps, git, artifactClient, p.AppVersions)
 		if err != nil {
 			return nil, fmt.Errorf("resolve app versions for chart %s: %w", chart.Name, err)
 		}

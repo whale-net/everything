@@ -531,6 +531,78 @@ type WritebackRepository interface {
 	Get(ctx context.Context, outboxID string) (*WritebackOutbox, error)
 }
 
+// ReleaseRunRepository covers `release_run` and `release_run_target`
+// (migration 016, NFR4) -- the UI-trigger-layer audit trail described in
+// migration 016's doc comment and architecture/08-release-lifecycle/
+// 04-run-log.md. NOT SCD2 (AGENTS.md "SCD2"): release_run is written once
+// and never rewritten after create (barring TemporalRunID and, once,
+// ResolvedPlan via SetResolvedPlan -- see issue #906);
+// release_run_target follows `artifact`'s existing mutation style --
+// UpdateTargetState mutates a row in place, it does not insert a new row
+// per transition.
+type ReleaseRunRepository interface {
+	// CreateReleaseRun inserts one `release_run` row plus one
+	// `release_run_target` row per target in run.Targets, all starting in
+	// ReleaseRunTargetStateQueued, in a single transaction. Must be called
+	// inside Registry.WithTx.
+	//
+	// Rejects with ErrAlreadyExists (issue #889, FR11/migration 017) if any
+	// existing release_run sharing run.TemporalWorkflowID still has at
+	// least one non-terminal release_run_target row -- i.e. an in-flight
+	// retry of the same trigger, or a genuinely concurrent trigger of the
+	// same batch (release.WorkflowID is deterministic per target batch).
+	// Once every release_run_target row for a prior release_run under that
+	// same workflow id has reached succeeded/failed, a new release_run may
+	// reuse the id -- this is what lets the same apps/charts be released
+	// again later, matching Temporal's own default WorkflowIDReusePolicy
+	// (AllowDuplicate: a new execution may start under a previously-used id
+	// once the prior execution is terminal) rather than forbidding it
+	// forever.
+	CreateReleaseRun(ctx context.Context, run ReleaseRun, targets []ReleaseRunTarget) (*ReleaseRun, []ReleaseRunTarget, error)
+
+	// SetResolvedPlan stamps release_run.resolved_plan for releaseRunID
+	// (issue #906, validation finding #903). CreateReleaseRun leaves
+	// resolved_plan NULL (see ReleaseRun.ResolvedPlan's doc comment for
+	// why it cannot populate it synchronously); this is the one write that
+	// fills it in, called exactly once per release_run by
+	// worker/release/workflow.go's ReleaseWorkflow (RecordResolvedPlan
+	// activity) once its ResolvePlan step has actually resolved a plan.
+	// resolvedPlan must be non-empty, valid JSON -- implementations reject
+	// an empty/nil value with ErrInvalidArgument rather than silently
+	// writing NULL back (that would defeat the "written once" contract
+	// this method exists to uphold) or, in Postgres, produce the same
+	// SQLSTATE 22P02 this issue closes.
+	SetResolvedPlan(ctx context.Context, releaseRunID string, resolvedPlan []byte) error
+
+	// UpdateTargetState transitions releaseRunTargetID to newState,
+	// stamping StateChangedAt and optionally BuildID/ErrorDetail --
+	// appending in place (the row IS the current state; this does not
+	// insert a new row), matching `artifact`'s mutation style rather than
+	// `promotion`'s SCD2 open/close style. buildID/errorDetail, when
+	// non-empty, are written onto the row; an empty string leaves the
+	// existing stored value unchanged. Implementations must enforce
+	// ReleaseRunTargetState's legal-transition table, translating any other
+	// starting state into ErrFailedPrecondition.
+	UpdateTargetState(ctx context.Context, releaseRunTargetID string, newState ReleaseRunTargetState, buildID, errorDetail string) error
+
+	// GetReleaseRun returns the release_run row and every one of its
+	// release_run_target rows, or ErrNotFound.
+	GetReleaseRun(ctx context.Context, releaseRunID string) (*ReleaseRun, []ReleaseRunTarget, error)
+
+	// ListReleaseRunsByTarget returns every release_run that has a
+	// release_run_target row for ownerFullName, most-recent-first -- NFR4's
+	// "reconstruct full history including prior attempts", not just the
+	// current in-flight one. The non-terminal-only filter FR5/NFR2's status
+	// query needs is a narrower read on top of this, not a separate method
+	// -- callers filter ReleaseRunTarget.State themselves. Note: the actual
+	// "one non-terminal release per target" rejection is Temporal's
+	// deterministic workflow-id dedup (release_run.TemporalWorkflowID),
+	// not a DB constraint enforced here -- this method (and the
+	// release_run_target_owner_state_idx index backing it) only serves the
+	// read path.
+	ListReleaseRunsByTarget(ctx context.Context, ownerFullName string) ([]ReleaseRun, error)
+}
+
 // Registry aggregates the per-entity repositories and provides a
 // unit-of-work boundary. Handlers call WithTx to make a business operation
 // (reconcile, idempotency check-and-store, etc.) atomic: fn receives a
@@ -544,6 +616,7 @@ type Registry interface {
 	Promotions() PromotionRepository
 	Writeback() WritebackRepository
 	DomainAdoption() DomainAdoptionRepository
+	ReleaseRuns() ReleaseRunRepository
 
 	WithTx(ctx context.Context, fn func(ctx context.Context, r Registry) error) error
 }

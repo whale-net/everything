@@ -421,17 +421,19 @@ func TestGetEnvironmentState_ReportsDrift(t *testing.T) {
 // construction -- two Promote calls a few microseconds apart routinely land
 // in the same second.
 
-// TestPromote_EnqueuesWritebackOutbox covers AR-4b: a successful Promote
-// writes one writeback_outbox row in the same call, carrying the same
-// promotion id, the environment key, the promotion_event id, and a
-// state_hash equal to what a subsequent GetEnvironmentState reports -- see
-// server/handlers/promotion.go's enqueueWriteback and
-// ARCHITECTURE.md "Writeback: outbox -> Temporal".
+// TestPromote_EnqueuesWritebackOutbox covers AR-4b: a successful Promote of
+// a CHART artifact writes one writeback_outbox row in the same call,
+// carrying the same promotion id, the environment key, the promotion_event
+// id, and a state_hash equal to what a subsequent GetEnvironmentState
+// reports -- see server/handlers/promotion.go's enqueueWriteback and
+// ARCHITECTURE.md "Writeback: outbox -> Temporal". Uses demo-achart (CHART
+// kind), not demo-image-app -- see shouldEnqueueWriteback's doc comment
+// (FR9/#881/#893): only a CHART promotion ever enqueues a writeback.
 func TestPromote_EnqueuesWritebackOutbox(t *testing.T) {
 	f := newPromotionFixture(t)
 	ctx := authedCtx()
 
-	resp, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "outbox-promo"))
+	resp, err := f.promo.Promote(ctx, promoteReq("dev", "demo-achart", pb.ArtifactKind_ARTIFACT_KIND_CHART, "outbox-promo"))
 	if err != nil {
 		t.Fatalf("promote: %v", err)
 	}
@@ -474,10 +476,10 @@ func TestPromote_AlreadyPromoted_DoesNotEnqueueOutbox(t *testing.T) {
 	f := newPromotionFixture(t)
 	ctx := authedCtx()
 
-	if _, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "outbox-again-1")); err != nil {
+	if _, err := f.promo.Promote(ctx, promoteReq("dev", "demo-achart", pb.ArtifactKind_ARTIFACT_KIND_CHART, "outbox-again-1")); err != nil {
 		t.Fatalf("first promote: %v", err)
 	}
-	second, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "outbox-again-2"))
+	second, err := f.promo.Promote(ctx, promoteReq("dev", "demo-achart", pb.ArtifactKind_ARTIFACT_KIND_CHART, "outbox-again-2"))
 	if err != nil {
 		t.Fatalf("second promote: %v", err)
 	}
@@ -510,20 +512,21 @@ func TestPromote_DryRun_DoesNotEnqueueOutbox(t *testing.T) {
 }
 
 // TestRollback_EnqueuesWritebackOutbox covers Rollback's own
-// enqueueWriteback call, symmetric with Promote's.
+// enqueueWriteback call, symmetric with Promote's. Uses demo-achart (CHART
+// kind) -- see TestPromote_EnqueuesWritebackOutbox's doc comment.
 func TestRollback_EnqueuesWritebackOutbox(t *testing.T) {
 	f := newPromotionFixture(t)
 	ctx := authedCtx()
 
-	if _, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "rb-outbox-1")); err != nil {
+	if _, err := f.promo.Promote(ctx, promoteReq("dev", "demo-achart", pb.ArtifactKind_ARTIFACT_KIND_CHART, "rb-outbox-1")); err != nil {
 		t.Fatalf("promote v1: %v", err)
 	}
 	mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
-		BuildId: mustRecordBuild(t, f.art, "run-rb-outbox").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-		OwnerFullName: "demo-image-app", Digest: "sha256:rb-outbox-v2", Version: "v2.0.0",
+		BuildId: mustRecordBuild(t, f.art, "run-rb-outbox").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Digest: "sha256:achart-rb-v2", Version: "v2.0.0",
 		IdempotencyKey: "rb-outbox-artifact-v2",
 	})
-	v2Req := promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "rb-outbox-2")
+	v2Req := promoteReq("dev", "demo-achart", pb.ArtifactKind_ARTIFACT_KIND_CHART, "rb-outbox-2")
 	v2Req.Version = "v2.0.0"
 	if _, err := f.promo.Promote(ctx, v2Req); err != nil {
 		t.Fatalf("promote v2: %v", err)
@@ -536,7 +539,7 @@ func TestRollback_EnqueuesWritebackOutbox(t *testing.T) {
 	drainOutboxToDone(t, f.repo)
 
 	rbResp, err := f.promo.Rollback(ctx, &pb.RollbackRequest{
-		EnvironmentKey: "dev", OwnerFullName: "demo-image-app", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, IdempotencyKey: "rb-outbox-rollback",
+		EnvironmentKey: "dev", OwnerFullName: "demo-achart", Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART, IdempotencyKey: "rb-outbox-rollback",
 	})
 	if err != nil {
 		t.Fatalf("rollback: %v", err)
@@ -548,6 +551,28 @@ func TestRollback_EnqueuesWritebackOutbox(t *testing.T) {
 	}
 	if rows[0].PromotionID != rbResp.Promotion.PromotionId {
 		t.Fatalf("expected the rollback's outbox row to carry promotion id %s, got %s", rbResp.Promotion.PromotionId, rows[0].PromotionID)
+	}
+}
+
+// TestPromote_ImageArtifact_DoesNotEnqueueOutbox proves FR9/#881's
+// DeployUnit-aware writeback guard (folded into this plan per #893):
+// promoting demo-image-app (deploy_unit=image, a direct-deploy app with no
+// owning chart) must never enqueue a writeback_outbox row -- before this
+// guard, this exact promotion produced a WritebackWorkflow execution that
+// could only fail (no CHART entry exists anywhere in this environment's
+// state) or, in a domain that also has a chart, write back an unrelated
+// chart's state -- see shouldEnqueueWriteback's doc comment.
+func TestPromote_ImageArtifact_DoesNotEnqueueOutbox(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+
+	if _, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "no-outbox-image")); err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	rows := claimAllOutbox(t, f.repo)
+	if len(rows) != 0 {
+		t.Fatalf("expected a direct-deploy IMAGE promotion to enqueue no outbox row, found %d: %+v", len(rows), rows)
 	}
 }
 

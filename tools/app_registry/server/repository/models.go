@@ -596,3 +596,89 @@ type VersionAllocation struct {
 	Version         string
 	PreviousVersion string
 }
+
+// ReleaseRunTargetState is `release_run_target.state` (migration 016,
+// NFR4). NOT part of the artifact lifecycle (ArtifactState) -- this is the
+// UI-trigger layer's own view of one target's progress through a release,
+// tracked independently of (and ahead of) whatever `artifact` row that
+// target's build eventually produces. Legal transitions, enforced
+// server-side in server/repository/postgres/release_run.go and mirrored in
+// server/repository/fake: queued -> building -> publishing -> recording ->
+// succeeded, with a transition to failed legal from any non-terminal state.
+// succeeded/failed are terminal.
+type ReleaseRunTargetState string
+
+const (
+	ReleaseRunTargetStateQueued     ReleaseRunTargetState = "queued"
+	ReleaseRunTargetStateBuilding   ReleaseRunTargetState = "building"
+	ReleaseRunTargetStatePublishing ReleaseRunTargetState = "publishing"
+	ReleaseRunTargetStateRecording  ReleaseRunTargetState = "recording"
+	ReleaseRunTargetStateSucceeded  ReleaseRunTargetState = "succeeded"
+	ReleaseRunTargetStateFailed     ReleaseRunTargetState = "failed"
+)
+
+// ReleaseRun is one row per triggered release (a batch covering one or more
+// targets) -- see migration 016's doc comment and
+// architecture/08-release-lifecycle/04-run-log.md "The run log". NOT SCD2
+// (AGENTS.md "SCD2") -- written once by CreateReleaseRun and never mutated
+// after create, except TemporalRunID (filled in once the workflow actually
+// starts running under TemporalWorkflowID) and ResolvedPlan (filled in
+// once, by ReleaseRunRepository.SetResolvedPlan -- see that field's doc
+// comment).
+type ReleaseRun struct {
+	ReleaseRunID string
+	// TriggeredBy is the authenticated user who triggered this release
+	// (FR1).
+	TriggeredBy string
+	// RequestedScope is the raw `all`/domain/comma-list input as given by
+	// the trigger (FR1), unnormalized.
+	RequestedScope string
+	// DigestInput is FR2's per-target digest map, serialized as JSON; nil
+	// means "build fresh" rather than "pinned to an empty set".
+	DigestInput []byte
+	// ResolvedPlan is the single plan resolved for this release (FR7/FR8),
+	// serialized as JSON. nil/NULL until ReleaseRunRepository.SetResolvedPlan
+	// stamps it -- CreateReleaseRun does NOT populate this itself (issue
+	// #906, validation finding #903): FR7/FR8's plan resolution
+	// (worker/release/plan.go's ResolvePlan) shells out to
+	// `release_helper_go plan` against a full monorepo checkout and only
+	// runs inside app-registry-worker's ReleaseWorkflow, after
+	// CreateReleaseRun has already committed -- see
+	// server/handlers/release.go's TriggerRelease doc comment. Written at
+	// most once (the single SetResolvedPlan call from ReleaseWorkflow's
+	// RecordResolvedPlan activity) and never rewritten again after that.
+	ResolvedPlan []byte
+	// TemporalWorkflowID is the workflow-id-based dedup key (FR5/NFR2),
+	// release.WorkflowID(targets) -- deterministic per target batch, with
+	// no time component (see that function's doc comment), so it is NOT
+	// unique across every release_run row over time: two release_run rows
+	// for the same batch, created weeks apart, legitimately share this
+	// value once the earlier one's targets are all terminal -- see
+	// ReleaseRunRepository.CreateReleaseRun's doc comment (migration 017)
+	// and ListReleaseRunsByTarget's doc comment for the read-side
+	// implication (most-recent-first, not "the" row for a workflow id).
+	TemporalWorkflowID string
+	// TemporalRunID is empty until the workflow named by TemporalWorkflowID
+	// actually starts running.
+	TemporalRunID string
+	CreatedAt     time.Time
+}
+
+// ReleaseRunTarget is one row per target (app or chart) in a ReleaseRun's
+// batch. A row IS the current state of one target -- transitioned in place
+// via UPDATE, matching `artifact`'s existing mutation style (migration
+// 007), not `promotion`'s SCD2 open/close style. See
+// ReleaseRunTargetState's doc comment for the legal transition table.
+type ReleaseRunTarget struct {
+	ReleaseRunTargetID string
+	ReleaseRunID       string
+	OwnerFullName      string
+	Kind               ArtifactKind // ArtifactKindImage or ArtifactKindChart only
+	State              ReleaseRunTargetState
+	StateChangedAt     time.Time
+	// BuildID is empty until the 'building' step actually runs one.
+	BuildID string
+	// ErrorDetail is set when State == ReleaseRunTargetStateFailed; free
+	// text for operator diagnosis, empty otherwise.
+	ErrorDetail string
+}

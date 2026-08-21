@@ -1560,4 +1560,9 @@ member app's pinned version has not been recorded as `published`.
 - **A live GHCR existence verifier.** `published` is proof-of-existence at
   write time and deliberately not a liveness check.
 - **Any inbound Temporal workflow.** CI orchestrates; the registry logs.
+  (Superseded by #886/#889 — see
+  `architecture/08-release-lifecycle/11-rejected-alternatives.md`'s
+  "Registry orchestrates the release saga" row for what actually shipped;
+  this AR-7 entry is left as-written above as the accurate as-built record
+  of the decision at that point in the plan's history.)
 

@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package appregistry.v1;
+
+option go_package = "github.com/whale-net/everything/tools/app_registry/protos;appregistrypb";
+
+import "tools/app_registry/protos/messages.proto";
+
+// ============================================================================
+// Release triggering (FR1-5, FR10, NFR4, NFR5; issue #888) -- the seam both
+// the UI (a later task) and the Temporal ReleaseWorkflow (a later task) call
+// through. Temporal activities never talk to Postgres directly -- see
+// worker/writeback/workflow.go's package doc comment and ARCHITECTURE.md
+// principle 3, "The API is the write path". Backed by
+// repository.ReleaseRunRepository (`release_run`/`release_run_target`,
+// migration 016, issue #887).
+// ============================================================================
+
+// ReleaseRunTargetState mirrors repository.ReleaseRunTargetState
+// (server/repository/models.go) -- queued -> building -> publishing ->
+// recording -> succeeded, with a transition to failed legal from any
+// non-terminal state. succeeded/failed are terminal. NOT the same lifecycle
+// as ArtifactState: this tracks the UI-trigger layer's own view of one
+// target's progress through a release, ahead of (and independent of)
+// whatever `artifact` row that target's build eventually produces.
+enum ReleaseRunTargetState {
+  RELEASE_RUN_TARGET_STATE_UNSPECIFIED = 0;
+  RELEASE_RUN_TARGET_STATE_QUEUED = 1;
+  RELEASE_RUN_TARGET_STATE_BUILDING = 2;
+  RELEASE_RUN_TARGET_STATE_PUBLISHING = 3;
+  RELEASE_RUN_TARGET_STATE_RECORDING = 4;
+  RELEASE_RUN_TARGET_STATE_SUCCEEDED = 5;
+  RELEASE_RUN_TARGET_STATE_FAILED = 6;
+}
+
+// ReleaseTargetInput is one target (app or chart) in a trigger's already-
+// expanded batch. The caller (UI/CLI) resolves `all`/domain/comma-list scope
+// syntax into a concrete target list before calling TriggerRelease -- this
+// RPC does not itself interpret that syntax (see FR1 note, issue #888 Task
+// D). digest empty means "build fresh" (FR2); a non-empty digest pins the
+// target to a pre-existing digest instead of triggering a new build.
+message ReleaseTargetInput {
+  string owner_full_name = 1;
+  ArtifactKind kind = 2;
+  string digest = 3;
+}
+
+message TriggerReleaseRequest {
+  // The raw `all`/domain/comma-list input as given by the trigger (FR1),
+  // unnormalized -- stored on release_run.requested_scope for audit/display
+  // only. Not interpreted here; see ReleaseTargetInput's doc comment.
+  string requested_scope = 1;
+  repeated ReleaseTargetInput targets = 2;
+}
+
+message TriggerReleaseResponse {
+  string release_run_id = 1;
+  string temporal_workflow_id = 2;
+}
+
+// ReleaseRunTarget mirrors repository.ReleaseRunTarget -- one row per target
+// in a release run's batch, transitioned in place (not SCD2; see
+// repository.ReleaseRunTarget's doc comment).
+message ReleaseRunTarget {
+  string owner_full_name = 1;
+  ArtifactKind kind = 2;
+  ReleaseRunTargetState state = 3;
+  // Unix timestamp, matching the repo-wide convention for _at fields on
+  // this wire (see Artifact.state_changed_at above) rather than
+  // google.protobuf.Timestamp -- no message in this proto set imports
+  // google/protobuf/timestamp.proto today, and introducing that dependency
+  // for one field would break with every existing _at field's shape.
+  int64 state_changed_at = 4;
+  string build_id = 5;
+  string error_detail = 6;
+}
+
+message GetReleaseRequest {
+  string release_run_id = 1;
+}
+
+message GetReleaseResponse {
+  string release_run_id = 1;
+  string triggered_by = 2;
+  string requested_scope = 3;
+  // The single plan resolved for this release (FR7/FR8), serialized as
+  // JSON -- resolved once at trigger time and reused everywhere (by every
+  // target's build/publish step), never recomputed.
+  string resolved_plan_json = 4;
+  repeated ReleaseRunTarget targets = 5;
+  string temporal_workflow_id = 6;
+}
+
+// ListReleasesRequest scopes to one owner's release history -- NFR4:
+// reconstructing the full history of attempts against a target, not just
+// its current in-flight (or most recent) one.
+message ListReleasesRequest {
+  string owner_full_name = 1;
+}
+
+message ListReleasesResponse {
+  repeated GetReleaseResponse releases = 1;
+}

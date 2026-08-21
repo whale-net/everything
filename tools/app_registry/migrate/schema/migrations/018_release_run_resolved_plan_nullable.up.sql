@@ -1,0 +1,35 @@
+-- App Registry — release_run.resolved_plan becomes nullable (issue #906,
+-- validation finding #903)
+--
+-- The handler-bug root cause: server/handlers/release.go's TriggerRelease
+-- builds the repository.ReleaseRun{} passed to CreateReleaseRun without
+-- ever setting ResolvedPlan, leaving it at Go's zero value (nil []byte).
+-- CreateReleaseRun inserted it unconditionally as string(run.ResolvedPlan)
+-- -- string(nil) is "" -- and 016's resolved_plan JSONB NOT NULL (no
+-- default) rejected that as invalid JSON: every TriggerRelease call failed
+-- with SQLSTATE 22P02 and no release_run row was ever created. 100%
+-- reproducible; see #903 for the direct gRPC/UI repro.
+--
+-- This was not a missed nil-check alone -- it is a genuine design
+-- contradiction 016's own comment got wrong: FR7/FR8's plan resolution
+-- (worker/release/plan.go's ResolvePlan) shells out to `release_helper_go
+-- plan` against a full monorepo checkout (bazel/git on PATH) and only runs
+-- inside app-registry-worker's ReleaseWorkflow -- a different binary/
+-- process/deployment than app-registry-api, which has neither. It cannot
+-- run synchronously inside TriggerRelease's gRPC handler (the "primary"
+-- direction issue #906 considered and rejected as infeasible for exactly
+-- this reason), and TriggerRelease's own doc comment already said as much
+-- ("FR7/FR8's 'resolved once, reused everywhere' happens inside
+-- ReleaseWorkflow, not here") -- 016's "written once at CreateReleaseRun
+-- time" was the doc comment that was actually wrong, not the handler.
+--
+-- Fix: resolved_plan is now nullable. CreateReleaseRun leaves it NULL
+-- (mirroring digest_input's existing "NULL means not yet known"
+-- convention on this exact table), and a new ReleaseRunRepository.
+-- SetResolvedPlan method -- called by ReleaseWorkflow's new
+-- RecordResolvedPlan activity (worker/release/record.go), right after
+-- ResolvePlan actually resolves a plan -- stamps the real value in. Still
+-- written at most once and never rewritten again after that: 016's
+-- "written once ... and never rewritten" intent stands, just shifted from
+-- "at CreateReleaseRun time" to "once it is actually known".
+ALTER TABLE release_run ALTER COLUMN resolved_plan DROP NOT NULL;
