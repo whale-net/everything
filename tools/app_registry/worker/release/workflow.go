@@ -70,6 +70,7 @@ const (
 	ActivityRecordResolvedPlan = "RecordResolvedPlan"
 	ActivityDispatchBuild      = "DispatchBuild"
 	ActivityPollBuild          = "PollBuild"
+	ActivityFinalizePublish    = "FinalizePublish"
 	ActivityVerifyPublished    = "VerifyPublished"
 	ActivityRecordTargetState  = "RecordTargetState"
 )
@@ -208,6 +209,21 @@ type ReleaseActivities interface {
 	// reaches a terminal state.
 	PollBuild(ctx context.Context, ref BuildRef) (BuildStatus, error)
 
+	// FinalizePublish implements issue #928's post-build "finalize and
+	// publish" step: called once per workflow execution, immediately after
+	// PollBuild reports success, before VerifyPublished. The merged
+	// release-trigger GHA job (ref) has already built and pushed every app
+	// image by digest and composed every chart's source tree, but assigned
+	// no final version, uploaded nothing to ChartMuseum, and mutated no
+	// App Registry state -- FinalizePublish does all of that, per target,
+	// reusing the same BeginPublish/FailPublish/RecordArtifact machinery
+	// release-app/release-charts already used inline in GHA (see
+	// finalize.go's package doc comment). A FinalizeResult with
+	// Succeeded=false (some targets failed to finalize, not a batch-level
+	// error) still lets the workflow proceed to VerifyPublished, which is
+	// the authoritative per-target signal RecordTargetState acts on below.
+	FinalizePublish(ctx context.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error)
+
 	// VerifyPublished confirms every target in releaseRunID reached
 	// published/succeeded via GetRelease/GetReleaseRun (FR12).
 	VerifyPublished(ctx context.Context, releaseRunID string) (VerifyResult, error)
@@ -265,6 +281,25 @@ var defaultActivityOptions = workflow.ActivityOptions{
 // pollBuildActivityOptions applies only to PollBuild.
 var pollBuildActivityOptions = workflow.ActivityOptions{
 	StartToCloseTimeout: 30 * time.Minute,
+	RetryPolicy: &temporal.RetryPolicy{
+		MaximumAttempts: 3,
+	},
+}
+
+// finalizePublishActivityOptions applies only to FinalizePublish (issue
+// #928): a much longer StartToCloseTimeout than defaultActivityOptions'
+// 30s, since a batch can retag several images and package/upload several
+// charts to ChartMuseum in one activity execution -- each of those is a
+// network call, and unlike PollBuild's long-poll this activity has no
+// internal progress reporting, so the timeout must cover the whole batch's
+// worst case in one shot. A lower MaximumAttempts than the 5-attempt
+// default: FinalizePublish's per-target work already has its own
+// idempotent retry story via BeginPublish/FailPublish's two-phase
+// reservation (see finalize.go's package doc comment) -- a whole-activity
+// retry on top of that mainly guards against transient batch-level
+// failures (a GitHub API blip fetching artifacts), not per-target ones.
+var finalizePublishActivityOptions = workflow.ActivityOptions{
+	StartToCloseTimeout: 15 * time.Minute,
 	RetryPolicy: &temporal.RetryPolicy{
 		MaximumAttempts: 3,
 	},
@@ -338,6 +373,18 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	}
 	if !buildStatus.Succeeded {
 		return recordFailure(ctx, in, fmt.Errorf("build did not succeed: %s", buildStatus.Detail))
+	}
+
+	// Issue #928: the merged build job (buildRef) only built and pushed
+	// artifacts by digest -- finalize them (registry retag, chart
+	// packaging, ChartMuseum upload, App Registry recording) before
+	// checking what actually got published. A FinalizeResult with
+	// Succeeded=false is NOT treated as a workflow-level failure here (see
+	// FinalizePublish's doc comment) -- only a hard activity error is;
+	// per-target finalize failures are left for verifyPublished below to
+	// surface precisely.
+	if _, err := finalizePublish(workflow.WithActivityOptions(ctx, finalizePublishActivityOptions), plan, buildRef); err != nil {
+		return recordFailure(ctx, in, fmt.Errorf("finalize publish: %w", err))
 	}
 
 	verify, err := verifyPublished(ctx, in.ReleaseRunID)
@@ -434,6 +481,12 @@ func pollBuild(ctx workflow.Context, ref BuildRef) (BuildStatus, error) {
 	var status BuildStatus
 	err := workflow.ExecuteActivity(ctx, ActivityPollBuild, ref).Get(ctx, &status)
 	return status, err
+}
+
+func finalizePublish(ctx workflow.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
+	var result FinalizeResult
+	err := workflow.ExecuteActivity(ctx, ActivityFinalizePublish, plan, ref).Get(ctx, &result)
+	return result, err
 }
 
 func verifyPublished(ctx workflow.Context, releaseRunID string) (VerifyResult, error) {

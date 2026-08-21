@@ -37,6 +37,9 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, ref BuildRef) (BuildStatus, error) {
 		return BuildStatus{}, nil
 	}, activity.RegisterOptions{Name: ActivityPollBuild})
+	env.RegisterActivityWithOptions(func(ctx context.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
+		return FinalizeResult{Succeeded: true}, nil
+	}, activity.RegisterOptions{Name: ActivityFinalizePublish})
 	env.RegisterActivityWithOptions(func(ctx context.Context, releaseRunID string) (VerifyResult, error) {
 		return VerifyResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityVerifyPublished})
@@ -67,6 +70,7 @@ func TestReleaseWorkflow_HappyPath(t *testing.T) {
 	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityResolvePlan) })
 	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityDispatchBuild) })
 	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityPollBuild) })
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityFinalizePublish) })
 	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-1").Return(VerifyResult{AllPublished: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityVerifyPublished) })
 	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-1", testTarget(), repository.ReleaseRunTargetStateSucceeded, "42", "").
 		Return(nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityRecordTargetState) })
@@ -84,8 +88,8 @@ func TestReleaseWorkflow_HappyPath(t *testing.T) {
 
 	require.Equal(t, []string{
 		ActivityCheckApproval, ActivityResolvePlan, ActivityDispatchBuild,
-		ActivityPollBuild, ActivityVerifyPublished, ActivityRecordTargetState,
-	}, calls, "ReleaseWorkflow must dispatch activities in exactly this order (FR6)")
+		ActivityPollBuild, ActivityFinalizePublish, ActivityVerifyPublished, ActivityRecordTargetState,
+	}, calls, "ReleaseWorkflow must dispatch activities in exactly this order (FR6, extended by issue #928's FinalizePublish)")
 }
 
 // TestReleaseWorkflow_DispatchBuildFailure_MarksTargetsFailed proves FR11's
@@ -128,6 +132,38 @@ func TestReleaseWorkflow_DispatchBuildFailure_MarksTargetsFailed(t *testing.T) {
 	require.Empty(t, calledPollOrVerify, "PollBuild/VerifyPublished must not run once DispatchBuild has failed")
 }
 
+// TestReleaseWorkflow_FinalizePublishFailure_MarksTargetsFailed proves
+// issue #928's FinalizePublish is treated the same as any other pre-
+// VerifyPublished step failure: a hard FinalizePublish activity error (as
+// opposed to a FinalizeResult{Succeeded: false} -- see that type's doc
+// comment) marks every target failed and VerifyPublished never runs.
+func TestReleaseWorkflow_FinalizePublishFailure_MarksTargetsFailed(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-6", Targets: []ReleaseTarget{testTarget()}}
+	plan := ResolvedPlan{ReleaseRunID: "run-6", Versions: map[string]string{testTarget().key(): "v1.0.1"}}
+	ref := BuildRef{ReleaseRunID: "run-6", RunID: "46"}
+
+	var calledVerify bool
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-6").Return(true, nil).Once()
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
+	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once()
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{}, errors.New("github artifacts unreachable")).Once()
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, mock.Anything).Return(VerifyResult{}, nil).Maybe().
+		Run(func(args mock.Arguments) { calledVerify = true })
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-6", testTarget(), repository.ReleaseRunTargetStateFailed, "", mock.AnythingOfType("string")).
+		Return(nil).Once()
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	require.False(t, calledVerify, "VerifyPublished must not run once FinalizePublish has hard-failed")
+}
+
 // TestReleaseWorkflow_VerifyPublished_PartialFailure proves a target
 // VerifyPublished reports as not-published is recorded Failed while a
 // sibling target that did publish is recorded Succeeded in the same
@@ -147,6 +183,7 @@ func TestReleaseWorkflow_VerifyPublished_PartialFailure(t *testing.T) {
 	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
 	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
 	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once()
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once()
 	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-3").Return(VerifyResult{
 		AllPublished: false,
 		Failed:       map[string]string{bad.key(): "no published artifact found"},
@@ -193,6 +230,7 @@ func TestReleaseWorkflow_RecordResolvedPlan_DispatchedWhenPlanHasRawJSON(t *test
 	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-4", rawJSON).Return(nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityRecordResolvedPlan) })
 	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityDispatchBuild) })
 	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityPollBuild) })
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityFinalizePublish) })
 	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-4").Return(VerifyResult{AllPublished: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityVerifyPublished) })
 	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-4", testTarget(), repository.ReleaseRunTargetStateSucceeded, "44", "").
 		Return(nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityRecordTargetState) })
@@ -204,8 +242,8 @@ func TestReleaseWorkflow_RecordResolvedPlan_DispatchedWhenPlanHasRawJSON(t *test
 
 	require.Equal(t, []string{
 		ActivityCheckApproval, ActivityResolvePlan, ActivityRecordResolvedPlan, ActivityDispatchBuild,
-		ActivityPollBuild, ActivityVerifyPublished, ActivityRecordTargetState,
-	}, calls, "RecordResolvedPlan must run right after ResolvePlan and before DispatchBuild (issue #906)")
+		ActivityPollBuild, ActivityFinalizePublish, ActivityVerifyPublished, ActivityRecordTargetState,
+	}, calls, "RecordResolvedPlan must run right after ResolvePlan and before DispatchBuild (issue #906); FinalizePublish must run right after PollBuild succeeds and before VerifyPublished (issue #928)")
 }
 
 // TestReleaseWorkflow_RecordResolvedPlan_Failure_MarksTargetsFailed proves

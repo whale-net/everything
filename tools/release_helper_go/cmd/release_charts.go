@@ -722,6 +722,63 @@ func extractChartVersionFromTag(chartName, tag string) string {
 	return ExtractVersionFromTag(tag, prefixes...)
 }
 
+// resolveContainedImagesFromDigests builds a chart's ContainedImages list
+// from the chart's compose-time image lockfile plus a caller-supplied
+// digest map, without any `docker` call. Used by finalize-chart (issue
+// #928): by the time a chart is finalized, every composed app's image
+// digest is already known from the merged build job's per-app manifest (a
+// digest never changes across a GHCR retag from the build-scoped tag to the
+// resolved version tag -- see finalize_app.go), so there is no need for the
+// finalize environment to hold registry read credentials just to re-derive
+// what is already known. appDigests is keyed by AppMetadata.FullName(),
+// matching appVersions and the lockfile's AppFullName field. An app present
+// in the lockfile but missing from appDigests is skipped with a warning
+// (mirrors resolveContainedImages' unresolved-digest warning) rather than
+// failing the whole chart.
+func resolveContainedImagesFromDigests(chartDir string, appVersions map[string]string, appDigests map[string]string, fs FileSystem) []*pb.ContainedImage {
+	lockfilePath := filepath.Join(chartDir, helm.LockfileFileName)
+
+	var lockfile helm.ChartLockfile
+	var loadedLockfile bool
+	if fs != nil {
+		if data, err := fs.ReadFile(lockfilePath); err == nil {
+			if err := json.Unmarshal(data, &lockfile); err == nil {
+				loadedLockfile = true
+			}
+		}
+	}
+	if !loadedLockfile {
+		if data, err := os.ReadFile(lockfilePath); err == nil {
+			if err := json.Unmarshal(data, &lockfile); err == nil {
+				loadedLockfile = true
+			}
+		}
+	}
+	if !loadedLockfile {
+		return nil
+	}
+
+	var contained []*pb.ContainedImage
+	for _, img := range lockfile.Images {
+		ver := img.Version
+		if v, ok := appVersions[img.AppFullName]; ok && v != "" {
+			ver = v
+		}
+		digest, ok := appDigests[img.AppFullName]
+		if !ok || digest == "" {
+			fmt.Printf("::warning::No resolved digest for %s (%s), omitting from contains list\n", img.AppFullName, img.Repository)
+			continue
+		}
+		contained = append(contained, &pb.ContainedImage{
+			AppFullName: img.AppFullName,
+			Repository:  img.Repository,
+			Version:     ver,
+			Digest:      digest,
+		})
+	}
+	return contained
+}
+
 func resolveContainedImages(chartDir string, appVersions map[string]string, chart HelmChartMetadata, allApps []AppMetadata, docker DockerRunner, fs FileSystem) []*pb.ContainedImage {
 	var contained []*pb.ContainedImage
 	lockfilePath := filepath.Join(chartDir, helm.LockfileFileName)
