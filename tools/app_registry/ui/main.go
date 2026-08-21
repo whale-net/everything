@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -55,6 +56,13 @@ type Config struct {
 	// required — unlike manmanv2/ui, this UI never falls back to
 	// cookie-only sessions (see NewApp).
 	DatabaseURL string
+
+	// ShowDemoDomain controls whether the "demo" domain's apps/charts
+	// appear in the Apps Catalog (issue #750). Mirrors release.yml's
+	// include_demo workflow_dispatch input / resolveReleaseScope's
+	// includeDemo param (release_scope.go's demoDomain const) — "demo" is
+	// hidden from this UI by default, with an explicit opt-in to show it.
+	ShowDemoDomain bool
 }
 
 // LoadConfig loads configuration from environment variables.
@@ -72,7 +80,8 @@ func LoadConfig() *Config {
 		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
 		// PG_DATABASE_URL matches the variable every other App Registry
 		// component reads (see ../ENV.md) — deliberately not "DATABASE_URL".
-		DatabaseURL: getEnv("PG_DATABASE_URL", ""),
+		DatabaseURL:    getEnv("PG_DATABASE_URL", ""),
+		ShowDemoDomain: getEnvBool("APP_REGISTRY_UI_SHOW_DEMO_DOMAIN", false),
 	}
 }
 
@@ -81,6 +90,23 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// getEnvBool parses key via strconv.ParseBool ("1"/"t"/"true"/"0"/"f"/
+// "false", case-insensitive, per the stdlib). An unset or unparseable value
+// falls back to defaultValue rather than failing boot — this only gates a
+// UI display default, not a required credential.
+func getEnvBool(key string, defaultValue bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		log.Printf("invalid %s=%q (expected true/false); using default %v", key, value, defaultValue)
+		return defaultValue
+	}
+	return parsed
 }
 
 // App holds the application state.
