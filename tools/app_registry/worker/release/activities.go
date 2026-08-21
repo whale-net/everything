@@ -83,6 +83,14 @@ var _ ReleaseActivities = (*Activities)(nil)
 // practice release-v2.yml for this worker's deployment -- FR11 note:
 // release.yml's v1 dispatch path/trigger is untouched by this task and is
 // not driven through this worker).
+//
+// Issue #927: when plan.RawJSON is populated (the normal case -- see
+// plan.go's ResolvePlan), DispatchBuild forwards it verbatim as a single
+// `resolved_plan` input rather than collapsing it into the flat
+// apps/version/app_versions inputs release-v2.yml's plan-release job used
+// to re-expand by re-invoking `release-helper plan` from scratch. See the
+// body below and release-v2.yml's plan-release job for the
+// parse-and-passthrough / fallback split.
 func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, digestOverrides map[string]string) (BuildRef, error) {
 	if len(digestOverrides) > 0 {
 		return BuildRef{}, fmt.Errorf("dispatch build: digest overrides (FR2 hotfix/re-release input) not implemented yet -- see issue #889's Implementation scope")
@@ -97,6 +105,10 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 		return BuildRef{}, fmt.Errorf("dispatch build: resolved plan has no versions")
 	}
 
+	// uniformVersion is still enforced unconditionally -- lifting this
+	// limitation is explicitly out of scope for issue #927 (see github.go's
+	// package doc comment); this guard's job is unchanged by #927, only what
+	// happens to its result below is.
 	version, err := uniformVersion(plan.Versions)
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
@@ -107,21 +119,58 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 	}
 
 	inputs := map[string]string{
-		"version": version,
 		"dry_run": "false",
 	}
-	if len(apps) > 0 {
-		inputs["apps"] = joinComma(apps)
-	}
+	// helm_charts is sent regardless of path below: release-v2.yml's
+	// release-helm-charts job reads github.event.inputs.helm_charts
+	// directly (its `if` gate and `--charts` arg) -- that is not part of
+	// plan-release's re-derivation this issue eliminates, so it stays a
+	// flat input in both branches.
 	if len(charts) > 0 {
 		inputs["helm_charts"] = joinComma(charts)
 	}
-	appVersions, err := appVersionsJSON(plan.Versions)
-	if err != nil {
-		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
-	}
-	if appVersions != "" {
-		inputs["app_versions"] = appVersions
+
+	if len(plan.RawJSON) > 0 {
+		// Issue #927: ResolvePlan (plan.go) already produced the fully-
+		// expanded release matrix -- the exact same JSON RecordResolvedPlan
+		// persists onto release_run.resolved_plan -- by shelling out to
+		// `release_helper_go plan --format=json`. Forward it verbatim as a
+		// single `resolved_plan` workflow_dispatch input instead of
+		// collapsing it into apps/version/app_versions and making
+		// release-v2.yml's plan-release job re-invoke `release-helper plan`
+		// from scratch (checkout + bazel setup + registry queries) just to
+		// re-expand those flat inputs back into the same matrix. See
+		// release-v2.yml's plan-release job: it parses-and-passes-through
+		// resolved_plan when present, no re-derivation.
+		inputs["resolved_plan"] = string(plan.RawJSON)
+	} else {
+		// Fallback for a ResolvePlan implementation that legitimately omits
+		// RawJSON (e.g. a test double -- see ReleaseWorkflow's
+		// RecordResolvedPlan guard in workflow.go, and this package's own
+		// activities_test.go happy-path tests, which construct ResolvedPlan
+		// literals with no RawJSON) or any other future dispatcher that
+		// hasn't computed a resolved plan up front: reconstruct the flat
+		// apps/version/app_versions inputs release-v2.yml's plan-release
+		// job still knows how to fully re-derive from (its
+		// `release-helper plan` fallback path, unchanged by #927 -- see
+		// that job's "Plan release" step). This is pre-#927 behavior,
+		// preserved rather than removed, since release-v2.yml's
+		// workflow_dispatch trigger is machine-only (authorize-trigger
+		// requires a bot triggering_actor -- see this workflow's header
+		// comment) but not exclusively Temporal-only: any other bot-
+		// credentialed dispatcher hitting this endpoint without a
+		// pre-computed resolved_plan still needs a working path.
+		inputs["version"] = version
+		if len(apps) > 0 {
+			inputs["apps"] = joinComma(apps)
+		}
+		appVersions, err := appVersionsJSON(plan.Versions)
+		if err != nil {
+			return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
+		}
+		if appVersions != "" {
+			inputs["app_versions"] = appVersions
+		}
 	}
 
 	dispatchRef, err := resolveDispatchRef(ctx, a.Registry, plan.Versions, a.GitHub.Config.Ref)

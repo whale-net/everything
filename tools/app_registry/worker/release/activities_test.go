@@ -127,6 +127,66 @@ func TestActivities_DispatchBuild_HappyPath_DispatchesUniformVersionWithSplitTar
 	require.Equal(t, map[string]string{"demo-widget": "v1.2.3"}, gotAppVersions)
 }
 
+// TestActivities_DispatchBuild_ResolvedPlan_ForwardsRawJSONVerbatim covers
+// issue #927: when plan.RawJSON is populated (the normal ResolvePlan path,
+// see plan.go), DispatchBuild must forward it verbatim as a single
+// `resolved_plan` input instead of collapsing plan.Versions into
+// apps/version/app_versions inputs -- those must be absent, since
+// release-v2.yml's plan-release job now derives everything it needs from
+// resolved_plan for this path. helm_charts is still sent directly (it is
+// not part of plan-release's re-derivation this issue eliminates --
+// release-helm-charts reads it straight off the dispatch input).
+func TestActivities_DispatchBuild_ResolvedPlan_ForwardsRawJSONVerbatim(t *testing.T) {
+	var sawInputs map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		sawInputs, _ = body["inputs"].(map[string]any)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":101,"html_url":"https://example/101","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
+	})
+
+	repo := newTestRegistry(t)
+	seedApp(t, repo, "demo", "widget")
+	_, err := repo.Reconcile(context.Background(), nil, []*appmetapb.ChartManifest{
+		{Domain: "demo", Name: "achart"},
+	}, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+
+	rawJSON := []byte(`{"matrix":{"include":[{"app":"widget","domain":"demo","version":"v1.2.3"}]},"apps":["demo-widget"],"version":"v1.2.3","versions":{"demo-widget":"v1.2.3","demo-achart":"v1.2.3"},"event_type":"workflow_dispatch","has_specs":false}`)
+
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
+	plan := ResolvedPlan{
+		ReleaseRunID: "release-run-3",
+		Versions: map[string]string{
+			"image:demo-widget": "v1.2.3",
+			"chart:demo-achart": "v1.2.3",
+		},
+		RawJSON: rawJSON,
+	}
+	ref, err := a.DispatchBuild(context.Background(), plan, nil)
+	require.NoError(t, err)
+	require.Equal(t, "101", ref.RunID)
+
+	require.Equal(t, string(rawJSON), sawInputs["resolved_plan"])
+	require.Equal(t, "demo-achart", sawInputs["helm_charts"], "helm_charts is still sent directly -- release-helm-charts reads it straight off the dispatch input, unrelated to plan-release's re-derivation")
+	require.Equal(t, "false", sawInputs["dry_run"])
+
+	_, hasApps := sawInputs["apps"]
+	require.False(t, hasApps, "apps must not be sent once resolved_plan carries the full matrix -- it would be redundant re-derivation input")
+	_, hasVersion := sawInputs["version"]
+	require.False(t, hasVersion, "version must not be sent once resolved_plan carries it (resolved_plan.version)")
+	_, hasAppVersions := sawInputs["app_versions"]
+	require.False(t, hasAppVersions, "app_versions must not be sent once resolved_plan carries the full versions map")
+}
+
 // TestActivities_DispatchBuild_AppVersions_OmittedWhenNoImageTargets proves
 // a chart-only batch (no image-kind entries in plan.Versions) never emits
 // an app_versions input at all, rather than an empty/misleading one.
