@@ -176,17 +176,25 @@ spec:
           value: "{pg_database_url}"
         - name: GRPC_AUTH_MODE
           value: "none"
+        - name: TEMPORAL_HOST
+          value: "{temporal_host}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
+        temporal_host=temporal_host,
         otel_endpoint=otel_endpoint,
     )))
 
     api_deps = []
     if get_env_bool('ENABLE_APP_REGISTRY_MIGRATION', default='true'):
         api_deps.append('app-registry-migration')
+    if temporal_info:
+        # server/main.go unconditionally constructs a Temporal client at
+        # startup (see #888/#889); without this dep Tilt can start the API
+        # before temporal-dev is reachable, crash-looping the pod (#904/#905).
+        api_deps.append('temporal-dev')
 
     k8s_resource(
         'app-registry-api',
