@@ -11,6 +11,7 @@ go_test(
     name = "citest_test",
     srcs = [
         "contract_test.go",
+        "isolation_test.go",
     ],
     # The real workflow/action YAML, not a copy -- the whole point is to
     # test what CI actually runs. See //.github:ci_config.
@@ -20,5 +21,6 @@ go_test(
         "//tools/app_registry/cli/cmd",
         "//tools/release_helper_go:cmd",
         "@com_github_spf13_cobra//:cobra",
+        "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )
