@@ -239,6 +239,104 @@ func TestReleaseRunFake_CreateReleaseRun_FieldsRoundTripThroughGet(t *testing.T)
 	assertReleaseRunFields(t, *fetched)
 }
 
+// TestReleaseRunFake_CreateReleaseRun_NilResolvedPlanStaysNil proves the
+// production TriggerRelease path (issue #906, validation finding #903):
+// CreateReleaseRun called with ResolvedPlan left unset (nil, as
+// server/handlers/release.go's TriggerRelease does) leaves it nil on both
+// the CreateReleaseRun return value and a fresh GetReleaseRun read -- not
+// some other zero-value stand-in that a real Postgres NOT NULL column
+// would have rejected before migration 018.
+func TestReleaseRunFake_CreateReleaseRun_NilResolvedPlanStaysNil(t *testing.T) {
+	r := New()
+	run := newReleaseRun("wf-nil-plan")
+	run.ResolvedPlan = nil
+
+	created, _, err := createReleaseRunTx(t, r, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	if created.ResolvedPlan != nil {
+		t.Fatalf("expected ResolvedPlan nil immediately after CreateReleaseRun, got %s", created.ResolvedPlan)
+	}
+
+	fetched, _, err := r.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if fetched.ResolvedPlan != nil {
+		t.Fatalf("expected ResolvedPlan nil after GetReleaseRun, got %s", fetched.ResolvedPlan)
+	}
+}
+
+// TestReleaseRunFake_SetResolvedPlan_RoundTrip proves
+// ReleaseRunRepository.SetResolvedPlan (issue #906) -- the write
+// worker/release/record.go's RecordResolvedPlan activity performs -- both
+// stamps the value and makes it readable back through GetReleaseRun, for a
+// release run created the way TriggerRelease actually creates one (nil
+// ResolvedPlan at CreateReleaseRun time).
+func TestReleaseRunFake_SetResolvedPlan_RoundTrip(t *testing.T) {
+	r := New()
+	run := newReleaseRun("wf-set-resolved-plan")
+	run.ResolvedPlan = nil
+
+	created, _, err := createReleaseRunTx(t, r, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+
+	want := []byte(`{"targets":[{"owner":"acme-widget","version":"1.2.3"}]}`)
+	if err := r.ReleaseRuns().SetResolvedPlan(context.Background(), created.ReleaseRunID, want); err != nil {
+		t.Fatalf("SetResolvedPlan: %v", err)
+	}
+
+	fetched, _, err := r.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if string(fetched.ResolvedPlan) != string(want) {
+		t.Fatalf("ResolvedPlan = %s, want %s", fetched.ResolvedPlan, want)
+	}
+}
+
+// TestReleaseRunFake_SetResolvedPlan_EmptyRejected proves the
+// empty/nil-value guard documented on ReleaseRunRepository.SetResolvedPlan:
+// an empty resolvedPlan is rejected with ErrInvalidArgument rather than
+// silently writing NULL back over an already-set value, or a real Postgres
+// implementation reproducing #903's original SQLSTATE 22P02 the other way
+// around (an empty string, not NULL).
+func TestReleaseRunFake_SetResolvedPlan_EmptyRejected(t *testing.T) {
+	r := New()
+	run := newReleaseRun("wf-set-resolved-plan-empty")
+	run.ResolvedPlan = nil
+	created, _, err := createReleaseRunTx(t, r, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+
+	err = r.ReleaseRuns().SetResolvedPlan(context.Background(), created.ReleaseRunID, nil)
+	if !errors.Is(err, repository.ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument for empty resolvedPlan, got: %v", err)
+	}
+}
+
+// TestReleaseRunFake_SetResolvedPlan_UnknownReleaseRunNotFound proves an
+// unknown releaseRunID is rejected with ErrNotFound, matching
+// UpdateTargetState/GetReleaseRun's existing not-found contract on this
+// same fake.
+func TestReleaseRunFake_SetResolvedPlan_UnknownReleaseRunNotFound(t *testing.T) {
+	r := New()
+	err := r.ReleaseRuns().SetResolvedPlan(context.Background(), "does-not-exist", []byte(`{"a":1}`))
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
 func TestReleaseRunFake_UpdateTargetState_UnknownTargetNotFound(t *testing.T) {
 	r := New()
 	err := r.ReleaseRuns().UpdateTargetState(context.Background(), "does-not-exist", repository.ReleaseRunTargetStateBuilding, "", "")

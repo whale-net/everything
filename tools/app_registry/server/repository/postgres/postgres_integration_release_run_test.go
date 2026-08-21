@@ -40,8 +40,13 @@ func assertJSONEqual(t *testing.T, field string, got, want []byte) {
 }
 
 // newReleaseRun builds a minimal, valid repository.ReleaseRun for
-// CreateReleaseRun -- ResolvedPlan is NOT NULL (migration 016), so every
-// caller here supplies a small valid JSON document rather than nil.
+// CreateReleaseRun. ResolvedPlan is nullable as of migration 018 (issue
+// #906) -- CreateReleaseRun no longer requires it, and the production
+// TriggerRelease path leaves it nil (see
+// TestReleaseRun_CreateReleaseRun_NilResolvedPlanWritesNull below) -- but
+// most tests in this file still supply a small valid JSON document here
+// for convenience/determinism where ResolvedPlan isn't the thing under
+// test.
 func newReleaseRun(workflowID string) repository.ReleaseRun {
 	return repository.ReleaseRun{
 		TriggeredBy:        "integration-test",
@@ -175,6 +180,122 @@ func TestReleaseRun_CreateReleaseRun_DigestInputNilMeansBuildFresh(t *testing.T)
 	}
 	if fetched.DigestInput != nil {
 		t.Fatalf("expected DigestInput nil after GetReleaseRun, got %s", fetched.DigestInput)
+	}
+}
+
+// TestReleaseRun_CreateReleaseRun_NilResolvedPlanWritesNull proves issue
+// #906's actual fix end to end against real Postgres: the production
+// TriggerRelease code path (server/handlers/release.go) builds a
+// repository.ReleaseRun{} with ResolvedPlan left at Go's nil zero value,
+// and CreateReleaseRun's nil-guard (release_run.go, mirroring the existing
+// DigestInput pattern) must write that as SQL NULL against migration 018's
+// now-nullable resolved_plan column -- NOT the empty-string literal
+// string(nil) == "" that migration 016's original NOT NULL column rejected
+// with SQLSTATE 22P02 (see #903). Both the CreateReleaseRun return value
+// and a fresh GetReleaseRun read must come back nil, proving this is a
+// real column NULL round-tripping through Postgres's JSONB scan, not just
+// an in-process Go value that happens to look right.
+func TestReleaseRun_CreateReleaseRun_NilResolvedPlanWritesNull(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+
+	run := newReleaseRun("wf-nil-plan")
+	run.ResolvedPlan = nil
+
+	created, _, err := createReleaseRunTx(t, reg, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	if created.ResolvedPlan != nil {
+		t.Fatalf("expected ResolvedPlan nil immediately after CreateReleaseRun, got %s", created.ResolvedPlan)
+	}
+
+	fetched, _, err := reg.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if fetched.ResolvedPlan != nil {
+		t.Fatalf("expected ResolvedPlan nil after GetReleaseRun, got %s", fetched.ResolvedPlan)
+	}
+
+	// Belt-and-suspenders: confirm the column itself is a real SQL NULL,
+	// not an empty-but-non-NULL JSONB value that a looser scan could have
+	// masked as a nil []byte on the Go side.
+	var isNull bool
+	if scanErr := pool.QueryRow(context.Background(),
+		`SELECT resolved_plan IS NULL FROM release_run WHERE release_run_id = $1`, created.ReleaseRunID,
+	).Scan(&isNull); scanErr != nil {
+		t.Fatalf("check resolved_plan IS NULL: %v", scanErr)
+	}
+	if !isNull {
+		t.Fatalf("expected resolved_plan column to be SQL NULL, it was not")
+	}
+}
+
+// TestReleaseRun_SetResolvedPlan_RoundTrip proves
+// ReleaseRunRepository.SetResolvedPlan (issue #906) against real Postgres:
+// created with ResolvedPlan nil (the production TriggerRelease shape),
+// SetResolvedPlan stamps a value in, and it is readable back through
+// GetReleaseRun -- the write worker/release/record.go's RecordResolvedPlan
+// activity performs once ReleaseWorkflow's ResolvePlan step succeeds.
+func TestReleaseRun_SetResolvedPlan_RoundTrip(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	run := newReleaseRun("wf-set-resolved-plan")
+	run.ResolvedPlan = nil
+	created, _, err := createReleaseRunTx(t, reg, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+
+	want := []byte(`{"targets":[{"owner":"acme-widget","version":"1.2.3"}]}`)
+	if err := reg.ReleaseRuns().SetResolvedPlan(context.Background(), created.ReleaseRunID, want); err != nil {
+		t.Fatalf("SetResolvedPlan: %v", err)
+	}
+
+	fetched, _, err := reg.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	assertJSONEqual(t, "ResolvedPlan", fetched.ResolvedPlan, want)
+}
+
+// TestReleaseRun_SetResolvedPlan_EmptyRejected proves the empty-value
+// guard documented on ReleaseRunRepository.SetResolvedPlan holds against
+// real Postgres too (the fake's identically-named test covers the same
+// contract on the in-memory implementation) -- an empty resolvedPlan is
+// rejected with ErrInvalidArgument before any UPDATE reaches the database.
+func TestReleaseRun_SetResolvedPlan_EmptyRejected(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	run := newReleaseRun("wf-set-resolved-plan-empty")
+	run.ResolvedPlan = nil
+	created, _, err := createReleaseRunTx(t, reg, run, []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+
+	err = reg.ReleaseRuns().SetResolvedPlan(context.Background(), created.ReleaseRunID, nil)
+	if !errors.Is(err, repository.ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument for empty resolvedPlan, got: %v", err)
+	}
+}
+
+// TestReleaseRun_SetResolvedPlan_UnknownReleaseRunNotFound proves an
+// unknown releaseRunID is rejected with ErrNotFound (the zero-rows-affected
+// branch in releaseRunRepo.SetResolvedPlan), not silently accepted as a
+// no-op UPDATE matching nothing.
+func TestReleaseRun_SetResolvedPlan_UnknownReleaseRunNotFound(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	err := reg.ReleaseRuns().SetResolvedPlan(context.Background(), "00000000-0000-0000-0000-000000000000", []byte(`{"a":1}`))
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
 	}
 }
 

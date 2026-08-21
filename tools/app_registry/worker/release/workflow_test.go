@@ -169,3 +169,76 @@ func TestReleaseWorkflow_VerifyPublished_PartialFailure(t *testing.T) {
 	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, byOwner["demo-widget"])
 	require.Equal(t, repository.ReleaseRunTargetStateFailed, byOwner["demo-gadget"])
 }
+
+// TestReleaseWorkflow_RecordResolvedPlan_DispatchedWhenPlanHasRawJSON
+// proves issue #906's new dispatch step: when ResolvePlan returns a plan
+// with non-empty RawJSON, ReleaseWorkflow calls RecordResolvedPlan with
+// that exact releaseRunID/RawJSON pair immediately after ResolvePlan and
+// before DispatchBuild -- the ordering
+// TestReleaseWorkflow_HappyPath's calls slice pattern already asserts for
+// the other five activities, extended here to include this one.
+func TestReleaseWorkflow_RecordResolvedPlan_DispatchedWhenPlanHasRawJSON(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-4", Targets: []ReleaseTarget{testTarget()}}
+	rawJSON := []byte(`{"targets":[{"owner":"demo-widget","version":"v1.0.1"}]}`)
+	plan := ResolvedPlan{ReleaseRunID: "run-4", Versions: map[string]string{testTarget().key(): "v1.0.1"}, RawJSON: rawJSON}
+	ref := BuildRef{ReleaseRunID: "run-4", RunID: "44"}
+
+	var calls []string
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-4").Return(true, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityCheckApproval) })
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityResolvePlan) })
+	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-4", rawJSON).Return(nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityRecordResolvedPlan) })
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityDispatchBuild) })
+	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityPollBuild) })
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-4").Return(VerifyResult{AllPublished: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityVerifyPublished) })
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-4", testTarget(), repository.ReleaseRunTargetStateSucceeded, "44", "").
+		Return(nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityRecordTargetState) })
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	require.Equal(t, []string{
+		ActivityCheckApproval, ActivityResolvePlan, ActivityRecordResolvedPlan, ActivityDispatchBuild,
+		ActivityPollBuild, ActivityVerifyPublished, ActivityRecordTargetState,
+	}, calls, "RecordResolvedPlan must run right after ResolvePlan and before DispatchBuild (issue #906)")
+}
+
+// TestReleaseWorkflow_RecordResolvedPlan_Failure_MarksTargetsFailed proves
+// a RecordResolvedPlan failure is treated the same as any other pre-
+// RecordTargetState step failure (issue #889's Testing scope, extended to
+// this new step by #906): DispatchBuild/PollBuild/VerifyPublished must
+// never run, and every target is recorded failed via the recordFailure
+// branch.
+func TestReleaseWorkflow_RecordResolvedPlan_Failure_MarksTargetsFailed(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-5", Targets: []ReleaseTarget{testTarget()}}
+	rawJSON := []byte(`{"targets":[{"owner":"demo-widget","version":"v1.0.1"}]}`)
+	plan := ResolvedPlan{ReleaseRunID: "run-5", Versions: map[string]string{testTarget().key(): "v1.0.1"}, RawJSON: rawJSON}
+
+	var calledDownstream []string
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-5").Return(true, nil).Once()
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-5", rawJSON).Return(errors.New("db unavailable")).Once()
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, mock.Anything, mock.Anything).Return(BuildRef{}, nil).Maybe().
+		Run(func(args mock.Arguments) { calledDownstream = append(calledDownstream, ActivityDispatchBuild) })
+	env.OnActivity(ActivityPollBuild, mock.Anything, mock.Anything).Return(BuildStatus{}, nil).Maybe().
+		Run(func(args mock.Arguments) { calledDownstream = append(calledDownstream, ActivityPollBuild) })
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, mock.Anything).Return(VerifyResult{}, nil).Maybe().
+		Run(func(args mock.Arguments) { calledDownstream = append(calledDownstream, ActivityVerifyPublished) })
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-5", testTarget(), repository.ReleaseRunTargetStateFailed, "", mock.AnythingOfType("string")).
+		Return(nil).Once()
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.Error(t, env.GetWorkflowError())
+	require.Empty(t, calledDownstream, "DispatchBuild/PollBuild/VerifyPublished must not run once RecordResolvedPlan has failed")
+}
