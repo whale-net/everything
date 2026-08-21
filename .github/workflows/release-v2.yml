@@ -511,13 +511,56 @@ jobs:
           name: openapi-specs
           path: /tmp/openapi-specs/*.json
 
-  release:
-    name: Release Applications
+  # Issue #928: merges the old `release` (apps) and `release-helm-charts`
+  # (charts) jobs into one -- a single checkout/setup-build-env/bazel
+  # session amortized across both app images and chart packages for the
+  # whole batch (FR1 of #928), mirroring the amortization reasoning the
+  # now-superseded FR10 used for push-time compose (closed #917), applied
+  # here at release-trigger time instead.
+  #
+  # This job's responsibility deliberately SHRANK relative to the two jobs
+  # it replaces: it builds and pushes every app image (tagged only with
+  # the build-scoped git SHA -- no version, no "latest") and composes
+  # every chart's source tree, but assigns no final version, uploads
+  # nothing to ChartMuseum, creates no git tag, and holds no ChartMuseum
+  # credential. Those steps -- all safety-sensitive version-minting/
+  # publish work -- moved to Temporal's new FinalizePublish activity
+  # (tools/app_registry/worker/release/finalize.go), which runs after this
+  # job's GHA run completes and reuses BeginPublish/FailPublish's existing
+  # two-phase reservation + RecordArtifact's compare-and-swap machinery
+  # unchanged (issue #928's explicit ask: do not reinvent this). See that
+  # file's package doc comment for the full design, including how build
+  # outputs (image digests, chart source trees) get from this job back to
+  # Temporal: the two `actions/upload-artifact` steps below, downloaded by
+  # FinalizePublish via the GitHub Actions API after PollBuild reports
+  # this run terminal -- the same workflow-artifact mechanism this
+  # workflow already used for release-notes/digest-check/helm-charts
+  # before this task, just consumed by Temporal instead of a later GHA
+  # job.
+  #
+  # KNOWN GAP (not fixed by this task -- flagged per issue #928's scope
+  # note): create-github-releases below still runs inside this SAME GHA
+  # run, using plan-release's pre-finalization version matrix and (now
+  # absent) release-notes/digest-check/helm-charts artifacts this job used
+  # to produce -- it cannot wait for Temporal's FinalizePublish, which
+  # only starts after this whole run reaches a terminal state. The GitHub
+  # Releases it creates for v2 will generally reference the correct
+  # version (FinalizePublish uses the same already-resolved plan version
+  # for the common case) but will have no release notes, no packaged
+  # assets, and no attached chart .tgz, and will not reflect the rare
+  # chart-version-collision-advance case. Moving GitHub Release creation
+  # to run after FinalizePublish (e.g. a new Temporal-triggered step, or a
+  # second lightweight dispatch) is documented follow-up work.
+  build-release-artifacts:
+    name: Build Release Artifacts
     runs-on: ubuntu-latest
     needs: [authorize-trigger, plan-release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    if: |
+      needs.authorize-trigger.result == 'success' &&
+      ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) ||
+       github.event.inputs.helm_charts != '')
     permissions:
-      contents: write
+      contents: read
       packages: write
     steps:
       - name: Checkout code
@@ -544,195 +587,71 @@ jobs:
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
-      - name: Configure Git
-        run: |
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-
-      - name: Log in to GitHub Container Registry
-        if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
-
-      - name: Release applications
-        env:
-          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
-          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-          GRPC_AUTH_MODE: oidc
-          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
-          DEFAULT_VERSION: ${{ needs.plan-release.outputs.version }}
-          BUILD_ID: ${{ needs.plan-release.outputs.build-id }}
-          DRY_RUN: ${{ github.event.inputs.dry_run }}
-        run: |
-          mkdir -p /tmp/release-notes /tmp/digest-check
-
-          echo "$RELEASE_MATRIX" | jq -c '.include[]' | while read -r item; do
-            DOMAIN=$(echo "$item" | jq -r '.domain')
-            APP=$(echo "$item" | jq -r '.app')
-            VER=$(echo "$item" | jq -r '.version // empty')
-            if [[ -z "$VER" ]]; then
-              VER="$DEFAULT_VERSION"
-            fi
-
-            FULL_NAME="${DOMAIN}-${APP}"
-            echo "=========================================="
-            echo "Releasing application: $FULL_NAME (version: $VER)"
-            echo "=========================================="
-
-            ARGS=(release-app --domain "$DOMAIN" --app "$APP" --version "$VER" --create-git-tag)
-            [[ -n "$BUILD_ID" ]] && ARGS+=(--build-id "$BUILD_ID")
-            [[ "$DRY_RUN" == "true" ]] && ARGS+=(--dry-run)
-            [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
-
-            "$RELEASE_HELPER" "${ARGS[@]}"
-
-            if [[ "$DRY_RUN" != "true" ]]; then
-              TAG_NAME="${FULL_NAME}.${VER}"
-              "$RELEASE_HELPER" release-notes "$FULL_NAME" --current-tag "$TAG_NAME" --format markdown > "/tmp/release-notes/${FULL_NAME}.md" || true
-
-              # Package binary / firmware release assets if applicable
-              mkdir -p "/tmp/assets/${FULL_NAME}"
-              "$RELEASE_HELPER" package-assets "$FULL_NAME" --version "$VER" --output-dir "/tmp/assets/${FULL_NAME}" || true
-            fi
-          done
-
-      - name: Upload release notes artifact
-        if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-notes
-          path: /tmp/release-notes/*.md
-          if-no-files-found: ignore
-
-      - name: Upload digest-check artifact
-        if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: digest-check
-          path: /tmp/digest-check/*.json
-          if-no-files-found: ignore
-
-      - name: Upload release assets artifact
-        if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-assets
-          path: /tmp/assets/
-          if-no-files-found: ignore
-
-  release-helm-charts:
-    name: Release Helm Charts
-    needs: [authorize-trigger, plan-release, release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && github.event.inputs.helm_charts != '' && (always() && !cancelled())
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    env:
-      CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Setup Build Environment
-        uses: ./.github/actions/setup-build-env
-        with:
-          setup-docker: 'true'
-          cache-suffix: 'helm'
-          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
-          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
-          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
-          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-
-      - name: Download release tools
-        uses: ./.github/actions/download-release-tools
-        with:
-          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
-          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
-          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
-
-      - name: Configure Git
-        if: ${{ github.event.inputs.dry_run == 'false' }}
-        run: |
-          git config --global user.name "${{ github.actor }}"
-          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
-
-      - name: Log in to GitHub Container Registry
-        if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
-
       - name: Install Helm
+        if: ${{ github.event.inputs.helm_charts != '' }}
         uses: azure/setup-helm@v4
         with:
           version: 'latest'
 
-      - name: Release Helm charts
+      - name: Log in to GitHub Container Registry
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+
+      # Push-by-digest only -- no version tag, no "latest", no App
+      # Registry mutation, no git tag. See this job's header comment.
+      - name: Build app images (push by digest)
+        if: ${{ github.event.inputs.dry_run == 'false' && needs.plan-release.outputs.release-matrix != '' }}
         env:
-          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
-          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-          GRPC_AUTH_MODE: oidc
-          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-          CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
-          CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
+          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
         run: |
-          ARGS=(release-charts --charts "${{ github.event.inputs.helm_charts }}" --chart-repo-url "$CHART_REPO_URL" --create-git-tag)
-          [[ -n "${{ needs.plan-release.outputs.version }}" ]] && ARGS+=(--version "${{ needs.plan-release.outputs.version }}")
-          [[ "${{ github.event.inputs.increment_minor }}" == "true" ]] && ARGS+=(--increment-minor)
-          [[ "${{ github.event.inputs.increment_patch }}" == "true" ]] && ARGS+=(--increment-patch)
-          [[ -n "${{ needs.plan-release.outputs.build-id }}" ]] && ARGS+=(--build-id "${{ needs.plan-release.outputs.build-id }}")
+          mkdir -p /tmp/build-manifest/apps
+
+          echo "$RELEASE_MATRIX" | jq -c '.include[]' | while read -r item; do
+            DOMAIN=$(echo "$item" | jq -r '.domain')
+            APP=$(echo "$item" | jq -r '.app')
+
+            echo "=========================================="
+            echo "Building application: ${DOMAIN}-${APP} (build tag: ${{ github.sha }})"
+            echo "=========================================="
+
+            "$RELEASE_HELPER" build-app --domain "$DOMAIN" --app "$APP" --git-sha "${{ github.sha }}" --output-dir /tmp/build-manifest/apps
+          done
+
+      # Composes each chart's source tree only -- no `helm package`, no
+      # final version, no ChartMuseum upload. See this job's header
+      # comment.
+      - name: Build chart source trees
+        if: ${{ github.event.inputs.helm_charts != '' }}
+        run: |
+          ARGS=(build-chart --charts "${{ github.event.inputs.helm_charts }}" --output-dir /tmp/build-manifest/charts)
           [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
-          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
-          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
-          # Issue #927: app_versions is no longer set by Temporal's
-          # DispatchBuild -- it forwards resolved_plan instead, which
-          # plan-release parses straight into its own `versions` output, so
-          # that output is now always the batch's actual locked plan (not a
-          # re-resolution) whenever a resolved_plan was dispatched. Prefer
-          # app_versions only as a manual-dispatch override (a caller who
-          # sets it directly without a resolved_plan); otherwise use
-          # plan-release's versions output.
-          if [[ -n "${{ github.event.inputs.app_versions }}" ]]; then
-            ARGS+=(--app-versions "${{ github.event.inputs.app_versions }}")
-          elif [[ -n "${{ needs.plan-release.outputs.versions }}" ]]; then
-            ARGS+=(--app-versions "${{ needs.plan-release.outputs.versions }}")
-          fi
           "$RELEASE_HELPER" "${ARGS[@]}"
 
-      - name: Upload chart release notes artifact
+      - name: Upload build manifest artifact
         if: ${{ github.event.inputs.dry_run == 'false' }}
         uses: actions/upload-artifact@v4
         with:
-          name: release-notes-charts
-          path: /tmp/release-notes/*.md
+          name: build-manifest
+          path: /tmp/build-manifest/apps/*.json
           if-no-files-found: ignore
 
-      - name: Upload helm chart artifacts
+      - name: Upload chart sources artifact
+        if: ${{ github.event.inputs.helm_charts != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: helm-charts
-          path: /tmp/helm-charts/*.tgz
+          name: chart-sources
+          path: /tmp/build-manifest/charts/
           if-no-files-found: ignore
 
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, release, release-helm-charts, build-openapi-specs, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && github.event.inputs.dry_run == 'false' && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.release-helm-charts.result == 'success' || needs.release-helm-charts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
+    needs: [authorize-trigger, plan-release, build-release-artifacts, build-openapi-specs, build-release-tools]
+    if: needs.authorize-trigger.result == 'success' && always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && github.event.inputs.dry_run == 'false' && (needs.build-release-artifacts.result == 'success' || needs.build-release-artifacts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -837,7 +756,7 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, release, release-helm-charts, create-github-releases, build-release-tools]
+    needs: [authorize-trigger, plan-release, build-release-artifacts, create-github-releases, build-release-tools]
     if: needs.authorize-trigger.result == 'success' && always()
     env:
       CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
