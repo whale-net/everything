@@ -174,8 +174,20 @@ workspace (see `worker/release/activities.go`).
 | `RELEASE_GITHUB_REPO_NAME` | `everything` | Repo `release.yml` lives in. |
 | `RELEASE_GITHUB_WORKFLOW_FILE` | `release.yml` | Workflow file `DispatchBuild`/`PollBuild` dispatch/poll. |
 | `RELEASE_GITHUB_REF` | `main` | Git ref `DispatchBuild` dispatches `RELEASE_GITHUB_WORKFLOW_FILE` against. |
-| `RELEASE_PLAN_BINARY_PATH` | `release_helper_go` (resolved via `PATH`) | Path to the `release_helper_go` binary `ResolvePlan`'s interim CLI shell-out invokes — see `worker/release/plan.go`'s package doc comment for why this is a shell-out rather than an in-process library call. |
-| `RELEASE_WORKSPACE_ROOT` | *(unset)*, required for `ResolvePlan` | Working directory `ResolvePlan` runs `RELEASE_PLAN_BINARY_PATH plan` from — must be a full monorepo checkout with `bazel`/`git` on `PATH`, since the CLI's version-resolution logic assumes it is running inside `release.yml`'s own environment. `ResolvePlan` fails fast with a clear error, rather than a confusing subprocess failure, when this is unset. |
+| `RELEASE_PLAN_BINARY_PATH` | `release_helper_go` (resolved via `PATH`) | Path to the `release_helper_go` binary `ResolvePlan`'s interim CLI shell-out invokes — see `worker/release/plan.go`'s package doc comment for why this is a shell-out rather than an in-process library call. Reused by `FinalizePublish`'s `finalize-app`/`finalize-chart` shell-outs (issue #928, `worker/release/finalize.go`) — same binary, one flag. |
+| `RELEASE_WORKSPACE_ROOT` | *(unset)*, required for `ResolvePlan` and `FinalizePublish` | Working directory `ResolvePlan` runs `RELEASE_PLAN_BINARY_PATH plan` from, and `FinalizePublish` runs `finalize-app`/`finalize-chart` from — must be a full monorepo checkout with `bazel`/`git`/`helm` on `PATH`. `ResolvePlan`'s version-resolution logic needs `bazel`; `finalize-app`/`finalize-chart` do not shell out to `bazel` themselves (their inputs — an already-pushed image digest, an already-built chart source tree — arrive from the merged build job's workflow artifacts, not a fresh Bazel build) but do use `git`/`helm`. Both activities fail fast with a clear error, rather than a confusing subprocess failure, when this is unset. |
+
+### FinalizePublish (issue #928)
+
+`FinalizePublish` runs after `PollBuild` reports the merged release-trigger GHA job (`release-v2.yml`'s `build-release-artifacts`) succeeded, and before `VerifyPublished` — see `worker/release/finalize.go`'s package doc comment for the full design (why this step exists, how build outputs get from GHA back to Temporal, and the credential-locality reasoning below). It reuses `RELEASE_GITHUB_APP_*`/`RELEASE_GITHUB_REPO_*`/`RELEASE_PLAN_BINARY_PATH`/`RELEASE_WORKSPACE_ROOT` above unchanged, plus:
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `RELEASE_CHART_REPO_URL` | `https://charts.whalenet.dev` | ChartMuseum repository URL `finalize-chart` uploads packaged charts to. |
+| `RELEASE_CHART_REPO_USER` | *(unset)* | ChartMuseum username. **Credential-locality move (issue #928):** previously a GitHub Actions secret (`secrets.CHART_REPO_USER`) held by `release-v2.yml`'s chart-release job; ChartMuseum write access now lives only here, on the worker — the merged `build-release-artifacts` GHA job holds no ChartMuseum credential at all. |
+| `RELEASE_CHART_REPO_PASS` | *(unset)* | ChartMuseum password — same credential-locality move as above (was `secrets.CHART_REPO_PASS`). |
+
+**GHCR retag credential:** `finalize-app`'s registry-side retag (via `crane.Tag`, see `tools/release_helper_go/cmd/releaser_ghcr_retag.go`) reuses the *same* GitHub App installation token `RELEASE_GITHUB_APP_*` already mints for the Actions dispatch/poll API calls (see `worker/release/finalize.go`, threaded to the CLI subprocess as `GHCR_TOKEN`) — no separate GHCR secret was introduced. **Operational prerequisite:** the GitHub App backing `RELEASE_GITHUB_APP_ID` must be granted the `packages: write` repository permission for its installation token to authenticate against `ghcr.io`; if it currently only has `actions: write` (per the existing `RELEASE_GITHUB_APP_ID` row above), this permission needs to be added before `FinalizePublish` can retag images. This could not be verified from within the repo and is called out explicitly as a deployment follow-up, not assumed.
 
 The API server (`app-registry-api`) also needs Temporal connectivity as of
 issue #889 (`TriggerRelease` starts `ReleaseWorkflow` directly) — the same

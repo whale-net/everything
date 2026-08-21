@@ -16,13 +16,13 @@ binary that already runs `WritebackWorkflow`), not the registry/gRPC server
 itself — the server component still only mutates rows and emits writeback
 intents.
 
-What did **not** change: CI (the GHA build job, `release.yml`) still performs
-every actual GHCR/chart-repo push and still calls
+What did **not** change, for `release.yml` (v1): CI still performs every
+actual GHCR/chart-repo push and still calls
 `BeginPublish`/`BeginPublishBatch`/`RecordArtifact` exactly as the rest of
 this file describes — those RPC mechanics, the `allocated → publishing →
 published` state machine, and the run-log/resume semantics below are
-unchanged. What changed is *who calls CI and polls it to completion*: a
-Temporal workflow now sits above `release.yml` as its caller/poller instead
+unchanged for v1. What changed is *who calls CI and polls it to completion*:
+a Temporal workflow now sits above `release.yml` as its caller/poller instead
 of a human, and it resolves the release plan once (`ResolvePlan`) and passes
 that resolved plan into `release.yml` as a literal input (bypassing
 `plan-release`'s own independent resolution for that invocation) rather than
@@ -31,6 +31,26 @@ property FR7/FR8 describe. A release run still spans real GHCR pushes, so it
 still cannot be one database transaction, and it still must not become one:
 re-pushing eight images because the ninth failed is exactly wrong — the run
 log below is unaffected by any of this.
+
+**Updated again by #928, for `release-v2.yml` (v1 unaffected).** The
+paragraph above ("CI still performs every actual GHCR/chart-repo push and
+still calls `BeginPublish`/.../`RecordArtifact`") is no longer true for v2:
+`release-v2.yml`'s merged `build-release-artifacts` job only pushes app
+images by digest (a build-scoped tag, not the final version) and composes
+chart source trees — it calls neither `BeginPublish` nor `RecordArtifact`.
+Those calls, along with the registry-side GHCR retag to the final version
+and the ChartMuseum upload, now happen in `app-registry-worker` itself, in
+the new `FinalizePublish` Temporal activity
+(`worker/release/finalize.go`), which runs after `PollBuild` observes the
+GHA run complete and before `VerifyPublished`. It reuses the exact same
+`BeginPublish`/`FailPublish`/`RecordArtifact` RPC mechanics this file
+describes — via `finalize-app`/`finalize-chart`, new `release_helper_go`
+subcommands that call `ExecuteRelease` exactly as `release-app`/
+`release-charts` already did (see `tools/release_helper_go/cmd/
+finalize_app.go`/`finalize_chart.go`) — so the `allocated → publishing →
+published` state machine and run-log/resume semantics below are unchanged
+in substance, only in *which process* (`app-registry-worker` instead of a
+GHA runner) makes the calls, for v2 only.
 
 **This needs no new tables either.** `build` is already the run aggregate
 (`(workflow_run_id, workflow_attempt)` unique); the artifact rows in
