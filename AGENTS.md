@@ -151,6 +151,19 @@ WHERE <entity_id> = $1
 
 **Views:** Pre-join SCD2 history tables in `v_` views so downstream consumers (dashboards, APIs) never replicate the join logic. See `leaflab/` for a worked example.
 
+## GitHub Labels
+
+Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plugin's lifecycle labels (`plan:*`, `phase:*`, `status:*`), apply these when filing or triaging issues:
+
+- `idea` — not yet a concrete task
+- `high-effort` / `low-effort` — sizing, for human token-budget triage
+- `agent:ready` — safe for an agent to pick up unattended; combine with the above for queries
+- `source:scope-note` — deferred item surfaced during a plan
+- `source:validation` — generated from system-validator findings
+- `type:spike` — investigation/exploration, not a concrete deliverable
+- `domain:<name>` — apply to root `Plan:` issues so plans are filterable by domain later (matches the Domains table below, e.g. `domain:manmanv2`, `domain:app-registry`)
+- `duplicate` — flag actual duplicate issues; check before filing
+
 ## Domains
 
 | Domain | Description | Reference |
