@@ -26,6 +26,28 @@ type ChartReleaser struct {
 	Uploader      ChartUploader
 	OutDir        string
 
+	// ChartDir, when non-empty, points at an already-built chart source
+	// tree (Chart.yaml/values.yaml/templates/image-lockfile.json) to
+	// package directly -- Build skips chartOutputPaths derivation and the
+	// `bazel build` step entirely. Set by finalize-chart (issue #928): the
+	// merged release-trigger GHA job builds this tree once (build-chart)
+	// and ships it as a workflow artifact; the Temporal-driven finalize
+	// step re-packages it here with the resolved final version/app
+	// versions, without needing bazel or a monorepo checkout of its own.
+	// Empty (the default) preserves the original "bazel build then
+	// package" behavior release-charts still uses directly.
+	ChartDir string
+	// AppDigests, when non-empty, supplies each composed app's already-
+	// resolved image digest (keyed by AppMetadata.FullName()), used by
+	// Build to populate ContainedImages without a live `docker buildx
+	// imagetools inspect` call -- see resolveContainedImagesFromDigests's
+	// doc comment. Set by finalize-chart alongside ChartDir: at finalize
+	// time the digests are already known from the build job's own
+	// per-app manifest (a digest never changes across a GHCR retag), so
+	// there is no need for the finalize environment to hold a `docker`
+	// credential just to re-derive it.
+	AppDigests map[string]string
+
 	chartPath       string
 	chartBytes      []byte
 	chartDigest     string
@@ -37,12 +59,21 @@ func (r *ChartReleaser) Kind() pb.ArtifactKind {
 	return pb.ArtifactKind_ARTIFACT_KIND_CHART
 }
 
-// Build invokes Bazel to build the chart, packages it with HelmPackager, and computes its content digest.
+// Build packages the chart with HelmPackager and computes its content
+// digest. When r.ChartDir is empty (the release-charts path), it first
+// invokes Bazel to build the chart into chartOutputPaths' derived
+// directory; when r.ChartDir is set (the finalize-chart path, issue #928),
+// that already-built directory is packaged directly and no Bazel/git
+// checkout is required.
 func (r *ChartReleaser) Build(ctx context.Context, version string) (string, error) {
-	chartTarget, chartDir := chartOutputPaths(r.WorkspaceRoot, r.Chart)
-	fmt.Printf("Building bazel target: %s\n", chartTarget)
-	if _, err := r.Bazel.Run("build", chartTarget); err != nil {
-		return "", fmt.Errorf("bazel build %s: %w", chartTarget, err)
+	chartDir := r.ChartDir
+	if chartDir == "" {
+		var chartTarget string
+		chartTarget, chartDir = chartOutputPaths(r.WorkspaceRoot, r.Chart)
+		fmt.Printf("Building bazel target: %s\n", chartTarget)
+		if _, err := r.Bazel.Run("build", chartTarget); err != nil {
+			return "", fmt.Errorf("bazel build %s: %w", chartTarget, err)
+		}
 	}
 
 	outDir := r.OutDir
@@ -71,7 +102,11 @@ func (r *ChartReleaser) Build(ctx context.Context, version string) (string, erro
 	hasher.Write(chartBytes)
 	r.chartDigest = fmt.Sprintf("sha256:%x", hasher.Sum(nil))
 
-	r.containedImages = resolveContainedImages(chartDir, r.AppVersions, r.Chart, r.AllApps, r.Docker, r.FS)
+	if len(r.AppDigests) > 0 {
+		r.containedImages = resolveContainedImagesFromDigests(chartDir, r.AppVersions, r.AppDigests, r.FS)
+	} else {
+		r.containedImages = resolveContainedImages(chartDir, r.AppVersions, r.Chart, r.AllApps, r.Docker, r.FS)
+	}
 	return r.chartDigest, nil
 }
 
