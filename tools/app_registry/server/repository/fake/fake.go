@@ -83,6 +83,12 @@ type state struct {
 	// UpdateTargetState can look a target up directly by its own id, the
 	// same shape Promotions/PromotionEvents use.
 	ReleaseRunTargets map[string]repository.ReleaseRunTarget
+	// AppBuildLogs mirrors `app_build_log` (migration 019, issue #923,
+	// FR8-FR12/FR14), keyed by app_build_log_id. Written UNCONDITIONALLY on
+	// every RecordBuildLog call (see AppBuildLogRepository's doc comment)
+	// -- unlike every other SCD2-shaped map here, there is no
+	// same-content-skip branch in the write path this mirrors.
+	AppBuildLogs map[string]repository.AppBuildLog
 }
 
 func newState() *state {
@@ -100,6 +106,7 @@ func newState() *state {
 		ReconcileRuns:     map[string]repository.ReconcileRun{},
 		ReleaseRuns:       map[string]repository.ReleaseRun{},
 		ReleaseRunTargets: map[string]repository.ReleaseRunTarget{},
+		AppBuildLogs:      map[string]repository.AppBuildLog{},
 	}
 }
 
@@ -239,6 +246,10 @@ func (r *Registry) DomainAdoption() repository.DomainAdoptionRepository { return
 // ReleaseRuns returns a distinct type for the same reason Environments
 // does.
 func (r *Registry) ReleaseRuns() repository.ReleaseRunRepository { return releaseRunFake{r} }
+
+// AppBuildLogs returns a distinct type for the same reason Environments
+// does.
+func (r *Registry) AppBuildLogs() repository.AppBuildLogRepository { return appBuildLogFake{r} }
 
 // WithTx snapshots state, runs fn against a Registry sharing that snapshot,
 // and commits the snapshot back only if fn succeeds — giving the fake the

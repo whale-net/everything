@@ -68,6 +68,16 @@ var _ ReleaseActivities = (*Activities)(nil)
 // check-before-dispatch (e.g. recording BuildRef on the release_run row
 // before calling GitHub, and having a retried DispatchBuild read it back
 // first) is documented follow-up, not implemented here.
+//
+// TODO(#923, Implementation): FR9-FR11 -- resolve app_build_log's current
+// row for this batch's targets (buildref.go's resolveBuildRef, using
+// a.Registry) and thread the result into a.GitHub.Dispatch's `ref`
+// (GitHubDispatcherConfig.Ref is currently a static field defaulting to
+// "main" -- see github.go). Not wired in during Scaffold (issue #923);
+// deferred to Implementation pending the per-Dispatch()-call-parameter-
+// vs-static-field design decision FR11 calls out. This only applies to
+// release-v2.yml dispatches (FR11 note: release.yml's v1 dispatch path is
+// explicitly out of scope for this task).
 func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, digestOverrides map[string]string) (BuildRef, error) {
 	if len(digestOverrides) > 0 {
 		return BuildRef{}, fmt.Errorf("dispatch build: digest overrides (FR2 hotfix/re-release input) not implemented yet -- see issue #889's Implementation scope")

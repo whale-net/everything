@@ -4,6 +4,7 @@ go_library(
     name = "postgres",
     srcs = [
         "app.go",
+        "app_build_log.go",
         "artifact.go",
         "domain_adoption.go",
         "environment.go",

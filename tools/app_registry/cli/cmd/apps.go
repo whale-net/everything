@@ -20,6 +20,7 @@ func newAppsCmd() *cobra.Command {
 		newAppsSetStatusCmd(),
 		newAppsReconcileCmd(),
 		newAppsAssertCmd(),
+		newAppsRecordBuildLogCmd(),
 	)
 	return appsCmd
 }

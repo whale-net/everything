@@ -603,6 +603,38 @@ type ReleaseRunRepository interface {
 	ListReleaseRunsByTarget(ctx context.Context, ownerFullName string) ([]ReleaseRun, error)
 }
 
+// AppBuildLogRepository covers the `app_build_log` table (migration 019,
+// issue #923, FR8-FR12/FR14). SCD2-shaped per AGENTS.md but --
+// deliberately, unlike AppRepository's manifest-history methods --
+// NOT content-gated: every RecordBuildLog call writes a new row
+// unconditionally, regardless of whether GitSHA differs from the
+// currently-open row. This is what lets ci.yml's reconcile-app-registry
+// job answer "what commit has this owner's build log last recorded" on
+// every push, without needing content-addressing (see migration 019's
+// doc comment for why this table's row count is expected to scale with CI
+// push frequency, not content churn).
+type AppBuildLogRepository interface {
+	// RecordBuildLog performs the SCD2 close-and-open write
+	// unconditionally: closes any currently-open row for ownerID (valid_to
+	// IS NULL) and opens a new one carrying kind/gitSHA/buildID. Must be
+	// called inside Registry.WithTx for the close+open pair to be atomic
+	// -- mirrors ReleaseRunRepository.CreateReleaseRun's convention (see
+	// that method's doc comment). Unlike postgres/app.go's
+	// recordAppManifestSweep, there is no "same content -> skip the
+	// write" branch: FR8 requires a row written on every call, one per
+	// push per discovered app/chart, regardless of whether anything
+	// changed.
+	RecordBuildLog(ctx context.Context, ownerID string, kind ArtifactKind, gitSHA, buildID string) (*AppBuildLog, error)
+
+	// GetCurrentBuildLog returns the currently-open (valid_to IS NULL) row
+	// for ownerID -- backed by app_build_log_current_idx for an O(1) point
+	// lookup, matching app_manifest_history_current_idx's shape (migration
+	// 010). Returns ErrNotFound if ownerID has no app_build_log row yet --
+	// FR10's fallback-to-literal-branch-name case; callers translate
+	// ErrNotFound into that fallback rather than failing the release.
+	GetCurrentBuildLog(ctx context.Context, ownerID string) (*AppBuildLog, error)
+}
+
 // Registry aggregates the per-entity repositories and provides a
 // unit-of-work boundary. Handlers call WithTx to make a business operation
 // (reconcile, idempotency check-and-store, etc.) atomic: fn receives a
@@ -617,6 +649,7 @@ type Registry interface {
 	Writeback() WritebackRepository
 	DomainAdoption() DomainAdoptionRepository
 	ReleaseRuns() ReleaseRunRepository
+	AppBuildLogs() AppBuildLogRepository
 
 	WithTx(ctx context.Context, fn func(ctx context.Context, r Registry) error) error
 }

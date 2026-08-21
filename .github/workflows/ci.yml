@@ -74,6 +74,14 @@ jobs:
         git-sha: ${{ github.sha }}
         idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-reconcile
 
+    # TODO(#923, Implementation): after the reconcile step above, call
+    # `app-registry apps record-build-log` (tools/app_registry/cli/cmd/
+    # build_log.go -- currently a stub, no RPC yet) once per discovered
+    # app/chart for this push, unconditionally (FR8). build-id comes from
+    # a single RecordBuild RPC call per push/workflow-run (not per app --
+    # see migration 019's doc comment), made once here rather than inside
+    # this loop.
+
   # # Build job - commented out in favor of merged build+test job below
   # # Uncomment and remove build step from test job to restore separate build/test parallelism
   # build:

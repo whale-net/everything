@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "activities.go",
         "approval.go",
+        "buildref.go",
         "github.go",
         "plan.go",
         "record.go",
