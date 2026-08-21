@@ -752,7 +752,14 @@ jobs:
           CHART_MATRIX: ${{ needs.plan-release.outputs.chart-matrix }}
         run: |
           APPS=$(echo '${{ steps.matrix-override.outputs.matrix }}' | jq -r '.include[] | "\(.domain)-\(.app)"' | paste -sd, -)
-          CHARTS="${{ github.event.inputs.helm_charts }}"
+          # Derive from the resolved $CHART_MATRIX (like APPS above),
+          # not the raw github.event.inputs.helm_charts: that input can be
+          # a domain shorthand (e.g. "app-registry") or a "all", which
+          # plan-release already expands into the matrix's concrete
+          # `.chart` names, but this command's own chart resolver
+          # (github_release.go) only matches exact chart names -- feeding
+          # it the raw shorthand fails with "Could not resolve chart".
+          CHARTS=$(echo "$CHART_MATRIX" | jq -r '.include[]? | .chart' | paste -sd, -)
           ARGS=(create-combined-github-release-with-notes "${{ needs.plan-release.outputs.version }}" --owner "${{ github.repository_owner }}" --repo "${{ github.event.repository.name }}" --commit "${{ github.sha }}" --release-notes-dir "/tmp/release-notes" --openapi-specs-dir "/tmp/openapi-specs" --assets-dir "/tmp/assets" --helm-charts-dir "/tmp/helm-charts")
           [[ -n "$APPS" ]] && ARGS+=(--apps "$APPS")
           [[ -n "$CHARTS" ]] && ARGS+=(--charts "$CHARTS")
