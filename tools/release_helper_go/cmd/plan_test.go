@@ -1127,3 +1127,93 @@ func TestPlanCmd_MatrixGitHubOutput(t *testing.T) {
 		})
 	})
 }
+
+// ── --from-resolved-plan (issue #929) ───────────────────────────────────────
+
+// TestPlanCmd_FromResolvedPlan_MatchesFreshPlanGithubOutput covers the core
+// claim of issue #929's fix: `plan --format github --from-resolved-plan
+// <json>` (the CLI-owned parse path release-v2.yml's plan-release job now
+// delegates to, replacing a hand-written jq mirror of the same field
+// mapping) produces identical --format github output to a fresh
+// planRelease() + --format github emission for an equivalent plan. Both
+// invocations share the same underlying PlanResult (obtained via a real
+// --format json plan call), so this asserts the --from-resolved-plan path
+// reaches the exact same emission code as the normal path, not merely a
+// similar one.
+func TestPlanCmd_FromResolvedPlan_MatchesFreshPlanGithubOutput(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit()
+
+	var freshJSON, freshGithub string
+	withFS(fs, func() {
+		withBazel(bazel, func() {
+			withGit(git, func() {
+				withWorkspace(fakeWorkspaceRoot, func() {
+					var err error
+					freshJSON, _, err = runTest([]string{
+						"plan",
+						"--event-type", "workflow_dispatch",
+						"--apps", "control-api",
+						"--version", "v1.0.0",
+						"--format", "json",
+						"--dry-run",
+					})
+					if err != nil {
+						t.Fatalf("unexpected error planning (json): %v", err)
+					}
+
+					freshGithub, _, err = runTest([]string{
+						"plan",
+						"--event-type", "workflow_dispatch",
+						"--apps", "control-api",
+						"--version", "v1.0.0",
+						"--format", "github",
+						"--dry-run",
+					})
+					if err != nil {
+						t.Fatalf("unexpected error planning (github): %v", err)
+					}
+				})
+			})
+		})
+	})
+
+	// --from-resolved-plan must not touch fs/bazel/git/workspace at all --
+	// deliberately invoked outside every with* fake wrapper above, so a
+	// stray dependency on any of them would panic (nil FileSystem/
+	// BazelRunner/GitRunner) or fail workspace-root discovery rather than
+	// silently pass.
+	resolvedGithub, stderr, err := runTest([]string{
+		"plan",
+		"--format", "github",
+		"--from-resolved-plan", freshJSON,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v (stderr: %s)", err, stderr)
+	}
+
+	if resolvedGithub != freshGithub {
+		t.Errorf("--from-resolved-plan output diverged from fresh plan's --format github output:\n--from-resolved-plan:\n%s\nfresh:\n%s", resolvedGithub, freshGithub)
+	}
+}
+
+// TestPlanCmd_FromResolvedPlanMalformedJSON covers issue #929's other half:
+// malformed --from-resolved-plan input must fail clearly and typed, not
+// panic or silently emit an empty/garbage plan.
+func TestPlanCmd_FromResolvedPlanMalformedJSON(t *testing.T) {
+	_, stderr, err := runTest([]string{
+		"plan",
+		"--format", "github",
+		"--from-resolved-plan", "{not valid json",
+	})
+	if err == nil {
+		t.Fatal("expected error for malformed --from-resolved-plan JSON")
+	}
+	var valErr *PlanValidationError
+	if !errors.As(err, &valErr) || valErr.Field != "from-resolved-plan" {
+		t.Errorf("expected from-resolved-plan validation error, got %v", err)
+	}
+	if !strings.Contains(stderr, "not valid JSON") {
+		t.Errorf("want 'not valid JSON' in stderr, got: %q", stderr)
+	}
+}

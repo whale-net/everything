@@ -66,7 +66,11 @@ on:
         type: boolean
         default: false
       app_versions:
-        description: 'JSON object of resolved app versions from this release batch''s plan, keyed by "<domain>-<name>" (e.g. {"manmanv2-control-api":"v1.2.3"}). Set by App Registry''s Temporal-orchestrated DispatchBuild so a chart''s composed member apps that are themselves batch targets pin to the batch''s resolved version instead of an independent latest_published query. Leave empty for manual dispatch -- release-helm-charts falls back to plan-release''s own freshly-resolved versions.'
+        description: 'JSON object of resolved app versions from this release batch''s plan, keyed by "<domain>-<name>" (e.g. {"manmanv2-control-api":"v1.2.3"}). Superseded by resolved_plan below (issue #927) for App Registry''s Temporal-orchestrated DispatchBuild, which no longer sets this -- kept as a manual-dispatch override: release-helm-charts prefers this when set, else falls back to plan-release''s versions output (itself either parsed from resolved_plan or freshly resolved).'
+        required: false
+        default: ''
+      resolved_plan:
+        description: 'JSON-encoded fully-expanded release plan (release_helper_go plan --format=json''s output shape: matrix, chart_matrix, openapi_matrix, has_specs, apps, charts, version, versions, build_id) computed once by App Registry''s Temporal ResolvePlan activity and forwarded verbatim by DispatchBuild (issue #927). When set, plan-release parses and passes it through as-is -- no checkout, no bazel setup, no `release-helper plan` re-invocation. Leave empty for a dispatcher that has not pre-computed a plan -- plan-release falls back to its own full `release-helper plan` derivation from the apps/helm_charts/version/increment_* inputs above.'
         required: false
         default: ''
 
@@ -353,23 +357,73 @@ jobs:
     needs: [authorize-trigger, build-release-tools]
     if: needs.authorize-trigger.result == 'success'
     outputs:
-      release-matrix: ${{ steps.plan.outputs.matrix }}
-      version: ${{ steps.plan.outputs.version }}
-      apps: ${{ steps.plan.outputs.apps }}
-      chart-matrix: ${{ steps.plan.outputs.chart_matrix }}
-      charts: ${{ steps.plan.outputs.charts }}
-      openapi-matrix: ${{ steps.plan.outputs.openapi_matrix }}
-      has-specs: ${{ steps.plan.outputs.has_specs }}
-      build-id: ${{ steps.plan.outputs.build_id }}
-      versions: ${{ steps.plan.outputs.versions }}
+      release-matrix: ${{ steps.plan.outputs.matrix || steps.resolved-plan.outputs.matrix }}
+      version: ${{ steps.plan.outputs.version || steps.resolved-plan.outputs.version }}
+      apps: ${{ steps.plan.outputs.apps || steps.resolved-plan.outputs.apps }}
+      chart-matrix: ${{ steps.plan.outputs.chart_matrix || steps.resolved-plan.outputs.chart_matrix }}
+      charts: ${{ steps.plan.outputs.charts || steps.resolved-plan.outputs.charts }}
+      openapi-matrix: ${{ steps.plan.outputs.openapi_matrix || steps.resolved-plan.outputs.openapi_matrix }}
+      has-specs: ${{ steps.plan.outputs.has_specs || steps.resolved-plan.outputs.has_specs }}
+      build-id: ${{ steps.plan.outputs.build_id || steps.resolved-plan.outputs.build_id }}
+      versions: ${{ steps.plan.outputs.versions || steps.resolved-plan.outputs.versions }}
     steps:
+      # Issue #927/#929: when App Registry's Temporal DispatchBuild has
+      # already computed the full release plan (the normal case for this
+      # workflow's machine-only dispatch -- see authorize-trigger above), it
+      # forwards it verbatim as the resolved_plan input. Rather than hand-
+      # parsing that JSON into this job's outputs field-by-field with jq (a
+      # second, hand-maintained mirror of the exact field mapping
+      # `release-helper plan --format github` already implements -- see
+      # tools/release_helper_go/cmd/plan.go), delegate to that same CLI via
+      # its --from-resolved-plan flag: it unmarshals resolved_plan directly
+      # into the same PlanResult struct `--format json` produces and falls
+      # through to the identical --format github emission code, so there is
+      # exactly one place (plan.go) that knows PlanResult's field mapping.
+      #
+      # This still needs a checkout -- `download-release-tools` is a local
+      # composite action, and GitHub Actions can only resolve `uses: ./...`
+      # against a checked-out repository -- but a plain shallow one (no
+      # fetch-depth:0, no fetch-tags: those are only needed by the
+      # `release-helper plan` re-derivation in the fallback path below), and
+      # no Bazel toolchain setup (setup-build-env): download-release-tools
+      # in its default 'published' source mode only downloads a prebuilt
+      # binary (see release-summary job below for the same shallow-checkout
+      # + download-release-tools pattern with no bazel setup).
+      - name: Checkout code (resolved plan)
+        if: github.event.inputs.resolved_plan != ''
+        uses: actions/checkout@v4
+
+      - name: Download release tools (resolved plan)
+        if: github.event.inputs.resolved_plan != ''
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+
+      - name: Parse resolved plan
+        id: resolved-plan
+        if: github.event.inputs.resolved_plan != ''
+        env:
+          RESOLVED_PLAN: ${{ github.event.inputs.resolved_plan }}
+        run: |
+          "$RELEASE_HELPER" plan --format github --from-resolved-plan "$RESOLVED_PLAN" >> "$GITHUB_OUTPUT"
+
+      # Fallback path (resolved_plan not set): a dispatcher that hasn't
+      # pre-computed a plan -- e.g. a bot-credentialed manual/test dispatch
+      # (release-v2.yml's workflow_dispatch is machine-only per
+      # authorize-trigger above, so this is not a human fallback). Full
+      # `release-helper plan` derivation, unchanged from pre-#927 behavior.
       - name: Checkout code
+        if: github.event.inputs.resolved_plan == ''
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Setup Build Environment
+        if: github.event.inputs.resolved_plan == ''
         uses: ./.github/actions/setup-build-env
         with:
           cache-suffix: 'release-tools'
@@ -379,6 +433,7 @@ jobs:
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Download release tools
+        if: github.event.inputs.resolved_plan == ''
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
@@ -388,6 +443,7 @@ jobs:
 
       - name: Plan release
         id: plan
+        if: github.event.inputs.resolved_plan == ''
         env:
           APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
@@ -642,13 +698,14 @@ jobs:
           [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
           [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
-          # Prefer the Temporal-dispatched batch's actual resolved plan
-          # (github.event.inputs.app_versions, set by DispatchBuild) over
-          # this job's own freshly-resolved plan-release output: the
-          # dispatch input is the release's literal locked plan, while
-          # plan-release's own versions output is this job independently
-          # re-resolving apps on a manual/legacy dispatch (still correct,
-          # just not "the" batch's plan).
+          # Issue #927: app_versions is no longer set by Temporal's
+          # DispatchBuild -- it forwards resolved_plan instead, which
+          # plan-release parses straight into its own `versions` output, so
+          # that output is now always the batch's actual locked plan (not a
+          # re-resolution) whenever a resolved_plan was dispatched. Prefer
+          # app_versions only as a manual-dispatch override (a caller who
+          # sets it directly without a resolved_plan); otherwise use
+          # plan-release's versions output.
           if [[ -n "${{ github.event.inputs.app_versions }}" ]]; then
             ARGS+=(--app-versions "${{ github.event.inputs.app_versions }}")
           elif [[ -n "${{ needs.plan-release.outputs.versions }}" ]]; then
