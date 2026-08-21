@@ -28,6 +28,9 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, targets []ReleaseTarget) (ResolvedPlan, error) {
 		return ResolvedPlan{}, nil
 	}, activity.RegisterOptions{Name: ActivityResolvePlan})
+	env.RegisterActivityWithOptions(func(ctx context.Context, releaseRunID string, resolvedPlan []byte) error {
+		return nil
+	}, activity.RegisterOptions{Name: ActivityRecordResolvedPlan})
 	env.RegisterActivityWithOptions(func(ctx context.Context, plan ResolvedPlan, digests map[string]string) (BuildRef, error) {
 		return BuildRef{}, nil
 	}, activity.RegisterOptions{Name: ActivityDispatchBuild})

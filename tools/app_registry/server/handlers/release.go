@@ -57,7 +57,15 @@ func NewReleaseServer(repo repository.Registry, temporalClient client.Client) *R
 // `all`/domain/comma-list scope syntax (that's the caller's job, done
 // before this RPC is called -- see ReleaseTargetInput's doc comment) and
 // does NOT itself resolve a version plan (FR7/FR8's "resolved once, reused
-// everywhere" happens inside ReleaseWorkflow, not here).
+// everywhere" happens inside ReleaseWorkflow, not here). Concretely: the
+// repository.ReleaseRun{} below leaves ResolvedPlan unset (nil), which
+// CreateReleaseRun writes as SQL NULL (migration 018) -- ReleaseWorkflow's
+// ResolvePlan step stamps the real value in afterward via
+// ReleaseRunRepository.SetResolvedPlan (issue #906, validation finding
+// #903: resolving synchronously in this handler was considered and
+// rejected as infeasible -- ResolvePlan shells out to `release_helper_go
+// plan` against a full monorepo checkout only available in the
+// app-registry-worker process, not this one).
 //
 // The workflow id is release.WorkflowID(targets) -- deterministic per the
 // exact batch of targets (see that function's doc comment) -- used both as

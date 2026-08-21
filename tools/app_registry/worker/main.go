@@ -166,6 +166,7 @@ func run() error {
 	w.RegisterWorkflow(release.ReleaseWorkflow)
 	w.RegisterActivityWithOptions(releaseActivities.CheckApproval, activityOptions(release.ActivityCheckApproval))
 	w.RegisterActivityWithOptions(releaseActivities.ResolvePlan, activityOptions(release.ActivityResolvePlan))
+	w.RegisterActivityWithOptions(releaseActivities.RecordResolvedPlan, activityOptions(release.ActivityRecordResolvedPlan))
 	w.RegisterActivityWithOptions(releaseActivities.DispatchBuild, activityOptions(release.ActivityDispatchBuild))
 	w.RegisterActivityWithOptions(releaseActivities.PollBuild, activityOptions(release.ActivityPollBuild))
 	w.RegisterActivityWithOptions(releaseActivities.VerifyPublished, activityOptions(release.ActivityVerifyPublished))

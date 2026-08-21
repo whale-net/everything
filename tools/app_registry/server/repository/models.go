@@ -621,8 +621,10 @@ const (
 // targets) -- see migration 016's doc comment and
 // architecture/08-release-lifecycle/04-run-log.md "The run log". NOT SCD2
 // (AGENTS.md "SCD2") -- written once by CreateReleaseRun and never mutated
-// after create, except TemporalRunID which is filled in once the workflow
-// actually starts running under TemporalWorkflowID.
+// after create, except TemporalRunID (filled in once the workflow actually
+// starts running under TemporalWorkflowID) and ResolvedPlan (filled in
+// once, by ReleaseRunRepository.SetResolvedPlan -- see that field's doc
+// comment).
 type ReleaseRun struct {
 	ReleaseRunID string
 	// TriggeredBy is the authenticated user who triggered this release
@@ -635,7 +637,16 @@ type ReleaseRun struct {
 	// means "build fresh" rather than "pinned to an empty set".
 	DigestInput []byte
 	// ResolvedPlan is the single plan resolved for this release (FR7/FR8),
-	// serialized as JSON, written once at create time and never rewritten.
+	// serialized as JSON. nil/NULL until ReleaseRunRepository.SetResolvedPlan
+	// stamps it -- CreateReleaseRun does NOT populate this itself (issue
+	// #906, validation finding #903): FR7/FR8's plan resolution
+	// (worker/release/plan.go's ResolvePlan) shells out to
+	// `release_helper_go plan` against a full monorepo checkout and only
+	// runs inside app-registry-worker's ReleaseWorkflow, after
+	// CreateReleaseRun has already committed -- see
+	// server/handlers/release.go's TriggerRelease doc comment. Written at
+	// most once (the single SetResolvedPlan call from ReleaseWorkflow's
+	// RecordResolvedPlan activity) and never rewritten again after that.
 	ResolvedPlan []byte
 	// TemporalWorkflowID is the workflow-id-based dedup key (FR5/NFR2),
 	// release.WorkflowID(targets) -- deterministic per target batch, with

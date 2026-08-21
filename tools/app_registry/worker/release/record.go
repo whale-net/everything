@@ -16,6 +16,22 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
+// RecordResolvedPlan implements ReleaseActivities.RecordResolvedPlan (issue
+// #906, validation finding #903): stamps resolvedPlan onto
+// release_run.resolved_plan for releaseRunID via
+// Registry.ReleaseRuns().SetResolvedPlan, the same direct-Postgres pattern
+// VerifyPublished/RecordTargetState use (see this file's package doc
+// comment).
+func (a *Activities) RecordResolvedPlan(ctx context.Context, releaseRunID string, resolvedPlan []byte) error {
+	if a.Registry == nil {
+		return fmt.Errorf("record resolved plan for release run %s: Activities.Registry not configured", releaseRunID)
+	}
+	if err := a.Registry.ReleaseRuns().SetResolvedPlan(ctx, releaseRunID, resolvedPlan); err != nil {
+		return fmt.Errorf("record resolved plan for release run %s: %w", releaseRunID, err)
+	}
+	return nil
+}
+
 // VerifyPublished implements ReleaseActivities.VerifyPublished (FR12):
 // for every release_run_target row under releaseRunID, confirms an
 // artifact for that target's owner+kind currently exists in the published
@@ -28,12 +44,12 @@ import (
 // published artifact exists for the target, not that its version equals
 // the exact version ResolvePlan resolved earlier in this same workflow
 // execution -- VerifyPublished's activity signature (releaseRunID only,
-// fixed by this package's scaffold) carries no version info, and
-// ReleaseRun.ResolvedPlan is written once at CreateReleaseRun time (before
-// ResolvePlan has run) with no repository method to update it afterward
-// (see repository.ReleaseRun's doc comment: "written once ... and never
-// rewritten"). Tightening this to an exact-version check is follow-up work
-// alongside plan.go's own documented library-extraction follow-up.
+// fixed by this package's scaffold) carries no version info to compare
+// against. ReleaseRun.ResolvedPlan is now readable back via
+// Registry.ReleaseRuns().GetReleaseRun once RecordResolvedPlan has stamped
+// it (issue #906), but VerifyPublished itself was not extended to use it --
+// tightening this to an exact-version check is follow-up work alongside
+// plan.go's own documented library-extraction follow-up.
 func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string) (VerifyResult, error) {
 	if a.Registry == nil {
 		return VerifyResult{}, fmt.Errorf("verify published for release run %s: Activities.Registry not configured", releaseRunID)

@@ -85,6 +85,21 @@ func (f releaseRunFake) CreateReleaseRun(ctx context.Context, run repository.Rel
 	return &created, outTargets, nil
 }
 
+// SetResolvedPlan mirrors postgres's releaseRunRepo.SetResolvedPlan (issue
+// #906, validation finding #903).
+func (f releaseRunFake) SetResolvedPlan(ctx context.Context, releaseRunID string, resolvedPlan []byte) error {
+	if len(resolvedPlan) == 0 {
+		return fmt.Errorf("%w: resolved plan must not be empty", repository.ErrInvalidArgument)
+	}
+	run, ok := f.r.state.ReleaseRuns[releaseRunID]
+	if !ok {
+		return fmt.Errorf("%w: release run %s", repository.ErrNotFound, releaseRunID)
+	}
+	run.ResolvedPlan = resolvedPlan
+	f.r.state.ReleaseRuns[releaseRunID] = run
+	return nil
+}
+
 // UpdateTargetState mirrors postgres's releaseRunRepo.UpdateTargetState --
 // same legalReleaseRunTargetTransitions table, same
 // preserve-existing-buildID-when-empty behavior.

@@ -535,7 +535,8 @@ type WritebackRepository interface {
 // (migration 016, NFR4) -- the UI-trigger-layer audit trail described in
 // migration 016's doc comment and architecture/08-release-lifecycle/
 // 04-run-log.md. NOT SCD2 (AGENTS.md "SCD2"): release_run is written once
-// and never rewritten after create (barring TemporalRunID);
+// and never rewritten after create (barring TemporalRunID and, once,
+// ResolvedPlan via SetResolvedPlan -- see issue #906);
 // release_run_target follows `artifact`'s existing mutation style --
 // UpdateTargetState mutates a row in place, it does not insert a new row
 // per transition.
@@ -558,6 +559,20 @@ type ReleaseRunRepository interface {
 	// once the prior execution is terminal) rather than forbidding it
 	// forever.
 	CreateReleaseRun(ctx context.Context, run ReleaseRun, targets []ReleaseRunTarget) (*ReleaseRun, []ReleaseRunTarget, error)
+
+	// SetResolvedPlan stamps release_run.resolved_plan for releaseRunID
+	// (issue #906, validation finding #903). CreateReleaseRun leaves
+	// resolved_plan NULL (see ReleaseRun.ResolvedPlan's doc comment for
+	// why it cannot populate it synchronously); this is the one write that
+	// fills it in, called exactly once per release_run by
+	// worker/release/workflow.go's ReleaseWorkflow (RecordResolvedPlan
+	// activity) once its ResolvePlan step has actually resolved a plan.
+	// resolvedPlan must be non-empty, valid JSON -- implementations reject
+	// an empty/nil value with ErrInvalidArgument rather than silently
+	// writing NULL back (that would defeat the "written once" contract
+	// this method exists to uphold) or, in Postgres, produce the same
+	// SQLSTATE 22P02 this issue closes.
+	SetResolvedPlan(ctx context.Context, releaseRunID string, resolvedPlan []byte) error
 
 	// UpdateTargetState transitions releaseRunTargetID to newState,
 	// stamping StateChangedAt and optionally BuildID/ErrorDetail --

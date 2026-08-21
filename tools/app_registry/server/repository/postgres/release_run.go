@@ -31,16 +31,22 @@ func scanReleaseRun(row pgx.Row) (repository.ReleaseRun, error) {
 	var rr repository.ReleaseRun
 	// digest_input is nullable (NULL means "build fresh", see migration
 	// 016's doc comment) -- scan into a *[]byte so a NULL row leaves
-	// rr.DigestInput nil rather than an empty non-nil slice.
-	var digestInput *[]byte
+	// rr.DigestInput nil rather than an empty non-nil slice. resolved_plan
+	// is nullable the same way as of migration 018 (issue #906): NULL
+	// means "not resolved yet" -- see ReleaseRun.ResolvedPlan's doc
+	// comment.
+	var digestInput, resolvedPlan *[]byte
 	if err := row.Scan(
-		&rr.ReleaseRunID, &rr.TriggeredBy, &rr.RequestedScope, &digestInput, &rr.ResolvedPlan,
+		&rr.ReleaseRunID, &rr.TriggeredBy, &rr.RequestedScope, &digestInput, &resolvedPlan,
 		&rr.TemporalWorkflowID, &rr.TemporalRunID, &rr.CreatedAt,
 	); err != nil {
 		return repository.ReleaseRun{}, err
 	}
 	if digestInput != nil {
 		rr.DigestInput = *digestInput
+	}
+	if resolvedPlan != nil {
+		rr.ResolvedPlan = *resolvedPlan
 	}
 	return rr, nil
 }
@@ -119,12 +125,29 @@ func (r *releaseRunRepo) CreateReleaseRun(ctx context.Context, run repository.Re
 	if run.DigestInput != nil {
 		digestInput = string(run.DigestInput)
 	}
+	// resolved_plan is nil-guarded into SQL NULL exactly like digestInput
+	// above (issue #906, validation finding #903): TriggerRelease
+	// deliberately does not populate run.ResolvedPlan itself (see
+	// ReleaseRun.ResolvedPlan's doc comment -- it is stamped later by
+	// SetResolvedPlan, once ReleaseWorkflow's ResolvePlan step actually
+	// resolves a plan). Without this guard, a Go nil []byte would insert
+	// as string(nil) == "", which migration 018's now-nullable
+	// resolved_plan column would happily accept as an empty string --
+	// still not valid JSON, and NULL is the correct "not yet known" value
+	// here anyway (matching digest_input's own convention). This is
+	// defense in depth: even if some future caller populates
+	// run.ResolvedPlan with an empty-but-non-nil []byte, it is treated the
+	// same as nil rather than reaching Postgres as invalid JSON.
+	var resolvedPlan any
+	if len(run.ResolvedPlan) > 0 {
+		resolvedPlan = string(run.ResolvedPlan)
+	}
 
 	row := r.ex.QueryRow(ctx, `
 		INSERT INTO release_run (triggered_by, requested_scope, digest_input, resolved_plan, temporal_workflow_id)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING `+releaseRunColumns,
-		run.TriggeredBy, run.RequestedScope, digestInput, string(run.ResolvedPlan), run.TemporalWorkflowID)
+		run.TriggeredBy, run.RequestedScope, digestInput, resolvedPlan, run.TemporalWorkflowID)
 	created, err := scanReleaseRun(row)
 	if err != nil {
 		if de, ok := translatePgError(err, fmt.Sprintf("release run for workflow %s already exists", run.TemporalWorkflowID)); ok {
@@ -151,6 +174,31 @@ func (r *releaseRunRepo) CreateReleaseRun(ctx context.Context, run repository.Re
 	}
 
 	return &created, outTargets, nil
+}
+
+// SetResolvedPlan implements repository.ReleaseRunRepository.SetResolvedPlan
+// (issue #906, validation finding #903): the single UPDATE that stamps
+// release_run.resolved_plan once ReleaseWorkflow's ResolvePlan activity has
+// actually resolved a plan -- see ReleaseRun.ResolvedPlan's doc comment for
+// why CreateReleaseRun cannot populate this itself. Naturally idempotent
+// under Temporal's at-least-once RecordResolvedPlan activity retry: writing
+// the same resolvedPlan bytes twice is a no-op change.
+func (r *releaseRunRepo) SetResolvedPlan(ctx context.Context, releaseRunID string, resolvedPlan []byte) error {
+	if len(resolvedPlan) == 0 {
+		return fmt.Errorf("%w: resolved plan must not be empty", repository.ErrInvalidArgument)
+	}
+	tag, err := r.ex.Exec(ctx, `UPDATE release_run SET resolved_plan = $1 WHERE release_run_id = $2`,
+		string(resolvedPlan), releaseRunID)
+	if err != nil {
+		if de, ok := translatePgError(err, fmt.Sprintf("resolved plan for release run %s", releaseRunID)); ok {
+			return de
+		}
+		return fmt.Errorf("set resolved plan for release run %s: %w", releaseRunID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: release run %s", repository.ErrNotFound, releaseRunID)
+	}
+	return nil
 }
 
 // UpdateTargetState implements

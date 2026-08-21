@@ -34,10 +34,27 @@ CREATE TABLE release_run (
     -- "build fresh" — this is presence/absence information, not an empty
     -- map standing in for "no input given".
     digest_input          JSONB,
-    -- resolved_plan: the single plan resolved for this release (FR7/FR8),
-    -- written once at CreateReleaseRun time and never rewritten — so no
-    -- downstream consumer (a resumed/retried step, a status query, an
-    -- audit read) ever needs to re-resolve it themselves.
+    -- resolved_plan: the single plan resolved for this release (FR7/FR8).
+    -- CORRECTION (migration 018, issue #906): this column's original NOT
+    -- NULL below is WRONG and is relaxed by 018 — do not take it at face
+    -- value; see 018's own comment for the full story. Kept as originally
+    -- written here (NOT NULL) rather than edited in place, matching this
+    -- migrate/ directory's established convention of never rewriting an
+    -- already-shipped migration file's DDL (see 017's doc comment fixing
+    -- 016's UNIQUE index the same way: a new migration, not an edit here).
+    -- In short: CreateReleaseRun does NOT populate resolved_plan itself —
+    -- plan resolution (worker/release/plan.go's ResolvePlan) shells out to
+    -- `release_helper_go plan` against a full monorepo checkout and only
+    -- runs inside app-registry-worker's ReleaseWorkflow, after
+    -- CreateReleaseRun has already committed (see
+    -- server/handlers/release.go's TriggerRelease doc comment) — so NOT
+    -- NULL with no default made every CreateReleaseRun call fail
+    -- (SQLSTATE 22P02, see issue #903). "Written once ... and never
+    -- rewritten" below is directionally still true post-018, just shifted
+    -- to "written once it is actually known" (via
+    -- ReleaseRunRepository.SetResolvedPlan) rather than "at CreateReleaseRun
+    -- time" — see repository.ReleaseRun.ResolvedPlan's doc comment for the
+    -- authoritative, current version of this story.
     resolved_plan         JSONB NOT NULL,
     -- temporal_workflow_id: the workflow-id-based dedup key (FR5/NFR2) —
     -- the actual "only one non-terminal release per target" guarantee is

@@ -65,12 +65,13 @@ const TaskQueue = writeback.TaskQueue
 // implementation it is built with under these same names (see
 // ../main.go).
 const (
-	ActivityCheckApproval     = "CheckApproval"
-	ActivityResolvePlan       = "ResolvePlan"
-	ActivityDispatchBuild     = "DispatchBuild"
-	ActivityPollBuild         = "PollBuild"
-	ActivityVerifyPublished   = "VerifyPublished"
-	ActivityRecordTargetState = "RecordTargetState"
+	ActivityCheckApproval      = "CheckApproval"
+	ActivityResolvePlan        = "ResolvePlan"
+	ActivityRecordResolvedPlan = "RecordResolvedPlan"
+	ActivityDispatchBuild      = "DispatchBuild"
+	ActivityPollBuild          = "PollBuild"
+	ActivityVerifyPublished    = "VerifyPublished"
+	ActivityRecordTargetState  = "RecordTargetState"
 )
 
 // ReleaseTarget is one target (app image or chart) in a release batch, as
@@ -184,6 +185,18 @@ type ReleaseActivities interface {
 	// version source threaded into DispatchBuild.
 	ResolvePlan(ctx context.Context, targets []ReleaseTarget) (ResolvedPlan, error)
 
+	// RecordResolvedPlan persists plan.RawJSON onto release_run.resolved_plan
+	// for releaseRunID (issue #906, validation finding #903), via
+	// repository.ReleaseRunRepository.SetResolvedPlan. Called exactly once
+	// per workflow execution, immediately after ResolvePlan succeeds --
+	// CreateReleaseRun (server/handlers/release.go's TriggerRelease) leaves
+	// resolved_plan NULL, since ResolvePlan cannot run synchronously inside
+	// that gRPC handler (it shells out to `release_helper_go plan` against
+	// a full monorepo checkout, only available in the app-registry-worker
+	// process this workflow itself runs in). This is the one write that
+	// fills it in.
+	RecordResolvedPlan(ctx context.Context, releaseRunID string, resolvedPlan []byte) error
+
 	// DispatchBuild invokes the GHA build job with plan as direct input,
 	// bypassing that workflow's own plan-release resolution for this
 	// trigger. digestOverrides carries FR2's per-target pinned-digest input
@@ -258,12 +271,16 @@ var pollBuildActivityOptions = workflow.ActivityOptions{
 }
 
 // ReleaseWorkflow carries in.ReleaseRunID's batch from trigger through
-// build, publish, and record (FR6): CheckApproval, then ResolvePlan, then
-// DispatchBuild, then PollBuild, then VerifyPublished, then
-// RecordTargetState once per target -- in that exact order, matching the
-// dispatch sequence worker/release/workflow_test.go (Testing phase) asserts
-// against. A failure at any step before RecordTargetState still causes
-// every target to be recorded failed (via the recordFailure branch below)
+// build, publish, and record (FR6): CheckApproval, then ResolvePlan (plus
+// RecordResolvedPlan, issue #906 -- see that activity's doc comment; only
+// called when ResolvePlan actually returns RawJSON, so it does not
+// interpose an extra dispatch on a test double or future ResolvePlan
+// implementation that omits it), then DispatchBuild, then PollBuild, then
+// VerifyPublished, then RecordTargetState once per target -- in that exact
+// order, matching the dispatch sequence worker/release/workflow_test.go
+// (Testing phase) asserts against. A failure at any step before
+// RecordTargetState still causes every target to be recorded failed (via
+// the recordFailure branch below)
 // rather than left stuck in whatever state ResolvePlan/DispatchBuild left
 // them in -- see issue #889's Testing scope: "a DispatchBuild failure
 // should mark targets failed, not hang or silently succeed".
@@ -296,6 +313,18 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	plan, err := resolvePlan(ctx, in.Targets)
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("resolve plan: %w", err))
+	}
+	if len(plan.RawJSON) > 0 {
+		// See RecordResolvedPlan's doc comment (issue #906): stamp the now-
+		// resolved plan onto release_run.resolved_plan before proceeding.
+		// Guarded on non-empty RawJSON rather than unconditional so a
+		// ResolvePlan implementation that legitimately returns no RawJSON
+		// (e.g. a test double) doesn't fail the workflow on a
+		// SetResolvedPlan empty-value rejection -- see that repository
+		// method's doc comment.
+		if rerr := recordResolvedPlan(ctx, in.ReleaseRunID, plan.RawJSON); rerr != nil {
+			return recordFailure(ctx, in, fmt.Errorf("record resolved plan: %w", rerr))
+		}
 	}
 
 	buildRef, err := dispatchBuild(ctx, plan, digestOverrides(in.Targets))
@@ -389,6 +418,10 @@ func resolvePlan(ctx workflow.Context, targets []ReleaseTarget) (ResolvedPlan, e
 	var plan ResolvedPlan
 	err := workflow.ExecuteActivity(ctx, ActivityResolvePlan, targets).Get(ctx, &plan)
 	return plan, err
+}
+
+func recordResolvedPlan(ctx workflow.Context, releaseRunID string, resolvedPlan []byte) error {
+	return workflow.ExecuteActivity(ctx, ActivityRecordResolvedPlan, releaseRunID, resolvedPlan).Get(ctx, nil)
 }
 
 func dispatchBuild(ctx workflow.Context, plan ResolvedPlan, digests map[string]string) (BuildRef, error) {
