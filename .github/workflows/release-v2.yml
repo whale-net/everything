@@ -1,0 +1,259 @@
+name: Release v2
+
+# SCAFFOLD (Plan #912, issue #914): this workflow is the independently-
+# evolvable v2 home for Temporal-dispatched release/build logic (FR1). It
+# is forked from release.yml's job skeleton -- job names, `needs` chains,
+# and outputs mirror release.yml's -- so `release.yml`'s other task
+# issues under this plan (build_artifact digest lookup, DispatchBuild
+# digest-override consumption, chart resolution) can land their real
+# logic straight into these jobs during Implementation without a second
+# structural rewrite. Every job body below is currently a pass-through
+# stub (`echo` + no-op) -- porting the real step bodies from release.yml
+# happens in this issue's Implementation phase, not here. See the v1->v2
+# migration checklist in tools/app_registry/PLAN.md ("App Registry v2
+# release job -- migration checklist") for which domains dispatch through
+# v1 vs v2 at any point in time.
+#
+# Isolation from v1 (release.yml), enforced by this file:
+#   - `concurrency.group` is `release-v2`, distinct from release.yml's
+#     `release` (FR2, C2) -- a v1 run and a v2 run for the same commit
+#     never cancel or block each other.
+#   - Triggers: `workflow_dispatch` here is a *machine-only* dispatch
+#     endpoint for Temporal's GitHubDispatcher.Dispatch
+#     (tools/app_registry/worker/release/github.go, which POSTs to
+#     `.../actions/workflows/<WorkflowFile>/dispatches` -- WorkflowFile
+#     is configurable and will point at `release-v2.yml` once a domain
+#     cuts over per the migration checklist). It is not a human entry
+#     point -- authorize-trigger below enforces that identically to
+#     release.yml's, once its real body lands in Implementation. This
+#     workflow declares no other trigger, so it never fires on any event
+#     release.yml itself responds to (FR3).
+
+on:
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: 'Comma-separated list of apps to release (e.g., hello_python,hello_go) or "all" for all apps, or domain name (e.g., "demo") to release all apps in a domain. Leave empty to skip app release.'
+        required: false
+        default: ''
+      version:
+        description: 'Release version (e.g., v1.0.0) - leave empty when using increment options'
+        required: false
+        default: ''
+      increment_minor:
+        description: 'Auto-increment minor version (resets patch to 0) - applies to both apps and helm charts'
+        type: boolean
+        default: false
+      increment_patch:
+        description: 'Auto-increment patch version - applies to both apps and helm charts'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run - build but do not publish'
+        type: boolean
+        default: false
+      helm_charts:
+        description: 'Helm charts to release (e.g., hello-fastapi,demo-workers) or "all" or domain name (e.g., "demo"). Leave empty to skip helm chart release.'
+        required: false
+        default: ''
+      include_demo:
+        description: 'Include demo domain when using "all" for apps or helm charts'
+        type: boolean
+        default: false
+      use_source_tools:
+        description: 'Build release tools from source instead of downloading pinned prebuilt binaries (safety valve)'
+        type: boolean
+        default: false
+      app_versions:
+        description: 'JSON object of resolved app versions from this release batch''s plan, keyed by "<domain>-<name>" (e.g. {"manmanv2-control-api":"v1.2.3"}). Set by App Registry''s Temporal-orchestrated DispatchBuild so a chart''s composed member apps that are themselves batch targets pin to the batch''s resolved version instead of an independent latest_published query. Leave empty for manual dispatch -- release-helm-charts falls back to plan-release''s own freshly-resolved versions.'
+        required: false
+        default: ''
+
+concurrency:
+  group: release-v2
+  cancel-in-progress: false
+
+env:
+  APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
+
+jobs:
+  # Job skeleton mirrors release.yml's (FR1). Every job below is a
+  # pass-through stub -- see the file-level comment above. Real bodies,
+  # including the machine-only-dispatch enforcement this job's name
+  # promises, land in this issue's Implementation phase.
+  authorize-trigger:
+    name: Authorize Trigger (stub -- Implementation lands machine-only check)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stub
+        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+
+  build-release-tools:
+    name: Build Release Tools
+    runs-on: ubuntu-latest
+    needs: [authorize-trigger]
+    if: needs.authorize-trigger.result == 'success'
+    outputs:
+      needs_build: ${{ steps.stub.outputs.needs_build }}
+      source: ${{ steps.stub.outputs.source }}
+      release_helper_version: ${{ steps.stub.outputs.release_helper_version }}
+      app_registry_version: ${{ steps.stub.outputs.app_registry_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Shared composite action, referenced (not forked) per FR4.
+      - name: App Registry Auth
+        if: inputs.use_source_tools != true
+        continue-on-error: true
+        uses: ./.github/actions/app-registry-auth
+        with:
+          address: ${{ vars.APP_REGISTRY_ADDRESS }}
+          token-url: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      - name: Stub
+        id: stub
+        run: |
+          echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+          echo "needs_build=false" >> "$GITHUB_OUTPUT"
+          echo "source=published" >> "$GITHUB_OUTPUT"
+
+  plan-release:
+    name: Plan Release
+    runs-on: ubuntu-latest
+    needs: [authorize-trigger, build-release-tools]
+    if: needs.authorize-trigger.result == 'success'
+    outputs:
+      release-matrix: ${{ steps.stub.outputs.matrix }}
+      version: ${{ steps.stub.outputs.version }}
+      apps: ${{ steps.stub.outputs.apps }}
+      chart-matrix: ${{ steps.stub.outputs.chart_matrix }}
+      charts: ${{ steps.stub.outputs.charts }}
+      openapi-matrix: ${{ steps.stub.outputs.openapi_matrix }}
+      has-specs: ${{ steps.stub.outputs.has_specs }}
+      build-id: ${{ steps.stub.outputs.build_id }}
+      versions: ${{ steps.stub.outputs.versions }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Shared composite action, referenced (not forked) per FR4.
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+
+      - name: Stub
+        id: stub
+        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+
+  build-openapi-specs:
+    name: Build OpenAPI Specs
+    runs-on: ubuntu-latest
+    needs: [authorize-trigger, plan-release, build-release-tools]
+    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.has-specs == 'true' && inputs.dry_run == false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Stub
+        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+
+  release:
+    name: Release Applications
+    runs-on: ubuntu-latest
+    needs: [authorize-trigger, plan-release, build-release-tools]
+    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Shared composite action, referenced (not forked) per FR4.
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+
+      - name: Stub
+        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+
+  release-helm-charts:
+    name: Release Helm Charts
+    needs: [authorize-trigger, plan-release, release, build-release-tools]
+    if: needs.authorize-trigger.result == 'success' && inputs.helm_charts != '' && (always() && !cancelled())
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Shared composite action, referenced (not forked) per FR4.
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+
+      - name: Stub
+        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+
+  create-github-releases:
+    name: Create GitHub Releases
+    runs-on: ubuntu-latest
+    needs: [authorize-trigger, plan-release, release, release-helm-charts, build-openapi-specs, build-release-tools]
+    if: needs.authorize-trigger.result == 'success' && always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && inputs.dry_run == false && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.release-helm-charts.result == 'success' || needs.release-helm-charts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Shared composite action, referenced (not forked) per FR4.
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+
+      - name: Stub
+        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+
+  release-summary:
+    name: Release Summary
+    runs-on: ubuntu-latest
+    needs: [authorize-trigger, plan-release, release, release-helm-charts, create-github-releases, build-release-tools]
+    if: needs.authorize-trigger.result == 'success' && always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Stub
+        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"

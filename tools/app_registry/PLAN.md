@@ -174,6 +174,28 @@ picking this up cold, read those three before starting anything.
   out-of-scope list notes the CLI is kept thin specifically so a UI can be
   added without reimplementing rules server-side.
 
+## App Registry v2 release job — migration checklist
+
+Informal tracker for [plan #912](https://github.com/whale-net/everything/issues/912)'s
+FR5: which domains dispatch releases through `.github/workflows/release.yml`
+(v1) vs `.github/workflows/release-v2.yml` (v2). No schema or tooling —
+a human updates this table as a domain's Temporal `GitHubDispatcher`
+config (`WorkflowFile`, `tools/app_registry/worker/release/github.go`) is
+repointed at `release-v2.yml`. Not a gate on #912's FR7 retirement; kept
+only for visibility during v2's build-out. `release-v2.yml` is scaffold-only
+(job stubs) as of this table's last update — no domain can cut over until
+its Implementation phase lands the real job bodies.
+
+| Domain | Dispatch target | Notes |
+|---|---|---|
+| `demo` | v1 (`release.yml`) | Not yet migrated |
+| `manman` | v1 (`release.yml`) | Not yet migrated |
+| `manmanv2` | v1 (`release.yml`) | Not yet migrated |
+| `friendly_computing_machine` | v1 (`release.yml`) | Not yet migrated |
+| `leaflab` | v1 (`release.yml`) | Not yet migrated |
+| `firmware` | v1 (`release.yml`) | Not yet migrated |
+| `tools` (release tooling itself) | v1 (`release.yml`) | Not yet migrated |
+
 ## Sequencing rationale
 
 Promotion tracking is additive and low-risk; replacing git-tag version

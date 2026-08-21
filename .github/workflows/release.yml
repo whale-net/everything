@@ -43,6 +43,21 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# App Registry v2 release job (Plan #912, issue #914): this file (v1) is
+# now FROZEN TO BUG FIXES ONLY for the duration of plan #912. New
+# Temporal-dispatched release/build logic (FR1-6: build_artifact digest
+# lookup, DispatchBuild digest-override consumption, chart resolution)
+# lands in .github/workflows/release-v2.yml instead -- release-v2.yml is
+# an independently-evolvable fork of this file's job skeleton, isolated
+# by its own `concurrency: group: release-v2` and machine-only
+# `workflow_dispatch` trigger so the two workflows never conflict for the
+# same commit. This freeze lasts until #912's retirement task (FR7)
+# removes this file; track that issue for the actual retirement date.
+# Composite actions this file references (./.github/actions/*) remain
+# shared with release-v2.yml and are NOT forked -- changes there still
+# affect both workflows. See tools/app_registry/PLAN.md's "App Registry
+# v2 release job -- migration checklist" for per-domain v1/v2 status.
+
 env:
   APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
 
