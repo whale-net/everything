@@ -33,13 +33,13 @@ const helmChartMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(pr
 // helmChartMetadataQuery mirrors appMetadataQuery: excludes testonly chart
 // fixtures from release discovery. No such fixture exists yet, but the
 // exclusion costs nothing and keeps the two discovery paths symmetric.
-const helmChartMetadataQuery = "kind(helm_chart_metadata, //...) except attr(testonly, 1, //...)"
+var helmChartMetadataQuery = fmt.Sprintf("kind(helm_chart_metadata, %s) except attr(testonly, 1, %s)", discoveryPackagesPattern, discoveryPackagesPattern)
 
 // ListAllHelmCharts mirrors ListAllApps: a loading-phase query lists targets
 // so cquery analysis can be scoped, keeping discovery robust to unrelated
 // analysis failures elsewhere in `//...`.
 func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, _ string) ([]HelmChartMetadata, error) {
-	labelsOut, err := bazel.Run("query", helmChartMetadataQuery, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
+	labelsOut, err := bazel.Run("query", helmChartMetadataQuery, discoveryUniverseScope, "--noimplicit_deps", "--nodep_deps", "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query helm_chart_metadata: %w", err)
 	}

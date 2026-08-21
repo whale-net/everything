@@ -151,3 +151,24 @@ func TestListAllAppsExcludesTestOnly(t *testing.T) {
 		t.Fatalf("unexpected result: %v", result)
 	}
 }
+
+func TestListAllAppsUniverseScopeNarrowed(t *testing.T) {
+	bazel := newFakeBazel(
+		fakeBazelCall{
+			argsContain:    []string{"query", discoveryUniverseScope, "except attr(testonly, 1"},
+			argsNotContain: []string{"cquery", "//generated/..."},
+			output:         "//demo/hello_go:hello-go_metadata",
+		},
+		fakeBazelCall{argsContain: []string{"cquery"}, output: "@@//demo/hello_go:hello-go_metadata\t" +
+			`{"name":"hello-go","domain":"demo"}`},
+	)
+
+	result, err := ListAllApps(bazel, newFakeFS(), fakeWorkspaceRoot)
+	if err != nil {
+		t.Fatalf("ListAllApps failed: %v", err)
+	}
+	if len(result) != 1 || result[0].Name != "hello-go" {
+		t.Fatalf("unexpected result: %v", result)
+	}
+}
+
