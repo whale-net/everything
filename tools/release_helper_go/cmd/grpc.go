@@ -218,6 +218,7 @@ func (f *FakeAppRegistryClient) ListReconcileRuns(ctx context.Context, in *pb.Li
 // FakeArtifactRegistryClient is an in-memory test implementation of pb.ArtifactRegistryClient.
 type FakeArtifactRegistryClient struct {
 	RecordBuildFn           func(ctx context.Context, in *pb.RecordBuildRequest, opts ...grpc.CallOption) (*pb.RecordBuildResponse, error)
+	RecordBuildLogFn        func(ctx context.Context, in *pb.RecordBuildLogRequest, opts ...grpc.CallOption) (*pb.RecordBuildLogResponse, error)
 	RecordArtifactFn        func(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error)
 	BeginPublishFn          func(ctx context.Context, in *pb.BeginPublishRequest, opts ...grpc.CallOption) (*pb.BeginPublishResponse, error)
 	FailPublishFn           func(ctx context.Context, in *pb.FailPublishRequest, opts ...grpc.CallOption) (*pb.FailPublishResponse, error)
@@ -233,6 +234,7 @@ type FakeArtifactRegistryClient struct {
 	CheckChartHermeticityFn func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error)
 
 	RecordBuildCalls           []*pb.RecordBuildRequest
+	RecordBuildLogCalls        []*pb.RecordBuildLogRequest
 	RecordArtifactCalls        []*pb.RecordArtifactRequest
 	BeginPublishCalls          []*pb.BeginPublishRequest
 	FailPublishCalls           []*pb.FailPublishRequest
@@ -259,6 +261,21 @@ func (f *FakeArtifactRegistryClient) RecordBuild(ctx context.Context, in *pb.Rec
 		return f.RecordBuildFn(ctx, in, opts...)
 	}
 	return &pb.RecordBuildResponse{Build: &pb.Build{BuildId: "test-build-id", GitSha: in.GitSha}}, nil
+}
+
+// RecordBuildLog implements FR8 (issue #923)'s fake, mirroring RecordBuild
+// above -- most callers of this fake never invoke it (it is
+// release_helper_go's `apps record-build-log`-adjacent CLI path in
+// tools/app_registry/cli, not release_helper_go itself, that calls the
+// real RPC), but ArtifactRegistryClient's interface requires every method,
+// so a zero-value-returning fake keeps every other test in this package
+// compiling unchanged.
+func (f *FakeArtifactRegistryClient) RecordBuildLog(ctx context.Context, in *pb.RecordBuildLogRequest, opts ...grpc.CallOption) (*pb.RecordBuildLogResponse, error) {
+	f.RecordBuildLogCalls = append(f.RecordBuildLogCalls, in)
+	if f.RecordBuildLogFn != nil {
+		return f.RecordBuildLogFn(ctx, in, opts...)
+	}
+	return &pb.RecordBuildLogResponse{AppBuildLog: &pb.AppBuildLog{AppBuildLogId: "test-app-build-log-id", OwnerFullName: in.OwnerFullName, Kind: in.Kind, GitSha: in.GitSha, BuildId: in.BuildId}}, nil
 }
 
 func (f *FakeArtifactRegistryClient) RecordArtifact(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error) {

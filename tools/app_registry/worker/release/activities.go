@@ -19,7 +19,10 @@ type Activities struct {
 	// Registry is the direct Postgres-backed repository.Registry
 	// VerifyPublished/RecordTargetState read/write through -- see record.go's
 	// package doc comment for why this bypasses the gRPC API (which has no
-	// mutating RPC for release_run_target). Required for those two methods.
+	// mutating RPC for release_run_target). Required for those two methods,
+	// and also for DispatchBuild's FR9-FR11 app_build_log ref resolution
+	// (buildref.go's resolveDispatchRef) -- the same direct-Postgres
+	// rationale applies: AppBuildLogs() has no read RPC either.
 	Registry repository.Registry
 
 	// GitHub dispatches/polls the GitHub Actions build job. Required for
@@ -69,21 +72,26 @@ var _ ReleaseActivities = (*Activities)(nil)
 // before calling GitHub, and having a retried DispatchBuild read it back
 // first) is documented follow-up, not implemented here.
 //
-// TODO(#923, Implementation): FR9-FR11 -- resolve app_build_log's current
-// row for this batch's targets (buildref.go's resolveBuildRef, using
-// a.Registry) and thread the result into a.GitHub.Dispatch's `ref`
-// (GitHubDispatcherConfig.Ref is currently a static field defaulting to
-// "main" -- see github.go). Not wired in during Scaffold (issue #923);
-// deferred to Implementation pending the per-Dispatch()-call-parameter-
-// vs-static-field design decision FR11 calls out. This only applies to
-// release-v2.yml dispatches (FR11 note: release.yml's v1 dispatch path is
-// explicitly out of scope for this task).
+// FR9-FR11 (issue #923): resolves app_build_log's current row for this
+// batch's targets (buildref.go's resolveDispatchRef/resolveBuildRef,
+// using a.Registry) and threads the result into a.GitHub.Dispatch's `ref`
+// -- Dispatch's ref became a per-call parameter (see github.go's Dispatch
+// doc comment), falling back to the still-required
+// GitHubDispatcherConfig.Ref (default "main") whenever no target has a
+// current app_build_log row (FR10). This only applies to whatever
+// workflow a.GitHub.Config.WorkflowFile is configured to dispatch (in
+// practice release-v2.yml for this worker's deployment -- FR11 note:
+// release.yml's v1 dispatch path/trigger is untouched by this task and is
+// not driven through this worker).
 func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, digestOverrides map[string]string) (BuildRef, error) {
 	if len(digestOverrides) > 0 {
 		return BuildRef{}, fmt.Errorf("dispatch build: digest overrides (FR2 hotfix/re-release input) not implemented yet -- see issue #889's Implementation scope")
 	}
 	if a.GitHub == nil {
 		return BuildRef{}, fmt.Errorf("dispatch build: GitHub dispatcher not configured")
+	}
+	if a.Registry == nil {
+		return BuildRef{}, fmt.Errorf("dispatch build: registry not configured (required for FR9-FR11 app_build_log ref resolution)")
 	}
 	if len(plan.Versions) == 0 {
 		return BuildRef{}, fmt.Errorf("dispatch build: resolved plan has no versions")
@@ -116,7 +124,12 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 		inputs["app_versions"] = appVersions
 	}
 
-	ref, err := a.GitHub.Dispatch(ctx, plan.ReleaseRunID, inputs)
+	dispatchRef, err := resolveDispatchRef(ctx, a.Registry, plan.Versions, a.GitHub.Config.Ref)
+	if err != nil {
+		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
+	}
+
+	ref, err := a.GitHub.Dispatch(ctx, plan.ReleaseRunID, inputs, dispatchRef)
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
 	}

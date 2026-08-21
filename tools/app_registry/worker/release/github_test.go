@@ -75,7 +75,7 @@ func TestGitHubDispatcher_Dispatch_FindsCreatedRun(t *testing.T) {
 	})
 
 	d := newTestDispatcher(t, mux)
-	ref, err := d.Dispatch(context.Background(), "release-run-1", map[string]string{"version": "v1.2.3", "apps": "demo-widget"})
+	ref, err := d.Dispatch(context.Background(), "release-run-1", map[string]string{"version": "v1.2.3", "apps": "demo-widget"}, "")
 	require.NoError(t, err)
 	require.Equal(t, "42", ref.RunID)
 	require.Equal(t, "release-run-1", ref.ReleaseRunID)
@@ -100,7 +100,7 @@ func TestGitHubDispatcher_Dispatch_NoRunFound_Errors(t *testing.T) {
 	})
 
 	d := newTestDispatcher(t, mux)
-	_, err := d.Dispatch(context.Background(), "release-run-1", map[string]string{"version": "v1.2.3"})
+	_, err := d.Dispatch(context.Background(), "release-run-1", map[string]string{"version": "v1.2.3"}, "")
 	require.Error(t, err)
 }
 

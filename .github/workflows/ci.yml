@@ -74,13 +74,42 @@ jobs:
         git-sha: ${{ github.sha }}
         idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-reconcile
 
-    # TODO(#923, Implementation): after the reconcile step above, call
-    # `app-registry apps record-build-log` (tools/app_registry/cli/cmd/
-    # build_log.go -- currently a stub, no RPC yet) once per discovered
-    # app/chart for this push, unconditionally (FR8). build-id comes from
-    # a single RecordBuild RPC call per push/workflow-run (not per app --
-    # see migration 019's doc comment), made once here rather than inside
-    # this loop.
+    # FR8 (issue #923): unconditional per-app/chart build log, one row per
+    # discovered app/chart, EVERY push -- no digest-diff or content gating
+    # (that is `apps reconcile`'s job above, not this one). This is what
+    # lets a v2 release-trigger-time GitHubDispatcher.Dispatch resolve a
+    # commit ci.yml has actually reconciled for a target, instead of the
+    # literal `main` branch pointer (see buildref.go's resolveBuildRef and
+    # migration 019's doc comment).
+    - name: Record build (App Registry, watermark for release ref resolution)
+      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      id: record-build
+      shell: bash
+      run: |
+        set -euo pipefail
+        RESP="$("$APP_REGISTRY_CLI" builds record \
+          --git-sha "${{ github.sha }}" \
+          --git-ref "${{ github.ref }}" \
+          --workflow-run-id "${{ github.run_id }}" \
+          --workflow-attempt "${{ github.run_attempt }}" \
+          --actor "${{ github.actor }}" \
+          --idempotency-key "${{ github.run_id }}-${{ github.run_attempt }}-buildlog")"
+        BUILD_ID="$(echo "$RESP" | jq -r '.build.buildId // .build.build_id')"
+        if [[ -z "$BUILD_ID" || "$BUILD_ID" == "null" ]]; then
+          echo "::error::builds record did not return a build_id: $RESP"
+          exit 1
+        fi
+        echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
+
+    - name: Record app_build_log for every discovered app/chart (App Registry, FR8)
+      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+      timeout-minutes: 5
+      shell: bash
+      run: |
+        "$APP_REGISTRY_CLI" apps record-build-log \
+          --from-plan "$RUNNER_TEMP/manifest-set.json" \
+          --build-id "${{ steps.record-build.outputs.build_id }}" \
+          --idempotency-key "${{ github.run_id }}-${{ github.run_attempt }}-buildlog"
 
   # # Build job - commented out in favor of merged build+test job below
   # # Uncomment and remove build step from test job to restore separate build/test parallelism

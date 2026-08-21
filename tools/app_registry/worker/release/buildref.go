@@ -1,16 +1,13 @@
-// buildref.go implements FR9/FR10's watermark-free release ref resolution
-// read-side call site skeleton (issue #923, Scaffold phase): given a
-// release target, resolve app_build_log's current-pointer row
+// buildref.go implements FR9/FR10's watermark-free release ref resolution:
+// given a release target, resolve app_build_log's current-pointer row
 // (repository.AppBuildLogRepository.GetCurrentBuildLog) to a commit SHA,
 // falling back to a literal branch name when no current row exists yet.
 //
-// NOT YET WIRED into DispatchBuild/GitHubDispatcher.Dispatch's `ref`
-// parameter (see github.go's GitHubDispatcherConfig.Ref, currently a
-// static field defaulting to "main") -- that thread-through, including the
-// per-Dispatch()-call-parameter-vs-static-field design decision FR11
-// calls out, is Implementation-phase work for issue #923. This file is the
-// read-side skeleton Scaffold adds; activities.go's DispatchBuild has a
-// TODO marking where it will be called from.
+// Wired into DispatchBuild via resolveDispatchRef below, which threads the
+// result into GitHubDispatcher.Dispatch's `ref` parameter (FR11, issue
+// #923's design decision: Dispatch's ref became a per-call parameter,
+// falling back to the still-required GitHubDispatcherConfig.Ref when
+// empty -- see github.go's Dispatch doc comment for the full rationale).
 package release
 
 import (
@@ -49,6 +46,46 @@ func resolveBuildRef(ctx context.Context, reg repository.Registry, ownerFullName
 // resolution (postgres/app.go), but read-only and against
 // AppRepository.GetAppByFullName/GetChartByFullName rather than a
 // reconcile write.
+// resolveDispatchRef implements FR9-FR11 for a whole DispatchBuild batch:
+// resolves each target's build ref (resolveBuildRef, FR9/FR10, using
+// fallbackRef for any target with no current app_build_log row), then
+// requires the batch to agree on a single ref before returning it.
+//
+// The GitHub Actions workflow_dispatch API accepts exactly one `ref` per
+// call, not a per-target map, so a batch with genuinely divergent
+// per-target resolved refs cannot be dispatched atomically against all of
+// them at once -- this mirrors uniformVersion's existing version-
+// uniformity limitation (github.go's package doc comment,
+// "DispatchBuild's version-uniformity limitation") for the identical
+// underlying reason. A divergent batch is rejected with a clear error
+// rather than silently picking one ref and building the rest from the
+// wrong commit -- accepted follow-up, same limitation class as
+// uniformVersion, not fixed by this task.
+func resolveDispatchRef(ctx context.Context, reg repository.Registry, versions map[string]string, fallbackRef string) (string, error) {
+	var resolved string
+	for key := range versions {
+		kind, owner, ok := parseTargetKey(key)
+		if !ok {
+			return "", fmt.Errorf("resolve dispatch ref: malformed resolved-plan target key %q", key)
+		}
+		ref, err := resolveBuildRef(ctx, reg, owner, kind, fallbackRef)
+		if err != nil {
+			return "", err
+		}
+		if resolved == "" {
+			resolved = ref
+			continue
+		}
+		if ref != resolved {
+			return "", fmt.Errorf("resolve dispatch ref: resolved plan has heterogeneous build refs (%q vs %q) across targets -- DispatchBuild requires a single uniform ref across the batch, mirroring uniformVersion's limitation (see github.go's package doc comment)", resolved, ref)
+		}
+	}
+	if resolved == "" {
+		return "", fmt.Errorf("resolve dispatch ref: resolved plan has no versions")
+	}
+	return resolved, nil
+}
+
 func resolveBuildLogOwnerID(ctx context.Context, reg repository.Registry, ownerFullName string, kind repository.ArtifactKind) (string, error) {
 	switch kind {
 	case repository.ArtifactKindImage:
