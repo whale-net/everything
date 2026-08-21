@@ -1,18 +1,18 @@
 name: Release v2
 
-# SCAFFOLD (Plan #912, issue #914): this workflow is the independently-
-# evolvable v2 home for Temporal-dispatched release/build logic (FR1). It
-# is forked from release.yml's job skeleton -- job names, `needs` chains,
-# and outputs mirror release.yml's -- so `release.yml`'s other task
-# issues under this plan (build_artifact digest lookup, DispatchBuild
+# App Registry v2 release job (Plan #912, issue #914): this workflow is
+# the independently-evolvable v2 home for Temporal-dispatched release/
+# build logic (FR1). It was forked from release.yml's job skeleton --
+# job names, `needs` chains, and outputs mirror release.yml's -- so this
+# plan's other task issues (build_artifact digest lookup, DispatchBuild
 # digest-override consumption, chart resolution) can land their real
-# logic straight into these jobs during Implementation without a second
-# structural rewrite. Every job body below is currently a pass-through
-# stub (`echo` + no-op) -- porting the real step bodies from release.yml
-# happens in this issue's Implementation phase, not here. See the v1->v2
-# migration checklist in tools/app_registry/PLAN.md ("App Registry v2
-# release job -- migration checklist") for which domains dispatch through
-# v1 vs v2 at any point in time.
+# logic straight into these jobs without a second structural rewrite.
+# Job bodies below are ported from release.yml (Implementation phase of
+# #914); shared composite actions (./.github/actions/*) are referenced
+# unchanged, not forked (FR4). See the v1->v2 migration checklist in
+# tools/app_registry/PLAN.md ("App Registry v2 release job -- migration
+# checklist") for which domains dispatch through v1 vs v2 at any point
+# in time.
 #
 # Isolation from v1 (release.yml), enforced by this file:
 #   - `concurrency.group` is `release-v2`, distinct from release.yml's
@@ -25,9 +25,10 @@ name: Release v2
 #     is configurable and will point at `release-v2.yml` once a domain
 #     cuts over per the migration checklist). It is not a human entry
 #     point -- authorize-trigger below enforces that identically to
-#     release.yml's, once its real body lands in Implementation. This
-#     workflow declares no other trigger, so it never fires on any event
-#     release.yml itself responds to (FR3).
+#     release.yml's `authorize-trigger` job (bot-identity check on
+#     `github.triggering_actor`). This workflow declares no other
+#     trigger, so it never fires on any event release.yml itself
+#     responds to (FR3).
 
 on:
   workflow_dispatch:
@@ -77,34 +78,44 @@ env:
   APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
 
 jobs:
-  # Job skeleton mirrors release.yml's (FR1). Every job below is a
-  # pass-through stub -- see the file-level comment above. Real bodies,
-  # including the machine-only-dispatch enforcement this job's name
-  # promises, land in this issue's Implementation phase.
+  # Job skeleton mirrors release.yml's (FR1). Machine-only dispatch is
+  # enforced identically to release.yml's authorize-trigger job (bot-
+  # identity check on github.triggering_actor) -- release-v2.yml never
+  # exposes a human-usable workflow_dispatch entry point either.
   authorize-trigger:
-    name: Authorize Trigger (stub -- Implementation lands machine-only check)
+    name: Authorize Trigger (machine-only)
     runs-on: ubuntu-latest
     steps:
-      - name: Stub
-        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+      - name: Require App-Registry-driven (machine) dispatch
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          if [[ "$TRIGGERING_ACTOR" != *"[bot]" ]]; then
+            echo "::error::release-v2.yml's workflow_dispatch is not a human entry point (App Registry v2 cutover). Trigger releases from the App Registry UI instead. (triggering_actor=$TRIGGERING_ACTOR)"
+            exit 1
+          fi
+          echo "Authorized machine-triggered dispatch (triggering_actor=$TRIGGERING_ACTOR)"
 
+  # Probe for prebuilt release tools or build from source if missing / requested.
+  # When prebuilt releases exist and use_source_tools is false, this job completes in seconds.
+  # If prebuilt releases do not exist or use_source_tools is true, this builds the tools ONCE
+  # via Bazel and uploads them as a workflow artifact for all downstream jobs to reuse.
   build-release-tools:
     name: Build Release Tools
     runs-on: ubuntu-latest
     needs: [authorize-trigger]
     if: needs.authorize-trigger.result == 'success'
     outputs:
-      needs_build: ${{ steps.stub.outputs.needs_build }}
-      source: ${{ steps.stub.outputs.source }}
-      release_helper_version: ${{ steps.stub.outputs.release_helper_version }}
-      app_registry_version: ${{ steps.stub.outputs.app_registry_version }}
+      needs_build: ${{ steps.probe.outputs.needs_build }}
+      source: ${{ steps.probe.outputs.source }}
+      release_helper_version: ${{ steps.probe.outputs.release_helper_version }}
+      app_registry_version: ${{ steps.probe.outputs.app_registry_version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Shared composite action, referenced (not forked) per FR4.
       - name: App Registry Auth
-        if: inputs.use_source_tools != true
+        if: inputs.use_source_tools != true && github.event.inputs.use_source_tools != 'true'
         continue-on-error: true
         uses: ./.github/actions/app-registry-auth
         with:
@@ -113,12 +124,228 @@ jobs:
           client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
 
-      - name: Stub
-        id: stub
+      - name: Check prebuilt tool availability
+        id: probe
+        env:
+          USE_SOURCE: ${{ inputs.use_source_tools == true || github.event.inputs.use_source_tools == 'true' }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_ENV: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
         run: |
-          echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
-          echo "needs_build=false" >> "$GITHUB_OUTPUT"
-          echo "source=published" >> "$GITHUB_OUTPUT"
+          if [[ "$USE_SOURCE" == "true" ]]; then
+            echo "Explicit use_source_tools requested. Building from source."
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+            echo "source=artifact" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Release Tools Acquisition"
+              echo "**Acquisition Mode:** 🛠️ Source Build (\`use_source_tools: true\` requested)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "Resolving release tooling versions from App Registry (env=$TARGET_ENV)..."
+
+          GRPCURL_VERSION="1.9.3"
+          grpcurl_checksum() {
+            case "$1" in
+              linux_x86_64) echo "a926b62a85787ccf73ef8736b3ae554f1242e39d92bb8767a79d6dd23b11d1d5" ;;
+              linux_arm64)  echo "b20a00c1cb82ab81ec32696766d4076e99b4cb5ca0823a71767ba64dbea0f263" ;;
+              osx_x86_64)   echo "246a6669e58c282dcaf0e9dcb06dd1c8681833d59df24eb83d3123ec64c2d2e5" ;;
+              osx_arm64)    echo "d8391485e99a728a3a4e82af3fd621f9fdea0c417a74e5122803ad20b207b623" ;;
+              *) return 1 ;;
+            esac
+          }
+
+          install_grpcurl() {
+            if command -v grpcurl >/dev/null 2>&1; then
+              GRPCURL_BIN="$(command -v grpcurl)"
+              return 0
+            fi
+            local cache_root="${RUNNER_TOOL_CACHE:-${RUNNER_TEMP:-/tmp}}/grpcurl/${GRPCURL_VERSION}"
+            local cached_bin="$cache_root/grpcurl"
+            if [[ -x "$cached_bin" ]]; then
+              GRPCURL_BIN="$cached_bin"
+              return 0
+            fi
+            local host_os host_arch key
+            host_os="$(uname -s)"
+            host_arch="$(uname -m)"
+            [[ "$host_os" == "Linux" ]] && host_os="linux" || host_os="osx"
+            [[ "$host_arch" == "x86_64" || "$host_arch" == "amd64" ]] && host_arch="x86_64" || host_arch="arm64"
+            key="${host_os}_${host_arch}"
+            if ! expected_sha="$(grpcurl_checksum "$key")"; then
+              return 1
+            fi
+            local tmp_dl
+            tmp_dl="$(mktemp -d)"
+            local url="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_${key}.tar.gz"
+            if ! curl -sSL -m 30 -o "$tmp_dl/grpcurl.tar.gz" "$url"; then
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+            local actual_sha
+            actual_sha="$(sha256sum "$tmp_dl/grpcurl.tar.gz" | awk '{print $1}')"
+            if [[ "$actual_sha" != "$expected_sha" ]]; then
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+            if ! tar -xzf "$tmp_dl/grpcurl.tar.gz" -C "$tmp_dl" grpcurl; then
+              rm -rf "$tmp_dl"
+              return 1
+            fi
+            mkdir -p "$cache_root"
+            cp "$tmp_dl/grpcurl" "$cached_bin"
+            chmod +x "$cached_bin"
+            rm -rf "$tmp_dl"
+            GRPCURL_BIN="$cached_bin"
+            return 0
+          }
+
+          resolve_registry_version() {
+            local app_full_name="$1"
+            local grpc_target="$APP_REGISTRY_ADDRESS"
+            grpc_target="${grpc_target#https://}"
+            grpc_target="${grpc_target#http://}"
+
+            local use_tls=false
+            if [[ "$APP_REGISTRY_ADDRESS" == https://* || "$APP_REGISTRY_ADDRESS" == *:443* ]]; then
+              use_tls=true
+            fi
+            if [[ -n "${GRPC_USE_TLS:-}" ]]; then
+              [[ "$GRPC_USE_TLS" == "true" ]] && use_tls=true || use_tls=false
+            fi
+            local -a tls_opt=()
+            [[ "$use_tls" == "false" ]] && tls_opt=(-plaintext)
+
+            local -a auth_opt=()
+            if [[ -n "$REGISTRY_TOKEN" ]]; then
+              auth_opt=(-H "authorization: Bearer $REGISTRY_TOKEN")
+            fi
+
+            local get_app_json app_id
+            get_app_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
+              -d "{\"full_name\":\"${app_full_name}\"}" \
+              "$grpc_target" appregistry.v1.AppRegistry/GetApp 2>/dev/null)" || true
+            app_id="$(echo "$get_app_json" | jq -r '.app.appId // .app.app_id // empty' 2>/dev/null)" || true
+            if [[ -z "$app_id" ]]; then
+              return 1
+            fi
+
+            local env_state_json version
+            env_state_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
+              -d "{\"environment_key\":\"${TARGET_ENV}\"}" \
+              "$grpc_target" appregistry.v1.PromotionRegistry/GetEnvironmentState 2>/dev/null)" || true
+            if [[ -z "$env_state_json" ]]; then
+              return 1
+            fi
+
+            version="$(echo "$env_state_json" | jq -r --arg app_id "$app_id" '
+              [.entries[]?
+                | select((.artifact.appId // .artifact.app_id) == $app_id)
+                | select((.artifact.kind // "") == "ARTIFACT_KIND_BINARY")
+              ][0].artifact.version // empty
+            ' 2>/dev/null)" || true
+            if [[ -z "$version" || "$version" == "null" ]]; then
+              return 1
+            fi
+
+            echo "$version"
+            return 0
+          }
+
+          REGISTRY_TOKEN=""
+          if [[ -n "${GRPC_AUTH_TOKEN_URL:-}" && -n "${GRPC_AUTH_CLIENT_ID:-}" && -n "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
+            if token_json=$(curl -sS -m 15 -X POST "$GRPC_AUTH_TOKEN_URL" \
+                  -d grant_type=client_credentials \
+                  -d client_id="$GRPC_AUTH_CLIENT_ID" \
+                  -d client_secret="$GRPC_AUTH_CLIENT_SECRET" 2>/dev/null); then
+              REGISTRY_TOKEN="$(echo "$token_json" | jq -r '.access_token // empty' 2>/dev/null)" || REGISTRY_TOKEN=""
+            fi
+          fi
+
+          RH_VER=""
+          AR_VER=""
+          if [[ -n "${APP_REGISTRY_ADDRESS:-}" ]] && install_grpcurl; then
+            RH_VER="$(resolve_registry_version "tools-release_helper_go" || true)"
+            AR_VER="$(resolve_registry_version "tools-app-registry" || resolve_registry_version "tools-app_registry_cli" || true)"
+          fi
+
+          echo "Resolved release tooling versions from App Registry (env=$TARGET_ENV):"
+          echo "  release_helper_go: ${RH_VER:-<not resolved>}"
+          echo "  app_registry_cli:  ${AR_VER:-<not resolved>}"
+          echo "release_helper_version=$RH_VER" >> "$GITHUB_OUTPUT"
+          echo "app_registry_version=$AR_VER" >> "$GITHUB_OUTPUT"
+
+          RH_EXISTS=false
+          AR_EXISTS=false
+          if [[ -n "$RH_VER" ]] && (gh release view "tools-release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1); then
+            RH_EXISTS=true
+            echo "✓ Found prebuilt release_helper_go (${RH_VER}) on GitHub Releases"
+          else
+            echo "✗ Prebuilt release_helper_go (${RH_VER:-<unset>}) not found on GitHub Releases"
+          fi
+          if [[ -n "$AR_VER" ]] && (gh release view "tools-app-registry.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "tools-app_registry_cli.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "app-registry.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1); then
+            AR_EXISTS=true
+            echo "✓ Found prebuilt app_registry_cli (${AR_VER}) on GitHub Releases"
+          else
+            echo "✗ Prebuilt app_registry_cli (${AR_VER:-<unset>}) not found on GitHub Releases"
+          fi
+
+          if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
+            echo "Prebuilt release tools exist on GitHub Releases (release_helper_go: $RH_VER, app_registry_cli: $AR_VER). Downstream jobs will download prebuilt binaries directly."
+            echo "needs_build=false" >> "$GITHUB_OUTPUT"
+            echo "source=published" >> "$GITHUB_OUTPUT"
+          else
+            echo "Prebuilt release tools not found on GitHub Releases (release_helper_go: ${RH_VER:-<unset>} [exists=$RH_EXISTS], app_registry_cli: ${AR_VER:-<unset>} [exists=$AR_EXISTS]). Building once as workflow artifact for this run."
+            echo "needs_build=true" >> "$GITHUB_OUTPUT"
+            echo "source=artifact" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "### Release Tools Acquisition"
+            echo "| Tool | Version | Status |"
+            echo "| --- | --- | --- |"
+            echo "| \`release_helper_go\` | \`${RH_VER:-<not set>}\` | $([[ "$RH_EXISTS" == "true" ]] && echo "✅ Found on GitHub Releases" || echo "⚠️ Not found (will build)") |"
+            echo "| \`app_registry_cli\` | \`${AR_VER:-<not set>}\` | $([[ "$AR_EXISTS" == "true" ]] && echo "✅ Found on GitHub Releases" || echo "⚠️ Not found (will build)") |"
+            echo ""
+            if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
+              echo "**Acquisition Mode:** ⚡ Prebuilt Binaries (Downloaded from GitHub Releases)"
+            else
+              echo "**Acquisition Mode:** 🛠️ Source Build (Artifact uploaded for downstream jobs)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup Build Environment
+        if: steps.probe.outputs.needs_build == 'true'
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'release-tools'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+
+      - name: Build release helper & app registry
+        if: steps.probe.outputs.needs_build == 'true'
+        run: |
+          bazel build --config=ci-images \
+            //tools/release_helper_go:release_helper_go \
+            //tools/app_registry/cli:app-registry
+          BAZEL_BIN="$(bazel info bazel-bin --config=ci-images)"
+          mkdir -p /tmp/release-tools
+          cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
+          cp "$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry" /tmp/release-tools/app-registry
+
+      - name: Upload release tools artifact
+        if: steps.probe.outputs.needs_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tools
+          path: /tmp/release-tools/
+          retention-days: 1
 
   plan-release:
     name: Plan Release
@@ -126,15 +353,15 @@ jobs:
     needs: [authorize-trigger, build-release-tools]
     if: needs.authorize-trigger.result == 'success'
     outputs:
-      release-matrix: ${{ steps.stub.outputs.matrix }}
-      version: ${{ steps.stub.outputs.version }}
-      apps: ${{ steps.stub.outputs.apps }}
-      chart-matrix: ${{ steps.stub.outputs.chart_matrix }}
-      charts: ${{ steps.stub.outputs.charts }}
-      openapi-matrix: ${{ steps.stub.outputs.openapi_matrix }}
-      has-specs: ${{ steps.stub.outputs.has_specs }}
-      build-id: ${{ steps.stub.outputs.build_id }}
-      versions: ${{ steps.stub.outputs.versions }}
+      release-matrix: ${{ steps.plan.outputs.matrix }}
+      version: ${{ steps.plan.outputs.version }}
+      apps: ${{ steps.plan.outputs.apps }}
+      chart-matrix: ${{ steps.plan.outputs.chart_matrix }}
+      charts: ${{ steps.plan.outputs.charts }}
+      openapi-matrix: ${{ steps.plan.outputs.openapi_matrix }}
+      has-specs: ${{ steps.plan.outputs.has_specs }}
+      build-id: ${{ steps.plan.outputs.build_id }}
+      versions: ${{ steps.plan.outputs.versions }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -142,7 +369,15 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # Shared composite action, referenced (not forked) per FR4.
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'release-tools'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
@@ -151,21 +386,74 @@ jobs:
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
-      - name: Stub
-        id: stub
-        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+      - name: Plan release
+        id: plan
+        env:
+          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_MODE: oidc
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+        run: |
+          ARGS=(plan --format github --event-type workflow_dispatch)
+          [[ -n "${{ github.event.inputs.apps }}" ]] && ARGS+=(--apps "${{ github.event.inputs.apps }}")
+          [[ -n "${{ github.event.inputs.helm_charts }}" ]] && ARGS+=(--charts "${{ github.event.inputs.helm_charts }}")
+          [[ -n "${{ github.event.inputs.version }}" ]] && ARGS+=(--version "${{ github.event.inputs.version }}")
+          [[ "${{ github.event.inputs.increment_minor }}" == "true" ]] && ARGS+=(--increment-minor)
+          [[ "${{ github.event.inputs.increment_patch }}" == "true" ]] && ARGS+=(--increment-patch)
+          [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
+          "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_OUTPUT"
 
   build-openapi-specs:
     name: Build OpenAPI Specs
     runs-on: ubuntu-latest
     needs: [authorize-trigger, plan-release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.has-specs == 'true' && inputs.dry_run == false
+    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Stub
-        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'docker'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+
+      - name: Build OpenAPI specs
+        env:
+          OPENAPI_MATRIX: ${{ needs.plan-release.outputs.openapi-matrix }}
+        run: |
+          mkdir -p /tmp/openapi-specs
+          BAZEL_BIN=$(bazel info bazel-bin --config=ci-images)
+
+          echo "$OPENAPI_MATRIX" | jq -c '.include[]' | while read -r item; do
+            TARGET=$(echo "$item" | jq -r '.openapi_target')
+            DOMAIN=$(echo "$item" | jq -r '.domain')
+            APP=$(echo "$item" | jq -r '.app')
+
+            echo "Building OpenAPI spec for ${DOMAIN}-${APP} (target: $TARGET)..."
+            bazel build --config=ci-images "$TARGET"
+
+            TARGET_PATH="${TARGET#@@//}"
+            TARGET_PATH="${TARGET_PATH#//}"
+            TARGET_DIR=$(echo "$TARGET_PATH" | sed 's#:#/#' | sed 's#/[^/]*$##')
+            SPEC_FILE="${BAZEL_BIN}/${TARGET_DIR}/${DOMAIN}-${APP}_openapi_spec.json"
+            [[ ! -f "$SPEC_FILE" ]] && SPEC_FILE="${BAZEL_BIN}/$(echo "$TARGET_PATH" | sed 's#:#/#').json"
+
+            cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}_openapi_spec.json"
+          done
+
+      - name: Upload OpenAPI spec artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-specs
+          path: /tmp/openapi-specs/*.json
 
   release:
     name: Release Applications
@@ -182,7 +470,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # Shared composite action, referenced (not forked) per FR4.
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          setup-docker: 'true'
+          cache-suffix: 'docker'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
@@ -191,13 +488,92 @@ jobs:
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
-      - name: Stub
-        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+      - name: Configure Git
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Log in to GitHub Container Registry
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Release applications
+        env:
+          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_MODE: oidc
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+          DEFAULT_VERSION: ${{ needs.plan-release.outputs.version }}
+          BUILD_ID: ${{ needs.plan-release.outputs.build-id }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          mkdir -p /tmp/release-notes /tmp/digest-check
+
+          echo "$RELEASE_MATRIX" | jq -c '.include[]' | while read -r item; do
+            DOMAIN=$(echo "$item" | jq -r '.domain')
+            APP=$(echo "$item" | jq -r '.app')
+            VER=$(echo "$item" | jq -r '.version // empty')
+            if [[ -z "$VER" ]]; then
+              VER="$DEFAULT_VERSION"
+            fi
+
+            FULL_NAME="${DOMAIN}-${APP}"
+            echo "=========================================="
+            echo "Releasing application: $FULL_NAME (version: $VER)"
+            echo "=========================================="
+
+            ARGS=(release-app --domain "$DOMAIN" --app "$APP" --version "$VER" --create-git-tag)
+            [[ -n "$BUILD_ID" ]] && ARGS+=(--build-id "$BUILD_ID")
+            [[ "$DRY_RUN" == "true" ]] && ARGS+=(--dry-run)
+            [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
+
+            "$RELEASE_HELPER" "${ARGS[@]}"
+
+            if [[ "$DRY_RUN" != "true" ]]; then
+              TAG_NAME="${FULL_NAME}.${VER}"
+              "$RELEASE_HELPER" release-notes "$FULL_NAME" --current-tag "$TAG_NAME" --format markdown > "/tmp/release-notes/${FULL_NAME}.md" || true
+
+              # Package binary / firmware release assets if applicable
+              mkdir -p "/tmp/assets/${FULL_NAME}"
+              "$RELEASE_HELPER" package-assets "$FULL_NAME" --version "$VER" --output-dir "/tmp/assets/${FULL_NAME}" || true
+            fi
+          done
+
+      - name: Upload release notes artifact
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: /tmp/release-notes/*.md
+          if-no-files-found: ignore
+
+      - name: Upload digest-check artifact
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-check
+          path: /tmp/digest-check/*.json
+          if-no-files-found: ignore
+
+      - name: Upload release assets artifact
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: /tmp/assets/
+          if-no-files-found: ignore
 
   release-helm-charts:
     name: Release Helm Charts
     needs: [authorize-trigger, plan-release, release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && inputs.helm_charts != '' && (always() && !cancelled())
+    if: needs.authorize-trigger.result == 'success' && github.event.inputs.helm_charts != '' && (always() && !cancelled())
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -210,7 +586,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # Shared composite action, referenced (not forked) per FR4.
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          setup-docker: 'true'
+          cache-suffix: 'helm'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
@@ -219,14 +604,78 @@ jobs:
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
-      - name: Stub
-        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+      - name: Configure Git
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Log in to GitHub Container Registry
+        if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Release Helm charts
+        env:
+          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_MODE: oidc
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+          CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
+          CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
+        run: |
+          ARGS=(release-charts --charts "${{ github.event.inputs.helm_charts }}" --chart-repo-url "$CHART_REPO_URL" --create-git-tag)
+          [[ -n "${{ needs.plan-release.outputs.version }}" ]] && ARGS+=(--version "${{ needs.plan-release.outputs.version }}")
+          [[ "${{ github.event.inputs.increment_minor }}" == "true" ]] && ARGS+=(--increment-minor)
+          [[ "${{ github.event.inputs.increment_patch }}" == "true" ]] && ARGS+=(--increment-patch)
+          [[ -n "${{ needs.plan-release.outputs.build-id }}" ]] && ARGS+=(--build-id "${{ needs.plan-release.outputs.build-id }}")
+          [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
+          # Prefer the Temporal-dispatched batch's actual resolved plan
+          # (github.event.inputs.app_versions, set by DispatchBuild) over
+          # this job's own freshly-resolved plan-release output: the
+          # dispatch input is the release's literal locked plan, while
+          # plan-release's own versions output is this job independently
+          # re-resolving apps on a manual/legacy dispatch (still correct,
+          # just not "the" batch's plan).
+          if [[ -n "${{ github.event.inputs.app_versions }}" ]]; then
+            ARGS+=(--app-versions "${{ github.event.inputs.app_versions }}")
+          elif [[ -n "${{ needs.plan-release.outputs.versions }}" ]]; then
+            ARGS+=(--app-versions "${{ needs.plan-release.outputs.versions }}")
+          fi
+          "$RELEASE_HELPER" "${ARGS[@]}"
+
+      - name: Upload chart release notes artifact
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes-charts
+          path: /tmp/release-notes/*.md
+          if-no-files-found: ignore
+
+      - name: Upload helm chart artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: helm-charts
+          path: /tmp/helm-charts/*.tgz
+          if-no-files-found: ignore
 
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
     needs: [authorize-trigger, plan-release, release, release-helm-charts, build-openapi-specs, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && inputs.dry_run == false && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.release-helm-charts.result == 'success' || needs.release-helm-charts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
+    if: needs.authorize-trigger.result == 'success' && always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && github.event.inputs.dry_run == 'false' && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.release-helm-charts.result == 'success' || needs.release-helm-charts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -234,7 +683,6 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # Shared composite action, referenced (not forked) per FR4.
       - name: Download release tools
         uses: ./.github/actions/download-release-tools
         with:
@@ -243,17 +691,116 @@ jobs:
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
-      - name: Stub
-        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+      - name: Download release notes artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-notes*
+          path: /tmp/release-notes
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download OpenAPI spec artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: openapi-spec*
+          path: /tmp/openapi-specs
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download digest-check artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-check*
+          path: /tmp/digest-check
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download release assets artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets*
+          path: /tmp/assets
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Download helm chart artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: helm-charts*
+          path: /tmp/helm-charts
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Apply digest-check overrides to release matrix
+        id: matrix-override
+        env:
+          MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+        run: |
+          OVERRIDDEN_MATRIX="$MATRIX"
+          if compgen -G "/tmp/digest-check/*.json" > /dev/null; then
+            for f in /tmp/digest-check/*.json; do
+              DOMAIN=$(jq -r '.domain' "$f")
+              APP=$(jq -r '.app' "$f")
+              UNCHANGED=$(jq -r '.digest_unchanged' "$f")
+              EFF_VERSION=$(jq -r '.effective_version' "$f")
+              if [[ "$UNCHANGED" == "true" ]]; then
+                echo "Overriding ${DOMAIN}-${APP} to reused version $EFF_VERSION (no-op rebuild)"
+                OVERRIDDEN_MATRIX=$(echo "$OVERRIDDEN_MATRIX" | jq -c \
+                  --arg domain "$DOMAIN" --arg app "$APP" --arg version "$EFF_VERSION" \
+                  '.include |= map(if .domain == $domain and .app == $app then .version = $version else . end)')
+              fi
+            done
+          fi
+          echo "matrix=$OVERRIDDEN_MATRIX" >> "$GITHUB_OUTPUT"
+
+      # This step's create-combined-github-release-with-notes command records
+      # every released app/binary/firmware artifact in App Registry via
+      # recordPublishedArtifact (tools/release_helper_go/cmd/github_release.go),
+      # including release_helper_go and the app-registry CLI itself when they
+      # are among the released apps. It deliberately stops at RecordArtifact
+      # and does NOT also call PromotionRegistry.Promote: this workflow only
+      # holds `app-registry-builder-*` credentials, and Promote requires the
+      # distinct `app-registry-promoter-<env>` role (server/auth/auth.go
+      # RequirePromoter) -- builder creds cannot call it regardless.
+      # Promotion for images and charts is exclusively human-triggered via
+      # promote.yml.
+      - name: Create GitHub releases for all apps and charts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATRIX: ${{ steps.matrix-override.outputs.matrix }}
+          CHART_MATRIX: ${{ needs.plan-release.outputs.chart-matrix }}
+        run: |
+          APPS=$(echo '${{ steps.matrix-override.outputs.matrix }}' | jq -r '.include[] | "\(.domain)-\(.app)"' | paste -sd, -)
+          CHARTS="${{ github.event.inputs.helm_charts }}"
+          ARGS=(create-combined-github-release-with-notes "${{ needs.plan-release.outputs.version }}" --owner "${{ github.repository_owner }}" --repo "${{ github.event.repository.name }}" --commit "${{ github.sha }}" --release-notes-dir "/tmp/release-notes" --openapi-specs-dir "/tmp/openapi-specs" --assets-dir "/tmp/assets" --helm-charts-dir "/tmp/helm-charts")
+          [[ -n "$APPS" ]] && ARGS+=(--apps "$APPS")
+          [[ -n "$CHARTS" ]] && ARGS+=(--charts "$CHARTS")
+          "$RELEASE_HELPER" "${ARGS[@]}"
 
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
     needs: [authorize-trigger, plan-release, release, release-helm-charts, create-github-releases, build-release-tools]
     if: needs.authorize-trigger.result == 'success' && always()
+    env:
+      CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Stub
-        run: echo "release-v2.yml scaffold stub -- see issue #914 Implementation phase"
+      - name: Download release tools
+        id: download-tools
+        continue-on-error: true
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+
+      - name: Generate summary
+        if: steps.download-tools.outcome == 'success'
+        run: |
+          ARGS=(summary --matrix '${{ needs.plan-release.outputs.release-matrix }}' --version "${{ needs.plan-release.outputs.version }}" --event-type workflow_dispatch --repository-owner "${{ github.repository_owner }}")
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_STEP_SUMMARY"
