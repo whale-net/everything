@@ -180,11 +180,15 @@ func TestReleaseV2IsolatedFromReleaseV1(t *testing.T) {
 		if !v2Has {
 			continue
 		}
-		if !requiresBotIdentity(t, dir, v1Path) {
-			t.Errorf("release.yml declares %q but has no bot-identity gate on github.triggering_actor -- it would be a human entry point overlapping release-v2.yml's", e)
-		}
-		if !requiresBotIdentity(t, dir, v2Path) {
-			t.Errorf("release-v2.yml declares %q but has no bot-identity gate on github.triggering_actor -- it would be a second human entry point alongside release.yml's", e)
+		// Interim state (plan #912): release.yml's human-trigger gate was
+		// deliberately reverted so v1 stays usable while release-v2.yml is
+		// still stabilizing -- see docs/RELEASE.md's "Release Methods" note.
+		// The invariant this test actually protects, a human being able to
+		// fire two *different* pipelines for the same commit, only requires
+		// that at most one of the two files be an open human entry point at
+		// a time; it does not require both to carry the gate.
+		if !requiresBotIdentity(t, dir, v1Path) && !requiresBotIdentity(t, dir, v2Path) {
+			t.Errorf("neither release.yml nor release-v2.yml has a bot-identity gate on github.triggering_actor for %q -- both would be human entry points, risking two pipelines racing the same commit", e)
 		}
 	}
 }

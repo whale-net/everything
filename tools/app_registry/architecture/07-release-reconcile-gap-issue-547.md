@@ -21,11 +21,8 @@
 > for this has been retired accordingly.
 
 `ReconcileApps` runs only from `ci.yml` on push to `main` (#543); `release.yml`
-is a `workflow_dispatch`, historically human-triggered and, since the App
-Registry v2 release cutover (issue #891), triggered by the App Registry's
-Temporal `ReleaseWorkflow` instead — either way it fires independently of
-`ci.yml`'s push trigger, often immediately after merging. This is normal
-usage, not an edge case. That decoupling opens a window: a
+is a `workflow_dispatch` a human triggers, often immediately after merging —
+this is normal usage, not an edge case. That decoupling opens a window: a
 release can run, and reach `RecordArtifact`'s owner lookup
 (`resolveOwner`), *before* the corresponding `main`-push reconcile for that
 commit has finished, or even started. If the commit introduces a genuinely

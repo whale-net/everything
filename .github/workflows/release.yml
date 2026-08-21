@@ -62,38 +62,6 @@ env:
   APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
 
 jobs:
-  # App Registry v2 cutover (FR15-17, issue #891): release.yml keeps
-  # `workflow_dispatch` because that is the exact GitHub Actions API
-  # endpoint worker/release/github.go's GitHubDispatcher.Dispatch calls
-  # (`POST .../actions/workflows/release.yml/dispatches`) via a GitHub App
-  # installation token (RELEASE_GITHUB_APP_* -- see worker/main.go) -- that
-  # endpoint requires the workflow to declare a `workflow_dispatch` trigger,
-  # and issue #889's DispatchBuild mechanism (already implemented) must not
-  # be redesigned by this cutover. What's removed is the *human* entry
-  # point: a human dispatching via `gh workflow run` or the Actions "Run
-  # workflow" UI form authenticates as their own GitHub user, which GitHub
-  # never attributes a `[bot]` identity to, whereas every dispatch
-  # authenticated with a GitHub App installation token (Temporal's
-  # DispatchBuild) is attributed by GitHub itself to that App's bot user
-  # (`<app-slug>[bot]`) -- not something a human dispatch can spoof, since
-  # GitHub derives this identity from the authenticating credential, not
-  # from any workflow input. Every job below therefore requires
-  # authorize-trigger to have succeeded before doing any real work -- see
-  # that job's step for the actual check.
-  authorize-trigger:
-    name: Authorize Trigger (FR15 cutover -- machine-only)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require App-Registry-driven (machine) dispatch
-        env:
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: |
-          if [[ "$TRIGGERING_ACTOR" != *"[bot]" ]]; then
-            echo "::error::release.yml's workflow_dispatch is no longer a supported human entry point (App Registry v2 cutover, FR15). Trigger releases from the App Registry UI instead. (triggering_actor=$TRIGGERING_ACTOR)"
-            exit 1
-          fi
-          echo "Authorized machine-triggered dispatch (triggering_actor=$TRIGGERING_ACTOR)"
-
   # Probe for prebuilt release tools or build from source if missing / requested.
   # When prebuilt releases exist and use_source_tools is false, this job completes in seconds.
   # If prebuilt releases do not exist or use_source_tools is true, this builds the tools ONCE
@@ -101,8 +69,6 @@ jobs:
   build-release-tools:
     name: Build Release Tools
     runs-on: ubuntu-latest
-    needs: [authorize-trigger]
-    if: needs.authorize-trigger.result == 'success'
     outputs:
       needs_build: ${{ steps.probe.outputs.needs_build }}
       source: ${{ steps.probe.outputs.source }}
@@ -348,8 +314,7 @@ jobs:
   plan-release:
     name: Plan Release
     runs-on: ubuntu-latest
-    needs: [authorize-trigger, build-release-tools]
-    if: needs.authorize-trigger.result == 'success'
+    needs: [build-release-tools]
     outputs:
       release-matrix: ${{ steps.plan.outputs.matrix }}
       version: ${{ steps.plan.outputs.version }}
@@ -408,8 +373,8 @@ jobs:
   build-openapi-specs:
     name: Build OpenAPI Specs
     runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
+    needs: [plan-release, build-release-tools]
+    if: needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -456,8 +421,8 @@ jobs:
   release:
     name: Release Applications
     runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
+    needs: [plan-release, build-release-tools]
+    if: needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null
     permissions:
       contents: write
       packages: write
@@ -570,8 +535,8 @@ jobs:
 
   release-helm-charts:
     name: Release Helm Charts
-    needs: [authorize-trigger, plan-release, release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && github.event.inputs.helm_charts != '' && (always() && !cancelled())
+    needs: [plan-release, release, build-release-tools]
+    if: github.event.inputs.helm_charts != '' && (always() && !cancelled())
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -672,8 +637,8 @@ jobs:
   create-github-releases:
     name: Create GitHub Releases
     runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, release, release-helm-charts, build-openapi-specs, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && github.event.inputs.dry_run == 'false' && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.release-helm-charts.result == 'success' || needs.release-helm-charts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
+    needs: [plan-release, release, release-helm-charts, build-openapi-specs, build-release-tools]
+    if: always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && github.event.inputs.dry_run == 'false' && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.release-helm-charts.result == 'success' || needs.release-helm-charts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -785,8 +750,8 @@ jobs:
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, release, release-helm-charts, create-github-releases, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && always()
+    needs: [plan-release, release, release-helm-charts, create-github-releases, build-release-tools]
+    if: always()
     env:
       CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
     steps:

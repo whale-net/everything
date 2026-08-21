@@ -174,24 +174,59 @@ bazel run //tools:release -- plan --event-type workflow_dispatch --apps hello-py
 
 ## Release Methods
 
-### App Registry UI (the only supported human entry point)
+> **Interim note (App Registry v2 migration, plan #912):** `release.yml`'s
+> human-trigger gate (added by #886 FR15) has been reverted so it can be
+> dispatched directly again while `release-v2.yml` is still stabilizing.
+> The App Registry UI's **Trigger Release** page (`/releases/trigger`)
+> still works too — it dispatches `release.yml` via the same Temporal
+> `ReleaseWorkflow` (issue #889) App Registry has always used — so either
+> method below or the UI can be used until the eventual cutover to
+> `release-v2.yml` is complete.
 
-Since the App Registry v2 release cutover (issue #891, plan #886 FR15), a
-human no longer has a supported way to directly start `release.yml`'s
-release orchestration — `gh workflow run release.yml ...` and the GitHub
-Actions "Run workflow" UI form are both rejected (`release.yml`'s
-`authorize-trigger` job requires the dispatch to come from the App
-Registry's Temporal-driven GitHub App, not a human GitHub identity). To
-trigger a release, go to the App Registry UI's **Trigger Release** page
-(`/releases/trigger`) and submit a batch scope (`all`, a domain, or a
-comma-separated app/chart list) — the same permission that's already
-required to promote is required to trigger. The App Registry UI resolves
-the release plan, dispatches `release.yml` via its Temporal
-`ReleaseWorkflow` (issue #889), and shows live per-target status at
-`/releases/<id>`.
+### Method 1: GitHub Actions UI (Recommended) ⭐
 
-> **Note: Demo Domain Exclusion**
-> When using `all` for apps or helm charts, the `demo` domain is **excluded by default** to prevent accidental publishing of demo/example applications in production releases. Include demo domain explicitly in the App Registry UI's scope selection to override this.
+This is the **preferred method** as it provides full control and prevents mistakes:
+
+1. Go to your repository on GitHub
+2. Click **Actions** → **Release** workflow
+3. Click **Run workflow**
+4. Fill in the parameters:
+   - **Apps**: Comma-separated list (e.g., `hello-python,hello-go`) or `all`
+   - **Version**: Release version (e.g., `v1.2.3`)
+   - **Dry run**: Check this to test without publishing
+
+**Example Release:**
+```
+Apps: hello-python,hello-go
+Version: v1.2.3
+Dry run: false
+```
+
+> **Note: Demo Domain Exclusion**  
+> When using `all` for apps or helm charts, the `demo` domain is **excluded by default** to prevent accidental publishing of demo/example applications in production releases. To include demo domain, check the "Include demo domain" checkbox in the UI or use the `--include-demo` flag in CLI commands. Specific app names and domain selections (e.g., `demo`, `manman`) are not affected by this behavior.
+
+### Method 2: GitHub CLI
+
+For automated workflows and scripting:
+
+```bash
+# Release specific apps
+gh workflow run release.yml \
+  -f apps=hello-python,hello-go \
+  -f version=v1.2.3 \
+  -f dry_run=false
+
+# Release all apps
+gh workflow run release.yml \
+  -f apps=all \
+  -f version=v1.2.3
+
+# Dry run (test without publishing)
+gh workflow run release.yml \
+  -f apps=hello-python \
+  -f version=v1.2.3 \
+  -f dry_run=true
+```
 
 ## Release Process Details
 
@@ -325,9 +360,8 @@ bazel run //tools:release -- changes --base-commit HEAD~1
 # Use file-based detection instead of Bazel query if needed
 bazel run //tools:release -- changes --base-commit HEAD~1 --no-bazel-query
 
-# Force release specific apps manually -- trigger from the App Registry UI's
-# /releases/trigger page (see "Release Methods" above); `gh workflow run
-# release.yml` is no longer a supported human entry point post-cutover.
+# Force release specific apps manually
+gh workflow run release.yml -f apps=hello-python,hello-go -f version=v1.0.0 -f dry_run=true
 ```
 
 **Note:** The change detection system may sometimes be overly conservative, rebuilding all apps when infrastructure files change or when dependency analysis fails.
@@ -350,9 +384,13 @@ bazel run //tools:release -- release hello-python --version v1.2.3 --allow-overw
 
 ### Dry Run Releases
 
-Always use dry run mode when testing -- select the dry-run option when
-triggering from the App Registry UI's `/releases/trigger` page (see
-"Release Methods" above).
+Always use dry run mode when testing:
+```bash
+gh workflow run release.yml \
+  -f apps=your_app \
+  -f version=v0.0.1-test \
+  -f dry_run=true
+```
 
 ## Release Notes
 
