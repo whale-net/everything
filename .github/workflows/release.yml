@@ -596,6 +596,17 @@ jobs:
           GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
           CHART_REPO_USER: ${{ secrets.CHART_REPO_USER }}
           CHART_REPO_PASS: ${{ secrets.CHART_REPO_PASS }}
+          # Passed via env instead of interpolated directly into the script
+          # below: both values are JSON objects containing literal `"`
+          # characters, and GitHub Actions' `${{ }}` substitution happens
+          # as raw text before bash parses the script, so a directly
+          # interpolated `"${{ ... }}"` has its embedded quotes parsed as
+          # shell quoting -- stripping them and corrupting the JSON (see
+          # the "parse --app-versions: invalid character" failures this
+          # caused). Reading through $VAR instead passes the value as a
+          # single opaque word, sidestepping that entirely.
+          APP_VERSIONS_INPUT: ${{ github.event.inputs.app_versions }}
+          APP_VERSIONS_PLAN: ${{ needs.plan-release.outputs.versions }}
         run: |
           ARGS=(release-charts --charts "${{ github.event.inputs.helm_charts }}" --chart-repo-url "$CHART_REPO_URL" --create-git-tag)
           [[ -n "${{ needs.plan-release.outputs.version }}" ]] && ARGS+=(--version "${{ needs.plan-release.outputs.version }}")
@@ -612,10 +623,10 @@ jobs:
           # plan-release's own versions output is this job independently
           # re-resolving apps on a manual/legacy dispatch (still correct,
           # just not "the" batch's plan).
-          if [[ -n "${{ github.event.inputs.app_versions }}" ]]; then
-            ARGS+=(--app-versions "${{ github.event.inputs.app_versions }}")
-          elif [[ -n "${{ needs.plan-release.outputs.versions }}" ]]; then
-            ARGS+=(--app-versions "${{ needs.plan-release.outputs.versions }}")
+          if [[ -n "$APP_VERSIONS_INPUT" ]]; then
+            ARGS+=(--app-versions "$APP_VERSIONS_INPUT")
+          elif [[ -n "$APP_VERSIONS_PLAN" ]]; then
+            ARGS+=(--app-versions "$APP_VERSIONS_PLAN")
           fi
           "$RELEASE_HELPER" "${ARGS[@]}"
 
