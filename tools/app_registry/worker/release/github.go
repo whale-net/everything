@@ -185,7 +185,23 @@ func (d *GitHubDispatcher) token(ctx context.Context) (string, error) {
 // the wrong run. Acceptable at this repo's release cadence (this plan's
 // #889 does not attempt to remove it); a future improvement could pass a
 // caller-chosen marker input to disambiguate, once release.yml grows one.
-func (d *GitHubDispatcher) Dispatch(ctx context.Context, releaseRunID string, inputs map[string]string) (BuildRef, error) {
+//
+// ref (FR11, issue #923): the git ref/sha to dispatch against for THIS
+// call, overriding d.Config.Ref -- a per-Dispatch()-call parameter, not
+// only the static Config.Ref default. This is FR11's resolved design
+// choice: Config.Ref stays as the REQUIRED fallback default (validated at
+// construction, see NewGitHubDispatcher, and still what an empty ref
+// falls back to here), but the caller (DispatchBuild, via buildref.go's
+// resolveDispatchRef) now resolves a per-batch ref from app_build_log
+// (FR9/FR10) and passes it explicitly, so a release can be pinned to a
+// commit ci.yml's reconcile job has actually processed instead of always
+// dispatching against the literal branch pointer. Pass "" to keep the old
+// Config.Ref behavior (e.g. from a caller with no FR9/FR10 resolution
+// available, such as a direct test of Dispatch itself).
+func (d *GitHubDispatcher) Dispatch(ctx context.Context, releaseRunID string, inputs map[string]string, ref string) (BuildRef, error) {
+	if ref == "" {
+		ref = d.Config.Ref
+	}
 	token, err := d.token(ctx)
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build for release run %s: %w", releaseRunID, err)
@@ -194,7 +210,7 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, releaseRunID string, in
 	since := d.now().Add(-2 * time.Second) // small buffer against clock skew between this process and GitHub's
 
 	body, err := json.Marshal(map[string]any{
-		"ref":    d.Config.Ref,
+		"ref":    ref,
 		"inputs": inputs,
 	})
 	if err != nil {
@@ -205,12 +221,12 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, releaseRunID string, in
 		return BuildRef{}, fmt.Errorf("dispatch build for release run %s: %w", releaseRunID, err)
 	}
 
-	ref, err := d.findDispatchedRun(ctx, token, since)
+	buildRef, err := d.findDispatchedRun(ctx, token, since)
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build for release run %s: %w", releaseRunID, err)
 	}
-	ref.ReleaseRunID = releaseRunID
-	return ref, nil
+	buildRef.ReleaseRunID = releaseRunID
+	return buildRef, nil
 }
 
 // findDispatchedRun polls the workflow's runs list until a run created at

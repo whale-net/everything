@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 // TestActivities_DispatchBuild_HeterogeneousVersions_ReturnsClearError proves
@@ -17,7 +20,7 @@ import (
 // isolation, which github_test.go's TestUniformVersion already covers) --
 // see issue #889's Testing-phase instruction to verify this specifically.
 func TestActivities_DispatchBuild_HeterogeneousVersions_ReturnsClearError(t *testing.T) {
-	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux())}
+	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux()), Registry: newTestRegistry(t)}
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-1",
 		Versions: map[string]string{
@@ -57,7 +60,7 @@ func TestActivities_DispatchBuild_GitHubNotConfigured_ReturnsClearError(t *testi
 // TestActivities_DispatchBuild_EmptyPlan_ReturnsClearError covers a
 // ResolvePlan result with no versions reaching DispatchBuild.
 func TestActivities_DispatchBuild_EmptyPlan_ReturnsClearError(t *testing.T) {
-	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux())}
+	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux()), Registry: newTestRegistry(t)}
 	_, err := a.DispatchBuild(context.Background(), ResolvedPlan{}, nil)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "no versions")
@@ -70,6 +73,7 @@ func TestActivities_DispatchBuild_EmptyPlan_ReturnsClearError(t *testing.T) {
 // isolation; this proves DispatchBuild wires them together correctly).
 func TestActivities_DispatchBuild_HappyPath_DispatchesUniformVersionWithSplitTargets(t *testing.T) {
 	var sawInputs map[string]any
+	var sawRef string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
@@ -79,13 +83,25 @@ func TestActivities_DispatchBuild_HappyPath_DispatchesUniformVersionWithSplitTar
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		sawInputs, _ = body["inputs"].(map[string]any)
+		sawRef, _ = body["ref"].(string)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":99,"html_url":"https://example/99","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
 	})
 
-	a := &Activities{GitHub: newTestDispatcher(t, mux)}
+	// FR9-FR11: DispatchBuild resolves each target's owner against
+	// app_build_log via a.Registry -- seed identity for both targets (no
+	// app_build_log row for either, so resolveDispatchRef falls back to
+	// a.GitHub.Config.Ref, "main" -- see newTestDispatcher).
+	repo := newTestRegistry(t)
+	seedApp(t, repo, "demo", "widget")
+	_, err := repo.Reconcile(context.Background(), nil, []*appmetapb.ChartManifest{
+		{Domain: "demo", Name: "achart"},
+	}, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-1",
 		Versions: map[string]string{
@@ -99,6 +115,7 @@ func TestActivities_DispatchBuild_HappyPath_DispatchesUniformVersionWithSplitTar
 	require.Equal(t, "v1.2.3", sawInputs["version"])
 	require.Equal(t, "demo-widget", sawInputs["apps"])
 	require.Equal(t, "demo-achart", sawInputs["helm_charts"])
+	require.Equal(t, "main", sawRef, "no app_build_log row exists for either target, so FR10's fallback to Config.Ref applies")
 
 	// issue #901: the image-kind entry from plan.Versions must also be
 	// forwarded as a JSON app_versions input, keyed by bare OwnerFullName
@@ -130,12 +147,18 @@ func TestActivities_DispatchBuild_AppVersions_OmittedWhenNoImageTargets(t *testi
 		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":100,"html_url":"https://example/100","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
 	})
 
-	a := &Activities{GitHub: newTestDispatcher(t, mux)}
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), nil, []*appmetapb.ChartManifest{
+		{Domain: "demo", Name: "achart"},
+	}, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-2",
 		Versions:     map[string]string{"chart:demo-achart": "v1.2.3"},
 	}
-	_, err := a.DispatchBuild(context.Background(), plan, nil)
+	_, err = a.DispatchBuild(context.Background(), plan, nil)
 	require.NoError(t, err)
 	_, ok := sawInputs["app_versions"]
 	require.False(t, ok, "expected no app_versions input for a chart-only batch, got %v", sawInputs["app_versions"])

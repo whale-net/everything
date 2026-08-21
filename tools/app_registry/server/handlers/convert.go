@@ -196,6 +196,33 @@ func chartsToPB(charts []repository.Chart) []*pb.Chart {
 	return out
 }
 
+// appBuildLogToPB converts a repository.AppBuildLog row to its wire shape.
+// ownerFullName is passed in separately (not stored on the row itself,
+// mirroring Artifact's OwnerID -- see AppBuildLog's doc comment) since the
+// caller (ArtifactServer.RecordBuildLog) already resolved it once to get
+// OwnerID and there is no sense re-resolving it in the other direction.
+func appBuildLogToPB(l repository.AppBuildLog, ownerFullName string) *pb.AppBuildLog {
+	return &pb.AppBuildLog{
+		AppBuildLogId: l.AppBuildLogID,
+		OwnerFullName: ownerFullName,
+		Kind:          artifactKindToPB(l.Kind),
+		GitSha:        l.GitSHA,
+		BuildId:       l.BuildID,
+		ValidFrom:     timeToUnix(l.ValidFrom),
+		ValidTo:       timeToUnixPtr(l.ValidTo),
+	}
+}
+
+// timeToUnixPtr is timeToUnix for a *time.Time, matching AppBuildLog's
+// ValidTo shape (nil == still current, wire value 0 -- see
+// RecordBuildLogResponse's AppBuildLog.valid_to doc comment).
+func timeToUnixPtr(t *time.Time) int64 {
+	if t == nil {
+		return 0
+	}
+	return timeToUnix(*t)
+}
+
 func buildToPB(b repository.Build) *pb.Build {
 	var startedAt int64
 	if b.StartedAt != nil {

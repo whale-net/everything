@@ -30,6 +30,65 @@ message RecordBuildResponse {
   bool already_recorded = 2;
 }
 
+// ============================================================================
+// app_build_log — FR8-FR12/FR14 (issue #923). Unconditional per-app/chart
+// build log, one row per owner per push, so v2 release-trigger-time
+// GitHubDispatcher.Dispatch (worker/release/github.go) can resolve a
+// release target's build ref against a commit ci.yml's reconcile job has
+// actually processed, instead of the literal "main" branch pointer. See
+// migration 019's doc comment and server/repository.AppBuildLogRepository
+// for the storage-layer contract this RPC writes through.
+// ============================================================================
+
+// RecordBuildLogRequest writes one app_build_log row, unconditionally --
+// deliberately no content-gating (FR8). Called once per discovered
+// app/chart for a push, all sharing the same build_id (one RecordBuild
+// call per push/workflow-run -- see migration 019's doc comment).
+message RecordBuildLogRequest {
+  // Full name ("<domain>-<name>") of the app or chart this build log entry
+  // is for -- resolved the same way RecordArtifact's owner_full_name is
+  // (ArtifactServer.resolveOwner), so the owner must already be reconciled
+  // (ReconcileApps/AssertApps) before this call, exactly like
+  // RecordArtifact.
+  string owner_full_name = 1;
+
+  // Must be ARTIFACT_KIND_IMAGE or ARTIFACT_KIND_CHART -- app_build_log has
+  // no binary/firmware rows (migration 019's CHECK constraint).
+  ArtifactKind kind = 2;
+
+  string git_sha = 3;
+
+  // build_id returned by a prior RecordBuild call for this push -- see
+  // migration 019's doc comment: one RecordBuild call per push, shared by
+  // every app_build_log row written for that push.
+  string build_id = 4;
+
+  // Required. Recommended shape:
+  // "<workflow_run_id>-<attempt>-buildlog-<kind>-<owner_full_name>" so a
+  // retried CI step replays rather than double-writing new rows -- this is
+  // about retry-safety, not content-gating (FR8's "unconditional" is about
+  // NOT skipping the write when content is unchanged; it says nothing about
+  // exact-request replay, which idempotency_key still protects against, the
+  // same as every other write RPC in this file).
+  string idempotency_key = 5;
+}
+
+message AppBuildLog {
+  string app_build_log_id = 1;
+  string owner_full_name = 2;
+  ArtifactKind kind = 3;
+  string git_sha = 4;
+  string build_id = 5;
+  int64 valid_from = 6;
+
+  // 0 means still current (valid_to IS NULL).
+  int64 valid_to = 7;
+}
+
+message RecordBuildLogResponse {
+  AppBuildLog app_build_log = 1;
+}
+
 // ContainedImage is one image a chart pins, as resolved by tools/helm at
 // compose time. Charts must be recorded with digests, not floating tags —
 // this is what makes environment state auditable.

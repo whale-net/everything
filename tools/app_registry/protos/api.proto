@@ -52,6 +52,13 @@ service ArtifactRegistry {
   rpc RecordBuild(RecordBuildRequest) returns (RecordBuildResponse);
   rpc RecordArtifact(RecordArtifactRequest) returns (RecordArtifactResponse);
 
+  // FR8 (issue #923): writes one app_build_log row, unconditionally, for a
+  // single owner (app or chart) -- ci.yml's reconcile-app-registry job
+  // calls this once per discovered app/chart after RecordBuild and after
+  // ReconcileApps/AssertApps have run. See
+  // api_messages_artifact.proto's RecordBuildLogRequest doc comment.
+  rpc RecordBuildLog(RecordBuildLogRequest) returns (RecordBuildLogResponse);
+
   // Phase AR-7b (issue #558): artifact lifecycle, allocated -> publishing ->
   // published. Called immediately before/after an image or chart push;
   // RecordArtifact above completes publishing -> published.

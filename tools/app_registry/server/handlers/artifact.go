@@ -90,6 +90,53 @@ func (s *ArtifactServer) RecordBuild(ctx context.Context, req *pb.RecordBuildReq
 	return resp.(*pb.RecordBuildResponse), nil
 }
 
+// RecordBuildLog implements FR8 (issue #923): writes one app_build_log row
+// for a single owner (app or chart), unconditionally -- see
+// RecordBuildLogRequest's doc comment. Owner resolution mirrors
+// RecordArtifact's resolveOwner exactly (same ErrOwnerNotReconciled
+// wrapping, same ARCHIVED rejection) since both resolve an owner_full_name
+// against the same app/chart identity tables.
+func (s *ArtifactServer) RecordBuildLog(ctx context.Context, req *pb.RecordBuildLogRequest) (*pb.RecordBuildLogResponse, error) {
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, err
+	}
+	if req.OwnerFullName == "" {
+		return nil, status.Error(codes.InvalidArgument, "owner_full_name is required")
+	}
+	kind := artifactKindFromPB(req.Kind)
+	if kind != repository.ArtifactKindImage && kind != repository.ArtifactKindChart {
+		return nil, status.Error(codes.InvalidArgument, "kind must be IMAGE or CHART")
+	}
+	if req.GitSha == "" {
+		return nil, status.Error(codes.InvalidArgument, "git_sha is required")
+	}
+	if req.BuildId == "" {
+		return nil, status.Error(codes.InvalidArgument, "build_id is required")
+	}
+	if req.IdempotencyKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
+	}
+
+	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "RecordBuildLog",
+		func() proto.Message { return &pb.RecordBuildLogResponse{} },
+		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
+			ownerID, _, err := s.resolveOwner(ctx, r, kind, req.OwnerFullName)
+			if err != nil {
+				return nil, err
+			}
+			log, err := r.AppBuildLogs().RecordBuildLog(ctx, ownerID, kind, req.GitSha, req.BuildId)
+			if err != nil {
+				return nil, err
+			}
+			return &pb.RecordBuildLogResponse{AppBuildLog: appBuildLogToPB(*log, req.OwnerFullName)}, nil
+		},
+	)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return resp.(*pb.RecordBuildLogResponse), nil
+}
+
 func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtifactRequest) (*pb.RecordArtifactResponse, error) {
 	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
 		return nil, err

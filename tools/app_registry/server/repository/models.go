@@ -229,6 +229,25 @@ type Build struct {
 	RecordedAt      time.Time
 }
 
+// AppBuildLog is one row from the `app_build_log` table (migration 019,
+// issue #923, FR8-FR12/FR14) -- SCD2-shaped (ValidFrom/ValidTo) but,
+// unlike app_manifest_history (migration 010), written UNCONDITIONALLY on
+// every ci.yml reconcile-app-registry push, not gated on content change.
+// Answers "what commit is OwnerID's latest logged build" for FR9's
+// watermark-free release ref resolution. OwnerID is polymorphic --
+// app.app_id when Kind is ArtifactKindImage, chart.chart_id when Kind is
+// ArtifactKindChart -- mirroring Artifact.OwnerID's convention. See
+// AppBuildLogRepository's doc comment for the write/read contract.
+type AppBuildLog struct {
+	AppBuildLogID string
+	OwnerID       string
+	Kind          ArtifactKind
+	GitSHA        string
+	BuildID       string
+	ValidFrom     time.Time
+	ValidTo       *time.Time
+}
+
 // ArtifactLink records that a chart artifact pins a specific image digest.
 type ArtifactLink struct {
 	ImageArtifactID string

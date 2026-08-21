@@ -54,9 +54,31 @@ correct; only one is actually enforced.
 | # | Required ordering | Enforced by | Failure |
 |---|---|---|---|
 | 1 | reconcile of commit `C` **before** `RecordArtifact` for an app introduced in `C` | nothing — accepted gap (#547) | exit 3, artifact never recorded and **never backfilled**; that build can never be promoted |
+| 1v2 | reconcile of commit `C` **before** a v2 release dispatch builds against `C` | `app_build_log`'s current-pointer resolution (#923, FR8-FR12) — see below | fixed for the v2 dispatch path only; ordering 1's own v1 gap (`RecordArtifact` itself) is unchanged |
 | 2 | newer reconcile **after** older reconcile | `reconcile_watermark` (#545) + CI concurrency (#546) | solved |
 | 3 | `RecordArtifact(IMAGE, digest D)` **before** any chart pinning `D` | hard server-side reject (`postgres/artifact.go`, "chart pins unrecorded image digest") | chart artifact not recorded |
 | 4 | app rows exist **before** a chart manifest referencing them resolves | `resolveChartApps` skips and reports the one bad chart (AR-7a, built) | solved — see below |
+
+**Ordering 1v2 (#923):** the v1 gap in row 1 is about `RecordArtifact` racing
+ahead of reconcile for an app introduced in the same commit. A related but
+distinct gap existed on the v2 dispatch path: `DispatchBuild`
+(`worker/release/activities.go`) used to dispatch `release-v2.yml` against
+the literal `main` branch pointer, which can itself race ahead of whatever
+commit `ci.yml`'s `reconcile-app-registry` job has actually finished
+processing — the same failure class as ordering 1 (act against commit `C`
+before `C` is reconciled), just at the dispatch-ref step instead of the
+artifact-record step. Fixed by `app_build_log` (migration 019): `ci.yml`
+writes one `app_build_log` row per discovered app/chart, unconditionally,
+immediately after its reconcile step, so a row's presence proves reconcile
+already saw that commit for that owner. `DispatchBuild` now resolves each
+release target's build ref against `app_build_log`'s current-pointer row
+(`buildref.go`'s `resolveDispatchRef`/`resolveBuildRef`) and dispatches
+against that commit instead of `main`, falling back to the literal branch
+name only when no `app_build_log` row exists yet for a target (a fresh
+environment, or an app added in a commit reconcile hasn't processed) —
+see `GitHubDispatcherConfig.Ref` and `GitHubDispatcher.Dispatch`'s `ref`
+parameter. This does not touch `release.yml` (v1) or ordering 1's own gap
+(`RecordArtifact` racing reconcile) at all.
 
 Ordering 3 is the expensive one, because charts pin digests resolved from
 **GHCR by tag** (`docker buildx imagetools inspect ${IMG_REPO}:${IMG_VERSION}`
