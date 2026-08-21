@@ -1,4 +1,34 @@
-name: Release
+name: Release v2
+
+# App Registry v2 release job (Plan #912, issue #914): this workflow is
+# the independently-evolvable v2 home for Temporal-dispatched release/
+# build logic (FR1). It was forked from release.yml's job skeleton --
+# job names, `needs` chains, and outputs mirror release.yml's -- so this
+# plan's other task issues (build_artifact digest lookup, DispatchBuild
+# digest-override consumption, chart resolution) can land their real
+# logic straight into these jobs without a second structural rewrite.
+# Job bodies below are ported from release.yml (Implementation phase of
+# #914); shared composite actions (./.github/actions/*) are referenced
+# unchanged, not forked (FR4). See the v1->v2 migration checklist in
+# tools/app_registry/PLAN.md ("App Registry v2 release job -- migration
+# checklist") for which domains dispatch through v1 vs v2 at any point
+# in time.
+#
+# Isolation from v1 (release.yml), enforced by this file:
+#   - `concurrency.group` is `release-v2`, distinct from release.yml's
+#     `release` (FR2, C2) -- a v1 run and a v2 run for the same commit
+#     never cancel or block each other.
+#   - Triggers: `workflow_dispatch` here is a *machine-only* dispatch
+#     endpoint for Temporal's GitHubDispatcher.Dispatch
+#     (tools/app_registry/worker/release/github.go, which POSTs to
+#     `.../actions/workflows/<WorkflowFile>/dispatches` -- WorkflowFile
+#     is configurable and will point at `release-v2.yml` once a domain
+#     cuts over per the migration checklist). It is not a human entry
+#     point -- authorize-trigger below enforces that identically to
+#     release.yml's `authorize-trigger` job (bot-identity check on
+#     `github.triggering_actor`). This workflow declares no other
+#     trigger, so it never fires on any event release.yml itself
+#     responds to (FR3).
 
 on:
   workflow_dispatch:
@@ -10,6 +40,7 @@ on:
       version:
         description: 'Release version (e.g., v1.0.0) - leave empty when using increment options'
         required: false
+        default: ''
       increment_minor:
         description: 'Auto-increment minor version (resets patch to 0) - applies to both apps and helm charts'
         type: boolean
@@ -35,53 +66,24 @@ on:
         type: boolean
         default: false
       app_versions:
-        description: 'JSON object of resolved app versions from this release batch''s plan, keyed by "<domain>-<name>" (e.g. {"manmanv2-control-api":"v1.2.3"}). Set by App Registry''s Temporal-orchestrated DispatchBuild (issue #901) so a chart''s composed member apps that are themselves batch targets pin to the batch''s resolved version instead of an independent latest_published query. Leave empty for manual dispatch -- release-helm-charts falls back to plan-release''s own freshly-resolved versions.'
+        description: 'JSON object of resolved app versions from this release batch''s plan, keyed by "<domain>-<name>" (e.g. {"manmanv2-control-api":"v1.2.3"}). Set by App Registry''s Temporal-orchestrated DispatchBuild so a chart''s composed member apps that are themselves batch targets pin to the batch''s resolved version instead of an independent latest_published query. Leave empty for manual dispatch -- release-helm-charts falls back to plan-release''s own freshly-resolved versions.'
         required: false
         default: ''
 
 concurrency:
-  group: release
+  group: release-v2
   cancel-in-progress: false
-
-# App Registry v2 release job (Plan #912, issue #914): this file (v1) is
-# now FROZEN TO BUG FIXES ONLY for the duration of plan #912. New
-# Temporal-dispatched release/build logic (FR1-6: build_artifact digest
-# lookup, DispatchBuild digest-override consumption, chart resolution)
-# lands in .github/workflows/release-v2.yml instead -- release-v2.yml is
-# an independently-evolvable fork of this file's job skeleton, isolated
-# by its own `concurrency: group: release-v2` and machine-only
-# `workflow_dispatch` trigger so the two workflows never conflict for the
-# same commit. This freeze lasts until #912's retirement task (FR7)
-# removes this file; track that issue for the actual retirement date.
-# Composite actions this file references (./.github/actions/*) remain
-# shared with release-v2.yml and are NOT forked -- changes there still
-# affect both workflows. See tools/app_registry/PLAN.md's "App Registry
-# v2 release job -- migration checklist" for per-domain v1/v2 status.
 
 env:
   APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
 
 jobs:
-  # App Registry v2 cutover (FR15-17, issue #891): release.yml keeps
-  # `workflow_dispatch` because that is the exact GitHub Actions API
-  # endpoint worker/release/github.go's GitHubDispatcher.Dispatch calls
-  # (`POST .../actions/workflows/release.yml/dispatches`) via a GitHub App
-  # installation token (RELEASE_GITHUB_APP_* -- see worker/main.go) -- that
-  # endpoint requires the workflow to declare a `workflow_dispatch` trigger,
-  # and issue #889's DispatchBuild mechanism (already implemented) must not
-  # be redesigned by this cutover. What's removed is the *human* entry
-  # point: a human dispatching via `gh workflow run` or the Actions "Run
-  # workflow" UI form authenticates as their own GitHub user, which GitHub
-  # never attributes a `[bot]` identity to, whereas every dispatch
-  # authenticated with a GitHub App installation token (Temporal's
-  # DispatchBuild) is attributed by GitHub itself to that App's bot user
-  # (`<app-slug>[bot]`) -- not something a human dispatch can spoof, since
-  # GitHub derives this identity from the authenticating credential, not
-  # from any workflow input. Every job below therefore requires
-  # authorize-trigger to have succeeded before doing any real work -- see
-  # that job's step for the actual check.
+  # Job skeleton mirrors release.yml's (FR1). Machine-only dispatch is
+  # enforced identically to release.yml's authorize-trigger job (bot-
+  # identity check on github.triggering_actor) -- release-v2.yml never
+  # exposes a human-usable workflow_dispatch entry point either.
   authorize-trigger:
-    name: Authorize Trigger (FR15 cutover -- machine-only)
+    name: Authorize Trigger (machine-only)
     runs-on: ubuntu-latest
     steps:
       - name: Require App-Registry-driven (machine) dispatch
@@ -89,7 +91,7 @@ jobs:
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           if [[ "$TRIGGERING_ACTOR" != *"[bot]" ]]; then
-            echo "::error::release.yml's workflow_dispatch is no longer a supported human entry point (App Registry v2 cutover, FR15). Trigger releases from the App Registry UI instead. (triggering_actor=$TRIGGERING_ACTOR)"
+            echo "::error::release-v2.yml's workflow_dispatch is not a human entry point (App Registry v2 cutover). Trigger releases from the App Registry UI instead. (triggering_actor=$TRIGGERING_ACTOR)"
             exit 1
           fi
           echo "Authorized machine-triggered dispatch (triggering_actor=$TRIGGERING_ACTOR)"
@@ -641,9 +643,9 @@ jobs:
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
           [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
           # Prefer the Temporal-dispatched batch's actual resolved plan
-          # (github.event.inputs.app_versions, set by DispatchBuild -- issue
-          # #901) over this job's own freshly-resolved plan-release output:
-          # the dispatch input is the release's literal locked plan, while
+          # (github.event.inputs.app_versions, set by DispatchBuild) over
+          # this job's own freshly-resolved plan-release output: the
+          # dispatch input is the release's literal locked plan, while
           # plan-release's own versions output is this job independently
           # re-resolving apps on a manual/legacy dispatch (still correct,
           # just not "the" batch's plan).
@@ -755,20 +757,13 @@ jobs:
       # every released app/binary/firmware artifact in App Registry via
       # recordPublishedArtifact (tools/release_helper_go/cmd/github_release.go),
       # including release_helper_go and the app-registry CLI itself when they
-      # are among the released apps -- see #780. It deliberately stops at
-      # RecordArtifact and does NOT also call PromotionRegistry.Promote:
-      # this workflow only holds `app-registry-builder-*` credentials, and
-      # Promote requires the distinct `app-registry-promoter-<env>` role
-      # (server/auth/auth.go RequirePromoter) -- builder creds cannot call it
-      # regardless. Promotion for images and charts is exclusively human-
-      # triggered via promote.yml, and that workflow is itself fully disabled
-      # (`if: false`) pending live Keycloak promoter clients / GitHub
-      # Environments. Auto-promoting binaries here would both require
-      # inventing new credential wiring this workflow doesn't have and skip
-      # the human-approval gate every other artifact kind goes through.
-      # promote.yml's `kind` input now accepts `binary` so tool binaries can
-      # be promoted through that same manual, human-gated path once it's
-      # re-enabled -- see that workflow's header comment.
+      # are among the released apps. It deliberately stops at RecordArtifact
+      # and does NOT also call PromotionRegistry.Promote: this workflow only
+      # holds `app-registry-builder-*` credentials, and Promote requires the
+      # distinct `app-registry-promoter-<env>` role (server/auth/auth.go
+      # RequirePromoter) -- builder creds cannot call it regardless.
+      # Promotion for images and charts is exclusively human-triggered via
+      # promote.yml.
       - name: Create GitHub releases for all apps and charts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
