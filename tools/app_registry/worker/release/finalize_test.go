@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/whale-net/everything/libs/go/s3"
 )
 
 // zipDir builds a zip archive (the format GitHub's artifact download
@@ -633,4 +635,250 @@ exit 0
 	require.True(t, result.Succeeded, "a no-op rebuild reusing an older chart version is a legitimate success, detail: %s", result.Detail)
 
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.9.0"}, result.Targets["chart:demo-demo"])
+}
+
+// fakeUploader is the binaryUploader test seam (Activities.S3Uploader)
+// publishCLIBinaries' tests substitute in place of a real libs/go/s3.Client,
+// per issue #984's Testing scope ("check for a binaryUploader fake/test-seam
+// already in place from the Scaffold phase ... and use it rather than
+// hitting real S3"). Records every key/data pair it was asked to upload
+// (uploads), or fails every call with err if set.
+type fakeUploader struct {
+	uploads map[string][]byte
+	err     error
+}
+
+func newFakeUploader() *fakeUploader {
+	return &fakeUploader{uploads: map[string][]byte{}}
+}
+
+func (f *fakeUploader) Upload(_ context.Context, key string, data []byte, _ *s3.UploadOptions) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	f.uploads[key] = data
+	return key, nil
+}
+
+// refusingUploader fails the test outright if Upload is ever called -- used
+// by tests proving publishCLIBinaries must not even attempt an upload (FR9/
+// FR10's "never silently skip, but also never wrongly publish" guarantee
+// cuts both ways: a target with no confirmed version, or an app that isn't a
+// CLI-binary target at all, must not reach the uploader).
+type refusingUploader struct {
+	t *testing.T
+}
+
+func (r *refusingUploader) Upload(_ context.Context, key string, _ []byte, _ *s3.UploadOptions) (string, error) {
+	r.t.Fatalf("Upload must not be called, got key %q", key)
+	return "", nil
+}
+
+// writeCLIBinaryFiles creates cliBinariesDir/<binaryName>/ with a fake set
+// of #981's build-cli-binaries output: two platform binaries, checksums.txt,
+// and (mirroring package_assets.go's generateChecksumFiles) a SHA256SUMS
+// file that publishCLIBinaries must NOT upload (issue #984's Implementation
+// scope: "does not publish" SHA256SUMS, only checksums.txt parity).
+func writeCLIBinaryFiles(t *testing.T, cliBinariesDir, binaryName string) {
+	t.Helper()
+	dir := filepath.Join(cliBinariesDir, binaryName)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, binaryName+"-linux-amd64"), []byte("linux-amd64-binary"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, binaryName+"-darwin-arm64"), []byte("darwin-arm64-binary"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte("deadbeef  "+binaryName+"-linux-amd64\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "SHA256SUMS"), []byte("not-published"), 0o644))
+}
+
+// TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys is scenario
+// (a): a confirmed-version CLI-binary target (release_helper_go, non-empty
+// non-Failed EffectiveVersion) must have its platform binaries and
+// checksums.txt uploaded under cliBinaryS3Key's exact convention
+// ("<binary>/<version>/<file>"), and must NOT upload the non-manifest
+// SHA256SUMS file alongside them.
+func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T) {
+	cliBinariesDir := t.TempDir()
+	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
+
+	uploader := newFakeUploader()
+	a := &Activities{S3Uploader: uploader}
+	finalizeTargets := map[string]FinalizeTargetOutcome{
+		"image:tools-release_helper_go": {EffectiveVersion: "v1.2.3"},
+	}
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, finalizeTargets, cliBinariesDir, true)
+
+	require.Empty(t, failures)
+	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"], "a successful publish must not mutate the target's outcome")
+
+	require.Len(t, uploader.uploads, 3, "expected exactly the two platform binaries plus checksums.txt, got keys %v", uploadedKeys(uploader))
+	require.Equal(t, []byte("linux-amd64-binary"), uploader.uploads["release_helper_go/v1.2.3/release_helper_go-linux-amd64"])
+	require.Equal(t, []byte("darwin-arm64-binary"), uploader.uploads["release_helper_go/v1.2.3/release_helper_go-darwin-arm64"])
+	require.Contains(t, uploader.uploads, "release_helper_go/v1.2.3/checksums.txt")
+
+	_, gotSHA256SUMS := uploader.uploads["release_helper_go/v1.2.3/SHA256SUMS"]
+	require.False(t, gotSHA256SUMS, "SHA256SUMS must not be published -- only checksums.txt parity is in scope")
+}
+
+func uploadedKeys(u *fakeUploader) []string {
+	keys := make([]string, 0, len(u.uploads))
+	for k := range u.uploads {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// TestPublishCLIBinaries_EffectiveVersionDivergence_UploadsUnderEffectiveVersion
+// is scenario (c) of #984's Testing section (its "(c) EffectiveVersion
+// divergence" case): a no-op-rebuild target reused an older EffectiveVersion
+// than the plan-time requested version -- the S3 key must use that
+// EffectiveVersion, never a plan-time version (there is in fact no plan-time
+// version passed to publishCLIBinaries at all -- it only ever sees
+// FinalizeTargetOutcome.EffectiveVersion, which this test pins to a value
+// distinct from any "obvious" plan-time-looking version to prove that).
+func TestPublishCLIBinaries_EffectiveVersionDivergence_UploadsUnderEffectiveVersion(t *testing.T) {
+	cliBinariesDir := t.TempDir()
+	writeCLIBinaryFiles(t, cliBinariesDir, "app-registry")
+
+	uploader := newFakeUploader()
+	a := &Activities{S3Uploader: uploader}
+	finalizeTargets := map[string]FinalizeTargetOutcome{
+		"image:tools-app-registry": {EffectiveVersion: "v0.9.0"}, // reused older version, not e.g. v2.0.0
+	}
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, finalizeTargets, cliBinariesDir, true)
+
+	require.Empty(t, failures)
+	require.Contains(t, uploader.uploads, "app-registry/v0.9.0/checksums.txt")
+	require.Contains(t, uploader.uploads, "app-registry/v0.9.0/app-registry-linux-amd64")
+}
+
+// TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched is scenario (b): an
+// app not in cliBinaryTargets (i.e. not release_helper_go/app-registry) must
+// be skipped entirely -- no uploader call, no finalizeTargets mutation, no
+// failure recorded -- regardless of what its EffectiveVersion is or whether
+// a cli-binaries artifact is even present.
+func TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched(t *testing.T) {
+	uploader := &refusingUploader{t: t}
+	a := &Activities{S3Uploader: uploader}
+	finalizeTargets := map[string]FinalizeTargetOutcome{
+		"image:demo-widget": {EffectiveVersion: "v1.0.0"},
+	}
+	original := finalizeTargets["image:demo-widget"]
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, finalizeTargets, t.TempDir(), true)
+
+	require.Empty(t, failures)
+	require.Equal(t, original, finalizeTargets["image:demo-widget"], "a non-CLI-binary app's outcome must be untouched")
+}
+
+// TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads is scenario (c) of
+// the worker directive (FR9/FR10's guarantee): a CLI-binary-target app with
+// no confirmed EffectiveVersion -- covering all three ways that can happen
+// (missing finalizeTargets entry, Failed, empty EffectiveVersion) -- must
+// never trigger an upload. Uses refusingUploader so any Upload call fails
+// the test outright rather than merely being asserted against afterward.
+func TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads(t *testing.T) {
+	cliBinariesDir := t.TempDir()
+	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
+	writeCLIBinaryFiles(t, cliBinariesDir, "app-registry")
+
+	cases := []struct {
+		name            string
+		finalizeTargets map[string]FinalizeTargetOutcome
+		apps            []string
+	}{
+		{
+			name:            "missing finalizeTargets entry",
+			finalizeTargets: map[string]FinalizeTargetOutcome{},
+			apps:            []string{"tools-release_helper_go"},
+		},
+		{
+			name: "Failed target",
+			finalizeTargets: map[string]FinalizeTargetOutcome{
+				"image:tools-release_helper_go": {Failed: true, Detail: "finalize-app: DENIED"},
+			},
+			apps: []string{"tools-release_helper_go"},
+		},
+		{
+			name: "empty EffectiveVersion",
+			finalizeTargets: map[string]FinalizeTargetOutcome{
+				"image:tools-app-registry": {},
+			},
+			apps: []string{"tools-app-registry"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uploader := &refusingUploader{t: t}
+			a := &Activities{S3Uploader: uploader}
+			before := map[string]FinalizeTargetOutcome{}
+			for k, v := range tc.finalizeTargets {
+				before[k] = v
+			}
+
+			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.finalizeTargets, cliBinariesDir, true)
+
+			require.Empty(t, failures, "no confirmed version means nothing to fail either -- this target is simply not touched")
+			require.Equal(t, before, tc.finalizeTargets, "a target with no confirmed EffectiveVersion must not be mutated")
+		})
+	}
+}
+
+// TestPublishCLIBinaries_UploadFailure_MarksTargetFailed is scenario (d): an
+// uploader error must be surfaced as a per-target failure (finalizeTargets
+// entry overwritten to Failed, detail returned in the failures slice) --
+// never silently swallowed, matching every other failure path in this file.
+func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
+	cliBinariesDir := t.TempDir()
+	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
+
+	uploader := newFakeUploader()
+	uploader.err = errors.New("simulated S3 write failure")
+	a := &Activities{S3Uploader: uploader}
+	finalizeTargets := map[string]FinalizeTargetOutcome{
+		"image:tools-release_helper_go": {EffectiveVersion: "v1.2.3"},
+	}
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, finalizeTargets, cliBinariesDir, true)
+
+	require.Len(t, failures, 1)
+	require.Contains(t, failures[0], "simulated S3 write failure")
+
+	outcome := finalizeTargets["image:tools-release_helper_go"]
+	require.True(t, outcome.Failed, "an upload error must mark the target Failed, not leave its prior success outcome in place")
+	require.Contains(t, outcome.Detail, "simulated S3 write failure")
+}
+
+// TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget covers
+// #984's Implementation scope explicitly ("If the cli-binaries artifact is
+// missing ... for a target that IS release_helper_go/app-registry and did
+// finalize successfully, treat this as a per-target failure ... do not
+// silently skip a confirmed-version target's publish"): haveCLIBinaries
+// false must fail the target, not merely skip it.
+func TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget(t *testing.T) {
+	uploader := newFakeUploader()
+	a := &Activities{S3Uploader: uploader}
+	finalizeTargets := map[string]FinalizeTargetOutcome{
+		"image:tools-release_helper_go": {EffectiveVersion: "v1.2.3"},
+	}
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */)
+
+	require.Len(t, failures, 1)
+	require.Contains(t, failures[0], "no cli-binaries artifact entry")
+	require.Empty(t, uploader.uploads, "no upload must be attempted when the artifact never arrived")
+
+	outcome := finalizeTargets["image:tools-release_helper_go"]
+	require.True(t, outcome.Failed)
+}
+
+// TestCLIBinaryS3Key_MatchesDocumentedConvention pins cliBinaryS3Key's
+// output format against tools/app_registry/ENV.md's documented convention
+// and issue #983's read-side expectation:
+// "<binary>/<version>/<file>". A deliberately wrong separator would be
+// caught here first.
+func TestCLIBinaryS3Key_MatchesDocumentedConvention(t *testing.T) {
+	require.Equal(t, "release_helper_go/v1.2.3/release_helper_go-linux-amd64", cliBinaryS3Key("release_helper_go", "v1.2.3", "release_helper_go-linux-amd64"))
+	require.Equal(t, "app-registry/v0.9.0/checksums.txt", cliBinaryS3Key("app-registry", "v0.9.0", "checksums.txt"))
 }

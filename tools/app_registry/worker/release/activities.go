@@ -53,6 +53,36 @@ type Activities struct {
 	ChartRepoURL  string
 	ChartRepoUser string
 	ChartRepoPass string
+
+	// ReleaseToolsS3Bucket/Endpoint/Region/AccessKey/SecretKey configure the
+	// libs/go/s3.Client FinalizePublish's CLI-binary publish step (issue
+	// #984, finalize.go) constructs to upload release_helper_go's/
+	// app-registry's own multi-platform CLI binaries once their version is
+	// confirmed (FR8-FR10 of #979) -- see finalize.go's package doc comment
+	// and tools/app_registry/ENV.md's "CLI binary S3" section for the S3 key
+	// convention (must match #983's ArtifactRegistry.ResolveBinaryURL read
+	// side exactly). Same credential-locality pattern as ChartRepoURL/User/
+	// Pass above: this worker holds write credentials, no GHA job does.
+	// Required only when a batch includes a release_helper_go/app-registry
+	// target -- FinalizePublish skips S3 client construction entirely
+	// otherwise, so a release with no CLI-binary target needs none of these
+	// set.
+	ReleaseToolsS3Bucket    string
+	ReleaseToolsS3Endpoint  string
+	ReleaseToolsS3Region    string
+	ReleaseToolsS3AccessKey string
+	ReleaseToolsS3SecretKey string
+
+	// S3Uploader, when non-nil, is used by FinalizePublish's CLI-binary
+	// publish step instead of constructing a real libs/go/s3.Client from
+	// ReleaseToolsS3* above -- the test seam finalize_test.go substitutes a
+	// fake through (issue #984's Testing scope: covers upload key
+	// correctness, no-client-when-no-CLI-binary-target, EffectiveVersion
+	// divergence, and missing-artifact per-target failure without a real S3
+	// endpoint). Production (worker/main.go) leaves this nil; FinalizePublish
+	// lazily constructs a real client from ReleaseToolsS3* the first time a
+	// batch actually needs one.
+	S3Uploader binaryUploader
 }
 
 var _ ReleaseActivities = (*Activities)(nil)
