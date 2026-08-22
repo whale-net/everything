@@ -27,7 +27,10 @@ templ_library(
 go_test(
     name = "role_gating_test",
     size = "small",
-    srcs = ["role_gating_test.go"],
+    srcs = [
+        "app_detail_test.go",
+        "role_gating_test.go",
+    ],
     embed = [":pages"],
     deps = [
         "//libs/go/htmxauth",
