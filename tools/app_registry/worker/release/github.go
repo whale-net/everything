@@ -6,7 +6,7 @@
 // "reuse ... rather than inventing a second auth mechanism"), then poll the
 // resulting run to a terminal state.
 //
-// # DispatchBuild's version-uniformity limitation
+// # DispatchBuild's version-uniformity limitation -- now scoped to the flat-input fallback only
 //
 // release.yml's workflow_dispatch accepts a single top-level `version`
 // input applied to every selected app/chart -- there is no per-target
@@ -14,20 +14,22 @@
 // map, since FR7/FR8 resolve independently-versioned targets in general.
 // Reconciling that with release.yml's single-version input by changing
 // release.yml's input schema is out of this issue's scope (see issue
-// #889's "File paths / targets": release.yml is not listed). Instead,
-// DispatchBuild requires every target in the resolved plan to share the
-// exact same version string and passes that single version to release.yml
-// as an explicit --version-equivalent input, which -- per
-// tools/release_helper_go/cmd/plan.go's buildPlanResult -- makes
-// release.yml's own plan-release job apply it literally to every selected
-// app/chart rather than re-deriving anything, satisfying "resolved once,
-// reused everywhere" for the uniform-version case. A batch with
-// genuinely heterogeneous per-target versions is rejected with a clear
-// error rather than silently picking one -- see uniformVersion. Lifting
-// this limitation (a release.yml input-schema change carrying a full
-// per-target version map) is documented follow-up work, matching this
-// file's other "interim implementation" precedent (see plan.go's
-// ResolvePlan doc comment).
+// #889's "File paths / targets": release.yml is not listed).
+//
+// Issue #927 changed which branch this actually affects: when plan.RawJSON
+// is populated (the normal case for a real ResolvePlan output),
+// DispatchBuild forwards it verbatim as a single `resolved_plan` input --
+// release-v2.yml's plan-release job parses that directly and applies each
+// app/chart's own per-target version from the embedded matrix, never a
+// single flat `version` string. Heterogeneous per-target versions
+// (the release-trigger UI's per-target Draft-page picker, issue #889
+// follow-up) work correctly through that path with no further change here.
+// uniformVersion is therefore only still enforced in the legacy flat-input
+// fallback (no RawJSON -- see DispatchBuild's `else` branch in
+// activities.go), which really does need one top-level `version` input and
+// has no way to carry a heterogeneous map. A batch with genuinely
+// heterogeneous per-target versions and no RawJSON is rejected with a clear
+// error rather than silently picking one -- see uniformVersion.
 //
 // # Composed-app-pin plumbing (issue #901) -- distinct from the above
 //

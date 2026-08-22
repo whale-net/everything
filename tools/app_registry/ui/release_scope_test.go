@@ -281,3 +281,104 @@ func TestResolveReleaseScope_All_ResolvesToNothing_IsRejected(t *testing.T) {
 		t.Fatal("expected scope \"all\" resolving to nothing (all-demo catalog, demo excluded by default) to error, got nil")
 	}
 }
+
+// --- resolveSelectedTargets (issue #889 follow-up: the checkbox-tree picker) ---
+
+// This directly unit-tests resolveSelectedTargets (release_scope.go) --
+// the picker's "domain:<name>" | "app:<full_name>" | "chart:<full_name>"
+// token grammar, the picker's counterpart to resolveReleaseScope's
+// comma-string grammar above. Reuses scopeTestCatalog/scopeTestClient.
+
+func TestResolveSelectedTargets_DomainToken_ResolvesEverythingUnderIt(t *testing.T) {
+	apps, charts := scopeTestCatalog()
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps, charts: charts}}
+
+	targets, err := resolveSelectedTargets(context.Background(), registry, []string{"domain:platform"})
+	if err != nil {
+		t.Fatalf("resolveSelectedTargets: %v", err)
+	}
+	names := fullNames(targets)
+	if !containsAll(names, "platform-worker", "platform-api", "platform-chart") {
+		t.Errorf("expected every active platform app/chart, got %v", names)
+	}
+	if len(names) != 3 {
+		t.Errorf("expected exactly 3 targets (platform-archived must never resolve), got %v", names)
+	}
+}
+
+func TestResolveSelectedTargets_AppToken_DoesNotRequireItsChart(t *testing.T) {
+	apps, charts := scopeTestCatalog()
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps, charts: charts}}
+
+	// The user's explicit requirement: picking one chart never implies or
+	// requires picking its member apps, and vice versa -- an app token
+	// alone must resolve to exactly that one app, nothing else.
+	targets, err := resolveSelectedTargets(context.Background(), registry, []string{"app:platform-worker"})
+	if err != nil {
+		t.Fatalf("resolveSelectedTargets: %v", err)
+	}
+	if names := fullNames(targets); len(names) != 1 || names[0] != "platform-worker" {
+		t.Errorf("expected exactly [platform-worker], got %v", names)
+	}
+}
+
+func TestResolveSelectedTargets_ChartToken_DoesNotRequireItsApps(t *testing.T) {
+	apps, charts := scopeTestCatalog()
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps, charts: charts}}
+
+	targets, err := resolveSelectedTargets(context.Background(), registry, []string{"chart:platform-chart"})
+	if err != nil {
+		t.Fatalf("resolveSelectedTargets: %v", err)
+	}
+	if names := fullNames(targets); len(names) != 1 || names[0] != "platform-chart" {
+		t.Errorf("expected exactly [platform-chart], got %v", names)
+	}
+}
+
+func TestResolveSelectedTargets_MixedTokens_UnionsAcrossKinds(t *testing.T) {
+	apps, charts := scopeTestCatalog()
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps, charts: charts}}
+
+	targets, err := resolveSelectedTargets(context.Background(), registry, []string{
+		"app:platform-api", "chart:demo-chart", "domain:demo",
+	})
+	if err != nil {
+		t.Fatalf("resolveSelectedTargets: %v", err)
+	}
+	names := fullNames(targets)
+	if !containsAll(names, "platform-api", "demo-chart", "demo-worker") {
+		t.Errorf("expected the union of all three selections (with demo-chart deduplicated against domain:demo), got %v", names)
+	}
+	if len(names) != 3 {
+		t.Errorf("expected exactly 3 deduplicated targets, got %v", names)
+	}
+}
+
+func TestResolveSelectedTargets_UnknownApp_IsRejected(t *testing.T) {
+	apps, charts := scopeTestCatalog()
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps, charts: charts}}
+
+	_, err := resolveSelectedTargets(context.Background(), registry, []string{"app:nonexistent-app"})
+	if err == nil {
+		t.Fatal("expected an error for a selection naming a nonexistent app, got nil")
+	}
+}
+
+func TestResolveSelectedTargets_MalformedToken_IsRejected(t *testing.T) {
+	apps, charts := scopeTestCatalog()
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps, charts: charts}}
+
+	_, err := resolveSelectedTargets(context.Background(), registry, []string{"platform-worker"})
+	if err == nil {
+		t.Fatal("expected an error for a token with no \"kind:\" prefix, got nil")
+	}
+}
+
+func TestResolveSelectedTargets_NoSelections_IsRejected(t *testing.T) {
+	registry := &RegistryClient{App: &scopeTestClient{}}
+
+	_, err := resolveSelectedTargets(context.Background(), registry, nil)
+	if err == nil {
+		t.Fatal("expected an error when nothing is selected, got nil")
+	}
+}

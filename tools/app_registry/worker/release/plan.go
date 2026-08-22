@@ -142,7 +142,34 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 		}
 	}
 
-	args := []string{"plan", "--format=json", "--event-type=workflow_dispatch", "--increment-patch"}
+	// versionSelections carries each target's own per-target version choice
+	// (issue #889 follow-up: the release-trigger UI's Draft-page picker) as
+	// release_helper_go's --version-selections JSON, keyed by OwnerFullName.
+	// A target with an empty VersionSelection (the pre-picker default, and
+	// every target on the old free-form-scope path) is simply omitted --
+	// when the whole batch omits it, --increment-patch below still supplies
+	// the batch-wide default unchanged.
+	versionSelections := map[string]string{}
+	for _, t := range targets {
+		if t.VersionSelection != "" {
+			versionSelections[t.OwnerFullName] = t.VersionSelection
+		}
+	}
+
+	args := []string{"plan", "--format=json", "--event-type=workflow_dispatch"}
+	if len(versionSelections) < len(targets) {
+		// At least one target has no per-target selection -- --increment-patch
+		// remains the batch-wide default for it (and for every target, when
+		// versionSelections is empty entirely).
+		args = append(args, "--increment-patch")
+	}
+	if len(versionSelections) > 0 {
+		raw, err := json.Marshal(versionSelections)
+		if err != nil {
+			return ResolvedPlan{}, fmt.Errorf("resolve plan: marshal version selections: %w", err)
+		}
+		args = append(args, "--version-selections="+string(raw))
+	}
 	if len(appsMetadata) > 0 {
 		raw, err := json.Marshal(appsMetadata)
 		if err != nil {

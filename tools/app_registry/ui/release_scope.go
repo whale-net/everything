@@ -271,3 +271,116 @@ func resolveScopeTokens(scope string, cat *scopeCatalog) ([]*pb.ReleaseTargetInp
 	}
 	return targetsFromAppsAndCharts(resultApps, resultCharts), nil
 }
+
+// pickerKindDomain/pickerKindApp/pickerKindChart are the "kind:value"
+// checkbox-value prefixes the release-trigger picker's <input name="target">
+// checkboxes use (issue #889 follow-up) -- "domain:<name>" |
+// "app:<full_name>" | "chart:<full_name>". pages.PickerToken (release_trigger.
+// templ) builds these same strings when rendering the checkboxes; this
+// package only parses them back (resolveSelectedTargets below). Duplicated
+// rather than shared from a common package, deliberately -- these are three
+// string literals, and pages cannot import this (main) package (the
+// reverse: main already imports pages) -- same "local, minimal,
+// positionally coupled" precedent as e.g. worker/release/plan.go's
+// appMetadataInput mirroring release_helper_go's AppMetadataInput.
+const (
+	pickerKindDomain = "domain"
+	pickerKindApp    = "app"
+	pickerKindChart  = "chart"
+)
+
+// resolveSelectedTargets expands the picker's checkbox selections (already-
+// disambiguated domain/app/chart tokens, see pickerToken) into the
+// ReleaseTargetInput list TriggerRelease expects -- the picker's counterpart
+// to resolveReleaseScope's comma-string grammar above. Selections need no
+// short-name ambiguity resolution (unlike resolveScopeTokens): every token
+// already names its kind and, for app/chart tokens, its full name exactly
+// as the picker rendered it.
+func resolveSelectedTargets(ctx context.Context, registry *RegistryClient, selections []string) ([]*pb.ReleaseTargetInput, error) {
+	if len(selections) == 0 {
+		return nil, fmt.Errorf("select at least one domain, app, or chart to release")
+	}
+
+	cat, err := fetchReleasableCatalog(ctx, registry)
+	if err != nil {
+		return nil, err
+	}
+
+	byFullApp := make(map[string]*pb.App, len(cat.apps))
+	byDomainApp := make(map[string][]*pb.App, len(cat.apps))
+	for _, a := range cat.apps {
+		byFullApp[a.GetFullName()] = a
+		byDomainApp[a.GetDomain()] = append(byDomainApp[a.GetDomain()], a)
+	}
+	byFullChart := make(map[string]*pb.Chart, len(cat.charts))
+	byDomainChart := make(map[string][]*pb.Chart, len(cat.charts))
+	for _, c := range cat.charts {
+		byFullChart[c.GetFullName()] = c
+		byDomainChart[c.GetDomain()] = append(byDomainChart[c.GetDomain()], c)
+	}
+
+	var resultApps []*pb.App
+	var resultCharts []*pb.Chart
+	seenApp := map[string]bool{}
+	seenChart := map[string]bool{}
+	addApp := func(a *pb.App) {
+		if !seenApp[a.GetFullName()] {
+			seenApp[a.GetFullName()] = true
+			resultApps = append(resultApps, a)
+		}
+	}
+	addChart := func(c *pb.Chart) {
+		if !seenChart[c.GetFullName()] {
+			seenChart[c.GetFullName()] = true
+			resultCharts = append(resultCharts, c)
+		}
+	}
+
+	var invalid []string
+	for _, token := range selections {
+		kind, value, ok := strings.Cut(token, ":")
+		if !ok {
+			invalid = append(invalid, token)
+			continue
+		}
+		switch kind {
+		case pickerKindDomain:
+			apps, hasApps := byDomainApp[value]
+			charts, hasCharts := byDomainChart[value]
+			if !hasApps && !hasCharts {
+				invalid = append(invalid, fmt.Sprintf("domain %q has no releasable apps or charts", value))
+				continue
+			}
+			for _, a := range apps {
+				addApp(a)
+			}
+			for _, c := range charts {
+				addChart(c)
+			}
+		case pickerKindApp:
+			a, ok := byFullApp[value]
+			if !ok {
+				invalid = append(invalid, fmt.Sprintf("app %q not found", value))
+				continue
+			}
+			addApp(a)
+		case pickerKindChart:
+			c, ok := byFullChart[value]
+			if !ok {
+				invalid = append(invalid, fmt.Sprintf("chart %q not found", value))
+				continue
+			}
+			addChart(c)
+		default:
+			invalid = append(invalid, token)
+		}
+	}
+
+	if len(invalid) > 0 {
+		return nil, fmt.Errorf("invalid selection: %s", strings.Join(invalid, "; "))
+	}
+	if len(resultApps) == 0 && len(resultCharts) == 0 {
+		return nil, fmt.Errorf("selection resolved to no releasable apps or charts")
+	}
+	return targetsFromAppsAndCharts(resultApps, resultCharts), nil
+}

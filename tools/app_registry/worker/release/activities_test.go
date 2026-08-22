@@ -19,6 +19,12 @@ import (
 // the real Activities.DispatchBuild entry point (not just uniformVersion in
 // isolation, which github_test.go's TestUniformVersion already covers) --
 // see issue #889's Testing-phase instruction to verify this specifically.
+// This plan has no RawJSON, so it exercises DispatchBuild's flat-input
+// fallback branch -- the only branch that still needs one uniform version
+// (issue #889 follow-up); see
+// TestActivities_DispatchBuild_HeterogeneousVersionsWithRawJSON_DispatchesSuccessfully
+// below for the RawJSON branch, which must accept exactly this same
+// heterogeneous input.
 func TestActivities_DispatchBuild_HeterogeneousVersions_ReturnsClearError(t *testing.T) {
 	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux()), Registry: newTestRegistry(t)}
 	plan := ResolvedPlan{
@@ -32,6 +38,58 @@ func TestActivities_DispatchBuild_HeterogeneousVersions_ReturnsClearError(t *tes
 	require.Error(t, err)
 	require.ErrorContains(t, err, "heterogeneous versions")
 	require.ErrorContains(t, err, "dispatch build")
+}
+
+// TestActivities_DispatchBuild_HeterogeneousVersionsWithRawJSON_DispatchesSuccessfully
+// is the issue #889 follow-up counterpart to the test above: once
+// plan.RawJSON is populated (the normal ResolvePlan path, and the only path
+// a per-target version picker on the release-trigger UI actually needs),
+// DispatchBuild must NOT reject a heterogeneous plan.Versions map --
+// uniformVersion is scoped to the flat-input fallback only (see github.go's
+// package doc comment "DispatchBuild's version-uniformity limitation -- now
+// scoped to the flat-input fallback only").
+func TestActivities_DispatchBuild_HeterogeneousVersionsWithRawJSON_DispatchesSuccessfully(t *testing.T) {
+	var sawInputs map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		sawInputs, _ = body["inputs"].(map[string]any)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":202,"html_url":"https://example/202","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
+	})
+
+	repo := newTestRegistry(t)
+	seedApp(t, repo, "demo", "widget")
+	_, err := repo.Reconcile(context.Background(), nil, []*appmetapb.ChartManifest{
+		{Domain: "demo", Name: "achart"},
+	}, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+
+	rawJSON := []byte(`{"matrix":{"include":[{"app":"widget","domain":"demo","version":"v2.0.0"}]},"apps":["demo-widget"],"versions":{"demo-widget":"v2.0.0","demo-achart":"v1.0.1"},"event_type":"workflow_dispatch","has_specs":false}`)
+
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
+	plan := ResolvedPlan{
+		ReleaseRunID: "release-run-2",
+		Versions: map[string]string{
+			"image:demo-widget": "v2.0.0",
+			"chart:demo-achart": "v1.0.1",
+		},
+		RawJSON: rawJSON,
+	}
+	ref, err := a.DispatchBuild(context.Background(), plan, nil)
+	require.NoError(t, err)
+	require.Equal(t, "202", ref.RunID)
+	require.Equal(t, string(rawJSON), sawInputs["resolved_plan"])
+
+	_, hasVersion := sawInputs["version"]
+	require.False(t, hasVersion, "version (a single flat string) must never be sent for a heterogeneous batch -- resolved_plan carries each target's own version instead")
 }
 
 // TestActivities_DispatchBuild_DigestOverrides_ReturnsUnimplementedError

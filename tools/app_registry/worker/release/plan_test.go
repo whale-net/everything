@@ -154,3 +154,62 @@ func TestActivities_ResolvePlan_WorkspaceRootSet_UsedAsIs(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "v1.0.0", plan.Versions["image:demo-hello-go"])
 }
+
+// TestActivities_ResolvePlan_NoVersionSelections_PassesIncrementPatch proves
+// the pre-existing default is unchanged for callers that never set
+// ReleaseTarget.VersionSelection (e.g. anything still on the old free-form-
+// scope path): ResolvePlan must still pass the batch-wide --increment-patch
+// flag, with no --version-selections at all.
+func TestActivities_ResolvePlan_NoVersionSelections_PassesIncrementPatch(t *testing.T) {
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+
+	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"demo-hello-go":"v1.2.5"}}`)
+	a := &Activities{Registry: repo, PlanBinaryPath: bin}
+
+	_, err = runResolvePlan(t, a, []ReleaseTarget{
+		{OwnerFullName: "demo-hello-go", Kind: repository.ArtifactKindImage},
+	})
+	require.NoError(t, err)
+
+	joined := strings.Join(readFakeArgs(t, argsFile), " ")
+	require.Contains(t, joined, "--increment-patch")
+	require.NotContains(t, joined, "--version-selections=")
+}
+
+// TestActivities_ResolvePlan_MixedVersionSelections_BuildsPerTargetJSON is
+// the direct regression test for the release-trigger UI's per-target
+// Draft-page picker (issue #889 follow-up): a batch with one target on an
+// explicit hardcoded version, one on a specific bump type, and one with no
+// selection at all must build --version-selections covering exactly the
+// first two, and must still pass --increment-patch as the batch-wide
+// default for the third (uncovered) target.
+func TestActivities_ResolvePlan_MixedVersionSelections_BuildsPerTargetJSON(t *testing.T) {
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+		{Domain: "demo", Name: "worker", AppType: "worker", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+		{Domain: "demo", Name: "job", AppType: "job", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+
+	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"demo-hello-go":"v9.9.9","demo-worker":"v1.1.0","demo-job":"v0.0.2"}}`)
+	a := &Activities{Registry: repo, PlanBinaryPath: bin}
+
+	_, err = runResolvePlan(t, a, []ReleaseTarget{
+		{OwnerFullName: "demo-hello-go", Kind: repository.ArtifactKindImage, VersionSelection: "v9.9.9"},
+		{OwnerFullName: "demo-worker", Kind: repository.ArtifactKindImage, VersionSelection: "minor"},
+		{OwnerFullName: "demo-job", Kind: repository.ArtifactKindImage},
+	})
+	require.NoError(t, err)
+
+	joined := strings.Join(readFakeArgs(t, argsFile), " ")
+	require.Contains(t, joined, "--increment-patch", "demo-job has no selection, so the batch-wide default must still be passed")
+	require.Contains(t, joined, "--version-selections=")
+	require.Contains(t, joined, `"demo-hello-go":"v9.9.9"`)
+	require.Contains(t, joined, `"demo-worker":"minor"`)
+	require.NotContains(t, joined, `"demo-job"`, "demo-job has no VersionSelection, so it must not appear in --version-selections at all")
+}

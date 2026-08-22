@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
+	"github.com/whale-net/everything/libs/go/semver"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -128,6 +130,9 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 		if kind != repository.ArtifactKindImage && kind != repository.ArtifactKindChart {
 			return nil, status.Errorf(codes.InvalidArgument, "targets[].kind must be IMAGE or CHART, got %v", t.GetKind())
 		}
+		if sel := t.GetVersionSelection(); sel != "" && !isValidVersionSelection(sel) {
+			return nil, status.Errorf(codes.InvalidArgument, `targets[].version_selection for %s must be "major", "minor", "patch", or "vMAJOR.MINOR.PATCH", got %q`, t.GetOwnerFullName(), sel)
+		}
 		key := t.GetOwnerFullName() + "\x00" + string(kind)
 		if seen[key] {
 			return nil, status.Errorf(codes.InvalidArgument, "targets[] contains %s (%s) more than once in the same request", t.GetOwnerFullName(), kind)
@@ -143,9 +148,10 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 			Kind:          kind,
 		})
 		releaseTargets = append(releaseTargets, release.ReleaseTarget{
-			OwnerFullName: t.GetOwnerFullName(),
-			Kind:          kind,
-			Digest:        t.GetDigest(),
+			OwnerFullName:    t.GetOwnerFullName(),
+			Kind:             kind,
+			Digest:           t.GetDigest(),
+			VersionSelection: t.GetVersionSelection(),
 		})
 		if t.GetDigest() != "" {
 			digests[t.GetOwnerFullName()] = t.GetDigest()
@@ -332,4 +338,24 @@ func releaseRunTargetStateToPB(s repository.ReleaseRunTargetState) pb.ReleaseRun
 	default:
 		return pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_UNSPECIFIED
 	}
+}
+
+// isValidVersionSelection validates ReleaseTargetInput.version_selection
+// (issue #889 follow-up): a bump keyword, or a literal "vMAJOR.MINOR.PATCH"
+// version via the one shared libs/go/semver parser (see that package's doc
+// comment on why it, not a second regex, is the parser every caller in this
+// repo shares) -- mirrors tools/release_helper_go/cmd/plan.go's identical
+// isValidVersionSelection for its own --version-selections CLI flag.
+func isValidVersionSelection(sel string) bool {
+	if sel == "major" || sel == "minor" || sel == "patch" {
+		return true
+	}
+	// semver.Parse/ParseRelease treat the "v" prefix as optional on input;
+	// require it here to match the "vMAJOR.MINOR.PATCH" shape this field's
+	// doc comment (and the CLI's --version-selections validator) promises.
+	if !strings.HasPrefix(sel, "v") {
+		return false
+	}
+	_, err := semver.ParseRelease(sel)
+	return err == nil
 }

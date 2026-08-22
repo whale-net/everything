@@ -91,6 +91,16 @@ type ReleaseTarget struct {
 	// it is out of scope for issue #889's implementation -- see
 	// DispatchBuild's doc comment.
 	Digest string
+	// VersionSelection is this target's own version choice, independent of
+	// every other target in the batch (the release-trigger UI's per-target
+	// picker, issue #889 follow-up). Empty means "auto-patch-bump" (this
+	// activity's long-standing default, unchanged); "major"/"minor"/"patch"
+	// picks that bump type via the same AllocateVersion path a batch-wide
+	// bump already used; "vX.Y.Z" hardcodes the version, bypassing
+	// AllocateVersion/git entirely for this target. See ResolvePlan
+	// (plan.go) for how this becomes release_helper_go's
+	// --version-selections input.
+	VersionSelection string
 }
 
 // key returns the same "<kind>:<owner>" identity repository.TargetKey uses

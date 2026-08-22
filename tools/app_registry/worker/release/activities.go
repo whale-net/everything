@@ -127,14 +127,6 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 		return BuildRef{}, fmt.Errorf("dispatch build: resolved plan has no versions")
 	}
 
-	// uniformVersion is still enforced unconditionally -- lifting this
-	// limitation is explicitly out of scope for issue #927 (see github.go's
-	// package doc comment); this guard's job is unchanged by #927, only what
-	// happens to its result below is.
-	version, err := uniformVersion(plan.Versions)
-	if err != nil {
-		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
-	}
 	apps, charts, err := splitPlanTargets(plan.Versions)
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
@@ -182,6 +174,20 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 		// comment) but not exclusively Temporal-only: any other bot-
 		// credentialed dispatcher hitting this endpoint without a
 		// pre-computed resolved_plan still needs a working path.
+		//
+		// uniformVersion is only enforced here, in the flat-input fallback
+		// (issue #889 follow-up: the release-trigger UI's per-target
+		// version picker needs heterogeneous plan.Versions to work at all --
+		// see this file's package doc comment "DispatchBuild's version-
+		// uniformity limitation"). The RawJSON branch above never uses a
+		// single flat version string -- it forwards the full per-target
+		// versions map verbatim -- so it must not reject a heterogeneous
+		// batch; only this legacy fallback, which really does need one
+		// top-level `version` input, still requires uniformity.
+		version, err := uniformVersion(plan.Versions)
+		if err != nil {
+			return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
+		}
 		inputs["version"] = version
 		if len(apps) > 0 {
 			inputs["apps"] = joinComma(apps)

@@ -2,43 +2,150 @@ package pages
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
 
-// ReleaseTriggerViewState is the release-trigger screen's render state
-// (FR1-6, FR10, FR4/NFR5; issue #890). Scope/IncludeDemo/Digest are the raw
-// submitted form fields, echoed back on every render (matches
-// promote.templ's validation-re-render pattern). ResolvedTargets is FR1's
-// real scope-expansion result (release_scope.go's resolveReleaseScope) --
-// nil on the initial GET, populated after any POST that resolved
-// successfully (both the preview-only "resolve" step and the confirmed
-// "trigger" step).
-//
-// Denied/DenyReason are FR4/NFR5's client-side gate decision
-// (handlers_release.go's applyReleaseTriggerGate) -- when Denied is true,
-// the form is not rendered at all (see ReleaseTrigger below), mirroring
-// rollback.templ's identical Denied banner.
-type ReleaseTriggerViewState struct {
-	Scope       string
-	IncludeDemo bool
-	Digest      string
+// PickerKindDomain/PickerKindApp/PickerKindChart are the "kind:value"
+// checkbox-value prefixes this screen's picker checkboxes use (issue #889
+// follow-up: a domain/app/chart multi-select replacing the original
+// free-form scope text field) -- "domain:<name>" | "app:<full_name>" |
+// "chart:<full_name>". The release-trigger handler's resolveSelectedTargets
+// (release_scope.go, package main) parses these same string values back;
+// duplicated rather than shared from a common package since pages cannot
+// import main (the reverse: main already imports pages) -- see that
+// package's identical doc comment on this exact coupling.
+const (
+	PickerKindDomain = "domain"
+	PickerKindApp    = "app"
+	PickerKindChart  = "chart"
+)
 
+// PickerToken builds one picker checkbox's value attribute.
+func PickerToken(kind, value string) string {
+	return kind + ":" + value
+}
+
+// DomainPickerGroup is one domain's releasable apps/charts, as rendered by
+// the checkbox-tree picker. Apps and charts are rendered as sibling leaf
+// checkboxes under the domain, never nested under one another -- selecting
+// a chart never requires or implies selecting its member apps (a chart is
+// independently releasable: it pins already-published image digests via
+// its compose-time lockfile, see ARCHITECTURE.md "Chart → image
+// lockfile"), and vice versa.
+type DomainPickerGroup struct {
+	Domain string
+	Apps   []*pb.App
+	Charts []*pb.Chart
+}
+
+// BuildDomainPickerGroups groups apps/charts by domain for the picker,
+// sorted by domain name, with apps/charts within each domain sorted by
+// full name -- deterministic rendering regardless of ListApps/ListCharts'
+// own ordering (same rationale as release_scope.go's targetsFromAppsAndCharts
+// sort).
+func BuildDomainPickerGroups(apps []*pb.App, charts []*pb.Chart) []DomainPickerGroup {
+	byDomain := make(map[string]*DomainPickerGroup)
+	for _, a := range apps {
+		g, ok := byDomain[a.GetDomain()]
+		if !ok {
+			g = &DomainPickerGroup{Domain: a.GetDomain()}
+			byDomain[a.GetDomain()] = g
+		}
+		g.Apps = append(g.Apps, a)
+	}
+	for _, c := range charts {
+		g, ok := byDomain[c.GetDomain()]
+		if !ok {
+			g = &DomainPickerGroup{Domain: c.GetDomain()}
+			byDomain[c.GetDomain()] = g
+		}
+		g.Charts = append(g.Charts, c)
+	}
+
+	domains := make([]string, 0, len(byDomain))
+	for d := range byDomain {
+		domains = append(domains, d)
+	}
+	sort.Strings(domains)
+
+	groups := make([]DomainPickerGroup, 0, len(domains))
+	for _, d := range domains {
+		g := *byDomain[d]
+		sort.Slice(g.Apps, func(i, j int) bool { return g.Apps[i].GetFullName() < g.Apps[j].GetFullName() })
+		sort.Slice(g.Charts, func(i, j int) bool { return g.Charts[i].GetFullName() < g.Charts[j].GetFullName() })
+		groups = append(groups, g)
+	}
+	return groups
+}
+
+// TargetVersionInput is one resolved target's version-selection form state
+// on the Draft step (issue #889 follow-up). Mode "bump" (the default for a
+// freshly-resolved target, Bump "patch") keeps today's unchanged auto-
+// patch-bump behavior unless the operator changes it; Mode "explicit"
+// hardcodes Explicit as the version instead, bypassing auto-increment
+// entirely for that one target.
+type TargetVersionInput struct {
+	Mode     string // "bump" | "explicit"
+	Bump     string // "major" | "minor" | "patch" -- meaningful when Mode == "bump"
+	Explicit string // "vMAJOR.MINOR.PATCH" -- meaningful when Mode == "explicit"
+}
+
+// modeFieldName/bumpFieldName/explicitFieldName build this target's three
+// Draft-step form field names -- handlers_release.go's
+// parseTargetVersionInputs reads these same names back by iterating the
+// same ResolvedTargets list, so the two must stay in lockstep; kept next to
+// each other in this file and that one respectively rather than shared
+// across the main/pages package boundary (same rationale as PickerToken's
+// doc comment).
+func modeFieldName(fullName string) string     { return "mode__" + fullName }
+func bumpFieldName(fullName string) string     { return "bump__" + fullName }
+func explicitFieldName(fullName string) string { return "explicit__" + fullName }
+
+// ReleaseTriggerViewState is the release-trigger screen's render state
+// (FR1-6, FR10, FR4/NFR5; issue #890; issue #889 follow-up for the
+// domain/app/chart picker and per-target version selection that replaced
+// the original free-form scope text field). Two steps on one page, same
+// "do" form-value pattern as before handleReleaseTriggerSubmit's doc
+// comment describes:
+//   - Picker (step 1): PickerGroups render the checkbox tree; Selected
+//     echoes which were checked, on a validation re-render.
+//   - Draft (step 2, once ResolvedTargets != nil): one version-selection
+//     row per resolved target, keyed by OwnerFullName in VersionInputs.
+type ReleaseTriggerViewState struct {
 	Denied     bool
 	DenyReason string
 
-	ScopeErr  string
+	// PickerGroups is the releasable catalog, grouped by domain, for the
+	// checkbox tree -- nil when Denied (no point loading it).
+	PickerGroups []DomainPickerGroup
+	// Selected echoes which picker checkboxes (by their "kind:value" token,
+	// see PickerToken) were checked, so a PickErr re-render doesn't lose the
+	// operator's in-progress selection.
+	Selected map[string]bool
+
+	// Digest (optional) still pins the target to a pre-existing digest
+	// instead of building fresh (FR2) -- only meaningful once the picker
+	// resolves to exactly one target, same rule as before.
+	Digest string
+
+	PickErr   string
 	DigestErr string
-	// SubmitErr is TriggerRelease's own error, distinct from ScopeErr
-	// (scope resolution failed) -- includes FR5's "already releasing"
-	// FailedPrecondition rejection, rendered with its own specific prefix
-	// rather than folded into a generic failure message (see
+	// SubmitErr is TriggerRelease's own error, distinct from PickErr/
+	// DigestErr -- includes FR5's "already releasing" FailedPrecondition
+	// rejection, rendered with its own specific prefix (see
 	// handleReleaseTriggerSubmit's doc comment).
 	SubmitErr string
 
 	ResolvedTargets []*pb.ReleaseTargetInput
+	// VersionInputs holds each resolved target's version-selection form
+	// state, keyed by OwnerFullName -- defaults to Mode "bump"/Bump "patch"
+	// for a freshly-resolved target, echoed back verbatim on a Draft-step
+	// validation re-render.
+	VersionInputs map[string]TargetVersionInput
 }
 
 // releaseTargetKindLabel matches the CLI's --kind flag values ("image" |
@@ -61,9 +168,10 @@ func releaseTargetKindLabel(k pb.ArtifactKind) string {
 	}
 }
 
-// ReleaseTrigger is the release-trigger screen: enter a batch scope ("all",
-// a domain name, or a comma-separated app/chart list -- FR1) and preview
-// the concrete target list it resolves to.
+// ReleaseTrigger is the release-trigger screen: pick domains/apps/charts
+// from a checkbox tree (FR1, issue #889 follow-up) and, once resolved,
+// choose each target's own version (auto-bump or an explicit hardcoded
+// version) on the Draft step below.
 templ ReleaseTrigger(user *htmxauth.UserInfo, s ReleaseTriggerViewState) {
 	@components.Shell("Trigger Release", user) {
 		<div class="flex justify-between items-center mb-4">
@@ -74,8 +182,8 @@ templ ReleaseTrigger(user *htmxauth.UserInfo, s ReleaseTriggerViewState) {
 				<span><strong>Read-only.</strong> { s.DenyReason }</span>
 			</div>
 		} else {
-			if s.ScopeErr != "" {
-				<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.ScopeErr }</span></div>
+			if s.PickErr != "" {
+				<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.PickErr }</span></div>
 			}
 			if s.DigestErr != "" {
 				<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.DigestErr }</span></div>
@@ -87,81 +195,138 @@ templ ReleaseTrigger(user *htmxauth.UserInfo, s ReleaseTriggerViewState) {
 				<div class="form-control mb-4">
 					<label class="label">
 						<span class="label-text">
-							Scope <span class="text-error">*</span> — "all", a domain name
-							(e.g. "manmanv2"), or a comma-separated list of app/chart names
+							Select domains, apps, or charts to release <span class="text-error">*</span>
+							— checking a domain releases everything under it; checking one
+							app or chart releases only that target
 						</span>
 					</label>
-					<input name="scope" class="input input-bordered font-mono" value={ s.Scope } required placeholder="all"/>
-				</div>
-				<div class="form-control mb-4">
-					<label class="label cursor-pointer justify-start gap-3">
-						<input type="checkbox" name="include_demo" value="true" class="toggle" checked?={ s.IncludeDemo }/>
-						<span class="label-text">Include demo domain when scope is "all" — excluded by default</span>
-					</label>
+					<div class="flex flex-col gap-3">
+						for _, g := range s.PickerGroups {
+							@domainPickerGroupView(g, s.Selected)
+						}
+					</div>
 				</div>
 				<div class="form-control mb-4">
 					<label class="label">
 						<span class="label-text">
 							Digest (optional) — pins the target to a pre-existing digest
-							instead of building fresh; only meaningful once scope resolves
-							to exactly one target
+							instead of building fresh; only meaningful once the selection
+							resolves to exactly one target
 						</span>
 					</label>
 					<input name="digest" class="input input-bordered font-mono" value={ s.Digest } placeholder="sha256:..."/>
 				</div>
 				<div class="flex gap-2 justify-end mb-6">
-					<button type="submit" name="do" value="resolve" class="btn btn-primary">Resolve scope</button>
+					<button type="submit" name="do" value="resolve" class="btn btn-primary">Resolve selection</button>
 				</div>
 			</form>
 
 			if s.ResolvedTargets != nil {
-				@resolvedTargetsPreview(s)
+				@releaseDraft(s)
 			}
 		}
 	}
 }
 
-templ resolvedTargetsPreview(s ReleaseTriggerViewState) {
+templ domainPickerGroupView(g DomainPickerGroup, selected map[string]bool) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm">
+		<div class="card-body py-3">
+			<label class="label cursor-pointer justify-start gap-3">
+				<input type="checkbox" name="target" value={ PickerToken(PickerKindDomain, g.Domain) } class="checkbox" checked?={ selected[PickerToken(PickerKindDomain, g.Domain)] }/>
+				<span class="label-text font-semibold">{ g.Domain } (all)</span>
+			</label>
+			<div class="flex flex-wrap gap-x-6 gap-y-1 pl-8">
+				for _, a := range g.Apps {
+					<label class="label cursor-pointer justify-start gap-2 p-0">
+						<input type="checkbox" name="target" value={ PickerToken(PickerKindApp, a.GetFullName()) } class="checkbox checkbox-sm" checked?={ selected[PickerToken(PickerKindApp, a.GetFullName())] }/>
+						<span class="label-text font-mono text-sm">{ a.GetName() }</span>
+					</label>
+				}
+				for _, c := range g.Charts {
+					<label class="label cursor-pointer justify-start gap-2 p-0">
+						<input type="checkbox" name="target" value={ PickerToken(PickerKindChart, c.GetFullName()) } class="checkbox checkbox-sm" checked?={ selected[PickerToken(PickerKindChart, c.GetFullName())] }/>
+						<span class="label-text font-mono text-sm">{ c.GetName() } <span class="opacity-50">(chart)</span></span>
+					</label>
+				}
+			</div>
+		</div>
+	</div>
+}
+
+// releaseDraft is the Draft step (step 2): one version-selection row per
+// resolved target, plus a hidden echo of every original picker selection
+// and the digest -- handleReleaseTriggerSubmit's "trigger" step re-resolves
+// from that echo rather than trusting a client-supplied target list (closes
+// the same TOCTOU window the pre-#889 preview already closed).
+templ releaseDraft(s ReleaseTriggerViewState) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
 		<div class="card-body">
-			<h3 class="card-title text-base">Resolved targets ({ fmt.Sprint(len(s.ResolvedTargets)) })</h3>
+			<h3 class="card-title text-base">Draft — { fmt.Sprint(len(s.ResolvedTargets)) } target(s)</h3>
 			if len(s.ResolvedTargets) == 0 {
-				<p class="text-sm opacity-70">No releasable targets matched this scope.</p>
+				<p class="text-sm opacity-70">No releasable targets matched this selection.</p>
 			} else {
-				<table class="table table-sm">
-					<thead>
-						<tr>
-							<th>Target</th>
-							<th>Kind</th>
-							<th>Digest</th>
-						</tr>
-					</thead>
-					<tbody>
-						for _, t := range s.ResolvedTargets {
-							<tr>
-								<td class="font-mono">{ t.GetOwnerFullName() }</td>
-								<td>{ releaseTargetKindLabel(t.GetKind()) }</td>
-								<td class="font-mono text-xs">
-									if t.GetDigest() != "" {
-										{ t.GetDigest() }
-									} else {
-										<span class="opacity-50">build fresh</span>
-									}
-								</td>
-							</tr>
-						}
-					</tbody>
-				</table>
-				<form method="post" action="/releases/trigger" class="flex gap-2 justify-end mt-4">
-					<input type="hidden" name="scope" value={ s.Scope }/>
-					if s.IncludeDemo {
-						<input type="hidden" name="include_demo" value="true"/>
+				<form method="post" action="/releases/trigger">
+					for tok := range s.Selected {
+						<input type="hidden" name="target" value={ tok }/>
 					}
 					<input type="hidden" name="digest" value={ s.Digest }/>
 					<input type="hidden" name="do" value="trigger"/>
-					<button type="submit" class="btn btn-warning">Trigger release</button>
+					<table class="table table-sm">
+						<thead>
+							<tr>
+								<th>Target</th>
+								<th>Kind</th>
+								<th>Digest</th>
+								<th>Version</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, t := range s.ResolvedTargets {
+								@releaseDraftRow(t, s.VersionInputs[t.GetOwnerFullName()])
+							}
+						</tbody>
+					</table>
+					<div class="flex gap-2 justify-end mt-4">
+						<button type="submit" class="btn btn-warning">Trigger release</button>
+					</div>
 				</form>
 			}
 		</div>
 	</div>
+}
+
+templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput) {
+	<tr>
+		<td class="font-mono">{ t.GetOwnerFullName() }</td>
+		<td>{ releaseTargetKindLabel(t.GetKind()) }</td>
+		<td class="font-mono text-xs">
+			if t.GetDigest() != "" {
+				{ t.GetDigest() }
+			} else {
+				<span class="opacity-50">build fresh</span>
+			}
+		</td>
+		<td>
+			<div class="flex flex-col gap-1">
+				<div class="flex items-center gap-2">
+					<label class="label cursor-pointer justify-start gap-1 p-0">
+						<input type="radio" name={ modeFieldName(t.GetOwnerFullName()) } value="bump" class="radio radio-sm" checked?={ v.Mode != "explicit" }/>
+						<span class="label-text text-xs">Auto-bump</span>
+					</label>
+					<select name={ bumpFieldName(t.GetOwnerFullName()) } class="select select-bordered select-xs">
+						<option value="major" selected?={ v.Bump == "major" }>+major</option>
+						<option value="minor" selected?={ v.Bump == "minor" }>+minor</option>
+						<option value="patch" selected?={ v.Bump == "" || v.Bump == "patch" }>+patch</option>
+					</select>
+				</div>
+				<div class="flex items-center gap-2">
+					<label class="label cursor-pointer justify-start gap-1 p-0">
+						<input type="radio" name={ modeFieldName(t.GetOwnerFullName()) } value="explicit" class="radio radio-sm" checked?={ v.Mode == "explicit" }/>
+						<span class="label-text text-xs">Explicit</span>
+					</label>
+					<input type="text" name={ explicitFieldName(t.GetOwnerFullName()) } value={ v.Explicit } placeholder="vX.Y.Z" class="input input-bordered input-xs font-mono w-28"/>
+				</div>
+			</div>
+		</td>
+	</tr>
 }
