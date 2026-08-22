@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -51,6 +53,7 @@ func newFinalizeChartCmd() *cobra.Command {
 		idempotencyKeyPrefix string
 		skipRegistry         bool
 		createGitTag         bool
+		outputDir            string
 	)
 
 	cmd := &cobra.Command{
@@ -131,6 +134,28 @@ func newFinalizeChartCmd() *cobra.Command {
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Finalized chart %s (version: %s, effective: %s, digest: %s, published: %t)\n",
 				chartName, version, res.EffectiveVersion, res.Digest, res.Published)
+
+			// --output-dir mirrors finalize-app's identical convention
+			// (finalize_app.go): lets a caller (Temporal's FinalizePublish,
+			// worker/release/finalize.go) recover res.EffectiveVersion
+			// after this runs as a subprocess. Charts previously had no
+			// way to report this at all -- FinalizePublish's per-target
+			// outcome tracking needs it for charts exactly as it already
+			// does for apps (issue #973's proper fix, superseding the
+			// resolved-plan-JSON comparison PR #976 first attempted).
+			if outputDir != "" {
+				if err := os.MkdirAll(outputDir, 0755); err != nil {
+					return fmt.Errorf("create --output-dir %s: %w", outputDir, err)
+				}
+				data, merr := json.MarshalIndent(res, "", "  ")
+				if merr != nil {
+					return fmt.Errorf("marshal finalize-chart result: %w", merr)
+				}
+				outPath := filepath.Join(outputDir, fmt.Sprintf("%s-%s.json", domain, chartName))
+				if werr := os.WriteFile(outPath, data, 0644); werr != nil {
+					return fmt.Errorf("write finalize-chart result %s: %w", outPath, werr)
+				}
+			}
 			return nil
 		},
 	}
@@ -148,6 +173,7 @@ func newFinalizeChartCmd() *cobra.Command {
 	cmd.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Prefix for idempotency keys")
 	cmd.Flags().BoolVar(&skipRegistry, "skip-registry", false, "Skip App Registry API interactions")
 	cmd.Flags().BoolVar(&createGitTag, "create-git-tag", false, "Create git tag upon successful publication")
+	cmd.Flags().StringVar(&outputDir, "output-dir", "", "Write the finalize result (including effective_version) as <domain>-<chart>.json here; skipped if unset")
 
 	_ = cmd.MarkFlagRequired("chart")
 	_ = cmd.MarkFlagRequired("chart-dir")

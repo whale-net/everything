@@ -11,7 +11,6 @@ package release
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -39,58 +38,47 @@ func (a *Activities) RecordResolvedPlan(ctx context.Context, releaseRunID string
 // the published state (repository.ArtifactStatePublished) via
 // Registry.Artifacts().GetArtifact with LatestPublished -- the same
 // registry-visible signal GetEnvironmentState/promotion already treat as
-// "this exists and is usable" -- AND that its version matches the version
-// ResolvePlan resolved for this target earlier in this same workflow
-// execution.
+// "this exists and is usable" -- AND (when expectedVersions has an entry
+// for the target) that its version matches.
 //
-// The expected version comes from run.ResolvedPlan (release_run's stamped
-// copy of ResolvePlan's raw CLI JSON, written by RecordResolvedPlan --
-// issue #906), decoded with the same planCLIResult shape plan.go's
-// ResolvePlan uses (its "versions" object is keyed by OwnerFullName, not
-// TargetKey -- see planCLIResult's doc comment). This closes the gap issue
-// #973 reported: FinalizePublish deliberately does not fail the workflow
-// when one target's finalize-app/finalize-chart call fails (e.g. a GHCR
-// retag returning DENIED), leaving that target's RecordArtifact call never
-// made -- but if an OLDER version of the same target was already Published
-// from a prior release, the presence+state check alone still found *that*
-// artifact and reported the target satisfied, masking the real failure.
-// Comparing artifact.Version against the resolved plan's expected version
-// is what actually catches this.
+// expectedVersions is keyed by repository.TargetKey format and comes
+// directly from FinalizePublish's own per-target result
+// (FinalizeResult.Targets' EffectiveVersion, threaded through by
+// workflow.go's ReleaseWorkflow) -- NOT re-derived from
+// release_run.resolved_plan's plan-time JSON as PR #976's first pass did.
+// That re-derivation could not distinguish a real finalize failure from
+// ExecuteRelease's legitimate no-op-rebuild path, where the actually-
+// published version legitimately differs from the plan-time requested one
+// (see FinalizeTargetOutcome's doc comment) -- comparing against
+// FinalizePublish's own reported EffectiveVersion instead makes that
+// distinction for free, since EffectiveVersion already reflects whichever
+// version was actually reused/published.
 //
-// Defensive fallback: if run.ResolvedPlan is empty/unparseable, or a
-// target's OwnerFullName has no entry in its versions map, the version
-// check is skipped for that target only -- prior behavior (presence +
-// Published state) still applies. This only matters for old/test data;
-// ReleaseWorkflow always calls RecordResolvedPlan (when ResolvePlan
-// returns RawJSON) before FinalizePublish/VerifyPublished, so production
-// runs always have a resolved plan to compare against by the time this
-// activity executes.
-func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string) (VerifyResult, error) {
+// This closes the gap issue #973 reported: FinalizePublish deliberately
+// does not fail the workflow when one target's finalize-app/finalize-chart
+// call fails (e.g. a GHCR retag returning DENIED), leaving that target's
+// RecordArtifact call never made -- but if an OLDER version of the same
+// target was already Published from a prior release, the presence+state
+// check alone still found *that* artifact and reported the target
+// satisfied, masking the real failure. In practice, workflow.go's
+// ReleaseWorkflow now routes a real finalize failure straight to that
+// target's Failed state without even calling into this method's result for
+// it (see FinalizeResult.Targets' doc comment) -- the version comparison
+// here remains as defense in depth for any target VerifyPublished is still
+// asked to check.
+//
+// Defensive fallback: a target with no entry in expectedVersions (should
+// not happen for any target FinalizePublish actually processed -- kept
+// only for old/test data and any future caller that omits it) skips the
+// version check and falls back to the prior presence+Published-state-only
+// check for that target.
+func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, expectedVersions map[string]string) (VerifyResult, error) {
 	if a.Registry == nil {
 		return VerifyResult{}, fmt.Errorf("verify published for release run %s: Activities.Registry not configured", releaseRunID)
 	}
-	run, targets, err := a.Registry.ReleaseRuns().GetReleaseRun(ctx, releaseRunID)
+	_, targets, err := a.Registry.ReleaseRuns().GetReleaseRun(ctx, releaseRunID)
 	if err != nil {
 		return VerifyResult{}, fmt.Errorf("verify published for release run %s: %w", releaseRunID, err)
-	}
-
-	// expectedVersions maps a target's key() (repository.TargetKey format)
-	// to the version ResolvePlan resolved for it, derived from run's
-	// resolved plan JSON the same way plan.go's ResolvePlan turns
-	// planCLIResult.Versions (OwnerFullName-keyed) into ResolvedPlan.Versions
-	// (key()-keyed) -- see this method's doc comment. A parse failure or an
-	// empty plan simply leaves expectedVersions empty; see the defensive
-	// fallback described above.
-	expectedVersions := map[string]string{}
-	if run != nil && len(run.ResolvedPlan) > 0 {
-		var parsed planCLIResult
-		if perr := json.Unmarshal(run.ResolvedPlan, &parsed); perr == nil {
-			for _, t := range targets {
-				if v, ok := parsed.Versions[t.OwnerFullName]; ok && v != "" {
-					expectedVersions[repository.TargetKey(t.Kind, t.OwnerFullName)] = v
-				}
-			}
-		}
 	}
 
 	result := VerifyResult{AllPublished: true}

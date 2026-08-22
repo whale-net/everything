@@ -102,32 +102,37 @@ type buildChartManifestEntry struct {
 	ChartDir  string `json:"chart_dir"`
 }
 
-// finalizeAppResult mirrors release_helper_go/cmd/releaser.go's
+// finalizeCLIResult mirrors release_helper_go/cmd/releaser.go's
 // ReleaseResult JSON shape -- only the field this activity actually needs.
-// finalize-app writes this to --output-dir as <domain>-<app>.json (see
-// finalize_app.go). EffectiveVersion is the version finalize-app actually
+// Both finalize-app and finalize-chart write this to --output-dir as
+// <domain>-<name>.json (see finalize_app.go/finalize_chart.go).
+// EffectiveVersion is the version finalize-app/finalize-chart actually
 // published under, which can differ from the plan-time version requested
 // via --version whenever ExecuteRelease's no-op detection reuses an
 // already-published version instead (identical digest) -- see this file's
-// loop over apps for why appVersions must use this, not plan.Versions.
-type finalizeAppResult struct {
+// loops over apps/charts for why appVersions and FinalizeTargetOutcome must
+// use this, not plan.Versions.
+type finalizeCLIResult struct {
 	EffectiveVersion string `json:"effective_version"`
 }
 
-// readFinalizeAppResult reads and parses the finalize-app result file
-// finalize_app.go's --output-dir writes for the given domain/app.
-func readFinalizeAppResult(dir, domain, app string) (finalizeAppResult, error) {
-	path := filepath.Join(dir, fmt.Sprintf("%s-%s.json", domain, app))
+// readFinalizeResult reads and parses the finalize-app/finalize-chart
+// result file --output-dir writes for the given domain/name, shared by both
+// the apps and charts loops below (apps and charts each write to their own
+// dir, so a shared "<domain>-<name>.json" naming convention cannot collide
+// even if an app and a chart happen to share a domain+name).
+func readFinalizeResult(dir, domain, name string) (finalizeCLIResult, error) {
+	path := filepath.Join(dir, fmt.Sprintf("%s-%s.json", domain, name))
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return finalizeAppResult{}, fmt.Errorf("read %s: %w", path, err)
+		return finalizeCLIResult{}, fmt.Errorf("read %s: %w", path, err)
 	}
-	var res finalizeAppResult
+	var res finalizeCLIResult
 	if err := json.Unmarshal(data, &res); err != nil {
-		return finalizeAppResult{}, fmt.Errorf("parse %s: %w", path, err)
+		return finalizeCLIResult{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if res.EffectiveVersion == "" {
-		return finalizeAppResult{}, fmt.Errorf("%s: effective_version missing", path)
+		return finalizeCLIResult{}, fmt.Errorf("%s: effective_version missing", path)
 	}
 	return res, nil
 }
@@ -139,6 +144,37 @@ type resolvedPlanBuildID struct {
 	BuildID string `json:"build_id"`
 }
 
+// FinalizeTargetOutcome is FinalizePublish's precise per-target result --
+// the authoritative signal for whether THIS target's finalize actually
+// succeeded, superseding VerifyPublished's indirect presence-check for any
+// target this map has an entry for (see workflow.go's ReleaseWorkflow: a
+// target found in FinalizeResult.Targets with Failed=true is recorded
+// failed directly, without ever consulting VerifyPublished's result for
+// it). This is issue #973's proper fix: PR #976's first pass re-derived an
+// "expected version" from release_run.resolved_plan and compared it
+// against VerifyPublished's presence check, but that re-derivation cannot
+// distinguish a real finalize failure from ExecuteRelease's legitimate
+// no-op-rebuild path (identical digest reuses an older already-published
+// version instead of the plan-time one -- see EffectiveVersion below).
+// Threading FinalizePublish's own direct knowledge through in-process
+// avoids re-guessing it downstream at all.
+type FinalizeTargetOutcome struct {
+	// Failed is true if this target's finalize-app/finalize-chart
+	// subprocess failed (build-manifest missing, CLI exited non-zero,
+	// result file unreadable, etc).
+	Failed bool
+	// Detail is the failure reason, populated only when Failed.
+	Detail string
+	// EffectiveVersion is the version this target actually got published
+	// under, populated only when !Failed. Can differ from the plan-time
+	// requested version when ExecuteRelease's no-op-rebuild detection
+	// reused an already-published older version instead (identical
+	// digest) -- see finalizeCLIResult's doc comment for the precedent;
+	// this is the same field, just also captured for charts and exposed
+	// to the workflow instead of only used internally for chart pinning.
+	EffectiveVersion string
+}
+
 // FinalizeResult is FinalizePublish's outcome. Unlike PollBuild's
 // BuildStatus (a single pass/fail for the whole GHA run), FinalizePublish
 // deliberately does not fail the whole activity when only some targets
@@ -146,12 +182,20 @@ type resolvedPlanBuildID struct {
 // function's doc comment.
 type FinalizeResult struct {
 	// Succeeded is true only if every target in the batch finalized
-	// without error.
+	// without error (equivalently: no entry in Targets has Failed=true).
+	// Aggregate/operator-facing only -- ReleaseWorkflow acts on Targets,
+	// not this field.
 	Succeeded bool
 	// Detail summarizes any per-target failures (empty when Succeeded).
-	// VerifyPublished (the next workflow step) is still the authoritative
-	// per-target signal -- Detail is for operator-facing context only.
+	// Operator-facing context only -- ReleaseWorkflow acts on Targets, not
+	// this field.
 	Detail string
+	// Targets carries FinalizePublish's own per-target outcome, keyed by
+	// repository.TargetKey(kind, ownerFullName) -- the authoritative
+	// signal ReleaseWorkflow uses to decide a target's pass/fail directly,
+	// superseding VerifyPublished's indirect presence-check for any target
+	// with an entry here. See FinalizeTargetOutcome's doc comment.
+	Targets map[string]FinalizeTargetOutcome
 }
 
 // FinalizePublish implements the new post-build finalize/publish step --
@@ -271,13 +315,22 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	appVersions := make(map[string]string, len(apps))
 	appDigests := make(map[string]string, len(apps))
 	finalizeResultsDir := filepath.Join(tmpDir, "finalize-results")
+	// finalizeTargets carries FinalizePublish's own precise per-target
+	// outcome back to the caller (workflow.go's ReleaseWorkflow) -- see
+	// FinalizeResult.Targets/FinalizeTargetOutcome's doc comments. Every
+	// failures = append(...) call site below has a matching
+	// finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, ...} so
+	// the two never drift apart.
+	finalizeTargets := make(map[string]FinalizeTargetOutcome, len(apps)+len(charts))
 
 	for _, fullName := range apps {
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
 		version := plan.Versions[key]
 		m, ok := appManifests[fullName]
 		if !ok {
-			failures = append(failures, fmt.Sprintf("%s: no build-manifest entry in run %s", fullName, ref.RunID))
+			msg := fmt.Sprintf("%s: no build-manifest entry in run %s", fullName, ref.RunID)
+			failures = append(failures, msg)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: msg}
 			continue
 		}
 		appDigests[fullName] = m.Digest
@@ -296,25 +349,34 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			args = append(args, "--build-id", buildID)
 		}
 		if _, err := runReleaseHelper(ctx, binary, workspaceDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: finalize-app: %v", fullName, err))
+			msg := fmt.Sprintf("%s: finalize-app: %v", fullName, err)
+			failures = append(failures, msg)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: msg}
 			continue
 		}
 
 		// A no-op rebuild (identical digest to an already-published
 		// version) means finalize-app reused that older version instead
-		// of --version -- see finalizeAppResult's doc comment. A chart
+		// of --version -- see finalizeCLIResult's doc comment. A chart
 		// composed from this app must pin the version it ACTUALLY
 		// published under, not the plan-time --version, which stays
 		// unpublished in that case and would fail finalize-chart's own
 		// hermeticity/pin check ("chart pins N unpublished app(s)") --
 		// this is release.yml's release-helm-charts digest-check-override
-		// bug (see that fix's PR), reproduced here if left unhandled.
-		res, rerr := readFinalizeAppResult(finalizeResultsDir, m.Domain, m.App)
+		// bug (see that fix's PR), reproduced here if left unhandled. The
+		// same EffectiveVersion is also this target's FinalizeTargetOutcome
+		// -- VerifyPublished must compare against it, not the unpublished
+		// plan-time version, or a legitimate no-op rebuild would be
+		// misreported as a failure (issue #973's PR #976 first-pass gap).
+		res, rerr := readFinalizeResult(finalizeResultsDir, m.Domain, m.App)
 		if rerr != nil {
-			failures = append(failures, fmt.Sprintf("%s: read finalize-app result: %v", fullName, rerr))
+			msg := fmt.Sprintf("%s: read finalize-app result: %v", fullName, rerr)
+			failures = append(failures, msg)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: msg}
 			continue
 		}
 		appVersions[fullName] = res.EffectiveVersion
+		finalizeTargets[key] = FinalizeTargetOutcome{EffectiveVersion: res.EffectiveVersion}
 	}
 
 	appVersionsJSON, _ := json.Marshal(appVersions) //nolint:errcheck
@@ -331,12 +393,20 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		chartEnv = append(chartEnv, "CHART_REPO_PASS="+a.ChartRepoPass)
 	}
 
+	// chartFinalizeResultsDir is separate from apps' finalizeResultsDir
+	// (rather than sharing one directory) so that readFinalizeResult's
+	// shared "<domain>-<name>.json" naming convention cannot collide even
+	// if an app and a chart happen to share the same domain+name.
+	chartFinalizeResultsDir := filepath.Join(tmpDir, "finalize-results-charts")
+
 	for _, fullName := range charts {
 		key := repository.TargetKey(repository.ArtifactKindChart, fullName)
 		version := plan.Versions[key]
 		c, ok := chartManifests[fullName]
 		if !ok {
-			failures = append(failures, fmt.Sprintf("%s: no chart-sources manifest entry in run %s", fullName, ref.RunID))
+			msg := fmt.Sprintf("%s: no chart-sources manifest entry in run %s", fullName, ref.RunID)
+			failures = append(failures, msg)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: msg}
 			continue
 		}
 
@@ -349,19 +419,36 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			"--app-versions", string(appVersionsJSON),
 			"--app-digests", string(appDigestsJSON),
 			"--create-git-tag",
+			"--output-dir", chartFinalizeResultsDir,
 		}
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
 		}
 		if _, err := runReleaseHelper(ctx, binary, workspaceDir, chartEnv, args...); err != nil {
-			failures = append(failures, fmt.Sprintf("%s: finalize-chart: %v", fullName, err))
+			msg := fmt.Sprintf("%s: finalize-chart: %v", fullName, err)
+			failures = append(failures, msg)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: msg}
+			continue
 		}
+
+		// Same EffectiveVersion-vs-plan-time-version divergence as apps
+		// above (ExecuteRelease's no-op-rebuild path) -- captured here so
+		// VerifyPublished can compare against it instead of the unpublished
+		// plan-time version.
+		res, rerr := readFinalizeResult(chartFinalizeResultsDir, c.Domain, c.ChartName)
+		if rerr != nil {
+			msg := fmt.Sprintf("%s: read finalize-chart result: %v", fullName, rerr)
+			failures = append(failures, msg)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: msg}
+			continue
+		}
+		finalizeTargets[key] = FinalizeTargetOutcome{EffectiveVersion: res.EffectiveVersion}
 	}
 
 	if len(failures) > 0 {
-		return FinalizeResult{Succeeded: false, Detail: strings.Join(failures, "; ")}, nil
+		return FinalizeResult{Succeeded: false, Detail: strings.Join(failures, "; "), Targets: finalizeTargets}, nil
 	}
-	return FinalizeResult{Succeeded: true}, nil
+	return FinalizeResult{Succeeded: true, Targets: finalizeTargets}, nil
 }
 
 // cloneWorkspace performs a shallow, authenticated clone of this monorepo
