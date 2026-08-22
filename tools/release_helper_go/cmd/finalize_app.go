@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -48,6 +49,7 @@ func newFinalizeAppCmd() *cobra.Command {
 		repository           string
 		digest               string
 		ghcrToken            string
+		outputDir            string
 	)
 
 	cmd := &cobra.Command{
@@ -118,6 +120,29 @@ func newFinalizeAppCmd() *cobra.Command {
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Finalized %s-%s (version: %s, effective: %s, digest: %s, published: %t)\n",
 				domain, app, version, res.EffectiveVersion, res.Digest, res.Published)
+
+			// --output-dir lets a caller (Temporal's FinalizePublish,
+			// worker/release/finalize.go) recover res.EffectiveVersion
+			// after this runs as a subprocess -- ExecuteRelease's no-op
+			// detection (see ReleaseResult's doc comment) can reuse an
+			// older already-published version instead of --version when
+			// the digest is unchanged, and a chart composed from this
+			// app must pin that actual effective version, not the
+			// unpublished one requested here. Mirrors build-app's
+			// BuildAppManifest output-dir convention (build_app.go).
+			if outputDir != "" {
+				if err := os.MkdirAll(outputDir, 0755); err != nil {
+					return fmt.Errorf("create --output-dir %s: %w", outputDir, err)
+				}
+				data, merr := json.MarshalIndent(res, "", "  ")
+				if merr != nil {
+					return fmt.Errorf("marshal finalize-app result: %w", merr)
+				}
+				outPath := filepath.Join(outputDir, fmt.Sprintf("%s-%s.json", domain, app))
+				if werr := os.WriteFile(outPath, data, 0644); werr != nil {
+					return fmt.Errorf("write finalize-app result %s: %w", outPath, werr)
+				}
+			}
 			return nil
 		},
 	}
@@ -133,6 +158,7 @@ func newFinalizeAppCmd() *cobra.Command {
 	cmd.Flags().StringVar(&repository, "repository", "", "Image repository (e.g. ghcr.io/whale-net/demo-hello-go); read from --manifest if unset")
 	cmd.Flags().StringVar(&digest, "digest", "", "Already-pushed image digest (sha256:...); read from --manifest if unset")
 	cmd.Flags().StringVar(&ghcrToken, "ghcr-token", "", "Registry auth token for the retag (default: $GHCR_TOKEN, else local Docker keychain)")
+	cmd.Flags().StringVar(&outputDir, "output-dir", "", "Write the finalize result (including effective_version) as <domain>-<app>.json here; skipped if unset")
 
 	_ = cmd.MarkFlagRequired("domain")
 	_ = cmd.MarkFlagRequired("app")

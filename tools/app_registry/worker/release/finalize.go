@@ -102,6 +102,36 @@ type buildChartManifestEntry struct {
 	ChartDir  string `json:"chart_dir"`
 }
 
+// finalizeAppResult mirrors release_helper_go/cmd/releaser.go's
+// ReleaseResult JSON shape -- only the field this activity actually needs.
+// finalize-app writes this to --output-dir as <domain>-<app>.json (see
+// finalize_app.go). EffectiveVersion is the version finalize-app actually
+// published under, which can differ from the plan-time version requested
+// via --version whenever ExecuteRelease's no-op detection reuses an
+// already-published version instead (identical digest) -- see this file's
+// loop over apps for why appVersions must use this, not plan.Versions.
+type finalizeAppResult struct {
+	EffectiveVersion string `json:"effective_version"`
+}
+
+// readFinalizeAppResult reads and parses the finalize-app result file
+// finalize_app.go's --output-dir writes for the given domain/app.
+func readFinalizeAppResult(dir, domain, app string) (finalizeAppResult, error) {
+	path := filepath.Join(dir, fmt.Sprintf("%s-%s.json", domain, app))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return finalizeAppResult{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	var res finalizeAppResult
+	if err := json.Unmarshal(data, &res); err != nil {
+		return finalizeAppResult{}, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if res.EffectiveVersion == "" {
+		return finalizeAppResult{}, fmt.Errorf("%s: effective_version missing", path)
+	}
+	return res, nil
+}
+
 // resolvedPlanBuildID is the subset of `release_helper_go plan
 // --format=json`'s output FinalizePublish needs beyond what ResolvedPlan
 // already carries -- see plan.go's identical planCLIResult pattern.
@@ -240,6 +270,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	var failures []string
 	appVersions := make(map[string]string, len(apps))
 	appDigests := make(map[string]string, len(apps))
+	finalizeResultsDir := filepath.Join(tmpDir, "finalize-results")
 
 	for _, fullName := range apps {
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
@@ -249,7 +280,6 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			failures = append(failures, fmt.Sprintf("%s: no build-manifest entry in run %s", fullName, ref.RunID))
 			continue
 		}
-		appVersions[fullName] = version
 		appDigests[fullName] = m.Digest
 
 		args := []string{
@@ -260,13 +290,31 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			"--repository", m.Repository,
 			"--digest", m.Digest,
 			"--create-git-tag",
+			"--output-dir", finalizeResultsDir,
 		}
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
 		}
 		if _, err := runReleaseHelper(ctx, binary, workspaceDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: finalize-app: %v", fullName, err))
+			continue
 		}
+
+		// A no-op rebuild (identical digest to an already-published
+		// version) means finalize-app reused that older version instead
+		// of --version -- see finalizeAppResult's doc comment. A chart
+		// composed from this app must pin the version it ACTUALLY
+		// published under, not the plan-time --version, which stays
+		// unpublished in that case and would fail finalize-chart's own
+		// hermeticity/pin check ("chart pins N unpublished app(s)") --
+		// this is release.yml's release-helm-charts digest-check-override
+		// bug (see that fix's PR), reproduced here if left unhandled.
+		res, rerr := readFinalizeAppResult(finalizeResultsDir, m.Domain, m.App)
+		if rerr != nil {
+			failures = append(failures, fmt.Sprintf("%s: read finalize-app result: %v", fullName, rerr))
+			continue
+		}
+		appVersions[fullName] = res.EffectiveVersion
 	}
 
 	appVersionsJSON, _ := json.Marshal(appVersions) //nolint:errcheck
