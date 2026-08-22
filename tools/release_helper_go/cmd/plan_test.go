@@ -71,7 +71,7 @@ func TestPlanMissingVersionOptionWorkflowDispatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(stderr, "manual releases require --version, --increment-major, --increment-minor, or --increment-patch") {
+	if !strings.Contains(stderr, "manual releases require --version, --increment-major, --increment-minor, --increment-patch, or --version-selections") {
 		t.Errorf("want missing version option error, got: %q", stderr)
 	}
 }
@@ -352,6 +352,97 @@ func TestPlanCmd_AppsMetadata_InvalidJSON(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "--apps-metadata is not valid JSON") {
 		t.Errorf("want '--apps-metadata is not valid JSON' in stderr, got: %q", stderr)
+	}
+}
+
+// ── --version-selections (issue #889 follow-up: per-target version picker) ────
+
+// TestPlanReleaseWorkflowDispatch_VersionSelections_MixedPerTarget is the
+// direct regression test for the release-trigger UI's per-target Draft-page
+// picker: one app gets an explicit hardcoded version, one gets its own bump
+// type overriding the (absent) batch default, and one has no per-target
+// entry at all and falls back to the batch-wide --increment-minor flag.
+func TestPlanReleaseWorkflowDispatch_VersionSelections_MixedPerTarget(t *testing.T) {
+	git := newFakeGit() // no tags registered -- autoIncrementVersion's "no tags" default applies to every bump-type resolution below
+	bazel := newFakeBazel()
+
+	result, err := planRelease(planParams{
+		eventType: "workflow_dispatch",
+		appsMetadata: []AppMetadataInput{
+			{Domain: "demo", Name: "hello-go", AppType: "external-api"},
+			{Domain: "demo", Name: "worker", AppType: "worker"},
+			{Domain: "demo", Name: "job", AppType: "job"},
+		},
+		versionSelections: map[string]string{
+			"demo-hello-go": "v9.9.9",
+			"demo-worker":   "major",
+		},
+		incrementMinor: true, // batch-wide default, applies only to demo-job (no per-target entry)
+		bazel:          bazel,
+		git:            git,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := result.Versions["demo-hello-go"]; got != "v9.9.9" {
+		t.Errorf("demo-hello-go: want explicit v9.9.9, got %q", got)
+	}
+	if got := result.Versions["demo-worker"]; got != "v0.0.1" {
+		t.Errorf("demo-worker: want major-bump-type resolution with no existing tags -> autoIncrementVersion's no-tags default v0.0.1 (only \"minor\" defaults to v0.1.0 with no tags), got %q", got)
+	}
+	if got := result.Versions["demo-job"]; got != "v0.1.0" {
+		t.Errorf("demo-job: want batch-wide --increment-minor default v0.1.0 (no per-target entry), got %q", got)
+	}
+}
+
+// TestPlanCmd_VersionSelections_InvalidEntry proves a --version-selections
+// value that is neither a bump keyword nor a valid semver is rejected
+// clearly, the same way --version's own malformed-value check is.
+func TestPlanCmd_VersionSelections_InvalidEntry(t *testing.T) {
+	_, stderr, err := runTest([]string{
+		"plan", "--event-type", "workflow_dispatch",
+		"--apps-metadata", `[{"domain":"demo","name":"hello-go","app_type":"external-api"}]`,
+		"--version-selections", `{"demo-hello-go":"not-a-version"}`,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(stderr, "version-selections") {
+		t.Errorf("want 'version-selections' in stderr, got: %q", stderr)
+	}
+}
+
+// TestPlanCmd_VersionSelections_InvalidJSON proves malformed
+// --version-selections JSON is rejected rather than panicking downstream.
+func TestPlanCmd_VersionSelections_InvalidJSON(t *testing.T) {
+	_, stderr, err := runTest([]string{
+		"plan", "--event-type", "workflow_dispatch",
+		"--apps-metadata", `[{"domain":"demo","name":"hello-go","app_type":"external-api"}]`,
+		"--version-selections", `not-json`,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(stderr, "--version-selections is not valid JSON") {
+		t.Errorf("want '--version-selections is not valid JSON' in stderr, got: %q", stderr)
+	}
+}
+
+// TestPlanCmd_VersionSelections_SatisfiesMissingVersionOptionCheck proves a
+// --version-selections that covers every requested target satisfies
+// workflow_dispatch's "must have some version source" validation on its
+// own, with none of --version/--increment-* supplied.
+func TestPlanCmd_VersionSelections_SatisfiesMissingVersionOptionCheck(t *testing.T) {
+	stdout, stderr, err := runTest([]string{
+		"plan", "--event-type", "workflow_dispatch",
+		"--apps-metadata", `[{"domain":"demo","name":"hello-go","app_type":"external-api"}]`,
+		"--version-selections", `{"demo-hello-go":"v3.4.5"}`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v (stderr: %s)", err, stderr)
+	}
+	if !strings.Contains(stdout, `"v3.4.5"`) {
+		t.Errorf("want resolved version v3.4.5 in stdout, got: %q", stdout)
 	}
 }
 

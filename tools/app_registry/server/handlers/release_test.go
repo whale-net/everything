@@ -31,6 +31,14 @@ func target(owner string, kind pb.ArtifactKind, digest string) *pb.ReleaseTarget
 	return &pb.ReleaseTargetInput{OwnerFullName: owner, Kind: kind, Digest: digest}
 }
 
+// targetWithVersion mirrors target but also sets version_selection --
+// issue #889 follow-up's per-target Draft-page picker input. A distinct
+// helper rather than adding a parameter to target() keeps every existing
+// call site (which never cares about version_selection) unchanged.
+func targetWithVersion(owner string, kind pb.ArtifactKind, versionSelection string) *pb.ReleaseTargetInput {
+	return &pb.ReleaseTargetInput{OwnerFullName: owner, Kind: kind, VersionSelection: versionSelection}
+}
+
 // TestTriggerRelease_Authorization mirrors authz_test.go's pattern:
 // TriggerRelease requires exactly the promoter-dev role Promote already
 // requires (FR4/NFR5) -- no new role.
@@ -201,6 +209,8 @@ func TestTriggerRelease_InvalidArgument(t *testing.T) {
 		{"missing owner", triggerReq("demo", target("", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, ""))},
 		{"unsupported kind", triggerReq("demo", target("demo-fw", pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE, ""))},
 		{"unspecified kind", triggerReq("demo", target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_UNSPECIFIED, ""))},
+		{"garbage version_selection", triggerReq("demo", targetWithVersion("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "not-a-version"))},
+		{"version_selection missing v prefix", triggerReq("demo", targetWithVersion("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "1.2.3"))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -231,6 +241,35 @@ func TestTriggerRelease_DuplicateTargetInBatch_Rejected(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Fatalf("expected no release_run to be created for a rejected batch, got %d", len(runs))
+	}
+}
+
+// TestTriggerRelease_VersionSelection_ValidValuesAccepted proves every
+// legal version_selection shape (issue #889 follow-up: the release-trigger
+// UI's per-target Draft-page picker) -- a bump keyword, a hardcoded
+// version, and the empty default -- is accepted, not just rejected on
+// garbage input (TestTriggerRelease_InvalidArgument covers that side).
+func TestTriggerRelease_VersionSelection_ValidValuesAccepted(t *testing.T) {
+	cases := []struct {
+		name             string
+		versionSelection string
+	}{
+		{"empty (default patch-bump)", ""},
+		{"major", "major"},
+		{"minor", "minor"},
+		{"patch", "patch"},
+		{"explicit version", "v3.4.5"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := newReleaseFixture()
+			_, err := srv.TriggerRelease(authedCtx(), triggerReq("demo",
+				targetWithVersion("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, tc.versionSelection),
+			))
+			if err != nil {
+				t.Fatalf("TriggerRelease with version_selection %q: %v", tc.versionSelection, err)
+			}
+		})
 	}
 }
 

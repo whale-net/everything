@@ -43,6 +43,15 @@ message ReleaseTargetInput {
   string owner_full_name = 1;
   ArtifactKind kind = 2;
   string digest = 3;
+
+  // version_selection is this target's own version choice, independent of
+  // every other target in the same batch (the release-trigger UI's
+  // per-target Draft step). Empty means "auto-patch-bump" (unchanged
+  // default behavior). "major" | "minor" | "patch" picks that bump type for
+  // this target only. "vMAJOR.MINOR.PATCH" hardcodes the version for this
+  // target, bypassing auto-increment entirely. Validated server-side
+  // (TriggerRelease) against exactly these shapes.
+  string version_selection = 4;
 }
 
 message TriggerReleaseRequest {

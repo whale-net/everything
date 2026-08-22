@@ -321,6 +321,167 @@ func TestReleaseStatusPage_HasManualRefreshLink(t *testing.T) {
 	}
 }
 
+// --- issue #889 follow-up: the picker + per-target version selection ----
+
+func newReleaseTriggerPickerRequest(t *testing.T, form url.Values) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/releases/trigger", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return req
+}
+
+// The picker's "Resolve selection" step ("target" checkboxes instead of the
+// old free-form "scope" field) must behave exactly like the pre-#889
+// resolve step: render the Draft preview, never call TriggerRelease, and
+// echo the original selection as a hidden field so the confirm step can
+// re-resolve it.
+func TestHandleReleaseTriggerSubmit_PickerResolve_RendersDraftWithoutCallingTriggerRelease(t *testing.T) {
+	rel := &fakeReleaseClient{}
+	app := &App{registry: &RegistryClient{
+		App:     &releaseAppClient{apps: oneAppCatalog()},
+		Release: rel,
+	}}
+
+	req := newReleaseTriggerPickerRequest(t, url.Values{"target": {"app:platform-worker"}, "do": {"resolve"}})
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(rel.triggerCalls) != 0 {
+		t.Fatalf("TriggerRelease calls = %d, want 0 -- the resolve-only step must never call TriggerRelease", len(rel.triggerCalls))
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "platform-worker") {
+		t.Errorf("expected the resolved target to appear in the Draft step; body = %s", body)
+	}
+	if !strings.Contains(body, `value="app:platform-worker"`) {
+		t.Errorf("expected the Draft step to echo the original picker selection as a hidden field; body = %s", body)
+	}
+}
+
+// TestHandleReleaseTriggerSubmit_PickerTrigger_ThreadsPerTargetVersionSelection
+// is the direct regression test for issue #889's per-target Draft-page
+// picker: two targets in one batch, one on an explicit hardcoded version
+// and one on a specific bump type, must each reach TriggerRelease with
+// their own distinct version_selection -- never the same value, never
+// dropped.
+func TestHandleReleaseTriggerSubmit_PickerTrigger_ThreadsPerTargetVersionSelection(t *testing.T) {
+	rel := &fakeReleaseClient{triggerResp: &pb.TriggerReleaseResponse{ReleaseRunId: "run-99"}}
+	app := &App{registry: &RegistryClient{
+		App: &releaseAppClient{apps: []*pb.App{
+			{AppId: "a1", FullName: "platform-worker", Name: "worker", Domain: "platform", Status: pb.AppStatus_APP_STATUS_ACTIVE},
+			{AppId: "a2", FullName: "platform-api", Name: "api", Domain: "platform", Status: pb.AppStatus_APP_STATUS_ACTIVE},
+		}},
+		Release: rel,
+	}}
+
+	form := url.Values{
+		"target":                    {"app:platform-worker", "app:platform-api"},
+		"mode__platform-worker":     {"explicit"},
+		"explicit__platform-worker": {"v9.9.9"},
+		"mode__platform-api":        {"bump"},
+		"bump__platform-api":        {"major"},
+		"do":                        {"trigger"},
+	}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(rel.triggerCalls) != 1 {
+		t.Fatalf("TriggerRelease calls = %d, want 1; body = %s", len(rel.triggerCalls), w.Body.String())
+	}
+	byOwner := map[string]string{}
+	for _, tgt := range rel.triggerCalls[0].GetTargets() {
+		byOwner[tgt.GetOwnerFullName()] = tgt.GetVersionSelection()
+	}
+	if got := byOwner["platform-worker"]; got != "v9.9.9" {
+		t.Errorf("platform-worker version_selection = %q, want v9.9.9", got)
+	}
+	if got := byOwner["platform-api"]; got != "major" {
+		t.Errorf("platform-api version_selection = %q, want major", got)
+	}
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusSeeOther)
+	}
+}
+
+// A target left on the default "Auto-bump" / "+patch" selection must reach
+// TriggerRelease with an EMPTY version_selection, not the literal string
+// "patch" -- empty is what preserves today's unchanged default behavior
+// server-side (ResolvePlan passes --increment-patch for the whole batch
+// when nothing overrides it) rather than forcing every default-left target
+// through the per-target bump-type path for no reason.
+func TestHandleReleaseTriggerSubmit_DefaultPatchBump_SendsEmptyVersionSelection(t *testing.T) {
+	rel := &fakeReleaseClient{triggerResp: &pb.TriggerReleaseResponse{ReleaseRunId: "run-1"}}
+	app := &App{registry: &RegistryClient{
+		App:     &releaseAppClient{apps: oneAppCatalog()},
+		Release: rel,
+	}}
+
+	req := newReleaseTriggerPickerRequest(t, url.Values{"target": {"app:platform-worker"}, "do": {"trigger"}})
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(rel.triggerCalls) != 1 {
+		t.Fatalf("TriggerRelease calls = %d, want 1", len(rel.triggerCalls))
+	}
+	targets := rel.triggerCalls[0].GetTargets()
+	if len(targets) != 1 || targets[0].GetVersionSelection() != "" {
+		t.Errorf("expected version_selection empty for an untouched target, got %+v", targets)
+	}
+}
+
+// An "Explicit" mode with no version text entered must be rejected before
+// ever reaching TriggerRelease -- silently falling back to auto-patch-bump
+// would not be what the operator who chose "Explicit" intended.
+func TestHandleReleaseTriggerSubmit_ExplicitModeWithEmptyValue_RejectedBeforeCallingAPI(t *testing.T) {
+	rel := &fakeReleaseClient{}
+	app := &App{registry: &RegistryClient{
+		App:     &releaseAppClient{apps: oneAppCatalog()},
+		Release: rel,
+	}}
+
+	form := url.Values{
+		"target":                     {"app:platform-worker"},
+		"mode__platform-worker":      {"explicit"},
+		"explicit__platform-worker":  {""},
+		"do":                         {"trigger"},
+	}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(rel.triggerCalls) != 0 {
+		t.Fatalf("TriggerRelease calls = %d, want 0 -- an empty explicit version must be rejected before the RPC", len(rel.triggerCalls))
+	}
+	if !strings.Contains(w.Body.String(), "explicit version is required") {
+		t.Errorf("expected a clear validation message; body = %s", w.Body.String())
+	}
+}
+
+// A "domain:" picker token must resolve to every app/chart under that
+// domain, mirroring resolveReleaseScope's single-domain-name behavior.
+func TestHandleReleaseTriggerSubmit_PickerDomainToken_ResolvesEverythingUnderIt(t *testing.T) {
+	rel := &fakeReleaseClient{triggerResp: &pb.TriggerReleaseResponse{ReleaseRunId: "run-1"}}
+	app := &App{registry: &RegistryClient{
+		App: &releaseAppClient{apps: []*pb.App{
+			{AppId: "a1", FullName: "platform-worker", Name: "worker", Domain: "platform", Status: pb.AppStatus_APP_STATUS_ACTIVE},
+			{AppId: "a2", FullName: "platform-api", Name: "api", Domain: "platform", Status: pb.AppStatus_APP_STATUS_ACTIVE},
+		}},
+		Release: rel,
+	}}
+
+	req := newReleaseTriggerPickerRequest(t, url.Values{"target": {"domain:platform"}, "do": {"trigger"}})
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(rel.triggerCalls) != 1 {
+		t.Fatalf("TriggerRelease calls = %d, want 1", len(rel.triggerCalls))
+	}
+	if got := rel.triggerCalls[0].GetTargets(); len(got) != 2 {
+		t.Errorf("expected both platform apps resolved from the domain token, got %d: %+v", len(got), got)
+	}
+}
+
 // devUserAuth is declared in handlers_promote_rollback_test.go and reused
 // here -- see that file's doc comment for why RequireAuthFunc is the only
 // supported way to inject a *htmxauth.UserInfo into a handler test.

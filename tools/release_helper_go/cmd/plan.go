@@ -19,6 +19,18 @@ var validEventTypes = []string{"workflow_dispatch", "tag_push", "pull_request", 
 
 var semverRE = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)(?:-[a-zA-Z0-9\-\.]+)?$`)
 
+// isBumpKeyword reports whether sel is one of the three per-target bump
+// types --version-selections accepts (see newPlanCmd's flag doc).
+func isBumpKeyword(sel string) bool {
+	return sel == "major" || sel == "minor" || sel == "patch"
+}
+
+// isValidVersionSelection reports whether sel is a legal --version-selections
+// entry value: a bump keyword, or a literal "vMAJOR.MINOR.PATCH" version.
+func isValidVersionSelection(sel string) bool {
+	return isBumpKeyword(sel) || semverRE.MatchString(sel)
+}
+
 // PlanValidationError represents a typed validation error for plan inputs.
 type PlanValidationError struct {
 	Field   string
@@ -74,6 +86,10 @@ var (
 		Field:   "charts-metadata",
 		Message: "must be a JSON array of {domain, name}",
 	}
+	ErrInvalidVersionSelections = &PlanValidationError{
+		Field:   "version-selections",
+		Message: `must be a JSON object mapping full_name to "major", "minor", "patch", or "vMAJOR.MINOR.PATCH"`,
+	}
 )
 
 type PlanResult struct {
@@ -103,6 +119,7 @@ func newPlanCmd() *cobra.Command {
 		helmCharts           string
 		appsMetadata         string
 		chartsMetadata       string
+		versionSelections    string
 		version              string
 		incrementMajor       bool
 		incrementMinor       bool
@@ -167,8 +184,19 @@ func newPlanCmd() *cobra.Command {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Error: --version, --increment-major, --increment-minor, and --increment-patch are mutually exclusive\n")
 					return ErrMutuallyExclusiveVersionOptions
 				}
-				if eventType == "workflow_dispatch" && versionOpts == 0 {
-					fmt.Fprintf(cmd.ErrOrStderr(), "Error: manual releases require --version, --increment-major, --increment-minor, or --increment-patch\n")
+				// versionSelections (--version-selections) satisfies this
+				// requirement on its own when it covers every requested
+				// target -- e.g. ResolvePlan omits every batch-wide version
+				// flag when every ReleaseTarget carries its own
+				// VersionSelection (see that activity's doc comment). A
+				// versionSelections that only covers *some* targets must
+				// still be paired with a batch-wide flag by the caller (as
+				// ResolvePlan itself always does) for the remaining
+				// targets -- not re-validated here per-target, since that
+				// would require the app/chart list this early in
+				// validation, before ListAllApps/AppMetadataFromInputs run.
+				if eventType == "workflow_dispatch" && versionOpts == 0 && versionSelections == "" {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Error: manual releases require --version, --increment-major, --increment-minor, --increment-patch, or --version-selections\n")
 					return ErrMissingVersionOption
 				}
 				if version != "" && version != "latest" && !semverRE.MatchString(version) {
@@ -200,6 +228,20 @@ func newPlanCmd() *cobra.Command {
 					if err := json.Unmarshal([]byte(chartsMetadata), &parsedChartsMetadata); err != nil {
 						fmt.Fprintf(cmd.ErrOrStderr(), "Error: --charts-metadata is not valid JSON: %v\n", err)
 						return fmt.Errorf("%v: %w", err, ErrInvalidChartsMetadata)
+					}
+				}
+
+				var parsedVersionSelections map[string]string
+				if versionSelections != "" {
+					if err := json.Unmarshal([]byte(versionSelections), &parsedVersionSelections); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "Error: --version-selections is not valid JSON: %v\n", err)
+						return fmt.Errorf("%v: %w", err, ErrInvalidVersionSelections)
+					}
+					for fullName, sel := range parsedVersionSelections {
+						if !isValidVersionSelection(sel) {
+							fmt.Fprintf(cmd.ErrOrStderr(), "Error: --version-selections entry %q has invalid value %q (must be \"major\", \"minor\", \"patch\", or \"vMAJOR.MINOR.PATCH\")\n", fullName, sel)
+							return ErrInvalidVersionSelections
+						}
 					}
 				}
 
@@ -235,6 +277,7 @@ func newPlanCmd() *cobra.Command {
 					requestedCharts:      effectiveCharts,
 					appsMetadata:         parsedAppsMetadata,
 					chartsMetadata:       parsedChartsMetadata,
+					versionSelections:    parsedVersionSelections,
 					version:              version,
 					incrementMajor:       incrementMajor,
 					incrementMinor:       incrementMinor,
@@ -302,6 +345,7 @@ func newPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&helmCharts, "helm-charts", "", "Alias for --charts")
 	cmd.Flags().StringVar(&appsMetadata, "apps-metadata", "", "JSON array of {domain, name, app_type} -- bypasses bazel discovery entirely, for a caller that already resolved this exact app list (e.g. App Registry's ResolvePlan); mutually exclusive with --apps")
 	cmd.Flags().StringVar(&chartsMetadata, "charts-metadata", "", "JSON array of {domain, name} -- bypasses bazel discovery entirely, for a caller that already resolved this exact chart list; mutually exclusive with --charts/--helm-charts")
+	cmd.Flags().StringVar(&versionSelections, "version-selections", "", `JSON object mapping full_name to "major"/"minor"/"patch" (that target's own bump type) or "vMAJOR.MINOR.PATCH" (hardcoded version for that target) -- per-target override of --version/--increment-*, which stays the default for any target with no entry here`)
 	cmd.Flags().StringVar(&version, "version", "", "Release version")
 	cmd.Flags().BoolVar(&incrementMajor, "increment-major", false, "Auto-increment major version")
 	cmd.Flags().BoolVar(&incrementMinor, "increment-minor", false, "Auto-increment minor version")
@@ -334,6 +378,14 @@ type planParams struct {
 	// mutually exclusive per app/chart axis before planRelease is called.
 	appsMetadata           []AppMetadataInput
 	chartsMetadata         []HelmChartMetadataInput
+	// versionSelections (issue #889 follow-up) is a per-target override of
+	// version/incrementMajor/incrementMinor/incrementPatch below, keyed by
+	// full_name. A target present here uses its own entry instead of the
+	// batch-wide flags; a target absent from it falls back to those flags
+	// unchanged -- see assignVersions/assignChartVersions for the precedence
+	// order (explicit vX.Y.Z wins, then a bump keyword, then the batch
+	// default).
+	versionSelections map[string]string
 	version                string
 	incrementMajor         bool
 	incrementMinor         bool
@@ -434,7 +486,7 @@ func planRelease(p planParams) (*PlanResult, error) {
 					}
 				}
 			}
-			if err := assignVersions(ctx, p, releaseApps, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, perAppVersions); err != nil {
+			if err := assignVersions(ctx, p, releaseApps, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, p.versionSelections, perAppVersions); err != nil {
 				return nil, err
 			}
 		}
@@ -451,7 +503,7 @@ func planRelease(p planParams) (*PlanResult, error) {
 				}
 				selectedCharts = selectHelmCharts(p.requestedCharts, allCharts, p.includeDemo, nil)
 			}
-			if err := assignChartVersions(ctx, p, selectedCharts, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, perChartVersions); err != nil {
+			if err := assignChartVersions(ctx, p, selectedCharts, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, p.versionSelections, perChartVersions); err != nil {
 				return nil, err
 			}
 		}
@@ -511,7 +563,7 @@ func planRelease(p planParams) (*PlanResult, error) {
 	return result, nil
 }
 
-func assignChartVersions(ctx context.Context, p planParams, charts []HelmChartMetadata, version string, major, minor, patch bool, out map[string]string) error {
+func assignChartVersions(ctx context.Context, p planParams, charts []HelmChartMetadata, version string, major, minor, patch bool, versionSelections map[string]string, out map[string]string) error {
 	var client pb.ArtifactRegistryClient
 	if p.registryOptedIn() {
 		c, closeFn, err := dialVersioningClient(ctx, p.artifactRegistryClient)
@@ -525,16 +577,33 @@ func assignChartVersions(ctx context.Context, p planParams, charts []HelmChartMe
 
 	for i := range charts {
 		fullName := charts[i].FullName()
-		if version != "" {
-			out[fullName] = version
+
+		// Per-target override (issue #889 follow-up): an explicit
+		// "vX.Y.Z" entry wins outright, no registry/git call for this
+		// target. A bump-keyword entry ("major"/"minor"/"patch") picks
+		// this target's own bump type, overriding the batch-wide
+		// major/minor/patch flags below for this target only.
+		targetVersion, targetMajor, targetMinor, targetPatch := version, major, minor, patch
+		if sel, ok := versionSelections[fullName]; ok {
+			if isBumpKeyword(sel) {
+				targetVersion = ""
+				targetMajor, targetMinor, targetPatch = sel == "major", sel == "minor", sel == "patch"
+			} else {
+				out[fullName] = sel
+				continue
+			}
+		}
+
+		if targetVersion != "" {
+			out[fullName] = targetVersion
 			continue
 		}
-		if major || minor || patch {
+		if targetMajor || targetMinor || targetPatch {
 			bumpType := "patch"
 			switch {
-			case major:
+			case targetMajor:
 				bumpType = "major"
-			case minor:
+			case targetMinor:
 				bumpType = "minor"
 			}
 			publishedName := strings.TrimPrefix(charts[i].Name, "helm-")
@@ -782,7 +851,7 @@ func buildPlanResult(
 // (keyed by the app's FullName). AppManifest.Version — the manifest's own
 // declared default (normally "latest") — is left untouched: it describes
 // the app definition, not the version being planned for this release.
-func assignVersions(ctx context.Context, p planParams, apps []AppMetadata, version string, major, minor, patch bool, out map[string]string) error {
+func assignVersions(ctx context.Context, p planParams, apps []AppMetadata, version string, major, minor, patch bool, versionSelections map[string]string, out map[string]string) error {
 	var client pb.ArtifactRegistryClient
 	if p.registryOptedIn() {
 		c, closeFn, err := dialVersioningClient(ctx, p.artifactRegistryClient)
@@ -795,19 +864,33 @@ func assignVersions(ctx context.Context, p planParams, apps []AppMetadata, versi
 	idemPrefix := p.idempotencyPrefix()
 
 	for i := range apps {
-		if version != "" {
-			out[apps[i].FullName()] = version
+		fullName := apps[i].FullName()
+
+		// Per-target override (issue #889 follow-up) -- see
+		// assignChartVersions' identical precedence-order comment.
+		targetVersion, targetMajor, targetMinor, targetPatch := version, major, minor, patch
+		if sel, ok := versionSelections[fullName]; ok {
+			if isBumpKeyword(sel) {
+				targetVersion = ""
+				targetMajor, targetMinor, targetPatch = sel == "major", sel == "minor", sel == "patch"
+			} else {
+				out[fullName] = sel
+				continue
+			}
+		}
+
+		if targetVersion != "" {
+			out[fullName] = targetVersion
 			continue
 		}
-		if major || minor || patch {
+		if targetMajor || targetMinor || targetPatch {
 			incrementType := "patch"
 			switch {
-			case major:
+			case targetMajor:
 				incrementType = "major"
-			case minor:
+			case targetMinor:
 				incrementType = "minor"
 			}
-			fullName := apps[i].FullName()
 			domain, name := apps[i].Domain, apps[i].Name
 			newVer, _, err := resolveVersion(ctx, client, determineArtifactKind(apps[i]), fullName, incrementType,
 				fmt.Sprintf("%s-%s-allocate", idemPrefix, fullName),
@@ -817,7 +900,15 @@ func assignVersions(ctx context.Context, p planParams, apps []AppMetadata, versi
 				return fmt.Errorf("auto-increment for %s: %w", fullName, err)
 			}
 			out[fullName] = newVer
+			continue
 		}
+		// Reachable now that --version-selections lets workflow_dispatch
+		// pass CLI-level validation with versionOpts == 0 (see newPlanCmd):
+		// a versionSelections covering only some requested apps, with no
+		// batch-wide fallback flag, leaves this app with no version source
+		// at all. Fail loudly rather than silently emitting an empty
+		// version into the matrix.
+		return fmt.Errorf("no version resolved for app %s: no --version-selections entry and no --version/--increment-* fallback", fullName)
 	}
 	return nil
 }

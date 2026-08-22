@@ -67,45 +67,64 @@ func (app *App) handleReleaseTrigger(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 }
 
-// handleReleaseTriggerShow renders the initial (or retry-prefilled, via the
-// "scope" query param -- see pages.retryHref) form. FR4/NFR5: a caller
-// without the promoter role sees the read-only denial banner instead of the
-// form (handleReleaseTriggerSubmit re-checks the same gate server-round-trip
+// handleReleaseTriggerShow renders the initial picker (step 1, issue #889
+// follow-up: a domain/app/chart checkbox tree replacing the original
+// free-form scope text field). FR4/NFR5: a caller without the promoter role
+// sees the read-only denial banner instead of the form
+// (handleReleaseTriggerSubmit re-checks the same gate server-round-trip
 // side, since a GET-time check alone can never be trusted for the actual
 // write -- see releaseTriggerGate's doc comment).
 func (app *App) handleReleaseTriggerShow(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
-	s := pages.ReleaseTriggerViewState{
-		Scope:       r.URL.Query().Get("scope"),
-		IncludeDemo: r.URL.Query().Get("include_demo") == "true",
-		Digest:      r.URL.Query().Get("digest"),
-	}
+	s := pages.ReleaseTriggerViewState{}
 	applyReleaseTriggerGate(&s, user)
+	if !s.Denied {
+		app.loadReleasePickerGroups(r, &s)
+	}
 	app.renderReleaseTrigger(w, r, user, s)
+}
+
+// loadReleasePickerGroups fetches the releasable catalog and groups it by
+// domain for the picker (fetchReleasableCatalog, release_scope.go) -- a
+// plain read, same RPCs resolveReleaseScope/resolveSelectedTargets already
+// make, just surfaced up front now that the picker needs live data to
+// render checkboxes rather than accepting free-form text. A fetch failure
+// is surfaced as PickErr rather than a raw 500: the picker degrades to an
+// empty (but still rendered) tree with an explanatory error, matching this
+// screen's existing error-banner pattern for every other failure mode.
+func (app *App) loadReleasePickerGroups(r *http.Request, s *pages.ReleaseTriggerViewState) {
+	cat, err := fetchReleasableCatalog(r.Context(), app.registry)
+	if err != nil {
+		s.PickErr = fmt.Sprintf("failed to load releasable apps/charts: %v", err)
+		return
+	}
+	s.PickerGroups = pages.BuildDomainPickerGroups(cat.apps, cat.charts)
 }
 
 // handleReleaseTriggerSubmit handles both steps of this screen's form,
 // distinguished by the "do" form value:
 //
-//   - "" (or anything other than "trigger") -- the "Resolve scope" step:
-//     resolves the submitted scope into a concrete target list (FR1, real
-//     logic -- see release_scope.go's resolveReleaseScope) and re-renders
-//     the form with that resolution as a preview. No RPC call, nothing
-//     mutates -- safe to hit repeatedly while iterating on the scope input.
-//   - "trigger" -- the confirm step, submitted from the preview's own
-//     "Trigger release" button (resolvedTargetsPreview in
-//     pages/release_trigger.templ), which echoes the same scope/
-//     include_demo/digest fields as hidden inputs. Re-resolves the scope
+//   - "" (or anything other than "trigger") -- the "Resolve selection"
+//     step: resolves the submitted picker checkboxes into a concrete
+//     target list (FR1, issue #889 follow-up -- see release_scope.go's
+//     resolveSelectedTargets) and re-renders the page with that resolution
+//     as the Draft step (pages.releaseDraft), one version-selection row per
+//     target. No RPC beyond the read used to resolve -- nothing mutates,
+//     safe to hit repeatedly while iterating on the selection.
+//   - "trigger" -- the confirm step, submitted from the Draft step's own
+//     "Trigger release" button (pages.releaseDraft), which echoes the
+//     original picker selections and digest as hidden inputs, plus each
+//     target's version-selection fields. Re-resolves the selection
 //     (resolution is a deterministic read against current registry state,
 //     so re-resolving here rather than trusting a client-echoed target list
-//     costs nothing and closes a TOCTOU window against the preview), then
-//     calls TriggerRelease and redirects to the new release's status page
-//     on success.
+//     costs nothing and closes a TOCTOU window against the Draft preview),
+//     applies each target's version selection, then calls TriggerRelease
+//     and redirects to the new release's status page on success.
 //
 // FR4/NFR5: gated the same way on both steps (a denied caller never
-// resolves a scope preview for a write they can't make, matching Rollback's
-// screen). FR5: TriggerRelease's FailedPrecondition ("already releasing")
-// response is surfaced as its own specific, inline message
+// resolves a selection preview for a write they can't make, matching
+// Rollback's screen). FR5: TriggerRelease's FailedPrecondition ("already
+// releasing") response is surfaced as its own specific, inline message
 // (s.SubmitErr) -- never folded into grpcErrorMessage's generic
 // "Transport or server failure" default, which has no FailedPrecondition
 // case and would otherwise render this exactly like an unrelated backend
@@ -117,15 +136,17 @@ func (app *App) handleReleaseTriggerSubmit(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	scope := r.FormValue("scope")
-	includeDemo := r.FormValue("include_demo") == "true"
+	selections := r.Form["target"]
+	legacyScope := r.FormValue("scope")
 	digest := strings.TrimSpace(r.FormValue("digest"))
 	confirmedTrigger := r.FormValue("do") == "trigger"
 
 	s := pages.ReleaseTriggerViewState{
-		Scope:       scope,
-		IncludeDemo: includeDemo,
-		Digest:      digest,
+		Digest:   digest,
+		Selected: make(map[string]bool, len(selections)),
+	}
+	for _, tok := range selections {
+		s.Selected[tok] = true
 	}
 
 	applyReleaseTriggerGate(&s, user)
@@ -133,27 +154,54 @@ func (app *App) handleReleaseTriggerSubmit(w http.ResponseWriter, r *http.Reques
 		app.renderReleaseTrigger(w, r, user, s)
 		return
 	}
+	app.loadReleasePickerGroups(r, &s)
 
-	targets, err := resolveReleaseScope(r.Context(), app.registry, scope, includeDemo)
+	// targets resolves from one of two shapes: the picker's "target"
+	// checkboxes (the normal path, issue #889 follow-up), or a legacy
+	// "scope" field with no "target" fields at all -- release_status.templ's
+	// Retry action (FR6/FR11) still posts requested_scope's original
+	// free-form string directly, predating the picker, and there is no
+	// stored per-target selection to reconstruct picker tokens from. Retry
+	// therefore still goes through resolveReleaseScope's grammar unchanged,
+	// with its own pre-existing documented limitations (include_demo always
+	// false, a retried digest-pinned release re-resolves to "build fresh" --
+	// see release_status.templ's doc comment on this function's caller).
+	var targets []*pb.ReleaseTargetInput
+	var err error
+	switch {
+	case len(selections) > 0:
+		targets, err = resolveSelectedTargets(r.Context(), app.registry, selections)
+	case legacyScope != "":
+		targets, err = resolveReleaseScope(r.Context(), app.registry, legacyScope, false)
+	default:
+		err = fmt.Errorf("select at least one domain, app, or chart to release")
+	}
 	if err != nil {
-		s.ScopeErr = err.Error()
+		s.PickErr = err.Error()
 		app.renderReleaseTrigger(w, r, user, s)
 		return
 	}
 	s.ResolvedTargets = targets
 
 	// FR2: the digest input only makes sense against a single resolved
-	// target -- a batch scope ("all"/domain/multi-entry list) has no
+	// target -- a batch selection (a domain, or several apps/charts) has no
 	// sensible way to apply one digest string to more than one target, so
 	// this is rejected as a validation error rather than silently applied
 	// to (or silently ignored for) an arbitrary member of the batch.
 	if digest != "" {
 		if len(targets) != 1 {
-			s.DigestErr = fmt.Sprintf("a digest can only be supplied when the scope resolves to exactly one target (resolved %d)", len(targets))
+			s.DigestErr = fmt.Sprintf("a digest can only be supplied when the selection resolves to exactly one target (resolved %d)", len(targets))
 			app.renderReleaseTrigger(w, r, user, s)
 			return
 		}
 		targets[0].Digest = digest
+	}
+
+	s.VersionInputs, err = parseTargetVersionInputs(r, targets)
+	if err != nil {
+		s.SubmitErr = err.Error()
+		app.renderReleaseTrigger(w, r, user, s)
+		return
 	}
 
 	if !confirmedTrigger {
@@ -162,8 +210,7 @@ func (app *App) handleReleaseTriggerSubmit(w http.ResponseWriter, r *http.Reques
 	}
 
 	resp, err := app.registry.Release.TriggerRelease(r.Context(), &pb.TriggerReleaseRequest{
-		RequestedScope: scope,
-		Targets:        targets,
+		Targets: targets,
 	})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.FailedPrecondition {
@@ -181,6 +228,45 @@ func (app *App) handleReleaseTriggerSubmit(w http.ResponseWriter, r *http.Reques
 	}
 
 	http.Redirect(w, r, "/releases/"+resp.GetReleaseRunId(), http.StatusSeeOther)
+}
+
+// parseTargetVersionInputs reads each resolved target's Draft-step version-
+// selection form fields (pages.modeFieldName/bumpFieldName/explicitFieldName)
+// and applies the chosen value onto that target's own
+// ReleaseTargetInput.VersionSelection -- an empty target list produces an
+// empty (not nil) map so the Draft page's per-row lookups (s.VersionInputs
+// [owner]) render the "bump"/"patch" zero-value default correctly rather
+// than panicking on a nil map read (reading a nil map is safe in Go, but
+// being explicit here documents the invariant). An "explicit" mode with an
+// empty text value is rejected here, before ever reaching TriggerRelease --
+// silently falling back to auto-patch-bump would not be what the operator
+// who chose "Explicit" intended.
+func parseTargetVersionInputs(r *http.Request, targets []*pb.ReleaseTargetInput) (map[string]pages.TargetVersionInput, error) {
+	inputs := make(map[string]pages.TargetVersionInput, len(targets))
+	for _, t := range targets {
+		full := t.GetOwnerFullName()
+		mode := r.FormValue("mode__" + full)
+		bump := r.FormValue("bump__" + full)
+		explicit := strings.TrimSpace(r.FormValue("explicit__" + full))
+
+		if mode == "explicit" {
+			if explicit == "" {
+				return nil, fmt.Errorf("%s: an explicit version is required when \"Explicit\" is selected", full)
+			}
+			inputs[full] = pages.TargetVersionInput{Mode: "explicit", Explicit: explicit}
+			t.VersionSelection = explicit
+			continue
+		}
+
+		if bump == "" {
+			bump = "patch"
+		}
+		inputs[full] = pages.TargetVersionInput{Mode: "bump", Bump: bump, Explicit: explicit}
+		if bump != "patch" {
+			t.VersionSelection = bump
+		}
+	}
+	return inputs, nil
 }
 
 func (app *App) renderReleaseTrigger(w http.ResponseWriter, r *http.Request, user *htmxauth.UserInfo, s pages.ReleaseTriggerViewState) {
