@@ -23,16 +23,17 @@ type Client struct {
 	presignPublic  *s3.PresignClient // uses public endpoint for pre-signed URLs
 	uploader       *manager.Uploader
 	bucket         string
+	publicEndpoint string // Config.PublicEndpoint, used by PublicURL
 }
 
 // Config holds S3 client configuration
 type Config struct {
-	Bucket          string
-	Region          string
-	Endpoint        string // Optional: Custom S3 endpoint (e.g., for OVH, MinIO, DigitalOcean Spaces)
-	PublicEndpoint  string // Optional: Public-facing endpoint for pre-signed URLs (if different from Endpoint)
-	AccessKey       string // Optional: Static access key (for MinIO, etc.)
-	SecretKey       string // Optional: Static secret key (for MinIO, etc.)
+	Bucket         string
+	Region         string
+	Endpoint       string // Optional: Custom S3 endpoint (e.g., for OVH, MinIO, DigitalOcean Spaces)
+	PublicEndpoint string // Optional: Public-facing endpoint for pre-signed URLs (if different from Endpoint)
+	AccessKey      string // Optional: Static access key (for MinIO, etc.)
+	SecretKey      string // Optional: Static secret key (for MinIO, etc.)
 }
 
 // NewClient creates a new S3 client
@@ -89,11 +90,12 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		s3Client:      s3c,
-		presign:       s3.NewPresignClient(s3c),
-		presignPublic: presignPublic,
-		uploader:      manager.NewUploader(s3c),
-		bucket:        cfg.Bucket,
+		s3Client:       s3c,
+		presign:        s3.NewPresignClient(s3c),
+		presignPublic:  presignPublic,
+		uploader:       manager.NewUploader(s3c),
+		bucket:         cfg.Bucket,
+		publicEndpoint: cfg.PublicEndpoint,
 	}, nil
 }
 
@@ -222,6 +224,16 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 // GetBucket returns the configured bucket name
 func (c *Client) GetBucket() string {
 	return c.bucket
+}
+
+// PublicURL returns an unsigned, public download URL for key in the
+// client's configured bucket, built from the public endpoint (see
+// Config.PublicEndpoint). No network call and no signing: callers use this
+// only for objects in a public-read bucket (e.g. app-registry's
+// RELEASE_TOOLS_S3_BUCKET, see tools/app_registry/ENV.md) -- for anything
+// requiring authentication, use PresignPutURL or Download instead.
+func (c *Client) PublicURL(key string) string {
+	return strings.TrimSuffix(c.publicEndpoint, "/") + "/" + c.bucket + "/" + key
 }
 
 // Exists checks if an object exists in S3

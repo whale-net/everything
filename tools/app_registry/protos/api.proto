@@ -87,6 +87,12 @@ service ArtifactRegistry {
   rpc ListBuilds(ListBuildsRequest) returns (ListBuildsResponse);
   rpc ListArtifactPins(ListArtifactPinsRequest) returns (ListArtifactPinsResponse);
 
+  // Issue #979/#983: resolves a CLI binary ("release_helper_go" /
+  // "app-registry") + version + platform to its public S3 download URL --
+  // never a fabricated URL for an unpublished binary+version (FR13); see
+  // ResolveBinaryURLResponse's doc comment.
+  rpc ResolveBinaryURL(ResolveBinaryURLRequest) returns (ResolveBinaryURLResponse);
+
   // Phase AR-5: transactional version allocation, replacing git-tag scanning.
   rpc AllocateVersion(AllocateVersionRequest) returns (AllocateVersionResponse);
 

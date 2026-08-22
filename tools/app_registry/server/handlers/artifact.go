@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/libs/go/semver"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
@@ -36,11 +38,46 @@ var artifactLog = logging.Get("app-registry-handlers")
 type ArtifactServer struct {
 	pb.UnimplementedArtifactRegistryServer
 	repo repository.Registry
+
+	// releaseToolsS3Bucket/releaseToolsS3PublicEndpoint back ResolveBinaryURL
+	// (issue #979/#983) -- the public-read bucket CLI binaries are published
+	// to, and the base URL used to construct unsigned download URLs. See
+	// RELEASE_TOOLS_S3_BUCKET/RELEASE_TOOLS_S3_PUBLIC_ENDPOINT in ENV.md.
+	// Both are optional: most ArtifactServer construction (tests, every
+	// other RPC in this file) has no need of them, hence WithReleaseToolsS3
+	// rather than required constructor params.
+	releaseToolsS3Bucket         string
+	releaseToolsS3PublicEndpoint string
+
+	// releaseToolsS3Client/releaseToolsS3ClientErr/releaseToolsS3ClientOnce
+	// lazily build (and cache) the s3.Client ResolveBinaryURL's PublicURL
+	// calls go through, so the AWS SDK's config load only happens once per
+	// process rather than once per request. See releaseToolsS3PublicURLClient.
+	releaseToolsS3Client     *s3.Client
+	releaseToolsS3ClientErr  error
+	releaseToolsS3ClientOnce sync.Once
+}
+
+// ArtifactServerOption configures an optional ArtifactServer dependency --
+// see WithReleaseToolsS3.
+type ArtifactServerOption func(*ArtifactServer)
+
+// WithReleaseToolsS3 configures the public-read S3 bucket ResolveBinaryURL
+// resolves CLI binary/checksum-manifest download URLs against.
+func WithReleaseToolsS3(bucket, publicEndpoint string) ArtifactServerOption {
+	return func(s *ArtifactServer) {
+		s.releaseToolsS3Bucket = bucket
+		s.releaseToolsS3PublicEndpoint = publicEndpoint
+	}
 }
 
 // NewArtifactServer constructs an ArtifactServer over repo.
-func NewArtifactServer(repo repository.Registry) *ArtifactServer {
-	return &ArtifactServer{repo: repo}
+func NewArtifactServer(repo repository.Registry, opts ...ArtifactServerOption) *ArtifactServer {
+	s := &ArtifactServer{repo: repo}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *ArtifactServer) RecordBuild(ctx context.Context, req *pb.RecordBuildRequest) (*pb.RecordBuildResponse, error) {
@@ -361,6 +398,85 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 		return nil, mapRepoErr(err)
 	}
 	return &pb.ListArtifactPinsResponse{ChartArtifacts: artifactsToPB(chartArtifacts)}, nil
+}
+
+// binaryOwnerFullName maps a CLI binary name to its App Registry owner full
+// name ("<domain>-<name>"), matching the resolution logic already in
+// release-v2.yml's build-release-tools probe and
+// download-release-tools/action.yml. ResolveBinaryURL rejects any binary not
+// in this map with InvalidArgument.
+var binaryOwnerFullName = map[string]string{
+	"release_helper_go": "tools-release_helper_go",
+	"app-registry":      "tools-app-registry",
+}
+
+// ResolveBinaryURL implements issue #979/#983 (FR12-FR14, FR16): resolves a
+// CLI binary + version + platform to its public S3 download URL. See the
+// issue's "Design" section for the exact S3 key convention this must
+// produce -- it has to match what the sibling FinalizePublish S3-publish
+// task writes.
+//
+// The lookup against s.repo.Artifacts().GetArtifact is what enforces FR9/
+// FR13: only RecordArtifact'd (i.e. FinalizePublish-confirmed) versions ever
+// exist in that table, so an unpublished or guessed version simply isn't
+// found -- there is no separate "is this confirmed?" check to get wrong.
+func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
+	ownerFullName, ok := binaryOwnerFullName[req.Binary]
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: release_helper_go, app-registry)", req.Binary)
+	}
+	if req.Os == "" {
+		return nil, status.Error(codes.InvalidArgument, "os is required")
+	}
+	if req.Arch == "" {
+		return nil, status.Error(codes.InvalidArgument, "arch is required")
+	}
+	if req.Version == "" {
+		return nil, status.Error(codes.InvalidArgument, "version is required")
+	}
+
+	_, err := s.repo.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName: ownerFullName,
+		Kind:          repository.ArtifactKindBinary,
+		Version:       req.Version,
+	})
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	client, err := s.releaseToolsS3PublicURLClient()
+	if err != nil {
+		return nil, err
+	}
+
+	binaryKey := fmt.Sprintf("%s/%s/%s-%s-%s", req.Binary, req.Version, req.Binary, req.Os, req.Arch)
+	checksumKey := fmt.Sprintf("%s/%s/checksums.txt", req.Binary, req.Version)
+	return &pb.ResolveBinaryURLResponse{
+		DownloadUrl:         client.PublicURL(binaryKey),
+		ChecksumManifestUrl: client.PublicURL(checksumKey),
+	}, nil
+}
+
+// releaseToolsS3PublicURLClient lazily builds and caches the bucket/
+// endpoint-only s3.Client ResolveBinaryURL's PublicURL calls go through.
+// s3.NewClient is the only constructor libs/go/s3 exports; it issues no
+// network call and needs no credentials (see s3.Client.PublicURL's doc
+// comment) -- it just loads AWS SDK config, so this is safe to build once
+// and reuse for the life of the process rather than on every request.
+func (s *ArtifactServer) releaseToolsS3PublicURLClient() (*s3.Client, error) {
+	if s.releaseToolsS3Bucket == "" || s.releaseToolsS3PublicEndpoint == "" {
+		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_BUCKET and RELEASE_TOOLS_S3_PUBLIC_ENDPOINT must be configured to resolve binary URLs")
+	}
+	s.releaseToolsS3ClientOnce.Do(func() {
+		s.releaseToolsS3Client, s.releaseToolsS3ClientErr = s3.NewClient(context.Background(), s3.Config{
+			Bucket:         s.releaseToolsS3Bucket,
+			PublicEndpoint: s.releaseToolsS3PublicEndpoint,
+		})
+	})
+	if s.releaseToolsS3ClientErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to construct S3 client: %v", s.releaseToolsS3ClientErr)
+	}
+	return s.releaseToolsS3Client, nil
 }
 
 // maxAllocateVersionAttempts bounds the retry loop below. A collision means
