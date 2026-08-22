@@ -335,13 +335,93 @@ func TestHandleBuildDetail_RecordingHealth_AllPublishedIsHealthy(t *testing.T) {
 	}
 }
 
-func TestHandleBuildDetail_RecordingHealth_AnyFailedOrIncompleteIsFailed(t *testing.T) {
+func TestHandleBuildDetail_RecordingHealth_AnyFailedArtifactIsFailed(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getReleaseRunResp: &pb.GetReleaseRunResponse{
+			Build: &pb.Build{BuildId: "build-1", WorkflowRunId: "999"},
+			Artifacts: []*pb.Artifact{
+				{ArtifactId: "a1", AppId: "app-1", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED},
+				{ArtifactId: "a2", AppId: "app-2", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, State: pb.ArtifactState_ARTIFACT_STATE_FAILED, FailReason: "boom"},
+			},
+		},
+	}
+	app := newTestApp(artifact, &fakeAppClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/builds/999", nil)
+	req.SetPathValue("id", "999")
+	w := httptest.NewRecorder()
+	app.handleBuildDetail(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "App Registry recording health: Failed") {
+		t.Errorf("expected a labelled 'App Registry recording health: Failed' status; body = %s", body)
+	}
+}
+
+// #846: a run still in progress (artifacts ALLOCATED/PUBLISHING, none
+// FAILED yet) must be labelled distinctly from Failed — the AR-7b lifecycle
+// (allocated -> publishing -> published) is non-terminal until an artifact
+// either publishes or fails, and the UI must not default to "Failed" for a
+// build that simply hasn't finished yet.
+func TestHandleBuildDetail_RecordingHealth_InProgressArtifactsIsInProgressNotFailed(t *testing.T) {
 	artifact := &fakeArtifactClient{
 		getReleaseRunResp: &pb.GetReleaseRunResponse{
 			Build: &pb.Build{BuildId: "build-1", WorkflowRunId: "999"},
 			Artifacts: []*pb.Artifact{
 				{ArtifactId: "a1", AppId: "app-1", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED},
 				{ArtifactId: "a2", AppId: "app-2", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, State: pb.ArtifactState_ARTIFACT_STATE_ALLOCATED},
+			},
+		},
+	}
+	app := newTestApp(artifact, &fakeAppClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/builds/999", nil)
+	req.SetPathValue("id", "999")
+	w := httptest.NewRecorder()
+	app.handleBuildDetail(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "App Registry recording health: In progress") {
+		t.Errorf("expected a labelled 'App Registry recording health: In progress' status; body = %s", body)
+	}
+	if strings.Contains(body, "App Registry recording health: Failed") {
+		t.Errorf("in-progress run must never render as Failed (#846); body = %s", body)
+	}
+}
+
+// A single PUBLISHING artifact (no ALLOCATED, no FAILED) must also read as
+// in-progress, not failed.
+func TestHandleBuildDetail_RecordingHealth_PublishingOnlyIsInProgress(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getReleaseRunResp: &pb.GetReleaseRunResponse{
+			Build: &pb.Build{BuildId: "build-1", WorkflowRunId: "999"},
+			Artifacts: []*pb.Artifact{
+				{ArtifactId: "a1", AppId: "app-1", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHING},
+			},
+		},
+	}
+	app := newTestApp(artifact, &fakeAppClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/builds/999", nil)
+	req.SetPathValue("id", "999")
+	w := httptest.NewRecorder()
+	app.handleBuildDetail(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "App Registry recording health: In progress") {
+		t.Errorf("expected a labelled 'App Registry recording health: In progress' status; body = %s", body)
+	}
+}
+
+// A FAILED artifact alongside still-building ones must win over
+// in-progress: a real failure is never masked as "still building".
+func TestHandleBuildDetail_RecordingHealth_FailedWinsOverInProgress(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getReleaseRunResp: &pb.GetReleaseRunResponse{
+			Build: &pb.Build{BuildId: "build-1", WorkflowRunId: "999"},
+			Artifacts: []*pb.Artifact{
+				{ArtifactId: "a1", AppId: "app-1", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHING},
+				{ArtifactId: "a2", AppId: "app-2", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, State: pb.ArtifactState_ARTIFACT_STATE_FAILED, FailReason: "boom"},
 			},
 		},
 	}

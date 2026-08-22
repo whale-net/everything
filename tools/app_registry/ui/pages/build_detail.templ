@@ -21,16 +21,34 @@ const (
 	buildVerdictIndeterminate buildVerdictKind = iota
 	buildVerdictHealthy
 	buildVerdictFailed
+	// buildVerdictInProgress: every artifact is either PUBLISHED or still
+	// mid-lifecycle (ALLOCATED/PUBLISHING per AR-7b's allocated ->
+	// publishing -> published progression) and none has FAILED. A run that
+	// simply hasn't finished yet must never be reported as Failed (#846) —
+	// FAILED is terminal-but-distinct and always takes priority over this.
+	buildVerdictInProgress
 )
 
 func buildVerdict(artifacts []*pb.Artifact) buildVerdictKind {
 	if len(artifacts) == 0 {
 		return buildVerdictIndeterminate
 	}
+	sawInProgress := false
 	for _, a := range artifacts {
-		if a.GetState() != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		switch a.GetState() {
+		case pb.ArtifactState_ARTIFACT_STATE_PUBLISHED:
+			// no-op: contributes neither in-progress nor failure
+		case pb.ArtifactState_ARTIFACT_STATE_ALLOCATED, pb.ArtifactState_ARTIFACT_STATE_PUBLISHING:
+			sawInProgress = true
+		default:
+			// FAILED (and any unspecified/unknown state) is terminal and
+			// always wins over in-progress — never mask a real failure as
+			// merely "still building" (NFR-6).
 			return buildVerdictFailed
 		}
+	}
+	if sawInProgress {
+		return buildVerdictInProgress
 	}
 	return buildVerdictHealthy
 }
@@ -39,6 +57,8 @@ func verdictLabelClass(v buildVerdictKind) (label, class string) {
 	switch v {
 	case buildVerdictHealthy:
 		return "Healthy", "badge-success"
+	case buildVerdictInProgress:
+		return "In progress", "badge-info"
 	case buildVerdictFailed:
 		return "Failed", "badge-error"
 	default:
@@ -129,6 +149,14 @@ templ BuildDetail(user *htmxauth.UserInfo, build *pb.Build, artifacts []*pb.Arti
 					{ strconv.Itoa(incompleteCount(artifacts)) } of { strconv.Itoa(len(artifacts)) } artifacts { pluralIsAre(incompleteCount(artifacts)) } incomplete.
 					The release itself may still have succeeded — check the artifact
 					states below before assuming otherwise.
+				</span>
+			</div>
+		} else if verdict == buildVerdictInProgress {
+			<div role="alert" class="alert alert-info shadow-md mb-6">
+				<span>
+					{ strconv.Itoa(incompleteCount(artifacts)) } of { strconv.Itoa(len(artifacts)) } artifacts { pluralIsAre(incompleteCount(artifacts)) } still building.
+					This run has not finished yet; refresh once it completes on
+					GitHub Actions to see final states.
 				</span>
 			</div>
 		}
