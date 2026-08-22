@@ -402,6 +402,44 @@ jobs:
           path: /tmp/release-tools/
           retention-days: 1
 
+  # Issue #986 (FR21/FR22 of #979): reviewed this job (both the
+  # --from-resolved-plan path above and the fallback `release-helper plan`
+  # path below) for hidden versioned side effects. Findings:
+  #   - --from-resolved-plan path: release-helper plan --from-resolved-plan
+  #     unmarshals the caller-supplied JSON directly (see plan.go's
+  #     fromResolvedPlan handling) -- no bazel/registry/git calls at all.
+  #     Clean.
+  #   - Fallback path (resolved_plan unset -- a bot-credentialed
+  #     manual/test dispatch, not the normal Temporal-orchestrated case):
+  #     `release-helper plan`'s planRelease() DOES call App Registry RPCs
+  #     with real write side effects when opted in (registryOptedIn(),
+  #     i.e. APP_REGISTRY_CICD_OPT_IN=true, not --dry-run, not
+  #     --skip-registry) -- AssertApps, RecordBuild, BeginPublishBatch,
+  #     and (via assignVersions/assignChartVersions -> resolveVersion)
+  #     AllocateVersion. This is NOT new or hidden: it is the AR-5
+  #     version-resolution/two-phase-reservation machinery (issues
+  #     #779/#829/#831, all merged well before #979), it is extensively
+  #     documented in tools/release_helper_go/cmd/plan.go and
+  #     registry_version.go, and #979's own "Out of scope" section
+  #     explicitly excludes retiring this AR-5 series from this plan.
+  #     BeginPublishBatch/AllocateVersion are the reservation ("Begin")
+  #     half of the two-phase commit protocol build-release-artifacts'
+  #     header comment describes -- not a final version stamp, promotion,
+  #     tag, or Release creation (FinalizePublish's RecordArtifact, via
+  #     finalize-app/finalize-chart, remains the sole confirmation/
+  #     commit point). Reviewed and confirmed pre-existing/already-
+  #     tracked, not a new #979 violation -- documented here per FR22
+  #     rather than left silent.
+  #   - The "Apply digest-check overrides to release matrix" step this
+  #     plan's Out-of-Scope section refers to as "preserved as-is in
+  #     plan-release" lived in the now-deleted create-github-releases job
+  #     (removed by #980, per that issue's own explicit scope), not in
+  #     this job -- confirmed via `git log -S` that it was deleted
+  #     outright, not moved, and grep of the current file confirms no
+  #     "digest-check"/"digest_unchanged" reference remains anywhere in
+  #     release-v2.yml. It was already dead code pre-#980 in v2 (v2 never
+  #     produced the digest-check artifact this step consumed -- only
+  #     v1's release.yml does), so its removal has no behavioral effect.
   plan-release:
     name: Plan Release
     runs-on: ubuntu-latest
@@ -517,6 +555,10 @@ jobs:
           [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
           "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_OUTPUT"
 
+  # Issue #986 (FR21/FR22 of #979): reviewed -- only `bazel build`s each
+  # OpenAPI spec target and uploads the resulting JSON as a workflow
+  # artifact. No App Registry call, no publish, no versioned side effect.
+  # Clean.
   build-openapi-specs:
     name: Build OpenAPI Specs
     runs-on: ubuntu-latest
@@ -599,6 +641,13 @@ jobs:
   # issue #979) -- not relocated or deferred, just gone. This job's build
   # outputs (image digests, chart source trees) are consumed solely by
   # FinalizePublish via the two `actions/upload-artifact` steps below.
+  #
+  # Issue #986 (FR21/FR22 of #979): reviewed step-by-step -- build-app
+  # pushes by digest only (--tag is the build-scoped git SHA; see its own
+  # `Short`/`Long` help text), build-chart composes a source tree only (no
+  # `helm package`, no ChartMuseum upload, no version resolution), and
+  # neither step calls any App Registry RPC. Matches this header comment's
+  # design. Clean.
   build-release-artifacts:
     name: Build Release Artifacts
     runs-on: ubuntu-latest
@@ -768,6 +817,10 @@ jobs:
           path: /tmp/cli-binaries/
           if-no-files-found: ignore
 
+  # Issue #986 (FR21/FR22 of #979): reviewed -- `release-helper summary`
+  # (tools/release_helper_go/cmd/summary.go) makes no client/registry
+  # calls at all; it only formats plan-release's own outputs into a
+  # string, appended to $GITHUB_STEP_SUMMARY. Read-only. Clean.
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
