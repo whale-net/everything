@@ -51,3 +51,55 @@ templ DigestDisplay(version string, digest string) {
 		</button>
 	</span>
 }
+
+// versionDigestTitle is DigestDisplayCompact's hover text — the full
+// "version@digest" (or just digest, with no version) so truncating the
+// visible text never hides information the way DigestDisplay's per-span
+// title (digest only) doesn't need to, since DigestDisplay never truncates
+// the version.
+func versionDigestTitle(version, digest string) string {
+	if version == "" {
+		return digest
+	}
+	return version + "@" + digest
+}
+
+// versionDigestCompactText is DigestDisplayCompact's visible text — version
+// plus the already-truncated digest, built as one string (rather than
+// adjacent templ expressions) so truncate/ellipsis has a single text node
+// to clip, matching promote.templ's candidateOptionLabel pattern for
+// combining version and digest.
+func versionDigestCompactText(version, digest string) string {
+	if version == "" {
+		return digestTruncated(digest)
+	}
+	return version + "@" + digestTruncated(digest)
+}
+
+// DigestDisplayCompact is DigestDisplay's variant for the deployments
+// matrix's fixed-width per-environment cells (#769): grid columns are
+// minmax(170px,1fr), and DigestDisplay's untruncated version plus already-
+// truncated digest plus copy button routinely overflowed that width,
+// crowding the promote/rollback buttons sharing the cell. Renders the same
+// version+digest as one single-line, ellipsis-truncated block (min-w-0 so
+// the flex parent lets it actually shrink below content size) with the
+// full value on hover, and keeps the copy button un-truncated and
+// un-shrinkable alongside it.
+templ DigestDisplayCompact(version string, digest string) {
+	<span class="inline-flex items-center gap-1 min-w-0 max-w-full">
+		<span
+			class="font-mono text-xs truncate min-w-0 max-w-[100px]"
+			title={ versionDigestTitle(version, digest) }
+		>
+			{ versionDigestCompactText(version, digest) }
+		</span>
+		<button
+			type="button"
+			class="btn btn-ghost btn-xs px-1 shrink-0"
+			title="Copy full digest"
+			onclick={ copyDigest(digest) }
+		>
+			⧉
+		</button>
+	</span>
+}
