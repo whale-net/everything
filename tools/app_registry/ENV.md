@@ -214,7 +214,7 @@ workspace (see `worker/release/activities.go`).
 
 ### FinalizePublish (issue #928)
 
-`FinalizePublish` runs after `PollBuild` reports the merged release-trigger GHA job (`release-v2.yml`'s `build-release-artifacts`) succeeded, and before `VerifyPublished` — see `worker/release/finalize.go`'s package doc comment for the full design (why this step exists, how build outputs get from GHA back to Temporal, and the credential-locality reasoning below). It reuses `RELEASE_GITHUB_APP_*`/`RELEASE_GITHUB_REPO_*`/`RELEASE_PLAN_BINARY_PATH`/`RELEASE_WORKSPACE_ROOT` above unchanged, plus:
+`FinalizePublish` runs after `PollBuild` reports the merged release-trigger GHA job (`release-v2.yml`'s `build-release-artifacts`) succeeded, and before `VerifyPublished` — see `worker/release/finalize.go`'s package doc comment for the full design (why this step exists, how build outputs get from GHA back to Temporal, and the credential-locality reasoning below). It reuses `RELEASE_GITHUB_APP_*`/`RELEASE_GITHUB_REPO_*`/`RELEASE_PLAN_BINARY_PATH` above unchanged, plus:
 
 | Variable | Default | Description |
 |----------|---------|--------------|
