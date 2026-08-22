@@ -215,14 +215,20 @@ func TestActivities_FinalizePublish_NoOpApp_ChartPinsEffectiveVersion(t *testing
 
 	binDir := t.TempDir()
 	bin := filepath.Join(binDir, "fake-release-helper-go")
+	appArgsFile := filepath.Join(binDir, "app-args.txt")
 	chartArgsFile := filepath.Join(binDir, "chart-args.txt")
 	// finalize-app always reports effective_version "v1.0.0" -- simulating
 	// a no-op rebuild reusing an older published version regardless of the
-	// plan-time --version ("v1.2.3") this test's plan requests. finalize-
-	// chart records its full argument list to chartArgsFile.
+	// plan-time --version ("v1.2.3") this test's plan requests. finalize-app
+	// and finalize-chart each record their full argument list (appArgsFile/
+	// chartArgsFile) so this test can also assert neither is invoked with
+	// --create-git-tag -- see the regression assertions below, guarding
+	// against that flag (and the ephemeral-clone plumbing it required in
+	// finalize.go) being reintroduced (issue #982, FR17-FR19 of #979).
 	script := fmt.Sprintf(`#!/bin/sh
 cmd="$1"; shift
 if [ "$cmd" = "finalize-app" ]; then
+  for a in "$@"; do printf '%%s\n' "$a"; done > %q
   domain=""; app=""; outdir=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -254,7 +260,7 @@ elif [ "$cmd" = "finalize-chart" ]; then
   exit 0
 fi
 exit 0
-`, chartArgsFile)
+`, appArgsFile, chartArgsFile)
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
@@ -275,11 +281,16 @@ exit 0
 	require.NoError(t, err)
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
 
+	appData, err := os.ReadFile(appArgsFile)
+	require.NoError(t, err)
+	require.NotContains(t, string(appData), "--create-git-tag", "finalize-app must not be invoked with --create-git-tag -- FinalizePublish's version-of-record lives in App Registry, not a git tag (issue #982)")
+
 	data, err := os.ReadFile(chartArgsFile)
 	require.NoError(t, err)
 	joined := string(data)
 	require.Contains(t, joined, `"demo-widget":"v1.0.0"`, "chart's --app-versions must pin the app's actual effective (published) version")
 	require.NotContains(t, joined, `"demo-widget":"v1.2.3"`, "chart's --app-versions must not pin the unpublished plan-time version")
+	require.NotContains(t, joined, "--create-git-tag", "finalize-chart must not be invoked with --create-git-tag -- FinalizePublish's version-of-record lives in App Registry, not a git tag (issue #982)")
 
 	// FinalizeResult.Targets must reflect the app's actual reused
 	// EffectiveVersion ("v1.0.0"), not the unpublished plan-time version
