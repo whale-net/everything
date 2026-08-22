@@ -44,7 +44,7 @@ func (f *fakeArtifactClient) GetReleaseRun(ctx context.Context, in *pb.GetReleas
 }
 
 // fakeAppClient is a minimal stand-in for pb.AppRegistryClient, covering
-// only the calls handleBuildDetail's ownerDomainIndex makes.
+// only the calls handleBuildDetail's ownerIdentityIndex makes.
 type fakeAppClient struct {
 	pb.AppRegistryClient
 
@@ -269,6 +269,57 @@ func TestHandleBuildDetail_BinaryArtifact_RendersBinaryKindBadge(t *testing.T) {
 	}
 	if strings.Contains(body, ">unknown<") {
 		t.Errorf("binary artifact should not render as 'unknown' kind, got body: %s", body)
+	}
+}
+
+// #857: the build detail page's artifact table showed id/domain/kind but no
+// app/chart name, forcing readers to resolve a UUID-shaped owner id
+// themselves. nameByOwnerID (built alongside domainByOwnerID from the same
+// ListApps/ListCharts calls) should resolve both an app-owned and a
+// chart-owned artifact's name, and add a <th>Name</th> column header next
+// to Domain.
+func TestHandleBuildDetail_ArtifactTable_ShowsAppAndChartName(t *testing.T) {
+	artifacts := []*pb.Artifact{
+		{ArtifactId: "a-img", AppId: "app-control-api", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED},
+		{ArtifactId: "a-chart", ChartId: "chart-manmanv2", Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED},
+	}
+	artifact := &fakeArtifactClient{
+		getReleaseRunResp: &pb.GetReleaseRunResponse{
+			Build:     &pb.Build{BuildId: "build-1", WorkflowRunId: "999"},
+			Artifacts: artifacts,
+		},
+	}
+	app := newTestApp(artifact, &fakeAppClient{
+		listAppsResp: &pb.ListAppsResponse{
+			Apps: []*pb.App{
+				{AppId: "app-control-api", Domain: "manmanv2", Name: "control-api", FullName: "manmanv2-control-api"},
+			},
+		},
+		listChartsResp: &pb.ListChartsResponse{
+			Charts: []*pb.Chart{
+				{ChartId: "chart-manmanv2", Domain: "manmanv2", Name: "orchestrator-chart", FullName: "manmanv2-orchestrator-chart"},
+			},
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/builds/999", nil)
+	req.SetPathValue("id", "999")
+	w := httptest.NewRecorder()
+	app.handleBuildDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "<th>Name</th>") {
+		t.Errorf("expected a Name column header; body = %s", body)
+	}
+	if !strings.Contains(body, ">control-api<") {
+		t.Errorf("expected the app's name 'control-api' rendered; body = %s", body)
+	}
+	if !strings.Contains(body, ">orchestrator-chart<") {
+		t.Errorf("expected the chart's name 'orchestrator-chart' rendered; body = %s", body)
 	}
 }
 

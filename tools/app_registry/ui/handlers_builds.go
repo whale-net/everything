@@ -80,12 +80,12 @@ func (app *App) handleBuildDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Domain is shown on THIS screen (unlike screen 30) because an app/chart
-	// identity is actually in hand per artifact. One ListApps + one
-	// ListCharts call for the whole page — never a per-artifact fetch.
-	domainByOwnerID, err := app.ownerDomainIndex(r.Context())
+	// Domain and name are shown on THIS screen (unlike screen 30) because an
+	// app/chart identity is actually in hand per artifact. One ListApps +
+	// one ListCharts call for the whole page — never a per-artifact fetch.
+	domainByOwnerID, nameByOwnerID, err := app.ownerIdentityIndex(r.Context())
 	if err != nil {
-		log.Printf("ownerDomainIndex failed: %v", err)
+		log.Printf("ownerIdentityIndex failed: %v", err)
 		http.Error(w, "Failed to load app/chart identity from app-registry-api: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -97,6 +97,7 @@ func (app *App) handleBuildDetail(w http.ResponseWriter, r *http.Request) {
 		resp.GetBuild(),
 		resp.GetArtifacts(),
 		domainByOwnerID,
+		nameByOwnerID,
 		incompleteOnly,
 		githubActionsRunURL(runID),
 	)); err != nil {
@@ -105,28 +106,34 @@ func (app *App) handleBuildDetail(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ownerDomainIndex maps every known app_id/chart_id to its owning domain,
-// so screen 31 can label each artifact's domain without a per-artifact
-// GetApp/GetChart call. Charts have no GetChart RPC, so both come from
-// their List* calls.
-func (app *App) ownerDomainIndex(ctx context.Context) (map[string]string, error) {
+// ownerIdentityIndex maps every known app_id/chart_id to its owning domain
+// and to its (short, not full) name, so screen 31 can label each artifact's
+// domain and name without a per-artifact GetApp/GetChart call. Charts have
+// no GetChart RPC, so both maps come from their List* calls — one ListApps
+// + one ListCharts for the whole page, built in the same pass so adding the
+// name lookup never doubles the RPC count.
+func (app *App) ownerIdentityIndex(ctx context.Context) (domainByOwnerID, nameByOwnerID map[string]string, err error) {
 	appsResp, err := app.registry.App.ListApps(ctx, &pb.ListAppsRequest{})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	chartsResp, err := app.registry.App.ListCharts(ctx, &pb.ListChartsRequest{})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	index := make(map[string]string, len(appsResp.GetApps())+len(chartsResp.GetCharts()))
+	n := len(appsResp.GetApps()) + len(chartsResp.GetCharts())
+	domainByOwnerID = make(map[string]string, n)
+	nameByOwnerID = make(map[string]string, n)
 	for _, a := range appsResp.GetApps() {
-		index[a.GetAppId()] = a.GetDomain()
+		domainByOwnerID[a.GetAppId()] = a.GetDomain()
+		nameByOwnerID[a.GetAppId()] = a.GetName()
 	}
 	for _, c := range chartsResp.GetCharts() {
-		index[c.GetChartId()] = c.GetDomain()
+		domainByOwnerID[c.GetChartId()] = c.GetDomain()
+		nameByOwnerID[c.GetChartId()] = c.GetName()
 	}
-	return index, nil
+	return domainByOwnerID, nameByOwnerID, nil
 }
 
 // handleReconcileRuns is screen 32 (FR-31): every ReconcileApps sweep that
