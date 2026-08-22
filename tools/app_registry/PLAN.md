@@ -178,23 +178,30 @@ picking this up cold, read those three before starting anything.
 
 Informal tracker for [plan #912](https://github.com/whale-net/everything/issues/912)'s
 FR5: which domains dispatch releases through `.github/workflows/release.yml`
-(v1) vs `.github/workflows/release-v2.yml` (v2). No schema or tooling —
-a human updates this table as a domain's Temporal `GitHubDispatcher`
-config (`WorkflowFile`, `tools/app_registry/worker/release/github.go`) is
-repointed at `release-v2.yml`. Not a gate on #912's FR7 retirement; kept
-only for visibility during v2's build-out. `release-v2.yml` is scaffold-only
-(job stubs) as of this table's last update — no domain can cut over until
-its Implementation phase lands the real job bodies.
+(v1) vs `.github/workflows/release-v2.yml` (v2). No schema or tooling — the
+`WorkflowFile` a `GitHubDispatcher` dispatches against
+(`tools/app_registry/worker/release/github.go`) is a single **global**
+setting (`RELEASE_GITHUB_WORKFLOW_FILE`, default and required value
+`release-v2.yml` — see `tools/app_registry/ENV.md`), not something repointed
+per domain. The actual gate on a domain's cutover is whether `TriggerRelease`
+(`tools/app_registry/server/handlers/release.go`) is ever called for that
+domain's real releases — i.e. whether the App Registry UI/API is used to
+trigger the domain's releases at all — not a config value to flip. Not a
+gate on #912's FR7 retirement; kept only for visibility during v2's
+build-out. `release-v2.yml` has real, non-stub job bodies (ported in by
+PR #924) — cutover is gated on the domain actually calling `TriggerRelease`,
+not on job-body readiness.
 
 | Domain | Dispatch target | Notes |
 |---|---|---|
 | `demo` | v1 (`release.yml`) | Not yet migrated |
 | `manman` | v1 (`release.yml`) | Not yet migrated |
-| `manmanv2` | v1 (`release.yml`) | Not yet migrated |
+| `manmanv2` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `manmanv2` apps/charts as of 2026-08-22). |
 | `friendly_computing_machine` | v1 (`release.yml`) | Not yet migrated |
-| `leaflab` | v1 (`release.yml`) | Not yet migrated |
+| `leaflab` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `leaflab` as of 2026-08-22). Also at `domain_adoption.stage = allocate` (AR-5, a separate version-allocation axis). |
 | `firmware` | v1 (`release.yml`) | Not yet migrated |
-| `tools` (release tooling itself) | v1 (`release.yml`) | Not yet migrated |
+| `tools` (release tooling itself) | v1 (`release.yml`) | Not yet migrated — no `tools-*` CLI release target has appeared in `release_run_target` yet. Separately at `domain_adoption.stage = allocate` (AR-5) — that is a different axis (version allocation, not GHA dispatch target) and does not imply v2 dispatch. |
+| `app-registry` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `app-registry` as of 2026-08-22). Also at `domain_adoption.stage = allocate` (AR-5). |
 
 ## Sequencing rationale
 
@@ -290,13 +297,19 @@ the release rather than mask itself as a tag-based one.
   domains were cut over by hand-editing `domain_adoption` directly. Real,
   separate scope before a future domain can be cut over without doing the
   same.
-- Git tags are still created for allocate-domain releases (`--create-git-tag`
-  is unchanged) — deliberately kept as this section's originally-planned
-  "redundant record and disaster-recovery path": neither `release-app` nor
-  `release-charts` ever pushes a tag to origin (apps' tags only reach origin
-  as an accidental side effect of `create-combined-github-release-with-notes`;
-  charts' never do at all), so a local tag object in an ephemeral CI
-  checkout costs nothing to keep. No-op/digest-collision detection for
+- **v1 (`release-app`/`release-charts`, `release.yml`) still creates git
+  tags for allocate-domain releases (`--create-git-tag` is unchanged there)**
+  — deliberately kept as this section's originally-planned "redundant record
+  and disaster-recovery path": neither `release-app` nor `release-charts`
+  ever pushes a tag to origin (apps' tags only reach origin as an accidental
+  side effect of `create-combined-github-release-with-notes`; charts' never
+  do at all), so a local tag object in an ephemeral CI checkout costs
+  nothing to keep. **v2 (`finalize-app`/`finalize-chart`, `FinalizePublish`)
+  no longer accepts or passes `--create-git-tag` at all** — removed by
+  #982, since `FinalizePublish`'s version-of-record lives in App Registry,
+  not a git tag; this bullet's "redundant record" rationale never applied
+  to v2's own tag-creation (it never created one to begin with) and is now
+  moot for v2 entirely. No-op/digest-collision detection for
   `allocate`-stage domains (issue #832) queries App Registry directly via
   `GetArtifact(latest_published=true)`, moving off tag-scanning while keeping
   git-tag fallback for domains not yet at `allocate`.
