@@ -72,22 +72,55 @@ templ AppDetail(user *htmxauth.UserInfo, data *matrix.AppDetailData) {
 		{{ deployable := matrix.IsDeployable(data.App) }}
 		if deployable {
 			<div class="grid md:grid-cols-3 gap-4 mb-6">
+				@appLatestStatCard(data.LatestArtifact)
 				for _, s := range data.States {
 					@appEnvStatCard(s)
 				}
 			</div>
 		} else {
-			<div role="alert" class="alert alert-info mb-6">
-				<span>Build-only app — not deployed to any environment, so there is no version-by-environment state to show.</span>
+			<div class="card bg-base-100 shadow-md mb-6">
+				<div class="card-body">
+					<h2 class="card-title text-lg">Latest version</h2>
+					<p class="text-sm opacity-60 mb-2">Build-only app — not deployed to any environment, so there is no version-by-environment state to show.</p>
+					if data.LatestArtifact == nil {
+						<p class="text-sm opacity-60">No published artifact yet.</p>
+					} else {
+						<div class="flex items-center gap-2 flex-wrap">
+							@components.DigestDisplay(data.LatestArtifact.GetVersion(), data.LatestArtifact.GetDigest())
+							@components.ProvenanceBadge(data.LatestArtifact.GetProvenance())
+						</div>
+					}
+				</div>
 			</div>
 		}
 		<div class={ "grid gap-6 mb-6", templ.KV("md:grid-cols-2", deployable) }>
 			if deployable {
-				@appDriftCard(data.App.GetFullName(), data.States)
+				@appDriftCard(data.App.GetFullName(), data.LatestArtifact, data.States)
 			}
 			@promotionTimelineCard(user, data)
 		</div>
 	}
+}
+
+// appLatestStatCard is #774's "show latest version even if no env to
+// deploy to" -- and, for a deployable app (the only place this is called
+// alongside appEnvStatCard), it is prepended ahead of every per-environment
+// card so it reads as a synthetic column ranked below every real
+// environment (States/environments are already rank-ascending): latest,
+// then dev, ..., then prod, eyeballable left-to-right at a glance.
+templ appLatestStatCard(art *pb.Artifact) {
+	<div class="stat bg-base-100 rounded-box shadow-md">
+		<div class="stat-title">Latest</div>
+		if art == nil {
+			<div class="stat-value text-lg opacity-50">—</div>
+			<div class="stat-desc"><span class="text-xs opacity-50">no published artifact</span></div>
+		} else {
+			<div class="stat-value text-lg font-mono">{ art.GetVersion() }</div>
+			<div class="stat-desc flex flex-wrap gap-1">
+				@components.ProvenanceBadge(art.GetProvenance())
+			</div>
+		}
+	</div>
 }
 
 templ appEnvStatCard(s matrix.AppEnvState) {
@@ -121,12 +154,28 @@ templ appEnvStatCard(s matrix.AppEnvState) {
 // FR-19's "one app across every environment" holds here too — each row
 // names its own environment plus digest, provenance, build link, and the
 // "chart pin says … (mismatch)" drift line when it applies.
-templ appDriftCard(fullName string, states []matrix.AppEnvState) {
+templ appDriftCard(fullName string, latest *pb.Artifact, states []matrix.AppEnvState) {
 	<div class="card bg-base-100 shadow-md">
 		<div class="card-body">
 			<h2 class="card-title text-lg">Current artifact by environment</h2>
 			<table class="table table-sm">
 				<tbody>
+					if latest != nil {
+						<tr>
+							<td class="opacity-60 align-top">Latest</td>
+							<td>
+								<div class="flex flex-col gap-1">
+									@components.DigestDisplay(latest.GetVersion(), latest.GetDigest())
+									<div class="flex items-center gap-2">
+										@components.ProvenanceBadge(latest.GetProvenance())
+										if latest.GetBuildId() != "" {
+											<a href={ templ.URL("/builds/" + latest.GetBuildId()) } class="link font-mono text-xs">build { latest.GetBuildId() }</a>
+										}
+									</div>
+								</div>
+							</td>
+						</tr>
+					}
 					for _, s := range states {
 						if s.ColumnErr == nil && s.Promoted {
 							<tr>
