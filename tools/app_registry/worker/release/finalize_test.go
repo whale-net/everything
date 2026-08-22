@@ -138,18 +138,14 @@ func TestPlanBuildID_ExtractsFieldOrEmpty(t *testing.T) {
 	require.Equal(t, "build-123", planBuildID([]byte(`{"build_id":"build-123","version":"v1.0.0"}`)))
 }
 
-// TestActivities_FinalizePublish_WorkspaceRootUnset_ClonesAndSucceeds
-// proves FinalizePublish no longer hard-fails when a.WorkspaceRoot is
-// unset -- it clones its own scratch workspace instead (cloneWorkspace).
-// cloneWorkspaceFn is overridden here to avoid a real network git clone in
-// this hermetic test -- cloneWorkspace itself (finalize.go) is a thin,
-// directly-readable wrapper around writeback.MintInstallationToken (already
-// covered by github_test.go's token-minting tests) and `git clone`, with no
-// independent branching logic worth a separate unit test. The fake
-// release_helper_go binary is a no-op (exit 0): this test is about
-// FinalizePublish's workspace handling, not finalize-app/finalize-chart's
-// own logic.
-func TestActivities_FinalizePublish_WorkspaceRootUnset_ClonesAndSucceeds(t *testing.T) {
+// TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds proves
+// FinalizePublish does not require a.WorkspaceRoot at all -- neither
+// finalize-app nor finalize-chart needs a real git checkout any more (see
+// finalize.go's package doc comment), so an unset a.WorkspaceRoot must not
+// hard-fail or attempt any clone. The fake release_helper_go binary is a
+// no-op (exit 0): this test is about FinalizePublish's own orchestration,
+// not finalize-app/finalize-chart's logic.
+func TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds(t *testing.T) {
 	appManifest := `{"domain":"demo","app":"widget","full_name":"demo-widget","repository":"ghcr.io/whale-net/demo-widget","digest":"sha256:aaa"}`
 	buildManifestZip := zipDir(t, map[string]string{"demo-widget.json": appManifest})
 
@@ -169,14 +165,9 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_ClonesAndSucceeds(t *test
 	bin := filepath.Join(binDir, "fake-release-helper-go")
 	require.NoError(t, os.WriteFile(bin, fakeFinalizeAppScript(), 0o755))
 
-	var clonedDirs []string
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
-		cloneWorkspaceFn: func(ctx context.Context, dir string) error {
-			clonedDirs = append(clonedDirs, dir)
-			return nil
-		},
 	}
 
 	plan := ResolvedPlan{
@@ -186,55 +177,8 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_ClonesAndSucceeds(t *test
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
 	result, err := a.FinalizePublish(context.Background(), plan, ref)
-	require.NoError(t, err, "WorkspaceRoot unset must not hard-fail -- FinalizePublish should clone its own scratch workspace")
+	require.NoError(t, err, "WorkspaceRoot unset must not hard-fail -- FinalizePublish needs no git checkout at all")
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
-	require.Len(t, clonedDirs, 1, "expected exactly one clone for one FinalizePublish invocation")
-}
-
-// TestActivities_FinalizePublish_WorkspaceRootSet_SkipsClone proves an
-// explicit a.WorkspaceRoot (e.g. an operator override) is used as-is, with
-// no clone attempted at all.
-func TestActivities_FinalizePublish_WorkspaceRootSet_SkipsClone(t *testing.T) {
-	appManifest := `{"domain":"demo","app":"widget","full_name":"demo-widget","repository":"ghcr.io/whale-net/demo-widget","digest":"sha256:aaa"}`
-	buildManifestZip := zipDir(t, map[string]string{"demo-widget.json": appManifest})
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
-	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/runs/42/artifacts", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"artifacts":[{"id":7,"name":"build-manifest","expired":false}]}`))
-	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/artifacts/7/zip", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(buildManifestZip)
-	})
-
-	binDir := t.TempDir()
-	bin := filepath.Join(binDir, "fake-release-helper-go")
-	require.NoError(t, os.WriteFile(bin, fakeFinalizeAppScript(), 0o755))
-
-	cloneCalled := false
-	a := &Activities{
-		GitHub:         newTestDispatcher(t, mux),
-		PlanBinaryPath: bin,
-		WorkspaceRoot:  t.TempDir(),
-		cloneWorkspaceFn: func(ctx context.Context, dir string) error {
-			cloneCalled = true
-			return nil
-		},
-	}
-
-	plan := ResolvedPlan{
-		ReleaseRunID: "release-run-1",
-		Versions:     map[string]string{"image:demo-widget": "v1.2.3"},
-	}
-	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
-
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
-	require.NoError(t, err)
-	require.True(t, result.Succeeded, "detail: %s", result.Detail)
-	require.False(t, cloneCalled, "an explicit WorkspaceRoot must be used as-is with no clone")
 }
 
 // TestActivities_FinalizePublish_NoOpApp_ChartPinsEffectiveVersion is the
@@ -316,7 +260,6 @@ exit 0
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
-		WorkspaceRoot:  t.TempDir(),
 	}
 
 	plan := ResolvedPlan{
@@ -390,7 +333,6 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *te
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
-		WorkspaceRoot:  t.TempDir(),
 	}
 
 	plan := ResolvedPlan{
@@ -486,7 +428,6 @@ exit 0
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
-		WorkspaceRoot:  t.TempDir(),
 	}
 
 	plan := ResolvedPlan{
@@ -542,7 +483,6 @@ func TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget(t *tes
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
-		WorkspaceRoot:  t.TempDir(),
 	}
 
 	plan := ResolvedPlan{
@@ -597,7 +537,6 @@ exit 0
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
-		WorkspaceRoot:  t.TempDir(),
 	}
 
 	plan := ResolvedPlan{
@@ -670,7 +609,6 @@ exit 0
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
-		WorkspaceRoot:  t.TempDir(),
 	}
 
 	plan := ResolvedPlan{

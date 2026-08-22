@@ -34,23 +34,16 @@
 //
 // Like ResolvePlan (see plan.go's package doc comment), this is an interim
 // shell-out to release_helper_go rather than an in-process library call.
-// Unlike ResolvePlan, this activity's shell-outs pass `--create-git-tag`
-// (finalize-app/finalize-chart), which runs `git tag`+`git push` -- a real
-// authenticated git remote, not just a scratch directory. When
-// a.WorkspaceRoot is unset, FinalizePublish performs its own shallow,
-// authenticated clone of this monorepo per invocation (cloneWorkspace,
-// below) into a fresh temp directory, reusing the exact GitHub App
-// installation-token pattern DispatchBuild's dispatcher already has
-// (a.GitHub.Config's writeback.GitHubAppConfig + Owner/Repo -- see
-// github.go's package doc comment's "reuse ... rather than inventing a
-// second auth mechanism" precedent) rather than requiring an operator to
-// pre-provision a persistent checkout. A fresh clone per invocation also
-// means ResolvePlan's previously-documented git-tag-race concurrency
-// caveat (a single shared WorkspaceRoot directory racing across concurrent
-// ReleaseWorkflow executions) does not apply here: each FinalizePublish
-// call gets its own directory. a.WorkspaceRoot remains a supported
-// override (e.g. for tests, or an operator who does want a persistent
-// checkout) -- when set, it is used as-is and no clone is performed.
+// Unlike ResolvePlan, neither finalize-app nor finalize-chart needs a real
+// git checkout at all: both used to pass `--create-git-tag` (running `git
+// tag`+`git push` against a real authenticated remote FinalizePublish
+// cloned per invocation), but that flag and the clone-per-invocation
+// plumbing it required were removed -- FinalizePublish's version-of-record
+// lives in App Registry, not in a git tag, and finalize-app's retag
+// (--repository/--digest) and finalize-chart's packaging (--chart-dir, an
+// absolute path under the scratch tmpDir) never read anything relative to
+// a git checkout. Both subprocesses now run with tmpDir (already created
+// for the downloaded build artifacts, see below) as their cwd instead.
 // `helm` must still be on PATH wherever this process runs (neither
 // finalize-app nor finalize-chart shells out to bazel).
 package release
@@ -229,31 +222,17 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		return FinalizeResult{}, fmt.Errorf("finalize publish: %w", err)
 	}
 
-	// workspaceDir is where finalize-app/finalize-chart run `git
-	// tag`+`git push` from -- see package doc comment. a.WorkspaceRoot
-	// stays a supported override; when unset, clone one ourselves.
-	workspaceDir := a.WorkspaceRoot
-	if workspaceDir == "" {
-		cloneDir, cerr := os.MkdirTemp("", "release-finalize-workspace-*")
-		if cerr != nil {
-			return FinalizeResult{}, fmt.Errorf("finalize publish: create scratch workspace: %w", cerr)
-		}
-		defer os.RemoveAll(cloneDir) //nolint:errcheck
-		clone := a.cloneWorkspaceFn
-		if clone == nil {
-			clone = a.cloneWorkspace
-		}
-		if cerr := clone(ctx, cloneDir); cerr != nil {
-			return FinalizeResult{}, fmt.Errorf("finalize publish: %w", cerr)
-		}
-		workspaceDir = cloneDir
-	}
-
 	tmpDir, err := os.MkdirTemp("", "release-finalize-")
 	if err != nil {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: %w", err)
 	}
 	defer os.RemoveAll(tmpDir) //nolint:errcheck
+	// finalize-app/finalize-chart no longer need a real git checkout --
+	// neither shell-out reads files relative to its process cwd (finalize-
+	// app's retag uses --repository/--digest directly; finalize-chart's
+	// packaging uses --chart-dir, an absolute path under tmpDir) now that
+	// --create-git-tag is gone (see package doc comment). tmpDir, already
+	// created for the downloaded artifacts below, doubles as cmd.Dir.
 
 	appsDir := filepath.Join(tmpDir, "apps")
 	chartsDir := filepath.Join(tmpDir, "charts")
@@ -353,13 +332,12 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			"--version", version,
 			"--repository", m.Repository,
 			"--digest", m.Digest,
-			"--create-git-tag",
 			"--output-dir", finalizeResultsDir,
 		}
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
 		}
-		if _, err := runReleaseHelper(ctx, binary, workspaceDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
+		if _, err := runReleaseHelper(ctx, binary, tmpDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
 			detail := fmt.Sprintf("%s: finalize-app: %v", fullName, err)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
@@ -468,13 +446,12 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			"--version", version,
 			"--app-versions", string(appVersionsJSON),
 			"--app-digests", string(appDigestsJSON),
-			"--create-git-tag",
 			"--output-dir", chartFinalizeResultsDir,
 		}
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
 		}
-		if _, err := runReleaseHelper(ctx, binary, workspaceDir, chartEnv, args...); err != nil {
+		if _, err := runReleaseHelper(ctx, binary, tmpDir, chartEnv, args...); err != nil {
 			detail := fmt.Sprintf("%s: finalize-chart: %v", fullName, err)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
@@ -503,43 +480,17 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	return FinalizeResult{Succeeded: true, Targets: finalizeTargets}, nil
 }
 
-// cloneWorkspace performs a shallow, authenticated clone of this monorepo
-// into dir, so finalize-app/finalize-chart's --create-git-tag shell-outs
-// have a real git remote to push to -- see package doc comment. Reuses
-// a.GitHub.Config's GitHub App credentials and Owner/Repo (already
-// required for DispatchBuild) and writeback.MintInstallationToken's
-// installation-token flow, the same "x-access-token:<token>" HTTPS
-// credential shape writeback/gitops.go's remoteURL uses for gitops pushes
-// -- one auth mechanism, not two. The token is redacted from any returned
-// error.
-func (a *Activities) cloneWorkspace(ctx context.Context, dir string) error {
-	token, err := a.GitHub.token(ctx)
-	if err != nil {
-		return fmt.Errorf("mint clone token: %w", err)
-	}
-	ref := a.GitHub.Config.Ref
-	if ref == "" {
-		ref = "main"
-	}
-	url := "https://x-access-token:" + token + "@github.com/" + a.GitHub.Config.Owner + "/" + a.GitHub.Config.Repo + ".git"
-
-	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--branch", ref, url, dir)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
-	if runErr := cmd.Run(); runErr != nil {
-		msg := strings.ReplaceAll(out.String(), token, "REDACTED")
-		return fmt.Errorf("git clone: %w: %s", runErr, strings.TrimSpace(msg))
-	}
-	return nil
-}
-
-// runReleaseHelper invokes binary (release_helper_go) from workspaceRoot
-// with extraEnv appended to the current process's environment -- mirroring
-// plan.go's ResolvePlan shell-out (same binary, same Dir convention).
-func runReleaseHelper(ctx context.Context, binary, workspaceRoot string, extraEnv []string, args ...string) (string, error) {
+// runReleaseHelper invokes binary (release_helper_go) with cmd.Dir set to
+// dir and extraEnv appended to the current process's environment. Unlike
+// plan.go's ResolvePlan shell-out (which needs a real bazel workspace
+// checkout), dir here is just a scratch directory -- neither finalize-app
+// nor finalize-chart reads anything relative to their process cwd (see
+// package doc comment) -- so callers pass tmpDir, the same scratch
+// directory FinalizePublish already created for the downloaded build
+// artifacts, purely so the subprocess has *some* valid working directory.
+func runReleaseHelper(ctx context.Context, binary, dir string, extraEnv []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Dir = workspaceRoot
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), extraEnv...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

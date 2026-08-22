@@ -19,7 +19,6 @@ type FinalizeAppParams struct {
 	BuildID              string
 	IdempotencyKeyPrefix string
 	SkipRegistry         bool
-	CreateGitTag         bool
 	// Repository/Digest are the already-pushed image's coordinates, as
 	// recorded by build-app (BuildAppManifest) and threaded through by the
 	// Temporal finalize activity after downloading that manifest -- see
@@ -31,7 +30,6 @@ type FinalizeAppParams struct {
 	// $GHCR_TOKEN, then to the local Docker keychain.
 	GHCRToken string
 
-	Git            GitRunner
 	ArtifactClient pb.ArtifactRegistryClient
 }
 
@@ -43,7 +41,6 @@ func newFinalizeAppCmd() *cobra.Command {
 		buildID              string
 		idempotencyKeyPrefix string
 		skipRegistry         bool
-		createGitTag         bool
 		manifestPath         string
 		repository           string
 		digest               string
@@ -107,11 +104,9 @@ func newFinalizeAppCmd() *cobra.Command {
 				BuildID:              buildID,
 				IdempotencyKeyPrefix: idempotencyKeyPrefix,
 				SkipRegistry:         skipRegistry,
-				CreateGitTag:         createGitTag,
 				Repository:           repository,
 				Digest:               digest,
 				GHCRToken:            ghcrToken,
-				Git:                  defaultGit,
 			})
 			if err != nil {
 				return err
@@ -155,7 +150,6 @@ func newFinalizeAppCmd() *cobra.Command {
 	cmd.Flags().StringVar(&buildID, "build-id", "", "App Registry Build ID")
 	cmd.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Prefix for idempotency keys")
 	cmd.Flags().BoolVar(&skipRegistry, "skip-registry", false, "Skip App Registry API interactions")
-	cmd.Flags().BoolVar(&createGitTag, "create-git-tag", false, "Create git tag upon successful publication")
 	cmd.Flags().StringVar(&manifestPath, "manifest", "", "Path to build-app's BuildAppManifest JSON (repository+digest); overrides --repository/--digest when they are unset")
 	cmd.Flags().StringVar(&repository, "repository", "", "Image repository (e.g. ghcr.io/whale-net/demo-hello-go); read from --manifest if unset")
 	cmd.Flags().StringVar(&digest, "digest", "", "Already-pushed image digest (sha256:...); read from --manifest if unset")
@@ -183,10 +177,6 @@ func ExecuteFinalizeApp(p FinalizeAppParams) (*ReleaseResult, error) {
 	ctx := p.Ctx
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	git := p.Git
-	if git == nil {
-		git = defaultGit
 	}
 
 	fullName := p.Domain + "-" + p.App
@@ -228,13 +218,11 @@ func ExecuteFinalizeApp(p FinalizeAppParams) (*ReleaseResult, error) {
 		IdempotencyKeyPrefix: p.IdempotencyKeyPrefix,
 		Repository:           fmt.Sprintf("ghcr.io/%s/%s", owner, fullName),
 		SkipRegistry:         p.SkipRegistry,
-		CreateGitTag:         p.CreateGitTag,
 		TagName:              tagName,
 		TagPrefix:            fullName + ".",
 		PreviousTagPatterns:  []string{fullName + ".v*"},
 		PreviousTagPrefixes:  []string{fullName + "."},
 		Releaser:             releaser,
-		Git:                  git,
 		ArtifactClient:       artifactClient,
 	})
 }
