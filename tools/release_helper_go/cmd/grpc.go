@@ -232,6 +232,7 @@ type FakeArtifactRegistryClient struct {
 	AllocateVersionFn       func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error)
 	AdoptArtifactFn         func(ctx context.Context, in *pb.AdoptArtifactRequest, opts ...grpc.CallOption) (*pb.AdoptArtifactResponse, error)
 	CheckChartHermeticityFn func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error)
+	ResolveBinaryURLFn      func(ctx context.Context, in *pb.ResolveBinaryURLRequest, opts ...grpc.CallOption) (*pb.ResolveBinaryURLResponse, error)
 
 	RecordBuildCalls           []*pb.RecordBuildRequest
 	RecordBuildLogCalls        []*pb.RecordBuildLogRequest
@@ -248,6 +249,7 @@ type FakeArtifactRegistryClient struct {
 	AllocateVersionCalls       []*pb.AllocateVersionRequest
 	AdoptArtifactCalls         []*pb.AdoptArtifactRequest
 	CheckChartHermeticityCalls []*pb.CheckChartHermeticityRequest
+	ResolveBinaryURLCalls      []*pb.ResolveBinaryURLRequest
 }
 
 // NewFakeArtifactRegistryClient creates a new FakeArtifactRegistryClient.
@@ -394,4 +396,12 @@ func (f *FakeArtifactRegistryClient) CheckChartHermeticity(ctx context.Context, 
 		return f.CheckChartHermeticityFn(ctx, in, opts...)
 	}
 	return &pb.CheckChartHermeticityResponse{Enforced: false}, nil
+}
+
+func (f *FakeArtifactRegistryClient) ResolveBinaryURL(ctx context.Context, in *pb.ResolveBinaryURLRequest, opts ...grpc.CallOption) (*pb.ResolveBinaryURLResponse, error) {
+	f.ResolveBinaryURLCalls = append(f.ResolveBinaryURLCalls, in)
+	if f.ResolveBinaryURLFn != nil {
+		return f.ResolveBinaryURLFn(ctx, in, opts...)
+	}
+	return &pb.ResolveBinaryURLResponse{}, nil
 }
