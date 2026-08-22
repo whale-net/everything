@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "s3",
@@ -12,4 +12,11 @@ go_library(
         "@com_github_aws_aws_sdk_go_v2_service_s3//:s3",
         "@com_github_aws_aws_sdk_go_v2_service_s3//types",
     ],
+)
+
+go_test(
+    name = "s3_test",
+    size = "small",
+    srcs = ["s3_test.go"],
+    embed = [":s3"],
 )

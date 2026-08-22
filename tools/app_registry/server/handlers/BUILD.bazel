@@ -50,6 +50,7 @@ go_test(
         "list_pagination_test.go",
         "promotion_test.go",
         "release_test.go",
+        "resolve_binary_url_test.go",
     ],
     embed = [":handlers"],
     deps = [
