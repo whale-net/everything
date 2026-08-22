@@ -2,6 +2,7 @@ package release
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,6 +50,20 @@ func createTestReleaseRun(t *testing.T, repo *fake.Registry, targets []repositor
 	return outRun, outTargets
 }
 
+// stampResolvedPlan marshals versions (OwnerFullName -> version, the same
+// shape release_helper_go plan's JSON stdout uses -- see plan.go's
+// planCLIResult doc comment) and stamps it onto releaseRunID's
+// release_run.resolved_plan via SetResolvedPlan, the same call
+// RecordResolvedPlan (record.go) makes in production. Used by
+// VerifyPublished tests that need a resolved plan to compare against
+// (issue #973).
+func stampResolvedPlan(t *testing.T, repo *fake.Registry, releaseRunID string, versions map[string]string) {
+	t.Helper()
+	raw, err := json.Marshal(planCLIResult{Versions: versions})
+	require.NoError(t, err)
+	require.NoError(t, repo.ReleaseRuns().SetResolvedPlan(context.Background(), releaseRunID, raw))
+}
+
 // --- VerifyPublished ---
 
 func TestActivities_VerifyPublished_AllPublished(t *testing.T) {
@@ -65,6 +80,7 @@ func TestActivities_VerifyPublished_AllPublished(t *testing.T) {
 	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 	})
+	stampResolvedPlan(t, repo, run.ReleaseRunID, map[string]string{"demo-widget": "v1.0.1"})
 
 	a := &Activities{Registry: repo}
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID)
@@ -102,6 +118,10 @@ func TestActivities_VerifyPublished_PartialFailure(t *testing.T) {
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 		{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage}, // never published
 	})
+	stampResolvedPlan(t, repo, run.ReleaseRunID, map[string]string{
+		"demo-widget": "v1.0.1",
+		"demo-gadget": "v1.0.1",
+	})
 
 	a := &Activities{Registry: repo}
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID)
@@ -109,6 +129,73 @@ func TestActivities_VerifyPublished_PartialFailure(t *testing.T) {
 	require.False(t, result.AllPublished)
 	require.NotContains(t, result.Failed, repository.TargetKey(repository.ArtifactKindImage, "demo-widget"))
 	require.Contains(t, result.Failed, repository.TargetKey(repository.ArtifactKindImage, "demo-gadget"))
+}
+
+// TestActivities_VerifyPublished_VersionMismatch_ReportsFailed is the
+// issue #973 regression test: FinalizePublish deliberately does not fail
+// the workflow when a single target's finalize-app/finalize-chart call
+// fails (e.g. a GHCR retag returning DENIED) -- that target simply never
+// reaches RecordArtifact for the NEW version. If an OLDER version of the
+// same target was already Published from a prior release run, the
+// presence+state check alone (pre-#973 behavior) still found that old
+// artifact and reported the target satisfied -- masking the real failure
+// and letting the workflow record the target Succeeded despite the
+// requested version never having been published. This asserts
+// VerifyPublished now catches that mismatch instead.
+func TestActivities_VerifyPublished_VersionMismatch_ReportsFailed(t *testing.T) {
+	repo := newTestRegistry(t)
+	appID := seedApp(t, repo, "demo", "widget")
+	// vOLD is still Published from a prior release run -- vNEW's
+	// finalize-app call failed and never reached RecordArtifact.
+	repo.SeedArtifact(repository.Artifact{
+		Kind:    repository.ArtifactKindImage,
+		AppID:   appID,
+		Version: "v0.6.2",
+		Digest:  "sha256:old",
+		State:   repository.ArtifactStatePublished,
+	})
+
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+	stampResolvedPlan(t, repo, run.ReleaseRunID, map[string]string{"demo-widget": "v0.6.3"})
+
+	a := &Activities{Registry: repo}
+	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID)
+	require.NoError(t, err)
+	require.False(t, result.AllPublished, "a published-but-stale-version artifact must not satisfy VerifyPublished")
+	require.Contains(t, result.Failed, repository.TargetKey(repository.ArtifactKindImage, "demo-widget"))
+	require.Contains(t, result.Failed[repository.TargetKey(repository.ArtifactKindImage, "demo-widget")], "v0.6.2")
+	require.Contains(t, result.Failed[repository.TargetKey(repository.ArtifactKindImage, "demo-widget")], "v0.6.3")
+}
+
+// TestActivities_VerifyPublished_NoResolvedPlan_FallsBackToPresenceCheck
+// proves the defensive fallback (item 5 of issue #973's fix): a release
+// run with no resolved_plan stamped (old/test data -- production always
+// stamps one via RecordResolvedPlan before VerifyPublished runs, see
+// ReleaseWorkflow) still passes on presence+Published state alone, rather
+// than hard-failing the whole activity.
+func TestActivities_VerifyPublished_NoResolvedPlan_FallsBackToPresenceCheck(t *testing.T) {
+	repo := newTestRegistry(t)
+	appID := seedApp(t, repo, "demo", "widget")
+	repo.SeedArtifact(repository.Artifact{
+		Kind:    repository.ArtifactKindImage,
+		AppID:   appID,
+		Version: "v1.0.1",
+		Digest:  "sha256:widget",
+		State:   repository.ArtifactStatePublished,
+	})
+
+	// No stampResolvedPlan call -- release_run.resolved_plan stays NULL.
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+
+	a := &Activities{Registry: repo}
+	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID)
+	require.NoError(t, err)
+	require.True(t, result.AllPublished)
+	require.Empty(t, result.Failed)
 }
 
 // --- RecordTargetState ---
