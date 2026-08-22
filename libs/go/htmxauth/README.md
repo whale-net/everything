@@ -108,6 +108,10 @@ type Config struct {
     OIDCClientSecret string
     OIDCRedirectURL  string
     OIDCScopes       []string // Optional, defaults to ["openid", "profile", "email"]
+
+    // OIDCPostLogoutRedirectURL is where RP-initiated logout sends the
+    // browser back to. Optional — defaults to OIDCRedirectURL's origin.
+    OIDCPostLogoutRedirectURL string
 }
 ```
 
@@ -157,7 +161,14 @@ Handles OIDC callback after successful authentication. Only available in OIDC mo
 
 #### `HandleLogout(w http.ResponseWriter, r *http.Request)`
 
-Handles logout requests. Clears session in OIDC mode, redirects to home in no-auth mode.
+Handles logout requests. Redirects to home in no-auth mode. In OIDC mode,
+always clears the local session first; if the provider's discovery document
+advertises an `end_session_endpoint` (RP-Initiated Logout), it then redirects
+there (with `client_id` and `post_logout_redirect_uri`) so the upstream SSO
+session ends too, rather than surviving a local-only logout. Falls back to
+redirecting home when the provider doesn't advertise one. See
+`Config.OIDCPostLogoutRedirectURL` to override the derived
+`post_logout_redirect_uri`.
 
 ### Types
 
