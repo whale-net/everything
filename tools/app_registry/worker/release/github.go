@@ -78,7 +78,11 @@ type GitHubDispatcherConfig struct {
 	Owner string
 	Repo  string
 	// WorkflowFile is the workflow file name DispatchBuild/PollBuild
-	// operate on, e.g. "release.yml". Defaults to "release.yml".
+	// operate on, e.g. "release-v2.yml". Defaults to "release-v2.yml" --
+	// release.yml (v1) no longer accepts the `resolved_plan` input
+	// DispatchBuild sends (issue #927) since #931 restored it to a
+	// human-only trigger during the v2 migration; dispatching against it
+	// now fails with a 422 "Unexpected inputs provided: [resolved_plan]".
 	WorkflowFile string
 	// Ref is the git ref (branch or tag) release.yml is dispatched
 	// against. Defaults to "main".
@@ -134,7 +138,7 @@ func NewGitHubDispatcher(cfg GitHubDispatcherConfig) (*GitHubDispatcher, error) 
 		return nil, fmt.Errorf("github dispatcher: missing required config: %s", strings.Join(missing, ", "))
 	}
 	if cfg.WorkflowFile == "" {
-		cfg.WorkflowFile = "release.yml"
+		cfg.WorkflowFile = "release-v2.yml"
 	}
 	if cfg.Ref == "" {
 		cfg.Ref = "main"

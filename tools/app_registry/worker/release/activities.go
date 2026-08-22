@@ -60,7 +60,7 @@ type Activities struct {
 var _ ReleaseActivities = (*Activities)(nil)
 
 // DispatchBuild implements ReleaseActivities.DispatchBuild: invokes
-// release.yml (or whatever workflow file a.GitHub.Config.WorkflowFile
+// release-v2.yml (or whatever workflow file a.GitHub.Config.WorkflowFile
 // names) via the GitHub Actions API with plan's resolved version, skipping
 // that workflow's own plan-release re-resolution for this trigger (its
 // explicit `version` input takes precedence over auto-increment -- see
