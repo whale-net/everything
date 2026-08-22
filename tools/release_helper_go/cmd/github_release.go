@@ -211,6 +211,27 @@ func recordPublishedArtifact(ctx context.Context, warn func(string), meta AppMet
 	return nil
 }
 
+// resolveTargetNames returns the caller-specified comma/space-separated
+// list of names from flagValue, or -- when flagValue is empty -- every key
+// in fallback (e.g. every app/chart present in the resolved release
+// matrix, keyed exactly as create-combined-github-release-with-notes's own
+// chart/app resolvers expect: "domain-app" and the chart's bare Name).
+// This is what lets callers that only have a domain shorthand or "all"
+// (like a workflow's raw github.event.inputs.helm_charts) skip
+// --apps/--charts entirely and let the already-resolved $MATRIX/
+// $CHART_MATRIX drive selection, instead of re-resolving that shorthand
+// against exact names here -- which is a resolution this command doesn't
+// perform and previously failed on ("Could not resolve chart <name>").
+func resolveTargetNames(flagValue string, fallback map[string]string) []string {
+	list := parseAppList(flagValue)
+	if len(list) == 0 && flagValue == "" {
+		for k := range fallback {
+			list = append(list, k)
+		}
+	}
+	return list
+}
+
 func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 	var (
 		owner           string
@@ -282,19 +303,8 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 			}
 
 			// Resolve app list and chart list.
-			appList := parseAppList(apps)
-			if len(appList) == 0 && apps == "" {
-				for k := range appVersions {
-					appList = append(appList, k)
-				}
-			}
-
-			chartList := parseAppList(charts)
-			if len(chartList) == 0 && charts == "" {
-				for k := range chartVersions {
-					chartList = append(chartList, k)
-				}
-			}
+			appList := resolveTargetNames(apps, appVersions)
+			chartList := resolveTargetNames(charts, chartVersions)
 
 			if len(appList) == 0 && len(chartList) == 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error: no apps or charts specified\n")
