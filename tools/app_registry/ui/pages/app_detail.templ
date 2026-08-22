@@ -88,6 +88,7 @@ templ AppDetail(user *htmxauth.UserInfo, data *matrix.AppDetailData) {
 						<div class="flex items-center gap-2 flex-wrap">
 							@components.DigestDisplay(data.LatestArtifact.GetVersion(), data.LatestArtifact.GetDigest())
 							@components.ProvenanceBadge(data.LatestArtifact.GetProvenance())
+							@artifactLink(data.LatestArtifact.GetDigest())
 						</div>
 					}
 				</div>
@@ -99,6 +100,18 @@ templ AppDetail(user *htmxauth.UserInfo, data *matrix.AppDetailData) {
 			}
 			@promotionTimelineCard(user, data)
 		</div>
+	}
+}
+
+// artifactLink is #794's one place a digest anywhere on this page also
+// links to the artifact it names -- screen 21-artifact-detail. Every digest
+// link elsewhere in this UI builds its href the same way (see
+// artifact_detail.templ's doc comment): "/artifacts/" + digest. Renders
+// nothing for an empty digest rather than assuming callers only pass a
+// non-empty one.
+templ artifactLink(digest string) {
+	if digest != "" {
+		<a href={ templ.URL("/artifacts/" + digest) } class="link font-mono text-xs">view artifact</a>
 	}
 }
 
@@ -116,8 +129,9 @@ templ appLatestStatCard(art *pb.Artifact) {
 			<div class="stat-desc"><span class="text-xs opacity-50">no published artifact</span></div>
 		} else {
 			<div class="stat-value text-lg font-mono">{ art.GetVersion() }</div>
-			<div class="stat-desc flex flex-wrap gap-1">
+			<div class="stat-desc flex flex-wrap gap-1 items-center">
 				@components.ProvenanceBadge(art.GetProvenance())
+				@artifactLink(art.GetDigest())
 			</div>
 		}
 	</div>
@@ -134,7 +148,7 @@ templ appEnvStatCard(s matrix.AppEnvState) {
 			<div class="stat-desc"><span class="text-xs opacity-50">not promoted</span></div>
 		} else {
 			<div class="stat-value text-lg font-mono">{ s.Version }</div>
-			<div class="stat-desc flex flex-wrap gap-1">
+			<div class="stat-desc flex flex-wrap gap-1 items-center">
 				if s.Override && s.Drifted {
 					<span class="badge badge-soft badge-error badge-sm">Override · Drift</span>
 				} else if s.Override {
@@ -144,6 +158,7 @@ templ appEnvStatCard(s matrix.AppEnvState) {
 				} else {
 					<span class="badge badge-soft badge-success badge-sm">Promotable</span>
 				}
+				@artifactLink(s.Digest)
 			</div>
 		}
 	</div>
@@ -171,6 +186,7 @@ templ appDriftCard(fullName string, latest *pb.Artifact, states []matrix.AppEnvS
 										if latest.GetBuildId() != "" {
 											<a href={ templ.URL("/builds/" + latest.GetBuildId()) } class="link font-mono text-xs">build { latest.GetBuildId() }</a>
 										}
+										@artifactLink(latest.GetDigest())
 									</div>
 								</div>
 							</td>
@@ -182,7 +198,10 @@ templ appDriftCard(fullName string, latest *pb.Artifact, states []matrix.AppEnvS
 								<td class="opacity-60 align-top">{ s.Env.GetKey() }</td>
 								<td>
 									<div class="flex flex-col gap-1">
-										@components.DigestDisplay(s.Version, s.Digest)
+										<div class="flex items-center gap-2 flex-wrap">
+											@components.DigestDisplay(s.Version, s.Digest)
+											@artifactLink(s.Digest)
+										</div>
 										if s.Artifact != nil {
 											<div class="flex items-center gap-2">
 												@components.ProvenanceBadge(s.Artifact.GetProvenance())

@@ -123,3 +123,39 @@ func TestAppDetail_DeployableApp_LatestPrecedesDevEnv(t *testing.T) {
 		t.Errorf("expected the latest artifact's version to render, got: %s", html)
 	}
 }
+
+// --- #794: every digest on the app page also links to its artifact -------
+
+func onePromotedDevEnv() []matrix.AppEnvState {
+	return []matrix.AppEnvState{
+		{
+			Env:      &pb.Environment{EnvironmentId: "e1", Key: "dev", Rank: 0},
+			Promoted: true,
+			Version:  "v1.0.0",
+			Digest:   "sha256:cafefeed",
+			Artifact: &pb.Artifact{Provenance: pb.ArtifactProvenance_ARTIFACT_PROVENANCE_OBSERVED},
+		},
+	}
+}
+
+func TestAppDetail_LatestArtifact_LinksToArtifactDetail(t *testing.T) {
+	data := &matrix.AppDetailData{App: buildOnlyApp(), States: oneDevEnv(), LatestArtifact: publishedArtifact()}
+
+	html := renderComponent(t, AppDetail(nil, data))
+
+	want := `href="/artifacts/sha256:deadbeef"`
+	if !strings.Contains(html, want) {
+		t.Errorf("expected an artifact link %q for the latest artifact's digest, got: %s", want, html)
+	}
+}
+
+func TestAppDetail_PromotedEnv_LinksToArtifactDetail(t *testing.T) {
+	data := &matrix.AppDetailData{App: deployableApp(), States: onePromotedDevEnv()}
+
+	html := renderComponent(t, AppDetail(nil, data))
+
+	want := `href="/artifacts/sha256:cafefeed"`
+	if !strings.Contains(html, want) {
+		t.Errorf("expected an artifact link %q for the promoted dev env's digest, got: %s", want, html)
+	}
+}
