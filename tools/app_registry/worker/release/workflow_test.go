@@ -62,17 +62,23 @@ func TestReleaseWorkflow_HappyPath(t *testing.T) {
 	registerActivityStubs(env)
 
 	in := ReleaseWorkflowInput{ReleaseRunID: "run-1", Targets: []ReleaseTarget{testTarget()}}
-	plan := ResolvedPlan{ReleaseRunID: "run-1", Versions: map[string]string{testTarget().key(): "v1.0.1"}}
+	// RawJSON's build_id is the `build` table UUID RecordTargetState must
+	// write to release_run_target.build_id -- NOT ref.RunID (GitHub's
+	// numeric Actions run id, which release_run_target.build_id rejects as
+	// an invalid UUID -- see workflow.go's planBuildID call site).
+	rawJSON := []byte(`{"build_id":"11111111-1111-1111-1111-111111111111","version":"v1.0.1"}`)
+	plan := ResolvedPlan{ReleaseRunID: "run-1", Versions: map[string]string{testTarget().key(): "v1.0.1"}, RawJSON: rawJSON}
 	ref := BuildRef{ReleaseRunID: "run-1", RunID: "42"}
 
 	var calls []string
 	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-1").Return(true, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityCheckApproval) })
 	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityResolvePlan) })
+	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-1", rawJSON).Return(nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityRecordResolvedPlan) })
 	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityDispatchBuild) })
 	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityPollBuild) })
 	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityFinalizePublish) })
 	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-1").Return(VerifyResult{AllPublished: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityVerifyPublished) })
-	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-1", testTarget(), repository.ReleaseRunTargetStateSucceeded, "42", "").
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-1", testTarget(), repository.ReleaseRunTargetStateSucceeded, "11111111-1111-1111-1111-111111111111", "").
 		Return(nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityRecordTargetState) })
 
 	env.ExecuteWorkflow(ReleaseWorkflow, in)
@@ -87,7 +93,7 @@ func TestReleaseWorkflow_HappyPath(t *testing.T) {
 	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, got.Targets[0].State)
 
 	require.Equal(t, []string{
-		ActivityCheckApproval, ActivityResolvePlan, ActivityDispatchBuild,
+		ActivityCheckApproval, ActivityResolvePlan, ActivityRecordResolvedPlan, ActivityDispatchBuild,
 		ActivityPollBuild, ActivityFinalizePublish, ActivityVerifyPublished, ActivityRecordTargetState,
 	}, calls, "ReleaseWorkflow must dispatch activities in exactly this order (FR6, extended by issue #928's FinalizePublish)")
 }
@@ -176,11 +182,13 @@ func TestReleaseWorkflow_VerifyPublished_PartialFailure(t *testing.T) {
 	ok := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
 	bad := ReleaseTarget{OwnerFullName: "demo-gadget", Kind: repository.ArtifactKindImage}
 	in := ReleaseWorkflowInput{ReleaseRunID: "run-3", Targets: []ReleaseTarget{ok, bad}}
-	plan := ResolvedPlan{ReleaseRunID: "run-3", Versions: map[string]string{ok.key(): "v1.0.1", bad.key(): "v1.0.1"}}
+	rawJSON := []byte(`{"build_id":"33333333-3333-3333-3333-333333333333","version":"v1.0.1"}`)
+	plan := ResolvedPlan{ReleaseRunID: "run-3", Versions: map[string]string{ok.key(): "v1.0.1", bad.key(): "v1.0.1"}, RawJSON: rawJSON}
 	ref := BuildRef{ReleaseRunID: "run-3", RunID: "43"}
 
 	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-3").Return(true, nil).Once()
 	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityRecordResolvedPlan, mock.Anything, "run-3", rawJSON).Return(nil).Once()
 	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
 	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once()
 	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once()
@@ -188,8 +196,8 @@ func TestReleaseWorkflow_VerifyPublished_PartialFailure(t *testing.T) {
 		AllPublished: false,
 		Failed:       map[string]string{bad.key(): "no published artifact found"},
 	}, nil).Once()
-	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-3", ok, repository.ReleaseRunTargetStateSucceeded, "43", "").Return(nil).Once()
-	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-3", bad, repository.ReleaseRunTargetStateFailed, "43", "no published artifact found").Return(nil).Once()
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-3", ok, repository.ReleaseRunTargetStateSucceeded, "33333333-3333-3333-3333-333333333333", "").Return(nil).Once()
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-3", bad, repository.ReleaseRunTargetStateFailed, "33333333-3333-3333-3333-333333333333", "no published artifact found").Return(nil).Once()
 
 	env.ExecuteWorkflow(ReleaseWorkflow, in)
 
@@ -220,7 +228,7 @@ func TestReleaseWorkflow_RecordResolvedPlan_DispatchedWhenPlanHasRawJSON(t *test
 	registerActivityStubs(env)
 
 	in := ReleaseWorkflowInput{ReleaseRunID: "run-4", Targets: []ReleaseTarget{testTarget()}}
-	rawJSON := []byte(`{"targets":[{"owner":"demo-widget","version":"v1.0.1"}]}`)
+	rawJSON := []byte(`{"build_id":"44444444-4444-4444-4444-444444444444","targets":[{"owner":"demo-widget","version":"v1.0.1"}]}`)
 	plan := ResolvedPlan{ReleaseRunID: "run-4", Versions: map[string]string{testTarget().key(): "v1.0.1"}, RawJSON: rawJSON}
 	ref := BuildRef{ReleaseRunID: "run-4", RunID: "44"}
 
@@ -232,7 +240,7 @@ func TestReleaseWorkflow_RecordResolvedPlan_DispatchedWhenPlanHasRawJSON(t *test
 	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityPollBuild) })
 	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(FinalizeResult{Succeeded: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityFinalizePublish) })
 	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-4").Return(VerifyResult{AllPublished: true}, nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityVerifyPublished) })
-	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-4", testTarget(), repository.ReleaseRunTargetStateSucceeded, "44", "").
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-4", testTarget(), repository.ReleaseRunTargetStateSucceeded, "44444444-4444-4444-4444-444444444444", "").
 		Return(nil).Once().Run(func(args mock.Arguments) { calls = append(calls, ActivityRecordTargetState) })
 
 	env.ExecuteWorkflow(ReleaseWorkflow, in)
