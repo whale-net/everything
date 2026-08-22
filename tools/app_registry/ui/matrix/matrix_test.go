@@ -169,3 +169,33 @@ func TestBuild_BinaryToolApp_StandaloneBinaryRow(t *testing.T) {
 		}
 	}
 }
+
+// --- IsDeployable (#773) ----------------------------------------------------
+
+// TestIsDeployable mirrors Build's own row-inclusion rule above: a
+// DEPLOY_UNIT_CHART or DEPLOY_UNIT_IMAGE app, or a cli/binary tool
+// regardless of deploy_unit, is deployable; a DEPLOY_UNIT_NONE app that
+// isn't a binary tool (the "build-only job", same fixture Build already
+// excludes from the matrix entirely) is not -- app detail's
+// version-by-environment section has nothing to show for it.
+func TestIsDeployable(t *testing.T) {
+	tests := []struct {
+		name string
+		app  *pb.App
+		want bool
+	}{
+		{"via-chart app", &pb.App{DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_CHART}, true},
+		{"standalone image app", &pb.App{DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE}, true},
+		{"cli tool, deploy_unit none", &pb.App{AppType: "cli", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE}, true},
+		{"binary tool, deploy_unit none", &pb.App{AppType: "binary", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE}, true},
+		{"build-only job, deploy_unit none", &pb.App{AppType: "job", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE}, false},
+		{"unspecified deploy_unit, non-binary app_type", &pb.App{AppType: "worker", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_UNSPECIFIED}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsDeployable(tc.app); got != tc.want {
+				t.Errorf("IsDeployable(%+v) = %v, want %v", tc.app, got, tc.want)
+			}
+		})
+	}
+}
