@@ -76,6 +76,17 @@ type AppDetailData struct {
 
 	States []AppEnvState // aligned with Environments
 
+	// LatestArtifact is the most recently published artifact recorded for
+	// this app (any kind -- see releaseTargetKindFromApp), independent of
+	// whether it is promoted anywhere (#774). Shown even for a
+	// non-deployable (build-only) app -- see IsDeployable -- and, for a
+	// deployable app, prepended ahead of the real per-environment States
+	// as a synthetic "lower rank than dev" column/row so latest-vs-prod is
+	// eyeballable at a glance (States/environments are already
+	// rank-ascending, per ListEnvironments). Nil when ListArtifacts found
+	// no published artifact yet.
+	LatestArtifact *pb.Artifact
+
 	Events    []*pb.PromotionEvent
 	EventsErr error
 }

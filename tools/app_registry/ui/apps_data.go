@@ -143,11 +143,42 @@ func (app *App) buildAppDetail(ctx context.Context, fullName string) (*matrix.Ap
 		eventList = events.GetEvents()
 	}
 
+	latestArtifact := app.fetchLatestArtifact(ctx, a.GetFullName(), releaseTargetKindFromApp(a))
+
 	return &matrix.AppDetailData{
-		App:         a,
-		OwningChart: owningChart,
-		States:      states,
-		Events:      eventList,
-		EventsErr:   eventsErr,
+		App:            a,
+		OwningChart:    owningChart,
+		States:         states,
+		LatestArtifact: latestArtifact,
+		Events:         eventList,
+		EventsErr:      eventsErr,
 	}, nil
+}
+
+// fetchLatestArtifact resolves the most recently published artifact
+// recorded for fullName/kind (#774), relying on ListArtifacts' own
+// ORDER BY state_changed_at DESC, artifact_id DESC (server/repository/
+// postgres/artifact.go and fake/fake.go's ListArtifacts -- the same order
+// app_history_data.go's buildAppVersionHistory already relies on),
+// filtered client-side to the first PUBLISHED row since Kind alone doesn't
+// filter by state. kind comes from releaseTargetKindFromApp so a
+// build-only (DEPLOY_UNIT_NONE) cli/binary tool's own artifact kind
+// (BINARY) is queried instead of the IMAGE default buildAppVersionHistory
+// hardcodes for its own, image-only screen. Best-effort: an RPC error or
+// an empty/all-unpublished result both just mean "nothing to show yet",
+// not a fatal page error -- same tolerance as fetchArtifactsByID.
+func (app *App) fetchLatestArtifact(ctx context.Context, fullName string, kind pb.ArtifactKind) *pb.Artifact {
+	resp, err := app.registry.Artifact.ListArtifacts(ctx, &pb.ListArtifactsRequest{
+		OwnerFullName: fullName,
+		Kind:          kind,
+	})
+	if err != nil {
+		return nil
+	}
+	for _, art := range resp.GetArtifacts() {
+		if art.GetState() == pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+			return art
+		}
+	}
+	return nil
 }
