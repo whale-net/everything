@@ -751,11 +751,16 @@ jobs:
           MATRIX: ${{ steps.matrix-override.outputs.matrix }}
           CHART_MATRIX: ${{ needs.plan-release.outputs.chart-matrix }}
         run: |
-          APPS=$(echo '${{ steps.matrix-override.outputs.matrix }}' | jq -r '.include[] | "\(.domain)-\(.app)"' | paste -sd, -)
-          CHARTS="${{ github.event.inputs.helm_charts }}"
+          # No --apps/--charts here: create-combined-github-release-with-notes
+          # already parses the exact same $MATRIX/$CHART_MATRIX this step
+          # sets above and falls back to every app/chart found there when
+          # --apps/--charts are omitted (see github_release.go's appVersions/
+          # chartVersions resolution). Deriving --apps/--charts here too was
+          # redundant, and doing it from the raw github.event.inputs.helm_charts
+          # (a domain shorthand like "app-registry", or "all") was actively
+          # wrong -- this command's resolver only matches exact chart names,
+          # so the shorthand failed with "Could not resolve chart".
           ARGS=(create-combined-github-release-with-notes "${{ needs.plan-release.outputs.version }}" --owner "${{ github.repository_owner }}" --repo "${{ github.event.repository.name }}" --commit "${{ github.sha }}" --release-notes-dir "/tmp/release-notes" --openapi-specs-dir "/tmp/openapi-specs" --assets-dir "/tmp/assets" --helm-charts-dir "/tmp/helm-charts")
-          [[ -n "$APPS" ]] && ARGS+=(--apps "$APPS")
-          [[ -n "$CHARTS" ]] && ARGS+=(--charts "$CHARTS")
           "$RELEASE_HELPER" "${ARGS[@]}"
 
   release-summary:
