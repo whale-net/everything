@@ -72,13 +72,21 @@ writes one `app_build_log` row per discovered app/chart, unconditionally,
 immediately after its reconcile step, so a row's presence proves reconcile
 already saw that commit for that owner. `DispatchBuild` now resolves each
 release target's build ref against `app_build_log`'s current-pointer row
-(`buildref.go`'s `resolveDispatchRef`/`resolveBuildRef`) and dispatches
-against that commit instead of `main`, falling back to the literal branch
-name only when no `app_build_log` row exists yet for a target (a fresh
-environment, or an app added in a commit reconcile hasn't processed) —
-see `GitHubDispatcherConfig.Ref` and `GitHubDispatcher.Dispatch`'s `ref`
-parameter. This does not touch `release.yml` (v1) or ordering 1's own gap
-(`RecordArtifact` racing reconcile) at all.
+(`buildref.go`'s `resolveDispatchRef`/`resolveBuildRef`), falling back to
+the literal branch name only when no `app_build_log` row exists yet for a
+target (a fresh environment, or an app added in a commit reconcile hasn't
+processed). That resolved ref is **not** passed as
+`GitHubDispatcher.Dispatch`'s `ref` parameter — GitHub's `workflow_dispatch`
+REST API only accepts a branch or tag there and 422s ("No ref found for:
+&lt;sha&gt;") on a raw commit SHA, even one that genuinely is a branch's
+current tip (this broke every v2 dispatch in production once
+`app_build_log` had current rows, until corrected). `Dispatch` is always
+called against the plain branch (`GitHubDispatcherConfig.Ref`); the
+resolved ref is instead forwarded as `release-v2.yml`'s `build_ref`
+workflow input, which every job in that workflow checks out explicitly
+(`actions/checkout@v4`'s `ref:`) instead of relying on the trigger ref. This
+does not touch `release.yml` (v1) or ordering 1's own gap (`RecordArtifact`
+racing reconcile) at all.
 
 Ordering 3 is the expensive one, because charts pin digests resolved from
 **GHCR by tag** (`docker buildx imagetools inspect ${IMG_REPO}:${IMG_VERSION}`

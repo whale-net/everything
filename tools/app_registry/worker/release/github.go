@@ -192,18 +192,23 @@ func (d *GitHubDispatcher) token(ctx context.Context) (string, error) {
 // #889 does not attempt to remove it); a future improvement could pass a
 // caller-chosen marker input to disambiguate, once release.yml grows one.
 //
-// ref (FR11, issue #923): the git ref/sha to dispatch against for THIS
-// call, overriding d.Config.Ref -- a per-Dispatch()-call parameter, not
-// only the static Config.Ref default. This is FR11's resolved design
-// choice: Config.Ref stays as the REQUIRED fallback default (validated at
-// construction, see NewGitHubDispatcher, and still what an empty ref
-// falls back to here), but the caller (DispatchBuild, via buildref.go's
-// resolveDispatchRef) now resolves a per-batch ref from app_build_log
-// (FR9/FR10) and passes it explicitly, so a release can be pinned to a
-// commit ci.yml's reconcile job has actually processed instead of always
-// dispatching against the literal branch pointer. Pass "" to keep the old
-// Config.Ref behavior (e.g. from a caller with no FR9/FR10 resolution
-// available, such as a direct test of Dispatch itself).
+// ref: the git branch/tag to dispatch against for THIS call, overriding
+// d.Config.Ref -- a per-Dispatch()-call parameter, not only the static
+// Config.Ref default. Pass "" to use Config.Ref (the common case).
+//
+// This MUST be a branch or tag name, never a commit SHA: GitHub's
+// workflow_dispatch REST API rejects a raw SHA in `ref` with 422 "No ref
+// found for: <sha>", even when that SHA genuinely is a branch's current
+// tip -- confirmed against a real production failure, not a documentation
+// assumption. FR11 (issue #923) originally threaded a per-batch resolved
+// commit SHA (buildref.go's resolveDispatchRef, from app_build_log) in
+// here to pin a release to the exact commit ci.yml's reconcile job had
+// processed; that broke every dispatch once app_build_log had a current
+// row (see activities.go's DispatchBuild) and was corrected to instead
+// forward the resolved ref as a `build_ref` workflow input, always
+// calling Dispatch with ref="" (Config.Ref). This parameter remains for
+// callers that legitimately want a different branch/tag (e.g. direct
+// tests of Dispatch itself).
 func (d *GitHubDispatcher) Dispatch(ctx context.Context, releaseRunID string, inputs map[string]string, ref string) (BuildRef, error) {
 	if ref == "" {
 		ref = d.Config.Ref

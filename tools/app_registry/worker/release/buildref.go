@@ -3,11 +3,12 @@
 // (repository.AppBuildLogRepository.GetCurrentBuildLog) to a commit SHA,
 // falling back to a literal branch name when no current row exists yet.
 //
-// Wired into DispatchBuild via resolveDispatchRef below, which threads the
-// result into GitHubDispatcher.Dispatch's `ref` parameter (FR11, issue
-// #923's design decision: Dispatch's ref became a per-call parameter,
-// falling back to the still-required GitHubDispatcherConfig.Ref when
-// empty -- see github.go's Dispatch doc comment for the full rationale).
+// Wired into DispatchBuild via resolveDispatchRef below, which forwards the
+// result as release-v2.yml's `build_ref` workflow input (activities.go) --
+// NOT GitHubDispatcher.Dispatch's `ref` parameter, since GitHub's
+// workflow_dispatch API rejects a commit SHA there (see github.go's
+// Dispatch doc comment). release-v2.yml checks out `build_ref` explicitly
+// in each job that needs the pinned commit.
 package release
 
 import (
