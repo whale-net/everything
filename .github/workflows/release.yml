@@ -586,6 +586,49 @@ jobs:
         with:
           version: 'latest'
 
+      - name: Download digest-check artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digest-check*
+          path: /tmp/digest-check
+          merge-multiple: true
+        continue-on-error: true
+
+      # Mirrors create-github-releases' "Apply digest-check overrides to
+      # release matrix" step below, but on plan-release's flat versions map
+      # (keyed "<domain>-<app>") instead of the matrix array shape: a
+      # no-op-rebuild app (identical digest to an already-published
+      # version -- see release-app's digest-check JSON output,
+      # tools/release_helper_go/cmd/release_app.go) never actually
+      # publishes under plan-release's originally-planned version, so
+      # pinning the chart's member-app version to that unpublished,
+      # plan-time value fails hermeticity/pin checks with "chart pins N
+      # unpublished app(s)" even though the app itself released
+      # successfully (just reusing its prior version). Substitute each
+      # no-op app's actual effective (already-published) version before
+      # composing the chart.
+      - name: Apply digest-check overrides to app versions
+        id: versions-override
+        env:
+          APP_VERSIONS_PLAN: ${{ needs.plan-release.outputs.versions }}
+        run: |
+          OVERRIDDEN_VERSIONS="$APP_VERSIONS_PLAN"
+          if compgen -G "/tmp/digest-check/*.json" > /dev/null; then
+            for f in /tmp/digest-check/*.json; do
+              DOMAIN=$(jq -r '.domain' "$f")
+              APP=$(jq -r '.app' "$f")
+              UNCHANGED=$(jq -r '.digest_unchanged' "$f")
+              EFF_VERSION=$(jq -r '.effective_version' "$f")
+              if [[ "$UNCHANGED" == "true" ]]; then
+                echo "Overriding ${DOMAIN}-${APP} to reused version $EFF_VERSION (no-op rebuild) for chart app-versions pin"
+                OVERRIDDEN_VERSIONS=$(echo "$OVERRIDDEN_VERSIONS" | jq -c \
+                  --arg key "${DOMAIN}-${APP}" --arg version "$EFF_VERSION" \
+                  '.[$key] = $version')
+              fi
+            done
+          fi
+          echo "versions=$OVERRIDDEN_VERSIONS" >> "$GITHUB_OUTPUT"
+
       - name: Release Helm charts
         env:
           APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
@@ -606,7 +649,7 @@ jobs:
           # caused). Reading through $VAR instead passes the value as a
           # single opaque word, sidestepping that entirely.
           APP_VERSIONS_INPUT: ${{ github.event.inputs.app_versions }}
-          APP_VERSIONS_PLAN: ${{ needs.plan-release.outputs.versions }}
+          APP_VERSIONS_PLAN: ${{ steps.versions-override.outputs.versions }}
         run: |
           ARGS=(release-charts --charts "${{ github.event.inputs.helm_charts }}" --chart-repo-url "$CHART_REPO_URL" --create-git-tag)
           [[ -n "${{ needs.plan-release.outputs.version }}" ]] && ARGS+=(--version "${{ needs.plan-release.outputs.version }}")
