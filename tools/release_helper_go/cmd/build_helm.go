@@ -181,10 +181,21 @@ func findHelmChartByName(name string, charts []HelmChartMetadata) (HelmChartMeta
 
 func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string, error) {
 	out, err := git.Run("tag", "--sort=-version:refname", "--list", chartName+".*")
-	if (err != nil || strings.TrimSpace(out) == "") && !strings.HasPrefix(chartName, "helm-") {
-		out, err = git.Run("tag", "--sort=-version:refname", "--list", "helm-"+chartName+".*")
+	// A real git failure (not "ran fine, zero tags matched") must not
+	// fall through to the v0.0.1/v0.1.0 default below -- see
+	// autoIncrementVersion's doc comment (plan.go) for why silently
+	// reissuing the first version in a tag-less directory is a real bug,
+	// not a harmless no-op.
+	if err != nil {
+		return "", fmt.Errorf("list git tags for chart %s: %w", chartName, err)
 	}
-	if err != nil || strings.TrimSpace(out) == "" {
+	if strings.TrimSpace(out) == "" && !strings.HasPrefix(chartName, "helm-") {
+		out, err = git.Run("tag", "--sort=-version:refname", "--list", "helm-"+chartName+".*")
+		if err != nil {
+			return "", fmt.Errorf("list git tags for chart %s: %w", chartName, err)
+		}
+	}
+	if strings.TrimSpace(out) == "" {
 		if bumpType == "minor" {
 			return "v0.1.0", nil
 		}

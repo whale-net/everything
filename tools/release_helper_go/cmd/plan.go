@@ -922,7 +922,22 @@ func assignVersions(ctx context.Context, p planParams, apps []AppMetadata, versi
 func autoIncrementVersion(domain, name, incrementType string, git GitRunner) (string, error) {
 	prefix := fmt.Sprintf("%s-%s.", domain, name)
 	tagsOut, err := git.Run("tag", "--sort=-version:refname", "--list", prefix+"v*")
-	if err != nil || strings.TrimSpace(tagsOut) == "" {
+	if err != nil {
+		// A real git failure (e.g. this process has no working .git at
+		// all -- see App Registry's worker/release/plan.go's ResolvePlan,
+		// which shells out `release_helper_go plan` from a bare scratch
+		// dir) must not be conflated with "ran fine, found zero matching
+		// tags": that used to fall through to the v0.0.1/v0.1.0 default
+		// below unconditionally, silently reissuing the first version for
+		// every app on every call in a tag-less directory regardless of
+		// what was actually already published -- observed for manmanv2
+		// (six apps all "resolved" to v0.0.1 despite higher published
+		// versions existing) whenever AllocateVersion's FailedPrecondition
+		// fallback (resolveVersion, registry_version.go) is hit for a
+		// domain not yet at App Registry's "allocate" adoption stage.
+		return "", fmt.Errorf("list git tags for %s: %w", prefix, err)
+	}
+	if strings.TrimSpace(tagsOut) == "" {
 		if incrementType == "minor" {
 			return "v0.1.0", nil
 		}

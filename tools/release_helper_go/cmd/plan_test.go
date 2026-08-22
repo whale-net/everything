@@ -363,7 +363,15 @@ func TestPlanCmd_AppsMetadata_InvalidJSON(t *testing.T) {
 // type overriding the (absent) batch default, and one has no per-target
 // entry at all and falls back to the batch-wide --increment-minor flag.
 func TestPlanReleaseWorkflowDispatch_VersionSelections_MixedPerTarget(t *testing.T) {
-	git := newFakeGit() // no tags registered -- autoIncrementVersion's "no tags" default applies to every bump-type resolution below
+	git := newFakeGit(
+		// Every `git tag --list` call succeeds but matches zero tags --
+		// autoIncrementVersion's "no tags" default applies to every
+		// bump-type resolution below. Stubbed explicitly (rather than
+		// left unregistered) so a real git failure and "ran fine, found
+		// nothing" stay distinguishable -- see autoIncrementVersion's doc
+		// comment.
+		fakeGitCall{argsContain: []string{"tag", "--list"}, output: "", err: nil},
+	)
 	bazel := newFakeBazel()
 
 	result, err := planRelease(planParams{
@@ -921,6 +929,9 @@ func TestPlanReleaseWithCharts(t *testing.T) {
 	bazel := newFakeBazel(bazelCalls...)
 	git := newFakeGit(
 		fakeGitCall{argsContain: []string{"tag", "--sort", "helm-control.*"}, output: "helm-control.v1.0.0"},
+		// control-api's own auto-increment (requestedApps includes it
+		// alongside the chart) -- no tags found, no-tags default applies.
+		fakeGitCall{argsContain: []string{"tag", "--sort", "manmanv2-control-api.v*"}, output: ""},
 	)
 
 	result, err := planRelease(planParams{

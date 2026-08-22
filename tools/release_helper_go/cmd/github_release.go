@@ -283,7 +283,12 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 				}
 			}
 
-			// Parse per-chart versions from CHART_MATRIX env var.
+			// Parse per-chart versions from CHART_MATRIX env var. Keyed by
+			// domain+"-"+chart (mirroring the app block above), since
+			// HelmChartMetadata.Name/FullName below are both domain-
+			// prefixed ("helm-<domain>-<chart>") -- keying by the bare
+			// chart name here (as before) never matched, causing every
+			// chart to fail with "Could not resolve chart <name>".
 			chartVersions := map[string]string{}
 			if chartMatrixEnv := defaultEnv("CHART_MATRIX"); chartMatrixEnv != "" {
 				var cmatrix struct {
@@ -292,10 +297,12 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 				if err := json.Unmarshal([]byte(chartMatrixEnv), &cmatrix); err == nil {
 					for _, item := range cmatrix.Include {
 						chartName := item["chart"]
+						chartDomain := item["domain"]
 						chartVer := item["version"]
-						if chartName != "" {
+						if chartName != "" && chartDomain != "" {
+							full := chartDomain + "-" + chartName
 							if chartVer != "" {
-								chartVersions[chartName] = chartVer
+								chartVersions[full] = chartVer
 							}
 						}
 					}
@@ -387,7 +394,9 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 				}
 
 				chartVer := version
-				if v, ok := chartVersions[matchedChart.Name]; ok && v != "" {
+				if v, ok := chartVersions[chartName]; ok && v != "" {
+					chartVer = v
+				} else if v, ok := chartVersions[matchedChart.Name]; ok && v != "" {
 					chartVer = v
 				} else if v, ok := chartVersions[matchedChart.FullName()]; ok && v != "" {
 					chartVer = v
