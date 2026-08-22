@@ -50,39 +50,41 @@ templ Environments(user *htmxauth.UserInfo, envs []*pb.Environment, includeArchi
 		</form>
 		<div class="card bg-base-100 shadow-md">
 			<div class="card-body p-0">
-				<table class="table">
-					<thead>
-						<tr>
-							<th>Key</th>
-							<th>Display name</th>
-							<th>Rank</th>
-							<th>
-								Requires approval
-								<div class="text-xs font-normal opacity-60">stored, not enforced — Promote does not check it</div>
-							</th>
-							<th>
-								Allowed principals
-								<div class="text-xs font-normal opacity-60">does not restrict who can promote — the promoter role check is the only access control in force</div>
-							</th>
-							<th>GitOps path</th>
-							<th>
-								Promoter role
-								<div class="text-xs font-normal opacity-60">denied until it exists in Keycloak and is assigned</div>
-							</th>
-							<th class="text-right">Actions</th>
-						</tr>
-					</thead>
-					<tbody>
-						if len(envs) == 0 {
+				<div class="overflow-x-auto">
+					<table class="table">
+						<thead>
 							<tr>
-								<td colspan="8" class="p-4 text-sm opacity-60">No environments registered.</td>
+								<th>Key</th>
+								<th>Display name</th>
+								<th>Rank</th>
+								<th>
+									Requires approval
+									<div class="text-xs font-normal opacity-60">stored, not enforced — Promote does not check it</div>
+								</th>
+								<th>
+									Allowed principals
+									<div class="text-xs font-normal opacity-60">does not restrict who can promote — the promoter role check is the only access control in force</div>
+								</th>
+								<th>GitOps path</th>
+								<th>
+									Promoter role
+									<div class="text-xs font-normal opacity-60">denied until it exists in Keycloak and is assigned</div>
+								</th>
+								<th class="text-right">Actions</th>
 							</tr>
-						}
-						for _, env := range envs {
-							@environmentRow(user, env)
-						}
-					</tbody>
-				</table>
+						</thead>
+						<tbody>
+							if len(envs) == 0 {
+								<tr>
+									<td colspan="8" class="p-4 text-sm opacity-60">No environments registered.</td>
+								</tr>
+							}
+							for _, env := range envs {
+								@environmentRow(user, env)
+							}
+						</tbody>
+					</table>
+				</div>
 			</div>
 		</div>
 		<p class="wf-note mt-4 text-sm opacity-70">
@@ -117,14 +119,14 @@ templ environmentRow(user *htmxauth.UserInfo, env *pb.Environment) {
 				<span class="badge badge-soft badge-neutral badge-sm">No</span>
 			}
 		</td>
-		<td class="text-sm opacity-70">
+		<td class="text-sm opacity-70 break-words max-w-xs">
 			if len(env.GetAllowedPrincipals()) == 0 {
 				<span class="opacity-50">— (falls back to promoter role only)</span>
 			} else {
 				{ strings.Join(env.GetAllowedPrincipals(), ", ") }
 			}
 		</td>
-		<td class="font-mono text-xs opacity-70">{ env.GetGitopsPath() }</td>
+		<td class="font-mono text-xs opacity-70 break-all max-w-xs">{ env.GetGitopsPath() }</td>
 		<td class="font-mono text-xs opacity-70">{ components.EnvironmentPromoterRole(env.GetKey()) }</td>
 		<td class="text-right">
 			@components.GatedLinkAction(components.Gate(user, components.RoleAdmin), "Edit", "btn-xs btn-primary", "/environments/edit?key="+env.GetKey(), "Edit "+env.GetKey())
