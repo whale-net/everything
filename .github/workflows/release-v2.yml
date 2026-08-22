@@ -549,19 +549,11 @@ jobs:
   # before this task, just consumed by Temporal instead of a later GHA
   # job.
   #
-  # KNOWN GAP (not fixed by this task -- flagged per issue #928's scope
-  # note): create-github-releases below still runs inside this SAME GHA
-  # run, using plan-release's pre-finalization version matrix and (now
-  # absent) release-notes/digest-check/helm-charts artifacts this job used
-  # to produce -- it cannot wait for Temporal's FinalizePublish, which
-  # only starts after this whole run reaches a terminal state. The GitHub
-  # Releases it creates for v2 will generally reference the correct
-  # version (FinalizePublish uses the same already-resolved plan version
-  # for the common case) but will have no release notes, no packaged
-  # assets, and no attached chart .tgz, and will not reflect the rare
-  # chart-version-collision-advance case. Moving GitHub Release creation
-  # to run after FinalizePublish (e.g. a new Temporal-triggered step, or a
-  # second lightweight dispatch) is documented follow-up work.
+  # GitHub Release creation, release notes, and the implicit git-tag side
+  # effect it produced have been removed entirely from this workflow (see
+  # issue #979) -- not relocated or deferred, just gone. This job's build
+  # outputs (image digests, chart source trees) are consumed solely by
+  # FinalizePublish via the two `actions/upload-artifact` steps below.
   build-release-artifacts:
     name: Build Release Artifacts
     runs-on: ubuntu-latest
@@ -660,122 +652,10 @@ jobs:
           path: /tmp/build-manifest/charts/
           if-no-files-found: ignore
 
-  create-github-releases:
-    name: Create GitHub Releases
-    runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, build-release-artifacts, build-openapi-specs, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && github.event.inputs.dry_run == 'false' && (needs.build-release-artifacts.result == 'success' || needs.build-release-artifacts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.build_ref || github.sha }}
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Download release tools
-        uses: ./.github/actions/download-release-tools
-        with:
-          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
-          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
-          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
-
-      - name: Download release notes artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: release-notes*
-          path: /tmp/release-notes
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Download OpenAPI spec artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: openapi-spec*
-          path: /tmp/openapi-specs
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Download digest-check artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: digest-check*
-          path: /tmp/digest-check
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Download release assets artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: release-assets*
-          path: /tmp/assets
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Download helm chart artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: helm-charts*
-          path: /tmp/helm-charts
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Apply digest-check overrides to release matrix
-        id: matrix-override
-        env:
-          MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
-        run: |
-          OVERRIDDEN_MATRIX="$MATRIX"
-          if compgen -G "/tmp/digest-check/*.json" > /dev/null; then
-            for f in /tmp/digest-check/*.json; do
-              DOMAIN=$(jq -r '.domain' "$f")
-              APP=$(jq -r '.app' "$f")
-              UNCHANGED=$(jq -r '.digest_unchanged' "$f")
-              EFF_VERSION=$(jq -r '.effective_version' "$f")
-              if [[ "$UNCHANGED" == "true" ]]; then
-                echo "Overriding ${DOMAIN}-${APP} to reused version $EFF_VERSION (no-op rebuild)"
-                OVERRIDDEN_MATRIX=$(echo "$OVERRIDDEN_MATRIX" | jq -c \
-                  --arg domain "$DOMAIN" --arg app "$APP" --arg version "$EFF_VERSION" \
-                  '.include |= map(if .domain == $domain and .app == $app then .version = $version else . end)')
-              fi
-            done
-          fi
-          echo "matrix=$OVERRIDDEN_MATRIX" >> "$GITHUB_OUTPUT"
-
-      # This step's create-combined-github-release-with-notes command records
-      # every released app/binary/firmware artifact in App Registry via
-      # recordPublishedArtifact (tools/release_helper_go/cmd/github_release.go),
-      # including release_helper_go and the app-registry CLI itself when they
-      # are among the released apps. It deliberately stops at RecordArtifact
-      # and does NOT also call PromotionRegistry.Promote: this workflow only
-      # holds `app-registry-builder-*` credentials, and Promote requires the
-      # distinct `app-registry-promoter-<env>` role (server/auth/auth.go
-      # RequirePromoter) -- builder creds cannot call it regardless.
-      # Promotion for images and charts is exclusively human-triggered via
-      # promote.yml.
-      - name: Create GitHub releases for all apps and charts
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MATRIX: ${{ steps.matrix-override.outputs.matrix }}
-          CHART_MATRIX: ${{ needs.plan-release.outputs.chart-matrix }}
-        run: |
-          # No --apps/--charts here: create-combined-github-release-with-notes
-          # already parses the exact same $MATRIX/$CHART_MATRIX this step
-          # sets above and falls back to every app/chart found there when
-          # --apps/--charts are omitted (see github_release.go's appVersions/
-          # chartVersions resolution). Deriving --apps/--charts here too was
-          # redundant, and doing it from the raw github.event.inputs.helm_charts
-          # (a domain shorthand like "app-registry", or "all") was actively
-          # wrong -- this command's resolver only matches exact chart names,
-          # so the shorthand failed with "Could not resolve chart".
-          ARGS=(create-combined-github-release-with-notes "${{ needs.plan-release.outputs.version }}" --owner "${{ github.repository_owner }}" --repo "${{ github.event.repository.name }}" --commit "${{ github.event.inputs.build_ref || github.sha }}" --release-notes-dir "/tmp/release-notes" --openapi-specs-dir "/tmp/openapi-specs" --assets-dir "/tmp/assets" --helm-charts-dir "/tmp/helm-charts")
-          "$RELEASE_HELPER" "${ARGS[@]}"
-
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, build-release-artifacts, create-github-releases, build-release-tools]
+    needs: [authorize-trigger, plan-release, build-release-artifacts, build-release-tools]
     if: needs.authorize-trigger.result == 'success' && always()
     env:
       CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
