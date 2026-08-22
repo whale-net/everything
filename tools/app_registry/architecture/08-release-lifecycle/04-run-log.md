@@ -52,6 +52,24 @@ published` state machine and run-log/resume semantics below are unchanged
 in substance, only in *which process* (`app-registry-worker` instead of a
 GHA runner) makes the calls, for v2 only.
 
+**Updated by #979, qualifying the "exactly as" claim above.** Since #982,
+`finalize-app`/`finalize-chart` no longer call `ExecuteRelease` with
+identical parameters to `release-app`/`release-charts` — the parity is in
+the `BeginPublish`/`FailPublish`/`RecordArtifact` RPC mechanics and the
+`allocated → publishing → published` state machine only, not in every
+`ExecuteRelease` input. `release-app`/`release-charts` (v1) still pass
+`--create-git-tag` and run against a real git checkout, per their own
+independent AR-5-series version-resolution design (out of scope for #979).
+`finalize-app`/`finalize-chart` (v2) no longer pass `--create-git-tag` and
+no longer need a real git checkout at all — `FinalizePublish` runs both
+subprocesses with cwd set to its scratch temp directory (already created
+for downloaded build artifacts) instead of a cloned workspace, since
+neither shell-out reads anything relative to a git working tree (see
+`tools/app_registry/worker/release/finalize.go`'s package doc comment).
+The RPC-mechanics/state-machine parity this paragraph originally asserted
+still holds; the git-tagging behavior it implied by "exactly as" no longer
+does, for v2.
+
 **Updated again by issue #973, for how `VerifyPublished` gets its expected
 versions.** The paragraph above establishes that `FinalizePublish` (not CI)
 now makes the `BeginPublish`/`FailPublish`/`RecordArtifact` calls for v2, and
