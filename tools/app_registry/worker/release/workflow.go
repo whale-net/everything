@@ -402,6 +402,16 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 		return recordFailure(ctx, in, fmt.Errorf("verify published: %w", err))
 	}
 
+	// release_run_target.build_id is a UUID FK into the `build` table
+	// (migration 016) -- it is NOT buildRef.RunID, which is GitHub's
+	// numeric Actions run id (used only by PollBuild/FinalizePublish to
+	// address that run). planBuildID extracts the same App Registry
+	// build_id field FinalizePublish already threads through to
+	// finalize-app/finalize-chart's --build-id (finalize.go); passing
+	// buildRef.RunID here instead made every RecordTargetState call fail
+	// in production with "invalid input syntax for type uuid".
+	buildID := planBuildID(plan.RawJSON)
+
 	result := ReleaseWorkflowResult{ReleaseRunID: in.ReleaseRunID}
 	for _, t := range in.Targets {
 		state := repository.ReleaseRunTargetStateSucceeded
@@ -412,7 +422,7 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 				detail = d
 			}
 		}
-		if recErr := recordTargetState(ctx, in.ReleaseRunID, t, state, buildRef.RunID, detail); recErr != nil {
+		if recErr := recordTargetState(ctx, in.ReleaseRunID, t, state, buildID, detail); recErr != nil {
 			return ReleaseWorkflowResult{}, fmt.Errorf("record target state for %s: %w", t.key(), recErr)
 		}
 		result.Targets = append(result.Targets, ReleaseTargetResult{
