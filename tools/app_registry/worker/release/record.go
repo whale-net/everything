@@ -32,25 +32,47 @@ func (a *Activities) RecordResolvedPlan(ctx context.Context, releaseRunID string
 	return nil
 }
 
-// VerifyPublished implements ReleaseActivities.VerifyPublished (FR12):
-// for every release_run_target row under releaseRunID, confirms an
-// artifact for that target's owner+kind currently exists in the published
-// state (repository.ArtifactStatePublished) via
+// VerifyPublished implements ReleaseActivities.VerifyPublished (FR12,
+// issue #973): for every release_run_target row under releaseRunID,
+// confirms an artifact for that target's owner+kind currently exists in
+// the published state (repository.ArtifactStatePublished) via
 // Registry.Artifacts().GetArtifact with LatestPublished -- the same
 // registry-visible signal GetEnvironmentState/promotion already treat as
-// "this exists and is usable".
+// "this exists and is usable" -- AND (when expectedVersions has an entry
+// for the target) that its version matches.
 //
-// Known limitation (documented, not solved here): this confirms *a*
-// published artifact exists for the target, not that its version equals
-// the exact version ResolvePlan resolved earlier in this same workflow
-// execution -- VerifyPublished's activity signature (releaseRunID only,
-// fixed by this package's scaffold) carries no version info to compare
-// against. ReleaseRun.ResolvedPlan is now readable back via
-// Registry.ReleaseRuns().GetReleaseRun once RecordResolvedPlan has stamped
-// it (issue #906), but VerifyPublished itself was not extended to use it --
-// tightening this to an exact-version check is follow-up work alongside
-// plan.go's own documented library-extraction follow-up.
-func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string) (VerifyResult, error) {
+// expectedVersions is keyed by repository.TargetKey format and comes
+// directly from FinalizePublish's own per-target result
+// (FinalizeResult.Targets' EffectiveVersion, threaded through by
+// workflow.go's ReleaseWorkflow) -- NOT re-derived from
+// release_run.resolved_plan's plan-time JSON as PR #976's first pass did.
+// That re-derivation could not distinguish a real finalize failure from
+// ExecuteRelease's legitimate no-op-rebuild path, where the actually-
+// published version legitimately differs from the plan-time requested one
+// (see FinalizeTargetOutcome's doc comment) -- comparing against
+// FinalizePublish's own reported EffectiveVersion instead makes that
+// distinction for free, since EffectiveVersion already reflects whichever
+// version was actually reused/published.
+//
+// This closes the gap issue #973 reported: FinalizePublish deliberately
+// does not fail the workflow when one target's finalize-app/finalize-chart
+// call fails (e.g. a GHCR retag returning DENIED), leaving that target's
+// RecordArtifact call never made -- but if an OLDER version of the same
+// target was already Published from a prior release, the presence+state
+// check alone still found *that* artifact and reported the target
+// satisfied, masking the real failure. In practice, workflow.go's
+// ReleaseWorkflow now routes a real finalize failure straight to that
+// target's Failed state without even calling into this method's result for
+// it (see FinalizeResult.Targets' doc comment) -- the version comparison
+// here remains as defense in depth for any target VerifyPublished is still
+// asked to check.
+//
+// Defensive fallback: a target with no entry in expectedVersions (should
+// not happen for any target FinalizePublish actually processed -- kept
+// only for old/test data and any future caller that omits it) skips the
+// version check and falls back to the prior presence+Published-state-only
+// check for that target.
+func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, expectedVersions map[string]string) (VerifyResult, error) {
 	if a.Registry == nil {
 		return VerifyResult{}, fmt.Errorf("verify published for release run %s: Activities.Registry not configured", releaseRunID)
 	}
@@ -81,6 +103,14 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string) (
 				result.Failed = map[string]string{}
 			}
 			result.Failed[key] = fmt.Sprintf("latest artifact is in state %q, not published", artifact.State)
+			continue
+		}
+		if expectedVersion, ok := expectedVersions[key]; ok && artifact.Version != expectedVersion {
+			result.AllPublished = false
+			if result.Failed == nil {
+				result.Failed = map[string]string{}
+			}
+			result.Failed[key] = fmt.Sprintf("published artifact version %q does not match expected version %q", artifact.Version, expectedVersion)
 		}
 	}
 	return result, nil

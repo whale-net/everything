@@ -230,13 +230,23 @@ type ReleaseActivities interface {
 	// release-app/release-charts already used inline in GHA (see
 	// finalize.go's package doc comment). A FinalizeResult with
 	// Succeeded=false (some targets failed to finalize, not a batch-level
-	// error) still lets the workflow proceed to VerifyPublished, which is
-	// the authoritative per-target signal RecordTargetState acts on below.
+	// error) still lets the workflow proceed to VerifyPublished -- but
+	// FinalizeResult.Targets (issue #973's proper fix, see
+	// FinalizeTargetOutcome's doc comment) is now itself the authoritative
+	// per-target signal for any target it has an entry for: ReleaseWorkflow
+	// routes a target reported Failed here straight to that target's Failed
+	// state, without depending on VerifyPublished's inference at all (see
+	// ReleaseWorkflow's body).
 	FinalizePublish(ctx context.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error)
 
 	// VerifyPublished confirms every target in releaseRunID reached
 	// published/succeeded via GetRelease/GetReleaseRun (FR12).
-	VerifyPublished(ctx context.Context, releaseRunID string) (VerifyResult, error)
+	// expectedVersions (repository.TargetKey format -> EffectiveVersion) is
+	// derived by ReleaseWorkflow directly from FinalizeResult.Targets (see
+	// that type's doc comment) -- not re-derived from resolved_plan JSON --
+	// so a legitimate no-op-rebuild's reused older version compares
+	// correctly instead of being misreported as a mismatch.
+	VerifyPublished(ctx context.Context, releaseRunID string, expectedVersions map[string]string) (VerifyResult, error)
 
 	// RecordTargetState updates the release_run_target row identified by
 	// releaseRunID+target (see ReleaseTarget's doc comment on why this
@@ -389,15 +399,30 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	// artifacts by digest -- finalize them (registry retag, chart
 	// packaging, ChartMuseum upload, App Registry recording) before
 	// checking what actually got published. A FinalizeResult with
-	// Succeeded=false is NOT treated as a workflow-level failure here (see
-	// FinalizePublish's doc comment) -- only a hard activity error is;
-	// per-target finalize failures are left for verifyPublished below to
-	// surface precisely.
-	if _, err := finalizePublish(workflow.WithActivityOptions(ctx, finalizePublishActivityOptions), plan, buildRef); err != nil {
+	// Succeeded=false is NOT treated as a workflow-level failure here --
+	// only a hard activity error is. Per-target finalize failures ARE,
+	// however, surfaced directly and precisely below: finalizeResult.Targets
+	// (see FinalizeTargetOutcome's doc comment, issue #973's proper fix)
+	// is FinalizePublish's own authoritative knowledge of which targets
+	// actually finalized, split into finalizeFailures (routed straight to
+	// that target's Failed state, bypassing verifyPublished entirely for
+	// it) and expectedVersions (the EffectiveVersion verifyPublished must
+	// compare a published artifact against for every other target) below.
+	finalizeResult, err := finalizePublish(workflow.WithActivityOptions(ctx, finalizePublishActivityOptions), plan, buildRef)
+	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("finalize publish: %w", err))
 	}
+	finalizeFailures := map[string]string{}
+	expectedVersions := map[string]string{}
+	for key, outcome := range finalizeResult.Targets {
+		if outcome.Failed {
+			finalizeFailures[key] = outcome.Detail
+		} else {
+			expectedVersions[key] = outcome.EffectiveVersion
+		}
+	}
 
-	verify, err := verifyPublished(ctx, in.ReleaseRunID)
+	verify, err := verifyPublished(ctx, in.ReleaseRunID, expectedVersions)
 	if err != nil {
 		return recordFailure(ctx, in, fmt.Errorf("verify published: %w", err))
 	}
@@ -416,7 +441,17 @@ func ReleaseWorkflow(ctx workflow.Context, in ReleaseWorkflowInput) (ReleaseWork
 	for _, t := range in.Targets {
 		state := repository.ReleaseRunTargetStateSucceeded
 		detail := ""
-		if verify.Failed != nil {
+		if d, failed := finalizeFailures[t.key()]; failed {
+			// FinalizePublish already knows precisely this target's
+			// finalize-app/finalize-chart call failed (e.g. a GHCR retag
+			// DENIED) -- record that directly, full stop. Do not consult
+			// verify.Failed for it: this target may not even be a key
+			// verifyPublished was asked to check (it never reached
+			// RecordArtifact), and its indirect presence/version check is
+			// not needed when FinalizePublish's own signal is authoritative.
+			state = repository.ReleaseRunTargetStateFailed
+			detail = d
+		} else if verify.Failed != nil {
 			if d, failed := verify.Failed[t.key()]; failed {
 				state = repository.ReleaseRunTargetStateFailed
 				detail = d
@@ -509,9 +544,9 @@ func finalizePublish(ctx workflow.Context, plan ResolvedPlan, ref BuildRef) (Fin
 	return result, err
 }
 
-func verifyPublished(ctx workflow.Context, releaseRunID string) (VerifyResult, error) {
+func verifyPublished(ctx workflow.Context, releaseRunID string, expectedVersions map[string]string) (VerifyResult, error) {
 	var result VerifyResult
-	err := workflow.ExecuteActivity(ctx, ActivityVerifyPublished, releaseRunID).Get(ctx, &result)
+	err := workflow.ExecuteActivity(ctx, ActivityVerifyPublished, releaseRunID, expectedVersions).Get(ctx, &result)
 	return result, err
 }
 

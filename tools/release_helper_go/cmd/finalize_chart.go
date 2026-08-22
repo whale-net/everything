@@ -51,6 +51,7 @@ func newFinalizeChartCmd() *cobra.Command {
 		idempotencyKeyPrefix string
 		skipRegistry         bool
 		createGitTag         bool
+		outputDir            string
 	)
 
 	cmd := &cobra.Command{
@@ -131,6 +132,29 @@ func newFinalizeChartCmd() *cobra.Command {
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Finalized chart %s (version: %s, effective: %s, digest: %s, published: %t)\n",
 				chartName, version, res.EffectiveVersion, res.Digest, res.Published)
+
+			// --output-dir mirrors finalize-app's identical convention
+			// (finalize_app.go): lets a caller (Temporal's FinalizePublish,
+			// worker/release/finalize.go) recover res.EffectiveVersion
+			// after this runs as a subprocess. Charts previously had no
+			// way to report this at all -- FinalizePublish's per-target
+			// outcome tracking needs it for charts exactly as it already
+			// does for apps (issue #973's proper fix, superseding the
+			// resolved-plan-JSON comparison PR #976 first attempted).
+			//
+			// ExecuteFinalizeChart above has ALREADY succeeded (chart
+			// packaged and uploaded to ChartMuseum, App Registry recorded)
+			// by the time we get here -- this write is a secondary
+			// bookkeeping sidecar, not part of that. A failure writing it
+			// must not make this command exit non-zero for the same
+			// reason finalize-app's identical write doesn't (see
+			// writeFinalizeResultFile's doc comment / this PR's Finding
+			// 1). Warn and still exit 0.
+			if outputDir != "" {
+				if werr := writeFinalizeResultFile(outputDir, domain, chartName, res); werr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "::warning::finalize-chart: publish succeeded but failed to write --output-dir result file: %v\n", werr)
+				}
+			}
 			return nil
 		},
 	}
@@ -148,6 +172,7 @@ func newFinalizeChartCmd() *cobra.Command {
 	cmd.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Prefix for idempotency keys")
 	cmd.Flags().BoolVar(&skipRegistry, "skip-registry", false, "Skip App Registry API interactions")
 	cmd.Flags().BoolVar(&createGitTag, "create-git-tag", false, "Create git tag upon successful publication")
+	cmd.Flags().StringVar(&outputDir, "output-dir", "", "Write the finalize result (including effective_version) as <domain>-<chart>.json here; skipped if unset")
 
 	_ = cmd.MarkFlagRequired("chart")
 	_ = cmd.MarkFlagRequired("chart-dir")
