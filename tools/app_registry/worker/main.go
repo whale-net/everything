@@ -132,14 +132,15 @@ func run() error {
 	// that constant's doc comment. Registry is the same direct-Postgres repo
 	// the outbox drainer uses (see release/record.go's package doc comment
 	// for why VerifyPublished/RecordTargetState bypass the gRPC API).
-	// GitHub/PlanBinaryPath/WorkspaceRoot are opt-in, like
-	// WRITEBACK_GITOPS_REPO above: DispatchBuild/PollBuild and ResolvePlan
-	// return a clear "not configured" error rather than running with a
-	// silently-defaulted credential or workspace when unset -- so `bazel
-	// test`/local dev/Tilt keep working with zero config, and only a real
-	// deployment that sets these env vars actually dispatches GitHub Actions
-	// runs or shells out to release_helper_go (see release/plan.go's
-	// package doc comment on that shell-out's operational requirement).
+	// GitHub is opt-in, like WRITEBACK_GITOPS_REPO above: DispatchBuild/
+	// PollBuild return a clear "not configured" error rather than running
+	// with a silently-defaulted credential when unset. PlanBinaryPath/
+	// WorkspaceRoot are optional overrides, not requirements -- ResolvePlan
+	// and FinalizePublish both work with them unset (a PATH-resolved
+	// release_helper_go binary and a per-invocation scratch/cloned
+	// directory respectively; see release/plan.go and
+	// release/finalize.go's package doc comments) -- so `bazel test`/local
+	// dev/Tilt keep working with zero config either way.
 	releaseActivities := &release.Activities{
 		Registry:       repo,
 		PlanBinaryPath: os.Getenv("RELEASE_PLAN_BINARY_PATH"),

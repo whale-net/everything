@@ -58,6 +58,22 @@ var (
 		Field:   "from-resolved-plan",
 		Message: "must be valid JSON matching PlanResult's shape (release-helper plan --format=json's own output)",
 	}
+	ErrMutuallyExclusiveAppsInput = &PlanValidationError{
+		Field:   "apps_input",
+		Message: "--apps and --apps-metadata are mutually exclusive",
+	}
+	ErrMutuallyExclusiveChartsInput = &PlanValidationError{
+		Field:   "charts_input",
+		Message: "--charts/--helm-charts and --charts-metadata are mutually exclusive",
+	}
+	ErrInvalidAppsMetadata = &PlanValidationError{
+		Field:   "apps-metadata",
+		Message: "must be a JSON array of {domain, name, app_type}",
+	}
+	ErrInvalidChartsMetadata = &PlanValidationError{
+		Field:   "charts-metadata",
+		Message: "must be a JSON array of {domain, name}",
+	}
 )
 
 type PlanResult struct {
@@ -85,6 +101,8 @@ func newPlanCmd() *cobra.Command {
 		apps                 string
 		charts               string
 		helmCharts           string
+		appsMetadata         string
+		chartsMetadata       string
 		version              string
 		incrementMajor       bool
 		incrementMinor       bool
@@ -157,15 +175,57 @@ func newPlanCmd() *cobra.Command {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Error: version %q does not follow semantic versioning (vMAJOR.MINOR.PATCH)\n", version)
 					return ErrInvalidVersion
 				}
-
-				workspaceRoot, err := defaultWorkspaceRoot()
-				if err != nil {
-					return fmt.Errorf("workspace root: %w", err)
+				if apps != "" && appsMetadata != "" {
+					fmt.Fprintln(cmd.ErrOrStderr(), "Error: --apps and --apps-metadata are mutually exclusive")
+					return ErrMutuallyExclusiveAppsInput
 				}
-
 				effectiveCharts := charts
 				if effectiveCharts == "" && helmCharts != "" {
 					effectiveCharts = helmCharts
+				}
+				if effectiveCharts != "" && chartsMetadata != "" {
+					fmt.Fprintln(cmd.ErrOrStderr(), "Error: --charts/--helm-charts and --charts-metadata are mutually exclusive")
+					return ErrMutuallyExclusiveChartsInput
+				}
+
+				var parsedAppsMetadata []AppMetadataInput
+				if appsMetadata != "" {
+					if err := json.Unmarshal([]byte(appsMetadata), &parsedAppsMetadata); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "Error: --apps-metadata is not valid JSON: %v\n", err)
+						return fmt.Errorf("%v: %w", err, ErrInvalidAppsMetadata)
+					}
+				}
+				var parsedChartsMetadata []HelmChartMetadataInput
+				if chartsMetadata != "" {
+					if err := json.Unmarshal([]byte(chartsMetadata), &parsedChartsMetadata); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "Error: --charts-metadata is not valid JSON: %v\n", err)
+						return fmt.Errorf("%v: %w", err, ErrInvalidChartsMetadata)
+					}
+				}
+
+				// Skip the eager bazel-workspace-root check when every
+				// requested target is satisfied by an explicit metadata
+				// input (issue #889 follow-up: ResolvePlan's real call path
+				// no longer needs a full monorepo checkout -- see
+				// tools/app_registry/worker/release/plan.go's package doc
+				// comment). Any bazel-driven discovery path (a name list, an
+				// "all" expansion, or any non-workflow_dispatch event type)
+				// still needs it -- and executeAppRegistryUpfront's own
+				// best-effort AssertApps re-sweep still calls
+				// ListAllApps/ListAllHelmCharts independently of this
+				// variable and degrades gracefully (see its doc comment) if
+				// bazel isn't available there.
+				needsBazelWorkspace := eventType != "workflow_dispatch" ||
+					(apps != "" && parsedAppsMetadata == nil) ||
+					(effectiveCharts != "" && parsedChartsMetadata == nil)
+
+				var workspaceRoot string
+				var err error
+				if needsBazelWorkspace {
+					workspaceRoot, err = defaultWorkspaceRoot()
+					if err != nil {
+						return fmt.Errorf("workspace root: %w", err)
+					}
 				}
 
 				result, err = planRelease(planParams{
@@ -173,6 +233,8 @@ func newPlanCmd() *cobra.Command {
 					eventType:            eventType,
 					requestedApps:        apps,
 					requestedCharts:      effectiveCharts,
+					appsMetadata:         parsedAppsMetadata,
+					chartsMetadata:       parsedChartsMetadata,
 					version:              version,
 					incrementMajor:       incrementMajor,
 					incrementMinor:       incrementMinor,
@@ -238,6 +300,8 @@ func newPlanCmd() *cobra.Command {
 	cmd.Flags().StringVar(&apps, "apps", "", "Comma-separated list of apps, domain names, or 'all'")
 	cmd.Flags().StringVar(&charts, "charts", "", "Comma-separated list of charts, domain names, or 'all'")
 	cmd.Flags().StringVar(&helmCharts, "helm-charts", "", "Alias for --charts")
+	cmd.Flags().StringVar(&appsMetadata, "apps-metadata", "", "JSON array of {domain, name, app_type} -- bypasses bazel discovery entirely, for a caller that already resolved this exact app list (e.g. App Registry's ResolvePlan); mutually exclusive with --apps")
+	cmd.Flags().StringVar(&chartsMetadata, "charts-metadata", "", "JSON array of {domain, name} -- bypasses bazel discovery entirely, for a caller that already resolved this exact chart list; mutually exclusive with --charts/--helm-charts")
 	cmd.Flags().StringVar(&version, "version", "", "Release version")
 	cmd.Flags().BoolVar(&incrementMajor, "increment-major", false, "Auto-increment major version")
 	cmd.Flags().BoolVar(&incrementMinor, "increment-minor", false, "Auto-increment minor version")
@@ -258,10 +322,18 @@ func newPlanCmd() *cobra.Command {
 }
 
 type planParams struct {
-	ctx                    context.Context
-	eventType              string
-	requestedApps          string
-	requestedCharts        string
+	ctx             context.Context
+	eventType       string
+	requestedApps   string
+	requestedCharts string
+	// appsMetadata/chartsMetadata (issue #889 follow-up), when non-nil,
+	// bypass ListAllApps/ListAllHelmCharts' bazel query entirely -- see
+	// AppMetadataFromInputs/HelmChartMetadataFromInputs's doc comments. An
+	// alternative to requestedApps/requestedCharts (a bazel-discovered name
+	// list), not a companion to it -- newPlanCmd validates the two are
+	// mutually exclusive per app/chart axis before planRelease is called.
+	appsMetadata           []AppMetadataInput
+	chartsMetadata         []HelmChartMetadataInput
 	version                string
 	incrementMajor         bool
 	incrementMinor         bool
@@ -335,24 +407,31 @@ func planRelease(p planParams) (*PlanResult, error) {
 
 	switch p.eventType {
 	case "workflow_dispatch":
-		if p.requestedApps == "" && p.requestedCharts == "" {
+		if p.requestedApps == "" && len(p.appsMetadata) == 0 && p.requestedCharts == "" && len(p.chartsMetadata) == 0 {
 			return nil, fmt.Errorf("manual releases require --apps or --charts to be specified: %w", ErrMissingReleaseTargets)
 		}
 
-		if p.requestedApps != "" {
-			allApps, err := ListAllApps(p.bazel, p.fs, p.workspaceRoot)
-			if err != nil {
-				return nil, err
-			}
-			if strings.ToLower(p.requestedApps) == "all" {
-				releaseApps = allApps
-				if !p.includeDemo {
-					releaseApps = filterOutDemo(releaseApps)
-				}
+		if p.requestedApps != "" || len(p.appsMetadata) > 0 {
+			if len(p.appsMetadata) > 0 {
+				// Bazel-free path (issue #889 follow-up): the caller
+				// (ResolvePlan) already resolved this exact target list
+				// against App Registry -- see AppMetadataFromInputs.
+				releaseApps = AppMetadataFromInputs(p.appsMetadata)
 			} else {
-				releaseApps, err = resolveApps(strings.Split(p.requestedApps, ","), allApps)
+				allApps, err := ListAllApps(p.bazel, p.fs, p.workspaceRoot)
 				if err != nil {
 					return nil, err
+				}
+				if strings.ToLower(p.requestedApps) == "all" {
+					releaseApps = allApps
+					if !p.includeDemo {
+						releaseApps = filterOutDemo(releaseApps)
+					}
+				} else {
+					releaseApps, err = resolveApps(strings.Split(p.requestedApps, ","), allApps)
+					if err != nil {
+						return nil, err
+					}
 				}
 			}
 			if err := assignVersions(ctx, p, releaseApps, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, perAppVersions); err != nil {
@@ -360,12 +439,18 @@ func planRelease(p planParams) (*PlanResult, error) {
 			}
 		}
 
-		if p.requestedCharts != "" {
-			allCharts, err := ListAllHelmCharts(p.bazel, p.fs, p.workspaceRoot)
-			if err != nil {
-				return nil, err
+		if p.requestedCharts != "" || len(p.chartsMetadata) > 0 {
+			if len(p.chartsMetadata) > 0 {
+				// Bazel-free path (issue #889 follow-up) -- see
+				// HelmChartMetadataFromInputs.
+				selectedCharts = HelmChartMetadataFromInputs(p.chartsMetadata)
+			} else {
+				allCharts, err := ListAllHelmCharts(p.bazel, p.fs, p.workspaceRoot)
+				if err != nil {
+					return nil, err
+				}
+				selectedCharts = selectHelmCharts(p.requestedCharts, allCharts, p.includeDemo, nil)
 			}
-			selectedCharts = selectHelmCharts(p.requestedCharts, allCharts, p.includeDemo, nil)
 			if err := assignChartVersions(ctx, p, selectedCharts, p.version, p.incrementMajor, p.incrementMinor, p.incrementPatch, perChartVersions); err != nil {
 				return nil, err
 			}

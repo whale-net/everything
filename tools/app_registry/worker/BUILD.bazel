@@ -37,9 +37,21 @@ go_binary(
 release_app(
     name = "worker",
     app_type = "worker",
+    # release_helper_go's own binary + a real helm CLI, bundled so
+    # ResolvePlan/FinalizePublish's release_helper_go shell-outs (see
+    # worker/release/plan.go and worker/release/finalize.go's package doc
+    # comments) resolve both via PATH with no separate binary-mount
+    # operational requirement. See //tools/release_helper_go's
+    # release_helper_go_tar and //tools/helm_cli's helm_cli_tar doc
+    # comments for how each is built/selected per platform.
+    additional_tars = [
+        "//tools/release_helper_go:release_helper_go_tar",
+        "//tools/helm_cli:helm_cli_tar",
+    ],
     # The real (non-stub) Writeback implementation shells out to `git` --
-    # see worker/writeback/gitops.go. The default base image doesn't carry
-    # it, so use the git-enabled base instead (see MODULE.bazel's
+    # see worker/writeback/gitops.go. FinalizePublish's own git clone (see
+    # finalize.go) also needs `git` on PATH. The default base image doesn't
+    # carry it, so use the git-enabled base instead (see MODULE.bazel's
     # "git_base" oci.pull for why).
     base = "@git_base",
     binary_name = ":worker",

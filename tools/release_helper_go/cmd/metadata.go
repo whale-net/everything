@@ -108,6 +108,39 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, erro
 	return apps, nil
 }
 
+// AppMetadataInput is one app's identity as supplied directly by a caller
+// that has already resolved its target list against a source of truth
+// other than `bazel query` (e.g. App Registry's own App rows) -- see
+// AppMetadataFromInputs.
+type AppMetadataInput struct {
+	Domain  string `json:"domain"`
+	Name    string `json:"name"`
+	AppType string `json:"app_type"`
+}
+
+// AppMetadataFromInputs builds []AppMetadata directly from inputs, with no
+// bazel query/cquery call -- the bazel-free counterpart to ListAllApps for a
+// caller (tools/app_registry/worker/release/plan.go's ResolvePlan) that
+// already has an explicit, pre-validated target list and only needs
+// Domain/Name/AppType (FullName() and determineArtifactKind's only inputs
+// for an explicit --apps list -- see this file's ListAllApps/plan.go's
+// assignVersions). BazelTarget is left empty: it is only consumed by
+// buildPlanResult's GHA matrix `bazel_target` field and the OpenAPI-spec
+// plumbing, neither of which ResolvePlan's shell-out reads back (it only
+// parses the JSON output's `versions` map).
+func AppMetadataFromInputs(inputs []AppMetadataInput) []AppMetadata {
+	out := make([]AppMetadata, 0, len(inputs))
+	for _, in := range inputs {
+		out = append(out, AppMetadata{AppManifest: &appmetapb.AppManifest{
+			Domain:  in.Domain,
+			Name:    in.Name,
+			AppType: in.AppType,
+		}})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FullName() < out[j].FullName() })
+	return out
+}
+
 func splitNonEmpty(out string) []string {
 	var result []string
 	for _, line := range strings.Split(out, "\n") {

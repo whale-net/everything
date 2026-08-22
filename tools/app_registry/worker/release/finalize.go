@@ -33,17 +33,26 @@
 // explicit ask: do not reinvent this).
 //
 // Like ResolvePlan (see plan.go's package doc comment), this is an interim
-// shell-out to release_helper_go rather than an in-process library call,
-// and inherits the identical operational precondition: a.WorkspaceRoot
-// must be a real directory on disk (finalize-app/finalize-chart need
-// `helm`/`git` on PATH there; unlike ResolvePlan they do NOT need
-// `bazel` or a monorepo checkout, since neither shells out to bazel).
-// FinalizePublish also inherits ResolvePlan's already-accepted concurrency
-// caveat: if a.WorkspaceRoot is a single shared directory and Temporal runs
-// two ReleaseWorkflow executions' activities concurrently, their `git tag`
-// invocations race in the same working tree. Not solved here -- the same
-// gap plan.go's shell-out already carries, not a new one this task
-// introduces.
+// shell-out to release_helper_go rather than an in-process library call.
+// Unlike ResolvePlan, this activity's shell-outs pass `--create-git-tag`
+// (finalize-app/finalize-chart), which runs `git tag`+`git push` -- a real
+// authenticated git remote, not just a scratch directory. When
+// a.WorkspaceRoot is unset, FinalizePublish performs its own shallow,
+// authenticated clone of this monorepo per invocation (cloneWorkspace,
+// below) into a fresh temp directory, reusing the exact GitHub App
+// installation-token pattern DispatchBuild's dispatcher already has
+// (a.GitHub.Config's writeback.GitHubAppConfig + Owner/Repo -- see
+// github.go's package doc comment's "reuse ... rather than inventing a
+// second auth mechanism" precedent) rather than requiring an operator to
+// pre-provision a persistent checkout. A fresh clone per invocation also
+// means ResolvePlan's previously-documented git-tag-race concurrency
+// caveat (a single shared WorkspaceRoot directory racing across concurrent
+// ReleaseWorkflow executions) does not apply here: each FinalizePublish
+// call gets its own directory. a.WorkspaceRoot remains a supported
+// override (e.g. for tests, or an operator who does want a persistent
+// checkout) -- when set, it is used as-is and no clone is performed.
+// `helm` must still be on PATH wherever this process runs (neither
+// finalize-app nor finalize-chart shells out to bazel).
 package release
 
 import (
@@ -131,9 +140,6 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	if a.GitHub == nil {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: GitHub dispatcher not configured")
 	}
-	if a.WorkspaceRoot == "" {
-		return FinalizeResult{}, fmt.Errorf("finalize publish: WorkspaceRoot not configured -- finalize-app/finalize-chart shell out from it, same operational precondition as ResolvePlan (see plan.go's package doc comment)")
-	}
 	if len(plan.Versions) == 0 {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: resolved plan has no versions")
 	}
@@ -141,6 +147,26 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	apps, charts, err := splitPlanTargets(plan.Versions)
 	if err != nil {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: %w", err)
+	}
+
+	// workspaceDir is where finalize-app/finalize-chart run `git
+	// tag`+`git push` from -- see package doc comment. a.WorkspaceRoot
+	// stays a supported override; when unset, clone one ourselves.
+	workspaceDir := a.WorkspaceRoot
+	if workspaceDir == "" {
+		cloneDir, cerr := os.MkdirTemp("", "release-finalize-workspace-*")
+		if cerr != nil {
+			return FinalizeResult{}, fmt.Errorf("finalize publish: create scratch workspace: %w", cerr)
+		}
+		defer os.RemoveAll(cloneDir) //nolint:errcheck
+		clone := a.cloneWorkspaceFn
+		if clone == nil {
+			clone = a.cloneWorkspace
+		}
+		if cerr := clone(ctx, cloneDir); cerr != nil {
+			return FinalizeResult{}, fmt.Errorf("finalize publish: %w", cerr)
+		}
+		workspaceDir = cloneDir
 	}
 
 	tmpDir, err := os.MkdirTemp("", "release-finalize-")
@@ -238,7 +264,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
 		}
-		if _, err := runReleaseHelper(ctx, binary, a.WorkspaceRoot, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
+		if _, err := runReleaseHelper(ctx, binary, workspaceDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: finalize-app: %v", fullName, err))
 		}
 	}
@@ -279,7 +305,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
 		}
-		if _, err := runReleaseHelper(ctx, binary, a.WorkspaceRoot, chartEnv, args...); err != nil {
+		if _, err := runReleaseHelper(ctx, binary, workspaceDir, chartEnv, args...); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: finalize-chart: %v", fullName, err))
 		}
 	}
@@ -288,6 +314,37 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		return FinalizeResult{Succeeded: false, Detail: strings.Join(failures, "; ")}, nil
 	}
 	return FinalizeResult{Succeeded: true}, nil
+}
+
+// cloneWorkspace performs a shallow, authenticated clone of this monorepo
+// into dir, so finalize-app/finalize-chart's --create-git-tag shell-outs
+// have a real git remote to push to -- see package doc comment. Reuses
+// a.GitHub.Config's GitHub App credentials and Owner/Repo (already
+// required for DispatchBuild) and writeback.MintInstallationToken's
+// installation-token flow, the same "x-access-token:<token>" HTTPS
+// credential shape writeback/gitops.go's remoteURL uses for gitops pushes
+// -- one auth mechanism, not two. The token is redacted from any returned
+// error.
+func (a *Activities) cloneWorkspace(ctx context.Context, dir string) error {
+	token, err := a.GitHub.token(ctx)
+	if err != nil {
+		return fmt.Errorf("mint clone token: %w", err)
+	}
+	ref := a.GitHub.Config.Ref
+	if ref == "" {
+		ref = "main"
+	}
+	url := "https://x-access-token:" + token + "@github.com/" + a.GitHub.Config.Owner + "/" + a.GitHub.Config.Repo + ".git"
+
+	cmd := exec.CommandContext(ctx, "git", "clone", "--depth=1", "--branch", ref, url, dir)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if runErr := cmd.Run(); runErr != nil {
+		msg := strings.ReplaceAll(out.String(), token, "REDACTED")
+		return fmt.Errorf("git clone: %w: %s", runErr, strings.TrimSpace(msg))
+	}
+	return nil
 }
 
 // runReleaseHelper invokes binary (release_helper_go) from workspaceRoot

@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
 load("//tools/bazel:release.bzl", "release_app")
 
 package(default_visibility = ["//visibility:public"])
@@ -44,6 +45,25 @@ go_binary(
     srcs = ["main.go"],
     importpath = "github.com/whale-net/everything/tools/release_helper_go",
     deps = [":cmd"],
+)
+
+# Bundles this binary into another release_app image's `additional_tars`
+# (mirrors //tools/steamcmd's pkg_tar pattern) -- used by
+# //tools/app_registry/worker so app-registry-worker's own image carries
+# `release_helper_go` at /usr/local/bin/release_helper_go, letting
+# ResolvePlan/FinalizePublish's release_helper_go shell-outs (see
+# tools/app_registry/worker/release/plan.go's package doc comment) resolve
+# it via PATH with no separate binary-mount operational requirement.
+# go_binary's cross-compiled output is picked up transitively through
+# rules_oci's platform transition (same mechanism the worker's own
+# binary_name gets built for each target platform), so this needs no
+# separate per-arch handling the way an externally-fetched binary would.
+pkg_tar(
+    name = "release_helper_go_tar",
+    srcs = [":release_helper_go"],
+    mode = "0755",
+    package_dir = "/usr/local/bin",
+    visibility = ["//visibility:public"],
 )
 
 go_test(
