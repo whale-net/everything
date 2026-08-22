@@ -41,6 +41,41 @@ Standard `libs/go/logging` environment auto-detection also applies
 (`APP_NAME`, `APP_DOMAIN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_*_DISABLED`,
 etc.) — see that package's doc comment for the full list.
 
+### CLI binary S3 (issue #979/#983)
+
+`ArtifactRegistry.ResolveBinaryURL` resolves a CLI binary (`release_helper_go`
+/ `app-registry`) + version + platform to its public S3 download URL, backed
+by a dedicated bucket (NFR4: not a reuse of any existing bucket). The API
+server only ever constructs *unsigned* public URLs (NFR2 — the bucket is
+public-read) and so needs no credentials; see `libs/go/s3`'s
+`Client.PublicURL`.
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `RELEASE_TOOLS_S3_BUCKET` | `""` | Bucket name for CLI binary artifacts. Required for `ResolveBinaryURL` to return a usable URL. |
+| `RELEASE_TOOLS_S3_PUBLIC_ENDPOINT` | `""` | Public base URL used to construct unsigned download URLs, e.g. `PublicURL(key) == "<endpoint>/<bucket>/<key>"`. |
+
+The following are consumed by the *publish* side (the FinalizePublish
+S3-publish task, `worker/release/finalize.go`), not by `ResolveBinaryURL` —
+documented here so the full `RELEASE_TOOLS_S3_*` var set lives in one place:
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `RELEASE_TOOLS_S3_ENDPOINT` | *(unset)* | Custom S3 endpoint (e.g. OVH, MinIO) the worker's `s3.Client` connects to when publishing CLI binaries. Used by the publish side, see the FinalizePublish S3-publish task. |
+| `RELEASE_TOOLS_S3_REGION` | *(unset)* | Region for the publish-side `s3.Client`. Used by the publish side, see the FinalizePublish S3-publish task. |
+| `RELEASE_TOOLS_S3_ACCESS_KEY` | *(unset)* | Static access key for the publish-side `s3.Client`. Used by the publish side, see the FinalizePublish S3-publish task. |
+| `RELEASE_TOOLS_S3_SECRET_KEY` | *(unset)* | Static secret key for the publish-side `s3.Client`. Used by the publish side, see the FinalizePublish S3-publish task. |
+
+**S3 key convention** (must match exactly between the publish side and
+`ResolveBinaryURL`):
+- Binary: `<binary>/<version>/<binary>-<os>-<arch>`, e.g.
+  `release_helper_go/v1.2.3/release_helper_go-linux-amd64` (`os` ∈
+  {`linux`,`darwin`}, `arch` ∈ {`amd64`,`arm64`}, matching
+  `package_assets.go`'s `<name>-<os>-<arch>` output).
+- Checksum manifest: `<binary>/<version>/checksums.txt` — one manifest per
+  binary+version, covering all its platform variants, same `checksums.txt`
+  format `package_assets.go`'s `generateChecksumFiles` already produces.
+
 ### Role model (AR-3a)
 
 Server-side enforcement lives in `server/auth`; see

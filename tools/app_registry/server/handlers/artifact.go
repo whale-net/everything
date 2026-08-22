@@ -36,11 +36,38 @@ var artifactLog = logging.Get("app-registry-handlers")
 type ArtifactServer struct {
 	pb.UnimplementedArtifactRegistryServer
 	repo repository.Registry
+
+	// releaseToolsS3Bucket/releaseToolsS3PublicEndpoint back ResolveBinaryURL
+	// (issue #979/#983) -- the public-read bucket CLI binaries are published
+	// to, and the base URL used to construct unsigned download URLs. See
+	// RELEASE_TOOLS_S3_BUCKET/RELEASE_TOOLS_S3_PUBLIC_ENDPOINT in ENV.md.
+	// Both are optional: most ArtifactServer construction (tests, every
+	// other RPC in this file) has no need of them, hence WithReleaseToolsS3
+	// rather than required constructor params.
+	releaseToolsS3Bucket         string
+	releaseToolsS3PublicEndpoint string
+}
+
+// ArtifactServerOption configures an optional ArtifactServer dependency --
+// see WithReleaseToolsS3.
+type ArtifactServerOption func(*ArtifactServer)
+
+// WithReleaseToolsS3 configures the public-read S3 bucket ResolveBinaryURL
+// resolves CLI binary/checksum-manifest download URLs against.
+func WithReleaseToolsS3(bucket, publicEndpoint string) ArtifactServerOption {
+	return func(s *ArtifactServer) {
+		s.releaseToolsS3Bucket = bucket
+		s.releaseToolsS3PublicEndpoint = publicEndpoint
+	}
 }
 
 // NewArtifactServer constructs an ArtifactServer over repo.
-func NewArtifactServer(repo repository.Registry) *ArtifactServer {
-	return &ArtifactServer{repo: repo}
+func NewArtifactServer(repo repository.Registry, opts ...ArtifactServerOption) *ArtifactServer {
+	s := &ArtifactServer{repo: repo}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *ArtifactServer) RecordBuild(ctx context.Context, req *pb.RecordBuildRequest) (*pb.RecordBuildResponse, error) {
@@ -361,6 +388,35 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 		return nil, mapRepoErr(err)
 	}
 	return &pb.ListArtifactPinsResponse{ChartArtifacts: artifactsToPB(chartArtifacts)}, nil
+}
+
+// binaryOwnerFullName maps a CLI binary name to its App Registry owner full
+// name ("<domain>-<name>"), matching the resolution logic already in
+// release-v2.yml's build-release-tools probe and
+// download-release-tools/action.yml. ResolveBinaryURL rejects any binary not
+// in this map with InvalidArgument.
+var binaryOwnerFullName = map[string]string{
+	"release_helper_go": "tools-release_helper_go",
+	"app-registry":      "tools-app-registry",
+}
+
+// ResolveBinaryURL implements issue #979/#983 (FR12-FR14, FR16): resolves a
+// CLI binary + version + platform to its public S3 download URL. See the
+// issue's "Design" section for the exact S3 key convention this must
+// produce -- it has to match what the sibling FinalizePublish S3-publish
+// task writes.
+//
+// TODO(#983, Implementation phase): validate req.Binary/Os/Arch/Version,
+// resolve req.Binary via binaryOwnerFullName, look up the artifact via
+// s.repo.Artifacts().GetArtifact (propagating NotFound via mapRepoErr on a
+// miss -- this is what enforces FR13's "never a fabricated URL" without any
+// extra check, since only RecordArtifact'd/FinalizePublish-confirmed
+// versions exist in that table), then construct download_url/
+// checksum_manifest_url via an s3.Client built from
+// s.releaseToolsS3Bucket/s.releaseToolsS3PublicEndpoint and its PublicURL
+// method.
+func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ResolveBinaryURL is not yet implemented (issue #983)")
 }
 
 // maxAllocateVersionAttempts bounds the retry loop below. A collision means

@@ -45,7 +45,7 @@ func startTestServer(t *testing.T) *grpc.ClientConn {
 		grpc.ChainUnaryInterceptor(unaryInt),
 		grpc.ChainStreamInterceptor(streamInt),
 	)
-	registerServices(grpcServer, fake.New(), nil)
+	registerServices(grpcServer, fake.New(), nil, "", "")
 
 	go func() {
 		// Serve returns a non-nil error on Stop()/GracefulStop() too; the

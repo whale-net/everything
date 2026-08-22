@@ -420,6 +420,43 @@ message ListArtifactPinsResponse {
 }
 
 // ============================================================================
+// CLI binary URL resolution (issue #979/#983)
+// ============================================================================
+
+// ResolveBinaryURLRequest resolves a CLI binary + version + platform to its
+// public S3 download URL (FR12-FR14, FR16 of issue #979). Unlike
+// GetArtifactRequest, callers name the binary/os/arch directly rather than
+// owner_full_name -- ArtifactServer.ResolveBinaryURL maps binary to its App
+// Registry owner full name internally ("tools-release_helper_go" /
+// "tools-app-registry"), the same mapping release-v2.yml's
+// build-release-tools probe and download-release-tools/action.yml already
+// use.
+message ResolveBinaryURLRequest {
+  // "release_helper_go" or "app-registry".
+  string binary = 1;
+
+  string version = 2;  // semver tag, e.g. "v1.2.3"
+  string os = 3;        // "linux" | "darwin"
+  string arch = 4;       // "amd64" | "arm64"
+}
+
+// ResolveBinaryURLResponse carries unsigned, public-read download URLs (see
+// libs/go/s3's Client.PublicURL) matching the S3 key convention:
+// "<binary>/<version>/<binary>-<os>-<arch>" for download_url and
+// "<binary>/<version>/checksums.txt" for checksum_manifest_url -- the same
+// convention FinalizePublish's S3-publish task writes to.
+//
+// An unknown/unpublished binary+version returns a NotFound gRPC error
+// instead of this response -- never a fabricated URL (FR13).
+message ResolveBinaryURLResponse {
+  string download_url = 1;
+
+  // checksums.txt for this binary+version, covering all its platform
+  // variants (FR16).
+  string checksum_manifest_url = 2;
+}
+
+// ============================================================================
 // Version allocation (phase AR-5)
 // ============================================================================
 
