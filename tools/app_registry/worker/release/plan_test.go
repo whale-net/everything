@@ -134,6 +134,45 @@ func TestActivities_ResolvePlan_UnknownOwner_ReturnsClearError(t *testing.T) {
 	require.ErrorContains(t, err, "no App Registry app named")
 }
 
+// TestActivities_ResolvePlan_ForcesRegistryOptIn is the regression test for
+// the bug where every Temporal-driven release batch silently resolved every
+// target to v0.0.1 regardless of the target domain's adoption stage or its
+// actual App Registry version history: release_helper_go's registryOptedIn()
+// (cmd/plan.go) gates the whole AllocateVersion path on
+// APP_REGISTRY_CICD_OPT_IN=true, which this worker's own process env never
+// carried (it's documented purely as a GitHub Actions repository variable) --
+// so the subprocess always fell through to the git-tag tagFallback, which is
+// always broken in ResolvePlan's git-less scratch dir. ResolvePlan must force
+// this var into the subprocess's env unconditionally.
+func TestActivities_ResolvePlan_ForcesRegistryOptIn(t *testing.T) {
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "fake-release-helper-go")
+	envFile := filepath.Join(dir, "env.txt")
+	script := fmt.Sprintf("#!/bin/sh\nenv > %q\ncat <<'PLANOUT'\n{\"versions\":{\"demo-hello-go\":\"v1.0.0\"}}\nPLANOUT\n", envFile)
+	require.NoError(t, os.WriteFile(binPath, []byte(script), 0o755))
+
+	// A pre-existing false value in the parent env must not survive --
+	// ResolvePlan's forced value must win, not merely default when unset.
+	t.Setenv("APP_REGISTRY_CICD_OPT_IN", "false")
+
+	a := &Activities{Registry: repo, PlanBinaryPath: binPath}
+	plan, err := runResolvePlan(t, a, []ReleaseTarget{
+		{OwnerFullName: "demo-hello-go", Kind: repository.ArtifactKindImage},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "v1.0.0", plan.Versions["image:demo-hello-go"])
+
+	envOut, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	require.Contains(t, string(envOut), "APP_REGISTRY_CICD_OPT_IN=true")
+}
+
 // TestActivities_ResolvePlan_WorkspaceRootSet_UsedAsIs proves an explicit
 // a.WorkspaceRoot (e.g. an operator override) is still honored as cmd.Dir
 // rather than always forcing a scratch dir.
