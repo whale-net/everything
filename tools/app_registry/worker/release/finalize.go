@@ -205,11 +205,17 @@ type FinalizeResult struct {
 // the batch from finalizing. It returns a hard error only for a
 // batch-level setup failure (can't reach GitHub's artifacts API, no
 // workspace configured, malformed plan) -- conditions where no target
-// could possibly have finalized. Per-target failures are aggregated into
-// FinalizeResult.Detail and left for VerifyPublished to surface precisely
-// (a target whose finalize-app/finalize-chart failed never reached
-// RecordArtifact, so VerifyPublished's GetArtifact(LatestPublished) check
-// correctly reports it unpublished).
+// could possibly have finalized. Per-target outcomes are reported
+// precisely via FinalizeResult.Targets (see FinalizeTargetOutcome's doc
+// comment): workflow.go's ReleaseWorkflow routes any target with an entry
+// here whose Failed is true directly to ReleaseRunTargetStateFailed,
+// bypassing VerifyPublished entirely for that target. Everything else --
+// a target that finalized successfully, or an ambiguous case left with no
+// entry at all (e.g. this function's own bookkeeping-write-failure
+// fallback, see the apps loop below) -- flows to VerifyPublished for the
+// real registry-state check. FinalizeResult.Detail/Succeeded are
+// operator-facing aggregates derived from Targets; ReleaseWorkflow itself
+// never acts on them directly.
 func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
 	if a.GitHub == nil {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: GitHub dispatcher not configured")
@@ -316,20 +322,26 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	finalizeResultsDir := filepath.Join(tmpDir, "finalize-results")
 	// finalizeTargets carries FinalizePublish's own precise per-target
 	// outcome back to the caller (workflow.go's ReleaseWorkflow) -- see
-	// FinalizeResult.Targets/FinalizeTargetOutcome's doc comments. This is
-	// the single source of truth: FinalizeResult.Detail/Succeeded are
-	// derived from it once, after both loops finish (see the bottom of
-	// this function), instead of being maintained by hand as a second,
-	// separately-appended failures list that could drift out of sync with
-	// it (this PR's Finding 4).
+	// FinalizeResult.Targets/FinalizeTargetOutcome's doc comments.
+	// failures collects the same Detail strings inline, at each Failed
+	// assignment site below, for FinalizeResult.Detail/Succeeded -- a
+	// single edit point per failure kind, not a second hand-maintained
+	// list: appending here instead of re-deriving via a second traversal
+	// after both loops finish avoids re-iterating apps/charts and
+	// recomputing repository.TargetKey a second time just to reconstruct
+	// what this loop already knows at the point each failure happens
+	// (this PR's Finding 5).
 	finalizeTargets := make(map[string]FinalizeTargetOutcome, len(apps)+len(charts))
+	var failures []string
 
 	for _, fullName := range apps {
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
 		version := plan.Versions[key]
 		m, ok := appManifests[fullName]
 		if !ok {
-			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: fmt.Sprintf("%s: no build-manifest entry in run %s", fullName, ref.RunID)}
+			detail := fmt.Sprintf("%s: no build-manifest entry in run %s", fullName, ref.RunID)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			failures = append(failures, detail)
 			continue
 		}
 		appDigests[fullName] = m.Digest
@@ -348,7 +360,9 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			args = append(args, "--build-id", buildID)
 		}
 		if _, err := runReleaseHelper(ctx, binary, workspaceDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
-			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: fmt.Sprintf("%s: finalize-app: %v", fullName, err)}
+			detail := fmt.Sprintf("%s: finalize-app: %v", fullName, err)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			failures = append(failures, detail)
 			continue
 		}
 
@@ -380,6 +394,35 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			// through to VerifyPublished's real presence/state check
 			// (record.go's defensive fallback) to decide its fate from
 			// actual App Registry state, instead of a guess made here.
+			//
+			// appVersions still needs an entry for this app, though:
+			// unlike finalizeTargets (only consulted by VerifyPublished's
+			// per-target logic), appVersions is marshaled into
+			// --app-versions for every chart in this same batch that
+			// composes this app (see below). A missing key there is not a
+			// "fall through and check later" case -- finalize_chart.go's
+			// hermeticity-pin check only iterates keys present in
+			// AppVersions (so a missing app can't even be flagged as an
+			// unpublished pin) and build_helm.go's packageChartWithVersion
+			// only rewrites values.yaml imageTag entries for keys present
+			// in the map, so an absent key means the composed chart
+			// silently keeps whatever imageTag was baked in at build time.
+			// Fall back to the plan-time requested `version` (already in
+			// scope above, the same value passed as finalize-app's
+			// --version). This is safe, not a guess: ExecuteRelease
+			// (releaser.go) runs its step-2 Build unconditionally, before
+			// any no-op-rebuild collision detection in step 3. For
+			// GHCRRetagReleaser (releaser_ghcr_retag.go), Build performs a
+			// real crane.Tag write of `version` against the already-pushed
+			// digest -- that registry-side tag exists and points at the
+			// right content by the time finalize-app's process exits 0,
+			// regardless of whatever the no-op-rebuild logic in step 3
+			// later decides about App Registry's "official" published-
+			// version bookkeeping (that decision only affects which
+			// version string App Registry considers latest, not which tag
+			// exists in the registry). So a chart pinning to `version`
+			// here resolves to the correct image content either way.
+			appVersions[fullName] = version
 			continue
 		}
 		appVersions[fullName] = res.EffectiveVersion
@@ -411,7 +454,9 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		version := plan.Versions[key]
 		c, ok := chartManifests[fullName]
 		if !ok {
-			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: fmt.Sprintf("%s: no chart-sources manifest entry in run %s", fullName, ref.RunID)}
+			detail := fmt.Sprintf("%s: no chart-sources manifest entry in run %s", fullName, ref.RunID)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			failures = append(failures, detail)
 			continue
 		}
 
@@ -430,7 +475,9 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			args = append(args, "--build-id", buildID)
 		}
 		if _, err := runReleaseHelper(ctx, binary, workspaceDir, chartEnv, args...); err != nil {
-			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: fmt.Sprintf("%s: finalize-chart: %v", fullName, err)}
+			detail := fmt.Sprintf("%s: finalize-chart: %v", fullName, err)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			failures = append(failures, detail)
 			continue
 		}
 
@@ -448,27 +495,6 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			continue
 		}
 		finalizeTargets[key] = FinalizeTargetOutcome{EffectiveVersion: res.EffectiveVersion}
-	}
-
-	// FinalizeResult.Detail/Succeeded are derived from finalizeTargets here,
-	// once, rather than maintained by hand as a second list kept in lockstep
-	// with every finalizeTargets[key] = {Failed: true, ...} assignment above
-	// -- single source of truth (this PR's Finding 4). Iterates apps then
-	// charts (the same order each was processed above) so Detail's ordering
-	// matches this function's pre-refactor behavior of appending at each
-	// failure site as it happened.
-	var failures []string
-	for _, fullName := range apps {
-		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
-		if outcome, ok := finalizeTargets[key]; ok && outcome.Failed {
-			failures = append(failures, outcome.Detail)
-		}
-	}
-	for _, fullName := range charts {
-		key := repository.TargetKey(repository.ArtifactKindChart, fullName)
-		if outcome, ok := finalizeTargets[key]; ok && outcome.Failed {
-			failures = append(failures, outcome.Detail)
-		}
 	}
 
 	if len(failures) > 0 {
@@ -520,6 +546,19 @@ func runReleaseHelper(ctx context.Context, binary, workspaceRoot string, extraEn
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("%s %s: %w: %s", binary, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+	}
+	// The subprocess can exit 0 while still having written operator-facing
+	// diagnostics to stderr -- notably finalize_app.go/finalize_chart.go's
+	// "::warning::...failed to write --output-dir result file..." (added
+	// specifically so an operator has visibility into the Finding-1-style
+	// bookkeeping-write failure, which does NOT fail the CLI process).
+	// Surface it the same way ExecuteRelease's own ::warning::/::notice::
+	// lines reach the workflow/activity log (releaser.go prints those
+	// directly via fmt.Printf) -- otherwise a success-path stderr message
+	// is silently discarded here and never reaches any log an operator
+	// could see.
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		fmt.Println(s)
 	}
 	return stdout.String(), nil
 }

@@ -408,6 +408,109 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *te
 	require.False(t, ok, "FinalizeResult.Targets must have NO entry for demo-widget -- VerifyPublished's real check must decide its fate, not a guess made here")
 }
 
+// TestActivities_FinalizePublish_MissingFinalizeAppResult_ChartStillGetsAppVersionsEntry
+// is this PR's Finding 1 regression test: the same bookkeeping-write-
+// failure scenario as
+// TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry
+// above, but with the affected app composed into a chart in the same
+// batch. Before this fix, `continue` ran before appVersions[fullName] was
+// ever set, so the app was silently missing from the JSON marshaled into
+// finalize-chart's --app-versions -- not merely absent from
+// FinalizeResult.Targets (correct), but also invisible to
+// finalize_chart.go's hermeticity-pin check (which only iterates keys
+// present in AppVersions) and build_helm.go's packageChartWithVersion
+// (which only rewrites values.yaml imageTag entries for keys present in
+// the map). The chart would then ship whatever imageTag was baked in at
+// build time, with the release recorded fully Succeeded and no signal of
+// the stale pin. The fix falls back to the plan-time requested version for
+// appVersions in this case -- safe because ExecuteRelease's Build step
+// (the real crane.Tag registry write) already ran unconditionally before
+// any no-op-rebuild bookkeeping decision, so that version tag already
+// points at the right digest regardless (see finalize.go's apps loop for
+// the full reasoning).
+func TestActivities_FinalizePublish_MissingFinalizeAppResult_ChartStillGetsAppVersionsEntry(t *testing.T) {
+	appManifest := `{"domain":"demo","app":"widget","full_name":"demo-widget","repository":"ghcr.io/whale-net/demo-widget","digest":"sha256:aaa"}`
+	buildManifestZip := zipDir(t, map[string]string{"demo-widget.json": appManifest})
+	chartManifestJSON := `[{"chart_name":"helm-demo","domain":"demo","full_name":"demo-demo","chart_dir":"helm-demo"}]`
+	chartSourcesZip := zipDir(t, map[string]string{"manifest.json": chartManifestJSON})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/runs/42/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"artifacts":[{"id":7,"name":"build-manifest","expired":false},{"id":8,"name":"chart-sources","expired":false}]}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/artifacts/7/zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(buildManifestZip)
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/artifacts/8/zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(chartSourcesZip)
+	})
+
+	binDir := t.TempDir()
+	bin := filepath.Join(binDir, "fake-release-helper-go")
+	chartArgsFile := filepath.Join(binDir, "chart-args.txt")
+	// finalize-app exits 0 (publish succeeded) but never writes an
+	// --output-dir result file -- the same bookkeeping-write failure as
+	// TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry
+	// above. finalize-chart records its full argument list (including
+	// --app-versions) to chartArgsFile so the test can inspect it.
+	script := fmt.Sprintf(`#!/bin/sh
+cmd="$1"; shift
+if [ "$cmd" = "finalize-app" ]; then
+  exit 0
+elif [ "$cmd" = "finalize-chart" ]; then
+  for a in "$@"; do printf '%%s\n' "$a"; done > %q
+  domain=""; chart=""; version=""; outdir=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --domain) domain="$2"; shift 2;;
+      --chart) chart="$2"; shift 2;;
+      --version) version="$2"; shift 2;;
+      --output-dir) outdir="$2"; shift 2;;
+      *) shift;;
+    esac
+  done
+  if [ -n "$outdir" ]; then
+    mkdir -p "$outdir"
+    printf '{"effective_version":"%%s"}' "$version" > "$outdir/$domain-$chart.json"
+  fi
+  exit 0
+fi
+exit 0
+`, chartArgsFile)
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+
+	a := &Activities{
+		GitHub:         newTestDispatcher(t, mux),
+		PlanBinaryPath: bin,
+		WorkspaceRoot:  t.TempDir(),
+	}
+
+	plan := ResolvedPlan{
+		ReleaseRunID: "release-run-1",
+		Versions: map[string]string{
+			"image:demo-widget": "v1.2.3",
+			"chart:demo-demo":   "v2.0.0",
+		},
+	}
+	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
+
+	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	require.NoError(t, err)
+	require.True(t, result.Succeeded, "a missing bookkeeping result file must not be reported as a finalize failure, detail: %s", result.Detail)
+
+	_, ok := result.Targets["image:demo-widget"]
+	require.False(t, ok, "the app must still have NO entry in FinalizeResult.Targets -- VerifyPublished's real check decides its fate, not this function")
+
+	data, err := os.ReadFile(chartArgsFile)
+	require.NoError(t, err)
+	joined := string(data)
+	require.Contains(t, joined, `"demo-widget":"v1.2.3"`, "the composed chart's --app-versions must still pin the app to its plan-time requested version, not silently drop the key (this PR's Finding 1)")
+}
+
 // TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget
 // proves a target whose finalize-app subprocess itself exits non-zero
 // (e.g. GHCR retag DENIED -- issue #973's original report) is reported as

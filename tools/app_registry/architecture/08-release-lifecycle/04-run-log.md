@@ -52,6 +52,46 @@ published` state machine and run-log/resume semantics below are unchanged
 in substance, only in *which process* (`app-registry-worker` instead of a
 GHA runner) makes the calls, for v2 only.
 
+**Updated again by issue #973, for how `VerifyPublished` gets its expected
+versions.** The paragraph above establishes that `FinalizePublish` (not CI)
+now makes the `BeginPublish`/`FailPublish`/`RecordArtifact` calls for v2, and
+that `VerifyPublished` runs after it. What that left unresolved: how does
+`VerifyPublished` know what version each target was *supposed to* end up at,
+so a target `FinalizePublish` silently failed to finalize (e.g. a GHCR retag
+returning `DENIED`) doesn't get masked by an older already-`published`
+artifact still satisfying a presence-only check? A first pass (PR #976) had
+`VerifyPublished` re-derive an "expected version" itself, by re-reading
+`release_run.resolved_plan`'s plan-time JSON. That re-derivation could not
+distinguish a real finalize failure from `ExecuteRelease`'s legitimate
+no-op-rebuild path, where the actually-published version legitimately
+differs from the plan-time requested one (identical digest to an
+already-published version reuses that older version instead) — it
+misreported that case as a version mismatch.
+
+The fix removes the re-derivation entirely: `FinalizePublish` already knows,
+per target, exactly what happened (`worker/release/finalize.go`'s
+`FinalizeResult.Targets`, keyed by `repository.TargetKey`, one
+`FinalizeTargetOutcome{Failed, Detail, EffectiveVersion}` per target) — that
+knowledge is threaded in-process to `ReleaseWorkflow` (`workflow.go`)
+instead of being reconstructed downstream from `resolved_plan` JSON.
+`ReleaseWorkflow` then splits `FinalizeResult.Targets` into two things a
+target can never be in both of: a target with `Failed: true` is routed
+**directly** to `ReleaseRunTargetStateFailed`, bypassing `VerifyPublished`
+entirely for it; every other target — finalized successfully, or left with
+**no entry at all** (a deliberate "ambiguous, don't guess" case: e.g. the
+finalize CLI's subprocess exited 0 but its `--output-dir` bookkeeping-JSON
+write itself failed afterward, so the actual publish is known-good but its
+`EffectiveVersion` is unreadable) — flows to `VerifyPublished`, passed an
+`expectedVersions` map built from the successful entries'
+`EffectiveVersion`. `VerifyPublished` (`record.go`) compares each target's
+current published artifact against `expectedVersions[target]` when present,
+and falls back to the prior presence/state-only check when a target has no
+entry (defense in depth for old/test data or a future caller that omits it,
+not the expected path for anything `FinalizePublish` actually processed).
+The registry-state check `VerifyPublished` performs is unchanged — only
+where its comparison version comes from changed, and it is now the
+authoritative, not the sole, per-target gate.
+
 **This needs no new tables either.** `build` is already the run aggregate
 (`(workflow_run_id, workflow_attempt)` unique); the artifact rows in
 `allocated`/`publishing`/`published`/`failed` are its children. So:
