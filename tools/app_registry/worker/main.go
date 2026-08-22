@@ -153,6 +153,18 @@ func run() error {
 		ChartRepoURL:  getEnv("RELEASE_CHART_REPO_URL", "https://charts.whalenet.dev"),
 		ChartRepoUser: os.Getenv("RELEASE_CHART_REPO_USER"),
 		ChartRepoPass: os.Getenv("RELEASE_CHART_REPO_PASS"),
+		// S3 credentials for FinalizePublish's CLI-binary publish step
+		// (issue #984) -- same credential-locality reasoning as
+		// RELEASE_CHART_REPO_* above: this worker holds write access to the
+		// dedicated RELEASE_TOOLS_S3_BUCKET, no GHA job does. Optional like
+		// the chart vars: a batch with no release_helper_go/app-registry
+		// target never needs them (see Activities.ReleaseToolsS3* doc
+		// comment, activities.go).
+		ReleaseToolsS3Bucket:    os.Getenv("RELEASE_TOOLS_S3_BUCKET"),
+		ReleaseToolsS3Endpoint:  os.Getenv("RELEASE_TOOLS_S3_ENDPOINT"),
+		ReleaseToolsS3Region:    os.Getenv("RELEASE_TOOLS_S3_REGION"),
+		ReleaseToolsS3AccessKey: os.Getenv("RELEASE_TOOLS_S3_ACCESS_KEY"),
+		ReleaseToolsS3SecretKey: os.Getenv("RELEASE_TOOLS_S3_SECRET_KEY"),
 	}
 	if appID := os.Getenv("RELEASE_GITHUB_APP_ID"); appID != "" {
 		dispatcher, derr := release.NewGitHubDispatcher(release.GitHubDispatcherConfig{

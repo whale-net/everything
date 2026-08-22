@@ -60,6 +60,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
@@ -69,7 +70,46 @@ import (
 const (
 	buildManifestArtifactName = "build-manifest"
 	chartSourcesArtifactName  = "chart-sources"
+	// cliBinariesArtifactName is #981's build-cli-binaries job's
+	// actions/upload-artifact name -- see release-v2.yml. Unlike the two
+	// artifacts above, its absence from a run is expected and not an error:
+	// most releases don't include release_helper_go/app-registry (that job
+	// only runs when the release matrix contains one of them).
+	cliBinariesArtifactName = "cli-binaries"
 )
+
+// cliBinaryTargets maps the App Registry full_name (repository.TargetKey's
+// ownerFullName, ArtifactKindImage) of release_helper_go's and
+// app-registry's own app records to the "binary name" segment #981's
+// build-cli-binaries job and #983's S3 key convention both use (the bare
+// app.Name, not the domain-qualified full_name) -- e.g. full_name
+// "tools-release_helper_go" packages files under
+// cli-binaries/release_helper_go/ (see release-v2.yml's "Package CLI
+// binaries" step) and publishes under S3 key prefix
+// "release_helper_go/<version>/" (see tools/app_registry/ENV.md's "CLI
+// binary S3" section). Sourced from tools/release_helper_go/BUILD.bazel
+// (domain "tools", app_name "release_helper_go") and
+// tools/app_registry/cli/BUILD.bazel (domain "tools", app_name
+// "app-registry") -- both domain "tools", matching release-v2.yml's
+// resolve_registry_version "tools-release_helper_go"/"tools-app-registry"
+// calls.
+var cliBinaryTargets = map[string]string{
+	"tools-release_helper_go": "release_helper_go",
+	"tools-app-registry":      "app-registry",
+}
+
+// binaryUploader is the S3 upload seam FinalizePublish's CLI-binary publish
+// step uses -- satisfied by *s3.Client's Upload method (libs/go/s3, no
+// changes needed there per issue #984's Implementation scope) and
+// substituted by a fake in finalize_test.go. Deliberately narrow (just
+// Upload, matching libs/go/s3.Client.Upload's exact signature) since that is
+// the only method this step needs -- see Activities.S3Uploader's doc
+// comment.
+type binaryUploader interface {
+	Upload(ctx context.Context, key string, data []byte, opts *s3.UploadOptions) (string, error)
+}
+
+var _ binaryUploader = (*s3.Client)(nil)
 
 // buildAppManifest mirrors release_helper_go/cmd/build_app.go's
 // BuildAppManifest JSON shape -- decoded from each <full_name>.json file
@@ -236,12 +276,19 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 
 	appsDir := filepath.Join(tmpDir, "apps")
 	chartsDir := filepath.Join(tmpDir, "charts")
+	// cliBinariesDir mirrors build-cli-binaries's own /tmp/cli-binaries/
+	// layout once extracted: cliBinariesDir/<binary-name>/<binary-name>-
+	// <os>-<arch> plus cliBinariesDir/<binary-name>/checksums.txt -- see
+	// cliBinaryTargets' doc comment. Populated below only if this run
+	// actually produced the artifact (haveCLIBinaries); its absence is
+	// expected, not an error, unlike build-manifest/chart-sources.
+	cliBinariesDir := filepath.Join(tmpDir, "cli-binaries")
 
 	artifactList, err := a.GitHub.ListRunArtifacts(ctx, ref)
 	if err != nil {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: %w", err)
 	}
-	var haveManifest, haveCharts bool
+	var haveManifest, haveCharts, haveCLIBinaries bool
 	for _, art := range artifactList {
 		var dest string
 		switch art.Name {
@@ -249,6 +296,8 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			dest = appsDir
 		case chartSourcesArtifactName:
 			dest = chartsDir
+		case cliBinariesArtifactName:
+			dest = cliBinariesDir
 		default:
 			continue
 		}
@@ -259,10 +308,13 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		if uerr := unzipTo(data, dest); uerr != nil {
 			return FinalizeResult{}, fmt.Errorf("finalize publish: extract %s artifact: %w", art.Name, uerr)
 		}
-		if art.Name == buildManifestArtifactName {
+		switch art.Name {
+		case buildManifestArtifactName:
 			haveManifest = true
-		} else {
+		case chartSourcesArtifactName:
 			haveCharts = true
+		case cliBinariesArtifactName:
+			haveCLIBinaries = true
 		}
 	}
 	if len(apps) > 0 && !haveManifest {
@@ -271,6 +323,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	if len(charts) > 0 && !haveCharts {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: run %s produced no %q artifact for %d chart target(s)", ref.RunID, chartSourcesArtifactName, len(charts))
 	}
+	_ = haveCLIBinaries // consumed once publishCLIBinaries is wired in (Implementation phase, issue #984)
 
 	appManifests, err := loadAppManifests(appsDir)
 	if err != nil {
@@ -615,6 +668,51 @@ func loadChartManifest(dir string) (map[string]buildChartManifestEntry, error) {
 		}
 	}
 	return out, nil
+}
+
+// binaryUploaderFor returns the binaryUploader FinalizePublish's CLI-binary
+// publish step should use: a.S3Uploader if the caller (a test, per
+// Activities.S3Uploader's doc comment) already substituted one, otherwise a
+// real libs/go/s3.Client constructed from a.ReleaseToolsS3*. Constructed
+// once per FinalizePublish call, not per file (per issue #984's
+// Implementation scope) -- callers must only invoke this when the batch
+// actually has at least one cliBinaryTargets entry, so a release with no
+// release_helper_go/app-registry target never requires S3 credentials to be
+// configured at all.
+//
+// TODO(#984, Implementation phase): wire this into FinalizePublish's apps
+// loop (construct lazily on the first cliBinaryTargets hit) and implement
+// the per-target upload loop (platform files + checksums.txt, keyed per
+// tools/app_registry/ENV.md's "CLI binary S3" convention, using each
+// target's FinalizeTargetOutcome.EffectiveVersion -- never plan.Versions'
+// plan-time version, see finalizeCLIResult's doc comment for why) plus the
+// per-target failure handling for a missing cli-binaries artifact/binary
+// subdirectory (append to finalizeTargets/failures the same way the apps
+// loop above does for a missing build-manifest entry, per issue #984's FR9
+// guarantee -- do not silently skip a confirmed-version target's publish).
+func (a *Activities) binaryUploaderFor(ctx context.Context) (binaryUploader, error) {
+	if a.S3Uploader != nil {
+		return a.S3Uploader, nil
+	}
+	return s3.NewClient(ctx, s3.Config{
+		Bucket:    a.ReleaseToolsS3Bucket,
+		Endpoint:  a.ReleaseToolsS3Endpoint,
+		Region:    a.ReleaseToolsS3Region,
+		AccessKey: a.ReleaseToolsS3AccessKey,
+		SecretKey: a.ReleaseToolsS3SecretKey,
+	})
+}
+
+// cliBinaryS3Key builds the S3 key for one platform file of a CLI binary,
+// per tools/app_registry/ENV.md's "CLI binary S3" convention --
+// "<binary>/<version>/<binary>-<os>-<arch>", e.g.
+// "release_helper_go/v1.2.3/release_helper_go-linux-amd64". version must be
+// the target's FinalizeTargetOutcome.EffectiveVersion (never the plan-time
+// requested version -- see finalizeCLIResult's doc comment). fileName is the
+// bare file name as #981's package-assets/checksum output produces it
+// (either "<binary>-<os>-<arch>" or "checksums.txt").
+func cliBinaryS3Key(binaryName, version, fileName string) string {
+	return fmt.Sprintf("%s/%s/%s", binaryName, version, fileName)
 }
 
 // planBuildID extracts the App Registry build_id field from
