@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/libs/go/semver"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
@@ -46,6 +48,14 @@ type ArtifactServer struct {
 	// rather than required constructor params.
 	releaseToolsS3Bucket         string
 	releaseToolsS3PublicEndpoint string
+
+	// releaseToolsS3Client/releaseToolsS3ClientErr/releaseToolsS3ClientOnce
+	// lazily build (and cache) the s3.Client ResolveBinaryURL's PublicURL
+	// calls go through, so the AWS SDK's config load only happens once per
+	// process rather than once per request. See releaseToolsS3PublicURLClient.
+	releaseToolsS3Client     *s3.Client
+	releaseToolsS3ClientErr  error
+	releaseToolsS3ClientOnce sync.Once
 }
 
 // ArtifactServerOption configures an optional ArtifactServer dependency --
@@ -406,17 +416,67 @@ var binaryOwnerFullName = map[string]string{
 // produce -- it has to match what the sibling FinalizePublish S3-publish
 // task writes.
 //
-// TODO(#983, Implementation phase): validate req.Binary/Os/Arch/Version,
-// resolve req.Binary via binaryOwnerFullName, look up the artifact via
-// s.repo.Artifacts().GetArtifact (propagating NotFound via mapRepoErr on a
-// miss -- this is what enforces FR13's "never a fabricated URL" without any
-// extra check, since only RecordArtifact'd/FinalizePublish-confirmed
-// versions exist in that table), then construct download_url/
-// checksum_manifest_url via an s3.Client built from
-// s.releaseToolsS3Bucket/s.releaseToolsS3PublicEndpoint and its PublicURL
-// method.
+// The lookup against s.repo.Artifacts().GetArtifact is what enforces FR9/
+// FR13: only RecordArtifact'd (i.e. FinalizePublish-confirmed) versions ever
+// exist in that table, so an unpublished or guessed version simply isn't
+// found -- there is no separate "is this confirmed?" check to get wrong.
 func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ResolveBinaryURL is not yet implemented (issue #983)")
+	ownerFullName, ok := binaryOwnerFullName[req.Binary]
+	if !ok {
+		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: release_helper_go, app-registry)", req.Binary)
+	}
+	if req.Os == "" {
+		return nil, status.Error(codes.InvalidArgument, "os is required")
+	}
+	if req.Arch == "" {
+		return nil, status.Error(codes.InvalidArgument, "arch is required")
+	}
+	if req.Version == "" {
+		return nil, status.Error(codes.InvalidArgument, "version is required")
+	}
+
+	_, err := s.repo.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+		OwnerFullName: ownerFullName,
+		Kind:          repository.ArtifactKindBinary,
+		Version:       req.Version,
+	})
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	client, err := s.releaseToolsS3PublicURLClient()
+	if err != nil {
+		return nil, err
+	}
+
+	binaryKey := fmt.Sprintf("%s/%s/%s-%s-%s", req.Binary, req.Version, req.Binary, req.Os, req.Arch)
+	checksumKey := fmt.Sprintf("%s/%s/checksums.txt", req.Binary, req.Version)
+	return &pb.ResolveBinaryURLResponse{
+		DownloadUrl:         client.PublicURL(binaryKey),
+		ChecksumManifestUrl: client.PublicURL(checksumKey),
+	}, nil
+}
+
+// releaseToolsS3PublicURLClient lazily builds and caches the bucket/
+// endpoint-only s3.Client ResolveBinaryURL's PublicURL calls go through.
+// s3.NewClient is the only constructor libs/go/s3 exports; it issues no
+// network call and needs no credentials (see s3.Client.PublicURL's doc
+// comment) -- it just loads AWS SDK config, so this is safe to build once
+// and reuse for the life of the process rather than on every request.
+func (s *ArtifactServer) releaseToolsS3PublicURLClient() (*s3.Client, error) {
+	if s.releaseToolsS3Bucket == "" || s.releaseToolsS3PublicEndpoint == "" {
+		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_BUCKET and RELEASE_TOOLS_S3_PUBLIC_ENDPOINT must be configured to resolve binary URLs")
+	}
+	s.releaseToolsS3ClientOnce.Do(func() {
+		s.releaseToolsS3Client, s.releaseToolsS3ClientErr = s3.NewClient(context.Background(), s3.Config{
+			Bucket:         s.releaseToolsS3Bucket,
+			PublicEndpoint: s.releaseToolsS3PublicEndpoint,
+		})
+	})
+	if s.releaseToolsS3ClientErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to construct S3 client: %v", s.releaseToolsS3ClientErr)
+	}
+	return s.releaseToolsS3Client, nil
 }
 
 // maxAllocateVersionAttempts bounds the retry loop below. A collision means

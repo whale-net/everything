@@ -18,6 +18,7 @@ go_library(
     deps = [
         "//libs/go/grpcauth",
         "//libs/go/logging",
+        "//libs/go/s3",
         "//libs/go/semver",
         "//tools/app_registry/apierrors",
         "//tools/app_registry/protos:appregistrypb",
