@@ -323,8 +323,6 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	if len(charts) > 0 && !haveCharts {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: run %s produced no %q artifact for %d chart target(s)", ref.RunID, chartSourcesArtifactName, len(charts))
 	}
-	_ = haveCLIBinaries // consumed once publishCLIBinaries is wired in (Implementation phase, issue #984)
-
 	appManifests, err := loadAppManifests(appsDir)
 	if err != nil {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: %w", err)
@@ -459,6 +457,15 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		appVersions[fullName] = res.EffectiveVersion
 		finalizeTargets[key] = FinalizeTargetOutcome{EffectiveVersion: res.EffectiveVersion}
 	}
+
+	// Publish release_helper_go's/app-registry's own CLI binaries now that
+	// the apps loop above has recorded each target's confirmed
+	// EffectiveVersion (FR8-FR9 of #979) -- see publishCLIBinaries' doc
+	// comment. Deliberately runs after the apps loop entirely (not inline
+	// per-target) so it only ever considers finalizeTargets entries that
+	// already reflect a confirmed finalize-app outcome, never a plan-time
+	// guess.
+	failures = append(failures, a.publishCLIBinaries(ctx, apps, finalizeTargets, cliBinariesDir, haveCLIBinaries)...)
 
 	appVersionsJSON, _ := json.Marshal(appVersions) //nolint:errcheck
 	appDigestsJSON, _ := json.Marshal(appDigests)   //nolint:errcheck
@@ -670,6 +677,107 @@ func loadChartManifest(dir string) (map[string]buildChartManifestEntry, error) {
 	return out, nil
 }
 
+// publishCLIBinaries uploads release_helper_go's/app-registry's own
+// multi-platform CLI binaries to S3, once per qualifying target in apps --
+// see cliBinaryTargets' doc comment for the full_name->binary-name mapping.
+// A target only qualifies if finalizeTargets already carries a !Failed
+// entry with a non-empty EffectiveVersion for it: that is FinalizePublish's
+// own confirmation the target's version was actually published (FR8/FR9 of
+// #979), never a plan-time guess -- a target whose finalize-app failed (no
+// entry, or Failed=true) is skipped here too, satisfying FR10 without any
+// extra bookkeeping (the apps loop above already `continue`d past it).
+//
+// The binaryUploader (a real libs/go/s3.Client, or a.S3Uploader's test
+// fake -- see binaryUploaderFor) is constructed lazily, on the first
+// qualifying target, so a release with none never requires S3 credentials
+// configured at all. If construction fails, every remaining qualifying
+// target in this batch is recorded as failed too (each gets its own
+// finalizeTargets/failures entry, matching this file's "a single bad
+// target must not stop others" policy -- see FinalizePublish's doc
+// comment) rather than aborting the loop outright.
+//
+// A qualifying target whose cli-binaries artifact is missing, or whose
+// binary subdirectory (cliBinariesDir/<binaryName>) is missing or empty,
+// is a per-target failure: this OVERWRITES that target's finalizeTargets
+// entry from success to Failed and returns its detail in the returned
+// slice, exactly the same shape every other failure path in this file
+// uses -- FR9's guarantee only holds if a confirmed-version target's
+// publish is never silently skipped.
+func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, finalizeTargets map[string]FinalizeTargetOutcome, cliBinariesDir string, haveCLIBinaries bool) []string {
+	var failures []string
+	var uploader binaryUploader
+
+	for _, fullName := range apps {
+		binaryName, ok := cliBinaryTargets[fullName]
+		if !ok {
+			continue
+		}
+		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
+		outcome, ok := finalizeTargets[key]
+		if !ok || outcome.Failed || outcome.EffectiveVersion == "" {
+			// No confirmed EffectiveVersion for this target (finalize-app
+			// failed, or its result file was unreadable -- see the apps
+			// loop's readFinalizeResult handling above) -- nothing to
+			// publish under, and FR10 says nothing should be.
+			continue
+		}
+
+		if uploader == nil {
+			u, err := a.binaryUploaderFor(ctx)
+			if err != nil {
+				detail := fmt.Sprintf("%s: construct release-tools S3 client: %v", fullName, err)
+				finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+				failures = append(failures, detail)
+				continue
+			}
+			uploader = u
+		}
+
+		binDir := filepath.Join(cliBinariesDir, binaryName)
+		entries, direrr := os.ReadDir(binDir)
+		if !haveCLIBinaries || direrr != nil || len(entries) == 0 {
+			detail := fmt.Sprintf("%s: no cli-binaries artifact entry for %q (expected dir %s)", fullName, binaryName, binDir)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			failures = append(failures, detail)
+			continue
+		}
+
+		var uploadErr error
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			// Only the platform binaries (<binaryName>-<os>-<arch>) and
+			// the checksum manifest (checksums.txt) are part of the S3 key
+			// convention -- package_assets.go's generateChecksumFiles also
+			// writes a SHA256SUMS file into the same directory, which this
+			// task's scope does not publish (FR16 only asks for
+			// checksums.txt parity).
+			fileName := e.Name()
+			if fileName != "checksums.txt" && !strings.HasPrefix(fileName, binaryName+"-") {
+				continue
+			}
+			data, rerr := os.ReadFile(filepath.Join(binDir, fileName))
+			if rerr != nil {
+				uploadErr = fmt.Errorf("read %s: %w", fileName, rerr)
+				break
+			}
+			s3Key := cliBinaryS3Key(binaryName, outcome.EffectiveVersion, fileName)
+			if _, uerr := uploader.Upload(ctx, s3Key, data, nil); uerr != nil {
+				uploadErr = fmt.Errorf("upload %s: %w", s3Key, uerr)
+				break
+			}
+		}
+		if uploadErr != nil {
+			detail := fmt.Sprintf("%s: publish cli binaries: %v", fullName, uploadErr)
+			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+			failures = append(failures, detail)
+		}
+	}
+
+	return failures
+}
+
 // binaryUploaderFor returns the binaryUploader FinalizePublish's CLI-binary
 // publish step should use: a.S3Uploader if the caller (a test, per
 // Activities.S3Uploader's doc comment) already substituted one, otherwise a
@@ -679,17 +787,6 @@ func loadChartManifest(dir string) (map[string]buildChartManifestEntry, error) {
 // actually has at least one cliBinaryTargets entry, so a release with no
 // release_helper_go/app-registry target never requires S3 credentials to be
 // configured at all.
-//
-// TODO(#984, Implementation phase): wire this into FinalizePublish's apps
-// loop (construct lazily on the first cliBinaryTargets hit) and implement
-// the per-target upload loop (platform files + checksums.txt, keyed per
-// tools/app_registry/ENV.md's "CLI binary S3" convention, using each
-// target's FinalizeTargetOutcome.EffectiveVersion -- never plan.Versions'
-// plan-time version, see finalizeCLIResult's doc comment for why) plus the
-// per-target failure handling for a missing cli-binaries artifact/binary
-// subdirectory (append to finalizeTargets/failures the same way the apps
-// loop above does for a missing build-manifest entry, per issue #984's FR9
-// guarantee -- do not silently skip a confirmed-version target's publish).
 func (a *Activities) binaryUploaderFor(ctx context.Context) (binaryUploader, error) {
 	if a.S3Uploader != nil {
 		return a.S3Uploader, nil
