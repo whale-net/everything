@@ -1,0 +1,32 @@
+"""Real upstream Helm CLI binary, packaged for use in a release_app image's
+`additional_tars` -- distinct from //tools/helm, this repo's own Go chart
+composer library.
+
+Usage in your image:
+    release_app(
+        name = "my_app",
+        binary_name = ":my_binary",
+        language = "go",
+        domain = "demo",
+        additional_tars = ["//tools/helm_cli:helm_cli_tar"],
+    )
+
+The `helm` executable will be available at /usr/local/bin/helm in the
+container.
+"""
+
+load("@rules_pkg//:pkg.bzl", "pkg_tar")
+
+# Select the right architecture's fetched binary (MODULE.bazel's
+# helm_cli_linux_amd64/helm_cli_linux_arm64) per target platform -- mirrors
+# tools/bazel/container_image.bzl's python_stripped_x86_64/_arm64 select().
+pkg_tar(
+    name = "helm_cli_tar",
+    srcs = select({
+        "@platforms//cpu:x86_64": ["@helm_cli_linux_amd64//:helm"],
+        "@platforms//cpu:arm64": ["@helm_cli_linux_arm64//:helm"],
+    }),
+    mode = "0755",
+    package_dir = "/usr/local/bin",
+    visibility = ["//visibility:public"],
+)

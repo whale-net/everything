@@ -222,6 +222,34 @@ exports_files(["python"])
     url = "https://github.com/astral-sh/python-build-standalone/releases/download/20251014/cpython-3.13.9%2B20251014-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
 )
 
+# ── Helm CLI (per-arch) ───────────────────────────────────────────────────────
+# Real upstream Helm binary -- distinct from this repo's own //tools/helm Go
+# chart composer library. Bundled into app-registry-worker's image via
+# //tools/helm_cli:helm_cli_tar (additional_tars) so FinalizePublish's
+# finalize-chart shell-out has `helm` on PATH -- see
+# tools/app_registry/worker/release/finalize.go's package doc comment and
+# tools/app_registry/worker/BUILD.bazel. Same per-arch http_archive + cpu
+# select() pattern as python_stripped_x86_64/_arm64 above: helm's release
+# tarballs are architecture-specific native binaries, unlike
+# release_helper_go (a go_binary this repo cross-compiles per target
+# platform via rules_oci's own transition, needing no separate per-arch
+# fetch -- see tools/release_helper_go/BUILD.bazel's release_helper_go_tar).
+http_archive(
+    name = "helm_cli_linux_amd64",
+    build_file_content = """exports_files(["helm"])""",
+    sha256 = "fc307327959aa38ed8f9f7e66d45492bb022a66c3e5da6063958254b9767d179",
+    strip_prefix = "linux-amd64",
+    urls = ["https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz"],
+)
+
+http_archive(
+    name = "helm_cli_linux_arm64",
+    build_file_content = """exports_files(["helm"])""",
+    sha256 = "d3f8f15b3d9ec8c8678fbf3280c3e5902efabe5912e2f9fcf29107efbc8ead69",
+    strip_prefix = "linux-arm64",
+    urls = ["https://get.helm.sh/helm-v3.16.4-linux-arm64.tar.gz"],
+)
+
 # Pycross setup for cross-platform Python dependency management
 # Create environments for different platforms
 environments = use_extension("@rules_pycross//pycross/extensions:environments.bzl", "environments")

@@ -25,6 +25,32 @@ type HelmChartMetadata struct {
 // FullName returns the canonical "domain-name" identifier for the helm chart.
 func (m HelmChartMetadata) FullName() string { return m.Domain + "-" + m.Name }
 
+// HelmChartMetadataInput is one chart's identity as supplied directly by a
+// caller that has already resolved its target list against a source of
+// truth other than `bazel query` -- see HelmChartMetadataFromInputs.
+type HelmChartMetadataInput struct {
+	Domain string `json:"domain"`
+	Name   string `json:"name"`
+}
+
+// HelmChartMetadataFromInputs builds []HelmChartMetadata directly from
+// inputs, with no bazel query/cquery call -- the bazel-free counterpart to
+// ListAllHelmCharts for a caller (tools/app_registry/worker/release/plan.go's
+// ResolvePlan) that already has an explicit, pre-validated chart list and
+// only needs Domain/Name (assignChartVersions' only inputs for an explicit
+// --charts list). BazelTarget is left empty, same rationale as
+// AppMetadataFromInputs (metadata.go).
+func HelmChartMetadataFromInputs(inputs []HelmChartMetadataInput) []HelmChartMetadata {
+	out := make([]HelmChartMetadata, 0, len(inputs))
+	for _, in := range inputs {
+		out = append(out, HelmChartMetadata{ChartManifest: &appmetapb.ChartManifest{
+			Domain: in.Domain,
+			Name:   in.Name,
+		}})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
 
 // helmChartMetadataStarlarkExpr extracts helm chart metadata in one cquery
 // call by reading the HelmChartMetadataInfo provider.

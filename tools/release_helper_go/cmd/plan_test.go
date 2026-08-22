@@ -244,6 +244,117 @@ func TestPlanReleaseWorkflowDispatchInvalidApp(t *testing.T) {
 	}
 }
 
+// TestPlanReleaseWorkflowDispatch_AppsMetadata_NoBazelQuery proves the
+// --apps-metadata path (issue #889 follow-up -- see
+// tools/app_registry/worker/release/plan.go's package doc comment) never
+// calls bazel: newFakeBazel() with zero registered calls errors on any
+// Run() invocation, so a successful plan with zero recorded calls is
+// direct proof ListAllApps' bazel query was never reached.
+func TestPlanReleaseWorkflowDispatch_AppsMetadata_NoBazelQuery(t *testing.T) {
+	bazel := newFakeBazel()
+	git := newFakeGit()
+
+	result, err := planRelease(planParams{
+		eventType: "workflow_dispatch",
+		appsMetadata: []AppMetadataInput{
+			{Domain: "demo", Name: "hello-go", AppType: "external-api"},
+			{Domain: "manmanv2", Name: "control-api", AppType: "internal-api"},
+		},
+		version: "v1.5.0",
+		bazel:   bazel,
+		git:     git,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Apps) != 2 {
+		t.Errorf("expected 2 apps, got %d: %v", len(result.Apps), result.Apps)
+	}
+	if len(bazel.recorded) != 0 {
+		t.Errorf("expected zero bazel calls for the metadata-input path, got %v", bazel.recorded)
+	}
+}
+
+// TestPlanReleaseWorkflowDispatch_ChartsMetadata_NoBazelQuery mirrors
+// TestPlanReleaseWorkflowDispatch_AppsMetadata_NoBazelQuery for
+// --charts-metadata.
+func TestPlanReleaseWorkflowDispatch_ChartsMetadata_NoBazelQuery(t *testing.T) {
+	bazel := newFakeBazel()
+	git := newFakeGit()
+
+	result, err := planRelease(planParams{
+		eventType: "workflow_dispatch",
+		chartsMetadata: []HelmChartMetadataInput{
+			{Domain: "manmanv2", Name: "control-services"},
+		},
+		version: "v1.5.0",
+		bazel:   bazel,
+		git:     git,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Charts) != 1 {
+		t.Errorf("expected 1 chart, got %d: %v", len(result.Charts), result.Charts)
+	}
+	if len(bazel.recorded) != 0 {
+		t.Errorf("expected zero bazel calls for the metadata-input path, got %v", bazel.recorded)
+	}
+}
+
+// TestPlanMutuallyExclusiveAppsAndAppsMetadata exercises the CLI-layer
+// validation (newPlanCmd's RunE) via runTest, since planRelease itself has
+// no --apps vs --apps-metadata guard -- that mutual exclusion is enforced
+// before planRelease is ever called.
+func TestPlanMutuallyExclusiveAppsAndAppsMetadata(t *testing.T) {
+	_, stderr, err := runTest([]string{
+		"plan", "--event-type", "workflow_dispatch",
+		"--apps", "demo-hello-go",
+		"--apps-metadata", `[{"domain":"demo","name":"hello-go","app_type":"external-api"}]`,
+		"--version", "v1.0.0",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(stderr, "mutually exclusive") {
+		t.Errorf("want 'mutually exclusive' in stderr, got: %q", stderr)
+	}
+}
+
+// TestPlanMutuallyExclusiveChartsAndChartsMetadata mirrors
+// TestPlanMutuallyExclusiveAppsAndAppsMetadata for charts.
+func TestPlanMutuallyExclusiveChartsAndChartsMetadata(t *testing.T) {
+	_, stderr, err := runTest([]string{
+		"plan", "--event-type", "workflow_dispatch",
+		"--charts", "manmanv2-control-services",
+		"--charts-metadata", `[{"domain":"manmanv2","name":"control-services"}]`,
+		"--version", "v1.0.0",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(stderr, "mutually exclusive") {
+		t.Errorf("want 'mutually exclusive' in stderr, got: %q", stderr)
+	}
+}
+
+// TestPlanCmd_AppsMetadata_InvalidJSON proves a malformed --apps-metadata
+// value is rejected with a clear error rather than an obscure downstream
+// panic.
+func TestPlanCmd_AppsMetadata_InvalidJSON(t *testing.T) {
+	_, stderr, err := runTest([]string{
+		"plan", "--event-type", "workflow_dispatch",
+		"--apps-metadata", `not-json`,
+		"--version", "v1.0.0",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(stderr, "--apps-metadata is not valid JSON") {
+		t.Errorf("want '--apps-metadata is not valid JSON' in stderr, got: %q", stderr)
+	}
+}
+
 func TestPlanReleaseTagPushNoVersion(t *testing.T) {
 	_, fs, bazel := makeTestApps()
 	git := newFakeGit()

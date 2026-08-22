@@ -49,6 +49,12 @@ type Activities struct {
 	ChartRepoURL  string
 	ChartRepoUser string
 	ChartRepoPass string
+
+	// cloneWorkspaceFn overrides FinalizePublish's real git-clone-over-HTTPS
+	// step (cloneWorkspace in finalize.go) in tests -- unexported, same
+	// package only, mirroring GitHubDispatcher.Now's test-injection pattern.
+	// nil (the production default) means "use the real implementation."
+	cloneWorkspaceFn func(ctx context.Context, dir string) error
 }
 
 var _ ReleaseActivities = (*Activities)(nil)
