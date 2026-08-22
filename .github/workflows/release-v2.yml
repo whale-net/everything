@@ -266,6 +266,51 @@ jobs:
             return 0
           }
 
+          # resolve_binary_url mirrors download-release-tools/action.yml's
+          # function of the same name (#983/#985): calls
+          # ArtifactRegistry/ResolveBinaryURL for tool+ver+os/arch, returning
+          # non-zero (no stdout) if the binary+version isn't a confirmed,
+          # published S3 object -- that failure IS "does not exist" for this
+          # probe's purposes, replacing the old `gh release view` check.
+          # TARGET_OS/TARGET_ARCH are hardcoded to this job's own runner
+          # platform (ubuntu-latest == linux/amd64), matching what
+          # download-release-tools auto-detects when its target_os/
+          # target_arch inputs are left empty (as every caller of this job's
+          # release_helper_version/app_registry_version outputs does).
+          resolve_binary_url() {
+            local tool="$1"
+            local ver="$2"
+            local grpc_target="$APP_REGISTRY_ADDRESS"
+            grpc_target="${grpc_target#https://}"
+            grpc_target="${grpc_target#http://}"
+
+            local use_tls=false
+            if [[ "$APP_REGISTRY_ADDRESS" == https://* || "$APP_REGISTRY_ADDRESS" == *:443* ]]; then
+              use_tls=true
+            fi
+            if [[ -n "${GRPC_USE_TLS:-}" ]]; then
+              [[ "$GRPC_USE_TLS" == "true" ]] && use_tls=true || use_tls=false
+            fi
+            local -a tls_opt=()
+            [[ "$use_tls" == "false" ]] && tls_opt=(-plaintext)
+
+            local -a auth_opt=()
+            if [[ -n "$REGISTRY_TOKEN" ]]; then
+              auth_opt=(-H "authorization: Bearer $REGISTRY_TOKEN")
+            fi
+
+            local resp_json download_url
+            resp_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
+              -d "{\"binary\":\"${tool}\",\"version\":\"${ver}\",\"os\":\"linux\",\"arch\":\"amd64\"}" \
+              "$grpc_target" appregistry.v1.ArtifactRegistry/ResolveBinaryURL 2>/dev/null)" || true
+            if [[ -z "$resp_json" ]]; then
+              return 1
+            fi
+            download_url="$(echo "$resp_json" | jq -r '.downloadUrl // .download_url // empty' 2>/dev/null)" || true
+            [[ -z "$download_url" ]] && return 1
+            return 0
+          }
+
           REGISTRY_TOKEN=""
           if [[ -n "${GRPC_AUTH_TOKEN_URL:-}" && -n "${GRPC_AUTH_CLIENT_ID:-}" && -n "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
             if token_json=$(curl -sS -m 15 -X POST "$GRPC_AUTH_TOKEN_URL" \
@@ -291,25 +336,25 @@ jobs:
 
           RH_EXISTS=false
           AR_EXISTS=false
-          if [[ -n "$RH_VER" ]] && (gh release view "tools-release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "release_helper_go.${RH_VER}" -R "${{ github.repository }}" >/dev/null 2>&1); then
+          if [[ -n "$RH_VER" && -n "${GRPCURL_BIN:-}" ]] && resolve_binary_url "release_helper_go" "$RH_VER"; then
             RH_EXISTS=true
-            echo "✓ Found prebuilt release_helper_go (${RH_VER}) on GitHub Releases"
+            echo "✓ Found prebuilt release_helper_go (${RH_VER}) via the App Registry (S3)"
           else
-            echo "✗ Prebuilt release_helper_go (${RH_VER:-<unset>}) not found on GitHub Releases"
+            echo "✗ Prebuilt release_helper_go (${RH_VER:-<unset>}) not found via the App Registry (S3)"
           fi
-          if [[ -n "$AR_VER" ]] && (gh release view "tools-app-registry.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "tools-app_registry_cli.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release view "app-registry.${AR_VER}" -R "${{ github.repository }}" >/dev/null 2>&1); then
+          if [[ -n "$AR_VER" && -n "${GRPCURL_BIN:-}" ]] && resolve_binary_url "app-registry" "$AR_VER"; then
             AR_EXISTS=true
-            echo "✓ Found prebuilt app_registry_cli (${AR_VER}) on GitHub Releases"
+            echo "✓ Found prebuilt app_registry_cli (${AR_VER}) via the App Registry (S3)"
           else
-            echo "✗ Prebuilt app_registry_cli (${AR_VER:-<unset>}) not found on GitHub Releases"
+            echo "✗ Prebuilt app_registry_cli (${AR_VER:-<unset>}) not found via the App Registry (S3)"
           fi
 
           if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
-            echo "Prebuilt release tools exist on GitHub Releases (release_helper_go: $RH_VER, app_registry_cli: $AR_VER). Downstream jobs will download prebuilt binaries directly."
+            echo "Prebuilt release tools exist in the App Registry (S3) (release_helper_go: $RH_VER, app_registry_cli: $AR_VER). Downstream jobs will download prebuilt binaries directly."
             echo "needs_build=false" >> "$GITHUB_OUTPUT"
             echo "source=published" >> "$GITHUB_OUTPUT"
           else
-            echo "Prebuilt release tools not found on GitHub Releases (release_helper_go: ${RH_VER:-<unset>} [exists=$RH_EXISTS], app_registry_cli: ${AR_VER:-<unset>} [exists=$AR_EXISTS]). Building once as workflow artifact for this run."
+            echo "Prebuilt release tools not found in the App Registry (S3) (release_helper_go: ${RH_VER:-<unset>} [exists=$RH_EXISTS], app_registry_cli: ${AR_VER:-<unset>} [exists=$AR_EXISTS]). Building once as workflow artifact for this run."
             echo "needs_build=true" >> "$GITHUB_OUTPUT"
             echo "source=artifact" >> "$GITHUB_OUTPUT"
           fi
@@ -318,11 +363,11 @@ jobs:
             echo "### Release Tools Acquisition"
             echo "| Tool | Version | Status |"
             echo "| --- | --- | --- |"
-            echo "| \`release_helper_go\` | \`${RH_VER:-<not set>}\` | $([[ "$RH_EXISTS" == "true" ]] && echo "✅ Found on GitHub Releases" || echo "⚠️ Not found (will build)") |"
-            echo "| \`app_registry_cli\` | \`${AR_VER:-<not set>}\` | $([[ "$AR_EXISTS" == "true" ]] && echo "✅ Found on GitHub Releases" || echo "⚠️ Not found (will build)") |"
+            echo "| \`release_helper_go\` | \`${RH_VER:-<not set>}\` | $([[ "$RH_EXISTS" == "true" ]] && echo "✅ Found in App Registry (S3)" || echo "⚠️ Not found (will build)") |"
+            echo "| \`app_registry_cli\` | \`${AR_VER:-<not set>}\` | $([[ "$AR_EXISTS" == "true" ]] && echo "✅ Found in App Registry (S3)" || echo "⚠️ Not found (will build)") |"
             echo ""
             if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
-              echo "**Acquisition Mode:** ⚡ Prebuilt Binaries (Downloaded from GitHub Releases)"
+              echo "**Acquisition Mode:** ⚡ Prebuilt Binaries (Downloaded from App Registry S3)"
             else
               echo "**Acquisition Mode:** 🛠️ Source Build (Artifact uploaded for downstream jobs)"
             fi
