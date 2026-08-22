@@ -652,6 +652,77 @@ jobs:
           path: /tmp/build-manifest/charts/
           if-no-files-found: ignore
 
+  # FR7 of #979: cross-compiles release_helper_go/app-registry (only, not
+  # every cli app) for all four supported CLI platforms and stages them as
+  # a build-scoped `cli-binaries` workflow artifact, distinct from the
+  # `release-tools` artifact build-release-tools produces above (that one
+  # is this-run's-host-platform only, meant for downstream jobs in *this*
+  # run to exec; this one is multi-platform and meant for Temporal's
+  # FinalizePublish to later download and publish to S3 once a version is
+  # confirmed -- see issue #981). This job assigns no final version and
+  # performs no S3 upload itself (FR9/FR10's job, done later once
+  # FinalizePublish knows the confirmed EffectiveVersion).
+  build-cli-binaries:
+    name: Build CLI Binaries
+    runs-on: ubuntu-latest
+    needs: [authorize-trigger, plan-release, build-release-tools]
+    if: |
+      needs.authorize-trigger.result == 'success' &&
+      github.event.inputs.dry_run == 'false' &&
+      needs.plan-release.outputs.release-matrix != '' &&
+      (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
+       contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"'))
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
+
+      - name: Setup Build Environment
+        uses: ./.github/actions/setup-build-env
+        with:
+          cache-suffix: 'docker'
+          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+
+      - name: Download release tools
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
+          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+
+      # Only package whichever of the two apps is actually present in this
+      # run's release matrix -- the job-level `if:` above only guarantees
+      # at least one of them is; a run releasing just one must not fail
+      # trying to package-assets the other (resolveApps would error on an
+      # app name absent from this run's plan).
+      - name: Package CLI binaries (multi-platform)
+        env:
+          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+        run: |
+          mkdir -p /tmp/cli-binaries
+          for APP_NAME in release_helper_go app-registry; do
+            if echo "$RELEASE_MATRIX" | jq -e --arg app "$APP_NAME" '.include[] | select(.app == $app)' >/dev/null; then
+              echo "Packaging CLI binaries for ${APP_NAME} (linux_amd64, linux_arm64, darwin_arm64, darwin_amd64)..."
+              "$RELEASE_HELPER" package-assets "$APP_NAME" \
+                --platforms linux_amd64,linux_arm64,darwin_arm64,darwin_amd64 \
+                --output-dir "/tmp/cli-binaries/${APP_NAME}"
+            else
+              echo "${APP_NAME} not in this run's release matrix, skipping."
+            fi
+          done
+
+      - name: Upload CLI binaries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-binaries
+          path: /tmp/cli-binaries/
+          if-no-files-found: ignore
+
   release-summary:
     name: Release Summary
     runs-on: ubuntu-latest
