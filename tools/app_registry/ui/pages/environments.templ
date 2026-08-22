@@ -22,8 +22,8 @@ templ Environments(user *htmxauth.UserInfo, envs []*pb.Environment, includeArchi
 			<div>
 				<h1 class="text-2xl md:text-3xl font-bold mb-2">Environments</h1>
 				<p class="text-sm opacity-80">
-					A row, not an enum — an environment is an insert, not a release.
-					Rare to add or archive; admin-only.
+					The environments apps can be deployed to, such as staging and
+					production. Adding or archiving one is rare and restricted to admins.
 				</p>
 			</div>
 			@components.GatedLinkAction(components.Gate(user, components.RoleAdmin), "+ Add environment", "btn-primary", "/environments/new", "Add environment")
