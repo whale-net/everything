@@ -42,6 +42,12 @@ type Config struct {
 	OIDCClientID     string
 	OIDCClientSecret string
 	OIDCRedirectURL  string
+	// OIDCPostLogoutRedirectURL overrides where RP-initiated logout (issue
+	// #763) sends the browser back to. Optional — htmxauth derives a
+	// default from OIDCRedirectURL's origin when this is empty; set it only
+	// if the derived value isn't a registered post-logout redirect URI with
+	// the OIDC provider.
+	OIDCPostLogoutRedirectURL string
 
 	// Session
 	SessionSecret string
@@ -60,16 +66,17 @@ type Config struct {
 // LoadConfig loads configuration from environment variables.
 func LoadConfig() *Config {
 	return &Config{
-		Host:             getEnv("HOST", "0.0.0.0"),
-		Port:             getEnv("PORT", "8000"),
-		AuthMode:         strings.ToLower(getEnv("AUTH_MODE", "none")),
-		OIDCIssuer:       getEnv("OIDC_ISSUER", ""),
-		OIDCClientID:     getEnv("OIDC_CLIENT_ID", ""),
-		OIDCClientSecret: getEnv("OIDC_CLIENT_SECRET", ""),
-		OIDCRedirectURL:  getEnv("OIDC_REDIRECT_URI", "http://localhost:8000/auth/callback"),
-		SessionSecret:    getEnv("SECRET_KEY", "dev-secret-key-change-in-production"),
-		RegistryAPIURL:   getEnv("REGISTRY_API_URL", "app-registry-api:50051"),
-		GRPCAuthMode:     strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
+		Host:                      getEnv("HOST", "0.0.0.0"),
+		Port:                      getEnv("PORT", "8000"),
+		AuthMode:                  strings.ToLower(getEnv("AUTH_MODE", "none")),
+		OIDCIssuer:                getEnv("OIDC_ISSUER", ""),
+		OIDCClientID:              getEnv("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:          getEnv("OIDC_CLIENT_SECRET", ""),
+		OIDCRedirectURL:           getEnv("OIDC_REDIRECT_URI", "http://localhost:8000/auth/callback"),
+		OIDCPostLogoutRedirectURL: getEnv("OIDC_POST_LOGOUT_REDIRECT_URI", ""),
+		SessionSecret:             getEnv("SECRET_KEY", "dev-secret-key-change-in-production"),
+		RegistryAPIURL:            getEnv("REGISTRY_API_URL", "app-registry-api:50051"),
+		GRPCAuthMode:              strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
 		// PG_DATABASE_URL matches the variable every other App Registry
 		// component reads (see ../ENV.md) — deliberately not "DATABASE_URL".
 		DatabaseURL: getEnv("PG_DATABASE_URL", ""),
@@ -114,13 +121,14 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	}
 
 	authConfig := htmxauth.Config{
-		Mode:             authMode,
-		SessionSecret:    config.SessionSecret,
-		SessionName:      "app_registry_ui_session",
-		OIDCIssuer:       config.OIDCIssuer,
-		OIDCClientID:     config.OIDCClientID,
-		OIDCClientSecret: config.OIDCClientSecret,
-		OIDCRedirectURL:  config.OIDCRedirectURL,
+		Mode:                      authMode,
+		SessionSecret:             config.SessionSecret,
+		SessionName:               "app_registry_ui_session",
+		OIDCIssuer:                config.OIDCIssuer,
+		OIDCClientID:              config.OIDCClientID,
+		OIDCClientSecret:          config.OIDCClientSecret,
+		OIDCRedirectURL:           config.OIDCRedirectURL,
+		OIDCPostLogoutRedirectURL: config.OIDCPostLogoutRedirectURL,
 	}
 
 	pool, err := db.NewPool(ctx, config.DatabaseURL)

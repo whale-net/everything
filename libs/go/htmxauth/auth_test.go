@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,6 +99,89 @@ func TestHandleLogoutNoAuth(t *testing.T) {
 	// Should redirect to home
 	assert.Equal(t, http.StatusSeeOther, w.Code)
 	assert.Equal(t, "/", w.Header().Get("Location"))
+}
+
+// ── HandleLogout: RP-initiated logout (issue #763) ─────────────────────────────
+
+// When the OIDC provider advertises an end_session_endpoint, HandleLogout
+// must clear the local session AND redirect to the provider's RP-initiated
+// logout endpoint (client_id + post_logout_redirect_uri) — not just redirect
+// home — so the upstream SSO session ends too.
+func TestHandleLogout_OIDC_RPInitiatedLogout_RedirectsToEndSessionEndpoint(t *testing.T) {
+	config := Config{
+		Mode:            AuthModeOIDC,
+		SessionSecret:   "test-secret-that-is-at-least-32-bytes-long",
+		OIDCClientID:    "app-registry-ui",
+		OIDCRedirectURL: "https://app-registry.example.com/auth/callback",
+	}
+	auth := &Authenticator{
+		config:             config,
+		sessions:           NewSessionManager(config.SessionSecret, "test_session"),
+		endSessionEndpoint: "https://keycloak.example.com/realms/r/protocol/openid-connect/logout",
+	}
+
+	req := httptest.NewRequest("GET", "/auth/logout", nil)
+	w := httptest.NewRecorder()
+
+	auth.HandleLogout(w, req)
+
+	require.Equal(t, http.StatusSeeOther, w.Code)
+	loc, err := url.Parse(w.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "keycloak.example.com", loc.Host)
+	assert.Equal(t, "/realms/r/protocol/openid-connect/logout", loc.Path)
+	assert.Equal(t, "app-registry-ui", loc.Query().Get("client_id"))
+	assert.Equal(t, "https://app-registry.example.com/", loc.Query().Get("post_logout_redirect_uri"))
+}
+
+// A provider that does not advertise end_session_endpoint (empty string,
+// the zero value before/without discovery) must degrade to the old
+// local-only redirect — never send the browser to an empty URL.
+func TestHandleLogout_OIDC_NoEndSessionEndpoint_FallsBackLocalOnly(t *testing.T) {
+	config := Config{
+		Mode:          AuthModeOIDC,
+		SessionSecret: "test-secret-that-is-at-least-32-bytes-long",
+	}
+	auth := &Authenticator{
+		config:   config,
+		sessions: NewSessionManager(config.SessionSecret, "test_session"),
+		// endSessionEndpoint intentionally left unset.
+	}
+
+	req := httptest.NewRequest("GET", "/auth/logout", nil)
+	w := httptest.NewRecorder()
+
+	auth.HandleLogout(w, req)
+
+	assert.Equal(t, http.StatusSeeOther, w.Code)
+	assert.Equal(t, "/", w.Header().Get("Location"))
+}
+
+// An explicit OIDCPostLogoutRedirectURL must win over the derived
+// OIDCRedirectURL origin — the escape hatch for when the derived value
+// isn't a registered post-logout redirect URI with the provider.
+func TestHandleLogout_OIDC_ExplicitPostLogoutRedirectURL_Wins(t *testing.T) {
+	config := Config{
+		Mode:                      AuthModeOIDC,
+		SessionSecret:             "test-secret-that-is-at-least-32-bytes-long",
+		OIDCClientID:              "app-registry-ui",
+		OIDCRedirectURL:           "https://app-registry.example.com/auth/callback",
+		OIDCPostLogoutRedirectURL: "https://app-registry.example.com/logged-out",
+	}
+	auth := &Authenticator{
+		config:             config,
+		sessions:           NewSessionManager(config.SessionSecret, "test_session"),
+		endSessionEndpoint: "https://keycloak.example.com/realms/r/protocol/openid-connect/logout",
+	}
+
+	req := httptest.NewRequest("GET", "/auth/logout", nil)
+	w := httptest.NewRecorder()
+
+	auth.HandleLogout(w, req)
+
+	loc, err := url.Parse(w.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "https://app-registry.example.com/logged-out", loc.Query().Get("post_logout_redirect_uri"))
 }
 
 // ── parseRealmRoles tests ─────────────────────────────────────────────────────

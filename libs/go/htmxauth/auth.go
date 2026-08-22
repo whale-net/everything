@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +39,15 @@ type Config struct {
 	OIDCClientSecret string
 	OIDCRedirectURL  string
 	OIDCScopes       []string // Defaults to ["openid", "profile", "email"]
+
+	// OIDCPostLogoutRedirectURL is where the OIDC provider sends the browser
+	// back to after RP-initiated logout (issue #763). Optional: if empty, it
+	// is derived from OIDCRedirectURL's origin ("scheme://host" + "/").
+	// Keycloak validates this param against the client's
+	// post.logout.redirect.uris, which defaults to the client's Valid
+	// Redirect URIs list — if that list doesn't already cover the derived
+	// origin, set this explicitly to a registered value.
+	OIDCPostLogoutRedirectURL string
 }
 
 // UserInfo holds authenticated user information.
@@ -126,6 +136,14 @@ type Authenticator struct {
 	provider     *oidc.Provider
 	oauth2Config *oauth2.Config
 	verifier     *oidc.IDTokenVerifier
+
+	// endSessionEndpoint is the OIDC provider's RP-initiated logout endpoint
+	// (issue #763), discovered from the provider's own discovery document
+	// (the "end_session_endpoint" claim — not part of go-oidc's Provider API,
+	// so pulled out via Provider.Claims). Empty when the provider doesn't
+	// advertise one; HandleLogout falls back to local-only logout in that
+	// case, exactly like it did before this field existed.
+	endSessionEndpoint string
 }
 
 // NewAuthenticator creates a new authenticator using a cookie-backed session store.
@@ -206,6 +224,18 @@ func (a *Authenticator) initOIDC(ctx context.Context) error {
 
 	// Create ID token verifier
 	a.verifier = provider.Verifier(&oidc.Config{ClientID: a.config.OIDCClientID})
+
+	// Discover the RP-initiated logout endpoint (issue #763). Not every
+	// provider advertises one (it's an OpenID Connect RP-Initiated Logout
+	// extension, not core discovery) — a missing/malformed claim just leaves
+	// endSessionEndpoint empty and HandleLogout degrades to local-only
+	// logout, so this is deliberately best-effort and never fails init.
+	var discoveryClaims struct {
+		EndSessionEndpoint string `json:"end_session_endpoint"`
+	}
+	if err := provider.Claims(&discoveryClaims); err == nil {
+		a.endSessionEndpoint = discoveryClaims.EndSessionEndpoint
+	}
 
 	return nil
 }
@@ -351,7 +381,10 @@ func (a *Authenticator) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, nextURL, http.StatusSeeOther)
 }
 
-// HandleLogout logs out the user
+// HandleLogout logs out the user. It always clears the local session first;
+// when the OIDC provider advertises RP-initiated logout (issue #763), it
+// then redirects to the provider's end_session_endpoint so the upstream SSO
+// session ends too, instead of leaving it alive for a silent re-login.
 func (a *Authenticator) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if a.config.Mode == AuthModeNone {
 		// No-auth mode - just redirect to home
@@ -362,7 +395,56 @@ func (a *Authenticator) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if err := a.sessions.ClearSession(w, r); err != nil {
 		// Log error but continue
 	}
+
+	if a.endSessionEndpoint != "" {
+		http.Redirect(w, r, a.endSessionURL(), http.StatusSeeOther)
+		return
+	}
+
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// endSessionURL builds the RP-initiated logout redirect (OpenID Connect
+// RP-Initiated Logout 1.0). It identifies the client with client_id rather
+// than id_token_hint: neither SessionManager (cookie) nor DBSessionManager
+// persists the raw ID token today (only the access/refresh tokens), and
+// client_id is an accepted alternative per spec — the only cost is that
+// Keycloak shows a "do you want to log out?" confirmation instead of
+// logging out silently, which is an acceptable tradeoff against adding a new
+// persisted secret across every adopting domain's session store.
+func (a *Authenticator) endSessionURL() string {
+	u, err := url.Parse(a.endSessionEndpoint)
+	if err != nil {
+		return "/"
+	}
+	q := u.Query()
+	if a.config.OIDCClientID != "" {
+		q.Set("client_id", a.config.OIDCClientID)
+	}
+	if redirect := a.postLogoutRedirectURL(); redirect != "" {
+		q.Set("post_logout_redirect_uri", redirect)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// postLogoutRedirectURL returns where the provider should send the browser
+// back to after RP-initiated logout: the configured
+// OIDCPostLogoutRedirectURL if set, otherwise OIDCRedirectURL's origin
+// ("scheme://host/"). See Config.OIDCPostLogoutRedirectURL's doc comment for
+// why an operator may need to override the derived value.
+func (a *Authenticator) postLogoutRedirectURL() string {
+	if a.config.OIDCPostLogoutRedirectURL != "" {
+		return a.config.OIDCPostLogoutRedirectURL
+	}
+	redirectURL, err := url.Parse(a.config.OIDCRedirectURL)
+	if err != nil || redirectURL.Host == "" {
+		return ""
+	}
+	redirectURL.Path = "/"
+	redirectURL.RawQuery = ""
+	redirectURL.Fragment = ""
+	return redirectURL.String()
 }
 
 // SessionManager handles user sessions
