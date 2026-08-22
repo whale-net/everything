@@ -140,6 +140,34 @@ func CellsForKey(environments []*pb.Environment, columns map[string]ColumnResult
 	return cells
 }
 
+// isBinaryTool reports whether app is a CLI/binary tool -- packaged with
+// DEPLOY_UNIT_NONE (#534/NFR-4, see architecture/09-promotability.md) but
+// still PROMOTABLE regardless of deploy_unit, so it still earns a
+// standalone row here. release_scope.go's releaseTargetKindFromApp
+// duplicates this exact cli/binary distinction for a different purpose
+// (release-target kind) -- keep both in sync if AppType grows a new value.
+func isBinaryTool(app *pb.App) bool {
+	return app.GetAppType() == "cli" || app.GetAppType() == "binary"
+}
+
+// IsDeployable reports whether app has any environment/chart pairing at
+// all: DEPLOY_UNIT_CHART (a VIA_CHART app, reached only through its owning
+// chart's row/pin) or DEPLOY_UNIT_IMAGE (a standalone-promotable row),
+// mirroring Build's own per-app row-inclusion rule below, plus a cli/binary
+// tool (isBinaryTool) which is PROMOTABLE regardless of deploy_unit. A
+// DEPLOY_UNIT_NONE non-binary app has no environment to ever have a version
+// in -- Build already skips it entirely rather than emitting an all-blank
+// row (see the "for _, app := range apps" loop below); app detail (screen
+// 11) uses this same predicate to skip its own version-by-environment
+// section instead of rendering one that can only ever read empty (#773).
+func IsDeployable(app *pb.App) bool {
+	switch app.GetDeployUnit() {
+	case appmetapb.DeployUnit_DEPLOY_UNIT_CHART, appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE:
+		return true
+	}
+	return isBinaryTool(app)
+}
+
 func anyDrift(cells []*Cell) bool {
 	for _, c := range cells {
 		if c.Drifted {
@@ -202,8 +230,8 @@ func Build(charts []*pb.Chart, apps []*pb.App, environments []*pb.Environment, c
 	}
 
 	for _, app := range apps {
-		isBinaryTool := app.GetAppType() == "cli" || app.GetAppType() == "binary"
-		if app.GetDeployUnit() != appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE && !isBinaryTool {
+		isBinary := isBinaryTool(app)
+		if app.GetDeployUnit() != appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE && !isBinary {
 			continue
 		}
 		// Guard against inconsistent data: a standalone app should
@@ -213,7 +241,7 @@ func Build(charts []*pb.Chart, apps []*pb.App, environments []*pb.Environment, c
 			continue
 		}
 		rowKind := RowKindStandaloneImage
-		if isBinaryTool {
+		if isBinary {
 			rowKind = RowKindStandaloneBinary
 		}
 		key := "app:" + app.GetAppId()

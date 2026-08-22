@@ -69,13 +69,22 @@ templ AppDetail(user *htmxauth.UserInfo, data *matrix.AppDetailData) {
 				<a href={ templ.URL("/apps/" + data.App.GetFullName() + "/history") } class="btn btn-secondary">Version history</a>
 			</div>
 		</div>
-		<div class="grid md:grid-cols-3 gap-4 mb-6">
-			for _, s := range data.States {
-				@appEnvStatCard(s)
+		{{ deployable := matrix.IsDeployable(data.App) }}
+		if deployable {
+			<div class="grid md:grid-cols-3 gap-4 mb-6">
+				for _, s := range data.States {
+					@appEnvStatCard(s)
+				}
+			</div>
+		} else {
+			<div role="alert" class="alert alert-info mb-6">
+				<span>Build-only app — not deployed to any environment, so there is no version-by-environment state to show.</span>
+			</div>
+		}
+		<div class={ "grid gap-6 mb-6", templ.KV("md:grid-cols-2", deployable) }>
+			if deployable {
+				@appDriftCard(data.App.GetFullName(), data.States)
 			}
-		</div>
-		<div class="grid md:grid-cols-2 gap-6 mb-6">
-			@appDriftCard(data.App.GetFullName(), data.States)
 			@promotionTimelineCard(user, data)
 		</div>
 	}
