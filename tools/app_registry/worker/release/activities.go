@@ -31,8 +31,12 @@ type Activities struct {
 
 	// PlanBinaryPath/WorkspaceRoot configure ResolvePlan's interim
 	// release_helper_go shell-out -- see plan.go's package doc comment.
-	// FinalizePublish (issue #928, finalize.go) reuses both for its own
-	// release_helper_go finalize-app/finalize-chart shell-outs.
+	// FinalizePublish (issue #928, finalize.go) reuses PlanBinaryPath for
+	// its own release_helper_go finalize-app/finalize-chart shell-outs, but
+	// not WorkspaceRoot: neither shell-out needs a real git checkout (a
+	// scratch temp dir is sufficient -- see finalize.go's package doc
+	// comment), unlike ResolvePlan's `release_helper_go plan`, which needs
+	// a real bazel workspace.
 	PlanBinaryPath string
 	WorkspaceRoot  string
 
@@ -49,12 +53,6 @@ type Activities struct {
 	ChartRepoURL  string
 	ChartRepoUser string
 	ChartRepoPass string
-
-	// cloneWorkspaceFn overrides FinalizePublish's real git-clone-over-HTTPS
-	// step (cloneWorkspace in finalize.go) in tests -- unexported, same
-	// package only, mirroring GitHubDispatcher.Now's test-injection pattern.
-	// nil (the production default) means "use the real implementation."
-	cloneWorkspaceFn func(ctx context.Context, dir string) error
 }
 
 var _ ReleaseActivities = (*Activities)(nil)

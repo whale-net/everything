@@ -27,9 +27,7 @@ type FinalizeChartParams struct {
 	ChartRepoPass        string
 	IdempotencyKeyPrefix string
 	SkipRegistry         bool
-	CreateGitTag         bool
 
-	Git            GitRunner
 	Uploader       ChartUploader
 	Packager       HelmPackager
 	Hermeticity    ChartHermeticityChecker
@@ -50,7 +48,6 @@ func newFinalizeChartCmd() *cobra.Command {
 		chartRepoPass        string
 		idempotencyKeyPrefix string
 		skipRegistry         bool
-		createGitTag         bool
 		outputDir            string
 	)
 
@@ -120,8 +117,6 @@ func newFinalizeChartCmd() *cobra.Command {
 				ChartRepoPass:        pass,
 				IdempotencyKeyPrefix: idempotencyKeyPrefix,
 				SkipRegistry:         skipRegistry,
-				CreateGitTag:         createGitTag,
-				Git:                  defaultGit,
 				Uploader:             defaultUploader,
 				Packager:             defaultPackager,
 				Hermeticity:          defaultHermeticityChecker,
@@ -171,7 +166,6 @@ func newFinalizeChartCmd() *cobra.Command {
 	cmd.Flags().StringVar(&chartRepoPass, "chart-repo-pass", "", "ChartMuseum password (default: $CHART_REPO_PASS)")
 	cmd.Flags().StringVar(&idempotencyKeyPrefix, "idempotency-key-prefix", "", "Prefix for idempotency keys")
 	cmd.Flags().BoolVar(&skipRegistry, "skip-registry", false, "Skip App Registry API interactions")
-	cmd.Flags().BoolVar(&createGitTag, "create-git-tag", false, "Create git tag upon successful publication")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "", "Write the finalize result (including effective_version) as <domain>-<chart>.json here; skipped if unset")
 
 	_ = cmd.MarkFlagRequired("chart")
@@ -193,10 +187,6 @@ func ExecuteFinalizeChart(p FinalizeChartParams) (*ReleaseResult, error) {
 	ctx := p.Ctx
 	if ctx == nil {
 		ctx = context.Background()
-	}
-	git := p.Git
-	if git == nil {
-		git = defaultGit
 	}
 	uploader := p.Uploader
 	if uploader == nil {
@@ -283,13 +273,11 @@ func ExecuteFinalizeChart(p FinalizeChartParams) (*ReleaseResult, error) {
 		IdempotencyKeyPrefix: p.IdempotencyKeyPrefix,
 		Repository:           fmt.Sprintf("%s/%s", strings.TrimRight(p.ChartRepoURL, "/"), publishedName),
 		SkipRegistry:         p.SkipRegistry,
-		CreateGitTag:         p.CreateGitTag,
 		TagName:              fmt.Sprintf("%s.%s", p.ChartName, p.Version),
 		TagPrefix:            p.ChartName + ".",
 		PreviousTagPatterns:  []string{p.ChartName + ".*"},
 		PreviousTagPrefixes:  []string{p.ChartName + ".", publishedName + "."},
 		Releaser:             releaser,
-		Git:                  git,
 		ArtifactClient:       artifactClient,
 	})
 }
