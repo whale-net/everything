@@ -61,11 +61,11 @@ func TestGitHubDispatcher_Dispatch_FindsCreatedRun(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&sawDispatchBody))
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/runs", func(w http.ResponseWriter, r *http.Request) {
 		pollCount++
 		if pollCount < 2 {
 			_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
@@ -92,10 +92,10 @@ func TestGitHubDispatcher_Dispatch_NoRunFound_Errors(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/runs", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
 	})
 

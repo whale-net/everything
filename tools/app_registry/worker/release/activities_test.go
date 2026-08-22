@@ -55,13 +55,13 @@ func TestActivities_DispatchBuild_HeterogeneousVersionsWithRawJSON_DispatchesSuc
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		sawInputs, _ = body["inputs"].(map[string]any)
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/runs", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":202,"html_url":"https://example/202","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
 	})
 
@@ -137,14 +137,14 @@ func TestActivities_DispatchBuild_HappyPath_DispatchesUniformVersionWithSplitTar
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		sawInputs, _ = body["inputs"].(map[string]any)
 		sawRef, _ = body["ref"].(string)
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/runs", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":99,"html_url":"https://example/99","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
 	})
 
@@ -201,13 +201,13 @@ func TestActivities_DispatchBuild_ResolvedPlan_ForwardsRawJSONVerbatim(t *testin
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		sawInputs, _ = body["inputs"].(map[string]any)
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/runs", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":101,"html_url":"https://example/101","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
 	})
 
@@ -255,13 +255,13 @@ func TestActivities_DispatchBuild_AppVersions_OmittedWhenNoImageTargets(t *testi
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 		sawInputs, _ = body["inputs"].(map[string]any)
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/runs", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":100,"html_url":"https://example/100","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
 	})
 

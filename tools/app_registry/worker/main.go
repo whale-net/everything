@@ -163,7 +163,7 @@ func run() error {
 			},
 			Owner:        getEnv("RELEASE_GITHUB_REPO_OWNER", "whale-net"),
 			Repo:         getEnv("RELEASE_GITHUB_REPO_NAME", "everything"),
-			WorkflowFile: getEnv("RELEASE_GITHUB_WORKFLOW_FILE", "release.yml"),
+			WorkflowFile: getEnv("RELEASE_GITHUB_WORKFLOW_FILE", "release-v2.yml"),
 			Ref:          getEnv("RELEASE_GITHUB_REF", "main"),
 		})
 		if derr != nil {
