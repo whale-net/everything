@@ -45,6 +45,31 @@ below describes. See `architecture/08-release-lifecycle/04-run-log.md`'s
 updated framing and `ARCHITECTURE.md` design principle 5's clarifying note
 for the full account.
 
+**Updated by #979 (GitHub Release/notes/git-tag removal from v2).**
+`release-v2.yml`'s `create-github-releases` job — which used to run
+`create-combined-github-release-with-notes` at the end of every v2 release
+run — is removed entirely (#980). No component of the v2/Temporal pipeline
+creates a GitHub Release, generates release notes, or produces (or relies
+on) a git tag GitHub would otherwise create as a Release side effect; v2's
+version-of-record lives in App Registry, not in a git tag or a GitHub
+Release. That job also made a second, independent `RecordArtifact` call per
+released app/chart, keyed to `plan-release`'s pre-finalization guessed
+version rather than `FinalizePublish`'s confirmed one — that call is
+eliminated, not relocated: only `FinalizePublish`'s own
+`BeginPublish`/`FailPublish`/`RecordArtifact` calls (via
+`finalize-app`/`finalize-chart`, described in "The run log" section of
+`04-run-log.md`) remain for v2. Separately, `FinalizePublish`'s
+`finalize-app`/`finalize-chart` no longer pass `--create-git-tag` (#982):
+`FinalizePublish` no longer performs a real git checkout/clone at all for
+either shell-out — neither reads anything relative to a git working tree
+(the app retag uses `--repository`/`--digest` directly; chart packaging
+uses `--chart-dir`, an absolute path under the run's scratch temp dir), so
+the plain `os.MkdirTemp` scratch directory `FinalizePublish` already
+created for downloaded build artifacts now doubles as both commands' `cmd.Dir`,
+replacing the former clone-per-invocation workspace. v1 (`release.yml`,
+`release-app`/`release-charts`) is unaffected by any of this — it still
+creates GitHub Releases, release notes, and git tags exactly as before.
+
 ## The problem: four cross-run orderings, three of them unenforced
 
 A release run and a `main`-push reconcile are separate CI runs with no
