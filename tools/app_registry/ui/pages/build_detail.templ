@@ -108,12 +108,13 @@ func incompleteCount(artifacts []*pb.Artifact) int {
 
 // BuildDetail is screen 31 (FR-27, FR-28, FR-29, FR-30): every artifact a
 // run touched, its state, and an "incomplete only" filter. FAILED rows show
-// fail_reason verbatim. domainByOwnerID maps app_id/chart_id -> domain (see
-// handlers_builds.go's ownerDomainIndex) — domain is shown here, unlike
-// screen 30, because an app/chart identity is actually in hand per
-// artifact. githubActionsRunURL is a deep link only (NFR-15: no GitHub API
-// calls from this UI) for the zero-artifact indeterminate case.
-templ BuildDetail(user *htmxauth.UserInfo, build *pb.Build, artifacts []*pb.Artifact, domainByOwnerID map[string]string, incompleteOnly bool, githubActionsRunURL string) {
+// fail_reason verbatim. domainByOwnerID/nameByOwnerID map app_id/chart_id
+// -> domain/name (see handlers_builds.go's ownerIdentityIndex) — domain and
+// name are shown here, unlike screen 30, because an app/chart identity is
+// actually in hand per artifact (#857). githubActionsRunURL is a deep link
+// only (NFR-15: no GitHub API calls from this UI) for the zero-artifact
+// indeterminate case.
+templ BuildDetail(user *htmxauth.UserInfo, build *pb.Build, artifacts []*pb.Artifact, domainByOwnerID map[string]string, nameByOwnerID map[string]string, incompleteOnly bool, githubActionsRunURL string) {
 	@components.Shell("Run #"+build.GetWorkflowRunId(), user) {
 		<div class="breadcrumbs text-sm mb-4">
 			<ul>
@@ -182,6 +183,7 @@ templ BuildDetail(user *htmxauth.UserInfo, build *pb.Build, artifacts []*pb.Arti
 					<thead>
 						<tr>
 							<th>Owner</th>
+							<th>Name</th>
 							<th>Domain</th>
 							<th>Kind</th>
 							<th>Version</th>
@@ -194,12 +196,12 @@ templ BuildDetail(user *htmxauth.UserInfo, build *pb.Build, artifacts []*pb.Arti
 						for _, a := range artifacts {
 							if !incompleteOnly || isIncomplete(a) {
 								{{ shown++ }}
-								@artifactRow(a, domainByOwnerID)
+								@artifactRow(a, domainByOwnerID, nameByOwnerID)
 							}
 						}
 						if shown == 0 {
 							<tr>
-								<td colspan="6" class="text-sm opacity-60 p-4">
+								<td colspan="7" class="text-sm opacity-60 p-4">
 									if incompleteOnly {
 										No incomplete artifacts in this run.
 									} else {
@@ -227,9 +229,10 @@ templ recordingHealthBadge(v buildVerdictKind) {
 	<span class={ "badge", "badge-soft", "badge-lg", class }>App Registry recording health: { label }</span>
 }
 
-templ artifactRow(a *pb.Artifact, domainByOwnerID map[string]string) {
+templ artifactRow(a *pb.Artifact, domainByOwnerID map[string]string, nameByOwnerID map[string]string) {
 	<tr class={ "hover", templ.KV("bg-error/5", isIncomplete(a)) }>
 		<td class="font-mono text-sm">{ ownerFullNameFallback(a) }</td>
+		<td class="text-sm">{ nameByOwnerID[artifactOwnerID(a)] }</td>
 		<td class="text-sm">{ domainByOwnerID[artifactOwnerID(a)] }</td>
 		<td class="text-sm">{ artifactKindLabel(a.GetKind()) }</td>
 		<td class="font-mono text-sm">{ a.GetVersion() }</td>
