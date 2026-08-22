@@ -223,6 +223,7 @@ for defaults below.
 | `GRPC_AUTH_MODE` | `none` | gRPC token-forwarding mode: `none` or `oidc` — should match `app-registry-api`'s own `GRPC_AUTH_MODE` |
 | `PG_DATABASE_URL` | *(required, no fallback)* | PostgreSQL connection string for `htmxauth`'s DB-backed session store (the `ui_sessions` table) — **same variable name as the rest of App Registry** (see Database above), deliberately not `DATABASE_URL` |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URI` | `""` | Required when `AUTH_MODE=oidc` — OIDC provider URL, client ID/secret, and callback URL |
+| `OIDC_POST_LOGOUT_REDIRECT_URI` | `""` | Optional. Where the OIDC provider sends the browser after RP-initiated logout (issue #763). `htmxauth` derives a default from `OIDC_REDIRECT_URI`'s origin when unset; set this only if that derived value isn't a registered post-logout redirect URI with the provider (Keycloak validates it against the client's `post.logout.redirect.uris`) |
 
 **`PG_DATABASE_URL` points at the same database as the registry's
 `PG_DATABASE_URL` above, and is used *solely* for session storage.** The

@@ -43,7 +43,12 @@ templ Shell(title string, user *htmxauth.UserInfo) {
 		</div>
 		<div class="flex-none">
 			if user != nil {
-				<span class="mr-2 text-sm opacity-90">{ user.PreferredUsername }</span>
+				<div class="dropdown dropdown-end">
+					<div tabindex="0" role="button" class="btn btn-ghost btn-sm">{ user.PreferredUsername }</div>
+					<ul tabindex="0" class="dropdown-content menu bg-neutral text-neutral-content rounded-box z-10 w-40 p-2 shadow-sm">
+						<li><a href="/auth/logout">Logout</a></li>
+					</ul>
+				</div>
 			}
 		</div>
 	</div>
