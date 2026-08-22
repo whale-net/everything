@@ -20,12 +20,73 @@ type ReleaseStatusViewState struct {
 	LoadErr      string
 }
 
+// releaseRunIDShort truncates a release run id to a dense, scannable
+// prefix for the header (issue #756) -- matching gitShaShort's (builds.templ)
+// and digestTruncated's (components/digest.templ) truncate-for-density
+// convention for identifiers, with the full value always still recoverable
+// via the title attribute and the copy button next to it.
+func releaseRunIDShort(id string) string {
+	const n = 12
+	if len(id) <= n {
+		return id
+	}
+	return id[:n] + "…"
+}
+
+// releaseHeaderName resolves the app/artifact name to show prominently in
+// the header (issue #756) -- GetReleaseResponse has no single "app name"
+// field of its own (a release run is a batch: see ReleaseRunTarget in
+// api_messages_release.proto), so this uses the single target's
+// owner_full_name (the "<domain>-<name>" identity already shown per-row in
+// the Targets table below) when the run resolved to exactly one target --
+// the common case, a single app/chart release -- and falls back to the
+// requested scope (already a domain/"all"/comma-list description, see
+// TriggerReleaseRequest.requested_scope) alongside the target count for a
+// batch release.
+func releaseHeaderName(rel *pb.GetReleaseResponse) string {
+	targets := rel.GetTargets()
+	if len(targets) == 1 {
+		return targets[0].GetOwnerFullName()
+	}
+	if rel.GetRequestedScope() != "" {
+		return fmt.Sprintf("%s (%d targets)", rel.GetRequestedScope(), len(targets))
+	}
+	return "Release"
+}
+
+// copyReleaseRunID is a templ script template mirroring components/
+// digest.templ's copyDigest -- same self-contained-JS-function pattern, so
+// this header's copy affordance needs no hand-written inline-script wiring
+// and stays within the CDN Tailwind/daisyUI-only toolchain (NFR-20).
+script copyReleaseRunID(id string) {
+	navigator.clipboard.writeText(id);
+}
+
 // ReleaseStatus is the release-status screen: durable, keyed by
 // release_run_id, showing per-target state through to completion (FR10).
 templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 	@components.Shell("Release Status", user) {
 		<div class="flex justify-between items-center mb-4">
-			<h2 class="text-xl font-bold">Release { s.ReleaseRunID }</h2>
+			<div>
+				<h2 class="text-xl font-bold">
+					if s.Release != nil {
+						{ releaseHeaderName(s.Release) }
+					} else {
+						Release
+					}
+				</h2>
+				<div class="flex items-center gap-1 text-sm opacity-60">
+					<span class="font-mono" title={ s.ReleaseRunID }>{ releaseRunIDShort(s.ReleaseRunID) }</span>
+					<button
+						type="button"
+						class="btn btn-ghost btn-xs px-1"
+						title="Copy full release run ID"
+						onclick={ copyReleaseRunID(s.ReleaseRunID) }
+					>
+						⧉
+					</button>
+				</div>
+			</div>
 			<div class="flex gap-1">
 				<a
 					href={ templ.URL("/releases/" + s.ReleaseRunID) }
