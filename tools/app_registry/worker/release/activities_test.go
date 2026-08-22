@@ -173,7 +173,8 @@ func TestActivities_DispatchBuild_HappyPath_DispatchesUniformVersionWithSplitTar
 	require.Equal(t, "v1.2.3", sawInputs["version"])
 	require.Equal(t, "demo-widget", sawInputs["apps"])
 	require.Equal(t, "demo-achart", sawInputs["helm_charts"])
-	require.Equal(t, "main", sawRef, "no app_build_log row exists for either target, so FR10's fallback to Config.Ref applies")
+	require.Equal(t, "main", sawRef, "workflow_dispatch's `ref` must always be the branch, never a resolved commit SHA -- see github.go's Dispatch doc comment")
+	require.Equal(t, "main", sawInputs["build_ref"], "no app_build_log row exists for either target, so FR10's fallback to Config.Ref is forwarded as the build_ref input")
 
 	// issue #901: the image-kind entry from plan.Versions must also be
 	// forwarded as a JSON app_versions input, keyed by bare OwnerFullName

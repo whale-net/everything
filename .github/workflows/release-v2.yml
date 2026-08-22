@@ -73,6 +73,10 @@ on:
         description: 'JSON-encoded fully-expanded release plan (release_helper_go plan --format=json''s output shape: matrix, chart_matrix, openapi_matrix, has_specs, apps, charts, version, versions, build_id) computed once by App Registry''s Temporal ResolvePlan activity and forwarded verbatim by DispatchBuild (issue #927). When set, plan-release parses and passes it through as-is -- no checkout, no bazel setup, no `release-helper plan` re-invocation. Leave empty for a dispatcher that has not pre-computed a plan -- plan-release falls back to its own full `release-helper plan` derivation from the apps/helm_charts/version/increment_* inputs above.'
         required: false
         default: ''
+      build_ref:
+        description: 'Git commit SHA (or branch/tag) this run should check out and build, overriding the branch tip at dispatch time. FR9-FR11 (issue #923): App Registry''s Temporal DispatchBuild resolves app_build_log''s current-pointer row to pin a release to the exact commit ci.yml''s reconcile job last processed, and passes it here -- GitHub''s workflow_dispatch `ref` field itself must stay a branch/tag (it 422s on a raw commit SHA, even one that is genuinely a branch''s tip), so this workflow always dispatches against the branch and checks out build_ref explicitly instead. Leave empty to build the branch tip at dispatch time (falls back to github.sha).'
+        required: false
+        default: ''
 
 concurrency:
   group: release-v2
@@ -117,6 +121,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
 
       - name: App Registry Auth
         if: inputs.use_source_tools != true && github.event.inputs.use_source_tools != 'true'
@@ -392,6 +398,8 @@ jobs:
       - name: Checkout code (resolved plan)
         if: github.event.inputs.resolved_plan != ''
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
 
       - name: Download release tools (resolved plan)
         if: github.event.inputs.resolved_plan != ''
@@ -419,6 +427,7 @@ jobs:
         if: github.event.inputs.resolved_plan == ''
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -471,6 +480,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
 
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-env
@@ -566,6 +577,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -607,6 +619,7 @@ jobs:
         if: ${{ github.event.inputs.dry_run == 'false' && needs.plan-release.outputs.release-matrix != '' }}
         env:
           RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+          BUILD_SHA: ${{ github.event.inputs.build_ref || github.sha }}
         run: |
           mkdir -p /tmp/build-manifest/apps
 
@@ -615,10 +628,10 @@ jobs:
             APP=$(echo "$item" | jq -r '.app')
 
             echo "=========================================="
-            echo "Building application: ${DOMAIN}-${APP} (build tag: ${{ github.sha }})"
+            echo "Building application: ${DOMAIN}-${APP} (build tag: ${BUILD_SHA})"
             echo "=========================================="
 
-            "$RELEASE_HELPER" build-app --domain "$DOMAIN" --app "$APP" --git-sha "${{ github.sha }}" --output-dir /tmp/build-manifest/apps
+            "$RELEASE_HELPER" build-app --domain "$DOMAIN" --app "$APP" --git-sha "$BUILD_SHA" --output-dir /tmp/build-manifest/apps
           done
 
       # Composes each chart's source tree only -- no `helm package`, no
@@ -656,6 +669,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
           fetch-depth: 0
           fetch-tags: true
 
@@ -755,7 +769,7 @@ jobs:
           # (a domain shorthand like "app-registry", or "all") was actively
           # wrong -- this command's resolver only matches exact chart names,
           # so the shorthand failed with "Could not resolve chart".
-          ARGS=(create-combined-github-release-with-notes "${{ needs.plan-release.outputs.version }}" --owner "${{ github.repository_owner }}" --repo "${{ github.event.repository.name }}" --commit "${{ github.sha }}" --release-notes-dir "/tmp/release-notes" --openapi-specs-dir "/tmp/openapi-specs" --assets-dir "/tmp/assets" --helm-charts-dir "/tmp/helm-charts")
+          ARGS=(create-combined-github-release-with-notes "${{ needs.plan-release.outputs.version }}" --owner "${{ github.repository_owner }}" --repo "${{ github.event.repository.name }}" --commit "${{ github.event.inputs.build_ref || github.sha }}" --release-notes-dir "/tmp/release-notes" --openapi-specs-dir "/tmp/openapi-specs" --assets-dir "/tmp/assets" --helm-charts-dir "/tmp/helm-charts")
           "$RELEASE_HELPER" "${ARGS[@]}"
 
   release-summary:
@@ -768,6 +782,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.build_ref || github.sha }}
 
       - name: Download release tools
         id: download-tools

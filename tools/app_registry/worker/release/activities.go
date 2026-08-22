@@ -96,15 +96,19 @@ var _ ReleaseActivities = (*Activities)(nil)
 //
 // FR9-FR11 (issue #923): resolves app_build_log's current row for this
 // batch's targets (buildref.go's resolveDispatchRef/resolveBuildRef,
-// using a.Registry) and threads the result into a.GitHub.Dispatch's `ref`
-// -- Dispatch's ref became a per-call parameter (see github.go's Dispatch
-// doc comment), falling back to the still-required
-// GitHubDispatcherConfig.Ref (default "main") whenever no target has a
-// current app_build_log row (FR10). This only applies to whatever
-// workflow a.GitHub.Config.WorkflowFile is configured to dispatch (in
-// practice release-v2.yml for this worker's deployment -- FR11 note:
-// release.yml's v1 dispatch path/trigger is untouched by this task and is
-// not driven through this worker).
+// using a.Registry) and forwards the result as a `build_ref` workflow
+// input, falling back to the still-required GitHubDispatcherConfig.Ref
+// (default "main") whenever no target has a current app_build_log row
+// (FR10). GitHub's workflow_dispatch API's own `ref` parameter is always
+// dispatched as the plain branch/tag (GitHubDispatcherConfig.Ref) -- it
+// cannot carry a commit SHA (422 "No ref found for: <sha>", confirmed
+// against a SHA that genuinely was the branch tip); release-v2.yml checks
+// out `build_ref` explicitly instead (see that workflow's `Checkout code`
+// steps). This only applies to whatever workflow
+// a.GitHub.Config.WorkflowFile is configured to dispatch (in practice
+// release-v2.yml for this worker's deployment -- FR11 note: release.yml's
+// v1 dispatch path/trigger is untouched by this task and is not driven
+// through this worker).
 //
 // Issue #927: when plan.RawJSON is populated (the normal case -- see
 // plan.go's ResolvePlan), DispatchBuild forwards it verbatim as a single
@@ -205,8 +209,16 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
 	}
+	// GitHub's workflow_dispatch API only accepts a branch or tag for `ref`
+	// -- a raw commit SHA (what dispatchRef usually is, FR9) is rejected
+	// with 422 "No ref found for: <sha>" even when that SHA is genuinely
+	// the tip of a real branch. So dispatchRef is forwarded as the
+	// `build_ref` workflow input instead (release-v2.yml checks it out
+	// explicitly), and Dispatch is always called with ref="" -- letting it
+	// fall back to the required, always-branch/tag GitHubDispatcherConfig.Ref.
+	inputs["build_ref"] = dispatchRef
 
-	ref, err := a.GitHub.Dispatch(ctx, plan.ReleaseRunID, inputs, dispatchRef)
+	ref, err := a.GitHub.Dispatch(ctx, plan.ReleaseRunID, inputs, "")
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
 	}
