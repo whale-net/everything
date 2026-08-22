@@ -10,6 +10,14 @@ import (
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
+// hideDemoDomain reports whether demoDomain rows should be dropped from the
+// Apps Catalog (issue #750). A nil config (e.g. an App built directly in a
+// test fixture without LoadConfig) is treated the same as the documented
+// default — hidden — rather than panicking.
+func (app *App) hideDemoDomain() bool {
+	return app.config == nil || !app.config.ShowDemoDomain
+}
+
 // buildAppsCatalog loads the environments, charts, and apps screens 20
 // (apps catalog) and 11 (app detail) share, and shapes the flat
 // matrix.AppCatalogRow list. It reuses fetchEnvironmentColumns — the same
@@ -35,6 +43,14 @@ func (app *App) buildAppsCatalog(ctx context.Context) ([]*pb.Environment, []matr
 
 	rows := make([]matrix.AppCatalogRow, 0, len(chartsResp.GetCharts())+len(appsResp.GetApps()))
 	for _, c := range chartsResp.GetCharts() {
+		// demoDomain (release_scope.go) is hidden from the catalog by
+		// default (issue #750) — same "demo" domain release.yml's
+		// include_demo input and resolveReleaseScope's includeDemo param
+		// exclude by default; ShowDemoDomain (APP_REGISTRY_UI_SHOW_DEMO_DOMAIN)
+		// opts back in.
+		if c.GetDomain() == demoDomain && app.hideDemoDomain() {
+			continue
+		}
 		rows = append(rows, matrix.AppCatalogRow{
 			IsChart:    true,
 			ID:         c.GetChartId(),
@@ -45,6 +61,9 @@ func (app *App) buildAppsCatalog(ctx context.Context) ([]*pb.Environment, []matr
 		})
 	}
 	for _, a := range appsResp.GetApps() {
+		if a.GetDomain() == demoDomain && app.hideDemoDomain() {
+			continue
+		}
 		rows = append(rows, matrix.AppCatalogRow{
 			IsChart:    false,
 			ID:         a.GetAppId(),

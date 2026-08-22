@@ -258,6 +258,7 @@ for defaults below.
 | `GRPC_AUTH_MODE` | `none` | gRPC token-forwarding mode: `none` or `oidc` — should match `app-registry-api`'s own `GRPC_AUTH_MODE` |
 | `PG_DATABASE_URL` | *(required, no fallback)* | PostgreSQL connection string for `htmxauth`'s DB-backed session store (the `ui_sessions` table) — **same variable name as the rest of App Registry** (see Database above), deliberately not `DATABASE_URL` |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_REDIRECT_URI` | `""` | Required when `AUTH_MODE=oidc` — OIDC provider URL, client ID/secret, and callback URL |
+| `APP_REGISTRY_UI_SHOW_DEMO_DOMAIN` | `false` | Issue #750: when `false` (default), the Apps Catalog (screen 20) hides every app/chart whose domain is `demo` — the same `demoDomain` (`release_scope.go`) release.yml's `include_demo` input and `resolveReleaseScope`'s `includeDemo` param exclude by default. Set to `true`/`1` (parsed via `strconv.ParseBool`) to show them. Only gates the catalog listing; a demo app's detail page (`/apps/{full_name}`) remains reachable by direct URL either way. |
 
 **`PG_DATABASE_URL` points at the same database as the registry's
 `PG_DATABASE_URL` above, and is used *solely* for session storage.** The
