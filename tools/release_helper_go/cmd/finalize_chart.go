@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -143,17 +141,18 @@ func newFinalizeChartCmd() *cobra.Command {
 			// outcome tracking needs it for charts exactly as it already
 			// does for apps (issue #973's proper fix, superseding the
 			// resolved-plan-JSON comparison PR #976 first attempted).
+			//
+			// ExecuteFinalizeChart above has ALREADY succeeded (chart
+			// packaged and uploaded to ChartMuseum, App Registry recorded)
+			// by the time we get here -- this write is a secondary
+			// bookkeeping sidecar, not part of that. A failure writing it
+			// must not make this command exit non-zero for the same
+			// reason finalize-app's identical write doesn't (see
+			// writeFinalizeResultFile's doc comment / this PR's Finding
+			// 1). Warn and still exit 0.
 			if outputDir != "" {
-				if err := os.MkdirAll(outputDir, 0755); err != nil {
-					return fmt.Errorf("create --output-dir %s: %w", outputDir, err)
-				}
-				data, merr := json.MarshalIndent(res, "", "  ")
-				if merr != nil {
-					return fmt.Errorf("marshal finalize-chart result: %w", merr)
-				}
-				outPath := filepath.Join(outputDir, fmt.Sprintf("%s-%s.json", domain, chartName))
-				if werr := os.WriteFile(outPath, data, 0644); werr != nil {
-					return fmt.Errorf("write finalize-chart result %s: %w", outPath, werr)
+				if werr := writeFinalizeResultFile(outputDir, domain, chartName, res); werr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "::warning::finalize-chart: publish succeeded but failed to write --output-dir result file: %v\n", werr)
 				}
 			}
 			return nil

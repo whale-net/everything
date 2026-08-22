@@ -399,3 +399,55 @@ func TestReleaseWorkflow_FinalizeNoOpRebuild_RecordsSucceeded(t *testing.T) {
 	require.Equal(t, repository.ReleaseRunTargetStateSucceeded, got.Targets[0].State,
 		"a no-op rebuild reusing an older EffectiveVersion must not be misreported as a failure")
 }
+
+// TestReleaseWorkflow_FinalizeTargetNoEntry_FallsThroughToVerifyPublished is
+// this PR's Finding 1 regression test at the workflow level: a target with
+// NO entry at all in FinalizeResult.Targets (e.g. finalize.go/finalize.go's
+// CLI succeeded but the bookkeeping --output-dir result file could not be
+// read back -- see finalize_test.go's
+// TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry)
+// must still be checked via VerifyPublished's real presence/version
+// signal, not auto-succeeded or auto-failed by the workflow itself. This
+// test proves the "falls through" half specifically: expectedVersions is
+// the empty map for this target (no EffectiveVersion to compare, since
+// FinalizePublish reported nothing), and the workflow trusts whatever
+// VerifyPublished's mock returns for it -- here, deliberately Failed, so a
+// workflow bug that silently treated "no entry" as an automatic success
+// would be caught (it would observe Succeeded instead).
+func TestReleaseWorkflow_FinalizeTargetNoEntry_FallsThroughToVerifyPublished(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	in := ReleaseWorkflowInput{ReleaseRunID: "run-9", Targets: []ReleaseTarget{testTarget()}}
+	plan := ResolvedPlan{ReleaseRunID: "run-9", Versions: map[string]string{testTarget().key(): "v1.2.3"}}
+	ref := BuildRef{ReleaseRunID: "run-9", RunID: "49"}
+
+	// No entry for testTarget().key() in Targets at all -- neither Failed
+	// nor a reported EffectiveVersion.
+	finalizeResult := FinalizeResult{Succeeded: true, Targets: map[string]FinalizeTargetOutcome{}}
+
+	env.OnActivity(ActivityCheckApproval, mock.Anything, "run-9").Return(true, nil).Once()
+	env.OnActivity(ActivityResolvePlan, mock.Anything, in.Targets).Return(plan, nil).Once()
+	env.OnActivity(ActivityDispatchBuild, mock.Anything, plan, map[string]string{}).Return(ref, nil).Once()
+	env.OnActivity(ActivityPollBuild, mock.Anything, ref).Return(BuildStatus{Succeeded: true}, nil).Once()
+	env.OnActivity(ActivityFinalizePublish, mock.Anything, plan, ref).Return(finalizeResult, nil).Once()
+	// expectedVersions must be the empty map here -- there is no
+	// EffectiveVersion for a target with no FinalizeResult.Targets entry.
+	env.OnActivity(ActivityVerifyPublished, mock.Anything, "run-9", map[string]string{}).
+		Return(VerifyResult{AllPublished: false, Failed: map[string]string{testTarget().key(): "no published artifact found"}}, nil).Once()
+	env.OnActivity(ActivityRecordTargetState, mock.Anything, "run-9", testTarget(), repository.ReleaseRunTargetStateFailed, mock.Anything, "no published artifact found").
+		Return(nil).Once()
+
+	env.ExecuteWorkflow(ReleaseWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	var got ReleaseWorkflowResult
+	require.NoError(t, env.GetWorkflowResult(&got))
+	require.Len(t, got.Targets, 1)
+	require.Equal(t, repository.ReleaseRunTargetStateFailed, got.Targets[0].State,
+		"a target with no FinalizeResult.Targets entry must be decided by VerifyPublished's real result, not auto-succeeded")
+	require.Equal(t, "no published artifact found", got.Targets[0].ErrorDetail)
+}

@@ -110,7 +110,7 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 			if result.Failed == nil {
 				result.Failed = map[string]string{}
 			}
-			result.Failed[key] = fmt.Sprintf("published artifact version %q does not match resolved plan version %q", artifact.Version, expectedVersion)
+			result.Failed[key] = fmt.Sprintf("published artifact version %q does not match expected version %q", artifact.Version, expectedVersion)
 		}
 	}
 	return result, nil

@@ -347,13 +347,23 @@ exit 0
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v2.0.0"}, result.Targets["chart:demo-demo"])
 }
 
-// TestActivities_FinalizePublish_MissingFinalizeAppResult_FailsThatTarget
-// proves a target whose finalize-app succeeded but never wrote a readable
-// --output-dir result (e.g. an older release_helper_go binary that doesn't
-// support it yet) is reported as a per-target failure -- silently falling
-// back to the unpublished plan-time version would reintroduce the same bug
-// TestActivities_FinalizePublish_NoOpApp_ChartPinsEffectiveVersion guards.
-func TestActivities_FinalizePublish_MissingFinalizeAppResult_FailsThatTarget(t *testing.T) {
+// TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry is
+// this PR's Finding 1 regression test: a target whose finalize-app
+// subprocess exited 0 (the actual retag/publish/RecordArtifact work
+// succeeded) but never wrote a readable --output-dir result file (e.g. a
+// disk-full/permission error writing the bookkeeping sidecar, or an older
+// release_helper_go binary that doesn't support --output-dir yet) must NOT
+// be reported as a per-target failure here. A bookkeeping-only write
+// failure has no bearing on whether the actual publish succeeded, and must
+// not have the power to falsely fail a release that actually succeeded --
+// this target is left with no entry in FinalizeResult.Targets at all, so
+// workflow.go's ReleaseWorkflow falls through to VerifyPublished's real
+// presence/version check (record.go's defensive fallback) to decide its
+// fate from actual App Registry state, instead of a guess made here. (Prior
+// to this fix, this exact scenario populated Failed: true here, which
+// bypassed VerifyPublished entirely and always failed the release --
+// wrongly, since the publish had already succeeded.)
+func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *testing.T) {
 	appManifest := `{"domain":"demo","app":"widget","full_name":"demo-widget","repository":"ghcr.io/whale-net/demo-widget","digest":"sha256:aaa"}`
 	buildManifestZip := zipDir(t, map[string]string{"demo-widget.json": appManifest})
 
@@ -371,6 +381,10 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_FailsThatTarget(t *
 
 	binDir := t.TempDir()
 	bin := filepath.Join(binDir, "fake-release-helper-go")
+	// finalize-app exits 0 (publish succeeded) but never writes an
+	// --output-dir result file -- simulating the bookkeeping-sidecar
+	// write failure this test guards against (or an older CLI binary that
+	// predates --output-dir support).
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
 
 	a := &Activities{
@@ -387,14 +401,11 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_FailsThatTarget(t *
 
 	result, err := a.FinalizePublish(context.Background(), plan, ref)
 	require.NoError(t, err)
-	require.False(t, result.Succeeded)
-	require.Contains(t, result.Detail, "demo-widget")
-	require.Contains(t, result.Detail, "read finalize-app result")
+	require.True(t, result.Succeeded, "a missing bookkeeping result file must not be reported as a finalize failure, detail: %s", result.Detail)
+	require.Empty(t, result.Detail)
 
-	outcome, ok := result.Targets["image:demo-widget"]
-	require.True(t, ok, "FinalizeResult.Targets must have an entry for demo-widget")
-	require.True(t, outcome.Failed)
-	require.Contains(t, outcome.Detail, "read finalize-app result")
+	_, ok := result.Targets["image:demo-widget"]
+	require.False(t, ok, "FinalizeResult.Targets must have NO entry for demo-widget -- VerifyPublished's real check must decide its fate, not a guess made here")
 }
 
 // TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget

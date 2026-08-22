@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -130,17 +129,20 @@ func newFinalizeAppCmd() *cobra.Command {
 			// app must pin that actual effective version, not the
 			// unpublished one requested here. Mirrors build-app's
 			// BuildAppManifest output-dir convention (build_app.go).
+			//
+			// ExecuteFinalizeApp above has ALREADY succeeded (image
+			// retagged, App Registry recorded) by the time we get here --
+			// this write is a secondary bookkeeping sidecar, not part of
+			// that. A failure writing it (disk full, permissions, ...)
+			// must not make this command exit non-zero: doing so would be
+			// indistinguishable, from finalize.go's perspective, from the
+			// actual publish having failed, and would route a genuinely
+			// successful release straight to Failed with no fallback
+			// check (see writeFinalizeResultFile's doc comment / this
+			// PR's Finding 1). Warn and still exit 0.
 			if outputDir != "" {
-				if err := os.MkdirAll(outputDir, 0755); err != nil {
-					return fmt.Errorf("create --output-dir %s: %w", outputDir, err)
-				}
-				data, merr := json.MarshalIndent(res, "", "  ")
-				if merr != nil {
-					return fmt.Errorf("marshal finalize-app result: %w", merr)
-				}
-				outPath := filepath.Join(outputDir, fmt.Sprintf("%s-%s.json", domain, app))
-				if werr := os.WriteFile(outPath, data, 0644); werr != nil {
-					return fmt.Errorf("write finalize-app result %s: %w", outPath, werr)
+				if werr := writeFinalizeResultFile(outputDir, domain, app, res); werr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "::warning::finalize-app: publish succeeded but failed to write --output-dir result file: %v\n", werr)
 				}
 			}
 			return nil
