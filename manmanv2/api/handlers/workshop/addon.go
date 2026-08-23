@@ -55,7 +55,7 @@ func (h *WorkshopServiceHandler) CreateAddon(ctx context.Context, req *pb.Create
 		addon.Metadata = metadata
 	}
 
-	addon, err := h.addonRepo.Create(ctx, addon)
+	addon, err := h.workshopManager.CreateAddon(ctx, addon)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create addon: %v", err)
 	}
@@ -83,6 +83,21 @@ func (h *WorkshopServiceHandler) GetAddon(ctx context.Context, req *pb.GetAddonR
 
 // ListAddons lists workshop addons with optional filtering
 func (h *WorkshopServiceHandler) ListAddons(ctx context.Context, req *pb.ListAddonsRequest) (*pb.ListAddonsResponse, error) {
+	if req.CollectionId != 0 {
+		children, err := h.addonRepo.ListByCollectionID(ctx, req.CollectionId)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list collection children: %v", err)
+		}
+		pbAddons := make([]*pb.WorkshopAddon, len(children))
+		for i, addon := range children {
+			pbAddons[i] = addonToProto(addon)
+		}
+		return &pb.ListAddonsResponse{
+			Addons:     pbAddons,
+			TotalCount: int32(len(children)),
+		}, nil
+	}
+
 	limit := int(req.Limit)
 	if limit <= 0 {
 		limit = 50
@@ -260,9 +275,15 @@ func addonToProto(addon *manman.WorkshopAddon) *pb.WorkshopAddon {
 	if addon.LastUpdated != nil {
 		pbAddon.LastUpdated = addon.LastUpdated.Unix()
 	}
+	if addon.CollectionID != nil {
+		pbAddon.CollectionId = *addon.CollectionID
+	}
 	if addon.Metadata != nil {
 		if appID, ok := addon.Metadata["steam_app_id"].(string); ok {
 			pbAddon.SteamAppId = appID
+		}
+		if items, ok := addon.Metadata["collection_items"].([]map[string]interface{}); ok {
+			pbAddon.CollectionItemCount = int32(len(items))
 		}
 	}
 

@@ -4,21 +4,25 @@ import "time"
 
 // WorkshopAddon represents a workshop addon in the library
 type WorkshopAddon struct {
-	AddonID          int64      `db:"addon_id"`
-	GameID           int64      `db:"game_id"`
-	WorkshopID       string     `db:"workshop_id"`
-	PlatformType     string     `db:"platform_type"`
-	Name             string     `db:"name"`
-	Description      *string    `db:"description"`
-	FileSizeBytes    *int64     `db:"file_size_bytes"`
-	InstallationPath *string    `db:"installation_path"`
-	PresetID         int64      `db:"preset_id"`
-	IsCollection     bool       `db:"is_collection"`
-	IsDeprecated     bool       `db:"is_deprecated"`
-	Metadata         JSONB      `db:"metadata"`
-	LastUpdated      *time.Time `db:"last_updated"`
-	CreatedAt        time.Time  `db:"created_at"`
-	UpdatedAt        time.Time  `db:"updated_at"`
+	AddonID          int64   `db:"addon_id"`
+	GameID           int64   `db:"game_id"`
+	WorkshopID       string  `db:"workshop_id"`
+	PlatformType     string  `db:"platform_type"`
+	Name             string  `db:"name"`
+	Description      *string `db:"description"`
+	FileSizeBytes    *int64  `db:"file_size_bytes"`
+	InstallationPath *string `db:"installation_path"`
+	PresetID         int64   `db:"preset_id"`
+	IsCollection     bool    `db:"is_collection"`
+	IsDeprecated     bool    `db:"is_deprecated"`
+	// CollectionID correlates an addon created as a child of a Steam Workshop
+	// collection back to the collection's own addon row. Nil for standalone
+	// addons and for the collection row itself.
+	CollectionID *int64     `db:"collection_id"`
+	Metadata     JSONB      `db:"metadata"`
+	LastUpdated  *time.Time `db:"last_updated"`
+	CreatedAt    time.Time  `db:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at"`
 }
 
 // WorkshopAddonWithGame is returned by ListAddons queries that join with the games table.

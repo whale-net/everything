@@ -169,6 +169,7 @@ type WorkshopAddonRepository interface {
 	Get(ctx context.Context, addonID int64) (*manman.WorkshopAddon, error)
 	GetByWorkshopID(ctx context.Context, gameID int64, workshopID string, platformType string) (*manman.WorkshopAddon, error)
 	List(ctx context.Context, gameID *int64, includeDeprecated bool, limit, offset int) ([]*manman.WorkshopAddon, error)
+	ListByCollectionID(ctx context.Context, collectionID int64) ([]*manman.WorkshopAddon, error)
 	Update(ctx context.Context, addon *manman.WorkshopAddon) error
 	Delete(ctx context.Context, addonID int64) error
 }
@@ -215,22 +216,22 @@ type AddonPathPresetRepository interface {
 
 // Repository aggregates all repository interfaces
 type Repository struct {
-	Servers                ServerRepository
-	Games                  GameRepository
-	GameConfigs            GameConfigRepository
-	ServerGameConfigs      ServerGameConfigRepository
-	Sessions               SessionRepository
-	ServerCapabilities     ServerCapabilityRepository
-	LogReferences          LogReferenceRepository
-	Backups                BackupRepository
-	BackupConfigs          BackupConfigRepository
-	ServerPorts            ServerPortRepository
+	Servers                 ServerRepository
+	Games                   GameRepository
+	GameConfigs             GameConfigRepository
+	ServerGameConfigs       ServerGameConfigRepository
+	Sessions                SessionRepository
+	ServerCapabilities      ServerCapabilityRepository
+	LogReferences           LogReferenceRepository
+	Backups                 BackupRepository
+	BackupConfigs           BackupConfigRepository
+	ServerPorts             ServerPortRepository
 	ConfigurationStrategies ConfigurationStrategyRepository
-	ConfigurationPatches   ConfigurationPatchRepository
-	GameConfigVolumes      GameConfigVolumeRepository
-	WorkshopAddons         WorkshopAddonRepository
-	WorkshopInstallations  WorkshopInstallationRepository
-	WorkshopLibraries      WorkshopLibraryRepository
-	AddonPathPresets       AddonPathPresetRepository
-	Actions                interface{} // ActionRepository from postgres package
+	ConfigurationPatches    ConfigurationPatchRepository
+	GameConfigVolumes       GameConfigVolumeRepository
+	WorkshopAddons          WorkshopAddonRepository
+	WorkshopInstallations   WorkshopInstallationRepository
+	WorkshopLibraries       WorkshopLibraryRepository
+	AddonPathPresets        AddonPathPresetRepository
+	Actions                 interface{} // ActionRepository from postgres package
 }

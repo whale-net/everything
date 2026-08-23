@@ -41,6 +41,14 @@ func (m *MockWorkshopAddonRepository) List(ctx context.Context, gameID *int64, i
 	return args.Get(0).([]*manman.WorkshopAddon), args.Error(1)
 }
 
+func (m *MockWorkshopAddonRepository) ListByCollectionID(ctx context.Context, collectionID int64) ([]*manman.WorkshopAddon, error) {
+	args := m.Called(ctx, collectionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*manman.WorkshopAddon), args.Error(1)
+}
+
 func (m *MockWorkshopAddonRepository) Update(ctx context.Context, addon *manman.WorkshopAddon) error {
 	args := m.Called(ctx, addon)
 	return args.Error(0)
@@ -235,6 +243,14 @@ func (m *MockWorkshopManager) ResetInstallation(ctx context.Context, installatio
 
 func (m *MockWorkshopManager) FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error) {
 	args := m.Called(ctx, gameID, workshopID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*manman.WorkshopAddon), args.Error(1)
+}
+
+func (m *MockWorkshopManager) CreateAddon(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error) {
+	args := m.Called(ctx, addon)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

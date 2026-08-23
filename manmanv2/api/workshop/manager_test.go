@@ -6,19 +6,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/steam"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 // Mock implementations for testing - only implement methods used by InstallAddon
 
 type mockAddonRepo struct {
 	addons map[int64]*manman.WorkshopAddon
+	nextID int64
 }
 
 func (m *mockAddonRepo) Create(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error) {
-	return nil, fmt.Errorf("not implemented")
+	m.nextID++
+	addon.AddonID = m.nextID
+	m.addons[addon.AddonID] = addon
+	return addon, nil
 }
 
 func (m *mockAddonRepo) Get(ctx context.Context, addonID int64) (*manman.WorkshopAddon, error) {
@@ -30,11 +34,26 @@ func (m *mockAddonRepo) Get(ctx context.Context, addonID int64) (*manman.Worksho
 }
 
 func (m *mockAddonRepo) GetByWorkshopID(ctx context.Context, gameID int64, workshopID string, platformType string) (*manman.WorkshopAddon, error) {
-	return nil, fmt.Errorf("not implemented")
+	for _, addon := range m.addons {
+		if addon.GameID == gameID && addon.WorkshopID == workshopID && addon.PlatformType == platformType {
+			return addon, nil
+		}
+	}
+	return nil, fmt.Errorf("addon not found")
 }
 
 func (m *mockAddonRepo) List(ctx context.Context, gameID *int64, includeDeprecated bool, limit, offset int) ([]*manman.WorkshopAddon, error) {
 	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockAddonRepo) ListByCollectionID(ctx context.Context, collectionID int64) ([]*manman.WorkshopAddon, error) {
+	var children []*manman.WorkshopAddon
+	for _, addon := range m.addons {
+		if addon.CollectionID != nil && *addon.CollectionID == collectionID {
+			children = append(children, addon)
+		}
+	}
+	return children, nil
 }
 
 func (m *mockAddonRepo) Update(ctx context.Context, addon *manman.WorkshopAddon) error {
@@ -636,8 +655,7 @@ func TestProperty14_VolumeStrategyValidation(t *testing.T) {
 
 	// Test 2: Strategy exists but not volume type
 	// Test case removed - no longer needed (volumes replaced strategies)
-		
-	
+
 	// Test case removed - no longer relevant with volume system
 
 	_, err = manager.InstallAddon(ctx, sgcID, addonID, false, false, "", 0, 0)
@@ -997,11 +1015,189 @@ func TestProperty15_APIErrorHandling(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when collection fetch fails, got nil")
 	}
-	if addon != nil {
-		t.Error("Expected nil addon when collection fetch fails, got non-nil")
+	// The collection's own addon row is still created/returned even when child
+	// expansion fails — see CreateAddon's doc comment.
+	if addon == nil {
+		t.Error("Expected the collection's own addon row to still be returned, got nil")
 	}
 }
 
+// TestCreateAddon_ExpandsCollectionIntoChildAddons is a regression test for issue #445:
+// creating a collection addon must also create one real addon row per collection item,
+// each with its own Steam-reported size (not 0) and CollectionID pointing back to the parent.
+func TestCreateAddon_ExpandsCollectionIntoChildAddons(t *testing.T) {
+	ctx := context.Background()
+	manager, addonRepo, _, _, _, _, _, _ := createTestManager()
+
+	steamClient := &mockSteamClient{
+		items:       make(map[string]*steam.WorkshopItemMetadata),
+		collections: make(map[string][]steam.CollectionItem),
+	}
+	manager.steamClient = steamClient
+
+	gameID := int64(1)
+	collectionWorkshopID := "999999"
+	steamClient.collections[collectionWorkshopID] = []steam.CollectionItem{
+		{WorkshopID: "111111", Title: "Map 1"},
+		{WorkshopID: "222222", Title: "Map 2"},
+	}
+	steamClient.items["111111"] = &steam.WorkshopItemMetadata{
+		WorkshopID: "111111", Title: "Map 1", FileSize: 1024, TimeUpdated: time.Now(),
+	}
+	steamClient.items["222222"] = &steam.WorkshopItemMetadata{
+		WorkshopID: "222222", Title: "Map 2", FileSize: 2048, TimeUpdated: time.Now(),
+	}
+
+	parent := &manman.WorkshopAddon{
+		GameID:       gameID,
+		WorkshopID:   collectionWorkshopID,
+		PlatformType: manman.PlatformTypeSteamWorkshop,
+		Name:         "Map Collection",
+		IsCollection: true,
+	}
+
+	created, err := manager.CreateAddon(ctx, parent)
+	if err != nil {
+		t.Fatalf("CreateAddon failed: %v", err)
+	}
+
+	children, err := addonRepo.ListByCollectionID(ctx, created.AddonID)
+	if err != nil {
+		t.Fatalf("ListByCollectionID failed: %v", err)
+	}
+	if len(children) != 2 {
+		t.Fatalf("Expected 2 child addons, got %d", len(children))
+	}
+
+	bySize := make(map[string]int64)
+	for _, child := range children {
+		if child.CollectionID == nil || *child.CollectionID != created.AddonID {
+			t.Errorf("Child %s: expected CollectionID %d, got %v", child.WorkshopID, created.AddonID, child.CollectionID)
+		}
+		if child.IsCollection {
+			t.Errorf("Child %s: expected IsCollection false", child.WorkshopID)
+		}
+		if child.FileSizeBytes == nil {
+			t.Errorf("Child %s: expected non-nil FileSizeBytes", child.WorkshopID)
+			continue
+		}
+		bySize[child.WorkshopID] = *child.FileSizeBytes
+	}
+	if bySize["111111"] != 1024 {
+		t.Errorf("Expected child 111111 file_size 1024, got %d", bySize["111111"])
+	}
+	if bySize["222222"] != 2048 {
+		t.Errorf("Expected child 222222 file_size 2048, got %d", bySize["222222"])
+	}
+}
+
+// TestCreateAddon_CollectionExpansionSkipsExistingChildren verifies that a collection
+// child already registered as its own addon for this game is not duplicated.
+func TestCreateAddon_CollectionExpansionSkipsExistingChildren(t *testing.T) {
+	ctx := context.Background()
+	manager, addonRepo, _, _, _, _, _, _ := createTestManager()
+
+	steamClient := &mockSteamClient{
+		items:       make(map[string]*steam.WorkshopItemMetadata),
+		collections: make(map[string][]steam.CollectionItem),
+	}
+	manager.steamClient = steamClient
+
+	gameID := int64(1)
+	collectionWorkshopID := "999999"
+	steamClient.collections[collectionWorkshopID] = []steam.CollectionItem{
+		{WorkshopID: "111111", Title: "Map 1"},
+	}
+	steamClient.items["111111"] = &steam.WorkshopItemMetadata{
+		WorkshopID: "111111", Title: "Map 1", FileSize: 1024, TimeUpdated: time.Now(),
+	}
+
+	// Pre-register the child as a standalone addon before the collection is created.
+	existingChild := &manman.WorkshopAddon{
+		GameID:       gameID,
+		WorkshopID:   "111111",
+		PlatformType: manman.PlatformTypeSteamWorkshop,
+		Name:         "Map 1 (already added)",
+	}
+	if _, err := addonRepo.Create(ctx, existingChild); err != nil {
+		t.Fatalf("failed to seed existing child: %v", err)
+	}
+
+	parent := &manman.WorkshopAddon{
+		GameID:       gameID,
+		WorkshopID:   collectionWorkshopID,
+		PlatformType: manman.PlatformTypeSteamWorkshop,
+		Name:         "Map Collection",
+		IsCollection: true,
+	}
+	created, err := manager.CreateAddon(ctx, parent)
+	if err != nil {
+		t.Fatalf("CreateAddon failed: %v", err)
+	}
+
+	children, err := addonRepo.ListByCollectionID(ctx, created.AddonID)
+	if err != nil {
+		t.Fatalf("ListByCollectionID failed: %v", err)
+	}
+	if len(children) != 0 {
+		t.Errorf("Expected no new child rows for an already-registered workshop item, got %d", len(children))
+	}
+}
+
+// TestInstallAddon_CollectionInstallsAllChildren verifies that installing a collection
+// addon fans out to installing each of its children instead of trying to download the
+// collection's own (contentless) workshop ID.
+func TestInstallAddon_CollectionInstallsAllChildren(t *testing.T) {
+	ctx := context.Background()
+	manager, addonRepo, installationRepo, sgcRepo, _, volumeRepo, _, rmqPublisher := createTestManager()
+
+	gameID := int64(1)
+	gameConfigID := int64(1)
+	sgcID := int64(1)
+
+	manager.gameRepo.(*mockGameRepo).games[gameID] = &manman.Game{GameID: gameID, Name: "Test Game"}
+	sgcRepo.sgcs[sgcID] = &manman.ServerGameConfig{SGCID: sgcID, GameConfigID: gameConfigID, ServerID: 1}
+	volumeRepo.volumes[gameConfigID] = []*manman.GameConfigVolume{
+		{ContainerPath: "/data"},
+	}
+
+	addonPath := "addons"
+	collection := &manman.WorkshopAddon{AddonID: 1, GameID: gameID, WorkshopID: "999999", IsCollection: true}
+	addonRepo.addons[1] = collection
+	addonRepo.nextID = 1
+	child1ID := int64(2)
+	child2ID := int64(3)
+	collectionID := collection.AddonID
+	addonRepo.addons[child1ID] = &manman.WorkshopAddon{AddonID: child1ID, GameID: gameID, WorkshopID: "111111", InstallationPath: &addonPath, CollectionID: &collectionID}
+	addonRepo.addons[child2ID] = &manman.WorkshopAddon{AddonID: child2ID, GameID: gameID, WorkshopID: "222222", InstallationPath: &addonPath, CollectionID: &collectionID}
+	addonRepo.nextID = 3
+
+	inst, err := manager.InstallAddon(ctx, sgcID, collection.AddonID, false, false, "", 0, 0)
+	if err != nil {
+		t.Fatalf("InstallAddon on collection failed: %v", err)
+	}
+	if inst == nil {
+		t.Fatal("Expected a non-nil installation for the last successfully installed child")
+	}
+
+	inst1, err1 := installationRepo.GetBySGCAndAddon(ctx, sgcID, child1ID)
+	inst2, err2 := installationRepo.GetBySGCAndAddon(ctx, sgcID, child2ID)
+	if err1 != nil || inst1 == nil {
+		t.Errorf("Expected child %d to have an installation record: %v", child1ID, err1)
+	}
+	if err2 != nil || inst2 == nil {
+		t.Errorf("Expected child %d to have an installation record: %v", child2ID, err2)
+	}
+
+	for _, cmd := range rmqPublisher.publishedCommands {
+		if cmd.AddonID == collection.AddonID {
+			t.Errorf("Expected no download command for the collection's own addon_id %d", collection.AddonID)
+		}
+	}
+	if len(rmqPublisher.publishedCommands) != 2 {
+		t.Errorf("Expected 2 download commands (one per child), got %d", len(rmqPublisher.publishedCommands))
+	}
+}
 
 // TestRemoveInstallation_Success tests successful removal of an installation
 func TestRemoveInstallation_Success(t *testing.T) {

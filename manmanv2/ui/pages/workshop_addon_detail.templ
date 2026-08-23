@@ -12,6 +12,10 @@ type WorkshopAddonDetailPageData struct {
 	Game                *manmanpb.Game
 	ContainingLibraries []*manmanpb.WorkshopLibrary
 	AvailableLibraries  []*manmanpb.WorkshopLibrary
+	// CollectionChildren holds this addon's own children, populated when Addon.IsCollection.
+	CollectionChildren []*manmanpb.WorkshopAddon
+	// ParentCollection is the collection this addon was created from, populated when Addon.CollectionId != 0.
+	ParentCollection *manmanpb.WorkshopAddon
 }
 
 templ WorkshopAddonDetail(data WorkshopAddonDetailPageData) {
@@ -69,6 +73,39 @@ templ WorkshopAddonDetail(data WorkshopAddonDetailPageData) {
 					</div>
 				</div>
 			</div>
+			<!-- Collection Relationships -->
+			if data.ParentCollection != nil {
+				<div class="bg-indigo-50 dark:bg-indigo-900/20 rounded-lg border border-indigo-200 dark:border-indigo-900 p-4 mb-6 text-sm">
+					<span class="text-indigo-900 dark:text-indigo-200">Part of collection: </span>
+					<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", data.ParentCollection.AddonId)) } class="font-semibold text-indigo-700 dark:text-indigo-300 hover:underline">{ data.ParentCollection.Name }</a>
+				</div>
+			}
+			if data.Addon.IsCollection {
+				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6 mb-6">
+					<div class="flex justify-between items-center mb-4">
+						<h2 class="text-lg font-bold text-gray-900 dark:text-white">Collection Items</h2>
+						<span class="text-sm text-gray-500 dark:text-gray-400">{ fmt.Sprintf("%d items", len(data.CollectionChildren)) }</span>
+					</div>
+					if len(data.CollectionChildren) > 0 {
+						<div class="space-y-2">
+							for _, child := range data.CollectionChildren {
+								<div class="flex justify-between items-center p-3 bg-gray-50 dark:bg-slate-900 rounded-lg border border-gray-200 dark:border-slate-700">
+									<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", child.AddonId)) } class="font-semibold text-sm text-gray-900 dark:text-white hover:text-blue-600">{ child.Name }</a>
+									<span class="text-xs text-gray-500 dark:text-gray-400">
+										if child.FileSizeBytes > 0 {
+											{ fmt.Sprintf("%.1f MB", float64(child.FileSizeBytes)/1048576) }
+										} else {
+											Unknown size
+										}
+									</span>
+								</div>
+							}
+						</div>
+					} else {
+						<div class="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">No items found for this collection</div>
+					}
+				</div>
+			}
 			<!-- Description -->
 			if data.Addon.Description != "" {
 				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-5 mb-6">
