@@ -480,7 +480,7 @@ func planRelease(p planParams) (*PlanResult, error) {
 						releaseApps = filterOutDemo(releaseApps)
 					}
 				} else {
-					releaseApps, err = resolveAppsPreferDomain(strings.Split(p.requestedApps, ","), allApps)
+					releaseApps, err = resolveApps(strings.Split(p.requestedApps, ","), allApps)
 					if err != nil {
 						return nil, err
 					}
@@ -973,42 +973,27 @@ func incrementVersion(ver, incrementType string) (string, error) {
 	return next.String(), nil
 }
 
-// resolveApps matches requested app names (full, short, or domain) against
-// allApps, preferring an unambiguous app-name match over a same-named
-// domain sweep. Use this for callers that resolve one specific, named app
-// (package-assets, build-app-adjacent single lookups): a domain and an app
-// name can collide (e.g. domain "app-registry" for the server/worker/ui
-// components vs. app name "app-registry" for the tools-domain CLI), and
-// asking for one app by name means that app, not every app in a
-// same-named domain. Callers that build a release matrix from a raw,
-// possibly multi-domain --apps list should use resolveAppsPreferDomain
-// instead, so a bare domain name that happens to collide with one of its
-// own sibling domains' app names still reaches the whole domain.
+// resolveApps matches requested app identifiers against allApps. Each
+// identifier must be either an app's full name ("<domain>-<name>" or
+// "<domain>/<name>") or a bare domain name (which sweeps every app in that
+// domain). A bare, unqualified app name is deliberately NOT matched: an app
+// name and a domain name can collide (e.g. domain "app-registry" for the
+// server/migrate/worker/ui components vs. app name "app-registry" for the
+// unrelated tools-domain CLI, full name "tools-app-registry") and there is
+// no context-free way to tell which one a bare name means. Domain sweeps
+// are a release-v1 convenience only, on life support until the App
+// Registry-backed release-v2 checkbox picker (which always supplies full
+// names, see AppMetadataFromInputs) fully replaces it -- so the fix here is
+// to require full names rather than to keep growing collision-avoidance
+// heuristics for short names.
 func resolveApps(requested []string, allApps []AppMetadata) ([]AppMetadata, error) {
-	return resolveAppsWithPolicy(requested, allApps, false)
-}
-
-// resolveAppsPreferDomain is resolveApps but tries a domain sweep before an
-// unambiguous same-named app. See resolveApps' doc comment for when to use
-// which: this is for callers assembling a release matrix from a raw --apps
-// list (plan's own --apps flag, plan-openapi-builds), where a bare
-// "app-registry" must still be able to reach the app-registry *domain*
-// (server/migrate/worker/ui) even though "app-registry" is also the literal
-// name of an unrelated CLI app that happens to live in the tools domain.
-func resolveAppsPreferDomain(requested []string, allApps []AppMetadata) ([]AppMetadata, error) {
-	return resolveAppsWithPolicy(requested, allApps, true)
-}
-
-func resolveAppsWithPolicy(requested []string, allApps []AppMetadata, preferDomain bool) ([]AppMetadata, error) {
 	// Build lookup maps
 	byFull := make(map[string]AppMetadata)
-	byName := make(map[string][]AppMetadata)
 	byDomain := make(map[string][]AppMetadata)
 
 	for _, app := range allApps {
 		byFull[app.FullName()] = app
 		byFull[app.Domain+"/"+app.Name] = app
-		byName[app.Name] = append(byName[app.Name], app)
 		byDomain[app.Domain] = append(byDomain[app.Domain], app)
 	}
 
@@ -1024,31 +1009,8 @@ func resolveAppsWithPolicy(requested []string, allApps []AppMetadata, preferDoma
 			result = append(result, app)
 			continue
 		}
-		if preferDomain {
-			if domainApps, ok := byDomain[req]; ok {
-				result = append(result, domainApps...)
-				continue
-			}
-			if nameApps, ok := byName[req]; ok && len(nameApps) == 1 {
-				result = append(result, nameApps[0])
-				continue
-			}
-		} else {
-			if nameApps, ok := byName[req]; ok && len(nameApps) == 1 {
-				result = append(result, nameApps[0])
-				continue
-			}
-			if domainApps, ok := byDomain[req]; ok {
-				result = append(result, domainApps...)
-				continue
-			}
-		}
-		if nameApps, ok := byName[req]; ok {
-			names := make([]string, len(nameApps))
-			for i, a := range nameApps {
-				names[i] = a.FullName()
-			}
-			invalid = append(invalid, fmt.Sprintf("%s (ambiguous: %s)", req, strings.Join(names, ", ")))
+		if domainApps, ok := byDomain[req]; ok {
+			result = append(result, domainApps...)
 			continue
 		}
 		invalid = append(invalid, req)

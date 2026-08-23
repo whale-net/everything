@@ -39,7 +39,7 @@ func newPlanOpenapiBuildsCmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error: --apps is required and cannot be empty\n")
 				return fmt.Errorf("app list cannot be empty")
 			}
-			resolved, err := resolveAppsPreferDomain(requested, allApps)
+			resolved, err := resolveApps(requested, allApps)
 			if err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Error validating apps: %v\n", err)
 				return err
