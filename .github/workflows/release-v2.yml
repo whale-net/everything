@@ -268,10 +268,23 @@ jobs:
 
           # resolve_binary_url mirrors download-release-tools/action.yml's
           # function of the same name (#983/#985): calls
-          # ArtifactRegistry/ResolveBinaryURL for tool+ver+os/arch, returning
-          # non-zero (no stdout) if the binary+version isn't a confirmed,
-          # published S3 object -- that failure IS "does not exist" for this
-          # probe's purposes, replacing the old `gh release view` check.
+          # ArtifactRegistry/ResolveBinaryURL for tool+ver+os/arch, then HEADs
+          # the returned download_url itself before trusting it -- a promoted/
+          # recorded version in App Registry's DB does not guarantee the S3
+          # object was actually written (the publish-side upload is best-
+          # effort/non-blocking, see worker/release/finalize.go's
+          # publishCLIBinaries), so ResolveBinaryURL alone can return a URL
+          # for an object that was never uploaded (observed in run
+          # 32615125644: RPC succeeded, S3 GET 400'd, empty bucket). Returns
+          # non-zero (no stdout) if the binary+version isn't BOTH resolvable
+          # AND actually fetchable -- that failure IS "does not exist" for
+          # this probe's purposes, replacing the old `gh release view` check.
+          # This is what makes this probe self-healing for the bootstrap
+          # case: a phantom promoted-but-unpublished version now falls
+          # through to needs_build=true/source=artifact below, which builds
+          # once via Bazel and uploads a workflow artifact every downstream
+          # job's download-release-tools call already knows how to consume
+          # (source: artifact needs no Bazel toolchain in the consuming job).
           # TARGET_OS/TARGET_ARCH are hardcoded to this job's own runner
           # platform (ubuntu-latest == linux/amd64), matching what
           # download-release-tools auto-detects when its target_os/
@@ -308,6 +321,13 @@ jobs:
             fi
             download_url="$(echo "$resp_json" | jq -r '.downloadUrl // .download_url // empty' 2>/dev/null)" || true
             [[ -z "$download_url" ]] && return 1
+
+            local http_code
+            http_code="$(curl -s -o /dev/null -w '%{http_code}' -I -m 15 "$download_url" 2>/dev/null)" || true
+            if [[ "$http_code" != "200" ]]; then
+              echo "Notice: $tool $ver resolved to a download_url but HEAD returned HTTP ${http_code:-<none>} (object not actually available in S3)" >&2
+              return 1
+            fi
             return 0
           }
 
