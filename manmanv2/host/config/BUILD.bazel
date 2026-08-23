@@ -6,7 +6,9 @@ go_library(
     importpath = "github.com/whale-net/everything/manmanv2/host/config",
     visibility = ["//visibility:public"],
     deps = [
+        "//manmanv2/models",
         "//manmanv2/protos:manmanpb",
+        "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )
 
@@ -16,5 +18,6 @@ go_test(
     embed = [":config"],
     deps = [
         "//manmanv2/protos:manmanpb",
+        "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )

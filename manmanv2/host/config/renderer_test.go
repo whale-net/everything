@@ -1,12 +1,14 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	pb "github.com/whale-net/everything/manmanv2/protos"
+	"gopkg.in/yaml.v3"
 )
 
 func TestRenderPropertiesFilePreservesUnchangedProperties(t *testing.T) {
@@ -200,13 +202,18 @@ func TestRenderConfigurationsMultipleFiles(t *testing.T) {
 		t.Fatalf("Failed to render configurations: %v", err)
 	}
 
-	// Should only render the properties file (JSON not implemented yet)
-	if len(files) != 1 {
-		t.Fatalf("Expected 1 file (only properties), got %d", len(files))
+	if len(files) != 2 {
+		t.Fatalf("Expected 2 files, got %d", len(files))
 	}
 
 	if files[0].HostPath != filepath.Join(baseDataDir, "data/server.properties") {
 		t.Errorf("Incorrect host path for server.properties")
+	}
+	if files[1].HostPath != filepath.Join(baseDataDir, "data/whitelist.json") {
+		t.Errorf("Incorrect host path for whitelist.json")
+	}
+	if strings.TrimSpace(files[1].Content) != "[]" {
+		t.Errorf("Expected whitelist content '[]', got %q", files[1].Content)
 	}
 }
 
@@ -566,4 +573,272 @@ motd=Custom Server`
 	t.Logf("   patch_order=1: max-players=50, motd=Custom Server")
 	t.Logf("   Final: max-players=%s (patch_order=1 wins), difficulty=%s (patch_order=0 survives)",
 		properties["max-players"], properties["difficulty"])
+}
+
+func TestRenderEnvVarsFromConfig(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Server Env",
+		StrategyType:    "env_vars",
+		TargetPath:      "/data/server.env",
+		BaseContent:     "EULA=false\nMEMORY=1024M",
+		RenderedContent: "EULA=true",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	properties := parsePropertiesFile(files[0].Content)
+	if properties["EULA"] != "true" {
+		t.Errorf("EULA not overridden: got %q", properties["EULA"])
+	}
+	if properties["MEMORY"] != "1024M" {
+		t.Errorf("MEMORY not preserved: got %q", properties["MEMORY"])
+	}
+}
+
+func TestRenderEnvVarsWithoutTargetPathIsSkipped(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Server Env",
+		StrategyType:    "env_vars",
+		RenderedContent: "EULA=true",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("Expected 0 files when target path is empty, got %d", len(files))
+	}
+}
+
+func TestRenderCLIArgsFromConfig(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Server Args",
+		StrategyType:    "cli_args",
+		TargetPath:      "/data/args.txt",
+		BaseContent:     "--memory=1G\n--world=world\n--nogui",
+		RenderedContent: "--memory=4G",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	lines := strings.Split(files[0].Content, "\n")
+	expected := []string{"--memory=4G", "--world=world", "--nogui"}
+	if len(lines) != len(expected) {
+		t.Fatalf("Expected %d lines, got %d: %v", len(expected), len(lines), lines)
+	}
+	for i, e := range expected {
+		if lines[i] != e {
+			t.Errorf("Line %d: expected %q, got %q", i, e, lines[i])
+		}
+	}
+}
+
+func TestRenderJSONFileMergePatch(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Whitelist Config",
+		StrategyType:    "file_json",
+		TargetPath:      "/data/config.json",
+		BaseContent:     `{"port": 25565, "settings": {"pvp": true, "difficulty": "normal"}}`,
+		RenderedContent: `{"port": 25566, "settings": {"difficulty": "hard"}}`,
+		PatchFormat:     "json_merge_patch",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	var doc map[string]interface{}
+	if err := json.Unmarshal([]byte(files[0].Content), &doc); err != nil {
+		t.Fatalf("Rendered content is not valid JSON: %v", err)
+	}
+
+	if doc["port"] != float64(25566) {
+		t.Errorf("port not overridden: got %v", doc["port"])
+	}
+	settings, ok := doc["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings is not an object: %v", doc["settings"])
+	}
+	if settings["difficulty"] != "hard" {
+		t.Errorf("difficulty not overridden: got %v", settings["difficulty"])
+	}
+	if settings["pvp"] != true {
+		t.Errorf("pvp not preserved by merge: got %v", settings["pvp"])
+	}
+}
+
+func TestRenderJSONFileJSONPatch(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Whitelist Config",
+		StrategyType:    "file_json",
+		TargetPath:      "/data/config.json",
+		BaseContent:     `{"port": 25565, "tags": ["a", "b"]}`,
+		RenderedContent: `[{"op": "replace", "path": "/port", "value": 25566}, {"op": "add", "path": "/tags/-", "value": "c"}, {"op": "remove", "path": "/tags/0"}]`,
+		PatchFormat:     "json_patch",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	var doc map[string]interface{}
+	if err := json.Unmarshal([]byte(files[0].Content), &doc); err != nil {
+		t.Fatalf("Rendered content is not valid JSON: %v", err)
+	}
+
+	if doc["port"] != float64(25566) {
+		t.Errorf("port not replaced: got %v", doc["port"])
+	}
+	tags, ok := doc["tags"].([]interface{})
+	if !ok {
+		t.Fatalf("tags is not an array: %v", doc["tags"])
+	}
+	if len(tags) != 2 || tags[0] != "b" || tags[1] != "c" {
+		t.Errorf("tags not patched as expected: got %v", tags)
+	}
+}
+
+func TestRenderYAMLFileMerge(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Server YAML",
+		StrategyType:    "file_yaml",
+		TargetPath:      "/data/config.yaml",
+		BaseContent:     "port: 25565\nsettings:\n  pvp: true\n  difficulty: normal\n",
+		RenderedContent: "settings:\n  difficulty: hard\n",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	var doc map[string]interface{}
+	if err := yaml.Unmarshal([]byte(files[0].Content), &doc); err != nil {
+		t.Fatalf("Rendered content is not valid YAML: %v", err)
+	}
+
+	settings, ok := doc["settings"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("settings is not a map: %v", doc["settings"])
+	}
+	if settings["difficulty"] != "hard" {
+		t.Errorf("difficulty not overridden: got %v", settings["difficulty"])
+	}
+	if settings["pvp"] != true {
+		t.Errorf("pvp not preserved by merge: got %v", settings["pvp"])
+	}
+	if doc["port"] != 25565 {
+		t.Errorf("port not preserved: got %v", doc["port"])
+	}
+}
+
+func TestRenderINIFileMerge(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName: "Server INI",
+		StrategyType: "file_ini",
+		TargetPath:   "/data/config.ini",
+		BaseContent: `global_setting=1
+[server]
+port=25565
+difficulty=normal`,
+		RenderedContent: `[server]
+difficulty=hard`,
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+
+	sections := parseINIFile(files[0].Content)
+	if sections[""]["global_setting"] != "1" {
+		t.Errorf("global_setting not preserved: got %v", sections[""])
+	}
+	if sections["server"]["difficulty"] != "hard" {
+		t.Errorf("difficulty not overridden: got %v", sections["server"])
+	}
+	if sections["server"]["port"] != "25565" {
+		t.Errorf("port not preserved: got %v", sections["server"])
+	}
+}
+
+func TestRenderOpaqueFileReplacesWholesale(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName:    "Custom Lua Script",
+		StrategyType:    "file_lua",
+		TargetPath:      "/data/config.lua",
+		BaseContent:     "return { motd = 'base' }",
+		RenderedContent: "return { motd = 'patched' }",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("Expected 1 file, got %d", len(files))
+	}
+	if files[0].Content != "return { motd = 'patched' }" {
+		t.Errorf("Expected patch to replace content wholesale, got %q", files[0].Content)
+	}
+}
+
+func TestRenderVolumeStrategySkipped(t *testing.T) {
+	renderer := NewRenderer(nil)
+
+	config := &pb.RenderedConfiguration{
+		StrategyName: "Mods Volume",
+		StrategyType: "volume",
+	}
+
+	files, err := renderer.RenderConfigurations([]*pb.RenderedConfiguration{config}, t.TempDir())
+	if err != nil {
+		t.Fatalf("Failed to render configurations: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("Expected volume strategy to produce no file, got %d", len(files))
+	}
 }

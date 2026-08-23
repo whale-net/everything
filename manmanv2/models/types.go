@@ -85,6 +85,7 @@ const (
 	PatchFormatJSONMergePatch = "json_merge_patch"
 	PatchFormatJSONPatch      = "json_patch"
 	PatchFormatYAMLMerge      = "yaml_merge"
+	PatchFormatProperties     = "properties"
 
 	// Log archival states
 	LogStateComplete = "complete"
