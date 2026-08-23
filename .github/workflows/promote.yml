@@ -110,7 +110,7 @@ jobs:
         echo "✅ inputs validated"
 
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     # Read from *this job's* Environment secrets (scoped by `environment:`
     # above), never from repository secrets. See DEPLOY.md "Where each
