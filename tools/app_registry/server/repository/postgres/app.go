@@ -35,7 +35,7 @@ func scanApp(row pgx.Row) (repository.App, error) {
 	return a, nil
 }
 
-const chartColumns = `chart_id, domain, name, description, chart_repository, deploy_unit, status, first_seen_at, last_seen_at, argo_application_name_overrides`
+const chartColumns = `chart_id, domain, name, description, chart_repository, deploy_unit, status, first_seen_at, last_seen_at`
 
 // chartColumnsQualified is chartColumns with the v_current_chart alias
 // prefixed on every column, for use in queries that join v_current_chart
@@ -43,12 +43,12 @@ const chartColumns = `chart_id, domain, name, description, chart_repository, dep
 // chart_app), where an unqualified `chart_id` in the SELECT list is
 // ambiguous to Postgres (SQLSTATE 42702). Column order matches chartColumns
 // so scanChart can be reused unchanged.
-const chartColumnsQualified = `c.chart_id, c.domain, c.name, c.description, c.chart_repository, c.deploy_unit, c.status, c.first_seen_at, c.last_seen_at, c.argo_application_name_overrides`
+const chartColumnsQualified = `c.chart_id, c.domain, c.name, c.description, c.chart_repository, c.deploy_unit, c.status, c.first_seen_at, c.last_seen_at`
 
 func scanChart(row pgx.Row) (repository.Chart, error) {
 	var c repository.Chart
 	var deployUnit, status string
-	if err := row.Scan(&c.ChartID, &c.Domain, &c.Name, &c.Description, &c.ChartRepository, &deployUnit, &status, &c.FirstSeenAt, &c.LastSeenAt, &c.ArgoApplicationNameOverrides); err != nil {
+	if err := row.Scan(&c.ChartID, &c.Domain, &c.Name, &c.Description, &c.ChartRepository, &deployUnit, &status, &c.FirstSeenAt, &c.LastSeenAt); err != nil {
 		return repository.Chart{}, err
 	}
 	c.DeployUnit = deployUnitFromDB(deployUnit)
@@ -920,6 +920,29 @@ func (r *appRepo) chartAppIDs(ctx context.Context, chartID string) ([]string, er
 	return ids, rows.Err()
 }
 
+// chartArgoOverrides reads chart_argo_application_override (migration 022)
+// for chartID into a map[environment_key]argo_application_name -- see
+// Chart.ResolveArgoApplicationName. Kept out of chartColumns/scanChart
+// deliberately (see migration 022's doc comment): those back Reconcile's
+// "mark missing charts" sweep, which must never depend on this table's
+// existence at whatever migration step a caller has applied.
+func (r *appRepo) chartArgoOverrides(ctx context.Context, chartID string) (map[string]string, error) {
+	rows, err := r.ex.Query(ctx, `SELECT environment_key, argo_application_name FROM chart_argo_application_override WHERE chart_id = $1`, chartID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	overrides := map[string]string{}
+	for rows.Next() {
+		var env, name string
+		if err := rows.Scan(&env, &name); err != nil {
+			return nil, err
+		}
+		overrides[env] = name
+	}
+	return overrides, rows.Err()
+}
+
 func (r *appRepo) ListApps(ctx context.Context, filter repository.AppListFilter) ([]repository.App, error) {
 	statuses := filter.Statuses
 	if len(statuses) == 0 {
@@ -1001,6 +1024,9 @@ func (r *appRepo) ChartsForApp(ctx context.Context, appID string) ([]repository.
 		if ids, err := r.chartAppIDs(ctx, c.ChartID); err == nil {
 			c.AppIDs = ids
 		}
+		if overrides, err := r.chartArgoOverrides(ctx, c.ChartID); err == nil {
+			c.ArgoApplicationNameOverrides = overrides
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -1038,6 +1064,9 @@ func (r *appRepo) ListCharts(ctx context.Context, filter repository.ChartListFil
 		if ids, err := r.chartAppIDs(ctx, c.ChartID); err == nil {
 			c.AppIDs = ids
 		}
+		if overrides, err := r.chartArgoOverrides(ctx, c.ChartID); err == nil {
+			c.ArgoApplicationNameOverrides = overrides
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -1055,6 +1084,9 @@ func (r *appRepo) GetChartByID(ctx context.Context, chartID string) (*repository
 	if ids, err := r.chartAppIDs(ctx, c.ChartID); err == nil {
 		c.AppIDs = ids
 	}
+	if overrides, err := r.chartArgoOverrides(ctx, c.ChartID); err == nil {
+		c.ArgoApplicationNameOverrides = overrides
+	}
 	return &c, nil
 }
 
@@ -1069,6 +1101,9 @@ func (r *appRepo) GetChartByFullName(ctx context.Context, fullName string) (*rep
 	}
 	if ids, err := r.chartAppIDs(ctx, c.ChartID); err == nil {
 		c.AppIDs = ids
+	}
+	if overrides, err := r.chartArgoOverrides(ctx, c.ChartID); err == nil {
+		c.ArgoApplicationNameOverrides = overrides
 	}
 	return &c, nil
 }
@@ -1121,18 +1156,32 @@ func (r *appRepo) SetAppStatus(ctx context.Context, appID string, target reposit
 // set/delete rather than a whole-map replace. Reconcile/ReconcileApps above
 // never touch this column at all, so an admin-set override survives
 // reconciliation. See repository.Chart.ResolveArgoApplicationName.
+// SetChartArgoApplicationNameOverride sets (argoApplicationName non-empty)
+// or clears (argoApplicationName == "") the chart_argo_application_override
+// row for exactly one (chartID, environmentKey) pair -- every other
+// environment's override on this chart is untouched (migration 022). The
+// upfront GetChartByID existence check (rather than relying on RowsAffected
+// from the write below) is deliberate: a DELETE against a nonexistent
+// chartID silently affects 0 rows either way, and an INSERT against one
+// would surface as a foreign-key violation, not a clean ErrNotFound --
+// checking first gives SetAppStatus's existence-check convention instead.
 func (r *appRepo) SetChartArgoApplicationNameOverride(ctx context.Context, chartID, environmentKey, argoApplicationName string) (*repository.Chart, error) {
-	tag, err := r.ex.Exec(ctx, `
-		UPDATE chart SET argo_application_name_overrides =
-			CASE WHEN $3 = '' THEN argo_application_name_overrides - $2
-			     ELSE jsonb_set(argo_application_name_overrides, ARRAY[$2], to_jsonb($3::text), true)
-			END
-		WHERE chart_id = $1`, chartID, environmentKey, argoApplicationName)
+	if _, err := r.GetChartByID(ctx, chartID); err != nil {
+		return nil, err
+	}
+
+	var err error
+	if argoApplicationName == "" {
+		_, err = r.ex.Exec(ctx, `DELETE FROM chart_argo_application_override WHERE chart_id = $1 AND environment_key = $2`, chartID, environmentKey)
+	} else {
+		_, err = r.ex.Exec(ctx, `
+			INSERT INTO chart_argo_application_override (chart_id, environment_key, argo_application_name, updated_at)
+			VALUES ($1, $2, $3, now())
+			ON CONFLICT (chart_id, environment_key) DO UPDATE SET argo_application_name = EXCLUDED.argo_application_name, updated_at = EXCLUDED.updated_at`,
+			chartID, environmentKey, argoApplicationName)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("set chart argo application name override: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return nil, repository.ErrNotFound
 	}
 	return r.GetChartByID(ctx, chartID)
 }

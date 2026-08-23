@@ -137,21 +137,23 @@ func withRegistryClients(appClient pb.AppRegistryClient, artifactClient pb.Artif
 
 // FakeAppRegistryClient is an in-memory test implementation of pb.AppRegistryClient.
 type FakeAppRegistryClient struct {
-	ReconcileAppsFn     func(ctx context.Context, in *pb.ReconcileAppsRequest, opts ...grpc.CallOption) (*pb.ReconcileAppsResponse, error)
-	AssertAppsFn        func(ctx context.Context, in *pb.AssertAppsRequest, opts ...grpc.CallOption) (*pb.AssertAppsResponse, error)
-	ListAppsFn          func(ctx context.Context, in *pb.ListAppsRequest, opts ...grpc.CallOption) (*pb.ListAppsResponse, error)
-	GetAppFn            func(ctx context.Context, in *pb.GetAppRequest, opts ...grpc.CallOption) (*pb.GetAppResponse, error)
-	ListChartsFn        func(ctx context.Context, in *pb.ListChartsRequest, opts ...grpc.CallOption) (*pb.ListChartsResponse, error)
-	SetAppStatusFn      func(ctx context.Context, in *pb.SetAppStatusRequest, opts ...grpc.CallOption) (*pb.SetAppStatusResponse, error)
-	ListReconcileRunsFn func(ctx context.Context, in *pb.ListReconcileRunsRequest, opts ...grpc.CallOption) (*pb.ListReconcileRunsResponse, error)
+	ReconcileAppsFn                       func(ctx context.Context, in *pb.ReconcileAppsRequest, opts ...grpc.CallOption) (*pb.ReconcileAppsResponse, error)
+	AssertAppsFn                          func(ctx context.Context, in *pb.AssertAppsRequest, opts ...grpc.CallOption) (*pb.AssertAppsResponse, error)
+	ListAppsFn                            func(ctx context.Context, in *pb.ListAppsRequest, opts ...grpc.CallOption) (*pb.ListAppsResponse, error)
+	GetAppFn                              func(ctx context.Context, in *pb.GetAppRequest, opts ...grpc.CallOption) (*pb.GetAppResponse, error)
+	ListChartsFn                          func(ctx context.Context, in *pb.ListChartsRequest, opts ...grpc.CallOption) (*pb.ListChartsResponse, error)
+	SetAppStatusFn                        func(ctx context.Context, in *pb.SetAppStatusRequest, opts ...grpc.CallOption) (*pb.SetAppStatusResponse, error)
+	ListReconcileRunsFn                   func(ctx context.Context, in *pb.ListReconcileRunsRequest, opts ...grpc.CallOption) (*pb.ListReconcileRunsResponse, error)
+	SetChartArgoApplicationNameOverrideFn func(ctx context.Context, in *pb.SetChartArgoApplicationNameOverrideRequest, opts ...grpc.CallOption) (*pb.SetChartArgoApplicationNameOverrideResponse, error)
 
-	ReconcileAppsCalls     []*pb.ReconcileAppsRequest
-	AssertAppsCalls        []*pb.AssertAppsRequest
-	ListAppsCalls          []*pb.ListAppsRequest
-	GetAppCalls            []*pb.GetAppRequest
-	ListChartsCalls        []*pb.ListChartsRequest
-	SetAppStatusCalls      []*pb.SetAppStatusRequest
-	ListReconcileRunsCalls []*pb.ListReconcileRunsRequest
+	ReconcileAppsCalls                       []*pb.ReconcileAppsRequest
+	AssertAppsCalls                          []*pb.AssertAppsRequest
+	ListAppsCalls                            []*pb.ListAppsRequest
+	GetAppCalls                              []*pb.GetAppRequest
+	ListChartsCalls                          []*pb.ListChartsRequest
+	SetAppStatusCalls                        []*pb.SetAppStatusRequest
+	ListReconcileRunsCalls                   []*pb.ListReconcileRunsRequest
+	SetChartArgoApplicationNameOverrideCalls []*pb.SetChartArgoApplicationNameOverrideRequest
 }
 
 // NewFakeAppRegistryClient creates a new FakeAppRegistryClient.
@@ -213,6 +215,14 @@ func (f *FakeAppRegistryClient) ListReconcileRuns(ctx context.Context, in *pb.Li
 		return f.ListReconcileRunsFn(ctx, in, opts...)
 	}
 	return &pb.ListReconcileRunsResponse{}, nil
+}
+
+func (f *FakeAppRegistryClient) SetChartArgoApplicationNameOverride(ctx context.Context, in *pb.SetChartArgoApplicationNameOverrideRequest, opts ...grpc.CallOption) (*pb.SetChartArgoApplicationNameOverrideResponse, error) {
+	f.SetChartArgoApplicationNameOverrideCalls = append(f.SetChartArgoApplicationNameOverrideCalls, in)
+	if f.SetChartArgoApplicationNameOverrideFn != nil {
+		return f.SetChartArgoApplicationNameOverrideFn(ctx, in, opts...)
+	}
+	return &pb.SetChartArgoApplicationNameOverrideResponse{}, nil
 }
 
 // FakeArtifactRegistryClient is an in-memory test implementation of pb.ArtifactRegistryClient.

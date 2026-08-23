@@ -117,7 +117,10 @@ verbatim (`workflow.go`) rather than re-deriving it.
 
 Ad-hoc/legacy deployments whose real ArgoCD Application name doesn't follow
 that convention can override it, one environment at a time:
-`Chart.ArgoApplicationNameOverrides` (migration 022) is a map of
+`Chart.ArgoApplicationNameOverrides` (backed by the `chart_argo_application_override`
+table, migration 022 — deliberately not a column on `chart`/`v_current_chart`,
+which back `Reconcile`'s "mark missing charts" sweep and would otherwise
+couple every `ReconcileApps` call to this migration's existence) is a map of
 environment key -> explicit Application name, settable only via
 `AppRepository.SetChartArgoApplicationNameOverride` (exposed as the
 `SetChartArgoApplicationNameOverride` RPC and the `app-registry chart
@@ -130,7 +133,7 @@ Overrides are deliberately per-environment rather than a single per-chart
 value or template, because an ad-hoc deployment's naming can differ
 unrelatedly between environments — e.g. dev named `foo-dev-app`, prod named
 `prod-svc-foo`, sharing no pattern at all; setting dev's override never
-touches prod's. `ReconcileApps` never writes this column, so admin-set
+touches prod's. `ReconcileApps` never writes this table, so admin-set
 overrides survive reconciliation.
 
 This is a **distinct, new mechanism** from `Environment.gitops_path` above —
