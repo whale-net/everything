@@ -25,42 +25,42 @@ templ WorkshopLibraryDetail(data WorkshopLibraryDetailPageData) {
 			<div class="flex flex-col md:flex-row justify-between items-start gap-4 mb-6">
 				<div>
 					<div class="flex items-center gap-2 mb-2 text-sm">
-						<a href="/workshop/library" class="text-gray-600 dark:text-gray-400 hover:text-blue-600">Workshop</a>
-						<span class="text-gray-400">›</span>
-						<span class="text-gray-900 dark:text-white">{ data.Library.Name }</span>
+						<a href="/workshop/library" class="text-base-content/60 hover:text-primary">Workshop</a>
+						<span class="text-base-content/40">›</span>
+						<span class="text-base-content">{ data.Library.Name }</span>
 					</div>
-					<h1 class="text-3xl font-bold text-gray-900 dark:text-white mb-2">{ data.Library.Name }</h1>
+					<h1 class="text-3xl font-bold text-base-content mb-2">{ data.Library.Name }</h1>
 					<div class="flex items-center gap-2 flex-wrap">
-						<span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">Library</span>
+						<span class="badge badge-warning badge-soft">Library</span>
 						if data.Game != nil {
-							<span class="inline-flex items-center px-3 py-1 rounded text-xs font-semibold bg-gray-100 text-gray-700 dark:bg-slate-700 dark:text-gray-300">{ data.Game.Name }</span>
+							<span class="badge badge-neutral badge-soft">{ data.Game.Name }</span>
 						}
-						<span class="text-sm text-gray-500 dark:text-gray-400">{ fmt.Sprintf("%d addons", len(data.Addons)) }</span>
+						<span class="text-sm text-base-content/60">{ fmt.Sprintf("%d addons", len(data.Addons)) }</span>
 					</div>
 				</div>
 				<div class="flex gap-2">
-					<button @click="editLib = !editLib" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">Edit</button>
+					<button @click="editLib = !editLib" class="btn btn-primary">Edit</button>
 				</div>
 			</div>
 			<!-- Description -->
 			if data.Library.Description != "" {
-				<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-5 mb-6">
-					<div class="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">{ data.Library.Description }</div>
+				<div class="bg-base-100 rounded-box border border-base-300 p-5 mb-6">
+					<div class="text-sm text-base-content leading-relaxed">{ data.Library.Description }</div>
 				</div>
 			}
 			<!-- Edit Form -->
-			<div x-show="editLib" x-cloak class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6 mb-6">
-				<h2 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Edit Library</h2>
+			<div x-show="editLib" x-cloak class="bg-base-100 rounded-box border border-base-300 p-6 mb-6">
+				<h2 class="text-lg font-bold text-base-content mb-4">Edit Library</h2>
 				<form method="POST" action="/workshop/update-library" class="space-y-4">
 					<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", data.Library.LibraryId) }/>
 					<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 						<div>
-							<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Name</label>
-							<input type="text" name="name" value={ data.Library.Name } required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+							<label class="block text-sm font-medium text-base-content mb-2">Name</label>
+							<input type="text" name="name" value={ data.Library.Name } required class="input input-bordered w-full"/>
 						</div>
 						<div>
-							<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Game</label>
-							<select name="game_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+							<label class="block text-sm font-medium text-base-content mb-2">Game</label>
+							<select name="game_id" required class="select select-bordered w-full">
 								for _, game := range data.Games {
 									<option value={ fmt.Sprintf("%d", game.GameId) } selected?={ data.Library.GameId == game.GameId }>{ game.Name }</option>
 								}
@@ -68,92 +68,94 @@ templ WorkshopLibraryDetail(data WorkshopLibraryDetailPageData) {
 						</div>
 					</div>
 					<div>
-						<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Description</label>
-						<textarea name="description" rows="3" class="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">{ data.Library.Description }</textarea>
+						<label class="block text-sm font-medium text-base-content mb-2">Description</label>
+						<textarea name="description" rows="3" class="textarea textarea-bordered w-full">{ data.Library.Description }</textarea>
 					</div>
 					<div class="flex gap-2">
-						<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">Save Changes</button>
-						<button type="button" @click="editLib = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+						<button type="submit" class="btn btn-success">Save Changes</button>
+						<button type="button" @click="editLib = false" class="btn btn-secondary">Cancel</button>
 					</div>
 				</form>
 			</div>
 			<!-- Addons in Library -->
-			<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6 mb-6">
+			<div class="bg-base-100 rounded-box border border-base-300 p-6 mb-6">
 				<div class="flex justify-between items-center mb-4">
-					<h2 class="text-lg font-bold text-gray-900 dark:text-white">Addons in Library</h2>
-					<span class="text-sm text-gray-500 dark:text-gray-400">{ fmt.Sprintf("%d addons", len(data.Addons)) }</span>
+					<h2 class="text-lg font-bold text-base-content">Addons in Library</h2>
+					<span class="text-sm text-base-content/60">{ fmt.Sprintf("%d addons", len(data.Addons)) }</span>
 				</div>
 				if len(data.Addons) > 0 {
-					<div class="divide-y divide-gray-200 dark:divide-slate-700">
+					<div class="divide-y divide-base-300">
 						for _, addon := range data.Addons {
-							<div class="flex justify-between items-center py-3 hover:bg-gray-50 dark:hover:bg-slate-900 px-3 -mx-3 rounded">
+							<div class="flex justify-between items-center py-3 hover:bg-base-200 px-3 -mx-3 rounded">
 								<div class="flex-1 min-w-0">
-									<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", addon.AddonId)) } class="font-semibold text-sm text-gray-900 dark:text-white hover:text-blue-600 block truncate">{ addon.Name }</a>
+									<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", addon.AddonId)) } class="font-semibold text-sm text-base-content hover:text-primary block truncate">{ addon.Name }</a>
 									<div class="flex gap-2 mt-1 text-xs flex-wrap">
 										if addon.IsCollection {
-											<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200 font-semibold">Collection</span>
+											<span class="badge badge-primary badge-soft">Collection</span>
 										} else {
-											<span class="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 font-semibold">Addon</span>
+											<span class="badge badge-info badge-soft">Addon</span>
 										}
-										<span class="text-gray-500 dark:text-gray-400 font-mono">{ addon.WorkshopId }</span>
+										<span class="text-base-content/60 font-mono">{ addon.WorkshopId }</span>
 									</div>
 								</div>
 								<form method="POST" action="/workshop/remove-addon-from-library">
 									<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", data.Library.LibraryId) }/>
 									<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", addon.AddonId) }/>
-									<button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded transition-colors ml-3">Remove</button>
+									<button type="submit" class="btn btn-error btn-sm ml-3">Remove</button>
 								</form>
 							</div>
 						}
 					</div>
 				} else {
-					<div class="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">No addons in this library</div>
+					<div class="text-center py-8 text-base-content/60 text-sm">No addons in this library</div>
 				}
 			</div>
 			<!-- Add Addons -->
-			<div class="bg-white dark:bg-slate-800 rounded-lg border border-gray-200 dark:border-slate-700 p-6">
-				<h2 class="text-lg font-bold text-gray-900 dark:text-white mb-4">Add Addons</h2>
-				<input type="text" x-model="filterAddons" placeholder="Filter addons..." class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white mb-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+			<div class="bg-base-100 rounded-box border border-base-300 p-6">
+				<h2 class="text-lg font-bold text-base-content mb-4">Add Addons</h2>
+				<input type="text" x-model="filterAddons" placeholder="Filter addons..." class="input input-bordered w-full mb-3"/>
 				if len(data.AvailableAddons) > 0 {
 					<div class="space-y-2 max-h-80 overflow-y-auto">
 						for _, addon := range data.AvailableAddons {
-							<div x-show={ fmt.Sprintf("filterAddons === '' || '%s'.toLowerCase().includes(filterAddons.toLowerCase())", addon.Name) } class="flex justify-between items-center p-3 bg-gray-50 dark:bg-slate-900 rounded-lg border border-transparent hover:border-gray-300 dark:hover:border-slate-600 transition-colors">
+							<div x-show={ fmt.Sprintf("filterAddons === '' || '%s'.toLowerCase().includes(filterAddons.toLowerCase())", addon.Name) } class="flex justify-between items-center p-3 bg-base-200 rounded-box border border-transparent hover:border-base-300 transition-colors">
 								<div class="flex-1 min-w-0">
-									<div class="text-sm text-gray-900 dark:text-white font-medium truncate">{ addon.Name }</div>
-									<div class="text-xs text-gray-500 dark:text-gray-400 font-mono mt-1">{ addon.WorkshopId }</div>
+									<div class="text-sm text-base-content font-medium truncate">{ addon.Name }</div>
+									<div class="text-xs text-base-content/60 font-mono mt-1">{ addon.WorkshopId }</div>
 								</div>
 								<form method="POST" action="/workshop/add-addon-to-library">
 									<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", data.Library.LibraryId) }/>
 									<input type="hidden" name="addon_id" value={ fmt.Sprintf("%d", addon.AddonId) }/>
-									<button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded transition-colors ml-3">Add</button>
+									<button type="submit" class="btn btn-primary btn-sm ml-3">Add</button>
 								</form>
 							</div>
 						}
 					</div>
 				} else {
-					<div class="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">No available addons</div>
+					<div class="text-center py-8 text-base-content/60 text-sm">No available addons</div>
 				}
 			</div>
-			<!-- Danger Zone -->
-			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mt-6">
-				<div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900">
-					<h2 class="text-lg font-semibold text-red-900 dark:text-red-200">⚠️ Danger Zone</h2>
+			<!-- Danger Zone: chrome restyled onto htmxui.Confirm's ZoneTitle visual
+			language; existing Alpine click-to-reveal gate kept as-is (FR7), see
+			sgc_detail.templ's Danger Zone comment for the full rationale. -->
+			<div class="card bg-base-100 border-2 border-error/40 shadow-md overflow-hidden mt-6">
+				<div class="bg-error/10 px-6 py-4 border-b-2 border-error/40">
+					<h2 class="text-lg font-semibold text-error">⚠️ Danger Zone</h2>
 				</div>
-				<div class="p-6">
+				<div class="card-body">
 					<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
 						<div>
-							<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Delete this library</h3>
-							<p class="text-sm text-gray-600 dark:text-gray-400">Permanently delete this library. Addons will not be deleted, only the library grouping. This action cannot be undone.</p>
+							<h3 class="text-sm font-semibold text-base-content mb-1">Delete this library</h3>
+							<p class="text-sm text-base-content/60">Permanently delete this library. Addons will not be deleted, only the library grouping. This action cannot be undone.</p>
 						</div>
 						<div class="flex-shrink-0">
-							<button x-show="!confirmDelete" @click="confirmDelete = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Delete Library</button>
+							<button x-show="!confirmDelete" @click="confirmDelete = true" class="btn btn-error">Delete Library</button>
 							<div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
-								<span class="text-sm text-red-900 dark:text-red-200 font-medium">Are you sure?</span>
+								<span class="text-sm text-error font-medium">Are you sure?</span>
 								<form method="POST" action="/workshop/delete-library" class="inline">
 									<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", data.Library.LibraryId) }/>
-									<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Yes, Delete</button>
+									<button type="submit" class="btn btn-error">Yes, Delete</button>
 								</form>
-								<button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+								<button @click="confirmDelete = false" class="btn btn-secondary">Cancel</button>
 							</div>
 						</div>
 					</div>

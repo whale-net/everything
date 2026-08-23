@@ -2,64 +2,68 @@ package pages
 
 import (
 	"fmt"
-	"github.com/whale-net/everything/manmanv2/ui/components"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
 templ ServerDetail(layout components.LayoutData, server *manmanpb.Server, configs []*manmanpb.ServerGameConfig) {
 	@components.Layout(layout) {
 		<div class="flex justify-between items-center mb-6">
-			<h1 class="text-3xl font-bold text-gray-900 dark:text-white">{ server.Name }</h1>
+			<h1 class="text-3xl font-bold text-base-content">{ server.Name }</h1>
 			<div class="flex gap-2 items-center">
-				@components.ButtonLink(components.ButtonSecondary, components.ButtonSmall, "Back to Servers", "/servers")
-				@components.Badge(serverStatusVariant(server.Status), server.Status)
+				<a href="/servers" class="btn btn-secondary btn-sm">Back to Servers</a>
+				@htmxui.Badge(server.Status, statusBadgeVariant(serverStatusVariant(server.Status)), htmxui.BadgeSizeSM, true, nil)
 			</div>
 		</div>
-		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
-			<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Server Information</h2>
-			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
-				@components.DLItem("Server ID", fmt.Sprintf("%d", server.ServerId))
-				@components.DLItem("Name", server.Name)
-				<div>
-					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Status</dt>
-					<dd class="mt-1">
-						@components.Badge(serverStatusVariant(server.Status), server.Status)
-					</dd>
-				</div>
-				@components.DLItem("Environment", orDash(server.Environment))
-				@components.DLItem("Last Seen", fmt.Sprintf("%s (%s)", timeAgo(server.LastSeen), formatTime(server.LastSeen)))
-			</dl>
+		<div class="card bg-base-100 border border-base-300 shadow-sm mb-6">
+			<div class="card-body">
+				<h2 class="text-lg font-semibold text-base-content mb-4">Server Information</h2>
+				<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+					@components.DLItem("Server ID", fmt.Sprintf("%d", server.ServerId))
+					@components.DLItem("Name", server.Name)
+					<div>
+						<dt class="text-sm font-medium text-base-content/60">Status</dt>
+						<dd class="mt-1">
+							@htmxui.Badge(server.Status, statusBadgeVariant(serverStatusVariant(server.Status)), htmxui.BadgeSizeSM, true, nil)
+						</dd>
+					</div>
+					@components.DLItem("Environment", orDash(server.Environment))
+					@components.DLItem("Last Seen", fmt.Sprintf("%s (%s)", timeAgo(server.LastSeen), formatTime(server.LastSeen)))
+				</dl>
+			</div>
 		</div>
-		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
-			<div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
-				<h2 class="text-lg font-semibold text-slate-900 dark:text-white">Deployments</h2>
-				@components.ButtonLink(components.ButtonPrimary, components.ButtonSmall, "Deploy New Config", "/games")
+		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+			<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
+				<h2 class="text-lg font-semibold text-base-content">Deployments</h2>
+				<a href="/games" class="btn btn-primary btn-sm">Deploy New Config</a>
 			</div>
 			if len(configs) > 0 {
 				<div class="overflow-x-auto">
-					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
-						<thead class="bg-gray-50 dark:bg-slate-900">
+					<table class="table">
+						<thead>
 							<tr>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">ID</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Game Config</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Port Bindings</th>
-								<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
+								<th>ID</th>
+								<th>Game Config</th>
+								<th>Status</th>
+								<th>Port Bindings</th>
+								<th class="text-right">Actions</th>
 							</tr>
 						</thead>
-						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+						<tbody>
 							for _, sgc := range configs {
-								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
-									<td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 dark:text-white">{ fmt.Sprintf("%d", sgc.ServerGameConfigId) }</td>
-									<td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">Config #{ fmt.Sprintf("%d", sgc.GameConfigId) }</td>
-									<td class="px-6 py-4 whitespace-nowrap">
-										@components.Badge(serverStatusVariant(sgc.Status), sgc.Status)
+								<tr class="hover">
+									<td class="text-sm">{ fmt.Sprintf("%d", sgc.ServerGameConfigId) }</td>
+									<td class="text-sm">Config #{ fmt.Sprintf("%d", sgc.GameConfigId) }</td>
+									<td>
+										@htmxui.Badge(sgc.Status, statusBadgeVariant(serverStatusVariant(sgc.Status)), htmxui.BadgeSizeSM, true, nil)
 									</td>
-									<td class="px-6 py-4 whitespace-nowrap text-sm">
+									<td class="text-sm">
 										if len(sgc.PortBindings) > 0 {
 											<div class="flex flex-wrap gap-1">
 												for _, pb := range sgc.PortBindings {
-													<code class="text-xs bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded">
+													<code class="text-xs bg-base-200 text-base-content px-2 py-1 rounded">
 														{ fmt.Sprintf("%d:%d/%s", pb.ContainerPort, pb.HostPort, pb.Protocol) }
 													</code>
 												}
@@ -68,26 +72,25 @@ templ ServerDetail(layout components.LayoutData, server *manmanpb.Server, config
 											-
 										}
 									</td>
-									<td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+									<td class="text-right text-sm font-medium">
 										<div class="flex justify-end gap-2">
-											@components.ButtonLink(components.ButtonSecondary, components.ButtonSmall, "Manage SGC", fmt.Sprintf("/sgc/%d", sgc.ServerGameConfigId))
-											@components.ButtonLink(components.ButtonSecondary, components.ButtonSmall, "View Sessions", fmt.Sprintf("/sessions?server_game_config_id=%d", sgc.ServerGameConfigId))
+											<a href={ templ.URL(fmt.Sprintf("/sgc/%d", sgc.ServerGameConfigId)) } class="btn btn-secondary btn-sm">Manage SGC</a>
+											<a href={ templ.URL(fmt.Sprintf("/sessions?server_game_config_id=%d", sgc.ServerGameConfigId)) } class="btn btn-secondary btn-sm">View Sessions</a>
 											<form method="POST" action="/sessions/start" class="inline-flex items-center gap-2">
 												<input type="hidden" name="server_game_config_id" value={ fmt.Sprintf("%d", sgc.ServerGameConfigId) }/>
-												<label class="flex items-center gap-1 text-xs text-slate-700 dark:text-slate-300">
-													<input type="checkbox" name="force" value="true" class="w-3 h-3"/>
+												<label class="label cursor-pointer gap-1 text-xs text-base-content">
+													<input type="checkbox" name="force" value="true" class="checkbox checkbox-xs"/>
 													Force
 												</label>
-												<button
-													type="submit"
-													class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-md transition-colors"
-													hx-get={ fmt.Sprintf("/api/sessions/check-active?server_game_config_id=%d", sgc.ServerGameConfigId) }
-													hx-trigger="mouseenter once"
-													hx-target={ fmt.Sprintf("#sgc-warning-%d", sgc.ServerGameConfigId) }
-													hx-swap="innerHTML"
-												>
+												@htmxui.Button(htmxui.ButtonSuccess, htmxui.ButtonSizeSM, false, templ.Attributes{
+													"type":       "submit",
+													"hx-get":     fmt.Sprintf("/api/sessions/check-active?server_game_config_id=%d", sgc.ServerGameConfigId),
+													"hx-trigger": "mouseenter once",
+													"hx-target":  fmt.Sprintf("#sgc-warning-%d", sgc.ServerGameConfigId),
+													"hx-swap":    "innerHTML",
+												}) {
 													Start Session
-												</button>
+												}
 											</form>
 											<div id={ fmt.Sprintf("sgc-warning-%d", sgc.ServerGameConfigId) } class="absolute mt-1 min-w-[300px] z-10"></div>
 										</div>
@@ -99,8 +102,8 @@ templ ServerDetail(layout components.LayoutData, server *manmanpb.Server, config
 				</div>
 			} else {
 				<div class="p-12 text-center">
-					<p class="text-slate-600 dark:text-slate-400 mb-4">No deployments on this server yet.</p>
-					@components.ButtonLink(components.ButtonPrimary, components.ButtonDefault, "Browse Games to Deploy", "/games")
+					<p class="text-base-content/60 mb-4">No deployments on this server yet.</p>
+					<a href="/games" class="btn btn-primary">Browse Games to Deploy</a>
 				</div>
 			}
 		</div>
