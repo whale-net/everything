@@ -25,6 +25,7 @@ go_test(
     srcs = [
         "promotion_sync_event_test.go",
         "release_run_test.go",
+        "writeback_test.go",
     ],
     embed = [":fake"],
     deps = ["//tools/app_registry/server/repository"],
