@@ -793,6 +793,41 @@ func TestResolveApps(t *testing.T) {
 	}
 }
 
+// TestResolveApps_NameDomainCollision covers the real-world app-registry
+// case: domain "app-registry" (server/migrate/worker/ui) collides with app
+// name "app-registry" (the tools-domain CLI, full name
+// "tools-app-registry"). A bare request for "app-registry" must resolve to
+// the single app actually named that, not sweep the whole same-named
+// domain -- see release-v2.yml's "Package CLI binaries" step, which calls
+// `package-assets app-registry` and requires exactly one match.
+func TestResolveApps_NameDomainCollision(t *testing.T) {
+	allApps := []AppMetadata{
+		{AppManifest: &appmetapb.AppManifest{Name: "app-registry", Domain: "tools", AppType: "cli"}, BazelTarget: "//tools/app_registry/cli:app-registry_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "api", Domain: "app-registry", AppType: "external-api"}, BazelTarget: "//tools/app_registry/server:api_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "migrate", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/migrate:migrate_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "worker", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/worker:worker_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "ui", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/ui:ui_metadata"},
+	}
+
+	got, err := resolveApps([]string{"app-registry"}, allApps)
+	if err != nil {
+		t.Fatalf("resolveApps([app-registry]): unexpected error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("resolveApps([app-registry]): got %d apps, want 1: %v", len(got), got)
+	}
+	if got[0].FullName() != "tools-app-registry" {
+		t.Errorf("resolveApps([app-registry]): got %s, want tools-app-registry", got[0].FullName())
+	}
+
+	// The domain itself is still reachable via its own full-name prefix, so
+	// "domain sweep" isn't lost -- just no longer the first match tried.
+	domainApp, err := resolveApps([]string{"app-registry-api"}, allApps)
+	if err != nil || len(domainApp) != 1 || domainApp[0].FullName() != "app-registry-api" {
+		t.Errorf("resolveApps([app-registry-api]) = %v, %v; want single app-registry-api", domainApp, err)
+	}
+}
+
 func TestJoinStrings(t *testing.T) {
 	got := joinStrings([]string{"a", "b", "c"})
 	if got != "a, b, c" {

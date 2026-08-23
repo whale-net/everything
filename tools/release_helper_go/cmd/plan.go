@@ -999,15 +999,20 @@ func resolveApps(requested []string, allApps []AppMetadata) ([]AppMetadata, erro
 			result = append(result, app)
 			continue
 		}
+		// An unambiguous app name wins over a domain sweep: a domain and an
+		// app name can collide (e.g. domain "app-registry" for the server/
+		// worker/ui components vs. app name "app-registry" for the
+		// tools-domain CLI), and the caller asking for one specific app by
+		// name means that app, not every app in a same-named domain.
+		if nameApps, ok := byName[req]; ok && len(nameApps) == 1 {
+			result = append(result, nameApps[0])
+			continue
+		}
 		if domainApps, ok := byDomain[req]; ok {
 			result = append(result, domainApps...)
 			continue
 		}
 		if nameApps, ok := byName[req]; ok {
-			if len(nameApps) == 1 {
-				result = append(result, nameApps[0])
-				continue
-			}
 			names := make([]string, len(nameApps))
 			for i, a := range nameApps {
 				names[i] = a.FullName()

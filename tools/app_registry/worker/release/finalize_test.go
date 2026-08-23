@@ -746,14 +746,13 @@ func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T
 
 	uploader := newFakeUploader()
 	a := &Activities{S3Uploader: uploader}
-	finalizeTargets := map[string]FinalizeTargetOutcome{
-		"image:tools-release_helper_go": {EffectiveVersion: "v1.2.3"},
-	}
+	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
+	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true)
 
 	require.Empty(t, failures)
-	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"], "a successful publish must not mutate the target's outcome")
+	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"], "a successful publish must record the plan version as this target's outcome")
 
 	require.Len(t, uploader.uploads, 3, "expected exactly the two platform binaries plus checksums.txt, got keys %v", uploadedKeys(uploader))
 	require.Equal(t, []byte("linux-amd64-binary"), uploader.uploads["release_helper_go/v1.2.3/release_helper_go-linux-amd64"])
@@ -772,25 +771,22 @@ func uploadedKeys(u *fakeUploader) []string {
 	return keys
 }
 
-// TestPublishCLIBinaries_EffectiveVersionDivergence_UploadsUnderEffectiveVersion
-// is scenario (c) of #984's Testing section (its "(c) EffectiveVersion
-// divergence" case): a no-op-rebuild target reused an older EffectiveVersion
-// than the plan-time requested version -- the S3 key must use that
-// EffectiveVersion, never a plan-time version (there is in fact no plan-time
-// version passed to publishCLIBinaries at all -- it only ever sees
-// FinalizeTargetOutcome.EffectiveVersion, which this test pins to a value
-// distinct from any "obvious" plan-time-looking version to prove that).
-func TestPublishCLIBinaries_EffectiveVersionDivergence_UploadsUnderEffectiveVersion(t *testing.T) {
+// TestPublishCLIBinaries_UsesPlanVersion proves publishCLIBinaries uploads
+// under the plan's resolved version for the app-registry CLI target too
+// (not just release_helper_go) -- these apps have no image to
+// finalize-app-retag (app_type "cli"), so there is no EffectiveVersion
+// confirmation to wait on; the plan-time version passed in `versions` is
+// what's actually published under.
+func TestPublishCLIBinaries_UsesPlanVersion(t *testing.T) {
 	cliBinariesDir := t.TempDir()
 	writeCLIBinaryFiles(t, cliBinariesDir, "app-registry")
 
 	uploader := newFakeUploader()
 	a := &Activities{S3Uploader: uploader}
-	finalizeTargets := map[string]FinalizeTargetOutcome{
-		"image:tools-app-registry": {EffectiveVersion: "v0.9.0"}, // reused older version, not e.g. v2.0.0
-	}
+	versions := map[string]string{"image:tools-app-registry": "v0.9.0"}
+	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true)
 
 	require.Empty(t, failures)
 	require.Contains(t, uploader.uploads, "app-registry/v0.9.0/checksums.txt")
@@ -805,12 +801,13 @@ func TestPublishCLIBinaries_EffectiveVersionDivergence_UploadsUnderEffectiveVers
 func TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched(t *testing.T) {
 	uploader := &refusingUploader{t: t}
 	a := &Activities{S3Uploader: uploader}
+	versions := map[string]string{"image:demo-widget": "v1.0.0"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{
 		"image:demo-widget": {EffectiveVersion: "v1.0.0"},
 	}
 	original := finalizeTargets["image:demo-widget"]
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, finalizeTargets, t.TempDir(), true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true)
 
 	require.Empty(t, failures)
 	require.Equal(t, original, finalizeTargets["image:demo-widget"], "a non-CLI-binary app's outcome must be untouched")
@@ -818,38 +815,29 @@ func TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched(t *testing.T) {
 
 // TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads is scenario (c) of
 // the worker directive (FR9/FR10's guarantee): a CLI-binary-target app with
-// no confirmed EffectiveVersion -- covering all three ways that can happen
-// (missing finalizeTargets entry, Failed, empty EffectiveVersion) -- must
-// never trigger an upload. Uses refusingUploader so any Upload call fails
-// the test outright rather than merely being asserted against afterward.
+// no version in the plan's `versions` map -- covering both ways that can
+// happen (missing entry, empty string) -- must never trigger an upload.
+// Uses refusingUploader so any Upload call fails the test outright rather
+// than merely being asserted against afterward.
 func TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads(t *testing.T) {
 	cliBinariesDir := t.TempDir()
 	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
 	writeCLIBinaryFiles(t, cliBinariesDir, "app-registry")
 
 	cases := []struct {
-		name            string
-		finalizeTargets map[string]FinalizeTargetOutcome
-		apps            []string
+		name     string
+		versions map[string]string
+		apps     []string
 	}{
 		{
-			name:            "missing finalizeTargets entry",
-			finalizeTargets: map[string]FinalizeTargetOutcome{},
-			apps:            []string{"tools-release_helper_go"},
+			name:     "missing versions entry",
+			versions: map[string]string{},
+			apps:     []string{"tools-release_helper_go"},
 		},
 		{
-			name: "Failed target",
-			finalizeTargets: map[string]FinalizeTargetOutcome{
-				"image:tools-release_helper_go": {Failed: true, Detail: "finalize-app: DENIED"},
-			},
-			apps: []string{"tools-release_helper_go"},
-		},
-		{
-			name: "empty EffectiveVersion",
-			finalizeTargets: map[string]FinalizeTargetOutcome{
-				"image:tools-app-registry": {},
-			},
-			apps: []string{"tools-app-registry"},
+			name:     "empty version string",
+			versions: map[string]string{"image:tools-app-registry": ""},
+			apps:     []string{"tools-app-registry"},
 		},
 	}
 
@@ -857,15 +845,12 @@ func TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			uploader := &refusingUploader{t: t}
 			a := &Activities{S3Uploader: uploader}
-			before := map[string]FinalizeTargetOutcome{}
-			for k, v := range tc.finalizeTargets {
-				before[k] = v
-			}
+			finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.finalizeTargets, cliBinariesDir, true)
+			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true)
 
 			require.Empty(t, failures, "no confirmed version means nothing to fail either -- this target is simply not touched")
-			require.Equal(t, before, tc.finalizeTargets, "a target with no confirmed EffectiveVersion must not be mutated")
+			require.Empty(t, finalizeTargets, "a target with no confirmed version must not be mutated")
 		})
 	}
 }
@@ -881,11 +866,10 @@ func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
 	uploader := newFakeUploader()
 	uploader.err = errors.New("simulated S3 write failure")
 	a := &Activities{S3Uploader: uploader}
-	finalizeTargets := map[string]FinalizeTargetOutcome{
-		"image:tools-release_helper_go": {EffectiveVersion: "v1.2.3"},
-	}
+	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
+	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true)
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "simulated S3 write failure")
@@ -904,11 +888,10 @@ func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
 func TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget(t *testing.T) {
 	uploader := newFakeUploader()
 	a := &Activities{S3Uploader: uploader}
-	finalizeTargets := map[string]FinalizeTargetOutcome{
-		"image:tools-release_helper_go": {EffectiveVersion: "v1.2.3"},
-	}
+	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
+	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */)
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "no cli-binaries artifact entry")
