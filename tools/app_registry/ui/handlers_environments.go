@@ -19,7 +19,11 @@ import (
 // Every handler that calls a mutating (admin-only) RPC in this file routes
 // its error through this — never a bare err.Error() — so a denied caller
 // sees the missing role, not an opaque 500-shaped message indistinguishable
-// from app-registry-api being unreachable.
+// from app-registry-api being unreachable. codes.NotFound gets the same
+// treatment for the same reason: a durable detail page keyed by an id in the
+// URL (release status, promotion details, ...) hits this on every stale or
+// mistyped id, and "not found" is an expected, benign outcome — not a
+// transport/server failure, so it must not be labelled as one.
 func grpcErrorMessage(err error) string {
 	st, ok := status.FromError(err)
 	if !ok {
@@ -32,6 +36,8 @@ func grpcErrorMessage(err error) string {
 		return "Your session is not authenticated with app-registry-api — sign in again. " + st.Message()
 	case codes.InvalidArgument:
 		return "Rejected: " + st.Message()
+	case codes.NotFound:
+		return "Not found: " + st.Message()
 	default:
 		return "Transport or server failure calling app-registry-api (" + st.Code().String() + "): " + st.Message()
 	}
