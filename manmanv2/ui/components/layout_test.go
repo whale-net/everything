@@ -103,13 +103,21 @@ func TestLayout_NoLocationReloadInEmittedScripts(t *testing.T) {
 // FR1a slot wiring didn't drop manmanv2's own chrome content when Layout
 // switched from a hand-rolled navbar to composing htmxui.Shell: the nav
 // item list, the server selector (desktop HeaderRight slot + mobile nav
-// dropdown), and the existing logout link (kept working via the slot per
-// #1007's scope, Phase 3 unifies it onto FR8's UserMenu) must all still
-// reach the rendered page. Each renders twice (once for the wide-viewport
-// menu, once folded into the mobile dropdown -- see navItems' doc comment
-// in layout.templ), so this asserts an exact count of 2, not mere
-// presence, to guard against a regression that dropped one of the two
-// responsive copies.
+// dropdown), and the logout affordance must all still reach the rendered
+// page. Nav items and the server selector each render twice (once for the
+// wide-viewport menu, once folded into the mobile dropdown -- see
+// navItems' doc comment in layout.templ), so this asserts an exact count
+// of 2 for those, not mere presence, to guard against a regression that
+// dropped one of the two responsive copies.
+//
+// The logout affordance is different since #1011 (FR8): manmanv2 no
+// longer hand-rolls a desktop link plus a separate mobile-menu copy --
+// both are replaced by a single shared htmxui.UserMenu instance, whose
+// own dropdown already covers narrow viewports (see UserMenu's doc
+// comment in libs/go/htmxui/user_menu.templ). So the identity label, the
+// logout link, and its href must each appear exactly once, not twice --
+// asserting a count of 2 here (the pre-#1011 shape) would silently mask a
+// regression that reintroduced the retired mobile-duplicate link.
 func TestLayout_RendersNavItemsServerSelectorAndLogoutAffordance(t *testing.T) {
 	servers := []*manmanpb.Server{
 		{ServerId: 1, Name: "Alpha", IsDefault: true},
@@ -163,12 +171,70 @@ func TestLayout_RendersNavItemsServerSelectorAndLogoutAffordance(t *testing.T) {
 		t.Errorf("expected server option %q exactly twice, got %d occurrences in %q", "Beta", got, body)
 	}
 
-	// Logout affordance: desktop HeaderRight slot + mobile nav dropdown.
-	if got := strings.Count(body, "Logout (Alice)"); got != 2 {
-		t.Errorf("expected logout affordance exactly twice, got %d occurrences in %q", got, body)
+	// Logout affordance: a single shared htmxui.UserMenu instance covers
+	// both desktop and mobile (FR8), so identity, the logout link, and its
+	// href must each appear exactly once -- not twice, which would be the
+	// pre-#1011 hand-rolled-duplicate shape.
+	if got := strings.Count(body, "data-htmxui-user-menu"); got != 1 {
+		t.Errorf("expected exactly one htmxui.UserMenu instance, got %d occurrences in %q", got, body)
 	}
-	if got := strings.Count(body, `href="/auth/logout"`); got != 2 {
-		t.Errorf("expected logout href exactly twice, got %d occurrences in %q", got, body)
+	if got := strings.Count(body, `aria-label="Account menu">Alice</div>`); got != 1 {
+		t.Errorf("expected identity label %q exactly once, got %d occurrences in %q", "Alice", got, body)
+	}
+	if got := strings.Count(body, `<li><a href="/auth/logout">Logout</a></li>`); got != 1 {
+		t.Errorf("expected logout affordance exactly once, got %d occurrences in %q", got, body)
+	}
+	if got := strings.Count(body, `href="/auth/logout"`); got != 1 {
+		t.Errorf("expected logout href exactly once, got %d occurrences in %q", got, body)
+	}
+}
+
+// TestLayout_ServerSelectorComposesAlongsideUserMenu is manmanv2's
+// call-site guard for FR8's composition-not-folding rule: headerRight
+// (layout.templ) must render ServerSelector and htmxui.UserMenu as
+// siblings in the HeaderRight slot, never with ServerSelector's markup
+// folded inside UserMenu's own dropdown container. This is the manmanv2
+// counterpart to libs/go/htmxui/htmxui_test.go's
+// TestUserMenu_ComposesAlongsideHeaderRightSlot (which guards the shared
+// component's composition contract in isolation); this test instead
+// proves manmanv2's actual Layout() call site upholds it, so a regression
+// that nested ServerSelector inside the @htmxui.UserMenu(...) call in
+// headerRight -- rather than keeping it a sibling -- would fail here even
+// if the shared component's own contract test still passed.
+//
+// Red/green (verified by hand): temporarily moving the
+// `<div class="hidden lg:flex items-center gap-2">...ServerSelector...</div>`
+// block in headerRight (layout.templ) to after the
+// @htmxui.UserMenu(...) call but keeping it inside UserMenu's own
+// <ul>...</ul> dropdown-content -- i.e. actually folding it into
+// UserMenu's rendered dropdown rather than passing it as a component
+// parameter -- makes this test fail with "expected ServerSelector to
+// render outside UserMenu's dropdown"; reverting restores green.
+func TestLayout_ServerSelectorComposesAlongsideUserMenu(t *testing.T) {
+	servers := []*manmanpb.Server{
+		{ServerId: 1, Name: "Alpha", IsDefault: true},
+	}
+	body := renderLayout(t, LayoutData{
+		Title:          "Dashboard",
+		User:           &htmxauth.UserInfo{Name: "Alice"},
+		Servers:        servers,
+		SelectedServer: servers[0],
+	})
+
+	menuOpenIdx := strings.Index(body, "data-htmxui-user-menu")
+	// UserMenu's own dropdown closes right after its logout link -- see
+	// UserMenu's exact markup in libs/go/htmxui/user_menu.templ -- so
+	// anchoring the close boundary there (rather than on the next
+	// sibling's markup) ties this test to UserMenu's own contract, not to
+	// ThemeSwitcher happening to render immediately afterward.
+	logoutLinkIdx := strings.Index(body, `<li><a href="/auth/logout">Logout</a></li>`)
+	selectIdx := strings.Index(body, `<select name="server_id"`)
+	if menuOpenIdx == -1 || logoutLinkIdx == -1 || selectIdx == -1 {
+		t.Fatalf("expected UserMenu dropdown, its logout link, and ServerSelector's <select> all present, got %q", body)
+	}
+	menuCloseIdx := logoutLinkIdx + len(`<li><a href="/auth/logout">Logout</a></li></ul>`)
+	if selectIdx > menuOpenIdx && selectIdx < menuCloseIdx {
+		t.Errorf("expected ServerSelector to render outside UserMenu's dropdown (composed as a sibling, not folded in per FR8), got %q", body)
 	}
 }
 
