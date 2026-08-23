@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 type ghReleasePayload struct {
@@ -232,6 +233,45 @@ func resolveTargetNames(flagValue string, fallback map[string]string) []string {
 	return list
 }
 
+// parseChartVersionsFromMatrix parses the $CHART_MATRIX env var's JSON
+// (the same "include" array shape buildPlanResult in plan.go produces) into
+// a map keyed by each chart's canonical HelmChartMetadata.FullName() --
+// "domain-chart_name". item["chart"] is CHART_MATRIX's raw bazel-discovered
+// chart name, which release.bzl's release_helm_chart macro always composes
+// as "helm-{domain}-{chart_name}" (see plan_helm.go's HelmChartMetadata doc
+// comment), NOT the bare chart_name -- so naively concatenating
+// chartDomain+"-"+chartName double-counts the domain (e.g. "app-registry"
+// + "helm-app-registry-app-registry" =
+// "app-registry-helm-app-registry-app-registry", the exact unresolvable
+// identifier a real prod run hit: this function replaced that naive
+// concatenation, which was itself an instance of the same class of bug
+// HelmChartMetadata.FullName's own doc comment describes). Building a
+// HelmChartMetadata and calling FullName() reuses the one place that
+// already normalizes this correctly instead of re-deriving it again here.
+func parseChartVersionsFromMatrix(chartMatrixJSON string) map[string]string {
+	chartVersions := map[string]string{}
+	if chartMatrixJSON == "" {
+		return chartVersions
+	}
+	var cmatrix struct {
+		Include []map[string]string `json:"include"`
+	}
+	if err := json.Unmarshal([]byte(chartMatrixJSON), &cmatrix); err != nil {
+		return chartVersions
+	}
+	for _, item := range cmatrix.Include {
+		chartName := item["chart"]
+		chartDomain := item["domain"]
+		chartVer := item["version"]
+		if chartName == "" || chartDomain == "" || chartVer == "" {
+			continue
+		}
+		full := HelmChartMetadata{ChartManifest: &appmetapb.ChartManifest{Domain: chartDomain, Name: chartName}}.FullName()
+		chartVersions[full] = chartVer
+	}
+	return chartVersions
+}
+
 func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 	var (
 		owner           string
@@ -283,31 +323,11 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 				}
 			}
 
-			// Parse per-chart versions from CHART_MATRIX env var. Keyed by
-			// domain+"-"+chart (mirroring the app block above), since
-			// HelmChartMetadata.Name/FullName below are both domain-
-			// prefixed ("helm-<domain>-<chart>") -- keying by the bare
-			// chart name here (as before) never matched, causing every
-			// chart to fail with "Could not resolve chart <name>".
-			chartVersions := map[string]string{}
-			if chartMatrixEnv := defaultEnv("CHART_MATRIX"); chartMatrixEnv != "" {
-				var cmatrix struct {
-					Include []map[string]string `json:"include"`
-				}
-				if err := json.Unmarshal([]byte(chartMatrixEnv), &cmatrix); err == nil {
-					for _, item := range cmatrix.Include {
-						chartName := item["chart"]
-						chartDomain := item["domain"]
-						chartVer := item["version"]
-						if chartName != "" && chartDomain != "" {
-							full := chartDomain + "-" + chartName
-							if chartVer != "" {
-								chartVersions[full] = chartVer
-							}
-						}
-					}
-				}
-			}
+			// Parse per-chart versions from CHART_MATRIX env var -- see
+			// parseChartVersionsFromMatrix's doc comment for why this must
+			// go through HelmChartMetadata.FullName() rather than a naive
+			// domain+"-"+chart concatenation.
+			chartVersions := parseChartVersionsFromMatrix(defaultEnv("CHART_MATRIX"))
 
 			// Resolve app list and chart list.
 			appList := resolveTargetNames(apps, appVersions)
