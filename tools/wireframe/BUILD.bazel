@@ -7,7 +7,9 @@ go_binary(
     srcs = ["main.go"],
     embedsrcs = [
         "template.html",
-        "themes.css",
     ],
     importpath = "github.com/whale-net/everything/tools/wireframe",
+    deps = [
+        "//libs/go/htmxui",
+    ],
 )
