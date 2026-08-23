@@ -584,6 +584,34 @@ type PromotionDetails struct {
 	Outcome             PromotionSyncOutcome
 }
 
+// DerivePromotionSyncOutcome computes PromotionDetails' Outcome/
+// CurrentSyncStatus/CurrentHealthStatus (FR8) from a promotion's full
+// sync_events history, oldest-first (ListSyncEvents' own order) -- the
+// single shared implementation every GetDetails (postgres, fake) calls, so
+// the two backends never derive this classification differently. "Current"
+// is always the LAST entry, terminal or not: if the most recent poll
+// session exhausted its attempts without reaching Synced+Healthy/Degraded
+// (FR5's "still pending" case), that non-terminal pair IS the current
+// status, and the outcome is PENDING -- this method never falls back to
+// scanning further back in history for an earlier terminal observation.
+func DerivePromotionSyncOutcome(events []PromotionSyncEvent) (outcome PromotionSyncOutcome, currentSyncStatus, currentHealthStatus string) {
+	if len(events) == 0 {
+		return PromotionSyncOutcomePending, "", ""
+	}
+	last := events[len(events)-1]
+	currentSyncStatus = last.SyncStatus
+	currentHealthStatus = last.HealthStatus
+	switch {
+	case last.SyncStatus == "Synced" && last.HealthStatus == "Healthy":
+		outcome = PromotionSyncOutcomeSyncedHealthy
+	case last.HealthStatus == "Degraded":
+		outcome = PromotionSyncOutcomeSyncFailed
+	default:
+		outcome = PromotionSyncOutcomePending
+	}
+	return outcome, currentSyncStatus, currentHealthStatus
+}
+
 // PromotionListFilter is ListPromotionsRequest's filter set.
 type PromotionListFilter struct {
 	EnvironmentKey string

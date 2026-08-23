@@ -567,17 +567,20 @@ func (s *PromotionServer) ListPromotionEvents(ctx context.Context, req *pb.ListP
 	}, nil
 }
 
-// GetPromotionDetails will read straight from
-// s.repo.Promotions().GetDetails and translate the result via
-// promotionDetailsToPB. Not yet implemented -- see this type's doc
-// comment. Unauthenticated, matching every other read RPC in
-// ARCHITECTURE.md's Authorization table (issue #853) -- no auth.Require*
-// check here is deliberate, not an oversight (FR9).
+// GetPromotionDetails assembles one promotion's full lifecycle (FR7-FR9,
+// issue #1031) via s.repo.Promotions().GetDetails, translated to the wire
+// type by promotionDetailsToPB. Unauthenticated, matching every other read
+// RPC in ARCHITECTURE.md's Authorization table (issue #853) -- no
+// auth.Require* check here is deliberate, not an oversight (FR9).
 func (s *PromotionServer) GetPromotionDetails(ctx context.Context, req *pb.GetPromotionDetailsRequest) (*pb.GetPromotionDetailsResponse, error) {
 	if req.GetPromotionId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "promotion_id is required")
 	}
-	return nil, status.Error(codes.Unimplemented, "GetPromotionDetails is not yet implemented")
+	details, err := s.repo.Promotions().GetDetails(ctx, req.GetPromotionId())
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return &pb.GetPromotionDetailsResponse{Details: promotionDetailsToPB(details)}, nil
 }
 
 // actorFromCtx reads the authenticated principal recorded on
