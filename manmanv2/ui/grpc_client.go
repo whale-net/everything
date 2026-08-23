@@ -317,13 +317,23 @@ func (c *ControlClient) ListServerGameConfigs(ctx context.Context, serverID int6
 }
 
 // DeployGameConfig deploys a game config to a server.
-func (c *ControlClient) DeployGameConfig(ctx context.Context, serverID, gameConfigID int64) (*manmanpb.ServerGameConfig, error) {
+func (c *ControlClient) DeployGameConfig(ctx context.Context, serverID, gameConfigID int64, portBindings []*manmanpb.PortBinding) (*manmanpb.ServerGameConfig, error) {
 	resp, err := c.api.DeployGameConfig(ctx, &manmanpb.DeployGameConfigRequest{
 		ServerId:     serverID,
 		GameConfigId: gameConfigID,
+		PortBindings: portBindings,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to deploy game config: %w", err)
+	}
+	return resp.Config, nil
+}
+
+// UpdateServerGameConfig updates an existing server game config (e.g. port bindings, status).
+func (c *ControlClient) UpdateServerGameConfig(ctx context.Context, req *manmanpb.UpdateServerGameConfigRequest) (*manmanpb.ServerGameConfig, error) {
+	resp, err := c.api.UpdateServerGameConfig(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update server game config: %w", err)
 	}
 	return resp.Config, nil
 }

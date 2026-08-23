@@ -573,8 +573,14 @@ func (app *App) handleGameConfigDeploy(w http.ResponseWriter, r *http.Request, g
 		return
 	}
 
+	portBindings, err := parsePortBindingsJSON(r.FormValue("port_bindings_json"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	ctx := r.Context()
-	_, err = app.grpc.DeployGameConfig(ctx, serverID, configID)
+	_, err = app.grpc.DeployGameConfig(ctx, serverID, configID, portBindings)
 	if err != nil {
 		log.Printf("Error deploying game config: %v", err)
 		redirectURL := "/games/" + gameIDStr + "/configs/" + configIDStr + "?deploy_error=Failed%20to%20deploy%20config"
@@ -594,6 +600,44 @@ func (app *App) handleGameConfigDeploy(w http.ResponseWriter, r *http.Request, g
 	} else {
 		http.Redirect(w, r, redirectURL, http.StatusSeeOther)
 	}
+}
+
+// parsePortBindingsJSON parses a JSON array of {container_port, host_port, protocol}
+// objects submitted via a hidden form field into PortBinding protos.
+func parsePortBindingsJSON(raw string) ([]*manmanpb.PortBinding, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	var entries []struct {
+		ContainerPort int32  `json:"container_port"`
+		HostPort      int32  `json:"host_port"`
+		Protocol      string `json:"protocol"`
+	}
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		return nil, fmt.Errorf("invalid port bindings: %w", err)
+	}
+
+	bindings := make([]*manmanpb.PortBinding, 0, len(entries))
+	for _, e := range entries {
+		if e.ContainerPort <= 0 || e.ContainerPort > 65535 {
+			return nil, fmt.Errorf("invalid container port: %d", e.ContainerPort)
+		}
+		if e.HostPort <= 0 || e.HostPort > 65535 {
+			return nil, fmt.Errorf("invalid host port: %d", e.HostPort)
+		}
+		protocol := strings.ToUpper(strings.TrimSpace(e.Protocol))
+		if protocol != "TCP" && protocol != "UDP" {
+			return nil, fmt.Errorf("invalid protocol: %q", e.Protocol)
+		}
+		bindings = append(bindings, &manmanpb.PortBinding{
+			ContainerPort: e.ContainerPort,
+			HostPort:      e.HostPort,
+			Protocol:      protocol,
+		})
+	}
+	return bindings, nil
 }
 
 func (app *App) handleGameConfigNew(w http.ResponseWriter, r *http.Request, gameIDStr string) {

@@ -323,6 +323,11 @@ func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
 		app.handleTriggerBackup(w, r)
 		return
 	}
+	// /sgc/{id}/update-ports
+	if len(pathParts) >= 3 && pathParts[2] == "update-ports" {
+		app.handleSGCUpdatePorts(w, r, pathParts[1])
+		return
+	}
 	app.handleSGCDetail(w, r)
 }
 
