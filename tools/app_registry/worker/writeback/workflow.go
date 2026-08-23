@@ -60,6 +60,18 @@ const (
 	// CommitSHA) onto the promotion's writeback_outbox row -- FR7a, issue
 	// #1029. See worker/writeback/record.go's Recorder.
 	ActivityRecordWritebackResult = "RecordWritebackResult"
+	// ActivityTriggerArgoRefresh triggers an ArgoCD refresh for a
+	// promotion's target Application and records one promotion_sync_event
+	// row (source = refresh_triggered) -- FR1, issue #1030. See
+	// worker/writeback/argosync.go's ArgoSyncActivities.
+	ActivityTriggerArgoRefresh = "TriggerArgoRefresh"
+	// ActivityPollArgoSyncStatus polls ArgoCD's sync/health status for a
+	// promotion's target Application up to 3 times, 2 minutes apart,
+	// recording one promotion_sync_event row (source = poll_observed) per
+	// attempt and stopping early once a terminal state is observed --
+	// FR3/FR4/FR5, NFR3, issue #1030. See worker/writeback/argosync.go's
+	// ArgoSyncActivities.
+	ActivityPollArgoSyncStatus = "PollArgoSyncStatus"
 )
 
 // WritebackInput is WritebackWorkflow's single argument -- everything an
