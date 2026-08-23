@@ -45,27 +45,34 @@ func renderShell(t *testing.T, user *htmxauth.UserInfo) string {
 // from shellNav() in layout.templ makes this test fail with "expected nav
 // item ... exactly once, got 0 occurrences"; restoring the <li> makes it
 // pass again. Verified by hand during this change.
+//
+// Per issue #770, "Environments" moved off the top-level nav into the
+// "Admin" dropdown alongside "Reconcile Runs" and "Drift & Audit" -- the
+// <li> count below (8) is the 4 top-level day-to-day items + 1 "Admin"
+// wrapper <li> + 3 items nested inside the Admin dropdown.
 func TestShell_RendersEveryNavItemExactlyOnce(t *testing.T) {
 	body := renderShell(t, noRolesShellUser())
 
 	wantNavItems := []string{
-		`<li><a href="/environments">Environments</a></li>`,
 		`<li><a href="/deployments">Deployments</a></li>`,
 		`<li><a href="/apps">Apps</a></li>`,
 		`<li><a href="/builds">Builds</a></li>`,
+		`<li><a href="/releases/trigger">Trigger Release</a></li>`,
+		`<li><a href="/environments">Environments</a></li>`,
 		`<li><a href="/reconcile-runs">Reconcile Runs</a></li>`,
 		`<li><a href="/drift-audit">Drift &amp; Audit</a></li>`,
-		`<li><a href="/releases/trigger">Trigger Release</a></li>`,
 	}
 	for _, want := range wantNavItems {
 		if got := strings.Count(body, want); got != 1 {
 			t.Errorf("expected nav item %q exactly once, got %d occurrences in %q", want, got, body)
 		}
 	}
-	// Exactly seven <li> elements -- guards against an extra hardcoded item
-	// sitting alongside the real nav list.
-	if got := strings.Count(body, "<li>"); got != len(wantNavItems) {
-		t.Errorf("expected exactly %d <li> nav items, got %d in %q", len(wantNavItems), got, body)
+	// Exactly eight <li> elements (7 nav items + 1 "Admin" dropdown wrapper)
+	// -- guards against an extra hardcoded item sitting alongside the real
+	// nav list.
+	wantLiCount := len(wantNavItems) + 1
+	if got := strings.Count(body, "<li>"); got != wantLiCount {
+		t.Errorf("expected exactly %d <li> nav items, got %d in %q", wantLiCount, got, body)
 	}
 }
 
