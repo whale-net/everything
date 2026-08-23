@@ -127,6 +127,14 @@ func run() error {
 		w.RegisterActivityWithOptions(stub.Publish, activityOptions(writeback.ActivityPublish))
 	}
 
+	// RecordWritebackResult (FR7a, issue #1029) is shared by both the
+	// gitops and stub branches above -- see writeback.Recorder's doc
+	// comment. Same direct-Postgres repo (repo) the outbox drainer and
+	// release.Activities below use, for the same "no mutating gRPC RPC for
+	// this write" reason.
+	recorder := &writeback.Recorder{Registry: repo}
+	w.RegisterActivityWithOptions(recorder.RecordWritebackResult, activityOptions(writeback.ActivityRecordWritebackResult))
+
 	// ReleaseWorkflow (issue #889), registered on the same task queue as
 	// WritebackWorkflow -- release.TaskQueue == writeback.TaskQueue, see
 	// that constant's doc comment. Registry is the same direct-Postgres repo

@@ -203,5 +203,16 @@ func WritebackWorkflow(ctx workflow.Context, in WritebackInput) (PublishResult, 
 	if err := workflow.ExecuteActivity(ctx, ActivityPublish, rendered).Get(ctx, &result); err != nil {
 		return PublishResult{}, err
 	}
+
+	// Best-effort: persist Publish's result (Location, CommitSHA) onto the
+	// promotion's writeback_outbox row -- FR7a, issue #1029. A failure here
+	// must not fail the workflow's already-successful publish outcome, even
+	// once this activity's own RetryPolicy (ao above) is exhausted --
+	// logged and swallowed, a known best-effort gap matching TriggerRelease's
+	// own documented orphan-row gap in server/handlers/release.go.
+	if err := workflow.ExecuteActivity(ctx, ActivityRecordWritebackResult, in.PromotionID, result.Location, result.CommitSHA).Get(ctx, nil); err != nil {
+		workflow.GetLogger(ctx).Error("record writeback result failed after successful publish", "promotion_id", in.PromotionID, "error", err)
+	}
+
 	return result, nil
 }
