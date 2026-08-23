@@ -27,6 +27,14 @@ type StubActivities struct {
 	// access works -- GetEnvironmentState only requires
 	// auth.RequireAuthenticated, see ARCHITECTURE.md "Authorization".
 	Client pb.PromotionRegistryClient
+	// AppClient resolves the promoted chart's id to its full name, the
+	// segment RenderEnvironmentState populates RenderedState.ChartName with
+	// -- mirrors GitOpsActivities.AppClient (see gitops.go), needed here so
+	// WritebackWorkflow's ArgoCD Application name
+	// (ChartName + "-" + EnvironmentKey, workflow.go) is never malformed
+	// when ARGOCD_SERVER is set without WRITEBACK_GITOPS_REPO (issue
+	// #1035, #1037).
+	AppClient pb.AppRegistryClient
 	// OutDir is the local directory rendered documents are written to.
 	// Created if missing.
 	OutDir string
@@ -35,17 +43,35 @@ type StubActivities struct {
 // NewStubActivities constructs a StubActivities. outDir is created lazily
 // by Publish, not here, so RenderEnvironmentState-only use (e.g. tests)
 // never touches disk.
-func NewStubActivities(client pb.PromotionRegistryClient, outDir string) *StubActivities {
-	return &StubActivities{Client: client, OutDir: outDir}
+func NewStubActivities(client pb.PromotionRegistryClient, appClient pb.AppRegistryClient, outDir string) *StubActivities {
+	return &StubActivities{Client: client, AppClient: appClient, OutDir: outDir}
 }
 
 // RenderEnvironmentState implements Writeback. See that interface's doc
-// comment.
+// comment. Unlike GitOpsActivities' version, the rendered Document here is
+// the full protojson-marshaled GetEnvironmentStateResponse (StubActivities
+// is the no-op dev/test fallback, see the package doc comment above) --
+// but ChartName still must resolve to a real, non-empty chart name (issue
+// #1037), since WritebackWorkflow builds the ArgoCD Application name from
+// it regardless of which Writeback implementation rendered the state.
 func (a *StubActivities) RenderEnvironmentState(ctx context.Context, in WritebackInput) (RenderedState, error) {
-	resp, err := a.Client.GetEnvironmentState(ctx, &pb.GetEnvironmentStateRequest{EnvironmentKey: in.EnvironmentKey})
+	resp, err := a.Client.GetEnvironmentState(ctx, &pb.GetEnvironmentStateRequest{
+		EnvironmentKey: in.EnvironmentKey,
+		Domain:         in.Domain,
+	})
 	if err != nil {
 		return RenderedState{}, fmt.Errorf("render environment state for %s (promotion %s): %w", in.EnvironmentKey, in.PromotionID, err)
 	}
+
+	_, chartID, found := findChartArtifact(resp.Entries)
+	if !found {
+		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: no chart artifact found in environment state", in.Domain, in.EnvironmentKey)
+	}
+	chartName, err := resolveChartName(ctx, a.AppClient, in.Domain, chartID)
+	if err != nil {
+		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: %w", in.Domain, in.EnvironmentKey, err)
+	}
+
 	doc, err := protojson.MarshalOptions{Multiline: true, Indent: "  "}.Marshal(resp)
 	if err != nil {
 		return RenderedState{}, fmt.Errorf("marshal rendered state for %s: %w", in.EnvironmentKey, err)
@@ -53,6 +79,7 @@ func (a *StubActivities) RenderEnvironmentState(ctx context.Context, in Writebac
 	return RenderedState{
 		EnvironmentKey: in.EnvironmentKey,
 		Domain:         in.Domain,
+		ChartName:      chartName,
 		StateHash:      resp.StateHash,
 		RenderedAt:     time.Now().UTC(),
 		Document:       doc,

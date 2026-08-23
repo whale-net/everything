@@ -169,36 +169,14 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s (promotion %s): %w", in.Domain, in.EnvironmentKey, in.PromotionID, err)
 	}
 
-	var (
-		targetRevision string
-		chartID        string
-	)
-	for _, entry := range resp.Entries {
-		if entry.Artifact != nil && entry.Artifact.Kind == pb.ArtifactKind_ARTIFACT_KIND_CHART {
-			targetRevision = entry.Artifact.Version
-			chartID = entry.Artifact.ChartId
-			break
-		}
-	}
-	if targetRevision == "" {
+	targetRevision, chartID, found := findChartArtifact(resp.Entries)
+	if !found {
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: no chart artifact found in environment state", in.Domain, in.EnvironmentKey)
 	}
 
-	var chartName string
-	if a.AppClient != nil {
-		chartResp, err := a.AppClient.ListCharts(ctx, &pb.ListChartsRequest{Domain: in.Domain})
-		if err != nil {
-			return RenderedState{}, fmt.Errorf("render environment state for %s/%s: list charts: %w", in.Domain, in.EnvironmentKey, err)
-		}
-		for _, c := range chartResp.Charts {
-			if c.ChartId == chartID || (chartID == "" && len(chartResp.Charts) == 1) {
-				chartName = c.FullName
-				break
-			}
-		}
-	}
-	if chartName == "" {
-		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: chart %q not found in domain %q", in.Domain, in.EnvironmentKey, chartID, in.Domain)
+	chartName, err := resolveChartName(ctx, a.AppClient, in.Domain, chartID)
+	if err != nil {
+		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: %w", in.Domain, in.EnvironmentKey, err)
 	}
 
 	doc, err := renderTargetRevisionDocument(targetRevision)

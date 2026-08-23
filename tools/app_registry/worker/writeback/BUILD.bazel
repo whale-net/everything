@@ -4,6 +4,7 @@ go_library(
     name = "writeback",
     srcs = [
         "argosync.go",
+        "chartname.go",
         "gitops.go",
         "record.go",
         "stub.go",
@@ -35,6 +36,7 @@ go_test(
     embed = [":writeback"],
     deps = [
         "//libs/go/argocd",
+        "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/repository",
         "//tools/app_registry/server/repository/fake",
         "@com_github_stretchr_testify//mock",
