@@ -144,3 +144,35 @@ is **not** `continue-on-error`: a failed promotion fails the run.
 (`dev`/`stage`/`prod`) exist yet, and the workflow job is disabled with `if: false`.
 See [`tools/app_registry/DEPLOY.md`](../tools/app_registry/DEPLOY.md) for
 what has to exist first.
+
+## Release Tools Acquisition (`release-v2.yml`)
+
+`release-v2.yml` needs `release_helper_go` and `app-registry` (the CLI, not
+the server) to run its own `plan`/`build-app`/`package-assets` steps. It
+never builds these from source by default — it downloads prebuilt,
+checksum-verified binaries via `./.github/actions/download-release-tools`,
+resolving the version to fetch from whatever's currently promoted in the
+App Registry for `vars.APP_REGISTRY_BUILDER_ENV` (default `dev`). The
+`build-release-tools` job probes once per run whether that resolves to a
+real, fetchable S3 object (not just a promoted DB record — see #1036) and,
+if not, builds both tools via Bazel and uploads them as a `release-tools`
+workflow artifact every other job's `download-release-tools` call
+downloads instead of hitting S3 directly.
+
+**Safety valve: `RELEASE_TOOLS_FALLBACK_TO_SOURCE`.** A repository variable,
+unset/`false` by default, wired into every `download-release-tools` call's
+`fallback_to_source` input. With it unset, a failed prebuilt/artifact
+acquisition fails the job outright with a clear error — today's behavior,
+unchanged. Set it to `'true'` (`gh variable set RELEASE_TOOLS_FALLBACK_TO_SOURCE
+--repo whale-net/everything --body true`) to make that same failure instead
+build the tools from source via Bazel inline, in whichever job hit the
+failure. This is meant as a temporary operator escape hatch for exactly the
+kind of chicken-and-egg bootstrap gap that motivated it (App Registry/S3
+acquisition broken, but release-v2.yml itself is what would normally
+publish the fix) — flip it back to `false`/unset once the underlying
+acquisition path is healthy again, since source builds are slower and skip
+the checksum-verified prebuilt-binary supply chain. Two call sites
+(`plan-release`'s resolved-plan path and `release-summary`) normally skip
+Bazel setup entirely for speed; each gets its own `Setup Build Environment
+(fallback safety valve)` step, gated on the same variable, so the valve
+actually works there too instead of failing on a missing `bazel` binary.
