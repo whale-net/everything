@@ -174,17 +174,18 @@ func appsToPB(apps []repository.App) []*pb.App {
 
 func chartToPB(c repository.Chart) *pb.Chart {
 	return &pb.Chart{
-		ChartId:         c.ChartID,
-		Domain:          c.Domain,
-		Name:            c.Name,
-		FullName:        c.FullName(),
-		Description:     c.Description,
-		AppIds:          c.AppIDs,
-		ChartRepository: c.ChartRepository,
-		DeployUnit:      c.DeployUnit,
-		Status:          appStatusToPB(c.Status),
-		FirstSeenAt:     timeToUnix(c.FirstSeenAt),
-		LastSeenAt:      timeToUnix(c.LastSeenAt),
+		ChartId:                      c.ChartID,
+		Domain:                       c.Domain,
+		Name:                         c.Name,
+		FullName:                     c.FullName(),
+		Description:                  c.Description,
+		AppIds:                       c.AppIDs,
+		ChartRepository:              c.ChartRepository,
+		DeployUnit:                   c.DeployUnit,
+		Status:                       appStatusToPB(c.Status),
+		FirstSeenAt:                  timeToUnix(c.FirstSeenAt),
+		LastSeenAt:                   timeToUnix(c.LastSeenAt),
+		ArgoApplicationNameOverrides: c.ArgoApplicationNameOverrides,
 	}
 }
 

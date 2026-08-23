@@ -172,6 +172,7 @@ func TestStubActivities_RenderEnvironmentState_ResolvesChartName(t *testing.T) {
 	require.Equal(t, "dev", rendered.EnvironmentKey)
 	require.Equal(t, "app-registry", rendered.Domain)
 	require.Equal(t, "app-registry-app-registry", rendered.ChartName)
+	require.Equal(t, "app-registry-app-registry-dev", rendered.ArgoApplicationName)
 	require.Equal(t, "hash-123", rendered.StateHash)
 }
 

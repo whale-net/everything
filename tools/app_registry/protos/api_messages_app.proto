@@ -231,3 +231,21 @@ message SetAppStatusRequest {
 message SetAppStatusResponse {
   App app = 1;
 }
+
+// SetChartArgoApplicationNameOverrideRequest identifies its target chart by
+// chart_id or full_name (one of the two), same dual-lookup convention as
+// GetAppRequest/lookupApp. The override it sets applies to exactly one
+// environment_key -- every other environment's override on the chart is
+// untouched, since two environments can have completely unrelated naming
+// (see Chart.argo_application_name_overrides).
+message SetChartArgoApplicationNameOverrideRequest {
+  string chart_id = 1;
+  string full_name = 2;  // e.g. "<domain>-<name>"
+  string environment_key = 3;  // required — the one environment this override applies to
+  string argo_application_name = 4;  // "" clears the override for environment_key
+  string reason = 5;  // required — recorded in the audit log
+}
+
+message SetChartArgoApplicationNameOverrideResponse {
+  Chart chart = 1;
+}

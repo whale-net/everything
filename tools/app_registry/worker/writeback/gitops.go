@@ -174,7 +174,7 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: no chart artifact found in environment state", in.Domain, in.EnvironmentKey)
 	}
 
-	chartName, err := resolveChartName(ctx, a.AppClient, in.Domain, chartID)
+	chart, err := resolveChart(ctx, a.AppClient, in.Domain, chartID)
 	if err != nil {
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: %w", in.Domain, in.EnvironmentKey, err)
 	}
@@ -185,12 +185,13 @@ func (a *GitOpsActivities) RenderEnvironmentState(ctx context.Context, in Writeb
 	}
 
 	return RenderedState{
-		EnvironmentKey: in.EnvironmentKey,
-		Domain:         in.Domain,
-		ChartName:      chartName,
-		StateHash:      resp.StateHash,
-		RenderedAt:     time.Now().UTC(),
-		Document:       doc,
+		EnvironmentKey:      in.EnvironmentKey,
+		Domain:              in.Domain,
+		ChartName:           chart.GetFullName(),
+		ArgoApplicationName: resolveArgoApplicationName(chart, in.EnvironmentKey),
+		StateHash:           resp.StateHash,
+		RenderedAt:          time.Now().UTC(),
+		Document:            doc,
 	}, nil
 }
 

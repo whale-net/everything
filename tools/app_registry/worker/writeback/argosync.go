@@ -37,18 +37,21 @@ const (
 
 // ArgoSyncInput carries everything TriggerArgoRefresh/PollArgoSyncStatus
 // need to call ArgoCD's Application API and persist the observation,
-// without a second registry read (FR1). ApplicationName is
-// "<ChartName>-<EnvironmentKey>", derived by the caller (WritebackWorkflow)
-// from the SAME RenderedState.ChartName/EnvironmentKey fields the gitops
-// publish path already resolves -- never re-derived a second way here (see
-// issue #1030's Summary).
+// without a second registry read (FR1). ApplicationName is read by the
+// caller (WritebackWorkflow) directly from RenderedState.ArgoApplicationName
+// -- resolved by RenderEnvironmentState from the SAME AppRegistry.ListCharts
+// lookup the gitops publish path already used for RenderedState.ChartName,
+// as either the "<ChartName>-<EnvironmentKey>" convention or an admin-set
+// per-chart override for ad-hoc/legacy deployments (see
+// repository.Chart.ResolveArgoApplicationName) -- never re-derived a second
+// way here (see issue #1030's Summary).
 type ArgoSyncInput struct {
 	PromotionID string
 	// Domain is passed through to the argocd.Client as ArgoCD's "project"
 	// scoping parameter (see libs/go/argocd's NFR7 doc comment) --
 	// WritebackInput.Domain/RenderedState.Domain, not re-derived.
 	Domain string
-	// ApplicationName is the ArgoCD Application name: "<ChartName>-<EnvironmentKey>".
+	// ApplicationName is the ArgoCD Application name -- RenderedState.ArgoApplicationName, verbatim.
 	ApplicationName string
 	// IsRetry selects the retry_triggered/retry_observed promotion_sync_event
 	// Source pair instead of the default refresh_triggered/poll_observed

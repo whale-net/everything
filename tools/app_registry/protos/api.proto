@@ -41,6 +41,12 @@ service AppRegistry {
   // Human triage of a MISSING app: archive it or restore it. Role: admin.
   rpc SetAppStatus(SetAppStatusRequest) returns (SetAppStatusResponse);
 
+  // Sets or clears a chart's ArgoCD Application name override, for
+  // ad-hoc/legacy deployments that don't follow the
+  // "<full_name>-<environment>" naming convention WritebackWorkflow assumes
+  // by default. Role: admin.
+  rpc SetChartArgoApplicationNameOverride(SetChartArgoApplicationNameOverrideRequest) returns (SetChartArgoApplicationNameOverrideResponse);
+
   rpc ListReconcileRuns(ListReconcileRunsRequest) returns (ListReconcileRunsResponse);
 }
 

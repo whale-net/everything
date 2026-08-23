@@ -339,8 +339,81 @@ func TestGitOpsActivities_RenderEnvironmentState(t *testing.T) {
 	require.Equal(t, "dev", rendered.EnvironmentKey)
 	require.Equal(t, "app-registry", rendered.Domain)
 	require.Equal(t, "app-registry-app-registry", rendered.ChartName)
+	require.Equal(t, "app-registry-app-registry-dev", rendered.ArgoApplicationName)
 	require.Equal(t, "hash-123", rendered.StateHash)
 	require.Equal(t, "targetRevision: v0.0.39\n", string(rendered.Document))
+}
+
+// TestGitOpsActivities_RenderEnvironmentState_ArgoApplicationNameOverride
+// proves RenderEnvironmentState resolves RenderedState.ArgoApplicationName
+// from the chart's ArgoApplicationNameOverrides map (an ad-hoc/legacy
+// deployment's admin-set, per-environment override, see
+// repository.Chart.ResolveArgoApplicationName) instead of the
+// "<ChartName>-<EnvironmentKey>" convention when this environment has an
+// entry -- while ChartName itself is unaffected.
+func TestGitOpsActivities_RenderEnvironmentState_ArgoApplicationNameOverride(t *testing.T) {
+	fakeClient := &fakePromotionClient{
+		getEnvState: func(ctx context.Context, in *pb.GetEnvironmentStateRequest) (*pb.GetEnvironmentStateResponse, error) {
+			return &pb.GetEnvironmentStateResponse{
+				StateHash: "hash-123",
+				Entries: []*pb.EnvironmentStateEntry{
+					{Artifact: &pb.Artifact{Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART, ChartId: "chart-123", Version: "v0.0.39"}},
+				},
+			}, nil
+		},
+	}
+	fakeApp := &fakeAppClient{
+		listCharts: func(ctx context.Context, in *pb.ListChartsRequest) (*pb.ListChartsResponse, error) {
+			return &pb.ListChartsResponse{
+				Charts: []*pb.Chart{
+					{
+						ChartId:  "chart-123",
+						Domain:   "app-registry",
+						Name:     "app-registry",
+						FullName: "app-registry-app-registry",
+						ArgoApplicationNameOverrides: map[string]string{
+							"dev":  "legacy-app-dev",
+							"prod": "prod-svc-legacy",
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	a := &GitOpsActivities{Client: fakeClient, AppClient: fakeApp}
+
+	// dev and prod overrides share no naming pattern -- proving each
+	// environment's entry resolves independently, the exact case a single
+	// per-chart template couldn't express.
+	rendered, err := a.RenderEnvironmentState(context.Background(), WritebackInput{
+		PromotionID:    "promo-1",
+		EnvironmentKey: "dev",
+		Domain:         "app-registry",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "app-registry-app-registry", rendered.ChartName)
+	require.Equal(t, "legacy-app-dev", rendered.ArgoApplicationName)
+
+	rendered, err = a.RenderEnvironmentState(context.Background(), WritebackInput{
+		PromotionID:    "promo-2",
+		EnvironmentKey: "prod",
+		Domain:         "app-registry",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "app-registry-app-registry", rendered.ChartName)
+	require.Equal(t, "prod-svc-legacy", rendered.ArgoApplicationName)
+
+	// An environment absent from the overrides map still falls back to the
+	// convention, even though this chart has overrides set for others.
+	rendered, err = a.RenderEnvironmentState(context.Background(), WritebackInput{
+		PromotionID:    "promo-3",
+		EnvironmentKey: "stage",
+		Domain:         "app-registry",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "app-registry-app-registry", rendered.ChartName)
+	require.Equal(t, "app-registry-app-registry-stage", rendered.ArgoApplicationName)
 }
 
 func TestGitOpsActivities_RenderEnvironmentState_MissingChartError(t *testing.T) {

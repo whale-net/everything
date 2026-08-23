@@ -106,3 +106,39 @@ state" only** — the render and publish steps exist, the S3 put does not
 config, worker bootstrap, logging bridge to `libs/go/logging`) shipped in
 AR-4a — see [PLAN-HISTORY.md](PLAN-HISTORY.md).
 
+## ArgoCD Application name: convention with a per-(chart, environment) override
+
+`TriggerArgoRefresh`/`PollArgoSyncStatus` (`worker/writeback/argosync.go`,
+issue #1030) call ArgoCD's Application API by name. By default that name is
+the convention `<chart.full_name>-<environment.key>`, resolved by
+`RenderEnvironmentState` (`gitops.go`/`stub.go`) into
+`RenderedState.ArgoApplicationName` — `WritebackWorkflow` reads that field
+verbatim (`workflow.go`) rather than re-deriving it.
+
+Ad-hoc/legacy deployments whose real ArgoCD Application name doesn't follow
+that convention can override it, one environment at a time:
+`Chart.ArgoApplicationNameOverrides` (backed by the `chart_argo_application_override`
+table, migration 022 — deliberately not a column on `chart`/`v_current_chart`,
+which back `Reconcile`'s "mark missing charts" sweep and would otherwise
+couple every `ReconcileApps` call to this migration's existence) is a map of
+environment key -> explicit Application name, settable only via
+`AppRepository.SetChartArgoApplicationNameOverride` (exposed as the
+`SetChartArgoApplicationNameOverride` RPC and the `app-registry chart
+set-argo-override` CLI command, both admin-gated, each call touching exactly
+one environment's entry). An environment absent from the map uses the
+convention (see `repository.Chart.ResolveArgoApplicationName` and
+`worker/writeback/chartname.go`'s `resolveArgoApplicationName`); every
+standard chart has an empty map, so behavior is unchanged for it.
+Overrides are deliberately per-environment rather than a single per-chart
+value or template, because an ad-hoc deployment's naming can differ
+unrelatedly between environments — e.g. dev named `foo-dev-app`, prod named
+`prod-svc-foo`, sharing no pattern at all; setting dev's override never
+touches prod's. `ReconcileApps` never writes this table, so admin-set
+overrides survive reconciliation.
+
+This is a **distinct, new mechanism** from `Environment.gitops_path` above —
+that field is dead code and this change does not revive it. The override
+here lives on `chart` (not `environment`), is keyed by environment inside
+that per-chart map, and only ever affects the ArgoCD Application name, never
+the gitops file path.
+

@@ -18,6 +18,7 @@ go_library(
 go_test(
     name = "repository_test",
     srcs = [
+        "models_test.go",
         "promotability_test.go",
         "promotion_details_test.go",
     ],
