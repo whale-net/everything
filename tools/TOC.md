@@ -23,7 +23,7 @@ Build, release, and development tooling.
 
 ## Code Generation
 
-- [client_codegen/README.md](client_codegen/README.md) — OpenAPI client code generation
+- [client_codegen/README.md](client_codegen/README.md) — test that exercises a generated OpenAPI client; codegen targets themselves live under `//generated/...`
 - [openapi/README.md](openapi/README.md) — OpenAPI tooling
 
 ## Platform-Specific
