@@ -228,3 +228,24 @@ message PromotionDetails {
 message GetPromotionDetailsResponse {
   PromotionDetails details = 1;
 }
+
+// ============================================================================
+// Manual retry — admin-gated "retry refresh/sync" (FR10-FR13, issue #1033).
+// Starts a fresh RetryArgoSyncWorkflow execution against the same
+// Domain/ApplicationName as the original promotion; never resumes the
+// original (by-then-terminal) WritebackWorkflow. Role: app-registry-admin
+// only (FR10) -- see server/auth.RoleAdmin, the same global role
+// SetAppStatus already requires, not a new one.
+// ============================================================================
+
+message RetryArgoSyncRequest {
+  string promotion_id = 1;
+}
+
+message RetryArgoSyncResponse {
+  // The new RetryArgoSyncWorkflow execution's workflow id -- always
+  // distinct from the promotion's own (by-then-terminal) WritebackWorkflow
+  // id, and distinct across repeated retries of the same promotion_id (see
+  // worker/writeback/argosync.go's RetryArgoSyncWorkflowID).
+  string temporal_workflow_id = 1;
+}

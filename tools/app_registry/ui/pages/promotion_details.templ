@@ -18,6 +18,12 @@ type PromotionDetailsViewState struct {
 	PromotionID string
 	Details     *pb.GetPromotionDetailsResponse
 	LoadErr     string
+	// RetryErr is set when a POST to /promotions/{id}/retry (FR10-FR13,
+	// issue #1033) itself failed -- rendered as its own inline banner near
+	// the retry button, distinct from LoadErr (a failure to read the
+	// promotion's details at all). "" on a normal GET, or after a
+	// successful retry submit.
+	RetryErr string
 }
 
 // argok8sCommitURL builds the writeback-commit link (FR7a): argok8s is the
@@ -69,8 +75,10 @@ func syncEventSourceLabel(source string) string {
 // SHA/link, FR7a), the ArgoCD sync/health outcome (FR8, three visibly
 // distinct states -- never conflating "version upgraded, sync failed" with
 // plain success), and the full sync/health observation history (#1028).
-// Read-only: no mutating control appears on this page (retry is a separate
-// task).
+// Its one mutating control is the FR10-FR13 "Retry refresh/sync" button
+// (issue #1033) -- admin-gated, presentation-only here (the real
+// enforcement is server/handlers/promotion.go's RetryArgoSync auth.Require
+// check; see components.GatedAction's own doc comment on that split).
 templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 	@components.Shell("Promotion Details", user) {
 		<div class="breadcrumbs text-sm mb-4">
@@ -82,6 +90,9 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 		if s.LoadErr != "" {
 			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
 		} else if s.Details != nil {
+			if s.RetryErr != "" {
+				<div role="alert" class="alert alert-error shadow-md mb-4"><span>Retry failed: { s.RetryErr }</span></div>
+			}
 			@promotionDetailsBody(user, s.Details.GetDetails())
 		}
 	}
@@ -96,7 +107,10 @@ templ promotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 			}
 			{ d.GetToVersion() }
 		</h2>
-		@components.PromotionSyncOutcomeBadge(d.GetOutcome())
+		<div class="flex items-center gap-2">
+			@components.PromotionSyncOutcomeBadge(d.GetOutcome())
+			@retryArgoSyncButton(user, d.GetPromotion().GetPromotionId())
+		</div>
 	</div>
 	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
 		<div class="card-body">
@@ -193,4 +207,32 @@ templ promotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 			}
 		</div>
 	</div>
+}
+
+// retryArgoSyncButton is FR10-FR13's manual-retry action (issue #1033):
+// posts to /promotions/{id}/retry, gated by components.RoleAdmin --
+// disabled with the missing role named when absent (FR11, matching
+// components.GatedAction's own "never enabled-but-doomed-to-fail, never
+// silently omitted" convention), never a live control for a non-admin/
+// anonymous session. This is presentation-only: the real enforcement is
+// server/handlers/promotion.go's RetryArgoSync, which applies the exact
+// same auth.RoleAdmin check server-side regardless of what this button
+// renders.
+templ retryArgoSyncButton(user *htmxauth.UserInfo, promotionID string) {
+	<form method="post" action={ templ.URL("/promotions/" + promotionID + "/retry") }>
+		{{ decision := components.Gate(user, components.RoleAdmin) }}
+		if decision.Allowed {
+			<button type="submit" class="btn btn-sm btn-warning">Retry refresh/sync</button>
+		} else {
+			<button
+				type="submit"
+				class="btn btn-sm btn-warning btn-disabled"
+				disabled
+				title={ "Requires role: " + decision.MissingRole }
+			>
+				Retry refresh/sync
+				<span class="badge badge-outline badge-sm ml-1">{ decision.MissingRole }</span>
+			</button>
+		}
+	</form>
 }

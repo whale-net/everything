@@ -33,7 +33,7 @@ func newPromotionFixture(t *testing.T) *promotionFixture {
 	appSrv := NewAppServer(repo)
 	artSrv := NewArtifactServer(repo)
 	envSrv := NewEnvironmentServer(repo)
-	promoSrv := NewPromotionServer(repo)
+	promoSrv := NewPromotionServer(repo, nil)
 	ctx := authedCtx()
 
 	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{

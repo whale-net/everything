@@ -99,6 +99,12 @@ func run() error {
 
 	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(writeback.WritebackWorkflow)
+	// RetryArgoSyncWorkflow (FR12, issue #1033): a standalone execution
+	// started by server/handlers/promotion.go's RetryArgoSync RPC, on the
+	// same task queue as WritebackWorkflow -- see that workflow's own doc
+	// comment for why this is a fresh execution, never a resume of the
+	// original (by-then-terminal) WritebackWorkflow.
+	w.RegisterWorkflow(writeback.RetryArgoSyncWorkflow)
 
 	// Real (gitops) Writeback implementation is opt-in: only selected when
 	// WRITEBACK_GITOPS_REPO is set, so `bazel test`/local dev/Tilt keep
