@@ -2,8 +2,10 @@ package pages
 
 import (
 	"fmt"
-	"github.com/whale-net/everything/manmanv2/ui/components"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
 templ WorkshopInstallations(layout components.LayoutData, config *manmanpb.GameConfig, installations []*manmanpb.WorkshopInstallation, libraries []*manmanpb.WorkshopLibrary) {
@@ -14,57 +16,57 @@ templ WorkshopInstallations(layout components.LayoutData, config *manmanpb.GameC
 		<div x-data="{ showModal: false }">
 			<div class="flex justify-between items-center mb-6">
 				<div class="flex items-center gap-4">
-					<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", config.GameId, config.ConfigId)) } class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">
+					<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", config.GameId, config.ConfigId)) } class="btn btn-secondary">
 						← Back
 					</a>
-					<h1 class="text-3xl font-bold text-gray-900 dark:text-white">Workshop Addons { "for" } { config.Name }</h1>
+					<h1 class="text-3xl font-bold text-base-content">Workshop Addons { "for" } { config.Name }</h1>
 				</div>
-				<button @click="showModal = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">
+				<button @click="showModal = true" class="btn btn-primary">
 					Install Addon
 				</button>
 			</div>
-			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden">
+			<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden">
 				if len(installations) > 0 {
-					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
-						<thead class="bg-gray-50 dark:bg-slate-900">
+					<table class="table">
+						<thead class="bg-base-200">
 							<tr>
-								<th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Addon</th>
-								<th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Status</th>
-								<th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Progress</th>
-								<th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Path</th>
-								<th class="px-6 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Actions</th>
+								<th class="px-6 py-3 text-left text-xs font-semibold text-base-content uppercase tracking-wider">Addon</th>
+								<th class="px-6 py-3 text-left text-xs font-semibold text-base-content uppercase tracking-wider">Status</th>
+								<th class="px-6 py-3 text-left text-xs font-semibold text-base-content uppercase tracking-wider">Progress</th>
+								<th class="px-6 py-3 text-left text-xs font-semibold text-base-content uppercase tracking-wider">Path</th>
+								<th class="px-6 py-3 text-left text-xs font-semibold text-base-content uppercase tracking-wider">Actions</th>
 							</tr>
 						</thead>
-						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+						<tbody>
 							for _, inst := range installations {
-								<tr class="hover:bg-gray-50 dark:hover:bg-slate-900">
-									<td class="px-6 py-4 whitespace-nowrap">
-										<div class="text-sm font-medium text-gray-900 dark:text-white">Addon #{ fmt.Sprintf("%d", inst.AddonId) }</div>
+								<tr class="hover">
+									<td>
+										<div class="text-sm font-medium text-base-content">Addon #{ fmt.Sprintf("%d", inst.AddonId) }</div>
 									</td>
-									<td class="px-6 py-4 whitespace-nowrap">
-										@components.Badge(installStatusVariant(inst.Status), inst.Status)
+									<td>
+										@htmxui.Badge(inst.Status, statusBadgeVariant(installStatusVariant(inst.Status)), htmxui.BadgeSizeSM, true, nil)
 									</td>
-									<td class="px-6 py-4 whitespace-nowrap">
+									<td>
 										if inst.Status == "downloading" || inst.Status == "pending" {
-											<div class="w-full bg-gray-200 dark:bg-slate-700 rounded-full h-2.5 mb-1">
-												<div class="bg-blue-600 h-2.5 rounded-full" style={ fmt.Sprintf("width: %d%%", inst.ProgressPercent) }></div>
+											<div class="w-full bg-base-300 rounded-full h-2.5 mb-1">
+												<div class="bg-info h-2.5 rounded-full" style={ fmt.Sprintf("width: %d%%", inst.ProgressPercent) }></div>
 											</div>
-											<span class="text-xs text-gray-500 dark:text-gray-400">{ fmt.Sprintf("%d%%", inst.ProgressPercent) }</span>
+											<span class="text-xs text-base-content/60">{ fmt.Sprintf("%d%%", inst.ProgressPercent) }</span>
 										} else {
-											<span class="text-sm text-gray-500 dark:text-gray-400">-</span>
+											<span class="text-sm text-base-content/60">-</span>
 										}
 									</td>
-									<td class="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-xs truncate">
+									<td class="text-sm text-base-content/60 max-w-xs truncate">
 										if inst.InstallationPath != "" {
 											{ inst.InstallationPath }
 										} else {
 											-
 										}
 									</td>
-									<td class="px-6 py-4 whitespace-nowrap text-sm">
+									<td class="text-sm">
 										<form method="POST" action="/workshop/uninstall-addon" class="inline">
 											<input type="hidden" name="installation_id" value={ fmt.Sprintf("%d", inst.InstallationId) }/>
-											<button type="submit" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-red-600 hover:bg-red-700 text-white font-medium rounded transition-colors">
+											<button type="submit" class="btn btn-error btn-sm">
 												Uninstall
 											</button>
 										</form>
@@ -74,16 +76,16 @@ templ WorkshopInstallations(layout components.LayoutData, config *manmanpb.GameC
 						</tbody>
 					</table>
 				} else {
-					<div class="text-center py-12 text-gray-500 dark:text-gray-400">No workshop addons installed</div>
+					<div class="text-center py-12 text-base-content/60">No workshop addons installed</div>
 				}
 			</div>
 			<div x-show="showModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto" @click.self="showModal = false">
 				<div class="flex items-center justify-center min-h-screen px-4">
 					<div class="fixed inset-0 bg-black opacity-50"></div>
-					<div class="relative bg-white dark:bg-slate-800 rounded-lg shadow-xl max-w-2xl w-full p-6">
+					<div class="relative card bg-base-100 shadow-xl max-w-2xl w-full p-6">
 						<div class="flex justify-between items-center mb-4">
-							<h2 class="text-xl font-bold text-gray-900 dark:text-white">Install Workshop Addon</h2>
-							<button @click="showModal = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+							<h2 class="text-xl font-bold text-base-content">Install Workshop Addon</h2>
+							<button @click="showModal = false" class="text-base-content/50 hover:text-base-content">
 								<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
 								</svg>
@@ -92,8 +94,8 @@ templ WorkshopInstallations(layout components.LayoutData, config *manmanpb.GameC
 						<form method="POST" action="/workshop/install-addon" class="space-y-4">
 							<input type="hidden" name="config_id" value={ fmt.Sprintf("%d", config.ConfigId) }/>
 							<div>
-								<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Select Library</label>
-								<select name="library_id" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+								<label class="label"><span class="label-text">Select Library</span></label>
+								<select name="library_id" required class="select select-bordered w-full">
 									<option value="">Choose a library...</option>
 									for _, lib := range libraries {
 										<option value={ fmt.Sprintf("%d", lib.LibraryId) }>
@@ -103,14 +105,14 @@ templ WorkshopInstallations(layout components.LayoutData, config *manmanpb.GameC
 								</select>
 							</div>
 							<div>
-								<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Installation Path</label>
-								<input type="text" name="installation_path" placeholder="/path/to/install" required class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"/>
+								<label class="label"><span class="label-text">Installation Path</span></label>
+								<input type="text" name="installation_path" placeholder="/path/to/install" required class="input input-bordered w-full"/>
 							</div>
 							<div class="flex gap-2 justify-end pt-4">
-								<button type="button" @click="showModal = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">
+								<button type="button" @click="showModal = false" class="btn btn-secondary">
 									Cancel
 								</button>
-								<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">
+								<button type="submit" class="btn btn-primary">
 									Install
 								</button>
 							</div>

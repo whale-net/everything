@@ -1,117 +1,63 @@
 package components
 
-import "fmt"
+import (
+	"fmt"
 
-type ButtonVariant string
-
-const (
-	ButtonPrimary   ButtonVariant = "primary"
-	ButtonSuccess   ButtonVariant = "success"
-	ButtonDanger    ButtonVariant = "danger"
-	ButtonSecondary ButtonVariant = "secondary"
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
-type ButtonSize string
-
-const (
-	ButtonDefault ButtonSize = "default"
-	ButtonSmall   ButtonSize = "small"
-)
-
-func buttonClasses(variant ButtonVariant, size ButtonSize) string {
-	base := "inline-flex items-center justify-center font-medium rounded-md transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2"
-	
-	var sizeClass string
-	if size == ButtonSmall {
-		sizeClass = "px-3 py-1.5 min-h-[36px] text-sm"
-	} else {
-		sizeClass = "px-4 py-2 min-h-[44px]"
-	}
-	
-	var variantClass string
-	switch variant {
-	case ButtonPrimary:
-		variantClass = "bg-indigo-600 hover:bg-indigo-700 text-white focus:ring-indigo-500"
-	case ButtonSuccess:
-		variantClass = "bg-green-600 hover:bg-green-700 text-white focus:ring-green-500"
-	case ButtonDanger:
-		variantClass = "bg-red-600 hover:bg-red-700 text-white focus:ring-red-500"
-	case ButtonSecondary:
-		variantClass = "bg-slate-600 hover:bg-slate-700 text-white focus:ring-slate-500"
-	default:
-		variantClass = "bg-indigo-600 hover:bg-indigo-700 text-white focus:ring-indigo-500"
-	}
-	
-	return fmt.Sprintf("%s %s %s", base, sizeClass, variantClass)
-}
-
-templ Button(variant ButtonVariant, size ButtonSize, text string) {
-	<button class={ buttonClasses(variant, size) }>
-		{ text }
-	</button>
-}
-
-templ ButtonLink(variant ButtonVariant, size ButtonSize, text, href string) {
-	<a href={ templ.URL(href) } class={ buttonClasses(variant, size) }>
-		{ text }
-	</a>
-}
-
-func badgeClasses(status string) string {
+// StatusBadgeVariant maps manmanv2's pre-migration status-key vocabulary
+// (the raw enum-ish strings/semantic keys "online"/"success"/"danger"/etc.
+// pages and dashboard.templ's statusVariant already normalize state into)
+// onto htmxui.BadgeVariant, preserving the same colour/state meaning the
+// old badgeClasses(status) switch in this file encoded (FR7 -- see #1008's
+// "do not silently re-map a danger state to a neutral badge" rule). "info"
+// is the one addition: the old switch had no case for it and silently fell
+// through to the neutral default even though workshop_installations'
+// "downloading" state was already named "info" by its own
+// installStatusVariant -- mapping it onto BadgeInfo here restores that
+// stated intent rather than changing it.
+func StatusBadgeVariant(status string) htmxui.BadgeVariant {
 	switch status {
 	case "online", "active", "running", "completed", "success":
-		return "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+		return htmxui.BadgeSuccess
 	case "offline", "inactive", "stopped", "secondary":
-		return "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"
+		return htmxui.BadgeNeutral
 	case "starting", "stopping", "pending", "warning":
-		return "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+		return htmxui.BadgeWarning
 	case "crashed", "error", "failed", "danger":
-		return "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+		return htmxui.BadgeError
 	case "deployed", "primary":
-		return "bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200"
+		return htmxui.BadgePrimary
+	case "info":
+		return htmxui.BadgeInfo
 	default:
-		return "bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-300"
+		return htmxui.BadgeNeutral
 	}
 }
 
-templ Badge(status, text string) {
-	if text == "" {
-		<span class={ "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", badgeClasses(status) }>
-			{ status }
-		</span>
-	} else {
-		<span class={ "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium", badgeClasses(status) }>
-			{ text }
-		</span>
-	}
-}
-
-templ Card(title string) {
-	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
-		if title != "" {
-			<div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
-				<h2 class="text-lg font-semibold text-slate-900 dark:text-white">{ title }</h2>
-			</div>
-		}
-		<div class="p-6">
-			{ children... }
-		</div>
-	</div>
-}
-
-templ CardSimple() {
-	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
-		{ children... }
-	</div>
-}
+// Button/ButtonLink/Badge/Card/CardSimple used to live here as
+// manmanv2-local re-implementations of daisyUI button/badge/card chrome.
+// Per #1008 (FR4), that intermediate component layer is retired: page
+// templates now call libs/go/htmxui's Button/Badge/Card/Confirm directly
+// (or, for anchor-styled buttons -- which htmxui.Button, a <button>-only
+// primitive, doesn't cover -- use the same raw `btn btn-<variant>
+// btn-<size>` daisyUI classes htmxui.Button itself emits, matching the
+// tools/app_registry/ui/pages precedent from #1005). What remains below is
+// generic page-composition chrome (hero banners, form fields, empty
+// states, alerts, definition-list items, tables) that htmxui has no
+// primitive for; each is restyled onto daisyUI semantic tokens
+// (bg-base-100/text-base-content/etc.) so it themes correctly under the
+// data-theme switch #1007 introduced, instead of the old Tailwind
+// `dark:`-variant pairs.
 
 templ HeroHeader(title, subtitle string) {
-	<div class="bg-gradient-to-br from-indigo-600 to-purple-600 rounded-lg p-6 md:p-8 mb-6 shadow-lg">
+	<div class="bg-gradient-to-br from-primary to-secondary text-primary-content rounded-box p-6 md:p-8 mb-6 shadow-lg">
 		<div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-			<div class="text-white">
+			<div>
 				<h1 class="text-2xl md:text-3xl font-bold mb-2">{ title }</h1>
 				if subtitle != "" {
-					<p class="text-indigo-100 text-sm">{ subtitle }</p>
+					<p class="text-primary-content/80 text-sm">{ subtitle }</p>
 				}
 			</div>
 			<div class="flex gap-2">
@@ -122,23 +68,29 @@ templ HeroHeader(title, subtitle string) {
 }
 
 templ FormInput(label, name, inputType, value string) {
-	<div class="mb-4">
-		<label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{ label }</label>
+	<div class="form-control w-full mb-4">
+		<label class="label" for={ name }>
+			<span class="label-text">{ label }</span>
+		</label>
 		<input
 			type={ inputType }
+			id={ name }
 			name={ name }
 			value={ value }
-			class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+			class="input input-bordered w-full"
 		/>
 	</div>
 }
 
 templ FormSelect(label, name string, options []SelectOption, selected string) {
-	<div class="mb-4">
-		<label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{ label }</label>
+	<div class="form-control w-full mb-4">
+		<label class="label" for={ name }>
+			<span class="label-text">{ label }</span>
+		</label>
 		<select
+			id={ name }
 			name={ name }
-			class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+			class="select select-bordered w-full"
 		>
 			for _, opt := range options {
 				if opt.Value == selected {
@@ -152,12 +104,15 @@ templ FormSelect(label, name string, options []SelectOption, selected string) {
 }
 
 templ FormTextarea(label, name, value string, rows int) {
-	<div class="mb-4">
-		<label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">{ label }</label>
+	<div class="form-control w-full mb-4">
+		<label class="label" for={ name }>
+			<span class="label-text">{ label }</span>
+		</label>
 		<textarea
+			id={ name }
 			name={ name }
 			rows={ fmt.Sprintf("%d", rows) }
-			class="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+			class="textarea textarea-bordered w-full"
 		>{ value }</textarea>
 	</div>
 }
@@ -168,16 +123,16 @@ type SelectOption struct {
 }
 
 templ EmptyState(title, description, actionText, actionHref string) {
-	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-12">
-		<div class="text-center">
-			<svg class="mx-auto h-12 w-12 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+	<div class="card bg-base-100 border border-base-300 shadow-sm">
+		<div class="card-body items-center text-center py-12">
+			<svg class="mx-auto h-12 w-12 text-base-content/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
 			</svg>
-			<h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">{ title }</h3>
-			<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{ description }</p>
+			<h3 class="mt-2 text-sm font-medium text-base-content">{ title }</h3>
+			<p class="mt-1 text-sm text-base-content/60">{ description }</p>
 			if actionText != "" && actionHref != "" {
 				<div class="mt-6">
-					<a href={ templ.URL(actionHref) } class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-md transition-colors">
+					<a href={ templ.URL(actionHref) } class="btn btn-primary">
 						{ actionText }
 					</a>
 				</div>
@@ -188,52 +143,51 @@ templ EmptyState(title, description, actionText, actionHref string) {
 
 templ Alert(alertType, message string) {
 	if alertType == "warning" {
-		<div class="mb-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 rounded">
-			<p class="text-sm text-yellow-900 dark:text-yellow-200">{ message }</p>
+		<div role="alert" class="alert alert-warning mb-4">
+			<span class="text-sm">{ message }</span>
 		</div>
 	} else if alertType == "error" {
-		<div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 dark:border-red-400 rounded">
-			<p class="text-sm text-red-900 dark:text-red-200">{ message }</p>
+		<div role="alert" class="alert alert-error mb-4">
+			<span class="text-sm">{ message }</span>
 		</div>
 	} else {
-		<div class="mb-4 p-4 bg-indigo-50 dark:bg-indigo-900/20 border-l-4 border-indigo-500 dark:border-indigo-400 rounded">
-			<p class="text-sm text-indigo-900 dark:text-indigo-200">{ message }</p>
+		<div role="alert" class="alert alert-info mb-4">
+			<span class="text-sm">{ message }</span>
 		</div>
 	}
 }
 
-
 templ DLItem(label, value string) {
 	<div>
-		<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{ label }</dt>
-		<dd class="mt-1 text-sm text-gray-900 dark:text-white">{ value }</dd>
+		<dt class="text-sm font-medium text-base-content/60">{ label }</dt>
+		<dd class="mt-1 text-sm text-base-content">{ value }</dd>
 	</div>
 }
 
 templ DLItemMono(label, value string) {
 	<div>
-		<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{ label }</dt>
-		<dd class="mt-1 text-sm text-gray-900 dark:text-white font-mono">{ value }</dd>
+		<dt class="text-sm font-medium text-base-content/60">{ label }</dt>
+		<dd class="mt-1 text-sm text-base-content font-mono">{ value }</dd>
 	</div>
 }
 
 templ DLItemCode(label, value string) {
 	<div class="md:col-span-2">
-		<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{ label }</dt>
+		<dt class="text-sm font-medium text-base-content/60">{ label }</dt>
 		<dd class="mt-1">
 			if value != "" {
-				<pre class="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-slate-900 p-3 rounded border border-gray-200 dark:border-slate-700 overflow-x-auto">{ value }</pre>
+				<pre class="text-sm font-mono text-base-content bg-base-200 p-3 rounded border border-base-300 overflow-x-auto">{ value }</pre>
 			} else {
-				<span class="text-sm text-gray-900 dark:text-white">-</span>
+				<span class="text-sm text-base-content">-</span>
 			}
 		</dd>
 	</div>
 }
 
 templ Table() {
-	<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden">
+	<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden">
 		<div class="overflow-x-auto">
-			<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+			<table class="table">
 				{ children... }
 			</table>
 		</div>
@@ -242,7 +196,7 @@ templ Table() {
 
 templ TableInline() {
 	<div class="overflow-x-auto">
-		<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
+		<table class="table">
 			{ children... }
 		</table>
 	</div>
