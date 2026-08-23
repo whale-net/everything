@@ -973,17 +973,27 @@ func incrementVersion(ver, incrementType string) (string, error) {
 	return next.String(), nil
 }
 
-// resolveApps matches requested app names (full, short, or domain) against allApps.
+// resolveApps matches requested app identifiers against allApps. Each
+// identifier must be either an app's full name ("<domain>-<name>" or
+// "<domain>/<name>") or a bare domain name (which sweeps every app in that
+// domain). A bare, unqualified app name is deliberately NOT matched: an app
+// name and a domain name can collide (e.g. domain "app-registry" for the
+// server/migrate/worker/ui components vs. app name "app-registry" for the
+// unrelated tools-domain CLI, full name "tools-app-registry") and there is
+// no context-free way to tell which one a bare name means. Domain sweeps
+// are a release-v1 convenience only, on life support until the App
+// Registry-backed release-v2 checkbox picker (which always supplies full
+// names, see AppMetadataFromInputs) fully replaces it -- so the fix here is
+// to require full names rather than to keep growing collision-avoidance
+// heuristics for short names.
 func resolveApps(requested []string, allApps []AppMetadata) ([]AppMetadata, error) {
 	// Build lookup maps
 	byFull := make(map[string]AppMetadata)
-	byName := make(map[string][]AppMetadata)
 	byDomain := make(map[string][]AppMetadata)
 
 	for _, app := range allApps {
 		byFull[app.FullName()] = app
 		byFull[app.Domain+"/"+app.Name] = app
-		byName[app.Name] = append(byName[app.Name], app)
 		byDomain[app.Domain] = append(byDomain[app.Domain], app)
 	}
 
@@ -999,25 +1009,8 @@ func resolveApps(requested []string, allApps []AppMetadata) ([]AppMetadata, erro
 			result = append(result, app)
 			continue
 		}
-		// An unambiguous app name wins over a domain sweep: a domain and an
-		// app name can collide (e.g. domain "app-registry" for the server/
-		// worker/ui components vs. app name "app-registry" for the
-		// tools-domain CLI), and the caller asking for one specific app by
-		// name means that app, not every app in a same-named domain.
-		if nameApps, ok := byName[req]; ok && len(nameApps) == 1 {
-			result = append(result, nameApps[0])
-			continue
-		}
 		if domainApps, ok := byDomain[req]; ok {
 			result = append(result, domainApps...)
-			continue
-		}
-		if nameApps, ok := byName[req]; ok {
-			names := make([]string, len(nameApps))
-			for i, a := range nameApps {
-				names[i] = a.FullName()
-			}
-			invalid = append(invalid, fmt.Sprintf("%s (ambiguous: %s)", req, strings.Join(names, ", ")))
 			continue
 		}
 		invalid = append(invalid, req)

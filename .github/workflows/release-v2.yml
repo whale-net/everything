@@ -874,7 +874,11 @@ jobs:
       # run's release matrix -- the job-level `if:` above only guarantees
       # at least one of them is; a run releasing just one must not fail
       # trying to package-assets the other (resolveApps would error on an
-      # app name absent from this run's plan).
+      # app name absent from this run's plan). package-assets takes the
+      # full name ("tools-<app>") -- resolveApps only matches full names
+      # and domain sweeps, not bare app names, since a bare name can
+      # collide with an unrelated same-named domain (e.g. "app-registry"
+      # is both this CLI's bare name and the app-registry domain).
       - name: Package CLI binaries (multi-platform)
         env:
           RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
@@ -883,7 +887,7 @@ jobs:
           for APP_NAME in release_helper_go app-registry; do
             if echo "$RELEASE_MATRIX" | jq -e --arg app "$APP_NAME" '.include[] | select(.app == $app)' >/dev/null; then
               echo "Packaging CLI binaries for ${APP_NAME} (linux_amd64, linux_arm64, darwin_arm64, darwin_amd64)..."
-              "$RELEASE_HELPER" package-assets "$APP_NAME" \
+              "$RELEASE_HELPER" package-assets "tools-${APP_NAME}" \
                 --platforms linux_amd64,linux_arm64,darwin_arm64,darwin_amd64 \
                 --output-dir "/tmp/cli-binaries/${APP_NAME}"
             else

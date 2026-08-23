@@ -172,7 +172,7 @@ func TestPlanReleaseWorkflowDispatchSpecificApps(t *testing.T) {
 
 	result, err := planRelease(planParams{
 		eventType:     "workflow_dispatch",
-		requestedApps: "demo-hello-go,control-api",
+		requestedApps: "demo-hello-go,manmanv2-control-api",
 		version:       "v1.5.0",
 		bazel:         bazel,
 		git:           git,
@@ -627,7 +627,7 @@ func TestPlanReleaseWorkflowDispatchIncrementMajor(t *testing.T) {
 
 	result, err := planRelease(planParams{
 		eventType:      "workflow_dispatch",
-		requestedApps:  "control-api",
+		requestedApps:  "manmanv2-control-api",
 		incrementMajor: true,
 		bazel:          bazel,
 		git:            git,
@@ -668,7 +668,7 @@ func TestPlanReleaseWorkflowDispatch_AllocateDomainUsesRegistry(t *testing.T) {
 	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
 		result, err = planRelease(planParams{
 			eventType:              "workflow_dispatch",
-			requestedApps:          "control-api",
+			requestedApps:          "manmanv2-control-api",
 			incrementMajor:         true,
 			bazel:                  bazel,
 			git:                    git,
@@ -707,7 +707,7 @@ func TestPlanReleaseWorkflowDispatch_NotAllocatedFallsBackToTags(t *testing.T) {
 	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
 		result, err = planRelease(planParams{
 			eventType:              "workflow_dispatch",
-			requestedApps:          "control-api",
+			requestedApps:          "manmanv2-control-api",
 			incrementMajor:         true,
 			bazel:                  bazel,
 			git:                    git,
@@ -743,7 +743,7 @@ func TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal(t *testing.T) {
 	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
 		_, err = planRelease(planParams{
 			eventType:              "workflow_dispatch",
-			requestedApps:          "control-api",
+			requestedApps:          "manmanv2-control-api",
 			incrementMajor:         true,
 			bazel:                  bazel,
 			git:                    git,
@@ -769,11 +769,11 @@ func TestResolveApps(t *testing.T) {
 		wantCount int
 		wantErr   bool
 	}{
-		{[]string{"demo-hello-go"}, 1, false}, // full name
-		{[]string{"demo"}, 2, false},          // domain
-		{[]string{"control-api"}, 1, false},   // short (unambiguous)
-		{[]string{"nonexistent"}, 0, true},    // invalid
-		{[]string{"demo-hello-go", "control-api"}, 2, false},
+		{[]string{"demo-hello-go"}, 1, false},      // full name
+		{[]string{"demo"}, 2, false},                // domain sweep
+		{[]string{"control-api"}, 0, true},          // bare short name -- no longer matched, must be full "manmanv2-control-api"
+		{[]string{"nonexistent"}, 0, true},          // invalid
+		{[]string{"demo-hello-go", "manmanv2-control-api"}, 2, false},
 	}
 	for _, tt := range tests {
 		got, err := resolveApps(tt.requested, allApps)
@@ -796,10 +796,12 @@ func TestResolveApps(t *testing.T) {
 // TestResolveApps_NameDomainCollision covers the real-world app-registry
 // case: domain "app-registry" (server/migrate/worker/ui) collides with app
 // name "app-registry" (the tools-domain CLI, full name
-// "tools-app-registry"). A bare request for "app-registry" must resolve to
-// the single app actually named that, not sweep the whole same-named
-// domain -- see release-v2.yml's "Package CLI binaries" step, which calls
-// `package-assets app-registry` and requires exactly one match.
+// "tools-app-registry"). resolveApps no longer matches bare app names at
+// all (see resolveApps' doc comment) precisely so this kind of collision
+// can't happen: the CLI app is reachable only via its full name
+// "tools-app-registry", and the bare "app-registry" always means the
+// domain sweep -- see release-v2.yml's "Package CLI binaries" step, which
+// now calls `package-assets tools-app-registry`.
 func TestResolveApps_NameDomainCollision(t *testing.T) {
 	allApps := []AppMetadata{
 		{AppManifest: &appmetapb.AppManifest{Name: "app-registry", Domain: "tools", AppType: "cli"}, BazelTarget: "//tools/app_registry/cli:app-registry_metadata"},
@@ -809,22 +811,60 @@ func TestResolveApps_NameDomainCollision(t *testing.T) {
 		{AppManifest: &appmetapb.AppManifest{Name: "ui", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/ui:ui_metadata"},
 	}
 
+	// The bare app name is no longer matched -- it resolves as the domain
+	// sweep instead, unambiguously.
 	got, err := resolveApps([]string{"app-registry"}, allApps)
 	if err != nil {
 		t.Fatalf("resolveApps([app-registry]): unexpected error: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("resolveApps([app-registry]): got %d apps, want 1: %v", len(got), got)
-	}
-	if got[0].FullName() != "tools-app-registry" {
-		t.Errorf("resolveApps([app-registry]): got %s, want tools-app-registry", got[0].FullName())
+	if len(got) != 4 {
+		t.Fatalf("resolveApps([app-registry]): got %d apps, want 4 (the domain sweep): %v", len(got), got)
 	}
 
-	// The domain itself is still reachable via its own full-name prefix, so
-	// "domain sweep" isn't lost -- just no longer the first match tried.
-	domainApp, err := resolveApps([]string{"app-registry-api"}, allApps)
-	if err != nil || len(domainApp) != 1 || domainApp[0].FullName() != "app-registry-api" {
-		t.Errorf("resolveApps([app-registry-api]) = %v, %v; want single app-registry-api", domainApp, err)
+	// The CLI app is reachable only through its full name.
+	cliApp, err := resolveApps([]string{"tools-app-registry"}, allApps)
+	if err != nil || len(cliApp) != 1 || cliApp[0].FullName() != "tools-app-registry" {
+		t.Errorf("resolveApps([tools-app-registry]) = %v, %v; want single tools-app-registry", cliApp, err)
+	}
+
+	// Requesting both is not a duplicate: the domain sweep and the CLI app
+	// are disjoint sets now that the CLI app is only reachable by full name.
+	both, err := resolveApps([]string{"app-registry", "tools-app-registry"}, allApps)
+	if err != nil {
+		t.Fatalf("resolveApps([app-registry, tools-app-registry]): unexpected error: %v", err)
+	}
+	if len(both) != 5 {
+		t.Fatalf("resolveApps([app-registry, tools-app-registry]): got %d apps, want 5: %v", len(both), both)
+	}
+}
+
+// TestResolveApps_ToolsAndAppRegistryDomainsDoNotCollide is the regression
+// test for a real "plan --apps 'tools, app-registry'" run
+// (https://github.com/whale-net/everything/actions/runs/32621937589): a
+// prior fix made resolveApps prefer an unambiguous app-name match over a
+// same-named domain sweep, which made the app-registry *domain*
+// (server/migrate/worker/ui) unreachable via a bare "app-registry" and
+// caused the "tools" domain sweep (which contains the same-named
+// tools-app-registry CLI) plus a bare "app-registry" to collide into a
+// false duplicate. Removing bare app-name matching entirely (this change)
+// fixes it at the root: "tools" and "app-registry" are two disjoint domain
+// sweeps, full stop.
+func TestResolveApps_ToolsAndAppRegistryDomainsDoNotCollide(t *testing.T) {
+	allApps := []AppMetadata{
+		{AppManifest: &appmetapb.AppManifest{Name: "app-registry", Domain: "tools", AppType: "cli"}, BazelTarget: "//tools/app_registry/cli:app-registry_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "release_helper_go", Domain: "tools", AppType: "cli"}, BazelTarget: "//tools/release_helper_go:release_helper_go_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "api", Domain: "app-registry", AppType: "external-api"}, BazelTarget: "//tools/app_registry/server:api_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "migrate", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/migrate:migrate_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "worker", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/worker:worker_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "ui", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/ui:ui_metadata"},
+	}
+
+	union, err := resolveApps([]string{"tools", "app-registry"}, allApps)
+	if err != nil {
+		t.Fatalf("resolveApps([tools, app-registry]): unexpected error: %v", err)
+	}
+	if len(union) != 6 {
+		t.Fatalf("resolveApps([tools, app-registry]): got %d apps, want 6: %v", len(union), union)
 	}
 }
 
@@ -919,7 +959,7 @@ func TestPlanOpenAPISpecsPlanning(t *testing.T) {
 
 	result, err := planRelease(planParams{
 		eventType:     "workflow_dispatch",
-		requestedApps: "demo-hello-py,control-api",
+		requestedApps: "demo-hello-py,manmanv2-control-api",
 		version:       "v1.0.0",
 		bazel:         bazel,
 		git:           git,
@@ -971,7 +1011,7 @@ func TestPlanReleaseWithCharts(t *testing.T) {
 
 	result, err := planRelease(planParams{
 		eventType:       "workflow_dispatch",
-		requestedApps:   "control-api",
+		requestedApps:   "manmanv2-control-api",
 		requestedCharts: "all",
 		incrementMinor:  true,
 		bazel:           bazel,
@@ -1000,7 +1040,7 @@ func TestPlanReleaseWithCharts(t *testing.T) {
 // single `plan` invocation whose requested apps AND requested charts
 // overlap -- here, chart "helm-control" (domain manmanv2) composes app
 // "control-api" (domain manmanv2), and both are explicit targets of the
-// same batch (requestedApps: "control-api", requestedCharts: "all"). This
+// same batch (requestedApps: "manmanv2-control-api", requestedCharts: "all"). This
 // is the exact map (PlanResult.Versions) that flows, unchanged in shape,
 // through worker/release/plan.go's ResolvePlan re-keying, github.go's
 // appVersionsJSON, release.yml's --app-versions plumbing, and finally
@@ -1030,7 +1070,7 @@ func TestPlanReleaseWithCharts_VersionsMapCoversComposedMemberApp(t *testing.T) 
 
 	result, err := planRelease(planParams{
 		eventType:       "workflow_dispatch",
-		requestedApps:   "control-api",
+		requestedApps:   "manmanv2-control-api",
 		requestedCharts: "all",
 		incrementMinor:  true,
 		bazel:           bazel,
@@ -1094,7 +1134,7 @@ func TestPlanAppRegistryUpfrontCalls(t *testing.T) {
 
 	result, err := planRelease(planParams{
 		eventType:              "workflow_dispatch",
-		requestedApps:          "control-api",
+		requestedApps:          "manmanv2-control-api",
 		version:                "v1.0.0",
 		gitSHA:                 "test-sha",
 		gitRef:                 "refs/heads/main",
@@ -1176,7 +1216,7 @@ func TestPlanAppRegistryIntegration_IncludesBinaryKindInBatch(t *testing.T) {
 
 	_, err := planRelease(planParams{
 		eventType:              "workflow_dispatch",
-		requestedApps:          "app-registry",
+		requestedApps:          "tools-app-registry",
 		version:                "v1.0.0",
 		gitSHA:                 "test-sha",
 		workflowRunID:          "run-100",
@@ -1220,7 +1260,7 @@ func TestPlanDryRunAndSkipRegistry(t *testing.T) {
 	// Dry run: no registry calls
 	_, err := planRelease(planParams{
 		eventType:              "workflow_dispatch",
-		requestedApps:          "control-api",
+		requestedApps:          "manmanv2-control-api",
 		version:                "v1.0.0",
 		dryRun:                 true,
 		bazel:                  bazel,
@@ -1240,7 +1280,7 @@ func TestPlanDryRunAndSkipRegistry(t *testing.T) {
 	// Skip registry: no registry calls
 	_, err = planRelease(planParams{
 		eventType:              "workflow_dispatch",
-		requestedApps:          "control-api",
+		requestedApps:          "manmanv2-control-api",
 		version:                "v1.0.0",
 		skipRegistry:           true,
 		bazel:                  bazel,
@@ -1271,7 +1311,7 @@ func TestPlanCmd_MatrixJSONOutput(t *testing.T) {
 					stdout, stderr, err := runTest([]string{
 						"plan",
 						"--event-type", "workflow_dispatch",
-						"--apps", "control-api",
+						"--apps", "manmanv2-control-api",
 						"--version", "v1.0.0",
 						"--format", "json",
 						"--dry-run",
@@ -1322,7 +1362,7 @@ func TestPlanCmd_MatrixGitHubOutput(t *testing.T) {
 					stdout, stderr, err := runTest([]string{
 						"plan",
 						"--event-type", "workflow_dispatch",
-						"--apps", "control-api",
+						"--apps", "manmanv2-control-api",
 						"--version", "v1.0.0",
 						"--format", "github",
 						"--dry-run",
@@ -1401,7 +1441,7 @@ func TestPlanCmd_FromResolvedPlan_MatchesFreshPlanGithubOutput(t *testing.T) {
 					freshJSON, _, err = runTest([]string{
 						"plan",
 						"--event-type", "workflow_dispatch",
-						"--apps", "control-api",
+						"--apps", "manmanv2-control-api",
 						"--version", "v1.0.0",
 						"--format", "json",
 						"--dry-run",
@@ -1413,7 +1453,7 @@ func TestPlanCmd_FromResolvedPlan_MatchesFreshPlanGithubOutput(t *testing.T) {
 					freshGithub, _, err = runTest([]string{
 						"plan",
 						"--event-type", "workflow_dispatch",
-						"--apps", "control-api",
+						"--apps", "manmanv2-control-api",
 						"--version", "v1.0.0",
 						"--format", "github",
 						"--dry-run",
