@@ -81,10 +81,12 @@ go_test(
         "promotion_sync_outcome_data_test.go",
         "release_scope_test.go",
         "role_gating_test.go",
+        "templ_render_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
         "//libs/go/htmxauth",
+        "//libs/go/htmxui",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",
         "@org_golang_google_grpc//:grpc",
