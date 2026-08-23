@@ -1,0 +1,142 @@
+package htmxui
+
+// ConfirmIntent selects Confirm's visual weight: destructive actions get
+// error-coded chrome (danger-zone header when ZoneTitle is set, an
+// error-variant submit button); neutral actions get primary-coded chrome.
+type ConfirmIntent string
+
+const (
+	ConfirmDestructive ConfirmIntent = "destructive"
+	ConfirmNeutral     ConfirmIntent = "neutral"
+)
+
+// ConfirmProps is Confirm's full parameter set (FR1b). Its fields are the
+// union of what three independently-written call sites each needed:
+//
+//   - tools/app_registry/ui/pages/promote.templ: an inline (no ZoneTitle)
+//     neutral-to-destructive confirmation ahead of a real write, with an
+//     explicit-acknowledge checkbox (the override_ack checkbox, passed as
+//     Confirm's children) and a role-gated Disabled/DisabledReason submit.
+//   - tools/app_registry/ui/pages/rollback.templ: an inline (no ZoneTitle)
+//     destructive confirmation with a required-reason textarea (also
+//     passed as children) and a Disabled state for "nothing to roll back
+//     to" (NoHistory).
+//   - tools/app_registry/ui/pages/environment_form.templ: a bordered,
+//     headed "⚠️ Danger Zone" card (ZoneTitle set) wrapping an archive
+//     action with a required-reason textarea and a role-gated Disabled
+//     submit.
+//
+// Where the three diverge, this is resolved with a parameter rather than a
+// second component: ZoneTitle toggles the bordered/headed card chrome
+// on/off (present only for environment_form's danger zone); the
+// typed-confirmation / explicit-acknowledge affordance itself (checkbox
+// vs. textarea, and its exact prompt text) is never a Confirm field at all
+// -- it varies too much in shape across the three call sites to force into
+// one parameter, so it is passed as Confirm's children alongside any
+// hidden form fields, rendered between the summary and the action row.
+type ConfirmProps struct {
+	// Intent selects destructive vs neutral chrome (see ConfirmIntent).
+	Intent ConfirmIntent
+
+	// ZoneTitle, when non-empty, wraps Confirm in the bordered/headed
+	// "danger zone" card chrome (environment_form.templ's pattern) with
+	// this text as the header. Empty renders inline with no card wrapper
+	// (promote.templ's and rollback.templ's pattern).
+	ZoneTitle string
+
+	// Summary is a short prose statement of what is about to happen,
+	// rendered above the children slot (e.g. rollback.templ's "Rollback
+	// has no version argument..." explanation, or environment_form.templ's
+	// "Environments are never hard-deleted..." note).
+	Summary string
+
+	// SubmitLabel is the submit button's text (e.g. "Promote for real",
+	// "Confirm rollback", "Archive prod").
+	SubmitLabel string
+
+	// CancelHref, when non-empty, renders a Cancel link alongside the
+	// submit button. Empty omits the cancel affordance entirely (the
+	// danger-zone archive action has no separate cancel -- the surrounding
+	// page's own close control covers it).
+	CancelHref string
+
+	// CancelLabel overrides the cancel link's text; defaults to "Cancel"
+	// when empty.
+	CancelLabel string
+
+	// Disabled and DisabledReason cover the role-gated / no-history-to-
+	// roll-back-to disabled submit pattern shared by all three call sites:
+	// a disabled submit still renders (never hidden) with DisabledReason
+	// as its title tooltip.
+	Disabled       bool
+	DisabledReason string
+}
+
+func confirmCancelLabel(p ConfirmProps) string {
+	if p.CancelLabel != "" {
+		return p.CancelLabel
+	}
+	return "Cancel"
+}
+
+func confirmSubmitVariant(intent ConfirmIntent) ButtonVariant {
+	if intent == ConfirmDestructive {
+		return ButtonError
+	}
+	return ButtonPrimary
+}
+
+// Confirm is htmxui's shared confirm/danger-zone action primitive (FR1).
+// It is net-new consolidation, not an extraction (FR1b): the pattern was
+// previously implemented independently three times (see ConfirmProps'
+// doc comment for the exact call sites and how their differences map onto
+// ConfirmProps' fields). This is the first time it exists once.
+//
+// Confirm renders, in order: the danger-zone card chrome when ZoneTitle is
+// set, the Summary prose, the children slot (hidden form fields plus
+// whatever typed-confirmation / explicit-acknowledge control the caller
+// needs -- a checkbox, a required textarea, or nothing), and finally the
+// cancel + submit action row. submitAttrs is forwarded onto the submit
+// <button> itself (not the surrounding <form>, which stays entirely
+// app-owned) -- this is how a caller wires an hx-post target, a
+// name/value pair distinguishing multiple submit actions on one form
+// (promote.templ's dry_run vs commit), or any other submit-specific
+// attribute without Confirm needing to know about it.
+//
+// What is intentionally app-owned: the <form> element itself (method,
+// action, hidden fields) is never rendered by Confirm -- callers wrap
+// Confirm's children and action row in their own <form>, exactly as all
+// three consolidated call sites already do.
+templ Confirm(p ConfirmProps, submitAttrs templ.Attributes) {
+	if p.ZoneTitle != "" {
+		<div class="card bg-base-100 border-2 border-error/40 shadow-md">
+			<div class="bg-error/10 px-6 py-4 border-b-2 border-error/40 rounded-t-box">
+				<h3 class="text-lg font-semibold text-error">{ p.ZoneTitle }</h3>
+			</div>
+			<div class="card-body">
+				@confirmBody(p, submitAttrs) {
+					{ children... }
+				}
+			</div>
+		</div>
+	} else {
+		@confirmBody(p, submitAttrs) {
+			{ children... }
+		}
+	}
+}
+
+templ confirmBody(p ConfirmProps, submitAttrs templ.Attributes) {
+	if p.Summary != "" {
+		<p class="text-sm opacity-70 mb-2">{ p.Summary }</p>
+	}
+	{ children... }
+	<div class="flex gap-2 justify-end mt-4">
+		if p.CancelHref != "" {
+			<a href={ templ.URL(p.CancelHref) } class="btn btn-secondary">{ confirmCancelLabel(p) }</a>
+		}
+		<button type="submit" class={ buttonClasses(confirmSubmitVariant(p.Intent), ButtonSizeMD, p.Disabled) } disabled?={ p.Disabled } title={ p.DisabledReason } { submitAttrs... }>
+			{ p.SubmitLabel }
+		</button>
+	</div>
+}

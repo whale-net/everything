@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
@@ -109,7 +110,9 @@ templ DriftAudit(user *htmxauth.UserInfo, m *matrix.Matrix, driftRows []matrix.D
 				</div>
 				<form method="get" action="/drift-audit" class="flex flex-col md:flex-row gap-3 p-4 border-b border-base-300">
 					<input type="text" name="owner" placeholder="Scope to app/chart full name…" value={ ownerFilter } class="input input-bordered input-sm w-full md:w-72"/>
-					<button type="submit" class="btn btn-sm">Filter</button>
+					@htmxui.Button("", htmxui.ButtonSizeSM, false, templ.Attributes{"type": "submit"}) {
+					Filter
+				}
 					if ownerFilter != "" {
 						<a href="/drift-audit" class="btn btn-sm btn-ghost">Clear</a>
 					}

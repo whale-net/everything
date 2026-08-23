@@ -1,0 +1,67 @@
+package htmxui
+
+import "strings"
+
+// ButtonVariant selects a Button's daisyUI colour semantic class. These
+// mirror the manmanv2 design standards documented on ThemesCSS
+// (themes.go): primary=create/edit/view, success=start/save,
+// error=delete/stop (destructive), neutral/secondary=cancel/back,
+// warning=pending/caution.
+type ButtonVariant string
+
+const (
+	ButtonNeutral   ButtonVariant = "btn-neutral"
+	ButtonPrimary   ButtonVariant = "btn-primary"
+	ButtonSecondary ButtonVariant = "btn-secondary"
+	ButtonSuccess   ButtonVariant = "btn-success"
+	ButtonWarning   ButtonVariant = "btn-warning"
+	ButtonError     ButtonVariant = "btn-error"
+	ButtonGhost     ButtonVariant = "btn-ghost"
+)
+
+// ButtonSize selects a Button's daisyUI size modifier class. ButtonSizeMD is
+// daisyUI's implicit default size and intentionally emits no size class.
+type ButtonSize string
+
+const (
+	ButtonSizeXS ButtonSize = "btn-xs"
+	ButtonSizeSM ButtonSize = "btn-sm"
+	ButtonSizeMD ButtonSize = ""
+	ButtonSizeLG ButtonSize = "btn-lg"
+)
+
+// buttonClasses joins the daisyUI class set for a given variant/size/disabled
+// combination into a single space-separated class string. Empty pieces
+// (ButtonSizeMD, an unset variant, disabled=false) are dropped rather than
+// left as stray whitespace in the rendered class attribute.
+func buttonClasses(variant ButtonVariant, size ButtonSize, disabled bool) string {
+	classes := []string{"btn"}
+	if variant != "" {
+		classes = append(classes, string(variant))
+	}
+	if size != "" {
+		classes = append(classes, string(size))
+	}
+	if disabled {
+		classes = append(classes, "btn-disabled")
+	}
+	return strings.Join(classes, " ")
+}
+
+// Button is htmxui's shared daisyUI button primitive. It emits `btn` plus
+// the requested variant/size modifier classes (see ButtonVariant,
+// ButtonSize); when disabled is true it also emits `btn-disabled` and sets
+// the native `disabled` attribute, matching the disabled+tooltip pattern
+// used across tools/app_registry/ui/pages (e.g. promote.templ's
+// role-gated "Promote for real" button).
+//
+// attrs is the escape hatch for anything Button intentionally doesn't know
+// about: type="submit", name/value pairs for multi-action forms
+// (promote.templ's dry_run vs commit submit buttons), hx-* attributes,
+// title tooltips, and so on. Button owns only the daisyUI class mechanics;
+// callers own everything else about the underlying <button> element.
+templ Button(variant ButtonVariant, size ButtonSize, disabled bool, attrs templ.Attributes) {
+	<button class={ buttonClasses(variant, size, disabled) } disabled?={ disabled } { attrs... }>
+		{ children... }
+	</button>
+}

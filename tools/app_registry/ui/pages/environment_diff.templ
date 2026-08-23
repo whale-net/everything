@@ -2,6 +2,7 @@ package pages
 
 import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 	"github.com/whale-net/everything/tools/app_registry/ui/viewdata"
@@ -69,7 +70,9 @@ templ EnvironmentDiff(user *htmxauth.UserInfo, environments []*pb.Environment, f
 				</select>
 				<label class="text-sm opacity-70" for="diff-at">As of (UTC):</label>
 				<input type="datetime-local" id="diff-at" name="at" class="input input-sm input-bordered" value={ asOfInputValue(at) }/>
-				<button type="submit" class="btn btn-sm btn-primary">Diff</button>
+				@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeSM, false, templ.Attributes{"type": "submit"}) {
+					Diff
+				}
 			</form>
 		</div>
 		if len(environments) < 2 {

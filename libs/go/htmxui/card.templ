@@ -1,0 +1,40 @@
+package htmxui
+
+// Card is htmxui's shared daisyUI card primitive. It emits the
+// `card bg-base-100 border border-base-300 shadow-sm` chrome and a single
+// `card-body` wrapper used throughout tools/app_registry/ui/pages (e.g.
+// promote.templ's "Current recorded state of this target" card,
+// rollback.templ's currently-live / will-roll-back-to comparison cards).
+//
+// header, body, and actions are composition slots, each a plain
+// templ.Component so a caller can pass arbitrary markup (a <h3> title, a
+// <dl> definition list, a <form>, or nothing at all). A nil slot is dropped
+// entirely -- no empty wrapper element is rendered for it -- so an
+// omitted header or actions row leaves no visible trace. actions, when
+// present, is wrapped in `card-actions justify-end` to match the
+// right-aligned button row convention used across the app-registry UI's
+// confirm/cancel footers.
+//
+// What is intentionally app-owned: all slot content (headings, `<dl>`
+// grids, forms, buttons) and any decision about which slots to populate.
+// Card supplies only the structural chrome and slot ordering.
+//
+// attrs is the escape hatch for anything Card doesn't know about (extra
+// classes, an id, hx-* attributes on the outer <div>).
+templ Card(header, body, actions templ.Component, attrs templ.Attributes) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm" { attrs... }>
+		<div class="card-body">
+			if header != nil {
+				@header
+			}
+			if body != nil {
+				@body
+			}
+			if actions != nil {
+				<div class="card-actions justify-end">
+					@actions
+				</div>
+			}
+		</div>
+	</div>
+}

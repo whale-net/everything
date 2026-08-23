@@ -2,6 +2,7 @@ package pages
 
 import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
@@ -103,24 +104,32 @@ templ Rollback(user *htmxauth.UserInfo, s RollbackViewState) {
 					<strong>Nothing to roll back to.</strong> { s.NoHistoryReason }
 				</span>
 			</div>
-			<div class="flex gap-2 justify-end">
-				<button type="button" class="btn btn-error btn-disabled" disabled title={ s.NoHistoryReason }>Confirm rollback</button>
-			</div>
+			@htmxui.Confirm(htmxui.ConfirmProps{
+				Intent:         htmxui.ConfirmDestructive,
+				SubmitLabel:    "Confirm rollback",
+				Disabled:       true,
+				DisabledReason: s.NoHistoryReason,
+			}, nil)
 		} else {
 			@rollbackForm(s)
 		}
 	}
 }
 
+// rollbackSubmitLabel matches the wireframe's "Confirm rollback to
+// <version>" label when the target version is known, falling back to the
+// bare "Confirm rollback" label otherwise.
+func rollbackSubmitLabel(s RollbackViewState) string {
+	if s.Target != nil {
+		return "Confirm rollback to " + s.Target.GetVersion()
+	}
+	return "Confirm rollback"
+}
+
 templ rollbackForm(s RollbackViewState) {
 	if s.FormErr != "" {
 		<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.FormErr }</span></div>
 	}
-	<p class="text-sm opacity-70 mb-4">
-		Rollback has no version argument — it reverts to whatever the history
-		shows as the immediately preceding promotion. That target is shown
-		below before you confirm.
-	</p>
 	<div class="grid md:grid-cols-2 gap-4 mb-6">
 		<div class="card bg-base-100 border border-base-300">
 			<div class="card-body">
@@ -154,25 +163,23 @@ templ rollbackForm(s RollbackViewState) {
 		<input type="hidden" name="idem_key" value={ s.IdemKey }/>
 		<input type="hidden" name="intent_fp" value={ s.IntentFP }/>
 
-		<div class="form-control mb-6">
-			<label class="label">
-				<span class="label-text">
-					Reason <span class="text-error">*</span> — required for every
-					environment (UI policy; the server itself only requires it above
-					dev/rank 0), becomes part of the permanent history
-				</span>
-			</label>
-			<textarea name="reason" class="textarea textarea-bordered" rows="2" required placeholder="e.g. v1.4.0 causing elevated 5xx on /sessions">{ s.Reason }</textarea>
-		</div>
-
-		<div class="flex gap-2 justify-end">
-			<a href="/deployments" class="btn btn-secondary">Cancel</a>
-			if s.Target != nil {
-				<button type="submit" class="btn btn-error">Confirm rollback to { s.Target.GetVersion() }</button>
-			} else {
-				<button type="submit" class="btn btn-error">Confirm rollback</button>
-			}
-		</div>
+		@htmxui.Confirm(htmxui.ConfirmProps{
+			Intent:      htmxui.ConfirmDestructive,
+			Summary:     "Rollback has no version argument — it reverts to whatever the history shows as the immediately preceding promotion. That target is shown below before you confirm.",
+			SubmitLabel: rollbackSubmitLabel(s),
+			CancelHref:  "/deployments",
+		}, nil) {
+			<div class="form-control mb-6">
+				<label class="label">
+					<span class="label-text">
+						Reason <span class="text-error">*</span> — required for every
+						environment (UI policy; the server itself only requires it above
+						dev/rank 0), becomes part of the permanent history
+					</span>
+				</label>
+				<textarea name="reason" class="textarea textarea-bordered" rows="2" required placeholder="e.g. v1.4.0 causing elevated 5xx on /sessions">{ s.Reason }</textarea>
+			</div>
+		}
 	</form>
 }
 
@@ -184,34 +191,47 @@ templ rollbackOutcome(s RollbackViewState) {
 	<div role="alert" class="alert alert-success shadow-md mb-4">
 		<span class="font-semibold">Rollback recorded.</span>
 	</div>
-	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-		<div class="card-body">
-			<h3 class="card-title text-base">Current recorded state of this target</h3>
-			<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-				<dt class="opacity-60">Promotion ID</dt><dd class="font-mono">{ c.Promotion.GetPromotionId() }</dd>
-				<dt class="opacity-60">Environment</dt><dd>{ c.Promotion.GetEnvironmentKey() }</dd>
-				<dt class="opacity-60">Target</dt><dd class="font-mono">{ s.Owner }</dd>
-				<dt class="opacity-60">Version / digest</dt><dd>@components.DigestDisplay(c.Promotion.GetVersion(), c.Promotion.GetDigest())</dd>
-				<dt class="opacity-60">Valid from</dt><dd>{ unixToRFC3339(c.Promotion.GetValidFrom()) } UTC</dd>
-				if c.Superseded != nil && c.Superseded.GetPromotionId() != "" {
-					<dt class="opacity-60">Superseded</dt><dd>{ c.Superseded.GetVersion() } (valid until { unixToRFC3339(c.Superseded.GetValidTo()) } UTC)</dd>
-				}
-			</dl>
-		</div>
+	<div class="mb-4">
+		@htmxui.Card(nil, rollbackCurrentStateBody(s), nil, nil)
 	</div>
 	if c.Event != nil {
-		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-			<div class="card-body">
-				<h3 class="card-title text-base">This submission's event</h3>
-				<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-					<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.Event.GetActor() }</dd>
-					<dt class="opacity-60">Reason</dt><dd>{ c.Event.GetReason() }</dd>
-					<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.Event.GetOccurredAt()) } UTC</dd>
-				</dl>
-			</div>
+		<div class="mb-4">
+			@htmxui.Card(nil, rollbackSubmissionEventBody(s), nil, nil)
 		</div>
 	}
 	<div class="flex gap-2 justify-end">
 		<a href="/deployments" class="btn btn-primary">Back to deployments</a>
 	</div>
+}
+
+// rollbackCurrentStateBody and rollbackSubmissionEventBody are
+// rollbackOutcome's htmxui.Card body slots (FR2) -- see promote.templ's
+// identical promoteCurrentStateBody doc comment for why the `mb-4`
+// spacing lives on rollbackOutcome's own wrapping <div> rather than on
+// Card's attrs (Card's root <div> already carries a literal `class`
+// attribute; a second `class` value from attrs would be a duplicate HTML
+// attribute the browser silently discards, not merged).
+templ rollbackCurrentStateBody(s RollbackViewState) {
+	{{ c := s.Committed }}
+	<h3 class="card-title text-base">Current recorded state of this target</h3>
+	<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+		<dt class="opacity-60">Promotion ID</dt><dd class="font-mono">{ c.Promotion.GetPromotionId() }</dd>
+		<dt class="opacity-60">Environment</dt><dd>{ c.Promotion.GetEnvironmentKey() }</dd>
+		<dt class="opacity-60">Target</dt><dd class="font-mono">{ s.Owner }</dd>
+		<dt class="opacity-60">Version / digest</dt><dd>@components.DigestDisplay(c.Promotion.GetVersion(), c.Promotion.GetDigest())</dd>
+		<dt class="opacity-60">Valid from</dt><dd>{ unixToRFC3339(c.Promotion.GetValidFrom()) } UTC</dd>
+		if c.Superseded != nil && c.Superseded.GetPromotionId() != "" {
+			<dt class="opacity-60">Superseded</dt><dd>{ c.Superseded.GetVersion() } (valid until { unixToRFC3339(c.Superseded.GetValidTo()) } UTC)</dd>
+		}
+	</dl>
+}
+
+templ rollbackSubmissionEventBody(s RollbackViewState) {
+	{{ c := s.Committed }}
+	<h3 class="card-title text-base">This submission's event</h3>
+	<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+		<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.Event.GetActor() }</dd>
+		<dt class="opacity-60">Reason</dt><dd>{ c.Event.GetReason() }</dd>
+		<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.Event.GetOccurredAt()) } UTC</dd>
+	</dl>
 }
