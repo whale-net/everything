@@ -59,6 +59,7 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 		historyLimit   = flag.Int("history-limit", 20, "Number of history entries to show")
 		tracked        = flag.Bool("tracked", true, "Use history tracking for migrations (default: true)")
 		autoDown       = flag.Bool("auto-down", false, "Allow automatically migrating down when the DB is ahead of this binary's migrations (e.g. after a rollback). Same effect as MIGRATE_AUTO_DOWN=true. Without one of these, a detected rollback fails loudly instead of running destructive down migrations unattended.")
+		bypassVersion  = flag.Int("bypass-version", -1, "Migrate directly to this version (up or down as needed), bypassing rollback auto-detection entirely. Same effect as MIGRATE_BYPASS_VERSION. Safe to leave configured: once the DB reaches this version, further runs are a no-op rather than a standing rollback trigger.")
 	)
 	flag.Parse()
 
@@ -126,6 +127,26 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 			log.Fatalf("Failed to rollback: %v", err)
 		}
 		log.Println("Rollback completed successfully")
+		return
+	}
+
+	// Handle bypass-version flag/env: an explicit, one-time "go to exactly
+	// this version" override (direction determined automatically), for
+	// operators who'd rather name a target than leave -auto-down/
+	// MIGRATE_AUTO_DOWN flipped on indefinitely. Unlike that switch, this
+	// is self-limiting -- once the DB reaches the given version, Migrate()
+	// is a no-op, so forgetting to unset it doesn't risk a future
+	// unattended rollback.
+	bypassTarget := *bypassVersion
+	if bypassTarget < 0 {
+		bypassTarget = getEnvInt("MIGRATE_BYPASS_VERSION", -1)
+	}
+	if bypassTarget >= 0 {
+		log.Printf("Bypass: migrating directly to version %d...", bypassTarget)
+		if err := runner.Migrate(uint(bypassTarget)); err != nil {
+			log.Fatalf("Failed to migrate to version %d: %v", bypassTarget, err)
+		}
+		log.Println("Bypass migration completed successfully")
 		return
 	}
 
