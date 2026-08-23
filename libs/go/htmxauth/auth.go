@@ -14,6 +14,8 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gorilla/sessions"
 	"golang.org/x/oauth2"
+
+	"github.com/whale-net/everything/libs/go/grpcauth"
 )
 
 // AuthMode defines the authentication mode
@@ -267,6 +269,36 @@ func (a *Authenticator) GetAccessToken(r *http.Request) (string, error) {
 		return "dev-token", nil
 	}
 	return a.sessions.GetAccessToken(r)
+}
+
+// WithAccessToken wraps a protected handler to inject the user's access
+// token into the request context (via grpcauth.WithUserToken) for gRPC
+// forwarding. If the token is unavailable or expired, the caller is
+// redirected to re-authenticate at /auth/login, preserving the original
+// request URI as the "next" query parameter. HTMX partial requests
+// (identified by the HX-Request header) receive an HX-Redirect response
+// header plus a 401 status instead of a raw redirect, so the client-side
+// htmx runtime performs a full page navigation to the login URL rather than
+// swapping the redirect body into a fragment.
+//
+// Hoisted from manmanv2/ui and tools/app_registry/ui, where this logic was
+// byte-for-byte duplicated (convergence spike, #998 FR9 point 1).
+func (a *Authenticator) WithAccessToken(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		token, err := a.GetAccessToken(r)
+		if err != nil {
+			loginURL := fmt.Sprintf("/auth/login?next=%s", r.URL.RequestURI())
+			if r.Header.Get("HX-Request") == "true" {
+				w.Header().Set("HX-Redirect", loginURL)
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			http.Redirect(w, r, loginURL, http.StatusSeeOther)
+			return
+		}
+		r = r.WithContext(grpcauth.WithUserToken(r.Context(), token))
+		next(w, r)
+	}
 }
 
 // HandleLogin initiates the OIDC login flow

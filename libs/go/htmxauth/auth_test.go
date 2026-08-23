@@ -2,12 +2,15 @@ package htmxauth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/oauth2"
 )
 
 func TestAuthModeNone(t *testing.T) {
@@ -243,5 +246,90 @@ func TestUserInfoRecord_JSONRoundTrip_NilVsEmpty(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(raw), &out))
 		assert.Nil(t, out.Roles, "pre-existing row with no roles key must deserialise Roles as nil")
 	})
+}
+
+// ── WithAccessToken (hoisted from manmanv2/ui and tools/app_registry/ui,
+// convergence spike #998 FR9 point 1) ──────────────────────────────────────
+
+// stubSessionStore is a minimal sessionStore whose GetAccessToken behavior is
+// controlled per-test; every other method is unused by these tests.
+type stubSessionStore struct {
+	token string
+	err   error
+}
+
+func (s *stubSessionStore) GetUserInfo(r *http.Request) (*UserInfo, error) { return nil, nil }
+func (s *stubSessionStore) SetUserInfo(w http.ResponseWriter, r *http.Request, token *oauth2.Token, idToken *oidc.IDToken) error {
+	return nil
+}
+func (s *stubSessionStore) GetAccessToken(r *http.Request) (string, error) {
+	return s.token, s.err
+}
+func (s *stubSessionStore) ClearSession(w http.ResponseWriter, r *http.Request) error { return nil }
+func (s *stubSessionStore) SetOAuthState(w http.ResponseWriter, r *http.Request, state string, nextURL string) error {
+	return nil
+}
+func (s *stubSessionStore) VerifyOAuthState(r *http.Request, state string) (bool, error) {
+	return false, nil
+}
+func (s *stubSessionStore) GetNextURL(w http.ResponseWriter, r *http.Request) string { return "/" }
+
+func TestWithAccessToken_AuthModeNone_PassesThroughWithDevToken(t *testing.T) {
+	auth, err := NewAuthenticator(nil, Config{Mode: AuthModeNone, SessionSecret: "test-secret"})
+	require.NoError(t, err)
+
+	called := false
+	handler := auth.WithAccessToken(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/sessions", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	assert.True(t, called, "next handler must be invoked when a token is available")
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestWithAccessToken_MissingToken_RedirectsToLogin(t *testing.T) {
+	auth := &Authenticator{
+		config:   Config{Mode: AuthModeOIDC},
+		sessions: &stubSessionStore{err: fmt.Errorf("no access token in session")},
+	}
+
+	called := false
+	handler := auth.WithAccessToken(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	req := httptest.NewRequest("GET", "/sessions/42", nil)
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	assert.False(t, called, "next handler must not be invoked when the token is missing")
+	assert.Equal(t, http.StatusSeeOther, w.Code)
+	assert.Equal(t, "/auth/login?next=/sessions/42", w.Header().Get("Location"))
+}
+
+func TestWithAccessToken_MissingToken_HXRequest_SendsHXRedirect(t *testing.T) {
+	auth := &Authenticator{
+		config:   Config{Mode: AuthModeOIDC},
+		sessions: &stubSessionStore{err: fmt.Errorf("access token expired")},
+	}
+
+	called := false
+	handler := auth.WithAccessToken(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	})
+
+	req := httptest.NewRequest("GET", "/sessions/42", nil)
+	req.Header.Set("HX-Request", "true")
+	w := httptest.NewRecorder()
+	handler(w, req)
+
+	assert.False(t, called, "next handler must not be invoked when the token is missing")
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Equal(t, "/auth/login?next=/sessions/42", w.Header().Get("HX-Redirect"))
 }
 

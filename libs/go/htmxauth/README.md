@@ -356,6 +356,86 @@ Use this to forward the token to gRPC calls via `grpcauth.WithUserToken`.
 See the management-ui app for a complete example:
 - `//manman/management-ui` - Full HTMX application using htmxauth
 
+## Convergence spike (#998, FR9)
+
+Findings from the FR9 convergence spike (issue #1013), which investigated
+three pinned divergence points between `manmanv2/ui` and
+`tools/app_registry/ui`. Outcome: **partial convergence (FR9b)** — one point
+converged cleanly and was hoisted here; the other two do not converge into
+shared code, for reasons recorded below. No follow-up task issues were filed
+per the spike's scope.
+
+### Point 1 — `withAccessToken` (converged, FR9a)
+
+Confirmed byte-for-byte identical in both apps. Hoisted as
+`Authenticator.WithAccessToken` in this package (`auth.go`); both apps'
+`main.go` now call `app.auth.WithAccessToken(...)` and no longer define a
+local copy. This is a pure code move — behavior (redirect to
+`/auth/login?next=...`, `HX-Redirect` + 401 for HTMX partial requests,
+`grpcauth.WithUserToken` context injection) is unchanged (NFR3). Unit tests
+covering the pass-through, plain-redirect, and HX-Redirect paths live in
+`auth_test.go`.
+
+This added a `libs/go/grpcauth` dependency to `libs/go/htmxauth` (no cycle:
+`grpcauth` does not import `htmxauth`).
+
+### Point 2 — session-store bootstrap policy (decision: app-owned, not converged)
+
+manmanv2's UI falls back to cookie-only sessions when `DATABASE_URL` is
+unset; app-registry's UI hard-fails at boot instead. **Decision: this stays
+app-owned policy, not a shared `htmxauth.Config` option.**
+
+Reasoning:
+
+- The two behaviors reflect genuinely different, deliberate operational
+  contracts, not an accidental drift. app-registry's UI hard-fails *by
+  design* (see the comment in `tools/app_registry/ui/main.go`'s `NewApp`,
+  tied to FR-58) because it must never silently degrade to a session store
+  that can't refresh access tokens. manmanv2's cookie fallback is an
+  intentional lightweight-deployment affordance.
+- The actual duplicated logic is a single `if config.DatabaseURL == ""`
+  branch per app (a handful of lines) — not enough surface to justify a new
+  `htmxauth.Config` field, a `BootstrapPolicy` enum, or plumbing pool
+  construction through the library. The building blocks the branch chooses
+  between (`NewAuthenticator` for cookie sessions, `db.NewPool` +
+  `NewDBSessionManager` + `NewAuthenticatorWithDB` for DB sessions) are
+  already shared; only the choice of which to call is app-specific, and that
+  choice is exactly the kind of policy an app should own.
+- Forcing this into a shared config option would add an abstraction layer
+  (a policy enum threaded through a constructor, plus a way to hand the
+  library a pool or a pool-constructor callback) to remove less code than
+  the abstraction itself would add.
+
+If a third app ever needs this same choice, revisit — but two data points
+with a one-line-each divergence, both already using shared building blocks,
+is not enough justification for a new config knob today.
+
+### Point 3 — identity shaping behind the top-right rendering divergence (no backend divergence found)
+
+Investigated: manmanv2's top-right renders `data.User.Name`
+(`manmanv2/ui/components/layout.templ`); app-registry's renders
+`user.PreferredUsername` (`tools/app_registry/ui/components/layout.templ`).
+
+Finding: **there is no backend data-shaping divergence to converge.** Both
+apps populate `htmxauth.UserInfo` identically — same struct, same fields
+(`Sub`, `PreferredUsername`, `Name`, `Email`, `Roles`), same population path
+through `SessionManager.SetUserInfo`/`GetUserInfo` (cookie-backed) and
+`DBSessionManager.SetUserInfo`/`GetUserInfo` (DB-backed) in this package. The
+divergence is entirely in which field each app's `.templ` template chooses
+to display — a rendering choice, not a backend shaping difference. Nothing
+in `libs/go/htmxauth` needed to change for this point; whether the two
+templates should standardize on the same field is FR8's rendering-layer
+scope (see #1010/#1011), not this issue's.
+
+### NFR6 gate
+
+This spike changed `libs/go/htmxauth` (point 1), so the mandatory
+integration-test gate applies. Run and evidence posted on issue #1013:
+
+```sh
+bazel test //libs/go/htmxauth:htmxauth_integration_test --test_output=all
+```
+
 ## License
 
 Part of the Everything monorepo.
