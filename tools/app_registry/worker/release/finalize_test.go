@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/whale-net/everything/libs/go/s3"
+	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 // zipDir builds a zip archive (the format GitHub's artifact download
@@ -802,7 +804,7 @@ func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"], "a successful publish must record the plan version as this target's outcome")
@@ -814,6 +816,97 @@ func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T
 
 	_, gotSHA256SUMS := uploader.uploads["release_helper_go/v1.2.3/SHA256SUMS"]
 	require.False(t, gotSHA256SUMS, "SHA256SUMS must not be published -- only checksums.txt parity is in scope")
+}
+
+// TestPublishCLIBinaries_RecordsArtifactInAppRegistry is the direct
+// regression test for a real prod failure: a real release
+// (tools-app-registry/tools-release_helper_go v0.6.0) uploaded its
+// binaries to S3 successfully -- FinalizePublish reported Succeeded:true
+// with the right EffectiveVersion -- but the release_run_target still
+// ended up Failed with "no published artifact found: not found", because
+// publishCLIBinaries never called BeginPublish/RecordArtifact: the
+// AllocateVersion-created "allocated" artifact row was never transitioned
+// to "published", so VerifyPublished (record.go) correctly found nothing.
+// With buildID non-empty, a successful upload must now carry that row all
+// the way to "published".
+func TestPublishCLIBinaries_RecordsArtifactInAppRegistry(t *testing.T) {
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{Domain: "tools", Name: "release_helper_go", AppType: "cli"},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+	app, err := repo.Apps().GetAppByFullName(context.Background(), "tools-release_helper_go")
+	require.NoError(t, err)
+	// Mirrors real prod state: AllocateVersion (during ResolvePlan) already
+	// reserved this version in "allocated" state before FinalizePublish
+	// ever runs.
+	repo.SeedArtifact(repository.Artifact{
+		AppID:   app.AppID,
+		Kind:    repository.ArtifactKindBinary,
+		Version: "v1.2.3",
+		State:   repository.ArtifactStateAllocated,
+	})
+
+	cliBinariesDir := t.TempDir()
+	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
+
+	uploader := newFakeUploader()
+	a := &Activities{
+		Registry:   repo,
+		S3Uploader: uploader,
+		GitHub:     &GitHubDispatcher{Config: GitHubDispatcherConfig{Owner: "whale-net", Repo: "everything"}},
+	}
+	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
+	finalizeTargets := map[string]FinalizeTargetOutcome{}
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "build-123")
+
+	require.Empty(t, failures)
+	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"])
+
+	artifact, err := repo.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{
+		OwnerFullName:   "tools-release_helper_go",
+		Kind:            repository.ArtifactKindBinary,
+		LatestPublished: true,
+	})
+	require.NoError(t, err, "the artifact must now be found in the published state")
+	require.Equal(t, repository.ArtifactStatePublished, artifact.State)
+	require.Equal(t, "v1.2.3", artifact.Version)
+	require.NotEmpty(t, artifact.Digest, "digest must be derived from checksums.txt content, not left empty")
+	require.Equal(t, "build-123", artifact.BuildID)
+	// Repository is deliberately NOT asserted here: it is stamped only at
+	// row-creation time (AllocateVersion, or BeginPublish's no-existing-row
+	// branch) and never updated by BeginPublish/RecordArtifact once a row
+	// already exists -- exactly the case here, mirroring real prod (every
+	// target reaches this code with an "allocated" row AllocateVersion
+	// already created during ResolvePlan). recordCLIBinaryArtifact's own
+	// repositoryHint is therefore a no-op for this call shape; it exists
+	// only for the pre-cutover "no row exists at all" branch some other
+	// domain could still hit.
+}
+
+// TestPublishCLIBinaries_EmptyBuildID_SkipsRecording proves an empty
+// buildID (the same "no App Registry build_id resolved" case
+// finalize-app/finalize-chart already tolerate, per planBuildID's doc
+// comment) skips BeginPublish/RecordArtifact entirely rather than failing
+// the target -- registry recording is best-effort here exactly like it
+// already is for image/chart targets in that same situation.
+func TestPublishCLIBinaries_EmptyBuildID_SkipsRecording(t *testing.T) {
+	cliBinariesDir := t.TempDir()
+	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
+
+	uploader := newFakeUploader()
+	// No Registry/GitHub configured -- if the empty-buildID guard didn't
+	// skip recording, this would panic on a nil a.GitHub dereference,
+	// failing the test loudly rather than silently.
+	a := &Activities{S3Uploader: uploader}
+	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
+	finalizeTargets := map[string]FinalizeTargetOutcome{}
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
+
+	require.Empty(t, failures)
+	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"])
 }
 
 func uploadedKeys(u *fakeUploader) []string {
@@ -839,7 +932,7 @@ func TestPublishCLIBinaries_UsesPlanVersion(t *testing.T) {
 	versions := map[string]string{"image:tools-app-registry": "v0.9.0"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Contains(t, uploader.uploads, "app-registry/v0.9.0/checksums.txt")
@@ -860,7 +953,7 @@ func TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched(t *testing.T) {
 	}
 	original := finalizeTargets["image:demo-widget"]
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, original, finalizeTargets["image:demo-widget"], "a non-CLI-binary app's outcome must be untouched")
@@ -900,7 +993,7 @@ func TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads(t *testing.T) {
 			a := &Activities{S3Uploader: uploader}
 			finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true)
+			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true, "")
 
 			require.Empty(t, failures, "no confirmed version means nothing to fail either -- this target is simply not touched")
 			require.Empty(t, finalizeTargets, "a target with no confirmed version must not be mutated")
@@ -922,7 +1015,7 @@ func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "simulated S3 write failure")
@@ -944,7 +1037,7 @@ func TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget(t *testin
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */, "")
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "no cli-binaries artifact entry")
