@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "argocd",
@@ -7,5 +7,9 @@ go_library(
     visibility = ["//visibility:public"],
 )
 
-# go_test target is added in the Testing phase alongside client_test.go
-# (issue #1027).
+go_test(
+    name = "argocd_test",
+    size = "small",
+    srcs = ["client_test.go"],
+    embed = [":argocd"],
+)
