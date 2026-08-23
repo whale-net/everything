@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
@@ -217,7 +218,9 @@ templ ReleaseTrigger(user *htmxauth.UserInfo, s ReleaseTriggerViewState) {
 					<input name="digest" class="input input-bordered font-mono" value={ s.Digest } placeholder="sha256:..."/>
 				</div>
 				<div class="flex gap-2 justify-end mb-6">
-					<button type="submit" name="do" value="resolve" class="btn btn-primary">Resolve selection</button>
+					@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit", "name": "do", "value": "resolve"}) {
+						Resolve selection
+					}
 				</div>
 			</form>
 
@@ -258,41 +261,49 @@ templ domainPickerGroupView(g DomainPickerGroup, selected map[string]bool) {
 // and the digest -- handleReleaseTriggerSubmit's "trigger" step re-resolves
 // from that echo rather than trusting a client-supplied target list (closes
 // the same TOCTOU window the pre-#889 preview already closed).
+// releaseDraft's card migrates to htmxui.Card (FR2), wrapped in a plain
+// `mb-4` div for the same reason promote.templ's promoteCurrentStateBody
+// doc comment explains (Card's root <div> already owns a literal `class`
+// attribute, so attrs cannot safely add a second one).
 templ releaseDraft(s ReleaseTriggerViewState) {
-	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-		<div class="card-body">
-			<h3 class="card-title text-base">Draft — { fmt.Sprint(len(s.ResolvedTargets)) } target(s)</h3>
-			if len(s.ResolvedTargets) == 0 {
-				<p class="text-sm opacity-70">No releasable targets matched this selection.</p>
-			} else {
-				<form method="post" action="/releases/trigger">
-					for tok := range s.Selected {
-						<input type="hidden" name="target" value={ tok }/>
-					}
-					<input type="hidden" name="digest" value={ s.Digest }/>
-					<input type="hidden" name="do" value="trigger"/>
-					<table class="table table-sm">
-						<thead>
-							<tr>
-								<th>Target</th>
-								<th>Kind</th>
-								<th>Digest</th>
-								<th>Version</th>
-							</tr>
-						</thead>
-						<tbody>
-							for _, t := range s.ResolvedTargets {
-								@releaseDraftRow(t, s.VersionInputs[t.GetOwnerFullName()])
-							}
-						</tbody>
-					</table>
-					<div class="flex gap-2 justify-end mt-4">
-						<button type="submit" class="btn btn-warning">Trigger release</button>
-					</div>
-				</form>
-			}
-		</div>
+	<div class="mb-4">
+		@htmxui.Card(nil, releaseDraftBody(s), nil, nil)
 	</div>
+}
+
+templ releaseDraftBody(s ReleaseTriggerViewState) {
+	<h3 class="card-title text-base">Draft — { fmt.Sprint(len(s.ResolvedTargets)) } target(s)</h3>
+	if len(s.ResolvedTargets) == 0 {
+		<p class="text-sm opacity-70">No releasable targets matched this selection.</p>
+	} else {
+		<form method="post" action="/releases/trigger">
+			for tok := range s.Selected {
+				<input type="hidden" name="target" value={ tok }/>
+			}
+			<input type="hidden" name="digest" value={ s.Digest }/>
+			<input type="hidden" name="do" value="trigger"/>
+			<table class="table table-sm">
+				<thead>
+					<tr>
+						<th>Target</th>
+						<th>Kind</th>
+						<th>Digest</th>
+						<th>Version</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, t := range s.ResolvedTargets {
+						@releaseDraftRow(t, s.VersionInputs[t.GetOwnerFullName()])
+					}
+				</tbody>
+			</table>
+			<div class="flex gap-2 justify-end mt-4">
+				@htmxui.Button(htmxui.ButtonWarning, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
+					Trigger release
+				}
+			</div>
+		</form>
+	}
 }
 
 templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput) {

@@ -191,34 +191,47 @@ templ rollbackOutcome(s RollbackViewState) {
 	<div role="alert" class="alert alert-success shadow-md mb-4">
 		<span class="font-semibold">Rollback recorded.</span>
 	</div>
-	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-		<div class="card-body">
-			<h3 class="card-title text-base">Current recorded state of this target</h3>
-			<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-				<dt class="opacity-60">Promotion ID</dt><dd class="font-mono">{ c.Promotion.GetPromotionId() }</dd>
-				<dt class="opacity-60">Environment</dt><dd>{ c.Promotion.GetEnvironmentKey() }</dd>
-				<dt class="opacity-60">Target</dt><dd class="font-mono">{ s.Owner }</dd>
-				<dt class="opacity-60">Version / digest</dt><dd>@components.DigestDisplay(c.Promotion.GetVersion(), c.Promotion.GetDigest())</dd>
-				<dt class="opacity-60">Valid from</dt><dd>{ unixToRFC3339(c.Promotion.GetValidFrom()) } UTC</dd>
-				if c.Superseded != nil && c.Superseded.GetPromotionId() != "" {
-					<dt class="opacity-60">Superseded</dt><dd>{ c.Superseded.GetVersion() } (valid until { unixToRFC3339(c.Superseded.GetValidTo()) } UTC)</dd>
-				}
-			</dl>
-		</div>
+	<div class="mb-4">
+		@htmxui.Card(nil, rollbackCurrentStateBody(s), nil, nil)
 	</div>
 	if c.Event != nil {
-		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-			<div class="card-body">
-				<h3 class="card-title text-base">This submission's event</h3>
-				<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-					<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.Event.GetActor() }</dd>
-					<dt class="opacity-60">Reason</dt><dd>{ c.Event.GetReason() }</dd>
-					<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.Event.GetOccurredAt()) } UTC</dd>
-				</dl>
-			</div>
+		<div class="mb-4">
+			@htmxui.Card(nil, rollbackSubmissionEventBody(s), nil, nil)
 		</div>
 	}
 	<div class="flex gap-2 justify-end">
 		<a href="/deployments" class="btn btn-primary">Back to deployments</a>
 	</div>
+}
+
+// rollbackCurrentStateBody and rollbackSubmissionEventBody are
+// rollbackOutcome's htmxui.Card body slots (FR2) -- see promote.templ's
+// identical promoteCurrentStateBody doc comment for why the `mb-4`
+// spacing lives on rollbackOutcome's own wrapping <div> rather than on
+// Card's attrs (Card's root <div> already carries a literal `class`
+// attribute; a second `class` value from attrs would be a duplicate HTML
+// attribute the browser silently discards, not merged).
+templ rollbackCurrentStateBody(s RollbackViewState) {
+	{{ c := s.Committed }}
+	<h3 class="card-title text-base">Current recorded state of this target</h3>
+	<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+		<dt class="opacity-60">Promotion ID</dt><dd class="font-mono">{ c.Promotion.GetPromotionId() }</dd>
+		<dt class="opacity-60">Environment</dt><dd>{ c.Promotion.GetEnvironmentKey() }</dd>
+		<dt class="opacity-60">Target</dt><dd class="font-mono">{ s.Owner }</dd>
+		<dt class="opacity-60">Version / digest</dt><dd>@components.DigestDisplay(c.Promotion.GetVersion(), c.Promotion.GetDigest())</dd>
+		<dt class="opacity-60">Valid from</dt><dd>{ unixToRFC3339(c.Promotion.GetValidFrom()) } UTC</dd>
+		if c.Superseded != nil && c.Superseded.GetPromotionId() != "" {
+			<dt class="opacity-60">Superseded</dt><dd>{ c.Superseded.GetVersion() } (valid until { unixToRFC3339(c.Superseded.GetValidTo()) } UTC)</dd>
+		}
+	</dl>
+}
+
+templ rollbackSubmissionEventBody(s RollbackViewState) {
+	{{ c := s.Committed }}
+	<h3 class="card-title text-base">This submission's event</h3>
+	<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+		<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.Event.GetActor() }</dd>
+		<dt class="opacity-60">Reason</dt><dd>{ c.Event.GetReason() }</dd>
+		<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.Event.GetOccurredAt()) } UTC</dd>
+	</dl>
 }

@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
@@ -40,7 +41,9 @@ templ Builds(user *htmxauth.UserInfo, builds []*pb.Build, lookupErr string) {
 		</div>
 		<form method="get" action="/builds/lookup" class="flex flex-col md:flex-row gap-3 mb-4">
 			<input type="text" name="run" placeholder="Workflow run id…" class="input input-bordered input-sm w-full md:w-64"/>
-			<button type="submit" class="btn btn-sm btn-primary">Look up</button>
+			@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeSM, false, templ.Attributes{"type": "submit"}) {
+				Look up
+			}
 		</form>
 		if lookupErr != "" {
 			<div role="alert" class="alert alert-error shadow-md mb-4">

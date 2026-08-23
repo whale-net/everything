@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
@@ -45,68 +46,82 @@ templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 	}
 }
 
+// releaseStatusDetail's three info cards migrate to htmxui.Card (FR2),
+// each in the same `mb-4`-wrapping-div pattern promote.templ's
+// commitOutcome/promoteCurrentStateBody doc comment explains: Card's own
+// root <div> already carries a literal `class` attribute, so a caller
+// cannot reliably layer an extra `mb-4` onto it via attrs (a second
+// `class` value there would be a duplicate HTML attribute, silently
+// discarded by the browser, not merged) -- a plain unstyled wrapping div
+// carries the margin instead, with no effect on the Card's own rendered
+// box.
 templ releaseStatusDetail(rel *pb.GetReleaseResponse) {
-	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-		<div class="card-body">
-			<h3 class="card-title text-base">Run</h3>
-			<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-				<dt class="opacity-60">Triggered by</dt>
-				<dd class="font-mono">{ rel.GetTriggeredBy() }</dd>
-				<dt class="opacity-60">Requested scope</dt>
-				<dd class="font-mono">{ rel.GetRequestedScope() }</dd>
-				<dt class="opacity-60">Temporal workflow</dt>
-				<dd class="font-mono">{ rel.GetTemporalWorkflowId() }</dd>
-			</dl>
-		</div>
+	<div class="mb-4">
+		@htmxui.Card(nil, releaseStatusRunBody(rel), nil, nil)
 	</div>
-	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-		<div class="card-body">
-			<h3 class="card-title text-base">Targets ({ fmt.Sprint(len(rel.GetTargets())) })</h3>
-			<table class="table table-sm">
-				<thead>
-					<tr>
-						<th>Target</th>
-						<th>Kind</th>
-						<th>State</th>
-						<th>Build</th>
-						<th>Error</th>
-					</tr>
-				</thead>
-				<tbody>
-					for _, t := range rel.GetTargets() {
-						<tr>
-							<td class="font-mono">{ t.GetOwnerFullName() }</td>
-							<td>{ releaseTargetKindLabel(t.GetKind()) }</td>
-							<td>@components.ReleaseRunTargetStateBadge(t.GetState())</td>
-							<td class="font-mono text-xs">{ t.GetBuildId() }</td>
-							<td class="text-error text-xs">{ t.GetErrorDetail() }</td>
-						</tr>
-					}
-				</tbody>
-			</table>
-		</div>
+	<div class="mb-4">
+		@htmxui.Card(nil, releaseStatusTargetsBody(rel), nil, nil)
 	</div>
 	if rel.GetResolvedPlanJson() != "" {
-		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-			<div class="card-body">
-				<h3 class="card-title text-base">Resolved plan</h3>
-				<pre class="text-xs overflow-x-auto bg-base-200 p-3 rounded">{ rel.GetResolvedPlanJson() }</pre>
-			</div>
+		<div class="mb-4">
+			@htmxui.Card(nil, releaseStatusResolvedPlanBody(rel), nil, nil)
 		</div>
 	}
 	<div class="flex gap-2 justify-end">
 		<form method="post" action="/releases/trigger">
 			<input type="hidden" name="scope" value={ rel.GetRequestedScope() }/>
 			<input type="hidden" name="do" value="trigger"/>
-			<button
-				type="submit"
-				class="btn btn-warning"
-				title="Re-submits this run's original scope straight to TriggerRelease -- FR6/FR11: retry IS re-triggering, no separate resume/retry-from-step action."
-			>
+			@htmxui.Button(htmxui.ButtonWarning, htmxui.ButtonSizeMD, false, templ.Attributes{
+				"type":  "submit",
+				"title": "Re-submits this run's original scope straight to TriggerRelease -- FR6/FR11: retry IS re-triggering, no separate resume/retry-from-step action.",
+			}) {
 				Retry
-			</button>
+			}
 		</form>
 	</div>
+}
+
+templ releaseStatusRunBody(rel *pb.GetReleaseResponse) {
+	<h3 class="card-title text-base">Run</h3>
+	<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+		<dt class="opacity-60">Triggered by</dt>
+		<dd class="font-mono">{ rel.GetTriggeredBy() }</dd>
+		<dt class="opacity-60">Requested scope</dt>
+		<dd class="font-mono">{ rel.GetRequestedScope() }</dd>
+		<dt class="opacity-60">Temporal workflow</dt>
+		<dd class="font-mono">{ rel.GetTemporalWorkflowId() }</dd>
+	</dl>
+}
+
+templ releaseStatusTargetsBody(rel *pb.GetReleaseResponse) {
+	<h3 class="card-title text-base">Targets ({ fmt.Sprint(len(rel.GetTargets())) })</h3>
+	<table class="table table-sm">
+		<thead>
+			<tr>
+				<th>Target</th>
+				<th>Kind</th>
+				<th>State</th>
+				<th>Build</th>
+				<th>Error</th>
+			</tr>
+		</thead>
+		<tbody>
+			for _, t := range rel.GetTargets() {
+				<tr>
+					<td class="font-mono">{ t.GetOwnerFullName() }</td>
+					<td>{ releaseTargetKindLabel(t.GetKind()) }</td>
+					<td>@components.ReleaseRunTargetStateBadge(t.GetState())</td>
+					<td class="font-mono text-xs">{ t.GetBuildId() }</td>
+					<td class="text-error text-xs">{ t.GetErrorDetail() }</td>
+				</tr>
+			}
+		</tbody>
+	</table>
+}
+
+templ releaseStatusResolvedPlanBody(rel *pb.GetReleaseResponse) {
+	<h3 class="card-title text-base">Resolved plan</h3>
+	<pre class="text-xs overflow-x-auto bg-base-200 p-3 rounded">{ rel.GetResolvedPlanJson() }</pre>
 }
 
 // Retry (FR6/FR11) posts directly to /releases/trigger with "do=trigger",

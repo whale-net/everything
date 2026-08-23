@@ -202,7 +202,11 @@ func TestDeployments_AdminOnly_NoPromoteControlInAnyColumn(t *testing.T) {
 // screen 53's promote-eligibility note is informational, not a grant.
 func TestEnvironmentForm_AdminOnly_SaveAndArchiveLiveNoPromoterImplied(t *testing.T) {
 	body := renderComponent(t, EnvironmentForm(adminUser(), "edit", EnvironmentFormInput{Key: "dev"}, false, ""))
-	if !strings.Contains(body, `<button type="submit" class="btn btn-primary">Save environment</button>`) {
+	// The Save control is htmxui.Button-rendered (FR2): assert on its
+	// attributes/label independently rather than one exact-order literal
+	// tag string, since Button's generated markup writes class before the
+	// caller's attrs (attribute order carries no rendered meaning).
+	if !strings.Contains(body, `class="btn btn-primary"`) || !strings.Contains(body, `type="submit"`) || !strings.Contains(body, `Save environment`) || strings.Contains(body, "btn-disabled") {
 		t.Errorf("admin must see a live, enabled Save control; body = %s", body)
 	}
 	if strings.Contains(body, "Read-only.") {

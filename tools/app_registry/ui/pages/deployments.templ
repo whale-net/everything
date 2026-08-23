@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
@@ -67,7 +68,9 @@ templ Deployments(user *htmxauth.UserInfo, m *matrix.Matrix, asOfActive bool) {
 			<div class="flex items-center gap-2">
 				<label class="text-sm opacity-70" for="at">As of (UTC):</label>
 				<input type="datetime-local" id="at" name="at" class="input input-sm input-bordered" value={ asOfInputValue(m.AsOf) }/>
-				<button type="submit" class="btn btn-sm">Apply</button>
+				@htmxui.Button("", htmxui.ButtonSizeSM, false, templ.Attributes{"type": "submit"}) {
+					Apply
+				}
 				if asOfActive {
 					<a href="/deployments" class="btn btn-sm btn-ghost">Back to now</a>
 				}
