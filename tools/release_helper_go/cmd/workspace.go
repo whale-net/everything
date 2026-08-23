@@ -1,10 +1,18 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+// ErrWorkspaceRootNotFound is wrapped into findWorkspaceRoot's returned error
+// so callers that know *why* they need a workspace root (e.g.
+// autoIncrementVersion's git-tag fallback) can distinguish "no monorepo
+// checkout available at all" from any other git/bazel failure and give a
+// more actionable error than this package's own generic message below.
+var ErrWorkspaceRootNotFound = errors.New("workspace root not found")
 
 func findWorkspaceRoot() (string, error) {
 	if dir := os.Getenv("BUILD_WORKSPACE_DIRECTORY"); dir != "" {
@@ -28,5 +36,5 @@ func findWorkspaceRoot() (string, error) {
 		}
 		dir = parent
 	}
-	return "", fmt.Errorf("workspace root not found from %s", cwd)
+	return "", fmt.Errorf("%w from %s", ErrWorkspaceRootNotFound, cwd)
 }

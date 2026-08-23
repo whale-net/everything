@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -603,6 +604,31 @@ func TestAutoIncrementVersionNoTags(t *testing.T) {
 	}
 	if ver != "v0.1.0" {
 		t.Errorf("got %q, want %q", ver, "v0.1.0")
+	}
+}
+
+// TestAutoIncrementVersionNoWorkspace covers the case this exact fallback
+// path hits when invoked from App Registry's worker/release/plan.go
+// ResolvePlan activity: a domain that isn't at adoption stage "allocate"
+// sends AllocateVersion into FailedPrecondition, resolveVersion falls back
+// to this function, and the process has no real git checkout (ResolvePlan
+// runs from a bare os.MkdirTemp scratch dir) -- findWorkspaceRoot fails with
+// ErrWorkspaceRootNotFound. The error returned here must name the domain and
+// the adoption-stage cause instead of surfacing the bare "workspace root not
+// found" message a caller several layers up would otherwise have to decode.
+func TestAutoIncrementVersionNoWorkspace(t *testing.T) {
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--sort"}, err: fmt.Errorf("%w from /tmp/release-plan-123", ErrWorkspaceRootNotFound)},
+	)
+	_, err := autoIncrementVersion("manmanv2", "control-api", "patch", git)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrWorkspaceRootNotFound) {
+		t.Errorf("expected error to wrap ErrWorkspaceRootNotFound, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `domain "manmanv2"`) || !strings.Contains(err.Error(), "allocate") {
+		t.Errorf("expected error to name the domain and adoption stage, got: %v", err)
 	}
 }
 

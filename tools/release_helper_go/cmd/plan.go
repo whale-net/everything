@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -935,6 +936,21 @@ func autoIncrementVersion(domain, name, incrementType string, git GitRunner) (st
 		// versions existing) whenever AllocateVersion's FailedPrecondition
 		// fallback (resolveVersion, registry_version.go) is hit for a
 		// domain not yet at App Registry's "allocate" adoption stage.
+		if errors.Is(err, ErrWorkspaceRootNotFound) {
+			// This call site is only reached as resolveVersion's tagFallback,
+			// i.e. AllocateVersion just returned FailedPrecondition for
+			// domain (nil client -- registry opt-out -- also lands here, but
+			// callers that care about that distinguish it before ever
+			// calling autoIncrementVersion). The one caller that has no real
+			// git checkout to fall back to is App Registry's own
+			// worker/release/plan.go ResolvePlan activity, which always runs
+			// this binary from a bare scratch dir specifically because it
+			// expects AllocateVersion to succeed for App-Registry-driven
+			// releases. Surface that combination directly instead of the
+			// opaque "workspace root not found" a caller several layers up
+			// would otherwise have to decode.
+			return "", fmt.Errorf("cannot auto-increment version for %s: App Registry domain %q is not at adoption stage \"allocate\" (or the registry is unreachable), and this process has no git checkout to fall back to reading tags from -- promote the domain to \"allocate\" in domain_adoption, or run this command from a real repository checkout: %w", prefix, domain, err)
+		}
 		return "", fmt.Errorf("list git tags for %s: %w", prefix, err)
 	}
 	if strings.TrimSpace(tagsOut) == "" {
