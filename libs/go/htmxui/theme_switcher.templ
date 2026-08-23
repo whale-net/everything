@@ -1,0 +1,107 @@
+package htmxui
+
+// Theme is one entry in a ThemeSwitcher's theme list. Value is the
+// data-theme attribute value applied to <html> and is also the CSS
+// selector key a consuming app's palette CSS keys off of (e.g.
+// libs/go/htmxui/themes.css's [data-theme="light"] rule -- see ThemesCSS
+// in themes.go). Label is the human-readable control text.
+//
+// The theme list is always a caller-supplied parameter, never hardcoded
+// inside htmxui: Phase 3's POC theme (FR10) can be added to a caller's
+// list without editing this package, and a caller can offer a subset of
+// the themes present in its own palette CSS.
+type Theme struct {
+	Value string
+	Label string
+}
+
+// ThemeSwitcherStorageKey is the localStorage key ThemeSwitcher persists
+// the selected theme under. Exported so a consuming app's own bootstrap
+// code (e.g. a small inline <script> in <head>, to avoid a flash of the
+// wrong theme before ThemeSwitcher's own script has a chance to run) can
+// read the same key ThemeSwitcher writes.
+const ThemeSwitcherStorageKey = "htmxui-theme"
+
+// ThemeSwitcher is htmxui's shared, CSS-variable/daisyUI data-theme
+// switcher (FR5, shared side of the requirement -- manmanv2's actual
+// reload-removal migration happens in issue #1007). It renders one
+// control per entry in themes plus an inline script that:
+//
+//   - on load, re-applies any previously chosen theme from localStorage.
+//     This matters because every htmxui-based UI in this repo is a
+//     classic multi-page app, not an SPA: each navigation is a fresh
+//     document load, so "apply the stored theme" has to happen again on
+//     every page, not just once at first paint.
+//   - on click, sets data-theme on <html> and writes the choice to
+//     localStorage.
+//
+// It deliberately never calls location.reload(). manmanv2's current
+// manmanv2/ui/components/layout.templ themeManagement() script reloads
+// the page after every theme change (worked around its Tailwind CDN
+// build needing a fresh stylesheet recompute); that reload behavior is
+// manmanv2-specific and must not carry forward into a shared component.
+// htmxui's theming is CSS-variable-based (libs/go/htmxui/themes.css's
+// [data-theme="..."] rules, applied via daisyUI's CSS variables), so
+// swapping the data-theme attribute alone is sufficient -- no reload is
+// required. htmxui_test.go's TestThemeSwitcher_NoLocationReload guards
+// this directly by asserting the emitted markup contains no
+// "location.reload(" substring.
+//
+// Correct rendering of the resulting data-theme values requires the
+// consuming app to have injected htmxui.ThemesCSS per the NFR5 load-order
+// rule documented on ThemesCSS (themes.go, "Load-order trap"):
+// ThemeSwitcher only ever emits data-theme attribute changes -- it does
+// not ship the palette CSS itself, so a caller that forgets to inject
+// ThemesCSS after its daisyUI CDN <link> will see the switcher work (the
+// attribute changes) but the colors silently stay wrong.
+templ ThemeSwitcher(themes []Theme) {
+	<div class="dropdown dropdown-end" data-htmxui-theme-switcher>
+		<div tabindex="0" role="button" class="btn btn-ghost btn-sm" aria-label="Switch theme">
+			Theme
+		</div>
+		<ul tabindex="0" class="dropdown-content menu bg-base-100 text-base-content rounded-box z-10 w-40 p-2 shadow">
+			for _, theme := range themes {
+				<li>
+					<button type="button" data-htmxui-theme-value={ theme.Value }>
+						{ theme.Label }
+					</button>
+				</li>
+			}
+		</ul>
+	</div>
+	@themeSwitcherScript(ThemeSwitcherStorageKey)
+}
+
+// themeSwitcherScript is parameterized on storageKey (rather than
+// hardcoding ThemeSwitcherStorageKey's value as a JS literal) so the Go
+// constant and the emitted JS can never drift out of sync.
+script themeSwitcherScript(storageKey string) {
+	var root = document.documentElement;
+
+	function applyTheme(theme) {
+		root.setAttribute("data-theme", theme);
+		try {
+			localStorage.setItem(storageKey, theme);
+		} catch (e) {
+			// localStorage unavailable (private mode, disabled, etc.) --
+			// the theme still applies for this page load, it just won't
+			// persist across navigations.
+		}
+	}
+
+	var stored = null;
+	try {
+		stored = localStorage.getItem(storageKey);
+	} catch (e) {
+		stored = null;
+	}
+	if (stored) {
+		root.setAttribute("data-theme", stored);
+	}
+
+	document.querySelectorAll("[data-htmxui-theme-switcher] [data-htmxui-theme-value]").forEach(function (btn) {
+		btn.addEventListener("click", function () {
+			applyTheme(btn.getAttribute("data-htmxui-theme-value"));
+		});
+	});
+}

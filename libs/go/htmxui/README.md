@@ -5,10 +5,34 @@ applications in this monorepo. This package holds only cross-app primitives
 — never app-specific screens. App-specific UI stays in each consuming app's
 own package (e.g. `tools/app_registry/ui`, `manmanv2/ui`).
 
-This is Phase 1 groundwork (part of #998, FR1): shell/layout chrome and the
-theme switcher are a separate issue, and no consuming app has been migrated
-to these primitives yet (that is issue #1005's job) -- the primitives below
-exist here but are not yet adopted anywhere.
+This is Phase 1 groundwork (part of #998, FR1): no consuming app has been
+migrated to these primitives yet (that is issue #1005's job) -- the
+primitives below exist here but are not yet adopted anywhere.
+
+## Chrome primitives (FR1 / FR1a / FR5)
+
+- **`Shell(data ShellData)`** (`shell.templ`) — the shared navbar+main
+  chrome: navbar frame, `ThemeSwitcher` mount point, user-identity label
+  slot, banner slot, and main content region. **Not** a literal lift of
+  `tools/app_registry/ui/components/layout.templ`'s `Shell()`, which
+  hardcodes its nav inline (FR1a) — `ShellData.Nav`, `.Banner`, and
+  `.HeaderRight` are app-owned `templ.Component` slots the caller supplies
+  (nav item list, e.g. app-registry's `MisconfigBanner`, and top-right
+  extras like manmanv2's `ServerSelector`, respectively); Shell hardcodes
+  none of them. `ShellData.Themes` drives the `ThemeSwitcher` mount and
+  `UserLabel` is plain display text — Shell has no dependency on
+  `//libs/go/htmxauth` or any auth-specific user type. See `ShellData`'s
+  doc comment for the full app-owned/shared boundary.
+- **`ThemeSwitcher(themes []Theme)`** (`theme_switcher.templ`) — the
+  shared, CSS-variable/daisyUI `data-theme` switcher (FR5, shared side).
+  Renders one control per caller-supplied `Theme{Value, Label}` and an
+  inline script that re-applies the stored theme on every page load and
+  writes new selections to `localStorage` (key: exported
+  `ThemeSwitcherStorageKey`) — **without ever calling
+  `location.reload()`**, unlike manmanv2's current
+  `manmanv2/ui/components/layout.templ` `themeManagement()` script.
+  Requires the consuming app to have injected `htmxui.ThemesCSS` per the
+  NFR5 load-order rule (see `ThemesCSS`'s doc comment in `themes.go`).
 
 ## Content primitives (FR1 / FR1b)
 
