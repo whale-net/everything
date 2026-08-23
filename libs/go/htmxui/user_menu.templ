@@ -1,0 +1,85 @@
+package htmxui
+
+// UserMenuData carries UserMenu's identity + logout parameterisation (FR8).
+//
+// Both fields are plain strings, not a //libs/go/htmxauth dependency: the
+// component only ever needs a label to display and an href to link to, and
+// taking htmxauth.UserInfo here would give htmxui a dependency on a specific
+// auth implementation for no behavioural gain -- a caller with a different
+// auth story (or a synthetic/test identity) can populate UserMenuData
+// without htmxui needing to know what a UserInfo is. This mirrors
+// ShellData.UserLabel's existing plain-string choice (shell.templ) for the
+// same reason.
+//
+// LogoutHref is a parameter, not a hardcoded "/auth/logout" constant: both
+// current apps register that same route (htmxauth.Authenticator.HandleLogout),
+// but UserMenu must not assume every caller mounts logout at that path.
+// htmxui_test.go's TestUserMenu_LogoutHrefIsParameterised guards this
+// directly by rendering with a non-default href and asserting the default
+// path is absent from the output.
+type UserMenuData struct {
+	// IdentityLabel is the signed-in user's display text, e.g. a
+	// PreferredUsername or Name claim. Empty means "no user" -- UserMenu
+	// renders nothing in that case (see UserMenu's doc comment for why).
+	IdentityLabel string
+	// LogoutHref is the link target for the logout affordance.
+	LogoutHref string
+}
+
+// UserMenu is htmxui's shared top-right identity + logout component (FR8).
+// Both tools/app_registry and manmanv2 build their top-right chrome from
+// this single implementation instead of each maintaining their own:
+// app-registry's tools/app_registry/ui/components/layout.templ Shell()
+// today renders only `<span>{ user.PreferredUsername }</span>` -- identity
+// with no logout control at all -- and manmanv2's
+// manmanv2/ui/components/layout.templ Nav() renders
+// `Logout ({ data.User.Name })` as a bare link, duplicated a second time
+// for its mobile menu. UserMenu covers both: it always shows identity
+// alongside a visible logout affordance.
+//
+// Signed-out / no-user state: when data.IdentityLabel is empty, UserMenu
+// renders nothing (no dropdown, no stray logout link to nowhere). This
+// matters for AUTH_MODE=none, where callers may have no real user to
+// display -- rendering an empty-but-present menu would offer a logout
+// control with no identity behind it, which is more confusing than
+// omitting the control entirely. A caller with a real signed-out state that
+// wants a login affordance instead composes one alongside UserMenu via the
+// HeaderRight slot (see below) -- UserMenu itself only ever speaks to the
+// signed-in case, matching Shell's existing UserLabel convention of "empty
+// renders nothing" (shell.templ).
+//
+// Composition, not folding (FR8): UserMenu takes no app-specific
+// parameters, and app-specific extras -- e.g. manmanv2's ServerSelector --
+// are never passed into it. Instead, a caller composes UserMenu and its own
+// extras together into a single templ.Component and passes that combined
+// component as ShellData.HeaderRight (shell.templ); Shell renders
+// HeaderRight verbatim, so UserMenu and the caller's extras render as
+// siblings in that slot, not nested inside one another.
+// htmxui_test.go's TestUserMenu_ComposesAlongsideHeaderRightSlot renders
+// exactly that shape (a marker component plus UserMenu, both passed as one
+// HeaderRight component to Shell) and asserts the marker's markup falls
+// outside UserMenu's own dropdown container rather than inside it.
+//
+// Mobile/narrow presentation: UserMenu renders a single daisyUI
+// `dropdown`/`menu` control (mirroring ThemeSwitcher's dropdown pattern in
+// theme_switcher.templ) rather than manmanv2's current approach of a
+// visible-at-desktop-width inline link plus a second, separately-marked-up
+// copy for its mobile hamburger panel. A collapsed button that expands a
+// dropdown on tap/click needs no width-specific variant to remain usable at
+// narrow viewports, so one implementation covers both cases; this is a
+// deliberate simplification over manmanv2's current two-copies-of-the-same-
+// link approach, not an oversight -- there is no separate
+// MobileUserMenu here, and adopting apps should not maintain their own
+// mobile duplicate of this control either.
+templ UserMenu(data UserMenuData) {
+	if data.IdentityLabel != "" {
+		<div class="dropdown dropdown-end" data-htmxui-user-menu>
+			<div tabindex="0" role="button" class="btn btn-ghost btn-sm" aria-label="Account menu">
+				{ data.IdentityLabel }
+			</div>
+			<ul tabindex="0" class="dropdown-content menu bg-base-100 text-base-content rounded-box z-10 w-40 p-2 shadow">
+				<li><a href={ templ.URL(data.LogoutHref) }>Logout</a></li>
+			</ul>
+		</div>
+	}
+}

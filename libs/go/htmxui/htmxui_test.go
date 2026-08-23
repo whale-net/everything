@@ -551,3 +551,86 @@ func TestThemeSwitcher_PersistsUsingExportedStorageKey(t *testing.T) {
 		t.Errorf("expected script invocation to pass the exported ThemeSwitcherStorageKey value %q, got %q", invocation, body)
 	}
 }
+
+// --- UserMenu (FR8) -----------------------------------------------------------
+
+func TestUserMenu_RendersIdentityAndLogoutHref(t *testing.T) {
+	body := render(t, UserMenu(UserMenuData{
+		IdentityLabel: "alice",
+		LogoutHref:    "/auth/logout",
+	}))
+	if !strings.Contains(body, "alice") {
+		t.Errorf("expected identity label in rendered output, got %q", body)
+	}
+	want := `href="/auth/logout"`
+	if !strings.Contains(body, want) {
+		t.Errorf("expected logout affordance to link to the supplied href %q, got %q", want, body)
+	}
+}
+
+// TestUserMenu_NoUserRendersNothing guards the signed-out / no-user state
+// (relevant for AUTH_MODE=none): an empty IdentityLabel must not produce a
+// dropdown with a dangling logout link and no identity behind it -- it must
+// render nothing at all.
+func TestUserMenu_NoUserRendersNothing(t *testing.T) {
+	body := render(t, UserMenu(UserMenuData{}))
+	if body != "" {
+		t.Errorf("expected no markup when IdentityLabel is empty, got %q", body)
+	}
+}
+
+// TestUserMenu_LogoutHrefIsParameterised is the direct FR8 regression guard
+// against hardcoding "/auth/logout": both apps happen to register that
+// route today, but UserMenu must not assume it. Rendering with a distinct
+// href must produce that href, and must not also emit the default path
+// anywhere (e.g. as a leftover hardcoded fallback alongside the real one).
+//
+// Red/green discipline: temporarily hardcoding href="/auth/logout" in
+// user_menu.templ's <a> in place of { templ.URL(data.LogoutHref) } makes
+// this test fail with "expected no hardcoded default logout path" (the
+// custom href assertion also starts failing, since the hardcoded literal
+// wins); reverting restores green. See issue #1009 commit history for the
+// verified red run.
+func TestUserMenu_LogoutHrefIsParameterised(t *testing.T) {
+	body := render(t, UserMenu(UserMenuData{
+		IdentityLabel: "bob",
+		LogoutHref:    "/custom/signout",
+	}))
+	if !strings.Contains(body, `href="/custom/signout"`) {
+		t.Errorf("expected logout affordance to use the supplied custom href, got %q", body)
+	}
+	if strings.Contains(body, "/auth/logout") {
+		t.Errorf("expected no hardcoded default logout path when a different href is supplied, got %q", body)
+	}
+}
+
+// TestUserMenu_ComposesAlongsideHeaderRightSlot is the direct
+// composition-not-folding regression guard (FR8): a caller composes
+// UserMenu with its own app-specific extras (e.g. manmanv2's
+// ServerSelector) into a single templ.Component and passes that as
+// ShellData.HeaderRight -- UserMenu itself takes no app-specific
+// parameters. This asserts the extra's markup renders as a sibling of
+// UserMenu's dropdown container, not nested inside it, i.e. genuine
+// composition rather than UserMenu having grown a slot of its own.
+func TestUserMenu_ComposesAlongsideHeaderRightSlot(t *testing.T) {
+	extra := templ.Raw(`<div id="EXTRA-MARK">server selector</div>`)
+	headerRight := templ.Join(extra, UserMenu(UserMenuData{
+		IdentityLabel: "alice",
+		LogoutHref:    "/auth/logout",
+	}))
+	body := render(t, Shell(ShellData{
+		BrandLabel:  "Brand",
+		BrandHref:   "/",
+		HeaderRight: headerRight,
+	}))
+
+	extraIdx := strings.Index(body, `<div id="EXTRA-MARK">server selector</div>`)
+	menuOpenIdx := strings.Index(body, `data-htmxui-user-menu`)
+	menuCloseIdx := strings.Index(body, `</ul>`)
+	if extraIdx == -1 || menuOpenIdx == -1 || menuCloseIdx == -1 {
+		t.Fatalf("expected both the extra marker and the UserMenu dropdown present, got %q", body)
+	}
+	if extraIdx > menuOpenIdx && extraIdx < menuCloseIdx {
+		t.Errorf("expected app-specific extra to render adjacent to UserMenu, not nested inside its dropdown, got %q", body)
+	}
+}
