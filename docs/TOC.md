@@ -36,6 +36,7 @@ Cross-cutting documentation for the Bazel build system, release pipeline, and in
 ## Implementation Plans & Feature Docs
 
 - [INSTANCE_DRILLDOWN_IMPLEMENTATION.md](INSTANCE_DRILLDOWN_IMPLEMENTATION.md) — Game server instance drill-down page plan
+- [PG_CONNECTION_POOLING_PLAN.md](PG_CONNECTION_POOLING_PLAN.md) — Postgres connection pool sizing/consolidation plan (issue #1022): current state across Go/Python, root cause, phased remediation
 
 ## Archive
 
