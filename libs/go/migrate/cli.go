@@ -59,7 +59,7 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 		historyLimit   = flag.Int("history-limit", 20, "Number of history entries to show")
 		tracked        = flag.Bool("tracked", true, "Use history tracking for migrations (default: true)")
 		autoDown       = flag.Bool("auto-down", false, "Allow automatically migrating down when the DB is ahead of this binary's migrations (e.g. after a rollback). Same effect as MIGRATE_AUTO_DOWN=true. Without one of these, a detected rollback fails loudly instead of running destructive down migrations unattended.")
-		bypassVersion  = flag.Int("bypass-version", -1, "Migrate directly to this version (up or down as needed), bypassing rollback auto-detection entirely. Same effect as MIGRATE_BYPASS_VERSION. Safe to leave configured: once the DB reaches this version, further runs are a no-op rather than a standing rollback trigger.")
+		bypassVersion  = flag.Int("bypass-version", -1, "Operator-approved ceiling: if the DB is ahead of this binary's latest migration but at or below this version, leave the schema as-is (no migration run) instead of failing or auto-migrating down. Same effect as MIGRATE_BYPASS_VERSION. For additive-only migrations (e.g. a new column an older binary just ignores) where the extra state is safe to keep.")
 	)
 	flag.Parse()
 
@@ -130,24 +130,17 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 		return
 	}
 
-	// Handle bypass-version flag/env: an explicit, one-time "go to exactly
-	// this version" override (direction determined automatically), for
-	// operators who'd rather name a target than leave -auto-down/
-	// MIGRATE_AUTO_DOWN flipped on indefinitely. Unlike that switch, this
-	// is self-limiting -- once the DB reaches the given version, Migrate()
-	// is a no-op, so forgetting to unset it doesn't risk a future
-	// unattended rollback.
-	bypassTarget := *bypassVersion
-	if bypassTarget < 0 {
-		bypassTarget = getEnvInt("MIGRATE_BYPASS_VERSION", -1)
-	}
-	if bypassTarget >= 0 {
-		log.Printf("Bypass: migrating directly to version %d...", bypassTarget)
-		if err := runner.Migrate(uint(bypassTarget)); err != nil {
-			log.Fatalf("Failed to migrate to version %d: %v", bypassTarget, err)
-		}
-		log.Println("Bypass migration completed successfully")
-		return
+	// bypassCeiling: an operator-approved ceiling on how far AHEAD of this
+	// binary's latest migration the DB is allowed to be without failing or
+	// auto-migrating down (see the rollback-detection block below). Same
+	// effect as MIGRATE_BYPASS_VERSION. This never runs a migration itself
+	// -- it only widens what counts as an acceptable "ahead" state, for
+	// cases like an additive-only migration (a new column an older binary
+	// just ignores) where rolling the schema back would drop data an
+	// operator wants to keep.
+	bypassCeiling := *bypassVersion
+	if bypassCeiling < 0 {
+		bypassCeiling = getEnvInt("MIGRATE_BYPASS_VERSION", -1)
 	}
 
 	// Default: reconcile the schema to this binary's latest known migration
@@ -179,14 +172,18 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 	ranUp := false
 	if currentVersion > targetVersion {
 		log.Printf("Detected rollback: DB is at version %d, this image's latest migration is %d.", currentVersion, targetVersion)
-		if !allowAutoDown {
-			log.Fatalf("Refusing to auto-migrate down (destructive) without -auto-down or MIGRATE_AUTO_DOWN=true. Set one of those to roll back automatically, or use -steps/-down for an explicit, manual rollback.")
+		switch {
+		case bypassCeiling >= 0 && currentVersion <= uint(bypassCeiling):
+			log.Printf("DB version %d is within the operator-approved bypass ceiling %d -- leaving schema as-is, no migration run.", currentVersion, bypassCeiling)
+		case allowAutoDown:
+			log.Println("Migrating down...")
+			if err := runner.Migrate(targetVersion); err != nil {
+				log.Fatalf("Failed to roll back migrations: %v", err)
+			}
+			log.Println("Rollback completed successfully")
+		default:
+			log.Fatalf("Refusing to auto-migrate down (destructive) without -auto-down or MIGRATE_AUTO_DOWN=true. Set one of those to roll back automatically, raise -bypass-version/MIGRATE_BYPASS_VERSION to at least %d if this ahead-state is expected and safe to leave as-is, or use -steps/-down for an explicit, manual rollback.", currentVersion)
 		}
-		log.Println("Migrating down...")
-		if err := runner.Migrate(targetVersion); err != nil {
-			log.Fatalf("Failed to roll back migrations: %v", err)
-		}
-		log.Println("Rollback completed successfully")
 	} else {
 		log.Println("Running migrations...")
 		var migrationErr error

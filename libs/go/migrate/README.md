@@ -32,7 +32,7 @@ func main() {
 | `-history-limit N` | | `20` | Number of history rows to print with `-history`. |
 | `-tracked` | | `true` | Use per-step history tracking on the default up path (`UpWithTracking`) instead of plain `Up()`. |
 | `-auto-down` | `MIGRATE_AUTO_DOWN` | `false` | Allow the default path to automatically migrate DOWN when the DB is ahead of this binary's latest migration (e.g. an older image re-running after a rollback). **A standing switch** — leave it set and every future mismatch auto-rolls-back, not just the one you meant to fix. |
-| `-bypass-version N` | `MIGRATE_BYPASS_VERSION` | `-1` (off) | Migrate directly to version N (up or down, whichever the DB needs), bypassing rollback auto-detection entirely. Self-limiting: once the DB reaches N, leaving this set is a no-op, not a live rollback trigger. |
+| `-bypass-version N` | `MIGRATE_BYPASS_VERSION` | `-1` (off) | Operator-approved ceiling, not a target: if the DB is ahead of this binary's latest migration but at or below N, leave the schema as-is — no migration runs at all. For additive-only migrations (e.g. a new column an older binary just ignores) where the extra state is safe to keep. Only affects the "DB is ahead" case; never blocks a normal forward migration. |
 
 `PG_DATABASE_URL`, if set, overrides the individual `DB_HOST`/`DB_PORT`/
 `DB_USER`/`DB_PASSWORD`/`DB_NAME`/`DB_SSL_MODE` vars read by
@@ -49,15 +49,25 @@ The default path now compares the DB's current version against
 `Runner.LatestVersion()` (the highest version embedded in this binary):
 
 - DB behind or at that version: runs up as before (`UpWithTracking`/`Up`).
-- DB *ahead* of it (a rollback): fails loudly instead of silently doing
-  nothing, unless one of the opt-ins above is set, in which case it migrates
-  the schema down (`Runner.Migrate`) to match.
+- DB *ahead* of it (a rollback), checked in this order:
+  1. **`MIGRATE_BYPASS_VERSION`/`-bypass-version` covers it** (current version
+     ≤ the configured ceiling): do nothing. No migration runs, up or down —
+     the schema is left exactly as it is. Use this when the only thing ahead
+     is an additive, backward-compatible migration (e.g. a new column the
+     older binary never references) and rolling it back would just throw
+     away data the newer app already wrote.
+  2. **`MIGRATE_AUTO_DOWN`/`-auto-down` is set**: migrate the schema down
+     (`Runner.Migrate`) to this binary's latest known version.
+  3. **Neither is set**: fail loudly. Nothing is touched.
+
+Both opt-ins only change behavior in the "DB is ahead" branch — a normal
+forward deploy always just runs up, regardless of either setting.
 
 Neither opt-in is wired into the shared Helm job template by default — no
-job in this repo auto-rolls-back today. A team that wants it sets
-`MIGRATE_AUTO_DOWN` or `MIGRATE_BYPASS_VERSION` in their app's Helm values
-`env` map (the job template already passes an arbitrary per-app env map
-through to the container).
+job in this repo auto-rolls-back or auto-bypasses today. A team that wants
+one sets `MIGRATE_AUTO_DOWN` or `MIGRATE_BYPASS_VERSION` in their app's Helm
+values `env` map (the job template already passes an arbitrary per-app env
+map through to the container).
 
 ## See also
 
