@@ -128,7 +128,7 @@ func run() error {
 		w.RegisterActivityWithOptions(gitops.Publish, activityOptions(writeback.ActivityPublish))
 	} else {
 		outDir := getEnv("WRITEBACK_OUTPUT_DIR", "/tmp/app-registry-writeback")
-		stub := writeback.NewStubActivities(registryClient, outDir)
+		stub := writeback.NewStubActivities(registryClient, appClient, outDir)
 		w.RegisterActivityWithOptions(stub.RenderEnvironmentState, activityOptions(writeback.ActivityRenderEnvironmentState))
 		w.RegisterActivityWithOptions(stub.Publish, activityOptions(writeback.ActivityPublish))
 	}
