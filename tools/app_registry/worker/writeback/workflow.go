@@ -60,6 +60,18 @@ const (
 	// CommitSHA) onto the promotion's writeback_outbox row -- FR7a, issue
 	// #1029. See worker/writeback/record.go's Recorder.
 	ActivityRecordWritebackResult = "RecordWritebackResult"
+	// ActivityTriggerArgoRefresh triggers an ArgoCD refresh for a
+	// promotion's target Application and records one promotion_sync_event
+	// row (source = refresh_triggered) -- FR1, issue #1030. See
+	// worker/writeback/argosync.go's ArgoSyncActivities.
+	ActivityTriggerArgoRefresh = "TriggerArgoRefresh"
+	// ActivityPollArgoSyncStatus polls ArgoCD's sync/health status for a
+	// promotion's target Application up to 3 times, 2 minutes apart,
+	// recording one promotion_sync_event row (source = poll_observed) per
+	// attempt and stopping early once a terminal state is observed --
+	// FR3/FR4/FR5, NFR3, issue #1030. See worker/writeback/argosync.go's
+	// ArgoSyncActivities.
+	ActivityPollArgoSyncStatus = "PollArgoSyncStatus"
 )
 
 // WritebackInput is WritebackWorkflow's single argument -- everything an
@@ -212,6 +224,45 @@ func WritebackWorkflow(ctx workflow.Context, in WritebackInput) (PublishResult, 
 	// own documented orphan-row gap in server/handlers/release.go.
 	if err := workflow.ExecuteActivity(ctx, ActivityRecordWritebackResult, in.PromotionID, result.Location, result.CommitSHA).Get(ctx, nil); err != nil {
 		workflow.GetLogger(ctx).Error("record writeback result failed after successful publish", "promotion_id", in.PromotionID, "error", err)
+	}
+
+	// Best-effort: trigger an ArgoCD refresh, then poll its resulting
+	// sync/health status, for this promotion's target Application -- FR1-
+	// FR5, issue #1030. FR2/NFR6: no environment-specific branch/exemption,
+	// every promotion reaches this step. ApplicationName is derived from
+	// the SAME RenderedState.ChartName/EnvironmentKey fields the publish
+	// step above already resolved -- never re-derived a second way (see
+	// ArgoSyncInput's doc comment). Each activity's failure is
+	// independently logged and swallowed here -- the same best-effort shape
+	// as ActivityRecordWritebackResult above, not the failure-blocking
+	// semantics of RenderEnvironmentState/Publish. PollArgoSyncStatus still
+	// runs even when TriggerArgoRefresh failed: ArgoCD may already be
+	// mid-sync from an earlier auto-sync/refresh, so polling is still
+	// informative, and PollArgoSyncStatus's own attempt loop/timeout
+	// independently guards against ArgoCD being genuinely unreachable.
+	argoIn := ArgoSyncInput{
+		PromotionID:     in.PromotionID,
+		Domain:          in.Domain,
+		ApplicationName: rendered.ChartName + "-" + rendered.EnvironmentKey,
+	}
+	if err := workflow.ExecuteActivity(ctx, ActivityTriggerArgoRefresh, argoIn).Get(ctx, nil); err != nil {
+		workflow.GetLogger(ctx).Error("trigger argo refresh failed after successful publish", "promotion_id", in.PromotionID, "error", err)
+	}
+
+	// PollArgoSyncStatus's own internal loop runs up to ~6 minutes (NFR3),
+	// so it gets its own workflow.ActivityOptions with a much longer
+	// StartToCloseTimeout than the 30s `ao` used for the rest of this
+	// workflow -- reusing `ao` here would time out the activity partway
+	// through its own bounded poll loop.
+	pollAO := workflow.ActivityOptions{
+		StartToCloseTimeout: 7 * time.Minute,
+		RetryPolicy: &temporal.RetryPolicy{
+			MaximumAttempts: 3,
+		},
+	}
+	pollCtx := workflow.WithActivityOptions(ctx, pollAO)
+	if err := workflow.ExecuteActivity(pollCtx, ActivityPollArgoSyncStatus, argoIn).Get(pollCtx, nil); err != nil {
+		workflow.GetLogger(ctx).Error("poll argo sync status failed after successful publish", "promotion_id", in.PromotionID, "error", err)
 	}
 
 	return result, nil

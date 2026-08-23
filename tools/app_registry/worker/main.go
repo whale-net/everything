@@ -135,6 +135,29 @@ func run() error {
 	recorder := &writeback.Recorder{Registry: repo}
 	w.RegisterActivityWithOptions(recorder.RecordWritebackResult, activityOptions(writeback.ActivityRecordWritebackResult))
 
+	// TriggerArgoRefresh/PollArgoSyncStatus (FR1-FR5, NFR3, NFR6, issue
+	// #1030) are opt-in like the gitops branch above: SelectArgoSyncActivities
+	// only constructs a real argocd.Client + writeback.ArgoSyncActivities
+	// when ARGOCD_SERVER is set, so `bazel test`/local dev/Tilt keep working
+	// with zero ArgoCD config -- see writeback.NoopArgoSyncActivities's doc
+	// comment for why this gate is about runtime configurability, not an
+	// environment exemption (FR2/NFR6 still hold: every promotion that DOES
+	// reach WritebackWorkflow gets these activities called, regardless of
+	// its target environment). The gate itself is a pure function in the
+	// writeback package (not inlined here) so it has its own unit test
+	// coverage -- this file's own run() connects to a real database/Temporal
+	// server and cannot be unit tested directly.
+	argoServer := os.Getenv("ARGOCD_SERVER")
+	argoSync, aerr := writeback.SelectArgoSyncActivities(argoServer, os.Getenv("ARGOCD_AUTH_TOKEN"), repo)
+	if aerr != nil {
+		return fmt.Errorf("configure argocd sync activities: %w", aerr)
+	}
+	if argoServer != "" {
+		logger.Info("using real ArgoCD sync activities", "server", argoServer)
+	}
+	w.RegisterActivityWithOptions(argoSync.TriggerArgoRefresh, activityOptions(writeback.ActivityTriggerArgoRefresh))
+	w.RegisterActivityWithOptions(argoSync.PollArgoSyncStatus, activityOptions(writeback.ActivityPollArgoSyncStatus))
+
 	// ReleaseWorkflow (issue #889), registered on the same task queue as
 	// WritebackWorkflow -- release.TaskQueue == writeback.TaskQueue, see
 	// that constant's doc comment. Registry is the same direct-Postgres repo

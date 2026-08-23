@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "writeback",
     srcs = [
+        "argosync.go",
         "gitops.go",
         "record.go",
         "stub.go",
@@ -11,9 +12,11 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/app_registry/worker/writeback",
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/go/argocd",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/repository",
         "@in_gopkg_yaml_v3//:yaml_v3",
+        "@io_temporal_go_sdk//activity",
         "@io_temporal_go_sdk//temporal",
         "@io_temporal_go_sdk//workflow",
         "@org_golang_google_protobuf//encoding/protojson",
@@ -23,12 +26,16 @@ go_library(
 go_test(
     name = "writeback_test",
     srcs = [
+        "argosync_test.go",
         "gitops_test.go",
         "stub_test.go",
         "workflow_test.go",
     ],
     embed = [":writeback"],
     deps = [
+        "//libs/go/argocd",
+        "//tools/app_registry/server/repository",
+        "//tools/app_registry/server/repository/fake",
         "@com_github_stretchr_testify//mock",
         "@com_github_stretchr_testify//require",
         "@io_temporal_go_sdk//activity",
