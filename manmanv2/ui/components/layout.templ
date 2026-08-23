@@ -75,27 +75,44 @@ templ navItems(data LayoutData) {
 			@navLink("/workshop/library", "Workshop", data.Active)
 			<li class="menu-title">Server</li>
 			@MobileServerSelector(data.Servers, data.SelectedServer)
-			if data.User != nil {
-				<li><a href="/auth/logout">Logout ({ data.User.Name })</a></li>
-			}
 		</ul>
 	</div>
 }
 
-// headerRight is manmanv2's HeaderRight composition slot content (FR1a):
-// the desktop-visible ServerSelector plus the existing logout link.
-// Unifying this top-right user area on a shared FR8 component is Phase
-// 3, not this issue — this keeps the existing logout link working via
-// the slot, per #1007's scope.
+// headerRight is manmanv2's HeaderRight composition slot content (FR8):
+// the desktop-visible ServerSelector plus the shared htmxui.UserMenu,
+// composed as siblings — never folded together, since UserMenu takes no
+// manmanv2-specific parameters (ServerSelector included) per FR8's
+// composition rule. ServerSelector keeps its own "hidden lg:flex"
+// wrapper and its dedicated narrow-viewport copy (MobileServerSelector,
+// in navItems' dropdown above) because it has no built-in responsive
+// behavior of its own. UserMenu needs neither: it is a single
+// self-contained dropdown that already covers narrow viewports (see
+// UserMenu's doc comment), so it renders unconditionally here, and the
+// old mobile-duplicate logout link that used to live in navItems'
+// dropdown is gone — one UserMenu instance now covers both desktop and
+// mobile.
 templ headerRight(data LayoutData) {
 	<div class="hidden lg:flex items-center gap-2">
 		@ServerSelector(data.Servers, data.SelectedServer)
-		if data.User != nil {
-			<a href="/auth/logout" class="btn btn-ghost btn-sm">
-				Logout ({ data.User.Name })
-			</a>
-		}
 	</div>
+	@htmxui.UserMenu(htmxui.UserMenuData{
+		IdentityLabel: userIdentityLabel(data.User),
+		LogoutHref:    "/auth/logout",
+	})
+}
+
+// userIdentityLabel bridges manmanv2's htmxauth.UserInfo to UserMenu's
+// plain-string IdentityLabel (FR8): UserMenu deliberately takes no
+// htmxauth dependency (see UserMenuData's doc comment), so this is the
+// one place manmanv2 extracts a display string from its actual user
+// type. A nil User (e.g. AUTH_MODE=none) yields "", which UserMenu
+// already renders as nothing.
+func userIdentityLabel(user *htmxauth.UserInfo) string {
+	if user == nil {
+		return ""
+	}
+	return user.Name
 }
 
 templ ServerSelector(servers []*manmanpb.Server, selectedServer *manmanpb.Server) {
