@@ -372,21 +372,41 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	// existed for it -- the "tolerated skip" was silently skipping every
 	// single Temporal-driven release, not just a rare edge case.
 	//
-	// A syntactically valid but unresolvable build_id is safe to use here:
-	// neither BeginPublish nor RecordArtifact enforce a foreign key into
-	// `build` (data.artifact.build_id has no FK constraint), and
-	// resolveManifestForPublish's build_id -> git_sha lookup is already
-	// documented as best-effort, silently falling back to the owner's
-	// current manifest interval when the id doesn't resolve to a real row
-	// -- exactly the same fallback that already fires today whenever
-	// buildID is genuinely empty. So synthesizing one only trades "registry
-	// recording silently skipped forever" for "registry recording
-	// succeeds, with slightly less precise manifest/build provenance than
-	// a real App Registry build_id would give" -- a strict improvement,
-	// not a new failure mode.
+	// CORRECTION (this fix): a random UUID is NOT safe here. Migration 001
+	// declares `artifact.build_id UUID ... REFERENCES build (build_id)`,
+	// and migration 007 only ever drops that column's NOT NULL for the
+	// "allocated" state -- the FK itself was never dropped. A build_id that
+	// names no row in `build` makes BeginPublish's own UPDATE (and
+	// RecordArtifact's INSERT) fail with `artifact_build_id_fkey`, exactly
+	// reproducing the "not found"/skip symptom this block was written to
+	// fix, just as a hard error instead of a silent skip. So instead of
+	// fabricating an unresolvable id, record a real (if minimal) `build`
+	// row and use its real build_id -- BuildRepository.RecordBuild upserts
+	// on (workflow_run_id, workflow_attempt), so keying it off ref.RunID
+	// (the GitHub Actions run this activity already knows completed, per
+	// PollBuild above) both satisfies the FK and ties the row back to the
+	// actual run, which is strictly more traceable than a random UUID ever
+	// was. git_sha is deliberately a placeholder, not ref-derived (nothing
+	// in ResolvedPlan/BuildRef carries the head commit): unresolvable, it
+	// makes resolveManifestForPublish's build_id -> git_sha lookup fall
+	// through to the owner's current manifest interval, identical to its
+	// existing behavior for a genuinely empty buildID.
 	buildID := planBuildID(plan.RawJSON)
 	if buildID == "" {
-		buildID = uuid.NewString()
+		workflowRunID := ref.RunID
+		if workflowRunID == "" {
+			workflowRunID = uuid.NewString()
+		}
+		b, _, berr := a.Registry.Builds().RecordBuild(ctx, repository.Build{
+			GitSHA:          "unknown",
+			WorkflowRunID:   workflowRunID,
+			WorkflowAttempt: 1,
+			Actor:           "app-registry-worker",
+		})
+		if berr != nil {
+			return FinalizeResult{}, fmt.Errorf("finalize publish: record build for empty plan build_id: %w", berr)
+		}
+		buildID = b.BuildID
 	}
 
 	// idempotencyKeyPrefix is passed to every finalize-app/finalize-chart
