@@ -17,7 +17,10 @@ go_library(
 
 go_test(
     name = "repository_test",
-    srcs = ["promotability_test.go"],
+    srcs = [
+        "promotability_test.go",
+        "promotion_details_test.go",
+    ],
     embed = [":repository"],
     deps = [
         "//tools/appmeta/proto:appmetapb",

@@ -24,6 +24,7 @@ go_library(
 go_test(
     name = "fake_test",
     srcs = [
+        "promotion_details_test.go",
         "promotion_sync_event_test.go",
         "release_run_test.go",
         "writeback_test.go",

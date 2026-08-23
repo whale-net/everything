@@ -37,7 +37,14 @@ func (f promotionFake) GetDetails(ctx context.Context, promotionID string) (*rep
 	// from_version: the version live for this same (environment_id,
 	// target_key) immediately before THIS promotion's own valid_from -- see
 	// postgres's GetDetails doc comment for why this differs from
-	// GetPrevious.
+	// GetPrevious. Read from the candidate promotion's OWN denormalized
+	// Version field (never f.r.state.Artifacts), matching how the rest of
+	// this fake already treats Promotion.Version -- unlike postgres, the
+	// fake's `promotion` map entry is exactly whatever the caller passed to
+	// Promote/SeedPromotion, not a row re-derived from a separate Artifacts
+	// join at read time (see fake.go's Promote), so falling back to
+	// Artifacts here would silently return "" whenever a test seeds a
+	// Promotion without also seeding a matching Artifacts entry.
 	var fromVersion string
 	var haveFromVersion bool
 	var latestPriorValidFrom time.Time
@@ -49,7 +56,7 @@ func (f promotionFake) GetDetails(ctx context.Context, promotionID string) (*rep
 			continue
 		}
 		if !haveFromVersion || p.ValidFrom.After(latestPriorValidFrom) {
-			fromVersion = f.r.state.Artifacts[p.ArtifactID].Version
+			fromVersion = p.Version
 			latestPriorValidFrom = p.ValidFrom
 			haveFromVersion = true
 		}

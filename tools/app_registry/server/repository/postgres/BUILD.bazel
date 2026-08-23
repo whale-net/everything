@@ -69,6 +69,7 @@ go_test(
         "postgres_integration_artifact_test.go",
         "postgres_integration_environment_test.go",
         "postgres_integration_helpers_test.go",
+        "postgres_integration_promotion_details_test.go",
         "postgres_integration_promotion_sync_event_test.go",
         "postgres_integration_promotion_test.go",
         "postgres_integration_release_run_test.go",
