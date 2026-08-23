@@ -140,14 +140,22 @@ no separate mode branch needed here.
   CSS toolchain (NFR-20). The image build stays a pure Go cross-compile.
 - Shared UI chrome and primitives come from `//libs/go/htmxui` (issue
   #1005, FR2): `components.Shell` is a thin app-registry wrapper around
-  `htmxui.Shell`, supplying this app's own nav list, `MisconfigBanner`, and
-  user-identity label as `htmxui.Shell`'s app-owned slots; `badges.templ`
-  expresses this app's promotability/artifact-state/provenance vocabulary
-  in terms of the generic `htmxui.Badge` primitive; and the three
-  previously-independent confirm/danger-zone blocks in `pages/promote.templ`,
-  `pages/rollback.templ`, and `pages/environment_form.templ` now all route
-  through the single shared `htmxui.Confirm` component. This package no
-  longer maintains its own local Shell/badge/confirm implementations.
+  `htmxui.Shell`, supplying this app's own nav list and `MisconfigBanner`
+  as `htmxui.Shell`'s app-owned slots; `badges.templ` expresses this app's
+  promotability/artifact-state/provenance vocabulary in terms of the
+  generic `htmxui.Badge` primitive; and the three previously-independent
+  confirm/danger-zone blocks in `pages/promote.templ`, `pages/rollback.templ`,
+  and `pages/environment_form.templ` now all route through the single
+  shared `htmxui.Confirm` component. This package no longer maintains its
+  own local Shell/badge/confirm implementations.
+- The top-right user area is `htmxui.UserMenu` (issue #1010, FR8),
+  composed into `htmxui.Shell`'s `HeaderRight` slot: a dropdown showing
+  `user.PreferredUsername` plus a visible logout link to `/auth/logout`
+  (the existing `htmxauth.Authenticator.HandleLogout` route registered in
+  `main.go` — no backend change). Before this, app-registry showed only a
+  bare identity `<span>` with no logout control at all. `htmxui.ThemeSwitcher`
+  (light/night/oled, matching manmanv2's set) is mounted alongside it in the
+  same slot region — app-registry previously mounted no theme switcher.
 - `htmxui.ThemesCSS` (`//libs/go/htmxui`, `themes.css` embedded via
   `//go:embed`) is the single source of truth for the daisyUI
   theme-variable overrides — **not** a copy maintained here. `RenderTempl`

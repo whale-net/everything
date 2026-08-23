@@ -176,7 +176,10 @@ troubleshooting-vs-calm-day density convention, and the daisyUI +
 
 This UI is a **consumer** of `//libs/go/htmxui` (issue #1005, FR2), not the
 owner of its own daisyUI primitives: `components.Shell` is a thin wrapper
-around `htmxui.Shell` supplying this app's nav/banner/user-label slots,
+around `htmxui.Shell` supplying this app's nav/banner slots plus a
+`HeaderRight` slot composed from `htmxui.UserMenu` (issue #1010, FR8) — the
+shared identity + logout dropdown that gave app-registry its first visible
+logout control — and `htmxui.ThemeSwitcher`,
 `components/badges.templ` expresses this app's badge vocabulary in terms of
 the generic `htmxui.Badge`, and the confirm/danger-zone pattern (screens
 50-promote, 51-rollback, 53-environment-form) routes through the shared
