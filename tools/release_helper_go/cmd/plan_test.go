@@ -769,7 +769,11 @@ func TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal(t *testing.T) {
 // as a domain==name coincidence because that happens to be true for the App
 // Registry's own chart. Mirrors
 // TestPlanReleaseWorkflowDispatch_AllocateDomainUsesRegistry (the equivalent
-// app-side regression test, issue #829) for charts.
+// app-side regression test, issue #829) for charts. This variant covers the
+// App-Registry-DB-backed --charts-metadata path (HelmChartMetadataFromInputs);
+// see TestPlanReleaseWorkflowDispatch_ChartAllocateVersion_BazelDiscoveredName
+// below for the bazel-query-discovered --charts name path, which needed a
+// second, distinct fix (HelmChartMetadata.FullName, plan_helm.go).
 func TestPlanReleaseWorkflowDispatch_ChartAllocateVersionUsesFullOwnerName(t *testing.T) {
 	bazel := newFakeBazel()
 	git := newFakeGit(
@@ -797,6 +801,59 @@ func TestPlanReleaseWorkflowDispatch_ChartAllocateVersionUsesFullOwnerName(t *te
 			incrementMinor:         true,
 			bazel:                  bazel,
 			git:                    git,
+			artifactRegistryClient: artClient,
+		})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(artClient.AllocateVersionCalls) != 1 {
+		t.Fatalf("expected 1 AllocateVersion call, got %d", len(artClient.AllocateVersionCalls))
+	}
+	if result.Versions["app-registry-app-registry"] != "v9.0.0" {
+		t.Errorf("expected registry-allocated version v9.0.0, got %s", result.Versions["app-registry-app-registry"])
+	}
+}
+
+// TestPlanReleaseWorkflowDispatch_ChartAllocateVersion_BazelDiscoveredName
+// is the direct regression test for a real prod failure hit via v1
+// (release.yml, GHA run 32654699873's sibling): AllocateVersion rejected
+// "app-registry-helm-app-registry-app-registry" as not found. This is a
+// second variant of TestPlanReleaseWorkflowDispatch_ChartAllocateVersionUsesFullOwnerName
+// above (which covers the App-Registry-DB-backed --charts-metadata path)
+// -- this one goes through the bazel-query-discovered --charts name path
+// instead (ListAllHelmCharts), where HelmChartMetadata.Name carries the raw
+// Bazel-declared "helm-{domain}-{chart_name}" name (release.bzl's
+// release_helm_chart macro), not the bare chart_name -- see
+// HelmChartMetadata.FullName's doc comment (plan_helm.go) for why naive
+// Domain+"-"+Name concatenation double-counted the domain for exactly this
+// discovery path.
+func TestPlanReleaseWorkflowDispatch_ChartAllocateVersion_BazelDiscoveredName(t *testing.T) {
+	fs, bazel := buildFakeHelmInfra([]fakeHelmChart{
+		{pkg: "tools/app_registry", targetName: "app_registry_chart_chart_metadata", name: "helm-app-registry-app-registry", domain: "app-registry", apps: []string{}},
+	})
+	git := newFakeGit(
+		fakeGitCall{argsContain: []string{"tag", "--sort"}, output: "app-registry-app-registry.v1.0.0"},
+	)
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
+		if in.OwnerFullName != "app-registry-app-registry" || in.Kind != pb.ArtifactKind_ARTIFACT_KIND_CHART || in.Increment != "patch" {
+			t.Errorf("unexpected AllocateVersionRequest: %+v", in)
+		}
+		return &pb.AllocateVersionResponse{Version: "v9.0.0"}, nil
+	}
+
+	var result *PlanResult
+	var err error
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		result, err = planRelease(planParams{
+			eventType:              "workflow_dispatch",
+			requestedCharts:        "app-registry",
+			incrementPatch:         true,
+			bazel:                  bazel,
+			git:                    git,
+			fs:                     fs,
+			workspaceRoot:          fakeWorkspaceRoot,
 			artifactRegistryClient: artClient,
 		})
 	})
