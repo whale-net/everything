@@ -883,7 +883,14 @@ jobs:
           for APP_NAME in release_helper_go app-registry; do
             if echo "$RELEASE_MATRIX" | jq -e --arg app "$APP_NAME" '.include[] | select(.app == $app)' >/dev/null; then
               echo "Packaging CLI binaries for ${APP_NAME} (linux_amd64, linux_arm64, darwin_arm64, darwin_amd64)..."
-              "$RELEASE_HELPER" package-assets "$APP_NAME" \
+              # Full "tools-<name>" form, not bare "$APP_NAME" --
+              # resolveApps (plan.go) checks an exact FullName match first,
+              # but falls back to a domain match before a name match, and
+              # "app-registry" is BOTH this CLI's short name AND the name of
+              # the app-registry domain itself (many apps, e.g.
+              # app-registry-api). Bare "app-registry" resolves to the whole
+              # domain's first app instead of this one CLI target.
+              "$RELEASE_HELPER" package-assets "tools-${APP_NAME}" \
                 --platforms linux_amd64,linux_arm64,darwin_arm64,darwin_amd64 \
                 --output-dir "/tmp/cli-binaries/${APP_NAME}"
             else
