@@ -17,8 +17,9 @@ import (
 // This file covers #652 (NFR-17, FR-42-46, FR-59): role gating over
 // representative role subsets, exercised directly against the templ page
 // components that actually branch on role (components.HasRole/Gate is only
-// ever called from pages.Deployments, pages.Environments, and
-// pages.EnvironmentForm -- every other read screen (01/11/12/13/20/21/22/
+// ever called from pages.Deployments, pages.Environments,
+// pages.EnvironmentForm, and -- as of issue #1033's FR10/FR11 retry action --
+// pages.PromotionDetails; every other read screen (01/11/12/13/20/21/22/
 // 30/31/32/40) passes user through to components.Shell only for chrome and
 // never branches on Roles; that is asserted structurally by
 // components/roles_test.go and components/banner_test.go covering Shell's
@@ -234,6 +235,90 @@ func TestEnvironments_AllRoles_AdminControlsLive(t *testing.T) {
 	}
 	if !strings.Contains(body, `href="/environments/new"`) {
 		t.Errorf("all-roles principal must have a live 'Add environment' control; body = %s", body)
+	}
+}
+
+// --- PromotionDetails "Retry refresh/sync" button (FR10/FR11, issue #1033) -
+
+// promotionDetailsState builds a minimal PromotionDetailsViewState whose
+// Details is non-nil (so PromotionDetails renders promotionDetailsBody, and
+// therefore retryArgoSyncButton) for a given promotion_id -- the only field
+// retryArgoSyncButton's own href depends on.
+func promotionDetailsState(promotionID string) PromotionDetailsViewState {
+	return PromotionDetailsViewState{
+		PromotionID: promotionID,
+		Details: &pb.GetPromotionDetailsResponse{Details: &pb.PromotionDetails{
+			Promotion: &pb.Promotion{PromotionId: promotionID},
+		}},
+	}
+}
+
+// TestPromotionDetails_NoRoles_RetryButtonDisabled proves FR11: a no-roles
+// viewer sees the retry control rendered disabled, naming app-registry-admin
+// -- never omitted with no explanation, never a live control.
+func TestPromotionDetails_NoRoles_RetryButtonDisabled(t *testing.T) {
+	body := renderComponent(t, PromotionDetails(noRolesUser(), promotionDetailsState("promo-1")))
+	if !strings.Contains(body, "Retry refresh/sync") {
+		t.Fatalf("expected the retry control to render (disabled, not omitted); body = %s", body)
+	}
+	if !strings.Contains(body, `title="Requires role: `+components.RoleAdmin+`"`) {
+		t.Errorf("expected the disabled retry control to name %q; body = %s", components.RoleAdmin, body)
+	}
+	if strings.Contains(body, `action="/promotions/promo-1/retry"`) && !strings.Contains(body, "btn-disabled") {
+		t.Errorf("no-roles viewer must never see a live, enabled retry control; body = %s", body)
+	}
+}
+
+// TestPromotionDetails_PromoterDevOnly_RetryButtonDisabled proves FR10/FR11
+// that holding a promoter role -- real write power elsewhere on this exact
+// promotion (Promote/Rollback) -- is still not admin; no role implies
+// another (same principle role_gating_test.go's other subsets assert).
+func TestPromotionDetails_PromoterDevOnly_RetryButtonDisabled(t *testing.T) {
+	body := renderComponent(t, PromotionDetails(promoterDevUser(), promotionDetailsState("promo-1")))
+	if !strings.Contains(body, `title="Requires role: `+components.RoleAdmin+`"`) {
+		t.Errorf("expected the disabled retry control to name %q for a promoter-only session; body = %s", components.RoleAdmin, body)
+	}
+}
+
+// TestPromotionDetails_AdminOnly_RetryButtonLive proves FR10: an
+// app-registry-admin session gets a live, enabled retry submit button
+// posting to /promotions/{id}/retry.
+func TestPromotionDetails_AdminOnly_RetryButtonLive(t *testing.T) {
+	body := renderComponent(t, PromotionDetails(adminUser(), promotionDetailsState("promo-1")))
+	if !strings.Contains(body, `action="/promotions/promo-1/retry"`) {
+		t.Errorf("expected a form posting to /promotions/promo-1/retry; body = %s", body)
+	}
+	if !strings.Contains(body, `<button type="submit" class="btn btn-sm btn-warning">Retry refresh/sync</button>`) {
+		t.Errorf("expected a live, enabled retry submit button; body = %s", body)
+	}
+	if strings.Contains(body, "Requires role:") {
+		t.Errorf("admin must see no disabled/missing-role retry control; body = %s", body)
+	}
+}
+
+// TestPromotionDetails_AllRoles_RetryButtonLive is the all-roles-subset
+// parity check every other feature in this file gets.
+func TestPromotionDetails_AllRoles_RetryButtonLive(t *testing.T) {
+	body := renderComponent(t, PromotionDetails(allRolesUser(), promotionDetailsState("promo-1")))
+	if strings.Contains(body, "Requires role:") {
+		t.Errorf("all-roles principal must see no disabled/missing-role retry control; body = %s", body)
+	}
+	if !strings.Contains(body, `action="/promotions/promo-1/retry"`) {
+		t.Errorf("expected a form posting to /promotions/promo-1/retry; body = %s", body)
+	}
+}
+
+// TestPromotionDetails_RetryErr_RendersBanner proves handleRetryArgoSync's
+// RetryErr (a failed RetryArgoSync submit, distinct from LoadErr) surfaces
+// as its own inline error banner, alongside the promotion's own content --
+// never a silent failure and never mistaken for a failed GetPromotionDetails
+// read.
+func TestPromotionDetails_RetryErr_RendersBanner(t *testing.T) {
+	s := promotionDetailsState("promo-1")
+	s.RetryErr = "permission denied"
+	body := renderComponent(t, PromotionDetails(adminUser(), s))
+	if !strings.Contains(body, "alert-error") || !strings.Contains(body, "Retry failed: permission denied") {
+		t.Errorf("expected a RetryErr banner naming the failure; body = %s", body)
 	}
 }
 

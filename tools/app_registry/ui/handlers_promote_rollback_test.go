@@ -109,6 +109,10 @@ type fakePromotionClient struct {
 	// failing lookup among several succeeding ones). Falls back to a
 	// minimal default response echoing PromotionId when unset.
 	getDetailsFunc func(*pb.GetPromotionDetailsRequest) (*pb.GetPromotionDetailsResponse, error)
+
+	retryArgoSyncCalls []*pb.RetryArgoSyncRequest
+	retryArgoSyncResp  *pb.RetryArgoSyncResponse
+	retryArgoSyncErr   error
 }
 
 func (f *fakePromotionClient) Promote(ctx context.Context, in *pb.PromoteRequest, opts ...grpc.CallOption) (*pb.PromoteResponse, error) {
@@ -174,6 +178,18 @@ func (f *fakePromotionClient) getDetailsCallCount() int {
 	f.getDetailsMu.Lock()
 	defer f.getDetailsMu.Unlock()
 	return len(f.getDetailsCalls)
+}
+
+// RetryArgoSync backs handleRetryArgoSync's tests (issue #1033, FR10-FR13).
+func (f *fakePromotionClient) RetryArgoSync(ctx context.Context, in *pb.RetryArgoSyncRequest, opts ...grpc.CallOption) (*pb.RetryArgoSyncResponse, error) {
+	f.retryArgoSyncCalls = append(f.retryArgoSyncCalls, in)
+	if f.retryArgoSyncErr != nil {
+		return nil, f.retryArgoSyncErr
+	}
+	if f.retryArgoSyncResp != nil {
+		return f.retryArgoSyncResp, nil
+	}
+	return &pb.RetryArgoSyncResponse{TemporalWorkflowId: "retry-" + in.GetPromotionId() + "-1"}, nil
 }
 
 func newPromoteTestApp(env *fakeEnvironmentClient, artifact pb.ArtifactRegistryClient, promo *fakePromotionClient) *App {
