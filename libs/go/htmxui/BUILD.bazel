@@ -1,0 +1,21 @@
+load("//tools:templ.bzl", "templ_library")
+
+# templ_library, not go_library (FR1): this is the first templ_library under
+# libs/go/. It diverges from its directory siblings htmxauth/htmxbase, which
+# are plain go_library rules with no .templ sources. See
+# tools/app_registry/ui/components/BUILD.bazel for the pattern this mirrors,
+# and libs/go/htmxui/README.md for why. Do not let gazelle collapse this back
+# into a go_library rule.
+templ_library(
+    # keep
+    name = "htmxui",
+    # allow_empty: no .templ primitives exist yet (scaffold-only, #1001);
+    # they land in sibling Phase 1 issues.
+    srcs = glob(
+        ["*.templ"],
+        allow_empty = True,
+    ),
+    go_srcs = ["doc.go"],
+    visibility = ["//visibility:public"],
+    deps = [],
+)
