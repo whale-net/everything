@@ -57,6 +57,7 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 		history        = flag.Bool("history", false, "Show migration history")
 		historyLimit   = flag.Int("history-limit", 20, "Number of history entries to show")
 		tracked        = flag.Bool("tracked", true, "Use history tracking for migrations (default: true)")
+		autoDown       = flag.Bool("auto-down", false, "Allow automatically migrating down when the DB is ahead of this binary's migrations (e.g. after a rollback). Without this flag, a detected rollback fails loudly instead of running destructive down migrations unattended.")
 	)
 	flag.Parse()
 
@@ -131,7 +132,10 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 	// version. Normally that means running up, but if the DB is already
 	// ahead of this image's latest migration (e.g. an older image re-runs
 	// this job after a rollback), Up() would silently no-op and leave the
-	// newer schema in place. Detect that case and migrate down instead.
+	// newer schema in place. Detect that case explicitly rather than
+	// silently doing nothing -- but don't auto-run destructive down
+	// migrations unattended (wrong image, a stray version bump, a racing
+	// job) without -auto-down; fail loudly instead so a human decides.
 	targetVersion, err := runner.LatestVersion()
 	if err != nil {
 		log.Fatalf("Failed to determine latest migration version: %v", err)
@@ -147,7 +151,11 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 
 	ranUp := false
 	if currentVersion > targetVersion {
-		log.Printf("Detected rollback: DB is at version %d, this image's latest migration is %d. Migrating down...", currentVersion, targetVersion)
+		log.Printf("Detected rollback: DB is at version %d, this image's latest migration is %d.", currentVersion, targetVersion)
+		if !*autoDown {
+			log.Fatalf("Refusing to auto-migrate down (destructive) without -auto-down. Re-run with -auto-down to roll back automatically, or use -steps/-down for an explicit, manual rollback.")
+		}
+		log.Println("Migrating down...")
 		if err := runner.Migrate(targetVersion); err != nil {
 			log.Fatalf("Failed to roll back migrations: %v", err)
 		}
