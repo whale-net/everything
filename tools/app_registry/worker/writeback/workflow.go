@@ -56,6 +56,10 @@ const TaskQueue = "app-registry-writeback"
 const (
 	ActivityRenderEnvironmentState = "RenderEnvironmentState"
 	ActivityPublish                = "Publish"
+	// ActivityRecordWritebackResult persists Publish's result (Location,
+	// CommitSHA) onto the promotion's writeback_outbox row -- FR7a, issue
+	// #1029. See worker/writeback/record.go's Recorder.
+	ActivityRecordWritebackResult = "RecordWritebackResult"
 )
 
 // WritebackInput is WritebackWorkflow's single argument -- everything an
@@ -131,6 +135,14 @@ type PublishResult struct {
 	// state_hash no-op detection ARCHITECTURE.md commits the real
 	// implementation to inheriting.
 	Skipped bool
+	// CommitSHA is the git commit SHA GitOpsActivities.Publish produced by
+	// pushing to the gitops repo -- FR7a, issue #1029. Empty when no real
+	// commit was made: the Skipped no-op case, or StubActivities' no-git
+	// dev/test path, which never commits anything at all. Never a
+	// stand-in/synthetic value -- see RecordWritebackResult
+	// (worker/writeback/record.go), which persists this onto
+	// writeback_outbox.commit_sha.
+	CommitSHA string
 }
 
 // Writeback is the activity interface WritebackWorkflow drives. Every

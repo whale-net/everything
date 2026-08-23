@@ -53,10 +53,14 @@ type state struct {
 	// 009, issue #575): a key reused across two different RPCs must resolve
 	// each method independently, never let one replay the other's response.
 	Idempotency     map[string]map[string]idemEntry
-	Environments    map[string]repository.Environment     // keyed by environment_id
-	Promotions      map[string]repository.Promotion       // keyed by promotion_id
-	PromotionEvents map[string]repository.PromotionEvent  // keyed by event_id
-	WritebackOutbox map[string]repository.WritebackOutbox // keyed by outbox_id
+	Environments    map[string]repository.Environment    // keyed by environment_id
+	Promotions      map[string]repository.Promotion      // keyed by promotion_id
+	PromotionEvents map[string]repository.PromotionEvent // keyed by event_id
+	// PromotionSyncEvents mirrors `promotion_sync_event` (migration 020,
+	// issue #1028), keyed by sync_event_id -- the same flat, append-only
+	// shape as PromotionEvents.
+	PromotionSyncEvents map[string]repository.PromotionSyncEvent
+	WritebackOutbox     map[string]repository.WritebackOutbox // keyed by outbox_id
 	// DomainAdoption mirrors the `domain_adoption` table, keyed by domain.
 	// Absent means DomainAdoptionStageObserve -- see
 	// DomainAdoptionRepository.GetStage's doc comment.
@@ -93,20 +97,21 @@ type state struct {
 
 func newState() *state {
 	return &state{
-		Apps:              map[string]repository.App{},
-		Charts:            map[string]repository.Chart{},
-		Builds:            map[string]repository.Build{},
-		Artifacts:         map[string]repository.Artifact{},
-		Idempotency:       map[string]map[string]idemEntry{},
-		Environments:      map[string]repository.Environment{},
-		Promotions:        map[string]repository.Promotion{},
-		PromotionEvents:   map[string]repository.PromotionEvent{},
-		WritebackOutbox:   map[string]repository.WritebackOutbox{},
-		DomainAdoption:    map[string]repository.DomainAdoptionStage{},
-		ReconcileRuns:     map[string]repository.ReconcileRun{},
-		ReleaseRuns:       map[string]repository.ReleaseRun{},
-		ReleaseRunTargets: map[string]repository.ReleaseRunTarget{},
-		AppBuildLogs:      map[string]repository.AppBuildLog{},
+		Apps:                map[string]repository.App{},
+		Charts:              map[string]repository.Chart{},
+		Builds:              map[string]repository.Build{},
+		Artifacts:           map[string]repository.Artifact{},
+		Idempotency:         map[string]map[string]idemEntry{},
+		Environments:        map[string]repository.Environment{},
+		Promotions:          map[string]repository.Promotion{},
+		PromotionEvents:     map[string]repository.PromotionEvent{},
+		PromotionSyncEvents: map[string]repository.PromotionSyncEvent{},
+		WritebackOutbox:     map[string]repository.WritebackOutbox{},
+		DomainAdoption:      map[string]repository.DomainAdoptionStage{},
+		ReconcileRuns:       map[string]repository.ReconcileRun{},
+		ReleaseRuns:         map[string]repository.ReleaseRun{},
+		ReleaseRunTargets:   map[string]repository.ReleaseRunTarget{},
+		AppBuildLogs:        map[string]repository.AppBuildLog{},
 	}
 }
 
@@ -1681,6 +1686,23 @@ func (f writebackFake) Get(ctx context.Context, outboxID string) (*repository.Wr
 		return nil, repository.ErrNotFound
 	}
 	return &o, nil
+}
+
+// RecordResult implements repository.WritebackRepository.RecordResult
+// (FR7a, issue #1029), mirroring postgres's writebackRepo.RecordResult:
+// matches by promotionID (not outboxID -- see that method's doc comment),
+// and leaves Status/CompletedAt untouched.
+func (f writebackFake) RecordResult(ctx context.Context, outboxID, promotionID, location, commitSHA string) error {
+	for id, o := range f.r.state.WritebackOutbox {
+		if o.PromotionID != promotionID {
+			continue
+		}
+		o.Location = location
+		o.CommitSHA = commitSHA
+		f.r.state.WritebackOutbox[id] = o
+		return nil
+	}
+	return repository.ErrNotFound
 }
 
 func sortPromotions(promotions []repository.Promotion) {

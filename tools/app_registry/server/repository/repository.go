@@ -490,6 +490,20 @@ type PromotionRepository interface {
 	// wrapping ErrInvalidArgument. nextPageToken is "" when there is no next
 	// page.
 	ListEvents(ctx context.Context, filter PromotionEventListFilter, pageSize int32, pageToken string) (events []PromotionEvent, nextPageToken string, err error)
+
+	// RecordSyncEvent appends one row to promotion_sync_event (migration
+	// 020, issue #1028). Append-only, like RecordEvent: never updates or
+	// deletes an existing row (NFR4). e.PromotionID must reference a real
+	// promotion row -- an unknown promotion_id fails with an error wrapping
+	// ErrFailedPrecondition (the FK-violation mapping this package's other
+	// write paths already use, see postgres/errors.go's translatePgError).
+	RecordSyncEvent(ctx context.Context, e PromotionSyncEvent) (*PromotionSyncEvent, error)
+
+	// ListSyncEvents returns every promotion_sync_event row for promotionID,
+	// ordered occurred_at ASC (chronological transition history) -- this is
+	// what the Promotion Details read path walks to compute "current
+	// status" (most recent row) and "terminal outcome".
+	ListSyncEvents(ctx context.Context, promotionID string) ([]PromotionSyncEvent, error)
 }
 
 // WritebackRepository covers `writeback_outbox` (AR-4b) -- see
@@ -529,6 +543,22 @@ type WritebackRepository interface {
 
 	// Get returns a single row by id, for tests and observability.
 	Get(ctx context.Context, outboxID string) (*WritebackOutbox, error)
+
+	// RecordResult persists location/commitSHA (FR7a, issue #1029) onto
+	// the outbox row for promotionID -- what GitOpsActivities.Publish
+	// actually produced, once it has produced it. Called by
+	// RecordWritebackResult (worker/writeback/record.go) immediately after
+	// the Publish activity succeeds, keyed by promotionID (not outboxID:
+	// WritebackWorkflow only carries WritebackInput.PromotionID, not the
+	// outbox row's own id -- see WritebackInput). outboxID is accepted for
+	// callers that already hold it (e.g. a future admin/observability
+	// path) but implementations match the row by promotion_id, which is
+	// unique per promotion (a new promotion row -- and so a new
+	// writeback_outbox row -- is opened on every Promote/Rollback, per
+	// migration 003's SCD2 close-and-open). A distinct write from MarkDone
+	// (which fires when the workflow *starts*, not when Publish
+	// *completes*) -- must not disturb status/completed_at.
+	RecordResult(ctx context.Context, outboxID, promotionID, location, commitSHA string) error
 }
 
 // ReleaseRunRepository covers `release_run` and `release_run_target`

@@ -60,6 +60,10 @@ func (f *fakeStore) Get(ctx context.Context, outboxID string) (*repository.Write
 	panic("not used by Drainer")
 }
 
+func (f *fakeStore) RecordResult(ctx context.Context, outboxID, promotionID, location, commitSHA string) error {
+	panic("not used by Drainer")
+}
+
 var _ repository.WritebackRepository = (*fakeStore)(nil)
 
 func testRow() repository.WritebackOutbox {
