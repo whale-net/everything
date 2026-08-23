@@ -63,6 +63,8 @@ import (
 	"strings"
 	"time"
 
+	"go.temporal.io/sdk/activity"
+
 	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -387,6 +389,30 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		buildID = uuid.NewString()
 	}
 
+	// idempotencyKeyPrefix is passed to every finalize-app/finalize-chart
+	// subprocess call below as --idempotency-key-prefix, so their own
+	// BeginPublish/RecordArtifact idempotency keys
+	// ("<prefix>-<owner>-<kind>-begin"/"-record", releaser.go) are unique
+	// per Temporal execution. Without it (the bug this fixes), releaser.go
+	// falls back to GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT env reads -- absent in
+	// this activity's subprocess environment (same gap #1069/#1090 already
+	// found for other env-var-dependent fallbacks in this same CLI) -- and
+	// lands on the literal placeholder "local-1" every time, for every
+	// worker-invoked release. That's not merely a skip like #1090: since
+	// "local-1" never varies, EVERY app/chart finalize going through this
+	// path would collide on the exact same idempotency key, and the
+	// registry's idempotent-replay contract means the second-ever such
+	// call replays the FIRST one's cached response instead of recording
+	// the real new version -- a silent stale-data write, not just a
+	// missed one. RunID (not WorkflowExecution.ID -- see #1084's fix in
+	// plan.go's ResolvePlan for why) is unique per execution and stable
+	// across this activity's own at-least-once retries, exactly the
+	// property an idempotency-key prefix needs.
+	idempotencyKeyPrefix := ""
+	if info := activity.GetInfo(ctx); info.WorkflowExecution.RunID != "" {
+		idempotencyKeyPrefix = info.WorkflowExecution.RunID
+	}
+
 	var ghcrToken string
 	if nonCLIAppCount > 0 {
 		// A GitHub App installation token cannot write to organization-owned
@@ -459,6 +485,9 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		}
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
+		}
+		if idempotencyKeyPrefix != "" {
+			args = append(args, "--idempotency-key-prefix", idempotencyKeyPrefix)
 		}
 		if _, err := runReleaseHelper(ctx, binary, tmpDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
 			detail := fmt.Sprintf("%s: finalize-app: %v", fullName, err)
@@ -582,6 +611,9 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		}
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
+		}
+		if idempotencyKeyPrefix != "" {
+			args = append(args, "--idempotency-key-prefix", idempotencyKeyPrefix)
 		}
 		if _, err := runReleaseHelper(ctx, binary, tmpDir, chartEnv, args...); err != nil {
 			detail := fmt.Sprintf("%s: finalize-chart: %v", fullName, err)

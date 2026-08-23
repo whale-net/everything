@@ -9,13 +9,37 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/testsuite"
+
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
+
+// runFinalizePublish executes a.FinalizePublish through a real Temporal
+// activity environment rather than calling it directly with
+// context.Background(): FinalizePublish calls activity.GetInfo(ctx) (for
+// finalize-app/finalize-chart's --idempotency-key-prefix), which panics
+// outside a real activity context -- mirrors plan_test.go's
+// runResolvePlan, the SDK's own way to unit test an activity method that
+// does this.
+func runFinalizePublish(t *testing.T, a *Activities, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
+	t.Helper()
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(a.FinalizePublish)
+	val, err := env.ExecuteActivity(a.FinalizePublish, plan, ref)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	var result FinalizeResult
+	require.NoError(t, val.Get(&result))
+	return result, nil
+}
 
 // zipDir builds a zip archive (the format GitHub's artifact download
 // endpoint returns) from a map of relative-path -> file content, mirroring
@@ -135,6 +159,33 @@ exit 0
 `)
 }
 
+// fakeFinalizeAppScriptCapturingArgs is fakeFinalizeAppScript's twin, but
+// additionally dumps every arg it was invoked with to argsFile (one per
+// line, mirroring plan_test.go's writeFakePlanBinary) -- for tests that
+// need to assert on flags this activity passes through
+// (--idempotency-key-prefix, --build-id) rather than just on the
+// resulting FinalizeResult.
+func fakeFinalizeAppScriptCapturingArgs(argsFile string) []byte {
+	return []byte(fmt.Sprintf(`#!/bin/sh
+for a in "$@"; do printf '%%s\n' "$a"; done > %q
+domain=""; app=""; version=""; outdir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --domain) domain="$2"; shift 2;;
+    --app) app="$2"; shift 2;;
+    --version) version="$2"; shift 2;;
+    --output-dir) outdir="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+if [ -n "$outdir" ]; then
+  mkdir -p "$outdir"
+  printf '{"effective_version":"%%s"}' "$version" > "$outdir/$domain-$app.json"
+fi
+exit 0
+`, argsFile))
+}
+
 func TestPlanBuildID_ExtractsFieldOrEmpty(t *testing.T) {
 	require.Equal(t, "", planBuildID(nil))
 	require.Equal(t, "", planBuildID([]byte("not json")))
@@ -181,9 +232,75 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds(t *testing.T) {
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err, "WorkspaceRoot unset must not hard-fail -- FinalizePublish needs no git checkout at all")
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
+}
+
+// TestActivities_FinalizePublish_PassesIdempotencyKeyPrefixToFinalizeApp is
+// the direct regression test for a latent bug found while auditing #1069/
+// #1090's own bug class: finalize-app/finalize-chart never received
+// --idempotency-key-prefix from this activity. Without it,
+// tools/release_helper_go/cmd/releaser.go's ExecuteRelease falls back to
+// GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT env reads -- absent in this activity's
+// subprocess environment, same gap as #1069/#1090 -- landing on the
+// literal placeholder "local-1" every single time. Unlike #1090 (a
+// silently skipped read), that's a write-path risk: since the prefix
+// never varies, every app/chart finalized through this path would
+// collide on the exact same BeginPublish/RecordArtifact idempotency key,
+// and the registry's idempotent-replay contract means the second-ever
+// such call would replay the FIRST one's cached response instead of
+// recording the real new version. Confirmed empty in prod
+// (data.idempotency_key has zero rows matching "local-1-%") only because
+// no real image/chart release has yet reached this path successfully via
+// the Temporal worker -- this fixes it before it does.
+func TestActivities_FinalizePublish_PassesIdempotencyKeyPrefixToFinalizeApp(t *testing.T) {
+	appManifest := `{"domain":"demo","app":"widget","full_name":"demo-widget","repository":"ghcr.io/whale-net/demo-widget","digest":"sha256:aaa"}`
+	buildManifestZip := zipDir(t, map[string]string{"demo-widget.json": appManifest})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/runs/42/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"artifacts":[{"id":7,"name":"build-manifest","expired":false}]}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/artifacts/7/zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(buildManifestZip)
+	})
+
+	binDir := t.TempDir()
+	bin := filepath.Join(binDir, "fake-release-helper-go")
+	argsFile := filepath.Join(binDir, "args.txt")
+	require.NoError(t, os.WriteFile(bin, fakeFinalizeAppScriptCapturingArgs(argsFile), 0o755))
+
+	a := &Activities{
+		GitHub:         newTestDispatcher(t, mux),
+		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
+	}
+
+	plan := ResolvedPlan{
+		ReleaseRunID: "release-run-1",
+		Versions:     map[string]string{"image:demo-widget": "v1.2.3"},
+		// RawJSON deliberately empty, matching real prod (#1090) -- proves
+		// the idempotency-key-prefix comes from the Temporal activity's own
+		// RunID, not from anything plan-derived.
+	}
+	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
+
+	result, err := runFinalizePublish(t, a, plan, ref)
+	require.NoError(t, err)
+	require.True(t, result.Succeeded, "detail: %s", result.Detail)
+
+	argsBytes, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	joined := strings.Join(strings.Split(strings.TrimRight(string(argsBytes), "\n"), "\n"), " ")
+	require.Contains(t, joined, "--idempotency-key-prefix default-test-run-id",
+		"must key on the Temporal WorkflowExecution run id (unique per execution), the same fix #1084 already applied to ResolvePlan")
+	require.NotContains(t, joined, "local-1",
+		"must never fall through to release_helper_go's own GITHUB_RUN_ID-absent placeholder -- every app/chart finalized this way would collide on the same idempotency key")
 }
 
 // TestActivities_FinalizePublish_NoGHCRToken_FailsBatch is the regression
@@ -220,7 +337,7 @@ func TestActivities_FinalizePublish_NoGHCRToken_FailsBatch(t *testing.T) {
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	_, err := a.FinalizePublish(context.Background(), plan, ref)
+	_, err := runFinalizePublish(t, a, plan, ref)
 	require.ErrorContains(t, err, "GHCR token not configured")
 }
 
@@ -291,7 +408,7 @@ func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err, "an all-CLI batch must not require a build-manifest artifact or a GHCR token")
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
 	require.Contains(t, uploader.uploads, "release_helper_go/v1.2.3/checksums.txt")
@@ -402,7 +519,7 @@ exit 0
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
 
@@ -478,7 +595,7 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *te
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.True(t, result.Succeeded, "a missing bookkeeping result file must not be reported as a finalize failure, detail: %s", result.Detail)
 	require.Empty(t, result.Detail)
@@ -577,7 +694,7 @@ exit 0
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.True(t, result.Succeeded, "a missing bookkeeping result file must not be reported as a finalize failure, detail: %s", result.Detail)
 
@@ -630,7 +747,7 @@ func TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget(t *tes
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.False(t, result.Succeeded)
 
@@ -685,7 +802,7 @@ exit 0
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.False(t, result.Succeeded)
 
@@ -758,7 +875,7 @@ exit 0
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err, "detail: %s", result.Detail)
 	require.True(t, result.Succeeded, "a no-op rebuild reusing an older chart version is a legitimate success, detail: %s", result.Detail)
 
