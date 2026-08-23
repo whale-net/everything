@@ -29,6 +29,7 @@ cold; this file only indexes where things live.
 | [design/CONCEPTS_AUDIT.md](design/CONCEPTS_AUDIT.md) | Before building any wireframe screen for real — which UI concepts have no backing RPC/CLI today, are schema-only, or are out of this API's scope entirely |
 | [design/wireframes/](design/wireframes/README.md) | Iterating on the admin UI wireframes themselves (`bazel run //tools/wireframe`) |
 | [design/USER_JOURNEYS_2026-08-23.md](design/USER_JOURNEYS_2026-08-23.md) | Prioritizing UI fixes — point-in-time usability findings from 10 simulated personas playtesting the shipped UI live in local Tilt via Playwright. Cross-cutting bugs (nav hijacking, Apps Catalog/app-detail disagreement, drift-vs-sync-status contradiction) ranked by how many independent personas hit them, plus what's working. A dated snapshot, not a living doc — see [design/USER_JOURNEYS_2026-08-23_TRANSCRIPTS.md](design/USER_JOURNEYS_2026-08-23_TRANSCRIPTS.md) for the full per-persona transcripts behind it |
+| [design/USER_JOURNEYS_2026-08-23_WAVE2.md](design/USER_JOURNEYS_2026-08-23_WAVE2.md) | Same exercise, a second cohort of 20 more personas (mobile, keyboard-only/accessibility, edge-case input, compliance export, ArgoCD comparison, and more) — **read this before wave 1** if you're about to act on wave 1's nav-hijacking finding, since wave 2 surfaces a shared-test-session artifact that likely explains most of it. See [design/USER_JOURNEYS_2026-08-23_WAVE2_TRANSCRIPTS.md](design/USER_JOURNEYS_2026-08-23_WAVE2_TRANSCRIPTS.md) for the full transcripts |
 
 ## Components
 
