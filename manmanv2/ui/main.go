@@ -217,27 +217,9 @@ func main() {
 	}
 }
 
-// withAccessToken wraps a protected handler to inject the user's access token
-// into the request context for gRPC forwarding. If the token is unavailable or
-// expired, the user is redirected to re-authenticate. HTMX partial requests
-// receive an HX-Redirect header so the full page reloads to the login URL.
-func (app *App) withAccessToken(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token, err := app.auth.GetAccessToken(r)
-		if err != nil {
-			loginURL := fmt.Sprintf("/auth/login?next=%s", r.URL.RequestURI())
-			if r.Header.Get("HX-Request") == "true" {
-				w.Header().Set("HX-Redirect", loginURL)
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			http.Redirect(w, r, loginURL, http.StatusSeeOther)
-			return
-		}
-		r = r.WithContext(grpcauth.WithUserToken(r.Context(), token))
-		next(w, r)
-	}
-}
+// Note: withAccessToken was hoisted to htmxauth.Authenticator.WithAccessToken
+// (convergence spike, #998 FR9 point 1) — it was byte-for-byte identical to
+// tools/app_registry/ui's copy. Call sites use app.auth.WithAccessToken.
 
 func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Public routes
@@ -248,72 +230,72 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/logout", app.auth.HandleLogout)
 
 	// Server selection endpoint
-	mux.HandleFunc("/select-server", app.auth.RequireAuthFunc(app.withAccessToken(app.handleSelectServer)))
+	mux.HandleFunc("/select-server", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSelectServer)))
 
 	// Protected routes - Home/Dashboard
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleHome)))
-	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.withAccessToken(app.handleSessions)))
-	mux.HandleFunc("/sessions/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleSessionDetail)))
-	mux.HandleFunc("/sessions/start", app.auth.RequireAuthFunc(app.withAccessToken(app.handleSessionStart)))
-	mux.HandleFunc("/api/sessions/check-active", app.auth.RequireAuthFunc(app.withAccessToken(app.handleCheckActiveSession)))
-	mux.HandleFunc("/api/sessions/historical-logs", app.auth.RequireAuthFunc(app.withAccessToken(app.handleHistoricalLogs)))
-	mux.HandleFunc("/api/sessions/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleSessionStdin)))
+	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
+	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessions)))
+	mux.HandleFunc("/sessions/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
+	mux.HandleFunc("/sessions/start", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionStart)))
+	mux.HandleFunc("/api/sessions/check-active", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCheckActiveSession)))
+	mux.HandleFunc("/api/sessions/historical-logs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHistoricalLogs)))
+	mux.HandleFunc("/api/sessions/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionStdin)))
 
 	// Note: Log streaming endpoint is handled by handleSessionDetail which routes to handleSessionLogsStream
 
 	// Protected routes - Games
-	mux.HandleFunc("/games", app.auth.RequireAuthFunc(app.withAccessToken(app.handleGames)))
-	mux.HandleFunc("/games/new", app.auth.RequireAuthFunc(app.withAccessToken(app.handleGameNew)))
-	mux.HandleFunc("/games/create", app.auth.RequireAuthFunc(app.withAccessToken(app.handleGameCreate)))
-	mux.HandleFunc("/games/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleGameDetail)))
+	mux.HandleFunc("/games", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGames)))
+	mux.HandleFunc("/games/new", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGameNew)))
+	mux.HandleFunc("/games/create", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGameCreate)))
+	mux.HandleFunc("/games/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleGameDetail)))
 
 	// Note: Config routes are handled within handleGameDetail based on URL parsing
 	// Note: Action management routes are also handled within handleGameDetail and handleGameConfigDetail
 
 	// Documentation routes
-	mux.HandleFunc("/docs/config-strategies", app.auth.RequireAuthFunc(app.withAccessToken(app.handleConfigStrategiesDocs)))
+	mux.HandleFunc("/docs/config-strategies", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleConfigStrategiesDocs)))
 
 	// Protected routes - Servers
-	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.withAccessToken(app.handleServers)))
-	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleServerDetail)))
+	mux.HandleFunc("/servers", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServers)))
+	mux.HandleFunc("/servers/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleServerDetail)))
 
 	// Protected routes - Workshop
-	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.withAccessToken(app.handleWorkshopLibrary)))
-	mux.HandleFunc("/workshop/search", app.auth.RequireAuthFunc(app.withAccessToken(app.handleWorkshopSearch)))
-	mux.HandleFunc("/workshop/addon", app.auth.RequireAuthFunc(app.withAccessToken(app.handleWorkshopAddonDetail)))
-	mux.HandleFunc("/workshop/library-detail", app.auth.RequireAuthFunc(app.withAccessToken(app.handleLibraryDetail)))
-	mux.HandleFunc("/workshop/create-library", app.auth.RequireAuthFunc(app.withAccessToken(app.handleCreateLibrary)))
-	mux.HandleFunc("/workshop/delete-library", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDeleteLibrary)))
-	mux.HandleFunc("/workshop/add-addon-to-library", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAddAddonToLibrary)))
-	mux.HandleFunc("/workshop/remove-addon-from-library", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRemoveAddonFromLibrary)))
-	mux.HandleFunc("/workshop/add-library-reference", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAddLibraryReference)))
-	mux.HandleFunc("/workshop/remove-library-reference", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRemoveLibraryReference)))
-	mux.HandleFunc("/workshop/installations", app.auth.RequireAuthFunc(app.withAccessToken(app.handleWorkshopInstallations)))
-	mux.HandleFunc("/workshop/install", app.auth.RequireAuthFunc(app.withAccessToken(app.handleInstallAddon)))
-	mux.HandleFunc("/workshop/remove", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRemoveInstallation)))
-	mux.HandleFunc("/workshop/reset", app.auth.RequireAuthFunc(app.withAccessToken(app.handleResetInstallation)))
-	mux.HandleFunc("/workshop/fetch-metadata", app.auth.RequireAuthFunc(app.withAccessToken(app.handleFetchAddonMetadata)))
-	mux.HandleFunc("/workshop/create-addon", app.auth.RequireAuthFunc(app.withAccessToken(app.handleCreateAddon)))
-	mux.HandleFunc("/workshop/update-addon-details", app.auth.RequireAuthFunc(app.withAccessToken(app.handleUpdateAddonDetails)))
-	mux.HandleFunc("/workshop/update-library", app.auth.RequireAuthFunc(app.withAccessToken(app.handleUpdateLibrary)))
-	mux.HandleFunc("/workshop/delete-addon", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDeleteAddon)))
-	mux.HandleFunc("/workshop/api/available-addons", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAvailableAddons)))
-	mux.HandleFunc("/workshop/api/available-libraries", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAvailableLibraries)))
-	mux.HandleFunc("/workshop/api/presets-for-game", app.auth.RequireAuthFunc(app.withAccessToken(app.handlePresetsForGame)))
+	mux.HandleFunc("/workshop/library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopLibrary)))
+	mux.HandleFunc("/workshop/search", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopSearch)))
+	mux.HandleFunc("/workshop/addon", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopAddonDetail)))
+	mux.HandleFunc("/workshop/library-detail", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleLibraryDetail)))
+	mux.HandleFunc("/workshop/create-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCreateLibrary)))
+	mux.HandleFunc("/workshop/delete-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeleteLibrary)))
+	mux.HandleFunc("/workshop/add-addon-to-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAddAddonToLibrary)))
+	mux.HandleFunc("/workshop/remove-addon-from-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRemoveAddonFromLibrary)))
+	mux.HandleFunc("/workshop/add-library-reference", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAddLibraryReference)))
+	mux.HandleFunc("/workshop/remove-library-reference", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRemoveLibraryReference)))
+	mux.HandleFunc("/workshop/installations", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleWorkshopInstallations)))
+	mux.HandleFunc("/workshop/install", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleInstallAddon)))
+	mux.HandleFunc("/workshop/remove", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRemoveInstallation)))
+	mux.HandleFunc("/workshop/reset", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleResetInstallation)))
+	mux.HandleFunc("/workshop/fetch-metadata", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleFetchAddonMetadata)))
+	mux.HandleFunc("/workshop/create-addon", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCreateAddon)))
+	mux.HandleFunc("/workshop/update-addon-details", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleUpdateAddonDetails)))
+	mux.HandleFunc("/workshop/update-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleUpdateLibrary)))
+	mux.HandleFunc("/workshop/delete-addon", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeleteAddon)))
+	mux.HandleFunc("/workshop/api/available-addons", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAvailableAddons)))
+	mux.HandleFunc("/workshop/api/available-libraries", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAvailableLibraries)))
+	mux.HandleFunc("/workshop/api/presets-for-game", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handlePresetsForGame)))
 
 	// Protected routes - SGC detail
-	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleSGCRoutes)))
-	mux.HandleFunc("/sgc/add-library", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAddLibraryToSGC)))
-	mux.HandleFunc("/sgc/remove-library", app.auth.RequireAuthFunc(app.withAccessToken(app.handleSGCRemoveLibrary)))
-	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.withAccessToken(app.handleSGCAvailableLibraries)))
+	mux.HandleFunc("/sgc/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRoutes)))
+	mux.HandleFunc("/sgc/add-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAddLibraryToSGC)))
+	mux.HandleFunc("/sgc/remove-library", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCRemoveLibrary)))
+	mux.HandleFunc("/sgc/api/available-libraries", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSGCAvailableLibraries)))
 
 	// Backup config management
-	mux.HandleFunc("/backup-configs/create", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBackupConfigCreate)))
-	mux.HandleFunc("/backup-configs/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBackupConfigDelete)))
+	mux.HandleFunc("/backup-configs/create", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupConfigCreate)))
+	mux.HandleFunc("/backup-configs/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBackupConfigDelete)))
 
 	// API endpoints for HTMX partial updates
-	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDashboardSummary)))
-	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDashboardSessions)))
+	mux.HandleFunc("/api/dashboard-summary", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboardSummary)))
+	mux.HandleFunc("/api/dashboard-sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboardSessions)))
 }
 // handleSGCRoutes dispatches /sgc/* routes
 func (app *App) handleSGCRoutes(w http.ResponseWriter, r *http.Request) {
