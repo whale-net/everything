@@ -241,7 +241,7 @@ third manifest representation to the two that already disagree.
 
 `AllocateVersion`, `CheckChartHermeticity`, and `RecordArtifact`'s
 prior-`BeginPublish` requirement apply unconditionally to every domain —
-`domain_adoption` (migration `022_drop_domain_adoption`) is dropped, and
+`domain_adoption` (migration `023_drop_domain_adoption`) is dropped, and
 there is no per-domain concept left anywhere in this system. `resolveVersion`
 (`tools/release_helper_go/cmd/registry_version.go`) always calls
 `AllocateVersion` once the registry integration is opted in

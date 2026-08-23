@@ -208,7 +208,6 @@ func TestActivities_ResolvePlan_IdempotencyKeyUsesRunID_NotWorkflowID(t *testing
 		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
 	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"demo-hello-go":"v1.2.4"}}`)
 	a := &Activities{Registry: repo, PlanBinaryPath: bin}
