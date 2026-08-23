@@ -475,6 +475,11 @@ jobs:
       has-specs: ${{ steps.plan.outputs.has_specs || steps.resolved-plan.outputs.has_specs }}
       build-id: ${{ steps.plan.outputs.build_id || steps.resolved-plan.outputs.build_id }}
       versions: ${{ steps.plan.outputs.versions || steps.resolved-plan.outputs.versions }}
+      # Issue #1024/#1055: the same PlanResult JSON as the individual
+      # outputs above, in one blob -- lets build-release-artifacts forward
+      # the whole plan to `release-helper build-release --from-resolved-plan`
+      # verbatim instead of reconstructing it field-by-field in YAML.
+      resolved-plan: ${{ steps.plan.outputs.resolved_plan || steps.resolved-plan.outputs.resolved_plan }}
     steps:
       # Issue #927/#929: when App Registry's Temporal DispatchBuild has
       # already computed the full release plan (the normal case for this
@@ -735,36 +740,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
-      # Push-by-digest only -- no version tag, no "latest", no App
-      # Registry mutation, no git tag. See this job's header comment.
-      - name: Build app images (push by digest)
-        if: ${{ github.event.inputs.dry_run == 'false' && needs.plan-release.outputs.release-matrix != '' }}
+      # Issue #1024/#1055: replaces four separate steps (build-app looped
+      # per app in bash, build-chart, an OpenAPI bazel-build/jq loop, and
+      # package-assets looped per CLI app in bash) with one call into
+      # `release-helper build-release`, which does that looping/dispatch in
+      # Go instead -- see tools/release_helper_go/cmd/build_release.go's
+      # ExecuteBuildReleaseArtifacts. Each artifact type's own "should I
+      # build this" gating (dry-run, has-specs, app-presence, an empty
+      # charts list) now lives in that Go code, driven off the resolved
+      # plan below, rather than as per-step YAML `if:` conditions -- this
+      # job's own `if:` above still gates whether the job runs at all. This
+      # CLI stays behind the same push-by-digest-only / no-final-version /
+      # no-ChartMuseum-upload boundary described in this job's header
+      # comment; ExecuteBuildReleaseArtifacts calls the exact same
+      # ExecuteBuildApp/ExecuteBuildCharts/PackageAppAssets primitives the
+      # former per-type steps did.
+      - name: Build release artifacts
         env:
-          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+          RESOLVED_PLAN: ${{ needs.plan-release.outputs.resolved-plan }}
           BUILD_SHA: ${{ github.event.inputs.build_ref || github.sha }}
         run: |
-          mkdir -p /tmp/build-manifest/apps
-
-          echo "$RELEASE_MATRIX" | jq -c '.include[]' | while read -r item; do
-            DOMAIN=$(echo "$item" | jq -r '.domain')
-            APP=$(echo "$item" | jq -r '.app')
-
-            echo "=========================================="
-            echo "Building application: ${DOMAIN}-${APP} (build tag: ${BUILD_SHA})"
-            echo "=========================================="
-
-            "$RELEASE_HELPER" build-app --domain "$DOMAIN" --app "$APP" --git-sha "$BUILD_SHA" --output-dir /tmp/build-manifest/apps
-          done
-
-      # Composes each chart's source tree only -- no `helm package`, no
-      # final version, no ChartMuseum upload. See this job's header
-      # comment.
-      - name: Build chart source trees
-        if: ${{ github.event.inputs.helm_charts != '' }}
-        run: |
-          ARGS=(build-chart --charts "${{ github.event.inputs.helm_charts }}" --output-dir /tmp/build-manifest/charts)
-          [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
-          "$RELEASE_HELPER" "${ARGS[@]}"
+          "$RELEASE_HELPER" build-release \
+            --from-resolved-plan "$RESOLVED_PLAN" \
+            --git-sha "$BUILD_SHA" \
+            --dry-run="${{ github.event.inputs.dry_run }}"
 
       - name: Upload build manifest artifact
         if: ${{ github.event.inputs.dry_run == 'false' }}
@@ -782,36 +781,6 @@ jobs:
           path: /tmp/build-manifest/charts/
           if-no-files-found: ignore
 
-      # Folded in from the former build-openapi-specs job (issue #1024).
-      # Issue #986 (FR21/FR22 of #979): reviewed -- only `bazel build`s each
-      # OpenAPI spec target and uploads the resulting JSON as a workflow
-      # artifact. No App Registry call, no publish, no versioned side
-      # effect. Clean.
-      - name: Build OpenAPI specs
-        if: ${{ needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false' }}
-        env:
-          OPENAPI_MATRIX: ${{ needs.plan-release.outputs.openapi-matrix }}
-        run: |
-          mkdir -p /tmp/openapi-specs
-          BAZEL_BIN=$(bazel info bazel-bin --config=ci-images)
-
-          echo "$OPENAPI_MATRIX" | jq -c '.include[]' | while read -r item; do
-            TARGET=$(echo "$item" | jq -r '.openapi_target')
-            DOMAIN=$(echo "$item" | jq -r '.domain')
-            APP=$(echo "$item" | jq -r '.app')
-
-            echo "Building OpenAPI spec for ${DOMAIN}-${APP} (target: $TARGET)..."
-            bazel build --config=ci-images "$TARGET"
-
-            TARGET_PATH="${TARGET#@@//}"
-            TARGET_PATH="${TARGET_PATH#//}"
-            TARGET_DIR=$(echo "$TARGET_PATH" | sed 's#:#/#' | sed 's#/[^/]*$##')
-            SPEC_FILE="${BAZEL_BIN}/${TARGET_DIR}/${DOMAIN}-${APP}_openapi_spec.json"
-            [[ ! -f "$SPEC_FILE" ]] && SPEC_FILE="${BAZEL_BIN}/$(echo "$TARGET_PATH" | sed 's#:#/#').json"
-
-            cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}_openapi_spec.json"
-          done
-
       - name: Upload OpenAPI spec artifact
         if: ${{ needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false' }}
         uses: actions/upload-artifact@v7
@@ -819,50 +788,6 @@ jobs:
           name: openapi-specs
           path: /tmp/openapi-specs/*.json
           if-no-files-found: ignore
-
-      # Folded in from the former build-cli-binaries job (issue #1024).
-      # FR7 of #979: cross-compiles release_helper_go/app-registry (only,
-      # not every cli app) for all four supported CLI platforms and stages
-      # them as a build-scoped `cli-binaries` workflow artifact, distinct
-      # from the `release-tools` artifact build-release-tools produces
-      # above (that one is this-run's-host-platform only, meant for
-      # downstream jobs in *this* run to exec; this one is multi-platform
-      # and meant for Temporal's FinalizePublish to later download and
-      # publish to S3 once a version is confirmed -- see issue #981). This
-      # step assigns no final version and performs no S3 upload itself
-      # (FR9/FR10's job, done later once FinalizePublish knows the
-      # confirmed EffectiveVersion).
-      #
-      # Only package whichever of the two apps is actually present in this
-      # run's release matrix -- this step's own `if:` below only
-      # guarantees at least one of them is; a run releasing just one must
-      # not fail trying to package-assets the other (resolveApps would
-      # error on an app name absent from this run's plan). package-assets
-      # takes the full name ("tools-<app>") -- resolveApps only matches
-      # full names and domain sweeps, not bare app names, since a bare
-      # name can collide with an unrelated same-named domain (e.g.
-      # "app-registry" is both this CLI's bare name and the app-registry
-      # domain).
-      - name: Package CLI binaries (multi-platform)
-        if: |
-          github.event.inputs.dry_run == 'false' &&
-          needs.plan-release.outputs.release-matrix != '' &&
-          (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
-           contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"'))
-        env:
-          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
-        run: |
-          mkdir -p /tmp/cli-binaries
-          for APP_NAME in release_helper_go app-registry; do
-            if echo "$RELEASE_MATRIX" | jq -e --arg app "$APP_NAME" '.include[] | select(.app == $app)' >/dev/null; then
-              echo "Packaging CLI binaries for ${APP_NAME} (linux_amd64, linux_arm64, darwin_arm64, darwin_amd64)..."
-              "$RELEASE_HELPER" package-assets "tools-${APP_NAME}" \
-                --platforms linux_amd64,linux_arm64,darwin_arm64,darwin_amd64 \
-                --output-dir "/tmp/cli-binaries/${APP_NAME}"
-            else
-              echo "${APP_NAME} not in this run's release matrix, skipping."
-            fi
-          done
 
       - name: Upload CLI binaries artifact
         if: |
