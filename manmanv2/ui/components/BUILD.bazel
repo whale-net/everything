@@ -6,7 +6,7 @@ templ_library(
     visibility = ["//manmanv2/ui:__subpackages__"],
     deps = [
         "//libs/go/htmxauth",
-        "//libs/go/htmxbase",
+        "//libs/go/htmxui",
         "//manmanv2/protos:manmanpb",
     ],
 )
