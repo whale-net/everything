@@ -251,18 +251,22 @@ func digestShort(digest string) string {
 // visually distinct (its own card, its own heading, no version-history link
 // inline) from the "Version history" button up in AppDetail's header
 // (FR-21 link). Each row links to the Promotion Details page (issue
-// #1032) via PromotionEvent.promotion_id, for FR7's full lifecycle view.
+// #1032) via PromotionEvent.promotion_id, for FR7's full lifecycle view,
+// and (Story 3) shows the inline sync/health outcome badge for that same
+// promotion when data.SyncOutcomes has an entry for it.
 //
-// Story 3's inline sync/health badge is deliberately NOT added to this
-// timeline yet, unlike the details-page link above: ListPromotionEvents
-// carries no sync/health data of its own (that's #1028's
-// promotion_sync_event, joined per-promotion by GetPromotionDetails), so
-// showing it here needs either a widened list RPC or N per-row
-// GetPromotionDetails lookups -- a data-plumbing/performance decision
-// (batch vs sequential, error handling per row) left for the
-// Implementation phase, mirroring handleReleaseStatus's own
-// polling-deferral precedent (handlers_release.go) for "defer the part
-// that needs a real design decision, ship the plain-read part now".
+// SyncOutcomes is populated by apps_data.go's buildAppDetail via
+// fetchPromotionSyncOutcomes -- N per-row GetPromotionDetails calls fanned
+// out concurrently (mirroring fetchArtifactsByID's exact precedent in
+// artifact_lookup.go), NOT a widened ListPromotionEvents. Widening that
+// RPC to carry sync/health data would touch every other consumer (the
+// CLI, any future screen using ListPromotionEvents) for a badge only this
+// one timeline needs today; per-row fanout keeps the change local to this
+// screen. This is a documented, deliberately un-generalized trade-off
+// (issue #1032): fine for one app's own bounded promotion history, not
+// something this page's approach claims to solve for an arbitrarily large
+// list view. A missing/failed lookup simply omits the badge for that row
+// -- never a false "Unknown".
 templ promotionTimelineCard(user *htmxauth.UserInfo, data *matrix.AppDetailData) {
 	<div class="card bg-base-100 shadow-md">
 		<div class="card-body">
@@ -286,6 +290,9 @@ templ promotionTimelineCard(user *htmxauth.UserInfo, data *matrix.AppDetailData)
 								{ promotionActionLabel(e.GetAction()) } — { actorDisplay(user, e.GetActor()) }
 								if e.GetReason() != "" {
 									, "{ e.GetReason() }"
+								}
+								if outcome := data.SyncOutcomes[e.GetPromotionId()]; outcome != nil {
+									<span class="ml-1">@components.PromotionSyncOutcomeBadge(outcome.GetOutcome())</span>
 								}
 								if e.GetPromotionId() != "" {
 									<a href={ templ.URL("/promotions/" + e.GetPromotionId()) } class="link font-mono text-xs ml-1">details</a>

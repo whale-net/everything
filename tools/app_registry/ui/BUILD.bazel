@@ -27,6 +27,7 @@ go_library(
         "handlers_release.go",
         "handlers_rollback.go",
         "main.go",
+        "promotion_sync_outcome_data.go",
         "release_scope.go",
         "templ_render.go",
     ],

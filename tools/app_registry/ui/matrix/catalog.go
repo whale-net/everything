@@ -89,4 +89,13 @@ type AppDetailData struct {
 
 	Events    []*pb.PromotionEvent
 	EventsErr error
+
+	// SyncOutcomes is Story 3's inline sync/health badge data (issue
+	// #1032), keyed by promotion_id -- one entry per Events row that
+	// resolved successfully via fetchPromotionSyncOutcomes'
+	// best-effort fanout. A missing entry (failed lookup, or the
+	// worker hasn't observed any ArgoCD sync/health state for that
+	// promotion yet) means promotionTimelineCard omits the badge for
+	// that row entirely, never rendering a false "Unknown".
+	SyncOutcomes map[string]*pb.PromotionDetails
 }
