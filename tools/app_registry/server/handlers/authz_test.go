@@ -573,4 +573,19 @@ func TestPromotionReads_Public(t *testing.T) {
 			t.Fatalf("expected unauthenticated access to list promotion events, got %v", err)
 		}
 	})
+
+	// GetPromotionDetails (FR9, issue #1031): no promotion exists for
+	// "nonexistent" in this fixture, so both calls fail downstream with
+	// NotFound -- that NotFound (not Unauthenticated/PermissionDenied) is
+	// exactly how we know auth never blocked either call, mirroring
+	// TestPromote_Authorization's "fails downstream" pattern above.
+	t.Run("GetPromotionDetails", func(t *testing.T) {
+		detailsReq := &pb.GetPromotionDetailsRequest{PromotionId: "nonexistent"}
+		if _, err := srv.GetPromotionDetails(readerCtx, detailsReq); status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.PermissionDenied {
+			t.Fatalf("expected authenticated principal to pass authorization for GetPromotionDetails, got %v", err)
+		}
+		if _, err := srv.GetPromotionDetails(context.Background(), detailsReq); status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.PermissionDenied {
+			t.Fatalf("expected unauthenticated access to pass authorization for GetPromotionDetails, got %v", err)
+		}
+	})
 }

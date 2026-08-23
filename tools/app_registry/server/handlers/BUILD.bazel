@@ -48,6 +48,7 @@ go_test(
         "environment_test.go",
         "list_builds_test.go",
         "list_pagination_test.go",
+        "promotion_details_test.go",
         "promotion_test.go",
         "release_test.go",
         "resolve_binary_url_test.go",

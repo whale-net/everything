@@ -504,6 +504,12 @@ type PromotionRepository interface {
 	// what the Promotion Details read path walks to compute "current
 	// status" (most recent row) and "terminal outcome".
 	ListSyncEvents(ctx context.Context, promotionID string) ([]PromotionSyncEvent, error)
+
+	// GetDetails assembles one promotion's full lifecycle (FR7-FR9, issue
+	// #1031) -- see PromotionDetails' doc comment for the join this
+	// composes. Returns ErrNotFound when promotionID does not reference a
+	// real promotion row.
+	GetDetails(ctx context.Context, promotionID string) (*PromotionDetails, error)
 }
 
 // WritebackRepository covers `writeback_outbox` (AR-4b) -- see

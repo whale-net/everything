@@ -440,6 +440,63 @@ func promotionEventsToPB(events []repository.PromotionEvent) []*pb.PromotionEven
 	return out
 }
 
+func promotionSyncOutcomeToPB(o repository.PromotionSyncOutcome) pb.PromotionSyncOutcome {
+	switch o {
+	case repository.PromotionSyncOutcomePending:
+		return pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_PENDING
+	case repository.PromotionSyncOutcomeSyncedHealthy:
+		return pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY
+	case repository.PromotionSyncOutcomeSyncFailed:
+		return pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNC_FAILED
+	default:
+		return pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_UNSPECIFIED
+	}
+}
+
+func promotionSyncEventToPB(e repository.PromotionSyncEvent) *pb.PromotionSyncEvent {
+	return &pb.PromotionSyncEvent{
+		SyncEventId:  e.SyncEventID,
+		PromotionId:  e.PromotionID,
+		Source:       e.Source,
+		SyncStatus:   e.SyncStatus,
+		HealthStatus: e.HealthStatus,
+		OccurredAt:   timeToUnix(e.OccurredAt),
+	}
+}
+
+func promotionSyncEventsToPB(events []repository.PromotionSyncEvent) []*pb.PromotionSyncEvent {
+	out := make([]*pb.PromotionSyncEvent, 0, len(events))
+	for _, e := range events {
+		out = append(out, promotionSyncEventToPB(e))
+	}
+	return out
+}
+
+// promotionDetailsToPB translates repository.PromotionDetails (issue
+// #1031) into the wire type. RequestEvent is omitted (nil) rather than a
+// populated-but-empty message when d.RequestEvent.EventID is "" -- the
+// defensive "no creating event found" case GetDetails' doc comment
+// describes, which should not happen in practice (Promote/Rollback always
+// write exactly one event in the same transaction as the promotion row)
+// but is not treated as a hard error either.
+func promotionDetailsToPB(d *repository.PromotionDetails) *pb.PromotionDetails {
+	out := &pb.PromotionDetails{
+		Promotion:           promotionToPB(d.Promotion),
+		FromVersion:         d.FromVersion,
+		ToVersion:           d.ToVersion,
+		WritebackLocation:   d.WritebackLocation,
+		WritebackCommitSha:  d.WritebackCommitSHA,
+		SyncEvents:          promotionSyncEventsToPB(d.SyncEvents),
+		CurrentSyncStatus:   d.CurrentSyncStatus,
+		CurrentHealthStatus: d.CurrentHealthStatus,
+		Outcome:             promotionSyncOutcomeToPB(d.Outcome),
+	}
+	if d.RequestEvent.EventID != "" {
+		out.RequestEvent = promotionEventToPB(d.RequestEvent)
+	}
+	return out
+}
+
 func containedImagesFromPB(images []*pb.ContainedImage) []repository.ContainedImageInput {
 	out := make([]repository.ContainedImageInput, 0, len(images))
 	for _, ci := range images {

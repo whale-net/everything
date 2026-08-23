@@ -533,6 +533,85 @@ const (
 	PromotionSyncEventSourceRetryObserved    = "retry_observed"
 )
 
+// PromotionSyncOutcome is FR8's server-derived, visibly-distinct summary of
+// a PromotionDetails' sync_events -- Go-native mirror of
+// appregistrypb.PromotionSyncOutcome (same convention as every other
+// repository/proto split in this service: this package never imports the
+// proto package). Zero value (PromotionSyncOutcomeUnspecified) must never
+// be returned by GetDetails -- every promotion has a real classification,
+// even a promotion with zero sync_events (PromotionSyncOutcomePending).
+type PromotionSyncOutcome string
+
+const (
+	PromotionSyncOutcomeUnspecified   PromotionSyncOutcome = ""
+	PromotionSyncOutcomePending       PromotionSyncOutcome = "pending"
+	PromotionSyncOutcomeSyncedHealthy PromotionSyncOutcome = "synced_healthy"
+	PromotionSyncOutcomeSyncFailed    PromotionSyncOutcome = "sync_failed"
+)
+
+// PromotionDetails assembles one promotion's full lifecycle (FR7-FR9, issue
+// #1031) for the Promotion Details page: GetDetails composes this by
+// joining promotion -> promotion_event (the creating event) -> artifact
+// (to-version; from-version via the superseded promotion) ->
+// writeback_outbox (#1029's Location/CommitSHA) -> promotion_sync_event
+// (#1028's ListSyncEvents). Go-native types throughout, not proto types --
+// see handlers/convert.go for the promotionDetailsToPB translation this
+// feeds.
+type PromotionDetails struct {
+	Promotion Promotion
+	// RequestEvent is the promote/rollback event that created Promotion --
+	// requester (RequestEvent.Actor) + request time (RequestEvent.OccurredAt).
+	RequestEvent PromotionEvent
+	// FromVersion is "" if this is the target's first-ever promotion (no
+	// prior row to supersede).
+	FromVersion string
+	// ToVersion is Promotion's own artifact.version.
+	ToVersion string
+
+	// WritebackLocation is "" if not yet published.
+	WritebackLocation string
+	// WritebackCommitSHA is "" per FR7a when no real commit was made (the
+	// stub path, or a Skipped no-op) -- never a stand-in/synthetic value.
+	WritebackCommitSHA string
+
+	// SyncEvents is the full chronological history (#1028), oldest first --
+	// see PromotionRepository.ListSyncEvents.
+	SyncEvents []PromotionSyncEvent
+	// CurrentSyncStatus/CurrentHealthStatus mirror the most recent
+	// SyncEvents entry, "" if SyncEvents is empty.
+	CurrentSyncStatus   string
+	CurrentHealthStatus string
+	Outcome             PromotionSyncOutcome
+}
+
+// DerivePromotionSyncOutcome computes PromotionDetails' Outcome/
+// CurrentSyncStatus/CurrentHealthStatus (FR8) from a promotion's full
+// sync_events history, oldest-first (ListSyncEvents' own order) -- the
+// single shared implementation every GetDetails (postgres, fake) calls, so
+// the two backends never derive this classification differently. "Current"
+// is always the LAST entry, terminal or not: if the most recent poll
+// session exhausted its attempts without reaching Synced+Healthy/Degraded
+// (FR5's "still pending" case), that non-terminal pair IS the current
+// status, and the outcome is PENDING -- this method never falls back to
+// scanning further back in history for an earlier terminal observation.
+func DerivePromotionSyncOutcome(events []PromotionSyncEvent) (outcome PromotionSyncOutcome, currentSyncStatus, currentHealthStatus string) {
+	if len(events) == 0 {
+		return PromotionSyncOutcomePending, "", ""
+	}
+	last := events[len(events)-1]
+	currentSyncStatus = last.SyncStatus
+	currentHealthStatus = last.HealthStatus
+	switch {
+	case last.SyncStatus == "Synced" && last.HealthStatus == "Healthy":
+		outcome = PromotionSyncOutcomeSyncedHealthy
+	case last.HealthStatus == "Degraded":
+		outcome = PromotionSyncOutcomeSyncFailed
+	default:
+		outcome = PromotionSyncOutcomePending
+	}
+	return outcome, currentSyncStatus, currentHealthStatus
+}
+
 // PromotionListFilter is ListPromotionsRequest's filter set.
 type PromotionListFilter struct {
 	EnvironmentKey string

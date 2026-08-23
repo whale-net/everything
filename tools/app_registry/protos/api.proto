@@ -128,6 +128,12 @@ service PromotionRegistry {
 
   rpc ListPromotions(ListPromotionsRequest) returns (ListPromotionsResponse);
   rpc ListPromotionEvents(ListPromotionEventsRequest) returns (ListPromotionEventsResponse);
+
+  // Assembles one promotion's full lifecycle (FR7-FR9, issue #1031) for the
+  // Promotion Details page: requester/request time, from/to version,
+  // writeback outcome, and the full ArgoCD sync/health history.
+  // Unauthenticated, like every other read RPC above (issue #853).
+  rpc GetPromotionDetails(GetPromotionDetailsRequest) returns (GetPromotionDetailsResponse);
 }
 
 // ============================================================================
