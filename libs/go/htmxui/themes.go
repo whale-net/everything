@@ -6,7 +6,8 @@ import _ "embed"
 // variables to the manmanv2 design standards (manmanv2/ui/DESIGN_SYSTEM.md):
 // primary=indigo (create/edit/view), success=green (start/save),
 // error=red (delete/stop), neutral/secondary=slate (cancel/back),
-// warning=yellow (pending states). Themes: light / night / oled.
+// warning=yellow (pending states). Themes: light / night / oled / sunset
+// (sunset is a Phase 3 POC theme, #998 FR10 — see themes.css's doc comment).
 //
 // Load-order trap (NFR5 — do not rediscover): ThemesCSS must be rendered
 // inside each consuming app's htmxbase.LayoutData.CustomHead, after the
