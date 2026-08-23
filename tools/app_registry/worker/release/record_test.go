@@ -32,6 +32,21 @@ func seedApp(t *testing.T, repo *fake.Registry, domain, name string) string {
 	return app.AppID
 }
 
+// seedCLIApp reconciles one app_type "cli" app (binary deploy_unit, no
+// image ever built for it -- matching how tools-app-registry and
+// tools-release_helper_go are actually registered) and returns its AppID.
+func seedCLIApp(t *testing.T, repo *fake.Registry, domain, name string) string {
+	t.Helper()
+	ctx := context.Background()
+	_, err := repo.Reconcile(ctx, []*appmetapb.AppManifest{
+		{Domain: domain, Name: name, AppType: "cli", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+	app, err := repo.Apps().GetAppByFullName(ctx, domain+"-"+name)
+	require.NoError(t, err)
+	return app.AppID
+}
+
 func createTestReleaseRun(t *testing.T, repo *fake.Registry, targets []repository.ReleaseRunTarget) (*repository.ReleaseRun, []repository.ReleaseRunTarget) {
 	t.Helper()
 	var outRun *repository.ReleaseRun
@@ -183,6 +198,44 @@ func TestActivities_VerifyPublished_NoExpectedVersionEntry_FallsBackToPresenceCh
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID, map[string]string{})
 	require.NoError(t, err)
 	require.True(t, result.AllPublished)
+	require.Empty(t, result.Failed)
+}
+
+// TestActivities_VerifyPublished_CLIBinaryTarget_LooksUpUnderBinaryKind is a
+// regression test for a real prod incident: release_run_target rows for
+// tools-app-registry/tools-release_helper_go always carry Kind
+// ArtifactKindImage (ui/release_scope.go's targetsFromAppsAndCharts tags
+// every app target IMAGE at the TriggerRelease layer, regardless of
+// AppType -- these two are app_type "cli"), but recordCLIBinaryArtifact
+// (finalize.go) actually records their published artifact under
+// ArtifactKindBinary. Before this fix, VerifyPublished looked up t.Kind
+// (IMAGE) verbatim, which these apps never have and never will (build-app
+// skips the image build entirely for app_type "cli") -- reporting "no
+// published artifact found" on every release, even when the binary
+// genuinely published successfully. See finalize.go's publishCLIBinaries
+// doc comment for the original incident this describes.
+func TestActivities_VerifyPublished_CLIBinaryTarget_LooksUpUnderBinaryKind(t *testing.T) {
+	repo := newTestRegistry(t)
+	appID := seedCLIApp(t, repo, "tools", "app-registry")
+	repo.SeedArtifact(repository.Artifact{
+		Kind:    repository.ArtifactKindBinary,
+		AppID:   appID,
+		Version: "v0.9.0",
+		Digest:  "sha256:cli-binary",
+		State:   repository.ArtifactStatePublished,
+	})
+
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "tools-app-registry", Kind: repository.ArtifactKindImage},
+	})
+	expectedVersions := map[string]string{
+		repository.TargetKey(repository.ArtifactKindImage, "tools-app-registry"): "v0.9.0",
+	}
+
+	a := &Activities{Registry: repo}
+	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID, expectedVersions)
+	require.NoError(t, err)
+	require.True(t, result.AllPublished, "cli-binary target must be verified against its actual ArtifactKindBinary record, not the release_run_target's ArtifactKindImage")
 	require.Empty(t, result.Failed)
 }
 
