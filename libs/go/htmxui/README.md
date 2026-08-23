@@ -33,6 +33,11 @@ primitives below exist here but are not yet adopted anywhere.
   `manmanv2/ui/components/layout.templ` `themeManagement()` script.
   Requires the consuming app to have injected `htmxui.ThemesCSS` per the
   NFR5 load-order rule (see `ThemesCSS`'s doc comment in `themes.go`).
+  `themes.css` currently defines four palettes: `light`, `night`, `oled`,
+  and `sunset` (a Phase 3 proof-of-concept theme, #998 FR10 — a warm
+  amber/coral palette added to prove the switcher plumbing generalizes
+  past the original three; not a long-term design commitment). A caller's
+  `[]Theme` list may offer any subset.
 
 - **`UserMenu(data UserMenuData)`** (`user_menu.templ`) — the shared
   top-right identity + logout component (FR8). Renders a single daisyUI

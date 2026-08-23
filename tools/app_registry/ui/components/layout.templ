@@ -14,12 +14,15 @@ import (
 // previously mount a theme switcher at all -- this reuses the same
 // light/night/oled set manmanv2 offers (manmanv2/ui/components/layout.templ's
 // manmanThemes), keyed to the shared libs/go/htmxui/themes.css palette.
-// Adding further themes (e.g. the FR10 POC theme) is issue #1012's scope,
-// not this one.
+// "sunset" is issue #1012's FR10 proof-of-concept theme (warm amber/coral,
+// deliberately distinct from light/night/oled -- see themes.css's doc
+// comment); its palette/name is an implementation-time POC decision, not a
+// long-term commitment.
 var shellThemes = []htmxui.Theme{
 	{Value: "light", Label: "☀️ Light"},
 	{Value: "night", Label: "🌙 Night"},
 	{Value: "oled", Label: "⚫ OLED Night"},
+	{Value: "sunset", Label: "🌅 Sunset"},
 }
 
 // logoutHref is the app-registry logout route registered in
