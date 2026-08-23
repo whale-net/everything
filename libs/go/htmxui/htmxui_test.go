@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -479,6 +480,133 @@ func TestShell_EmptyUserLabelOmitsLabel(t *testing.T) {
 	}
 }
 
+// --- ThemesCSS (FR10 POC theme parity) ----------------------------------------
+
+// cssRuleRE matches one CSS rule's raw selector text and body, e.g. for
+// `[data-theme="light"] {\n  --color-base-100: #ffffff;\n}` it captures
+// group 1 = `[data-theme="light"] ` and group 2 = the declarations between
+// the braces. It also matches the shared grouped selector rule near the
+// bottom of themes.css (multiple `[data-theme="…"]` selectors joined by
+// `,\n`) -- themeVariableKeys below distinguishes the two by selector
+// count, since only a single-selector rule is a genuine per-theme block.
+var cssRuleRE = regexp.MustCompile(`(?s)([^{}]+)\{([^}]*)\}`)
+
+// dataThemeSelectorRE matches one `[data-theme="<name>"]` selector token.
+var dataThemeSelectorRE = regexp.MustCompile(`\[data-theme="([a-z]+)"\]`)
+
+// cssVarRE matches a custom-property declaration's name, e.g. captures
+// "--color-primary" out of "  --color-primary: #ea580c;".
+var cssVarRE = regexp.MustCompile(`(--[a-zA-Z0-9-]+)\s*:`)
+
+// themeVariableKeys parses ThemesCSS and returns, per theme name, the set
+// of CSS custom-property keys defined in that theme's own single-selector
+// [data-theme="…"] block. Rules whose selector list names more than one
+// theme (the shared grouped `[data-theme="light"], [data-theme="night"],
+// ... { --radius-...: ...; }` block near the bottom of themes.css) are
+// skipped: that block defines radius tokens shared identically across
+// every theme by construction (one rule body applied to every listed
+// selector), so it can never itself drift out of per-theme parity and is
+// out of scope for this assertion. Only per-theme colour-variable blocks
+// (one distinct rule body per theme) are where a POC theme could silently
+// omit a variable.
+func themeVariableKeys(t *testing.T) map[string]map[string]bool {
+	t.Helper()
+	rules := cssRuleRE.FindAllStringSubmatch(ThemesCSS, -1)
+	out := make(map[string]map[string]bool)
+	for _, r := range rules {
+		selectorText, body := r[1], r[2]
+		selectors := dataThemeSelectorRE.FindAllStringSubmatch(selectorText, -1)
+		if len(selectors) != 1 {
+			// Either no [data-theme="…"] selector in this rule at all, or
+			// more than one (the shared grouped rule) -- neither is a
+			// per-theme block.
+			continue
+		}
+		name := selectors[0][1]
+		keys := make(map[string]bool)
+		for _, m := range cssVarRE.FindAllStringSubmatch(body, -1) {
+			keys[m[1]] = true
+		}
+		out[name] = keys
+	}
+	if len(out) == 0 {
+		t.Fatalf("expected at least one single-selector [data-theme=\"...\"] block in ThemesCSS, found none in %q", ThemesCSS)
+	}
+	return out
+}
+
+// TestThemesCSS_AllThemesDefineIdenticalVariableKeySet is the FR10 parity
+// guard deferred from issue #1012's implementation phase: every
+// [data-theme="…"] block in the shared ThemesCSS (light/night/oled and any
+// POC addition like "sunset") must define the exact same set of daisyUI
+// CSS-variable keys. A theme missing a key doesn't fail to render -- it
+// silently falls back to daisyUI's built-in default for that one token,
+// which is much harder to notice than an outright rendering error. This
+// compares every theme's key set against "light" (an arbitrary, stable
+// reference) in both directions (missing and extra keys).
+//
+// Red/green discipline: temporarily deleting the
+// `--color-accent: #0d9488;` declaration from the sunset block in
+// themes.css makes this test fail with "theme \"sunset\" is missing
+// variable keys ... [--color-accent]"; restoring the line makes it pass
+// again. Verified by hand during this change.
+func TestThemesCSS_AllThemesDefineIdenticalVariableKeySet(t *testing.T) {
+	keysByTheme := themeVariableKeys(t)
+
+	const reference = "light"
+	referenceKeys, ok := keysByTheme[reference]
+	if !ok {
+		t.Fatalf("expected a %q theme block to use as the parity reference, found themes %v", reference, keysByTheme)
+	}
+	if len(referenceKeys) == 0 {
+		t.Fatalf("expected the %q reference theme to define at least one CSS variable, found none", reference)
+	}
+
+	for name, keys := range keysByTheme {
+		if name == reference {
+			continue
+		}
+		var missing []string
+		for k := range referenceKeys {
+			if !keys[k] {
+				missing = append(missing, k)
+			}
+		}
+		sort.Strings(missing)
+		if len(missing) > 0 {
+			t.Errorf("theme %q is missing variable keys present in %q: %v", name, reference, missing)
+		}
+
+		var extra []string
+		for k := range keys {
+			if !referenceKeys[k] {
+				extra = append(extra, k)
+			}
+		}
+		sort.Strings(extra)
+		if len(extra) > 0 {
+			t.Errorf("theme %q defines variable keys not present in %q: %v", name, reference, extra)
+		}
+	}
+}
+
+// TestThemesCSS_ContainsSunsetTheme is the direct FR10 existence guard: the
+// POC theme must actually be present in the shared ThemesCSS (not merely
+// registered in some consuming app's switcher list with no backing
+// palette), and it must be distinct from the three pre-existing themes it
+// is meant to sit alongside.
+func TestThemesCSS_ContainsSunsetTheme(t *testing.T) {
+	keysByTheme := themeVariableKeys(t)
+	if _, ok := keysByTheme["sunset"]; !ok {
+		t.Fatalf(`expected a [data-theme="sunset"] block in ThemesCSS, found themes %v`, keysByTheme)
+	}
+	for _, existing := range []string{"light", "night", "oled"} {
+		if _, ok := keysByTheme[existing]; !ok {
+			t.Errorf("expected pre-existing theme %q to still be present in ThemesCSS", existing)
+		}
+	}
+}
+
 // --- ThemeSwitcher (FR5, shared side) -----------------------------------------
 
 func TestThemeSwitcher_RendersOneControlPerTheme(t *testing.T) {
@@ -549,5 +677,88 @@ func TestThemeSwitcher_PersistsUsingExportedStorageKey(t *testing.T) {
 	invocation := fmt.Sprintf("(%q)</script>", ThemeSwitcherStorageKey)
 	if !strings.Contains(body, invocation) {
 		t.Errorf("expected script invocation to pass the exported ThemeSwitcherStorageKey value %q, got %q", invocation, body)
+	}
+}
+
+// --- UserMenu (FR8) -----------------------------------------------------------
+
+func TestUserMenu_RendersIdentityAndLogoutHref(t *testing.T) {
+	body := render(t, UserMenu(UserMenuData{
+		IdentityLabel: "alice",
+		LogoutHref:    "/auth/logout",
+	}))
+	if !strings.Contains(body, "alice") {
+		t.Errorf("expected identity label in rendered output, got %q", body)
+	}
+	want := `href="/auth/logout"`
+	if !strings.Contains(body, want) {
+		t.Errorf("expected logout affordance to link to the supplied href %q, got %q", want, body)
+	}
+}
+
+// TestUserMenu_NoUserRendersNothing guards the signed-out / no-user state
+// (relevant for AUTH_MODE=none): an empty IdentityLabel must not produce a
+// dropdown with a dangling logout link and no identity behind it -- it must
+// render nothing at all.
+func TestUserMenu_NoUserRendersNothing(t *testing.T) {
+	body := render(t, UserMenu(UserMenuData{}))
+	if body != "" {
+		t.Errorf("expected no markup when IdentityLabel is empty, got %q", body)
+	}
+}
+
+// TestUserMenu_LogoutHrefIsParameterised is the direct FR8 regression guard
+// against hardcoding "/auth/logout": both apps happen to register that
+// route today, but UserMenu must not assume it. Rendering with a distinct
+// href must produce that href, and must not also emit the default path
+// anywhere (e.g. as a leftover hardcoded fallback alongside the real one).
+//
+// Red/green discipline: temporarily hardcoding href="/auth/logout" in
+// user_menu.templ's <a> in place of { templ.URL(data.LogoutHref) } makes
+// this test fail with "expected no hardcoded default logout path" (the
+// custom href assertion also starts failing, since the hardcoded literal
+// wins); reverting restores green. See issue #1009 commit history for the
+// verified red run.
+func TestUserMenu_LogoutHrefIsParameterised(t *testing.T) {
+	body := render(t, UserMenu(UserMenuData{
+		IdentityLabel: "bob",
+		LogoutHref:    "/custom/signout",
+	}))
+	if !strings.Contains(body, `href="/custom/signout"`) {
+		t.Errorf("expected logout affordance to use the supplied custom href, got %q", body)
+	}
+	if strings.Contains(body, "/auth/logout") {
+		t.Errorf("expected no hardcoded default logout path when a different href is supplied, got %q", body)
+	}
+}
+
+// TestUserMenu_ComposesAlongsideHeaderRightSlot is the direct
+// composition-not-folding regression guard (FR8): a caller composes
+// UserMenu with its own app-specific extras (e.g. manmanv2's
+// ServerSelector) into a single templ.Component and passes that as
+// ShellData.HeaderRight -- UserMenu itself takes no app-specific
+// parameters. This asserts the extra's markup renders as a sibling of
+// UserMenu's dropdown container, not nested inside it, i.e. genuine
+// composition rather than UserMenu having grown a slot of its own.
+func TestUserMenu_ComposesAlongsideHeaderRightSlot(t *testing.T) {
+	extra := templ.Raw(`<div id="EXTRA-MARK">server selector</div>`)
+	headerRight := templ.Join(extra, UserMenu(UserMenuData{
+		IdentityLabel: "alice",
+		LogoutHref:    "/auth/logout",
+	}))
+	body := render(t, Shell(ShellData{
+		BrandLabel:  "Brand",
+		BrandHref:   "/",
+		HeaderRight: headerRight,
+	}))
+
+	extraIdx := strings.Index(body, `<div id="EXTRA-MARK">server selector</div>`)
+	menuOpenIdx := strings.Index(body, `data-htmxui-user-menu`)
+	menuCloseIdx := strings.Index(body, `</ul>`)
+	if extraIdx == -1 || menuOpenIdx == -1 || menuCloseIdx == -1 {
+		t.Fatalf("expected both the extra marker and the UserMenu dropdown present, got %q", body)
+	}
+	if extraIdx > menuOpenIdx && extraIdx < menuCloseIdx {
+		t.Errorf("expected app-specific extra to render adjacent to UserMenu, not nested inside its dropdown, got %q", body)
 	}
 }

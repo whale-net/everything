@@ -9,7 +9,7 @@ This is Phase 1 groundwork (part of #998, FR1): no consuming app has been
 migrated to these primitives yet (that is issue #1005's job) -- the
 primitives below exist here but are not yet adopted anywhere.
 
-## Chrome primitives (FR1 / FR1a / FR5)
+## Chrome primitives (FR1 / FR1a / FR5 / FR8)
 
 - **`Shell(data ShellData)`** (`shell.templ`) — the shared navbar+main
   chrome: navbar frame, `ThemeSwitcher` mount point, user-identity label
@@ -33,6 +33,30 @@ primitives below exist here but are not yet adopted anywhere.
   `manmanv2/ui/components/layout.templ` `themeManagement()` script.
   Requires the consuming app to have injected `htmxui.ThemesCSS` per the
   NFR5 load-order rule (see `ThemesCSS`'s doc comment in `themes.go`).
+  `themes.css` currently defines four palettes: `light`, `night`, `oled`,
+  and `sunset` (a Phase 3 proof-of-concept theme, #998 FR10 — a warm
+  amber/coral palette added to prove the switcher plumbing generalizes
+  past the original three; not a long-term design commitment). A caller's
+  `[]Theme` list may offer any subset.
+
+- **`UserMenu(data UserMenuData)`** (`user_menu.templ`) — the shared
+  top-right identity + logout component (FR8). Renders a single daisyUI
+  `dropdown`/`menu` control showing `UserMenuData.IdentityLabel` plus a
+  logout link to `UserMenuData.LogoutHref` (a parameter, never a hardcoded
+  `/auth/logout` — both apps happen to register that route today via
+  `htmxauth.Authenticator.HandleLogout`, but UserMenu must not assume it).
+  Empty `IdentityLabel` (e.g. `AUTH_MODE=none`) renders nothing, matching
+  `ShellData.UserLabel`'s existing convention. Takes no
+  `//libs/go/htmxauth` dependency and no app-specific parameters — extras
+  like manmanv2's `ServerSelector` compose *alongside* `UserMenu` (e.g. via
+  `templ.Join`) into a single component passed as `ShellData.HeaderRight`,
+  not folded into `UserMenu` itself. One markup shape covers both
+  desktop and narrow/mobile presentation (a collapsed button expanding a
+  dropdown needs no width-specific variant), unlike manmanv2's current
+  approach of a separately-marked-up mobile copy of its logout link. Not
+  yet adopted by either app — see `UserMenu`'s doc comment for the full
+  design rationale; adoption is issues #1010 (app-registry) and #1011
+  (manmanv2).
 
 ## Content primitives (FR1 / FR1b)
 
