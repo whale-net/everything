@@ -381,6 +381,32 @@ func (r *Registry) SetAppStatus(ctx context.Context, appID string, target reposi
 	return &a, nil
 }
 
+// SetChartArgoApplicationNameOverride mirrors the postgres implementation:
+// the only write path to Chart.ArgoApplicationNameOverrides, one
+// environment at a time -- Reconcile never touches it here either. Builds a
+// fresh map rather than mutating the stored one in place, so a Chart value
+// handed out by an earlier Get/List call never sees this write (matching
+// postgres's copy-on-read semantics via a fresh row scan). See
+// repository.Chart.ResolveArgoApplicationName.
+func (r *Registry) SetChartArgoApplicationNameOverride(ctx context.Context, chartID, environmentKey, argoApplicationName string) (*repository.Chart, error) {
+	c, ok := r.state.Charts[chartID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	overrides := make(map[string]string, len(c.ArgoApplicationNameOverrides))
+	for k, v := range c.ArgoApplicationNameOverrides {
+		overrides[k] = v
+	}
+	if argoApplicationName == "" {
+		delete(overrides, environmentKey)
+	} else {
+		overrides[environmentKey] = argoApplicationName
+	}
+	c.ArgoApplicationNameOverrides = overrides
+	r.state.Charts[chartID] = c
+	return &c, nil
+}
+
 // defaultReconcileRunPageSize matches postgres's appRepo default -- see that
 // package's doc comment on the same constant.
 const defaultReconcileRunPageSize = 50

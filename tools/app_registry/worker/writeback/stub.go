@@ -27,13 +27,14 @@ type StubActivities struct {
 	// access works -- GetEnvironmentState only requires
 	// auth.RequireAuthenticated, see ARCHITECTURE.md "Authorization".
 	Client pb.PromotionRegistryClient
-	// AppClient resolves the promoted chart's id to its full name, the
-	// segment RenderEnvironmentState populates RenderedState.ChartName with
-	// -- mirrors GitOpsActivities.AppClient (see gitops.go), needed here so
-	// WritebackWorkflow's ArgoCD Application name
-	// (ChartName + "-" + EnvironmentKey, workflow.go) is never malformed
-	// when ARGOCD_SERVER is set without WRITEBACK_GITOPS_REPO (issue
-	// #1035, #1037).
+	// AppClient resolves the promoted chart id to its identity (full name,
+	// and any per-environment ArgoApplicationNameOverrides entry), the values
+	// RenderEnvironmentState populates RenderedState.ChartName/
+	// ArgoApplicationName with -- mirrors GitOpsActivities.AppClient (see
+	// gitops.go), needed here so WritebackWorkflow's ArgoCD Application
+	// name (RenderedState.ArgoApplicationName, workflow.go) is never
+	// malformed when ARGOCD_SERVER is set without WRITEBACK_GITOPS_REPO
+	// (issue #1035, #1037).
 	AppClient pb.AppRegistryClient
 	// OutDir is the local directory rendered documents are written to.
 	// Created if missing.
@@ -51,9 +52,10 @@ func NewStubActivities(client pb.PromotionRegistryClient, appClient pb.AppRegist
 // comment. Unlike GitOpsActivities' version, the rendered Document here is
 // the full protojson-marshaled GetEnvironmentStateResponse (StubActivities
 // is the no-op dev/test fallback, see the package doc comment above) --
-// but ChartName still must resolve to a real, non-empty chart name (issue
-// #1037), since WritebackWorkflow builds the ArgoCD Application name from
-// it regardless of which Writeback implementation rendered the state.
+// but ChartName/ArgoApplicationName still must resolve to real, non-empty
+// values (issue #1037), since WritebackWorkflow reads ArgoApplicationName
+// directly regardless of which Writeback implementation rendered the
+// state.
 func (a *StubActivities) RenderEnvironmentState(ctx context.Context, in WritebackInput) (RenderedState, error) {
 	resp, err := a.Client.GetEnvironmentState(ctx, &pb.GetEnvironmentStateRequest{
 		EnvironmentKey: in.EnvironmentKey,
@@ -67,7 +69,7 @@ func (a *StubActivities) RenderEnvironmentState(ctx context.Context, in Writebac
 	if !found {
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: no chart artifact found in environment state", in.Domain, in.EnvironmentKey)
 	}
-	chartName, err := resolveChartName(ctx, a.AppClient, in.Domain, chartID)
+	chart, err := resolveChart(ctx, a.AppClient, in.Domain, chartID)
 	if err != nil {
 		return RenderedState{}, fmt.Errorf("render environment state for %s/%s: %w", in.Domain, in.EnvironmentKey, err)
 	}
@@ -77,12 +79,13 @@ func (a *StubActivities) RenderEnvironmentState(ctx context.Context, in Writebac
 		return RenderedState{}, fmt.Errorf("marshal rendered state for %s: %w", in.EnvironmentKey, err)
 	}
 	return RenderedState{
-		EnvironmentKey: in.EnvironmentKey,
-		Domain:         in.Domain,
-		ChartName:      chartName,
-		StateHash:      resp.StateHash,
-		RenderedAt:     time.Now().UTC(),
-		Document:       doc,
+		EnvironmentKey:      in.EnvironmentKey,
+		Domain:              in.Domain,
+		ChartName:           chart.GetFullName(),
+		ArgoApplicationName: resolveArgoApplicationName(chart, in.EnvironmentKey),
+		StateHash:           resp.StateHash,
+		RenderedAt:          time.Now().UTC(),
+		Document:            doc,
 	}, nil
 }
 

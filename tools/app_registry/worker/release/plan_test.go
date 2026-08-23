@@ -173,6 +173,58 @@ func TestActivities_ResolvePlan_ForcesRegistryOptIn(t *testing.T) {
 	require.Contains(t, string(envOut), "APP_REGISTRY_CICD_OPT_IN=true")
 }
 
+// TestActivities_ResolvePlan_IdempotencyKeyUsesRunID_NotWorkflowID is the
+// direct regression test for a real prod bug: the "tools" domain's version
+// resolution silently returned a stale v0.5.0 forever, no matter how many
+// hours passed or how many other successful releases of the same targets
+// happened via other paths -- confirmed against prod's
+// data.idempotency_key: the row
+// "release-5ac1b1d5...-tools-app-registry-allocate" was created once (at
+// 2026-08-23T03:20:59Z) and kept being replayed by every later trigger.
+//
+// Root cause: WorkflowID (workflow.go) is deliberately deterministic per
+// target batch -- the same "release tools domain" request always hashes to
+// the same WorkflowID, by design, so Temporal's own
+// WorkflowExecutionAlreadyStarted rejection can enforce "at most one
+// non-terminal release per target" (that dedup guarantee is correct and
+// still wanted). But ResolvePlan used that same reused-by-design ID as its
+// AllocateVersion idempotency-key-prefix, so every later, genuinely
+// distinct trigger of the same batch (each a fresh execution, with a fresh
+// RunID, once the prior execution reached a terminal state) replayed the
+// very first execution's cached response instead of allocating a real next
+// version. It must use WorkflowExecution.RunID (unique per execution)
+// instead -- RunID still correctly dedupes true same-execution activity
+// retries (the actual property this idempotency key exists for, per this
+// file's package doc comment on ResolvePlan).
+//
+// testsuite.TestActivityEnvironment fixes both WorkflowExecution.ID
+// ("default-test-workflow-id") and RunID ("default-test-run-id") to
+// distinct constants with no way to vary them per environment -- exactly
+// what makes this assertion meaningful: it fails if ResolvePlan reads .ID
+// instead of .RunID, and passes only when it reads the right field.
+func TestActivities_ResolvePlan_IdempotencyKeyUsesRunID_NotWorkflowID(t *testing.T) {
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+
+	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"demo-hello-go":"v1.2.4"}}`)
+	a := &Activities{Registry: repo, PlanBinaryPath: bin}
+
+	_, err = runResolvePlan(t, a, []ReleaseTarget{
+		{OwnerFullName: "demo-hello-go", Kind: repository.ArtifactKindImage},
+	})
+	require.NoError(t, err)
+
+	joined := strings.Join(readFakeArgs(t, argsFile), " ")
+	require.Contains(t, joined, "--idempotency-key-prefix=default-test-run-id",
+		"must key on the Temporal WorkflowExecution *run* id, which is unique per execution")
+	require.NotContains(t, joined, "--idempotency-key-prefix=default-test-workflow-id",
+		"must NOT key on the Temporal workflow id, which is deliberately reused across every distinct trigger of the same target batch (see WorkflowID's doc comment) -- doing so replays a stale cached AllocateVersion response forever")
+}
+
 // TestActivities_ResolvePlan_WorkspaceRootSet_UsedAsIs proves an explicit
 // a.WorkspaceRoot (e.g. an operator override) is still honored as cmd.Dir
 // rather than always forcing a scratch dir.

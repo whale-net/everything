@@ -9,11 +9,37 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/testsuite"
+
 	"github.com/whale-net/everything/libs/go/s3"
+	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
+
+// runFinalizePublish executes a.FinalizePublish through a real Temporal
+// activity environment rather than calling it directly with
+// context.Background(): FinalizePublish calls activity.GetInfo(ctx) (for
+// finalize-app/finalize-chart's --idempotency-key-prefix), which panics
+// outside a real activity context -- mirrors plan_test.go's
+// runResolvePlan, the SDK's own way to unit test an activity method that
+// does this.
+func runFinalizePublish(t *testing.T, a *Activities, plan ResolvedPlan, ref BuildRef) (FinalizeResult, error) {
+	t.Helper()
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestActivityEnvironment()
+	env.RegisterActivity(a.FinalizePublish)
+	val, err := env.ExecuteActivity(a.FinalizePublish, plan, ref)
+	if err != nil {
+		return FinalizeResult{}, err
+	}
+	var result FinalizeResult
+	require.NoError(t, val.Get(&result))
+	return result, nil
+}
 
 // zipDir builds a zip archive (the format GitHub's artifact download
 // endpoint returns) from a map of relative-path -> file content, mirroring
@@ -133,6 +159,33 @@ exit 0
 `)
 }
 
+// fakeFinalizeAppScriptCapturingArgs is fakeFinalizeAppScript's twin, but
+// additionally dumps every arg it was invoked with to argsFile (one per
+// line, mirroring plan_test.go's writeFakePlanBinary) -- for tests that
+// need to assert on flags this activity passes through
+// (--idempotency-key-prefix, --build-id) rather than just on the
+// resulting FinalizeResult.
+func fakeFinalizeAppScriptCapturingArgs(argsFile string) []byte {
+	return []byte(fmt.Sprintf(`#!/bin/sh
+for a in "$@"; do printf '%%s\n' "$a"; done > %q
+domain=""; app=""; version=""; outdir=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --domain) domain="$2"; shift 2;;
+    --app) app="$2"; shift 2;;
+    --version) version="$2"; shift 2;;
+    --output-dir) outdir="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+if [ -n "$outdir" ]; then
+  mkdir -p "$outdir"
+  printf '{"effective_version":"%%s"}' "$version" > "$outdir/$domain-$app.json"
+fi
+exit 0
+`, argsFile))
+}
+
 func TestPlanBuildID_ExtractsFieldOrEmpty(t *testing.T) {
 	require.Equal(t, "", planBuildID(nil))
 	require.Equal(t, "", planBuildID([]byte("not json")))
@@ -168,6 +221,7 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(bin, fakeFinalizeAppScript(), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -179,9 +233,76 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds(t *testing.T) {
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err, "WorkspaceRoot unset must not hard-fail -- FinalizePublish needs no git checkout at all")
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
+}
+
+// TestActivities_FinalizePublish_PassesIdempotencyKeyPrefixToFinalizeApp is
+// the direct regression test for a latent bug found while auditing #1069/
+// #1090's own bug class: finalize-app/finalize-chart never received
+// --idempotency-key-prefix from this activity. Without it,
+// tools/release_helper_go/cmd/releaser.go's ExecuteRelease falls back to
+// GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT env reads -- absent in this activity's
+// subprocess environment, same gap as #1069/#1090 -- landing on the
+// literal placeholder "local-1" every single time. Unlike #1090 (a
+// silently skipped read), that's a write-path risk: since the prefix
+// never varies, every app/chart finalized through this path would
+// collide on the exact same BeginPublish/RecordArtifact idempotency key,
+// and the registry's idempotent-replay contract means the second-ever
+// such call would replay the FIRST one's cached response instead of
+// recording the real new version. Confirmed empty in prod
+// (data.idempotency_key has zero rows matching "local-1-%") only because
+// no real image/chart release has yet reached this path successfully via
+// the Temporal worker -- this fixes it before it does.
+func TestActivities_FinalizePublish_PassesIdempotencyKeyPrefixToFinalizeApp(t *testing.T) {
+	appManifest := `{"domain":"demo","app":"widget","full_name":"demo-widget","repository":"ghcr.io/whale-net/demo-widget","digest":"sha256:aaa"}`
+	buildManifestZip := zipDir(t, map[string]string{"demo-widget.json": appManifest})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/runs/42/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"artifacts":[{"id":7,"name":"build-manifest","expired":false}]}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/artifacts/7/zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(buildManifestZip)
+	})
+
+	binDir := t.TempDir()
+	bin := filepath.Join(binDir, "fake-release-helper-go")
+	argsFile := filepath.Join(binDir, "args.txt")
+	require.NoError(t, os.WriteFile(bin, fakeFinalizeAppScriptCapturingArgs(argsFile), 0o755))
+
+	a := &Activities{
+		Registry:       newTestRegistry(t),
+		GitHub:         newTestDispatcher(t, mux),
+		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
+	}
+
+	plan := ResolvedPlan{
+		ReleaseRunID: "release-run-1",
+		Versions:     map[string]string{"image:demo-widget": "v1.2.3"},
+		// RawJSON deliberately empty, matching real prod (#1090) -- proves
+		// the idempotency-key-prefix comes from the Temporal activity's own
+		// RunID, not from anything plan-derived.
+	}
+	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
+
+	result, err := runFinalizePublish(t, a, plan, ref)
+	require.NoError(t, err)
+	require.True(t, result.Succeeded, "detail: %s", result.Detail)
+
+	argsBytes, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	joined := strings.Join(strings.Split(strings.TrimRight(string(argsBytes), "\n"), "\n"), " ")
+	require.Contains(t, joined, "--idempotency-key-prefix default-test-run-id",
+		"must key on the Temporal WorkflowExecution run id (unique per execution), the same fix #1084 already applied to ResolvePlan")
+	require.NotContains(t, joined, "local-1",
+		"must never fall through to release_helper_go's own GITHUB_RUN_ID-absent placeholder -- every app/chart finalized this way would collide on the same idempotency key")
 }
 
 // TestActivities_FinalizePublish_NoGHCRToken_FailsBatch is the regression
@@ -209,7 +330,8 @@ func TestActivities_FinalizePublish_NoGHCRToken_FailsBatch(t *testing.T) {
 	})
 
 	a := &Activities{
-		GitHub: newTestDispatcher(t, mux),
+		Registry: newTestRegistry(t),
+		GitHub:   newTestDispatcher(t, mux),
 	}
 
 	plan := ResolvedPlan{
@@ -218,7 +340,7 @@ func TestActivities_FinalizePublish_NoGHCRToken_FailsBatch(t *testing.T) {
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	_, err := a.FinalizePublish(context.Background(), plan, ref)
+	_, err := runFinalizePublish(t, a, plan, ref)
 	require.ErrorContains(t, err, "GHCR token not configured")
 }
 
@@ -255,8 +377,23 @@ func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
 		_, _ = w.Write(cliBinariesZip)
 	})
 
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{Domain: "tools", Name: "release_helper_go", AppType: "cli"},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+	app, err := repo.Apps().GetAppByFullName(context.Background(), "tools-release_helper_go")
+	require.NoError(t, err)
+	repo.SeedArtifact(repository.Artifact{
+		AppID:   app.AppID,
+		Kind:    repository.ArtifactKindBinary,
+		Version: "v1.2.3",
+		State:   repository.ArtifactStateAllocated,
+	})
+
 	uploader := newFakeUploader()
 	a := &Activities{
+		Registry:   repo,
 		GitHub:     newTestDispatcher(t, mux),
 		S3Uploader: uploader,
 		// a.GHCRToken deliberately left unset -- an all-CLI batch must not
@@ -266,13 +403,42 @@ func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-1",
 		Versions:     map[string]string{"image:tools-release_helper_go": "v1.2.3"},
+		// RawJSON deliberately empty/no build_id -- proves buildID
+		// synthesis (this file's FinalizePublish, right after loading
+		// chartManifests) still lets artifact recording succeed even when
+		// the plan carries no App Registry build_id, matching the exact
+		// real prod shape this test's own doc comment describes.
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err, "an all-CLI batch must not require a build-manifest artifact or a GHCR token")
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
 	require.Contains(t, uploader.uploads, "release_helper_go/v1.2.3/checksums.txt")
+
+	artifact, err := repo.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{
+		OwnerFullName:   "tools-release_helper_go",
+		Kind:            repository.ArtifactKindBinary,
+		LatestPublished: true,
+	})
+	require.NoError(t, err, "buildID synthesis must let the artifact actually reach state \"published\", not just upload to S3")
+	require.Equal(t, repository.ArtifactStatePublished, artifact.State)
+
+	// Regression for the FK-violation recurrence (#1090 followed by this
+	// fix): the synthesized buildID must name a REAL `build` row, not an
+	// unresolvable random UUID -- migration 001's `artifact.build_id
+	// REFERENCES build (build_id)` was never dropped (migration 007 only
+	// relaxed NOT NULL for the "allocated" state), so a made-up id makes
+	// BeginPublish's UPDATE/RecordArtifact's INSERT fail with
+	// artifact_build_id_fkey against real Postgres -- a failure this
+	// package's fake.Registry doesn't model, which is exactly how #1090's
+	// UUID-only synthesis shipped without this test catching it. Asserting
+	// the build row actually exists, and is keyed off ref.RunID rather
+	// than an arbitrary UUID, is the fake-registry-reachable proxy for
+	// that FK invariant.
+	build, err := repo.Builds().GetBuild(context.Background(), artifact.BuildID)
+	require.NoError(t, err, "artifact.BuildID must resolve to a real build row")
+	require.Equal(t, "42", build.WorkflowRunID, "the synthesized build should be keyed off the GitHub Actions run FinalizePublish already knows about (ref.RunID), not an unrelated random UUID")
 }
 
 // TestActivities_FinalizePublish_NoOpApp_ChartPinsEffectiveVersion is the
@@ -358,6 +524,7 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -372,7 +539,7 @@ exit 0
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
 
@@ -437,6 +604,7 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *te
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -448,7 +616,7 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *te
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.True(t, result.Succeeded, "a missing bookkeeping result file must not be reported as a finalize failure, detail: %s", result.Detail)
 	require.Empty(t, result.Detail)
@@ -533,6 +701,7 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -547,7 +716,7 @@ exit 0
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.True(t, result.Succeeded, "a missing bookkeeping result file must not be reported as a finalize failure, detail: %s", result.Detail)
 
@@ -589,6 +758,7 @@ func TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget(t *tes
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho 'DENIED: permission_denied' >&2\nexit 1\n"), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -600,7 +770,7 @@ func TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget(t *tes
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.False(t, result.Succeeded)
 
@@ -644,6 +814,7 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -655,7 +826,7 @@ exit 0
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err)
 	require.False(t, result.Succeeded)
 
@@ -717,6 +888,7 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -728,7 +900,7 @@ exit 0
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
-	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	result, err := runFinalizePublish(t, a, plan, ref)
 	require.NoError(t, err, "detail: %s", result.Detail)
 	require.True(t, result.Succeeded, "a no-op rebuild reusing an older chart version is a legitimate success, detail: %s", result.Detail)
 
@@ -802,7 +974,7 @@ func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"], "a successful publish must record the plan version as this target's outcome")
@@ -814,6 +986,97 @@ func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T
 
 	_, gotSHA256SUMS := uploader.uploads["release_helper_go/v1.2.3/SHA256SUMS"]
 	require.False(t, gotSHA256SUMS, "SHA256SUMS must not be published -- only checksums.txt parity is in scope")
+}
+
+// TestPublishCLIBinaries_RecordsArtifactInAppRegistry is the direct
+// regression test for a real prod failure: a real release
+// (tools-app-registry/tools-release_helper_go v0.6.0) uploaded its
+// binaries to S3 successfully -- FinalizePublish reported Succeeded:true
+// with the right EffectiveVersion -- but the release_run_target still
+// ended up Failed with "no published artifact found: not found", because
+// publishCLIBinaries never called BeginPublish/RecordArtifact: the
+// AllocateVersion-created "allocated" artifact row was never transitioned
+// to "published", so VerifyPublished (record.go) correctly found nothing.
+// With buildID non-empty, a successful upload must now carry that row all
+// the way to "published".
+func TestPublishCLIBinaries_RecordsArtifactInAppRegistry(t *testing.T) {
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{Domain: "tools", Name: "release_helper_go", AppType: "cli"},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+	app, err := repo.Apps().GetAppByFullName(context.Background(), "tools-release_helper_go")
+	require.NoError(t, err)
+	// Mirrors real prod state: AllocateVersion (during ResolvePlan) already
+	// reserved this version in "allocated" state before FinalizePublish
+	// ever runs.
+	repo.SeedArtifact(repository.Artifact{
+		AppID:   app.AppID,
+		Kind:    repository.ArtifactKindBinary,
+		Version: "v1.2.3",
+		State:   repository.ArtifactStateAllocated,
+	})
+
+	cliBinariesDir := t.TempDir()
+	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
+
+	uploader := newFakeUploader()
+	a := &Activities{
+		Registry:   repo,
+		S3Uploader: uploader,
+		GitHub:     &GitHubDispatcher{Config: GitHubDispatcherConfig{Owner: "whale-net", Repo: "everything"}},
+	}
+	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
+	finalizeTargets := map[string]FinalizeTargetOutcome{}
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "build-123")
+
+	require.Empty(t, failures)
+	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"])
+
+	artifact, err := repo.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{
+		OwnerFullName:   "tools-release_helper_go",
+		Kind:            repository.ArtifactKindBinary,
+		LatestPublished: true,
+	})
+	require.NoError(t, err, "the artifact must now be found in the published state")
+	require.Equal(t, repository.ArtifactStatePublished, artifact.State)
+	require.Equal(t, "v1.2.3", artifact.Version)
+	require.NotEmpty(t, artifact.Digest, "digest must be derived from checksums.txt content, not left empty")
+	require.Equal(t, "build-123", artifact.BuildID)
+	// Repository is deliberately NOT asserted here: it is stamped only at
+	// row-creation time (AllocateVersion, or BeginPublish's no-existing-row
+	// branch) and never updated by BeginPublish/RecordArtifact once a row
+	// already exists -- exactly the case here, mirroring real prod (every
+	// target reaches this code with an "allocated" row AllocateVersion
+	// already created during ResolvePlan). recordCLIBinaryArtifact's own
+	// repositoryHint is therefore a no-op for this call shape; it exists
+	// only for the pre-cutover "no row exists at all" branch some other
+	// domain could still hit.
+}
+
+// TestPublishCLIBinaries_EmptyBuildID_SkipsRecording proves an empty
+// buildID (the same "no App Registry build_id resolved" case
+// finalize-app/finalize-chart already tolerate, per planBuildID's doc
+// comment) skips BeginPublish/RecordArtifact entirely rather than failing
+// the target -- registry recording is best-effort here exactly like it
+// already is for image/chart targets in that same situation.
+func TestPublishCLIBinaries_EmptyBuildID_SkipsRecording(t *testing.T) {
+	cliBinariesDir := t.TempDir()
+	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
+
+	uploader := newFakeUploader()
+	// No Registry/GitHub configured -- if the empty-buildID guard didn't
+	// skip recording, this would panic on a nil a.GitHub dereference,
+	// failing the test loudly rather than silently.
+	a := &Activities{S3Uploader: uploader}
+	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
+	finalizeTargets := map[string]FinalizeTargetOutcome{}
+
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
+
+	require.Empty(t, failures)
+	require.Equal(t, FinalizeTargetOutcome{EffectiveVersion: "v1.2.3"}, finalizeTargets["image:tools-release_helper_go"])
 }
 
 func uploadedKeys(u *fakeUploader) []string {
@@ -839,7 +1102,7 @@ func TestPublishCLIBinaries_UsesPlanVersion(t *testing.T) {
 	versions := map[string]string{"image:tools-app-registry": "v0.9.0"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-app-registry"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Empty(t, failures)
 	require.Contains(t, uploader.uploads, "app-registry/v0.9.0/checksums.txt")
@@ -860,7 +1123,7 @@ func TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched(t *testing.T) {
 	}
 	original := finalizeTargets["image:demo-widget"]
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"demo-widget"}, versions, finalizeTargets, t.TempDir(), true, "")
 
 	require.Empty(t, failures)
 	require.Equal(t, original, finalizeTargets["image:demo-widget"], "a non-CLI-binary app's outcome must be untouched")
@@ -900,7 +1163,7 @@ func TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads(t *testing.T) {
 			a := &Activities{S3Uploader: uploader}
 			finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true)
+			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true, "")
 
 			require.Empty(t, failures, "no confirmed version means nothing to fail either -- this target is simply not touched")
 			require.Empty(t, finalizeTargets, "a target with no confirmed version must not be mutated")
@@ -922,7 +1185,7 @@ func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, cliBinariesDir, true, "")
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "simulated S3 write failure")
@@ -944,7 +1207,7 @@ func TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget(t *testin
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
-	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */)
+	failures := a.publishCLIBinaries(context.Background(), []string{"tools-release_helper_go"}, versions, finalizeTargets, t.TempDir(), false /* haveCLIBinaries */, "")
 
 	require.Len(t, failures, 1)
 	require.Contains(t, failures[0], "no cli-binaries artifact entry")

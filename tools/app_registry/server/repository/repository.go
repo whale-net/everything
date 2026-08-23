@@ -150,6 +150,15 @@ type AppRepository interface {
 	// with ErrFailedPrecondition.
 	SetAppStatus(ctx context.Context, appID string, target Status, reason string) (*App, error)
 
+	// SetChartArgoApplicationNameOverride sets (argoApplicationName
+	// non-empty) or clears (argoApplicationName == "") the override for
+	// exactly one (chartID, environmentKey) pair -- every other
+	// environment's override on this chart is untouched, and
+	// ReconcileApps never touches this column at all. See
+	// Chart.ResolveArgoApplicationName. Returns ErrNotFound if chartID
+	// doesn't exist.
+	SetChartArgoApplicationNameOverride(ctx context.Context, chartID, environmentKey, argoApplicationName string) (*Chart, error)
+
 	// ListReconcileRuns returns reconcile_run rows ordered most-recent-first
 	// by applied_at, tie-broken by reconcile_run_id, with real LIMIT +
 	// keyset cursor pagination (the cursor encodes applied_at +

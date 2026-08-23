@@ -121,9 +121,39 @@ type Chart struct {
 	AppIDs          []string
 	FirstSeenAt     time.Time
 	LastSeenAt      time.Time
+	// ArgoApplicationNameOverrides is an optional, admin-settable map of
+	// environment_key -> ArgoCD Application name, overriding what
+	// WritebackWorkflow's TriggerArgoRefresh/PollArgoSyncStatus activities
+	// target for this chart's promotions in that one environment
+	// (worker/writeback/argosync.go), for ad-hoc/legacy deployments whose
+	// real Application name doesn't follow the
+	// "<FullName>-<environment>" convention. Keyed per environment --
+	// rather than one value for the whole chart -- because an ad-hoc
+	// deployment's naming can differ unrelatedly between environments
+	// (e.g. dev "foo-dev-app", prod "prod-svc-foo", sharing no pattern).
+	// An environment absent from this map (nil/empty, the default,
+	// migration 022) uses the convention. Set only via
+	// AppRepository.SetChartArgoApplicationNameOverride, one environment
+	// at a time -- ReconcileApps never writes it. See
+	// ResolveArgoApplicationName.
+	ArgoApplicationNameOverrides map[string]string
 }
 
 func (c Chart) FullName() string { return c.Domain + "-" + c.Name }
+
+// ResolveArgoApplicationName returns the ArgoCD Application name for this
+// chart in environmentKey: the explicit override in
+// ArgoApplicationNameOverrides[environmentKey], if one is set for this
+// exact environment (an ad-hoc/legacy deployment can have a completely
+// different name in each environment, not just a mechanical variation --
+// dev and prod need not share any naming pattern); otherwise the
+// convention every standard chart uses: "<FullName>-<environmentKey>".
+func (c Chart) ResolveArgoApplicationName(environmentKey string) string {
+	if name, ok := c.ArgoApplicationNameOverrides[environmentKey]; ok && name != "" {
+		return name
+	}
+	return c.FullName() + "-" + environmentKey
+}
 
 // NormalizeChartName strips the "helm-{domain}-" prefix that
 // release_helm_chart's Bazel macro bakes into ChartManifest.Name (needed

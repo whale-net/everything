@@ -168,10 +168,21 @@ if screen 52 is picked up, it is a new issue, not an extension of screen
 
 ## Design system
 
-See `ui/README.md`'s "Design system" section for the badge vocabulary
-(one colour/label per `Promotability`/`ArtifactState`/`ArtifactProvenance`
-value), the troubleshooting-vs-calm-day density convention, and the
-daisyUI + `themes.css` load-order constraint (NFR-10, NFR-11). This UI is
-the repo's first daisyUI adopter — see `manmanv2/ui/DESIGN_SYSTEM.md`'s
-"Future Direction: daisyUI" section for that decision record; `manmanv2/ui`
-itself is unchanged and stays Tailwind-only.
+See `ui/README.md`'s "Design system" and "Styling" sections for the badge
+vocabulary (one colour/label per
+`Promotability`/`ArtifactState`/`ArtifactProvenance` value), the
+troubleshooting-vs-calm-day density convention, and the daisyUI +
+`htmxui.ThemesCSS` load-order constraint (NFR-10, NFR-11, NFR5).
+
+This UI is a **consumer** of `//libs/go/htmxui` (issue #1005, FR2), not the
+owner of its own daisyUI primitives: `components.Shell` is a thin wrapper
+around `htmxui.Shell` supplying this app's nav/banner slots plus a
+`HeaderRight` slot composed from `htmxui.UserMenu` (issue #1010, FR8) — the
+shared identity + logout dropdown that gave app-registry its first visible
+logout control — and `htmxui.ThemeSwitcher`,
+`components/badges.templ` expresses this app's badge vocabulary in terms of
+the generic `htmxui.Badge`, and the confirm/danger-zone pattern (screens
+50-promote, 51-rollback, 53-environment-form) routes through the shared
+`htmxui.Confirm`. `libs/go/htmxui/README.md` documents the shared
+primitives themselves; this file and `ui/README.md` document only how
+app-registry composes them.

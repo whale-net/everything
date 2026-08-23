@@ -1,0 +1,92 @@
+package htmxui
+
+// ShellData carries Shell's chrome configuration and its app-owned
+// composition slots (FR1a). Shell itself owns only the navbar frame, the
+// shared ThemeSwitcher mount, the user-identity label, the banner slot,
+// and the main content region -- it hardcodes no nav items and knows
+// nothing about what a banner or header-right extra actually is. See
+// Shell's doc comment for the resulting markup shape.
+//
+// App-owned (the caller supplies these; Shell only mounts them):
+//
+//   - Nav: the app's own navigation item list. This is the FR1a boundary
+//     this component exists to enforce: Shell is explicitly not a literal
+//     lift of tools/app_registry/ui/components/layout.templ's Shell(),
+//     which hardcodes its nav inline
+//     (<ul class="menu menu-horizontal">...<li><a href="/environments">...
+//     Adopting app-registry onto this Shell (issue #1005, not this one)
+//     means passing that same <ul> unchanged as Nav; manmanv2 passes an
+//     entirely different one.
+//   - Banner: an app-specific banner, e.g. app-registry's
+//     components.MisconfigBanner(user) -- htmxui does not know what a
+//     misconfig banner is, so Banner is a plain slot, not a specific
+//     component.
+//   - HeaderRight: top-right extras composed alongside the shared
+//     ThemeSwitcher/UserLabel, e.g. manmanv2's ServerSelector. Keeping
+//     this slot now means Phase 3's shared user-menu component (FR8) can
+//     be composed here later without reshaping Shell.
+//
+// Shared (Shell renders these itself, not slots):
+//
+//   - Themes drives the shared ThemeSwitcher mount (theme_switcher.templ).
+//     A nil/empty slice omits the switcher entirely -- Shell does not
+//     hardcode a theme list of its own.
+//   - UserLabel is plain display text, not an auth type: Shell has no
+//     dependency on //libs/go/htmxauth or any UserInfo struct (unlike
+//     app-registry's current Shell(title string, user *htmxauth.UserInfo)
+//     signature), so a future UI with a different auth story can still
+//     use Shell. Empty renders nothing.
+//
+// Title is accepted for call-site convenience -- so a caller can pass the
+// same string it uses for the page's <title> tag -- but Shell has no
+// <head> and does not render it; this mirrors app-registry's existing
+// Shell(title string, ...), whose title parameter is likewise not
+// referenced inside the component body today.
+type ShellData struct {
+	Title       string
+	BrandLabel  string
+	BrandHref   string
+	Nav         templ.Component
+	Banner      templ.Component
+	HeaderRight templ.Component
+	UserLabel   string
+	Themes      []Theme
+}
+
+// Shell is htmxui's shared navbar+main chrome (FR1): the navbar frame,
+// the ThemeSwitcher mount point, the user-identity label slot, the banner
+// slot, and the main content region. See ShellData's doc comment for the
+// app-owned/shared slot boundary this component exists to enforce
+// (FR1a). children... is the page content rendered inside the main
+// region, after the optional banner.
+templ Shell(data ShellData) {
+	<div class="navbar bg-neutral text-neutral-content shadow-sm">
+		<div class="flex-1 flex items-center gap-4">
+			<a href={ templ.URL(data.BrandHref) } class="btn btn-ghost text-xl">
+				{ data.BrandLabel }
+			</a>
+			if data.Nav != nil {
+				@data.Nav
+			}
+		</div>
+		<div class="flex-none flex items-center gap-2">
+			if data.HeaderRight != nil {
+				@data.HeaderRight
+			}
+			if len(data.Themes) > 0 {
+				@ThemeSwitcher(data.Themes)
+			}
+			if data.UserLabel != "" {
+				<span class="mr-2 text-sm opacity-90">{ data.UserLabel }</span>
+			}
+		</div>
+	</div>
+	<main class="min-h-screen bg-base-200 p-6">
+		<div class="mx-auto max-w-4xl space-y-6">
+			if data.Banner != nil {
+				@data.Banner
+			}
+			{ children... }
+		</div>
+	</main>
+}

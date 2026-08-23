@@ -1,13 +1,49 @@
 // Package components holds daisyUI-based shell/chrome shared by every page
-// in this UI — this is the repo's first daisyUI adopter (see ../README.md
-// "Styling"). Screen-specific markup belongs in ../pages, not here.
+// in this UI — Shell here is a thin app-registry-specific wrapper around
+// libs/go/htmxui's shared Shell (see ../README.md "Styling"). Screen-specific
+// markup belongs in ../pages, not here.
 package components
 
-import "github.com/whale-net/everything/libs/go/htmxauth"
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
 
-// Shell wraps page content in the App Registry UI's navbar chrome. It shows
-// the signed-in user's identity so every screen — not just the placeholder
-// home page — makes "who am I" visible.
+// shellThemes is the theme list app-registry offers through the shared
+// htmxui.ThemeSwitcher (mounted by Shell, below). App-registry did not
+// previously mount a theme switcher at all -- this reuses the same
+// light/night/oled set manmanv2 offers (manmanv2/ui/components/layout.templ's
+// manmanThemes), keyed to the shared libs/go/htmxui/themes.css palette.
+// "sunset" is issue #1012's FR10 proof-of-concept theme (warm amber/coral,
+// deliberately distinct from light/night/oled -- see themes.css's doc
+// comment); its palette/name is an implementation-time POC decision, not a
+// long-term commitment.
+var shellThemes = []htmxui.Theme{
+	{Value: "light", Label: "☀️ Light"},
+	{Value: "night", Label: "🌙 Night"},
+	{Value: "oled", Label: "⚫ OLED Night"},
+	{Value: "sunset", Label: "🌅 Sunset"},
+}
+
+// logoutHref is the app-registry logout route registered in
+// tools/app_registry/ui/main.go ("/auth/logout" -> app.auth.HandleLogout).
+// UserMenu takes this as a plain parameter (not a hardcoded default of its
+// own), so the value lives here at the one real call site instead of being
+// duplicated across tests.
+const logoutHref = "/auth/logout"
+
+// Shell wraps page content in the App Registry UI's navbar chrome, built on
+// htmxui.Shell (FR2). It supplies app-registry's own nav list, banner, and
+// user-identity + logout control as htmxui.Shell's app-owned slots (FR1a)
+// — Shell itself hardcodes none of them.
+//
+// The top-right user area is htmxui.UserMenu (FR8), composed through the
+// HeaderRight slot rather than ShellData.UserLabel: UserMenu renders both
+// the identity label and a visible logout link to logoutHref in one
+// dropdown, where app-registry previously rendered only a bare
+// `<span>{ user.PreferredUsername }</span>` with no logout control at all.
+// ShellData.UserLabel is left unset here to avoid rendering the identity
+// twice.
 //
 // Nav deliberately keeps "Deployments" (state, screen 10) as a top-level,
 // day-to-day item separate from "Environments" (configuration, screen 09)
@@ -21,41 +57,40 @@ import "github.com/whale-net/everything/libs/go/htmxauth"
 // MisconfigBanner renders here, once, so every screen gets the FR-59
 // banner for free instead of each page having to remember to include it.
 templ Shell(title string, user *htmxauth.UserInfo) {
-	<div class="navbar bg-neutral text-neutral-content shadow-sm">
-		<div class="flex-1 flex items-center gap-4">
-			<a href="/" class="btn btn-ghost text-xl">App Registry</a>
-			<ul class="menu menu-horizontal px-1">
-				<li><a href="/deployments">Deployments</a></li>
-				<li><a href="/apps">Apps</a></li>
-				<li><a href="/builds">Builds</a></li>
-				<li><a href="/releases/trigger">Trigger Release</a></li>
-				<li>
-					<div class="dropdown">
-						<div tabindex="0" role="button" class="btn btn-ghost">Admin</div>
-						<ul tabindex="0" class="dropdown-content menu bg-neutral text-neutral-content rounded-box z-10 w-48 p-2 shadow-sm">
-							<li><a href="/environments">Environments</a></li>
-							<li><a href="/reconcile-runs">Reconcile Runs</a></li>
-							<li><a href="/drift-audit">Drift &amp; Audit</a></li>
-						</ul>
-					</div>
-				</li>
-			</ul>
-		</div>
-		<div class="flex-none">
-			if user != nil {
-				<div class="dropdown dropdown-end">
-					<div tabindex="0" role="button" class="btn btn-ghost btn-sm">{ user.PreferredUsername }</div>
-					<ul tabindex="0" class="dropdown-content menu bg-neutral text-neutral-content rounded-box z-10 w-40 p-2 shadow-sm">
-						<li><a href="/auth/logout">Logout</a></li>
-					</ul>
-				</div>
-			}
-		</div>
-	</div>
-	<main class="min-h-screen bg-base-200 p-6">
-		<div class="mx-auto max-w-4xl space-y-6">
-			@MisconfigBanner(user)
-			{ children... }
-		</div>
-	</main>
+	{{
+		var userLabel string
+		if user != nil {
+			userLabel = user.PreferredUsername
+		}
+	}}
+	@htmxui.Shell(htmxui.ShellData{
+		Title:       title,
+		BrandLabel:  "App Registry",
+		BrandHref:   "/",
+		Nav:         shellNav(),
+		Banner:      MisconfigBanner(user),
+		HeaderRight: htmxui.UserMenu(htmxui.UserMenuData{IdentityLabel: userLabel, LogoutHref: logoutHref}),
+		Themes:      shellThemes,
+	}) {
+		{ children... }
+	}
+}
+
+templ shellNav() {
+	<ul class="menu menu-horizontal px-1">
+		<li><a href="/deployments">Deployments</a></li>
+		<li><a href="/apps">Apps</a></li>
+		<li><a href="/builds">Builds</a></li>
+		<li><a href="/releases/trigger">Trigger Release</a></li>
+		<li>
+			<div class="dropdown">
+				<div tabindex="0" role="button" class="btn btn-ghost">Admin</div>
+				<ul tabindex="0" class="dropdown-content menu bg-neutral text-neutral-content rounded-box z-10 w-48 p-2 shadow-sm">
+					<li><a href="/environments">Environments</a></li>
+					<li><a href="/reconcile-runs">Reconcile Runs</a></li>
+					<li><a href="/drift-audit">Drift &amp; Audit</a></li>
+				</ul>
+			</div>
+		</li>
+	</ul>
 }

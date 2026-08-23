@@ -137,6 +137,7 @@ func NewRootCmd() *cobra.Command {
 		newHistoryCmd(),
 		newDiffCmd(),
 		newEnvCmd(),
+		newChartCmd(),
 		newReconcileRunsCmd(),
 	)
 	return c

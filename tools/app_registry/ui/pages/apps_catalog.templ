@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 	"github.com/whale-net/everything/tools/app_registry/ui/matrix"
@@ -122,7 +123,9 @@ templ AppsCatalog(user *htmxauth.UserInfo, environments []*pb.Environment, rows 
 				<option value="image" selected?={ filter.DeployUnit == "image" }>image</option>
 				<option value="none" selected?={ filter.DeployUnit == "none" }>none</option>
 			</select>
-			<button type="submit" class="btn btn-sm">Filter</button>
+			@htmxui.Button("", htmxui.ButtonSizeSM, false, templ.Attributes{"type": "submit"}) {
+				Filter
+			}
 			if filter.Query != "" || filter.Domain != "" || filter.DeployUnit != "" {
 				<a href="/apps" class="btn btn-sm btn-ghost">Clear</a>
 			}

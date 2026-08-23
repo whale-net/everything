@@ -255,28 +255,9 @@ func main() {
 	}
 }
 
-// withAccessToken wraps a protected handler to inject the user's access
-// token into the request context for gRPC forwarding. If the token is
-// unavailable or expired, the user is redirected to re-authenticate. HTMX
-// partial requests receive an HX-Redirect header so the full page reloads
-// to the login URL.
-func (app *App) withAccessToken(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token, err := app.auth.GetAccessToken(r)
-		if err != nil {
-			loginURL := fmt.Sprintf("/auth/login?next=%s", r.URL.RequestURI())
-			if r.Header.Get("HX-Request") == "true" {
-				w.Header().Set("HX-Redirect", loginURL)
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			http.Redirect(w, r, loginURL, http.StatusSeeOther)
-			return
-		}
-		r = r.WithContext(grpcauth.WithUserToken(r.Context(), token))
-		next(w, r)
-	}
-}
+// Note: withAccessToken was hoisted to htmxauth.Authenticator.WithAccessToken
+// (convergence spike, #998 FR9 point 1) — it was byte-for-byte identical to
+// manmanv2/ui's copy. Call sites use app.auth.WithAccessToken.
 
 func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Public routes — must sit outside the auth wrapper, or the sign-in
@@ -288,60 +269,60 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/logout", app.auth.HandleLogout)
 
 	// Protected routes.
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDashboard)))
-	mux.HandleFunc("/deployments", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDeployments)))
+	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboard)))
+	mux.HandleFunc("/deployments", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeployments)))
 	// Promotion Details (FR7-FR9, issue #1032): reached via a per-event link
 	// from the promotion timeline (pages/app_detail.templ's
 	// promotionTimelineCard), not from top-level nav.
-	mux.HandleFunc("/promotions/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handlePromotionDetails)))
+	mux.HandleFunc("/promotions/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handlePromotionDetails)))
 	// FR10-FR13 manual retry (issue #1033): admin-gated server-side by
 	// RetryArgoSync's own auth.Require check, not by this route's
 	// (identical-to-every-other-route) session-login requirement.
-	mux.HandleFunc("/promotions/{id}/retry", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRetryArgoSync)))
-	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppsCatalog)))
-	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppDetail)))
+	mux.HandleFunc("/promotions/{id}/retry", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRetryArgoSync)))
+	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppsCatalog)))
+	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppDetail)))
 
 	// Screens 12/13/21/22 (#645): environment diff, app version history,
 	// artifact detail, chart detail.
-	mux.HandleFunc("/environments/diff", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentDiff)))
-	mux.HandleFunc("/apps/{id}/history", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppHistory)))
-	mux.HandleFunc("/artifacts/{digest}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleArtifactDetail)))
-	mux.HandleFunc("/charts/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleChartDetail)))
+	mux.HandleFunc("/environments/diff", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleEnvironmentDiff)))
+	mux.HandleFunc("/apps/{id}/history", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppHistory)))
+	mux.HandleFunc("/artifacts/{digest}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleArtifactDetail)))
+	mux.HandleFunc("/charts/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleChartDetail)))
 
 	// Screens 30/31/32 (#649): builds, build detail, reconcile runs.
-	mux.HandleFunc("/builds", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBuilds)))
-	mux.HandleFunc("/builds/lookup", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBuildLookup)))
-	mux.HandleFunc("/builds/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleBuildDetail)))
-	mux.HandleFunc("/reconcile-runs", app.auth.RequireAuthFunc(app.withAccessToken(app.handleReconcileRuns)))
+	mux.HandleFunc("/builds", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBuilds)))
+	mux.HandleFunc("/builds/lookup", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBuildLookup)))
+	mux.HandleFunc("/builds/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBuildDetail)))
+	mux.HandleFunc("/reconcile-runs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReconcileRuns)))
 
 	// Screens 09/53 (#646): environments list, create/edit/archive form.
-	mux.HandleFunc("/environments", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironments)))
-	mux.HandleFunc("/environments/new", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentNew)))
-	mux.HandleFunc("/environments/edit", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentEdit)))
-	mux.HandleFunc("/environments/save", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentSave)))
-	mux.HandleFunc("/environments/archive", app.auth.RequireAuthFunc(app.withAccessToken(app.handleEnvironmentArchive)))
+	mux.HandleFunc("/environments", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleEnvironments)))
+	mux.HandleFunc("/environments/new", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleEnvironmentNew)))
+	mux.HandleFunc("/environments/edit", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleEnvironmentEdit)))
+	mux.HandleFunc("/environments/save", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleEnvironmentSave)))
+	mux.HandleFunc("/environments/archive", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleEnvironmentArchive)))
 
 	// Screen 50 (#647): promote, opened pre-scoped to (entity, environment)
 	// from a deployments-matrix cell (FR-6) — GET renders the form, POST
 	// handles both the dry-run and commit submit buttons.
-	mux.HandleFunc("/promote", app.auth.RequireAuthFunc(app.withAccessToken(app.handlePromote)))
+	mux.HandleFunc("/promote", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handlePromote)))
 
 	// Screen 51 (#648): rollback, opened pre-scoped to (entity,
 	// environment) from a deployments-matrix cell (FR-6) — GET renders the
 	// SCD2-derived confirmation (FR-17), POST handles the commit.
-	mux.HandleFunc("/rollback", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRollback)))
+	mux.HandleFunc("/rollback", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRollback)))
 
 	// Screen 40 (#650): drift and adoption audit — read-side only, no
 	// write control (the adopt action, screen 52, is deferred).
-	mux.HandleFunc("/drift-audit", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDriftAudit)))
+	mux.HandleFunc("/drift-audit", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDriftAudit)))
 
 	// Release trigger + status (#890, FR1-5/FR10): GET renders the scope
 	// form, POST resolves it (FR1); status is a durable page keyed by
 	// release_run_id. "/releases/trigger" (a literal path) takes precedence
 	// over the "/releases/{id}" wildcard for that exact segment, the same
 	// precedent "/builds/lookup" vs. "/builds/{id}" already relies on above.
-	mux.HandleFunc("/releases/trigger", app.auth.RequireAuthFunc(app.withAccessToken(app.handleReleaseTrigger)))
-	mux.HandleFunc("/releases/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleReleaseStatus)))
+	mux.HandleFunc("/releases/trigger", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReleaseTrigger)))
+	mux.HandleFunc("/releases/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReleaseStatus)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

@@ -321,9 +321,18 @@ jobs:
         retention-days: 7
 
   # Plan Docker builds - determine which apps need building
+  #
+  # Disabled: nothing consumes the images this produces right now, and the
+  # change-detection this job's plan relies on ("$RELEASE_HELPER" plan) isn't
+  # trusted yet. Disabling here also skips the downstream `docker` job, since
+  # its `if:` depends on this job's outputs and Actions treats a skipped need
+  # as not-success. Re-enable only after the auto change-detection has been
+  # hardened, or drop this job and lean on release-time builds instead -- see
+  # the tracking issues linked in this PR.
   plan-docker:
     name: Plan Docker Builds
     runs-on: ubuntu-latest
+    if: false
     needs: [test, test-container-arch]
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}

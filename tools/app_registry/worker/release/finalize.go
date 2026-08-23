@@ -52,6 +52,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -59,7 +61,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"go.temporal.io/sdk/activity"
+
+	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
@@ -347,7 +353,85 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		return FinalizeResult{}, fmt.Errorf("finalize publish: %w", err)
 	}
 
+	// buildID gates BeginPublish/RecordArtifact for every target kind below
+	// (apps, charts, and publishCLIBinaries) -- planBuildID's doc comment
+	// documents this as an accepted, tolerated skip ("empty build_id ->
+	// registry recording simply skipped"), on the assumption that an empty
+	// value is rare. In practice, for this activity's real invocation
+	// (release_helper_go plan run as a subprocess with no GITHUB_RUN_ID/
+	// GITHUB_SHA in its environment -- see this file's package doc
+	// comment), planRelease's own RecordBuild call (plan.go's "2.
+	// RecordBuild" step) has been observed to consistently leave
+	// PlanResult.BuildID empty, which -- because of json:"build_id,omitempty"
+	// -- disappears from RawJSON entirely rather than surfacing as an
+	// error anywhere. Confirmed against a real prod release
+	// (b9fa55ce-01c9-45c4-b56b-2b4a719b89d9, tools-app-registry/
+	// tools-release_helper_go v0.7.0): FinalizePublish reported
+	// Succeeded:true with the right EffectiveVersion, but no
+	// data.build row and no data.artifact row past "allocated" ever
+	// existed for it -- the "tolerated skip" was silently skipping every
+	// single Temporal-driven release, not just a rare edge case.
+	//
+	// CORRECTION (this fix): a random UUID is NOT safe here. Migration 001
+	// declares `artifact.build_id UUID ... REFERENCES build (build_id)`,
+	// and migration 007 only ever drops that column's NOT NULL for the
+	// "allocated" state -- the FK itself was never dropped. A build_id that
+	// names no row in `build` makes BeginPublish's own UPDATE (and
+	// RecordArtifact's INSERT) fail with `artifact_build_id_fkey`, exactly
+	// reproducing the "not found"/skip symptom this block was written to
+	// fix, just as a hard error instead of a silent skip. So instead of
+	// fabricating an unresolvable id, record a real (if minimal) `build`
+	// row and use its real build_id -- BuildRepository.RecordBuild upserts
+	// on (workflow_run_id, workflow_attempt), so keying it off ref.RunID
+	// (the GitHub Actions run this activity already knows completed, per
+	// PollBuild above) both satisfies the FK and ties the row back to the
+	// actual run, which is strictly more traceable than a random UUID ever
+	// was. git_sha is deliberately a placeholder, not ref-derived (nothing
+	// in ResolvedPlan/BuildRef carries the head commit): unresolvable, it
+	// makes resolveManifestForPublish's build_id -> git_sha lookup fall
+	// through to the owner's current manifest interval, identical to its
+	// existing behavior for a genuinely empty buildID.
 	buildID := planBuildID(plan.RawJSON)
+	if buildID == "" {
+		workflowRunID := ref.RunID
+		if workflowRunID == "" {
+			workflowRunID = uuid.NewString()
+		}
+		b, _, berr := a.Registry.Builds().RecordBuild(ctx, repository.Build{
+			GitSHA:          "unknown",
+			WorkflowRunID:   workflowRunID,
+			WorkflowAttempt: 1,
+			Actor:           "app-registry-worker",
+		})
+		if berr != nil {
+			return FinalizeResult{}, fmt.Errorf("finalize publish: record build for empty plan build_id: %w", berr)
+		}
+		buildID = b.BuildID
+	}
+
+	// idempotencyKeyPrefix is passed to every finalize-app/finalize-chart
+	// subprocess call below as --idempotency-key-prefix, so their own
+	// BeginPublish/RecordArtifact idempotency keys
+	// ("<prefix>-<owner>-<kind>-begin"/"-record", releaser.go) are unique
+	// per Temporal execution. Without it (the bug this fixes), releaser.go
+	// falls back to GITHUB_RUN_ID/GITHUB_RUN_ATTEMPT env reads -- absent in
+	// this activity's subprocess environment (same gap #1069/#1090 already
+	// found for other env-var-dependent fallbacks in this same CLI) -- and
+	// lands on the literal placeholder "local-1" every time, for every
+	// worker-invoked release. That's not merely a skip like #1090: since
+	// "local-1" never varies, EVERY app/chart finalize going through this
+	// path would collide on the exact same idempotency key, and the
+	// registry's idempotent-replay contract means the second-ever such
+	// call replays the FIRST one's cached response instead of recording
+	// the real new version -- a silent stale-data write, not just a
+	// missed one. RunID (not WorkflowExecution.ID -- see #1084's fix in
+	// plan.go's ResolvePlan for why) is unique per execution and stable
+	// across this activity's own at-least-once retries, exactly the
+	// property an idempotency-key prefix needs.
+	idempotencyKeyPrefix := ""
+	if info := activity.GetInfo(ctx); info.WorkflowExecution.RunID != "" {
+		idempotencyKeyPrefix = info.WorkflowExecution.RunID
+	}
 
 	var ghcrToken string
 	if nonCLIAppCount > 0 {
@@ -421,6 +505,9 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		}
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
+		}
+		if idempotencyKeyPrefix != "" {
+			args = append(args, "--idempotency-key-prefix", idempotencyKeyPrefix)
 		}
 		if _, err := runReleaseHelper(ctx, binary, tmpDir, []string{"GHCR_TOKEN=" + ghcrToken}, args...); err != nil {
 			detail := fmt.Sprintf("%s: finalize-app: %v", fullName, err)
@@ -499,7 +586,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	// per-target) so it only ever considers finalizeTargets entries that
 	// already reflect a confirmed finalize-app outcome, never a plan-time
 	// guess.
-	failures = append(failures, a.publishCLIBinaries(ctx, apps, plan.Versions, finalizeTargets, cliBinariesDir, haveCLIBinaries)...)
+	failures = append(failures, a.publishCLIBinaries(ctx, apps, plan.Versions, finalizeTargets, cliBinariesDir, haveCLIBinaries, buildID)...)
 
 	appVersionsJSON, _ := json.Marshal(appVersions) //nolint:errcheck
 	appDigestsJSON, _ := json.Marshal(appDigests)   //nolint:errcheck
@@ -544,6 +631,9 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		}
 		if buildID != "" {
 			args = append(args, "--build-id", buildID)
+		}
+		if idempotencyKeyPrefix != "" {
+			args = append(args, "--idempotency-key-prefix", idempotencyKeyPrefix)
 		}
 		if _, err := runReleaseHelper(ctx, binary, tmpDir, chartEnv, args...); err != nil {
 			detail := fmt.Sprintf("%s: finalize-chart: %v", fullName, err)
@@ -737,7 +827,26 @@ func loadChartManifest(dir string) (map[string]buildChartManifestEntry, error) {
 // slice, exactly the same shape every other failure path in this file
 // uses -- FR9's guarantee only holds if a confirmed-version target's
 // publish is never silently skipped.
-func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, versions map[string]string, finalizeTargets map[string]FinalizeTargetOutcome, cliBinariesDir string, haveCLIBinaries bool) []string {
+//
+// A successful S3 upload alone does not make the target promotable: it
+// still must be recorded in the App Registry (BeginPublish then
+// RecordArtifact, transitioning the AllocateVersion-created "allocated"
+// row through "publishing" to "published") the same way finalize-app/
+// finalize-chart's ExecuteRelease already does for image/chart targets --
+// see recordCLIBinaryArtifact's doc comment. Without this, a real prod
+// release (targets tools-app-registry/tools-release_helper_go, v0.6.0)
+// uploaded its binaries to S3 successfully but VerifyPublished
+// (record.go) correctly reported "no published artifact found: not
+// found" for both, since nothing had ever moved the row past "allocated"
+// -- the release_run_target ended up Failed despite the underlying
+// upload having genuinely worked. buildID (the App Registry build_id this
+// release's plan resolved, same value the apps loop above passes to
+// finalize-app/finalize-chart) gates this exactly like that existing
+// path: an empty buildID means BeginPublish/RecordArtifact are simply
+// skipped (planBuildID's doc comment), not treated as a target failure --
+// registry recording was already best-effort/tolerated for images with no
+// buildID, so binaries are no stricter.
+func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, versions map[string]string, finalizeTargets map[string]FinalizeTargetOutcome, cliBinariesDir string, haveCLIBinaries bool, buildID string) []string {
 	var failures []string
 	var uploader binaryUploader
 
@@ -777,6 +886,7 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 		}
 
 		var uploadErr error
+		var checksumsData []byte
 		for _, e := range entries {
 			if e.IsDir() {
 				continue
@@ -796,6 +906,9 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 				uploadErr = fmt.Errorf("read %s: %w", fileName, rerr)
 				break
 			}
+			if fileName == "checksums.txt" {
+				checksumsData = data
+			}
 			s3Key := cliBinaryS3Key(binaryName, version, fileName)
 			if _, uerr := uploader.Upload(ctx, s3Key, data, nil); uerr != nil {
 				uploadErr = fmt.Errorf("upload %s: %w", s3Key, uerr)
@@ -808,10 +921,66 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 			failures = append(failures, detail)
 			continue
 		}
+
+		if buildID != "" {
+			if err := a.recordCLIBinaryArtifact(ctx, fullName, version, buildID, checksumsData); err != nil {
+				detail := fmt.Sprintf("%s: record published artifact in App Registry: %v", fullName, err)
+				finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
+				failures = append(failures, detail)
+				continue
+			}
+		}
 		finalizeTargets[key] = FinalizeTargetOutcome{EffectiveVersion: version}
 	}
 
 	return failures
+}
+
+// recordCLIBinaryArtifact transitions fullName's AllocateVersion-created
+// "allocated" artifact row through "publishing" to "published" (the same
+// BeginPublish-then-RecordArtifact sequence ExecuteRelease uses for
+// image/chart targets -- tools/release_helper_go/cmd/releaser.go -- just
+// called in-process against a.Registry instead of over gRPC, matching
+// this package's established direct-Postgres pattern for release_run
+// bookkeeping (record.go's package doc comment)). Digest is a SHA-256 of
+// the platform binaries' checksums.txt -- the closest available
+// content-identity signal in this flow, since (unlike ExecuteRelease's
+// BinaryReleaser, which hashes a locally bazel-built file) this activity
+// never builds anything: it only downloads a pre-built, already-uploaded
+// cli-binaries GHA artifact.
+func (a *Activities) recordCLIBinaryArtifact(ctx context.Context, fullName, version, buildID string, checksumsData []byte) error {
+	if len(checksumsData) == 0 {
+		return fmt.Errorf("no checksums.txt content to derive a digest from")
+	}
+	sum := sha256.Sum256(checksumsData)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+
+	app, err := a.Registry.Apps().GetAppByFullName(ctx, fullName)
+	if err != nil {
+		return fmt.Errorf("look up app %q: %w", fullName, err)
+	}
+	repositoryHint := fmt.Sprintf("github.com/%s/%s", a.GitHub.Config.Owner, a.GitHub.Config.Repo)
+
+	if _, err := a.Registry.Artifacts().BeginPublish(ctx, repository.ArtifactKindBinary, app.AppID, version, buildID, repositoryHint, repository.VersionSourceRegistry); err != nil {
+		return fmt.Errorf("begin publish: %w", err)
+	}
+
+	domainStage, err := a.Registry.DomainAdoption().GetStage(ctx, app.Domain)
+	if err != nil {
+		return fmt.Errorf("check App Registry adoption stage for domain %q: %w", app.Domain, err)
+	}
+	if _, _, err := a.Registry.Artifacts().RecordArtifact(ctx, repository.Artifact{
+		Kind:        repository.ArtifactKindBinary,
+		AppID:       app.AppID,
+		Repository:  repositoryHint,
+		Version:     version,
+		Digest:      digest,
+		BuildID:     buildID,
+		PublishedAt: time.Now(),
+	}, nil, domainStage); err != nil {
+		return fmt.Errorf("record artifact: %w", err)
+	}
+	return nil
 }
 
 // binaryUploaderFor returns the binaryUploader FinalizePublish's CLI-binary

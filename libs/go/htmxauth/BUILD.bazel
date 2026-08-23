@@ -9,6 +9,7 @@ go_library(
     importpath = "github.com/whale-net/everything/libs/go/htmxauth",
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/go/grpcauth",
         "@com_github_coreos_go_oidc_v3//oidc",
         "@com_github_gorilla_sessions//:sessions",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -21,8 +22,10 @@ go_test(
     srcs = ["auth_test.go"],
     embed = [":htmxauth"],
     deps = [
+        "@com_github_coreos_go_oidc_v3//oidc",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@org_golang_x_oauth2//:oauth2",
     ],
 )
 

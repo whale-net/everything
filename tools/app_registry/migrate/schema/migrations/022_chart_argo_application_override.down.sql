@@ -1,0 +1,1 @@
+DROP TABLE chart_argo_application_override;

@@ -3,16 +3,17 @@ package components
 import (
 	"fmt"
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/whale-net/everything/manmanv2/protos"
 )
 
 type LayoutData struct {
-	Title           string
-	Active          string
-	User            *htmxauth.UserInfo
-	Servers         []*manmanpb.Server
-	SelectedServer  *manmanpb.Server
-	Breadcrumbs     []Breadcrumb
+	Title          string
+	Active         string
+	User           *htmxauth.UserInfo
+	Servers        []*manmanpb.Server
+	SelectedServer *manmanpb.Server
+	Breadcrumbs    []Breadcrumb
 }
 
 type Breadcrumb struct {
@@ -21,50 +22,109 @@ type Breadcrumb struct {
 	Icon  string
 }
 
-templ NavItem(href, label, active string) {
+// manmanThemes is the FR6 theme list manmanv2 offers through the shared
+// htmxui.ThemeSwitcher (mounted by Layout, below): light, night, oled,
+// and sunset, keyed to the [data-theme="..."] rules in the shared
+// libs/go/htmxui/themes.css. OLED is reachable here where it never was
+// under the old Tailwind darkMode:'class' + manual `dark` class toggle
+// (FR6 defect) — see themes.css for the actual pure-black palette this
+// now renders. sunset is issue #1012's FR10 proof-of-concept theme (warm
+// amber/coral, deliberately distinct from light/night/oled); it was added
+// to tools/app_registry/ui/components/layout.templ's shellThemes when
+// #1012 landed but not here, so manmanv2's switcher fell behind
+// app-registry's until #1085 caught the gap and #1086 wired it in to
+// match.
+var manmanThemes = []htmxui.Theme{
+	{Value: "light", Label: "☀️ Light"},
+	{Value: "night", Label: "🌙 Night"},
+	{Value: "oled", Label: "⚫ OLED Night"},
+	{Value: "sunset", Label: "🌅 Sunset"},
+}
+
+// navLink renders one nav entry, marking it active by exact label match
+// (mirrors the pre-migration NavItem's active-comparison semantics).
+templ navLink(href, label, active string) {
 	if active == label {
-		<a href={ templ.URL(href) } class="bg-slate-900 dark:bg-black text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{ label }</a>
+		<li><a href={ templ.URL(href) } class="menu-active">{ label }</a></li>
 	} else {
-		<a href={ templ.URL(href) } class="text-slate-300 hover:bg-slate-700 hover:text-white px-3 py-2 rounded-md text-sm font-medium transition-colors">{ label }</a>
+		<li><a href={ templ.URL(href) }>{ label }</a></li>
 	}
 }
 
-templ MobileNavItem(href, label, active string) {
-	if active == label {
-		<a href={ templ.URL(href) } class="bg-slate-700 text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">{ label }</a>
-	} else {
-		<a href={ templ.URL(href) } class="text-slate-300 hover:bg-slate-700 hover:text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">{ label }</a>
-	}
-}
-
-templ ThemeSwitcher() {
-	<div class="relative" id="theme-switcher">
-		<button type="button" id="theme-button" class="text-slate-300 hover:text-white p-2 rounded-md hover:bg-slate-700 transition-colors" aria-label="Switch theme">
+// navItems is manmanv2's app-owned nav item list (FR1a — Shell hardcodes
+// no nav of its own, see htmxui.ShellData's doc comment). It renders
+// twice: once as a horizontal menu for wide viewports, once folded into a
+// dropdown menu (reusing the same tabindex/focus-driven daisyUI dropdown
+// pattern htmxui.ThemeSwitcher uses, see theme_switcher.templ) for narrow
+// ones, so collapsing the old hamburger menu needs no JS of its own —
+// the previous themeManagement() script's manual mobile-menu-button
+// toggle is retired along with the rest of that script.
+templ navItems(data LayoutData) {
+	<ul class="menu menu-horizontal hidden lg:flex px-1">
+		@navLink("/", "Dashboard", data.Active)
+		@navLink("/servers", "Servers", data.Active)
+		@navLink("/games", "Games", data.Active)
+		@navLink("/sessions", "Sessions", data.Active)
+		@navLink("/workshop/library", "Workshop", data.Active)
+	</ul>
+	<div class="dropdown lg:hidden">
+		<div tabindex="0" role="button" class="btn btn-ghost btn-sm" aria-label="Open menu">
 			<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path>
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
 			</svg>
-		</button>
-		<div id="theme-menu" class="hidden absolute right-0 mt-2 w-48 bg-white dark:bg-slate-800 rounded-md shadow-lg py-1 ring-1 ring-black ring-opacity-5">
-			<button data-theme="light" class="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700">☀️ Light</button>
-			<button data-theme="night" class="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700">🌙 Night</button>
-			<button data-theme="oled" class="block w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-slate-700">⚫ OLED Night</button>
 		</div>
+		<ul tabindex="0" class="dropdown-content menu bg-base-100 text-base-content rounded-box z-10 w-64 p-2 shadow">
+			@navLink("/", "Dashboard", data.Active)
+			@navLink("/servers", "Servers", data.Active)
+			@navLink("/games", "Games", data.Active)
+			@navLink("/sessions", "Sessions", data.Active)
+			@navLink("/workshop/library", "Workshop", data.Active)
+			<li class="menu-title">Server</li>
+			@MobileServerSelector(data.Servers, data.SelectedServer)
+		</ul>
 	</div>
 }
 
-templ MobileThemeSwitcher() {
-	<div class="px-3 py-3 space-y-2">
-		<div class="text-gray-600 dark:text-slate-400 text-sm mb-2">Theme</div>
-		<button data-theme="light" class="mobile-theme-btn w-full text-left px-3 py-3 rounded-md text-base text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-white min-h-[44px]">☀️ Light</button>
-		<button data-theme="night" class="mobile-theme-btn w-full text-left px-3 py-3 rounded-md text-base text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-white min-h-[44px]">🌙 Night</button>
-		<button data-theme="oled" class="mobile-theme-btn w-full text-left px-3 py-3 rounded-md text-base text-gray-700 dark:text-slate-300 hover:bg-gray-100 dark:hover:bg-slate-700 hover:text-gray-900 dark:hover:text-white min-h-[44px]">⚫ OLED Night</button>
+// headerRight is manmanv2's HeaderRight composition slot content (FR8):
+// the desktop-visible ServerSelector plus the shared htmxui.UserMenu,
+// composed as siblings — never folded together, since UserMenu takes no
+// manmanv2-specific parameters (ServerSelector included) per FR8's
+// composition rule. ServerSelector keeps its own "hidden lg:flex"
+// wrapper and its dedicated narrow-viewport copy (MobileServerSelector,
+// in navItems' dropdown above) because it has no built-in responsive
+// behavior of its own. UserMenu needs neither: it is a single
+// self-contained dropdown that already covers narrow viewports (see
+// UserMenu's doc comment), so it renders unconditionally here, and the
+// old mobile-duplicate logout link that used to live in navItems'
+// dropdown is gone — one UserMenu instance now covers both desktop and
+// mobile.
+templ headerRight(data LayoutData) {
+	<div class="hidden lg:flex items-center gap-2">
+		@ServerSelector(data.Servers, data.SelectedServer)
 	</div>
+	@htmxui.UserMenu(htmxui.UserMenuData{
+		IdentityLabel: userIdentityLabel(data.User),
+		LogoutHref:    "/auth/logout",
+	})
+}
+
+// userIdentityLabel bridges manmanv2's htmxauth.UserInfo to UserMenu's
+// plain-string IdentityLabel (FR8): UserMenu deliberately takes no
+// htmxauth dependency (see UserMenuData's doc comment), so this is the
+// one place manmanv2 extracts a display string from its actual user
+// type. A nil User (e.g. AUTH_MODE=none) yields "", which UserMenu
+// already renders as nothing.
+func userIdentityLabel(user *htmxauth.UserInfo) string {
+	if user == nil {
+		return ""
+	}
+	return user.Name
 }
 
 templ ServerSelector(servers []*manmanpb.Server, selectedServer *manmanpb.Server) {
 	if len(servers) > 0 {
 		<form method="POST" action="/select-server" class="flex items-center">
-			<select name="server_id" onchange="this.form.submit()" class="bg-slate-700 dark:bg-slate-950 text-white border border-slate-600 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+			<select name="server_id" onchange="this.form.submit()" class="select select-sm">
 				<option value="">Select Server</option>
 				for _, server := range servers {
 					if selectedServer != nil && selectedServer.ServerId == server.ServerId {
@@ -90,9 +150,9 @@ templ ServerSelector(servers []*manmanpb.Server, selectedServer *manmanpb.Server
 
 templ MobileServerSelector(servers []*manmanpb.Server, selectedServer *manmanpb.Server) {
 	if len(servers) > 0 {
-		<div class="px-3 py-3">
-			<form method="POST" action="/select-server">
-				<select name="server_id" onchange="this.form.submit()" class="w-full bg-white dark:bg-slate-950 text-gray-900 dark:text-white border border-gray-300 dark:border-slate-600 rounded-md px-3 py-3 text-base min-h-[44px]">
+		<li>
+			<form method="POST" action="/select-server" class="w-full">
+				<select name="server_id" onchange="this.form.submit()" class="select select-sm w-full">
 					<option value="">Select Server</option>
 					for _, server := range servers {
 						if selectedServer != nil && selectedServer.ServerId == server.ServerId {
@@ -113,177 +173,65 @@ templ MobileServerSelector(servers []*manmanpb.Server, selectedServer *manmanpb.
 					}
 				</select>
 			</form>
-		</div>
+		</li>
 	}
-}
-
-templ Nav(data LayoutData) {
-	<nav class="bg-slate-800 dark:bg-slate-900 shadow-lg sticky top-0 z-50">
-		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-			<div class="flex items-center justify-between h-16">
-				<div class="flex items-center flex-1">
-					<div class="flex-shrink-0">
-						<a href="/" class="text-xl font-bold text-white">ManManV2</a>
-					</div>
-					<div class="hidden md:block ml-10">
-						<div class="flex items-baseline space-x-4">
-							@NavItem("/", "Dashboard", data.Active)
-							@NavItem("/servers", "Servers", data.Active)
-							@NavItem("/games", "Games", data.Active)
-							@NavItem("/sessions", "Sessions", data.Active)
-							@NavItem("/workshop/library", "Workshop", data.Active)
-						</div>
-					</div>
-				</div>
-				<div class="hidden md:flex items-center space-x-4">
-					@ServerSelector(data.Servers, data.SelectedServer)
-					@ThemeSwitcher()
-					if data.User != nil {
-						<a href="/auth/logout" class="text-slate-300 hover:text-white px-3 py-2 rounded-md text-sm font-medium hover:bg-slate-700 transition-colors">
-							Logout ({ data.User.Name })
-						</a>
-					}
-				</div>
-				<div class="md:hidden">
-					<button type="button" id="mobile-menu-button" class="text-slate-300 hover:text-white p-2 rounded-md hover:bg-slate-700" aria-label="Open menu">
-						<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-						</svg>
-					</button>
-				</div>
-			</div>
-		</div>
-		<div id="mobile-menu" class="hidden md:hidden bg-slate-900 dark:bg-black">
-			<div class="px-2 pt-2 pb-3 space-y-1">
-				@MobileNavItem("/", "Dashboard", data.Active)
-				@MobileNavItem("/servers", "Servers", data.Active)
-				@MobileNavItem("/games", "Games", data.Active)
-				@MobileNavItem("/sessions", "Sessions", data.Active)
-				@MobileNavItem("/workshop/library", "Workshop", data.Active)
-				@MobileServerSelector(data.Servers, data.SelectedServer)
-				@MobileThemeSwitcher()
-				if data.User != nil {
-					<a href="/auth/logout" class="text-slate-300 hover:bg-slate-700 hover:text-white block px-3 py-3 rounded-md text-base font-medium min-h-[44px] flex items-center">
-						Logout ({ data.User.Name })
-					</a>
-				}
-			</div>
-		</div>
-	</nav>
 }
 
 templ Breadcrumbs(items []Breadcrumb) {
 	if len(items) > 0 {
-		<nav class="flex mb-4" aria-label="Breadcrumb">
-			<ol class="inline-flex items-center space-x-1 md:space-x-3">
-				for i, item := range items {
-					<li class="inline-flex items-center">
-						if i > 0 {
-							<svg class="w-3 h-3 text-gray-400 mx-1" fill="currentColor" viewBox="0 0 20 20">
-								<path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd"></path>
-							</svg>
-						}
+		<nav class="breadcrumbs text-sm mb-4" aria-label="Breadcrumb">
+			<ul>
+				for _, item := range items {
+					<li>
 						if item.URL != "" {
-							<a href={ templ.URL(item.URL) } class="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400">
-								{ item.Label }
-							</a>
+							<a href={ templ.URL(item.URL) }>{ item.Label }</a>
 						} else {
-							<span class="text-sm font-medium text-gray-500 dark:text-gray-400">{ item.Label }</span>
+							<span>{ item.Label }</span>
 						}
 					</li>
 				}
-			</ol>
+			</ul>
 		</nav>
 	}
 }
 
-script themeScript() {
-	(function() {
-		const theme = localStorage.getItem('manman-theme') || 
-					  (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'light');
-		document.documentElement.setAttribute('data-theme', theme);
-		if (theme === 'night' || theme === 'oled') {
-			document.documentElement.classList.add('dark');
-		}
-	})();
-}
-
-script themeManagement() {
-	(function() {
-		const themeButton = document.getElementById('theme-button');
-		const themeMenu = document.getElementById('theme-menu');
-		const mobileMenuButton = document.getElementById('mobile-menu-button');
-		const mobileMenu = document.getElementById('mobile-menu');
-
-		function setTheme(theme) {
-			const currentTheme = document.documentElement.getAttribute('data-theme');
-			document.documentElement.setAttribute('data-theme', theme);
-			localStorage.setItem('manman-theme', theme);
-			
-			if (theme === 'light') {
-				document.documentElement.classList.remove('dark');
-			} else {
-				document.documentElement.classList.add('dark');
-			}
-			
-			// Reload page if theme actually changed (Tailwind CDN needs reload)
-			if (currentTheme && currentTheme !== theme) {
-				location.reload();
-			}
-		}
-
-		if (themeButton && themeMenu) {
-			themeButton.addEventListener('click', () => {
-				themeMenu.classList.toggle('hidden');
-			});
-
-			document.addEventListener('click', (e) => {
-				if (!themeButton.contains(e.target) && !themeMenu.contains(e.target)) {
-					themeMenu.classList.add('hidden');
-				}
-			});
-
-			themeMenu.querySelectorAll('[data-theme]').forEach(btn => {
-				btn.addEventListener('click', () => {
-					setTheme(btn.dataset.theme);
-					themeMenu.classList.add('hidden');
-				});
-			});
-		}
-
-		document.querySelectorAll('.mobile-theme-btn').forEach(btn => {
-			btn.addEventListener('click', () => {
-				setTheme(btn.dataset.theme);
-			});
-		});
-
-		if (mobileMenuButton && mobileMenu) {
-			mobileMenuButton.addEventListener('click', () => {
-				mobileMenu.classList.toggle('hidden');
-			});
-		}
-	})();
-}
-
+// toastScript keeps the pre-migration showToast custom-event contract
+// (evt.detail.type / evt.detail.message) unchanged (FR7 — no behavior
+// changes, only markup/styling), but builds daisyUI's own toast recipe
+// for the appended item now that #toast (below) is a real daisyUI `.toast`
+// positioning container: `.toast` on the item itself, as the pre-daisyUI
+// version used, would collide with that container class, so items use
+// `.alert.alert-{type}` instead — daisyUI's toast-item vocabulary.
 script toastScript() {
 	document.body.addEventListener('showToast', function(evt) {
 		const toast = document.createElement('div');
-		toast.className = 'toast toast-' + evt.detail.type;
+		toast.className = 'alert alert-' + evt.detail.type;
 		toast.textContent = evt.detail.message;
 		document.getElementById('toast').appendChild(toast);
 		setTimeout(() => toast.remove(), 5000);
 	});
 }
 
+// Layout is manmanv2's chrome, rebuilt on htmxui.Shell (FR4): the shared
+// navbar frame and ThemeSwitcher mount now come from htmxui, with
+// manmanv2's own nav (navItems), server selector + logout (headerRight),
+// and breadcrumbs (as Shell's app-specific Banner slot) composed in via
+// Shell's app-owned slots (FR1a). The local ThemeSwitcher/
+// MobileThemeSwitcher and their themeManagement()/themeScript() JS
+// (FR5's location.reload() defect lived there) are deleted outright, not
+// migrated — htmxui.ThemeSwitcher replaces them.
 templ Layout(data LayoutData) {
-	@Nav(data)
-	<main class="min-h-screen bg-gray-100 dark:bg-slate-900">
-		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-			@Breadcrumbs(data.Breadcrumbs)
-			{ children... }
-		</div>
-	</main>
-	<div id="toast" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
-	@themeManagement()
+	@htmxui.Shell(htmxui.ShellData{
+		Title:       data.Title,
+		BrandLabel:  "ManManV2",
+		BrandHref:   "/",
+		Nav:         navItems(data),
+		Banner:      Breadcrumbs(data.Breadcrumbs),
+		HeaderRight: headerRight(data),
+		Themes:      manmanThemes,
+	}) {
+		{ children... }
+	}
+	<div id="toast" class="toast toast-end"></div>
+	@toastScript()
 }
-

@@ -24,10 +24,9 @@ tools/app_registry/ui/
   deployments_data.go       # buildDeploymentMatrix: the N concurrent GetEnvironmentState fan-out (FR-7)
   handlers_dashboard.go     # screen 01-dashboard ("/")
   handlers_deployments.go   # screen 10-environment-status ("/deployments")
-  themes.css                # synced copy of tools/wireframe/themes.css (see below)
   components/                # shared chrome, vocabulary, and role-gate helpers (see "Design system")
-    layout.templ               # Shell: navbar, nav items, FR-59 banner slot
-    badges.templ                # PromotabilityBadge / ArtifactStateBadge / ProvenanceBadge — the one definition of each
+    layout.templ               # Shell: thin wrapper around libs/go/htmxui's Shell (nav items, FR-59 banner slot)
+    badges.templ                # PromotabilityBadge / ArtifactStateBadge / ProvenanceBadge — the one definition of each, over htmxui.Badge
     digest.templ                 # DigestDisplay: truncated + copyable digest, shown alongside version
     banner.templ                  # MisconfigBanner: the FR-59 persistent banner
     gate.templ                     # GatedAction / GatedLinkAction: standard "unavailable action" rendering
@@ -107,9 +106,9 @@ baseline; a troubleshooting screen should widen the container and drop the
 vertical `space-y` rhythm rather than reuse the card-per-section layout.
 
 Badge/status colours map through daisyUI 5 semantic classes (`badge-
-success`, `badge-error`, etc.), themed by `tools/wireframe/themes.css` (see
-"Styling" below) — never a raw hex colour or a Tailwind colour utility, so
-a theme change updates every badge for free.
+success`, `badge-error`, etc.), themed by `htmxui.ThemesCSS` (see "Styling"
+below) — never a raw hex colour or a Tailwind colour utility, so a theme
+change updates every badge for free.
 
 ## FR-59 misconfiguration banner
 
@@ -139,18 +138,36 @@ no separate mode branch needed here.
 - Tailwind's browser build (`@tailwindcss/browser@4.3.3`) and daisyUI
   (`daisyui@5.6.18`) load from pinned CDN URLs — no Node, no bundler, no
   CSS toolchain (NFR-20). The image build stays a pure Go cross-compile.
-- `themes.css` supplies the daisyUI theme-variable overrides. Go's
-  `//go:embed` directive cannot reach across a Bazel package boundary, so
-  `themes.css` here is a **synced literal copy** of
-  `tools/wireframe/themes.css`, not a shared reference. Keep the two
-  byte-for-byte identical when either changes; `themes.css`'s own header
-  comment repeats this.
-- **Trap:** `libs/go/htmxbase/layout.go` renders its `CustomCSS` slot
-  *before* `CustomHead`. `themes.css` must load after daisyUI's
-  stylesheet, so `templ_render.go` puts the daisyUI `<link>` and the
-  `themes.css` `<style>` both in `CustomHead` (which renders last), in
-  that order. Splitting them across `CustomCSS`/`CustomHead` silently
-  yields daisyUI's default palette with no error.
+- Shared UI chrome and primitives come from `//libs/go/htmxui` (issue
+  #1005, FR2): `components.Shell` is a thin app-registry wrapper around
+  `htmxui.Shell`, supplying this app's own nav list and `MisconfigBanner`
+  as `htmxui.Shell`'s app-owned slots; `badges.templ` expresses this app's
+  promotability/artifact-state/provenance vocabulary in terms of the
+  generic `htmxui.Badge` primitive; and the three previously-independent
+  confirm/danger-zone blocks in `pages/promote.templ`, `pages/rollback.templ`,
+  and `pages/environment_form.templ` now all route through the single
+  shared `htmxui.Confirm` component. This package no longer maintains its
+  own local Shell/badge/confirm implementations.
+- The top-right user area is `htmxui.UserMenu` (issue #1010, FR8),
+  composed into `htmxui.Shell`'s `HeaderRight` slot: a dropdown showing
+  `user.PreferredUsername` plus a visible logout link to `/auth/logout`
+  (the existing `htmxauth.Authenticator.HandleLogout` route registered in
+  `main.go` — no backend change). Before this, app-registry showed only a
+  bare identity `<span>` with no logout control at all. `htmxui.ThemeSwitcher`
+  (light/night/oled, matching manmanv2's set) is mounted alongside it in the
+  same slot region — app-registry previously mounted no theme switcher.
+- `htmxui.ThemesCSS` (`//libs/go/htmxui`, `themes.css` embedded via
+  `//go:embed`) is the single source of truth for the daisyUI
+  theme-variable overrides — **not** a copy maintained here. `RenderTempl`
+  in `templ_render.go` renders it directly (`<style>{htmxui.ThemesCSS}</style>`).
+- **Trap (NFR5 — do not rediscover):** `libs/go/htmxbase/layout.go` renders
+  its `CustomCSS` slot *before* `CustomHead`. `htmxui.ThemesCSS` must load
+  after daisyUI's stylesheet, so `templ_render.go` puts the daisyUI
+  `<link>` and the `htmxui.ThemesCSS` `<style>` both in `CustomHead` (which
+  renders last), in that order — never `CustomCSS`. Splitting them across
+  `CustomCSS`/`CustomHead` silently yields daisyUI's default palette with
+  no error. `templ_render_test.go`'s `TestRenderTempl_ThemesCSSLoadsAfterDaisyUILink`
+  guards this directly.
 
 ## Generated templ files
 

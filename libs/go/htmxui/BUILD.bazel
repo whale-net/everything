@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+# templ_library, not go_library (FR1): this is the first templ_library under
+# libs/go/. It diverges from its directory siblings htmxauth/htmxbase, which
+# are plain go_library rules with no .templ sources. See
+# tools/app_registry/ui/components/BUILD.bazel for the pattern this mirrors,
+# and libs/go/htmxui/README.md for why. Do not let gazelle collapse this back
+# into a go_library rule.
+templ_library(
+    # keep
+    name = "htmxui",
+    srcs = glob(["*.templ"]),
+    embedsrcs = ["themes.css"],
+    go_srcs = [
+        "doc.go",
+        "themes.go",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [],
+)
+
+# Content-primitive unit tests (#1003, FR1/FR1b): rendering each
+# button/badge/card/confirm variant to a buffer and asserting on the
+# emitted daisyUI classes, slot ordering/dropping, and forwarded
+# attributes. Mirrors tools/app_registry/ui/components/BUILD.bazel's
+# components_test pattern (embed the library, depend on the templ runtime).
+go_test(
+    name = "htmxui_test",
+    size = "small",
+    srcs = ["htmxui_test.go"],
+    embed = [":htmxui"],
+    deps = ["@com_github_a_h_templ//:templ"],
+)

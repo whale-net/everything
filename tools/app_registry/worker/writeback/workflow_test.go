@@ -148,9 +148,10 @@ func TestWritebackWorkflow_RenderFailurePropagates(t *testing.T) {
 // TestWritebackWorkflow_TriggersArgoSyncAfterRecordWritebackResult proves
 // FR1-FR5's wiring into WritebackWorkflow: TriggerArgoRefresh then
 // PollArgoSyncStatus are called, in that order, after
-// RecordWritebackResult -- and ApplicationName is derived from the SAME
-// RenderedState.ChartName/EnvironmentKey fields Publish already used
-// ("<ChartName>-<EnvironmentKey>"), never re-derived a second way (see
+// RecordWritebackResult -- and ApplicationName is read verbatim from
+// RenderedState.ArgoApplicationName (here, the plain
+// "<ChartName>-<EnvironmentKey>" convention, resolved upstream by
+// RenderEnvironmentState), never re-derived a second way here (see
 // ArgoSyncInput's doc comment and issue #1030's Summary).
 func TestWritebackWorkflow_TriggersArgoSyncAfterRecordWritebackResult(t *testing.T) {
 	ts := testsuite.WorkflowTestSuite{}
@@ -158,7 +159,7 @@ func TestWritebackWorkflow_TriggersArgoSyncAfterRecordWritebackResult(t *testing
 	registerActivityStubs(env)
 
 	in := WritebackInput{PromotionID: "promo-5", EnvironmentKey: "stage", Domain: "acme", StateHash: "hash-5"}
-	rendered := RenderedState{EnvironmentKey: "stage", Domain: "acme", ChartName: "foo", StateHash: "hash-5", Document: []byte(`{"ok":true}`)}
+	rendered := RenderedState{EnvironmentKey: "stage", Domain: "acme", ChartName: "foo", ArgoApplicationName: "foo-stage", StateHash: "hash-5", Document: []byte(`{"ok":true}`)}
 	want := PublishResult{Location: "acme/foo/versions/stage.yaml", CommitSHA: "cafef00d"}
 	wantArgoIn := ArgoSyncInput{PromotionID: "promo-5", Domain: "acme", ApplicationName: "foo-stage"}
 
@@ -188,6 +189,36 @@ func TestWritebackWorkflow_TriggersArgoSyncAfterRecordWritebackResult(t *testing
 	var got PublishResult
 	require.NoError(t, env.GetWorkflowResult(&got))
 	require.Equal(t, want, got)
+}
+
+// TestWritebackWorkflow_ArgoApplicationNameUsesOverrideVerbatim proves
+// WritebackWorkflow never recomputes ApplicationName from
+// ChartName/EnvironmentKey itself: when RenderedState.ArgoApplicationName
+// diverges from the "<ChartName>-<EnvironmentKey>" convention (an
+// ad-hoc/legacy deployment's admin-set override, resolved upstream by
+// RenderEnvironmentState -- see repository.Chart.ResolveArgoApplicationName),
+// the workflow passes that override through unchanged.
+func TestWritebackWorkflow_ArgoApplicationNameUsesOverrideVerbatim(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	in := WritebackInput{PromotionID: "promo-6", EnvironmentKey: "stage", Domain: "acme", StateHash: "hash-6"}
+	rendered := RenderedState{EnvironmentKey: "stage", Domain: "acme", ChartName: "foo", ArgoApplicationName: "legacy-foo-app", StateHash: "hash-6", Document: []byte(`{"ok":true}`)}
+	want := PublishResult{Location: "acme/foo/versions/stage.yaml", CommitSHA: "cafef00e"}
+	wantArgoIn := ArgoSyncInput{PromotionID: "promo-6", Domain: "acme", ApplicationName: "legacy-foo-app"}
+
+	env.OnActivity(ActivityRenderEnvironmentState, mock.Anything, in).Return(rendered, nil).Once()
+	env.OnActivity(ActivityPublish, mock.Anything, rendered).Return(want, nil).Once()
+	env.OnActivity(ActivityRecordWritebackResult, mock.Anything, in.PromotionID, want.Location, want.CommitSHA).Return(nil).Once()
+	env.OnActivity(ActivityTriggerArgoRefresh, mock.Anything, wantArgoIn).Return(nil).Once()
+	env.OnActivity(ActivityPollArgoSyncStatus, mock.Anything, wantArgoIn).Return(ArgoSyncResult{SyncStatus: "Synced", HealthStatus: "Healthy", Terminal: true}, nil).Once()
+
+	env.ExecuteWorkflow(WritebackWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
 }
 
 // TestWritebackWorkflow_ArgoSyncFailureDoesNotFailWorkflow proves the

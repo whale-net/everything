@@ -660,6 +660,158 @@ func TestSetAppStatus_RequiresReason(t *testing.T) {
 }
 
 // ============================================================================
+// SetChartArgoApplicationNameOverride
+// ============================================================================
+
+// TestSetChartArgoApplicationNameOverride_SetAndClear covers the round trip
+// through chartToPB by full_name lookup: setting a per-environment override,
+// then clearing it (empty string) back to "no override" for that one
+// environment -- see repository.Chart.ResolveArgoApplicationName.
+func TestSetChartArgoApplicationNameOverride_SetAndClear(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "demo", Name: "chart", Apps: []string{"svc"}}}),
+		IdempotencyKey: "chartoverride-1",
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	set, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{
+		FullName:            "demo-chart",
+		EnvironmentKey:      "prod",
+		ArgoApplicationName: "legacy-app-prod",
+		Reason:              "ad-hoc deployment predates the naming convention",
+	})
+	if err != nil {
+		t.Fatalf("set override: %v", err)
+	}
+	if got := set.Chart.GetArgoApplicationNameOverrides()["prod"]; got != "legacy-app-prod" {
+		t.Fatalf("expected prod override on response, got %q", got)
+	}
+
+	got, err := srv.GetApp(ctx, &pb.GetAppRequest{FullName: "demo-svc"})
+	if err != nil {
+		t.Fatalf("get app: %v", err)
+	}
+	if len(got.Charts) != 1 || got.Charts[0].GetArgoApplicationNameOverrides()["prod"] != "legacy-app-prod" {
+		t.Fatalf("expected override to persist through GetApp's chart list, got %+v", got.Charts)
+	}
+
+	cleared, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{
+		FullName:       "demo-chart",
+		EnvironmentKey: "prod",
+		Reason:         "reverting to the naming convention",
+	})
+	if err != nil {
+		t.Fatalf("clear override: %v", err)
+	}
+	if got := cleared.Chart.GetArgoApplicationNameOverrides()["prod"]; got != "" {
+		t.Fatalf("expected override cleared, got %q", got)
+	}
+}
+
+// TestSetChartArgoApplicationNameOverride_EnvironmentsAreIndependent proves
+// setting dev's override never touches prod's, and the two can carry
+// completely unrelated names -- the scenario a single per-chart template
+// (the design this superseded) couldn't express.
+func TestSetChartArgoApplicationNameOverride_EnvironmentsAreIndependent(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+
+	if _, err := srv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")},
+			[]*appmetapb.ChartManifest{{Domain: "demo", Name: "chart", Apps: []string{"svc"}}}),
+		IdempotencyKey: "chartoverride-independent-1",
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if _, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{
+		FullName:            "demo-chart",
+		EnvironmentKey:      "dev",
+		ArgoApplicationName: "foo-dev-app",
+		Reason:              "ad-hoc dev deployment",
+	}); err != nil {
+		t.Fatalf("set dev override: %v", err)
+	}
+
+	setProd, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{
+		FullName:            "demo-chart",
+		EnvironmentKey:      "prod",
+		ArgoApplicationName: "prod-svc-foo",
+		Reason:              "ad-hoc prod deployment, unrelated name to dev",
+	})
+	if err != nil {
+		t.Fatalf("set prod override: %v", err)
+	}
+
+	overrides := setProd.Chart.GetArgoApplicationNameOverrides()
+	if overrides["dev"] != "foo-dev-app" {
+		t.Fatalf("expected dev's override to survive setting prod's, got %q", overrides["dev"])
+	}
+	if overrides["prod"] != "prod-svc-foo" {
+		t.Fatalf("expected prod override %q, got %q", "prod-svc-foo", overrides["prod"])
+	}
+
+	clearedDev, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{
+		FullName:       "demo-chart",
+		EnvironmentKey: "dev",
+		Reason:         "reverting dev to the naming convention",
+	})
+	if err != nil {
+		t.Fatalf("clear dev override: %v", err)
+	}
+	overrides = clearedDev.Chart.GetArgoApplicationNameOverrides()
+	if _, ok := overrides["dev"]; ok {
+		t.Fatalf("expected dev's override cleared, got %+v", overrides)
+	}
+	if overrides["prod"] != "prod-svc-foo" {
+		t.Fatalf("expected prod's override to survive clearing dev's, got %+v", overrides)
+	}
+}
+
+func TestSetChartArgoApplicationNameOverride_RequiresReason(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+	_, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{FullName: "demo-chart", EnvironmentKey: "prod"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument when reason is missing, got %v", err)
+	}
+}
+
+func TestSetChartArgoApplicationNameOverride_RequiresEnvironmentKey(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+	_, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{FullName: "demo-chart", Reason: "cleanup"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument when environment_key is missing, got %v", err)
+	}
+}
+
+func TestSetChartArgoApplicationNameOverride_RequiresChartIdentifier(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+	_, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{EnvironmentKey: "prod", Reason: "cleanup"})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument when neither chart_id nor full_name is set, got %v", err)
+	}
+}
+
+func TestSetChartArgoApplicationNameOverride_UnknownChartNotFound(t *testing.T) {
+	ctx := authedCtx()
+	srv := NewAppServer(fake.New())
+	_, err := srv.SetChartArgoApplicationNameOverride(ctx, &pb.SetChartArgoApplicationNameOverrideRequest{
+		FullName: "demo-does-not-exist", EnvironmentKey: "prod", Reason: "cleanup",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for an unknown chart, got %v", err)
+	}
+}
+
+// ============================================================================
 // AssertApps (AR-7c, issue #558)
 // ============================================================================
 

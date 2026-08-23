@@ -2,8 +2,10 @@ package pages
 
 import (
 	"fmt"
-	"github.com/whale-net/everything/manmanv2/ui/components"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
 type SessionDetailPageData struct {
@@ -17,19 +19,49 @@ type SessionDetailPageData struct {
 	Installations []*manmanpb.WorkshopInstallation
 }
 
-func buttonStyleClass(style string) string {
+// actionButtonVariant maps an ActionDefinition's ButtonStyle (a manmanv2
+// domain field driven by action config, not a fixed enum) onto
+// htmxui.ButtonVariant, preserving the same primary/success/danger/warning
+// colour semantics the old buttonStyleClass switch encoded (FR7).
+func actionButtonVariant(style string) htmxui.ButtonVariant {
 	switch style {
 	case "primary":
-		return "bg-indigo-600 hover:bg-indigo-700 text-white"
+		return htmxui.ButtonPrimary
 	case "success":
-		return "bg-green-600 hover:bg-green-700 text-white"
+		return htmxui.ButtonSuccess
 	case "danger":
-		return "bg-red-600 hover:bg-red-700 text-white"
+		return htmxui.ButtonError
 	case "warning":
-		return "bg-yellow-600 hover:bg-yellow-700 text-white"
+		return htmxui.ButtonWarning
 	default:
-		return "bg-slate-600 hover:bg-slate-700 text-white"
+		return htmxui.ButtonSecondary
 	}
+}
+
+// actionExecuteAttrs carries the no-input action button's hx-* wiring
+// (FR7: hx-post/hx-vals/hx-target/hx-swap/hx-confirm exactly as before)
+// through htmxui.Button's attrs escape hatch.
+func actionExecuteAttrs(sessionID int64, action *manmanpb.ActionDefinition) templ.Attributes {
+	attrs := templ.Attributes{
+		"hx-post":   fmt.Sprintf("/sessions/%d/actions/execute", sessionID),
+		"hx-vals":   fmt.Sprintf("{\"action_id\": \"%d\"}", action.ActionId),
+		"hx-target": "#action-status",
+		"hx-swap":   "innerHTML",
+	}
+	if action.RequiresConfirmation {
+		attrs["hx-confirm"] = action.ConfirmationMessage
+	}
+	return attrs
+}
+
+// actionSubmitAttrs carries the parameterized action form's submit button
+// attributes (type=submit plus the same optional hx-confirm, FR7).
+func actionSubmitAttrs(action *manmanpb.ActionDefinition) templ.Attributes {
+	attrs := templ.Attributes{"type": "submit"}
+	if action.RequiresConfirmation {
+		attrs["hx-confirm"] = action.ConfirmationMessage
+	}
+	return attrs
 }
 
 templ SessionDetail(data SessionDetailPageData) {
@@ -69,114 +101,113 @@ templ SessionDetail(data SessionDetailPageData) {
 			.log-error { color: #f48771; }
 			.log-timestamp { color: #858585; margin-right: 0.5rem; }
 			#log-histogram {
-				border: 1px solid #e5e7eb;
+				border: 1px solid var(--color-base-300);
 				border-radius: 4px;
-			}
-			[data-theme="dark"] #log-histogram {
-				border-color: #374151;
 			}
 		</style>
 		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
 			<div>
 				<div class="flex items-center gap-2 mb-2">
-					<span class="inline-flex items-center px-3 py-1 rounded-md text-xs font-semibold bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+					<span class="badge badge-info badge-soft">
 						🎮 SESSION
 					</span>
-					@components.Badge(data.Session.Status, "")
+					@htmxui.Badge(data.Session.Status, statusBadgeVariant(data.Session.Status), htmxui.BadgeSizeMD, true, nil)
 				</div>
-				<h1 class="text-3xl font-bold text-gray-900 dark:text-white">Session { fmt.Sprintf("%d", data.Session.SessionId) }</h1>
+				<h1 class="text-3xl font-bold text-base-content">Session { fmt.Sprintf("%d", data.Session.SessionId) }</h1>
 				if data.Game != nil {
-					<p class="text-sm text-gray-600 dark:text-gray-400 mt-1">{ data.Game.Name }</p>
+					<p class="text-sm text-base-content/60 mt-1">{ data.Game.Name }</p>
 				}
 			</div>
 			<div class="flex flex-wrap gap-2">
 				if data.Session.Status == "running" {
 					<form method="POST" action={ templ.URL(fmt.Sprintf("/sessions/%d/stop", data.Session.SessionId)) } class="inline">
-						<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Stop Session</button>
+						<button type="submit" class="btn btn-error">Stop Session</button>
 					</form>
 				}
 				if data.SGC != nil {
-					<a href={ templ.URL(fmt.Sprintf("/sgc/%d", data.SGC.ServerGameConfigId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">View SGC</a>
+					<a href={ templ.URL(fmt.Sprintf("/sgc/%d", data.SGC.ServerGameConfigId)) } class="btn btn-secondary btn-sm">View SGC</a>
 				}
 			</div>
 		</div>
 		<!-- Session Info -->
-		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
-			<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Session Details</h2>
-			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
-				@components.DLItemMono("Session ID", fmt.Sprintf("%d", data.Session.SessionId))
-				<div>
-					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Status</dt>
-					<dd class="mt-1">
-						@components.Badge(data.Session.Status, "")
-					</dd>
-				</div>
-				<div class="md:col-span-2">
-					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Available</dt>
-					<dd class="mt-1">
-						if data.Session.Status == "running" {
-							<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Yes (Ready for connections)</span>
-						} else if data.Session.Status == "starting" || data.Session.Status == "pending" {
-							<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">Starting (Wait for it to be ready)</span>
-						} else {
-							<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200">No (Server is not running)</span>
-						}
-					</dd>
-				</div>
-				if data.Game != nil {
+		<div class="card bg-base-100 border border-base-300 shadow-sm mb-6">
+			<div class="card-body">
+				<h2 class="text-lg font-semibold text-base-content mb-4">Session Details</h2>
+				<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+					@components.DLItemMono("Session ID", fmt.Sprintf("%d", data.Session.SessionId))
 					<div>
-						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Game</dt>
-						<dd class="mt-1 text-sm">
-							<a href={ templ.URL(fmt.Sprintf("/games/%d", data.Game.GameId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.Game.Name }</a>
+						<dt class="text-sm font-medium text-base-content/60">Status</dt>
+						<dd class="mt-1">
+							@htmxui.Badge(data.Session.Status, statusBadgeVariant(data.Session.Status), htmxui.BadgeSizeMD, true, nil)
 						</dd>
 					</div>
-				}
-				if data.GameConfig != nil {
-					<div>
-						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">GameConfig</dt>
-						<dd class="mt-1 text-sm">
-							<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.GameConfig.GameId, data.GameConfig.ConfigId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.GameConfig.Name }</a>
-							<small class="text-gray-600 dark:text-gray-400 ml-1">({ data.GameConfig.Image })</small>
+					<div class="md:col-span-2">
+						<dt class="text-sm font-medium text-base-content/60">Available</dt>
+						<dd class="mt-1">
+							if data.Session.Status == "running" {
+								<span class="badge badge-success badge-soft">Yes (Ready for connections)</span>
+							} else if data.Session.Status == "starting" || data.Session.Status == "pending" {
+								<span class="badge badge-warning badge-soft">Starting (Wait for it to be ready)</span>
+							} else {
+								<span class="badge badge-error badge-soft">No (Server is not running)</span>
+							}
 						</dd>
 					</div>
-				}
-				if data.SGC != nil {
-					<div>
-						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Server Game Config</dt>
-						<dd class="mt-1 text-sm">
-							<a href={ templ.URL(fmt.Sprintf("/sgc/%d", data.SGC.ServerGameConfigId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">SGC #{ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }</a>
-							<small class="text-gray-600 dark:text-gray-400 ml-1">(Server #{ fmt.Sprintf("%d", data.SGC.ServerId) })</small>
-						</dd>
-					</div>
-				}
-				@components.DLItem("Started", fmt.Sprintf("%s (%s)", timeAgo(data.Session.StartedAt), formatTime(data.Session.StartedAt)))
-				if data.Session.EndedAt > 0 {
-					@components.DLItem("Ended", fmt.Sprintf("%s (%s)", timeAgo(data.Session.EndedAt), formatTime(data.Session.EndedAt)))
-				}
-				@components.DLItem("Exit Code", fmt.Sprintf("%d", data.Session.ExitCode))
-			</dl>
+					if data.Game != nil {
+						<div>
+							<dt class="text-sm font-medium text-base-content/60">Game</dt>
+							<dd class="mt-1 text-sm">
+								<a href={ templ.URL(fmt.Sprintf("/games/%d", data.Game.GameId)) } class="link link-primary">{ data.Game.Name }</a>
+							</dd>
+						</div>
+					}
+					if data.GameConfig != nil {
+						<div>
+							<dt class="text-sm font-medium text-base-content/60">GameConfig</dt>
+							<dd class="mt-1 text-sm">
+								<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.GameConfig.GameId, data.GameConfig.ConfigId)) } class="link link-primary">{ data.GameConfig.Name }</a>
+								<small class="text-base-content/60 ml-1">({ data.GameConfig.Image })</small>
+							</dd>
+						</div>
+					}
+					if data.SGC != nil {
+						<div>
+							<dt class="text-sm font-medium text-base-content/60">Server Game Config</dt>
+							<dd class="mt-1 text-sm">
+								<a href={ templ.URL(fmt.Sprintf("/sgc/%d", data.SGC.ServerGameConfigId)) } class="link link-primary">SGC #{ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }</a>
+								<small class="text-base-content/60 ml-1">(Server #{ fmt.Sprintf("%d", data.SGC.ServerId) })</small>
+							</dd>
+						</div>
+					}
+					@components.DLItem("Started", fmt.Sprintf("%s (%s)", timeAgo(data.Session.StartedAt), formatTime(data.Session.StartedAt)))
+					if data.Session.EndedAt > 0 {
+						@components.DLItem("Ended", fmt.Sprintf("%s (%s)", timeAgo(data.Session.EndedAt), formatTime(data.Session.EndedAt)))
+					}
+					@components.DLItem("Exit Code", fmt.Sprintf("%d", data.Session.ExitCode))
+				</dl>
+			</div>
 		</div>
 		// Live/Historical Logs
 		if data.Session.Status == "running" {
 			// Live Logs
-			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
-				<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700 bg-gray-50 dark:bg-slate-900">
-					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Live Logs</h2>
+			<div class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+				<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300 bg-base-200">
+					<h2 class="text-lg font-semibold text-base-content">Live Logs</h2>
 					<div class="flex flex-wrap items-center gap-2">
-						<button id="toggle-logs" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Hide</button>
-						<button id="clear-logs" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-gray-600 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors">Clear</button>
-						<span id="log-status" class="text-sm text-gray-600 dark:text-gray-400">Connecting...</span>
+						<button id="toggle-logs" class="btn btn-neutral btn-sm">Hide</button>
+						<button id="clear-logs" class="btn btn-neutral btn-sm">Clear</button>
+						<span id="log-status" class="text-sm text-base-content/60">Connecting...</span>
 					</div>
 				</div>
 				<div id="log-viewer" class="log-viewer-container">
 					<pre id="log-output" class="log-viewer-output"></pre>
 				</div>
-				<div class="border-t border-gray-700">
-					<form id="stdin-form" class="flex gap-2 p-3 bg-slate-900">
-						<input type="text" id="stdin-input" placeholder="Send command to server..." class="flex-1 px-3 py-2 min-h-[44px] bg-slate-950 border border-slate-700 text-gray-200 font-mono text-sm rounded focus:outline-none focus:ring-2 focus:ring-blue-500"/>
-						<button type="submit" id="stdin-submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md transition-colors min-w-[80px]">Send</button>
+				<div class="border-t border-base-300">
+					<form id="stdin-form" class="flex gap-2 p-3 bg-neutral">
+						<input type="text" id="stdin-input" placeholder="Send command to server..." class="input input-bordered flex-1 bg-neutral text-neutral-content font-mono text-sm"/>
+						<button type="submit" id="stdin-submit" class="btn btn-primary min-w-[80px]">Send</button>
 					</form>
-					<div id="stdin-status" class="px-3 pb-2 text-xs text-gray-500 min-h-[1.5rem] bg-slate-900"></div>
+					<div id="stdin-status" class="px-3 pb-2 text-xs text-neutral-content/60 min-h-[1.5rem] bg-neutral"></div>
 				</div>
 			</div>
 			<div id="live-logs-script" data-session-id={ fmt.Sprintf("%d", data.Session.SessionId) }></div>
@@ -285,34 +316,25 @@ templ SessionDetail(data SessionDetailPageData) {
 		}
 		<!-- Actions -->
 		if len(data.Actions) > 0 {
-			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
-				<div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700">
-					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Available Actions</h2>
+			<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+				<div class="flex justify-between items-center p-4 border-b border-base-300">
+					<h2 class="text-lg font-semibold text-base-content">Available Actions</h2>
 				</div>
-				<div class="p-6">
+				<div class="card-body">
 					<div id="action-status" class="mb-4"></div>
 					for _, action := range data.Actions {
-						<div class="mb-6 pb-6 border-b border-gray-200 dark:border-slate-700 last:border-0">
+						<div class="mb-6 pb-6 border-b border-base-300 last:border-0">
 							if action.GroupName != "" {
-								<h4 class="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase mb-2">{ action.GroupName }</h4>
+								<h4 class="text-sm font-semibold text-base-content/60 uppercase mb-2">{ action.GroupName }</h4>
 							}
 							if action.Description != "" {
-								<p class="text-sm text-gray-600 dark:text-gray-400 mb-3">{ action.Description }</p>
+								<p class="text-sm text-base-content/60 mb-3">{ action.Description }</p>
 							}
 							if len(action.InputFields) == 0 {
 								<!-- Simple button (no inputs) -->
-								<button
-									class={ "inline-flex items-center justify-center px-4 py-2 min-h-[44px] font-medium rounded-md transition-colors", buttonStyleClass(action.ButtonStyle) }
-									hx-post={ fmt.Sprintf("/sessions/%d/actions/execute", data.Session.SessionId) }
-									hx-vals={ fmt.Sprintf("{\"action_id\": \"%d\"}", action.ActionId) }
-									hx-target="#action-status"
-									hx-swap="innerHTML"
-									if action.RequiresConfirmation {
-										hx-confirm={ action.ConfirmationMessage }
-									}
-								>
+								@htmxui.Button(actionButtonVariant(action.ButtonStyle), htmxui.ButtonSizeMD, false, actionExecuteAttrs(data.Session.SessionId, action)) {
 									{ action.Label }
-								</button>
+								}
 							} else {
 								<!-- Parameterized button (with inputs) -->
 								<form
@@ -323,18 +345,20 @@ templ SessionDetail(data SessionDetailPageData) {
 								>
 									<input type="hidden" name="action_id" value={ fmt.Sprintf("%d", action.ActionId) }/>
 									for _, field := range action.InputFields {
-										<div>
-											<label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-												{ field.Label }
-												if field.Required {
-													<span class="text-red-600">*</span>
-												}
+										<div class="form-control">
+											<label class="label">
+												<span class="label-text">
+													{ field.Label }
+													if field.Required {
+														<span class="text-error">*</span>
+													}
+												</span>
 											</label>
 											if field.FieldType == "select" {
 												<select
 													name={ field.Name }
 													required?={ field.Required }
-													class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+													class="select select-bordered w-full"
 												>
 													for _, opt := range field.Options {
 														<option value={ opt.Value } selected?={ opt.IsDefault }>{ opt.Label }</option>
@@ -345,7 +369,7 @@ templ SessionDetail(data SessionDetailPageData) {
 													name={ field.Name }
 													placeholder={ field.Placeholder }
 													required?={ field.Required }
-													class="w-full px-3 py-2 border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white min-h-[80px]"
+													class="textarea textarea-bordered w-full min-h-[80px]"
 												></textarea>
 											} else if field.FieldType == "number" {
 												<input
@@ -359,7 +383,7 @@ templ SessionDetail(data SessionDetailPageData) {
 													if field.MaxValue != 0 {
 														max={ fmt.Sprintf("%f", field.MaxValue) }
 													}
-													class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+													class="input input-bordered w-full"
 												/>
 											} else {
 												<input
@@ -376,23 +400,17 @@ templ SessionDetail(data SessionDetailPageData) {
 													if field.MaxLength != 0 {
 														maxlength={ fmt.Sprintf("%d", field.MaxLength) }
 													}
-													class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white"
+													class="input input-bordered w-full"
 												/>
 											}
 											if field.HelpText != "" {
-												<small class="block mt-1 text-sm text-gray-600 dark:text-gray-400">{ field.HelpText }</small>
+												<small class="block mt-1 text-sm text-base-content/60">{ field.HelpText }</small>
 											}
 										</div>
 									}
-									<button
-										type="submit"
-										class={ "inline-flex items-center justify-center px-4 py-2 min-h-[44px] font-medium rounded-md transition-colors", buttonStyleClass(action.ButtonStyle) }
-										if action.RequiresConfirmation {
-											hx-confirm={ action.ConfirmationMessage }
-										}
-									>
+									@htmxui.Button(actionButtonVariant(action.ButtonStyle), htmxui.ButtonSizeMD, false, actionSubmitAttrs(action)) {
 										{ action.Label }
-									</button>
+									}
 								</form>
 							}
 						</div>
@@ -402,42 +420,42 @@ templ SessionDetail(data SessionDetailPageData) {
 		}
 		<!-- Workshop Installations -->
 		if len(data.Installations) > 0 {
-			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
-				<div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-slate-700">
-					<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Workshop Addons</h2>
+			<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+				<div class="flex justify-between items-center p-4 border-b border-base-300">
+					<h2 class="text-lg font-semibold text-base-content">Workshop Addons</h2>
 				</div>
 				if data.Session.Status == "pending" || data.Session.Status == "starting" {
-					<div class="bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 p-4 m-4">
-						<p class="text-sm text-yellow-800 dark:text-yellow-200">Installing addons before launch...</p>
+					<div role="alert" class="alert alert-warning m-4">
+						<span class="text-sm">Installing addons before launch...</span>
 					</div>
 				}
 				<div class="overflow-x-auto">
-					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
-						<thead class="bg-gray-50 dark:bg-slate-900">
+					<table class="table">
+						<thead>
 							<tr>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Addon ID</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Progress</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Path</th>
+								<th>Addon ID</th>
+								<th>Status</th>
+								<th>Progress</th>
+								<th>Path</th>
 							</tr>
 						</thead>
-						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+						<tbody>
 							for _, inst := range data.Installations {
-								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
-									<td class="px-6 py-4 text-sm text-gray-900 dark:text-white">
-										<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", inst.AddonId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ fmt.Sprintf("%d", inst.AddonId) }</a>
+								<tr class="hover">
+									<td class="text-sm">
+										<a href={ templ.URL(fmt.Sprintf("/workshop/addon?addon_id=%d", inst.AddonId)) } class="link link-primary">{ fmt.Sprintf("%d", inst.AddonId) }</a>
 									</td>
-									<td class="px-6 py-4">
-										@components.Badge(inst.Status, "")
+									<td>
+										@htmxui.Badge(inst.Status, statusBadgeVariant(inst.Status), htmxui.BadgeSizeSM, true, nil)
 									</td>
-									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">
+									<td class="text-sm">
 										if inst.Status == "downloading" {
 											{ fmt.Sprintf("%d%%", inst.ProgressPercent) }
 										} else {
 											—
 										}
 									</td>
-									<td class="px-6 py-4 text-xs font-mono text-gray-700 dark:text-gray-300">{ inst.InstallationPath }</td>
+									<td class="text-xs font-mono">{ inst.InstallationPath }</td>
 								</tr>
 							}
 						</tbody>
@@ -445,8 +463,8 @@ templ SessionDetail(data SessionDetailPageData) {
 				</div>
 			</div>
 		} else if len(data.Libraries) > 0 {
-			<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-12 text-center mb-6">
-				<p class="text-gray-500 dark:text-gray-400">Libraries attached but no addons installed yet.</p>
+			<div class="card bg-base-100 border border-base-300 shadow-sm p-12 text-center mb-6">
+				<p class="text-base-content/60">Libraries attached but no addons installed yet.</p>
 			</div>
 		}
 	}

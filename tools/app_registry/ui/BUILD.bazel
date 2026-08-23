@@ -33,7 +33,6 @@ go_library(
     ],
     embedsrcs = [
         "favicon.ico",
-        "themes.css",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/ui",
     visibility = ["//visibility:private"],
@@ -43,6 +42,7 @@ go_library(
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
+        "//libs/go/htmxui",
         "//libs/go/logging",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",
@@ -81,10 +81,12 @@ go_test(
         "promotion_sync_outcome_data_test.go",
         "release_scope_test.go",
         "role_gating_test.go",
+        "templ_render_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
         "//libs/go/htmxauth",
+        "//libs/go/htmxui",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",
         "@org_golang_google_grpc//:grpc",

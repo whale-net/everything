@@ -5,6 +5,14 @@
  *   error = red (delete/stop), neutral/secondary = slate (cancel/back),
  *   warning = yellow (pending states). Themes: light / night / oled.
  * Loaded after daisyui.css so these override its built-in light theme.
+ *
+ * "sunset" (below, after oled) is a Phase 3 proof-of-concept theme (#998
+ * FR10): a warm amber/coral palette, deliberately distinct from light's
+ * cool indigo-on-white and from night/oled's dark slate scheme, added to
+ * prove the shared theme-switcher plumbing (#1004) supports more than the
+ * original three. It keeps the same success=green/warning=yellow/error=red
+ * semantic mapping as the others, but is not a long-term design commitment
+ * — see ThemesCSS's doc comment (themes.go) and issue #1012.
  */
 
 [data-theme="light"] {
@@ -79,11 +87,36 @@
   --color-error-content: #ffffff;
 }
 
+[data-theme="sunset"] {
+  color-scheme: light;
+  --color-base-100: #fff7ed; /* warm cream, distinct from light's pure white */
+  --color-base-200: #ffedd5;
+  --color-base-300: #fed7aa;
+  --color-base-content: #431407;
+  --color-primary: #ea580c; /* amber/coral, distinct from light's indigo primary */
+  --color-primary-content: #ffffff;
+  --color-secondary: #db2777; /* pink, distinct from light/night/oled's slate secondary */
+  --color-secondary-content: #ffffff;
+  --color-accent: #0d9488; /* teal, contrasts against the warm base */
+  --color-accent-content: #ffffff;
+  --color-neutral: #7c2d12;
+  --color-neutral-content: #fff7ed;
+  --color-info: #0891b2;
+  --color-info-content: #ffffff;
+  --color-success: #16a34a;
+  --color-success-content: #ffffff;
+  --color-warning: #eab308;
+  --color-warning-content: #422006;
+  --color-error: #dc2626;
+  --color-error-content: #ffffff;
+}
+
 /* Radii matching the real components: rounded-md fields, rounded-lg cards,
  * pill badges. */
 [data-theme="light"],
 [data-theme="night"],
-[data-theme="oled"] {
+[data-theme="oled"],
+[data-theme="sunset"] {
   --radius-field: 0.375rem;
   --radius-box: 0.5rem;
   --radius-selector: 2rem;

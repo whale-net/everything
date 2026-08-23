@@ -6,10 +6,16 @@ between screens. No build pipeline, no app changes; open the output in a
 browser and refresh after each edit.
 
 Styling comes from pinned CDN builds (daisyUI 5 + Tailwind 4 browser runtime),
-so viewing requires network. `themes.css` maps the daisyUI theme variables to
-the manmanv2 design standards (`manmanv2/ui/DESIGN_SYSTEM.md`): three themes
-(`light` / `night` / `oled`), primary=indigo, success=green, error=red,
-neutral=slate.
+so viewing requires network. The theme override stylesheet maps the daisyUI
+theme variables to the manmanv2 design standards
+(`manmanv2/ui/DESIGN_SYSTEM.md`): three themes (`light` / `night` / `oled`),
+primary=indigo, success=green, error=red, neutral=slate.
+
+`themes.css` is no longer owned by `tools/wireframe` — it lives at
+`libs/go/htmxui/themes.css` and is exported as `htmxui.ThemesCSS`.
+`libs/go/htmxui` is the single canonical source; `tools/wireframe` is now a
+consumer on equal footing with `tools/app_registry/ui`, both importing the
+same Go value rather than embedding their own copy of the file.
 
 ## Usage
 

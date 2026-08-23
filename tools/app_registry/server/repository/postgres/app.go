@@ -920,6 +920,29 @@ func (r *appRepo) chartAppIDs(ctx context.Context, chartID string) ([]string, er
 	return ids, rows.Err()
 }
 
+// chartArgoOverrides reads chart_argo_application_override (migration 022)
+// for chartID into a map[environment_key]argo_application_name -- see
+// Chart.ResolveArgoApplicationName. Kept out of chartColumns/scanChart
+// deliberately (see migration 022's doc comment): those back Reconcile's
+// "mark missing charts" sweep, which must never depend on this table's
+// existence at whatever migration step a caller has applied.
+func (r *appRepo) chartArgoOverrides(ctx context.Context, chartID string) (map[string]string, error) {
+	rows, err := r.ex.Query(ctx, `SELECT environment_key, argo_application_name FROM chart_argo_application_override WHERE chart_id = $1`, chartID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	overrides := map[string]string{}
+	for rows.Next() {
+		var env, name string
+		if err := rows.Scan(&env, &name); err != nil {
+			return nil, err
+		}
+		overrides[env] = name
+	}
+	return overrides, rows.Err()
+}
+
 func (r *appRepo) ListApps(ctx context.Context, filter repository.AppListFilter) ([]repository.App, error) {
 	statuses := filter.Statuses
 	if len(statuses) == 0 {
@@ -1001,6 +1024,9 @@ func (r *appRepo) ChartsForApp(ctx context.Context, appID string) ([]repository.
 		if ids, err := r.chartAppIDs(ctx, c.ChartID); err == nil {
 			c.AppIDs = ids
 		}
+		if overrides, err := r.chartArgoOverrides(ctx, c.ChartID); err == nil {
+			c.ArgoApplicationNameOverrides = overrides
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -1038,6 +1064,9 @@ func (r *appRepo) ListCharts(ctx context.Context, filter repository.ChartListFil
 		if ids, err := r.chartAppIDs(ctx, c.ChartID); err == nil {
 			c.AppIDs = ids
 		}
+		if overrides, err := r.chartArgoOverrides(ctx, c.ChartID); err == nil {
+			c.ArgoApplicationNameOverrides = overrides
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -1055,6 +1084,9 @@ func (r *appRepo) GetChartByID(ctx context.Context, chartID string) (*repository
 	if ids, err := r.chartAppIDs(ctx, c.ChartID); err == nil {
 		c.AppIDs = ids
 	}
+	if overrides, err := r.chartArgoOverrides(ctx, c.ChartID); err == nil {
+		c.ArgoApplicationNameOverrides = overrides
+	}
 	return &c, nil
 }
 
@@ -1069,6 +1101,9 @@ func (r *appRepo) GetChartByFullName(ctx context.Context, fullName string) (*rep
 	}
 	if ids, err := r.chartAppIDs(ctx, c.ChartID); err == nil {
 		c.AppIDs = ids
+	}
+	if overrides, err := r.chartArgoOverrides(ctx, c.ChartID); err == nil {
+		c.ArgoApplicationNameOverrides = overrides
 	}
 	return &c, nil
 }
@@ -1108,6 +1143,47 @@ func (r *appRepo) SetAppStatus(ctx context.Context, appID string, target reposit
 	}
 	a.Status = target
 	return &a, nil
+}
+
+// ============================================================================
+// SetChartArgoApplicationNameOverride
+// ============================================================================
+
+// SetChartArgoApplicationNameOverride sets (argoApplicationName non-empty)
+// or clears (argoApplicationName == "") exactly one environmentKey entry in
+// chart.argo_application_name_overrides -- every other environment's
+// override on this chart is left untouched, via a single-key JSONB
+// set/delete rather than a whole-map replace. Reconcile/ReconcileApps above
+// never touch this column at all, so an admin-set override survives
+// reconciliation. See repository.Chart.ResolveArgoApplicationName.
+// SetChartArgoApplicationNameOverride sets (argoApplicationName non-empty)
+// or clears (argoApplicationName == "") the chart_argo_application_override
+// row for exactly one (chartID, environmentKey) pair -- every other
+// environment's override on this chart is untouched (migration 022). The
+// upfront GetChartByID existence check (rather than relying on RowsAffected
+// from the write below) is deliberate: a DELETE against a nonexistent
+// chartID silently affects 0 rows either way, and an INSERT against one
+// would surface as a foreign-key violation, not a clean ErrNotFound --
+// checking first gives SetAppStatus's existence-check convention instead.
+func (r *appRepo) SetChartArgoApplicationNameOverride(ctx context.Context, chartID, environmentKey, argoApplicationName string) (*repository.Chart, error) {
+	if _, err := r.GetChartByID(ctx, chartID); err != nil {
+		return nil, err
+	}
+
+	var err error
+	if argoApplicationName == "" {
+		_, err = r.ex.Exec(ctx, `DELETE FROM chart_argo_application_override WHERE chart_id = $1 AND environment_key = $2`, chartID, environmentKey)
+	} else {
+		_, err = r.ex.Exec(ctx, `
+			INSERT INTO chart_argo_application_override (chart_id, environment_key, argo_application_name, updated_at)
+			VALUES ($1, $2, $3, now())
+			ON CONFLICT (chart_id, environment_key) DO UPDATE SET argo_application_name = EXCLUDED.argo_application_name, updated_at = EXCLUDED.updated_at`,
+			chartID, environmentKey, argoApplicationName)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("set chart argo application name override: %w", err)
+	}
+	return r.GetChartByID(ctx, chartID)
 }
 
 // defaultReconcileRunPageSize is what ListReconcileRuns falls back to when
