@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
 // BuildAppManifest is build-app's output: everything finalize-app (issue
@@ -93,6 +95,10 @@ func newBuildAppCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if manifest == nil {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s/%s is not an image app; skipped image build/push\n", domain, app)
+				return nil
+			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Built and pushed %s (tag: %s, digest: %s)\n", manifest.FullName, manifest.BuildTag, manifest.Digest)
 			return nil
@@ -147,6 +153,20 @@ func ExecuteBuildApp(p BuildAppParams) (*BuildAppManifest, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Only image-kind apps have a bazel *_image_push target at all
+	// (release.bzl's is_container_app gate) -- cli/binary/firmware apps are
+	// published a different way entirely (package-assets + S3, see
+	// tools/app_registry/worker/release/finalize.go's publishCLIBinaries),
+	// not through this build/push-by-digest step. Skip rather than error:
+	// this command is now called unconditionally for every app in a
+	// release matrix (see release-v2.yml's "Build app images" step), and a
+	// non-image app in that matrix is expected, not a mistake.
+	if determineArtifactKind(*matchedApp) != pb.ArtifactKind_ARTIFACT_KIND_IMAGE {
+		fmt.Printf("%s is a %q app, not an image; skipping image build/push\n", matchedApp.FullName(), matchedApp.AppType)
+		return nil, nil
+	}
+
 	fullName := matchedApp.FullName()
 
 	reg := p.Registry

@@ -371,6 +371,19 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	for _, fullName := range apps {
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
 		version := plan.Versions[key]
+
+		// cliBinaryTargets apps (release_helper_go, app-registry) are
+		// app_type "cli" -- release.bzl never generates an image-push
+		// target for them, so build-app deliberately writes no
+		// build-manifest entry for these (see build_app.go's
+		// ExecuteBuildApp). Skip the image finalize-app flow entirely;
+		// publishCLIBinaries below is their actual publish step, keyed off
+		// plan.Versions directly rather than a finalize-app confirmation
+		// that will never come.
+		if _, isCLI := cliBinaryTargets[fullName]; isCLI {
+			continue
+		}
+
 		m, ok := appManifests[fullName]
 		if !ok {
 			detail := fmt.Sprintf("%s: no build-manifest entry in run %s", fullName, ref.RunID)
@@ -469,7 +482,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	// per-target) so it only ever considers finalizeTargets entries that
 	// already reflect a confirmed finalize-app outcome, never a plan-time
 	// guess.
-	failures = append(failures, a.publishCLIBinaries(ctx, apps, finalizeTargets, cliBinariesDir, haveCLIBinaries)...)
+	failures = append(failures, a.publishCLIBinaries(ctx, apps, plan.Versions, finalizeTargets, cliBinariesDir, haveCLIBinaries)...)
 
 	appVersionsJSON, _ := json.Marshal(appVersions) //nolint:errcheck
 	appDigestsJSON, _ := json.Marshal(appDigests)   //nolint:errcheck
@@ -684,12 +697,12 @@ func loadChartManifest(dir string) (map[string]buildChartManifestEntry, error) {
 // publishCLIBinaries uploads release_helper_go's/app-registry's own
 // multi-platform CLI binaries to S3, once per qualifying target in apps --
 // see cliBinaryTargets' doc comment for the full_name->binary-name mapping.
-// A target only qualifies if finalizeTargets already carries a !Failed
-// entry with a non-empty EffectiveVersion for it: that is FinalizePublish's
-// own confirmation the target's version was actually published (FR8/FR9 of
-// #979), never a plan-time guess -- a target whose finalize-app failed (no
-// entry, or Failed=true) is skipped here too, satisfying FR10 without any
-// extra bookkeeping (the apps loop above already `continue`d past it).
+// A target only qualifies if versions carries a non-empty entry for it.
+// cliBinaryTargets apps are app_type "cli", so they have no image to
+// finalize-app-retag and no finalizeTargets entry from the apps loop above
+// (see that loop's cliBinaryTargets skip) -- this publishes them straight
+// off the plan's own resolved version instead of an image-finalize
+// confirmation that will never exist for these targets.
 //
 // The binaryUploader (a real libs/go/s3.Client, or a.S3Uploader's test
 // fake -- see binaryUploaderFor) is constructed lazily, on the first
@@ -707,7 +720,7 @@ func loadChartManifest(dir string) (map[string]buildChartManifestEntry, error) {
 // slice, exactly the same shape every other failure path in this file
 // uses -- FR9's guarantee only holds if a confirmed-version target's
 // publish is never silently skipped.
-func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, finalizeTargets map[string]FinalizeTargetOutcome, cliBinariesDir string, haveCLIBinaries bool) []string {
+func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, versions map[string]string, finalizeTargets map[string]FinalizeTargetOutcome, cliBinariesDir string, haveCLIBinaries bool) []string {
 	var failures []string
 	var uploader binaryUploader
 
@@ -717,12 +730,12 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, fina
 			continue
 		}
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)
-		outcome, ok := finalizeTargets[key]
-		if !ok || outcome.Failed || outcome.EffectiveVersion == "" {
-			// No confirmed EffectiveVersion for this target (finalize-app
-			// failed, or its result file was unreadable -- see the apps
-			// loop's readFinalizeResult handling above) -- nothing to
-			// publish under, and FR10 says nothing should be.
+		// cliBinaryTargets apps skip the image finalize-app flow entirely
+		// (see the apps loop above), so there is no finalizeTargets
+		// EffectiveVersion to gate on here -- publish straight off the
+		// plan's own resolved version instead.
+		version := versions[key]
+		if version == "" {
 			continue
 		}
 
@@ -766,7 +779,7 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, fina
 				uploadErr = fmt.Errorf("read %s: %w", fileName, rerr)
 				break
 			}
-			s3Key := cliBinaryS3Key(binaryName, outcome.EffectiveVersion, fileName)
+			s3Key := cliBinaryS3Key(binaryName, version, fileName)
 			if _, uerr := uploader.Upload(ctx, s3Key, data, nil); uerr != nil {
 				uploadErr = fmt.Errorf("upload %s: %w", s3Key, uerr)
 				break
@@ -776,7 +789,9 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, fina
 			detail := fmt.Sprintf("%s: publish cli binaries: %v", fullName, uploadErr)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
+			continue
 		}
+		finalizeTargets[key] = FinalizeTargetOutcome{EffectiveVersion: version}
 	}
 
 	return failures
