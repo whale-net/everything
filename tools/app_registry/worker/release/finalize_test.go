@@ -170,6 +170,7 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds(t *testing.T) {
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
 	}
 
 	plan := ResolvedPlan{
@@ -181,6 +182,44 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds(t *testing.T) {
 	result, err := a.FinalizePublish(context.Background(), plan, ref)
 	require.NoError(t, err, "WorkspaceRoot unset must not hard-fail -- FinalizePublish needs no git checkout at all")
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
+}
+
+// TestActivities_FinalizePublish_NoGHCRToken_FailsBatch is the regression
+// test for issue #996: a GitHub App installation token cannot write to
+// organization-owned GHCR packages outside a GitHub Actions run, so
+// FinalizePublish no longer mints one via a.GitHub.token(ctx) for the
+// finalize-app retag -- it requires the static a.GHCRToken (RELEASE_GHCR_TOKEN)
+// instead. An unset a.GHCRToken must fail fast with a clear error, for any
+// batch with app targets, rather than attempting (and failing at the
+// registry with a confusing DENIED) an App-minted token.
+func TestActivities_FinalizePublish_NoGHCRToken_FailsBatch(t *testing.T) {
+	appManifest := `{"domain":"demo","app":"widget","full_name":"demo-widget","repository":"ghcr.io/whale-net/demo-widget","digest":"sha256:aaa"}`
+	buildManifestZip := zipDir(t, map[string]string{"demo-widget.json": appManifest})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/runs/42/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"artifacts":[{"id":7,"name":"build-manifest","expired":false}]}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/artifacts/7/zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(buildManifestZip)
+	})
+
+	a := &Activities{
+		GitHub: newTestDispatcher(t, mux),
+	}
+
+	plan := ResolvedPlan{
+		ReleaseRunID: "release-run-1",
+		Versions:     map[string]string{"image:demo-widget": "v1.2.3"},
+	}
+	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
+
+	_, err := a.FinalizePublish(context.Background(), plan, ref)
+	require.ErrorContains(t, err, "GHCR token not configured")
 }
 
 // TestActivities_FinalizePublish_NoOpApp_ChartPinsEffectiveVersion is the
@@ -268,6 +307,7 @@ exit 0
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
 	}
 
 	plan := ResolvedPlan{
@@ -346,6 +386,7 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *te
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
 	}
 
 	plan := ResolvedPlan{
@@ -441,6 +482,7 @@ exit 0
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
 	}
 
 	plan := ResolvedPlan{
@@ -496,6 +538,7 @@ func TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget(t *tes
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
 	}
 
 	plan := ResolvedPlan{
@@ -550,6 +593,7 @@ exit 0
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
 	}
 
 	plan := ResolvedPlan{
@@ -622,6 +666,7 @@ exit 0
 	a := &Activities{
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
+		GHCRToken:      "test-ghcr-token",
 	}
 
 	plan := ResolvedPlan{

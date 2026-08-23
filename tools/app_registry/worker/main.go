@@ -153,6 +153,13 @@ func run() error {
 		ChartRepoURL:  getEnv("RELEASE_CHART_REPO_URL", "https://charts.whalenet.dev"),
 		ChartRepoUser: os.Getenv("RELEASE_CHART_REPO_USER"),
 		ChartRepoPass: os.Getenv("RELEASE_CHART_REPO_PASS"),
+		// GHCR retag credential for FinalizePublish's finalize-app shell-out
+		// (issue #996) -- a static bot-account PAT, not minted from the
+		// RELEASE_GITHUB_APP_* App below: App installation tokens cannot
+		// write to organization-owned GHCR packages outside a GitHub
+		// Actions run. Optional like the chart vars: a batch with no app
+		// targets never needs it (see Activities.GHCRToken doc comment).
+		GHCRToken: os.Getenv("RELEASE_GHCR_TOKEN"),
 		// S3 credentials for FinalizePublish's CLI-binary publish step
 		// (issue #984) -- same credential-locality reasoning as
 		// RELEASE_CHART_REPO_* above: this worker holds write access to the

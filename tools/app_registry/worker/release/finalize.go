@@ -336,10 +336,14 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 
 	var ghcrToken string
 	if len(apps) > 0 {
-		ghcrToken, err = a.GitHub.token(ctx)
-		if err != nil {
-			return FinalizeResult{}, fmt.Errorf("finalize publish: mint registry token: %w", err)
+		// A GitHub App installation token cannot write to organization-owned
+		// GHCR packages when used outside a GitHub Actions run (issue
+		// #996) -- a.GHCRToken is a static bot-account PAT instead, not
+		// minted from a.GitHub.
+		if a.GHCRToken == "" {
+			return FinalizeResult{}, fmt.Errorf("finalize publish: GHCR token not configured (set RELEASE_GHCR_TOKEN)")
 		}
+		ghcrToken = a.GHCRToken
 	}
 
 	binary := a.PlanBinaryPath
