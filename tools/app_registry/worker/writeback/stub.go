@@ -28,7 +28,7 @@ type StubActivities struct {
 	// auth.RequireAuthenticated, see ARCHITECTURE.md "Authorization".
 	Client pb.PromotionRegistryClient
 	// AppClient resolves the promoted chart id to its identity (full name,
-	// and any ArgoApplicationNameTemplate override), the values
+	// and any per-environment ArgoApplicationNameOverrides entry), the values
 	// RenderEnvironmentState populates RenderedState.ChartName/
 	// ArgoApplicationName with -- mirrors GitOpsActivities.AppClient (see
 	// gitops.go), needed here so WritebackWorkflow's ArgoCD Application

@@ -331,11 +331,14 @@ func (s *AppServer) lookupChart(ctx context.Context, chartID, fullName string) (
 	}
 }
 
-// SetChartArgoApplicationNameOverride sets or clears (argo_application_name_template
-// = "") a chart's ArgoCD Application name override, for ad-hoc/legacy
-// deployments whose real Application name doesn't follow the
-// "<full_name>-<environment>" convention WritebackWorkflow assumes by
-// default -- see repository.Chart.ResolveArgoApplicationName.
+// SetChartArgoApplicationNameOverride sets or clears (argo_application_name
+// = "") a chart's ArgoCD Application name override for exactly one
+// environment_key, for ad-hoc/legacy deployments whose real Application
+// name doesn't follow the "<full_name>-<environment>" convention
+// WritebackWorkflow assumes by default -- every other environment's
+// override on the chart is untouched, since two environments can have
+// completely unrelated naming. See
+// repository.Chart.ResolveArgoApplicationName.
 func (s *AppServer) SetChartArgoApplicationNameOverride(ctx context.Context, req *pb.SetChartArgoApplicationNameOverrideRequest) (*pb.SetChartArgoApplicationNameOverrideResponse, error) {
 	if err := auth.Require(ctx, auth.RoleAdmin); err != nil {
 		return nil, err
@@ -343,11 +346,14 @@ func (s *AppServer) SetChartArgoApplicationNameOverride(ctx context.Context, req
 	if req.Reason == "" {
 		return nil, status.Error(codes.InvalidArgument, "reason is required")
 	}
+	if req.EnvironmentKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "environment_key is required")
+	}
 	chart, err := s.lookupChart(ctx, req.ChartId, req.FullName)
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
-	updated, err := s.repo.Apps().SetChartArgoApplicationNameOverride(ctx, chart.ChartID, req.ArgoApplicationNameTemplate)
+	updated, err := s.repo.Apps().SetChartArgoApplicationNameOverride(ctx, chart.ChartID, req.EnvironmentKey, req.ArgoApplicationName)
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}

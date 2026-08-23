@@ -3,7 +3,6 @@ package writeback
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
@@ -51,19 +50,20 @@ func resolveChart(ctx context.Context, appClient pb.AppRegistryClient, domain, c
 }
 
 // resolveArgoApplicationName is chart's ArgoCD-Application-name
-// counterpart to FullName: chart.ArgoApplicationNameTemplate with every
-// "{environment}" substring replaced by environmentKey, if the template is
-// set (an ad-hoc/legacy deployment override, admin-settable via
-// SetChartArgoApplicationNameOverride); otherwise the convention
-// "<FullName>-<environmentKey>" every standard deployment uses. Mirrors
-// repository.Chart.ResolveArgoApplicationName's rule exactly, but operates
-// on the *pb.Chart this package already has in hand via AppClient, not a
-// repository.Chart (this package talks to the registry only over its API,
-// never Postgres directly -- see ARCHITECTURE.md "The API is the write
-// path; git is the delivery path").
+// counterpart to FullName: chart.ArgoApplicationNameOverrides[environmentKey],
+// if an explicit override is set for this exact environment (an ad-hoc/
+// legacy deployment override, admin-settable via
+// SetChartArgoApplicationNameOverride -- dev and prod need not share any
+// naming pattern, each environment's override is independent); otherwise
+// the convention "<FullName>-<environmentKey>" every standard deployment
+// uses. Mirrors repository.Chart.ResolveArgoApplicationName's rule exactly,
+// but operates on the *pb.Chart this package already has in hand via
+// AppClient, not a repository.Chart (this package talks to the registry
+// only over its API, never Postgres directly -- see ARCHITECTURE.md "The
+// API is the write path; git is the delivery path").
 func resolveArgoApplicationName(chart *pb.Chart, environmentKey string) string {
-	if chart.GetArgoApplicationNameTemplate() != "" {
-		return strings.ReplaceAll(chart.GetArgoApplicationNameTemplate(), "{environment}", environmentKey)
+	if name := chart.GetArgoApplicationNameOverrides()[environmentKey]; name != "" {
+		return name
 	}
 	return chart.GetFullName() + "-" + environmentKey
 }

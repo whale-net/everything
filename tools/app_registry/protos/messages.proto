@@ -166,14 +166,15 @@ message Chart {
   int64 first_seen_at = 10;
   int64 last_seen_at = 11;
 
-  // Admin-set override for the ArgoCD Application name WritebackWorkflow
-  // targets for this chart, instead of the "<full_name>-<environment>"
-  // convention -- for ad-hoc/legacy deployments whose real Application name
-  // doesn't follow it. Empty means no override (default, used by every
-  // standard chart). "{environment}" in the template is replaced with the
-  // target environment key. See server/repository/models.go's
+  // Admin-set per-environment overrides for the ArgoCD Application name
+  // WritebackWorkflow targets for this chart's promotions, instead of the
+  // "<full_name>-<environment>" convention -- for ad-hoc/legacy
+  // deployments whose real Application name doesn't follow it, keyed by
+  // environment key. An environment absent from this map (default: empty)
+  // uses the convention; two environments need not share any naming
+  // relationship. See server/repository/models.go's
   // Chart.ResolveArgoApplicationName.
-  string argo_application_name_template = 12;
+  map<string, string> argo_application_name_overrides = 12;
 }
 
 // Build is one CI run that produced a set of artifacts. Artifacts always hang

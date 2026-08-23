@@ -135,7 +135,7 @@ func TestSetChartArgoApplicationNameOverride_Authorization(t *testing.T) {
 	}
 
 	req := func(chartID string) *pb.SetChartArgoApplicationNameOverrideRequest {
-		return &pb.SetChartArgoApplicationNameOverrideRequest{ChartId: chartID, ArgoApplicationNameTemplate: "legacy-app-{environment}", Reason: "ad-hoc deployment"}
+		return &pb.SetChartArgoApplicationNameOverrideRequest{ChartId: chartID, EnvironmentKey: "prod", ArgoApplicationName: "legacy-app-prod", Reason: "ad-hoc deployment"}
 	}
 
 	t.Run("correct role allowed", func(t *testing.T) {

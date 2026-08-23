@@ -35,7 +35,7 @@ func scanApp(row pgx.Row) (repository.App, error) {
 	return a, nil
 }
 
-const chartColumns = `chart_id, domain, name, description, chart_repository, deploy_unit, status, first_seen_at, last_seen_at, argo_application_name_template`
+const chartColumns = `chart_id, domain, name, description, chart_repository, deploy_unit, status, first_seen_at, last_seen_at, argo_application_name_overrides`
 
 // chartColumnsQualified is chartColumns with the v_current_chart alias
 // prefixed on every column, for use in queries that join v_current_chart
@@ -43,12 +43,12 @@ const chartColumns = `chart_id, domain, name, description, chart_repository, dep
 // chart_app), where an unqualified `chart_id` in the SELECT list is
 // ambiguous to Postgres (SQLSTATE 42702). Column order matches chartColumns
 // so scanChart can be reused unchanged.
-const chartColumnsQualified = `c.chart_id, c.domain, c.name, c.description, c.chart_repository, c.deploy_unit, c.status, c.first_seen_at, c.last_seen_at, c.argo_application_name_template`
+const chartColumnsQualified = `c.chart_id, c.domain, c.name, c.description, c.chart_repository, c.deploy_unit, c.status, c.first_seen_at, c.last_seen_at, c.argo_application_name_overrides`
 
 func scanChart(row pgx.Row) (repository.Chart, error) {
 	var c repository.Chart
 	var deployUnit, status string
-	if err := row.Scan(&c.ChartID, &c.Domain, &c.Name, &c.Description, &c.ChartRepository, &deployUnit, &status, &c.FirstSeenAt, &c.LastSeenAt, &c.ArgoApplicationNameTemplate); err != nil {
+	if err := row.Scan(&c.ChartID, &c.Domain, &c.Name, &c.Description, &c.ChartRepository, &deployUnit, &status, &c.FirstSeenAt, &c.LastSeenAt, &c.ArgoApplicationNameOverrides); err != nil {
 		return repository.Chart{}, err
 	}
 	c.DeployUnit = deployUnitFromDB(deployUnit)
@@ -1114,13 +1114,20 @@ func (r *appRepo) SetAppStatus(ctx context.Context, appID string, target reposit
 // SetChartArgoApplicationNameOverride
 // ============================================================================
 
-// SetChartArgoApplicationNameOverride sets (or clears, via template = "")
-// chart.argo_application_name_template -- the only write path to that
-// column; Reconcile/ReconcileApps above never touch it, so an admin-set
-// override survives reconciliation. See
-// repository.Chart.ResolveArgoApplicationName.
-func (r *appRepo) SetChartArgoApplicationNameOverride(ctx context.Context, chartID, template string) (*repository.Chart, error) {
-	tag, err := r.ex.Exec(ctx, `UPDATE chart SET argo_application_name_template = $2 WHERE chart_id = $1`, chartID, template)
+// SetChartArgoApplicationNameOverride sets (argoApplicationName non-empty)
+// or clears (argoApplicationName == "") exactly one environmentKey entry in
+// chart.argo_application_name_overrides -- every other environment's
+// override on this chart is left untouched, via a single-key JSONB
+// set/delete rather than a whole-map replace. Reconcile/ReconcileApps above
+// never touch this column at all, so an admin-set override survives
+// reconciliation. See repository.Chart.ResolveArgoApplicationName.
+func (r *appRepo) SetChartArgoApplicationNameOverride(ctx context.Context, chartID, environmentKey, argoApplicationName string) (*repository.Chart, error) {
+	tag, err := r.ex.Exec(ctx, `
+		UPDATE chart SET argo_application_name_overrides =
+			CASE WHEN $3 = '' THEN argo_application_name_overrides - $2
+			     ELSE jsonb_set(argo_application_name_overrides, ARRAY[$2], to_jsonb($3::text), true)
+			END
+		WHERE chart_id = $1`, chartID, environmentKey, argoApplicationName)
 	if err != nil {
 		return nil, fmt.Errorf("set chart argo application name override: %w", err)
 	}

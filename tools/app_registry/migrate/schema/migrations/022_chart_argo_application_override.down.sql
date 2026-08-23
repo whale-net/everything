@@ -13,4 +13,4 @@ SELECT
     c.last_seen_at
 FROM chart c;
 
-ALTER TABLE chart DROP COLUMN argo_application_name_template;
+ALTER TABLE chart DROP COLUMN argo_application_name_overrides;

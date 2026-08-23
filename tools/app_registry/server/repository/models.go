@@ -121,28 +121,36 @@ type Chart struct {
 	AppIDs          []string
 	FirstSeenAt     time.Time
 	LastSeenAt      time.Time
-	// ArgoApplicationNameTemplate is an optional, admin-settable override
-	// for the ArgoCD Application name WritebackWorkflow's
-	// TriggerArgoRefresh/PollArgoSyncStatus activities target for this
-	// chart's promotions (worker/writeback/argosync.go), for ad-hoc/legacy
-	// deployments whose real Application name doesn't follow the
-	// "<FullName>-<environment>" convention. "" (the default, migration
-	// 022) means no override. Set only via
-	// AppRepository.SetChartArgoApplicationNameOverride -- ReconcileApps
-	// never writes it. See ResolveArgoApplicationName.
-	ArgoApplicationNameTemplate string
+	// ArgoApplicationNameOverrides is an optional, admin-settable map of
+	// environment_key -> ArgoCD Application name, overriding what
+	// WritebackWorkflow's TriggerArgoRefresh/PollArgoSyncStatus activities
+	// target for this chart's promotions in that one environment
+	// (worker/writeback/argosync.go), for ad-hoc/legacy deployments whose
+	// real Application name doesn't follow the
+	// "<FullName>-<environment>" convention. Keyed per environment --
+	// rather than one value for the whole chart -- because an ad-hoc
+	// deployment's naming can differ unrelatedly between environments
+	// (e.g. dev "foo-dev-app", prod "prod-svc-foo", sharing no pattern).
+	// An environment absent from this map (nil/empty, the default,
+	// migration 022) uses the convention. Set only via
+	// AppRepository.SetChartArgoApplicationNameOverride, one environment
+	// at a time -- ReconcileApps never writes it. See
+	// ResolveArgoApplicationName.
+	ArgoApplicationNameOverrides map[string]string
 }
 
 func (c Chart) FullName() string { return c.Domain + "-" + c.Name }
 
 // ResolveArgoApplicationName returns the ArgoCD Application name for this
-// chart in environmentKey: ArgoApplicationNameTemplate with every
-// "{environment}" substring replaced by environmentKey, if the template is
-// set (an ad-hoc/legacy deployment override); otherwise the convention
-// "<FullName>-<environmentKey>" every standard deployment uses.
+// chart in environmentKey: the explicit override in
+// ArgoApplicationNameOverrides[environmentKey], if one is set for this
+// exact environment (an ad-hoc/legacy deployment can have a completely
+// different name in each environment, not just a mechanical variation --
+// dev and prod need not share any naming pattern); otherwise the
+// convention every standard chart uses: "<FullName>-<environmentKey>".
 func (c Chart) ResolveArgoApplicationName(environmentKey string) string {
-	if c.ArgoApplicationNameTemplate != "" {
-		return strings.ReplaceAll(c.ArgoApplicationNameTemplate, "{environment}", environmentKey)
+	if name, ok := c.ArgoApplicationNameOverrides[environmentKey]; ok && name != "" {
+		return name
 	}
 	return c.FullName() + "-" + environmentKey
 }

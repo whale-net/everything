@@ -119,8 +119,9 @@ type RenderedState struct {
 	// uses verbatim for TriggerArgoRefresh/PollArgoSyncStatus (issue
 	// #1030) -- resolved by RenderEnvironmentState from the SAME
 	// AppRegistry.ListCharts lookup ChartName comes from: either the
-	// chart's admin-set ArgoApplicationNameTemplate override (for
-	// ad-hoc/legacy deployments, see
+	// chart's admin-set, per-environment ArgoApplicationNameOverrides entry
+	// for this EnvironmentKey (for ad-hoc/legacy deployments -- two
+	// environments need not share any naming pattern, see
 	// repository.Chart.ResolveArgoApplicationName), or the convention
 	// "<ChartName>-<EnvironmentKey>" every standard deployment uses. Never
 	// re-derived by the workflow itself -- see WritebackWorkflow's own
