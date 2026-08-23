@@ -57,6 +57,46 @@ func TestStubActivities_Publish_SkipsNoOpWrite(t *testing.T) {
 	}
 }
 
+// TestStubActivities_Publish_NeverReportsCommitSHA is FR7a's "no-git
+// stub/dev-test path reports this field absent" requirement (issue #1029):
+// StubActivities never commits to a git repo, so PublishResult.CommitSHA
+// must stay at its zero value on every path -- the first (real) write, a
+// no-op skip, and a subsequent real re-write all included, so a future
+// change that starts stamping a stand-in value on any one of them is
+// caught.
+func TestStubActivities_Publish_NeverReportsCommitSHA(t *testing.T) {
+	dir := t.TempDir()
+	a := &StubActivities{OutDir: dir}
+	ctx := context.Background()
+
+	first, err := a.Publish(ctx, RenderedState{EnvironmentKey: "dev", StateHash: "hash-a", Document: []byte(`{"v":1}`)})
+	if err != nil {
+		t.Fatalf("first publish: %v", err)
+	}
+	if first.CommitSHA != "" {
+		t.Fatalf("expected CommitSHA to be empty on StubActivities' no-git path, got %q", first.CommitSHA)
+	}
+
+	skipped, err := a.Publish(ctx, RenderedState{EnvironmentKey: "dev", StateHash: "hash-a", Document: []byte(`{"v":1}`)})
+	if err != nil {
+		t.Fatalf("skipped publish: %v", err)
+	}
+	if !skipped.Skipped {
+		t.Fatalf("expected the second identical publish to be skipped")
+	}
+	if skipped.CommitSHA != "" {
+		t.Fatalf("expected CommitSHA to be empty on the skipped no-op path, got %q", skipped.CommitSHA)
+	}
+
+	changed, err := a.Publish(ctx, RenderedState{EnvironmentKey: "dev", StateHash: "hash-b", Document: []byte(`{"v":2}`)})
+	if err != nil {
+		t.Fatalf("changed publish: %v", err)
+	}
+	if changed.CommitSHA != "" {
+		t.Fatalf("expected CommitSHA to be empty on a real (non-skipped) StubActivities write, got %q", changed.CommitSHA)
+	}
+}
+
 // TestStubActivities_Publish_DifferentEnvironmentsIndependent proves the
 // no-op check is scoped per environment_key, not global -- publishing dev
 // must not affect whether stage's next publish is considered a no-op.
