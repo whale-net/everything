@@ -2,21 +2,23 @@ package pages
 
 import (
 	"fmt"
-	"github.com/whale-net/everything/manmanv2/ui/components"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
+	"github.com/whale-net/everything/manmanv2/ui/components"
 )
 
 type SGCDetailPageData struct {
-	Layout              components.LayoutData
-	SGC                 *manmanpb.ServerGameConfig
-	Server              *manmanpb.Server
-	GameConfig          *manmanpb.GameConfig
-	Game                *manmanpb.Game
-	LibraryAttachments  []LibraryAttachment
-	Sessions            []*manmanpb.Session
-	PendingCount        int
-	BackupConfigs       []BackupConfigGroup
-	RecentBackups       []*manmanpb.Backup
+	Layout             components.LayoutData
+	SGC                *manmanpb.ServerGameConfig
+	Server             *manmanpb.Server
+	GameConfig         *manmanpb.GameConfig
+	Game               *manmanpb.Game
+	LibraryAttachments []LibraryAttachment
+	Sessions           []*manmanpb.Session
+	PendingCount       int
+	BackupConfigs      []BackupConfigGroup
+	RecentBackups      []*manmanpb.Backup
 }
 
 type LibraryAttachment struct {
@@ -40,174 +42,176 @@ templ SGCDetail(data SGCDetailPageData) {
 		<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
 			<div>
 				<div class="flex items-center gap-2 mb-2">
-					<span class="inline-flex items-center px-3 py-1 rounded-md text-xs font-semibold bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+					<span class="badge badge-secondary badge-soft">
 						🚀 SERVER DEPLOYMENT
 					</span>
-					@components.Badge(data.SGC.Status, "")
+					@htmxui.Badge(data.SGC.Status, statusBadgeVariant(data.SGC.Status), htmxui.BadgeSizeMD, true, nil)
 				</div>
-				<h1 class="text-3xl font-bold text-gray-900 dark:text-white">SGC-{ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }</h1>
+				<h1 class="text-3xl font-bold text-base-content">SGC-{ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }</h1>
 				if data.Server != nil {
-					<p class="text-sm text-gray-600 dark:text-gray-400 mt-1">Deployed on { data.Server.Name }</p>
+					<p class="text-sm text-base-content/60 mt-1">Deployed on { data.Server.Name }</p>
 				}
 			</div>
 			<div class="flex gap-2">
 				<form method="post" action="/sessions/start">
 					<input type="hidden" name="server_game_config_id" value={ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }/>
-					<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-green-600 hover:bg-green-700 text-white font-medium rounded-md transition-colors">
+					<button type="submit" class="btn btn-success">
 						Start Session
 					</button>
 				</form>
 			</div>
 		</div>
 		<!-- SGC Info -->
-		<div x-data="{ editPorts: false }" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 p-6 mb-6">
-			<h2 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">Deployment Info</h2>
-			<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
-				@components.DLItemMono("SGC ID", fmt.Sprintf("%d", data.SGC.ServerGameConfigId))
-				<div>
-					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Server</dt>
-					<dd class="mt-1 text-sm">
-						if data.Server != nil {
-							<a href={ templ.URL(fmt.Sprintf("/servers/%d", data.Server.ServerId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.Server.Name }</a>
-						} else {
-							<span class="text-gray-900 dark:text-white">Server { fmt.Sprintf("%d", data.SGC.ServerId) }</span>
-						}
-					</dd>
-				</div>
-				<div>
-					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Game Config</dt>
-					<dd class="mt-1 text-sm">
-						if data.GameConfig != nil {
-							<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.GameConfig.GameId, data.GameConfig.ConfigId)) } class="text-indigo-600 dark:text-indigo-400 hover:underline">{ data.GameConfig.Name }</a>
-						} else {
-							<span class="text-gray-900 dark:text-white">Config { fmt.Sprintf("%d", data.SGC.GameConfigId) }</span>
-						}
-					</dd>
-				</div>
-				<div>
-					<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Status</dt>
-					<dd class="mt-1">
-						@components.Badge(data.SGC.Status, "")
-					</dd>
-				</div>
-				<div class="md:col-span-2">
-					<div class="flex justify-between items-center mb-2">
-						<dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Port Bindings</dt>
-						<button type="button" @click="editPorts = !editPorts" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[32px] bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-md transition-colors">
-							<span x-text="editPorts ? 'Cancel' : 'Edit'">Edit</span>
-						</button>
-					</div>
-					<dd x-show="!editPorts" class="mt-1">
-						if len(data.SGC.PortBindings) > 0 {
-							<div class="flex flex-wrap gap-1">
-								for _, pb := range data.SGC.PortBindings {
-									<code class="text-xs bg-gray-100 dark:bg-slate-700 text-gray-700 dark:text-gray-300 px-2 py-1 rounded">
-										{ fmt.Sprintf("%d:%d/%s", pb.ContainerPort, pb.HostPort, pb.Protocol) }
-									</code>
-								}
-							</div>
-						} else {
-							<span class="text-sm text-gray-500 dark:text-gray-400">No port bindings configured.</span>
-						}
-					</dd>
-					<div
-						x-show="editPorts"
-						x-cloak
-						x-data="{
-							ports: [],
-							addPort() { this.ports.push({ container_port: '', host_port: '', protocol: 'TCP' }) },
-							removePort(i) { this.ports.splice(i, 1) },
-							init() {
-								const dataStr = this.$el.dataset.portBindings;
-								const initial = dataStr ? JSON.parse(dataStr) : [];
-								this.ports = initial.map(pb => ({ container_port: pb.container_port, host_port: pb.host_port, protocol: pb.protocol }));
+		<div x-data="{ editPorts: false }" class="card bg-base-100 border border-base-300 shadow-sm mb-6">
+			<div class="card-body">
+				<h2 class="text-lg font-semibold text-base-content mb-4">Deployment Info</h2>
+				<dl class="grid grid-cols-1 md:grid-cols-2 gap-4">
+					@components.DLItemMono("SGC ID", fmt.Sprintf("%d", data.SGC.ServerGameConfigId))
+					<div>
+						<dt class="text-sm font-medium text-base-content/60">Server</dt>
+						<dd class="mt-1 text-sm">
+							if data.Server != nil {
+								<a href={ templ.URL(fmt.Sprintf("/servers/%d", data.Server.ServerId)) } class="link link-primary">{ data.Server.Name }</a>
+							} else {
+								<span class="text-base-content">Server { fmt.Sprintf("%d", data.SGC.ServerId) }</span>
 							}
-						}"
-						data-port-bindings={ templ.JSONString(data.SGC.PortBindings) }
-						class="mt-2"
-					>
-						<form
-							method="POST"
-							action={ templ.URL(fmt.Sprintf("/sgc/%d/update-ports", data.SGC.ServerGameConfigId)) }
-							x-on:submit="$event.target.port_bindings_json.value = JSON.stringify(ports.filter(p => p.container_port && p.host_port).map(p => ({ container_port: parseInt(p.container_port), host_port: parseInt(p.host_port), protocol: p.protocol })))"
-						>
-							<input type="hidden" name="port_bindings_json" value=""/>
-							<template x-for="(pb, idx) in ports" :key="idx">
-								<div class="flex gap-2 items-center mb-2">
-									<input type="number" x-model="pb.container_port" min="1" max="65535" placeholder="Container Port" class="w-36 px-3 py-2 min-h-[40px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-sm"/>
-									<span class="text-slate-500 dark:text-slate-400">→</span>
-									<input type="number" x-model="pb.host_port" min="1" max="65535" placeholder="Host Port" class="w-36 px-3 py-2 min-h-[40px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-mono text-sm"/>
-									<select x-model="pb.protocol" class="px-3 py-2 min-h-[40px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm">
-										<option value="TCP">TCP</option>
-										<option value="UDP">UDP</option>
-									</select>
-									<button type="button" x-on:click="removePort(idx)" class="inline-flex items-center justify-center px-3 py-2 min-h-[40px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">×</button>
-								</div>
-							</template>
-							<div class="flex gap-2 mt-2">
-								<button type="button" x-on:click="addPort()" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">+ Add Port Binding</button>
-								<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[36px] bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-md transition-colors">Save</button>
-							</div>
-						</form>
+						</dd>
 					</div>
-				</div>
-			</dl>
+					<div>
+						<dt class="text-sm font-medium text-base-content/60">Game Config</dt>
+						<dd class="mt-1 text-sm">
+							if data.GameConfig != nil {
+								<a href={ templ.URL(fmt.Sprintf("/games/%d/configs/%d", data.GameConfig.GameId, data.GameConfig.ConfigId)) } class="link link-primary">{ data.GameConfig.Name }</a>
+							} else {
+								<span class="text-base-content">Config { fmt.Sprintf("%d", data.SGC.GameConfigId) }</span>
+							}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-sm font-medium text-base-content/60">Status</dt>
+						<dd class="mt-1">
+							@htmxui.Badge(data.SGC.Status, statusBadgeVariant(data.SGC.Status), htmxui.BadgeSizeMD, true, nil)
+						</dd>
+					</div>
+					<div class="md:col-span-2">
+						<div class="flex justify-between items-center mb-2">
+							<dt class="text-sm font-medium text-base-content/60">Port Bindings</dt>
+							<button type="button" @click="editPorts = !editPorts" class="btn btn-primary btn-xs">
+								<span x-text="editPorts ? 'Cancel' : 'Edit'">Edit</span>
+							</button>
+						</div>
+						<dd x-show="!editPorts" class="mt-1">
+							if len(data.SGC.PortBindings) > 0 {
+								<div class="flex flex-wrap gap-1">
+									for _, pb := range data.SGC.PortBindings {
+										<code class="text-xs bg-base-200 text-base-content px-2 py-1 rounded">
+											{ fmt.Sprintf("%d:%d/%s", pb.ContainerPort, pb.HostPort, pb.Protocol) }
+										</code>
+									}
+								</div>
+							} else {
+								<span class="text-sm text-base-content/60">No port bindings configured.</span>
+							}
+						</dd>
+						<div
+							x-show="editPorts"
+							x-cloak
+							x-data="{
+								ports: [],
+								addPort() { this.ports.push({ container_port: '', host_port: '', protocol: 'TCP' }) },
+								removePort(i) { this.ports.splice(i, 1) },
+								init() {
+									const dataStr = this.$el.dataset.portBindings;
+									const initial = dataStr ? JSON.parse(dataStr) : [];
+									this.ports = initial.map(pb => ({ container_port: pb.container_port, host_port: pb.host_port, protocol: pb.protocol }));
+								}
+							}"
+							data-port-bindings={ templ.JSONString(data.SGC.PortBindings) }
+							class="mt-2"
+						>
+							<form
+								method="POST"
+								action={ templ.URL(fmt.Sprintf("/sgc/%d/update-ports", data.SGC.ServerGameConfigId)) }
+								x-on:submit="$event.target.port_bindings_json.value = JSON.stringify(ports.filter(p => p.container_port && p.host_port).map(p => ({ container_port: parseInt(p.container_port), host_port: parseInt(p.host_port), protocol: p.protocol })))"
+							>
+								<input type="hidden" name="port_bindings_json" value=""/>
+								<template x-for="(pb, idx) in ports" :key="idx">
+									<div class="flex gap-2 items-center mb-2">
+										<input type="number" x-model="pb.container_port" min="1" max="65535" placeholder="Container Port" class="input input-bordered input-sm w-36 font-mono"/>
+										<span class="text-base-content/60">→</span>
+										<input type="number" x-model="pb.host_port" min="1" max="65535" placeholder="Host Port" class="input input-bordered input-sm w-36 font-mono"/>
+										<select x-model="pb.protocol" class="select select-bordered select-sm">
+											<option value="TCP">TCP</option>
+											<option value="UDP">UDP</option>
+										</select>
+										<button type="button" x-on:click="removePort(idx)" class="btn btn-error btn-sm btn-square">×</button>
+									</div>
+								</template>
+								<div class="flex gap-2 mt-2">
+									<button type="button" x-on:click="addPort()" class="btn btn-neutral btn-sm">+ Add Port Binding</button>
+									<button type="submit" class="btn btn-success btn-sm">Save</button>
+								</div>
+							</form>
+						</div>
+					</div>
+				</dl>
+			</div>
 		</div>
 		<!-- Libraries -->
-		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 mb-6 overflow-hidden">
-			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700">
-				<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Workshop Libraries</h2>
-				<button onclick="document.getElementById('add-library-panel').style.display='block'" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-md transition-colors">
+		<div class="card bg-base-100 border border-base-300 shadow-sm mb-6 overflow-hidden">
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300">
+				<h2 class="text-lg font-semibold text-base-content">Workshop Libraries</h2>
+				<button onclick="document.getElementById('add-library-panel').style.display='block'" class="btn btn-primary btn-sm">
 					Add Library
 				</button>
 			</div>
 			if data.PendingCount > 0 {
-				<div class="bg-yellow-50 dark:bg-yellow-900/20 border-l-4 border-yellow-400 p-4 m-4">
-					<p class="text-sm text-yellow-800 dark:text-yellow-200">
+				<div role="alert" class="alert alert-warning m-4">
+					<span class="text-sm">
 						{ fmt.Sprintf("%d addon(s) pending installation — will be installed before the next session starts.", data.PendingCount) }
-					</p>
+					</span>
 				</div>
 			}
 			if len(data.LibraryAttachments) > 0 {
 				<div class="overflow-x-auto">
-					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
-						<thead class="bg-gray-50 dark:bg-slate-900">
+					<table class="table">
+						<thead>
 							<tr>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Library</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Install Path</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Volume</th>
-								<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+								<th>Library</th>
+								<th>Install Path</th>
+								<th>Volume</th>
+								<th class="text-right">Actions</th>
 							</tr>
 						</thead>
-						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+						<tbody>
 							for _, att := range data.LibraryAttachments {
-								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
-									<td class="px-6 py-4">
-										<a href={ templ.URL(fmt.Sprintf("/workshop/library-detail?library_id=%d", att.Library.LibraryId)) } class="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:underline">{ att.Library.Name }</a>
+								<tr class="hover">
+									<td>
+										<a href={ templ.URL(fmt.Sprintf("/workshop/library-detail?library_id=%d", att.Library.LibraryId)) } class="link link-primary text-sm font-medium">{ att.Library.Name }</a>
 										if att.PresetName != "" {
 											<br/>
-											<small class="text-gray-500 dark:text-gray-400">Preset: { att.PresetName }</small>
+											<small class="text-base-content/60">Preset: { att.PresetName }</small>
 										}
 									</td>
-									<td class="px-6 py-4">
-										<code class="text-xs text-gray-900 dark:text-white">{ att.ComputedPath }</code>
+									<td>
+										<code class="text-xs text-base-content">{ att.ComputedPath }</code>
 										if att.PathOverride {
 											<br/>
-											<small class="text-orange-600 dark:text-orange-400">⚠ Override</small>
+											<small class="text-warning">⚠ Override</small>
 										}
 									</td>
-									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">
+									<td class="text-sm">
 										if att.VolumeName != "" {
 											{ att.VolumeName }
 										} else {
-											<small class="text-gray-500 dark:text-gray-400">First available</small>
+											<small class="text-base-content/60">First available</small>
 										}
 									</td>
-									<td class="px-6 py-4 text-right">
+									<td class="text-right">
 										<form method="POST" action="/sgc/remove-library" class="inline">
 											<input type="hidden" name="sgc_id" value={ fmt.Sprintf("%d", data.SGC.ServerGameConfigId) }/>
 											<input type="hidden" name="library_id" value={ fmt.Sprintf("%d", att.Library.LibraryId) }/>
-											<button type="submit" onclick="return confirm('Remove this library?')" class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md transition-colors">Remove</button>
+											<button type="submit" onclick="return confirm('Remove this library?')" class="btn btn-error btn-sm">Remove</button>
 										</form>
 									</td>
 								</tr>
@@ -217,15 +221,15 @@ templ SGCDetail(data SGCDetailPageData) {
 				</div>
 			} else {
 				<div class="p-12 text-center">
-					<p class="text-gray-500 dark:text-gray-400">No libraries attached. Add a library to automatically install its addons before sessions start.</p>
+					<p class="text-base-content/60">No libraries attached. Add a library to automatically install its addons before sessions start.</p>
 				</div>
 			}
-			<div id="add-library-panel" style="display: none;" class="p-4 border-t border-gray-200 dark:border-slate-700">
-				<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-3">Add Library</h3>
+			<div id="add-library-panel" style="display: none;" class="p-4 border-t border-base-300">
+				<h3 class="text-sm font-semibold text-base-content mb-3">Add Library</h3>
 				<input
 					type="text"
 					placeholder="Search libraries..."
-					class="w-full px-3 py-2 min-h-[44px] border border-gray-300 dark:border-slate-600 rounded-md bg-white dark:bg-slate-800 text-gray-900 dark:text-white mb-3"
+					class="input input-bordered w-full mb-3"
 					hx-get={ fmt.Sprintf("/sgc/api/available-libraries?sgc_id=%d", data.SGC.ServerGameConfigId) }
 					hx-trigger="keyup changed delay:300ms"
 					hx-target="#sgc-available-libraries"
@@ -239,34 +243,34 @@ templ SGCDetail(data SGCDetailPageData) {
 			</div>
 		</div>
 		<!-- Sessions -->
-		<div class="bg-white dark:bg-slate-800 rounded-lg shadow-md border border-gray-200 dark:border-slate-700 overflow-hidden mb-6">
-			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-gray-200 dark:border-slate-700">
-				<h2 class="text-lg font-semibold text-gray-900 dark:text-white">Sessions</h2>
-				<a href={ templ.URL(fmt.Sprintf("/sessions?server_game_config_id=%d", data.SGC.ServerGameConfigId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">View All</a>
+		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
+			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300">
+				<h2 class="text-lg font-semibold text-base-content">Sessions</h2>
+				<a href={ templ.URL(fmt.Sprintf("/sessions?server_game_config_id=%d", data.SGC.ServerGameConfigId)) } class="btn btn-secondary btn-sm">View All</a>
 			</div>
 			if len(data.Sessions) > 0 {
 				<div class="overflow-x-auto">
-					<table class="min-w-full divide-y divide-gray-200 dark:divide-slate-700">
-						<thead class="bg-gray-50 dark:bg-slate-900">
+					<table class="table">
+						<thead>
 							<tr>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Session ID</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Status</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Started</th>
-								<th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Ended</th>
-								<th scope="col" class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+								<th>Session ID</th>
+								<th>Status</th>
+								<th>Started</th>
+								<th>Ended</th>
+								<th class="text-right">Actions</th>
 							</tr>
 						</thead>
-						<tbody class="bg-white dark:bg-slate-800 divide-y divide-gray-200 dark:divide-slate-700">
+						<tbody>
 							for _, session := range data.Sessions {
-								<tr class="hover:bg-gray-50 dark:hover:bg-slate-700 transition-colors">
-									<td class="px-6 py-4 text-sm font-mono text-gray-900 dark:text-white">{ fmt.Sprintf("%d", session.SessionId) }</td>
-									<td class="px-6 py-4">
-										@components.Badge(session.Status, "")
+								<tr class="hover">
+									<td class="text-sm font-mono">{ fmt.Sprintf("%d", session.SessionId) }</td>
+									<td>
+										@htmxui.Badge(session.Status, statusBadgeVariant(session.Status), htmxui.BadgeSizeSM, true, nil)
 									</td>
-									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">{ timeAgo(session.StartedAt) }</td>
-									<td class="px-6 py-4 text-sm text-gray-700 dark:text-gray-300">{ timeAgo(session.EndedAt) }</td>
-									<td class="px-6 py-4 text-right">
-										<a href={ templ.URL(fmt.Sprintf("/sessions/%d", session.SessionId)) } class="inline-flex items-center justify-center px-3 py-1.5 min-h-[36px] bg-slate-600 hover:bg-slate-700 text-white text-sm font-medium rounded-md transition-colors">View</a>
+									<td class="text-sm">{ timeAgo(session.StartedAt) }</td>
+									<td class="text-sm">{ timeAgo(session.EndedAt) }</td>
+									<td class="text-right">
+										<a href={ templ.URL(fmt.Sprintf("/sessions/%d", session.SessionId)) } class="btn btn-secondary btn-sm">View</a>
 									</td>
 								</tr>
 							}
@@ -275,31 +279,43 @@ templ SGCDetail(data SGCDetailPageData) {
 				</div>
 			} else {
 				<div class="p-12 text-center">
-					<p class="text-gray-500 dark:text-gray-400">No sessions yet for this SGC.</p>
+					<p class="text-base-content/60">No sessions yet for this SGC.</p>
 				</div>
 			}
 		</div>
-		<!-- Danger Zone -->
-		<div x-data="{ confirmDelete: false, confirmStop: false }" class="bg-white dark:bg-slate-800 rounded-lg shadow-md border-2 border-red-200 dark:border-red-900 overflow-hidden mt-6">
-			<div class="bg-red-50 dark:bg-red-900/20 px-6 py-4 border-b-2 border-red-200 dark:border-red-900">
-				<h2 class="text-lg font-semibold text-red-900 dark:text-red-200">⚠️ Danger Zone</h2>
+		<!--
+			Danger Zone: intentionally kept on its existing Alpine.js
+			x-show / click-handler reveal-then-confirm interaction. FR7:
+			this is pre-existing client behavior, not styling, and changing
+			"click once to reveal, click again to confirm" to htmxui.Confirm's
+			always-visible single-submit shape would be an observable
+			behavior change for a destructive action, which FR7 rules out.
+			Only the chrome is restyled here, onto the same card/border-error
+			visual language htmxui.Confirm's ZoneTitle option renders, so it
+			reads as the same "danger zone" pattern even though the
+			per-row click-to-reveal gate keeps its own markup instead of
+			calling the shared component directly.
+		-->
+		<div x-data="{ confirmDelete: false, confirmStop: false }" class="card bg-base-100 border-2 border-error/40 shadow-md overflow-hidden mt-6">
+			<div class="bg-error/10 px-6 py-4 border-b-2 border-error/40">
+				<h2 class="text-lg font-semibold text-error">⚠️ Danger Zone</h2>
 			</div>
-			<div class="p-6 space-y-4">
+			<div class="card-body space-y-4">
 				for _, session := range data.Sessions {
 					if session.Status == "running" {
-						<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-gray-200 dark:border-slate-700">
+						<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b border-base-300">
 							<div>
-								<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Stop deployment</h3>
-								<p class="text-sm text-gray-600 dark:text-gray-400">Stop the running server. Players will be disconnected. You can redeploy later.</p>
+								<h3 class="text-sm font-semibold text-base-content mb-1">Stop deployment</h3>
+								<p class="text-sm text-base-content/60">Stop the running server. Players will be disconnected. You can redeploy later.</p>
 							</div>
 							<div class="flex-shrink-0">
-								<button x-show="!confirmStop" @click="confirmStop = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-orange-600 hover:bg-orange-700 text-white font-medium rounded-md transition-colors">Stop Server</button>
+								<button x-show="!confirmStop" @click="confirmStop = true" class="btn btn-warning">Stop Server</button>
 								<div x-show="confirmStop" x-cloak class="flex gap-2 items-center">
-									<span class="text-sm text-orange-900 dark:text-orange-200 font-medium">Stop now?</span>
+									<span class="text-sm text-warning font-medium">Stop now?</span>
 									<form method="POST" action={ templ.URL(fmt.Sprintf("/sessions/%d/stop", session.SessionId)) } class="inline">
-										<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-orange-600 hover:bg-orange-700 text-white font-medium rounded-md transition-colors">Yes, Stop</button>
+										<button type="submit" class="btn btn-warning">Yes, Stop</button>
 									</form>
-									<button @click="confirmStop = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+									<button @click="confirmStop = false" class="btn btn-secondary">Cancel</button>
 								</div>
 							</div>
 						</div>
@@ -307,17 +323,17 @@ templ SGCDetail(data SGCDetailPageData) {
 				}
 				<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
 					<div>
-						<h3 class="text-sm font-semibold text-gray-900 dark:text-white mb-1">Delete this server config</h3>
-						<p class="text-sm text-gray-600 dark:text-gray-400">Permanently delete this server game config. Active deployments will be stopped. This action cannot be undone.</p>
+						<h3 class="text-sm font-semibold text-base-content mb-1">Delete this server config</h3>
+						<p class="text-sm text-base-content/60">Permanently delete this server game config. Active deployments will be stopped. This action cannot be undone.</p>
 					</div>
 					<div class="flex-shrink-0">
-						<button x-show="!confirmDelete" @click="confirmDelete = true" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Delete SGC</button>
+						<button x-show="!confirmDelete" @click="confirmDelete = true" class="btn btn-error">Delete SGC</button>
 						<div x-show="confirmDelete" x-cloak class="flex gap-2 items-center">
-							<span class="text-sm text-red-900 dark:text-red-200 font-medium">Are you sure?</span>
+							<span class="text-sm text-error font-medium">Are you sure?</span>
 							<form method="POST" action={ templ.URL(fmt.Sprintf("/sgc/%d/delete", data.SGC.ServerGameConfigId)) } class="inline">
-								<button type="submit" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-red-600 hover:bg-red-700 text-white font-medium rounded-md transition-colors">Yes, Delete</button>
+								<button type="submit" class="btn btn-error">Yes, Delete</button>
 							</form>
-							<button @click="confirmDelete = false" class="inline-flex items-center justify-center px-4 py-2 min-h-[44px] bg-slate-600 hover:bg-slate-700 text-white font-medium rounded-md transition-colors">Cancel</button>
+							<button @click="confirmDelete = false" class="btn btn-secondary">Cancel</button>
 						</div>
 					</div>
 				</div>

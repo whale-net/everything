@@ -1,3 +1,4 @@
+load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
 templ_library(
@@ -7,7 +8,29 @@ templ_library(
     visibility = ["//manmanv2/ui:__pkg__"],
     deps = [
         "//libs/go/htmxauth",
+        "//libs/go/htmxui",
         "//manmanv2/protos:manmanpb",
         "//manmanv2/ui/components",
+    ],
+)
+
+# #1008 (FR4, FR7): guards the daisyUI/htmxui markup migration itself --
+# hx-* attribute preservation on htmxui.Button call sites that moved
+# wiring from literal HTML into the attrs map (server_detail.templ's Start
+# Session button, session_detail.templ's action execute/submit buttons),
+# the state -> BadgeVariant/ButtonVariant colour mappings
+# (statusBadgeVariant, actionButtonVariant), and that Danger Zone sections
+# kept their pre-existing Alpine x-show confirm gate instead of silently
+# adopting htmxui.Confirm's different (always-visible) interaction shape.
+# No test rendered //manmanv2/ui/pages before this file.
+go_test(
+    name = "pages_test",
+    size = "small",
+    srcs = ["daisyui_migration_test.go"],
+    embed = [":pages"],
+    deps = [
+        "//manmanv2/protos:manmanpb",
+        "//manmanv2/ui/components",
+        "@com_github_a_h_templ//:templ",
     ],
 )

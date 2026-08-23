@@ -1,3 +1,4 @@
+load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
 templ_library(
@@ -6,7 +7,24 @@ templ_library(
     visibility = ["//manmanv2/ui:__subpackages__"],
     deps = [
         "//libs/go/htmxauth",
-        "//libs/go/htmxbase",
+        "//libs/go/htmxui",
+        "//manmanv2/protos:manmanpb",
+    ],
+)
+
+# Chrome migration guards (#1007, FR5/FR6/FR1a): Layout()'s adoption of
+# htmxui.Shell/htmxui.ThemeSwitcher still reaches manmanv2's own nav, server
+# selector, and logout affordance through the FR1a slots; OLED is reachable
+# as a real switchable theme through manmanv2's chrome (FR6); and no script
+# Layout emits reintroduces the pre-migration location.reload() defect
+# (FR5).
+go_test(
+    name = "components_test",
+    size = "small",
+    srcs = ["layout_test.go"],
+    embed = [":components"],
+    deps = [
+        "//libs/go/htmxauth",
         "//manmanv2/protos:manmanpb",
     ],
 )

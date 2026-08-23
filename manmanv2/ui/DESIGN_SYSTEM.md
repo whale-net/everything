@@ -37,10 +37,13 @@ accent" against the otherwise business-like UI:
 <nav class="bg-slate-800 dark:bg-slate-900 shadow-lg sticky top-0 z-50">
 ```
 
-- Sticky at the top, `z-50`
 - Link hover states use `bg-slate-700`
-- Collapses to a hamburger menu on mobile
-- Implementation: `Nav()` in `components/layout.templ`
+- Collapses to a dropdown menu on narrow viewports (a daisyUI
+  `dropdown`/`dropdown-content` pair, the same focus-driven pattern the
+  shared theme switcher uses — no JS toggle needed)
+- Implementation: `Layout()` in `components/layout.templ`, built on the
+  shared `htmxui.Shell` (`libs/go/htmxui`) — see "Future Direction:
+  daisyUI" below for how this landed
 
 ---
 
@@ -399,24 +402,36 @@ Use Tailwind's spacing scale consistently:
 
 ### Three Themes
 
-| Theme | Page background | Cards / surfaces |
-|-------|-----------------|------------------|
-| **Light** | `bg-gray-100` (#f3f4f6) | White (#ffffff) |
-| **Night** | `dark:bg-slate-900` (#0f172a) | Slate-800 (#1e293b) |
-| **OLED Night** | ⚠️ Currently identical to Night | — |
+| Theme | Chrome (navbar / page bg) | Page-body cards / surfaces |
+|-------|---------------------------|-----------------------------|
+| **Light** | daisyUI `[data-theme="light"]` (`libs/go/htmxui/themes.css`) | `bg-gray-100` (#f3f4f6) / White (#ffffff), unchanged |
+| **Night** | daisyUI `[data-theme="night"]` | `dark:bg-slate-900` (#0f172a) / Slate-800 (#1e293b), unchanged |
+| **OLED Night** | daisyUI `[data-theme="oled"]` — distinct near-black/pure-black palette, no longer identical to Night | Still `dark:bg-slate-900`-family (page-body markup migration to daisyUI is a follow-on effort) |
 
-> **Note**: OLED is intended to be pure black (#000000) for OLED power
-> savings, but no black overrides are implemented — selecting it only adds
-> the same `.dark` class as Night. Pure-black surfaces are an open TODO.
+The shared, pinned `libs/go/htmxui/themes.css` (see `[data-theme="oled"]`
+there) is the source of truth for OLED's actual pure-black values — it
+replaces the standalone `manman-theme`-era CSS variables this section used
+to describe.
 
 ### Mechanism
 
-- The theme is stored in `localStorage['manman-theme']` and falls back to
-  `prefers-color-scheme`. On load, `themeScript()` (in
-  `components/layout.templ`) sets `data-theme` on `<html>` and adds the
-  `.dark` class for `night`/`oled`.
-- Switching themes triggers `location.reload()` because the Tailwind CDN
-  build must re-scan classes.
+- Theming is `libs/go/htmxui`'s shared `ThemeSwitcher`
+  (`theme_switcher.templ`), mounted by `Layout()` via `htmxui.Shell` — not
+  a manmanv2-local component. It sets `data-theme` on `<html>` and
+  persists the choice to `localStorage['htmxui-theme']`
+  (`htmxui.ThemeSwitcherStorageKey`); `templ_render.go`'s bootstrap script
+  migrates a previously-saved `localStorage['manman-theme']` value onto
+  that key once, so existing operators' preferences aren't lost.
+- Switching themes applies immediately via daisyUI's CSS variables under
+  `data-theme` — **no `location.reload()`** (the pre-migration Tailwind
+  CDN build needed a full reload to re-scan classes; the pinned daisyUI +
+  `themes.css` pipeline does not).
+- `manmanv2/ui/pages/*.templ` bodies still use raw Tailwind `dark:`
+  utilities rather than daisyUI semantic classes (that migration is a
+  follow-on issue); `templ_render.go` redefines Tailwind's `dark:` variant
+  to key off `data-theme="night"|"oled"` instead of a `.dark` class, so
+  those utilities keep responding to the shared theme switcher without
+  any manmanv2-local class-toggling JS.
 
 ### Dark Mode Classes
 
@@ -462,18 +477,45 @@ The indigo-purple gradient works in all three themes:
 
 ## Migration Checklist
 
-When updating a page to the design system:
+The chrome and render pipeline (navbar, theme switching, `templ_render.go`'s
+`<head>`) are already migrated onto daisyUI via `libs/go/htmxui` (#1007) —
+see "Future Direction: daisyUI" below for what landed there. This checklist
+covers the remaining work: bringing an individual page's **body** markup
+onto daisyUI, built on `libs/go/htmxui`'s shared primitives, the same way
+the chrome was migrated. Do not build a manmanv2-local component layer for
+anything `libs/go/htmxui` already provides (Button/Badge/Card/Confirm) —
+import and use those directly, the way `components/layout.templ` imports
+`htmxui.Shell` and `htmxui.ThemeSwitcher` rather than re-implementing them.
 
-- [ ] Use templ components (`@components.Button`, `@components.Badge`, `@components.Hero`)
-- [ ] Replace blue buttons with indigo (`bg-indigo-600 hover:bg-indigo-700`)
-- [ ] Replace gray buttons with slate (`bg-slate-600 hover:bg-slate-700`)
-- [ ] Add hero header to main section pages (use `@components.Hero`)
-- [ ] Move delete actions to danger zone at bottom
-- [ ] Update status badges to use new colors (use `@components.Badge`)
-- [ ] Ensure all buttons meet 44px minimum height
-- [ ] Test in all three themes (light/night/OLED)
-- [ ] Verify mobile responsiveness
-- [ ] Use data attributes for passing dynamic data to JavaScript (NOT template expressions in `<script>` tags)
+When migrating a page to daisyUI:
+
+- [ ] Replace this package's local `@components.Button`/`@components.Badge`
+      (in `components/ui.templ`) with `@htmxui.Button`/`@htmxui.Badge`
+      (`libs/go/htmxui`) where the shared component already covers the
+      case; keep local components only for what `htmxui` doesn't provide
+      (e.g. `@components.Hero`).
+- [ ] Replace Tailwind `dark:` utility pairs (`bg-white dark:bg-slate-800`,
+      etc.) with daisyUI semantic classes driven by `data-theme`
+      (`bg-base-100`, `bg-base-200`, `text-base-content`, ...) — see
+      `libs/go/htmxui/themes.css` for the full variable-to-color mapping
+      per theme (light/night/oled).
+- [ ] Replace `bg-indigo-600 hover:bg-indigo-700`-style buttons with
+      `btn btn-primary`; `bg-slate-600 hover:bg-slate-700` with
+      `btn btn-secondary`; destructive actions with `btn btn-error`.
+- [ ] Add hero header to main section pages (use `@components.Hero`,
+      unchanged — daisyUI has no hero-gradient equivalent in this design
+      system's vocabulary).
+- [ ] Move delete actions to danger zone at bottom.
+- [ ] Update status badges to daisyUI badge classes (`badge badge-success`,
+      `badge-warning`, `badge-error`, `badge-secondary`).
+- [ ] Ensure all buttons meet the 44px minimum height (the shared
+      `libs/go/htmxui/themes.css` already sets this for `.btn`; no local
+      override needed).
+- [ ] Test in all three themes (light/night/OLED) — OLED must render the
+      distinct near-black `[data-theme="oled"]` palette, not look
+      identical to Night.
+- [ ] Verify mobile responsiveness.
+- [ ] Use data attributes for passing dynamic data to JavaScript (NOT template expressions in `<script>` tags).
 
 ---
 
@@ -504,35 +546,50 @@ When updating a page to the design system:
 
 ## Future Direction: daisyUI
 
-**The go decision has been made: daisyUI is adopted.** Its first adopter
-is `tools/app_registry/ui/` (App Registry admin UI, #629), which ships
-with daisyUI from the start rather than migrating onto it — see that
-package's `ARCHITECTURE.md`/`README.md` "Design system" and "Styling"
-sections for the load-order constraint and value vocabulary that decision
-produced.
+**The go decision has been made: daisyUI is adopted, on a shared library,
+not an app-local reimplementation.** Its first adopter was
+`tools/app_registry/ui/` (App Registry admin UI, #629), which shipped with
+daisyUI from the start rather than migrating onto it. Its components were
+then extracted into `libs/go/htmxui` (#1002–#1004: Button/Badge/Card/
+Confirm primitives, the shared `Shell`/`ShellData` chrome, and the
+CSS-variable-based `ThemeSwitcher` — none of it manmanv2- or app-registry-
+specific) precisely so a **second** UI could adopt daisyUI by importing
+that library instead of re-deriving its own component set. See
+`libs/go/htmxui/README.md` and `tools/app_registry/ui/`'s
+`ARCHITECTURE.md`/`README.md` "Design system"/"Styling" sections for the
+load-order constraint (NFR5) and value vocabulary that decision produced.
 
-**`manmanv2/ui` itself is explicitly out of scope for this decision and is
-unchanged** — it stays on the current Tailwind-only utility-class
-implementation described above. Migrating it is a separate, not-yet-
-scheduled effort; do not treat App Registry UI's adoption as authorization
-to start migrating this package's components.
+**`manmanv2/ui` is that second adopter (#1007 — this migration has
+landed).** The render pipeline (`templ_render.go`) and chrome
+(`components/layout.templ`'s `Layout()`, now built on `htmxui.Shell`) are
+daisyUI-based, on `libs/go/htmxui`, with no manmanv2-local
+reimplementation of the shared primitives:
 
-For reference, if/when `manmanv2/ui` is migrated:
+- `templ_render.go` swapped the unpinned `cdn.tailwindcss.com` for the
+  same pinned Tailwind browser build + daisyUI CDN pair
+  `tools/app_registry/ui/templ_render.go` uses, followed by
+  `htmxui.ThemesCSS` (`libs/go/htmxui/themes.css` — light/night/oled,
+  primary=indigo, success=green, error=red, neutral=slate, including the
+  pure-black OLED surfaces the pre-migration app lacked), in that exact
+  order (NFR5).
+- Theme switching is `htmxui.ThemeSwitcher`, not a manmanv2-local
+  implementation: daisyUI themes are CSS variables under `data-theme`, so
+  no re-scan is needed and the pre-migration theme-switch
+  `location.reload()` is gone.
+- `components/layout.templ`'s `Layout()` composes `htmxui.Shell` with
+  manmanv2's own nav list, server selector, and logout link via Shell's
+  app-owned slots (`Nav`, `HeaderRight`) and its breadcrumbs via the
+  `Banner` slot — see `htmxui.ShellData`'s doc comment for that slot
+  boundary (FR1a).
 
-- The wireframes (`design/wireframes/`) are already written in daisyUI
-  semantic classes and are the reference for what adoption looks like.
-- `tools/wireframe/themes.css` is the canonical mapping of this design
-  system onto daisyUI theme variables (light/night/oled, primary=indigo,
-  success=green, error=red, neutral=slate — including the pure-black OLED
-  surfaces the current app lacks).
-- Semantic equivalents: `btn-primary`/`btn-success`/`btn-error`/
-  `btn-secondary` for the button variants, `badge-soft badge-*` for the
-  soft-tint status badges, `card bg-base-100` for cards.
-- Adopting means swapping `cdn.tailwindcss.com` in `templ_render.go` for
-  the pinned daisyUI + Tailwind CDN builds plus `themes.css`, then
-  migrating components to the semantic classes. This also removes the
-  theme-switch `location.reload()` (daisyUI themes are CSS variables under
-  `data-theme`, no re-scan needed).
+**What's still pending** (a follow-on issue, not #1007): individual page
+**bodies** (`manmanv2/ui/pages/*.templ`) still use raw Tailwind `dark:`
+utility classes rather than daisyUI semantic classes — see "Migration
+Checklist" above for that remaining work. Semantic equivalents once a page
+is migrated: `btn-primary`/`btn-success`/`btn-error`/`btn-secondary` for
+the button variants (via `@htmxui.Button` where it covers the case),
+`badge-soft badge-*` for the soft-tint status badges, `card bg-base-100`
+for cards.
 
 ---
 
@@ -546,6 +603,6 @@ For reference, if/when `manmanv2/ui` is migrated:
 
 ---
 
-**Last Updated**: July 2026  
-**Version**: 2.1 (matched to actual app rendering; daisyUI noted as future direction)  
+**Last Updated**: August 2026  
+**Version**: 2.2 (chrome + render pipeline migrated to daisyUI via `libs/go/htmxui`, #1007; page-body markup migration remains a follow-on effort)  
 **Status**: Production Ready

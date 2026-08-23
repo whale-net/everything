@@ -425,33 +425,6 @@ func (app *App) getSelectedServer(r *http.Request, servers []*manmanpb.Server) *
 	return nil
 }
 
-// buildLayoutData populates common layout data with servers and selection
-func (app *App) buildLayoutData(r *http.Request, title, active string, user *htmxauth.UserInfo) (LayoutData, error) {
-	servers, err := app.grpc.ListServers(r.Context())
-	if err != nil {
-		log.Printf("Error fetching servers for layout: %v", err)
-		servers = []*manmanpb.Server{}
-	}
-
-	selectedServer := app.getSelectedServer(r, servers)
-	var defaultServerID int64
-	for _, s := range servers {
-		if s.IsDefault {
-			defaultServerID = s.ServerId
-			break
-		}
-	}
-
-	return LayoutData{
-		Title:           title,
-		Active:          active,
-		User:            user,
-		Servers:         servers,
-		SelectedServer:  selectedServer,
-		DefaultServerID: defaultServerID,
-	}, nil
-}
-
 // buildTemplLayoutData builds components.LayoutData for templ pages
 func (app *App) buildTemplLayoutData(r *http.Request, title, active string, user *htmxauth.UserInfo, breadcrumbs []components.Breadcrumb) (components.LayoutData, error) {
 	servers, err := app.grpc.ListServers(r.Context())
