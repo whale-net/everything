@@ -221,6 +221,7 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds(t *testing.T) {
 	require.NoError(t, os.WriteFile(bin, fakeFinalizeAppScript(), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -276,6 +277,7 @@ func TestActivities_FinalizePublish_PassesIdempotencyKeyPrefixToFinalizeApp(t *t
 	require.NoError(t, os.WriteFile(bin, fakeFinalizeAppScriptCapturingArgs(argsFile), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -328,7 +330,8 @@ func TestActivities_FinalizePublish_NoGHCRToken_FailsBatch(t *testing.T) {
 	})
 
 	a := &Activities{
-		GitHub: newTestDispatcher(t, mux),
+		Registry: newTestRegistry(t),
+		GitHub:   newTestDispatcher(t, mux),
 	}
 
 	plan := ResolvedPlan{
@@ -420,6 +423,22 @@ func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
 	})
 	require.NoError(t, err, "buildID synthesis must let the artifact actually reach state \"published\", not just upload to S3")
 	require.Equal(t, repository.ArtifactStatePublished, artifact.State)
+
+	// Regression for the FK-violation recurrence (#1090 followed by this
+	// fix): the synthesized buildID must name a REAL `build` row, not an
+	// unresolvable random UUID -- migration 001's `artifact.build_id
+	// REFERENCES build (build_id)` was never dropped (migration 007 only
+	// relaxed NOT NULL for the "allocated" state), so a made-up id makes
+	// BeginPublish's UPDATE/RecordArtifact's INSERT fail with
+	// artifact_build_id_fkey against real Postgres -- a failure this
+	// package's fake.Registry doesn't model, which is exactly how #1090's
+	// UUID-only synthesis shipped without this test catching it. Asserting
+	// the build row actually exists, and is keyed off ref.RunID rather
+	// than an arbitrary UUID, is the fake-registry-reachable proxy for
+	// that FK invariant.
+	build, err := repo.Builds().GetBuild(context.Background(), artifact.BuildID)
+	require.NoError(t, err, "artifact.BuildID must resolve to a real build row")
+	require.Equal(t, "42", build.WorkflowRunID, "the synthesized build should be keyed off the GitHub Actions run FinalizePublish already knows about (ref.RunID), not an unrelated random UUID")
 }
 
 // TestActivities_FinalizePublish_NoOpApp_ChartPinsEffectiveVersion is the
@@ -505,6 +524,7 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -584,6 +604,7 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *te
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -680,6 +701,7 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -736,6 +758,7 @@ func TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget(t *tes
 	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho 'DENIED: permission_denied' >&2\nexit 1\n"), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -791,6 +814,7 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
@@ -864,6 +888,7 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
 
 	a := &Activities{
+		Registry:       newTestRegistry(t),
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
