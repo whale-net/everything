@@ -2,6 +2,7 @@ package htmxui
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -376,5 +377,177 @@ func TestConfirm_ZoneTitleTogglesDangerZoneChrome(t *testing.T) {
 	}
 	if strings.Contains(withoutZone, "Danger Zone") {
 		t.Errorf("expected no zone title text when ZoneTitle is empty, got %q", withoutZone)
+	}
+}
+
+// --- Shell (FR1, FR1a) -------------------------------------------------------
+
+// countOccurrences reports how many non-overlapping times sub appears in s,
+// so tests can assert an exact count rather than mere presence -- guards
+// against e.g. a duplicated slot render or an extra hardcoded copy sitting
+// alongside the caller-supplied one.
+func countOccurrences(s, sub string) int {
+	return strings.Count(s, sub)
+}
+
+func TestShell_RendersNavSlotVerbatim(t *testing.T) {
+	body := render(t, Shell(ShellData{
+		BrandLabel: "Brand",
+		BrandHref:  "/",
+		Nav:        templ.Raw(`<li><a href="/mark">NAV-MARK</a></li>`),
+	}))
+	want := `<li><a href="/mark">NAV-MARK</a></li>`
+	if countOccurrences(body, want) != 1 {
+		t.Errorf("expected caller-supplied nav slot content to render verbatim exactly once, got %q in %q", want, body)
+	}
+}
+
+// TestShell_NilNavRendersNoNavItemsOfItsOwn is the direct FR1a regression
+// guard: Shell must not be a literal lift of
+// tools/app_registry/ui/components/layout.templ's Shell(), which hardcodes
+// its nav inline as a <ul class="menu menu-horizontal"> of <li><a
+// href="/environments">...</a></li> items. With no Nav slot supplied, Shell
+// must render zero <li> elements and must not mention "/environments"
+// anywhere -- a loose substring check for "menu-horizontal" alone would not
+// have caught a differently-classed hardcoded list, so this asserts on the
+// absence of the <li> element itself and of the literal href app-registry's
+// Shell hardcodes.
+func TestShell_NilNavRendersNoNavItemsOfItsOwn(t *testing.T) {
+	body := render(t, Shell(ShellData{
+		BrandLabel: "Brand",
+		BrandHref:  "/",
+	}))
+	if strings.Contains(body, "<li") {
+		t.Errorf("expected no <li> nav items when Nav slot is nil, got %q", body)
+	}
+	if strings.Contains(body, "/environments") {
+		t.Errorf("expected no hardcoded /environments nav item (FR1a literal-lift regression), got %q", body)
+	}
+}
+
+func TestShell_RendersBannerAndHeaderRightSlotsInExpectedPositions(t *testing.T) {
+	body := render(t, Shell(ShellData{
+		BrandLabel:  "Brand",
+		BrandHref:   "/",
+		Banner:      templ.Raw(`<div id="BANNER-MARK"></div>`),
+		HeaderRight: templ.Raw(`<div id="HEADERRIGHT-MARK"></div>`),
+	}))
+	navbarIdx := strings.Index(body, `<div class="navbar`)
+	mainIdx := strings.Index(body, "<main")
+	headerRightIdx := strings.Index(body, `<div id="HEADERRIGHT-MARK"></div>`)
+	bannerIdx := strings.Index(body, `<div id="BANNER-MARK"></div>`)
+	if navbarIdx == -1 || mainIdx == -1 || headerRightIdx == -1 || bannerIdx == -1 {
+		t.Fatalf("expected navbar, main, header-right slot, and banner slot all present, got %q", body)
+	}
+	if !(navbarIdx < headerRightIdx && headerRightIdx < mainIdx) {
+		t.Errorf("expected HeaderRight to render inside the navbar region (before <main>), got navbar=%d headerRight=%d main=%d in %q", navbarIdx, headerRightIdx, mainIdx, body)
+	}
+	if bannerIdx < mainIdx {
+		t.Errorf("expected Banner to render inside the <main> region, not before it, got banner=%d main=%d in %q", bannerIdx, mainIdx, body)
+	}
+}
+
+func TestShell_NilBannerAndHeaderRightOmitCleanly(t *testing.T) {
+	body := render(t, Shell(ShellData{
+		BrandLabel: "Brand",
+		BrandHref:  "/",
+	}))
+	if strings.Contains(body, "BANNER-MARK") || strings.Contains(body, "HEADERRIGHT-MARK") {
+		t.Errorf("expected no banner/header-right slot markers when both are nil, got %q", body)
+	}
+}
+
+func TestShell_UserLabelRendersExactSpan(t *testing.T) {
+	body := render(t, Shell(ShellData{
+		BrandLabel: "Brand",
+		BrandHref:  "/",
+		UserLabel:  "alice",
+	}))
+	want := `<span class="mr-2 text-sm opacity-90">alice</span>`
+	if !strings.Contains(body, want) {
+		t.Errorf("expected identity label span %q, got %q", want, body)
+	}
+}
+
+func TestShell_EmptyUserLabelOmitsLabel(t *testing.T) {
+	body := render(t, Shell(ShellData{
+		BrandLabel: "Brand",
+		BrandHref:  "/",
+	}))
+	if hasClass(body, "opacity-90") {
+		t.Errorf("expected no identity label span when UserLabel is empty, got %q", body)
+	}
+}
+
+// --- ThemeSwitcher (FR5, shared side) -----------------------------------------
+
+func TestThemeSwitcher_RendersOneControlPerTheme(t *testing.T) {
+	themes := []Theme{
+		{Value: "light", Label: "Light"},
+		{Value: "night", Label: "Night"},
+		{Value: "oled", Label: "OLED"},
+	}
+	body := render(t, ThemeSwitcher(themes))
+
+	if got := countOccurrences(body, `data-htmxui-theme-value="`); got != len(themes) {
+		t.Errorf("expected exactly %d theme controls, found %d in %q", len(themes), got, body)
+	}
+	for _, theme := range themes {
+		// Exact value+label pairing, not a loose substring match: a control
+		// whose data-htmxui-theme-value doesn't match its own Label would
+		// still pass a check that searched for the value and the label
+		// independently.
+		want := fmt.Sprintf(`<li><button type="button" data-htmxui-theme-value=%q>%s</button></li>`, theme.Value, theme.Label)
+		if !strings.Contains(body, want) {
+			t.Errorf("expected exact control markup %q for theme %+v, got %q", want, theme, body)
+		}
+	}
+}
+
+func TestThemeSwitcher_EmptyThemesRendersNoControls(t *testing.T) {
+	body := render(t, ThemeSwitcher(nil))
+	if strings.Contains(body, "<li") {
+		t.Errorf("expected no theme control <li> elements when themes is empty, got %q", body)
+	}
+}
+
+// TestThemeSwitcher_NoLocationReload is referenced by name in
+// theme_switcher.templ's ThemeSwitcher doc comment (FR5, shared side): the
+// shared switcher must never carry forward manmanv2's current
+// location.reload()-on-change behavior. Checks for the exact call
+// substring "location.reload(" -- not just the bare word "reload", which
+// would also match e.g. a hypothetical "reloadTheme" identifier and produce
+// a false failure, or miss a differently-invoked reload.
+func TestThemeSwitcher_NoLocationReload(t *testing.T) {
+	body := render(t, ThemeSwitcher([]Theme{{Value: "light", Label: "Light"}}))
+	if strings.Contains(body, "location.reload(") {
+		t.Errorf("expected no location.reload() call in ThemeSwitcher's emitted script, got %q", body)
+	}
+}
+
+func TestThemeSwitcher_SetsDataThemeAttribute(t *testing.T) {
+	body := render(t, ThemeSwitcher([]Theme{{Value: "light", Label: "Light"}}))
+	if !strings.Contains(body, `root.setAttribute("data-theme", theme);`) {
+		t.Errorf("expected click handler to set data-theme on click, got %q", body)
+	}
+	if !strings.Contains(body, `root.setAttribute("data-theme", stored);`) {
+		t.Errorf("expected load-time restore to set data-theme from the stored value, got %q", body)
+	}
+}
+
+// TestThemeSwitcher_PersistsUsingExportedStorageKey guards both halves of
+// the persistence contract: the script writes to localStorage under the
+// exported ThemeSwitcherStorageKey constant (not a private, drift-prone
+// literal), and the inline invocation actually passes that same key's
+// runtime value -- not merely that the string "localStorage" appears
+// somewhere.
+func TestThemeSwitcher_PersistsUsingExportedStorageKey(t *testing.T) {
+	body := render(t, ThemeSwitcher([]Theme{{Value: "light", Label: "Light"}}))
+	if !strings.Contains(body, `localStorage.setItem(storageKey, theme);`) {
+		t.Errorf("expected theme selection to be persisted via localStorage.setItem(storageKey, theme), got %q", body)
+	}
+	invocation := fmt.Sprintf("(%q)</script>", ThemeSwitcherStorageKey)
+	if !strings.Contains(body, invocation) {
+		t.Errorf("expected script invocation to pass the exported ThemeSwitcherStorageKey value %q, got %q", invocation, body)
 	}
 }
