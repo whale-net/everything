@@ -47,12 +47,24 @@ type Activities struct {
 	// ChartMuseum write access now lives here, on the Temporal worker,
 	// rather than in release-v2.yml's merged build job (which no longer
 	// uploads to ChartMuseum at all -- see finalize.go's package doc
-	// comment). GHCR retag auth needs no separate credential: finalize.go
-	// reuses GitHub's own installation token (see GitHubDispatcher.token)
-	// for that.
+	// comment).
 	ChartRepoURL  string
 	ChartRepoUser string
 	ChartRepoPass string
+
+	// GHCRToken is a static classic PAT (write:packages, read:packages) for
+	// FinalizePublish's finalize-app GHCR retag shell-out (issue #996).
+	// Required whenever the batch has any app targets. Not a GitHub App
+	// installation token: App installation tokens cannot write to
+	// organization-owned GHCR packages outside a GitHub Actions run -- a
+	// hard GitHub product limitation, not a permissions/scope gap on this
+	// repo's App -- so finalize.go no longer mints one via
+	// a.GitHub.token(ctx) for this purpose. a.GitHub itself (and the App
+	// token it mints) is still required and unrelated: it stays the
+	// credential for the GitHub Actions API calls FinalizePublish also
+	// makes (ListRunArtifacts/DownloadArtifact) and for DispatchBuild/
+	// PollBuild's workflow_dispatch API calls, none of which touch GHCR.
+	GHCRToken string
 
 	// ReleaseToolsS3Bucket/Endpoint/Region/AccessKey/SecretKey configure the
 	// libs/go/s3.Client FinalizePublish's CLI-binary publish step (issue
