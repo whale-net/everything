@@ -606,13 +606,23 @@ func assignChartVersions(ctx context.Context, p planParams, charts []HelmChartMe
 			case targetMinor:
 				bumpType = "minor"
 			}
-			publishedName := strings.TrimPrefix(charts[i].Name, "helm-")
-			newVer, _, err := resolveVersion(ctx, client, pb.ArtifactKind_ARTIFACT_KIND_CHART, publishedName, bumpType,
-				fmt.Sprintf("%s-%s-allocate", idemPrefix, publishedName),
+			// fullName (Domain+"-"+Name, computed above) is the identifier
+			// AllocateVersion's server side actually looks charts up by
+			// (GetChartByFullName, "domain || '-' || name = $1") -- it must
+			// be used here, not the bare chart Name, or AllocateVersion
+			// rejects every chart as InvalidArgument/"not found" the moment
+			// it's reached with a non-nil client (observed in prod for the
+			// app-registry domain's own chart release: domain=name=
+			// "app-registry" made the bug look like a domain==name special
+			// case, but it breaks every chart identically -- see
+			// assignVersions' equivalent app-side call, which has always
+			// used fullName correctly).
+			newVer, _, err := resolveVersion(ctx, client, pb.ArtifactKind_ARTIFACT_KIND_CHART, fullName, bumpType,
+				fmt.Sprintf("%s-%s-allocate", idemPrefix, fullName),
 				func() (string, error) { return autoIncrementHelmVersion(charts[i].Name, bumpType, p.git) },
 			)
 			if err != nil {
-				return fmt.Errorf("auto-increment for chart %s: %w", charts[i].Name, err)
+				return fmt.Errorf("auto-increment for chart %s: %w", fullName, err)
 			}
 			out[fullName] = newVer
 		} else {

@@ -757,6 +757,60 @@ func TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal(t *testing.T) {
 	}
 }
 
+// TestPlanReleaseWorkflowDispatch_ChartAllocateVersionUsesFullOwnerName is
+// the direct regression test for a real prod failure: the App Registry
+// domain's own release ("app-registry" domain, chart also named
+// "app-registry") failed with `AllocateVersion: rpc error: code =
+// InvalidArgument desc = chart "app-registry" not found`. assignChartVersions
+// (plan.go) was sending AllocateVersion the bare chart Name
+// ("app-registry") instead of the server's actual lookup key, the composed
+// "domain-name" full name ("app-registry-app-registry") -- this affected
+// every chart on the auto-increment path, not just this one; it only read
+// as a domain==name coincidence because that happens to be true for the App
+// Registry's own chart. Mirrors
+// TestPlanReleaseWorkflowDispatch_AllocateDomainUsesRegistry (the equivalent
+// app-side regression test, issue #829) for charts.
+func TestPlanReleaseWorkflowDispatch_ChartAllocateVersionUsesFullOwnerName(t *testing.T) {
+	bazel := newFakeBazel()
+	git := newFakeGit(
+		// Must never be consulted: AllocateVersion succeeds below, so the
+		// git-tag fallback (which would silently return the wrong version)
+		// must not run at all.
+		fakeGitCall{argsContain: []string{"tag", "--sort"}, output: "app-registry-app-registry.v1.0.0"},
+	)
+	artClient := NewFakeArtifactRegistryClient()
+	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
+		if in.OwnerFullName != "app-registry-app-registry" || in.Kind != pb.ArtifactKind_ARTIFACT_KIND_CHART || in.Increment != "minor" {
+			t.Errorf("unexpected AllocateVersionRequest: %+v", in)
+		}
+		return &pb.AllocateVersionResponse{Version: "v9.0.0"}, nil
+	}
+
+	var result *PlanResult
+	var err error
+	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
+		result, err = planRelease(planParams{
+			eventType: "workflow_dispatch",
+			chartsMetadata: []HelmChartMetadataInput{
+				{Domain: "app-registry", Name: "app-registry"},
+			},
+			incrementMinor:         true,
+			bazel:                  bazel,
+			git:                    git,
+			artifactRegistryClient: artClient,
+		})
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(artClient.AllocateVersionCalls) != 1 {
+		t.Fatalf("expected 1 AllocateVersion call, got %d", len(artClient.AllocateVersionCalls))
+	}
+	if result.Versions["app-registry-app-registry"] != "v9.0.0" {
+		t.Errorf("expected registry-allocated version v9.0.0, got %s", result.Versions["app-registry-app-registry"])
+	}
+}
+
 func TestResolveApps(t *testing.T) {
 	allApps := []AppMetadata{
 		{AppManifest: &appmetapb.AppManifest{Name: "hello-go", Domain: "demo"}, BazelTarget: "//demo/hello_go:hello-go_metadata"},
