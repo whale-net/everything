@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
 
@@ -131,39 +132,38 @@ templ EnvironmentForm(user *htmxauth.UserInfo, mode string, input EnvironmentFor
 		</form>
 
 		if mode == "edit" {
-			<div class="card bg-base-100 border-2 border-error/40 shadow-md">
-				<div class="bg-error/10 px-6 py-4 border-b-2 border-error/40 rounded-t-box">
-					<h3 class="text-lg font-semibold text-error">⚠️ Danger Zone</h3>
-				</div>
-				<div class="card-body">
-					if archived {
+			if archived {
+				<div class="card bg-base-100 border-2 border-error/40 shadow-md">
+					<div class="bg-error/10 px-6 py-4 border-b-2 border-error/40 rounded-t-box">
+						<h3 class="text-lg font-semibold text-error">⚠️ Danger Zone</h3>
+					</div>
+					<div class="card-body">
 						<p class="text-sm opacity-70">
 							This environment is already archived. Its promotion history is
 							retained — nothing is hard-deleted.
 						</p>
-					} else {
-						<h4 class="font-semibold">Archive this environment</h4>
-						<p class="text-sm opacity-70 mb-2">
-							Environments are never hard-deleted. Archiving stops it from
-							appearing as a promotion target; its promotion history is
-							retained.
-						</p>
-						<form method="post" action="/environments/archive" class="max-w-md">
-							<input type="hidden" name="key" value={ input.Key }/>
-							<div class="form-control mb-3">
-								<label class="label"><span class="label-text">Reason <span class="text-error">*</span></span></label>
-								<textarea name="reason" class="textarea textarea-bordered textarea-sm" rows="2" placeholder="e.g. canary environment decommissioned, no traffic since 2026-06" required disabled?={ !decision.Allowed }></textarea>
-								<span class="label-text-alt opacity-70 mt-1">Required — explains why, for anyone reading the archive history later.</span>
-							</div>
-							if decision.Allowed {
-								<button type="submit" class="btn btn-error">Archive { input.Key }</button>
-							} else {
-								<button type="submit" class="btn btn-error btn-disabled" disabled title={ "Requires role: " + decision.MissingRole }>Archive { input.Key }</button>
-							}
-						</form>
-					}
+					</div>
 				</div>
-			</div>
+			} else {
+				<form method="post" action="/environments/archive">
+					<input type="hidden" name="key" value={ input.Key }/>
+					@htmxui.Confirm(htmxui.ConfirmProps{
+						Intent:         htmxui.ConfirmDestructive,
+						ZoneTitle:      "⚠️ Danger Zone",
+						Summary:        "Environments are never hard-deleted. Archiving stops it from appearing as a promotion target; its promotion history is retained.",
+						SubmitLabel:    "Archive " + input.Key,
+						Disabled:       !decision.Allowed,
+						DisabledReason: "Requires role: " + decision.MissingRole,
+					}, nil) {
+						<h4 class="font-semibold">Archive this environment</h4>
+						<div class="form-control mb-3">
+							<label class="label"><span class="label-text">Reason <span class="text-error">*</span></span></label>
+							<textarea name="reason" class="textarea textarea-bordered textarea-sm" rows="2" placeholder="e.g. canary environment decommissioned, no traffic since 2026-06" required disabled?={ !decision.Allowed }></textarea>
+							<span class="label-text-alt opacity-70 mt-1">Required — explains why, for anyone reading the archive history later.</span>
+						</div>
+					}
+				</form>
+			}
 		}
 	}
 }

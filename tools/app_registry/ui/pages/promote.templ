@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
@@ -173,49 +174,63 @@ templ promoteForm(user *htmxauth.UserInfo, s PromoteViewState) {
 			</select>
 		</div>
 
-		if s.RequireOverride {
-			<div class="form-control mb-4">
-				<label class="label cursor-pointer justify-start gap-3">
-					<input type="checkbox" name="override_ack" value="true" class="checkbox checkbox-error" checked?={ s.OverrideAck }/>
-					<span class="label-text">I understand this is an override and will be flagged as drift when the chart's pin changes.</span>
-				</label>
-			</div>
-		}
-
-		<div class="form-control mb-4">
-			<label class="label">
-				<span class="label-text">
-					Reason <span class="text-error">*</span> — required for every
-					environment (UI policy; the server itself only requires it above
-					dev/rank 0), becomes part of the permanent history
-				</span>
-			</label>
-			<textarea name="reason" class="textarea textarea-bordered" rows="2" required placeholder="e.g. verify sensor batch fix ahead of chart's next cut">{ s.Reason }</textarea>
-		</div>
-
-		if aboveDev {
-			<div role="alert" class="alert alert-warning shadow-md mb-4">
-				<span>
-					<strong>{ s.EnvKey }</strong> is above dev (rank { fmt.Sprint(s.Env.GetRank()) }).
-					"Promote for real" is a UI policy requirement:
-					disabled until a dry run has been run against exactly the form
-					state below — changing any field re-arms this requirement.
-				</span>
-			</div>
-		}
-
-		<div class="flex gap-2 justify-end">
-			<a href="/deployments" class="btn btn-secondary">Cancel</a>
-			<button type="submit" name="action" value="dry_run" class="btn btn-warning">Run dry run</button>
-			if !decision.Allowed {
-				<button type="submit" class="btn btn-primary btn-disabled" disabled title={ "Requires role: " + decision.MissingRole }>Promote for real</button>
-			} else if aboveDev && s.DryRunFP != s.IntentFP {
-				<button type="submit" class="btn btn-primary btn-disabled" disabled title="Run a dry run against the current form state first.">Promote for real</button>
-			} else {
-				<button type="submit" name="action" value="commit" class="btn btn-primary">Promote for real</button>
+		@htmxui.Confirm(htmxui.ConfirmProps{
+			Intent:         htmxui.ConfirmNeutral,
+			SubmitLabel:    "Promote for real",
+			Disabled:       !decision.Allowed || (aboveDev && s.DryRunFP != s.IntentFP),
+			DisabledReason: promoteDisabledReason(decision, aboveDev, s),
+			CancelHref:     "/deployments",
+		}, templ.Attributes{"name": "action", "value": "commit"}) {
+			if s.RequireOverride {
+				<div class="form-control mb-4">
+					<label class="label cursor-pointer justify-start gap-3">
+						<input type="checkbox" name="override_ack" value="true" class="checkbox checkbox-error" checked?={ s.OverrideAck }/>
+						<span class="label-text">I understand this is an override and will be flagged as drift when the chart's pin changes.</span>
+					</label>
+				</div>
 			}
-		</div>
+
+			<div class="form-control mb-4">
+				<label class="label">
+					<span class="label-text">
+						Reason <span class="text-error">*</span> — required for every
+						environment (UI policy; the server itself only requires it above
+						dev/rank 0), becomes part of the permanent history
+					</span>
+				</label>
+				<textarea name="reason" class="textarea textarea-bordered" rows="2" required placeholder="e.g. verify sensor batch fix ahead of chart's next cut">{ s.Reason }</textarea>
+			</div>
+
+			if aboveDev {
+				<div role="alert" class="alert alert-warning shadow-md mb-4">
+					<span>
+						<strong>{ s.EnvKey }</strong> is above dev (rank { fmt.Sprint(s.Env.GetRank()) }).
+						"Promote for real" is a UI policy requirement:
+						disabled until a dry run has been run against exactly the form
+						state below — changing any field re-arms this requirement.
+					</span>
+				</div>
+			}
+
+			<div class="flex gap-2 justify-end mb-2">
+				<button type="submit" name="action" value="dry_run" class="btn btn-warning">Run dry run</button>
+			</div>
+		}
 	</form>
+}
+
+// promoteDisabledReason mirrors promoteForm's original three-way disabled
+// logic for the "Promote for real" submit: missing role takes precedence
+// over the aboveDev stale-dry-run requirement, matching the prior
+// if/else-if branch order exactly.
+func promoteDisabledReason(decision components.GateDecision, aboveDev bool, s PromoteViewState) string {
+	if !decision.Allowed {
+		return "Requires role: " + decision.MissingRole
+	}
+	if aboveDev && s.DryRunFP != s.IntentFP {
+		return "Run a dry run against the current form state first."
+	}
+	return ""
 }
 
 // dryRunResultBanner frames a dry-run result so it cannot be mistaken for a

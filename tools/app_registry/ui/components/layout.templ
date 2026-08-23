@@ -1,13 +1,18 @@
 // Package components holds daisyUI-based shell/chrome shared by every page
-// in this UI — this is the repo's first daisyUI adopter (see ../README.md
-// "Styling"). Screen-specific markup belongs in ../pages, not here.
+// in this UI — Shell here is a thin app-registry-specific wrapper around
+// libs/go/htmxui's shared Shell (see ../README.md "Styling"). Screen-specific
+// markup belongs in ../pages, not here.
 package components
 
-import "github.com/whale-net/everything/libs/go/htmxauth"
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
 
-// Shell wraps page content in the App Registry UI's navbar chrome. It shows
-// the signed-in user's identity so every screen — not just the placeholder
-// home page — makes "who am I" visible.
+// Shell wraps page content in the App Registry UI's navbar chrome, built on
+// htmxui.Shell (FR2). It supplies app-registry's own nav list, banner, and
+// user-identity label as htmxui.Shell's app-owned slots (FR1a) — Shell
+// itself hardcodes none of them.
 //
 // Nav deliberately keeps "Deployments" (state, screen 10) as a top-level,
 // day-to-day item separate from "Environments" (configuration, screen 09)
@@ -21,41 +26,39 @@ import "github.com/whale-net/everything/libs/go/htmxauth"
 // MisconfigBanner renders here, once, so every screen gets the FR-59
 // banner for free instead of each page having to remember to include it.
 templ Shell(title string, user *htmxauth.UserInfo) {
-	<div class="navbar bg-neutral text-neutral-content shadow-sm">
-		<div class="flex-1 flex items-center gap-4">
-			<a href="/" class="btn btn-ghost text-xl">App Registry</a>
-			<ul class="menu menu-horizontal px-1">
-				<li><a href="/deployments">Deployments</a></li>
-				<li><a href="/apps">Apps</a></li>
-				<li><a href="/builds">Builds</a></li>
-				<li><a href="/releases/trigger">Trigger Release</a></li>
-				<li>
-					<div class="dropdown">
-						<div tabindex="0" role="button" class="btn btn-ghost">Admin</div>
-						<ul tabindex="0" class="dropdown-content menu bg-neutral text-neutral-content rounded-box z-10 w-48 p-2 shadow-sm">
-							<li><a href="/environments">Environments</a></li>
-							<li><a href="/reconcile-runs">Reconcile Runs</a></li>
-							<li><a href="/drift-audit">Drift &amp; Audit</a></li>
-						</ul>
-					</div>
-				</li>
-			</ul>
-		</div>
-		<div class="flex-none">
-			if user != nil {
-				<div class="dropdown dropdown-end">
-					<div tabindex="0" role="button" class="btn btn-ghost btn-sm">{ user.PreferredUsername }</div>
-					<ul tabindex="0" class="dropdown-content menu bg-neutral text-neutral-content rounded-box z-10 w-40 p-2 shadow-sm">
-						<li><a href="/auth/logout">Logout</a></li>
-					</ul>
-				</div>
-			}
-		</div>
-	</div>
-	<main class="min-h-screen bg-base-200 p-6">
-		<div class="mx-auto max-w-4xl space-y-6">
-			@MisconfigBanner(user)
-			{ children... }
-		</div>
-	</main>
+	{{
+		var userLabel string
+		if user != nil {
+			userLabel = user.PreferredUsername
+		}
+	}}
+	@htmxui.Shell(htmxui.ShellData{
+		Title:      title,
+		BrandLabel: "App Registry",
+		BrandHref:  "/",
+		Nav:        shellNav(),
+		Banner:     MisconfigBanner(user),
+		UserLabel:  userLabel,
+	}) {
+		{ children... }
+	}
+}
+
+templ shellNav() {
+	<ul class="menu menu-horizontal px-1">
+		<li><a href="/deployments">Deployments</a></li>
+		<li><a href="/apps">Apps</a></li>
+		<li><a href="/builds">Builds</a></li>
+		<li><a href="/releases/trigger">Trigger Release</a></li>
+		<li>
+			<div class="dropdown">
+				<div tabindex="0" role="button" class="btn btn-ghost">Admin</div>
+				<ul tabindex="0" class="dropdown-content menu bg-neutral text-neutral-content rounded-box z-10 w-48 p-2 shadow-sm">
+					<li><a href="/environments">Environments</a></li>
+					<li><a href="/reconcile-runs">Reconcile Runs</a></li>
+					<li><a href="/drift-audit">Drift &amp; Audit</a></li>
+				</ul>
+			</div>
+		</li>
+	</ul>
 }

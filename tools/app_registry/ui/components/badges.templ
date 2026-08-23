@@ -1,6 +1,7 @@
 package components
 
 import (
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
@@ -9,80 +10,83 @@ import (
 // label pair of every promotability, artifact-state, and provenance value.
 // No screen may define a second, inline mapping of any of these — import
 // and reuse PromotabilityBadge / ArtifactStateBadge / ProvenanceBadge
-// instead. Colours map through daisyUI 5 semantic classes, themed by
-// tools/wireframe/themes.css (NFR-10).
+// instead. Each is expressed in terms of htmxui.Badge (FR2) — the generic
+// daisyUI badge primitive — with this file owning the domain vocabulary
+// (which value maps to which label + colour) that htmxui deliberately does
+// not know about. Colours map through daisyUI 5 semantic classes, themed by
+// htmxui.ThemesCSS (NFR-10).
 
-// promotabilityLabel returns the display label + daisyUI badge modifier
-// class for p. A VIA_CHART promotion is deliberately a distinct colour from
-// PROMOTABLE — it is a legal promotion target, but reaching it directly
-// instead of through its owning chart is recorded as an override.
-func promotabilityLabel(p pb.Promotability) (label, class string) {
+// promotabilityLabel returns the display label + htmxui.BadgeVariant for p.
+// A VIA_CHART promotion is deliberately a distinct colour from PROMOTABLE —
+// it is a legal promotion target, but reaching it directly instead of
+// through its owning chart is recorded as an override.
+func promotabilityLabel(p pb.Promotability) (label string, variant htmxui.BadgeVariant) {
 	switch p {
 	case pb.Promotability_PROMOTABILITY_PROMOTABLE:
-		return "Promotable", "badge-success"
+		return "Promotable", htmxui.BadgeSuccess
 	case pb.Promotability_PROMOTABILITY_VIA_CHART:
-		return "Via chart", "badge-info"
+		return "Via chart", htmxui.BadgeInfo
 	case pb.Promotability_PROMOTABILITY_NOT_PROMOTABLE:
-		return "Not promotable", "badge-neutral"
+		return "Not promotable", htmxui.BadgeNeutral
 	default:
 		// Never render an unknown/partial state as healthy (NFR-6).
-		return "Unknown", "badge-warning"
+		return "Unknown", htmxui.BadgeWarning
 	}
 }
 
-// artifactStateLabel returns the display label + daisyUI badge modifier
-// class for s, per the AR-7b lifecycle (allocated -> publishing ->
-// published; failed is terminal-but-distinct).
-func artifactStateLabel(s pb.ArtifactState) (label, class string) {
+// artifactStateLabel returns the display label + htmxui.BadgeVariant for s,
+// per the AR-7b lifecycle (allocated -> publishing -> published; failed is
+// terminal-but-distinct).
+func artifactStateLabel(s pb.ArtifactState) (label string, variant htmxui.BadgeVariant) {
 	switch s {
 	case pb.ArtifactState_ARTIFACT_STATE_ALLOCATED:
-		return "Allocated", "badge-neutral"
+		return "Allocated", htmxui.BadgeNeutral
 	case pb.ArtifactState_ARTIFACT_STATE_PUBLISHING:
-		return "Publishing", "badge-info"
+		return "Publishing", htmxui.BadgeInfo
 	case pb.ArtifactState_ARTIFACT_STATE_PUBLISHED:
-		return "Published", "badge-success"
+		return "Published", htmxui.BadgeSuccess
 	case pb.ArtifactState_ARTIFACT_STATE_FAILED:
-		return "Failed", "badge-error"
+		return "Failed", htmxui.BadgeError
 	default:
-		return "Unknown", "badge-warning"
+		return "Unknown", htmxui.BadgeWarning
 	}
 }
 
-// provenanceLabel returns the display label + daisyUI badge modifier class
-// for p. ADOPTED must be visually tagged on every screen an artifact
-// appears on (FR-33), not just an audit screen — callers must render
-// ProvenanceBadge wherever an artifact is shown, not only in audit views.
-func provenanceLabel(p pb.ArtifactProvenance) (label, class string) {
+// provenanceLabel returns the display label + htmxui.BadgeVariant for p.
+// ADOPTED must be visually tagged on every screen an artifact appears on
+// (FR-33), not just an audit screen — callers must render ProvenanceBadge
+// wherever an artifact is shown, not only in audit views.
+func provenanceLabel(p pb.ArtifactProvenance) (label string, variant htmxui.BadgeVariant) {
 	switch p {
 	case pb.ArtifactProvenance_ARTIFACT_PROVENANCE_OBSERVED:
-		return "Observed", "badge-ghost"
+		return "Observed", htmxui.BadgeGhost
 	case pb.ArtifactProvenance_ARTIFACT_PROVENANCE_ADOPTED:
-		return "Adopted", "badge-warning"
+		return "Adopted", htmxui.BadgeWarning
 	default:
-		return "Unknown", "badge-warning"
+		return "Unknown", htmxui.BadgeWarning
 	}
 }
 
-// deployUnitLabel returns the display label + daisyUI badge modifier class
-// for a DEPLOY_UNIT value, matching the vocabulary the apps catalog (screen
-// 20) and app detail (screen 11) wireframes use: a Chart entity itself is
+// deployUnitLabel returns the display label + htmxui.BadgeVariant for a
+// DEPLOY_UNIT value, matching the vocabulary the apps catalog (screen 20)
+// and app detail (screen 11) wireframes use: a Chart entity itself is
 // always "chart"; an App's own deploy_unit distinguishes a VIA_CHART app
 // ("image (via chart)") from a standalone-promotable one ("image") from a
 // build-only one ("none (build-only)", never deployed).
-func deployUnitLabel(isChart bool, u appmetapb.DeployUnit) (label, class string) {
+func deployUnitLabel(isChart bool, u appmetapb.DeployUnit) (label string, variant htmxui.BadgeVariant) {
 	if isChart {
-		return "chart", "badge-success"
+		return "chart", htmxui.BadgeSuccess
 	}
 	switch u {
 	case appmetapb.DeployUnit_DEPLOY_UNIT_CHART:
-		return "image (via chart)", "badge-info"
+		return "image (via chart)", htmxui.BadgeInfo
 	case appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE:
-		return "image", "badge-success"
+		return "image", htmxui.BadgeSuccess
 	case appmetapb.DeployUnit_DEPLOY_UNIT_NONE:
-		return "none (build-only)", "badge-neutral"
+		return "none (build-only)", htmxui.BadgeNeutral
 	default:
 		// Never render an unknown/partial state as healthy (NFR-6).
-		return "unknown", "badge-warning"
+		return "unknown", htmxui.BadgeWarning
 	}
 }
 
@@ -90,63 +94,63 @@ func deployUnitLabel(isChart bool, u appmetapb.DeployUnit) (label, class string)
 // (catalog rows and the app detail header both call this rather than
 // re-deriving the label/colour pair).
 templ DeployUnitBadge(isChart bool, u appmetapb.DeployUnit) {
-	{{ label, class := deployUnitLabel(isChart, u) }}
-	<span class={ "badge badge-soft badge-sm", class }>{ label }</span>
+	{{ label, variant := deployUnitLabel(isChart, u) }}
+	@htmxui.Badge(label, variant, htmxui.BadgeSizeSM, true, nil)
 }
 
 // PromotabilityBadge is the one place promotability renders anywhere in
 // this UI.
 templ PromotabilityBadge(p pb.Promotability) {
-	{{ label, class := promotabilityLabel(p) }}
-	<span class={ "badge", class }>{ label }</span>
+	{{ label, variant := promotabilityLabel(p) }}
+	@htmxui.Badge(label, variant, htmxui.BadgeSizeMD, false, nil)
 }
 
 // ArtifactStateBadge is the one place artifact state renders anywhere in
 // this UI.
 templ ArtifactStateBadge(s pb.ArtifactState) {
-	{{ label, class := artifactStateLabel(s) }}
-	<span class={ "badge", class }>{ label }</span>
+	{{ label, variant := artifactStateLabel(s) }}
+	@htmxui.Badge(label, variant, htmxui.BadgeSizeMD, false, nil)
 }
 
 // ProvenanceBadge is the one place artifact provenance renders anywhere in
 // this UI. Render it next to every artifact, not only on the audit screen.
 templ ProvenanceBadge(p pb.ArtifactProvenance) {
-	{{ label, class := provenanceLabel(p) }}
-	<span class={ "badge", class }>{ label }</span>
+	{{ label, variant := provenanceLabel(p) }}
+	@htmxui.Badge(label, variant, htmxui.BadgeSizeMD, false, nil)
 }
 
-// releaseRunTargetStateLabel returns the display label + daisyUI badge
-// modifier class for a ReleaseRunTargetState, mirroring
-// repository.ReleaseRunTargetState's queued -> building -> publishing ->
-// recording -> succeeded lifecycle (api_messages_release.proto) -- NOT the
-// same lifecycle as ArtifactState above (this is the release-trigger
-// layer's own view of one target's progress, ahead of and independent of
-// whatever artifact row its build eventually produces).
-func releaseRunTargetStateLabel(s pb.ReleaseRunTargetState) (label, class string) {
+// releaseRunTargetStateLabel returns the display label + htmxui.BadgeVariant
+// for a ReleaseRunTargetState, mirroring repository.ReleaseRunTargetState's
+// queued -> building -> publishing -> recording -> succeeded lifecycle
+// (api_messages_release.proto) -- NOT the same lifecycle as ArtifactState
+// above (this is the release-trigger layer's own view of one target's
+// progress, ahead of and independent of whatever artifact row its build
+// eventually produces).
+func releaseRunTargetStateLabel(s pb.ReleaseRunTargetState) (label string, variant htmxui.BadgeVariant) {
 	switch s {
 	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_QUEUED:
-		return "Queued", "badge-neutral"
+		return "Queued", htmxui.BadgeNeutral
 	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_BUILDING:
-		return "Building", "badge-info"
+		return "Building", htmxui.BadgeInfo
 	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_PUBLISHING:
-		return "Publishing", "badge-info"
+		return "Publishing", htmxui.BadgeInfo
 	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_RECORDING:
-		return "Recording", "badge-info"
+		return "Recording", htmxui.BadgeInfo
 	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_SUCCEEDED:
-		return "Succeeded", "badge-success"
+		return "Succeeded", htmxui.BadgeSuccess
 	case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_FAILED:
-		return "Failed", "badge-error"
+		return "Failed", htmxui.BadgeError
 	default:
 		// Never render an unknown/partial state as healthy (NFR-6).
-		return "Unknown", "badge-warning"
+		return "Unknown", htmxui.BadgeWarning
 	}
 }
 
 // ReleaseRunTargetStateBadge is the one place a release run target's state
 // renders anywhere in this UI (issue #890's status screen, FR10).
 templ ReleaseRunTargetStateBadge(s pb.ReleaseRunTargetState) {
-	{{ label, class := releaseRunTargetStateLabel(s) }}
-	<span class={ "badge", class }>{ label }</span>
+	{{ label, variant := releaseRunTargetStateLabel(s) }}
+	@htmxui.Badge(label, variant, htmxui.BadgeSizeMD, false, nil)
 }
 
 // promotionSyncOutcomeLabel returns the display label + daisyUI badge
