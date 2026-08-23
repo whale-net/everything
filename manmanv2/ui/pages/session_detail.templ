@@ -449,5 +449,15 @@ templ SessionDetail(data SessionDetailPageData) {
 				<p class="text-gray-500 dark:text-gray-400">Libraries attached but no addons installed yet.</p>
 			</div>
 		}
+		// Auto-refresh while the session is still starting (e.g. workshop mods
+		// installing) so the page picks up the transition to "running" (or any
+		// other terminal status) without a manual reload.
+		if data.Session.Status == "pending" || data.Session.Status == "starting" {
+			<script type="text/javascript">
+				(function() {
+					setTimeout(function() { location.reload(); }, 5000);
+				})();
+			</script>
+		}
 	}
 }
