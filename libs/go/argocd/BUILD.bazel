@@ -1,0 +1,11 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "argocd",
+    srcs = ["client.go"],
+    importpath = "github.com/whale-net/everything/libs/go/argocd",
+    visibility = ["//visibility:public"],
+)
+
+# go_test target is added in the Testing phase alongside client_test.go
+# (issue #1027).
