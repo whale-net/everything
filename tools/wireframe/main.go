@@ -25,13 +25,12 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"github.com/whale-net/everything/libs/go/htmxui"
 )
 
 //go:embed template.html
 var pageTemplate string
-
-//go:embed themes.css
-var themesCSS string
 
 type screen struct {
 	Name   string
@@ -136,7 +135,7 @@ func run(dir, out, title string) error {
 	defer f.Close()
 	err = tmpl.Execute(f, pageData{
 		Title:     title,
-		ThemesCSS: themesCSS,
+		ThemesCSS: htmxui.ThemesCSS,
 		Screens:   screens,
 	})
 	if err != nil {

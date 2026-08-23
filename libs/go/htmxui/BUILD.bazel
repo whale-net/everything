@@ -15,7 +15,11 @@ templ_library(
         ["*.templ"],
         allow_empty = True,
     ),
-    go_srcs = ["doc.go"],
+    embedsrcs = ["themes.css"],
+    go_srcs = [
+        "doc.go",
+        "themes.go",
+    ],
     visibility = ["//visibility:public"],
     deps = [],
 )

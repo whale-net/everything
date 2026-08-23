@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	_ "embed"
 	"fmt"
 	"html/template"
 	"log"
@@ -12,16 +11,9 @@ import (
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxbase"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
-
-// themesCSS is a synced copy of tools/wireframe/themes.css — Go's //go:embed
-// directive cannot reach across a Bazel package boundary, so the file lives
-// in this package too (see themes.css's header comment). It supplies the
-// daisyUI palette override that gives this UI its design-standard colors.
-//
-//go:embed themes.css
-var themesCSS string
 
 // RenderTempl renders a templ component wrapped in the shared htmxbase
 // layout, pulling in pinned CDN builds of Tailwind's browser build and
@@ -52,7 +44,7 @@ func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component
 	head := fmt.Sprintf(`<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js"></script>
 <style type="text/tailwindcss">@import "tailwindcss";</style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
-<style>%s</style>`, themesCSS)
+<style>%s</style>`, htmxui.ThemesCSS)
 
 	layoutData := htmxbase.LayoutData{
 		Title:      title,
