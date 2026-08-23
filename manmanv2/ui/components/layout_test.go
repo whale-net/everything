@@ -31,37 +31,45 @@ func renderLayout(t *testing.T, data LayoutData) string {
 	return buf.String()
 }
 
-// TestLayout_ThemeSwitcherOffersLightNightOled is the direct FR6
+// TestLayout_ThemeSwitcherOffersAllThemes is the direct FR6/FR10
 // reachability guard: proves manmanv2's own chrome (not just the shared
-// htmxui.ThemeSwitcher component in isolation) actually offers OLED as a
-// selectable theme, keyed to the same [data-theme="oled"] palette
-// libs/go/htmxui/themes.css defines (distinct from night -- see themes.css
-// base-100/base-200/neutral values, which differ between the two rules).
-// Under the pre-migration bug (FR6), OLED and Night rendered identically
-// because the old themeManagement() script only ever toggled a `dark`
-// class; this asserts the exact per-theme control markup htmxui.ThemeSwitcher
-// emits for manmanThemes, so a regression that dropped "oled" from
-// manmanThemes (layout.templ) -- reintroducing the defect at the call site
-// even with the shared component fixed -- would fail here.
+// htmxui.ThemeSwitcher component in isolation) actually offers OLED and
+// sunset as selectable themes, keyed to the [data-theme="..."] rules
+// libs/go/htmxui/themes.css defines (oled distinct from night -- see
+// themes.css base-100/base-200/neutral values, which differ between the two
+// rules; sunset added by #1012 as FR10's POC theme, then wired into
+// manmanv2's own manmanThemes call site by #1086 to match
+// tools/app_registry/ui/components/layout.templ's shellThemes -- see #1085's
+// finding that manmanv2's switcher had fallen behind app-registry's). Under
+// the pre-migration bug (FR6), OLED and Night rendered identically because
+// the old themeManagement() script only ever toggled a `dark` class; this
+// asserts the exact per-theme control markup htmxui.ThemeSwitcher emits for
+// manmanThemes, so a regression that dropped a theme from manmanThemes
+// (layout.templ) -- reintroducing a defect at the call site even with the
+// shared component fixed -- would fail here.
 //
 // Red/green (verified by hand): temporarily removing the oled entry from
 // manmanThemes in layout.templ makes this test fail with "expected exactly
 // 1 occurrence" for the oled control; restoring it makes the test pass
-// again.
-func TestLayout_ThemeSwitcherOffersLightNightOled(t *testing.T) {
+// again. Same for sunset (#1086): removing its entry from manmanThemes made
+// this test fail with "expected exactly 1 occurrence" for the sunset
+// control before the fix landed; restoring it (matching shellThemes) makes
+// it pass.
+func TestLayout_ThemeSwitcherOffersAllThemes(t *testing.T) {
 	body := renderLayout(t, LayoutData{Title: "Dashboard"})
 
 	wantControls := []string{
 		`<li><button type="button" data-htmxui-theme-value="light">☀️ Light</button></li>`,
 		`<li><button type="button" data-htmxui-theme-value="night">🌙 Night</button></li>`,
 		`<li><button type="button" data-htmxui-theme-value="oled">⚫ OLED Night</button></li>`,
+		`<li><button type="button" data-htmxui-theme-value="sunset">🌅 Sunset</button></li>`,
 	}
 	for _, want := range wantControls {
 		if got := strings.Count(body, want); got != 1 {
 			t.Errorf("expected theme control %q exactly once, got %d occurrences in %q", want, got, body)
 		}
 	}
-	// Exactly three theme controls -- guards against an extra/duplicate
+	// Exactly four theme controls -- guards against an extra/duplicate
 	// theme entry sneaking into manmanThemes.
 	if got := strings.Count(body, "data-htmxui-theme-value=\""); got != len(wantControls) {
 		t.Errorf("expected exactly %d theme controls, got %d in %q", len(wantControls), got, body)

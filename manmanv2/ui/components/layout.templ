@@ -23,16 +23,22 @@ type Breadcrumb struct {
 }
 
 // manmanThemes is the FR6 theme list manmanv2 offers through the shared
-// htmxui.ThemeSwitcher (mounted by Layout, below): light, night, and
-// oled, keyed to the [data-theme="..."] rules in the shared
+// htmxui.ThemeSwitcher (mounted by Layout, below): light, night, oled,
+// and sunset, keyed to the [data-theme="..."] rules in the shared
 // libs/go/htmxui/themes.css. OLED is reachable here where it never was
 // under the old Tailwind darkMode:'class' + manual `dark` class toggle
 // (FR6 defect) — see themes.css for the actual pure-black palette this
-// now renders.
+// now renders. sunset is issue #1012's FR10 proof-of-concept theme (warm
+// amber/coral, deliberately distinct from light/night/oled); it was added
+// to tools/app_registry/ui/components/layout.templ's shellThemes when
+// #1012 landed but not here, so manmanv2's switcher fell behind
+// app-registry's until #1085 caught the gap and #1086 wired it in to
+// match.
 var manmanThemes = []htmxui.Theme{
 	{Value: "light", Label: "☀️ Light"},
 	{Value: "night", Label: "🌙 Night"},
 	{Value: "oled", Label: "⚫ OLED Night"},
+	{Value: "sunset", Label: "🌅 Sunset"},
 }
 
 // navLink renders one nav entry, marking it active by exact label match
