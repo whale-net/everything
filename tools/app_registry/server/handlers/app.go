@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -312,6 +313,45 @@ func (s *AppServer) SetAppStatus(ctx context.Context, req *pb.SetAppStatusReques
 		return nil, mapRepoErr(err)
 	}
 	return &pb.SetAppStatusResponse{App: appToPB(*app)}, nil
+}
+
+// lookupChart mirrors lookupApp's dual chart_id/full_name lookup, but --
+// unlike lookupApp -- reports the missing-identifier case as
+// repository.ErrInvalidArgument (not a bare gRPC status) so mapRepoErr at
+// the call site maps every path uniformly, instead of a raw status.Error
+// falling through mapRepoErr's default case to codes.Internal.
+func (s *AppServer) lookupChart(ctx context.Context, chartID, fullName string) (*repository.Chart, error) {
+	switch {
+	case chartID != "":
+		return s.repo.Apps().GetChartByID(ctx, chartID)
+	case fullName != "":
+		return s.repo.Apps().GetChartByFullName(ctx, fullName)
+	default:
+		return nil, fmt.Errorf("%w: chart_id or full_name is required", repository.ErrInvalidArgument)
+	}
+}
+
+// SetChartArgoApplicationNameOverride sets or clears (argo_application_name_template
+// = "") a chart's ArgoCD Application name override, for ad-hoc/legacy
+// deployments whose real Application name doesn't follow the
+// "<full_name>-<environment>" convention WritebackWorkflow assumes by
+// default -- see repository.Chart.ResolveArgoApplicationName.
+func (s *AppServer) SetChartArgoApplicationNameOverride(ctx context.Context, req *pb.SetChartArgoApplicationNameOverrideRequest) (*pb.SetChartArgoApplicationNameOverrideResponse, error) {
+	if err := auth.Require(ctx, auth.RoleAdmin); err != nil {
+		return nil, err
+	}
+	if req.Reason == "" {
+		return nil, status.Error(codes.InvalidArgument, "reason is required")
+	}
+	chart, err := s.lookupChart(ctx, req.ChartId, req.FullName)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	updated, err := s.repo.Apps().SetChartArgoApplicationNameOverride(ctx, chart.ChartID, req.ArgoApplicationNameTemplate)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return &pb.SetChartArgoApplicationNameOverrideResponse{Chart: chartToPB(*updated)}, nil
 }
 
 // ListReconcileRuns browses the `reconcile_run` table (migration 010, AR-8)

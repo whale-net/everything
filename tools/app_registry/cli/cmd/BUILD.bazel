@@ -7,6 +7,7 @@ go_library(
         "artifacts.go",
         "build_log.go",
         "builds.go",
+        "chart.go",
         "client.go",
         "env.go",
         "promote.go",

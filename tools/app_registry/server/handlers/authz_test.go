@@ -115,6 +115,50 @@ func TestSetAppStatus_Authorization(t *testing.T) {
 	})
 }
 
+// TestSetChartArgoApplicationNameOverride_Authorization covers
+// AppRegistry.SetChartArgoApplicationNameOverride, which requires
+// RoleAdmin -- same boundary as SetAppStatus, for the same reason (a
+// per-chart admin write, not a builder/reconcile concern).
+func TestSetChartArgoApplicationNameOverride_Authorization(t *testing.T) {
+	newSrvWithChart := func(t *testing.T) (*AppServer, string) {
+		t.Helper()
+		srv := NewAppServer(fake.New())
+		created, err := srv.ReconcileApps(ctxWithRoles(auth.RoleBuilder), &pb.ReconcileAppsRequest{
+			Manifests: manifestSet([]*appmetapb.AppManifest{oneApp("demo", "svc")},
+				[]*appmetapb.ChartManifest{{Domain: "demo", Name: "chart", Apps: []string{"svc"}}}),
+			IdempotencyKey: "authz-chartoverride-1",
+		})
+		if err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		return srv, created.CreatedCharts[0].ChartId
+	}
+
+	req := func(chartID string) *pb.SetChartArgoApplicationNameOverrideRequest {
+		return &pb.SetChartArgoApplicationNameOverrideRequest{ChartId: chartID, ArgoApplicationNameTemplate: "legacy-app-{environment}", Reason: "ad-hoc deployment"}
+	}
+
+	t.Run("correct role allowed", func(t *testing.T) {
+		srv, chartID := newSrvWithChart(t)
+		_, err := srv.SetChartArgoApplicationNameOverride(ctxWithRoles(auth.RoleAdmin), req(chartID))
+		if err != nil {
+			t.Fatalf("expected admin to be allowed, got %v", err)
+		}
+	})
+
+	t.Run("wrong role is PermissionDenied", func(t *testing.T) {
+		srv, chartID := newSrvWithChart(t)
+		_, err := srv.SetChartArgoApplicationNameOverride(ctxWithRoles(auth.RoleBuilder), req(chartID))
+		requireCode(t, err, codes.PermissionDenied, "SetChartArgoApplicationNameOverride")
+	})
+
+	t.Run("no claims is Unauthenticated", func(t *testing.T) {
+		srv, chartID := newSrvWithChart(t)
+		_, err := srv.SetChartArgoApplicationNameOverride(context.Background(), req(chartID))
+		requireCode(t, err, codes.Unauthenticated, "SetChartArgoApplicationNameOverride")
+	})
+}
+
 // TestAppReads_Public covers ListApps, GetApp, and ListCharts:
 // public read endpoints that succeed with or without authentication (#853).
 func TestAppReads_Public(t *testing.T) {

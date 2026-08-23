@@ -403,6 +403,20 @@ func (r *Registry) SetAppStatus(ctx context.Context, appID string, target reposi
 	return &a, nil
 }
 
+// SetChartArgoApplicationNameOverride mirrors the postgres implementation:
+// the only write path to Chart.ArgoApplicationNameTemplate -- Reconcile
+// never touches it here either. See
+// repository.Chart.ResolveArgoApplicationName.
+func (r *Registry) SetChartArgoApplicationNameOverride(ctx context.Context, chartID, template string) (*repository.Chart, error) {
+	c, ok := r.state.Charts[chartID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	c.ArgoApplicationNameTemplate = template
+	r.state.Charts[chartID] = c
+	return &c, nil
+}
+
 // defaultReconcileRunPageSize matches postgres's appRepo default -- see that
 // package's doc comment on the same constant.
 const defaultReconcileRunPageSize = 50

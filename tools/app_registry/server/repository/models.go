@@ -121,9 +121,31 @@ type Chart struct {
 	AppIDs          []string
 	FirstSeenAt     time.Time
 	LastSeenAt      time.Time
+	// ArgoApplicationNameTemplate is an optional, admin-settable override
+	// for the ArgoCD Application name WritebackWorkflow's
+	// TriggerArgoRefresh/PollArgoSyncStatus activities target for this
+	// chart's promotions (worker/writeback/argosync.go), for ad-hoc/legacy
+	// deployments whose real Application name doesn't follow the
+	// "<FullName>-<environment>" convention. "" (the default, migration
+	// 022) means no override. Set only via
+	// AppRepository.SetChartArgoApplicationNameOverride -- ReconcileApps
+	// never writes it. See ResolveArgoApplicationName.
+	ArgoApplicationNameTemplate string
 }
 
 func (c Chart) FullName() string { return c.Domain + "-" + c.Name }
+
+// ResolveArgoApplicationName returns the ArgoCD Application name for this
+// chart in environmentKey: ArgoApplicationNameTemplate with every
+// "{environment}" substring replaced by environmentKey, if the template is
+// set (an ad-hoc/legacy deployment override); otherwise the convention
+// "<FullName>-<environmentKey>" every standard deployment uses.
+func (c Chart) ResolveArgoApplicationName(environmentKey string) string {
+	if c.ArgoApplicationNameTemplate != "" {
+		return strings.ReplaceAll(c.ArgoApplicationNameTemplate, "{environment}", environmentKey)
+	}
+	return c.FullName() + "-" + environmentKey
+}
 
 // NormalizeChartName strips the "helm-{domain}-" prefix that
 // release_helm_chart's Bazel macro bakes into ChartManifest.Name (needed

@@ -339,8 +339,54 @@ func TestGitOpsActivities_RenderEnvironmentState(t *testing.T) {
 	require.Equal(t, "dev", rendered.EnvironmentKey)
 	require.Equal(t, "app-registry", rendered.Domain)
 	require.Equal(t, "app-registry-app-registry", rendered.ChartName)
+	require.Equal(t, "app-registry-app-registry-dev", rendered.ArgoApplicationName)
 	require.Equal(t, "hash-123", rendered.StateHash)
 	require.Equal(t, "targetRevision: v0.0.39\n", string(rendered.Document))
+}
+
+// TestGitOpsActivities_RenderEnvironmentState_ArgoApplicationNameOverride
+// proves RenderEnvironmentState resolves RenderedState.ArgoApplicationName
+// from the chart's ArgoApplicationNameTemplate (an ad-hoc/legacy
+// deployment's admin-set override, see
+// repository.Chart.ResolveArgoApplicationName) instead of the
+// "<ChartName>-<EnvironmentKey>" convention when the template is set, with
+// "{environment}" substituted -- while ChartName itself is unaffected.
+func TestGitOpsActivities_RenderEnvironmentState_ArgoApplicationNameOverride(t *testing.T) {
+	fakeClient := &fakePromotionClient{
+		getEnvState: func(ctx context.Context, in *pb.GetEnvironmentStateRequest) (*pb.GetEnvironmentStateResponse, error) {
+			return &pb.GetEnvironmentStateResponse{
+				StateHash: "hash-123",
+				Entries: []*pb.EnvironmentStateEntry{
+					{Artifact: &pb.Artifact{Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART, ChartId: "chart-123", Version: "v0.0.39"}},
+				},
+			}, nil
+		},
+	}
+	fakeApp := &fakeAppClient{
+		listCharts: func(ctx context.Context, in *pb.ListChartsRequest) (*pb.ListChartsResponse, error) {
+			return &pb.ListChartsResponse{
+				Charts: []*pb.Chart{
+					{
+						ChartId:                     "chart-123",
+						Domain:                      "app-registry",
+						Name:                        "app-registry",
+						FullName:                    "app-registry-app-registry",
+						ArgoApplicationNameTemplate: "legacy-app-{environment}",
+					},
+				},
+			}, nil
+		},
+	}
+
+	a := &GitOpsActivities{Client: fakeClient, AppClient: fakeApp}
+	rendered, err := a.RenderEnvironmentState(context.Background(), WritebackInput{
+		PromotionID:    "promo-1",
+		EnvironmentKey: "dev",
+		Domain:         "app-registry",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "app-registry-app-registry", rendered.ChartName)
+	require.Equal(t, "legacy-app-dev", rendered.ArgoApplicationName)
 }
 
 func TestGitOpsActivities_RenderEnvironmentState_MissingChartError(t *testing.T) {

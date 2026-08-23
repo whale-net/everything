@@ -115,6 +115,17 @@ type RenderedState struct {
 	// Publish implementation. Resolved by RenderEnvironmentState via
 	// AppRegistry.ListCharts.
 	ChartName string
+	// ArgoApplicationName is the ArgoCD Application name WritebackWorkflow
+	// uses verbatim for TriggerArgoRefresh/PollArgoSyncStatus (issue
+	// #1030) -- resolved by RenderEnvironmentState from the SAME
+	// AppRegistry.ListCharts lookup ChartName comes from: either the
+	// chart's admin-set ArgoApplicationNameTemplate override (for
+	// ad-hoc/legacy deployments, see
+	// repository.Chart.ResolveArgoApplicationName), or the convention
+	// "<ChartName>-<EnvironmentKey>" every standard deployment uses. Never
+	// re-derived by the workflow itself -- see WritebackWorkflow's own
+	// comment where it's read.
+	ArgoApplicationName string
 	// StateHash is read back from the GetEnvironmentState response itself
 	// (not copied from WritebackInput), so Publish's no-op check reflects
 	// what was actually rendered just now, not what the outbox row
@@ -229,10 +240,12 @@ func WritebackWorkflow(ctx workflow.Context, in WritebackInput) (PublishResult, 
 	// Best-effort: trigger an ArgoCD refresh, then poll its resulting
 	// sync/health status, for this promotion's target Application -- FR1-
 	// FR5, issue #1030. FR2/NFR6: no environment-specific branch/exemption,
-	// every promotion reaches this step. ApplicationName is derived from
-	// the SAME RenderedState.ChartName/EnvironmentKey fields the publish
-	// step above already resolved -- never re-derived a second way (see
-	// ArgoSyncInput's doc comment). Each activity's failure is
+	// every promotion reaches this step. ApplicationName is read directly
+	// from RenderedState.ArgoApplicationName -- RenderEnvironmentState
+	// already resolved it (convention, or an ad-hoc/legacy deployment's
+	// admin-set override) from the same AppRegistry.ListCharts lookup the
+	// publish step above used for ChartName; never re-derived a second way
+	// here (see ArgoSyncInput's doc comment). Each activity's failure is
 	// independently logged and swallowed here -- the same best-effort shape
 	// as ActivityRecordWritebackResult above, not the failure-blocking
 	// semantics of RenderEnvironmentState/Publish. PollArgoSyncStatus still
@@ -243,7 +256,7 @@ func WritebackWorkflow(ctx workflow.Context, in WritebackInput) (PublishResult, 
 	argoIn := ArgoSyncInput{
 		PromotionID:     in.PromotionID,
 		Domain:          in.Domain,
-		ApplicationName: rendered.ChartName + "-" + rendered.EnvironmentKey,
+		ApplicationName: rendered.ArgoApplicationName,
 	}
 	if err := workflow.ExecuteActivity(ctx, ActivityTriggerArgoRefresh, argoIn).Get(ctx, nil); err != nil {
 		workflow.GetLogger(ctx).Error("trigger argo refresh failed after successful publish", "promotion_id", in.PromotionID, "error", err)

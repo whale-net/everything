@@ -106,3 +106,29 @@ state" only** — the render and publish steps exist, the S3 put does not
 config, worker bootstrap, logging bridge to `libs/go/logging`) shipped in
 AR-4a — see [PLAN-HISTORY.md](PLAN-HISTORY.md).
 
+## ArgoCD Application name: convention with a per-chart override
+
+`TriggerArgoRefresh`/`PollArgoSyncStatus` (`worker/writeback/argosync.go`,
+issue #1030) call ArgoCD's Application API by name. By default that name is
+the convention `<chart.full_name>-<environment.key>`, resolved by
+`RenderEnvironmentState` (`gitops.go`/`stub.go`) into
+`RenderedState.ArgoApplicationName` — `WritebackWorkflow` reads that field
+verbatim (`workflow.go`) rather than re-deriving it.
+
+Ad-hoc/legacy deployments whose real ArgoCD Application name doesn't follow
+that convention can override it per chart: `Chart.ArgoApplicationNameTemplate`
+(migration 022), settable only via `AppRepository.SetChartArgoApplicationNameOverride`
+(exposed as the `SetChartArgoApplicationNameOverride` RPC and the
+`app-registry chart set-argo-override` CLI command, both admin-gated). When
+set, `{environment}` in the template is substituted with the target
+environment key (see `repository.Chart.ResolveArgoApplicationName` and
+`worker/writeback/chartname.go`'s `resolveArgoApplicationName`); when empty
+(every standard chart), behavior is unchanged. `ReconcileApps` never writes
+this column, so an admin-set override survives reconciliation.
+
+This is a **distinct, new mechanism** from `Environment.gitops_path` above —
+that field is dead code and this change does not revive it. The override
+here is scoped per-chart (not per-environment), lives on `chart` (not
+`environment`), and only ever affects the ArgoCD Application name, never the
+gitops file path.
+

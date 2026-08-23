@@ -150,6 +150,13 @@ type AppRepository interface {
 	// with ErrFailedPrecondition.
 	SetAppStatus(ctx context.Context, appID string, target Status, reason string) (*App, error)
 
+	// SetChartArgoApplicationNameOverride sets (or clears, via "") a
+	// chart's ArgoApplicationNameTemplate -- the only write path to that
+	// column; ReconcileApps never touches it. See
+	// Chart.ResolveArgoApplicationName. Returns ErrNotFound if chartID
+	// doesn't exist.
+	SetChartArgoApplicationNameOverride(ctx context.Context, chartID, template string) (*Chart, error)
+
 	// ListReconcileRuns returns reconcile_run rows ordered most-recent-first
 	// by applied_at, tie-broken by reconcile_run_id, with real LIMIT +
 	// keyset cursor pagination (the cursor encodes applied_at +

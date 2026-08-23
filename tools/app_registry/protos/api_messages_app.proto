@@ -231,3 +231,17 @@ message SetAppStatusRequest {
 message SetAppStatusResponse {
   App app = 1;
 }
+
+// SetChartArgoApplicationNameOverrideRequest identifies its target chart by
+// chart_id or full_name (one of the two), same dual-lookup convention as
+// GetAppRequest/lookupApp.
+message SetChartArgoApplicationNameOverrideRequest {
+  string chart_id = 1;
+  string full_name = 2;  // e.g. "<domain>-<name>"
+  string argo_application_name_template = 3;  // "" clears the override
+  string reason = 4;  // required — recorded in the audit log
+}
+
+message SetChartArgoApplicationNameOverrideResponse {
+  Chart chart = 1;
+}
