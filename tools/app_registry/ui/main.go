@@ -286,6 +286,10 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// from the promotion timeline (pages/app_detail.templ's
 	// promotionTimelineCard), not from top-level nav.
 	mux.HandleFunc("/promotions/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handlePromotionDetails)))
+	// FR10-FR13 manual retry (issue #1033): admin-gated server-side by
+	// RetryArgoSync's own auth.Require check, not by this route's
+	// (identical-to-every-other-route) session-login requirement.
+	mux.HandleFunc("/promotions/{id}/retry", app.auth.RequireAuthFunc(app.withAccessToken(app.handleRetryArgoSync)))
 	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppsCatalog)))
 	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppDetail)))
 

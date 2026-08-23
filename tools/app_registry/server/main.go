@@ -155,7 +155,7 @@ func registerServices(grpcServer *grpc.Server, repo repository.Registry, tempora
 	// half first).
 	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer(repo))
 	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3PublicEndpoint)))
-	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo))
+	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo, temporalClient))
 	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer(repo))
 	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo, temporalClient))
 

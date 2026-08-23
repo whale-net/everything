@@ -478,7 +478,7 @@ func TestPromote_Authorization(t *testing.T) {
 		if _, err := envSrv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "prod", Rank: 20}); err != nil {
 			t.Fatalf("seed prod environment: %v", err)
 		}
-		return NewPromotionServer(repo)
+		return NewPromotionServer(repo, nil)
 	}
 	req := func(env string) *pb.PromoteRequest {
 		return &pb.PromoteRequest{EnvironmentKey: env, ArtifactId: "nonexistent", Reason: "test", IdempotencyKey: "authz-promote"}
@@ -522,7 +522,7 @@ func TestRollback_Authorization(t *testing.T) {
 	if _, err := envSrv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "prod", Rank: 20}); err != nil {
 		t.Fatalf("seed prod environment: %v", err)
 	}
-	srv := NewPromotionServer(repo)
+	srv := NewPromotionServer(repo, nil)
 	req := &pb.RollbackRequest{EnvironmentKey: "prod", OwnerFullName: "demo-svc", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, Reason: "test", IdempotencyKey: "authz-rollback"}
 
 	t.Run("wrong environment's promoter role is PermissionDenied", func(t *testing.T) {
@@ -544,7 +544,7 @@ func TestPromotionReads_Public(t *testing.T) {
 	if _, err := envSrv.UpsertEnvironment(ctxWithRoles(auth.RoleAdmin), &pb.UpsertEnvironmentRequest{Key: "dev"}); err != nil {
 		t.Fatalf("seed dev environment: %v", err)
 	}
-	srv := NewPromotionServer(repo)
+	srv := NewPromotionServer(repo, nil)
 	readerCtx := ctxWithRoles(auth.RoleBuilder)
 
 	t.Run("GetEnvironmentState", func(t *testing.T) {

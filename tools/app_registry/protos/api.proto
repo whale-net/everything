@@ -134,6 +134,13 @@ service PromotionRegistry {
   // writeback outcome, and the full ArgoCD sync/health history.
   // Unauthenticated, like every other read RPC above (issue #853).
   rpc GetPromotionDetails(GetPromotionDetailsRequest) returns (GetPromotionDetailsResponse);
+
+  // Admin-gated manual retry (FR10-FR13, issue #1033): starts a fresh
+  // RetryArgoSyncWorkflow execution for one promotion. Role:
+  // app-registry-admin (server/auth.RoleAdmin) -- the ONE write RPC on this
+  // service gated by the flat admin role rather than an environment-scoped
+  // promoter role, matching AppRegistry.SetAppStatus's precedent.
+  rpc RetryArgoSync(RetryArgoSyncRequest) returns (RetryArgoSyncResponse);
 }
 
 // ============================================================================

@@ -28,6 +28,7 @@ go_test(
     srcs = [
         "argosync_test.go",
         "gitops_test.go",
+        "retry_argosync_test.go",
         "stub_test.go",
         "workflow_test.go",
     ],

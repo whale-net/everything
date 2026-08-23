@@ -77,6 +77,7 @@ go_test(
         "handlers_promotion_details_test.go",
         "handlers_read_screens_test.go",
         "handlers_release_test.go",
+        "handlers_retry_argosync_test.go",
         "promotion_sync_outcome_data_test.go",
         "release_scope_test.go",
         "role_gating_test.go",
