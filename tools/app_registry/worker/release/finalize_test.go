@@ -257,8 +257,23 @@ func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
 		_, _ = w.Write(cliBinariesZip)
 	})
 
+	repo := newTestRegistry(t)
+	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
+		{Domain: "tools", Name: "release_helper_go", AppType: "cli"},
+	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
+	require.NoError(t, err)
+	app, err := repo.Apps().GetAppByFullName(context.Background(), "tools-release_helper_go")
+	require.NoError(t, err)
+	repo.SeedArtifact(repository.Artifact{
+		AppID:   app.AppID,
+		Kind:    repository.ArtifactKindBinary,
+		Version: "v1.2.3",
+		State:   repository.ArtifactStateAllocated,
+	})
+
 	uploader := newFakeUploader()
 	a := &Activities{
+		Registry:   repo,
 		GitHub:     newTestDispatcher(t, mux),
 		S3Uploader: uploader,
 		// a.GHCRToken deliberately left unset -- an all-CLI batch must not
@@ -268,6 +283,11 @@ func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-1",
 		Versions:     map[string]string{"image:tools-release_helper_go": "v1.2.3"},
+		// RawJSON deliberately empty/no build_id -- proves buildID
+		// synthesis (this file's FinalizePublish, right after loading
+		// chartManifests) still lets artifact recording succeed even when
+		// the plan carries no App Registry build_id, matching the exact
+		// real prod shape this test's own doc comment describes.
 	}
 	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
 
@@ -275,6 +295,14 @@ func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
 	require.NoError(t, err, "an all-CLI batch must not require a build-manifest artifact or a GHCR token")
 	require.True(t, result.Succeeded, "detail: %s", result.Detail)
 	require.Contains(t, uploader.uploads, "release_helper_go/v1.2.3/checksums.txt")
+
+	artifact, err := repo.Artifacts().GetArtifact(context.Background(), repository.ArtifactLookup{
+		OwnerFullName:   "tools-release_helper_go",
+		Kind:            repository.ArtifactKindBinary,
+		LatestPublished: true,
+	})
+	require.NoError(t, err, "buildID synthesis must let the artifact actually reach state \"published\", not just upload to S3")
+	require.Equal(t, repository.ArtifactStatePublished, artifact.State)
 }
 
 // TestActivities_FinalizePublish_NoOpApp_ChartPinsEffectiveVersion is the
