@@ -1,0 +1,196 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// PromotionDetailsViewState is the Promotion Details screen's render state
+// (FR7, FR7a, FR8, FR9, issue #1032). Details is GetPromotionDetails' full
+// response -- wired for real in the Scaffold phase (this is a plain read
+// keyed by promotion_id with no write/permission-gating complexity to
+// defer, the same precedent handleReleaseStatus's doc comment
+// (handlers_release.go) sets for release-status); LoadErr is set instead
+// when the RPC itself failed (unknown promotion_id -> NotFound, transport
+// failure, etc).
+type PromotionDetailsViewState struct {
+	PromotionID string
+	Details     *pb.GetPromotionDetailsResponse
+	LoadErr     string
+}
+
+// argok8sCommitURL builds the writeback-commit link (FR7a): argok8s is the
+// one gitops repo GitOpsActivities.Publish ever commits to (see
+// worker/writeback/gitops.go's GitOpsConfig.Repo doc comment) -- not
+// configurable per-environment, so this is safe to hardcode here exactly
+// like it is in that Go package's own doc comments.
+func argok8sCommitURL(sha string) string {
+	return "https://github.com/whale-net/argok8s/commit/" + sha
+}
+
+// earliestRefreshTriggered returns the first (chronologically earliest --
+// SyncEvents is oldest-first, see PromotionDetails.sync_events' doc
+// comment) refresh_triggered event, or nil if none exists yet (Promote
+// succeeded but ArgoCD sync hasn't been triggered/observed at all -- e.g.
+// the worker hasn't run TriggerArgoRefresh yet, or ARGOCD_SERVER isn't
+// configured in this deployment, see worker/writeback/argosync.go's
+// NoopArgoSyncActivities).
+func earliestRefreshTriggered(events []*pb.PromotionSyncEvent) *pb.PromotionSyncEvent {
+	for _, e := range events {
+		if e.GetSource() == "refresh_triggered" {
+			return e
+		}
+	}
+	return nil
+}
+
+// syncEventSourceLabel renders PromotionSyncEvent.source for the timeline --
+// screen-local since no other screen (yet) needs this vocabulary. Mirrors
+// repository.PromotionSyncEvent's Source constants
+// (server/repository/models.go) as display text.
+func syncEventSourceLabel(source string) string {
+	switch source {
+	case "refresh_triggered":
+		return "Refresh triggered"
+	case "poll_observed":
+		return "Poll observed"
+	case "retry_triggered":
+		return "Retry triggered"
+	case "retry_observed":
+		return "Retry observed"
+	default:
+		return source
+	}
+}
+
+// PromotionDetails is the Promotion Details screen (FR7-FR9, issue #1032):
+// requester/request time, from/to version, writeback outcome (commit
+// SHA/link, FR7a), the ArgoCD sync/health outcome (FR8, three visibly
+// distinct states -- never conflating "version upgraded, sync failed" with
+// plain success), and the full sync/health observation history (#1028).
+// Read-only: no mutating control appears on this page (retry is a separate
+// task).
+templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
+	@components.Shell("Promotion Details", user) {
+		<div class="breadcrumbs text-sm mb-4">
+			<ul>
+				<li><a href="/deployments">Deployments</a></li>
+				<li>Promotion { s.PromotionID }</li>
+			</ul>
+		</div>
+		if s.LoadErr != "" {
+			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
+		} else if s.Details != nil {
+			@promotionDetailsBody(user, s.Details.GetDetails())
+		}
+	}
+}
+
+templ promotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
+	<div class="flex justify-between items-center mb-4">
+		<h2 class="text-xl font-bold">
+			{ d.GetPromotion().GetEnvironmentKey() }: { d.GetFromVersion() }
+			if d.GetFromVersion() != "" {
+				→
+			}
+			{ d.GetToVersion() }
+		</h2>
+		@components.PromotionSyncOutcomeBadge(d.GetOutcome())
+	</div>
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+		<div class="card-body">
+			<h3 class="card-title text-base">Request</h3>
+			<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+				<dt class="opacity-60">Requested by</dt>
+				<dd>{ actorDisplay(user, d.GetRequestEvent().GetActor()) }</dd>
+				<dt class="opacity-60">Requested at</dt>
+				<dd class="font-mono">{ unixToRFC3339(d.GetRequestEvent().GetOccurredAt()) }</dd>
+				<dt class="opacity-60">Action</dt>
+				<dd>{ promotionActionLabel(d.GetRequestEvent().GetAction()) }</dd>
+				if d.GetRequestEvent().GetReason() != "" {
+					<dt class="opacity-60">Reason</dt>
+					<dd>{ d.GetRequestEvent().GetReason() }</dd>
+				}
+			</dl>
+		</div>
+	</div>
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+		<div class="card-body">
+			<h3 class="card-title text-base">Writeback</h3>
+			<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+				<dt class="opacity-60">Committed</dt>
+				<dd>
+					if d.GetWritebackCommitSha() != "" {
+						<a href={ templ.URL(argok8sCommitURL(d.GetWritebackCommitSha())) } class="link font-mono text-xs" target="_blank" rel="noopener noreferrer">
+							{ d.GetWritebackCommitSha() }
+						</a>
+					} else if d.GetWritebackLocation() != "" {
+						<span class="opacity-60">Not yet committed (dev-test stub path) — last written to { d.GetWritebackLocation() }</span>
+					} else {
+						<span class="opacity-60">Not yet committed</span>
+					}
+				</dd>
+				{{ refresh := earliestRefreshTriggered(d.GetSyncEvents()) }}
+				<dt class="opacity-60">Sync triggered at</dt>
+				<dd class="font-mono">
+					if refresh != nil {
+						{ unixToRFC3339(refresh.GetOccurredAt()) }
+					} else {
+						<span class="opacity-60">Not yet triggered</span>
+					}
+				</dd>
+				<dt class="opacity-60">Current sync status</dt>
+				<dd>
+					if d.GetCurrentSyncStatus() != "" {
+						{ d.GetCurrentSyncStatus() }
+					} else {
+						<span class="opacity-60">—</span>
+					}
+				</dd>
+				<dt class="opacity-60">Current health status</dt>
+				<dd>
+					if d.GetCurrentHealthStatus() != "" {
+						{ d.GetCurrentHealthStatus() }
+					} else {
+						<span class="opacity-60">—</span>
+					}
+				</dd>
+			</dl>
+			if d.GetOutcome() == pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNC_FAILED {
+				<div role="alert" class="alert alert-error mt-2">
+					<span>Sync failed: { d.GetCurrentSyncStatus() } / { d.GetCurrentHealthStatus() }</span>
+				</div>
+			}
+		</div>
+	</div>
+	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+		<div class="card-body">
+			<h3 class="card-title text-base">Sync history</h3>
+			if len(d.GetSyncEvents()) == 0 {
+				<p class="text-sm opacity-60">No ArgoCD sync/health observations recorded yet.</p>
+			} else {
+				<ul class="timeline timeline-vertical timeline-compact">
+					for i, e := range d.GetSyncEvents() {
+						<li>
+							if i > 0 {
+								<hr/>
+							}
+							<div class="timeline-start text-xs opacity-60 font-mono">{ unixToRFC3339(e.GetOccurredAt()) }</div>
+							<div class="timeline-middle"><span class="badge badge-soft badge-neutral badge-xs"></span></div>
+							<div class="timeline-end timeline-box text-sm">
+								{ syncEventSourceLabel(e.GetSource()) }
+								if e.GetSyncStatus() != "" || e.GetHealthStatus() != "" {
+									— { e.GetSyncStatus() } / { e.GetHealthStatus() }
+								}
+							</div>
+							if i < len(d.GetSyncEvents())-1 {
+								<hr/>
+							}
+						</li>
+					}
+				</ul>
+			}
+		</div>
+	</div>
+}

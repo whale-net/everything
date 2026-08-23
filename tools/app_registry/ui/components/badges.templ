@@ -148,3 +148,34 @@ templ ReleaseRunTargetStateBadge(s pb.ReleaseRunTargetState) {
 	{{ label, class := releaseRunTargetStateLabel(s) }}
 	<span class={ "badge", class }>{ label }</span>
 }
+
+// promotionSyncOutcomeLabel returns the display label + daisyUI badge
+// modifier class for a PromotionSyncOutcome (FR8, issue #1031/#1032): three
+// visibly distinct colours so "version upgraded, sync failed" (badge-error)
+// is never conflated with plain success (badge-success) or a still-pending
+// observation (badge-neutral) -- matching NFR-6's "never render an
+// unknown/partial state as healthy" rule for the UNSPECIFIED zero value
+// too.
+func promotionSyncOutcomeLabel(o pb.PromotionSyncOutcome) (label, class string) {
+	switch o {
+	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY:
+		return "Synced", "badge-success"
+	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNC_FAILED:
+		return "Sync failed", "badge-error"
+	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_PENDING:
+		return "Pending", "badge-neutral"
+	default:
+		return "Unknown", "badge-warning"
+	}
+}
+
+// PromotionSyncOutcomeBadge is the one place a promotion's ArgoCD sync
+// outcome renders anywhere in this UI (issue #1032) -- the Promotion
+// Details page (pages.PromotionDetails) today; Story 3's inline badge on
+// existing promotion-history views reuses this same component once that
+// per-row data plumbing lands (see pages/app_detail.templ's
+// promotionTimelineCard doc comment).
+templ PromotionSyncOutcomeBadge(o pb.PromotionSyncOutcome) {
+	{{ label, class := promotionSyncOutcomeLabel(o) }}
+	<span class={ "badge", class }>{ label }</span>
+}

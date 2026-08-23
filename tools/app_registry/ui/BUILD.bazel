@@ -23,6 +23,7 @@ go_library(
         "handlers_environment_diff.go",
         "handlers_environments.go",
         "handlers_promote.go",
+        "handlers_promotion_details.go",
         "handlers_release.go",
         "handlers_rollback.go",
         "main.go",

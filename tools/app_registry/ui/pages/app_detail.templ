@@ -250,7 +250,19 @@ func digestShort(digest string) string {
 // timestamp and environment per event, via ListPromotionEvents — kept
 // visually distinct (its own card, its own heading, no version-history link
 // inline) from the "Version history" button up in AppDetail's header
-// (FR-21 link).
+// (FR-21 link). Each row links to the Promotion Details page (issue
+// #1032) via PromotionEvent.promotion_id, for FR7's full lifecycle view.
+//
+// Story 3's inline sync/health badge is deliberately NOT added to this
+// timeline yet, unlike the details-page link above: ListPromotionEvents
+// carries no sync/health data of its own (that's #1028's
+// promotion_sync_event, joined per-promotion by GetPromotionDetails), so
+// showing it here needs either a widened list RPC or N per-row
+// GetPromotionDetails lookups -- a data-plumbing/performance decision
+// (batch vs sequential, error handling per row) left for the
+// Implementation phase, mirroring handleReleaseStatus's own
+// polling-deferral precedent (handlers_release.go) for "defer the part
+// that needs a real design decision, ship the plain-read part now".
 templ promotionTimelineCard(user *htmxauth.UserInfo, data *matrix.AppDetailData) {
 	<div class="card bg-base-100 shadow-md">
 		<div class="card-body">
@@ -274,6 +286,9 @@ templ promotionTimelineCard(user *htmxauth.UserInfo, data *matrix.AppDetailData)
 								{ promotionActionLabel(e.GetAction()) } — { actorDisplay(user, e.GetActor()) }
 								if e.GetReason() != "" {
 									, "{ e.GetReason() }"
+								}
+								if e.GetPromotionId() != "" {
+									<a href={ templ.URL("/promotions/" + e.GetPromotionId()) } class="link font-mono text-xs ml-1">details</a>
 								}
 							</div>
 							if i < len(data.Events)-1 {
