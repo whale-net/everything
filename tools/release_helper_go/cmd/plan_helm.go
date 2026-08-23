@@ -22,8 +22,32 @@ type HelmChartMetadata struct {
 	BazelTarget string `json:"bazel_target,omitempty"`
 }
 
-// FullName returns the canonical "domain-name" identifier for the helm chart.
-func (m HelmChartMetadata) FullName() string { return m.Domain + "-" + m.Name }
+// FullName returns the canonical "domain-name" identifier for the helm
+// chart, matching what the App Registry actually stores and looks charts
+// up by (GetChartByFullName: "domain || '-' || name"). m.Name's own shape
+// differs by discovery path, and both must normalize to the same canonical
+// form here:
+//   - bazel-query discovery (ListAllHelmCharts) yields the raw Bazel-
+//     declared chart_name, which release.bzl's release_helm_chart macro
+//     always composes as "helm-{domain}-{chart_name}" (its own doc comment:
+//     "will be prefixed with helm-{domain}- automatically") -- e.g. domain
+//     "app-registry", chart_name "app-registry" yields m.Name
+//     "helm-app-registry-app-registry".
+//   - the bazel-free HelmChartMetadataFromInputs path (App Registry's own
+//     reconciled chart rows, e.g. worker/release/plan.go's ResolvePlan) has
+//     already had that prefix stripped at reconciliation time -- m.Name is
+//     just the bare "app-registry".
+//
+// Naively concatenating Domain+"-"+Name (as this used to do unconditionally)
+// is correct for the second case but double-counts the domain for the
+// first, producing garbage like "app-registry-helm-app-registry-app-registry"
+// -- confirmed against a real v1 (release.yml) run that hit exactly that
+// string as an AllocateVersion InvalidArgument once assignChartVersions
+// started actually calling it (see that function's own doc comment).
+func (m HelmChartMetadata) FullName() string {
+	name := strings.TrimPrefix(m.Name, "helm-"+m.Domain+"-")
+	return m.Domain + "-" + name
+}
 
 // HelmChartMetadataInput is one chart's identity as supplied directly by a
 // caller that has already resolved its target list against a source of
