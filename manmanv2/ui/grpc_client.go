@@ -456,6 +456,17 @@ func (c *ControlClient) ListWorkshopAddons(ctx context.Context, offset, limit in
 	return resp.Addons, nil
 }
 
+// ListCollectionChildren lists the addons created as children of a Steam Workshop collection.
+func (c *ControlClient) ListCollectionChildren(ctx context.Context, collectionAddonID int64) ([]*manmanpb.WorkshopAddon, error) {
+	resp, err := c.workshop.ListAddons(ctx, &manmanpb.ListAddonsRequest{
+		CollectionId: collectionAddonID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Addons, nil
+}
+
 func (c *ControlClient) GetWorkshopAddon(ctx context.Context, addonID int64) (*manmanpb.WorkshopAddon, error) {
 	resp, err := c.workshop.GetAddon(ctx, &manmanpb.GetAddonRequest{
 		AddonId: addonID,

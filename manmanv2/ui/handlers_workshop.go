@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 	"github.com/whale-net/everything/manmanv2/ui/components"
 	"github.com/whale-net/everything/manmanv2/ui/pages"
-	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
 
 // WorkshopLibraryPageData holds data for workshop library home page
@@ -82,7 +82,6 @@ type WorkshopInstallationsPageData struct {
 	Installations      []*manmanpb.WorkshopInstallation
 	AvailableLibraries []*manmanpb.WorkshopLibrary
 }
-
 
 func (app *App) handleWorkshopLibrary(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
@@ -255,6 +254,22 @@ func (app *App) handleWorkshopAddonDetail(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	var collectionChildren []*manmanpb.WorkshopAddon
+	if addon.IsCollection {
+		collectionChildren, err = app.grpc.ListCollectionChildren(ctx, addonID)
+		if err != nil {
+			log.Printf("Error fetching collection children: %v", err)
+		}
+	}
+
+	var parentCollection *manmanpb.WorkshopAddon
+	if addon.CollectionId != 0 {
+		parentCollection, err = app.grpc.GetWorkshopAddon(ctx, addon.CollectionId)
+		if err != nil {
+			log.Printf("Error fetching parent collection: %v", err)
+		}
+	}
+
 	addonName := addon.Name
 	if addonName == "" {
 		addonName = "Addon " + addonIDStr
@@ -278,6 +293,8 @@ func (app *App) handleWorkshopAddonDetail(w http.ResponseWriter, r *http.Request
 		Game:                game,
 		ContainingLibraries: containingLibraries,
 		AvailableLibraries:  availableLibraries,
+		CollectionChildren:  collectionChildren,
+		ParentCollection:    parentCollection,
 	}
 
 	RenderTempl(w, r, addonName, pages.WorkshopAddonDetail(data))
@@ -469,6 +486,9 @@ func (app *App) handleFetchAddonMetadata(w http.ResponseWriter, r *http.Request)
 	if addon.IsCollection {
 		typeLabel = "Collection"
 		isCollectionStr = "true"
+		// A collection reports 0 bytes from Steam — its content lives on its children,
+		// which are created as their own addons (with their own real sizes) on save.
+		sizeStr = strconv.FormatInt(int64(addon.CollectionItemCount), 10) + " items on save"
 	}
 	fileSizeBytesStr := strconv.FormatInt(addon.FileSizeBytes, 10)
 

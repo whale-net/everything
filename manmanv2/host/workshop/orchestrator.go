@@ -100,6 +100,18 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		"workshop_id", cmd.WorkshopID,
 	)
 
+	// Defense in depth: a Steam Workshop collection is a grouping marker with no
+	// downloadable content of its own (its children carry the actual items — see
+	// WorkshopManager.InstallAddon, which fans out to children instead of dispatching
+	// a download for the collection's own addon_id). Refuse rather than hand SteamCMD
+	// a collection ID it cannot download.
+	if addon, err := do.workshopClient.GetAddon(ctx, &pb.GetAddonRequest{AddonId: cmd.AddonID}); err == nil && addon.Addon != nil && addon.Addon.IsCollection {
+		err := fmt.Errorf("addon %d is a Steam Workshop collection, not downloadable content", cmd.AddonID)
+		logger.Error("refusing to download collection addon", "error", err)
+		do.handleDownloadError(ctx, cmd.InstallationID, err)
+		return err
+	}
+
 	// Atomically check and mark to prevent duplicate concurrent downloads
 	if do.checkAndMarkDownloadInProgress(cmd.InstallationID) {
 		logger.Info("download already in progress, skipping duplicate")
@@ -255,7 +267,7 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 
 	// Extract files from SteamCMD's nested structure to final install path
 	steamContentDir := filepath.Join(tempDownloadDir, "steamapps", "workshop", "content", cmd.SteamAppID, cmd.WorkshopID)
-	
+
 	// Check if directory exists and has content
 	entries, err := os.ReadDir(steamContentDir)
 	if err != nil {
@@ -336,8 +348,8 @@ func (do *DownloadOrchestrator) HandleDownloadCommand(ctx context.Context, cmd *
 		}
 		copyCmd := fmt.Sprintf("mkdir -p %s && cp -r /tmp/workshop-staging/. %s/", destPath, destPath)
 		helperConfig := docker.ContainerConfig{
-			Name:  fmt.Sprintf("workshop-install-%s-%d-%d", do.environment, cmd.SGCID, cmd.AddonID),
-			Image: "busybox:latest",
+			Name:    fmt.Sprintf("workshop-install-%s-%d-%d", do.environment, cmd.SGCID, cmd.AddonID),
+			Image:   "busybox:latest",
 			Command: []string{"sh", "-c", copyCmd},
 			Volumes: []string{
 				fmt.Sprintf("%s:/tmp/workshop-staging", stagingHostDir),
@@ -849,8 +861,8 @@ func (do *DownloadOrchestrator) EnsureLibraryAddonsInstalled(ctx context.Context
 	type queueItem struct {
 		libraryID    int64
 		pathOverride string // inherited from the top-level SGC library attachment
-		presetID     int64 // effective preset (attachment override or library default)
-		volumeID     int64 // which volume to install into
+		presetID     int64  // effective preset (attachment override or library default)
+		volumeID     int64  // which volume to install into
 	}
 	queue := make([]queueItem, 0, len(attachmentsResp.Attachments))
 	for _, att := range attachmentsResp.Attachments {

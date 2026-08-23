@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 	"github.com/whale-net/everything/manmanv2/api/steam"
+	"github.com/whale-net/everything/manmanv2/models"
 )
 
 // RMQPublisher defines the interface for publishing messages to RabbitMQ
@@ -47,6 +47,7 @@ type WorkshopManagerInterface interface {
 	RemoveInstallation(ctx context.Context, installationID int64) error
 	ResetInstallation(ctx context.Context, installationID int64) (*manman.WorkshopInstallation, error)
 	FetchMetadata(ctx context.Context, gameID int64, workshopID string) (*manman.WorkshopAddon, error)
+	CreateAddon(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error)
 	EnsureLibraryAddonsInstalled(ctx context.Context, sgcID int64) error
 }
 
@@ -110,6 +111,13 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 	addon, err := wm.addonRepo.Get(ctx, addonID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get addon: %w", err)
+	}
+
+	// A collection has no downloadable content of its own (Steam reports its file_size
+	// as 0) — its children, created via CreateAddon, carry the actual workshop items.
+	// Installing a collection installs each of its children instead.
+	if addon.IsCollection {
+		return wm.installCollectionChildren(ctx, addon, sgcID, forceReinstall, skipDispatch, installationPathOverride, presetIDOverride, volumeIDOverride)
 	}
 
 	// 3. Get SGC and resolve volume paths
@@ -176,6 +184,39 @@ func (wm *WorkshopManager) InstallAddon(ctx context.Context, sgcID, addonID int6
 	}
 
 	return installation, nil
+}
+
+// installCollectionChildren installs every child addon of a collection, tolerating
+// individual child failures (mirroring EnsureLibraryAddonsInstalled's tolerance for
+// partial failure). Returns the last successful installation, or an error if none
+// of the children could be installed.
+func (wm *WorkshopManager) installCollectionChildren(ctx context.Context, collection *manman.WorkshopAddon, sgcID int64, forceReinstall, skipDispatch bool, installationPathOverride string, presetIDOverride int64, volumeIDOverride int64) (*manman.WorkshopInstallation, error) {
+	children, err := wm.addonRepo.ListByCollectionID(ctx, collection.AddonID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list collection children: %w", err)
+	}
+	if len(children) == 0 {
+		return nil, fmt.Errorf("collection addon %d has no children to install", collection.AddonID)
+	}
+
+	var last *manman.WorkshopInstallation
+	var firstErr error
+	for _, child := range children {
+		inst, err := wm.InstallAddon(ctx, sgcID, child.AddonID, forceReinstall, skipDispatch, installationPathOverride, presetIDOverride, volumeIDOverride)
+		if err != nil {
+			log.Printf("Warning: failed to install collection child addon %d (collection addon_id=%d): %v", child.AddonID, collection.AddonID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		last = inst
+	}
+
+	if last == nil {
+		return nil, fmt.Errorf("failed to install any collection children: %w", firstErr)
+	}
+	return last, nil
 }
 
 // resolveInstallationPath determines the target path for addon installation.
@@ -390,8 +431,64 @@ func (wm *WorkshopManager) FetchAndCreateAddon(ctx context.Context, gameID int64
 		return nil, err
 	}
 
-	// Create addon in database
-	return wm.addonRepo.Create(ctx, addon)
+	// Create addon (and, if it's a collection, its children) in database
+	return wm.CreateAddon(ctx, addon)
+}
+
+// CreateAddon persists addon, then, if addon.IsCollection, expands it: fetches the
+// collection's children from Steam and creates one child addon row per item so each
+// gets its own real size/name (a collection's own Steam metadata always reports
+// file_size 0 — the content lives on the children, not the collection itself).
+// Each child is linked back to the parent via CollectionID for correlation (#445).
+// Children that already exist for this game (by workshop_id) are left as-is rather
+// than duplicated. The parent row is still returned even if child expansion partially
+// fails — the caller ends up with a real, if incomplete, addon rather than nothing.
+func (wm *WorkshopManager) CreateAddon(ctx context.Context, addon *manman.WorkshopAddon) (*manman.WorkshopAddon, error) {
+	created, err := wm.addonRepo.Create(ctx, addon)
+	if err != nil {
+		return nil, err
+	}
+
+	if !created.IsCollection {
+		return created, nil
+	}
+
+	items, err := wm.steamClient.GetCollectionDetails(ctx, created.WorkshopID)
+	if err != nil {
+		return created, fmt.Errorf("addon %d created but failed to fetch collection children: %w", created.AddonID, err)
+	}
+
+	for _, item := range items {
+		if existing, err := wm.addonRepo.GetByWorkshopID(ctx, created.GameID, item.WorkshopID, created.PlatformType); err == nil && existing != nil {
+			continue
+		}
+
+		childMeta, err := wm.steamClient.GetWorkshopItemDetails(ctx, item.WorkshopID)
+		if err != nil {
+			log.Printf("Warning: failed to fetch metadata for collection child %s (collection addon_id=%d): %v", item.WorkshopID, created.AddonID, err)
+			continue
+		}
+
+		collectionID := created.AddonID
+		child := &manman.WorkshopAddon{
+			GameID:           created.GameID,
+			WorkshopID:       item.WorkshopID,
+			PlatformType:     created.PlatformType,
+			Name:             childMeta.Title,
+			Description:      &childMeta.Description,
+			FileSizeBytes:    &childMeta.FileSize,
+			InstallationPath: created.InstallationPath,
+			PresetID:         created.PresetID,
+			IsCollection:     childMeta.IsCollection,
+			CollectionID:     &collectionID,
+			LastUpdated:      &childMeta.TimeUpdated,
+		}
+		if _, err := wm.addonRepo.Create(ctx, child); err != nil {
+			log.Printf("Warning: failed to create collection child addon %s (collection addon_id=%d): %v", item.WorkshopID, created.AddonID, err)
+		}
+	}
+
+	return created, nil
 }
 
 // RemoveInstallation removes an installed addon from a ServerGameConfig

@@ -70,6 +70,12 @@ message WorkshopAddon {
   int64 created_at = 13;  // Unix timestamp
   int64 updated_at = 14;  // Unix timestamp
   string steam_app_id = 17;  // Steam application ID (e.g. "252490"), extracted from metadata
+  // collection_id correlates an addon created as a child of a Steam Workshop collection
+  // back to the collection's own addon row. 0 for standalone addons and for the collection row itself.
+  int64 collection_id = 16;
+  // collection_item_count is only populated on FetchAddonMetadata previews of a collection,
+  // before its children have been persisted (e.g. as separate addon_id rows via collection_id).
+  int32 collection_item_count = 18;
 }
 
 // GameAddonPathPreset represents a reusable installation path template
@@ -152,6 +158,7 @@ message ListAddonsRequest {
   bool include_deprecated = 2;
   int32 limit = 3;
   int32 offset = 4;
+  int64 collection_id = 5;  // optional filter: only children of this collection addon
 }
 
 message ListAddonsResponse {
