@@ -117,6 +117,7 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 
 	var appsMetadata []appMetadataInput
 	var chartsMetadata []chartMetadataInput
+	targetDomain := make(map[string]string, len(targets))
 	for _, t := range targets {
 		switch t.Kind {
 		case repository.ArtifactKindImage:
@@ -128,6 +129,7 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 				return ResolvedPlan{}, fmt.Errorf("resolve plan: look up app %q: %w", t.OwnerFullName, err)
 			}
 			appsMetadata = append(appsMetadata, appMetadataInput{Domain: app.Domain, Name: app.Name, AppType: app.AppType})
+			targetDomain[t.OwnerFullName] = app.Domain
 		case repository.ArtifactKindChart:
 			chart, err := a.Registry.Apps().GetChartByFullName(ctx, t.OwnerFullName)
 			if err != nil {
@@ -137,6 +139,7 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 				return ResolvedPlan{}, fmt.Errorf("resolve plan: look up chart %q: %w", t.OwnerFullName, err)
 			}
 			chartsMetadata = append(chartsMetadata, chartMetadataInput{Domain: chart.Domain, Name: chart.Name})
+			targetDomain[t.OwnerFullName] = chart.Domain
 		default:
 			return ResolvedPlan{}, fmt.Errorf("resolve plan: unsupported target kind %q for %s", t.Kind, t.OwnerFullName)
 		}
@@ -153,6 +156,54 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 	for _, t := range targets {
 		if t.VersionSelection != "" {
 			versionSelections[t.OwnerFullName] = t.VersionSelection
+		}
+	}
+
+	// Fail fast, with a specific and actionable message, for any target
+	// that will deterministically hit the "workspace root not found"
+	// failure below instead of letting it happen (issue: a real prod
+	// release run -- 9a1d783c-3cac-44fe-87d0-0d38793c43f8, domain
+	// manmanv2 -- failed exactly this way for all 7 of its targets).
+	//
+	// A target with no explicit VersionSelection resolves through
+	// release_helper_go's resolveVersion (registry_version.go), which
+	// calls AllocateVersion first and only falls back to the git-tag
+	// autoIncrementVersion (plan.go) if AllocateVersion returns
+	// FailedPrecondition -- which it always does for a domain not yet at
+	// App Registry adoption stage "allocate" (server/handlers/artifact.go).
+	// That fallback needs a real git checkout to list tags from; this
+	// activity only has one when a.WorkspaceRoot is explicitly configured
+	// (see this file's package doc comment on why that's optional and
+	// normally unset in prod). So: no WorkspaceRoot + any domain not at
+	// "allocate" + no explicit version for that domain's targets is not a
+	// rare edge case here, it is a guaranteed failure -- and worth
+	// diagnosing plainly rather than via a leaf-level git error that names
+	// a `/tmp` path nobody can act on.
+	if a.WorkspaceRoot == "" {
+		seen := make(map[string]bool)
+		var blocked []string
+		for _, t := range targets {
+			if t.VersionSelection != "" {
+				continue // an explicit version never reaches the git fallback
+			}
+			domain := targetDomain[t.OwnerFullName]
+			if seen[domain] {
+				continue
+			}
+			seen[domain] = true
+			stage, err := a.Registry.DomainAdoption().GetStage(ctx, domain)
+			if err != nil {
+				return ResolvedPlan{}, fmt.Errorf("resolve plan: check App Registry adoption stage for domain %q: %w", domain, err)
+			}
+			if stage != repository.DomainAdoptionStageAllocate {
+				blocked = append(blocked, domain)
+			}
+		}
+		if len(blocked) > 0 {
+			return ResolvedPlan{}, fmt.Errorf(
+				"resolve plan: cannot auto-increment a version for domain(s) %s: not yet at App Registry adoption stage %q, and this activity has no git checkout for the pre-adoption git-tag fallback to read tags from -- either supply an explicit version for every target in %s, or complete that domain's App Registry cutover first",
+				strings.Join(blocked, ", "), repository.DomainAdoptionStageAllocate, strings.Join(blocked, ", "),
+			)
 		}
 	}
 
