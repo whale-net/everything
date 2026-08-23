@@ -22,7 +22,10 @@ go_library(
 
 go_test(
     name = "fake_test",
-    srcs = ["release_run_test.go"],
+    srcs = [
+        "promotion_sync_event_test.go",
+        "release_run_test.go",
+    ],
     embed = [":fake"],
     deps = ["//tools/app_registry/server/repository"],
 )
