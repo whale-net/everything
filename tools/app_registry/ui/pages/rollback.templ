@@ -2,6 +2,7 @@ package pages
 
 import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 )
@@ -103,24 +104,32 @@ templ Rollback(user *htmxauth.UserInfo, s RollbackViewState) {
 					<strong>Nothing to roll back to.</strong> { s.NoHistoryReason }
 				</span>
 			</div>
-			<div class="flex gap-2 justify-end">
-				<button type="button" class="btn btn-error btn-disabled" disabled title={ s.NoHistoryReason }>Confirm rollback</button>
-			</div>
+			@htmxui.Confirm(htmxui.ConfirmProps{
+				Intent:         htmxui.ConfirmDestructive,
+				SubmitLabel:    "Confirm rollback",
+				Disabled:       true,
+				DisabledReason: s.NoHistoryReason,
+			}, nil)
 		} else {
 			@rollbackForm(s)
 		}
 	}
 }
 
+// rollbackSubmitLabel matches the wireframe's "Confirm rollback to
+// <version>" label when the target version is known, falling back to the
+// bare "Confirm rollback" label otherwise.
+func rollbackSubmitLabel(s RollbackViewState) string {
+	if s.Target != nil {
+		return "Confirm rollback to " + s.Target.GetVersion()
+	}
+	return "Confirm rollback"
+}
+
 templ rollbackForm(s RollbackViewState) {
 	if s.FormErr != "" {
 		<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.FormErr }</span></div>
 	}
-	<p class="text-sm opacity-70 mb-4">
-		Rollback has no version argument — it reverts to whatever the history
-		shows as the immediately preceding promotion. That target is shown
-		below before you confirm.
-	</p>
 	<div class="grid md:grid-cols-2 gap-4 mb-6">
 		<div class="card bg-base-100 border border-base-300">
 			<div class="card-body">
@@ -154,25 +163,23 @@ templ rollbackForm(s RollbackViewState) {
 		<input type="hidden" name="idem_key" value={ s.IdemKey }/>
 		<input type="hidden" name="intent_fp" value={ s.IntentFP }/>
 
-		<div class="form-control mb-6">
-			<label class="label">
-				<span class="label-text">
-					Reason <span class="text-error">*</span> — required for every
-					environment (UI policy; the server itself only requires it above
-					dev/rank 0), becomes part of the permanent history
-				</span>
-			</label>
-			<textarea name="reason" class="textarea textarea-bordered" rows="2" required placeholder="e.g. v1.4.0 causing elevated 5xx on /sessions">{ s.Reason }</textarea>
-		</div>
-
-		<div class="flex gap-2 justify-end">
-			<a href="/deployments" class="btn btn-secondary">Cancel</a>
-			if s.Target != nil {
-				<button type="submit" class="btn btn-error">Confirm rollback to { s.Target.GetVersion() }</button>
-			} else {
-				<button type="submit" class="btn btn-error">Confirm rollback</button>
-			}
-		</div>
+		@htmxui.Confirm(htmxui.ConfirmProps{
+			Intent:      htmxui.ConfirmDestructive,
+			Summary:     "Rollback has no version argument — it reverts to whatever the history shows as the immediately preceding promotion. That target is shown below before you confirm.",
+			SubmitLabel: rollbackSubmitLabel(s),
+			CancelHref:  "/deployments",
+		}, nil) {
+			<div class="form-control mb-6">
+				<label class="label">
+					<span class="label-text">
+						Reason <span class="text-error">*</span> — required for every
+						environment (UI policy; the server itself only requires it above
+						dev/rank 0), becomes part of the permanent history
+					</span>
+				</label>
+				<textarea name="reason" class="textarea textarea-bordered" rows="2" required placeholder="e.g. v1.4.0 causing elevated 5xx on /sessions">{ s.Reason }</textarea>
+			</div>
+		}
 	</form>
 }
 

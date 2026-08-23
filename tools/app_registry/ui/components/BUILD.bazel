@@ -8,6 +8,7 @@ templ_library(
     visibility = ["//tools/app_registry/ui:__subpackages__"],
     deps = [
         "//libs/go/htmxauth",
+        "//libs/go/htmxui",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",
     ],
