@@ -740,8 +740,8 @@ func TestExecuteReleaseCharts_RecordArtifactFails_TriggersFailPublish(t *testing
 		return nil, fmt.Errorf("chart pins unrecorded image digest")
 	}
 
-	// Since the AR-5 cutover, RecordArtifact failure is fatal -- there is no
-	// more per-domain adoption stage under which it would be a soft warning.
+	// RecordArtifact failure is fatal -- there is no per-domain adoption
+	// stage under which it would be a soft warning.
 	_, err := ExecuteReleaseCharts(ReleaseChartsParams{
 		Charts:         "demo-hello-fastapi",
 		Version:        "v0.2.0",
@@ -884,10 +884,10 @@ func TestExecuteReleaseCharts_AllocateDomainUsesRegistryNotTags(t *testing.T) {
 	}
 }
 
-// TestExecuteReleaseCharts_AllocateVersionErrorIsFatal proves that since the
-// AR-5 cutover, once a registry client is opted in, an AllocateVersion
-// error is always fatal -- there is no more per-domain adoption stage to
-// fall back on (see resolveVersion's doc comment).
+// TestExecuteReleaseCharts_AllocateVersionErrorIsFatal proves that once a
+// registry client is opted in, an AllocateVersion error is always fatal --
+// there is no per-domain adoption stage to fall back on (see
+// resolveVersion's doc comment).
 func TestExecuteReleaseCharts_AllocateVersionErrorIsFatal(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
 	uploader := &fakeChartUploader{}
@@ -1281,9 +1281,9 @@ func TestExecuteReleaseCharts_MinorBumpWithSharedDigestNotCollapsed(t *testing.T
 // version, rather than tagging/publishing a new one.
 // TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion exercises
 // the tag/ChartMuseum-based no-op path used when no ArtifactClient is
-// supplied (registry not opted in) -- since the AR-5 cutover, supplying a
-// client makes App Registry unconditionally authoritative for previous-
-// version lookup instead (see releaser.go's isAllocate).
+// supplied (registry not opted in) -- supplying a client makes App
+// Registry unconditionally authoritative for previous-version lookup
+// instead (see releaser.go's isAllocate).
 func TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
 
@@ -1339,10 +1339,10 @@ func TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion(t *testin
 	}
 }
 
-// TestExecuteReleaseCharts_AllocateStage_RecordArtifactFailureIsFatal proves
+// TestExecuteReleaseCharts_RegistryPath_RecordArtifactFailureIsFatal proves
 // that for a chart in an allocate-stage domain (issue #834), RecordArtifact
 // failure calls FailPublish to clean up the publishing row AND returns a fatal error.
-func TestExecuteReleaseCharts_AllocateStage_RecordArtifactFailureIsFatal(t *testing.T) {
+func TestExecuteReleaseCharts_RegistryPath_RecordArtifactFailureIsFatal(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
 	uploader := &fakeChartUploader{}
 	packager := &fakeHelmPackager{}
@@ -1382,10 +1382,10 @@ func TestExecuteReleaseCharts_AllocateStage_RecordArtifactFailureIsFatal(t *test
 	}
 }
 
-// TestExecuteReleaseCharts_AllocateStage_BeginPublishFailureIsFatal proves
+// TestExecuteReleaseCharts_RegistryPath_BeginPublishFailureIsFatal proves
 // that for a chart in an allocate-stage domain (issue #834), BeginPublish
 // failure returns a fatal error and aborts chart release.
-func TestExecuteReleaseCharts_AllocateStage_BeginPublishFailureIsFatal(t *testing.T) {
+func TestExecuteReleaseCharts_RegistryPath_BeginPublishFailureIsFatal(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
 	uploader := &fakeChartUploader{}
 	packager := &fakeHelmPackager{}

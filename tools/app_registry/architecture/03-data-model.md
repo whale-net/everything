@@ -21,14 +21,13 @@ erDiagram
 | `chart` | mutable, reconciled | `(domain, name)` unique. **Not SCD2** — see "Resolved questions" #4. |
 | `chart_app` | join, current-state only | Which apps a chart *currently* declares, per its latest manifest. Destructively rewritten (`DELETE` + re-`INSERT`) by every `Reconcile`. Informational only — never read on the promotion/writeback render path. **Not SCD2** — see "Resolved questions" #4. |
 | `build` | append-only | `(workflow_run_id, workflow_attempt)` unique. |
-| `artifact` | append-only | `digest` globally unique. `(owner, kind, version)` unique. `version_major/minor/patch` (AR-5a) back numeric ordering — see "Version model" below. |
+| `artifact` | append-only | `digest` globally unique. `(owner, kind, version)` unique. `version_major/minor/patch` back numeric ordering — see "Version model" below. |
 | `artifact_link` | append-only | Chart artifact → pinned image artifact, written once at `RecordArtifact` time and never mutated. This is what makes a promoted chart artifact's rendered app list deterministic — see "Resolved questions" #4. |
 | `environment` | mutable | `key` unique. `rank` orders promotion legality. |
 | `promotion` | **SCD2** | `valid_from` / `valid_to`. Partial unique index on current rows. |
 | `promotion_event` | append-only | Who, why, when, and the Temporal workflow id. |
 | `writeback_outbox` | append-only + claimed | Transactional outbox, drained by the worker. |
 | `idempotency_key` | append-only | Key → prior response, for safe CI retries. |
-| `version_allocation` | append-only | AR-5a. `AllocateVersion`'s reservation ledger — see "Version model" below. |
 | `reconcile_watermark` | singleton, mutable | Migration 006 (issue #545). Exactly one row (`id = 1`), seeded as a sentinel. Guards `Reconcile` against a stale (older-commit) call — see "Reconcile watermark" below. |
 | `app_manifest` / `chart_manifest` | append-only, content-addressed | Migration 010 (AR-8, issue #587). One row per DISTINCT manifest per owner, ever — `UNIQUE (owner_id, manifest_hash)`. `app`/`chart` themselves are pure identity (`domain`, `name`, `status`, first/last-seen); everything else is read off the owner's CURRENT manifest via `v_current_app`/`v_current_chart`. See "App identity vs. per-build manifest snapshot" below. |
 | `app_manifest_history` / `chart_manifest_history` | **SCD2** | Migration 010 (AR-8). The `main` sweep timeline — `valid_from`/`valid_to`, written ONLY by `ReconcileApps`. Partial unique index on current (`valid_to IS NULL`) rows backs `v_current_app`'s point lookup. |

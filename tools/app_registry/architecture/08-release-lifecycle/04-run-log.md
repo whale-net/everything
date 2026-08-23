@@ -124,23 +124,17 @@ authoritative, not the sole, per-target gate.
 
 **The intent set is written up front** (decided in review of PR #559). The
 release plan step writes one `allocated` artifact row per target *before*
-anything is pushed — that row is the `AllocateVersion` result (before the
-AR-5 cutover, this only held for a domain at the then-existing stage
-`allocate`; for every other domain the version came from the tag path and
-the registry was merely recording the intent). So "is this run complete?"
-was exact from the first phase rather than only after the AR-5 cutover, and
-the cutover itself was a change of *who authors the version*, not a new
-write. Now that the cutover is complete, every domain's intent row is
-authored the same way.
+anything is pushed — that row is the `AllocateVersion` result when the
+registry integration is opted in; when it's opted out, the version comes
+from the tag path and the registry is merely recording the intent. Either
+way "is this run complete?" is exact from the same row shape.
 
 Two consequences that are part of the design, not caveats:
 
 - `allocated` means "this run intends to publish this version" — who *chose*
   the version is a separate axis, `artifact.version_source ∈ ('registry',
-  'tag')`. That column is not bookkeeping for its own sake: AR-5's parity exit
-  criterion ("allocated versions match what tag-scanning would have produced")
-  becomes a query over rows that carry both, instead of a manual comparison
-  against soak data.
+  'tag')`. That column is not bookkeeping for its own sake: it makes "which
+  path authored this version" a query instead of tribal knowledge.
 - **The reaper must expire stale `allocated` rows too**, not just
   `publishing`. A cancelled run would otherwise hold a version number in
   `UNIQUE (owner_id, kind, version)` forever. Same sweep, same timeout
@@ -150,24 +144,22 @@ Declaring the set in a separate `build_target` table was considered and
 rejected: the `allocated` state already is the declaration, and a second table
 would restate it in a shape that can disagree with what the run actually did.
 
-**As built (AR-7b), the intent-set write is narrower than "before anything
-is pushed" describes.** No third RPC exists to declare intent independently
+**As built (AR-7b), the intent-set write was narrower than "before anything
+is pushed" describes.** No third RPC existed to declare intent independently
 of `BeginPublish` (the phase's scope named exactly two new RPCs,
-`BeginPublish`/`FailPublish`), and `AllocateVersion`'s per-domain gate
-(this document's "Version model" section) structurally cannot serve `observe`/
-`promote` domains — it would misattribute `version_source` to `registry` for
-a version the tag path actually chose. So AR-7b implements the intent write
-as `BeginPublish` called as the **first step of each matrix leg**, strictly
-before that leg's own push, rather than from the plan job before the whole
-matrix fans out. This is `allocated|∅ → publishing` directly, not a separate
-`∅ → allocated` row for `observe`/`promote` domains — the `allocated` state
-in that case is authored by `AllocateVersion` only at `allocate` stage, per
-the table above. The gap this leaves: a matrix leg that never starts at all
-(the job itself failed to schedule) has no row of any kind, so "is this run
-complete?" cannot distinguish that from "not part of this run" for such a
-leg. Closing that gap needs either a new RPC or loosening
-`AllocateVersion`'s stage gate, and is deliberately left to AR-7d, which
-owns `GetReleaseRun`/resume semantics — see PLAN-HISTORY.md's AR-7b
+`BeginPublish`/`FailPublish`), and at the time `AllocateVersion` had a
+per-domain gate (see PLAN-HISTORY.md's AR-5a section) that structurally
+could not serve every domain — it would have misattributed `version_source`
+to `registry` for a version the tag path actually chose. So AR-7b
+implemented the intent write as `BeginPublish` called as the **first step of
+each matrix leg**, strictly before that leg's own push, rather than from the
+plan job before the whole matrix fans out. This was `allocated|∅ →
+publishing` directly, not a separate `∅ → allocated` row for every domain.
+The gap this left: a matrix leg that never starts at all (the job itself
+failed to schedule) has no row of any kind, so "is this run complete?"
+cannot distinguish that from "not part of this run" for such a leg. Closing
+that gap needed a new RPC, deliberately left to AR-7d, which owns
+`GetReleaseRun`/resume semantics — see PLAN-HISTORY.md's AR-7b
 "Deliberately NOT done".
 
 **As built (AR-7d), the gap above is closed — with one adaptation the
@@ -188,10 +180,8 @@ more useful one anyway: it means the intent row already carries the
 structurally cannot. `GetReleaseRun`'s query is exactly `SELECT * FROM
 artifact WHERE build_id = $1` — simple only because every intended target,
 reached or not, already carries that build's id from the moment
-`BeginPublishBatch` runs. `AllocateVersion`'s own `∅ → allocated` write
-(the `allocate`-stage path, still inert — no domain has reached that stage)
-is unaffected; this only changes how the pre-cutover, `observe`/`promote`
-intent row is written.
+`BeginPublishBatch` runs. `AllocateVersion`'s own `∅ → allocated` write is
+unaffected; this only changes how the tag-path intent row is written.
 
 Concretely:
 

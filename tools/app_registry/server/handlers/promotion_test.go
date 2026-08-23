@@ -91,8 +91,8 @@ func newPromotionFixture(t *testing.T) *promotionFixture {
 }
 
 // mustRecordArtifact records a published artifact, via the mandatory
-// BeginPublish -> RecordArtifact sequence (since the AR-5 cutover there is
-// no more direct-create fallback).
+// BeginPublish -> RecordArtifact sequence (there is no direct-create
+// fallback).
 func mustRecordArtifact(t *testing.T, srv *ArtifactServer, req *pb.RecordArtifactRequest) *pb.Artifact {
 	t.Helper()
 	ctx := authedCtx()

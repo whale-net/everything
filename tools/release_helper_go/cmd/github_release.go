@@ -152,9 +152,9 @@ func (c *ghReleaseClient) uploadAsset(releaseID int, filePath, assetName string)
 
 // recordPublishedArtifact records a published binary or firmware artifact in
 // App Registry, via the same BeginPublish -> RecordArtifact/FailPublish
-// sequence releaser.go uses for apps/charts -- required since the AR-5
-// cutover, when RecordArtifact stopped accepting a direct create with no
-// prior BeginPublish. It intentionally stops there and never calls
+// sequence releaser.go uses for apps/charts -- required because
+// RecordArtifact never accepts a direct create with no prior BeginPublish.
+// It intentionally stops there and never calls
 // PromotionRegistry.Promote: this CLI runs in release.yml under
 // app-registry-builder credentials, and Promote requires the distinct
 // app-registry-promoter-<env> role (server/auth/auth.go RequirePromoter).

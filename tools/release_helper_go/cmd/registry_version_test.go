@@ -72,7 +72,7 @@ func TestResolveVersion_RegistryErrorIsFatal(t *testing.T) {
 		t.Fatal("expected a fatal error, got nil")
 	}
 	if tagCalled {
-		t.Error("tagFallback must NEVER be called on a registry error once a client is opted in -- since the AR-5 cutover every domain allocates unconditionally, so it must fail loudly, not silently revert to tags (issue #829)")
+		t.Error("tagFallback must NEVER be called on a registry error once a client is opted in -- every domain allocates unconditionally, so it must fail loudly, not silently revert to tags (issue #829)")
 	}
 }
 

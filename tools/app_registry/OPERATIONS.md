@@ -28,7 +28,7 @@ answers none of them:
 |---|---|
 | Is CI recording builds/artifacts at all? | Repository variable `APP_REGISTRY_CICD_OPT_IN` in GitHub → Settings → Secrets and variables → Actions → Variables. `true` = recording steps run (best-effort); unset/anything else = CI makes zero registry calls. |
 | Is a given domain's promotion state tracked? | `app-registry status <env> --domain <domain>` returns real data only if that domain has been recording long enough to have artifacts; there is no per-domain "promotion tracked" flag distinct from having promotable artifacts. |
-| Does the registry allocate versions for a domain? | Yes, always, for every domain — the AR-5 cutover removed the per-domain `domain_adoption.stage` gate that used to answer this. `AllocateVersion` serves any domain unconditionally; the only remaining question is whether `release_helper_go` calls it at all, which is `APP_REGISTRY_CICD_OPT_IN` (see above). |
+| Does the registry allocate versions for a domain? | Yes, always, for every domain — `AllocateVersion` serves any domain unconditionally. The only real question is whether `release_helper_go` calls it at all, which is `APP_REGISTRY_CICD_OPT_IN` (see above). |
 
 If `APP_REGISTRY_CICD_OPT_IN` is unset, the honest answer to "is the registry
 in use" is **no** — the service may be deployed and healthy, but nothing is
@@ -344,7 +344,7 @@ as `github.run_id`. Each artifact in the output carries a `state`:
 | `ARTIFACT_STATE_PUBLISHING` | Intent recorded (or the push started), but no digest yet. **Incomplete** — either still running, or was killed before pushing/recording. |
 | `ARTIFACT_STATE_PUBLISHED` | Done. Nothing to do. |
 | `ARTIFACT_STATE_FAILED` | `FailPublish` ran on the error path (or the stale-row reaper timed it out — check `fail_reason`, `"stale"` means the latter). **Incomplete** — needs a re-attempt. |
-| `ARTIFACT_STATE_ALLOCATED` | Reserved a version but never started publishing — possible for any domain now that `AllocateVersion` serves every domain unconditionally (the AR-5 cutover removed the per-domain adoption gate). **Incomplete.** |
+| `ARTIFACT_STATE_ALLOCATED` | Reserved a version but never started publishing. **Incomplete.** |
 
 An empty response with no `NotFound` error and zero artifacts, for a run
 that definitely built something, most likely means `APP_REGISTRY_CICD_OPT_IN`

@@ -28,11 +28,11 @@ func (s *ArtifactServer) CheckChartHermeticity(ctx context.Context, req *pb.Chec
 		return nil, status.Error(codes.InvalidArgument, "chart_domain is required")
 	}
 
-	// As of the AR-5 cutover this is enforced unconditionally for every
-	// domain — there is no more per-domain gate (see ARCHITECTURE.md
-	// "Rejected alternatives (issue #558)" for the now-historical rationale
-	// for why this was ever per-domain). Enforced is kept on the response
-	// (always true) rather than removed, so callers don't need a lockstep
+	// Enforced unconditionally for every domain — there is no per-domain
+	// gate (see ARCHITECTURE.md "Rejected alternatives (issue #558)" for
+	// the historical rationale for why this was ever per-domain). Enforced
+	// is kept on the response (always true) rather than removed, so
+	// callers don't need a lockstep
 	// proto change.
 	var violations []*pb.ChartPinViolation
 	for _, pin := range req.Pins {

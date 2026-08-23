@@ -7,15 +7,15 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
-// resolveVersion is issue #829's fix, since the AR-5 cutover: AllocateVersion
-// is the shared decision every version-resolution call site (plan.go's
-// assignVersions, build_helm.go's build-helm-chart, release_charts.go's
-// releaseCharts) goes through instead of calling autoIncrementVersion/
-// autoIncrementHelmVersion directly.
+// resolveVersion is issue #829's fix: AllocateVersion is the shared decision
+// every version-resolution call site (plan.go's assignVersions,
+// build_helm.go's build-helm-chart, release_charts.go's releaseCharts) goes
+// through instead of calling autoIncrementVersion/autoIncrementHelmVersion
+// directly.
 //
 // When the registry isn't opted in (client is nil), this is exactly the old
 // behavior: call tagFallback. When it is opted in, every domain allocates
-// unconditionally (there is no more per-domain adoption gate), so any
+// unconditionally (there is no per-domain adoption gate), so any
 // AllocateVersion error (network, auth, internal) is fatal here, not a
 // fallback: silently reverting to tag-scanning for a domain the registry
 // owns is the exact bug issue #829 reports, so a broken registry must fail

@@ -6,8 +6,8 @@
 //
 // This ships in the SAME phase as the allocated/publishing states
 // themselves, not later: an "allocated" row is written up front by the
-// release plan step, before anything is pushed, at every adoption stage --
-// a cancelled or killed run would otherwise hold a version number in the
+// release plan step, before anything is pushed, for every domain -- a
+// cancelled or killed run would otherwise hold a version number in the
 // (owner_id, kind, version) unique index forever, permanently blocking that
 // owner's next release.
 package reaper

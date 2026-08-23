@@ -32,11 +32,10 @@ type FileSystem interface {
 	WriteFile(path string, data []byte, perm os.FileMode) error
 }
 
-// ArtifactRecorder records published artifacts in App Registry. Since the
-// AR-5 cutover, RecordArtifact always requires a prior BeginPublish (there
-// is no more per-domain direct-create fallback), so this interface covers
-// the same BeginPublish -> RecordArtifact/FailPublish sequence releaser.go
-// uses for apps/charts.
+// ArtifactRecorder records published artifacts in App Registry.
+// RecordArtifact always requires a prior BeginPublish (there is no
+// direct-create fallback), so this interface covers the same BeginPublish
+// -> RecordArtifact/FailPublish sequence releaser.go uses for apps/charts.
 type ArtifactRecorder interface {
 	BeginPublish(ctx context.Context, req *pb.BeginPublishRequest) (*pb.BeginPublishResponse, error)
 	RecordArtifact(ctx context.Context, req *pb.RecordArtifactRequest) (*pb.RecordArtifactResponse, error)

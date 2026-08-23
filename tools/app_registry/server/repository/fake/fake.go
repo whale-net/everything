@@ -567,9 +567,8 @@ func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, co
 
 	existing, found := r.findByOwnerKindVersion(a.Kind, ownerID(a), a.Version)
 	if !found {
-		// No row at all for this (owner, kind, version). Since the AR-5
-		// cutover every domain is unconditionally past the pre-AR-7 rollout
-		// window, so BeginPublish must always have run first.
+		// No row at all for this (owner, kind, version): BeginPublish must
+		// always have run first, for every domain unconditionally.
 		return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact",
 			repository.ErrFailedPrecondition, r.ownerFullName(a), a.Version)
 	}

@@ -44,7 +44,7 @@ const exitOwnerNotReconciled = 3
 // redeploying the server (or turning off APP_REGISTRY_CICD_OPT_IN) fixes it.
 // Composite actions use this to escalate their annotation from `::warning::`
 // (transient, best-effort-and-move-on) to `::error::` (deployment defect,
-// loud at every adoption stage) -- see
+// loud every time) -- see
 // tools/app_registry/architecture/16-availability-and-bootstrap.md.
 //
 // Keep this constant's value in sync with every GitHub Actions call site

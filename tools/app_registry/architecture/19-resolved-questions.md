@@ -31,40 +31,16 @@ way to consume promotion state. That is acceptable because no deploy tooling
 depends on it yet — but it means the "registry can be down without blocking a
 deploy" property is untested until AR-4 completes for real.
 
-**3. No backfill; adopt by per-domain cutover.**
+**3. No backfill.**
 Historical artifacts are not backfilled from git tags or GHCR — history
 accumulates from AR-2 forward.
 
-Adoption is **per domain**, not global. A domain can publish through the
-registry while every other domain stays on the existing tag-based path, which
-allows a fast, low-blast-radius rollout instead of one repo-wide switch.
-
-> **Update (AR-5 cutover): superseded.** The per-domain rollout below
-> shipped and was used for the two domains cut over early (`app-registry`,
-> `tools`), but the `domain_adoption` table it depended on has since been
-> dropped — the AR-5 cutover replaced the per-domain gate with unconditional
-> allocation for every domain at once. See PLAN.md's "AR-5 — cutover status"
-> for how it landed. The table below is kept as the historical design
-> record of the originally-planned rollout mechanism, not a description of
-> current schema.
-
-This needed a `domain_adoption` table keyed by domain, recording which
-capabilities the registry was authoritative for:
-
-| Stage | Meaning |
-|---|---|
-| `observe` | Registry records builds and artifacts. Git tags remain authoritative. Default for every domain from AR-2. |
-| `promote` | Promotion state for this domain is tracked and consumed. |
-| `allocate` | Registry allocates versions for this domain; tag scanning is bypassed. |
-
-Recording (AR-2) is deliberately **not** gated — recording every domain is
-harmless and builds the parity evidence AR-5 depends on. The gate matters from
-AR-3 onward, and most of all at AR-5, where the source of truth actually
-changes hands.
-
-`AllocateVersion` must reject a domain not yet at `allocate`, so a
-misconfigured CI job fails loudly rather than silently allocating from the
-wrong source of truth.
+Recording, chart hermeticity enforcement, and version allocation apply
+unconditionally, to every domain at once — there is no per-domain adoption
+mechanism to reason about. (An earlier design gated these per domain via a
+`domain_adoption` table with `observe`/`promote`/`allocate` stages; that
+table is dropped and the gate is gone — see ARCHITECTURE.md's "Version
+model" for how `AllocateVersion` works now.)
 
 **4. `chart`/`chart_app` are not SCD2, and don't need to be — issue #544.**
 

@@ -159,9 +159,9 @@ func seedBuild(t *testing.T, pool *pgxpool.Pool, workflowRunID string) string {
 // recordArtifactTx runs RecordArtifact inside a real WithTx transaction,
 // exactly as handlers.runIdempotent does in production -- the postgres
 // repository methods rely on their caller providing transactional scope,
-// they do not open one themselves. Since the AR-5 cutover, RecordArtifact
-// unconditionally requires a prior BeginPublish (there is no more
-// direct-create fallback), so this helper seeds one first, on a fresh
+// they do not open one themselves. RecordArtifact unconditionally requires
+// a prior BeginPublish (there is no direct-create fallback), so this
+// helper seeds one first, on a fresh
 // synthetic build row. A BeginPublish failure here is swallowed rather than
 // propagated: a caller reusing this helper for the SAME (owner, kind,
 // version) a second time (replay/conflict tests) legitimately hits it

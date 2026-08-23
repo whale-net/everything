@@ -222,10 +222,10 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 	// APP_REGISTRY_ADDRESS/GRPC_AUTH_* below, which main.go already sets
 	// for the writeback stub's own gRPC client and this subprocess
 	// inherits via os.Environ()) -- so registryOptedIn() was always false
-	// here regardless of the target domain's adoption stage or its
-	// actual App Registry version history, and every batch silently
-	// resolved to v0.0.1. This activity's whole reason to exist is to
-	// call the App Registry-backed release path, so force it on
+	// here regardless of the target's actual App Registry version
+	// history, and every batch silently resolved to v0.0.1. This
+	// activity's whole reason to exist is to call the App
+	// Registry-backed release path, so force it on
 	// unconditionally rather than depending on a CI-oriented repository
 	// variable that was never wired to this deployment.
 	cmd.Env = append(os.Environ(), "APP_REGISTRY_CICD_OPT_IN=true")

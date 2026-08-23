@@ -32,8 +32,8 @@ func publishImage(t *testing.T, artifactSrv *ArtifactServer, version, idemPrefix
 }
 
 // TestCheckChartHermeticity_RejectsUnpublishedPin is AR-7f's core exit
-// criterion, unconditional for every domain since the AR-5 cutover: a
-// member app that was never published fails the check, naming the app.
+// criterion, unconditional for every domain: a member app that was never
+// published fails the check, naming the app.
 func TestCheckChartHermeticity_RejectsUnpublishedPin(t *testing.T) {
 	_, artifactSrv := setupAllocate(t)
 

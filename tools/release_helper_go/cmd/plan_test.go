@@ -688,14 +688,9 @@ func TestPlanReleaseWorkflowDispatch_AllocateDomainUsesRegistry(t *testing.T) {
 	}
 }
 
-// TestPlanReleaseWorkflowDispatch_NotAllocatedFallsBackToTags proves domains
-// not yet cut over to adoption stage "allocate" are unaffected: a
-// FailedPrecondition from AllocateVersion falls back to the pre-#829
-// tag-based bump, unchanged.
-// TestPlanReleaseWorkflowDispatch_FailedPreconditionIsFatal proves that
-// since the AR-5 cutover there is no more per-domain adoption stage to fall
-// back on: a FailedPrecondition from AllocateVersion is fatal exactly like
-// any other registry error, not a signal to silently revert to tags.
+// TestPlanReleaseWorkflowDispatch_FailedPreconditionIsFatal proves a
+// FailedPrecondition from AllocateVersion is fatal exactly like any other
+// registry error, not a signal to silently revert to tags.
 func TestPlanReleaseWorkflowDispatch_FailedPreconditionIsFatal(t *testing.T) {
 	_, fs, bazel := makeTestApps()
 	git := newFakeGit(
@@ -725,9 +720,8 @@ func TestPlanReleaseWorkflowDispatch_FailedPreconditionIsFatal(t *testing.T) {
 }
 
 // TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal proves the safety
-// property issue #829 actually asks for: once a domain is opted in and
-// AllocateVersion fails for any reason other than "not at stage allocate",
-// the release must fail loudly rather than silently reverting to
+// property issue #829 actually asks for: once opted in, any AllocateVersion
+// error must fail the release loudly rather than silently reverting to
 // tag-scanning -- the exact bug this issue reports.
 func TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal(t *testing.T) {
 	_, fs, bazel := makeTestApps()
@@ -753,7 +747,7 @@ func TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal(t *testing.T) {
 		})
 	})
 	if err == nil {
-		t.Fatal("expected planRelease to fail when AllocateVersion errors for a reason other than adoption stage")
+		t.Fatal("expected planRelease to fail when AllocateVersion errors")
 	}
 }
 

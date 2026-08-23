@@ -108,10 +108,9 @@ materially different capability than anything else here.
 
 Also not present in any screen. This was flagged because surfacing "is
 domain X at `observe`/`promote`/`allocate`" anywhere in this UI would have
-needed a new RPC that didn't exist. The AR-5 cutover removed the question
-entirely: `domain_adoption` is dropped, and every domain is unconditionally
-at what used to be called `allocate` — there is no per-domain stage left to
-surface, so this gap cannot recur.
+needed a new RPC that didn't exist. The question is now moot: `domain_adoption`
+is dropped, and every domain is unconditionally allocated — there is no
+per-domain stage left to surface, so this gap cannot recur.
 
 ## UI-imposed policy, not a server-side constraint
 

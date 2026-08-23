@@ -673,10 +673,9 @@ func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
 	}
 }
 
-// TestAllocateVersion_UnconditionalAllocation proves that since the AR-5
-// cutover, AllocateVersion serves every domain unconditionally end to end
-// through the real handler and a real Postgres-backed registry -- there is
-// no more per-domain adoption gate to cut over first.
+// TestAllocateVersion_UnconditionalAllocation proves AllocateVersion serves
+// every domain unconditionally end to end through the real handler and a
+// real Postgres-backed registry -- there is no per-domain adoption gate.
 func TestAllocateVersion_UnconditionalAllocation(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	ctx := authedCtx()
@@ -1083,7 +1082,7 @@ func artifactStateRow(t *testing.T, pool *pgxpool.Pool, artifactID string) (stat
 // publishing -> failed (FailPublish), failed -> publishing (BeginPublish
 // retry), publishing -> published (RecordArtifact). A second, independent
 // (owner, kind, version) proves the ∅ -> publishing branch (BeginPublish
-// with no prior allocation, the pre-cutover path) -- and, by coexisting
+// with no prior allocation) -- and, by coexisting
 // with the first sequence's NULL-digest rows at the same instant, proves
 // artifact_digest_idx's partial `WHERE digest IS NOT NULL` uniqueness
 // doesn't collide multiple digest-less rows.

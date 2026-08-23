@@ -134,10 +134,9 @@ func ExecuteRelease(p ReleaseParams) (*ReleaseResult, error) {
 	}
 
 	// isAllocate: whether App Registry is authoritative for this release --
-	// true whenever the caller opted a client in. Since the AR-5 cutover
-	// every domain allocates unconditionally, so this is no longer a
-	// registry round-trip (isDomainAtAllocateStage, pre-cutover); it's just
-	// "is the registry integration active for this run."
+	// true whenever the caller opted a client in. Every domain allocates
+	// unconditionally, so this is just "is the registry integration active
+	// for this run," not a registry round-trip.
 	isAllocate := p.ArtifactClient != nil && !p.SkipRegistry
 
 	// 1. BeginPublish (Heartbeat)

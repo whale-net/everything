@@ -136,8 +136,8 @@ func TestActivities_ResolvePlan_UnknownOwner_ReturnsClearError(t *testing.T) {
 
 // TestActivities_ResolvePlan_ForcesRegistryOptIn is the regression test for
 // the bug where every Temporal-driven release batch silently resolved every
-// target to v0.0.1 regardless of the target domain's adoption stage or its
-// actual App Registry version history: release_helper_go's registryOptedIn()
+// target to v0.0.1 regardless of its actual App Registry version history:
+// release_helper_go's registryOptedIn()
 // (cmd/plan.go) gates the whole AllocateVersion path on
 // APP_REGISTRY_CICD_OPT_IN=true, which this worker's own process env never
 // carried (it's documented purely as a GitHub Actions repository variable) --

@@ -1,15 +1,11 @@
 # Compose-time chart hermeticity (AR-7f, issue #558)
 
-**Built, and now live/enforced for every domain.** The reject in "Chart →
+**Built, live, and enforced for every domain.** The reject in "Chart →
 image lockfile" below ("a chart may not pin an unknown artifact") only fires
 at *record* time — after the chart has already been packaged and pushed to
-ChartMuseum. AR-7f moves the same rule earlier, to *compose* time. It
-originally did this only for domains that had earned the stricter guarantee
-via a per-domain `domain_adoption.stage = 'allocate'` gate; the AR-5 cutover
-removed that gate, so the rule now applies unconditionally to every domain
-(see "Relationship to AR-5" above and "Rejected alternatives" below for why
-it was originally built per-domain rather than repo-wide, and PLAN.md's
-"AR-5 — cutover status" for how the cutover landed).
+ChartMuseum. AR-7f moves the same rule earlier, to *compose* time, and it
+applies unconditionally to every domain — see "Rejected alternatives" below
+for why an earlier, narrower version of this rule was built first.
 
 **Where the check runs, and why that is hermetic.** `ArtifactRegistry`
 gained one new read-only RPC, `CheckChartHermeticity(chart_domain, pins)`.
@@ -47,15 +43,6 @@ also **not** fatal: it is logged as a warning and the build proceeds, the
 same best-effort posture `release.yml`'s other App Registry steps have.
 Only an actual `enforced = true` response naming violations fails the chart
 build, and it fails naming every offending `app_full_name`/version pair.
-
-**Shipped inert, now live.** For a period after AR-7f merged, no domain was
-at adoption stage `allocate`, so `CheckChartHermeticity` always returned
-`enforced = false` in every environment that existed — the same way AR-5a
-shipped `AllocateVersion` fully implemented but unreachable. The AR-5
-cutover is what changed that: `domain_adoption` is dropped, the per-domain
-gate this section originally described is gone, and `CheckChartHermeticity`
-now always computes real violations and returns `enforced = true` for every
-domain, unconditionally, whenever the check runs at all (i.e. whenever
-`APP_REGISTRY_CICD_OPT_IN=true`). The `enforced` field is kept on the wire
-response for API stability even though it is now always `true` — it is not
-being removed from the proto.
+`enforced` is always `true` whenever the check runs at all — it is kept on
+the wire response for API stability, not because there is still a case
+where it comes back `false`.

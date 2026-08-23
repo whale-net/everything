@@ -839,9 +839,8 @@ func TestAllocateVersion_UnknownOwnerNamesTheOwnerAndHintsAtReconcile(t *testing
 	}
 }
 
-// TestAllocateVersion_UnconditionalAllocation proves that since the AR-5
-// cutover, AllocateVersion serves every domain unconditionally -- there is
-// no more per-domain adoption gate to cut over first.
+// TestAllocateVersion_UnconditionalAllocation proves AllocateVersion serves
+// every domain unconditionally -- there is no per-domain adoption gate.
 func TestAllocateVersion_UnconditionalAllocation(t *testing.T) {
 	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
@@ -862,7 +861,7 @@ func TestAllocateVersion_UnconditionalAllocation(t *testing.T) {
 // TestAllocateVersion_IncrementsFromLatestRecordedArtifact proves
 // AllocateVersion accounts for artifacts already recorded via
 // RecordArtifact, not just prior allocations, and that major/minor/patch
-// all behave as PLAN.md's AR-5 addendum item 1 specifies.
+// all behave as ARCHITECTURE.md's "Version model" specifies.
 func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 	cases := []struct {
 		increment string
@@ -880,8 +879,8 @@ func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 			ctx := authedCtx()
 
 			// Seed a published v1.2.3 via the mandatory BeginPublish ->
-			// RecordArtifact sequence -- since the AR-5 cutover there is no
-			// more direct-create fallback.
+			// RecordArtifact sequence -- there is no direct-create
+			// fallback.
 			build := recordBuild(t, artifactSrv, "run-allocate-seed-"+tc.increment)
 			if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
 				Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
@@ -1136,9 +1135,9 @@ func TestBeginPublishThenRecordArtifact_SharedIdempotencyKey_ExecuteIndependentl
 }
 
 // TestBeginPublish_NoPriorAllocation_TagPath proves the ∅ -> publishing
-// transition (the pre-cutover path, ARCHITECTURE.md "Backward
-// compatibility during rollout"): no AllocateVersion call happened, so
-// BeginPublish creates the row itself, with version_source TAG.
+// transition (ARCHITECTURE.md "Artifact lifecycle"): no AllocateVersion
+// call happened, so BeginPublish creates the row itself, with
+// version_source TAG.
 func TestBeginPublish_NoPriorAllocation_TagPath(t *testing.T) {
 	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
@@ -1155,7 +1154,7 @@ func TestBeginPublish_NoPriorAllocation_TagPath(t *testing.T) {
 		t.Fatalf("expected state PUBLISHING, got %v", begun.Artifact.State)
 	}
 	if begun.Artifact.VersionSource != pb.VersionSource_VERSION_SOURCE_TAG {
-		t.Fatalf("expected version_source TAG for the pre-cutover ∅ -> publishing path, got %v", begun.Artifact.VersionSource)
+		t.Fatalf("expected version_source TAG for the ∅ -> publishing path with no prior allocation, got %v", begun.Artifact.VersionSource)
 	}
 }
 
@@ -1344,9 +1343,9 @@ func TestFailPublish_ThenBeginPublishRetries(t *testing.T) {
 	}
 }
 
-// TestRecordArtifact_RejectsCreateWithoutPriorBeginPublish proves that
-// since the AR-5 cutover, RecordArtifact's pre-AR-7 direct-create fallback
-// is gone entirely: BeginPublish must always run first, for every domain.
+// TestRecordArtifact_RejectsCreateWithoutPriorBeginPublish proves
+// RecordArtifact has no direct-create fallback: BeginPublish must always
+// run first, for every domain.
 func TestRecordArtifact_RejectsCreateWithoutPriorBeginPublish(t *testing.T) {
 	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
@@ -1425,7 +1424,7 @@ func TestBeginPublishBatch_WritesPublishingForEveryTarget(t *testing.T) {
 			t.Fatalf("expected artifact to carry the batch's build_id for %s, got %q", r.OwnerFullName, r.Artifact.BuildId)
 		}
 		if r.Artifact.VersionSource != pb.VersionSource_VERSION_SOURCE_TAG {
-			t.Fatalf("expected version_source TAG (pre-cutover path) for %s, got %v", r.OwnerFullName, r.Artifact.VersionSource)
+			t.Fatalf("expected version_source TAG (no prior allocation) for %s, got %v", r.OwnerFullName, r.Artifact.VersionSource)
 		}
 	}
 }

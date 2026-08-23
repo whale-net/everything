@@ -342,9 +342,8 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 	existing, everr := r.findByOwnerKindVersion(ctx, a.Kind, ownerIDOf(a), a.Version)
 	switch {
 	case errors.Is(everr, pgx.ErrNoRows):
-		// No row at all for this (owner, kind, version). Since the AR-5
-		// cutover every domain is unconditionally past the pre-AR-7 rollout
-		// window, so BeginPublish must always have run first.
+		// No row at all for this (owner, kind, version): BeginPublish must
+		// always have run first, for every domain unconditionally.
 		return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact",
 			repository.ErrFailedPrecondition, r.ownerFullName(ctx, a), a.Version)
 	case everr != nil:
@@ -848,9 +847,9 @@ func (r *artifactRepo) BeginPublish(ctx context.Context, kind repository.Artifac
 	existing, everr := r.findByOwnerKindVersion(ctx, kind, ownerID, version)
 	switch {
 	case errors.Is(everr, pgx.ErrNoRows):
-		// ∅ -> publishing: the pre-cutover path (no prior AllocateVersion
-		// call for this version) -- see ARCHITECTURE.md "Backward
-		// compatibility during rollout".
+		// ∅ -> publishing: no prior AllocateVersion call for this version
+		// (a kind that never allocates, or an explicit version) -- see
+		// ARCHITECTURE.md "Artifact lifecycle".
 		if repositoryHint == "" {
 			return nil, fmt.Errorf("%w: repository is required to begin publishing %s %s with no prior allocation", repository.ErrInvalidArgument, string(kind), version)
 		}

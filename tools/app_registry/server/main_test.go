@@ -141,8 +141,8 @@ func TestRegisterServices_AllFourServicesReachable(t *testing.T) {
 		}
 	})
 
-	// AllocateVersion serves every domain unconditionally since the AR-5
-	// cutover. An empty request reaches the real handler and fails
+	// AllocateVersion serves every domain unconditionally. An empty
+	// request reaches the real handler and fails
 	// validation ("kind is required") rather than codes.Unimplemented's
 	// "unknown service"/"not implemented" — enough to prove
 	// pb.RegisterArtifactRegistryServer wasn't dropped, which is this whole

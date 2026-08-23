@@ -211,10 +211,9 @@ type ArtifactRepository interface {
 	// set, state -> published). A "published" row there with a DIFFERENT
 	// digest is a real conflict (ErrAlreadyExists) — a different digest for
 	// an already-published version is rejected, not merged. A "publishing"
-	// row is not found and there is no existing row at all: since the AR-5
-	// cutover every domain is unconditionally past the pre-AR-7 rollout
-	// window, so this is always ErrFailedPrecondition — BeginPublish must
-	// have run first. An "allocated" or "failed" row found by (owner, kind,
+	// row is not found and there is no existing row at all: this is always
+	// ErrFailedPrecondition — BeginPublish must have run first, for every
+	// domain unconditionally. An "allocated" or "failed" row found by (owner, kind,
 	// version) is also ErrFailedPrecondition — those need BeginPublish
 	// (allocated/failed -> publishing) before RecordArtifact can complete
 	// them. For kind == chart, every entry in contains must already be a
@@ -272,8 +271,8 @@ type ArtifactRepository interface {
 	// ownerID, version). buildID is stamped on the row (refreshed on every
 	// call, including the publishing -> publishing branch — see below).
 	// repositoryHint is used only for the ∅ -> publishing branch (no prior
-	// row exists — the pre-cutover path, or a domain that never called
-	// AllocateVersion for this version): artifact.repository is NOT NULL,
+	// row exists — a kind or version that never called AllocateVersion):
+	// artifact.repository is NOT NULL,
 	// so a fresh row needs one from somewhere, and an existing
 	// allocated/failed/publishing row already carries its own from when it
 	// was created. versionSource is likewise only used on the fresh-create

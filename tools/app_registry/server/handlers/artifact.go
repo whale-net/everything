@@ -478,8 +478,7 @@ func (s *ArtifactServer) releaseToolsS3PublicURLClient() (*s3.Client, error) {
 // backstop against a pathological hot loop, not an expected steady state.
 const maxAllocateVersionAttempts = 5
 
-// AllocateVersion implements phase AR-5's version allocation RPC. As of the
-// AR-5 cutover every domain allocates unconditionally — there is no more
+// AllocateVersion serves every domain unconditionally — there is no
 // per-domain adoption gate; tools/release_helper_go's resolveVersion calls
 // this for every domain it has a registry client for.
 func (s *ArtifactServer) AllocateVersion(ctx context.Context, req *pb.AllocateVersionRequest) (*pb.AllocateVersionResponse, error) {
@@ -649,10 +648,10 @@ func (s *ArtifactServer) beginPublishOne(ctx context.Context, idempotencyKey str
 			// versionSource is only consulted by the ∅ -> publishing branch
 			// (no prior AllocateVersion call for this version) -- an
 			// existing allocated/failed row keeps whatever it was already
-			// given. "tag" is correct there: the caller is the pre-cutover
-			// release path (ARCHITECTURE.md "Backward compatibility during
-			// rollout") recording intent for a version the git-tag path
-			// chose, not one the registry allocated.
+			// given. "tag" is correct there: this call site records intent
+			// for a version the git-tag path chose (a kind that never
+			// calls AllocateVersion, or the registry integration is opted
+			// out), not one the registry allocated.
 			artifact, aerr := r.Artifacts().BeginPublish(ctx, kind, ownerID, version, buildID, repositoryHint, repository.VersionSourceTag)
 			if aerr != nil {
 				return nil, aerr

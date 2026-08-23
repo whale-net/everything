@@ -249,9 +249,9 @@ func TestExecuteReleaseApp_NoOpDigestDetection(t *testing.T) {
 	)
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
-	// Since the AR-5 cutover, previous-version lookup is unconditionally
-	// registry-authoritative whenever a client is present -- App Registry,
-	// not git tags, is asked for the previous published version.
+	// Previous-version lookup is unconditionally registry-authoritative
+	// whenever a client is present -- App Registry, not git tags, is asked
+	// for the previous published version.
 	fakeArtifactClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
 		if in.OwnerFullName == "demo-hello-go" && in.LatestPublished {
 			return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Version: "v0.9.0", Digest: sharedDigest, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED}}, nil
@@ -338,9 +338,9 @@ func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
 	)
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
-	// Since the AR-5 cutover, previous-version lookup is unconditionally
-	// registry-authoritative whenever a client is present -- App Registry,
-	// not git tags, is asked for the previous published version.
+	// Previous-version lookup is unconditionally registry-authoritative
+	// whenever a client is present -- App Registry, not git tags, is asked
+	// for the previous published version.
 	fakeArtifactClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
 		if in.OwnerFullName == "demo-hello-go" && in.LatestPublished {
 			return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Version: "v0.9.0", Digest: sharedDigest, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED}}, nil
@@ -390,10 +390,9 @@ func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
 	}
 }
 
-// TestExecuteReleaseApp_GRPCErrorsAreFatal proves that since the AR-5
-// cutover, a registry error is fatal whenever a client is opted in -- there
-// is no more per-domain adoption stage under which it would be a soft
-// warning.
+// TestExecuteReleaseApp_GRPCErrorsAreFatal proves a registry error is fatal
+// whenever a client is opted in -- there is no per-domain adoption stage
+// under which it would be a soft warning.
 func TestExecuteReleaseApp_GRPCErrorsAreFatal(t *testing.T) {
 	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
 
@@ -821,8 +820,8 @@ func TestExecuteReleaseApp_NonImageRecordArtifactFailureCleansUpPublishing(t *te
 		WorkspaceRoot:        fakeWorkspaceRoot,
 		ArtifactClient:       fakeArtifactClient,
 	})
-	// Since the AR-5 cutover, RecordArtifact failure is fatal -- there is no
-	// more per-domain adoption stage under which it would be a soft warning.
+	// RecordArtifact failure is fatal -- there is no per-domain adoption
+	// stage under which it would be a soft warning.
 	if err == nil {
 		t.Fatal("expected a fatal error on RecordArtifact failure, got nil")
 	}
@@ -852,11 +851,11 @@ func TestExecuteReleaseApp_NonImageRecordArtifactFailureCleansUpPublishing(t *te
 	}
 }
 
-// TestExecuteReleaseApp_AllocateStage_NonImageRecordArtifactFailureIsFatal proves
-// that for a domain at adoption stage "allocate" (issue #834), RecordArtifact
-// failures are fatal: FailPublish is called to clean up the publishing row, and
-// ExecuteReleaseApp returns a fatal error failing the release.
-func TestExecuteReleaseApp_AllocateStage_NonImageRecordArtifactFailureIsFatal(t *testing.T) {
+// TestExecuteReleaseApp_RegistryPath_NonImageRecordArtifactFailureIsFatal proves
+// that RecordArtifact failures are fatal (issue #834): FailPublish is called
+// to clean up the publishing row, and ExecuteReleaseApp returns a fatal
+// error failing the release.
+func TestExecuteReleaseApp_RegistryPath_NonImageRecordArtifactFailureIsFatal(t *testing.T) {
 	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
 	apps := []fakeApp{
 		{
@@ -923,10 +922,10 @@ func TestExecuteReleaseApp_AllocateStage_NonImageRecordArtifactFailureIsFatal(t 
 	}
 }
 
-// TestExecuteReleaseApp_AllocateStage_NonImageBeginPublishFailureIsFatal proves
-// that for a domain at adoption stage "allocate" (issue #834), BeginPublish
-// failure is fatal and aborts the release before building.
-func TestExecuteReleaseApp_AllocateStage_NonImageBeginPublishFailureIsFatal(t *testing.T) {
+// TestExecuteReleaseApp_RegistryPath_NonImageBeginPublishFailureIsFatal proves
+// that a BeginPublish failure is fatal (issue #834) and aborts the release
+// before building.
+func TestExecuteReleaseApp_RegistryPath_NonImageBeginPublishFailureIsFatal(t *testing.T) {
 	cliJSON := []byte(`{"name":"app-registry","domain":"tools","app_type":"cli","language":"go","binary_target":"@@//tools/app_registry/cli:app-registry","version":"latest"}`)
 	apps := []fakeApp{
 		{
@@ -972,10 +971,10 @@ func TestExecuteReleaseApp_AllocateStage_NonImageBeginPublishFailureIsFatal(t *t
 	}
 }
 
-// TestExecuteReleaseApp_AllocateStage_ImageRecordArtifactFailureIsFatal proves
+// TestExecuteReleaseApp_RegistryPath_ImageRecordArtifactFailureIsFatal proves
 // that for an image app in an allocate-stage domain, RecordArtifact failure
 // cleans up publishing row and returns a fatal error.
-func TestExecuteReleaseApp_AllocateStage_ImageRecordArtifactFailureIsFatal(t *testing.T) {
+func TestExecuteReleaseApp_RegistryPath_ImageRecordArtifactFailureIsFatal(t *testing.T) {
 	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
@@ -1011,9 +1010,9 @@ func TestExecuteReleaseApp_AllocateStage_ImageRecordArtifactFailureIsFatal(t *te
 	}
 }
 
-// TestExecuteReleaseApp_AllocateStage_ImageBeginPublishFailureIsFatal proves
+// TestExecuteReleaseApp_RegistryPath_ImageBeginPublishFailureIsFatal proves
 // that for an image app in an allocate-stage domain, BeginPublish failure is fatal.
-func TestExecuteReleaseApp_AllocateStage_ImageBeginPublishFailureIsFatal(t *testing.T) {
+func TestExecuteReleaseApp_RegistryPath_ImageBeginPublishFailureIsFatal(t *testing.T) {
 	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
