@@ -156,3 +156,75 @@ message ListPromotionEventsResponse {
   repeated PromotionEvent events = 1;
   PageResponse page = 2;
 }
+
+// ============================================================================
+// Promotion Details — the full per-promotion lifecycle (FR7-FR9, issue
+// #1031), assembled for the Promotion Details page a later task renders:
+// requester/request time, from/to version, writeback outcome, and the full
+// ArgoCD sync/health observation history (#1028/#1030).
+// ============================================================================
+
+message GetPromotionDetailsRequest {
+  string promotion_id = 1;
+}
+
+// PromotionSyncEvent mirrors repository.PromotionSyncEvent (migration 020,
+// issue #1028) -- one observed ArgoCD sync/health transition.
+// occurred_at is a Unix timestamp (seconds), matching this service's
+// existing int64-timestamp convention (see Promotion.valid_from/
+// PromotionEvent.occurred_at above), not google.protobuf.Timestamp.
+message PromotionSyncEvent {
+  string sync_event_id = 1;
+  string promotion_id = 2;
+  string source = 3;         // 'refresh_triggered' | 'poll_observed' | 'retry_triggered' | 'retry_observed'
+  string sync_status = 4;    // ArgoCD sync status, '' if not applicable
+  string health_status = 5;  // ArgoCD health status, '' if not applicable
+  int64 occurred_at = 6;
+}
+
+// PromotionSyncOutcome is FR8's visibly-distinct-not-conflated summary of
+// PromotionDetails.sync_events, derived server-side so every consumer
+// (UI, CLI) agrees on the same classification instead of re-deriving it
+// from the raw event list.
+enum PromotionSyncOutcome {
+  PROMOTION_SYNC_OUTCOME_UNSPECIFIED = 0;
+  // No sync_events rows yet, or none has reached a terminal
+  // (Synced+Healthy or Degraded) observation yet.
+  PROMOTION_SYNC_OUTCOME_PENDING = 1;
+  // Most recent terminal observation was Synced + Healthy.
+  PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY = 2;
+  // Most recent terminal observation was Degraded/a sync-error state --
+  // current_sync_status/current_health_status carry the raw ArgoCD strings
+  // the UI renders as the failure reason (no separate free-text field).
+  PROMOTION_SYNC_OUTCOME_SYNC_FAILED = 3;
+}
+
+message PromotionDetails {
+  Promotion promotion = 1;
+  // The promote/rollback event that created this promotion row --
+  // requester (event.actor) + request time (event.occurred_at).
+  PromotionEvent request_event = 2;
+  // "" if this is the target's first-ever promotion (no prior row to
+  // supersede).
+  string from_version = 3;
+  // This promotion's own artifact.version.
+  string to_version = 4;
+
+  // "" if not yet published.
+  string writeback_location = 5;
+  // "" per FR7a when no real commit was made (stub path, or a Skipped
+  // no-op) -- never a stand-in/synthetic value.
+  string writeback_commit_sha = 6;
+
+  // Full chronological history (#1028), oldest first.
+  repeated PromotionSyncEvent sync_events = 7;
+  // Most recent sync_events entry's sync_status, "" if none yet.
+  string current_sync_status = 8;
+  // Most recent sync_events entry's health_status, "" if none yet.
+  string current_health_status = 9;
+  PromotionSyncOutcome outcome = 10;
+}
+
+message GetPromotionDetailsResponse {
+  PromotionDetails details = 1;
+}

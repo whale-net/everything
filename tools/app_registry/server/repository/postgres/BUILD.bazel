@@ -12,6 +12,7 @@ go_library(
         "idempotency.go",
         "keyset_cursor.go",
         "promotion.go",
+        "promotion_details.go",
         "promotion_sync_event.go",
         "release_run.go",
         "repository.go",

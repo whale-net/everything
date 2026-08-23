@@ -6,6 +6,7 @@ go_library(
         "app_build_log.go",
         "fake.go",
         "keyset_cursor.go",
+        "promotion_details.go",
         "promotion_sync_event.go",
         "reconcile.go",
         "release_run.go",
