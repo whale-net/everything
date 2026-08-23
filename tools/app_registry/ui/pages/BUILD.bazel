@@ -25,10 +25,22 @@ templ_library(
 # (pages.Deployments, pages.Environments, pages.EnvironmentForm) -- every
 # other read screen never branches on Roles at all (see this file's header
 # comment).
+#
+# confirm_migration_test.go (issue #1005, FR1b) shares this target for its
+# renderComponent/noRolesUser/adminUser/promoterDevUser helpers: it guards
+# promote.templ/rollback.templ/environment_form.templ's adoption of the
+# shared htmxui.Confirm component -- the override-acknowledge checkbox, the
+# destructive/neutral submit styling, the disabled+reason wiring, and the
+# danger-zone card chrome each map onto ConfirmProps fields differently per
+# call site, and no pre-existing handler test asserted the rendered Confirm
+# markup itself.
 go_test(
     name = "role_gating_test",
     size = "small",
-    srcs = ["role_gating_test.go"],
+    srcs = [
+        "confirm_migration_test.go",
+        "role_gating_test.go",
+    ],
     embed = [":pages"],
     deps = [
         "//libs/go/htmxauth",

@@ -36,14 +36,23 @@ go_test(
 # Vocabulary (NFR-11, FR-33) and digest (NFR-4) read-surface tests (#654):
 # each promotability/artifact-state/provenance value renders exactly one
 # badge label+colour, and a digest stays fully recoverable despite being
-# visually truncated.
+# visually truncated. shell_test.go (issue #1005, FR2/FR1a) is the direct
+# wiring guard for Shell()'s adoption of htmxui.Shell: it renders through
+# to nav-item/banner/user-label markup, proving the slot wiring didn't drop
+# chrome during the migration.
 go_test(
     name = "components_test",
     size = "small",
-    srcs = ["read_screens_test.go"],
+    srcs = [
+        "badges_migration_test.go",
+        "read_screens_test.go",
+        "shell_test.go",
+    ],
     embed = [":components"],
     deps = [
+        "//libs/go/htmxauth",
         "//tools/app_registry/protos:appregistrypb",
+        "//tools/appmeta/proto:appmetapb",
         "@com_github_a_h_templ//:templ",
     ],
 )
