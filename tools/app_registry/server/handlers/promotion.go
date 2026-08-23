@@ -9,12 +9,14 @@ import (
 	"sort"
 	"time"
 
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	"github.com/whale-net/everything/tools/app_registry/worker/writeback"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -599,28 +601,87 @@ func (s *PromotionServer) GetPromotionDetails(ctx context.Context, req *pb.GetPr
 	return &pb.GetPromotionDetailsResponse{Details: promotionDetailsToPB(details)}, nil
 }
 
-// RetryArgoSync will start a fresh writeback.RetryArgoSyncWorkflow
-// execution for req.PromotionId, under a workflow id built by
+// RetryArgoSync starts a fresh writeback.RetryArgoSyncWorkflow execution
+// for req.PromotionId, under a workflow id built by
 // writeback.RetryArgoSyncWorkflowID (a distinct execution every call, per
 // that function's doc comment on why this is never the promotion_id
 // itself or the original WritebackWorkflow's id) -- mirroring
 // TriggerRelease's exact shape (release.go): resolve the target/id, call
 // s.temporal.ExecuteWorkflow, translate serviceerror.
 // WorkflowExecutionAlreadyStarted into codes.FailedPrecondition and
-// everything else into codes.Internal. Not yet implemented -- see this
-// type's doc comment. Gated by auth.RoleAdmin (FR10) -- unlike every read
-// RPC on this service, and unlike Promote/Rollback's environment-scoped
-// auth.RequirePromoter, this is the flat global role SetAppStatus already
-// requires (server/handlers/app.go), not a new one; FR11 an unauthenticated
-// or non-admin caller is rejected before any repository/Temporal access.
+// everything else into codes.Internal.
+//
+// Gated by auth.RoleAdmin (FR10) -- unlike every read RPC on this service,
+// and unlike Promote/Rollback's environment-scoped auth.RequirePromoter,
+// this is the flat global role SetAppStatus already requires
+// (server/handlers/app.go), not a new one; FR11 an unauthenticated or
+// non-admin caller is rejected before any repository/Temporal access.
+//
+// Domain/ApplicationName are resolved from the promotion's OWN stored
+// ChartID (via GetDetails, then Apps().GetChartByID), the exact same
+// (chart.Domain, chart.FullName()+"-"+EnvironmentKey) target the original
+// WritebackWorkflow's RenderEnvironmentState resolved for this promotion
+// (worker/writeback/gitops.go) -- never a fresh "whatever chart is
+// currently deployed" lookup, which could point at a different chart
+// version's Application if something else promoted in between. Only a
+// chart-kind promotion is ever eligible: shouldEnqueueWriteback (this
+// file) already gates WritebackWorkflow -- and therefore ArgoCD sync
+// tracking -- to Kind == ArtifactKindChart, so retrying a non-chart
+// promotion is rejected as FR13's own kind of "not this promotion's to
+// retry" precondition failure, not a panic on a zero-value ChartID.
 func (s *PromotionServer) RetryArgoSync(ctx context.Context, req *pb.RetryArgoSyncRequest) (*pb.RetryArgoSyncResponse, error) {
 	if err := auth.Require(ctx, auth.RoleAdmin); err != nil {
 		return nil, err
 	}
-	if req.GetPromotionId() == "" {
+	promotionID := req.GetPromotionId()
+	if promotionID == "" {
 		return nil, status.Error(codes.InvalidArgument, "promotion_id is required")
 	}
-	return nil, status.Error(codes.Unimplemented, "RetryArgoSync is not yet implemented")
+
+	details, err := s.repo.Promotions().GetDetails(ctx, promotionID)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	if details.Promotion.Kind != repository.ArtifactKindChart {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"promotion %s is not a chart promotion; ArgoCD sync only ever runs for chart promotions", promotionID)
+	}
+	chart, err := s.repo.Apps().GetChartByID(ctx, details.Promotion.ChartID)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	argoIn := writeback.ArgoSyncInput{
+		PromotionID:     promotionID,
+		Domain:          chart.Domain,
+		ApplicationName: chart.FullName() + "-" + details.Promotion.EnvironmentKey,
+		IsRetry:         true,
+	}
+	workflowID := writeback.RetryArgoSyncWorkflowID(promotionID, time.Now().UTC().UnixNano())
+
+	if s.temporal != nil {
+		_, werr := s.temporal.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
+			ID:        workflowID,
+			TaskQueue: writeback.TaskQueue,
+		}, writeback.RetryArgoSyncWorkflow, argoIn)
+		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+		switch {
+		case werr == nil:
+			// Started -- see this method's doc comment.
+		case errors.As(werr, &alreadyStarted):
+			// Practically unreachable given RetryArgoSyncWorkflowID's
+			// nanosecond-suffixed uniqueness (see that function's doc
+			// comment), but handled the same way TriggerRelease handles its
+			// own analogous case rather than surfacing a raw Internal for a
+			// Temporal-level dedup outcome.
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"a retry for promotion %s is already in progress (workflow %s)", promotionID, workflowID)
+		default:
+			return nil, status.Errorf(codes.Internal, "start retry argo sync workflow %s: %v", workflowID, werr)
+		}
+	}
+
+	return &pb.RetryArgoSyncResponse{TemporalWorkflowId: workflowID}, nil
 }
 
 // actorFromCtx reads the authenticated principal recorded on
