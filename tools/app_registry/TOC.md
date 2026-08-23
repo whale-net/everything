@@ -28,6 +28,7 @@ cold; this file only indexes where things live.
 | [design/PRINCIPLES.md](design/PRINCIPLES.md) | Designing or reviewing the admin UI — the guiding principles behind screen and interaction choices |
 | [design/CONCEPTS_AUDIT.md](design/CONCEPTS_AUDIT.md) | Before building any wireframe screen for real — which UI concepts have no backing RPC/CLI today, are schema-only, or are out of this API's scope entirely |
 | [design/wireframes/](design/wireframes/README.md) | Iterating on the admin UI wireframes themselves (`bazel run //tools/wireframe`) |
+| [design/USER_JOURNEYS_2026-08-23.md](design/USER_JOURNEYS_2026-08-23.md) | Prioritizing UI fixes — point-in-time usability findings from 10 simulated personas playtesting the shipped UI live in local Tilt via Playwright. Cross-cutting bugs (nav hijacking, Apps Catalog/app-detail disagreement, drift-vs-sync-status contradiction) ranked by how many independent personas hit them, plus what's working. A dated snapshot, not a living doc — see [design/USER_JOURNEYS_2026-08-23_TRANSCRIPTS.md](design/USER_JOURNEYS_2026-08-23_TRANSCRIPTS.md) for the full per-persona transcripts behind it |
 
 ## Components
 
