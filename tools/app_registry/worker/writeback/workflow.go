@@ -56,6 +56,10 @@ const TaskQueue = "app-registry-writeback"
 const (
 	ActivityRenderEnvironmentState = "RenderEnvironmentState"
 	ActivityPublish                = "Publish"
+	// ActivityRecordWritebackResult persists Publish's result (Location,
+	// CommitSHA) onto the promotion's writeback_outbox row -- FR7a, issue
+	// #1029. See worker/writeback/record.go's Recorder.
+	ActivityRecordWritebackResult = "RecordWritebackResult"
 )
 
 // WritebackInput is WritebackWorkflow's single argument -- everything an
@@ -131,6 +135,14 @@ type PublishResult struct {
 	// state_hash no-op detection ARCHITECTURE.md commits the real
 	// implementation to inheriting.
 	Skipped bool
+	// CommitSHA is the git commit SHA GitOpsActivities.Publish produced by
+	// pushing to the gitops repo -- FR7a, issue #1029. Empty when no real
+	// commit was made: the Skipped no-op case, or StubActivities' no-git
+	// dev/test path, which never commits anything at all. Never a
+	// stand-in/synthetic value -- see RecordWritebackResult
+	// (worker/writeback/record.go), which persists this onto
+	// writeback_outbox.commit_sha.
+	CommitSHA string
 }
 
 // Writeback is the activity interface WritebackWorkflow drives. Every
@@ -191,5 +203,16 @@ func WritebackWorkflow(ctx workflow.Context, in WritebackInput) (PublishResult, 
 	if err := workflow.ExecuteActivity(ctx, ActivityPublish, rendered).Get(ctx, &result); err != nil {
 		return PublishResult{}, err
 	}
+
+	// Best-effort: persist Publish's result (Location, CommitSHA) onto the
+	// promotion's writeback_outbox row -- FR7a, issue #1029. A failure here
+	// must not fail the workflow's already-successful publish outcome, even
+	// once this activity's own RetryPolicy (ao above) is exhausted --
+	// logged and swallowed, a known best-effort gap matching TriggerRelease's
+	// own documented orphan-row gap in server/handlers/release.go.
+	if err := workflow.ExecuteActivity(ctx, ActivityRecordWritebackResult, in.PromotionID, result.Location, result.CommitSHA).Get(ctx, nil); err != nil {
+		workflow.GetLogger(ctx).Error("record writeback result failed after successful publish", "promotion_id", in.PromotionID, "error", err)
+	}
+
 	return result, nil
 }

@@ -25,6 +25,9 @@ func registerActivityStubs(env *testsuite.TestWorkflowEnvironment) {
 	env.RegisterActivityWithOptions(func(ctx context.Context, state RenderedState) (PublishResult, error) {
 		return PublishResult{}, nil
 	}, activity.RegisterOptions{Name: ActivityPublish})
+	env.RegisterActivityWithOptions(func(ctx context.Context, promotionID, location, commitSHA string) error {
+		return nil
+	}, activity.RegisterOptions{Name: ActivityRecordWritebackResult})
 }
 
 // TestWritebackWorkflow_RendersThenPublishes proves the workflow's shape:
@@ -53,6 +56,66 @@ func TestWritebackWorkflow_RendersThenPublishes(t *testing.T) {
 	var got PublishResult
 	require.NoError(t, env.GetWorkflowResult(&got))
 	require.Equal(t, want, got)
+}
+
+// TestWritebackWorkflow_RecordsResultAfterPublish proves WritebackWorkflow
+// calls ActivityRecordWritebackResult with Publish's own
+// Location/CommitSHA immediately after Publish succeeds -- FR7a, issue
+// #1029. Uses .Once() on both the Publish and RecordWritebackResult mocks
+// so a regression that dropped (or duplicated) the second call fails this
+// test via testify/mock's own unmet-expectation assertion in
+// env.AssertExpectations, not just via the returned workflow result.
+func TestWritebackWorkflow_RecordsResultAfterPublish(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	in := WritebackInput{PromotionID: "promo-3", EnvironmentKey: "dev", StateHash: "hash-3"}
+	rendered := RenderedState{EnvironmentKey: "dev", StateHash: "hash-3", Document: []byte(`{"ok":true}`)}
+	want := PublishResult{Location: "app-registry/app-registry/versions/dev.yaml", CommitSHA: "deadbeefcafef00d"}
+
+	env.OnActivity(ActivityRenderEnvironmentState, mock.Anything, in).Return(rendered, nil).Once()
+	env.OnActivity(ActivityPublish, mock.Anything, rendered).Return(want, nil).Once()
+	env.OnActivity(ActivityRecordWritebackResult, mock.Anything, in.PromotionID, want.Location, want.CommitSHA).Return(nil).Once()
+
+	env.ExecuteWorkflow(WritebackWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+	env.AssertExpectations(t)
+
+	var got PublishResult
+	require.NoError(t, env.GetWorkflowResult(&got))
+	require.Equal(t, want, got)
+}
+
+// TestWritebackWorkflow_RecordResultFailureDoesNotFailWorkflow proves a
+// failing (exhausted-retries) ActivityRecordWritebackResult call is
+// swallowed -- WritebackWorkflow still completes successfully and still
+// returns Publish's own result, per that best-effort gap documented on
+// WritebackWorkflow and ActivityRecordWritebackResult.
+func TestWritebackWorkflow_RecordResultFailureDoesNotFailWorkflow(t *testing.T) {
+	ts := testsuite.WorkflowTestSuite{}
+	env := ts.NewTestWorkflowEnvironment()
+	registerActivityStubs(env)
+
+	in := WritebackInput{PromotionID: "promo-4", EnvironmentKey: "dev", StateHash: "hash-4"}
+	rendered := RenderedState{EnvironmentKey: "dev", StateHash: "hash-4", Document: []byte(`{"ok":true}`)}
+	want := PublishResult{Location: "app-registry/app-registry/versions/dev.yaml", CommitSHA: "cafebabe"}
+
+	env.OnActivity(ActivityRenderEnvironmentState, mock.Anything, in).Return(rendered, nil).Once()
+	env.OnActivity(ActivityPublish, mock.Anything, rendered).Return(want, nil).Once()
+	env.OnActivity(ActivityRecordWritebackResult, mock.Anything, in.PromotionID, want.Location, want.CommitSHA).
+		Return(errors.New("outbox row vanished")) // retried per WritebackWorkflow's ActivityOptions.RetryPolicy, then swallowed
+
+	env.ExecuteWorkflow(WritebackWorkflow, in)
+
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError(), "a failed RecordWritebackResult must not fail the workflow")
+
+	var got PublishResult
+	require.NoError(t, env.GetWorkflowResult(&got))
+	require.Equal(t, want, got, "the workflow must still return Publish's own result")
 }
 
 // TestWritebackWorkflow_RenderFailurePropagates proves a

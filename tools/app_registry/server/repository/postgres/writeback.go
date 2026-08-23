@@ -13,7 +13,7 @@ import (
 type writebackRepo struct{ ex dbtx }
 
 const writebackColumns = `outbox_id, promotion_id, environment_id, environment_key, domain, event_id, state_hash,
-	status, claimed_by, claimed_at, workflow_id, completed_at, last_error, attempts, created_at`
+	status, claimed_by, claimed_at, workflow_id, completed_at, last_error, attempts, created_at, location, commit_sha`
 
 func scanWriteback(row pgx.Row) (repository.WritebackOutbox, error) {
 	var o repository.WritebackOutbox
@@ -25,6 +25,7 @@ func scanWriteback(row pgx.Row) (repository.WritebackOutbox, error) {
 	if err := row.Scan(
 		&o.OutboxID, &o.PromotionID, &o.EnvironmentID, &o.EnvironmentKey, &o.Domain, &o.EventID, &o.StateHash,
 		&status, &claimedBy, &o.ClaimedAt, &o.WorkflowID, &o.CompletedAt, &o.LastError, &o.Attempts, &o.CreatedAt,
+		&o.Location, &o.CommitSHA,
 	); err != nil {
 		return repository.WritebackOutbox{}, err
 	}
@@ -139,4 +140,29 @@ func (r *writebackRepo) Get(ctx context.Context, outboxID string) (*repository.W
 		return nil, err
 	}
 	return &o, nil
+}
+
+// RecordResult implements repository.WritebackRepository.RecordResult
+// (FR7a, issue #1029). Matches by promotion_id -- see that interface
+// method's doc comment on why (WritebackWorkflow only carries PromotionID,
+// and promotion_id is unique per writeback_outbox row: migration 003's SCD2
+// close-and-open opens a fresh promotion row, and so a fresh outbox row,
+// on every Promote/Rollback). outboxID is accepted for interface symmetry
+// with Get/MarkDone/MarkFailed but not required to be correct here.
+// Deliberately does NOT touch status/completed_at -- distinct write from
+// MarkDone, see that method's doc comment.
+func (r *writebackRepo) RecordResult(ctx context.Context, outboxID, promotionID, location, commitSHA string) error {
+	_ = outboxID // see doc comment above: matched by promotion_id, not outbox_id.
+	tag, err := r.ex.Exec(ctx, `
+		UPDATE writeback_outbox
+		SET location = $2, commit_sha = $3
+		WHERE promotion_id = $1`,
+		promotionID, location, commitSHA)
+	if err != nil {
+		return fmt.Errorf("record writeback result for promotion %s: %w", promotionID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("record writeback result for promotion %s: %w", promotionID, repository.ErrNotFound)
+	}
+	return nil
 }

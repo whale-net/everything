@@ -6,6 +6,7 @@ go_library(
         "app_build_log.go",
         "fake.go",
         "keyset_cursor.go",
+        "promotion_sync_event.go",
         "reconcile.go",
         "release_run.go",
     ],
@@ -21,7 +22,11 @@ go_library(
 
 go_test(
     name = "fake_test",
-    srcs = ["release_run_test.go"],
+    srcs = [
+        "promotion_sync_event_test.go",
+        "release_run_test.go",
+        "writeback_test.go",
+    ],
     embed = [":fake"],
     deps = ["//tools/app_registry/server/repository"],
 )

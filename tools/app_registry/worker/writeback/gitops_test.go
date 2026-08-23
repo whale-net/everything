@@ -197,16 +197,22 @@ func TestGitOpsActivities_Publish_FirstWriteThenNoOp(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, first.Skipped)
 	require.Equal(t, filepath.Join("app-registry", "app-registry-app-registry", "versions", "dev.yaml"), first.Location)
-
-	second, err := a.Publish(context.Background(), state)
-	require.NoError(t, err)
-	require.True(t, second.Skipped, "identical content republished must be a no-op")
+	require.NotEmpty(t, first.CommitSHA, "a real commit was pushed, CommitSHA must be populated (FR7a)")
 
 	checkDir := t.TempDir()
 	runTestGit(t, "", "clone", bareDir, checkDir)
 	got, err := os.ReadFile(filepath.Join(checkDir, "app-registry", "app-registry-app-registry", "versions", "dev.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, state.Document, got)
+	// first.CommitSHA must be the SHA of the commit that actually landed on
+	// the remote -- not merely non-empty -- see revParseHEAD's doc comment.
+	headSHA := strings.TrimSpace(runTestGitOutput(t, checkDir, "rev-parse", "HEAD"))
+	require.Equal(t, headSHA, first.CommitSHA)
+
+	second, err := a.Publish(context.Background(), state)
+	require.NoError(t, err)
+	require.True(t, second.Skipped, "identical content republished must be a no-op")
+	require.Empty(t, second.CommitSHA, "a no-op publish must not report a commit SHA (FR7a)")
 }
 
 // TestGitOpsActivities_Publish_ConflictRetry simulates a concurrent writer
@@ -249,6 +255,7 @@ func TestGitOpsActivities_Publish_ConflictRetry(t *testing.T) {
 	result, err := a.publishToClone(context.Background(), staleDir, "main", relPath, doc, "")
 	require.NoError(t, err)
 	require.False(t, result.Skipped)
+	require.NotEmpty(t, result.CommitSHA, "the retried push's own commit SHA must be populated (FR7a)")
 
 	checkDir := t.TempDir()
 	runTestGit(t, "", "clone", bareDir, checkDir)
@@ -257,6 +264,10 @@ func TestGitOpsActivities_Publish_ConflictRetry(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(checkDir, relPath))
 	require.NoError(t, err)
 	require.Equal(t, doc, got)
+	// result.CommitSHA must be the retried push's own commit, not the
+	// concurrent writer's -- confirm it matches the remote's actual tip.
+	headSHA := strings.TrimSpace(runTestGitOutput(t, checkDir, "rev-parse", "HEAD"))
+	require.Equal(t, headSHA, result.CommitSHA)
 }
 
 type fakePromotionClient struct {
@@ -369,6 +380,20 @@ func runTestGit(t *testing.T, dir string, args ...string) {
 	}
 	out, err := cmd.CombinedOutput()
 	require.NoErrorf(t, err, "git %s: %s", strings.Join(args, " "), out)
+}
+
+// runTestGitOutput is runTestGit's sibling for a command whose stdout the
+// test needs back (e.g. `rev-parse HEAD`, to independently confirm what
+// Publish's CommitSHA claims).
+func runTestGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.Output()
+	require.NoErrorf(t, err, "git %s", strings.Join(args, " "))
+	return string(out)
 }
 
 func encodePKCS1PEMForTest(t *testing.T, key *rsa.PrivateKey) string {

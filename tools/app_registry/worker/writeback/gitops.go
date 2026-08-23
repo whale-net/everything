@@ -301,7 +301,11 @@ func (a *GitOpsActivities) publishToClone(ctx context.Context, repoDir, branch, 
 		return PublishResult{}, err
 	}
 	if err := a.push.push(ctx, repoDir, branch, token); err == nil {
-		return PublishResult{Location: relPath}, nil
+		sha, err := revParseHEAD(ctx, repoDir, token)
+		if err != nil {
+			return PublishResult{}, err
+		}
+		return PublishResult{Location: relPath, CommitSHA: sha}, nil
 	}
 
 	// Push was rejected -- re-fetch the branch's current tip and re-check
@@ -324,7 +328,20 @@ func (a *GitOpsActivities) publishToClone(ctx context.Context, repoDir, branch, 
 	if err := a.push.push(ctx, repoDir, branch, token); err != nil {
 		return PublishResult{}, fmt.Errorf("push conflict retry: push: %w", err)
 	}
-	return PublishResult{Location: relPath}, nil
+	sha, err := revParseHEAD(ctx, repoDir, token)
+	if err != nil {
+		return PublishResult{}, err
+	}
+	return PublishResult{Location: relPath, CommitSHA: sha}, nil
+}
+
+// revParseHEAD returns repoDir's current HEAD commit SHA -- called
+// immediately after a successful push, so this is exactly the commit that
+// was just pushed (writeAndCommit commits straight onto HEAD; directPush
+// pushes exactly that tip, see pushMechanism). Populates
+// PublishResult.CommitSHA -- FR7a, issue #1029.
+func revParseHEAD(ctx context.Context, repoDir, token string) (string, error) {
+	return runGitOutput(ctx, repoDir, token, "rev-parse", "HEAD")
 }
 
 // isNoOp reports whether relPath already contains exactly doc inside
@@ -438,6 +455,32 @@ func runGit(ctx context.Context, dir, token string, args ...string) error {
 		return fmt.Errorf("git %s: %w: %s", argStr, err, strings.TrimSpace(outStr))
 	}
 	return nil
+}
+
+// runGitOutput is runGit's sibling for the rare command whose stdout the
+// caller needs back (e.g. `rev-parse HEAD` -- see revParseHEAD): runGit
+// itself folds stdout into its combined-output error message only, never
+// returning it on success. Same token-redaction contract as runGit.
+func runGitOutput(ctx context.Context, dir, token string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	argStr := strings.Join(args, " ")
+	errStr := stderr.String()
+	if token != "" {
+		argStr = strings.ReplaceAll(argStr, token, "REDACTED")
+		errStr = strings.ReplaceAll(errStr, token, "REDACTED")
+	}
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", argStr, err, strings.TrimSpace(errStr))
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }
 
 // mintInstallationToken builds and signs a GitHub App JWT, then exchanges

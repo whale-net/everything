@@ -512,6 +512,27 @@ type PromotionEvent struct {
 	OccurredAt         time.Time
 }
 
+// PromotionSyncEvent is the append-only ArgoCD sync/health observation log
+// -- NOT SCD2, see AGENTS.md and promotion_event's own doc comment in
+// 003_promotion.up.sql.
+type PromotionSyncEvent struct {
+	SyncEventID  string
+	PromotionID  string
+	Source       string // one of the CHECK-constrained values below
+	SyncStatus   string
+	HealthStatus string
+	OccurredAt   time.Time
+}
+
+// PromotionSyncEvent.Source values -- must match promotion_sync_event's
+// `source` CHECK constraint (migration 020) exactly.
+const (
+	PromotionSyncEventSourceRefreshTriggered = "refresh_triggered"
+	PromotionSyncEventSourcePollObserved     = "poll_observed"
+	PromotionSyncEventSourceRetryTriggered   = "retry_triggered"
+	PromotionSyncEventSourceRetryObserved    = "retry_observed"
+)
+
 // PromotionListFilter is ListPromotionsRequest's filter set.
 type PromotionListFilter struct {
 	EnvironmentKey string
@@ -592,6 +613,17 @@ type WritebackOutbox struct {
 	CompletedAt *time.Time
 	LastError   string
 	Attempts    int32
+
+	// Location/CommitSHA are what GitOpsActivities.Publish actually
+	// produced (FR7a, issue #1029), set by RecordResult once Publish
+	// succeeds -- distinct from WorkflowID/CompletedAt above, which
+	// MarkDone sets when the workflow merely STARTS, not when Publish
+	// COMPLETES. CommitSHA is '' on the no-op Skipped path and on
+	// StubActivities' no-git dev/test path -- never a stand-in/synthetic
+	// value. See worker/writeback.PublishResult.CommitSHA and migration
+	// 021_writeback_outbox_result.
+	Location  string
+	CommitSHA string
 
 	CreatedAt time.Time
 }

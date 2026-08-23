@@ -520,6 +520,97 @@ func TestWritebackOutbox_ClaimBatch_SkipsLockedAndReclaimsStale(t *testing.T) {
 	}
 }
 
+// TestWritebackOutbox_RecordResult_PersistsLocationAndCommitSHA is FR7a's
+// (issue #1029) real-Postgres coverage for RecordResult: it must persist
+// location/commit_sha onto the outbox row matching promotion_id, and must
+// NOT disturb status/completed_at -- the distinction from MarkDone (which
+// fires when the workflow merely STARTS) that RecordResult's doc comment
+// calls out. Runs RecordResult AFTER MarkDone (the real WritebackWorkflow
+// order: MarkDone happens when outbox.startWorkflow starts the workflow,
+// RecordResult happens once its Publish activity has actually completed)
+// so the "does not disturb" assertion is meaningful rather than vacuous.
+func TestWritebackOutbox_RecordResult_PersistsLocationAndCommitSHA(t *testing.T) {
+	reg, pool := newTestRegistry(t)
+	ctx := context.Background()
+
+	envID := devEnvironmentID(t, reg)
+	appID := seedApp(t, pool, "acme", "widget", "image")
+	buildID := seedBuild(t, pool, "run-outbox-record-result")
+	art := seedArtifact(t, pool, appID, buildID, "sha256:outbox-record-result", "v1.0.0")
+
+	current, outbox, err := promoteWithOutboxTx(t, reg, repository.Promotion{
+		EnvironmentID: envID, EnvironmentKey: "dev", TargetKey: "image:acme-widget", ArtifactID: art,
+	}, "acme", "")
+	if err != nil {
+		t.Fatalf("promote+enqueue: %v", err)
+	}
+	// Newly enqueued: location/commit_sha both default to '' (migration
+	// 021), same NOT NULL DEFAULT '' convention as workflow_id/last_error.
+	if outbox.Location != "" || outbox.CommitSHA != "" {
+		t.Fatalf("expected a freshly enqueued outbox row to have empty location/commit_sha, got %+v", outbox)
+	}
+
+	if err := reg.Writeback().MarkDone(ctx, outbox.OutboxID, current.PromotionID, "run-1"); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+	beforeStatus, beforeCompletedAt := readOutboxStatusAndCompletedAt(t, pool, outbox.OutboxID)
+
+	wantLocation := "acme/acme-widget/versions/dev.yaml"
+	wantCommitSHA := "0123456789abcdef0123456789abcdef01234567"
+	if err := reg.Writeback().RecordResult(ctx, outbox.OutboxID, current.PromotionID, wantLocation, wantCommitSHA); err != nil {
+		t.Fatalf("record result: %v", err)
+	}
+
+	got, err := reg.Writeback().Get(ctx, outbox.OutboxID)
+	if err != nil {
+		t.Fatalf("get outbox row: %v", err)
+	}
+	if got.Location != wantLocation {
+		t.Fatalf("expected location %q, got %q", wantLocation, got.Location)
+	}
+	if got.CommitSHA != wantCommitSHA {
+		t.Fatalf("expected commit_sha %q, got %q", wantCommitSHA, got.CommitSHA)
+	}
+	// RecordResult must not disturb status/completed_at -- a distinct write
+	// from MarkDone, see that method's and RecordResult's own doc comments.
+	afterStatus, afterCompletedAt := readOutboxStatusAndCompletedAt(t, pool, outbox.OutboxID)
+	if afterStatus != beforeStatus {
+		t.Fatalf("expected status to stay %q after RecordResult, got %q", beforeStatus, afterStatus)
+	}
+	if !afterCompletedAt.Equal(beforeCompletedAt) {
+		t.Fatalf("expected completed_at to stay %v after RecordResult, got %v", beforeCompletedAt, afterCompletedAt)
+	}
+}
+
+// TestWritebackOutbox_RecordResult_UnknownPromotionReturnsNotFound proves
+// RecordResult surfaces repository.ErrNotFound (rather than silently
+// no-op-ing) when no outbox row's promotion_id matches.
+func TestWritebackOutbox_RecordResult_UnknownPromotionReturnsNotFound(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+	ctx := context.Background()
+
+	err := reg.Writeback().RecordResult(ctx, "", "00000000-0000-0000-0000-000000000000", "some/path.yaml", "deadbeef")
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected repository.ErrNotFound for an unknown promotion_id, got %v", err)
+	}
+}
+
+// readOutboxStatusAndCompletedAt reads status/completed_at directly
+// against the pool (not through Registry) so
+// TestWritebackOutbox_RecordResult_PersistsLocationAndCommitSHA can prove
+// RecordResult genuinely leaves both untouched in the database, not just
+// in whatever Go struct a caller happens to hold.
+func readOutboxStatusAndCompletedAt(t *testing.T, pool *pgxpool.Pool, outboxID string) (string, time.Time) {
+	t.Helper()
+	var status string
+	var completedAt time.Time
+	if err := pool.QueryRow(context.Background(), `
+		SELECT status, completed_at FROM writeback_outbox WHERE outbox_id = $1`, outboxID).Scan(&status, &completedAt); err != nil {
+		t.Fatalf("read outbox status/completed_at: %v", err)
+	}
+	return status, completedAt
+}
+
 // seedHistoricalPromotionRow inserts one already-superseded `promotion` row
 // directly (valid_to set, so promotion_current_idx's partial uniqueness --
 // at most one "current" row per (environment_id, target_key) -- never
