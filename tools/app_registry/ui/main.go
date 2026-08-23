@@ -282,6 +282,10 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Protected routes.
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDashboard)))
 	mux.HandleFunc("/deployments", app.auth.RequireAuthFunc(app.withAccessToken(app.handleDeployments)))
+	// Promotion Details (FR7-FR9, issue #1032): reached via a per-event link
+	// from the promotion timeline (pages/app_detail.templ's
+	// promotionTimelineCard), not from top-level nav.
+	mux.HandleFunc("/promotions/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handlePromotionDetails)))
 	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppsCatalog)))
 	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.withAccessToken(app.handleAppDetail)))
 

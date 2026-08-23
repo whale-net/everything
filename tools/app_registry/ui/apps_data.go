@@ -162,6 +162,20 @@ func (app *App) buildAppDetail(ctx context.Context, fullName string) (*matrix.Ap
 		eventList = events.GetEvents()
 	}
 
+	// Story 3's inline sync/health badge (issue #1032): one
+	// GetPromotionDetails per distinct promotion_id in this app's own
+	// timeline, fanned out concurrently -- see
+	// fetchPromotionSyncOutcomes' doc comment for why this is scoped to
+	// one app's bounded history rather than a general list-view solution.
+	syncOutcomes := map[string]*pb.PromotionDetails{}
+	if eventsErr == nil && len(eventList) > 0 {
+		promotionIDs := make([]string, 0, len(eventList))
+		for _, e := range eventList {
+			promotionIDs = append(promotionIDs, e.GetPromotionId())
+		}
+		syncOutcomes = app.fetchPromotionSyncOutcomes(ctx, promotionIDs)
+	}
+
 	latestArtifact := app.fetchLatestArtifact(ctx, a.GetFullName(), releaseTargetKindFromApp(a))
 
 	return &matrix.AppDetailData{
@@ -171,6 +185,7 @@ func (app *App) buildAppDetail(ctx context.Context, fullName string) (*matrix.Ap
 		LatestArtifact: latestArtifact,
 		Events:         eventList,
 		EventsErr:      eventsErr,
+		SyncOutcomes:   syncOutcomes,
 	}, nil
 }
 

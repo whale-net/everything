@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -96,6 +97,18 @@ type fakePromotionClient struct {
 	listEventsCalls []*pb.ListPromotionEventsRequest
 	listEventsResp  *pb.ListPromotionEventsResponse
 	listEventsErr   error
+
+	// getDetailsMu guards getDetailsCalls/getDetailsFunc below --
+	// fetchPromotionSyncOutcomes (promotion_sync_outcome_data.go) fans out
+	// concurrent GetPromotionDetails calls, unlike every other method on
+	// this fake, which only ever sees sequential test-driven calls.
+	getDetailsMu    sync.Mutex
+	getDetailsCalls []*pb.GetPromotionDetailsRequest
+	// getDetailsFunc, when set, computes the response/error per request --
+	// lets a test return a different result per promotion_id (e.g. one
+	// failing lookup among several succeeding ones). Falls back to a
+	// minimal default response echoing PromotionId when unset.
+	getDetailsFunc func(*pb.GetPromotionDetailsRequest) (*pb.GetPromotionDetailsResponse, error)
 }
 
 func (f *fakePromotionClient) Promote(ctx context.Context, in *pb.PromoteRequest, opts ...grpc.CallOption) (*pb.PromoteResponse, error) {
@@ -138,6 +151,29 @@ func (f *fakePromotionClient) ListPromotionEvents(ctx context.Context, in *pb.Li
 		return f.listEventsResp, nil
 	}
 	return &pb.ListPromotionEventsResponse{}, nil
+}
+
+func (f *fakePromotionClient) GetPromotionDetails(ctx context.Context, in *pb.GetPromotionDetailsRequest, opts ...grpc.CallOption) (*pb.GetPromotionDetailsResponse, error) {
+	f.getDetailsMu.Lock()
+	f.getDetailsCalls = append(f.getDetailsCalls, in)
+	fn := f.getDetailsFunc
+	f.getDetailsMu.Unlock()
+
+	if fn != nil {
+		return fn(in)
+	}
+	return &pb.GetPromotionDetailsResponse{Details: &pb.PromotionDetails{
+		Promotion: &pb.Promotion{PromotionId: in.GetPromotionId()},
+	}}, nil
+}
+
+// getDetailsCallCount is a thread-safe reader for getDetailsCalls -- tests
+// asserting on the fanout's call count must not race
+// fetchPromotionSyncOutcomes' still-running goroutines.
+func (f *fakePromotionClient) getDetailsCallCount() int {
+	f.getDetailsMu.Lock()
+	defer f.getDetailsMu.Unlock()
+	return len(f.getDetailsCalls)
 }
 
 func newPromoteTestApp(env *fakeEnvironmentClient, artifact pb.ArtifactRegistryClient, promo *fakePromotionClient) *App {

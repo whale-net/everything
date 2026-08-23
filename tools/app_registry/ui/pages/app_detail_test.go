@@ -159,3 +159,81 @@ func TestAppDetail_PromotedEnv_LinksToArtifactDetail(t *testing.T) {
 		t.Errorf("expected an artifact link %q for the promoted dev env's digest, got: %s", want, html)
 	}
 }
+
+// --- Story 3 (issue #1032): promotion timeline links + inline sync badge --
+
+func onePromotionEvent() []*pb.PromotionEvent {
+	return []*pb.PromotionEvent{
+		{EventId: "evt-1", PromotionId: "promo-1", Action: pb.PromotionAction_PROMOTION_ACTION_PROMOTE, Actor: "alice", OccurredAt: 1000},
+	}
+}
+
+// TestAppDetail_PromotionTimeline_LinksToPromotionDetails proves each
+// timeline row links to the Promotion Details page (issue #1032) by
+// promotion_id, for FR7's full lifecycle view.
+func TestAppDetail_PromotionTimeline_LinksToPromotionDetails(t *testing.T) {
+	data := &matrix.AppDetailData{App: deployableApp(), States: oneDevEnv(), Events: onePromotionEvent()}
+
+	html := renderComponent(t, AppDetail(nil, data))
+
+	want := `href="/promotions/promo-1"`
+	if !strings.Contains(html, want) {
+		t.Errorf("expected a link %q from the promotion timeline row, got: %s", want, html)
+	}
+}
+
+// TestAppDetail_PromotionTimeline_RendersInlineSyncBadgeWhenPresent proves
+// Story 3's inline sync/health badge renders on a timeline row when
+// SyncOutcomes has a resolved entry for that row's promotion_id.
+func TestAppDetail_PromotionTimeline_RendersInlineSyncBadgeWhenPresent(t *testing.T) {
+	data := &matrix.AppDetailData{
+		App: deployableApp(), States: oneDevEnv(), Events: onePromotionEvent(),
+		SyncOutcomes: map[string]*pb.PromotionDetails{
+			"promo-1": {Outcome: pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY},
+		},
+	}
+
+	html := renderComponent(t, AppDetail(nil, data))
+
+	if !strings.Contains(html, ">Synced<") {
+		t.Errorf("expected the inline Synced badge to render on the timeline row, got: %s", html)
+	}
+}
+
+// TestAppDetail_PromotionTimeline_OmitsBadgeWhenLookupMissing proves a
+// promotion_id absent from SyncOutcomes (a failed/best-effort lookup, see
+// fetchPromotionSyncOutcomes' doc comment) omits the badge entirely for
+// that row -- never a false "Unknown".
+func TestAppDetail_PromotionTimeline_OmitsBadgeWhenLookupMissing(t *testing.T) {
+	data := &matrix.AppDetailData{
+		App: deployableApp(), States: oneDevEnv(), Events: onePromotionEvent(),
+		SyncOutcomes: map[string]*pb.PromotionDetails{}, // no entry for promo-1
+	}
+
+	html := renderComponent(t, AppDetail(nil, data))
+
+	// Check the outcome badge's own label text, not raw badge-* classes --
+	// the page legitimately renders other badges (e.g. DeployUnitBadge's
+	// "image" label) that share those same daisyUI modifier classes.
+	for _, label := range []string{">Synced<", ">Sync failed<", ">Pending<", ">Unknown<"} {
+		if strings.Contains(html, label) {
+			t.Errorf("expected no sync-outcome badge label (%s) when the lookup is missing, got: %s", label, html)
+		}
+	}
+}
+
+// TestAppDetail_PromotionTimeline_OmitsBadgeWhenSyncOutcomesNil proves the
+// same omission holds when SyncOutcomes itself is nil (buildAppDetail's
+// zero value on an EventsErr path, or a caller that never populated it) --
+// an unconditional map index on a nil map is a documented, safe Go
+// no-op-returns-zero-value, not a panic, but this pins that behavior
+// against a future regression.
+func TestAppDetail_PromotionTimeline_OmitsBadgeWhenSyncOutcomesNil(t *testing.T) {
+	data := &matrix.AppDetailData{App: deployableApp(), States: oneDevEnv(), Events: onePromotionEvent(), SyncOutcomes: nil}
+
+	html := renderComponent(t, AppDetail(nil, data))
+
+	if strings.Contains(html, ">Unknown<") {
+		t.Errorf("a nil SyncOutcomes map must never render a false 'Unknown' badge, got: %s", html)
+	}
+}
