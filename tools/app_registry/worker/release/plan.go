@@ -98,12 +98,33 @@ type chartMetadataInput struct {
 // resolves versions once for the whole batch by invoking `release_helper_go
 // plan --format=json --apps-metadata=<image targets> --charts-metadata=<chart
 // targets> --increment-patch`, using the activity's own Temporal
-// WorkflowExecution id (deterministic per batch -- see WorkflowID's doc
-// comment) as the idempotency-key-prefix so retries of this activity
-// (Temporal's at-least-once activity execution, NFR3) hit the same App
-// Registry version-allocation idempotency key rather than allocating a
-// second version on redelivery -- see planParams.idempotencyPrefix and
+// WorkflowExecution *run* id -- NOT the workflow id -- as the
+// idempotency-key-prefix so retries of this activity (Temporal's
+// at-least-once activity execution, NFR3) hit the same App Registry
+// version-allocation idempotency key rather than allocating a second
+// version on redelivery -- see planParams.idempotencyPrefix and
 // AllocateVersion's own idempotency contract (unchanged by this task).
+//
+// This must be RunID, not WorkflowID: WorkflowID (WorkflowID's doc comment)
+// is deliberately deterministic per target batch -- the same "release
+// tools domain" request always hashes to the same WorkflowID, by design,
+// so Temporal's own WorkflowExecutionAlreadyStarted rejection can enforce
+// "at most one non-terminal release per target". But that means WorkflowID
+// is reused across every genuinely distinct trigger of the same batch
+// (each gets a fresh execution -- and a fresh RunID -- once the prior one
+// reaches a terminal state), while at-least-once activity redelivery
+// happens *within* a single execution, which always keeps the same RunID.
+// Keying on WorkflowID instead of RunID (the bug, confirmed against prod:
+// idempotency_key row
+// "release-5ac1b1d5...-tools-app-registry-allocate", created once at
+// 2026-08-23T03:20:59Z) makes every later trigger of "release tools
+// domain" replay that first execution's cached AllocateVersion response
+// forever -- silently returning a stale version (v0.5.0) instead of the
+// real next one, no matter how many hours or how many other successful
+// releases of the same targets happened via other paths in between. RunID
+// still correctly dedupes true same-execution activity retries (the
+// property this idempotency key exists for) while giving each new
+// execution of the same batch its own key.
 //
 // Each target's Domain/Name/AppType is looked up via a.Registry (the App
 // Registry's own App/Chart rows, already keyed by OwnerFullName) rather
@@ -235,8 +256,8 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 		}
 		args = append(args, "--charts-metadata="+string(raw))
 	}
-	if info := activity.GetInfo(ctx); info.WorkflowExecution.ID != "" {
-		args = append(args, "--idempotency-key-prefix="+info.WorkflowExecution.ID)
+	if info := activity.GetInfo(ctx); info.WorkflowExecution.RunID != "" {
+		args = append(args, "--idempotency-key-prefix="+info.WorkflowExecution.RunID)
 	}
 
 	bin := a.PlanBinaryPath
