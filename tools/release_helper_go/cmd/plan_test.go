@@ -828,6 +828,47 @@ func TestResolveApps_NameDomainCollision(t *testing.T) {
 	}
 }
 
+// TestResolveAppsPreferDomain_ReachesCollidingDomain covers the regression
+// that surfaced in a real "plan --apps 'tools, app-registry'" run
+// (https://github.com/whale-net/everything/actions/runs/32621937589):
+// resolveApps' name-over-domain preference (added for package-assets'
+// single-app lookup, see TestResolveApps_NameDomainCollision) made the
+// app-registry *domain* (server/migrate/worker/ui) unreachable via a bare
+// "app-registry" for matrix-building callers, so requesting the "tools"
+// domain (which itself contains the same-named tools-app-registry CLI)
+// alongside a bare "app-registry" collided into a false duplicate instead
+// of also pulling in the app-registry domain's own apps.
+func TestResolveAppsPreferDomain_ReachesCollidingDomain(t *testing.T) {
+	allApps := []AppMetadata{
+		{AppManifest: &appmetapb.AppManifest{Name: "app-registry", Domain: "tools", AppType: "cli"}, BazelTarget: "//tools/app_registry/cli:app-registry_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "release_helper_go", Domain: "tools", AppType: "cli"}, BazelTarget: "//tools/release_helper_go:release_helper_go_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "api", Domain: "app-registry", AppType: "external-api"}, BazelTarget: "//tools/app_registry/server:api_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "migrate", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/migrate:migrate_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "worker", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/worker:worker_metadata"},
+		{AppManifest: &appmetapb.AppManifest{Name: "ui", Domain: "app-registry"}, BazelTarget: "//tools/app_registry/ui:ui_metadata"},
+	}
+
+	got, err := resolveAppsPreferDomain([]string{"app-registry"}, allApps)
+	if err != nil {
+		t.Fatalf("resolveAppsPreferDomain([app-registry]): unexpected error: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("resolveAppsPreferDomain([app-registry]): got %d apps, want 4 (the domain sweep): %v", len(got), got)
+	}
+
+	// The exact failing input from the CI run: "tools" (which itself
+	// contains the same-named tools-app-registry CLI app) plus a bare
+	// "app-registry" must not collide into a duplicate-apps error -- it
+	// should union the tools domain with the app-registry domain.
+	union, err := resolveAppsPreferDomain([]string{"tools", "app-registry"}, allApps)
+	if err != nil {
+		t.Fatalf("resolveAppsPreferDomain([tools, app-registry]): unexpected error: %v", err)
+	}
+	if len(union) != 6 {
+		t.Fatalf("resolveAppsPreferDomain([tools, app-registry]): got %d apps, want 6: %v", len(union), union)
+	}
+}
+
 func TestJoinStrings(t *testing.T) {
 	got := joinStrings([]string{"a", "b", "c"})
 	if got != "a, b, c" {
