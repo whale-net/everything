@@ -12,7 +12,7 @@ AGY and Claude Code plugin providing a multi-persona project-management pipeline
 | `architect` | Reconciles the plan against repo conventions inside the Discussion, asks questions via Discussion comments, and signs off when ready for human review | opus |
 | *(human)* | Reviews the architect-approved draft in the Discussion, either approves it (triggering root plan Issue creation) or requests changes | — |
 | `planner` | Converts an approved root plan Issue into a GitHub Project with swimlanes and task issues | opus |
-| `worker` | Executes tasks in `Scaffold`, `Implementation`, and `Testing` swimlanes, commits changes to the plan branch, and advances tasks to the next swimlane | haiku |
+| `worker` | Executes tasks in `Scaffold`, `Implementation`, and `Testing` swimlanes inside a dedicated worktree, commits to the task's own `gh stack` branch, and advances tasks to the next swimlane | haiku |
 | `validator` | Checks a task's acceptance criteria in the `Validation` swimlane against merged work (read-only), moves to `Done`, and closes the issue | haiku |
 | `system-validator` | Runs the whole system end-to-end in Tilt against the root plan's criteria once all tasks are `Done`; files follow-up findings if needed | opus (max effort) |
 
@@ -60,8 +60,8 @@ Five skills orchestrate the pipeline:
 |---|---|---|
 | `/project-manager:plan "<feature>"` or `/project-manager:plan <discussion-url>` | Intake discussion → draft spec → producer/architect loop in Discussion until architect sign-off | `producer`, `architect` |
 | `/project-manager:review <discussion-url>` | The human gate: review architect-approved draft in Discussion → create root Issue (`plan:approved`), or leave feedback | `producer`, `architect` |
-| `/project-manager:implement <issue-number>` | Project board setup + task issues, then worker/validator loop moving tasks through swimlanes until all are `Done` | `planner`, `worker`, `validator` |
-| `/project-manager:validate <issue-number>` | Whole-system validation in Tilt once all tasks are `Done`, opens draft PR or routes findings to planner | `system-validator`, `planner` |
+| `/project-manager:implement <issue-number> [--max-subagents N] [--create-plan-only]` | Project board setup + task issues, then (unless `--create-plan-only`) orchestrates worker/validator subagents in parallel batches — up to `--max-subagents` (default 4) at a time — over `gh stack`-managed per-task branches until all tasks are `Done` | `planner`, `worker`, `validator` |
+| `/project-manager:validate <issue-number>` | Whole-system validation in Tilt (against a local integration branch merging every task's stack) once all tasks are `Done`; ensures every task branch has an open PR or routes findings to planner | `system-validator`, `planner` |
 | `/project-manager:status <issue-number>` | Read-only: current lifecycle state and Project board breakdown by swimlane | *(none — pure `gh` reads)* |
 
 Typical flow: `plan` → `review` → `implement` → `validate` → (if findings) `implement` again.

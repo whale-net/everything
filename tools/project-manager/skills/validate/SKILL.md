@@ -22,15 +22,23 @@ Drives `tools/project-manager/CONVENTIONS.md` § System validation. Only meaning
    ```
    If any task issues remain in `Scaffold`, `Implementation`, `Testing`, or `Validation`, implementation is not complete — inform the user to finish `/project-manager:implement <n>` first and stop.
 
-2. Dispatch `project-manager:system-validator` with the root issue number. System-validator brings the system up via Tilt, exercises it against the FRs/NFRs, and files finding issues (added to the plan's Project at `Status: Validation` with `from:system-validator`) for anything that isn't a clean pass.
+2. **Build and check out the integration branch** per CONVENTIONS.md § Git hygiene step 7 — every task's branch is still its own separate `gh stack`, so system-validator needs one local ref with all of them merged together to exercise the whole system in Tilt:
+   ```sh
+   git branch -D plan/<n>-integration 2>/dev/null
+   git checkout main && git pull
+   git checkout -b plan/<n>-integration
+   for tip in <topmost active branch of every task on this plan>; do
+     git merge --no-edit "$tip"
+   done
+   ```
+   Resolve any conflict (real cross-task integration work) before proceeding — it doesn't affect the individual task PRs.
 
-3. **If everything passed:** Open the PR per CONVENTIONS.md § Git hygiene:
-   - Push the plan branch: `git push -u origin plan/<n>-<short-slug>`
-   - Open a draft PR against `main`:
-     ```sh
-     gh pr create --draft --title "<root plan title> (#<n>)" --body "Closes #<n>" --head plan/<n>-<short-slug>
-     ```
-   - Post `gh issue comment <n> --body "PR: <pr-url>"` on the root issue.
-   - Report that the plan is fully validated along with the PR URL.
+3. Dispatch `project-manager:system-validator` with the root issue number. System-validator brings the system up via Tilt, exercises it against the FRs/NFRs, and files finding issues (added to the plan's Project at `Status: Validation` with `from:system-validator`) for anything that isn't a clean pass.
 
-4. **If there are findings:** Dispatch `project-manager:planner` with the finding issue numbers to run its "Handling system-validator findings" process — converting blocking findings into properly sequenced follow-up task issues starting in `Scaffold` or `Implementation` on the same Project. Report the new task issue numbers to the user, and point them to `/project-manager:implement <n>`.
+4. **If everything passed:** Finalize per CONVENTIONS.md § Git hygiene step 8:
+   - For each task branch, make sure it has an open PR: `git checkout plan/<n>-<task> && gh stack submit --auto`.
+   - Collect every task's PR URL (`gh stack view --json` per branch, or the URLs already gathered during `/project-manager:implement`).
+   - Post `gh issue comment <n> --body "PRs: <url>, <url>, ..."` on the root issue.
+   - Report that the plan is fully validated, with the full list of PR URLs — the deliverable is this stack of small, individually reviewable PRs, not one PR for the whole plan.
+
+5. **If there are findings:** Dispatch `project-manager:planner` with the finding issue numbers to run its "Handling system-validator findings" process — converting blocking findings into properly sequenced follow-up task issues starting in `Scaffold` or `Implementation` on the same Project. Report the new task issue numbers to the user, and point them to `/project-manager:implement <n>`.
