@@ -122,14 +122,16 @@ authoritative, not the sole, per-target gate.
 - Exposed as `GetReleaseRun(workflow_run_id[, attempt])` and
   `app-registry builds status --incomplete` (AR-7d).
 
-**The intent set is written up front, at every adoption stage** (decided in
-review of PR #559). The release plan step writes one `allocated` artifact row
-per target *before* anything is pushed — at stage `allocate` that row is the
-`AllocateVersion` result; at `observe`/`promote` the version still comes from
-the tag path and the registry is merely recording the intent. So "is this run
-complete?" is exact from the first phase rather than only after the AR-5
-cutover, and the cutover itself becomes a change of *who authors the version*,
-not a new write.
+**The intent set is written up front** (decided in review of PR #559). The
+release plan step writes one `allocated` artifact row per target *before*
+anything is pushed — that row is the `AllocateVersion` result (before the
+AR-5 cutover, this only held for a domain at the then-existing stage
+`allocate`; for every other domain the version came from the tag path and
+the registry was merely recording the intent). So "is this run complete?"
+was exact from the first phase rather than only after the AR-5 cutover, and
+the cutover itself was a change of *who authors the version*, not a new
+write. Now that the cutover is complete, every domain's intent row is
+authored the same way.
 
 Two consequences that are part of the design, not caveats:
 

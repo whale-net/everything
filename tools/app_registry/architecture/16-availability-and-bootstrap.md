@@ -12,12 +12,19 @@ API synchronously**:
 The registry can be down for hours without blocking a release or a deploy. The
 only thing lost is the ability to *make new promotions* during the outage.
 
-> **Scoped to adoption stage `observe` by issue #558.** The claim above holds
-> exactly while a domain's recording is best-effort. At `promote` recording
-> becomes required, and at `allocate` the registry is in the version path and
-> an outage does block that domain's releases — see "Release lifecycle (issue
-> #558)" → "Availability, restated per adoption stage". Every domain is at
-> `observe` today, so nothing here is wrong yet.
+> **Superseded by the AR-5 cutover.** The claim above ("can be down for
+> hours without blocking a release") originally held only while a domain's
+> recording was best-effort — issue #558 scoped that to adoption stage
+> `observe`, with recording becoming required at `promote` and the registry
+> entering the version path (an outage blocking that domain's releases) at
+> `allocate`. The AR-5 cutover removed the per-domain stage entirely:
+> recording, chart hermeticity, and version allocation are now unconditional
+> and release-critical for every domain, all the time, once
+> `APP_REGISTRY_CICD_OPT_IN` is on — see "Release lifecycle (issue #558)" →
+> "Availability, restated per adoption stage" for the current picture. The
+> claim above is no longer accurate for `AllocateVersion` or
+> `CheckChartHermeticity`; it still describes best-effort recording's
+> `continue-on-error` posture at the GitHub Actions layer.
 
 ## Version skew vs. outage (issue #570)
 
@@ -118,18 +125,16 @@ if: vars.APP_REGISTRY_CICD_OPT_IN == 'true'
   recording failure — but only after the real release work in that job has
   already completed. See "App Registry recording health" above.
 
-Two independent gates, easily confused — keep them distinct:
-
-| Gate | Layer | Question it answers |
-|---|---|---|
-| `APP_REGISTRY_CICD_OPT_IN` | GitHub Actions | Does CI talk to the registry **at all**? |
-| `domain_adoption.stage` | Registry server | For a given domain, what is the registry **authoritative for**? |
-
-The first is a global bootstrap/kill switch owned by whoever administers the
-repo; the second is the per-domain rollout described under
-[Resolved questions](#resolved-questions). The opt-in must be `true` before any
-domain's stage matters, and turning it off is the single-lever rollback for the
-entire CI integration.
+There used to be two independent gates here: `APP_REGISTRY_CICD_OPT_IN`
+(GitHub Actions — does CI talk to the registry at all?) and
+`domain_adoption.stage` (registry server — for a given domain, what is the
+registry authoritative for?). **The AR-5 cutover removed the second one.**
+`domain_adoption` is dropped, and the registry is now authoritative for
+recording, chart hermeticity, and version allocation for every domain,
+unconditionally, the moment it is called at all. `APP_REGISTRY_CICD_OPT_IN`
+is therefore the only gate left: it decides whether CI talks to the registry
+at all, and turning it off is the single-lever rollback for the entire CI
+integration — there is no longer a second, per-domain lever underneath it.
 
 Applies from AR-2c (the first phase to add CI steps) onward, including AR-5's
 `AllocateVersion` — version allocation must fall back to the tag-based path

@@ -61,10 +61,6 @@ type state struct {
 	// shape as PromotionEvents.
 	PromotionSyncEvents map[string]repository.PromotionSyncEvent
 	WritebackOutbox     map[string]repository.WritebackOutbox // keyed by outbox_id
-	// DomainAdoption mirrors the `domain_adoption` table, keyed by domain.
-	// Absent means DomainAdoptionStageObserve -- see
-	// DomainAdoptionRepository.GetStage's doc comment.
-	DomainAdoption map[string]repository.DomainAdoptionStage
 	// Watermark mirrors the singleton reconcile_watermark row (migration
 	// 006). nil means "no watermark yet" -- unlike postgres, the fake has
 	// no seeded-sentinel-row concurrency concern to work around (WithTx
@@ -107,7 +103,6 @@ func newState() *state {
 		PromotionEvents:     map[string]repository.PromotionEvent{},
 		PromotionSyncEvents: map[string]repository.PromotionSyncEvent{},
 		WritebackOutbox:     map[string]repository.WritebackOutbox{},
-		DomainAdoption:      map[string]repository.DomainAdoptionStage{},
 		ReconcileRuns:       map[string]repository.ReconcileRun{},
 		ReleaseRuns:         map[string]repository.ReleaseRun{},
 		ReleaseRunTargets:   map[string]repository.ReleaseRunTarget{},
@@ -140,20 +135,7 @@ func New() *Registry {
 	return &Registry{mu: &sync.Mutex{}, state: newState()}
 }
 
-// SetDomainAdoptionStage is a test-only fixture setter: there is no RPC to
-// cut a domain over to a new adoption stage in this change (see PLAN.md's
-// AR-5 status — AR-5a ships the gate but no cutover mechanism), so handler
-// tests that need to exercise the "allocate" path reach in here directly,
-// the same way postgres integration tests do via a raw
-// `INSERT INTO domain_adoption` (see postgres_integration_artifact_test.go).
-func (r *Registry) SetDomainAdoptionStage(domain string, stage repository.DomainAdoptionStage) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.state.DomainAdoption[domain] = stage
-}
-
-// SeedReconcileRun is a test-only fixture setter, the same shape as
-// SetDomainAdoptionStage above: ListReconcileRuns's duplicate-applied_at
+// SeedReconcileRun is a test-only fixture setter: ListReconcileRuns's duplicate-applied_at
 // tie-break case needs two rows with the exact same AppliedAt, which the
 // real write path (reconcile.go's reconcile(), via uuid.NewString() +
 // time.Now()) cannot reliably construct without racing a clock -- so tests
@@ -243,10 +225,6 @@ func (r *Registry) Promotions() repository.PromotionRepository { return promotio
 
 // Writeback returns a distinct type for the same reason Environments does.
 func (r *Registry) Writeback() repository.WritebackRepository { return writebackFake{r} }
-
-// DomainAdoption returns a distinct type for the same reason Environments
-// does.
-func (r *Registry) DomainAdoption() repository.DomainAdoptionRepository { return domainAdoptionFake{r} }
 
 // ReleaseRuns returns a distinct type for the same reason Environments
 // does.
@@ -567,11 +545,10 @@ func (r *Registry) ListBuilds(ctx context.Context, since time.Time, pageSize int
 // ============================================================================
 
 // RecordArtifact mirrors postgres's artifactRepo.RecordArtifact -- the
-// publishing -> published transition, plus (at adoption stage "observe"
-// only) the backward-compatible direct-create path. See
+// publishing -> published transition. See
 // repository.ArtifactRepository.RecordArtifact's doc comment for the full
 // state-machine contract.
-func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, domainStage repository.DomainAdoptionStage) (*repository.Artifact, bool, error) {
+func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, bool, error) {
 	for _, existing := range r.state.Artifacts {
 		// digest is empty on every non-published row (mirrors migration
 		// 007's artifact_state_shape CHECK) -- guard explicitly rather than
@@ -590,16 +567,11 @@ func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, co
 
 	existing, found := r.findByOwnerKindVersion(a.Kind, ownerID(a), a.Version)
 	if !found {
-		// No row at all for this (owner, kind, version). Creating directly
-		// as "published" is the pre-AR-7b behaviour, kept only for domains
-		// still at adoption stage "observe" -- see ARCHITECTURE.md
-		// "Backward compatibility during rollout".
-		if domainStage != repository.DomainAdoptionStageObserve {
-			return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact once a domain has left adoption stage \"observe\"",
-				repository.ErrFailedPrecondition, r.ownerFullName(a), a.Version)
-		}
-		out, err := r.insertArtifact(a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag, repository.ArtifactProvenanceObserved)
-		return out, false, err
+		// No row at all for this (owner, kind, version). Since the AR-5
+		// cutover every domain is unconditionally past the pre-AR-7 rollout
+		// window, so BeginPublish must always have run first.
+		return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact",
+			repository.ErrFailedPrecondition, r.ownerFullName(a), a.Version)
 	}
 
 	switch existing.State {
@@ -1717,27 +1689,6 @@ func sortPromotions(promotions []repository.Promotion) {
 // timeNow is a thin indirection so a future test could freeze it; today it's
 // just time.Now().UTC(), matching every other fake's timestamp handling.
 func timeNow() time.Time { return time.Now().UTC() }
-
-// ============================================================================
-// DomainAdoptionRepository
-// ============================================================================
-
-// domainAdoptionFake implements repository.DomainAdoptionRepository over
-// the same *Registry.state every other repository reads/writes -- see
-// Environments's doc comment for why this can't be a method directly on
-// Registry.
-type domainAdoptionFake struct{ r *Registry }
-
-// GetStage mirrors postgres's domainAdoptionRepo.GetStage: an absent row
-// (the default for every domain in a fresh fake, matching production where
-// domain_adoption seeds no rows automatically) means
-// DomainAdoptionStageObserve.
-func (f domainAdoptionFake) GetStage(ctx context.Context, domain string) (repository.DomainAdoptionStage, error) {
-	if stage, ok := f.r.state.DomainAdoption[domain]; ok {
-		return stage, nil
-	}
-	return repository.DomainAdoptionStageObserve, nil
-}
 
 // ============================================================================
 // helpers shared with reconcile.go

@@ -133,14 +133,12 @@ func ExecuteRelease(p ReleaseParams) (*ReleaseResult, error) {
 		tagName = tagPrefix + p.Version
 	}
 
-	isAllocate := false
-	if p.ArtifactClient != nil && !p.SkipRegistry {
-		var aerr error
-		isAllocate, aerr = isDomainAtAllocateStage(ctx, p.ArtifactClient, p.Domain)
-		if aerr != nil {
-			return nil, aerr
-		}
-	}
+	// isAllocate: whether App Registry is authoritative for this release --
+	// true whenever the caller opted a client in. Since the AR-5 cutover
+	// every domain allocates unconditionally, so this is no longer a
+	// registry round-trip (isDomainAtAllocateStage, pre-cutover); it's just
+	// "is the registry integration active for this run."
+	isAllocate := p.ArtifactClient != nil && !p.SkipRegistry
 
 	// 1. BeginPublish (Heartbeat)
 	beginPublishSucceeded := false
@@ -155,13 +153,9 @@ func ExecuteRelease(p ReleaseParams) (*ReleaseResult, error) {
 		}
 		_, err := p.ArtifactClient.BeginPublish(ctx, beginReq)
 		if err != nil {
-			if isAllocate {
-				return nil, fmt.Errorf("App Registry BeginPublish failed for %s (domain %q at stage 'allocate'): %w", p.OwnerFullName, p.Domain, err)
-			}
-			fmt.Printf("::warning title=App Registry BeginPublish failed::%v\n", err)
-		} else {
-			beginPublishSucceeded = true
+			return nil, fmt.Errorf("App Registry BeginPublish failed for %s (domain %q): %w", p.OwnerFullName, p.Domain, err)
 		}
+		beginPublishSucceeded = true
 	}
 
 	// 2. Build / packaging step
@@ -241,7 +235,7 @@ func ExecuteRelease(p ReleaseParams) (*ReleaseResult, error) {
 		var prevMatches bool
 		var prevDigest string
 
-		if isAllocate && p.ArtifactClient != nil {
+		if isAllocate {
 			getResp, getErr := p.ArtifactClient.GetArtifact(ctx, &pb.GetArtifactRequest{
 				OwnerFullName:   p.OwnerFullName,
 				Kind:            kind,
@@ -250,7 +244,7 @@ func ExecuteRelease(p ReleaseParams) (*ReleaseResult, error) {
 			})
 			if getErr != nil {
 				if status.Code(getErr) != codes.NotFound {
-					return nil, fmt.Errorf("App Registry GetArtifact (previous version) failed for %s (domain %q at stage 'allocate'): %w", p.OwnerFullName, p.Domain, getErr)
+					return nil, fmt.Errorf("App Registry GetArtifact (previous version) failed for %s (domain %q): %w", p.OwnerFullName, p.Domain, getErr)
 				}
 				// codes.NotFound: first release / no previous published version in registry
 			} else if getResp != nil && getResp.Artifact != nil {
@@ -380,41 +374,33 @@ func ExecuteRelease(p ReleaseParams) (*ReleaseResult, error) {
 		// 6. RecordArtifact in App Registry
 		if p.ArtifactClient != nil && p.BuildID != "" && !p.SkipRegistry {
 			if digest == "" {
-				if isAllocate {
-					return nil, fmt.Errorf("could not resolve %s digest for %s:%s (domain %q at stage 'allocate')", kindName, p.Repository, currentVersion, p.Domain)
-				}
-				fmt.Printf("::warning::Could not resolve digest for %s:%s; skipping App Registry recording\n", p.Repository, currentVersion)
-			} else {
-				recReq := &pb.RecordArtifactRequest{
-					BuildId:        p.BuildID,
-					Kind:           kind,
-					OwnerFullName:  p.OwnerFullName,
-					Repository:     p.Repository,
-					Version:        currentVersion,
-					Digest:         digest,
-					Contains:       containedImages,
-					PublishedAt:    time.Now().Unix(),
-					IdempotencyKey: fmt.Sprintf("%s-%s-%s-record", idempotencyPrefix, p.OwnerFullName, kindName),
-				}
-				if _, err := p.ArtifactClient.RecordArtifact(ctx, recReq); err != nil {
-					if beginPublishSucceeded {
-						failReq := &pb.FailPublishRequest{
-							Kind:           kind,
-							OwnerFullName:  p.OwnerFullName,
-							Version:        currentVersion,
-							Reason:         fmt.Sprintf("chart record artifact failed (RecordArtifact failed, workflow run %s, attempt %s): %v", runID, attempt, err),
-							IdempotencyKey: fmt.Sprintf("%s-%s-%s-fail-record", idempotencyPrefix, p.OwnerFullName, kindName),
-						}
-						_, _ = p.ArtifactClient.FailPublish(ctx, failReq)
-					}
-					if isAllocate {
-						return nil, fmt.Errorf("App Registry RecordArtifact failed for %s (domain %q at stage 'allocate'): %w", p.OwnerFullName, p.Domain, err)
-					}
-					fmt.Printf("::warning title=App Registry RecordArtifact failed::%v\n", err)
-				} else {
-					fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", p.OwnerFullName, currentVersion, digest)
-				}
+				return nil, fmt.Errorf("could not resolve %s digest for %s:%s (domain %q)", kindName, p.Repository, currentVersion, p.Domain)
 			}
+			recReq := &pb.RecordArtifactRequest{
+				BuildId:        p.BuildID,
+				Kind:           kind,
+				OwnerFullName:  p.OwnerFullName,
+				Repository:     p.Repository,
+				Version:        currentVersion,
+				Digest:         digest,
+				Contains:       containedImages,
+				PublishedAt:    time.Now().Unix(),
+				IdempotencyKey: fmt.Sprintf("%s-%s-%s-record", idempotencyPrefix, p.OwnerFullName, kindName),
+			}
+			if _, err := p.ArtifactClient.RecordArtifact(ctx, recReq); err != nil {
+				if beginPublishSucceeded {
+					failReq := &pb.FailPublishRequest{
+						Kind:           kind,
+						OwnerFullName:  p.OwnerFullName,
+						Version:        currentVersion,
+						Reason:         fmt.Sprintf("chart record artifact failed (RecordArtifact failed, workflow run %s, attempt %s): %v", runID, attempt, err),
+						IdempotencyKey: fmt.Sprintf("%s-%s-%s-fail-record", idempotencyPrefix, p.OwnerFullName, kindName),
+					}
+					_, _ = p.ArtifactClient.FailPublish(ctx, failReq)
+				}
+				return nil, fmt.Errorf("App Registry RecordArtifact failed for %s (domain %q): %w", p.OwnerFullName, p.Domain, err)
+			}
+			fmt.Printf("✅ Recorded %s %s (%s) in App Registry\n", p.OwnerFullName, currentVersion, digest)
 		}
 	}
 

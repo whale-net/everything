@@ -46,7 +46,7 @@ was too large for one file:
 | [`04-run-log.md`](architecture/08-release-lifecycle/04-run-log.md) | Temporal orchestrates (UI-triggered releases, #889), CI still pushes, the registry records; `BeginPublishBatch`, `GetReleaseRun` |
 | [`05-list-builds-issue-608.md`](architecture/08-release-lifecycle/05-list-builds-issue-608.md) | Real pagination over `build` |
 | [`06-pagination-issue-603.md`](architecture/08-release-lifecycle/06-pagination-issue-603.md) | Real pagination for `ListPromotionEvents`/`ListArtifacts`/`ListPromotions` |
-| [`07-availability-per-stage.md`](architecture/08-release-lifecycle/07-availability-per-stage.md) | Availability, restated per `domain_adoption.stage` |
+| [`07-availability-per-stage.md`](architecture/08-release-lifecycle/07-availability-per-stage.md) | What the registry is authoritative for now that the AR-5 cutover made every domain unconditional — recording, chart hermeticity, and version allocation are all release-critical for every domain once `APP_REGISTRY_CICD_OPT_IN` is on |
 | [`08-adoption-disaster-recovery.md`](architecture/08-release-lifecycle/08-adoption-disaster-recovery.md) | `AdoptArtifact` and the disaster-recovery path |
 | [`09-relationship-to-ar5.md`](architecture/08-release-lifecycle/09-relationship-to-ar5.md) | How AR-7 affects what remains of AR-5 (allocation cutover) |
 | [`10-compose-time-hermeticity.md`](architecture/08-release-lifecycle/10-compose-time-hermeticity.md) | `CheckChartHermeticity`, AR-7f |

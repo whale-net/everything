@@ -159,20 +159,24 @@ func seedBuild(t *testing.T, pool *pgxpool.Pool, workflowRunID string) string {
 // recordArtifactTx runs RecordArtifact inside a real WithTx transaction,
 // exactly as handlers.runIdempotent does in production -- the postgres
 // repository methods rely on their caller providing transactional scope,
-// they do not open one themselves. domainStage is
-// repository.DomainAdoptionStageObserve, matching every domain's implicit
-// default (no domain_adoption row) -- every pre-AR-7b test in this file
-// relies on RecordArtifact's create-directly-as-published backward-compat
-// path, which is legal only at "observe" (see ARCHITECTURE.md "Backward
-// compatibility during rollout"); AR-7b's own tests call
-// r.Artifacts().RecordArtifact directly when they need a different stage.
+// they do not open one themselves. Since the AR-5 cutover, RecordArtifact
+// unconditionally requires a prior BeginPublish (there is no more
+// direct-create fallback), so this helper seeds one first, on a fresh
+// synthetic build row. A BeginPublish failure here is swallowed rather than
+// propagated: a caller reusing this helper for the SAME (owner, kind,
+// version) a second time (replay/conflict tests) legitimately hits it
+// again ("published" is ErrFailedPrecondition) -- RecordArtifact's own
+// digest/identity lookup, not this helper, is what decides replay vs
+// conflict in that case.
 func recordArtifactTx(t *testing.T, reg *Registry, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, bool, error) {
 	t.Helper()
+	buildID := seedBuild(t, reg.pool, "record-artifact-tx-"+uuid.NewString())
 	var out *repository.Artifact
 	var already bool
 	err := reg.WithTx(context.Background(), func(ctx context.Context, r repository.Registry) error {
+		_, _ = r.Artifacts().BeginPublish(ctx, a.Kind, ownerIDOf(a), a.Version, buildID, a.Repository, repository.VersionSourceTag)
 		var ferr error
-		out, already, ferr = r.Artifacts().RecordArtifact(ctx, a, contains, repository.DomainAdoptionStageObserve)
+		out, already, ferr = r.Artifacts().RecordArtifact(ctx, a, contains)
 		return ferr
 	})
 	return out, already, err

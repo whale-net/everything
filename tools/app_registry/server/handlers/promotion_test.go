@@ -90,9 +90,24 @@ func newPromotionFixture(t *testing.T) *promotionFixture {
 	return &promotionFixture{app: appSrv, art: artSrv, env: envSrv, promo: promoSrv, repo: repo, chartImageDigest: "sha256:chartapp-v1"}
 }
 
+// mustRecordArtifact records a published artifact, via the mandatory
+// BeginPublish -> RecordArtifact sequence (since the AR-5 cutover there is
+// no more direct-create fallback).
 func mustRecordArtifact(t *testing.T, srv *ArtifactServer, req *pb.RecordArtifactRequest) *pb.Artifact {
 	t.Helper()
-	resp, err := srv.RecordArtifact(authedCtx(), req)
+	ctx := authedCtx()
+	repo := req.Repository
+	if repo == "" {
+		repo = "ghcr.io/" + req.OwnerFullName
+	}
+	if _, err := srv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: req.Kind, OwnerFullName: req.OwnerFullName, Version: req.Version,
+		BuildId: req.BuildId, Repository: repo,
+		IdempotencyKey: req.IdempotencyKey + "-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish %s: %v", req.OwnerFullName, err)
+	}
+	resp, err := srv.RecordArtifact(ctx, req)
 	if err != nil {
 		t.Fatalf("RecordArtifact %s: %v", req.OwnerFullName, err)
 	}
@@ -582,7 +597,7 @@ func TestPromote_BinaryArtifact(t *testing.T) {
 
 	// Record a binary artifact for image-app (which has deploy_unit = image)
 	build := recordBuild(t, f.art, "run-binary-promo")
-	recResp, err := f.art.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	recArtifact := mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "demo-image-app",
@@ -590,11 +605,8 @@ func TestPromote_BinaryArtifact(t *testing.T) {
 		Digest:         "sha256:binary-digest-1",
 		IdempotencyKey: "record-binary-promo",
 	})
-	if err != nil {
-		t.Fatalf("RecordArtifact(binary): %v", err)
-	}
-	if recResp.Artifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
-		t.Fatalf("expected PROMOTABILITY_PROMOTABLE, got %v", recResp.Artifact.Promotability)
+	if recArtifact.Promotability != pb.Promotability_PROMOTABILITY_PROMOTABLE {
+		t.Fatalf("expected PROMOTABILITY_PROMOTABLE, got %v", recArtifact.Promotability)
 	}
 
 	// Promote binary to dev

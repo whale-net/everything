@@ -33,7 +33,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 | AR-2d | [#503](https://github.com/whale-net/everything/pull/503) | merged |
 | AR-3a…AR-3d | [#504](https://github.com/whale-net/everything/pull/504), [#508](https://github.com/whale-net/everything/pull/508), [#509](https://github.com/whale-net/everything/pull/509), [#511](https://github.com/whale-net/everything/pull/511) | merged |
 | AR-4a / AR-4b | [#512](https://github.com/whale-net/everything/pull/512), [#514](https://github.com/whale-net/everything/pull/514) | merged — writeback `Publish` is still the stub |
-| AR-5a | [#513](https://github.com/whale-net/everything/pull/513) | merged — **inert**: no domain at stage `allocate`, `plan.go`'s tag path untouched |
+| AR-5a | [#513](https://github.com/whale-net/everything/pull/513) | merged — **inert at the time**: `AllocateVersion` implemented but not yet called by any release path, `plan.go`'s tag path untouched (wired in AR-5b) |
 | AR-5b (issue #829) | [#831](https://github.com/whale-net/everything/pull/831) | pending — `AllocateVersion` wired into every real version-resolution call site (`plan.go`'s `assignVersions`/`assignChartVersions`, `release_charts.go`'s `releaseCharts`, `build_helm.go`'s `build-helm-chart`) via `resolveVersion` — see "AR-5" below |
 | AR-6a / AR-6b | [#516](https://github.com/whale-net/everything/pull/516), [#515](https://github.com/whale-net/everything/pull/515) | merged |
 | AR-7 (design) | [#559](https://github.com/whale-net/everything/pull/559) | merged — design + delivery plan only, no implementation |
@@ -42,7 +42,7 @@ Read [ARCHITECTURE.md](ARCHITECTURE.md) before executing any phase.
 | AR-7c | [#566](https://github.com/whale-net/everything/pull/566) | merged — app identity/manifest-snapshot split, migration `008`, `AssertApps` |
 | AR-7d | [#567](https://github.com/whale-net/everything/pull/567) | merged — `GetReleaseRun`, `BeginPublishBatch`, `app-registry builds status`, `release.yml` resume, no schema change |
 | AR-7e | [#571](https://github.com/whale-net/everything/pull/571) | merged — `AdoptArtifact` (admin-only), `app-registry artifacts adopt`/`list --provenance`, OPERATIONS.md disaster-recovery runbook, no schema change |
-| AR-7f | [#572](https://github.com/whale-net/everything/pull/572) | merged — `CheckChartHermeticity` RPC, `build-helm-chart` call site, no schema change, **ships inert** (no domain at stage `allocate`) |
+| AR-7f | [#572](https://github.com/whale-net/everything/pull/572) | merged — `CheckChartHermeticity` RPC, `build-helm-chart` call site, no schema change; **shipped inert** pending the AR-5 cutover, now unconditionally enforced for every domain (see "AR-5 — cutover status" below) |
 
 **Post-AR-7 fixes, all merged, found by running the deployed `dev` registry
 for real:** [#574](https://github.com/whale-net/everything/pull/574) (issue
@@ -78,12 +78,12 @@ this fix — see "AR-5" below.
 The registry is deployed to `dev` and is being actively exercised by real
 release runs (see run 31660476677 above) — `app-registry-api`
 and `app-registry-migration` images publish from `apps=all`.
-`domain_adoption` has zero rows (verified directly against `dev` via the
-Postgres MCP plugin): every domain, including `app-registry`'s own, is still
-at the implicit `observe` stage — no cutover has started for anything.
-`APP_REGISTRY_CICD_OPT_IN` is now `true` (recording steps ran against `dev`
-and wrote real rows in the run above) — this section previously described it
-as unset.
+**The AR-5 cutover is complete** (migration `022_drop_domain_adoption`):
+`domain_adoption` no longer exists, and every domain, including
+`app-registry`'s own, allocates versions unconditionally — see "AR-5 —
+cutover status" below. `APP_REGISTRY_CICD_OPT_IN` is now `true` (recording
+steps ran against `dev` and wrote real rows in the run above) — this section
+previously described it as unset.
 
 **AR-3 (promotion) and AR-4 (writeback) are implemented and merged.** The
 writeback *contract* — outbox, worker, workflow, stub activity — is done; the
@@ -121,9 +121,10 @@ artifact the registry never observed being published, used when a chart
 release fails on a pre-registry pin, plus OPERATIONS.md's disaster-recovery
 runbook. AR-7f adds `ArtifactRegistry.CheckChartHermeticity` and its call
 site in `build-helm-chart`, moving the "chart may only pin published images"
-rule from record time to compose time for domains at adoption stage
-`allocate` — see its subsection for the full contract and why it ships
-inert. **Every sub-phase of AR-7 is implemented and merged.** Design is in
+rule from record time to compose time — shipped inert pending the AR-5
+cutover, now unconditionally enforced for every domain (see "AR-5 — cutover
+status" below) — see its subsection for the full contract. **Every sub-phase
+of AR-7 is implemented and merged.** Design is in
 ARCHITECTURE.md's "Release lifecycle (issue #558)"; delivery is "AR-7" in
 [PLAN-HISTORY.md](PLAN-HISTORY.md).
 
@@ -198,10 +199,10 @@ not on job-body readiness.
 | `manman` | v1 (`release.yml`) | Not yet migrated |
 | `manmanv2` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `manmanv2` apps/charts as of 2026-08-22). |
 | `friendly_computing_machine` | v1 (`release.yml`) | Not yet migrated |
-| `leaflab` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `leaflab` as of 2026-08-22). Also at `domain_adoption.stage = allocate` (AR-5, a separate version-allocation axis). |
+| `leaflab` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `leaflab` as of 2026-08-22). |
 | `firmware` | v1 (`release.yml`) | Not yet migrated |
-| `tools` (release tooling itself) | v1 (`release.yml`) | Not yet migrated — no `tools-*` CLI release target has appeared in `release_run_target` yet. Separately at `domain_adoption.stage = allocate` (AR-5) — that is a different axis (version allocation, not GHA dispatch target) and does not imply v2 dispatch. |
-| `app-registry` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `app-registry` as of 2026-08-22). Also at `domain_adoption.stage = allocate` (AR-5). |
+| `tools` (release tooling itself) | v1 (`release.yml`) | Not yet migrated — no `tools-*` CLI release target has appeared in `release_run_target` yet. |
+| `app-registry` | v2 (`release-v2.yml`, Temporal-dispatched) | `TriggerRelease` is live for this domain's real releases (`release_run_target` rows exist for `app-registry` as of 2026-08-22). |
 
 ## Sequencing rationale
 
@@ -233,12 +234,14 @@ AR-8 depends only on AR-7 being merged (it rewrites AR-7c's `v_current_app`/
 `artifact.manifest_id`) — independent of the AR-5 cutover in either
 direction.
 
-**AR-7 (issue #558) sits between AR-4 and the AR-5 cutover**, despite its
-number. AR-5a's inert foundations already landed; the cutover to `allocate`
-must not happen before AR-7, because version allocation happens *before* a
-build exists, so a release will need identity resolved even earlier than it
-does today — the release-vs-reconcile gap gets strictly worse under AR-5, not
-better. AR-7a and AR-7b are independently valuable and can land at any time.
+**AR-7 (issue #558) sat between AR-4 and the AR-5 cutover**, despite its
+number. AR-5a's inert foundations landed first; the cutover to unconditional
+allocation could not happen before AR-7, because version allocation happens
+*before* a build exists, so a release needs identity resolved even earlier
+than it did before — the release-vs-reconcile gap would have gotten strictly
+worse under AR-5 without AR-7 first. AR-7a and AR-7b were independently
+valuable and could land at any time; the AR-5 cutover itself has since
+landed — see "AR-5 — cutover status" below.
 
 AR-M stands alone and delivers value with or without the registry — it fixes
 drift that exists today. It is sequenced first because AR-2 otherwise adds a
@@ -247,6 +250,21 @@ third manifest representation to the two that already disagree.
 ---
 
 ## AR-5 — cutover status
+
+**The AR-5 cutover is complete.** `domain_adoption` (the per-domain
+`observe`/`promote`/`allocate` gate this whole section originally tracked) is
+dropped (migration `022_drop_domain_adoption`), and `AllocateVersion`,
+`CheckChartHermeticity`, and `RecordArtifact`'s pre-AR-7 direct-create
+fallback no longer branch on it at all: every domain allocates versions
+unconditionally, chart hermeticity is unconditionally enforced, and
+`RecordArtifact` unconditionally requires a prior `BeginPublish`. The
+per-domain admin-RPC gap the rest of this section spends most of its words
+worrying about ("no CLI/admin RPC exists to move a domain to/from
+`allocate`") is now moot — there is no more per-domain stage to move a
+domain into or out of, so nothing needs an RPC to do it. The subsections
+below are kept for their still-useful historical account of how AR-5b
+landed and what it changed; present-tense claims that assumed the
+per-domain gate still existed have been corrected in place.
 
 **AR-5a (inert foundations) is merged (#513)** — full as-built record in
 [PLAN-HISTORY.md](PLAN-HISTORY.md). **AR-5b (issue #829) wires `AllocateVersion`
@@ -257,8 +275,9 @@ plan:** the gate below ("do not start until AR-2's parity check is clean")
 was never satisfied — no parity-check tooling has ever been built or run.
 Despite that, `app-registry` and `tools` were independently promoted to
 `domain_adoption.stage = 'allocate'` directly against the `dev`/prod
-database (there is still no CLI/admin RPC for this — see "Deliberately NOT
-done" below), which made `AllocateVersion`'s adoption gate reject every real
+database (there was no CLI/admin RPC for this at the time — now moot, since
+the AR-5 cutover removed the per-domain stage entirely; see "Deliberately
+NOT done" below), which made `AllocateVersion`'s adoption gate reject every real
 release for those two domains from that point on with no caller ever
 noticing, because nothing called it: every domain, allocated or not, was
 silently still resolving its version from git tags. Issue #829 is that gap.
@@ -283,23 +302,33 @@ is the shared decision every call site now goes through instead of calling
 - `build_helm.go`'s `build-helm-chart` command, for consistency/completeness
   even though it is not on the production path (previous bullet).
 
-When the calling domain is at stage `allocate`, `AllocateVersion`'s result is
-used verbatim — git tags are never consulted. When it is not (the RPC's own
-adoption gate returns `FailedPrecondition`, its only use of that code),
-`resolveVersion` falls back to the pre-#829 tag-scanning path, byte-for-byte
-unchanged. Any other registry error (dial failure included) is fatal, not a
-fallback: silently reverting to tag-scanning for a domain that is actually at
-`allocate` is exactly the bug #829 reports, so a broken registry must fail
-the release rather than mask itself as a tag-based one.
+As landed by AR-5b, `resolveVersion` used `AllocateVersion`'s result verbatim
+when the calling domain was at `domain_adoption.stage = 'allocate'`, and fell
+back to the pre-#829 tag-scanning path, byte-for-byte unchanged, when the
+RPC's adoption gate rejected the domain with `FailedPrecondition`. **The AR-5
+cutover removed that gate, and the fallback along with it**: `AllocateVersion`
+now serves every domain unconditionally, so `FailedPrecondition` for adoption
+reasons can no longer happen, and `resolveVersion` no longer special-cases it
+— `isDomainAtAllocateStage` was deleted, and every call site now just checks
+whether a registry client is non-nil (i.e. whether the registry integration
+is opted in for this run). Once opted in, any `AllocateVersion` error is
+fatal to the release, full stop: silently reverting to tag-scanning would
+reintroduce exactly the bug #829 reports, so a broken registry must fail the
+release rather than mask itself as a tag-based one. A registry client that is
+never dialed at all (opt-in off) still uses the tag-scanning path — that is
+the only remaining fallback, and it is a global opt-in switch, not a
+per-domain one.
 
 **Deliberately NOT done**
-- No CLI/admin RPC exists to move a domain to/from `allocate` — both live
-  domains were cut over by hand-editing `domain_adoption` directly. Real,
-  separate scope before a future domain can be cut over without doing the
-  same.
+- ~~No CLI/admin RPC exists to move a domain to/from `allocate`.~~ **Moot as
+  of the AR-5 cutover** — `domain_adoption` is dropped, there is no more
+  per-domain stage to move, so nothing needs an RPC to move it. (Before the
+  cutover, both `app-registry` and `tools` had been cut over by hand-editing
+  `domain_adoption` directly — see "How AR-5b actually landed" above for that
+  history.)
 - **v1 (`release-app`/`release-charts`, `release.yml`) still creates git
-  tags for allocate-domain releases (`--create-git-tag` is unchanged there)**
-  — deliberately kept as this section's originally-planned "redundant record
+  tags on every release (`--create-git-tag` is unchanged there)** —
+  deliberately kept as this section's originally-planned "redundant record
   and disaster-recovery path": neither `release-app` nor `release-charts`
   ever pushes a tag to origin (apps' tags only reach origin as an accidental
   side effect of `create-combined-github-release-with-notes`; charts' never
@@ -309,25 +338,34 @@ the release rather than mask itself as a tag-based one.
   #982, since `FinalizePublish`'s version-of-record lives in App Registry,
   not a git tag; this bullet's "redundant record" rationale never applied
   to v2's own tag-creation (it never created one to begin with) and is now
-  moot for v2 entirely. No-op/digest-collision detection for
-  `allocate`-stage domains (issue #832) queries App Registry directly via
-  `GetArtifact(latest_published=true)`, moving off tag-scanning while keeping
-  git-tag fallback for domains not yet at `allocate`.
+  moot for v2 entirely. No-op/digest-collision detection (issue #832) queries
+  App Registry directly via `GetArtifact(latest_published=true)` when the
+  registry integration is opted in, falling back to tag-scanning only when
+  the opt-in itself is off (no registry client dialed) — not per domain.
 - Seeding a domain's starting version from its existing tags at cutover time
-  is moot for the two domains already cut over (done by hand) and remains
-  unbuilt for a future domain's cutover.
+  was only ever done by hand, for the two domains cut over early
+  (`app-registry`, `tools`) — the AR-5 cutover made allocation unconditional
+  for every other domain via a code change, not a per-domain seed step, so
+  no further seeding work remains to build.
 - The "allocated versions match tag-scanning" parity check against AR-2 soak
   data has still never been run — this predates #829 and is not resolved by
-  it.
+  it, or by the cutover.
 - The release workflow's version-allocation concurrency group is untouched.
 
-**Exit criteria (met by AR-5b)**
-- Concurrent releases of the same app cannot receive the same version, for a
-  domain at `allocate` (`AllocateVersion`'s transactional unique constraint).
-- A domain not at `allocate` still releases through the tag path, unchanged.
-- A fallback to tag-based allocation exists per domain, by moving its stage
-  back to `observe`/`promote` (untested against a real hand-edit, since no
-  admin RPC exists yet to make the switch — see above).
+**Exit criteria (met by AR-5b, then superseded by the AR-5 cutover)**
+- Concurrent releases of the same app cannot receive the same version, for
+  any domain (`AllocateVersion`'s transactional unique constraint spans every
+  owner unconditionally, not just domains previously at `allocate`).
+- ~~A domain not at `allocate` still releases through the tag path,
+  unchanged.~~ No longer applicable — there is no more per-domain `allocate`
+  distinction; every domain resolves through `AllocateVersion` once the
+  registry integration is opted in, and any `AllocateVersion` error is now
+  fatal to the release (see "What's wired" above).
+- ~~A fallback to tag-based allocation exists per domain, by moving its stage
+  back to `observe`/`promote`.~~ No longer applicable, for the same reason —
+  the only remaining fallback to tag-scanning is the global
+  `APP_REGISTRY_CICD_OPT_IN` opt-in switch (no registry client dialed at
+  all), not a per-domain stage.
 - **Not met:** allocated versions matching tag-scanning, verified against AR-2
   soak data — the soak/parity tooling this depended on still does not exist
   (see above).

@@ -707,18 +707,6 @@ type WritebackOutbox struct {
 	CreatedAt time.Time
 }
 
-// DomainAdoptionStage mirrors the `domain_adoption.stage` CHECK constraint
-// (migration 001) and ARCHITECTURE.md "Resolved questions" #3's per-domain
-// cutover table. AllocateVersion (AR-5) is the only capability gated on
-// this today; recording (AR-2) is deliberately never gated.
-type DomainAdoptionStage string
-
-const (
-	DomainAdoptionStageObserve  DomainAdoptionStage = "observe"
-	DomainAdoptionStagePromote  DomainAdoptionStage = "promote"
-	DomainAdoptionStageAllocate DomainAdoptionStage = "allocate"
-)
-
 // VersionAllocation is the result of a successful AllocateVersion call: the
 // newly reserved version, and what it was incremented from (empty for a
 // first release).

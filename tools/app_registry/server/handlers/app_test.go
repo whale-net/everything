@@ -849,6 +849,15 @@ func TestAssertApps_ThenRecordArtifact_NoReconcileNeeded(t *testing.T) {
 		t.Fatalf("record build: %v", err)
 	}
 
+	if _, err := artSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-new-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/new-app",
+		IdempotencyKey: "artifact-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-new-app", Version: "v1.0.0", Digest: "sha256:new1",
@@ -894,6 +903,15 @@ func TestAssertApps_ThenRecordArtifact_ChartOwnerFullNameMatches(t *testing.T) {
 	// PUBLISHED_NAME in release.yml: "${CHART#helm-}" against
 	// "helm-app-registry-app-registry" -- exactly what release.yml passes as
 	// --owner to BeginPublish/RecordArtifact for this chart.
+	if _, err := artSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "app-registry-app-registry", Version: "v0.0.13",
+		Repository:     "https://charts.example.com/app-registry-app-registry",
+		IdempotencyKey: "artifact-2-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "app-registry-app-registry", Version: "v0.0.13", Digest: "sha256:chart13",

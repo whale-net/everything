@@ -48,26 +48,37 @@ not accumulate ghosts. `app-registry-worker` sweeps `publishing` rows older
 than `WRITEBACK`-style configured staleness to `failed` with reason `stale`.
 Ships with AR-7b, not after it.
 
-**Backward compatibility during rollout.** `RecordArtifact` against no
-existing row keeps working, creating the row directly in `published` —
-allowed while a domain is at adoption stage `observe`, rejected at
-`allocate` (where allocation must have happened first). That is what lets CI
-adopt `BeginPublish` per domain instead of in one cutover.
+**Backward compatibility during rollout — removed by the AR-5 cutover.**
+`RecordArtifact` against no existing row used to keep working, creating the
+row directly in `published` — allowed while a domain was at adoption stage
+`observe`, rejected at `allocate` (where allocation must have happened
+first). That let CI adopt `BeginPublish` per domain instead of in one
+cutover. The AR-5 cutover removed the fallback entirely, for every domain:
+`RecordArtifact` now unconditionally requires a prior successful
+`BeginPublish` for that exact `(kind, owner, version)`, or it fails with
+`FailedPrecondition` ("no publishing artifact found ... `BeginPublish` must
+run before `RecordArtifact`"). See "Availability, restated per adoption
+stage" below for why this is no longer gated per domain, and PLAN.md's
+"AR-5 — cutover status" for how the cutover landed.
 
 **As built (AR-7b).** Everything above is real: migration `007` ships
 exactly this shape, plus an `artifact.fail_reason TEXT` column (not
 originally named in this design) so `FailPublish`'s caller-supplied reason
 and the reaper's hardcoded `"stale"` are both recorded, not just implied by
 the state transition. One decision this section left implicit and the
-implementation had to make explicit: the direct-create fallback is legal
-**only** at `observe`, not at `promote` too — `promote`'s own row in
-"Availability, restated per adoption stage" below already makes recording
+implementation had to make explicit at the time: the direct-create fallback
+was legal **only** at `observe`, not at `promote` too — `promote`'s own row
+in "Availability, restated per adoption stage" below already made recording
 mandatory there, so a domain at `promote` with no prior `publishing` row
-means `BeginPublish` itself failed (or was skipped), and that must surface
-as a rejection, not a silent fallback to the old behavior. The reaper
-(`worker/reaper`) is a third loop in `app-registry-worker`, alongside the
-outbox drainer, configured via `ENV.md`'s `ARTIFACT_REAPER_TIMEOUT` /
-`ARTIFACT_REAPER_POLL_INTERVAL` — see `worker/README.md`.
+meant `BeginPublish` itself had failed (or was skipped), and that had to
+surface as a rejection, not a silent fallback to the old behavior. **The AR-5
+cutover superseded this distinction entirely** — see the "Backward
+compatibility" callout above: the fallback is gone for every domain, not
+just gated more strictly at `promote`/`allocate`, so there is no longer a
+per-stage question to ask here. The reaper (`worker/reaper`) is a third loop
+in `app-registry-worker`, alongside the outbox drainer, configured via
+`ENV.md`'s `ARTIFACT_REAPER_TIMEOUT` / `ARTIFACT_REAPER_POLL_INTERVAL` — see
+`worker/README.md`.
 
 **Where `artifact.repository` comes from on `∅ → publishing`.** That branch
 creates the row from nothing, so it needs a value for the `NOT NULL`

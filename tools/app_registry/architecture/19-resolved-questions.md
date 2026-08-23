@@ -39,8 +39,17 @@ Adoption is **per domain**, not global. A domain can publish through the
 registry while every other domain stays on the existing tag-based path, which
 allows a fast, low-blast-radius rollout instead of one repo-wide switch.
 
-This needs a `domain_adoption` table keyed by domain, recording which
-capabilities the registry is authoritative for:
+> **Update (AR-5 cutover): superseded.** The per-domain rollout below
+> shipped and was used for the two domains cut over early (`app-registry`,
+> `tools`), but the `domain_adoption` table it depended on has since been
+> dropped — the AR-5 cutover replaced the per-domain gate with unconditional
+> allocation for every domain at once. See PLAN.md's "AR-5 — cutover status"
+> for how it landed. The table below is kept as the historical design
+> record of the originally-planned rollout mechanism, not a description of
+> current schema.
+
+This needed a `domain_adoption` table keyed by domain, recording which
+capabilities the registry was authoritative for:
 
 | Stage | Meaning |
 |---|---|

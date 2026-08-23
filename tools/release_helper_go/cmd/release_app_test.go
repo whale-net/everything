@@ -249,6 +249,15 @@ func TestExecuteReleaseApp_NoOpDigestDetection(t *testing.T) {
 	)
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	// Since the AR-5 cutover, previous-version lookup is unconditionally
+	// registry-authoritative whenever a client is present -- App Registry,
+	// not git tags, is asked for the previous published version.
+	fakeArtifactClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		if in.OwnerFullName == "demo-hello-go" && in.LatestPublished {
+			return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Version: "v0.9.0", Digest: sharedDigest, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED}}, nil
+		}
+		return &pb.GetArtifactResponse{}, nil
+	}
 
 	res, err := ExecuteReleaseApp(ReleaseAppParams{
 		Domain:               "demo",
@@ -329,6 +338,15 @@ func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
 	)
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	// Since the AR-5 cutover, previous-version lookup is unconditionally
+	// registry-authoritative whenever a client is present -- App Registry,
+	// not git tags, is asked for the previous published version.
+	fakeArtifactClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+		if in.OwnerFullName == "demo-hello-go" && in.LatestPublished {
+			return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Version: "v0.9.0", Digest: sharedDigest, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHED}}, nil
+		}
+		return &pb.GetArtifactResponse{}, nil
+	}
 
 	res, err := ExecuteReleaseApp(ReleaseAppParams{
 		Domain:               "demo",
@@ -372,20 +390,19 @@ func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
 	}
 }
 
-func TestExecuteReleaseApp_GRPCErrorsHandledGracefully(t *testing.T) {
+// TestExecuteReleaseApp_GRPCErrorsAreFatal proves that since the AR-5
+// cutover, a registry error is fatal whenever a client is opted in -- there
+// is no more per-domain adoption stage under which it would be a soft
+// warning.
+func TestExecuteReleaseApp_GRPCErrorsAreFatal(t *testing.T) {
 	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
 
-	// Create fake ArtifactClient where BeginPublish and RecordArtifact return errors
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
 	fakeArtifactClient.BeginPublishFn = func(ctx context.Context, in *pb.BeginPublishRequest, opts ...grpc.CallOption) (*pb.BeginPublishResponse, error) {
 		return nil, fmt.Errorf("registry unavailable")
 	}
-	fakeArtifactClient.RecordArtifactFn = func(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error) {
-		return nil, fmt.Errorf("registry write failure")
-	}
 
-	// The push should still succeed and return result even if registry warnings occur
-	res, err := ExecuteReleaseApp(ReleaseAppParams{
+	_, err := ExecuteReleaseApp(ReleaseAppParams{
 		Domain:               "demo",
 		App:                  "hello-go",
 		Version:              "v1.0.0",
@@ -399,11 +416,8 @@ func TestExecuteReleaseApp_GRPCErrorsHandledGracefully(t *testing.T) {
 		WorkspaceRoot:        ws,
 		ArtifactClient:       fakeArtifactClient,
 	})
-	if err != nil {
-		t.Fatalf("expected release-app to succeed despite non-fatal registry errors, got: %v", err)
-	}
-	if !res.Published {
-		t.Errorf("expected Published=true, got false")
+	if err == nil {
+		t.Fatal("expected a fatal error on BeginPublish failure, got nil")
 	}
 }
 
@@ -677,10 +691,19 @@ func TestExecuteReleaseApp_NonImageNoOpDigestDetection(t *testing.T) {
 	// already recorded for the previous version, simulating a no-op rebuild.
 	const noOpDigest = "sha256:sha123456789"
 	fakeArtifactClient.GetArtifactFn = func(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
-		if in.Version != "v0.2.2" {
-			t.Errorf("expected GetArtifact lookup for previous version v0.2.2, got %q", in.Version)
+		// Two distinct shapes reach here: releaser.go's own previous-version
+		// lookup (LatestPublished+BeforeVersion), and BinaryReleaser.
+		// FetchPublished's digest check for that resolved previous version
+		// (plain Version).
+		switch {
+		case in.LatestPublished && in.BeforeVersion == "v0.2.3":
+			return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Digest: noOpDigest, Version: "v0.2.2"}}, nil
+		case in.Version == "v0.2.2":
+			return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Digest: noOpDigest, Version: "v0.2.2"}}, nil
+		default:
+			t.Errorf("unexpected GetArtifact call: %+v", in)
+			return &pb.GetArtifactResponse{}, nil
 		}
-		return &pb.GetArtifactResponse{Artifact: &pb.Artifact{Digest: noOpDigest, Version: "v0.2.2"}}, nil
 	}
 
 	res, err := ExecuteReleaseApp(ReleaseAppParams{
@@ -783,7 +806,7 @@ func TestExecuteReleaseApp_NonImageRecordArtifactFailureCleansUpPublishing(t *te
 		return nil, fmt.Errorf("already exists: artifact tools-app-registry v0.2.3 already published with digest sha256:...")
 	}
 
-	res, err := ExecuteReleaseApp(ReleaseAppParams{
+	_, err := ExecuteReleaseApp(ReleaseAppParams{
 		Domain:               "tools",
 		App:                  "app-registry",
 		Version:              "v0.2.3",
@@ -798,11 +821,10 @@ func TestExecuteReleaseApp_NonImageRecordArtifactFailureCleansUpPublishing(t *te
 		WorkspaceRoot:        fakeWorkspaceRoot,
 		ArtifactClient:       fakeArtifactClient,
 	})
-	if err != nil {
-		t.Fatalf("unexpected error (RecordArtifact failure must be non-fatal): %v", err)
-	}
-	if !res.Published {
-		t.Errorf("expected Published=true (build itself succeeded), got false")
+	// Since the AR-5 cutover, RecordArtifact failure is fatal -- there is no
+	// more per-domain adoption stage under which it would be a soft warning.
+	if err == nil {
+		t.Fatal("expected a fatal error on RecordArtifact failure, got nil")
 	}
 
 	if len(fakeArtifactClient.RecordArtifactCalls) != 1 {

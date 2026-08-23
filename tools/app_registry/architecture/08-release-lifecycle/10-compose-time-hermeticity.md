@@ -1,22 +1,24 @@
 # Compose-time chart hermeticity (AR-7f, issue #558)
 
-**Built.** The reject in "Chart → image lockfile" below ("a chart may not
-pin an unknown artifact") only fires at *record* time — after the chart has
-already been packaged and pushed to ChartMuseum. AR-7f moves the same rule
-earlier, to *compose* time, for domains that have earned the stricter
-guarantee: `domain_adoption.stage = 'allocate'` (see "Availability, restated
-per adoption stage" above — the same per-domain gate every other AR-7
-tightening in this document uses, and "Rejected alternatives" below for why
-it is per-domain and not repo-wide).
+**Built, and now live/enforced for every domain.** The reject in "Chart →
+image lockfile" below ("a chart may not pin an unknown artifact") only fires
+at *record* time — after the chart has already been packaged and pushed to
+ChartMuseum. AR-7f moves the same rule earlier, to *compose* time. It
+originally did this only for domains that had earned the stricter guarantee
+via a per-domain `domain_adoption.stage = 'allocate'` gate; the AR-5 cutover
+removed that gate, so the rule now applies unconditionally to every domain
+(see "Relationship to AR-5" above and "Rejected alternatives" below for why
+it was originally built per-domain rather than repo-wide, and PLAN.md's
+"AR-5 — cutover status" for how the cutover landed).
 
 **Where the check runs, and why that is hermetic.** `ArtifactRegistry`
 gained one new read-only RPC, `CheckChartHermeticity(chart_domain, pins)`.
-Server-side (`server/handlers/chart_hermeticity.go`) it reads
-`chart_domain`'s adoption stage; at anything other than `allocate` it
-returns `enforced = false` and does no further work. At `allocate` it looks
-up each pin (`app_full_name`, `version`) via the same `Artifacts().
-GetArtifact` the CLI's `artifacts get` already exposes, and reports a
-violation for anything not found or not yet `ArtifactStatePublished`.
+Server-side (`server/handlers/chart_hermeticity.go`) it looks up each pin
+(`app_full_name`, `version`) via the same `Artifacts().GetArtifact` the
+CLI's `artifacts get` already exposes, and reports a violation for anything
+not found or not yet `ArtifactStatePublished`. It always computes real
+violations and returns `enforced = true` — there is no longer a per-domain
+branch that skips this and returns `enforced = false`.
 
 The caller is `tools/release_helper_go`'s `build-helm-chart` command
 (`cmd/chart_hermeticity.go`), called right after it resolves each member
@@ -42,16 +44,18 @@ That is what keeps `bazel build` — and `build-helm-chart` run without
 `--use-released`, i.e. every contributor's laptop — untouched. A transport
 or auth error talking to the registry (opt-in on, registry unreachable) is
 also **not** fatal: it is logged as a warning and the build proceeds, the
-same best-effort posture release.yml's other App Registry steps have at
-adoption stage `observe`/`promote`. Only an actual `enforced = true`
-response naming violations fails the chart build, and it fails naming every
-offending `app_full_name`/version pair.
+same best-effort posture `release.yml`'s other App Registry steps have.
+Only an actual `enforced = true` response naming violations fails the chart
+build, and it fails naming every offending `app_full_name`/version pair.
 
-**Ships inert.** No domain is at adoption stage `allocate` today (see
-"Relationship to AR-5" above) — `CheckChartHermeticity` always returns
-`enforced = false` in every environment that exists right now, the same way
-AR-5a shipped `AllocateVersion` fully implemented but unreachable. It starts
-to bite the first time a domain's `domain_adoption.stage` row is moved to
-`allocate`, which is a separate, explicit operational action, not part of
-this change.
-
+**Shipped inert, now live.** For a period after AR-7f merged, no domain was
+at adoption stage `allocate`, so `CheckChartHermeticity` always returned
+`enforced = false` in every environment that existed — the same way AR-5a
+shipped `AllocateVersion` fully implemented but unreachable. The AR-5
+cutover is what changed that: `domain_adoption` is dropped, the per-domain
+gate this section originally described is gone, and `CheckChartHermeticity`
+now always computes real violations and returns `enforced = true` for every
+domain, unconditionally, whenever the check runs at all (i.e. whenever
+`APP_REGISTRY_CICD_OPT_IN=true`). The `enforced` field is kept on the wire
+response for API stability even though it is now always `true` — it is not
+being removed from the proto.

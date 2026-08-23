@@ -115,7 +115,10 @@ func TestRecordArtifact_ChartLinkFailureRollsBackTransaction(t *testing.T) {
 	}
 
 	err := reg.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
-		_, _, ferr := r.Artifacts().RecordArtifact(ctx, chart, contains, repository.DomainAdoptionStageObserve)
+		if _, ferr := r.Artifacts().BeginPublish(ctx, chart.Kind, chart.ChartID, chart.Version, chart.BuildID, chart.Repository, repository.VersionSourceTag); ferr != nil {
+			return ferr
+		}
+		_, _, ferr := r.Artifacts().RecordArtifact(ctx, chart, contains)
 		return ferr
 	})
 
@@ -306,7 +309,7 @@ func TestRecordArtifact_DuplicateOwnerKindVersionRejectedByRealIndex(t *testing.
 	second.Digest = "sha256:second"
 
 	err := reg.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
-		_, _, ferr := r.Artifacts().RecordArtifact(ctx, second, nil, repository.DomainAdoptionStageObserve)
+		_, _, ferr := r.Artifacts().RecordArtifact(ctx, second, nil)
 		return ferr
 	})
 	if err == nil {
@@ -486,20 +489,6 @@ func TestResolveArtifact_ChartToImageJoin(t *testing.T) {
 
 // --- 7. version allocation (AR-5a) --------------------------------------
 
-// setDomainAdoptionStage cuts domain over directly via SQL -- there is no
-// RPC to do this in AR-5a (see PLAN.md's AR-5 status), the same way a real
-// operator would today: `INSERT ... ON CONFLICT DO UPDATE` against
-// domain_adoption.
-func setDomainAdoptionStage(t *testing.T, pool *pgxpool.Pool, domain, stage string) {
-	t.Helper()
-	_, err := pool.Exec(context.Background(), `
-		INSERT INTO domain_adoption (domain, stage) VALUES ($1, $2)
-		ON CONFLICT (domain) DO UPDATE SET stage = EXCLUDED.stage`, domain, stage)
-	if err != nil {
-		t.Fatalf("set domain_adoption stage for %s: %v", domain, err)
-	}
-}
-
 // allocateVersionTx runs Artifacts().AllocateVersion inside a real WithTx
 // transaction, exactly as handlers.ArtifactServer.AllocateVersion's retry
 // loop does in production -- the postgres repository method relies on its
@@ -532,7 +521,6 @@ func TestAllocateVersion_OrderingIsNumericNotLexical(t *testing.T) {
 
 	appID := seedApp(t, pool, "acme", "widget", "image")
 	buildID := seedBuild(t, pool, "run-order")
-	setDomainAdoptionStage(t, pool, "acme", "allocate")
 
 	// Record v1.10.0 FIRST, then v1.9.0 -- insertion order must not matter;
 	// only the numeric columns should. Both use recordArtifactTx so
@@ -575,7 +563,6 @@ func TestAllocateVersion_OrderingIsNumericNotLexical(t *testing.T) {
 func TestAllocateVersion_ConcurrentCallsNeverCollide(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	appID := seedApp(t, pool, "acme", "widget", "image")
-	setDomainAdoptionStage(t, pool, "acme", "allocate")
 
 	const workers = 8
 	var wg sync.WaitGroup
@@ -647,7 +634,6 @@ func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	ctx := authedCtx()
 	seedApp(t, pool, "acme", "widget", "image")
-	setDomainAdoptionStage(t, pool, "acme", "allocate")
 
 	srv := handlers.NewArtifactServer(reg)
 	req := &pb.AllocateVersionRequest{
@@ -687,12 +673,11 @@ func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
 	}
 }
 
-// TestAllocateVersion_AdoptionStageGateRejectsNonAllocateDomain proves the
-// per-domain cutover gate end to end through the real handler: a domain
-// with no domain_adoption row (every domain's implicit default -- see
-// migration 001) is rejected, and only after being explicitly cut over does
-// the identical request succeed.
-func TestAllocateVersion_AdoptionStageGateRejectsNonAllocateDomain(t *testing.T) {
+// TestAllocateVersion_UnconditionalAllocation proves that since the AR-5
+// cutover, AllocateVersion serves every domain unconditionally end to end
+// through the real handler and a real Postgres-backed registry -- there is
+// no more per-domain adoption gate to cut over first.
+func TestAllocateVersion_UnconditionalAllocation(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	ctx := authedCtx()
 	seedApp(t, pool, "acme", "widget", "image")
@@ -703,15 +688,9 @@ func TestAllocateVersion_AdoptionStageGateRejectsNonAllocateDomain(t *testing.T)
 		Increment: "patch", IdempotencyKey: "gate-1",
 	}
 
-	_, err := srv.AllocateVersion(ctx, req)
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition for a domain with no domain_adoption row, got %v", err)
-	}
-
-	setDomainAdoptionStage(t, pool, "acme", "allocate")
 	resp, err := srv.AllocateVersion(ctx, req)
 	if err != nil {
-		t.Fatalf("expected success once 'acme' is cut over to 'allocate', got %v", err)
+		t.Fatalf("expected success, got %v", err)
 	}
 	if resp.Version != "v0.0.1" {
 		t.Fatalf("expected the first-ever patch allocation to be v0.0.1, got %q", resp.Version)
@@ -1112,7 +1091,6 @@ func TestArtifactLifecycle_LegalTransitions(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	appID := seedApp(t, pool, "acme", "lifecycle", "image")
 	buildID := seedBuild(t, pool, "run-lifecycle")
-	setDomainAdoptionStage(t, pool, "acme", "allocate")
 
 	// ∅ -> allocated
 	alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "ghcr.io/acme/lifecycle", "patch", "")
@@ -1217,7 +1195,6 @@ func TestArtifactLifecycle_IllegalTransitionsRejected(t *testing.T) {
 	reg, pool := newTestRegistry(t)
 	appID := seedApp(t, pool, "acme", "illegal", "image")
 	buildID := seedBuild(t, pool, "run-illegal")
-	setDomainAdoptionStage(t, pool, "acme", "allocate")
 
 	t.Run("BeginPublish rejects an already-published row", func(t *testing.T) {
 		if _, _, err := recordArtifactTx(t, reg, repository.Artifact{
@@ -1244,7 +1221,7 @@ func TestArtifactLifecycle_IllegalTransitionsRejected(t *testing.T) {
 		}
 	})
 
-	t.Run("RecordArtifact rejects an allocated row with no prior BeginPublish, at a non-observe stage", func(t *testing.T) {
+	t.Run("RecordArtifact rejects an allocated row with no prior BeginPublish", func(t *testing.T) {
 		alloc, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appID, "ghcr.io/acme/illegal", "major", "")
 		if err != nil {
 			t.Fatalf("AllocateVersion: %v", err)
@@ -1254,11 +1231,11 @@ func TestArtifactLifecycle_IllegalTransitionsRejected(t *testing.T) {
 				Kind: repository.ArtifactKindImage, AppID: appID,
 				Repository: "ghcr.io/acme/illegal", Version: alloc.Version,
 				Digest: "sha256:illegal-skip-publish", BuildID: buildID,
-			}, nil, repository.DomainAdoptionStageAllocate)
+			}, nil)
 			return ferr
 		})
 		if !errors.Is(err, repository.ErrFailedPrecondition) {
-			t.Fatalf("expected ErrFailedPrecondition for RecordArtifact against an allocated row at domainStage=allocate, got %v", err)
+			t.Fatalf("expected ErrFailedPrecondition for RecordArtifact against an allocated row with no prior BeginPublish, got %v", err)
 		}
 	})
 
@@ -1502,6 +1479,14 @@ func TestRecordArtifact_PromotabilityIsRetroactive_Postgres(t *testing.T) {
 	_ = created
 
 	buildID := seedBuild(t, pool, "run-retro-pg")
+	if _, err := artSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-retro-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/acme/retro-app",
+		IdempotencyKey: "retro-pg-artifact-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
 	published, err := artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "acme-retro-app", Version: "v1.0.0", Digest: "sha256:retropg1",
@@ -1582,6 +1567,14 @@ func TestResolveManifestForPublish_PrefersExactBuildCommit_Postgres(t *testing.T
 		INSERT INTO build (git_sha, workflow_run_id) VALUES ('sha-exact-release', 'run-exact')
 		RETURNING build_id`).Scan(&buildID); err != nil {
 		t.Fatalf("seed build: %v", err)
+	}
+	if _, err := artSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-exact-svc", Version: "v1.0.0",
+		Repository:     "ghcr.io/acme/exact-svc",
+		IdempotencyKey: "exact-artifact-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
 	}
 	resp, err := artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -1691,7 +1684,6 @@ func TestListArtifacts_BuildIDFilter_AcrossAllFourStates(t *testing.T) {
 	appPublished := seedApp(t, pool, "acme", "run-log-published", "image")
 	appFailed := seedApp(t, pool, "acme", "run-log-failed", "image")
 	buildID := seedBuild(t, pool, "run-log-states")
-	setDomainAdoptionStage(t, pool, "acme", "allocate")
 
 	// allocated -- NOT tied to this (or any) build; must not appear below.
 	if _, err := allocateVersionTx(t, reg, repository.ArtifactKindImage, appAllocated, "ghcr.io/acme/run-log-allocated", "patch", ""); err != nil {
@@ -2325,12 +2317,16 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 	binArt := repository.Artifact{
 		Kind:          repository.ArtifactKindBinary,
 		AppID:         cliAppID,
+		Repository:    "github.com/whale-net/everything",
 		Digest:        "sha256:binary-test-digest-123",
 		Version:       "v0.1.0",
 		BuildID:       buildID,
 		Promotability: repository.PromotabilityPromotable,
 	}
-	recordedBin, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, binArt, nil, repository.DomainAdoptionStageObserve)
+	if _, err := reg.Artifacts().BeginPublish(ctx, binArt.Kind, binArt.AppID, binArt.Version, binArt.BuildID, binArt.Repository, repository.VersionSourceTag); err != nil {
+		t.Fatalf("BeginPublish binary: %v", err)
+	}
+	recordedBin, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, binArt, nil)
 	if err != nil {
 		t.Fatalf("RecordArtifact binary: %v", err)
 	}
@@ -2348,12 +2344,16 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 	fwArt := repository.Artifact{
 		Kind:          repository.ArtifactKindFirmware,
 		AppID:         firmwareAppID,
+		Repository:    "github.com/whale-net/everything",
 		Digest:        "sha256:firmware-test-digest-456",
 		Version:       "v0.1.0",
 		BuildID:       buildID,
 		Promotability: repository.PromotabilityNotPromotable,
 	}
-	recordedFw, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, fwArt, nil, repository.DomainAdoptionStageObserve)
+	if _, err := reg.Artifacts().BeginPublish(ctx, fwArt.Kind, fwArt.AppID, fwArt.Version, fwArt.BuildID, fwArt.Repository, repository.VersionSourceTag); err != nil {
+		t.Fatalf("BeginPublish firmware: %v", err)
+	}
+	recordedFw, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, fwArt, nil)
 	if err != nil {
 		t.Fatalf("RecordArtifact firmware: %v", err)
 	}
@@ -2372,12 +2372,16 @@ func TestRecordArtifact_BinaryAndFirmwareKinds(t *testing.T) {
 	toolBinArt := repository.Artifact{
 		Kind:          repository.ArtifactKindBinary,
 		AppID:         toolAppID,
+		Repository:    "github.com/whale-net/everything",
 		Digest:        "sha256:tool-test-digest-789",
 		Version:       "v0.1.0",
 		BuildID:       buildID,
 		Promotability: repository.PromotabilityPromotable,
 	}
-	recordedToolBin, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, toolBinArt, nil, repository.DomainAdoptionStageObserve)
+	if _, err := reg.Artifacts().BeginPublish(ctx, toolBinArt.Kind, toolBinArt.AppID, toolBinArt.Version, toolBinArt.BuildID, toolBinArt.Repository, repository.VersionSourceTag); err != nil {
+		t.Fatalf("BeginPublish tool binary: %v", err)
+	}
+	recordedToolBin, alreadyRecorded, err := reg.Artifacts().RecordArtifact(ctx, toolBinArt, nil)
 	if err != nil {
 		t.Fatalf("RecordArtifact tool binary: %v", err)
 	}
@@ -2398,6 +2402,13 @@ func TestRecordArtifact_Postgres_SameDigestMultipleVersions(t *testing.T) {
 	buildID := seedBuild(t, pool, "run-multi-ver")
 	const sharedDigest = "sha256:same-digest-across-versions-test-12345"
 
+	beginPublish := func(kind repository.ArtifactKind, version string) {
+		t.Helper()
+		if _, err := reg.Artifacts().BeginPublish(ctx, kind, appID, version, buildID, "ghcr.io/demo/multi-ver-app", repository.VersionSourceTag); err != nil {
+			t.Fatalf("BeginPublish(%s): %v", version, err)
+		}
+	}
+
 	// 1. Record v1.0.0
 	art1 := repository.Artifact{
 		Kind:          repository.ArtifactKindImage,
@@ -2407,7 +2418,8 @@ func TestRecordArtifact_Postgres_SameDigestMultipleVersions(t *testing.T) {
 		BuildID:       buildID,
 		Promotability: repository.PromotabilityPromotable,
 	}
-	rec1, already1, err := reg.Artifacts().RecordArtifact(ctx, art1, nil, repository.DomainAdoptionStageObserve)
+	beginPublish(art1.Kind, art1.Version)
+	rec1, already1, err := reg.Artifacts().RecordArtifact(ctx, art1, nil)
 	if err != nil {
 		t.Fatalf("RecordArtifact(v1.0.0): %v", err)
 	}
@@ -2424,7 +2436,8 @@ func TestRecordArtifact_Postgres_SameDigestMultipleVersions(t *testing.T) {
 		BuildID:       buildID,
 		Promotability: repository.PromotabilityPromotable,
 	}
-	_, _, err = reg.Artifacts().RecordArtifact(ctx, artPatch, nil, repository.DomainAdoptionStageObserve)
+	beginPublish(artPatch.Kind, artPatch.Version)
+	_, _, err = reg.Artifacts().RecordArtifact(ctx, artPatch, nil)
 	if err == nil {
 		t.Fatalf("expected RecordArtifact for patch bump v1.0.1 with same digest to fail")
 	}
@@ -2441,7 +2454,8 @@ func TestRecordArtifact_Postgres_SameDigestMultipleVersions(t *testing.T) {
 		BuildID:       buildID,
 		Promotability: repository.PromotabilityPromotable,
 	}
-	rec2, already2, err := reg.Artifacts().RecordArtifact(ctx, art2, nil, repository.DomainAdoptionStageObserve)
+	beginPublish(art2.Kind, art2.Version)
+	rec2, already2, err := reg.Artifacts().RecordArtifact(ctx, art2, nil)
 	if err != nil {
 		t.Fatalf("RecordArtifact(v2.0.0 with same digest): %v", err)
 	}
@@ -2514,6 +2528,14 @@ func TestMigration014DownRestoresPromotabilityColumn(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("RecordBuild: %v", err)
+	}
+	if _, err := artSrv.BeginPublish(ctxAuthed, &pb.BeginPublishRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-mig014-down-svc", Version: "v1.0.0",
+		Repository:     "ghcr.io/acme/mig014-down-svc",
+		IdempotencyKey: "mig014-down-artifact-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
 	}
 	published, err := artSrv.RecordArtifact(ctxAuthed, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -2595,7 +2617,10 @@ func TestGetArtifact_LatestPublished_Integration(t *testing.T) {
 			Digest:     tc.digest,
 			BuildID:    buildID,
 		}
-		if _, _, err := reg.Artifacts().RecordArtifact(ctx, art, nil, repository.DomainAdoptionStageObserve); err != nil {
+		if _, err := reg.Artifacts().BeginPublish(ctx, art.Kind, art.AppID, art.Version, art.BuildID, art.Repository, repository.VersionSourceTag); err != nil {
+			t.Fatalf("BeginPublish(%s): %v", tc.ver, err)
+		}
+		if _, _, err := reg.Artifacts().RecordArtifact(ctx, art, nil); err != nil {
 			t.Fatalf("RecordArtifact(%s): %v", tc.ver, err)
 		}
 	}

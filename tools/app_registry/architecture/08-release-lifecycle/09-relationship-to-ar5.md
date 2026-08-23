@@ -20,11 +20,22 @@ What AR-7 does to each of AR-5's remaining items:
 
 The one ordering rule: **do not move any domain to `allocate` before AR-7b
 lands.** Everything else in AR-7 can be built, merged, and run while every
-domain sits at `observe`. **AR-7b has landed** (migration `007`,
+domain sits at `observe`. **AR-7b landed first** (migration `007`,
 `AllocateVersion` writing `artifact` rows directly, `BeginPublish`/
-`FailPublish`, the reaper) — this rule is satisfied, and a domain may now be
-moved to `allocate` as far as AR-7 is concerned. No domain has been, as of
-this writing; that cutover is a separate, explicit operational action (see
-"Per-domain cutover gate" in the Version model section above), not part of
-this change.
+`FailPublish`, the reaper) — satisfying this rule before the cutover could
+happen.
+
+**The AR-5 cutover is now complete.** `domain_adoption` — the per-domain
+`observe`/`promote`/`allocate` stage this whole document is written against
+— is dropped. Every domain now allocates versions unconditionally:
+`AllocateVersion` serves any domain, `CheckChartHermeticity` is
+unconditionally enforced, and `RecordArtifact`'s pre-AR-7 direct-create
+fallback is gone entirely (see "Artifact lifecycle" above). AR-7b's fold-in
+of `version_allocation` into `artifact` (the row above, "Per-domain cutover
+gate, rollback by moving the stage back") was already load-bearing for this
+— the cutover only had to flip *who authors the version* for every domain at
+once, exactly as this table anticipated, because `artifact`'s
+`UNIQUE (owner_id, kind, version)` and state machine already spanned every
+domain regardless of stage. See PLAN.md's "AR-5 — cutover status" for the
+as-built account of how the cutover landed.
 

@@ -151,7 +151,10 @@ func (c *ghReleaseClient) uploadAsset(releaseID int, filePath, assetName string)
 }
 
 // recordPublishedArtifact records a published binary or firmware artifact in
-// App Registry. It intentionally stops at RecordArtifact and never calls
+// App Registry, via the same BeginPublish -> RecordArtifact/FailPublish
+// sequence releaser.go uses for apps/charts -- required since the AR-5
+// cutover, when RecordArtifact stopped accepting a direct create with no
+// prior BeginPublish. It intentionally stops there and never calls
 // PromotionRegistry.Promote: this CLI runs in release.yml under
 // app-registry-builder credentials, and Promote requires the distinct
 // app-registry-promoter-<env> role (server/auth/auth.go RequirePromoter).
@@ -159,6 +162,10 @@ func (c *ghReleaseClient) uploadAsset(releaseID int, filePath, assetName string)
 // see promote.yml's `kind` input) -- is exclusively human-triggered via the
 // (currently disabled, pending live Keycloak promoter clients) promote.yml
 // workflow. Recording an artifact here just makes it a promotable candidate.
+//
+// Every registry error here is best-effort (warn and skip, never fails the
+// release) -- the same posture this function always had, just now spanning
+// two RPCs instead of one.
 func recordPublishedArtifact(ctx context.Context, warn func(string), meta AppMetadata, version, digest, repoOwner, repoName, buildID string) error {
 	if defaultEnv("APP_REGISTRY_CICD_OPT_IN") != "true" {
 		return nil
@@ -189,6 +196,19 @@ func recordPublishedArtifact(ctx context.Context, warn func(string), meta AppMet
 		idempotencyKey = fmt.Sprintf("%s-%s-%s", meta.FullName(), version, strings.ToLower(kind.String()))
 	}
 
+	beginReq := &pb.BeginPublishRequest{
+		Kind:           kind,
+		OwnerFullName:  meta.FullName(),
+		Version:        version,
+		BuildId:        buildID,
+		Repository:     repository,
+		IdempotencyKey: idempotencyKey + "-begin",
+	}
+	if _, err := defaultArtifactRecorder.BeginPublish(ctx, beginReq); err != nil {
+		warn(fmt.Sprintf("App Registry record artifact skipped (BeginPublish failed): %v", err))
+		return nil
+	}
+
 	req := &pb.RecordArtifactRequest{
 		BuildId:        buildID,
 		Kind:           kind,
@@ -202,6 +222,14 @@ func recordPublishedArtifact(ctx context.Context, warn func(string), meta AppMet
 
 	resp, err := defaultArtifactRecorder.RecordArtifact(ctx, req)
 	if err != nil {
+		failReq := &pb.FailPublishRequest{
+			Kind:           kind,
+			OwnerFullName:  meta.FullName(),
+			Version:        version,
+			Reason:         fmt.Sprintf("RecordArtifact failed: %v", err),
+			IdempotencyKey: idempotencyKey + "-fail",
+		}
+		_, _ = defaultArtifactRecorder.FailPublish(ctx, failReq)
 		warn(fmt.Sprintf("App Registry record artifact skipped (registry error): %v", err))
 		return nil
 	}

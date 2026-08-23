@@ -29,7 +29,6 @@ erDiagram
 | `writeback_outbox` | append-only + claimed | Transactional outbox, drained by the worker. |
 | `idempotency_key` | append-only | Key → prior response, for safe CI retries. |
 | `version_allocation` | append-only | AR-5a. `AllocateVersion`'s reservation ledger — see "Version model" below. |
-| `domain_adoption` | mutable | One row per domain; `stage` ∈ observe/promote/allocate. See "Resolved questions" #3. |
 | `reconcile_watermark` | singleton, mutable | Migration 006 (issue #545). Exactly one row (`id = 1`), seeded as a sentinel. Guards `Reconcile` against a stale (older-commit) call — see "Reconcile watermark" below. |
 | `app_manifest` / `chart_manifest` | append-only, content-addressed | Migration 010 (AR-8, issue #587). One row per DISTINCT manifest per owner, ever — `UNIQUE (owner_id, manifest_hash)`. `app`/`chart` themselves are pure identity (`domain`, `name`, `status`, first/last-seen); everything else is read off the owner's CURRENT manifest via `v_current_app`/`v_current_chart`. See "App identity vs. per-build manifest snapshot" below. |
 | `app_manifest_history` / `chart_manifest_history` | **SCD2** | Migration 010 (AR-8). The `main` sweep timeline — `valid_from`/`valid_to`, written ONLY by `ReconcileApps`. Partial unique index on current (`valid_to IS NULL`) rows backs `v_current_app`'s point lookup. |

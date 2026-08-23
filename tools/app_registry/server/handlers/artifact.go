@@ -204,16 +204,7 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "RecordArtifact",
 		func() proto.Message { return &pb.RecordArtifactResponse{} },
 		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
-			owner, domain, err := s.resolveOwner(ctx, r, kind, req.OwnerFullName)
-			if err != nil {
-				return nil, err
-			}
-			// AR-7b: RecordArtifact's direct-create fallback (no prior
-			// BeginPublish) is only legal while this owner's domain is
-			// still at adoption stage "observe" -- see
-			// repository.ArtifactRepository.RecordArtifact's doc comment
-			// and ARCHITECTURE.md "Backward compatibility during rollout".
-			stage, err := r.DomainAdoption().GetStage(ctx, domain)
+			owner, _, err := s.resolveOwner(ctx, r, kind, req.OwnerFullName)
 			if err != nil {
 				return nil, err
 			}
@@ -232,7 +223,7 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 				a.ChartID = owner
 			}
 
-			artifact, alreadyRecorded, err := r.Artifacts().RecordArtifact(ctx, a, containedImagesFromPB(req.Contains), stage)
+			artifact, alreadyRecorded, err := r.Artifacts().RecordArtifact(ctx, a, containedImagesFromPB(req.Contains))
 			if err != nil {
 				return nil, err
 			}
@@ -246,8 +237,8 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 }
 
 // resolveOwner resolves owner_full_name to an app_id or chart_id (and its
-// domain, needed by RecordArtifact's AR-7b adoption-stage check), depending
-// on kind, wrapping repository.ErrNotFound as ErrOwnerNotReconciled (which
+// domain), depending on kind, wrapping repository.ErrNotFound as
+// ErrOwnerNotReconciled (which
 // itself wraps ErrInvalidArgument — an unknown owner is a caller mistake,
 // not a "row doesn't exist yet" case). The wrapped message names the owner
 // and hints at the most common cause (see issue #548): a release running
@@ -487,12 +478,10 @@ func (s *ArtifactServer) releaseToolsS3PublicURLClient() (*s3.Client, error) {
 // backstop against a pathological hot loop, not an expected steady state.
 const maxAllocateVersionAttempts = 5
 
-// AllocateVersion implements phase AR-5's version allocation RPC. AR-5a
-// ships this fully working and tested but wired to nothing: no
-// domain_adoption row is ever set to 'allocate' by this change, and
-// tools/release_helper_go/cmd/plan.go's git-tag path (autoIncrementVersion)
-// is untouched — see PLAN.md's AR-5 status for what remains before any
-// domain can actually be cut over.
+// AllocateVersion implements phase AR-5's version allocation RPC. As of the
+// AR-5 cutover every domain allocates unconditionally — there is no more
+// per-domain adoption gate; tools/release_helper_go's resolveVersion calls
+// this for every domain it has a registry client for.
 func (s *ArtifactServer) AllocateVersion(ctx context.Context, req *pb.AllocateVersionRequest) (*pb.AllocateVersionResponse, error) {
 	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
 		return nil, err
@@ -518,23 +507,9 @@ func (s *ArtifactServer) AllocateVersion(ctx context.Context, req *pb.AllocateVe
 		return nil, status.Errorf(codes.InvalidArgument, `increment must be "major", "minor", or "patch" (got %q); or set explicit_version`, req.Increment)
 	}
 
-	domain, ownerID, repo, err := s.resolveOwnerAndDomain(ctx, kind, req.OwnerFullName)
+	_, ownerID, repo, err := s.resolveOwnerAndDomain(ctx, kind, req.OwnerFullName)
 	if err != nil {
 		return nil, err
-	}
-
-	// Per-domain adoption gate — ARCHITECTURE.md "Resolved questions" #3 and
-	// PLAN.md's AR-5 scope: AllocateVersion serves only domains explicitly
-	// cut over to stage "allocate", so a misconfigured caller fails loudly
-	// rather than silently allocating from the wrong source of truth. No
-	// domain is at "allocate" as of AR-5a.
-	stage, err := s.repo.DomainAdoption().GetStage(ctx, domain)
-	if err != nil {
-		return nil, mapRepoErr(err)
-	}
-	if stage != repository.DomainAdoptionStageAllocate {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"domain %q is at adoption stage %q; AllocateVersion only serves domains at stage \"allocate\"", domain, stage)
 	}
 
 	var resp *pb.AllocateVersionResponse
