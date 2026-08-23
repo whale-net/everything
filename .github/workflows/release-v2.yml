@@ -492,6 +492,11 @@ jobs:
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
 
       - name: Parse resolved plan
         id: resolved-plan
@@ -532,6 +537,11 @@ jobs:
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
 
       - name: Plan release
         id: plan
@@ -684,6 +694,11 @@ jobs:
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
 
       - name: Install Helm
         if: ${{ github.event.inputs.helm_charts != '' }}
@@ -788,6 +803,11 @@ jobs:
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
 
       # Only package whichever of the two apps is actually present in this
       # run's release matrix -- the job-level `if:` above only guarantees
@@ -843,6 +863,11 @@ jobs:
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
 
       - name: Generate summary
         if: steps.download-tools.outcome == 'success'
