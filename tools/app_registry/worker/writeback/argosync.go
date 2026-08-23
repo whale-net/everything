@@ -173,6 +173,31 @@ func isTerminalArgoSyncState(syncStatus, healthStatus string) bool {
 	return healthStatus == "Degraded"
 }
 
+// NoopArgoSyncActivities is the zero-config fallback registered instead of
+// a real *ArgoSyncActivities when ARGOCD_SERVER is unset (see
+// ../main.go's opt-in gate, issue #1030 scope item 4) -- so `bazel
+// test`/local dev/Tilt keep working with zero ArgoCD configuration. Both
+// methods skip the ArgoCD call entirely, report success, and write no
+// promotion_sync_event rows. This is a runtime-configurability opt-in, not
+// an environment exemption: it does not touch FR2/NFR6, which govern
+// promotion TARGET environments (dev/staging/prod), not whether a given
+// deployment has ArgoCD configured at all.
+type NoopArgoSyncActivities struct{}
+
+// TriggerArgoRefresh implements the same signature as
+// (*ArgoSyncActivities).TriggerArgoRefresh but is a pure no-op. See
+// NoopArgoSyncActivities's doc comment.
+func (NoopArgoSyncActivities) TriggerArgoRefresh(ctx context.Context, in ArgoSyncInput) error {
+	return nil
+}
+
+// PollArgoSyncStatus implements the same signature as
+// (*ArgoSyncActivities).PollArgoSyncStatus but is a pure no-op, returning a
+// zero-value ArgoSyncResult. See NoopArgoSyncActivities's doc comment.
+func (NoopArgoSyncActivities) PollArgoSyncStatus(ctx context.Context, in ArgoSyncInput) (ArgoSyncResult, error) {
+	return ArgoSyncResult{}, nil
+}
+
 // recordSyncEvent is TriggerArgoRefresh/PollArgoSyncStatus's shared
 // promotion_sync_event write -- see repository.PromotionRepository.
 // RecordSyncEvent's doc comment (append-only, NFR4).

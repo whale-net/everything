@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/worker"
 
+	"github.com/whale-net/everything/libs/go/argocd"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
@@ -134,6 +135,33 @@ func run() error {
 	// this write" reason.
 	recorder := &writeback.Recorder{Registry: repo}
 	w.RegisterActivityWithOptions(recorder.RecordWritebackResult, activityOptions(writeback.ActivityRecordWritebackResult))
+
+	// TriggerArgoRefresh/PollArgoSyncStatus (FR1-FR5, NFR3, NFR6, issue
+	// #1030) are opt-in like the gitops branch above: only a real
+	// argocd.Client + writeback.ArgoSyncActivities are constructed when
+	// ARGOCD_SERVER is set, so `bazel test`/local dev/Tilt keep working
+	// with zero ArgoCD config -- see writeback.NoopArgoSyncActivities's doc
+	// comment for why this gate is about runtime configurability, not an
+	// environment exemption (FR2/NFR6 still hold: every promotion that DOES
+	// reach WritebackWorkflow gets these activities called, regardless of
+	// its target environment).
+	if argoServer := os.Getenv("ARGOCD_SERVER"); argoServer != "" {
+		argoClient, aerr := argocd.NewClient(argocd.Config{
+			ServerURL: argoServer,
+			AuthToken: os.Getenv("ARGOCD_AUTH_TOKEN"),
+		}, nil)
+		if aerr != nil {
+			return fmt.Errorf("configure argocd client: %w", aerr)
+		}
+		logger.Info("using real ArgoCD sync activities", "server", argoServer)
+		argoSync := &writeback.ArgoSyncActivities{Client: argoClient, Registry: repo}
+		w.RegisterActivityWithOptions(argoSync.TriggerArgoRefresh, activityOptions(writeback.ActivityTriggerArgoRefresh))
+		w.RegisterActivityWithOptions(argoSync.PollArgoSyncStatus, activityOptions(writeback.ActivityPollArgoSyncStatus))
+	} else {
+		noopArgoSync := &writeback.NoopArgoSyncActivities{}
+		w.RegisterActivityWithOptions(noopArgoSync.TriggerArgoRefresh, activityOptions(writeback.ActivityTriggerArgoRefresh))
+		w.RegisterActivityWithOptions(noopArgoSync.PollArgoSyncStatus, activityOptions(writeback.ActivityPollArgoSyncStatus))
+	}
 
 	// ReleaseWorkflow (issue #889), registered on the same task queue as
 	// WritebackWorkflow -- release.TaskQueue == writeback.TaskQueue, see
