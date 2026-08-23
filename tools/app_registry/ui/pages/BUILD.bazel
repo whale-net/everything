@@ -34,11 +34,20 @@ templ_library(
 # danger-zone card chrome each map onto ConfirmProps fields differently per
 # call site, and no pre-existing handler test asserted the rendered Confirm
 # markup itself.
+#
+# button_card_migration_test.go (issue #1005, FR2) shares this target too:
+# it guards the remaining raw daisyUI btn/card call sites' migration onto
+# htmxui.Button/Card across promote/rollback/release_status/release_trigger's
+# mb-4-wrapped info cards and every plain (no-color-variant) and coloured
+# Button call site in builds/deployments/drift_audit/environment_diff/
+# apps_catalog/environment_form -- none of which any pre-existing test
+# asserted the rendered class/structure of.
 go_test(
     name = "role_gating_test",
     size = "small",
     srcs = [
         "app_detail_test.go",
+        "button_card_migration_test.go",
         "confirm_migration_test.go",
         "role_gating_test.go",
     ],
