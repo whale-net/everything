@@ -63,6 +63,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
@@ -350,7 +351,41 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		return FinalizeResult{}, fmt.Errorf("finalize publish: %w", err)
 	}
 
+	// buildID gates BeginPublish/RecordArtifact for every target kind below
+	// (apps, charts, and publishCLIBinaries) -- planBuildID's doc comment
+	// documents this as an accepted, tolerated skip ("empty build_id ->
+	// registry recording simply skipped"), on the assumption that an empty
+	// value is rare. In practice, for this activity's real invocation
+	// (release_helper_go plan run as a subprocess with no GITHUB_RUN_ID/
+	// GITHUB_SHA in its environment -- see this file's package doc
+	// comment), planRelease's own RecordBuild call (plan.go's "2.
+	// RecordBuild" step) has been observed to consistently leave
+	// PlanResult.BuildID empty, which -- because of json:"build_id,omitempty"
+	// -- disappears from RawJSON entirely rather than surfacing as an
+	// error anywhere. Confirmed against a real prod release
+	// (b9fa55ce-01c9-45c4-b56b-2b4a719b89d9, tools-app-registry/
+	// tools-release_helper_go v0.7.0): FinalizePublish reported
+	// Succeeded:true with the right EffectiveVersion, but no
+	// data.build row and no data.artifact row past "allocated" ever
+	// existed for it -- the "tolerated skip" was silently skipping every
+	// single Temporal-driven release, not just a rare edge case.
+	//
+	// A syntactically valid but unresolvable build_id is safe to use here:
+	// neither BeginPublish nor RecordArtifact enforce a foreign key into
+	// `build` (data.artifact.build_id has no FK constraint), and
+	// resolveManifestForPublish's build_id -> git_sha lookup is already
+	// documented as best-effort, silently falling back to the owner's
+	// current manifest interval when the id doesn't resolve to a real row
+	// -- exactly the same fallback that already fires today whenever
+	// buildID is genuinely empty. So synthesizing one only trades "registry
+	// recording silently skipped forever" for "registry recording
+	// succeeds, with slightly less precise manifest/build provenance than
+	// a real App Registry build_id would give" -- a strict improvement,
+	// not a new failure mode.
 	buildID := planBuildID(plan.RawJSON)
+	if buildID == "" {
+		buildID = uuid.NewString()
+	}
 
 	var ghcrToken string
 	if nonCLIAppCount > 0 {
