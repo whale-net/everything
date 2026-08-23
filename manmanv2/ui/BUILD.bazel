@@ -49,8 +49,14 @@ go_binary(
 go_test(
     name = "ui_test",
     size = "small",
-    srcs = ["main_test.go"],
+    srcs = [
+        "main_test.go",
+        "templ_render_test.go",
+    ],
     embed = [":ui_lib"],
+    deps = [
+        "//libs/go/htmxui",
+    ],
 )
 
 release_app(
