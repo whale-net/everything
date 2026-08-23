@@ -120,7 +120,7 @@ jobs:
       app_registry_version: ${{ steps.probe.outputs.app_registry_version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 
@@ -416,7 +416,7 @@ jobs:
 
       - name: Upload release tools artifact
         if: steps.probe.outputs.needs_build == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-tools
           path: /tmp/release-tools/
@@ -503,7 +503,7 @@ jobs:
       # download for why.
       - name: Checkout code (resolved plan)
         if: github.event.inputs.resolved_plan != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 
@@ -562,7 +562,7 @@ jobs:
       # `release-helper plan` derivation, unchanged from pre-#927 behavior.
       - name: Checkout code
         if: github.event.inputs.resolved_plan == ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
           fetch-depth: 0
@@ -629,7 +629,7 @@ jobs:
     if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 
@@ -667,7 +667,7 @@ jobs:
           done
 
       - name: Upload OpenAPI spec artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openapi-specs
           path: /tmp/openapi-specs/*.json
@@ -724,7 +724,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
           fetch-depth: 0
@@ -804,7 +804,7 @@ jobs:
 
       - name: Upload build manifest artifact
         if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: build-manifest
           path: /tmp/build-manifest/apps/*.json
@@ -812,7 +812,7 @@ jobs:
 
       - name: Upload chart sources artifact
         if: ${{ github.event.inputs.helm_charts != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chart-sources
           path: /tmp/build-manifest/charts/
@@ -840,7 +840,7 @@ jobs:
        contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"'))
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 
@@ -892,7 +892,7 @@ jobs:
           done
 
       - name: Upload CLI binaries artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cli-binaries
           path: /tmp/cli-binaries/
@@ -911,7 +911,7 @@ jobs:
       CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 

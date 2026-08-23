@@ -39,7 +39,7 @@ runs:
   using: composite
   steps:
     - name: Cache Bazel External Repositories (all sizes)
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         # Cache the entire external/ directory — this complements setup-bazel's
         # per-repo external-cache (which only caches repos >=10MB) by also
@@ -118,7 +118,7 @@ runs:
 
     - name: Setup Bazel with Optimized Caching
       id: setup-bazel
-      uses: bazel-contrib/setup-bazel@0.15.0
+      uses: bazel-contrib/setup-bazel@0.19.0
       with:
         # Enable bazelisk binary caching (minimal overhead)
         bazelisk-cache: true

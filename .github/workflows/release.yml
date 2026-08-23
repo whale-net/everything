@@ -76,7 +76,7 @@ jobs:
       app_registry_version: ${{ steps.probe.outputs.app_registry_version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: App Registry Auth
         if: inputs.use_source_tools != true && github.event.inputs.use_source_tools != 'true'
@@ -305,7 +305,7 @@ jobs:
 
       - name: Upload release tools artifact
         if: steps.probe.outputs.needs_build == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-tools
           path: /tmp/release-tools/
@@ -327,7 +327,7 @@ jobs:
       versions: ${{ steps.plan.outputs.versions }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -377,7 +377,7 @@ jobs:
     if: needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-env
@@ -413,7 +413,7 @@ jobs:
           done
 
       - name: Upload OpenAPI spec artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openapi-specs
           path: /tmp/openapi-specs/*.json
@@ -428,7 +428,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -511,7 +511,7 @@ jobs:
 
       - name: Upload release notes artifact
         if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: /tmp/release-notes/*.md
@@ -519,7 +519,7 @@ jobs:
 
       - name: Upload digest-check artifact
         if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digest-check
           path: /tmp/digest-check/*.json
@@ -527,7 +527,7 @@ jobs:
 
       - name: Upload release assets artifact
         if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets
           path: /tmp/assets/
@@ -544,7 +544,7 @@ jobs:
       CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -587,7 +587,7 @@ jobs:
           version: 'latest'
 
       - name: Download digest-check artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: digest-check*
           path: /tmp/digest-check
@@ -675,14 +675,14 @@ jobs:
 
       - name: Upload chart release notes artifact
         if: ${{ github.event.inputs.dry_run == 'false' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-notes-charts
           path: /tmp/release-notes/*.md
           if-no-files-found: ignore
 
       - name: Upload helm chart artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helm-charts
           path: /tmp/helm-charts/*.tgz
@@ -695,7 +695,7 @@ jobs:
     if: always() && !cancelled() && ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) || (needs.plan-release.outputs.chart-matrix != '' && fromJson(needs.plan-release.outputs.chart-matrix).include[0] != null)) && github.event.inputs.dry_run == 'false' && (needs.release.result == 'success' || needs.release.result == 'skipped') && (needs.release-helm-charts.result == 'success' || needs.release-helm-charts.result == 'skipped') && (needs.build-openapi-specs.result == 'success' || needs.build-openapi-specs.result == 'skipped')
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -709,7 +709,7 @@ jobs:
           app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
 
       - name: Download release notes artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-notes*
           path: /tmp/release-notes
@@ -717,7 +717,7 @@ jobs:
         continue-on-error: true
 
       - name: Download OpenAPI spec artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: openapi-spec*
           path: /tmp/openapi-specs
@@ -725,7 +725,7 @@ jobs:
         continue-on-error: true
 
       - name: Download digest-check artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: digest-check*
           path: /tmp/digest-check
@@ -733,7 +733,7 @@ jobs:
         continue-on-error: true
 
       - name: Download release assets artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-assets*
           path: /tmp/assets
@@ -741,7 +741,7 @@ jobs:
         continue-on-error: true
 
       - name: Download helm chart artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: helm-charts*
           path: /tmp/helm-charts
@@ -815,7 +815,7 @@ jobs:
       CHART_REPO_URL: ${{ vars.CHART_REPO_URL || 'https://charts.whalenet.dev' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download release tools
         id: download-tools
