@@ -170,11 +170,9 @@ func promotionSyncOutcomeLabel(o pb.PromotionSyncOutcome) (label, class string) 
 }
 
 // PromotionSyncOutcomeBadge is the one place a promotion's ArgoCD sync
-// outcome renders anywhere in this UI (issue #1032) -- the Promotion
-// Details page (pages.PromotionDetails) today; Story 3's inline badge on
-// existing promotion-history views reuses this same component once that
-// per-row data plumbing lands (see pages/app_detail.templ's
-// promotionTimelineCard doc comment).
+// outcome renders anywhere in this UI (issue #1032): the Promotion Details
+// page (pages.PromotionDetails) and, inline, the promotion-history timeline
+// (Story 3, pages/app_detail.templ's promotionTimelineCard).
 templ PromotionSyncOutcomeBadge(o pb.PromotionSyncOutcome) {
 	{{ label, class := promotionSyncOutcomeLabel(o) }}
 	<span class={ "badge", class }>{ label }</span>
