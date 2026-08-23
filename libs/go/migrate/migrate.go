@@ -3,7 +3,9 @@ package migrate
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/golang-migrate/migrate/v4"
@@ -63,6 +65,55 @@ func (r *Runner) Down() error {
 	}
 
 	return nil
+}
+
+// Migrate moves the schema to the given version, running up or down steps as
+// needed - direction is determined automatically from the current DB version.
+func (r *Runner) Migrate(version uint) error {
+	m, err := r.createMigrator()
+	if err != nil {
+		return err
+	}
+	// Don't defer m.Close() here - we're using WithInstance which doesn't own the DB
+
+	if err := m.Migrate(version); err != nil && err != migrate.ErrNoChange {
+		return fmt.Errorf("failed to migrate to version %d: %w", version, err)
+	}
+
+	return nil
+}
+
+// LatestVersion returns the highest migration version embedded in this
+// binary's migration source (independent of what's applied in the DB).
+// Comparing this against the DB's current version is how RunCLI detects a
+// rollback: if the DB is already ahead of this binary's latest known
+// migration, the target is behind the current state and the schema needs to
+// go down, not up.
+func (r *Runner) LatestVersion() (uint, error) {
+	sourceDriver, err := iofs.New(r.migrations, r.migrateDir)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create migration source: %w", err)
+	}
+	defer sourceDriver.Close()
+
+	version, err := sourceDriver.First()
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to read first migration version: %w", err)
+	}
+
+	for {
+		next, err := sourceDriver.Next(version)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return version, nil
+			}
+			return 0, fmt.Errorf("failed to read next migration version: %w", err)
+		}
+		version = next
+	}
 }
 
 // Steps runs n migrations (positive = up, negative = down)

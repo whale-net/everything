@@ -127,18 +127,43 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 		return
 	}
 
-	// Default: run up
-	log.Println("Running migrations...")
-
-	var migrationErr error
-	if *tracked {
-		migrationErr = runner.UpWithTracking()
-	} else {
-		migrationErr = runner.Up()
+	// Default: reconcile the schema to this binary's latest known migration
+	// version. Normally that means running up, but if the DB is already
+	// ahead of this image's latest migration (e.g. an older image re-runs
+	// this job after a rollback), Up() would silently no-op and leave the
+	// newer schema in place. Detect that case and migrate down instead.
+	targetVersion, err := runner.LatestVersion()
+	if err != nil {
+		log.Fatalf("Failed to determine latest migration version: %v", err)
 	}
 
-	if migrationErr != nil {
-		log.Fatalf("Failed to run migrations: %v", migrationErr)
+	currentVersion, dirty, err := runner.Version()
+	if err != nil {
+		log.Fatalf("Failed to get current migration version: %v", err)
+	}
+	if dirty {
+		log.Fatalf("Database is in dirty state (version %d). Use -force to recover", currentVersion)
+	}
+
+	ranUp := false
+	if currentVersion > targetVersion {
+		log.Printf("Detected rollback: DB is at version %d, this image's latest migration is %d. Migrating down...", currentVersion, targetVersion)
+		if err := runner.Migrate(targetVersion); err != nil {
+			log.Fatalf("Failed to roll back migrations: %v", err)
+		}
+		log.Println("Rollback completed successfully")
+	} else {
+		log.Println("Running migrations...")
+		var migrationErr error
+		if *tracked {
+			migrationErr = runner.UpWithTracking()
+		} else {
+			migrationErr = runner.Up()
+		}
+		if migrationErr != nil {
+			log.Fatalf("Failed to run migrations: %v", migrationErr)
+		}
+		ranUp = true
 	}
 
 	v, dirty, err := runner.Version()
@@ -147,15 +172,17 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 	}
 	log.Printf("Migration completed successfully. Version: %d (dirty: %v)", v, dirty)
 
-	// Run seeders (up only — already returned above for down/steps/etc.)
-	for i, seeder := range o.seeders {
-		log.Printf("Running seeder %d/%d...", i+1, len(o.seeders))
-		if err := seeder(context.Background(), db); err != nil {
-			log.Fatalf("Seeder %d failed: %v", i+1, err)
+	// Run seeders (up only — skipped on rollback, and already returned above for down/steps/etc.)
+	if ranUp {
+		for i, seeder := range o.seeders {
+			log.Printf("Running seeder %d/%d...", i+1, len(o.seeders))
+			if err := seeder(context.Background(), db); err != nil {
+				log.Fatalf("Seeder %d failed: %v", i+1, err)
+			}
 		}
-	}
-	if len(o.seeders) > 0 {
-		log.Printf("All seeders completed successfully")
+		if len(o.seeders) > 0 {
+			log.Printf("All seeders completed successfully")
+		}
 	}
 }
 
