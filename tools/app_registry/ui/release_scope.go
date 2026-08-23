@@ -40,11 +40,14 @@ func releaseTargetKindFromApp(app *pb.App) pb.ArtifactKind {
 // scopeCatalog is the releasable universe a scope string resolves against:
 // every ACTIVE app and chart (never MISSING/ARCHIVED -- releasing a target
 // the registry no longer sees in the latest manifest reconcile, or that a
-// human has already archived, makes no sense). Fetched once per
-// resolveReleaseScope call via one ListApps({}) + one ListCharts({}), the
-// same unfiltered-then-filter-client-side pattern every other screen in
-// this package already uses (see e.g. deployments_data.go, apps_data.go) --
-// not a second, RPC-side reimplementation of domain/status filtering.
+// human has already archived, makes no sense). This includes cli/binary
+// apps -- see targetsFromAppsAndCharts' doc comment for why they're
+// releasable (as IMAGE-kind targets) despite releaseTargetKindFromApp
+// reporting BINARY for them. Fetched once per resolveReleaseScope call via
+// one ListApps({}) + one ListCharts({}), the same unfiltered-then-filter-
+// client-side pattern every other screen in this package already uses (see
+// e.g. deployments_data.go, apps_data.go) -- not a second, RPC-side
+// reimplementation of domain/status filtering.
 type scopeCatalog struct {
 	apps   []*pb.App
 	charts []*pb.Chart
@@ -99,12 +102,35 @@ func filterChartsExcludingDomain(charts []*pb.Chart, domain string) []*pb.Chart 
 // interpret "all"/domain/comma-list -- this is that expansion). Sorted by
 // owner full name so a given scope resolves deterministically regardless of
 // ListApps/ListCharts' own ordering.
+//
+// Every app target's Kind is ARTIFACT_KIND_IMAGE, regardless of the app's
+// own AppType (cli/binary apps included) -- NOT releaseTargetKindFromApp's
+// BINARY/FIRMWARE mapping, which answers a different question (what kind of
+// build artifact this app produces, for apps_data.go's artifact lookups).
+// At the release_run/TriggerRelease level, "image" vs "chart" only
+// distinguishes an app target from a chart target (repository.
+// ReleaseRunTarget.Kind's doc comment: "ArtifactKindImage or
+// ArtifactKindChart only"); the image-vs-CLI-binary distinction is resolved
+// downstream, per full_name, driven by the app's AppType -- ResolvePlan
+// (worker/release/plan.go) passes AppType straight through to
+// `release_helper_go plan`, and FinalizePublish's cliBinaryTargets map
+// (worker/release/finalize.go) already routes known cli apps (e.g.
+// "tools-release_helper_go", "tools-app-registry") to an S3 binary publish
+// instead of a GHCR image retag. Mapping cli/binary apps to
+// ARTIFACT_KIND_BINARY here would make TriggerRelease reject them outright
+// (server/handlers/release.go only accepts IMAGE/CHART), hiding release
+// support that already exists end to end.
+//
+// Firmware apps have no equivalent downstream support (no Firmware case in
+// ResolvePlan, no firmware handling in finalize.go) and none are currently
+// registered; if one ever is, ResolvePlan's default case reports it as an
+// unsupported target kind.
 func targetsFromAppsAndCharts(apps []*pb.App, charts []*pb.Chart) []*pb.ReleaseTargetInput {
 	targets := make([]*pb.ReleaseTargetInput, 0, len(apps)+len(charts))
 	for _, a := range apps {
 		targets = append(targets, &pb.ReleaseTargetInput{
 			OwnerFullName: a.GetFullName(),
-			Kind:          releaseTargetKindFromApp(a),
+			Kind:          pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		})
 	}
 	for _, c := range charts {
