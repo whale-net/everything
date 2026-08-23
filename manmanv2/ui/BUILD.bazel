@@ -28,6 +28,7 @@ go_library(
         "//libs/go/grpcclient",
         "//libs/go/htmxauth",
         "//libs/go/htmxbase",
+        "//libs/go/htmxui",
         "//libs/go/logging",
         "//manmanv2/protos:manmanpb",
         "//manmanv2/ui/components",

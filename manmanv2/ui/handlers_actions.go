@@ -287,100 +287,13 @@ func (app *App) handleConfigActions(w http.ResponseWriter, r *http.Request) {
 	RenderTempl(w, r, "Manage Actions", pages.ActionsManage(pageData))
 }
 
-// handleSGCActions displays the actions management page for an SGC
-func (app *App) handleSGCActions(w http.ResponseWriter, r *http.Request) {
-	user := htmxauth.GetUser(r.Context())
-	ctx := r.Context()
-
-	// Extract SGC ID from URL
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/sgcs/"), "/")
-	if len(parts) < 2 || parts[1] != "actions" {
-		http.Error(w, "Invalid URL", http.StatusBadRequest)
-		return
-	}
-
-	sgcID, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		http.Error(w, "Invalid SGC ID", http.StatusBadRequest)
-		return
-	}
-
-	// Handle edit form request: /sgcs/{id}/actions/edit/{action_id}
-	if len(parts) >= 4 && parts[2] == "edit" {
-		actionID, err := strconv.ParseInt(parts[3], 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid action ID", http.StatusBadRequest)
-			return
-		}
-		app.handleActionEditForm(w, r, actionID, "server_game_config", sgcID)
-		return
-	}
-
-	// Handle POST requests for create/update/delete
-	if r.Method == http.MethodPost {
-		app.handleActionMutation(w, r, "server_game_config", sgcID)
-		return
-	}
-
-	// GET request - show the actions page
-	sgcResp, err := app.grpc.GetAPI().GetServerGameConfig(ctx, &manmanpb.GetServerGameConfigRequest{
-		ServerGameConfigId: sgcID,
-	})
-	if err != nil {
-		log.Printf("Error fetching SGC: %v", err)
-		http.Error(w, "SGC not found", http.StatusNotFound)
-		return
-	}
-	sgc := sgcResp.Config
-
-	config, err := app.grpc.GetGameConfig(ctx, sgc.GameConfigId)
-	if err != nil {
-		log.Printf("Error fetching config: %v", err)
-		http.Error(w, "Config not found", http.StatusNotFound)
-		return
-	}
-
-	game, err := app.grpc.GetGame(ctx, config.GameId)
-	if err != nil {
-		log.Printf("Error fetching game: %v", err)
-		http.Error(w, "Game not found", http.StatusNotFound)
-		return
-	}
-
-	// Fetch actions for all levels
-	gameActions, _ := app.grpc.ListActionDefinitions(ctx, &config.GameId, nil, nil)
-	configActions, _ := app.grpc.ListActionDefinitions(ctx, nil, &sgc.GameConfigId, nil)
-	sgcActions, _ := app.grpc.ListActionDefinitions(ctx, nil, nil, &sgcID)
-
-	allActions := append(append(gameActions, configActions...), sgcActions...)
-	localActions, inheritedActions := app.categorizeActions(ctx, allActions, "server_game_config", sgcID, config.GameId, sgc.GameConfigId)
-
-	data := ActionsPageData{
-		Title:            "Manage Actions - SGC",
-		Active:           "servers",
-		User:             user,
-		DefinitionLevel:  "server_game_config",
-		EntityID:         sgcID,
-		EntityName:       fmt.Sprintf("%s / %s / SGC #%d", game.Name, config.Name, sgcID),
-		CurrentPath:      fmt.Sprintf("/sgcs/%d/actions", sgcID),
-		LocalActions:     localActions,
-		InheritedActions: inheritedActions,
-		FieldTypes:       []string{"text", "number", "select", "textarea", "checkbox", "radio", "email", "url"},
-		ButtonStyles:     []string{"primary", "secondary", "success", "danger", "warning", "info", "light", "dark"},
-		IconOptions:      getIconOptions(),
-	}
-
-	layoutData := LayoutData{
-		Title:  data.Title,
-		Active: data.Active,
-		User:   data.User,
-	}
-
-	if err := renderPage(w, "actions_manage_content", data, layoutData); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-	}
-}
+// handleSGCActions (SGC-level actions management, dispatched on a
+// "/sgcs/{id}/actions" URL prefix) was deleted in #1007: main.go's route
+// table only ever registers "/sgc/" (singular — see handleSGCRoutes),
+// never "/sgcs/", so this handler — and its only caller of the also-now-
+// deleted renderPage full-page legacy render path (templates.go) — was
+// unreachable dead code. See templates.go's package doc comment for the
+// full removal rationale.
 
 // categorizeActions separates actions into local (defined at this level) and inherited (from parent levels)
 func (app *App) categorizeActions(ctx context.Context, actions []*manmanpb.ActionDefinition, currentLevel string, currentEntityID int64, gameID int64, configID int64) ([]*ActionWithFields, []*ActionWithFields) {
