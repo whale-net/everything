@@ -5,9 +5,43 @@ applications in this monorepo. This package holds only cross-app primitives
 — never app-specific screens. App-specific UI stays in each consuming app's
 own package (e.g. `tools/app_registry/ui`, `manmanv2/ui`).
 
-This is scaffold-only groundwork (part of #998, FR1): the actual primitives
-and the shared `themes.css` land in sibling Phase 1 issues. Right now the
-package exists only so those issues have somewhere to add files.
+This is Phase 1 groundwork (part of #998, FR1): shell/layout chrome and the
+theme switcher are a separate issue, and no consuming app has been migrated
+to these primitives yet (that is issue #1005's job) -- the primitives below
+exist here but are not yet adopted anywhere.
+
+## Content primitives (FR1 / FR1b)
+
+Each is a `.templ` component in `libs/go/htmxui`, daisyUI-classes-only
+(NFR1), with no proto/app dependency:
+
+- **`Button(variant ButtonVariant, size ButtonSize, disabled bool, attrs templ.Attributes)`**
+  (`button.templ`) — the shared `btn` primitive. `ButtonVariant` covers the
+  manmanv2 design-standard semantics (`ButtonPrimary`, `ButtonSecondary`,
+  `ButtonSuccess`, `ButtonWarning`, `ButtonError`, `ButtonNeutral`,
+  `ButtonGhost`); `ButtonSize` covers `ButtonSizeXS/SM/MD/LG`. `attrs` is the
+  escape hatch for `type`, `name`/`value`, `hx-*`, and `title`.
+- **`Badge(label string, variant BadgeVariant, size BadgeSize, soft bool, attrs templ.Attributes)`**
+  (`badge.templ`) — a generic single-label, single-colour `badge` primitive.
+  Deliberately repo-generic: app-registry's promotability/artifact-state/
+  provenance vocabulary in `tools/app_registry/ui/components/badges.templ`
+  stays domain-owned and is expressed in terms of this `Badge` in the
+  adoption issue, keeping its labels and colours unchanged.
+- **`Card(header, body, actions templ.Component, attrs templ.Attributes)`**
+  (`card.templ`) — the shared `card bg-base-100 border border-base-300
+  shadow-sm` chrome with three composition slots; a `nil` slot renders
+  nothing, `actions` wraps in `card-actions justify-end`.
+- **`Confirm(p ConfirmProps, submitAttrs templ.Attributes)`** (`confirm.templ`)
+  — the confirm/danger-zone action primitive. **Net-new consolidation, not
+  extraction (FR1b):** it is the first single implementation of a pattern
+  previously repeated independently in `tools/app_registry/ui/pages/
+  promote.templ`, `rollback.templ`, and `environment_form.templ`. See
+  `ConfirmProps`' doc comment for how each call site's needs map onto its
+  fields (`ZoneTitle` for the danger-zone card chrome, `Summary`, a
+  children slot for the typed-confirmation/explicit-acknowledge control,
+  `Disabled`/`DisabledReason`, `CancelHref`). The `<form>` element itself
+  stays app-owned; `submitAttrs` forwards onto the submit `<button>` (e.g.
+  an `hx-post` target).
 
 ## BUILD shape: `templ_library`, not `go_library`
 

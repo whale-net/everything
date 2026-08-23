@@ -9,12 +9,7 @@ load("//tools:templ.bzl", "templ_library")
 templ_library(
     # keep
     name = "htmxui",
-    # allow_empty: no .templ primitives exist yet (scaffold-only, #1001);
-    # they land in sibling Phase 1 issues.
-    srcs = glob(
-        ["*.templ"],
-        allow_empty = True,
-    ),
+    srcs = glob(["*.templ"]),
     embedsrcs = ["themes.css"],
     go_srcs = [
         "doc.go",
@@ -23,3 +18,8 @@ templ_library(
     visibility = ["//visibility:public"],
     deps = [],
 )
+
+# Content-primitive unit tests land here in the Testing phase (#1003,
+# FR1/FR1b): a go_test embedding :htmxui, mirroring
+# tools/app_registry/ui/components/BUILD.bazel's components_test pattern
+# (embed the library, depend on the templ runtime to render to a buffer).

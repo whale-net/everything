@@ -1,0 +1,69 @@
+package htmxui
+
+import "strings"
+
+// BadgeVariant selects a Badge's daisyUI colour semantic class.
+//
+// This is deliberately a generic variant/label primitive, not app
+// vocabulary: tools/app_registry/ui/components/badges.templ's
+// PromotabilityBadge/ArtifactStateBadge/ProvenanceBadge/DeployUnitBadge
+// encode promotability, artifact-state, and provenance semantics that
+// htmxui must not know about (design constraint: repo-generic only, no
+// proto/domain deps). Those app-owned badges are expressed in terms of
+// this Badge in the adoption issue, keeping their existing labels and
+// colours unchanged.
+type BadgeVariant string
+
+const (
+	BadgeNeutral   BadgeVariant = "badge-neutral"
+	BadgePrimary   BadgeVariant = "badge-primary"
+	BadgeSecondary BadgeVariant = "badge-secondary"
+	BadgeSuccess   BadgeVariant = "badge-success"
+	BadgeWarning   BadgeVariant = "badge-warning"
+	BadgeError     BadgeVariant = "badge-error"
+	BadgeInfo      BadgeVariant = "badge-info"
+	BadgeGhost     BadgeVariant = "badge-ghost"
+)
+
+// BadgeSize selects a Badge's daisyUI size modifier class. BadgeSizeMD is
+// daisyUI's implicit default size and intentionally emits no size class.
+type BadgeSize string
+
+const (
+	BadgeSizeXS BadgeSize = "badge-xs"
+	BadgeSizeSM BadgeSize = "badge-sm"
+	BadgeSizeMD BadgeSize = ""
+	BadgeSizeLG BadgeSize = "badge-lg"
+)
+
+// badgeClasses joins the daisyUI class set for a given variant/size/soft
+// combination into a single space-separated class string, dropping empty
+// pieces (BadgeSizeMD, an unset variant) rather than leaving stray
+// whitespace in the rendered class attribute. Exactly one colour class
+// (`badge-<variant>`) is ever emitted per call, since variant is a single
+// value, not a set.
+func badgeClasses(variant BadgeVariant, size BadgeSize, soft bool) string {
+	classes := []string{"badge"}
+	if soft {
+		classes = append(classes, "badge-soft")
+	}
+	if variant != "" {
+		classes = append(classes, string(variant))
+	}
+	if size != "" {
+		classes = append(classes, string(size))
+	}
+	return strings.Join(classes, " ")
+}
+
+// Badge is htmxui's shared daisyUI badge primitive: one label, one colour
+// class, optionally in daisyUI's "soft" (tinted background) treatment. It
+// carries no domain vocabulary of its own -- label is caller-supplied plain
+// text, and variant/size are the only styling knobs.
+//
+// attrs is the escape hatch for anything Badge doesn't know about (a title
+// tooltip, an id, hx-* attributes) without htmxui needing to know what
+// they're for.
+templ Badge(label string, variant BadgeVariant, size BadgeSize, soft bool, attrs templ.Attributes) {
+	<span class={ badgeClasses(variant, size, soft) } { attrs... }>{ label }</span>
+}
