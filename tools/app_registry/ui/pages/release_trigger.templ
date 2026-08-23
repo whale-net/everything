@@ -149,10 +149,14 @@ type ReleaseTriggerViewState struct {
 }
 
 // releaseTargetKindLabel matches the CLI's --kind flag values ("image" |
-// "chart" | "binary"), plus "firmware" (which the promote screen never
-// shows -- see ui/ARCHITECTURE.md's promote-kind note -- but which a
-// release trigger, being about building/publishing rather than promoting,
-// legitimately can).
+// "chart" | "binary" | "firmware"), rendering ResolvedTargets' own Kind
+// field (t.GetKind() below). Only "image" and "chart" are reachable today:
+// release_scope.go's targetsFromAppsAndCharts always sets ARTIFACT_KIND_
+// IMAGE for app targets -- including cli/binary apps, which are
+// releasable via this screen despite building a non-image artifact (see
+// that function's doc comment) -- and ARTIFACT_KIND_CHART for chart
+// targets. The binary/firmware cases are kept here only so this switch
+// stays exhaustive over pb.ArtifactKind.
 func releaseTargetKindLabel(k pb.ArtifactKind) string {
 	switch k {
 	case pb.ArtifactKind_ARTIFACT_KIND_IMAGE:

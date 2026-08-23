@@ -259,6 +259,79 @@ func TestResolveReleaseScope_ArchivedApp_NeverResolvesByFullName(t *testing.T) {
 	}
 }
 
+// --- cli/binary apps release as IMAGE-kind targets --------------------------
+//
+// cli/binary apps (AppType "cli"/"binary") ARE releasable through this
+// screen: FinalizePublish's cliBinaryTargets map (worker/release/
+// finalize.go) already routes known cli apps like "tools-release_helper_go"
+// and "tools-app-registry" to an S3 binary publish instead of a GHCR image
+// retag, and ResolvePlan (worker/release/plan.go) passes AppType straight
+// through to `release_helper_go plan` regardless of the target's declared
+// Kind. What matters is that targetsFromAppsAndCharts sends Kind
+// ARTIFACT_KIND_IMAGE for every app target (never BINARY/FIRMWARE) --
+// TriggerRelease only accepts IMAGE/CHART (server/handlers/release.go), so
+// sending BINARY would make it reject the whole batch outright and hide
+// release support that already exists end to end.
+
+func TestResolveReleaseScope_All_CliAppResolvesAsImageKind(t *testing.T) {
+	apps := []*pb.App{
+		{AppId: "a1", FullName: "tools-app-registry", Name: "app-registry", Domain: "tools", Status: pb.AppStatus_APP_STATUS_ACTIVE, AppType: "service"},
+		{AppId: "a2", FullName: "tools-release_helper_go", Name: "release_helper_go", Domain: "tools", Status: pb.AppStatus_APP_STATUS_ACTIVE, AppType: "cli"},
+	}
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps}}
+
+	targets, err := resolveReleaseScope(context.Background(), registry, "all", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	names := fullNames(targets)
+	if len(names) != 2 {
+		t.Fatalf("expected both the service and cli apps included in \"all\", got %v", names)
+	}
+	for _, tgt := range targets {
+		if tgt.GetKind() != pb.ArtifactKind_ARTIFACT_KIND_IMAGE {
+			t.Errorf("target %s: expected Kind ARTIFACT_KIND_IMAGE (never BINARY), got %v", tgt.GetOwnerFullName(), tgt.GetKind())
+		}
+	}
+}
+
+func TestResolveReleaseScope_FullName_CliApp_ResolvesAsImageKind(t *testing.T) {
+	apps := []*pb.App{
+		{AppId: "a1", FullName: "tools-release_helper_go", Name: "release_helper_go", Domain: "tools", Status: pb.AppStatus_APP_STATUS_ACTIVE, AppType: "cli"},
+	}
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps}}
+
+	targets, err := resolveReleaseScope(context.Background(), registry, "tools-release_helper_go", true)
+	if err != nil {
+		t.Fatalf("unexpected error resolving a cli app by full name: %v", err)
+	}
+	if len(targets) != 1 || targets[0].GetKind() != pb.ArtifactKind_ARTIFACT_KIND_IMAGE {
+		t.Errorf("expected one ARTIFACT_KIND_IMAGE target for the cli app, got %v", targets)
+	}
+}
+
+func TestResolveSelectedTargets_DomainToken_IncludesCliAppAsImageKind(t *testing.T) {
+	apps := []*pb.App{
+		{AppId: "a1", FullName: "tools-app-registry", Name: "app-registry", Domain: "tools", Status: pb.AppStatus_APP_STATUS_ACTIVE, AppType: "service"},
+		{AppId: "a2", FullName: "tools-release_helper_go", Name: "release_helper_go", Domain: "tools", Status: pb.AppStatus_APP_STATUS_ACTIVE, AppType: "cli"},
+	}
+	registry := &RegistryClient{App: &scopeTestClient{apps: apps}}
+
+	targets, err := resolveSelectedTargets(context.Background(), registry, []string{"domain:tools"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	names := fullNames(targets)
+	if len(names) != 2 {
+		t.Fatalf("expected both apps included in the domain selection, got %v", names)
+	}
+	for _, tgt := range targets {
+		if tgt.GetKind() != pb.ArtifactKind_ARTIFACT_KIND_IMAGE {
+			t.Errorf("target %s: expected Kind ARTIFACT_KIND_IMAGE, got %v", tgt.GetOwnerFullName(), tgt.GetKind())
+		}
+	}
+}
+
 // --- edge cases ------------------------------------------------------------
 
 func TestResolveReleaseScope_EmptyScope_IsRejected(t *testing.T) {
