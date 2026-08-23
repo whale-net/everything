@@ -80,6 +80,44 @@ type ArgoSyncActivities struct {
 	// writeback.Recorder.Registry and worker/release.Activities.Registry:
 	// RecordSyncEvent has no mutating gRPC RPC equivalent.
 	Registry repository.Registry
+	// PollInterval overrides pollArgoSyncInterval (2 minutes) between
+	// PollArgoSyncStatus attempts when non-zero. Exists so tests can shrink
+	// the interval to something practical instead of waiting out the full
+	// production cadence -- mirrors GitOpsActivities.HTTPClient/
+	// GitHubAPIBaseURL's "overridable in tests" convention (gitops.go).
+	// worker/main.go never sets this, so production always gets the real
+	// 2-minute cadence (NFR3).
+	PollInterval time.Duration
+}
+
+// ArgoSync is the interface both *ArgoSyncActivities and
+// NoopArgoSyncActivities satisfy -- the boundary SelectArgoSyncActivities
+// (below) returns, and what ../main.go registers WritebackWorkflow's
+// ActivityTriggerArgoRefresh/ActivityPollArgoSyncStatus against, mirroring
+// how the Writeback interface (workflow.go) lets WritebackWorkflow depend
+// on an interface rather than StubActivities/GitOpsActivities directly.
+type ArgoSync interface {
+	TriggerArgoRefresh(ctx context.Context, in ArgoSyncInput) error
+	PollArgoSyncStatus(ctx context.Context, in ArgoSyncInput) (ArgoSyncResult, error)
+}
+
+// SelectArgoSyncActivities implements the ARGOCD_SERVER opt-in gate (issue
+// #1030 scope item 4): a real *ArgoSyncActivities when server is non-empty
+// (constructing an argocd.Client from server/authToken), or
+// NoopArgoSyncActivities otherwise -- see that type's doc comment for why
+// this is a runtime-configurability gate, not an environment exemption.
+// Pulled out of ../main.go as its own pure, testable function since
+// main.go's run() itself connects to a real database/Temporal server and
+// cannot be unit tested directly.
+func SelectArgoSyncActivities(server, authToken string, registry repository.Registry) (ArgoSync, error) {
+	if server == "" {
+		return NoopArgoSyncActivities{}, nil
+	}
+	client, err := argocd.NewClient(argocd.Config{ServerURL: server, AuthToken: authToken}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("configure argocd client: %w", err)
+	}
+	return &ArgoSyncActivities{Client: client, Registry: registry}, nil
 }
 
 // TriggerArgoRefresh implements FR1: calls Client.Refresh for
@@ -127,6 +165,10 @@ func (a *ArgoSyncActivities) PollArgoSyncStatus(ctx context.Context, in ArgoSync
 	if a.Client == nil {
 		return ArgoSyncResult{}, fmt.Errorf("poll argo sync status for promotion %s: ArgoSyncActivities.Client not configured", in.PromotionID)
 	}
+	interval := a.PollInterval
+	if interval <= 0 {
+		interval = pollArgoSyncInterval
+	}
 
 	var last ArgoSyncResult
 	for attempt := 1; attempt <= pollArgoSyncMaxAttempts; attempt++ {
@@ -152,7 +194,7 @@ func (a *ArgoSyncActivities) PollArgoSyncStatus(ctx context.Context, in ArgoSync
 		select {
 		case <-ctx.Done():
 			return ArgoSyncResult{}, ctx.Err()
-		case <-time.After(pollArgoSyncInterval):
+		case <-time.After(interval):
 		}
 	}
 	// FR5: exhausted every attempt without reaching terminal -- the
