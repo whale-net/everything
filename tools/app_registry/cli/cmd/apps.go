@@ -57,7 +57,7 @@ func newAppsListCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&domain, "domain", "", "Filter by domain")
 	c.Flags().StringVar(&status, "status", "", "Filter by status (active|missing|archived)")
-	c.Flags().StringVar(&deployUnit, "deploy-unit", "", "Filter by deploy unit (chart|image|none)")
+	c.Flags().StringVar(&deployUnit, "deploy-unit", "", "Filter by deploy unit (chart|image|none|binary)")
 	return c
 }
 
@@ -263,7 +263,9 @@ func parseDeployUnit(s string) (appmetapb.DeployUnit, error) {
 		return appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE, nil
 	case "none":
 		return appmetapb.DeployUnit_DEPLOY_UNIT_NONE, nil
+	case "binary":
+		return appmetapb.DeployUnit_DEPLOY_UNIT_BINARY, nil
 	default:
-		return appmetapb.DeployUnit_DEPLOY_UNIT_UNSPECIFIED, fmt.Errorf("unknown deploy-unit %q (want chart|image|none)", s)
+		return appmetapb.DeployUnit_DEPLOY_UNIT_UNSPECIFIED, fmt.Errorf("unknown deploy-unit %q (want chart|image|none|binary)", s)
 	}
 }

@@ -64,6 +64,8 @@ func deployUnitFromDB(s string) appmetapb.DeployUnit {
 		return appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE
 	case "none":
 		return appmetapb.DeployUnit_DEPLOY_UNIT_NONE
+	case "binary":
+		return appmetapb.DeployUnit_DEPLOY_UNIT_BINARY
 	default:
 		return appmetapb.DeployUnit_DEPLOY_UNIT_UNSPECIFIED
 	}
@@ -75,6 +77,8 @@ func deployUnitToDB(du appmetapb.DeployUnit) string {
 		return "image"
 	case appmetapb.DeployUnit_DEPLOY_UNIT_NONE:
 		return "none"
+	case appmetapb.DeployUnit_DEPLOY_UNIT_BINARY:
+		return "binary"
 	default:
 		return "chart"
 	}

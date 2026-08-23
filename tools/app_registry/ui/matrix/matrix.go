@@ -141,7 +141,7 @@ func CellsForKey(environments []*pb.Environment, columns map[string]ColumnResult
 }
 
 // isBinaryTool reports whether app is a CLI/binary tool -- packaged with
-// DEPLOY_UNIT_NONE (#534/NFR-4, see architecture/09-promotability.md) but
+// DEPLOY_UNIT_BINARY (#534/NFR-4, see architecture/09-promotability.md) but
 // still PROMOTABLE regardless of deploy_unit, so it still earns a
 // standalone row here. release_scope.go's releaseTargetKindFromApp
 // duplicates this exact cli/binary distinction for a different purpose

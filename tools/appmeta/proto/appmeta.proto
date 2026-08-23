@@ -41,6 +41,18 @@ enum DeployUnit {
 
   // Built and published, but never deployed to an environment.
   DEPLOY_UNIT_NONE = 3;
+
+  // App is distributed as a standalone binary (cli/binary app_type),
+  // published to S3/GitHub Releases rather than pushed as a container
+  // image -- there is no Bazel image target to build or promote by moving
+  // a reference (e.g. tools-release_helper_go, tools-app-registry).
+  // Binary-kind artifacts are already unconditionally promotable
+  // regardless of deploy_unit (see DerivePromotability), so this value
+  // does not change promotion behavior -- it exists so deploy_unit
+  // accurately describes how the app reaches consumers instead of
+  // overloading DEPLOY_UNIT_NONE (genuinely never distributed) or
+  // DEPLOY_UNIT_IMAGE (implies a real OCI image target) for it.
+  DEPLOY_UNIT_BINARY = 4;
 }
 
 // ArtifactKind is the type of published, digest-addressable thing.

@@ -20,6 +20,7 @@ _DEPLOY_UNIT_TO_PROTO_ENUM = {
     "chart": "DEPLOY_UNIT_CHART",
     "image": "DEPLOY_UNIT_IMAGE",
     "none": "DEPLOY_UNIT_NONE",
+    "binary": "DEPLOY_UNIT_BINARY",
 }
 
 def _app_metadata_impl(ctx):
@@ -127,7 +128,7 @@ app_metadata = rule(
         "resources_limits_cpu": attr.string(default = ""),
         "resources_limits_memory": attr.string(default = ""),
         "openapi_spec_target": attr.label(default = None),
-        "deploy_unit": attr.string(default = "chart", values = ["chart", "image", "none"]),
+        "deploy_unit": attr.string(default = "chart", values = ["chart", "image", "none", "binary"]),
     },
 )
 
@@ -183,8 +184,10 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         additional_tars: Additional tar layers to include in the image (e.g., ["//tools/steamcmd:steamcmd"])
         deploy_unit: How the app reaches an environment: "chart" (default for containerized apps, bundled
                      into a Helm chart and not independently promotable), "image" (deployed by moving an image
-                     reference directly, no chart involved, e.g. manmanv2-host-manager), or "none"
-                     (default for cli/firmware apps, built and published but never deployed to K8s).
+                     reference directly, no chart involved, e.g. manmanv2-host-manager), "binary" (distributed
+                     as a standalone binary via S3/GitHub Releases, no Bazel image target -- e.g.
+                     release_helper_go, the app-registry CLI), or "none" (default for firmware apps, built and
+                     published but never deployed anywhere).
         app_name: Override app name for metadata if different from target name.
         base: Override the container base image label (defaults to
               multiplatform_image's own default, "@ubuntu_base"). Use this

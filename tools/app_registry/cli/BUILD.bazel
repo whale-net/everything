@@ -16,7 +16,7 @@ release_app(
     app_name = "app-registry",
     app_type = "cli",
     binary_name = ":app-registry",
-    deploy_unit = "image",
+    deploy_unit = "binary",
     description = "App Registry CLI",
     domain = "tools",
     language = "go",

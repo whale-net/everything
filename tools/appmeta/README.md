@@ -169,13 +169,14 @@ already disagreed.
    `assignVersions` now records per-app versions into an explicit map instead
    of overloading the `Language` field with a `"v"`-prefixed sentinel.
 4. `deploy_unit` added to `release_app` and to the proto, mapped from the
-   Starlark attr string (`"chart"` / `"image"` / `"none"`) to the
+   Starlark attr string (`"chart"` / `"image"` / `"none"` / `"binary"`) to the
    `DeployUnit` enum's JSON name so `protojson` decodes it directly.
    `manmanv2-host-manager` is the only app set to `"image"` — it runs on bare
    metal with Docker socket access and is explicitly documented as not
    deployed via the control-services Helm chart (see
-   `manmanv2/host/DEPLOYMENT.md`). Every other app keeps the `"chart"`
-   default.
+   `manmanv2/host/DEPLOYMENT.md`). `release_helper_go` and the `app-registry`
+   CLI are set to `"binary"` — distributed standalone via S3, no Bazel image
+   target. Every other app keeps the `"chart"` default.
 
 5. `release_helper_go manifest-set` emits `AppManifestSet` (apps + charts +
    `git_sha` + `discovered_at`) via `protojson`, so enums serialize as names.
