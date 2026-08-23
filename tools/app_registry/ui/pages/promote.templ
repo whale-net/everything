@@ -213,7 +213,9 @@ templ promoteForm(user *htmxauth.UserInfo, s PromoteViewState) {
 			}
 
 			<div class="flex gap-2 justify-end mb-2">
-				<button type="submit" name="action" value="dry_run" class="btn btn-warning">Run dry run</button>
+				@htmxui.Button(htmxui.ButtonWarning, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit", "name": "action", "value": "dry_run"}) {
+					Run dry run
+				}
 			</div>
 		}
 	</form>
@@ -279,65 +281,89 @@ templ commitOutcome(s PromoteViewState) {
 			<span class="font-semibold">Promotion recorded.</span>
 		</div>
 	}
-	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-		<div class="card-body">
-			<h3 class="card-title text-base">Current recorded state of this target</h3>
-			<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-				<dt class="opacity-60">Promotion ID</dt><dd class="font-mono">{ c.Promotion.GetPromotionId() }</dd>
-				<dt class="opacity-60">Environment</dt><dd>{ c.Promotion.GetEnvironmentKey() }</dd>
-				<dt class="opacity-60">Target</dt><dd class="font-mono">{ s.Owner }</dd>
-				<dt class="opacity-60">Version / digest</dt><dd>@components.DigestDisplay(c.Promotion.GetVersion(), c.Promotion.GetDigest())</dd>
-				<dt class="opacity-60">Override</dt>
-				<dd>
-					if c.Promotion.GetIsOverride() {
-						<span class="badge badge-soft badge-error badge-xs">override</span>
-					} else {
-						<span class="opacity-60">no</span>
-					}
-				</dd>
-				<dt class="opacity-60">Valid from</dt><dd>{ unixToRFC3339(c.Promotion.GetValidFrom()) } UTC</dd>
-				if c.Superseded != nil && c.Superseded.GetPromotionId() != "" {
-					<dt class="opacity-60">Superseded</dt><dd>{ c.Superseded.GetVersion() } (valid until { unixToRFC3339(c.Superseded.GetValidTo()) } UTC)</dd>
-				}
-			</dl>
-		</div>
+	<div class="mb-4">
+		@htmxui.Card(nil, promoteCurrentStateBody(s), nil, nil)
 	</div>
 	if c.Event != nil {
-		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-			<div class="card-body">
-				<h3 class="card-title text-base">This submission's event</h3>
-				<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-					<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.Event.GetActor() }</dd>
-					<dt class="opacity-60">Reason</dt><dd>{ c.Event.GetReason() }</dd>
-					<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.Event.GetOccurredAt()) } UTC</dd>
-				</dl>
-			</div>
+		<div class="mb-4">
+			@htmxui.Card(nil, promoteSubmissionEventBody(s), nil, nil)
 		</div>
 	} else if c.AlreadyPromoted {
-		<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-			<div class="card-body">
-				<h3 class="card-title text-base">Earlier promotion's event</h3>
-				if c.EarlierEventUnavailable || c.EarlierEvent == nil {
-					<p class="text-sm opacity-70">
-						Actor and reason are unavailable for this response — this is the
-						EARLIER promotion's attribution, not this submission's, and could
-						not be resolved.
-					</p>
-				} else {
-					<p class="text-xs opacity-60 mb-1">
-						Attributed to the EARLIER promotion that first set this state —
-						not this submission.
-					</p>
-					<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
-						<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.EarlierEvent.GetActor() }</dd>
-						<dt class="opacity-60">Reason</dt><dd>{ c.EarlierEvent.GetReason() }</dd>
-						<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.EarlierEvent.GetOccurredAt()) } UTC</dd>
-					</dl>
-				}
-			</div>
+		<div class="mb-4">
+			@htmxui.Card(nil, promoteEarlierEventBody(s), nil, nil)
 		</div>
 	}
 	<div class="flex gap-2 justify-end">
 		<a href="/deployments" class="btn btn-primary">Back to deployments</a>
 	</div>
+}
+
+// promoteCurrentStateBody, promoteSubmissionEventBody, and
+// promoteEarlierEventBody are commitOutcome's htmxui.Card body slots
+// (FR2). Each is identical markup to what a raw duplicate `card
+// bg-base-100 border border-base-300 shadow-sm` div previously rendered
+// inline -- the outer `mb-4` spacing lives on commitOutcome's own
+// wrapping <div>, not on Card's fixed chrome, since Card's attrs escape
+// hatch cannot safely add a second `class` value onto Card's own root
+// <div> (that div's `class` attribute is already a literal; templ's
+// generated markup would emit a second, duplicate `class="..."` attribute
+// from attrs, and per the HTML parsing spec browsers keep only the FIRST
+// `class` attribute on an element and silently discard the rest -- so the
+// caller-supplied class is never actually applied). A plain non-styled
+// wrapper div sidesteps that: it carries the `mb-4` margin itself, with
+// no border/padding/background of its own, so the rendered box (border,
+// shadow, padding) of the Card inside it is pixel-identical to before.
+templ promoteCurrentStateBody(s PromoteViewState) {
+	{{ c := s.Committed }}
+	<h3 class="card-title text-base">Current recorded state of this target</h3>
+	<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+		<dt class="opacity-60">Promotion ID</dt><dd class="font-mono">{ c.Promotion.GetPromotionId() }</dd>
+		<dt class="opacity-60">Environment</dt><dd>{ c.Promotion.GetEnvironmentKey() }</dd>
+		<dt class="opacity-60">Target</dt><dd class="font-mono">{ s.Owner }</dd>
+		<dt class="opacity-60">Version / digest</dt><dd>@components.DigestDisplay(c.Promotion.GetVersion(), c.Promotion.GetDigest())</dd>
+		<dt class="opacity-60">Override</dt>
+		<dd>
+			if c.Promotion.GetIsOverride() {
+				<span class="badge badge-soft badge-error badge-xs">override</span>
+			} else {
+				<span class="opacity-60">no</span>
+			}
+		</dd>
+		<dt class="opacity-60">Valid from</dt><dd>{ unixToRFC3339(c.Promotion.GetValidFrom()) } UTC</dd>
+		if c.Superseded != nil && c.Superseded.GetPromotionId() != "" {
+			<dt class="opacity-60">Superseded</dt><dd>{ c.Superseded.GetVersion() } (valid until { unixToRFC3339(c.Superseded.GetValidTo()) } UTC)</dd>
+		}
+	</dl>
+}
+
+templ promoteSubmissionEventBody(s PromoteViewState) {
+	{{ c := s.Committed }}
+	<h3 class="card-title text-base">This submission's event</h3>
+	<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+		<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.Event.GetActor() }</dd>
+		<dt class="opacity-60">Reason</dt><dd>{ c.Event.GetReason() }</dd>
+		<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.Event.GetOccurredAt()) } UTC</dd>
+	</dl>
+}
+
+templ promoteEarlierEventBody(s PromoteViewState) {
+	{{ c := s.Committed }}
+	<h3 class="card-title text-base">Earlier promotion's event</h3>
+	if c.EarlierEventUnavailable || c.EarlierEvent == nil {
+		<p class="text-sm opacity-70">
+			Actor and reason are unavailable for this response — this is the
+			EARLIER promotion's attribution, not this submission's, and could
+			not be resolved.
+		</p>
+	} else {
+		<p class="text-xs opacity-60 mb-1">
+			Attributed to the EARLIER promotion that first set this state —
+			not this submission.
+		</p>
+		<dl class="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+			<dt class="opacity-60">Actor</dt><dd class="font-mono">{ c.EarlierEvent.GetActor() }</dd>
+			<dt class="opacity-60">Reason</dt><dd>{ c.EarlierEvent.GetReason() }</dd>
+			<dt class="opacity-60">Occurred at</dt><dd>{ unixToRFC3339(c.EarlierEvent.GetOccurredAt()) } UTC</dd>
+		</dl>
+	}
 }

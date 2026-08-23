@@ -124,9 +124,13 @@ templ EnvironmentForm(user *htmxauth.UserInfo, mode string, input EnvironmentFor
 			<div class="flex gap-2 justify-end mb-8">
 				<a href="/environments" class="btn btn-secondary">Cancel</a>
 				if decision.Allowed {
-					<button type="submit" class="btn btn-primary">Save environment</button>
+					@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeMD, false, templ.Attributes{"type": "submit"}) {
+						Save environment
+					}
 				} else {
-					<button type="submit" class="btn btn-primary btn-disabled" disabled title={ "Requires role: " + decision.MissingRole }>Save environment</button>
+					@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeMD, true, templ.Attributes{"type": "submit", "title": "Requires role: " + decision.MissingRole}) {
+						Save environment
+					}
 				}
 			</div>
 		</form>
