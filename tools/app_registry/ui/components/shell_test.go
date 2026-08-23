@@ -168,21 +168,24 @@ func TestShell_NilUserOmitsIdentityLabel(t *testing.T) {
 
 // TestShell_RendersThemeSwitcherOptions guards app-registry's adoption of
 // the shared htmxui.ThemeSwitcher (issue #1010's "mount a theme switcher if
-// one isn't already mounted" scope): app-registry previously mounted no
-// theme switcher at all, so this proves shellThemes (layout.templ) reaches
-// htmxui.Shell's Themes slot and renders all three offered themes,
-// independent of whether a user is signed in.
+// one isn't already mounted" scope, extended by issue #1012's FR10 POC
+// theme): app-registry previously mounted no theme switcher at all, so this
+// proves shellThemes (layout.templ) reaches htmxui.Shell's Themes slot and
+// renders all four offered themes -- including "sunset" -- independent of
+// whether a user is signed in.
 //
-// Red/green (issue #1010): temporarily dropping the "oled" entry from
-// shellThemes in layout.templ makes this test fail with "expected theme
-// option ... exactly once, got 0 occurrences"; restoring it makes it pass
-// again. Verified by hand during this change.
+// Red/green (issue #1010, re-verified for #1012's "sunset" addition):
+// temporarily dropping the "sunset" entry from shellThemes in layout.templ
+// makes this test fail with "expected theme option ... exactly once, got 0
+// occurrences"; restoring it makes it pass again. Verified by hand during
+// this change.
 func TestShell_RendersThemeSwitcherOptions(t *testing.T) {
 	body := renderShell(t, nil)
 	wantThemeOptions := []string{
 		`<button type="button" data-htmxui-theme-value="light">☀️ Light</button>`,
 		`<button type="button" data-htmxui-theme-value="night">🌙 Night</button>`,
 		`<button type="button" data-htmxui-theme-value="oled">⚫ OLED Night</button>`,
+		`<button type="button" data-htmxui-theme-value="sunset">🌅 Sunset</button>`,
 	}
 	for _, want := range wantThemeOptions {
 		if got := strings.Count(body, want); got != 1 {
