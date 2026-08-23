@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
 // BuildAppManifest is build-app's output: everything finalize-app (issue
@@ -26,6 +27,13 @@ type BuildAppManifest struct {
 	// stable identifier a registry retag keys off.
 	BuildTag string `json:"build_tag"`
 	Digest   string `json:"digest"`
+	// Skipped is true for a non-image app (cli/binary/firmware, per
+	// determineArtifactKind) -- these are published via a separate path
+	// (build-cli-binaries + FinalizePublish's cliBinaryTargets S3 publish,
+	// not the digest-tagged image build/finalize-app retag this command and
+	// finalize-app implement), so no image push happens and no manifest
+	// file is written for them. Repository/Digest/BuildTag are empty.
+	Skipped bool `json:"skipped,omitempty"`
 }
 
 // BuildAppParams configures ExecuteBuildApp.
@@ -94,6 +102,10 @@ func newBuildAppCmd() *cobra.Command {
 				return err
 			}
 
+			if manifest.Skipped {
+				fmt.Fprintf(cmd.OutOrStdout(), "Skipped image build/push for %s (not an image app; published separately)\n", manifest.FullName)
+				return nil
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Built and pushed %s (tag: %s, digest: %s)\n", manifest.FullName, manifest.BuildTag, manifest.Digest)
 			return nil
 		},
@@ -148,6 +160,26 @@ func ExecuteBuildApp(p BuildAppParams) (*BuildAppManifest, error) {
 		return nil, err
 	}
 	fullName := matchedApp.FullName()
+
+	// cli/binary/firmware apps have no digest-tagged interim image to build
+	// or push -- release_app.go's ExecuteReleaseApp already branches on this
+	// same determineArtifactKind check (isImageApp) to use a BinaryReleaser
+	// instead of ImageReleaser, and worker/release/finalize.go's
+	// cliBinaryTargets routes these same two apps to an S3 binary publish
+	// instead of calling finalize-app at all. build-app/finalize-app (the
+	// #928 two-phase digest-commit split) only exists for image apps; skip
+	// cleanly here rather than trying imagePushTarget's would-be
+	// "<name>_image_push" against a Bazel package that never declares one
+	// (release.bzl's release_app macro only generates an image target when
+	// app_type is a container type -- see is_container_app).
+	if kind := determineArtifactKind(*matchedApp); kind != pb.ArtifactKind_ARTIFACT_KIND_IMAGE {
+		return &BuildAppManifest{
+			Domain:   p.Domain,
+			App:      p.App,
+			FullName: fullName,
+			Skipped:  true,
+		}, nil
+	}
 
 	reg := p.Registry
 	if reg == "" {
