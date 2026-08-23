@@ -317,8 +317,23 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			haveCLIBinaries = true
 		}
 	}
-	if len(apps) > 0 && !haveManifest {
-		return FinalizeResult{}, fmt.Errorf("finalize publish: run %s produced no %q artifact for %d app target(s)", ref.RunID, buildManifestArtifactName, len(apps))
+	// A batch of only CLI apps (cliBinaryTargets) never needs the
+	// build-manifest artifact at all: release-v2.yml's build-app step
+	// deliberately writes no manifest entry for a "cli" app_type (see the
+	// isCLI skip below), so the CI run has nothing to upload there and
+	// legitimately produces zero build-manifest files -- reproduced in
+	// prod for the "tools" domain's own release (targets
+	// tools-app-registry/tools-release_helper_go, both CLI-only): the run
+	// succeeded end-to-end, but this guard demanded a manifest artifact
+	// that was never supposed to exist, failing every CLI-only batch.
+	nonCLIAppCount := 0
+	for _, fullName := range apps {
+		if _, isCLI := cliBinaryTargets[fullName]; !isCLI {
+			nonCLIAppCount++
+		}
+	}
+	if nonCLIAppCount > 0 && !haveManifest {
+		return FinalizeResult{}, fmt.Errorf("finalize publish: run %s produced no %q artifact for %d app target(s)", ref.RunID, buildManifestArtifactName, nonCLIAppCount)
 	}
 	if len(charts) > 0 && !haveCharts {
 		return FinalizeResult{}, fmt.Errorf("finalize publish: run %s produced no %q artifact for %d chart target(s)", ref.RunID, chartSourcesArtifactName, len(charts))
@@ -335,11 +350,13 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	buildID := planBuildID(plan.RawJSON)
 
 	var ghcrToken string
-	if len(apps) > 0 {
+	if nonCLIAppCount > 0 {
 		// A GitHub App installation token cannot write to organization-owned
 		// GHCR packages when used outside a GitHub Actions run (issue
 		// #996) -- a.GHCRToken is a static bot-account PAT instead, not
-		// minted from a.GitHub.
+		// minted from a.GitHub. An all-CLI batch never retags a GHCR image
+		// at all (same reasoning as the build-manifest guard above), so it
+		// must not be blocked on this either.
 		if a.GHCRToken == "" {
 			return FinalizeResult{}, fmt.Errorf("finalize publish: GHCR token not configured (set RELEASE_GHCR_TOKEN)")
 		}

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 )
 
 // sampleHelmMetaJSON returns a helm chart metadata JSON blob for use in fakeFS.
@@ -212,4 +214,59 @@ func TestPlanHelmReleaseGithubFormat(t *testing.T) {
 			})
 		})
 	})
+}
+
+// ── HelmChartMetadata.FullName ─────────────────────────────────────────────
+
+// TestHelmChartMetadataFullName_NormalizesBothDiscoveryPaths is the direct
+// regression test for a real prod failure (a v1/release.yml run releasing
+// the app-registry domain's own chart): AllocateVersion rejected
+// "app-registry-helm-app-registry-app-registry" as not found. FullName()
+// used to concatenate Domain+"-"+Name unconditionally, which is only
+// correct when Name is already the bare chart_name (the
+// HelmChartMetadataFromInputs/App-Registry-DB-backed path) -- for the
+// bazel-query-discovered path (ListAllHelmCharts), Name is the raw
+// Bazel-declared name, which release.bzl's release_helm_chart macro always
+// composes as "helm-{domain}-{chart_name}", so naive concatenation
+// double-counts the domain.
+func TestHelmChartMetadataFullName_NormalizesBothDiscoveryPaths(t *testing.T) {
+	cases := []struct {
+		name   string
+		domain string
+		chart  string // bazel-declared Name (bazel path) or bare name (input path)
+		want   string
+	}{
+		{
+			name:   "bazel-discovered name, ordinary domain/chart",
+			domain: "manmanv2",
+			chart:  "helm-manmanv2-control-services",
+			want:   "manmanv2-control-services",
+		},
+		{
+			name:   "bazel-discovered name, domain equals chart_name (the real prod case)",
+			domain: "app-registry",
+			chart:  "helm-app-registry-app-registry",
+			want:   "app-registry-app-registry",
+		},
+		{
+			name:   "bare name from HelmChartMetadataFromInputs (App Registry DB), no helm- prefix at all",
+			domain: "app-registry",
+			chart:  "app-registry",
+			want:   "app-registry-app-registry",
+		},
+		{
+			name:   "bare name from HelmChartMetadataFromInputs, ordinary domain/chart",
+			domain: "manmanv2",
+			chart:  "control-services",
+			want:   "manmanv2-control-services",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := HelmChartMetadata{ChartManifest: &appmetapb.ChartManifest{Domain: c.domain, Name: c.chart}}
+			if got := m.FullName(); got != c.want {
+				t.Errorf("FullName() = %q, want %q", got, c.want)
+			}
+		})
+	}
 }

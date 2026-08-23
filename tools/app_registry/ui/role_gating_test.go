@@ -57,6 +57,12 @@ func TestGrpcErrorMessage_DistinguishesPermissionDeniedFromOtherFailures(t *test
 			err:  context.DeadlineExceeded,
 			want: []string{"Transport or server failure"},
 		},
+		{
+			name:    "NotFound is labelled as such, not as a transport/server failure",
+			err:     status.Error(codes.NotFound, "not found"),
+			want:    []string{"Not found"},
+			mustNot: "Transport or server failure",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

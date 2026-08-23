@@ -222,6 +222,59 @@ func TestActivities_FinalizePublish_NoGHCRToken_FailsBatch(t *testing.T) {
 	require.ErrorContains(t, err, "GHCR token not configured")
 }
 
+// TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
+// is the direct regression test for a real prod failure: the "tools"
+// domain's own release (targets tools-app-registry/tools-release_helper_go,
+// both app_type "cli") failed with `finalize publish: run 32654699873
+// produced no "build-manifest" artifact for 2 app target(s)` even though the
+// GHA run (release-v2.yml) succeeded end-to-end -- its build-app step
+// deliberately writes no build-manifest entry for a "cli" app (see the isCLI
+// skip in the per-app loop below), so a CLI-only batch's CI run legitimately
+// never produces a build-manifest artifact at all (if-no-files-found:
+// ignore matches zero .json files). FinalizePublish must not demand a
+// build-manifest artifact, or a GHCR token, when every app target in the
+// batch is CLI-only -- neither is ever touched for such a batch.
+func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds(t *testing.T) {
+	cliBinariesZip := zipDir(t, map[string]string{
+		"release_helper_go/release_helper_go-linux-amd64": "linux-amd64-binary",
+		"release_helper_go/checksums.txt":                 "deadbeef  release_helper_go-linux-amd64\n",
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/runs/42/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		// No "build-manifest" artifact at all -- matches the real prod run
+		// exactly: only "cli-binaries" was ever uploaded for an all-CLI
+		// batch.
+		_, _ = w.Write([]byte(`{"artifacts":[{"id":9,"name":"cli-binaries","expired":false}]}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/artifacts/9/zip", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(cliBinariesZip)
+	})
+
+	uploader := newFakeUploader()
+	a := &Activities{
+		GitHub:     newTestDispatcher(t, mux),
+		S3Uploader: uploader,
+		// a.GHCRToken deliberately left unset -- an all-CLI batch must not
+		// require it (the second half of this regression).
+	}
+
+	plan := ResolvedPlan{
+		ReleaseRunID: "release-run-1",
+		Versions:     map[string]string{"image:tools-release_helper_go": "v1.2.3"},
+	}
+	ref := BuildRef{ReleaseRunID: "release-run-1", RunID: "42"}
+
+	result, err := a.FinalizePublish(context.Background(), plan, ref)
+	require.NoError(t, err, "an all-CLI batch must not require a build-manifest artifact or a GHCR token")
+	require.True(t, result.Succeeded, "detail: %s", result.Detail)
+	require.Contains(t, uploader.uploads, "release_helper_go/v1.2.3/checksums.txt")
+}
+
 // TestActivities_FinalizePublish_NoOpApp_ChartPinsEffectiveVersion is the
 // regression test for the bug found alongside release.yml's
 // release-helm-charts (PR #961): a member app whose finalize-app call is a
