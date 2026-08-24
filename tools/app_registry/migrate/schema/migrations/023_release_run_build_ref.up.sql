@@ -1,0 +1,32 @@
+-- App Registry — release_run.build_ref_run_id/build_ref_run_url
+--
+-- Closes a gap DispatchBuild's own doc comment (worker/release/
+-- activities.go) already documented as accepted-but-unaddressed:
+-- DispatchBuild does not check-before-dispatch against an in-flight build
+-- for a release run before calling GitHub, so a retried DispatchBuild
+-- (Temporal's at-least-once activity retry -- workflow.go's
+-- defaultActivityOptions gives it MaximumAttempts: 5, e.g. after a
+-- transient network error on the dispatch POST itself, or on
+-- findDispatchedRun's polling) can call `workflow_dispatch` a second time
+-- for the same release.
+--
+-- That is not merely wasteful: release-v2.yml's concurrency group
+-- (concurrency: {group: release-v2, cancel-in-progress: false}) only keeps
+-- ONE additional pending run queued behind the one currently running -- a
+-- third GitHub Actions run created while one is running and one is already
+-- queued causes GitHub to silently cancel the older queued run ("Canceling
+-- since a higher priority waiting request for release-v2 exists", observed
+-- in production run 32691150140, which recorded zero jobs -- cancelled
+-- before it ever started).
+--
+-- These two columns store the GitHub Actions run DispatchBuild dispatched
+-- for a release_run, the first time it dispatches one. DispatchBuild reads
+-- this back FIRST, before calling GitHub, and returns it unchanged instead
+-- of dispatching again -- see ReleaseRunRepository.SetBuildRef's doc
+-- comment. Mirrors temporal_run_id's existing "empty (not NULL) until
+-- known" convention (migration 016) rather than resolved_plan's nullable
+-- one, since a run id/url pair has no meaningful JSON-validity concern the
+-- way resolved_plan's JSONB column did (issue #906/migration 018).
+ALTER TABLE release_run
+    ADD COLUMN build_ref_run_id  TEXT NOT NULL DEFAULT '',
+    ADD COLUMN build_ref_run_url TEXT NOT NULL DEFAULT '';

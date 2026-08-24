@@ -18,12 +18,12 @@ import (
 // style).
 type releaseRunRepo struct{ ex dbtx }
 
-const releaseRunColumns = `release_run_id, triggered_by, requested_scope, digest_input, resolved_plan, temporal_workflow_id, temporal_run_id, created_at`
+const releaseRunColumns = `release_run_id, triggered_by, requested_scope, digest_input, resolved_plan, temporal_workflow_id, temporal_run_id, build_ref_run_id, build_ref_run_url, created_at`
 
 // releaseRunColumnsPrefixed is releaseRunColumns qualified with the `rr`
 // alias ListReleaseRunsByTarget's join uses -- release_run_id exists on both
 // joined tables, so an unqualified SELECT list would be ambiguous there.
-const releaseRunColumnsPrefixed = `rr.release_run_id, rr.triggered_by, rr.requested_scope, rr.digest_input, rr.resolved_plan, rr.temporal_workflow_id, rr.temporal_run_id, rr.created_at`
+const releaseRunColumnsPrefixed = `rr.release_run_id, rr.triggered_by, rr.requested_scope, rr.digest_input, rr.resolved_plan, rr.temporal_workflow_id, rr.temporal_run_id, rr.build_ref_run_id, rr.build_ref_run_url, rr.created_at`
 
 const releaseRunTargetColumns = `release_run_target_id, release_run_id, owner_full_name, kind, state, state_changed_at, build_id, error_detail`
 
@@ -38,7 +38,7 @@ func scanReleaseRun(row pgx.Row) (repository.ReleaseRun, error) {
 	var digestInput, resolvedPlan *[]byte
 	if err := row.Scan(
 		&rr.ReleaseRunID, &rr.TriggeredBy, &rr.RequestedScope, &digestInput, &resolvedPlan,
-		&rr.TemporalWorkflowID, &rr.TemporalRunID, &rr.CreatedAt,
+		&rr.TemporalWorkflowID, &rr.TemporalRunID, &rr.BuildRefRunID, &rr.BuildRefRunURL, &rr.CreatedAt,
 	); err != nil {
 		return repository.ReleaseRun{}, err
 	}
@@ -194,6 +194,32 @@ func (r *releaseRunRepo) SetResolvedPlan(ctx context.Context, releaseRunID strin
 			return de
 		}
 		return fmt.Errorf("set resolved plan for release run %s: %w", releaseRunID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: release run %s", repository.ErrNotFound, releaseRunID)
+	}
+	return nil
+}
+
+// SetBuildRef implements repository.ReleaseRunRepository.SetBuildRef
+// (migration 023): the check-before-dispatch write that lets DispatchBuild
+// (worker/release/activities.go) detect an already-dispatched GitHub
+// Actions run on activity retry instead of calling `workflow_dispatch`
+// again -- see that interface method's doc comment for why a second
+// dispatch is unsafe under release-v2.yml's concurrency group, not just
+// wasteful. Naturally idempotent: writing the same runID/runURL twice is a
+// no-op change.
+func (r *releaseRunRepo) SetBuildRef(ctx context.Context, releaseRunID string, runID, runURL string) error {
+	if runID == "" {
+		return fmt.Errorf("%w: build ref run id must not be empty", repository.ErrInvalidArgument)
+	}
+	tag, err := r.ex.Exec(ctx, `UPDATE release_run SET build_ref_run_id = $1, build_ref_run_url = $2 WHERE release_run_id = $3`,
+		runID, runURL, releaseRunID)
+	if err != nil {
+		if de, ok := translatePgError(err, fmt.Sprintf("build ref for release run %s", releaseRunID)); ok {
+			return de
+		}
+		return fmt.Errorf("set build ref for release run %s: %w", releaseRunID, err)
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: release run %s", repository.ErrNotFound, releaseRunID)
