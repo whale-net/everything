@@ -385,12 +385,15 @@ jobs:
         fi
         
         # Use release helper to plan the Docker builds
-        FAST_FLAG=""
+        # FAST_MODE is empty when RELEASE_HELPER_FAST_MODE is unset -- normalize
+        # to a real "true"/"false" so --fast= never gets an empty value.
+        FAST="false"
         if [[ "$FAST_MODE" == "true" ]]; then
-          FAST_FLAG="--fast"
+          FAST="true"
         fi
         echo "Planning Docker builds using release tool..."
-        PLAN_OUTPUT=$("$RELEASE_HELPER" $FAST_FLAG plan \
+        PLAN_OUTPUT=$("$RELEASE_HELPER" plan \
+          --fast="$FAST" \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
           --format github)

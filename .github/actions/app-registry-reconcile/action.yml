@@ -69,11 +69,14 @@ runs:
       # resolveSourceCommittedAt's doc comment -- rather than failing the
       # step.
       run: |
-        FAST_FLAG=""
+        # FAST_MODE (from inputs.fast-mode, normally the RELEASE_HELPER_FAST_MODE
+        # repo variable) is empty when the variable is unset -- normalize to a
+        # real "true"/"false" so --fast= never gets an empty value.
+        FAST="false"
         if [[ "$FAST_MODE" == "true" ]]; then
-          FAST_FLAG="--fast"
+          FAST="true"
         fi
-        "$RELEASE_HELPER" $FAST_FLAG manifest-set --git-sha "$GIT_SHA" > "$RUNNER_TEMP/manifest-set.json"
+        "$RELEASE_HELPER" manifest-set --fast="$FAST" --git-sha "$GIT_SHA" > "$RUNNER_TEMP/manifest-set.json"
         "$APP_REGISTRY_CLI" apps reconcile \
           --from-plan "$RUNNER_TEMP/manifest-set.json" \
           --idempotency-key "$IDEMPOTENCY_KEY"
