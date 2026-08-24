@@ -20,6 +20,7 @@ type fakeTransport struct {
 	mu                sync.Mutex
 	handler           rmq.MessageHandler
 	bindExchangeCalls []bindExchangeCall
+	bindExchangeFunc  func(string, []string) error
 	startErr          error
 	deliveries        []rmq.Message
 	ctx               context.Context
@@ -34,6 +35,9 @@ type bindExchangeCall struct {
 func (f *fakeTransport) BindExchange(exchange string, routingKeys []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.bindExchangeFunc != nil {
+		return f.bindExchangeFunc(exchange, routingKeys)
+	}
 	f.bindExchangeCalls = append(f.bindExchangeCalls, bindExchangeCall{exchange, routingKeys})
 	return nil
 }
@@ -48,7 +52,6 @@ func (f *fakeTransport) Start(ctx context.Context) error {
 	if f.startErr != nil {
 		return f.startErr
 	}
-	// Block until context is cancelled
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -60,14 +63,14 @@ func (f *fakeTransport) Close() error {
 	return nil
 }
 
-// deliver sends a message through the handler (for testing).
-func (f *fakeTransport) deliver(ctx context.Context, msg rmq.Message) {
+func (f *fakeTransport) deliver(ctx context.Context, msg rmq.Message) error {
 	f.mu.Lock()
 	handler := f.handler
 	f.mu.Unlock()
 	if handler != nil {
-		handler(ctx, msg)
+		return handler(ctx, msg)
 	}
+	return nil
 }
 
 func TestNewHub(t *testing.T) {
@@ -93,7 +96,6 @@ func TestFR1_TopicDispatch(t *testing.T) {
 	h := NewHub(attachFunc, config)
 	defer h.Close()
 
-	// Subscribe to topic A and B
 	chA, unsub := h.Subscribe("topic-a")
 	require.NotNil(t, chA)
 	require.NotNil(t, unsub)
@@ -101,30 +103,25 @@ func TestFR1_TopicDispatch(t *testing.T) {
 	chB, _ := h.Subscribe("topic-b")
 	require.NotNil(t, chB)
 
-	// Wait for transport to attach
 	time.Sleep(100 * time.Millisecond)
 
-	// Deliver a message to topic A
 	fakeTransport.deliver(context.Background(), rmq.Message{
 		RoutingKey: "topic-a",
 		Body:       []byte("message-a"),
 	})
 
-	// Message should arrive on chA, not on chB
 	select {
-	case event := <-chA:
-		require.Equal(t, "topic-a", event.Topic)
-		require.Equal(t, []byte("message-a"), event.Body)
+	case eventA := <-chA:
+		require.Equal(t, "topic-a", eventA.Topic)
+		require.Equal(t, []byte("message-a"), eventA.Body)
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("expected message on chA")
 	}
 
-	// Verify chB is empty
 	select {
 	case <-chB:
 		t.Fatal("unexpected message on chB")
 	case <-time.After(50 * time.Millisecond):
-		// Expected - nothing on chB
 	}
 
 	unsub()
@@ -139,18 +136,16 @@ func TestFR1a_PerSubscriberBuffering(t *testing.T) {
 	}
 
 	config := Config{
-		SubscriberBufferDepth: 3, // Small buffer for testing
+		SubscriberBufferDepth: 3,
 	}
 	h := NewHub(attachFunc, config)
 	defer h.Close()
 
-	// Subscribe twice to the same topic
 	ch1, _ := h.Subscribe("topic-a")
 	ch2, _ := h.Subscribe("topic-a")
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Fill ch1's buffer completely
 	for i := 0; i < 3; i++ {
 		fakeTransport.deliver(context.Background(), rmq.Message{
 			RoutingKey: "topic-a",
@@ -158,18 +153,15 @@ func TestFR1a_PerSubscriberBuffering(t *testing.T) {
 		})
 	}
 
-	// Drain ch1
 	for i := 0; i < 3; i++ {
 		<-ch1
 	}
 
-	// ch2 should have received the same 3 messages
 	for i := 0; i < 3; i++ {
 		event := <-ch2
 		require.Equal(t, []byte{byte(i)}, event.Body)
 	}
 
-	// Now fill ch2's buffer
 	for i := 3; i < 6; i++ {
 		fakeTransport.deliver(context.Background(), rmq.Message{
 			RoutingKey: "topic-a",
@@ -177,14 +169,57 @@ func TestFR1a_PerSubscriberBuffering(t *testing.T) {
 		})
 	}
 
-	// ch2 should have 3 messages (buffer full, oldest dropped)
-	// Due to drop-oldest, we should see messages 3, 4, 5
 	event := <-ch2
 	require.Equal(t, []byte{3}, event.Body)
 	event = <-ch2
 	require.Equal(t, []byte{4}, event.Body)
 	event = <-ch2
 	require.Equal(t, []byte{5}, event.Body)
+}
+
+// Test 2b: Verify one slow subscriber doesn't block another
+func TestFR1a_OneSlowSubscriberDoesntBlockAnother(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+
+	config := Config{
+		SubscriberBufferDepth: 2,
+	}
+	h := NewHub(attachFunc, config)
+	defer h.Close()
+
+	chFast, _ := h.Subscribe("topic-a")
+	chSlow, _ := h.Subscribe("topic-a")
+
+	time.Sleep(50 * time.Millisecond)
+
+	for i := 0; i < 2; i++ {
+		fakeTransport.deliver(context.Background(), rmq.Message{
+			RoutingKey: "topic-a",
+			Body:       []byte{byte(i)},
+		})
+	}
+
+	event := <-chFast
+	require.Equal(t, []byte{0}, event.Body)
+	event = <-chFast
+	require.Equal(t, []byte{1}, event.Body)
+
+	fakeTransport.deliver(context.Background(), rmq.Message{
+		RoutingKey: "topic-a",
+		Body:       []byte{2},
+	})
+
+	event = <-chFast
+	require.Equal(t, []byte{2}, event.Body)
+
+	event = <-chSlow
+	require.Equal(t, []byte{1}, event.Body)
+	event = <-chSlow
+	require.Equal(t, []byte{2}, event.Body)
 }
 
 // Test 3: FR1a callback never blocks and always acks
@@ -200,22 +235,18 @@ func TestFR1a_CallbackNeverBlocks(t *testing.T) {
 	h := NewHub(attachFunc, config)
 	defer h.Close()
 
-	// Subscribe and fill the buffer
 	ch, _ := h.Subscribe("topic-a")
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Fill the buffer
 	fakeTransport.deliver(context.Background(), rmq.Message{
 		RoutingKey: "topic-a",
 		Body:       []byte("msg1"),
 	})
 
-	// Verify the handler executed (indirectly via the message being sent)
 	event := <-ch
 	require.Equal(t, []byte("msg1"), event.Body)
 
-	// Now with a full buffer, deliver should not block
 	done := make(chan error)
 
 	go func() {
@@ -226,7 +257,6 @@ func TestFR1a_CallbackNeverBlocks(t *testing.T) {
 		done <- err
 	}()
 
-	// The handler should return nil and not block
 	select {
 	case err := <-done:
 		require.NoError(t, err)
@@ -255,13 +285,10 @@ func TestFR1b_AttachAndRecover(t *testing.T) {
 	h := NewHub(attachFunc, config)
 	defer h.Close()
 
-	// Subscribe - this will trigger attach
 	_, _ = h.Subscribe("topic-a")
 
-	// Give time for retries (with exponential backoff: 100ms + 200ms + 400ms = 700ms + jitter)
 	time.Sleep(1500 * time.Millisecond)
 
-	// After retries, the hub should be ready
 	h.mu.RLock()
 	hasTransport := h.transport != nil
 	h.mu.RUnlock()
@@ -270,14 +297,68 @@ func TestFR1b_AttachAndRecover(t *testing.T) {
 	require.True(t, attachAttempts.Load() > int32(failTimes), "attach should have been retried")
 }
 
+// Test 4b: Attach backoff is exponential
+func TestFR1b_AttachBackoffIsExponential(t *testing.T) {
+	mockClock := &mockClock{
+		now: time.Now(),
+	}
+	sleepDurations := []time.Duration{}
+	var sleepMutex sync.Mutex
+
+	mockClock.sleepFn = func(ctx context.Context, d time.Duration) error {
+		sleepMutex.Lock()
+		sleepDurations = append(sleepDurations, d)
+		sleepMutex.Unlock()
+		return nil
+	}
+
+	attachAttempts := atomic.Int32{}
+	failTimes := 3
+
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		attempts := attachAttempts.Add(1)
+		if attempts <= int32(failTimes) {
+			return nil, errAttachFailed
+		}
+		return &fakeTransport{}, nil
+	}
+
+	config := Config{SubscriberBufferDepth: 10}
+	h := NewHubWithClock(attachFunc, config, mockClock)
+	defer h.Close()
+
+	_, _ = h.Subscribe("topic-a")
+
+	time.Sleep(100 * time.Millisecond)
+
+	sleepMutex.Lock()
+	numSleeps := len(sleepDurations)
+	sleepMutex.Unlock()
+
+	require.Greater(t, numSleeps, 0, "should have had sleep calls for backoff")
+
+	if numSleeps > 1 {
+		require.Less(t, sleepDurations[0], sleepDurations[1], "second sleep should be longer than first")
+	}
+}
+
 // Test 5: FR1b reconstruct-on-bind-failure
 func TestFR1b_ReconstructOnBindFailure(t *testing.T) {
-	fakeTransport := &fakeTransport{}
+	firstTransport := &fakeTransport{}
+	secondTransport := &fakeTransport{}
+
 	attachCalls := atomic.Int32{}
+	shouldReturnSecond := false
+	var attachMutex sync.Mutex
 
 	attachFunc := func(ctx context.Context) (Transport, error) {
 		attachCalls.Add(1)
-		return fakeTransport, nil
+		attachMutex.Lock()
+		defer attachMutex.Unlock()
+		if shouldReturnSecond {
+			return secondTransport, nil
+		}
+		return firstTransport, nil
 	}
 
 	config := Config{SubscriberBufferDepth: 10}
@@ -288,33 +369,39 @@ func TestFR1b_ReconstructOnBindFailure(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify initial attach
 	initialAttempts := attachCalls.Load()
 	require.Greater(t, int(initialAttempts), 0)
 
-	// Send a message to verify things are working
-	fakeTransport.deliver(context.Background(), rmq.Message{
+	firstTransport.deliver(context.Background(), rmq.Message{
 		RoutingKey: "topic-a",
-		Body:       []byte("test"),
+		Body:       []byte("test1"),
 	})
 
 	event := <-ch
-	require.Equal(t, []byte("test"), event.Body)
+	require.Equal(t, []byte("test1"), event.Body)
+
+	shouldReturnSecond = true
+
+	secondTransport.deliver(context.Background(), rmq.Message{
+		RoutingKey: "topic-a",
+		Body:       []byte("test2"),
+	})
+
+	firstTransport.deliver(context.Background(), rmq.Message{
+		RoutingKey: "topic-a",
+		Body:       []byte("test3"),
+	})
+
+	select {
+	case <-ch:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("should receive messages on transport")
+	}
 }
 
 // Test 6: FR1 construction arguments captured
 func TestFR1_ConstructionArguments(t *testing.T) {
-	// This test verifies that the default attacher would use the correct
-	// NewConsumerWithOpts arguments. Since we use fakes, we verify the
-	// contract is enforced in the docstring and the rmq.Consumer itself
-	// satisfies the Transport interface with the right arguments.
-
-	// Verify rmq.Consumer implements Transport interface
 	var _ Transport = (*rmq.Consumer)(nil)
-
-	// The actual arguments verification is done at the rmq package level:
-	// queueName="" (server-generated), durable=false, autoDelete=true,
-	// messageTTL=0, maxMessages=0
 }
 
 // Test 7: Exchange-declare arguments captured
@@ -332,7 +419,6 @@ func TestFR7_ExchangeDeclareArguments(t *testing.T) {
 	_, _ = h.Subscribe("topic-a")
 	time.Sleep(100 * time.Millisecond)
 
-	// Verify BindExchange was called with wildcard routing key
 	fakeTransport.mu.Lock()
 	require.Len(t, fakeTransport.bindExchangeCalls, 1)
 	call := fakeTransport.bindExchangeCalls[0]
@@ -358,16 +444,13 @@ func TestFR1_SubscriptionRelease(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Check that the subscriber was registered
 	h.mu.RLock()
 	subsCount := len(h.subscribers["topic-a"])
 	h.mu.RUnlock()
 	require.Equal(t, 1, subsCount)
 
-	// Unsubscribe
 	unsub()
 
-	// Check that the subscriber was removed
 	h.mu.RLock()
 	subsCount = len(h.subscribers["topic-a"])
 	unsubFuncCount := len(h.unsubscribeFuncs)
@@ -379,23 +462,20 @@ func TestFR1_SubscriptionRelease(t *testing.T) {
 
 // Test 9: Note 19 validation - advertisedRetry constraint
 func TestNote19_AdvertisedRetryValidation(t *testing.T) {
-	// Valid config: advertisedRetry < 2 * heartbeat
 	validConfig := Config{
 		HeartbeatInterval:       30 * time.Second,
-		AdvertisedRetryInterval: 30 * time.Second, // < 60s
+		AdvertisedRetryInterval: 30 * time.Second,
 	}
 	err := validConfig.Validate()
 	require.NoError(t, err)
 
-	// Invalid config: advertisedRetry >= 2 * heartbeat
 	invalidConfig := Config{
 		HeartbeatInterval:       30 * time.Second,
-		AdvertisedRetryInterval: 60 * time.Second, // >= 60s
+		AdvertisedRetryInterval: 60 * time.Second,
 	}
 	err = invalidConfig.Validate()
 	require.Error(t, err)
 
-	// Edge case: advertisedRetry == 2 * heartbeat
 	edgeConfig := Config{
 		HeartbeatInterval:       30 * time.Second,
 		AdvertisedRetryInterval: 60 * time.Second,
@@ -404,9 +484,40 @@ func TestNote19_AdvertisedRetryValidation(t *testing.T) {
 	require.Error(t, err)
 }
 
-// Test DefaultConfig returns valid defaults
 func TestDefaultConfigIsValid(t *testing.T) {
 	config := DefaultConfig()
 	err := config.Validate()
 	require.NoError(t, err)
+}
+
+type mockClock struct {
+	mu       sync.Mutex
+	now      time.Time
+	sleepFn  func(context.Context, time.Duration) error
+	tickerFn func(time.Duration) Ticker
+}
+
+func (m *mockClock) Now() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.now
+}
+
+func (m *mockClock) NewTicker(d time.Duration) Ticker {
+	if m.tickerFn != nil {
+		return m.tickerFn(d)
+	}
+	return &defaultTicker{time.NewTicker(d)}
+}
+
+func (m *mockClock) Sleep(ctx context.Context, d time.Duration) error {
+	if m.sleepFn != nil {
+		return m.sleepFn(ctx, d)
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(d):
+		return nil
+	}
 }
