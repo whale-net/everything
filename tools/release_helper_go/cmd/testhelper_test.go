@@ -218,6 +218,26 @@ func (f *fakeDockerRunner) Run(args ...string) (string, error) {
 	return "", fmt.Errorf("fakeDockerRunner: no match for args %v", args)
 }
 
+// ── fake image tagger ─────────────────────────────────────────────────────────
+
+type fakeTagCall struct {
+	src, newTag, token string
+}
+
+type fakeImageTagger struct {
+	err   error
+	calls []fakeTagCall
+}
+
+func newFakeTagger() *fakeImageTagger {
+	return &fakeImageTagger{}
+}
+
+func (f *fakeImageTagger) Tag(src, newTag, token string) error {
+	f.calls = append(f.calls, fakeTagCall{src: src, newTag: newTag, token: token})
+	return f.err
+}
+
 // ── injection helpers ────────────────────────────────────────────────────────
 
 func withFS(fs FileSystem, fn func()) {

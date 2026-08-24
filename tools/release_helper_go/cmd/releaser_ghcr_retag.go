@@ -43,6 +43,28 @@ func craneDigest(ref, token string) (string, error) {
 	return crane.Digest(ref, craneAuthOption(token))
 }
 
+// ImageTagger performs the registry-side retag ImageReleaser.Publish and
+// GHCRRetagReleaser.Publish use to point a version tag at already-pushed
+// content. Pulled out as an interface (unlike craneTag/craneDigest, which
+// both releasers also call directly for read-only lookups) specifically so
+// Publish's registry-mutating call can be swapped for a fake in tests --
+// BazelRunner/GitRunner/DockerRunner already have this seam for the same
+// reason.
+type ImageTagger interface {
+	Tag(src, newTag, token string) error
+}
+
+// craneImageTagger is the production ImageTagger, backed by craneTag.
+type craneImageTagger struct{}
+
+func (craneImageTagger) Tag(src, newTag, token string) error {
+	return craneTag(src, newTag, token)
+}
+
+// defaultImageTagger is used by ImageReleaser/GHCRRetagReleaser when their
+// Tagger field is left nil -- every real (non-test) construction site.
+var defaultImageTagger ImageTagger = craneImageTagger{}
+
 // GHCRRetagReleaser implements ArtifactReleaser for finalize-app (issue
 // #928): the "assign final version" half of what release-app used to do in
 // one step. It never rebuilds or re-pushes image content -- Build performs
@@ -74,6 +96,10 @@ type GHCRRetagReleaser struct {
 	// AuthToken authenticates the retag/digest-lookup calls against the
 	// registry -- see craneAuthOption's doc comment.
 	AuthToken string
+	// Tagger performs Publish's registry-side retag; nil uses
+	// defaultImageTagger (production). Tests inject a fake here instead of
+	// hitting the real registry.
+	Tagger ImageTagger
 
 	taggedVersion string
 }
@@ -83,19 +109,15 @@ func (r *GHCRRetagReleaser) Kind() pb.ArtifactKind {
 	return pb.ArtifactKind_ARTIFACT_KIND_IMAGE
 }
 
-// Build retags r.Digest with version in the same repository. Returns
-// r.Digest unchanged -- a retag never produces new content, so the digest
-// ExecuteRelease records is exactly the one the build job already pushed.
+// Build resolves the digest to retag. It performs no registry mutation --
+// returns r.Digest unchanged, since a retag never produces new content and
+// the digest ExecuteRelease records/compares is exactly the one the build
+// job already pushed. The actual registry-side retag happens in Publish,
+// not here -- see Publish's doc comment for why.
 func (r *GHCRRetagReleaser) Build(ctx context.Context, version string) (string, error) {
 	if r.Digest == "" {
 		return "", fmt.Errorf("no digest to retag for %s (finalize-app requires the build job's manifest digest)", r.Repository)
 	}
-	src := fmt.Sprintf("%s@%s", r.Repository, r.Digest)
-	fmt.Printf("Retagging %s -> %s:%s (no rebuild)...\n", src, r.Repository, version)
-	if err := craneTag(src, version, r.AuthToken); err != nil {
-		return "", fmt.Errorf("retag %s to %s: %w", src, version, err)
-	}
-	r.taggedVersion = version
 	return r.Digest, nil
 }
 
@@ -111,9 +133,26 @@ func (r *GHCRRetagReleaser) FetchPublished(ctx context.Context, version string) 
 	return true, digest, digest == r.Digest, nil
 }
 
-// Publish is a no-op: the retag in Build already made version visible in
-// the registry (mirrors ImageReleaser.Publish's identical no-op, for the
-// identical reason -- see that type's doc comment).
+// Publish retags r.Digest with version in the same repository -- a
+// registry-side retag (crane.Tag) with no image rebuild/re-pull/re-push of
+// layer data. Deliberately deferred out of Build: ExecuteRelease only calls
+// Publish once its no-op/collision decision (step 3, "Collision resolution
+// & no-op detection") concludes this candidate should actually be
+// published. Retagging in Build instead (the old behavior) created the
+// version tag in the registry before that decision ran, so a build later
+// classified as a no-op rebuild (FailPublish called, RecordArtifact never
+// called) still left a real, visible version tag in GHCR pointing at
+// content App Registry considers unpublished.
 func (r *GHCRRetagReleaser) Publish(ctx context.Context, version string) error {
+	tagger := r.Tagger
+	if tagger == nil {
+		tagger = defaultImageTagger
+	}
+	src := fmt.Sprintf("%s@%s", r.Repository, r.Digest)
+	fmt.Printf("Retagging %s -> %s:%s (no rebuild)...\n", src, r.Repository, version)
+	if err := tagger.Tag(src, version, r.AuthToken); err != nil {
+		return fmt.Errorf("retag %s to %s: %w", src, version, err)
+	}
+	r.taggedVersion = version
 	return nil
 }
