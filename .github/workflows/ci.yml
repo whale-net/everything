@@ -73,6 +73,7 @@ jobs:
         client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
         git-sha: ${{ github.sha }}
         idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-reconcile
+        fast-mode: ${{ vars.RELEASE_HELPER_FAST_MODE }}
 
     # FR8 (issue #923): unconditional per-app/chart build log, one row per
     # discovered app/chart, EVERY push -- no digest-diff or content gating
@@ -363,6 +364,7 @@ jobs:
       id: plan
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        FAST_MODE: ${{ vars.RELEASE_HELPER_FAST_MODE }}
       run: |
         # Determine what to build based on changes
         if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -383,8 +385,12 @@ jobs:
         fi
         
         # Use release helper to plan the Docker builds
+        FAST_FLAG=""
+        if [[ "$FAST_MODE" == "true" ]]; then
+          FAST_FLAG="--fast"
+        fi
         echo "Planning Docker builds using release tool..."
-        PLAN_OUTPUT=$("$RELEASE_HELPER" plan \
+        PLAN_OUTPUT=$("$RELEASE_HELPER" $FAST_FLAG plan \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
           --format github)
