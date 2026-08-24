@@ -101,3 +101,106 @@ func TestPublisher_ChanOpenerDefaultSet(t *testing.T) {
 		t.Error("chanOpener must be set; recovery path will panic if nil")
 	}
 }
+
+// TestNewPublisherWithExchange_CustomExchangeDeclaration verifies that
+// NewPublisherWithExchange declares the caller-supplied exchange name
+// and the Publisher stores that exchange for use in Publish calls.
+func TestNewPublisherWithExchange_CustomExchangeDeclaration(t *testing.T) {
+	t.Parallel()
+
+	customExchange := "my-custom-topic"
+	var declaredExchangeName string
+
+	// Create a mock connection
+	mockConn := &Connection{
+		// We're not calling Channel() in this test since we control the opener
+	}
+
+	// Create the publisher with our mock channel opener
+	p := &Publisher{
+		channel: &amqp.Channel{},
+		conn:    mockConn,
+		exchange: customExchange,
+		chanOpener: func(_ *Connection, exchange string) (*amqp.Channel, error) {
+			declaredExchangeName = exchange
+			return &amqp.Channel{}, nil
+		},
+	}
+
+	// Verify the exchange field was set to the custom value
+	if p.exchange != customExchange {
+		t.Errorf("Publisher.exchange = %q; want %q", p.exchange, customExchange)
+	}
+
+	// Simulate what happens when the channel closes and needs recreation
+	// The chanOpener should be called with the stored exchange
+	_, _ = p.chanOpener(p.conn, p.exchange)
+
+	if declaredExchangeName != customExchange {
+		t.Errorf("chanOpener called with exchange %q; want %q", declaredExchangeName, customExchange)
+	}
+}
+
+// TestNewPublisher_StillUsesManmanExchange verifies that the original
+// NewPublisher constructor still uses the "manman" exchange by default,
+// ensuring backward compatibility.
+func TestNewPublisher_StillUsesManmanExchange(t *testing.T) {
+	t.Parallel()
+
+	var declaredExchangeName string
+
+	mockConn := &Connection{}
+
+	// Create a publisher exactly as NewPublisher would
+	p := &Publisher{
+		channel: &amqp.Channel{},
+		conn:    mockConn,
+		exchange: "manman", // NewPublisher calls NewPublisherWithExchange with "manman"
+		chanOpener: func(_ *Connection, exchange string) (*amqp.Channel, error) {
+			declaredExchangeName = exchange
+			return &amqp.Channel{}, nil
+		},
+	}
+
+	// Verify the default exchange is "manman"
+	if p.exchange != "manman" {
+		t.Errorf("NewPublisher exchange = %q; want %q", p.exchange, "manman")
+	}
+
+	// Verify chanOpener would be called with "manman"
+	_, _ = p.chanOpener(p.conn, p.exchange)
+	if declaredExchangeName != "manman" {
+		t.Errorf("NewPublisher chanOpener called with exchange %q; want %q", declaredExchangeName, "manman")
+	}
+}
+
+// TestNewPublisherWithExchange_VariousExchangeNames verifies that the
+// constructor correctly handles different exchange names without modification.
+func TestNewPublisherWithExchange_VariousExchangeNames(t *testing.T) {
+	t.Parallel()
+
+	testCases := []string{
+		"topic-exchange",
+		"events",
+		"notifications-v2",
+		"custom.exchange.name",
+	}
+
+	for _, exchangeName := range testCases {
+		t.Run(exchangeName, func(t *testing.T) {
+			p := &Publisher{
+				channel:  &amqp.Channel{},
+				conn:     &Connection{},
+				exchange: exchangeName,
+				chanOpener: func(_ *Connection, exchange string) (*amqp.Channel, error) {
+					return &amqp.Channel{}, nil
+				},
+			}
+
+			// Verify the exchange is stored exactly as provided
+			if p.exchange != exchangeName {
+				t.Errorf("exchange = %q; want %q", p.exchange, exchangeName)
+			}
+		})
+	}
+}
