@@ -39,20 +39,34 @@ type ArtifactServer struct {
 	pb.UnimplementedArtifactRegistryServer
 	repo repository.Registry
 
-	// releaseToolsS3Bucket/releaseToolsS3PublicEndpoint back ResolveBinaryURL
-	// (issue #979/#983) -- the public-read bucket CLI binaries are published
-	// to, and the base URL used to construct unsigned download URLs. See
-	// RELEASE_TOOLS_S3_BUCKET/RELEASE_TOOLS_S3_PUBLIC_ENDPOINT in ENV.md.
-	// Both are optional: most ArtifactServer construction (tests, every
-	// other RPC in this file) has no need of them, hence WithReleaseToolsS3
+	// releaseToolsS3* fields back ResolveBinaryURL (issue #979/#983,
+	// #1101) -- the bucket CLI binaries are published to, the public
+	// endpoint used to address presigned download URLs, and the
+	// credentials used to sign them. See RELEASE_TOOLS_S3_BUCKET/
+	// RELEASE_TOOLS_S3_PUBLIC_ENDPOINT/RELEASE_TOOLS_S3_REGION/
+	// RELEASE_TOOLS_S3_ACCESS_KEY/RELEASE_TOOLS_S3_SECRET_KEY in ENV.md.
+	// All optional: most ArtifactServer construction (tests, every other
+	// RPC in this file) has no need of them, hence WithReleaseToolsS3
 	// rather than required constructor params.
+	//
+	// Credentials are required here (unlike an unsigned public URL) because
+	// the release-tools bucket was never actually configured to grant
+	// anonymous/public reads (issue #1101, follow-up) -- ResolveBinaryURL
+	// presigns with these instead, so any identity with read access to the
+	// object (e.g. the one FinalizePublish used to write it) can hand an
+	// external CI job a working download link without giving it S3
+	// credentials of its own.
 	releaseToolsS3Bucket         string
 	releaseToolsS3PublicEndpoint string
+	releaseToolsS3Region         string
+	releaseToolsS3AccessKey      string
+	releaseToolsS3SecretKey      string
 
 	// releaseToolsS3Client/releaseToolsS3ClientErr/releaseToolsS3ClientOnce
-	// lazily build (and cache) the s3.Client ResolveBinaryURL's PublicURL
-	// calls go through, so the AWS SDK's config load only happens once per
-	// process rather than once per request. See releaseToolsS3PublicURLClient.
+	// lazily build (and cache) the s3.Client ResolveBinaryURL presigns
+	// through, so the AWS SDK's config load only happens once per process
+	// rather than once per request. See releaseToolsS3PresignClient method
+	// below.
 	releaseToolsS3Client     *s3.Client
 	releaseToolsS3ClientErr  error
 	releaseToolsS3ClientOnce sync.Once
@@ -62,12 +76,16 @@ type ArtifactServer struct {
 // see WithReleaseToolsS3.
 type ArtifactServerOption func(*ArtifactServer)
 
-// WithReleaseToolsS3 configures the public-read S3 bucket ResolveBinaryURL
-// resolves CLI binary/checksum-manifest download URLs against.
-func WithReleaseToolsS3(bucket, publicEndpoint string) ArtifactServerOption {
+// WithReleaseToolsS3 configures the S3 bucket and credentials
+// ResolveBinaryURL presigns CLI binary/checksum-manifest download URLs
+// against.
+func WithReleaseToolsS3(bucket, publicEndpoint, region, accessKey, secretKey string) ArtifactServerOption {
 	return func(s *ArtifactServer) {
 		s.releaseToolsS3Bucket = bucket
 		s.releaseToolsS3PublicEndpoint = publicEndpoint
+		s.releaseToolsS3Region = region
+		s.releaseToolsS3AccessKey = accessKey
+		s.releaseToolsS3SecretKey = secretKey
 	}
 }
 
@@ -411,7 +429,9 @@ var binaryOwnerFullName = map[string]string{
 }
 
 // ResolveBinaryURL implements issue #979/#983 (FR12-FR14, FR16): resolves a
-// CLI binary + version + platform to its public S3 download URL. See the
+// CLI binary + version + platform to a presigned S3 download URL (issue
+// #1101: the bucket isn't actually public-read, so this signs with the
+// server's own credentials rather than handing back an unsigned URL). See the
 // issue's "Design" section for the exact S3 key convention this must
 // produce -- it has to match what the sibling FinalizePublish S3-publish
 // task writes.
@@ -444,26 +464,39 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, mapRepoErr(err)
 	}
 
-	client, err := s.releaseToolsS3PublicURLClient()
+	client, err := s.releaseToolsS3PresignClient()
 	if err != nil {
 		return nil, err
 	}
 
 	binaryKey := fmt.Sprintf("%s/%s/%s-%s-%s", req.Binary, req.Version, req.Binary, req.Os, req.Arch)
 	checksumKey := fmt.Sprintf("%s/%s/checksums.txt", req.Binary, req.Version)
+
+	downloadURL, err := client.PresignPublicGetURL(ctx, binaryKey, resolveBinaryURLTTL)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to presign binary download URL: %v", err)
+	}
+	checksumURL, err := client.PresignPublicGetURL(ctx, checksumKey, resolveBinaryURLTTL)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to presign checksum manifest URL: %v", err)
+	}
 	return &pb.ResolveBinaryURLResponse{
-		DownloadUrl:         client.PublicURL(binaryKey),
-		ChecksumManifestUrl: client.PublicURL(checksumKey),
+		DownloadUrl:         downloadURL,
+		ChecksumManifestUrl: checksumURL,
 	}, nil
 }
 
-// releaseToolsS3PublicURLClient lazily builds and caches the bucket/
-// endpoint-only s3.Client ResolveBinaryURL's PublicURL calls go through.
-// s3.NewClient is the only constructor libs/go/s3 exports; it issues no
-// network call and needs no credentials (see s3.Client.PublicURL's doc
-// comment) -- it just loads AWS SDK config, so this is safe to build once
-// and reuse for the life of the process rather than on every request.
-func (s *ArtifactServer) releaseToolsS3PublicURLClient() (*s3.Client, error) {
+// resolveBinaryURLTTL bounds how long a ResolveBinaryURL response's
+// presigned URLs stay valid. Callers (CI's "check prebuilt tool
+// availability" step, download-release-tools/action.yml) resolve and
+// immediately fetch, so this only needs to comfortably cover that -- not
+// e.g. survive a long queued CI run.
+const resolveBinaryURLTTL = 15 * time.Minute
+
+// releaseToolsS3PresignClient lazily builds and caches the s3.Client
+// ResolveBinaryURL presigns download URLs through, so the AWS SDK's config
+// load only happens once per process rather than once per request.
+func (s *ArtifactServer) releaseToolsS3PresignClient() (*s3.Client, error) {
 	if s.releaseToolsS3Bucket == "" || s.releaseToolsS3PublicEndpoint == "" {
 		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_BUCKET and RELEASE_TOOLS_S3_PUBLIC_ENDPOINT must be configured to resolve binary URLs")
 	}
@@ -471,6 +504,9 @@ func (s *ArtifactServer) releaseToolsS3PublicURLClient() (*s3.Client, error) {
 		s.releaseToolsS3Client, s.releaseToolsS3ClientErr = s3.NewClient(context.Background(), s3.Config{
 			Bucket:         s.releaseToolsS3Bucket,
 			PublicEndpoint: s.releaseToolsS3PublicEndpoint,
+			Region:         s.releaseToolsS3Region,
+			AccessKey:      s.releaseToolsS3AccessKey,
+			SecretKey:      s.releaseToolsS3SecretKey,
 		})
 	})
 	if s.releaseToolsS3ClientErr != nil {

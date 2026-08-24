@@ -23,7 +23,6 @@ type Client struct {
 	presignPublic  *s3.PresignClient // uses public endpoint for pre-signed URLs
 	uploader       *manager.Uploader
 	bucket         string
-	publicEndpoint string // Config.PublicEndpoint, used by PublicURL
 }
 
 // Config holds S3 client configuration
@@ -90,12 +89,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		s3Client:       s3c,
-		presign:        s3.NewPresignClient(s3c),
-		presignPublic:  presignPublic,
-		uploader:       manager.NewUploader(s3c),
-		bucket:         cfg.Bucket,
-		publicEndpoint: cfg.PublicEndpoint,
+		s3Client:      s3c,
+		presign:       s3.NewPresignClient(s3c),
+		presignPublic: presignPublic,
+		uploader:      manager.NewUploader(s3c),
+		bucket:        cfg.Bucket,
 	}, nil
 }
 
@@ -226,24 +224,33 @@ func (c *Client) GetBucket() string {
 	return c.bucket
 }
 
-// PublicURL returns an unsigned, virtual-hosted-style download URL for key
-// in the client's configured bucket, built from the public endpoint (see
-// Config.PublicEndpoint). No network call and no signing: callers use this
-// only for objects in a public-read bucket (e.g. app-registry's
-// RELEASE_TOOLS_S3_BUCKET, see tools/app_registry/ENV.md) -- for anything
-// requiring authentication, use PresignPutURL or Download instead.
+// PresignPublicGetURL generates a pre-signed GET URL for key, addressed via
+// the client's public endpoint (Config.PublicEndpoint) using presignPublic
+// -- virtual-hosted-style, per the comment on presignPublic in NewClient
+// (OVH's public endpoint rejects path-style requests outright with HTTP
+// 400). Returns an error if no public endpoint is configured.
 //
-// OVH's public endpoint (e.g. cloud.ovh.us) rejects path-style requests
-// (<endpoint>/<bucket>/<key>) outright with HTTP 400 -- see the comment on
-// presignPublic in NewClient. It requires virtual-hosted-style addressing
-// (<bucket>.<endpoint-host>/<key>), so PublicURL must build the same shape.
-func (c *Client) PublicURL(key string) string {
-	endpoint := strings.TrimSuffix(c.publicEndpoint, "/")
-	scheme, host, found := strings.Cut(endpoint, "://")
-	if !found {
-		scheme, host = "https", endpoint
+// Unlike an unsigned "public URL" (issue #979/#983's original design), this
+// does not require the bucket to grant anonymous/public reads: the
+// signature carries the caller's own credentials, so any identity with
+// read access to the object (e.g. the one that wrote it) can hand an
+// external consumer -- e.g. a CI job resolving a CLI binary download, see
+// tools/app_registry/server/handlers/artifact.go's ResolveBinaryURL -- a
+// working link without giving that consumer S3 credentials of its own.
+// OVH's release-tools bucket was never actually configured for anonymous
+// reads (issue #1101), which is why this replaced the unsigned approach.
+func (c *Client) PresignPublicGetURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
+	if c.presignPublic == nil {
+		return "", errors.New("no public endpoint configured for presigned GET URLs")
 	}
-	return scheme + "://" + c.bucket + "." + host + "/" + key
+	req, err := c.presignPublic.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", fmt.Errorf("failed to presign public GET URL: %w", err)
+	}
+	return req.URL, nil
 }
 
 // Exists checks if an object exists in S3

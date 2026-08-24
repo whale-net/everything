@@ -44,20 +44,36 @@ etc.) — see that package's doc comment for the full list.
 ### CLI binary S3 (issue #979/#983)
 
 `ArtifactRegistry.ResolveBinaryURL` resolves a CLI binary (`release_helper_go`
-/ `app-registry`) + version + platform to its public S3 download URL, backed
-by a dedicated bucket (NFR4: not a reuse of any existing bucket). The API
-server only ever constructs *unsigned* public URLs (NFR2 — the bucket is
-public-read) and so needs no credentials; see `libs/go/s3`'s
-`Client.PublicURL`.
+/ `app-registry`) + version + platform to a *presigned* S3 download URL,
+backed by a dedicated bucket (NFR4: not a reuse of any existing bucket).
+
+NFR2 originally called for the API server to construct *unsigned* public
+URLs against a public-read bucket, needing no credentials of its own. Issue
+#1101: the bucket was never actually configured to grant anonymous/public
+reads, so an unsigned URL always came back `403 Forbidden` regardless of
+addressing style. `ResolveBinaryURL` now presigns with its own S3
+credentials instead (`libs/go/s3`'s `Client.PresignPublicGetURL`) — any
+identity with read access to the object (e.g. the one that wrote it) can
+hand an external consumer (CI) a working, time-limited link without
+granting that consumer S3 access of its own.
 
 | Variable | Default | Description |
 |----------|---------|--------------|
 | `RELEASE_TOOLS_S3_BUCKET` | `""` | Bucket name for CLI binary artifacts. Required for `ResolveBinaryURL` to return a usable URL. |
-| `RELEASE_TOOLS_S3_PUBLIC_ENDPOINT` | `""` | Public base URL used to construct unsigned download URLs, virtual-hosted-style (OVH's public endpoint rejects path-style with HTTP 400): `PublicURL(key) == "<scheme>://<bucket>.<endpoint-host>/<key>"`. |
+| `RELEASE_TOOLS_S3_PUBLIC_ENDPOINT` | `""` | Public-facing endpoint `ResolveBinaryURL`'s presigned URLs are addressed against, virtual-hosted-style (OVH's public endpoint rejects path-style with HTTP 400): `PresignPublicGetURL(key)` signs a request to `"<scheme>://<bucket>.<endpoint-host>/<key>"`. |
+| `RELEASE_TOOLS_S3_REGION` | `""` | Region for the server-side (read/presign) `s3.Client`. |
+| `RELEASE_TOOLS_S3_ACCESS_KEY` | `""` | Static access key for the server-side (read/presign) `s3.Client`. Needs read access to `RELEASE_TOOLS_S3_BUCKET` — reusing the publish side's write credentials below is sufficient. |
+| `RELEASE_TOOLS_S3_SECRET_KEY` | `""` | Static secret key for the server-side (read/presign) `s3.Client`. |
 
 The following are consumed by the *publish* side (the FinalizePublish
 S3-publish task, `worker/release/finalize.go`), not by `ResolveBinaryURL` —
-documented here so the full `RELEASE_TOOLS_S3_*` var set lives in one place:
+documented here so the full `RELEASE_TOOLS_S3_*` var set lives in one place.
+Same variable names as the read-side REGION/ACCESS_KEY/SECRET_KEY above, but
+these are two independently-configured deployments (`app-registry-api` vs.
+`app-registry-worker`) — nothing cross-validates that their actual secret
+values agree on the same bucket/region, so a region or credential mismatch
+between them is a real source of drift to check if `ResolveBinaryURL` starts
+failing again after this fix.
 
 | Variable | Default | Description |
 |----------|---------|--------------|
