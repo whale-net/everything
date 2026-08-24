@@ -288,6 +288,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/apps/{id}/history", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppHistory)))
 	mux.HandleFunc("/artifacts/{digest}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleArtifactDetail)))
 	mux.HandleFunc("/charts/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleChartDetail)))
+	mux.HandleFunc("/charts/{id}/argo-override", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleChartSetArgoOverride)))
 
 	// Screens 30/31/32 (#649): builds, build detail, reconcile runs.
 	mux.HandleFunc("/builds", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBuilds)))
