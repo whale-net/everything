@@ -25,7 +25,7 @@ Ask focused follow-up questions rather than a giant intake form — a few at a t
 - **Personas** — every actor (human or system) interacting with the feature, and what each needs.
 - **Out of scope** — say explicitly what this plan does not cover.
 
-**2. Respond to feedback in Discussion.** Architect and human reviewer leave feedback as Discussion comments. Read the latest comments on the discussion, answer questions inline with `gh discussion comment <discussion-url> --body "..."`, and post an updated draft specification if requirements change. If feedback came from a human during review, re-invoke architect so its reconciliation stays current before the next human review.
+**2. Respond to feedback in Discussion.** Architect, stakeholder personas, and the human reviewer leave feedback as Discussion comments. Stakeholder meeting blockers arrive numbered `SB-<round>.<n>` in a `Stakeholder meeting minutes` comment — answer each one by identifier and change the requirement, or say explicitly why it stays as written and record it under **Out of scope**; their non-blocking **Feedback** and **Guidance** are yours to fold in or defer with a reason, not obligations. Read the latest comments on the discussion, answer questions inline with `gh discussion comment <discussion-url> --body "..."`, and post an updated draft specification if requirements change. If feedback came from a human during review, re-invoke architect so its reconciliation stays current before the next human review.
 
 **3. Publish final root plan issue.** Once the proposal has received human approval (during `/project-manager:review`), create the final root plan Issue representing the definitive spec of record:
 
