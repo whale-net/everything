@@ -53,6 +53,27 @@ version)` constraint or the integer triple; the ordering index would gain a
 trailing term. Do not add it speculatively — it lands with the change that
 actually needs prerelease ordering.
 
+**A `failed` version is reused, not skipped past.** `(owner_id, kind,
+version)` is unique across every artifact state (migration 007), so a
+`failed` row (from `FailPublish` or the stale-row reaper) would otherwise
+block that exact version forever while every retry silently allocated the
+next one — permanently burning a version per failed attempt with no way to
+actually retry the one that failed. `AllocateVersion` instead checks the
+state of the highest existing version for the owner+kind: if it is
+`failed`, that same version is handed back (no new row inserted) instead of
+incrementing past it, so a release can be retried an arbitrary number of
+times against the SAME version. The state-shape CHECK constraint still
+guarantees at most one of those attempts ever carries a real digest (only
+`published` may have one), so reuse is safe. This check is deliberately
+scoped to `failed` only — not `allocated`/`publishing` — because those may
+still be legitimately in flight from a concurrent caller; see
+`TestAllocateVersion_ConcurrentCallsNeverCollide`, which depends on N
+concurrent callers for the same owner each getting a distinct version. An
+abandoned `allocated`/`publishing` row still becomes reusable once the
+stale-row reaper (`ExpireStale`) sweeps it to `failed`, just bounded by the
+reaper's timeout instead of being immediate. `explicitVersion` bypasses this
+entirely — an explicit request always gets exactly what it asked for.
+
 **Per-domain cutover gate.** `AllocateVersion` rejects any domain not at
 `domain_adoption.stage = 'allocate'` (see "Resolved questions" #3) with
 `FailedPrecondition`. `domain_adoption` ships from AR-1's migration with a
