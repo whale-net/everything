@@ -11,7 +11,8 @@ This directory contains Bazel tools and utilities for the monorepo.
   - `pytest.bzl` - Python testing rules
 - **`openapi/`** - OpenAPI specification and client generation
   - `openapi.bzl` - OpenAPI spec generation from FastAPI apps
-  - `openapi_client.bzl` - Client generation rule
+  - `openapi_client_rule.bzl` - Python client generation rule
+  - `openapi_go_client.bzl` - Go client generation rule
   - `openapi_gen_wrapper.sh` - OpenAPI Generator wrapper script
 - **`scripts/`** - Utility scripts
   - `version_resolver.py` - Helm chart version resolution
@@ -19,7 +20,7 @@ This directory contains Bazel tools and utilities for the monorepo.
   - `python_runner.py` - Python execution wrapper
 - **`helm/`** - Helm chart generation and Kubernetes manifest management
 - **`release_helper_go/`** - Release management tools and utilities
-- **`client_codegen/`** - OpenAPI client code generation
+- **`client_codegen/`** - Test exercising a generated OpenAPI client (generation targets live under `//generated/...`)
 - **`cacerts/`** - CA certificates for container images
 
 ## Release System
@@ -93,5 +94,5 @@ For backward compatibility, aliases are provided at the top level:
 
 Load statements should now use the new paths:
 - `load("//tools/bazel:release.bzl", ...)` (instead of `//tools:release.bzl`)
-- `load("//tools/openapi:openapi_client.bzl", ...)` (instead of `//tools:openapi_client.bzl`)
+- `load("//tools/openapi:openapi_client_rule.bzl", ...)` (instead of `//tools:openapi_client.bzl`)
 - `load("//tools/bazel:pytest.bzl", ...)` (instead of `//tools:pytest.bzl`)
