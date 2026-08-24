@@ -295,6 +295,66 @@ func TestHandleReleaseTriggerSubmit_DigestAgainstMultipleTargets_RejectedBeforeC
 	}
 }
 
+// TestHandleReleaseTriggerSubmit_DigestPin_ShowsCommitLinkedToGitHub covers
+// the Trigger Release Draft step's Commit column: pinning a single
+// resolved target to a digest must resolve and render that digest's
+// commit as a GitHub deep link (resolveDigestCommit, handlers_release.go),
+// using the same GetArtifact(digest) lookup screen 21 already relies on.
+// Prevents an accidental release off the wrong digest -- an opaque hex
+// string, easy to mis-paste -- by letting the operator verify the commit
+// before triggering.
+func TestHandleReleaseTriggerSubmit_DigestPin_ShowsCommitLinkedToGitHub(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getArtifactResps: map[string]*pb.GetArtifactResponse{
+			"sha256:deadbeef": {
+				Artifact: &pb.Artifact{ArtifactId: "art-1", Digest: "sha256:deadbeef"},
+				Build:    &pb.Build{BuildId: "build-1", GitSha: "cafefeedbeef1234"},
+			},
+		},
+	}
+	app := &App{registry: &RegistryClient{
+		App:      &releaseAppClient{apps: oneAppCatalog()},
+		Release:  &fakeReleaseClient{},
+		Artifact: artifact,
+	}}
+
+	form := url.Values{"target": {"app:platform-worker"}, "digest": {"sha256:deadbeef"}, "do": {"resolve"}}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(artifact.getArtifactReqs) != 1 || artifact.getArtifactReqs[0].GetDigest() != "sha256:deadbeef" {
+		t.Fatalf("expected one GetArtifact(digest=sha256:deadbeef) call, got %+v", artifact.getArtifactReqs)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "https://github.com/whale-net/everything/commit/cafefeedbeef1234") {
+		t.Errorf("expected a GitHub commit deep link for the pinned digest; body = %s", body)
+	}
+	if !strings.Contains(body, "cafefeed") {
+		t.Errorf("expected the (truncated) git_sha to render; body = %s", body)
+	}
+}
+
+// A digest that GetArtifact can't resolve must degrade to "unknown" in the
+// Commit column rather than failing the whole Draft preview.
+func TestHandleReleaseTriggerSubmit_DigestPin_UnresolvableDigestShowsUnknown(t *testing.T) {
+	app := &App{registry: &RegistryClient{
+		App:      &releaseAppClient{apps: oneAppCatalog()},
+		Release:  &fakeReleaseClient{},
+		Artifact: &fakeArtifactClient{},
+	}}
+
+	form := url.Values{"target": {"app:platform-worker"}, "digest": {"sha256:unknowndigest"}, "do": {"resolve"}}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "unknown") {
+		t.Errorf("expected the unresolvable digest to degrade to \"unknown\"; body = %s", body)
+	}
+}
+
 // --- status page: retry re-submits via the same TriggerRelease path -----
 
 func TestReleaseStatusRetryForm_PostsScopeToTriggerEndpoint(t *testing.T) {

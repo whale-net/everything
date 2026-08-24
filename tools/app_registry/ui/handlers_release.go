@@ -196,6 +196,7 @@ func (app *App) handleReleaseTriggerSubmit(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		targets[0].Digest = digest
+		s.DigestCommit = app.resolveDigestCommit(r.Context(), digest)
 	}
 
 	s.VersionInputs, err = parseTargetVersionInputs(r, targets)
@@ -347,6 +348,31 @@ func (app *App) handleReleaseStatus(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to render release status page: %v", renderErr)
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
+}
+
+// resolveDigestCommit resolves the commit behind a digest-pinned target's
+// existing artifact on the Trigger Release Draft step (prevents an
+// accidental release off the wrong commit: a digest is an opaque hex
+// string, easy to mis-paste, and this lets the operator visually verify it
+// against GitHub before triggering). GetArtifact(digest=...) already embeds
+// the artifact's Build in its response when one is on record
+// (server/handlers/artifact.go's GetArtifact -- same call
+// buildArtifactDetail, artifact_data.go, already makes for screen 21) --
+// no separate GetBuild call needed here, unlike resolveTargetCommits below
+// which only has a bare build_id in hand. A lookup failure (unknown digest,
+// or an artifact with no build on record) returns nil -- the Draft step
+// then renders "unknown" rather than blocking the preview.
+func (app *App) resolveDigestCommit(ctx context.Context, digest string) *pages.BuildCommitInfo {
+	resp, err := app.registry.Artifact.GetArtifact(ctx, &pb.GetArtifactRequest{Digest: digest})
+	if err != nil {
+		log.Printf("GetArtifact(digest=%q) failed: %v", digest, err)
+		return nil
+	}
+	sha := resp.GetBuild().GetGitSha()
+	if sha == "" {
+		return nil
+	}
+	return &pages.BuildCommitInfo{GitSha: sha, URL: githubCommitURL(sha)}
 }
 
 // resolveTargetCommits resolves each target's build_id to the commit its
