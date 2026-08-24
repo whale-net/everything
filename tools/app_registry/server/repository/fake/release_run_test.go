@@ -385,3 +385,39 @@ func TestReleaseRunFake_ListReleaseRunsByTarget_MostRecentFirstIncludingPriorAtt
 			second.ReleaseRunID, first.ReleaseRunID, runs[0].ReleaseRunID, runs[1].ReleaseRunID)
 	}
 }
+
+// TestReleaseRunFake_ListReleaseRuns_UnscopedAndOwnerScoped mirrors
+// postgres's TestReleaseRun_ListReleaseRuns_UnscopedAndOwnerScopedWithPagination
+// -- unscoped (owner_full_name == "") returns every release_run across every
+// owner, most-recent-first; a non-empty owner narrows to that owner's runs.
+func TestReleaseRunFake_ListReleaseRuns_UnscopedAndOwnerScoped(t *testing.T) {
+	r := New()
+	first, _, err := createReleaseRunTx(t, r, newReleaseRun("wf-attempts-1"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("first CreateReleaseRun: %v", err)
+	}
+	second, _, err := createReleaseRunTx(t, r, newReleaseRun("wf-attempts-2"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-gadget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("second CreateReleaseRun: %v", err)
+	}
+
+	all, _, err := r.ReleaseRuns().ListReleaseRuns(context.Background(), "", 0, "")
+	if err != nil {
+		t.Fatalf("ListReleaseRuns(unscoped): %v", err)
+	}
+	if len(all) != 2 || all[0].ReleaseRunID != second.ReleaseRunID || all[1].ReleaseRunID != first.ReleaseRunID {
+		t.Fatalf("expected unscoped most-recent-first [%s, %s], got %+v", second.ReleaseRunID, first.ReleaseRunID, all)
+	}
+
+	scoped, _, err := r.ReleaseRuns().ListReleaseRuns(context.Background(), "acme-widget", 0, "")
+	if err != nil {
+		t.Fatalf("ListReleaseRuns(acme-widget): %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].ReleaseRunID != first.ReleaseRunID {
+		t.Fatalf("expected exactly [%s] for acme-widget, got %+v", first.ReleaseRunID, scoped)
+	}
+}

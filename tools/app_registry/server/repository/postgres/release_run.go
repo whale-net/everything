@@ -312,3 +312,69 @@ func (r *releaseRunRepo) ListReleaseRunsByTarget(ctx context.Context, ownerFullN
 	}
 	return out, rows.Err()
 }
+
+// defaultReleaseRunPageSize is what ListReleaseRuns falls back to when the
+// caller passes pageSize <= 0. Matches defaultArtifactPageSize/
+// defaultBuildPageSize/defaultReconcileRunPageSize (issue #603).
+const defaultReleaseRunPageSize = 50
+
+// ListReleaseRuns implements repository.ReleaseRunRepository.ListReleaseRuns
+// -- the release-history admin page's query. Ordered by created_at DESC,
+// tie-broken by release_run_id DESC: created_at is NOT NULL on every row
+// (set once at CreateReleaseRun), which is what makes it safe as a
+// keyset-pagination cursor column. DISTINCT collapses the owner-filter join
+// back to one row per release_run, same as ListReleaseRunsByTarget.
+func (r *releaseRunRepo) ListReleaseRuns(ctx context.Context, ownerFullName string, pageSize int32, pageToken string) ([]repository.ReleaseRun, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultReleaseRunPageSize
+	}
+
+	query := `SELECT DISTINCT ` + releaseRunColumnsPrefixed + ` FROM release_run rr`
+	var args []any
+	if ownerFullName != "" {
+		query += ` JOIN release_run_target rrt ON rrt.release_run_id = rr.release_run_id`
+	}
+	query += ` WHERE 1=1`
+	if ownerFullName != "" {
+		args = append(args, ownerFullName)
+		query += fmt.Sprintf(" AND rrt.owner_full_name = $%d", len(args))
+	}
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeKeysetCursor(pageToken)
+		if err != nil {
+			return nil, "", fmt.Errorf("list release runs: %w", err)
+		}
+		args = append(args, cursorTS, cursorID)
+		query += fmt.Sprintf(" AND (rr.created_at, rr.release_run_id) < ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+	}
+	// Fetch one extra row so we can tell whether there is a next page
+	// without a separate COUNT(*) query (matches ListArtifacts).
+	args = append(args, pageSize+1)
+	query += fmt.Sprintf(" ORDER BY rr.created_at DESC, rr.release_run_id DESC LIMIT $%d", len(args))
+
+	rows, err := r.ex.Query(ctx, query, args...)
+	if err != nil {
+		return nil, "", fmt.Errorf("list release runs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []repository.ReleaseRun
+	for rows.Next() {
+		run, err := scanReleaseRun(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	var nextPageToken string
+	if int32(len(out)) > pageSize {
+		last := out[pageSize-1]
+		nextPageToken = encodeKeysetCursor(last.CreatedAt, last.ReleaseRunID)
+		out = out[:pageSize]
+	}
+	return out, nextPageToken, nil
+}

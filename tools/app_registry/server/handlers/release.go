@@ -292,6 +292,31 @@ func (s *ReleaseServer) ListReleases(ctx context.Context, req *pb.ListReleasesRe
 	return &pb.ListReleasesResponse{Releases: out}, nil
 }
 
+// ListReleaseAttempts reads from repo.ReleaseRuns().ListReleaseRuns --
+// the release-history admin page's query, across every owner (when
+// owner_full_name is empty) or scoped to one, paginated. Unauthenticated,
+// same reasoning as GetRelease/ListReleases above.
+func (s *ReleaseServer) ListReleaseAttempts(ctx context.Context, req *pb.ListReleaseAttemptsRequest) (*pb.ListReleaseAttemptsResponse, error) {
+	runs, nextToken, err := s.repo.ReleaseRuns().ListReleaseRuns(ctx, req.GetOwnerFullName(), req.GetPage().GetPageSize(), req.GetPage().GetPageToken())
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	out := make([]*pb.GetReleaseResponse, 0, len(runs))
+	for _, run := range runs {
+		_, targets, gerr := s.repo.ReleaseRuns().GetReleaseRun(ctx, run.ReleaseRunID)
+		if gerr != nil {
+			return nil, mapRepoErr(gerr)
+		}
+		out = append(out, releaseRunToPB(run, targets))
+	}
+	return &pb.ListReleaseAttemptsResponse{
+		Releases: out,
+		// total_size is a PAGE-LOCAL count, same tradeoff as ListArtifacts
+		// (see ARCHITECTURE.md's pagination note).
+		Page: &pb.PageResponse{NextPageToken: nextToken, TotalSize: int32(len(out))},
+	}, nil
+}
+
 // releaseRunToPB assembles a GetReleaseResponse from a repository.ReleaseRun
 // and its release_run_target rows. Shared by GetRelease and ListReleases so
 // both read the exact same shape (NFR4).

@@ -318,9 +318,11 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// Release trigger + status (#890, FR1-5/FR10): GET renders the scope
 	// form, POST resolves it (FR1); status is a durable page keyed by
-	// release_run_id. "/releases/trigger" (a literal path) takes precedence
-	// over the "/releases/{id}" wildcard for that exact segment, the same
-	// precedent "/builds/lookup" vs. "/builds/{id}" already relies on above.
+	// release_run_id. "/releases" (list) and "/releases/trigger" (both
+	// literal paths) take precedence over the "/releases/{id}" wildcard for
+	// their exact segments, the same precedent "/builds/lookup" vs.
+	// "/builds/{id}" already relies on above.
+	mux.HandleFunc("/releases", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReleaseHistory)))
 	mux.HandleFunc("/releases/trigger", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReleaseTrigger)))
 	mux.HandleFunc("/releases/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReleaseStatus)))
 }

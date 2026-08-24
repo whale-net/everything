@@ -276,6 +276,33 @@ func (app *App) renderReleaseTrigger(w http.ResponseWriter, r *http.Request, use
 	}
 }
 
+// handleReleaseHistory serves the release-history screen: every release
+// attempt ever triggered (ListReleaseAttempts), across every owner, most-
+// recent-first. One RPC call per page load, same simplicity as
+// handleReconcileRuns/handleBuilds -- no pagination controls yet (no
+// precedent for consuming PageResponse.next_page_token anywhere in this UI
+// today; the server-side page defaults to 50 rows).
+func (app *App) handleReleaseHistory(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+
+	resp, err := app.registry.Release.ListReleaseAttempts(r.Context(), &pb.ListReleaseAttemptsRequest{})
+	if err != nil {
+		log.Printf("ListReleaseAttempts failed: %v", err)
+		s := pages.ReleaseHistoryViewState{LoadErr: grpcErrorMessage(err)}
+		if renderErr := RenderTempl(w, r, "Release History", pages.ReleaseHistory(user, s)); renderErr != nil {
+			log.Printf("Failed to render release history page: %v", renderErr)
+			http.Error(w, "Failed to render page", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	s := pages.ReleaseHistoryViewState{Releases: resp.GetReleases()}
+	if renderErr := RenderTempl(w, r, "Release History", pages.ReleaseHistory(user, s)); renderErr != nil {
+		log.Printf("Failed to render release history page: %v", renderErr)
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
 // handleReleaseStatus serves the release-status screen (FR10): a durable
 // page keyed by release_run_id (path param), rendering GetRelease's
 // response -- per-target state, the resolved plan, and error detail. This

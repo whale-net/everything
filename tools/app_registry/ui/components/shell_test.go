@@ -59,9 +59,10 @@ func renderShell(t *testing.T, user *htmxauth.UserInfo) string {
 // "Admin" dropdown alongside "Reconcile Runs" and "Drift & Audit" -- the
 // nav <ul>'s own close tag is found by skipping past the Admin dropdown's
 // *nested* <ul>...</ul> (its own dropdown-content menu), not the first
-// "</ul>" in the body, and the <li> count below (8) is the 4 top-level
-// day-to-day items + 1 "Admin" wrapper <li> + 3 items nested inside the
-// Admin dropdown.
+// "</ul>" in the body, and the <li> count below (9) is the 4 top-level
+// day-to-day items + 1 "Admin" wrapper <li> + 4 items nested inside the
+// Admin dropdown (Environments, Release History, Reconcile Runs, Drift &
+// Audit).
 func TestShell_RendersEveryNavItemExactlyOnce(t *testing.T) {
 	body := renderShell(t, noRolesShellUser())
 
@@ -71,6 +72,7 @@ func TestShell_RendersEveryNavItemExactlyOnce(t *testing.T) {
 		`<li><a href="/builds">Builds</a></li>`,
 		`<li><a href="/releases/trigger">Trigger Release</a></li>`,
 		`<li><a href="/environments">Environments</a></li>`,
+		`<li><a href="/releases">Release History</a></li>`,
 		`<li><a href="/reconcile-runs">Reconcile Runs</a></li>`,
 		`<li><a href="/drift-audit">Drift &amp; Audit</a></li>`,
 	}
@@ -98,7 +100,7 @@ func TestShell_RendersEveryNavItemExactlyOnce(t *testing.T) {
 	}
 	navEnd := afterFirstClose + secondClose + len("</ul>")
 	navSection := body[navStart:navEnd]
-	// Exactly eight <li> elements within the nav <ul> (7 nav items + 1
+	// Exactly nine <li> elements within the nav <ul> (8 nav items + 1
 	// "Admin" dropdown wrapper) -- guards against an extra hardcoded item
 	// sitting alongside the real nav list.
 	wantLiCount := len(wantNavItems) + 1

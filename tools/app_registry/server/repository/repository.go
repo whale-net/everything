@@ -646,6 +646,15 @@ type ReleaseRunRepository interface {
 	// release_run_target_owner_state_idx index backing it) only serves the
 	// read path.
 	ListReleaseRunsByTarget(ctx context.Context, ownerFullName string) ([]ReleaseRun, error)
+
+	// ListReleaseRuns returns release_run rows most-recent-first, optionally
+	// scoped to ownerFullName (empty means every owner), paginated via a
+	// (created_at, release_run_id) keyset -- backs the release-history
+	// admin page (ListReleaseAttempts RPC). Distinct from
+	// ListReleaseRunsByTarget, which is always owner-scoped and unpaginated
+	// (TriggerRelease's dedup check needs the full list for one owner, not
+	// a page of it).
+	ListReleaseRuns(ctx context.Context, ownerFullName string, pageSize int32, pageToken string) ([]ReleaseRun, string, error)
 }
 
 // AppBuildLogRepository covers the `app_build_log` table (migration 019,
