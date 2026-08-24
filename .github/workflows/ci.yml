@@ -136,26 +136,30 @@ jobs:
   #       bazel build --config=ci //...
   #       bazel shutdown
 
+  # EXPERIMENT (see PR #1107): merged test-database into this job to measure
+  # how much of the dbtest-backed bazel invocation is redundant analysis/build
+  # work vs. what a warm local Bazel server on the same runner already reuses.
   # Combined build + test job - reuses warm Bazel server to avoid duplicate analysis
   test:
     name: Test
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v7
       with:
         fetch-depth: 0
-        
+
     - name: Setup Build Environment
       uses: ./.github/actions/setup-build-env
       with:
         cache-suffix: 'ci'
+        setup-docker: 'true'
         bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
         bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
         bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
         bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-        
+
     - name: Build and test all targets
       env:
         EVENT_NAME: ${{ github.event_name }}
@@ -183,6 +187,30 @@ jobs:
         # added without a matching field in //tools/appmeta/proto would drift
         # silently — the exact failure the contract test exists to prevent.
         bazel run --config=ci //tools/appmeta:manifest_contract_test
+        bazel shutdown
+
+    - name: Run container-backed database tests
+      run: |
+        set -euo pipefail
+
+        echo "::group::Discovering dbtest-backed targets"
+        SCOPE='//libs/... + //tools/... + //manmanv2/...'
+        TARGETS=$(bazel query \
+          --config=ci \
+          --universe_scope=//... \
+          "tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)" \
+          | tr '\n' ' ')
+        echo "Targets: ${TARGETS:-<none>}"
+        echo "::endgroup::"
+
+        if [ -z "${TARGETS// /}" ]; then
+          echo "::error::No dbtest-backed test targets found. The discovery query is broken - it should always match at least //libs/go/dbtest:postgres_constraints_test."
+          exit 1
+        fi
+
+        echo "::group::Database Integration Tests"
+        bazel coverage --config=ci $TARGETS --test_output=streamed
+        echo "::endgroup::"
         bazel shutdown
 
     - name: Upload coverage to Codecov
@@ -237,88 +265,6 @@ jobs:
         echo "::endgroup::"
         # Shutdown Bazel server to prevent hanging
         bazel shutdown
-
-  # Container-backed database tests - real Postgres via libs/go/dbtest
-  #
-  # These targets are tagged `manual`, so `bazel test //...` (the Test job above)
-  # deliberately skips them and stays green on a machine with no Docker daemon.
-  # That means nothing runs them unless a job like this one names them explicitly.
-  # See libs/go/dbtest/README.md.
-  #
-  # Targets are discovered by querying for tests that depend on //libs/go/dbtest,
-  # rather than hardcoding a list, so a new dbtest-backed test is covered the
-  # moment it is written. Runs in parallel with the test jobs above.
-  test-database:
-    name: Test Database Integration
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v7
-      with:
-        fetch-depth: 0
-
-    - name: Setup Build Environment
-      uses: ./.github/actions/setup-build-env
-      with:
-        cache-suffix: 'ci'
-        setup-docker: 'true'
-        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
-        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
-        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
-        bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-
-    - name: Run container-backed database tests
-      run: |
-        set -euo pipefail
-
-        echo "::group::Discovering dbtest-backed targets"
-        # Scoped to the subtrees that can contain them; a bare //... fails to
-        # load unrelated external repositories in this workspace.
-        #
-        # Uses --config=ci (defined in .bazelrc with --noimplicit_deps) and
-        # --universe_scope to accelerate target discovery.
-        SCOPE='//libs/... + //tools/... + //manmanv2/...'
-        TARGETS=$(bazel query \
-          --config=ci \
-          --universe_scope=//... \
-          "tests($SCOPE) intersect rdeps($SCOPE, //libs/go/dbtest:dbtest)" \
-          | tr '\n' ' ')
-        echo "Targets: ${TARGETS:-<none>}"
-        echo "::endgroup::"
-
-        # An empty result means the query broke, not that there is no work:
-        # //libs/go/dbtest:postgres_constraints_test always matches. Failing
-        # here is the point — a silently-empty run would report this job green
-        # while testing nothing.
-        if [ -z "${TARGETS// /}" ]; then
-          echo "::error::No dbtest-backed test targets found. The discovery query is broken - it should always match at least //libs/go/dbtest:postgres_constraints_test."
-          exit 1
-        fi
-
-        echo "::group::Database Integration Tests"
-        # No --test_tag_filters: combining it with explicit labels makes Bazel
-        # report "No test targets were found" (see libs/go/dbtest/README.md).
-        bazel coverage --config=ci $TARGETS --test_output=streamed
-        echo "::endgroup::"
-        bazel shutdown
-
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v5
-      if: always()
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        files: bazel-out/_coverage/_coverage_report.dat
-        fail_ci_if_error: false
-        flags: integration
-
-    - name: Upload test results
-      uses: actions/upload-artifact@v7
-      if: always()
-      with:
-        name: test-results-database
-        path: bazel-testlogs/
-        retention-days: 7
 
   # Plan Docker builds - determine which apps need building
   #
