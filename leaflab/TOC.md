@@ -12,6 +12,11 @@ Plant and environment monitoring firmware and data pipeline.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Link-seam board config pattern, dynamic sensor factory, pipeline overview
 - [DATA.md](DATA.md) — ER diagram, sensor identity model, SCD2 convention, config push flow, reading write path, mux_path format, analytical views reference
 
+## Design
+
+- [ui/design/user-stories/README.md](ui/design/user-stories/README.md) — V1 API personas index: cross-cutting blocker table, two SCD2 data-model defects, open modelling questions. Read before planning or changing the API surface.
+- [ui/design/wireframes/](ui/design/wireframes/) — 19 UI screen mockups (`preview.html` is a gitignored SPA harness). Personas are named only in in-file prose notes.
+
 ## Projects
 
 - [sensorboard/README.md](sensorboard/README.md) — Build, flash, extend the sensorboard firmware; how to add sensors and board configs
