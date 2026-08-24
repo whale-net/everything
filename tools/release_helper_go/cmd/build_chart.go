@@ -37,13 +37,15 @@ type BuildChartResult struct {
 	// keyed by.
 	ChartName string `json:"chart_name"`
 	Domain    string `json:"domain"`
-	// FullName is the *published* full name (domain + "-" +
-	// strings.TrimPrefix(ChartName, "helm-")) -- the exact
-	// OwnerFullName/target-key format a resolved plan's chart entries use
-	// (see release_charts.go's ExecuteReleaseCharts, which calls
+	// FullName is the *published* full name, from HelmChartMetadata.FullName()
+	// -- the exact OwnerFullName/target-key format a resolved plan's chart
+	// entries use (see release_charts.go's ExecuteReleaseCharts, which calls
 	// ExecuteRelease with OwnerFullName: publishedName). finalize.go
 	// correlates ResolvedPlan.Versions' chart keys against this field, not
-	// ChartName.
+	// ChartName. Must use chart.FullName(), not a naive Domain+"-"+ChartName
+	// concatenation -- release.bzl's release_helm_chart macro always composes
+	// ChartName as "helm-{domain}-{chart_name}", so trimming only "helm-"
+	// double-counts the domain (see FullName()'s own doc comment / PR #1076).
 	FullName string `json:"full_name"`
 	// ChartDir is where the chart's built source tree (Chart.yaml,
 	// values.yaml, templates/, image-lockfile.json) was copied to, relative
@@ -162,11 +164,10 @@ func ExecuteBuildCharts(p BuildChartParams) ([]BuildChartResult, error) {
 			return nil, fmt.Errorf("copy chart dir %s -> %s: %w", chartDir, dest, err)
 		}
 
-		publishedName := strings.TrimPrefix(chart.Name, "helm-")
 		results = append(results, BuildChartResult{
 			ChartName: chart.Name,
 			Domain:    chart.Domain,
-			FullName:  chart.Domain + "-" + publishedName,
+			FullName:  chart.FullName(),
 			ChartDir:  relDir,
 		})
 	}
