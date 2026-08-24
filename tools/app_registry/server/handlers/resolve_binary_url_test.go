@@ -69,8 +69,8 @@ func TestResolveBinaryURL_KnownBinaryAndVersion(t *testing.T) {
 		t.Fatalf("ResolveBinaryURL: %v", err)
 	}
 
-	wantDownload := "https://s3.example.com/release-tools-bucket/release_helper_go/v1.2.3/release_helper_go-linux-amd64"
-	wantChecksum := "https://s3.example.com/release-tools-bucket/release_helper_go/v1.2.3/checksums.txt"
+	wantDownload := "https://release-tools-bucket.s3.example.com/release_helper_go/v1.2.3/release_helper_go-linux-amd64"
+	wantChecksum := "https://release-tools-bucket.s3.example.com/release_helper_go/v1.2.3/checksums.txt"
 	if resp.DownloadUrl != wantDownload {
 		t.Errorf("download_url = %q, want %q", resp.DownloadUrl, wantDownload)
 	}
