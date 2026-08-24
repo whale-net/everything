@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"net/url"
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -14,8 +15,10 @@ import (
 // setup(t), which reconciles a "demo" domain app fixture unrelated to CLI
 // binaries) with the "tools" domain apps ResolveBinaryURL's
 // binaryOwnerFullName map expects (issue #979/#983), and an ArtifactServer
-// configured with a fake public S3 bucket/endpoint via WithReleaseToolsS3 so
-// PublicURL construction can be asserted without any real network call.
+// configured with a fake S3 bucket/endpoint/credentials via
+// WithReleaseToolsS3 so presigned-URL construction can be asserted without
+// any real network call (presigning is a pure local computation given
+// static credentials -- see s3.Client.PresignPublicGetURL).
 func setupResolveBinaryURL(t *testing.T) (*ArtifactServer, *pb.Build) {
 	t.Helper()
 	repo := fake.New()
@@ -31,17 +34,27 @@ func setupResolveBinaryURL(t *testing.T) (*ArtifactServer, *pb.Build) {
 		t.Fatalf("reconcile tools apps: %v", err)
 	}
 
-	artifactSrv := NewArtifactServer(repo, WithReleaseToolsS3("release-tools-bucket", "https://s3.example.com/"))
+	artifactSrv := NewArtifactServer(repo, WithReleaseToolsS3(
+		"release-tools-bucket", "https://s3.example.com/",
+		"us-east-1", "test-access-key", "test-secret-key",
+	))
 	build := recordBuild(t, artifactSrv, "run-resolve-binary-url")
 	return artifactSrv, build
 }
 
 // TestResolveBinaryURL_KnownBinaryAndVersion is the FR12-FR14 happy path:
-// a published binary+version+os+arch resolves the exact key-convention URLs
-// documented on ResolveBinaryURL (issue #979/#983's "Design" section) --
-// "<binary>/<version>/<binary>-<os>-<arch>" for the download and
-// "<binary>/<version>/checksums.txt" for the manifest, both rooted at the
-// configured public endpoint + bucket.
+// a published binary+version+os+arch resolves presigned URLs addressed at
+// the exact key-convention documented on ResolveBinaryURL (issue #979/#983's
+// "Design" section) -- "<binary>/<version>/<binary>-<os>-<arch>" for the
+// download and "<binary>/<version>/checksums.txt" for the manifest, both
+// rooted at the configured public endpoint + bucket, virtual-hosted-style
+// (issue #1101).
+//
+// The URLs are presigned (issue #1101 -- the bucket isn't actually
+// public-read), so the signature/expiry query params are non-deterministic;
+// this only asserts the parts that must be exact -- scheme, host, and path
+// -- plus that a signature is actually present, rather than the full URL
+// string.
 //
 // Red/green (per the issue's "Testing" section): this test was first run
 // against a deliberately wrong key construction
@@ -69,13 +82,32 @@ func TestResolveBinaryURL_KnownBinaryAndVersion(t *testing.T) {
 		t.Fatalf("ResolveBinaryURL: %v", err)
 	}
 
-	wantDownload := "https://s3.example.com/release-tools-bucket/release_helper_go/v1.2.3/release_helper_go-linux-amd64"
-	wantChecksum := "https://s3.example.com/release-tools-bucket/release_helper_go/v1.2.3/checksums.txt"
-	if resp.DownloadUrl != wantDownload {
-		t.Errorf("download_url = %q, want %q", resp.DownloadUrl, wantDownload)
+	wantHost := "release-tools-bucket.s3.example.com"
+	assertPresignedURL(t, "download_url", resp.DownloadUrl, wantHost, "/release_helper_go/v1.2.3/release_helper_go-linux-amd64")
+	assertPresignedURL(t, "checksum_manifest_url", resp.ChecksumManifestUrl, wantHost, "/release_helper_go/v1.2.3/checksums.txt")
+}
+
+// assertPresignedURL checks the parts of a presigned URL that must be
+// exact (scheme, virtual-hosted-style host, path) and that it's actually
+// signed, without pinning the non-deterministic signature/expiry query
+// params.
+func assertPresignedURL(t *testing.T, field, got, wantHost, wantPath string) {
+	t.Helper()
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatalf("%s = %q is not a valid URL: %v", field, got, err)
 	}
-	if resp.ChecksumManifestUrl != wantChecksum {
-		t.Errorf("checksum_manifest_url = %q, want %q", resp.ChecksumManifestUrl, wantChecksum)
+	if u.Scheme != "https" {
+		t.Errorf("%s scheme = %q, want %q", field, u.Scheme, "https")
+	}
+	if u.Host != wantHost {
+		t.Errorf("%s host = %q, want %q (virtual-hosted-style)", field, u.Host, wantHost)
+	}
+	if u.Path != wantPath {
+		t.Errorf("%s path = %q, want %q", field, u.Path, wantPath)
+	}
+	if u.Query().Get("X-Amz-Signature") == "" {
+		t.Errorf("%s = %q has no X-Amz-Signature -- not actually signed", field, got)
 	}
 }
 
