@@ -322,10 +322,19 @@ jobs:
             download_url="$(echo "$resp_json" | jq -r '.downloadUrl // .download_url // empty' 2>/dev/null)" || true
             [[ -z "$download_url" ]] && return 1
 
+            # download_url is a presigned S3 GetObject URL -- SigV4 binds the
+            # HTTP method into the signature, so a HEAD request against a
+            # GetObject-signed URL fails signature validation (403) even
+            # when the object exists (observed in run 32684790873: object
+            # confirmed present and downloadable by the same-minute CI run
+            # 32684611183, yet this probe's HEAD got 403). Use a ranged GET
+            # (method matches the signed operation) instead of HEAD so the
+            # probe verifies real availability without pulling the full
+            # binary.
             local http_code
-            http_code="$(curl -s -o /dev/null -w '%{http_code}' -I -m 15 "$download_url" 2>/dev/null)" || true
-            if [[ "$http_code" != "200" ]]; then
-              echo "Notice: $tool $ver resolved to a download_url but HEAD returned HTTP ${http_code:-<none>} (object not actually available in S3)" >&2
+            http_code="$(curl -s -o /dev/null -w '%{http_code}' -r 0-0 -m 15 "$download_url" 2>/dev/null)" || true
+            if [[ "$http_code" != "200" && "$http_code" != "206" ]]; then
+              echo "Notice: $tool $ver resolved to a download_url but GET returned HTTP ${http_code:-<none>} (object not actually available in S3)" >&2
               return 1
             fi
             return 0
