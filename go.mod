@@ -3,6 +3,7 @@ module github.com/whale-net/everything
 go 1.25.0
 
 require (
+	github.com/bazelbuild/buildtools v0.0.0-20260819135130-5d08cfd22031
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.7.0

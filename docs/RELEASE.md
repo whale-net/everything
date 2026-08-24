@@ -93,6 +93,27 @@ The `release_app` macro accepts metadata directly:
 
 Metadata is specified once in `release_app` and used for both container images and Helm chart generation.
 
+### `--fast`: static discovery without invoking Bazel
+
+`release_helper` discovery commands (`manifest-set`, `plan-helm-release`, `plan`, `list`,
+`changes`, `build-app`, `build-chart`, ...) accept a global `--fast` flag that skips the
+`bazel query`/`bazel cquery` round trip entirely and instead statically parses every
+`BUILD.bazel` file's `release_app(...)`/`release_helm_chart(...)` calls with a Starlark AST
+parser, replicating the macros' own derivation logic in Go:
+
+```bash
+# Same output as the default path, without starting a Bazel analysis.
+bazel run //tools/release_helper_go -- --fast manifest-set
+```
+
+This is dramatically faster (milliseconds vs. seconds of Bazel loading/analysis) because it
+never touches the Bazel server. It depends on every `release_app`/`release_helm_chart` call
+site passing literal arguments — see
+[`RELEASE_HELPER_FAST_MODE.md`](RELEASE_HELPER_FAST_MODE.md) for the assumption, what's out of
+scope (`changes`' `rdeps` change-detection query still requires real Bazel), and how the fast
+path is kept honest against the real one. `--fast` is opt-in; every command's default behavior
+is unchanged.
+
 ## Intelligent Change Detection
 
 The system supports multiple detection modes, though the current implementation has some limitations:

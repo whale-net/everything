@@ -88,7 +88,14 @@ const helmChartMetadataQuery = "kind(helm_chart_metadata, //...) except attr(tes
 // ListAllHelmCharts mirrors ListAllApps: a loading-phase query lists targets
 // so cquery analysis can be scoped, keeping discovery robust to unrelated
 // analysis failures elsewhere in `//...`.
-func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, _ string) ([]HelmChartMetadata, error) {
+//
+// When --fast is set, this skips bazel entirely and statically parses
+// BUILD.bazel files instead -- see discover_fast.go and ListAllApps's doc
+// comment.
+func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, workspaceRoot string) ([]HelmChartMetadata, error) {
+	if fastDiscovery {
+		return ListAllHelmChartsFast(workspaceRoot)
+	}
 	labelsOut, err := bazel.Run("query", helmChartMetadataQuery, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query helm_chart_metadata: %w", err)
