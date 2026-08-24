@@ -7,6 +7,7 @@ release_helm_chart(
     namespace = "leaflab",
     environment = "production",
     apps = [
+        "//leaflab/api:leaflab-api_metadata",
         "//leaflab/migrate:migrate_metadata",
         "//leaflab/processor:processor_metadata",
     ],
