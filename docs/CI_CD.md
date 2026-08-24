@@ -90,6 +90,57 @@ Production telemetry and workflow benchmarks showed that matrix fanout across in
 3. **Decoupled Planning**: Planning jobs (`plan-docker`, `plan-release`) remain separate lightweight steps that execute in seconds using prebuilt release tools, outputting the change plan before build runners start.
 4. **Reduced Churn**: Eliminates inter-job artifact coordination and race conditions across fanned-out matrix legs.
 
+## CI Test Job Parallelism vs. Consolidation (`ci.yml`)
+
+`ci.yml`'s `test` and `test-database` jobs run in parallel on every PR, each
+paying its own `Setup Build Environment` (checkout + Bazel/cache setup) even
+though they share the same remote Bazel cache. This looks like the same
+per-runner setup overhead that motivated single-runner sequential execution
+for `release.yml` (above) — so it's worth asking whether `ci.yml`'s test jobs
+should be consolidated the same way. They should not; the two workflows
+optimize for different things.
+
+### The experiment
+
+Two back-to-back runs on the same PR ([#1107](https://github.com/whale-net/everything/pull/1107),
+closed without merging): a baseline with `test` and `test-database` as
+separate parallel jobs
+([run 32685276005](https://github.com/whale-net/everything/actions/runs/32685276005)),
+then the `test-database` steps merged into `test`
+([run 32685567628](https://github.com/whale-net/everything/actions/runs/32685567628)).
+
+| | Baseline (separate jobs) | Consolidated (one job) |
+|---|---|---|
+| `test` setup | 28s | 41s (now includes Docker setup) |
+| build + coverage | 139s | 138s |
+| manifest contract check | 63s | 59s |
+| db-test step | 167s (own job, own setup) | 101s (same job, warm Bazel server) |
+| **Total compute (sum of job-seconds)** | 460s | 354s (**-23%**) |
+| **Wall clock (PR feedback)** | 243s — jobs ran in parallel | 354s (**+45%**) — now serial |
+
+The db-test step really did get 40% faster (167s → 101s) riding the warm
+local Bazel daemon and disk cache left behind by the preceding build step in
+the same job — confirming there is real duplicated analysis/fetch work
+across the two jobs, on top of what the shared remote cache already
+dedupes.
+
+### Why the split stays
+
+`whale-net/everything` is a **public** repository, so GitHub-hosted runner
+minutes are free and effectively unlimited — the 106s of compute saved by
+consolidating has no billing value. What it does cost is PR feedback
+latency: two jobs that used to finish in parallel (243s wall clock) become
+one job that takes 354s, a 45% slower critical path on every PR. `release.yml`
+makes the opposite tradeoff deliberately because it fans out over many
+per-app legs where fixed setup overhead (~60-90s per runner) dominates total
+runner-minutes; `ci.yml`'s test jobs are few, already cheap to set up (~30s),
+and running them in parallel is the actual point.
+
+**Conclusion: keep `test`, `test-database`, and `test-container-arch` as
+separate parallel jobs.** Re-run this experiment if either changes:
+the repo goes private (compute now has a cost), or a `setup-build-env` change
+meaningfully raises per-job setup cost relative to the work each job does.
+
 ## App Registry
 
 `.github/workflows/release.yml` and a separate `.github/workflows/promote.yml`
