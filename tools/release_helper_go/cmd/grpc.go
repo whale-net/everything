@@ -238,6 +238,7 @@ type FakeArtifactRegistryClient struct {
 	GetReleaseRunFn         func(ctx context.Context, in *pb.GetReleaseRunRequest, opts ...grpc.CallOption) (*pb.GetReleaseRunResponse, error)
 	ResolveArtifactFn       func(ctx context.Context, in *pb.ResolveArtifactRequest, opts ...grpc.CallOption) (*pb.ResolveArtifactResponse, error)
 	ListBuildsFn            func(ctx context.Context, in *pb.ListBuildsRequest, opts ...grpc.CallOption) (*pb.ListBuildsResponse, error)
+	GetBuildFn              func(ctx context.Context, in *pb.GetBuildRequest, opts ...grpc.CallOption) (*pb.GetBuildResponse, error)
 	ListArtifactPinsFn      func(ctx context.Context, in *pb.ListArtifactPinsRequest, opts ...grpc.CallOption) (*pb.ListArtifactPinsResponse, error)
 	AllocateVersionFn       func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error)
 	AdoptArtifactFn         func(ctx context.Context, in *pb.AdoptArtifactRequest, opts ...grpc.CallOption) (*pb.AdoptArtifactResponse, error)
@@ -255,6 +256,7 @@ type FakeArtifactRegistryClient struct {
 	GetReleaseRunCalls         []*pb.GetReleaseRunRequest
 	ResolveArtifactCalls       []*pb.ResolveArtifactRequest
 	ListBuildsCalls            []*pb.ListBuildsRequest
+	GetBuildCalls              []*pb.GetBuildRequest
 	ListArtifactPinsCalls      []*pb.ListArtifactPinsRequest
 	AllocateVersionCalls       []*pb.AllocateVersionRequest
 	AdoptArtifactCalls         []*pb.AdoptArtifactRequest
@@ -374,6 +376,14 @@ func (f *FakeArtifactRegistryClient) ListBuilds(ctx context.Context, in *pb.List
 		return f.ListBuildsFn(ctx, in, opts...)
 	}
 	return &pb.ListBuildsResponse{}, nil
+}
+
+func (f *FakeArtifactRegistryClient) GetBuild(ctx context.Context, in *pb.GetBuildRequest, opts ...grpc.CallOption) (*pb.GetBuildResponse, error) {
+	f.GetBuildCalls = append(f.GetBuildCalls, in)
+	if f.GetBuildFn != nil {
+		return f.GetBuildFn(ctx, in, opts...)
+	}
+	return &pb.GetBuildResponse{}, nil
 }
 
 func (f *FakeArtifactRegistryClient) ListArtifactPins(ctx context.Context, in *pb.ListArtifactPinsRequest, opts ...grpc.CallOption) (*pb.ListArtifactPinsResponse, error) {

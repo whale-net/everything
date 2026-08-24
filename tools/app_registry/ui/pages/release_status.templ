@@ -19,6 +19,25 @@ type ReleaseStatusViewState struct {
 	ReleaseRunID string
 	Release      *pb.GetReleaseResponse
 	LoadErr      string
+
+	// BuildCommits maps a target's build_id (ReleaseRunTarget.GetBuildId())
+	// to the commit that build resolved -- resolved via one GetBuild call
+	// per distinct build_id (handlers_release.go's resolveTargetCommits), so
+	// an operator can see (and click through to) the actual commit a
+	// targeted build was cut from before releasing/promoting it, instead of
+	// only a build_id. A build_id with no entry here (lookup failed, or the
+	// target has no build yet) renders as "unknown" rather than blocking the
+	// page.
+	BuildCommits map[string]BuildCommitInfo
+}
+
+// BuildCommitInfo pairs a build's git_sha with a ready-made GitHub commit
+// deep link (githubCommitURL, handlers_builds.go) -- built server-side, same
+// NFR-15 "link only, never a live GitHub API call" precedent
+// githubActionsRunURL already sets.
+type BuildCommitInfo struct {
+	GitSha string
+	URL    string
 }
 
 // releaseRunIDShort truncates a release run id to a dense, scannable
@@ -102,7 +121,7 @@ templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 		if s.LoadErr != "" {
 			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
 		} else if s.Release != nil {
-			@releaseStatusDetail(s.Release)
+			@releaseStatusDetail(s.Release, s.BuildCommits)
 		}
 	}
 }
@@ -116,12 +135,12 @@ templ ReleaseStatus(user *htmxauth.UserInfo, s ReleaseStatusViewState) {
 // discarded by the browser, not merged) -- a plain unstyled wrapping div
 // carries the margin instead, with no effect on the Card's own rendered
 // box.
-templ releaseStatusDetail(rel *pb.GetReleaseResponse) {
+templ releaseStatusDetail(rel *pb.GetReleaseResponse, commits map[string]BuildCommitInfo) {
 	<div class="mb-4">
 		@htmxui.Card(nil, releaseStatusRunBody(rel), nil, nil)
 	</div>
 	<div class="mb-4">
-		@htmxui.Card(nil, releaseStatusTargetsBody(rel), nil, nil)
+		@htmxui.Card(nil, releaseStatusTargetsBody(rel, commits), nil, nil)
 	</div>
 	if rel.GetResolvedPlanJson() != "" {
 		<div class="mb-4">
@@ -154,7 +173,7 @@ templ releaseStatusRunBody(rel *pb.GetReleaseResponse) {
 	</dl>
 }
 
-templ releaseStatusTargetsBody(rel *pb.GetReleaseResponse) {
+templ releaseStatusTargetsBody(rel *pb.GetReleaseResponse, commits map[string]BuildCommitInfo) {
 	<h3 class="card-title text-base">Targets ({ fmt.Sprint(len(rel.GetTargets())) })</h3>
 	<table class="table table-sm">
 		<thead>
@@ -163,6 +182,7 @@ templ releaseStatusTargetsBody(rel *pb.GetReleaseResponse) {
 				<th>Kind</th>
 				<th>State</th>
 				<th>Build</th>
+				<th>Commit</th>
 				<th>Error</th>
 			</tr>
 		</thead>
@@ -173,6 +193,15 @@ templ releaseStatusTargetsBody(rel *pb.GetReleaseResponse) {
 					<td>{ releaseTargetKindLabel(t.GetKind()) }</td>
 					<td>@components.ReleaseRunTargetStateBadge(t.GetState())</td>
 					<td class="font-mono text-xs">{ t.GetBuildId() }</td>
+					<td class="font-mono text-xs">
+						if info, ok := commits[t.GetBuildId()]; ok {
+							<a href={ templ.URL(info.URL) } target="_blank" rel="noopener" class="link link-hover" title={ info.GitSha }>
+								{ gitShaShort(info.GitSha) }
+							</a>
+						} else if t.GetBuildId() != "" {
+							<span class="opacity-50" title="Commit lookup unavailable for this build">unknown</span>
+						}
+					</td>
 					<td class="text-error text-xs">{ t.GetErrorDetail() }</td>
 				</tr>
 			}

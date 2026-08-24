@@ -295,6 +295,66 @@ func TestHandleReleaseTriggerSubmit_DigestAgainstMultipleTargets_RejectedBeforeC
 	}
 }
 
+// TestHandleReleaseTriggerSubmit_DigestPin_ShowsCommitLinkedToGitHub covers
+// the Trigger Release Draft step's Commit column: pinning a single
+// resolved target to a digest must resolve and render that digest's
+// commit as a GitHub deep link (resolveDigestCommit, handlers_release.go),
+// using the same GetArtifact(digest) lookup screen 21 already relies on.
+// Prevents an accidental release off the wrong digest -- an opaque hex
+// string, easy to mis-paste -- by letting the operator verify the commit
+// before triggering.
+func TestHandleReleaseTriggerSubmit_DigestPin_ShowsCommitLinkedToGitHub(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getArtifactResps: map[string]*pb.GetArtifactResponse{
+			"sha256:deadbeef": {
+				Artifact: &pb.Artifact{ArtifactId: "art-1", Digest: "sha256:deadbeef"},
+				Build:    &pb.Build{BuildId: "build-1", GitSha: "cafefeedbeef1234"},
+			},
+		},
+	}
+	app := &App{registry: &RegistryClient{
+		App:      &releaseAppClient{apps: oneAppCatalog()},
+		Release:  &fakeReleaseClient{},
+		Artifact: artifact,
+	}}
+
+	form := url.Values{"target": {"app:platform-worker"}, "digest": {"sha256:deadbeef"}, "do": {"resolve"}}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(artifact.getArtifactReqs) != 1 || artifact.getArtifactReqs[0].GetDigest() != "sha256:deadbeef" {
+		t.Fatalf("expected one GetArtifact(digest=sha256:deadbeef) call, got %+v", artifact.getArtifactReqs)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "https://github.com/whale-net/everything/commit/cafefeedbeef1234") {
+		t.Errorf("expected a GitHub commit deep link for the pinned digest; body = %s", body)
+	}
+	if !strings.Contains(body, "cafefeed") {
+		t.Errorf("expected the (truncated) git_sha to render; body = %s", body)
+	}
+}
+
+// A digest that GetArtifact can't resolve must degrade to "unknown" in the
+// Commit column rather than failing the whole Draft preview.
+func TestHandleReleaseTriggerSubmit_DigestPin_UnresolvableDigestShowsUnknown(t *testing.T) {
+	app := &App{registry: &RegistryClient{
+		App:      &releaseAppClient{apps: oneAppCatalog()},
+		Release:  &fakeReleaseClient{},
+		Artifact: &fakeArtifactClient{},
+	}}
+
+	form := url.Values{"target": {"app:platform-worker"}, "digest": {"sha256:unknowndigest"}, "do": {"resolve"}}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "unknown") {
+		t.Errorf("expected the unresolvable digest to degrade to \"unknown\"; body = %s", body)
+	}
+}
+
 // --- status page: retry re-submits via the same TriggerRelease path -----
 
 func TestReleaseStatusRetryForm_PostsScopeToTriggerEndpoint(t *testing.T) {
@@ -317,6 +377,49 @@ func TestReleaseStatusRetryForm_PostsScopeToTriggerEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(body, `name="do"`) || !strings.Contains(body, `value="trigger"`) {
 		t.Errorf("expected the retry control to submit do=trigger so it reaches the confirmed-trigger branch directly; body = %s", body)
+	}
+}
+
+// TestReleaseStatusPage_ShowsTargetCommitLinkedToGitHub covers the release-
+// status screen's Commit column: for a target whose build_id resolves via
+// GetBuild, the page must render the (truncated) git_sha and a GitHub
+// commit deep link (helps catch releasing/promoting the wrong commit
+// before it ships) -- and for a build_id GetBuild can't resolve, it must
+// degrade to "unknown" rather than fail the whole page.
+func TestReleaseStatusPage_ShowsTargetCommitLinkedToGitHub(t *testing.T) {
+	rel := &fakeReleaseClient{
+		getResp: &pb.GetReleaseResponse{
+			ReleaseRunId: "run-7",
+			Targets: []*pb.ReleaseRunTarget{
+				{OwnerFullName: "platform-worker", BuildId: "build-ok"},
+				{OwnerFullName: "platform-api", BuildId: "build-missing"},
+			},
+		},
+	}
+	artifact := &fakeArtifactClient{
+		getBuildResps: map[string]*pb.GetBuildResponse{
+			"build-ok": {Build: &pb.Build{BuildId: "build-ok", GitSha: "deadbeefcafefeed"}},
+		},
+	}
+	app := &App{registry: &RegistryClient{Release: rel, Artifact: artifact}}
+
+	req := httptest.NewRequest(http.MethodGet, "/releases/run-7", nil)
+	req.SetPathValue("id", "run-7")
+	w := httptest.NewRecorder()
+	app.handleReleaseStatus(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "https://github.com/whale-net/everything/commit/deadbeefcafefeed") {
+		t.Errorf("expected a GitHub commit deep link for the resolved build; body = %s", body)
+	}
+	if !strings.Contains(body, "deadbeef") {
+		t.Errorf("expected the (truncated) git_sha to render; body = %s", body)
+	}
+	if !strings.Contains(body, "unknown") {
+		t.Errorf("expected the unresolvable target's build_id to degrade to \"unknown\" rather than fail the page; body = %s", body)
+	}
+	if len(artifact.getBuildReqs) != 2 {
+		t.Errorf("expected one GetBuild call per distinct build_id (2 targets), got %d", len(artifact.getBuildReqs))
 	}
 }
 
@@ -454,10 +557,10 @@ func TestHandleReleaseTriggerSubmit_ExplicitModeWithEmptyValue_RejectedBeforeCal
 	}}
 
 	form := url.Values{
-		"target":                     {"app:platform-worker"},
-		"mode__platform-worker":      {"explicit"},
-		"explicit__platform-worker":  {""},
-		"do":                         {"trigger"},
+		"target":                    {"app:platform-worker"},
+		"mode__platform-worker":     {"explicit"},
+		"explicit__platform-worker": {""},
+		"do":                        {"trigger"},
 	}
 	req := newReleaseTriggerPickerRequest(t, form)
 	w := httptest.NewRecorder()

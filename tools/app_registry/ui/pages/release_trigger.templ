@@ -147,6 +147,16 @@ type ReleaseTriggerViewState struct {
 	// for a freshly-resolved target, echoed back verbatim on a Draft-step
 	// validation re-render.
 	VersionInputs map[string]TargetVersionInput
+
+	// DigestCommit is the commit behind a digest-pinned target's existing
+	// artifact (handlers_release.go's resolveDigestCommit) -- a digest is an
+	// opaque hex string, easy to mis-paste, so showing which commit it was
+	// actually built from (linked to GitHub) lets the operator catch a
+	// wrong-digest accident before triggering. nil when Digest is empty, or
+	// the lookup found no build for it -- the Draft step then renders
+	// "unknown" for that row rather than blocking the preview. Always nil
+	// for a "build fresh" target: nothing exists yet to look up.
+	DigestCommit *BuildCommitInfo
 }
 
 // releaseTargetKindLabel matches the CLI's --kind flag values ("image" |
@@ -292,12 +302,13 @@ templ releaseDraftBody(s ReleaseTriggerViewState) {
 						<th>Target</th>
 						<th>Kind</th>
 						<th>Digest</th>
+						<th>Commit</th>
 						<th>Version</th>
 					</tr>
 				</thead>
 				<tbody>
 					for _, t := range s.ResolvedTargets {
-						@releaseDraftRow(t, s.VersionInputs[t.GetOwnerFullName()])
+						@releaseDraftRow(t, s.VersionInputs[t.GetOwnerFullName()], s.DigestCommit)
 					}
 				</tbody>
 			</table>
@@ -310,7 +321,12 @@ templ releaseDraftBody(s ReleaseTriggerViewState) {
 	}
 }
 
-templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput) {
+// releaseDraftRow's commit param is the digest-pinned target's resolved
+// commit (ReleaseTriggerViewState.DigestCommit) -- always nil for a "build
+// fresh" row since nothing exists yet to look up (FR2: digest only applies
+// to a single-target resolution, so there is at most one pinned row per
+// Draft).
+templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput, commit *BuildCommitInfo) {
 	<tr>
 		<td class="font-mono">{ t.GetOwnerFullName() }</td>
 		<td>{ releaseTargetKindLabel(t.GetKind()) }</td>
@@ -319,6 +335,17 @@ templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput) {
 				{ t.GetDigest() }
 			} else {
 				<span class="opacity-50">build fresh</span>
+			}
+		</td>
+		<td class="font-mono text-xs">
+			if t.GetDigest() == "" {
+				<span class="opacity-50">—</span>
+			} else if commit != nil {
+				<a href={ templ.URL(commit.URL) } target="_blank" rel="noopener" class="link link-hover" title={ commit.GitSha }>
+					{ gitShaShort(commit.GitSha) }
+				</a>
+			} else {
+				<span class="opacity-50" title="Commit lookup unavailable for this digest">unknown</span>
 			}
 		</td>
 		<td>

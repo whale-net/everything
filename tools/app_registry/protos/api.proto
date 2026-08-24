@@ -91,6 +91,12 @@ service ArtifactRegistry {
   rpc ResolveArtifact(ResolveArtifactRequest) returns (ResolveArtifactResponse);
 
   rpc ListBuilds(ListBuildsRequest) returns (ListBuildsResponse);
+
+  // Resolves one build by build_id -- the release-status screen needs the
+  // git_sha behind a ReleaseRunTarget's build_id, and that id is neither
+  // GetReleaseRun's workflow_run_id nor filterable through ListBuilds.
+  rpc GetBuild(GetBuildRequest) returns (GetBuildResponse);
+
   rpc ListArtifactPins(ListArtifactPinsRequest) returns (ListArtifactPinsResponse);
 
   // Issue #979/#983: resolves a CLI binary ("release_helper_go" /

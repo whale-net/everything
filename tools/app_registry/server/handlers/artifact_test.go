@@ -1724,6 +1724,47 @@ func TestGetReleaseRun_UnknownRunIsNotFound(t *testing.T) {
 	}
 }
 
+// TestGetBuild_ResolvesByBuildID covers the RPC the release-status UI screen
+// uses to resolve a ReleaseRunTarget's build_id to its git_sha -- a lookup
+// GetReleaseRun (keyed by workflow_run_id) and ListBuilds (no id filter)
+// can't serve directly.
+func TestGetBuild_ResolvesByBuildID(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-getbuild")
+
+	resp, err := artifactSrv.GetBuild(ctx, &pb.GetBuildRequest{BuildId: build.BuildId})
+	if err != nil {
+		t.Fatalf("GetBuild: %v", err)
+	}
+	if resp.Build.BuildId != build.BuildId {
+		t.Fatalf("expected build_id %s, got %s", build.BuildId, resp.Build.BuildId)
+	}
+	if resp.Build.GitSha != "abc123" {
+		t.Fatalf("expected git_sha %q, got %q", "abc123", resp.Build.GitSha)
+	}
+}
+
+func TestGetBuild_UnknownBuildIsNotFound(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+
+	_, err := artifactSrv.GetBuild(ctx, &pb.GetBuildRequest{BuildId: "build-does-not-exist"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for an unrecorded build_id, got %v", err)
+	}
+}
+
+func TestGetBuild_RequiresBuildID(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+
+	_, err := artifactSrv.GetBuild(ctx, &pb.GetBuildRequest{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for an empty build_id, got %v", err)
+	}
+}
+
 // TestGetReleaseRun_DefaultsToLatestAttempt proves workflow_attempt == 0
 // resolves to the highest attempt recorded for that run id -- the common
 // case for an operator who doesn't know in advance whether a run was
