@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "htmxsse",
     srcs = [
+        "attach.go",
         "doc.go",
         "hub.go",
     ],
@@ -18,6 +19,8 @@ go_test(
     srcs = ["hub_test.go"],
     embed = [":htmxsse"],
     deps = [
+        "//libs/go/rmq",
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
