@@ -233,11 +233,14 @@ func (app *App) handleReleaseTriggerSubmit(w http.ResponseWriter, r *http.Reques
 }
 
 // parseTargetVersionInputs reads each resolved target's Draft-step version-
-// selection form fields (pages.modeFieldName/bumpFieldName/explicitFieldName)
-// and applies the chosen value onto that target's own
+// selection form fields (pages.modeFieldName/bumpFieldName/explicitFieldName,
+// keyed by pages.TargetFormKey -- NOT OwnerFullName alone, see that
+// function's doc comment: an app and a chart can share a full_name, and
+// keying on full_name alone collided their form fields into one HTML radio
+// group, issue #1141) and applies the chosen value onto that target's own
 // ReleaseTargetInput.VersionSelection -- an empty target list produces an
 // empty (not nil) map so the Draft page's per-row lookups (s.VersionInputs
-// [owner]) render the "bump"/"patch" zero-value default correctly rather
+// [key]) render the "bump"/"patch" zero-value default correctly rather
 // than panicking on a nil map read (reading a nil map is safe in Go, but
 // being explicit here documents the invariant). An "explicit" mode with an
 // empty text value is rejected here, before ever reaching TriggerRelease --
@@ -247,15 +250,16 @@ func parseTargetVersionInputs(r *http.Request, targets []*pb.ReleaseTargetInput)
 	inputs := make(map[string]pages.TargetVersionInput, len(targets))
 	for _, t := range targets {
 		full := t.GetOwnerFullName()
-		mode := r.FormValue("mode__" + full)
-		bump := r.FormValue("bump__" + full)
-		explicit := strings.TrimSpace(r.FormValue("explicit__" + full))
+		key := pages.TargetFormKey(t)
+		mode := r.FormValue("mode__" + key)
+		bump := r.FormValue("bump__" + key)
+		explicit := strings.TrimSpace(r.FormValue("explicit__" + key))
 
 		if mode == "explicit" {
 			if explicit == "" {
 				return nil, fmt.Errorf("%s: an explicit version is required when \"Explicit\" is selected", full)
 			}
-			inputs[full] = pages.TargetVersionInput{Mode: "explicit", Explicit: explicit}
+			inputs[key] = pages.TargetVersionInput{Mode: "explicit", Explicit: explicit}
 			t.VersionSelection = explicit
 			continue
 		}
@@ -263,7 +267,7 @@ func parseTargetVersionInputs(r *http.Request, targets []*pb.ReleaseTargetInput)
 		if bump == "" {
 			bump = "patch"
 		}
-		inputs[full] = pages.TargetVersionInput{Mode: "bump", Bump: bump, Explicit: explicit}
+		inputs[key] = pages.TargetVersionInput{Mode: "bump", Bump: bump, Explicit: explicit}
 		if bump != "patch" {
 			t.VersionSelection = bump
 		}
