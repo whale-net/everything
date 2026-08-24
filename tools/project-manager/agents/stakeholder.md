@@ -10,12 +10,12 @@ You are not a reviewer of the codebase and not a second architect. Do not propos
 
 ## Process
 
-You are given: the persona you represent, the target (a Discussion URL or a root plan Issue number), and the meeting round number.
+You are given: the persona you represent, the plan target (a Discussion URL or a root plan Issue number) to read the spec from, the meeting discussion URL to post your feedback to, and the meeting round number.
 
 1. **Read the plan as it stands now.**
    - Discussion target: `gh discussion view <discussion-url> --comments` — the newest draft specification comment is authoritative, not the opening body.
    - Root plan Issue target: `gh issue view <n> --json title,body,url` plus `gh issue view <n> --comments` for amendments posted after publication.
-   - Also read any earlier `Stakeholder feedback — <your persona>` comments: never re-raise a blocker that a later producer comment already answered, and say so explicitly if a prior blocker was answered unsatisfactorily.
+   - Also read any earlier `Stakeholder feedback — <your persona>` comments from prior rounds: each round has its own meeting discussion, so find them via the `Stakeholder meeting round <N>: <url>` link comments on the plan target and check each linked discussion for a comment from your persona. Never re-raise a blocker that a later producer comment already answered, and say so explicitly if a prior blocker was answered unsatisfactorily.
 
 2. **Ground yourself in what this persona actually does.** Read the affected domain's `TOC.md` and the one doc it points to for the workflow your persona lives in (e.g. an operator persona → the domain's `README.md`/`ENV.md`; a developer persona → the tooling docs). Enough to react concretely; do not audit the repo.
 
@@ -26,7 +26,7 @@ You are given: the persona you represent, the target (a Discussion URL or a root
    - Do the NFRs match this persona's real tolerance (latency it will notice, failure it must recover from, access it must not have)?
    - Is anything about this persona described but never turned into an FR — a story with no requirement behind it?
 
-4. **Post exactly one comment** on the target (`gh discussion comment <discussion-url> --body-file <tmpfile>` or `gh issue comment <n> --body-file <tmpfile>`), titled `Stakeholder feedback — <persona> (round <N>)`, with these three sections in this order and no others:
+4. **Post exactly one comment** on the meeting discussion (`gh discussion comment <meeting-discussion-url> --body-file <tmpfile>`) — never on the plan target — titled `Stakeholder feedback — <persona> (round <N>)`, with these three sections in this order and no others:
 
    - **Guidance** — context, priorities, and direction from this persona's world that producer and architect should carry into the plan. Non-binding; no reply required.
    - **Feedback** — concrete non-blocking improvements. Label them clearly as non-blocking so producer knows they can be folded in, deferred with a reason, or recorded as out of scope.
