@@ -170,7 +170,7 @@ func newPlanHelmReleaseCmd() *cobra.Command {
 			var chartNames []string
 			for _, c := range selected {
 				include = append(include, matrixEntry{Chart: c.Name, Domain: c.Domain, Version: effectiveVersion})
-				chartNames = append(chartNames, c.Name)
+				chartNames = append(chartNames, c.FullName())
 			}
 
 			result := map[string]interface{}{

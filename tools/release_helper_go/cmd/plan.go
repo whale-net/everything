@@ -830,7 +830,7 @@ func buildPlanResult(
 			"bazel_target": chart.BazelTarget,
 			"version":      v,
 		})
-		chartNames = append(chartNames, chart.Name)
+		chartNames = append(chartNames, fullName)
 		versions[fullName] = v
 	}
 

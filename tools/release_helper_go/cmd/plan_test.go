@@ -294,8 +294,8 @@ func TestPlanReleaseWorkflowDispatch_ChartsMetadata_NoBazelQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Charts) != 1 {
-		t.Errorf("expected 1 chart, got %d: %v", len(result.Charts), result.Charts)
+	if len(result.Charts) != 1 || result.Charts[0] != "manmanv2-control-services" {
+		t.Errorf("expected charts [manmanv2-control-services], got %v", result.Charts)
 	}
 	if len(bazel.recorded) != 0 {
 		t.Errorf("expected zero bazel calls for the metadata-input path, got %v", bazel.recorded)
@@ -1134,8 +1134,8 @@ func TestPlanReleaseWithCharts(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(result.Charts) != 1 || result.Charts[0] != "helm-control" {
-		t.Fatalf("expected charts [helm-control], got %v", result.Charts)
+	if len(result.Charts) != 1 || result.Charts[0] != "manmanv2-helm-control" {
+		t.Fatalf("expected charts [manmanv2-helm-control], got %v", result.Charts)
 	}
 	chartMatrixInclude, ok := result.ChartMatrix["include"].([]map[string]string)
 	if !ok || len(chartMatrixInclude) != 1 {
