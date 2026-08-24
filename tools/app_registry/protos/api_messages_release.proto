@@ -110,3 +110,19 @@ message ListReleasesRequest {
 message ListReleasesResponse {
   repeated GetReleaseResponse releases = 1;
 }
+
+// ListReleaseAttemptsRequest is the release-history admin page's query --
+// unlike ListReleasesRequest (always owner-scoped, unpaginated), this lists
+// release_run rows across every owner when owner_full_name is empty, most-
+// recent-first, paginated via the shared PageRequest convention (see
+// messages.proto).
+message ListReleaseAttemptsRequest {
+  // Optional; empty lists every owner's release attempts.
+  string owner_full_name = 1;
+  PageRequest page = 2;
+}
+
+message ListReleaseAttemptsResponse {
+  repeated GetReleaseResponse releases = 1;
+  PageResponse page = 2;
+}

@@ -570,3 +570,71 @@ func TestReleaseRun_ListReleaseRunsByTarget_MostRecentFirstIncludingPriorAttempt
 			second.ReleaseRunID, first.ReleaseRunID, runs[0].ReleaseRunID, runs[1].ReleaseRunID)
 	}
 }
+
+// TestReleaseRun_ListReleaseRuns_UnscopedAndOwnerScopedWithPagination covers
+// ListReleaseRuns (the release-history admin page's query, ListReleaseAttempts
+// RPC): unscoped (owner_full_name == "") returns every release_run across
+// every owner, most-recent-first; a non-empty owner narrows to that owner's
+// runs, same as ListReleaseRunsByTarget; and a pageSize of 1 exercises the
+// keyset cursor -- the returned next_page_token, fed back in, must resume
+// after the first page's last row rather than repeating it.
+func TestReleaseRun_ListReleaseRuns_UnscopedAndOwnerScopedWithPagination(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	first, _, err := createReleaseRunTx(t, reg, newReleaseRun("wf-attempts-1"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("first CreateReleaseRun: %v", err)
+	}
+	second, _, err := createReleaseRunTx(t, reg, newReleaseRun("wf-attempts-2"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-gadget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("second CreateReleaseRun: %v", err)
+	}
+
+	// Unscoped: both runs, most-recent-first.
+	all, nextToken, err := reg.ReleaseRuns().ListReleaseRuns(context.Background(), "", 0, "")
+	if err != nil {
+		t.Fatalf("ListReleaseRuns(unscoped): %v", err)
+	}
+	if len(all) != 2 || all[0].ReleaseRunID != second.ReleaseRunID || all[1].ReleaseRunID != first.ReleaseRunID {
+		t.Fatalf("expected unscoped most-recent-first [%s, %s], got %+v", second.ReleaseRunID, first.ReleaseRunID, all)
+	}
+	if nextToken != "" {
+		t.Fatalf("expected no next page token for a 2-row result under the default page size, got %q", nextToken)
+	}
+
+	// Owner-scoped: only acme-widget's run.
+	scoped, _, err := reg.ReleaseRuns().ListReleaseRuns(context.Background(), "acme-widget", 0, "")
+	if err != nil {
+		t.Fatalf("ListReleaseRuns(acme-widget): %v", err)
+	}
+	if len(scoped) != 1 || scoped[0].ReleaseRunID != first.ReleaseRunID {
+		t.Fatalf("expected exactly [%s] for acme-widget, got %+v", first.ReleaseRunID, scoped)
+	}
+
+	// Pagination: pageSize 1 returns the newest row plus a next page token
+	// that resumes to the older row, never repeating it.
+	page1, page1Token, err := reg.ReleaseRuns().ListReleaseRuns(context.Background(), "", 1, "")
+	if err != nil {
+		t.Fatalf("ListReleaseRuns(page 1): %v", err)
+	}
+	if len(page1) != 1 || page1[0].ReleaseRunID != second.ReleaseRunID {
+		t.Fatalf("expected page 1 to be [%s], got %+v", second.ReleaseRunID, page1)
+	}
+	if page1Token == "" {
+		t.Fatalf("expected a non-empty next page token after a 1-row page with 2 total rows")
+	}
+	page2, page2Token, err := reg.ReleaseRuns().ListReleaseRuns(context.Background(), "", 1, page1Token)
+	if err != nil {
+		t.Fatalf("ListReleaseRuns(page 2): %v", err)
+	}
+	if len(page2) != 1 || page2[0].ReleaseRunID != first.ReleaseRunID {
+		t.Fatalf("expected page 2 to be [%s], got %+v", first.ReleaseRunID, page2)
+	}
+	if page2Token != "" {
+		t.Fatalf("expected no further page after exhausting both rows, got %q", page2Token)
+	}
+}

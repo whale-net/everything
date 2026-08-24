@@ -54,6 +54,9 @@ type fakeReleaseClient struct {
 
 	getResp *pb.GetReleaseResponse
 	getErr  error
+
+	listAttemptsResp *pb.ListReleaseAttemptsResponse
+	listAttemptsErr  error
 }
 
 func (f *fakeReleaseClient) TriggerRelease(ctx context.Context, in *pb.TriggerReleaseRequest, opts ...grpc.CallOption) (*pb.TriggerReleaseResponse, error) {
@@ -75,6 +78,16 @@ func (f *fakeReleaseClient) GetRelease(ctx context.Context, in *pb.GetReleaseReq
 		return f.getResp, nil
 	}
 	return &pb.GetReleaseResponse{ReleaseRunId: in.GetReleaseRunId()}, nil
+}
+
+func (f *fakeReleaseClient) ListReleaseAttempts(ctx context.Context, in *pb.ListReleaseAttemptsRequest, opts ...grpc.CallOption) (*pb.ListReleaseAttemptsResponse, error) {
+	if f.listAttemptsErr != nil {
+		return nil, f.listAttemptsErr
+	}
+	if f.listAttemptsResp != nil {
+		return f.listAttemptsResp, nil
+	}
+	return &pb.ListReleaseAttemptsResponse{}, nil
 }
 
 func oneAppCatalog() []*pb.App {
@@ -485,3 +498,74 @@ func TestHandleReleaseTriggerSubmit_PickerDomainToken_ResolvesEverythingUnderIt(
 // devUserAuth is declared in handlers_promote_rollback_test.go and reused
 // here -- see that file's doc comment for why RequireAuthFunc is the only
 // supported way to inject a *htmxauth.UserInfo into a handler test.
+
+// --- release history --------------------------------------------------
+
+// TestHandleReleaseHistory_RendersEveryAttempt covers the release-history
+// screen: it must call ListReleaseAttempts unscoped (no owner_full_name --
+// this screen shows every owner's attempts, unlike the owner-scoped
+// ListReleases) and render each returned run, including its overall status
+// derived from per-target state.
+func TestHandleReleaseHistory_RendersEveryAttempt(t *testing.T) {
+	rel := &fakeReleaseClient{
+		listAttemptsResp: &pb.ListReleaseAttemptsResponse{
+			Releases: []*pb.GetReleaseResponse{
+				{
+					ReleaseRunId:   "run-ok",
+					TriggeredBy:    "alice",
+					RequestedScope: "platform-worker",
+					Targets: []*pb.ReleaseRunTarget{
+						{OwnerFullName: "platform-worker", State: pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_SUCCEEDED},
+					},
+				},
+				{
+					ReleaseRunId:   "run-failed",
+					TriggeredBy:    "bob",
+					RequestedScope: "platform-api",
+					Targets: []*pb.ReleaseRunTarget{
+						{OwnerFullName: "platform-api", State: pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_FAILED},
+					},
+				},
+			},
+		},
+	}
+	app := &App{registry: &RegistryClient{Release: rel}}
+
+	req := httptest.NewRequest(http.MethodGet, "/releases", nil)
+	w := httptest.NewRecorder()
+	app.handleReleaseHistory(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "run-ok") {
+		t.Errorf("expected the succeeded run's id in the body; body = %s", body)
+	}
+	if !strings.Contains(body, "run-failed") {
+		t.Errorf("expected the failed run's id in the body; body = %s", body)
+	}
+	if !strings.Contains(body, "Succeeded") {
+		t.Errorf("expected a Succeeded badge; body = %s", body)
+	}
+	if !strings.Contains(body, "Failed") {
+		t.Errorf("expected a Failed badge; body = %s", body)
+	}
+}
+
+// TestHandleReleaseHistory_RPCFailure_RendersErrorBanner covers the load-
+// failure path, mirroring handleBuilds/handleReconcileRuns's error
+// handling.
+func TestHandleReleaseHistory_RPCFailure_RendersErrorBanner(t *testing.T) {
+	rel := &fakeReleaseClient{listAttemptsErr: status.Error(codes.Unavailable, "db down")}
+	app := &App{registry: &RegistryClient{Release: rel}}
+
+	req := httptest.NewRequest(http.MethodGet, "/releases", nil)
+	w := httptest.NewRecorder()
+	app.handleReleaseHistory(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "alert-error") {
+		t.Errorf("expected an error banner on RPC failure; body = %s", body)
+	}
+}

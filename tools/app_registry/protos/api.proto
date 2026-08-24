@@ -169,6 +169,11 @@ service ReleaseRegistry {
 
   rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse);
   rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse);
+
+  // Release-history admin page's query -- every owner's release attempts,
+  // most-recent-first, paginated. See ListReleaseAttemptsRequest's doc
+  // comment for how this differs from ListReleases.
+  rpc ListReleaseAttempts(ListReleaseAttemptsRequest) returns (ListReleaseAttemptsResponse);
 }
 
 // ============================================================================

@@ -166,3 +166,63 @@ func (f releaseRunFake) ListReleaseRunsByTarget(ctx context.Context, ownerFullNa
 	})
 	return out, nil
 }
+
+// defaultReleaseRunPageSize mirrors postgres.defaultReleaseRunPageSize.
+const defaultReleaseRunPageSize = 50
+
+// ListReleaseRuns mirrors postgres's releaseRunRepo.ListReleaseRuns -- every
+// release_run, optionally scoped to ownerFullName, most-recent-first,
+// paginated.
+func (f releaseRunFake) ListReleaseRuns(ctx context.Context, ownerFullName string, pageSize int32, pageToken string) ([]repository.ReleaseRun, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultReleaseRunPageSize
+	}
+
+	var all []repository.ReleaseRun
+	if ownerFullName == "" {
+		for _, run := range f.r.state.ReleaseRuns {
+			all = append(all, run)
+		}
+	} else {
+		seen := map[string]bool{}
+		for _, t := range f.r.state.ReleaseRunTargets {
+			if t.OwnerFullName != ownerFullName || seen[t.ReleaseRunID] {
+				continue
+			}
+			run, ok := f.r.state.ReleaseRuns[t.ReleaseRunID]
+			if !ok {
+				continue
+			}
+			seen[t.ReleaseRunID] = true
+			all = append(all, run)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].CreatedAt.After(all[j].CreatedAt)
+		}
+		return all[i].ReleaseRunID > all[j].ReleaseRunID
+	})
+
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeFakeCursor(pageToken)
+		if err != nil {
+			return nil, "", err
+		}
+		var resumed []repository.ReleaseRun
+		for _, run := range all {
+			if run.CreatedAt.Before(cursorTS) || (run.CreatedAt.Equal(cursorTS) && run.ReleaseRunID < cursorID) {
+				resumed = append(resumed, run)
+			}
+		}
+		all = resumed
+	}
+
+	var nextPageToken string
+	if int32(len(all)) > pageSize {
+		last := all[pageSize-1]
+		nextPageToken = encodeFakeCursor(last.CreatedAt, last.ReleaseRunID)
+		all = all[:pageSize]
+	}
+	return all, nextPageToken, nil
+}
