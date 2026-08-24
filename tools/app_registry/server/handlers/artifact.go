@@ -878,6 +878,22 @@ func (s *ArtifactServer) ListBuilds(ctx context.Context, req *pb.ListBuildsReque
 	}, nil
 }
 
+// GetBuild resolves one build by build_id. Added for the release-status UI
+// screen: a ReleaseRunTarget carries build_id, not workflow_run_id, so
+// GetReleaseRun (keyed by workflow_run_id) can't resolve it, and ListBuilds
+// has no id filter. A read, same authenticated-any-caller rule as
+// GetReleaseRun/ListBuilds above.
+func (s *ArtifactServer) GetBuild(ctx context.Context, req *pb.GetBuildRequest) (*pb.GetBuildResponse, error) {
+	if req.BuildId == "" {
+		return nil, status.Error(codes.InvalidArgument, "build_id is required")
+	}
+	build, err := s.repo.Builds().GetBuild(ctx, req.BuildId)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+	return &pb.GetBuildResponse{Build: buildToPB(*build)}, nil
+}
+
 // AdoptArtifact implements AR-7e's (issue #558) admin-only adoption /
 // disaster-recovery path: records a pre-existing GHCR image or chart as
 // published with provenance ADOPTED and a required reason, for when there is

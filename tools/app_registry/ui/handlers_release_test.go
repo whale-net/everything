@@ -320,6 +320,49 @@ func TestReleaseStatusRetryForm_PostsScopeToTriggerEndpoint(t *testing.T) {
 	}
 }
 
+// TestReleaseStatusPage_ShowsTargetCommitLinkedToGitHub covers the release-
+// status screen's Commit column: for a target whose build_id resolves via
+// GetBuild, the page must render the (truncated) git_sha and a GitHub
+// commit deep link (helps catch releasing/promoting the wrong commit
+// before it ships) -- and for a build_id GetBuild can't resolve, it must
+// degrade to "unknown" rather than fail the whole page.
+func TestReleaseStatusPage_ShowsTargetCommitLinkedToGitHub(t *testing.T) {
+	rel := &fakeReleaseClient{
+		getResp: &pb.GetReleaseResponse{
+			ReleaseRunId: "run-7",
+			Targets: []*pb.ReleaseRunTarget{
+				{OwnerFullName: "platform-worker", BuildId: "build-ok"},
+				{OwnerFullName: "platform-api", BuildId: "build-missing"},
+			},
+		},
+	}
+	artifact := &fakeArtifactClient{
+		getBuildResps: map[string]*pb.GetBuildResponse{
+			"build-ok": {Build: &pb.Build{BuildId: "build-ok", GitSha: "deadbeefcafefeed"}},
+		},
+	}
+	app := &App{registry: &RegistryClient{Release: rel, Artifact: artifact}}
+
+	req := httptest.NewRequest(http.MethodGet, "/releases/run-7", nil)
+	req.SetPathValue("id", "run-7")
+	w := httptest.NewRecorder()
+	app.handleReleaseStatus(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "https://github.com/whale-net/everything/commit/deadbeefcafefeed") {
+		t.Errorf("expected a GitHub commit deep link for the resolved build; body = %s", body)
+	}
+	if !strings.Contains(body, "deadbeef") {
+		t.Errorf("expected the (truncated) git_sha to render; body = %s", body)
+	}
+	if !strings.Contains(body, "unknown") {
+		t.Errorf("expected the unresolvable target's build_id to degrade to \"unknown\" rather than fail the page; body = %s", body)
+	}
+	if len(artifact.getBuildReqs) != 2 {
+		t.Errorf("expected one GetBuild call per distinct build_id (2 targets), got %d", len(artifact.getBuildReqs))
+	}
+}
+
 func TestReleaseStatusPage_HasManualRefreshLink(t *testing.T) {
 	rel := &fakeReleaseClient{getResp: &pb.GetReleaseResponse{ReleaseRunId: "run-7"}}
 	app := &App{registry: &RegistryClient{Release: rel}}
@@ -454,10 +497,10 @@ func TestHandleReleaseTriggerSubmit_ExplicitModeWithEmptyValue_RejectedBeforeCal
 	}}
 
 	form := url.Values{
-		"target":                     {"app:platform-worker"},
-		"mode__platform-worker":      {"explicit"},
-		"explicit__platform-worker":  {""},
-		"do":                         {"trigger"},
+		"target":                    {"app:platform-worker"},
+		"mode__platform-worker":     {"explicit"},
+		"explicit__platform-worker": {""},
+		"do":                        {"trigger"},
 	}
 	req := newReleaseTriggerPickerRequest(t, form)
 	w := httptest.NewRecorder()

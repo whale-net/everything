@@ -277,6 +277,18 @@ message GetReleaseRunResponse {
   repeated Artifact artifacts = 2;
 }
 
+// GetBuildRequest resolves one build by its build_id -- the id a
+// ReleaseRunTarget carries (api_messages_release.proto), for callers that
+// have a build_id in hand but not the workflow_run_id GetReleaseRun requires
+// and don't want ListBuilds' unfiltered, recency-paginated scan.
+message GetBuildRequest {
+  string build_id = 1;
+}
+
+message GetBuildResponse {
+  Build build = 1;
+}
+
 message ListBuildsRequest {
   // Optional: only return builds with recorded_at >= since (Unix timestamp).
   int64 since = 1;

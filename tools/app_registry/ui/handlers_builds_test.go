@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
@@ -27,6 +29,16 @@ type fakeArtifactClient struct {
 	getReleaseRunReqs  []*pb.GetReleaseRunRequest
 	getReleaseRunResp  *pb.GetReleaseRunResponse
 	getReleaseRunErr   error
+
+	getBuildCalls int
+	getBuildReqs  []*pb.GetBuildRequest
+	// getBuildResps maps build_id -> the response GetBuild should return for
+	// it; a build_id with no entry returns getBuildErr (default NotFound),
+	// letting tests exercise the release-status page's per-target
+	// GetBuild fan-out (handlers_release.go's resolveTargetCommits) with a
+	// mix of resolvable and unresolvable build_ids in one release run.
+	getBuildResps map[string]*pb.GetBuildResponse
+	getBuildErr   error
 }
 
 func (f *fakeArtifactClient) ListBuilds(ctx context.Context, in *pb.ListBuildsRequest, opts ...grpc.CallOption) (*pb.ListBuildsResponse, error) {
@@ -41,6 +53,18 @@ func (f *fakeArtifactClient) GetReleaseRun(ctx context.Context, in *pb.GetReleas
 		return nil, f.getReleaseRunErr
 	}
 	return f.getReleaseRunResp, nil
+}
+
+func (f *fakeArtifactClient) GetBuild(ctx context.Context, in *pb.GetBuildRequest, opts ...grpc.CallOption) (*pb.GetBuildResponse, error) {
+	f.getBuildCalls++
+	f.getBuildReqs = append(f.getBuildReqs, in)
+	if resp, ok := f.getBuildResps[in.GetBuildId()]; ok {
+		return resp, nil
+	}
+	if f.getBuildErr != nil {
+		return nil, f.getBuildErr
+	}
+	return nil, status.Error(codes.NotFound, "build not found")
 }
 
 // fakeAppClient is a minimal stand-in for pb.AppRegistryClient, covering

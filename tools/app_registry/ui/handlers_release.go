@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -337,9 +338,52 @@ func (app *App) handleReleaseStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s := pages.ReleaseStatusViewState{ReleaseRunID: releaseRunID, Release: resp}
+	s := pages.ReleaseStatusViewState{
+		ReleaseRunID: releaseRunID,
+		Release:      resp,
+		BuildCommits: app.resolveTargetCommits(r.Context(), resp.GetTargets()),
+	}
 	if renderErr := RenderTempl(w, r, "Release Status", pages.ReleaseStatus(user, s)); renderErr != nil {
 		log.Printf("Failed to render release status page: %v", renderErr)
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
+}
+
+// resolveTargetCommits resolves each target's build_id to the commit its
+// build was cut from (issue: show which commit a release targets, and link
+// it to GitHub, so an operator can catch an accidental wrong-commit release
+// before it ships) -- one GetBuild call per DISTINCT build_id among the
+// run's targets, bounded by the run's own target count (release.yml's
+// matrix keeps that small; same N+1-avoidance rationale as
+// ownerIdentityIndex's doc comment in handlers_builds.go, just scoped to one
+// run instead of the whole builds list since ListBuilds has no id filter to
+// batch this into a single call). A GetBuild failure for one build_id is
+// logged and simply omitted from the returned map -- the page renders
+// "unknown" for that target rather than failing the whole page over one
+// commit link.
+func (app *App) resolveTargetCommits(ctx context.Context, targets []*pb.ReleaseRunTarget) map[string]pages.BuildCommitInfo {
+	commits := make(map[string]pages.BuildCommitInfo, len(targets))
+	for _, t := range targets {
+		buildID := t.GetBuildId()
+		if buildID == "" {
+			continue
+		}
+		if _, ok := commits[buildID]; ok {
+			continue
+		}
+		resp, err := app.registry.Artifact.GetBuild(ctx, &pb.GetBuildRequest{BuildId: buildID})
+		if err != nil {
+			log.Printf("GetBuild(%q) failed: %v", buildID, err)
+			continue
+		}
+		sha := resp.GetBuild().GetGitSha()
+		if sha == "" {
+			continue
+		}
+		commits[buildID] = pages.BuildCommitInfo{
+			GitSha: sha,
+			URL:    githubCommitURL(sha),
+		}
+	}
+	return commits
 }
