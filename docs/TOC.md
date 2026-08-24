@@ -20,6 +20,7 @@ Cross-cutting documentation for the Bazel build system, release pipeline, and in
 ## Release & CI/CD
 
 - [RELEASE.md](RELEASE.md) — Release system: `release_app` macro, change detection, multi-arch publishing
+- [RELEASE_HELPER_FAST_MODE.md](RELEASE_HELPER_FAST_MODE.md) — `release_helper`'s `--fast` flag: static Starlark-AST discovery as a drop-in replacement for `bazel query`/`cquery` app/chart discovery — read before touching `release_app`/`release_helm_chart` macro semantics or `tools/release_helper_go/cmd/discover_fast.go`
 - [HELM.md](HELM.md) — Automatic Helm chart generation from app metadata
 - [HELM_RELEASE.md](HELM_RELEASE.md) — Helm chart release integration with GitHub Actions
 - [CI_CD.md](CI_CD.md) — GitHub Actions workflow overview, including the App Registry recording steps and `promote.yml`
