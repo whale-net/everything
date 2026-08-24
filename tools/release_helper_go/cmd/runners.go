@@ -3,15 +3,69 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 type realBazelRunner struct {
 	workspaceRoot string
 }
 
+// bazelTransientErrorSubstrings mark a bazel failure as a remote-cache/
+// network flake worth retrying rather than a real build error -- e.g.
+// "lost inputs with digests" (observed in GH Actions run 32689827812/job/
+// 97321529487: the remote cache evicted an already-uploaded blob mid-build,
+// which a bare network-level retry inside bazel's own gRPC client can't fix
+// since the blob itself is gone; only re-running the whole invocation, which
+// makes bazel recompute the missing input, recovers).
+var bazelTransientErrorSubstrings = []string{
+	"lost inputs",
+	"connection reset by peer",
+	"i/o timeout",
+	"unexpected eof",
+	"tls handshake timeout",
+	"connection refused",
+	"no route to host",
+	"broken pipe",
+	"temporary failure in name resolution",
+}
+
+func isTransientBazelError(errText string) bool {
+	lower := strings.ToLower(errText)
+	for _, substr := range bazelTransientErrorSubstrings {
+		if strings.Contains(lower, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+const (
+	bazelRetryAttempts = 3
+	bazelRetryDelay    = 5 * time.Second
+)
+
 func (r *realBazelRunner) Run(args ...string) (string, error) {
+	var out string
+	var err error
+	for attempt := 1; attempt <= bazelRetryAttempts; attempt++ {
+		out, err = r.runOnce(args...)
+		if err == nil {
+			return out, nil
+		}
+		if attempt == bazelRetryAttempts || !isTransientBazelError(err.Error()) {
+			return out, err
+		}
+		fmt.Fprintf(os.Stderr, "bazel %s: transient failure (attempt %d/%d), retrying in %s: %v\n",
+			strings.Join(args, " "), attempt, bazelRetryAttempts, bazelRetryDelay, err)
+		time.Sleep(bazelRetryDelay)
+	}
+	return out, err
+}
+
+func (r *realBazelRunner) runOnce(args ...string) (string, error) {
 	cmd := exec.Command("bazel", args...)
 	cmd.Dir = r.workspaceRoot
 	var stdout, stderr bytes.Buffer
