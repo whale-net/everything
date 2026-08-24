@@ -37,6 +37,7 @@ func NewRootCmd() *cobra.Command {
 		newReleaseChartsCmd(),
 		newBuildAppCmd(),
 		newBuildChartCmd(),
+		newBuildReleaseCmd(),
 		newFinalizeAppCmd(),
 		newFinalizeChartCmd(),
 		newCreateCombinedGithubReleaseCmd(),

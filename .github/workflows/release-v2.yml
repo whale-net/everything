@@ -475,6 +475,11 @@ jobs:
       has-specs: ${{ steps.plan.outputs.has_specs || steps.resolved-plan.outputs.has_specs }}
       build-id: ${{ steps.plan.outputs.build_id || steps.resolved-plan.outputs.build_id }}
       versions: ${{ steps.plan.outputs.versions || steps.resolved-plan.outputs.versions }}
+      # Issue #1024/#1055: the same PlanResult JSON as the individual
+      # outputs above, in one blob -- lets build-release-artifacts forward
+      # the whole plan to `release-helper build-release --from-resolved-plan`
+      # verbatim instead of reconstructing it field-by-field in YAML.
+      resolved-plan: ${{ steps.plan.outputs.resolved_plan || steps.resolved-plan.outputs.resolved_plan }}
     steps:
       # Issue #927/#929: when App Registry's Temporal DispatchBuild has
       # already computed the full release plan (the normal case for this
@@ -618,66 +623,19 @@ jobs:
           [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
           "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_OUTPUT"
 
-  # Issue #986 (FR21/FR22 of #979): reviewed -- only `bazel build`s each
-  # OpenAPI spec target and uploads the resulting JSON as a workflow
-  # artifact. No App Registry call, no publish, no versioned side effect.
-  # Clean.
-  build-openapi-specs:
-    name: Build OpenAPI Specs
-    runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.inputs.build_ref || github.sha }}
-
-      - name: Setup Build Environment
-        uses: ./.github/actions/setup-build-env
-        with:
-          cache-suffix: 'docker'
-          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
-          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
-          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
-          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-
-      - name: Build OpenAPI specs
-        env:
-          OPENAPI_MATRIX: ${{ needs.plan-release.outputs.openapi-matrix }}
-        run: |
-          mkdir -p /tmp/openapi-specs
-          BAZEL_BIN=$(bazel info bazel-bin --config=ci-images)
-
-          echo "$OPENAPI_MATRIX" | jq -c '.include[]' | while read -r item; do
-            TARGET=$(echo "$item" | jq -r '.openapi_target')
-            DOMAIN=$(echo "$item" | jq -r '.domain')
-            APP=$(echo "$item" | jq -r '.app')
-
-            echo "Building OpenAPI spec for ${DOMAIN}-${APP} (target: $TARGET)..."
-            bazel build --config=ci-images "$TARGET"
-
-            TARGET_PATH="${TARGET#@@//}"
-            TARGET_PATH="${TARGET_PATH#//}"
-            TARGET_DIR=$(echo "$TARGET_PATH" | sed 's#:#/#' | sed 's#/[^/]*$##')
-            SPEC_FILE="${BAZEL_BIN}/${TARGET_DIR}/${DOMAIN}-${APP}_openapi_spec.json"
-            [[ ! -f "$SPEC_FILE" ]] && SPEC_FILE="${BAZEL_BIN}/$(echo "$TARGET_PATH" | sed 's#:#/#').json"
-
-            cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}_openapi_spec.json"
-          done
-
-      - name: Upload OpenAPI spec artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: openapi-specs
-          path: /tmp/openapi-specs/*.json
-
   # Issue #928: merges the old `release` (apps) and `release-helm-charts`
   # (charts) jobs into one -- a single checkout/setup-build-env/bazel
   # session amortized across both app images and chart packages for the
   # whole batch (FR1 of #928), mirroring the amortization reasoning the
   # now-superseded FR10 used for push-time compose (closed #917), applied
-  # here at release-trigger time instead.
+  # here at release-trigger time instead. Issue #1024 folded the formerly
+  # separate build-openapi-specs and build-cli-binaries jobs into this one
+  # too, for the same reason (#991/FR7 had reintroduced the per-job
+  # checkout+setup-build-env+Bazel-server-startup cost #928 eliminated) --
+  # each artifact type's steps below are guarded by that type's own
+  # `if:` condition (mirroring how apps vs. charts already coexist in this
+  # job), and the job-level `if:` is the union of all three former jobs'
+  # conditions.
   #
   # This job's responsibility deliberately SHRANK relative to the two jobs
   # it replaces: it builds and pushes every app image (tagged only with
@@ -692,7 +650,7 @@ jobs:
   # unchanged (issue #928's explicit ask: do not reinvent this). See that
   # file's package doc comment for the full design, including how build
   # outputs (image digests, chart source trees) get from this job back to
-  # Temporal: the two `actions/upload-artifact` steps below, downloaded by
+  # Temporal: the `actions/upload-artifact` steps below, downloaded by
   # FinalizePublish via the GitHub Actions API after PollBuild reports
   # this run terminal -- the same workflow-artifact mechanism this
   # workflow already used for release-notes/digest-check/helm-charts
@@ -702,23 +660,34 @@ jobs:
   # GitHub Release creation, release notes, and the implicit git-tag side
   # effect it produced have been removed entirely from this workflow (see
   # issue #979) -- not relocated or deferred, just gone. This job's build
-  # outputs (image digests, chart source trees) are consumed solely by
-  # FinalizePublish via the two `actions/upload-artifact` steps below.
+  # outputs (image digests, chart source trees, OpenAPI specs, CLI
+  # binaries) are consumed solely by FinalizePublish via the
+  # `actions/upload-artifact` steps below.
   #
   # Issue #986 (FR21/FR22 of #979): reviewed step-by-step -- build-app
   # pushes by digest only (--tag is the build-scoped git SHA; see its own
   # `Short`/`Long` help text), build-chart composes a source tree only (no
   # `helm package`, no ChartMuseum upload, no version resolution), and
   # neither step calls any App Registry RPC. Matches this header comment's
-  # design. Clean.
+  # design. Clean. The folded-in OpenAPI (bazel build + upload only) and
+  # CLI-binaries (package-assets + upload only) steps were reviewed the
+  # same way when they were still separate jobs -- see their original
+  # header comments, preserved below on each step group -- and neither
+  # gained any new side effect by moving here.
   build-release-artifacts:
     name: Build Release Artifacts
     runs-on: ubuntu-latest
     needs: [authorize-trigger, plan-release, build-release-tools]
     if: |
       needs.authorize-trigger.result == 'success' &&
-      ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) ||
-       github.event.inputs.helm_charts != '')
+      (
+        (needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) ||
+        github.event.inputs.helm_charts != '' ||
+        (needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false') ||
+        (github.event.inputs.dry_run == 'false' && needs.plan-release.outputs.release-matrix != '' &&
+         (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
+          contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"')))
+      )
     permissions:
       contents: read
       packages: write
@@ -771,35 +740,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
-      # Push-by-digest only -- no version tag, no "latest", no App
-      # Registry mutation, no git tag. See this job's header comment.
-      - name: Build app images (push by digest)
-        if: ${{ github.event.inputs.dry_run == 'false' && needs.plan-release.outputs.release-matrix != '' }}
+      # Issue #1024/#1055: replaces four separate steps (build-app looped
+      # per app in bash, build-chart, an OpenAPI bazel-build/jq loop, and
+      # package-assets looped per CLI app in bash) with one call into
+      # `release-helper build-release`, which does that looping/dispatch in
+      # Go instead -- see tools/release_helper_go/cmd/build_release.go's
+      # ExecuteBuildReleaseArtifacts. Each artifact type's own "should I
+      # build this" gating (dry-run, has-specs, app-presence, an empty
+      # charts list) now lives in that Go code, driven off the resolved
+      # plan below, rather than as per-step YAML `if:` conditions -- this
+      # job's own `if:` above still gates whether the job runs at all. This
+      # CLI stays behind the same push-by-digest-only / no-final-version /
+      # no-ChartMuseum-upload boundary described in this job's header
+      # comment; ExecuteBuildReleaseArtifacts calls the exact same
+      # ExecuteBuildApp/ExecuteBuildCharts/PackageAppAssets primitives the
+      # former per-type steps did.
+      - name: Build release artifacts
         env:
-          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+          RESOLVED_PLAN: ${{ needs.plan-release.outputs.resolved-plan }}
           BUILD_SHA: ${{ github.event.inputs.build_ref || github.sha }}
         run: |
-          mkdir -p /tmp/build-manifest/apps
-
-          echo "$RELEASE_MATRIX" | jq -c '.include[]' | while read -r item; do
-            DOMAIN=$(echo "$item" | jq -r '.domain')
-            APP=$(echo "$item" | jq -r '.app')
-
-            echo "=========================================="
-            echo "Building application: ${DOMAIN}-${APP} (build tag: ${BUILD_SHA})"
-            echo "=========================================="
-
-            "$RELEASE_HELPER" build-app --domain "$DOMAIN" --app "$APP" --git-sha "$BUILD_SHA" --output-dir /tmp/build-manifest/apps
-          done
-
-      # Composes each chart's source tree only -- no `helm package`, no
-      # final version, no ChartMuseum upload. See this job's header
-      # comment.
-      - name: Build chart source trees
-        if: ${{ github.event.inputs.helm_charts != '' }}
-        run: |
-          ARGS=(build-chart --charts "${{ github.event.inputs.helm_charts }}" --output-dir /tmp/build-manifest/charts)
-          [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
+          ARGS=(build-release --from-resolved-plan "$RESOLVED_PLAN" --git-sha "$BUILD_SHA")
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
           "$RELEASE_HELPER" "${ARGS[@]}"
 
       - name: Upload build manifest artifact
@@ -818,84 +780,20 @@ jobs:
           path: /tmp/build-manifest/charts/
           if-no-files-found: ignore
 
-  # FR7 of #979: cross-compiles release_helper_go/app-registry (only, not
-  # every cli app) for all four supported CLI platforms and stages them as
-  # a build-scoped `cli-binaries` workflow artifact, distinct from the
-  # `release-tools` artifact build-release-tools produces above (that one
-  # is this-run's-host-platform only, meant for downstream jobs in *this*
-  # run to exec; this one is multi-platform and meant for Temporal's
-  # FinalizePublish to later download and publish to S3 once a version is
-  # confirmed -- see issue #981). This job assigns no final version and
-  # performs no S3 upload itself (FR9/FR10's job, done later once
-  # FinalizePublish knows the confirmed EffectiveVersion).
-  build-cli-binaries:
-    name: Build CLI Binaries
-    runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, build-release-tools]
-    if: |
-      needs.authorize-trigger.result == 'success' &&
-      github.event.inputs.dry_run == 'false' &&
-      needs.plan-release.outputs.release-matrix != '' &&
-      (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
-       contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"'))
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
+      - name: Upload OpenAPI spec artifact
+        if: ${{ needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v7
         with:
-          ref: ${{ github.event.inputs.build_ref || github.sha }}
-
-      - name: Setup Build Environment
-        uses: ./.github/actions/setup-build-env
-        with:
-          cache-suffix: 'docker'
-          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
-          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
-          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
-          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-
-      - name: Download release tools
-        uses: ./.github/actions/download-release-tools
-        with:
-          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
-          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
-          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
-          # Safety valve -- see "Download release tools (resolved plan)" in
-          # plan-release above for the full explanation. Bazel is already
-          # set up unconditionally in this job, so no extra wiring is needed.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
-        env:
-          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-
-      # Only package whichever of the two apps is actually present in this
-      # run's release matrix -- the job-level `if:` above only guarantees
-      # at least one of them is; a run releasing just one must not fail
-      # trying to package-assets the other (resolveApps would error on an
-      # app name absent from this run's plan). package-assets takes the
-      # full name ("tools-<app>") -- resolveApps only matches full names
-      # and domain sweeps, not bare app names, since a bare name can
-      # collide with an unrelated same-named domain (e.g. "app-registry"
-      # is both this CLI's bare name and the app-registry domain).
-      - name: Package CLI binaries (multi-platform)
-        env:
-          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
-        run: |
-          mkdir -p /tmp/cli-binaries
-          for APP_NAME in release_helper_go app-registry; do
-            if echo "$RELEASE_MATRIX" | jq -e --arg app "$APP_NAME" '.include[] | select(.app == $app)' >/dev/null; then
-              echo "Packaging CLI binaries for ${APP_NAME} (linux_amd64, linux_arm64, darwin_arm64, darwin_amd64)..."
-              "$RELEASE_HELPER" package-assets "tools-${APP_NAME}" \
-                --platforms linux_amd64,linux_arm64,darwin_arm64,darwin_amd64 \
-                --output-dir "/tmp/cli-binaries/${APP_NAME}"
-            else
-              echo "${APP_NAME} not in this run's release matrix, skipping."
-            fi
-          done
+          name: openapi-specs
+          path: /tmp/openapi-specs/*.json
+          if-no-files-found: ignore
 
       - name: Upload CLI binaries artifact
+        if: |
+          github.event.inputs.dry_run == 'false' &&
+          needs.plan-release.outputs.release-matrix != '' &&
+          (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
+           contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"'))
         uses: actions/upload-artifact@v7
         with:
           name: cli-binaries
