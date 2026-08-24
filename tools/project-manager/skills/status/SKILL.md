@@ -18,6 +18,7 @@ Pure read — never edits items or dispatches personas. See `tools/project-manag
 1. `gh issue view <n> --comments` — report the root issue's title and status:
    - If labeled `plan:approved` with a `Project board: <url>` comment, proceed to step 2.
    - If labeled `plan:approved` without a `Project board:` comment, report that task breakdown hasn't started yet and `/project-manager:implement <n>` is next.
+   - Report the last `Stakeholder meeting: cleared` / `Stakeholder meeting: blocked (<k> blockers)` line found on the root issue or on its intake discussion (first body line, `Intake discussion: <url>`). If neither has any, report that no stakeholder meeting has been held and that `/project-manager:stakeholder-meeting <n>` is available.
 
 2. List every item on the plan's Project and its `Status` (swimlane):
    ```sh
