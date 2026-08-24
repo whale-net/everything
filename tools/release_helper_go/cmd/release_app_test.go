@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-func setupReleaseAppFixtures() (BazelRunner, GitRunner, DockerRunner, FileSystem, string) {
+func setupReleaseAppFixtures() (BazelRunner, GitRunner, DockerRunner, FileSystem, string, ImageTagger) {
 	apps := []fakeApp{
 		{
 			pkg:          "demo/hello_go",
@@ -50,11 +50,11 @@ func setupReleaseAppFixtures() (BazelRunner, GitRunner, DockerRunner, FileSystem
 		},
 	)
 
-	return bazelRunner, gitRunner, dockerRunner, fs, fakeWorkspaceRoot
+	return bazelRunner, gitRunner, dockerRunner, fs, fakeWorkspaceRoot, newFakeTagger()
 }
 
 func TestExecuteReleaseApp_Success(t *testing.T) {
-	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
+	bazel, git, docker, fs, ws, tagger := setupReleaseAppFixtures()
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
 
 	res, err := ExecuteReleaseApp(ReleaseAppParams{
@@ -72,6 +72,7 @@ func TestExecuteReleaseApp_Success(t *testing.T) {
 		FS:                   fs,
 		WorkspaceRoot:        ws,
 		ArtifactClient:       fakeArtifactClient,
+		Tagger:               tagger,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -136,6 +137,19 @@ func TestExecuteReleaseApp_Success(t *testing.T) {
 	}
 	if recordReq.Repository != "ghcr.io/whale-net/demo-hello-go" {
 		t.Errorf("expected repository 'ghcr.io/whale-net/demo-hello-go', got %q", recordReq.Repository)
+	}
+
+	// Publish should retag the build-scoped (git SHA) image with the
+	// release version -- see ImageReleaser.Publish's doc comment.
+	fakeTagger, ok := tagger.(*fakeImageTagger)
+	if !ok {
+		t.Fatalf("expected tagger to be *fakeImageTagger, got %T", tagger)
+	}
+	if len(fakeTagger.calls) != 1 {
+		t.Fatalf("expected 1 registry retag call, got %d: %+v", len(fakeTagger.calls), fakeTagger.calls)
+	}
+	if fakeTagger.calls[0].newTag != "v1.0.0" {
+		t.Errorf("expected retag to v1.0.0, got %q", fakeTagger.calls[0].newTag)
 	}
 }
 
@@ -264,6 +278,7 @@ func TestExecuteReleaseApp_NoOpDigestDetection(t *testing.T) {
 		FS:                   fs,
 		WorkspaceRoot:        fakeWorkspaceRoot,
 		ArtifactClient:       fakeArtifactClient,
+		Tagger:               newFakeTagger(),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -329,6 +344,7 @@ func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
 	)
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
+	tagger := newFakeTagger()
 
 	res, err := ExecuteReleaseApp(ReleaseAppParams{
 		Domain:               "demo",
@@ -344,6 +360,7 @@ func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
 		FS:                   fs,
 		WorkspaceRoot:        fakeWorkspaceRoot,
 		ArtifactClient:       fakeArtifactClient,
+		Tagger:               tagger,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -362,6 +379,14 @@ func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
 		t.Errorf("expected EffectiveTag='demo-hello-go.v0.9.0', got %q", res.EffectiveTag)
 	}
 
+	// Regression guard: a no-op rebuild must never create the v0.9.1 tag in
+	// the registry -- Publish (and its retag) must not run when the release
+	// is a no-op, or GHCR ends up with a version tag App Registry considers
+	// unpublished (this test's whole reason for existing).
+	if len(tagger.calls) != 0 {
+		t.Errorf("expected 0 registry retag calls on no-op rebuild, got %d: %+v", len(tagger.calls), tagger.calls)
+	}
+
 	// FailPublish should be called to record no-op status
 	if len(fakeArtifactClient.FailPublishCalls) != 1 {
 		t.Fatalf("expected 1 FailPublish call for patch no-op rebuild, got %d", len(fakeArtifactClient.FailPublishCalls))
@@ -373,7 +398,7 @@ func TestExecuteReleaseApp_PatchBumpSameDigestNoOp(t *testing.T) {
 }
 
 func TestExecuteReleaseApp_GRPCErrorsHandledGracefully(t *testing.T) {
-	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
+	bazel, git, docker, fs, ws, tagger := setupReleaseAppFixtures()
 
 	// Create fake ArtifactClient where BeginPublish and RecordArtifact return errors
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
@@ -398,6 +423,7 @@ func TestExecuteReleaseApp_GRPCErrorsHandledGracefully(t *testing.T) {
 		FS:                   fs,
 		WorkspaceRoot:        ws,
 		ArtifactClient:       fakeArtifactClient,
+		Tagger:               tagger,
 	})
 	if err != nil {
 		t.Fatalf("expected release-app to succeed despite non-fatal registry errors, got: %v", err)
@@ -408,21 +434,22 @@ func TestExecuteReleaseApp_GRPCErrorsHandledGracefully(t *testing.T) {
 }
 
 func TestExecuteReleaseApp_SkipRegistry(t *testing.T) {
-	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
+	bazel, git, docker, fs, ws, tagger := setupReleaseAppFixtures()
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
 
 	res, err := ExecuteReleaseApp(ReleaseAppParams{
-		Domain:               "demo",
-		App:                  "hello-go",
-		Version:              "v1.0.0",
-		BuildID:              "build-101",
-		SkipRegistry:         true,
-		Bazel:                bazel,
-		Git:                  git,
-		Docker:               docker,
-		FS:                   fs,
-		WorkspaceRoot:        ws,
-		ArtifactClient:       fakeArtifactClient,
+		Domain:         "demo",
+		App:            "hello-go",
+		Version:        "v1.0.0",
+		BuildID:        "build-101",
+		SkipRegistry:   true,
+		Bazel:          bazel,
+		Git:            git,
+		Docker:         docker,
+		FS:             fs,
+		WorkspaceRoot:  ws,
+		ArtifactClient: fakeArtifactClient,
+		Tagger:         tagger,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -436,7 +463,7 @@ func TestExecuteReleaseApp_SkipRegistry(t *testing.T) {
 }
 
 func TestExecuteReleaseApp_DryRun(t *testing.T) {
-	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
+	bazel, git, docker, fs, ws, _ := setupReleaseAppFixtures()
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
 
 	res, err := ExecuteReleaseApp(ReleaseAppParams{
@@ -463,7 +490,7 @@ func TestExecuteReleaseApp_DryRun(t *testing.T) {
 }
 
 func TestExecuteReleaseApp_InputValidation(t *testing.T) {
-	bazel, _, _, fs, ws := setupReleaseAppFixtures()
+	bazel, _, _, fs, ws, _ := setupReleaseAppFixtures()
 
 	// Missing Domain
 	_, err := ExecuteReleaseApp(ReleaseAppParams{
@@ -516,7 +543,7 @@ func TestExecuteReleaseApp_InputValidation(t *testing.T) {
 }
 
 func TestReleaseAppCmd_CLI(t *testing.T) {
-	bazel, git, docker, fs, _ := setupReleaseAppFixtures()
+	bazel, git, docker, fs, _, _ := setupReleaseAppFixtures()
 
 	withFS(fs, func() {
 		withBazel(bazel, func() {
@@ -954,7 +981,7 @@ func TestExecuteReleaseApp_AllocateStage_NonImageBeginPublishFailureIsFatal(t *t
 // that for an image app in an allocate-stage domain, RecordArtifact failure
 // cleans up publishing row and returns a fatal error.
 func TestExecuteReleaseApp_AllocateStage_ImageRecordArtifactFailureIsFatal(t *testing.T) {
-	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
+	bazel, git, docker, fs, ws, tagger := setupReleaseAppFixtures()
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
 	fakeArtifactClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
@@ -977,6 +1004,7 @@ func TestExecuteReleaseApp_AllocateStage_ImageRecordArtifactFailureIsFatal(t *te
 		FS:                   fs,
 		WorkspaceRoot:        ws,
 		ArtifactClient:       fakeArtifactClient,
+		Tagger:               tagger,
 	})
 	if err == nil {
 		t.Fatal("expected fatal error on image RecordArtifact failure for allocate domain, got nil")
@@ -992,7 +1020,7 @@ func TestExecuteReleaseApp_AllocateStage_ImageRecordArtifactFailureIsFatal(t *te
 // TestExecuteReleaseApp_AllocateStage_ImageBeginPublishFailureIsFatal proves
 // that for an image app in an allocate-stage domain, BeginPublish failure is fatal.
 func TestExecuteReleaseApp_AllocateStage_ImageBeginPublishFailureIsFatal(t *testing.T) {
-	bazel, git, docker, fs, ws := setupReleaseAppFixtures()
+	bazel, git, docker, fs, ws, _ := setupReleaseAppFixtures()
 
 	fakeArtifactClient := NewFakeArtifactRegistryClient()
 	fakeArtifactClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
@@ -1023,5 +1051,3 @@ func TestExecuteReleaseApp_AllocateStage_ImageBeginPublishFailureIsFatal(t *test
 		t.Errorf("expected error message to mention BeginPublish failed, got: %v", err)
 	}
 }
-
-
