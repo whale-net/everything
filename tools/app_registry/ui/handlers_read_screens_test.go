@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -66,6 +68,17 @@ type rsAppClient struct {
 
 	charts []*pb.Chart
 	apps   []*pb.App
+
+	setArgoOverrideCalls []*pb.SetChartArgoApplicationNameOverrideRequest
+	setArgoOverrideErr   error
+}
+
+func (f *rsAppClient) SetChartArgoApplicationNameOverride(ctx context.Context, in *pb.SetChartArgoApplicationNameOverrideRequest, opts ...grpc.CallOption) (*pb.SetChartArgoApplicationNameOverrideResponse, error) {
+	f.setArgoOverrideCalls = append(f.setArgoOverrideCalls, in)
+	if f.setArgoOverrideErr != nil {
+		return nil, f.setArgoOverrideErr
+	}
+	return &pb.SetChartArgoApplicationNameOverrideResponse{}, nil
 }
 
 func (f *rsAppClient) ListCharts(ctx context.Context, in *pb.ListChartsRequest, opts ...grpc.CallOption) (*pb.ListChartsResponse, error) {
@@ -444,6 +457,164 @@ func TestHandleChartDetail_PinsAndDeclaredCompositionAreDistinctWhenDisagreeing(
 	pinsSection := body[pinsIdx:declaredIdx]
 	if strings.Contains(pinsSection, "platform-declared-only") {
 		t.Errorf("the declared composition must never be merged into the build-time pins table, body: %s", body)
+	}
+}
+
+// --- ArgoCD Application name override editor -------------------------------
+
+// TestHandleChartDetail_ArgoOverrides_DefaultAndExplicitBothRender proves
+// buildChartDetail's ArgoOverrides rows (chart_data.go): an environment with
+// no explicit override resolves to the "<full_name>-<environment_key>"
+// convention and renders a "default" badge, while an environment with an
+// explicit override (Chart.argo_application_name_overrides) resolves to
+// that value and renders an "override" badge instead -- never the other way
+// around.
+func TestHandleChartDetail_ArgoOverrides_DefaultAndExplicitBothRender(t *testing.T) {
+	envs := []*pb.Environment{
+		{EnvironmentId: "e1", Key: "dev", Rank: 0},
+		{EnvironmentId: "e2", Key: "prod", Rank: 10},
+	}
+	charts := []*pb.Chart{{
+		ChartId:  "chart-1",
+		Domain:   "platform",
+		FullName: "platform-web",
+		ArgoApplicationNameOverrides: map[string]string{
+			"prod": "legacy-platform-app",
+		},
+	}}
+	env := &rsEnvClient{environments: envs}
+	appc := &rsAppClient{charts: charts}
+	app := rsTestApp(env, appc, &rsPromotionClient{}, &rsArtifactClient{})
+
+	req := httptest.NewRequest(http.MethodGet, "/charts/platform-web", nil)
+	req.SetPathValue("id", "platform-web")
+	w := httptest.NewRecorder()
+	app.handleChartDetail(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if !strings.Contains(body, "platform-web-dev") {
+		t.Errorf("expected dev's default convention name rendered, body: %s", body)
+	}
+	if !strings.Contains(body, "legacy-platform-app") {
+		t.Errorf("expected prod's explicit override value rendered, body: %s", body)
+	}
+	// The "Resolves to" cell must show the override, not the default
+	// convention name -- prod's default ("platform-web-prod") is only
+	// allowed to appear as the input's placeholder hint, never as the
+	// resolved value itself.
+	if !strings.Contains(body, "legacy-platform-app <span") {
+		t.Errorf("expected prod's resolved-name cell to render the override immediately before its badge, body: %s", body)
+	}
+}
+
+// TestHandleChartSetArgoOverride_MissingID_NotFound mirrors
+// TestHandleRetryArgoSync_MissingID_NotFound's guard: an empty {id} path
+// param short-circuits to a real HTTP 404 before the RPC is attempted.
+func TestHandleChartSetArgoOverride_MissingID_NotFound(t *testing.T) {
+	appc := &rsAppClient{}
+	app := rsTestApp(&rsEnvClient{}, appc, &rsPromotionClient{}, &rsArtifactClient{})
+
+	req := httptest.NewRequest(http.MethodPost, "/charts//argo-override", nil)
+	// Deliberately no SetPathValue("id", ...).
+	w := httptest.NewRecorder()
+	app.handleChartSetArgoOverride(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+	if len(appc.setArgoOverrideCalls) != 0 {
+		t.Errorf("SetChartArgoApplicationNameOverride calls = %d, want 0 (must not call the RPC with an empty id)", len(appc.setArgoOverrideCalls))
+	}
+}
+
+// TestHandleChartSetArgoOverride_Success_CallsRPCWithFormFieldsThenRerenders
+// proves the submit wiring: the posted form's environment_key,
+// argo_application_name, and reason land verbatim on the RPC request
+// (FullName resolved from the {id} path param, not the form), and a
+// successful call re-renders the SAME chart detail page -- never a
+// redirect -- with no OverrideErr banner.
+func TestHandleChartSetArgoOverride_Success_CallsRPCWithFormFieldsThenRerenders(t *testing.T) {
+	envs := []*pb.Environment{{EnvironmentId: "e1", Key: "prod", Rank: 10}}
+	charts := []*pb.Chart{{ChartId: "chart-1", Domain: "platform", FullName: "platform-web"}}
+	env := &rsEnvClient{environments: envs}
+	appc := &rsAppClient{charts: charts}
+	app := rsTestApp(env, appc, &rsPromotionClient{}, &rsArtifactClient{})
+
+	form := url.Values{
+		"environment_key":       {"prod"},
+		"argo_application_name": {"custom-argo-app"},
+		"reason":                {"legacy deployment, doesn't follow convention"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/charts/platform-web/argo-override", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "platform-web")
+	w := httptest.NewRecorder()
+	app.handleChartSetArgoOverride(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if len(appc.setArgoOverrideCalls) != 1 {
+		t.Fatalf("SetChartArgoApplicationNameOverride calls = %d, want 1", len(appc.setArgoOverrideCalls))
+	}
+	got := appc.setArgoOverrideCalls[0]
+	if got.GetFullName() != "platform-web" {
+		t.Errorf("FullName = %q, want platform-web (from the {id} path param)", got.GetFullName())
+	}
+	if got.GetEnvironmentKey() != "prod" {
+		t.Errorf("EnvironmentKey = %q, want prod", got.GetEnvironmentKey())
+	}
+	if got.GetArgoApplicationName() != "custom-argo-app" {
+		t.Errorf("ArgoApplicationName = %q, want custom-argo-app", got.GetArgoApplicationName())
+	}
+	if got.GetReason() != "legacy deployment, doesn't follow convention" {
+		t.Errorf("Reason = %q, want the submitted reason", got.GetReason())
+	}
+	if strings.Contains(w.Body.String(), "alert-error") {
+		t.Errorf("a successful save must render no OverrideErr banner; body = %s", w.Body.String())
+	}
+}
+
+// TestHandleChartSetArgoOverride_RPCFailure_RendersOverrideErrBanner proves
+// a failed SetChartArgoApplicationNameOverride call (e.g. server-side
+// PermissionDenied for a non-admin session that bypassed the disabled UI
+// controls) still re-renders the chart detail page -- HTTP 200, not a raw
+// error status -- with the failure surfaced inline via OverrideErr.
+func TestHandleChartSetArgoOverride_RPCFailure_RendersOverrideErrBanner(t *testing.T) {
+	envs := []*pb.Environment{{EnvironmentId: "e1", Key: "prod", Rank: 10}}
+	charts := []*pb.Chart{{ChartId: "chart-1", Domain: "platform", FullName: "platform-web"}}
+	env := &rsEnvClient{environments: envs}
+	appc := &rsAppClient{
+		charts:             charts,
+		setArgoOverrideErr: errors.New("rpc error: code = PermissionDenied desc = missing role app-registry-admin"),
+	}
+	app := rsTestApp(env, appc, &rsPromotionClient{}, &rsArtifactClient{})
+
+	form := url.Values{"environment_key": {"prod"}, "argo_application_name": {"x"}, "reason": {"y"}}
+	req := httptest.NewRequest(http.MethodPost, "/charts/platform-web/argo-override", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("id", "platform-web")
+	w := httptest.NewRecorder()
+	app.handleChartSetArgoOverride(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d (a failed save renders inline, not as an HTTP error status)", w.Code, http.StatusOK)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "alert-error") {
+		t.Errorf("expected an OverrideErr banner; body = %s", body)
+	}
+	if !strings.Contains(body, "PermissionDenied") {
+		t.Errorf("expected the underlying RPC error surfaced; body = %s", body)
+	}
+	// The rest of the page must still render -- this is a re-render, not a
+	// blank error page.
+	if !strings.Contains(body, "platform-web") {
+		t.Errorf("expected the chart detail page to still render around the error banner; body = %s", body)
 	}
 }
 

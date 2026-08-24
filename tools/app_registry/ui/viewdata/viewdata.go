@@ -123,16 +123,36 @@ type ChartEnvPins struct {
 	Drift      []*pb.DriftEntry
 }
 
+// ChartArgoOverrideRow is one environment's ArgoCD Application name row for
+// screen 22's override editor. Override is the explicit admin-set value for
+// this environment (empty when none is set); Default is the
+// "<full_name>-<environment_key>" convention WritebackWorkflow falls back to
+// otherwise (repository.Chart.ResolveArgoApplicationName, mirrored here
+// read-only); Resolved is whichever of the two actually applies.
+type ChartArgoOverrideRow struct {
+	EnvKey   string
+	Override string
+	Default  string
+	Resolved string
+}
+
 // ChartDetailData is everything screen 22 needs. DeclaredApps is the
 // chart's currently DECLARED composition (chart.app_ids, resolved to full
 // App records) — FR-24 requires this be labelled distinctly from, and never
 // merged with, EnvPins[*].Images (the build-time artifact_link pins): the
-// two can legitimately disagree.
+// two can legitimately disagree. ArgoOverrides is aligned index-for-index
+// with Environments, same convention as EnvPins. OverrideErr surfaces a
+// failed SetChartArgoApplicationNameOverride submit inline (distinct from a
+// load failure, which never reaches this struct at all — see
+// buildChartDetail's nil,err contract).
 type ChartDetailData struct {
 	Chart        *pb.Chart
 	Environments []*pb.Environment
 	EnvPins      []ChartEnvPins // aligned index-for-index with Environments
 	DeclaredApps []*pb.App
+
+	ArgoOverrides []ChartArgoOverrideRow
+	OverrideErr   string
 }
 
 // ============================================================================

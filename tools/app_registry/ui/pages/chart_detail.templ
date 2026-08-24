@@ -2,6 +2,7 @@ package pages
 
 import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
 	"github.com/whale-net/everything/tools/app_registry/ui/viewdata"
 )
@@ -41,6 +42,7 @@ templ ChartDetail(user *htmxauth.UserInfo, data *viewdata.ChartDetailData) {
 			}
 		}
 		@chartDeclaredCompositionCard(data)
+		@chartArgoOverrideCard(user, data)
 	}
 }
 
@@ -147,6 +149,104 @@ templ chartDeclaredCompositionCard(data *viewdata.ChartDetailData) {
 					</tbody>
 				</table>
 			}
+		</div>
+	</div>
+}
+
+// chartArgoOverrideCard renders the ArgoCD Application name override editor:
+// admin-settable (RoleAdmin, presentation-only gate per ui/ARCHITECTURE.md's
+// "Auth and role gating"), one row per environment, previously only
+// reachable via `app-registry chart set-argo-override` (CLI) or the raw
+// SetChartArgoApplicationNameOverride RPC. Every environment's override is
+// independent -- an ad-hoc/legacy Application name doesn't follow any
+// pattern, so this deliberately renders one row (and one save form) per
+// environment rather than one shared field. "Resolves to" mirrors
+// repository.Chart.ResolveArgoApplicationName's override-or-convention rule
+// read-only, so an operator can see the effective name without leaving this
+// screen. Submitting an empty override value clears it -- same contract
+// SetChartArgoApplicationNameOverrideRequest.argo_application_name has.
+templ chartArgoOverrideCard(user *htmxauth.UserInfo, data *viewdata.ChartDetailData) {
+	{{ decision := components.Gate(user, components.RoleAdmin) }}
+	<div class="card bg-base-100 shadow-md mt-6">
+		<div class="card-body p-0">
+			<div class="p-4 border-b border-base-300">
+				<h2 class="text-lg font-semibold">ArgoCD Application name overrides</h2>
+				<p class="text-sm opacity-60">
+					WritebackWorkflow targets "&lt;chart&gt;-&lt;environment&gt;" by
+					default. Set an override here only for an ad-hoc/legacy deployment
+					whose real ArgoCD Application name doesn't follow that convention —
+					clear the field and save to remove an override.
+				</p>
+			</div>
+			if !decision.Allowed {
+				<div role="alert" class="alert alert-warning shadow-md m-4">
+					<span>
+						<strong>Read-only.</strong> Setting an override requires role
+						{ decision.MissingRole }, which this session does not hold.
+					</span>
+				</div>
+			}
+			if data.OverrideErr != "" {
+				<div role="alert" class="alert alert-error shadow-md m-4">
+					<span>{ data.OverrideErr }</span>
+				</div>
+			}
+			<table class="table">
+				<thead>
+					<tr>
+						<th>Environment</th>
+						<th>Resolves to</th>
+						<th>Set override</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, row := range data.ArgoOverrides {
+						<tr class="hover">
+							<td class="font-mono text-sm">{ row.EnvKey }</td>
+							<td class="font-mono text-xs">
+								{ row.Resolved }
+								if row.Override != "" {
+									<span class="badge badge-soft badge-info badge-sm ml-1">override</span>
+								} else {
+									<span class="badge badge-ghost badge-sm ml-1">default</span>
+								}
+							</td>
+							<td>
+								<form
+									method="post"
+									action={ templ.URL("/charts/" + data.Chart.GetFullName() + "/argo-override") }
+									class="flex flex-wrap gap-2 items-center"
+								>
+									<input type="hidden" name="environment_key" value={ row.EnvKey }/>
+									<input
+										name="argo_application_name"
+										class="input input-bordered input-sm font-mono w-52"
+										placeholder={ row.Default }
+										value={ row.Override }
+										disabled?={ !decision.Allowed }
+									/>
+									<input
+										name="reason"
+										class="input input-bordered input-sm w-40"
+										placeholder="reason (required)"
+										required
+										disabled?={ !decision.Allowed }
+									/>
+									if decision.Allowed {
+										@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeSM, false, templ.Attributes{"type": "submit"}) {
+											Save
+										}
+									} else {
+										@htmxui.Button(htmxui.ButtonPrimary, htmxui.ButtonSizeSM, true, templ.Attributes{"type": "submit", "title": "Requires role: " + decision.MissingRole}) {
+											Save
+										}
+									}
+								</form>
+							</td>
+						</tr>
+					}
+				</tbody>
+			</table>
 		</div>
 	</div>
 }

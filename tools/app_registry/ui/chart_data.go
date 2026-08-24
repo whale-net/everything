@@ -14,9 +14,13 @@ import (
 // current version per environment, the apps published at that artifact's
 // version (build-time artifact_link pins, read straight off
 // Artifact.contains -- already resolved by tools/helm at publish time, no
-// extra RPC needed), and, kept separately labelled and never merged
-// (FR-24), the chart's currently DECLARED composition (chart.app_ids). A
-// nil, nil return means no chart with this full_name exists -- mirrors
+// extra RPC needed), kept separately labelled and never merged (FR-24), the
+// chart's currently DECLARED composition (chart.app_ids), and the per-
+// environment ArgoCD Application name override editor's rows (ArgoOverrides
+// -- admin-settable via SetChartArgoApplicationNameOverride, computed
+// straight off Chart.argo_application_name_overrides plus each
+// environment's default naming convention, no extra RPC). A nil, nil
+// return means no chart with this full_name exists -- mirrors
 // handleBuildDetail's "no build recorded" pattern (handlers_builds.go)
 // rather than a synthetic error, since there is no GetChart-by-name RPC to
 // fail on directly.
@@ -105,10 +109,28 @@ func (app *App) buildChartDetail(ctx context.Context, fullName string) (*viewdat
 	}
 	sort.Slice(declaredApps, func(i, j int) bool { return declaredApps[i].GetFullName() < declaredApps[j].GetFullName() })
 
+	argoOverrides := make([]viewdata.ChartArgoOverrideRow, 0, len(environments))
+	overrides := chart.GetArgoApplicationNameOverrides()
+	for _, env := range environments {
+		row := viewdata.ChartArgoOverrideRow{
+			EnvKey:   env.GetKey(),
+			Override: overrides[env.GetKey()],
+			// Mirrors repository.Chart.ResolveArgoApplicationName's default
+			// convention exactly -- see that function's doc comment.
+			Default: chart.GetFullName() + "-" + env.GetKey(),
+		}
+		row.Resolved = row.Default
+		if row.Override != "" {
+			row.Resolved = row.Override
+		}
+		argoOverrides = append(argoOverrides, row)
+	}
+
 	return &viewdata.ChartDetailData{
-		Chart:        chart,
-		Environments: environments,
-		EnvPins:      envPins,
-		DeclaredApps: declaredApps,
+		Chart:         chart,
+		Environments:  environments,
+		EnvPins:       envPins,
+		DeclaredApps:  declaredApps,
+		ArgoOverrides: argoOverrides,
 	}, nil
 }
