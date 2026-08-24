@@ -760,10 +760,9 @@ jobs:
           RESOLVED_PLAN: ${{ needs.plan-release.outputs.resolved-plan }}
           BUILD_SHA: ${{ github.event.inputs.build_ref || github.sha }}
         run: |
-          "$RELEASE_HELPER" build-release \
-            --from-resolved-plan "$RESOLVED_PLAN" \
-            --git-sha "$BUILD_SHA" \
-            --dry-run="${{ github.event.inputs.dry_run }}"
+          ARGS=(build-release --from-resolved-plan "$RESOLVED_PLAN" --git-sha "$BUILD_SHA")
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
+          "$RELEASE_HELPER" "${ARGS[@]}"
 
       - name: Upload build manifest artifact
         if: ${{ github.event.inputs.dry_run == 'false' }}
