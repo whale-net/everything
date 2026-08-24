@@ -86,7 +86,15 @@ func (r *ChartReleaser) Build(ctx context.Context, version string) (string, erro
 		r.OutDir = outDir
 	}
 
-	chartPath, err := r.Packager.Package(chartDir, r.Chart.Name, version, outDir, r.AppVersions)
+	// r.ChartDir set means this is finalize-chart's already-built-tree path
+	// (see its own doc comment above), where r.AppVersions is a single map
+	// shared across every chart in the release batch -- an unmatched key is
+	// normal there, not a bug, so packaging must be lenient. The
+	// release-charts path (r.ChartDir empty) always resolves r.AppVersions
+	// from this chart's own composed apps, so any mismatch there is a real
+	// key-format regression worth failing hard on.
+	strict := r.ChartDir == ""
+	chartPath, err := r.Packager.Package(chartDir, r.Chart.Name, version, outDir, r.AppVersions, strict)
 	if err != nil {
 		return "", fmt.Errorf("package chart %s: %w", r.Chart.Name, err)
 	}

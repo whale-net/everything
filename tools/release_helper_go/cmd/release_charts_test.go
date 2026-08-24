@@ -89,11 +89,17 @@ type fakeHelmPackager struct {
 	// recent Package call, so tests can assert what resolveChartAppVersions
 	// actually resolved (issue #901's plan-pin precedence).
 	lastAppVersions map[string]string
+	// lastStrict captures the strict flag passed on the most recent Package
+	// call, so tests can assert release-charts vs finalize-chart pass the
+	// right value (release_charts.go's ChartDir-empty vs ChartDir-set
+	// distinction in releaser_chart.go's Build).
+	lastStrict bool
 }
 
-func (f *fakeHelmPackager) Package(chartDir, chartName, version, outDir string, appVersions map[string]string) (string, error) {
+func (f *fakeHelmPackager) Package(chartDir, chartName, version, outDir string, appVersions map[string]string, strict bool) (string, error) {
 	f.calls++
 	f.lastAppVersions = appVersions
+	f.lastStrict = strict
 	if f.packageErr != nil {
 		return "", f.packageErr
 	}

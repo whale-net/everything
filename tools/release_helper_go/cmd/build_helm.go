@@ -134,7 +134,7 @@ func newBuildHelmChartCmd() *cobra.Command {
 				}
 			}
 
-			chartPath, err := packageChartWithVersion(chartDir, chart.Name, version, outDir, appVersions)
+			chartPath, err := packageChartWithVersion(chartDir, chart.Name, version, outDir, appVersions, true)
 			if err != nil {
 				return fmt.Errorf("package chart: %w", err)
 			}
@@ -322,7 +322,18 @@ func getLatestAppVersion(domain, appName string, git GitRunner) (string, error) 
 	return "", nil
 }
 
-func packageChartWithVersion(chartDir, chartName, version, outDir string, appVersions map[string]string) (string, error) {
+// strict controls how packageChartWithVersion reacts to an appVersions key
+// that has no matching entry in the chart's own values.yaml "apps" map.
+// build-helm-chart and release-charts always resolve appVersions from this
+// exact chart's own composed apps (resolveChartAppVersions / chart.Apps), so
+// for them any mismatch can only mean a key-format regression -- pass
+// strict=true so it fails hard rather than silently keeping a stale
+// imageTag (see the doc comment below). finalize-chart's appVersions is a
+// single map shared across every chart in the release batch (not scoped to
+// this chart), so an unmatched key there is normal -- it belongs to some
+// other chart or a standalone app -- and must not fail this chart's
+// packaging; pass strict=false to skip those keys with a warning instead.
+func packageChartWithVersion(chartDir, chartName, version, outDir string, appVersions map[string]string, strict bool) (string, error) {
 	publishedName := strings.TrimPrefix(chartName, "helm-")
 
 	// Copy chart to temp dir (bazel-bin is read-only)
@@ -377,12 +388,20 @@ func packageChartWithVersion(chartDir, chartName, version, outDir string, appVer
 		}
 		apps, ok := values["apps"].(map[string]interface{})
 		if !ok {
-			return "", fmt.Errorf("values.yaml has no \"apps\" map to set imageTag on")
+			if strict {
+				return "", fmt.Errorf("values.yaml has no \"apps\" map to set imageTag on")
+			}
+			fmt.Printf("::warning::values.yaml has no \"apps\" map -- skipping imageTag updates for chart %s\n", chartName)
+			apps = map[string]interface{}{}
 		}
 		for appKey, ver := range appVersions {
 			appEntry, ok := apps[appKey].(map[string]interface{})
 			if !ok {
-				return "", fmt.Errorf("values.yaml \"apps\" has no entry %q to set imageTag on (chart's apps map may use a different key convention than the resolved app versions)", appKey)
+				if strict {
+					return "", fmt.Errorf("values.yaml \"apps\" has no entry %q to set imageTag on (chart's apps map may use a different key convention than the resolved app versions)", appKey)
+				}
+				fmt.Printf("::warning::values.yaml \"apps\" has no entry %q -- app not composed by chart %s, skipping\n", appKey, chartName)
+				continue
 			}
 			appEntry["imageTag"] = ver
 			fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)

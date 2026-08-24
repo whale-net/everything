@@ -86,15 +86,16 @@ func chartArchivesContentEqual(a, b []byte) bool {
 	return bytes.Equal(a, b)
 }
 
-// HelmPackager abstracts packaging a Helm chart for testing.
+// HelmPackager abstracts packaging a Helm chart for testing. strict is
+// packageChartWithVersion's strict parameter -- see its doc comment.
 type HelmPackager interface {
-	Package(chartDir, chartName, version, outDir string, appVersions map[string]string) (string, error)
+	Package(chartDir, chartName, version, outDir string, appVersions map[string]string, strict bool) (string, error)
 }
 
 type defaultHelmPackager struct{}
 
-func (defaultHelmPackager) Package(chartDir, chartName, version, outDir string, appVersions map[string]string) (string, error) {
-	return packageChartWithVersion(chartDir, chartName, version, outDir, appVersions)
+func (defaultHelmPackager) Package(chartDir, chartName, version, outDir string, appVersions map[string]string, strict bool) (string, error) {
+	return packageChartWithVersion(chartDir, chartName, version, outDir, appVersions, strict)
 }
 
 var defaultPackager HelmPackager = defaultHelmPackager{}

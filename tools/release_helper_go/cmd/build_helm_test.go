@@ -243,13 +243,13 @@ func TestFindChartAppPrefersChartDomain(t *testing.T) {
 
 // ── packageChartWithVersion's values.yaml imageTag guardrail ───────────────
 //
-// These tests only exercise the appVersions-key-mismatch failure path,
+// These tests only exercise the appVersions-key-mismatch failure/skip path,
 // which returns before packageChartWithVersion ever shells out to `helm
 // package` — the Bazel go_test target has no `helm` binary as a data
 // dependency, so a success-path test would fail on `helm: executable file
 // not found` rather than testing anything meaningful here.
 
-func TestPackageChartWithVersionErrorsOnKeyMismatch(t *testing.T) {
+func TestPackageChartWithVersionErrorsOnKeyMismatchStrict(t *testing.T) {
 	chartDir := t.TempDir()
 	writeFile(t, filepath.Join(chartDir, "Chart.yaml"), "name: control-services\nversion: 0.0.0-dev\n")
 	// values.yaml keyed the way composer.go actually keys it.
@@ -257,9 +257,12 @@ func TestPackageChartWithVersionErrorsOnKeyMismatch(t *testing.T) {
 
 	// A bare app name, as the pre-fix resolveChartAppVersions produced,
 	// must not silently no-op against the domain-prefixed values.yaml key.
+	// strict=true is what build-helm-chart/release-charts always pass here,
+	// since their appVersions is always resolved from this exact chart's
+	// own composed apps -- any mismatch can only be a key-format regression.
 	appVersions := map[string]string{"event-processor": "v0.2.18"}
 
-	_, err := packageChartWithVersion(chartDir, "helm-manmanv2-control-services", "v0.2.18", t.TempDir(), appVersions)
+	_, err := packageChartWithVersion(chartDir, "helm-manmanv2-control-services", "v0.2.18", t.TempDir(), appVersions, true)
 	if err == nil {
 		t.Fatal("expected error when appVersions key doesn't match values.yaml apps key, got nil")
 	}
@@ -268,16 +271,66 @@ func TestPackageChartWithVersionErrorsOnKeyMismatch(t *testing.T) {
 	}
 }
 
-func TestPackageChartWithVersionErrorsOnMissingAppsMap(t *testing.T) {
+func TestPackageChartWithVersionErrorsOnMissingAppsMapStrict(t *testing.T) {
 	chartDir := t.TempDir()
 	writeFile(t, filepath.Join(chartDir, "Chart.yaml"), "name: control-services\nversion: 0.0.0-dev\n")
 	writeFile(t, filepath.Join(chartDir, "values.yaml"), "global:\n  namespace: manmanv2\n")
 
 	appVersions := map[string]string{"manmanv2-event-processor": "v0.2.18"}
-	_, err := packageChartWithVersion(chartDir, "helm-manmanv2-control-services", "v0.2.18", t.TempDir(), appVersions)
+	_, err := packageChartWithVersion(chartDir, "helm-manmanv2-control-services", "v0.2.18", t.TempDir(), appVersions, true)
 	if err == nil {
 		t.Fatal("expected error when values.yaml has no apps map, got nil")
 	}
+}
+
+// assertPastValuesGuardrail asserts packageChartWithVersion's values.yaml
+// imageTag guardrail did not reject appVersions -- i.e. any error is the
+// unavoidable "helm: executable file not found" from the real `helm
+// package` exec this function shells out to next (see this section's
+// top-of-file doc comment: no `helm` binary is available as test data), not
+// one of the guardrail's own "apps"/key-mismatch errors.
+func assertPastValuesGuardrail(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), "has no entry") || strings.Contains(err.Error(), `has no "apps" map`) {
+		t.Fatalf("expected the values.yaml guardrail to pass (or a helm-exec error), got a guardrail error: %v", err)
+	}
+}
+
+// TestPackageChartWithVersionSkipsUnmatchedKeyLenient guards finalize-chart's
+// actual failure mode (release 33655474-2988-46f5-8de1-1cc6d0168b22): its
+// appVersions is one map shared across every chart in the release batch, not
+// scoped to this chart, so a key belonging to some other chart's app (or a
+// standalone app not composed by any chart) must be skipped, not fail this
+// chart's packaging.
+func TestPackageChartWithVersionSkipsUnmatchedKeyLenient(t *testing.T) {
+	chartDir := t.TempDir()
+	writeFile(t, filepath.Join(chartDir, "Chart.yaml"), "name: leaflab-leaflab\nversion: 0.0.0-dev\n")
+	writeFile(t, filepath.Join(chartDir, "values.yaml"), "apps:\n  leaflab-migrate:\n    imageTag: latest\n")
+
+	appVersions := map[string]string{
+		"leaflab-migrate":     "v0.1.1", // composed by this chart
+		"leaflab-leaflab-api": "v0.1.0", // released standalone, not composed by this chart
+	}
+
+	_, err := packageChartWithVersion(chartDir, "helm-leaflab-leaflab", "v0.1.1", t.TempDir(), appVersions, false)
+	assertPastValuesGuardrail(t, err)
+}
+
+// TestPackageChartWithVersionLenientMissingAppsMap guards a chart with no
+// composed apps at all showing up in a finalize-chart batch alongside other
+// apps' versions -- it must not fail just because none of the batch's keys
+// apply to it.
+func TestPackageChartWithVersionLenientMissingAppsMap(t *testing.T) {
+	chartDir := t.TempDir()
+	writeFile(t, filepath.Join(chartDir, "Chart.yaml"), "name: control-services\nversion: 0.0.0-dev\n")
+	writeFile(t, filepath.Join(chartDir, "values.yaml"), "global:\n  namespace: manmanv2\n")
+
+	appVersions := map[string]string{"manmanv2-event-processor": "v0.2.18"}
+	_, err := packageChartWithVersion(chartDir, "helm-manmanv2-control-services", "v0.2.18", t.TempDir(), appVersions, false)
+	assertPastValuesGuardrail(t, err)
 }
 
 func writeFile(t *testing.T, path, content string) {
