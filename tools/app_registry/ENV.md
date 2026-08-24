@@ -53,7 +53,7 @@ public-read) and so needs no credentials; see `libs/go/s3`'s
 | Variable | Default | Description |
 |----------|---------|--------------|
 | `RELEASE_TOOLS_S3_BUCKET` | `""` | Bucket name for CLI binary artifacts. Required for `ResolveBinaryURL` to return a usable URL. |
-| `RELEASE_TOOLS_S3_PUBLIC_ENDPOINT` | `""` | Public base URL used to construct unsigned download URLs, e.g. `PublicURL(key) == "<endpoint>/<bucket>/<key>"`. |
+| `RELEASE_TOOLS_S3_PUBLIC_ENDPOINT` | `""` | Public base URL used to construct unsigned download URLs, virtual-hosted-style (OVH's public endpoint rejects path-style with HTTP 400): `PublicURL(key) == "<scheme>://<bucket>.<endpoint-host>/<key>"`. |
 
 The following are consumed by the *publish* side (the FinalizePublish
 S3-publish task, `worker/release/finalize.go`), not by `ResolveBinaryURL` —

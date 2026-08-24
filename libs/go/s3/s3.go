@@ -226,14 +226,24 @@ func (c *Client) GetBucket() string {
 	return c.bucket
 }
 
-// PublicURL returns an unsigned, public download URL for key in the
-// client's configured bucket, built from the public endpoint (see
+// PublicURL returns an unsigned, virtual-hosted-style download URL for key
+// in the client's configured bucket, built from the public endpoint (see
 // Config.PublicEndpoint). No network call and no signing: callers use this
 // only for objects in a public-read bucket (e.g. app-registry's
 // RELEASE_TOOLS_S3_BUCKET, see tools/app_registry/ENV.md) -- for anything
 // requiring authentication, use PresignPutURL or Download instead.
+//
+// OVH's public endpoint (e.g. cloud.ovh.us) rejects path-style requests
+// (<endpoint>/<bucket>/<key>) outright with HTTP 400 -- see the comment on
+// presignPublic in NewClient. It requires virtual-hosted-style addressing
+// (<bucket>.<endpoint-host>/<key>), so PublicURL must build the same shape.
 func (c *Client) PublicURL(key string) string {
-	return strings.TrimSuffix(c.publicEndpoint, "/") + "/" + c.bucket + "/" + key
+	endpoint := strings.TrimSuffix(c.publicEndpoint, "/")
+	scheme, host, found := strings.Cut(endpoint, "://")
+	if !found {
+		scheme, host = "https", endpoint
+	}
+	return scheme + "://" + c.bucket + "." + host + "/" + key
 }
 
 // Exists checks if an object exists in S3
