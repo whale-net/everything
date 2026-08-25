@@ -2121,3 +2121,91 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 		t.Fatalf("expected NotFound for before_version=v1.0.0, got %v", err)
 	}
 }
+
+// TestRecordArtifact_NoopDetectionByIdentityDigest tests FR-17 artifact-level
+// no-op detection: when recording an artifact with an identity_digest that
+// matches an already-published artifact's identity_digest (same owner/kind),
+// the existing artifact is returned and no new version is allocated.
+func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-noop-detect")
+
+	const identityDigest = "sha256:identical-content-digest"
+	const contentDigest1 = "sha256:content-pushed-first"
+
+	// 1. Record v1.0.0 with a specific content digest and identity digest
+	resp1, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         contentDigest1,
+		IdentityDigest: identityDigest,
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-noop-v1",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v1.0.0): %v", err)
+	}
+	if resp1.Artifact.Version != "v1.0.0" || resp1.Artifact.Digest != contentDigest1 {
+		t.Fatalf("unexpected resp1: version=%s digest=%s", resp1.Artifact.Version, resp1.Artifact.Digest)
+	}
+	if resp1.Artifact.IdentityDigest != identityDigest {
+		t.Fatalf("expected identity_digest %s in resp1, got %s", identityDigest, resp1.Artifact.IdentityDigest)
+	}
+	firstArtifactID := resp1.Artifact.ArtifactId
+
+	// 2. Try to record v1.0.1 with a different content digest but the SAME
+	// identity_digest. This should trigger no-op detection and return v1.0.0
+	// (the existing published artifact with that identity_digest).
+	const contentDigest2 = "sha256:content-pushed-second"
+	resp2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         contentDigest2,
+		IdentityDigest: identityDigest,
+		Version:        "v1.0.1",
+		IdempotencyKey: "record-noop-v101",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v1.0.1): %v", err)
+	}
+
+	// The returned artifact should be v1.0.0 (the existing published artifact),
+	// not v1.0.1, because they have the same identity_digest (no-op detection).
+	if resp2.Artifact.Version != "v1.0.0" {
+		t.Fatalf("expected no-op to return v1.0.0, got %s", resp2.Artifact.Version)
+	}
+	if resp2.Artifact.Digest != contentDigest1 {
+		t.Fatalf("expected digest %s, got %s", contentDigest1, resp2.Artifact.Digest)
+	}
+	if resp2.Artifact.ArtifactId != firstArtifactID {
+		t.Fatalf("expected same artifact ID as first record, got different IDs")
+	}
+
+	// 3. Verify that a separate app is NOT affected by this identity_digest
+	// (no-op detection is per-owner, not global)
+	const differentAppDigest = "sha256:different-app-content"
+	resp3, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "different-demo-app",
+		Digest:         differentAppDigest,
+		IdentityDigest: identityDigest, // same identity_digest
+		Version:        "v2.0.0",
+		IdempotencyKey: "record-noop-different-app",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(different app, v2.0.0): %v", err)
+	}
+	if resp3.Artifact.Version != "v2.0.0" {
+		t.Fatalf("expected v2.0.0 for different app, got %s", resp3.Artifact.Version)
+	}
+	if resp3.Artifact.Digest != differentAppDigest {
+		t.Fatalf("expected digest %s for different app, got %s", differentAppDigest, resp3.Artifact.Digest)
+	}
+	if resp3.Artifact.ArtifactId == firstArtifactID {
+		t.Fatalf("expected different artifact ID for different app")
+	}
+}
