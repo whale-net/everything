@@ -54,12 +54,15 @@ func run() error {
 	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
 	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
 
-	// Issue #979/#983/#1101: ArtifactServer.ResolveBinaryURL's release-tools
-	// S3 bucket. Credentials are read here (unlike the original NFR2 design)
-	// because the bucket was never actually configured for anonymous/public
-	// reads -- ResolveBinaryURL presigns with these instead. See ENV.md's
-	// "CLI binary S3" section.
+	// Issue #979/#983/#1101/#1160: ArtifactServer.ResolveBinaryURL's
+	// release-tools S3 bucket. The resolve-side client requires four values
+	// (FR-72): primary/internal endpoint (for FR-27's existence check and
+	// FR-46's read-back), region (for signing), credential (NFR-22's grant),
+	// and public endpoint (for presigned URLs). See ENV.md's "CLI binary S3"
+	// section and ARCHITECTURE.md's "Resolve-side S3 operations" for the
+	// rationale behind each.
 	releaseToolsS3Bucket := getEnv("RELEASE_TOOLS_S3_BUCKET", "")
+	releaseToolsS3Endpoint := getEnv("RELEASE_TOOLS_S3_ENDPOINT", "")
 	releaseToolsS3PublicEndpoint := getEnv("RELEASE_TOOLS_S3_PUBLIC_ENDPOINT", "")
 	releaseToolsS3Region := getEnv("RELEASE_TOOLS_S3_REGION", "")
 	releaseToolsS3AccessKey := getEnv("RELEASE_TOOLS_S3_ACCESS_KEY", "")
@@ -110,7 +113,7 @@ func run() error {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	healthServer := registerServices(grpcServer, repo, temporalClient, releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)
+	healthServer := registerServices(grpcServer, repo, temporalClient, releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)
 
 	// Start listening
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
@@ -150,7 +153,7 @@ func run() error {
 // real database or gRPC auth setup required — see main_test.go, which passes
 // a fake repository.Registry (and a nil temporalClient -- see
 // handlers.ReleaseServer's temporal field doc comment).
-func registerServices(grpcServer *grpc.Server, repo repository.Registry, temporalClient client.Client, releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey string) *health.Server {
+func registerServices(grpcServer *grpc.Server, repo repository.Registry, temporalClient client.Client, releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey string) *health.Server {
 	// AppRegistry and ArtifactRegistry are real as of AR-2a (AllocateVersion
 	// stays Unimplemented — that's AR-5). EnvironmentRegistry is real as of
 	// AR-3b. PromotionRegistry is real as of AR-3c. ReleaseRegistry is real
@@ -158,7 +161,7 @@ func registerServices(grpcServer *grpc.Server, repo repository.Registry, tempora
 	// temporalClient; #888 landed TriggerRelease/GetRelease's repository
 	// half first).
 	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer(repo))
-	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)))
+	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)))
 	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo, temporalClient))
 	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer(repo))
 	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo, temporalClient))

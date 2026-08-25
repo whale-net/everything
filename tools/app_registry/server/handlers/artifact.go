@@ -57,6 +57,7 @@ type ArtifactServer struct {
 	// external CI job a working download link without giving it S3
 	// credentials of its own.
 	releaseToolsS3Bucket         string
+	releaseToolsS3Endpoint         string
 	releaseToolsS3PublicEndpoint string
 	releaseToolsS3Region         string
 	releaseToolsS3AccessKey      string
@@ -76,12 +77,15 @@ type ArtifactServer struct {
 // see WithReleaseToolsS3.
 type ArtifactServerOption func(*ArtifactServer)
 
-// WithReleaseToolsS3 configures the S3 bucket and credentials
+// WithReleaseToolsS3 configures the S3 bucket, endpoints, and credentials
 // ResolveBinaryURL presigns CLI binary/checksum-manifest download URLs
-// against.
-func WithReleaseToolsS3(bucket, publicEndpoint, region, accessKey, secretKey string) ArtifactServerOption {
+// against. The primary/internal endpoint is required for FR-27's existence
+// check and FR-46's read-back (see ARCHITECTURE.md "Resolve-side S3
+// operations").
+func WithReleaseToolsS3(bucket, endpoint, publicEndpoint, region, accessKey, secretKey string) ArtifactServerOption {
 	return func(s *ArtifactServer) {
 		s.releaseToolsS3Bucket = bucket
+		s.releaseToolsS3Endpoint = endpoint
 		s.releaseToolsS3PublicEndpoint = publicEndpoint
 		s.releaseToolsS3Region = region
 		s.releaseToolsS3AccessKey = accessKey
@@ -495,14 +499,32 @@ const resolveBinaryURLTTL = 15 * time.Minute
 
 // releaseToolsS3PresignClient lazily builds and caches the s3.Client
 // ResolveBinaryURL presigns download URLs through, so the AWS SDK's config
-// load only happens once per process rather than once per request.
+// load only happens once per process rather than once per request. FR-72:
+// fails at startup with an explicit error for each of the four required
+// values (primary endpoint for FR-27/FR-46, region for signing, credential
+// for NFR-22, and public endpoint for presigned URLs) rather than
+// degrading to unsigned URLs or failing per request.
 func (s *ArtifactServer) releaseToolsS3PresignClient() (*s3.Client, error) {
-	if s.releaseToolsS3Bucket == "" || s.releaseToolsS3PublicEndpoint == "" {
-		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_BUCKET and RELEASE_TOOLS_S3_PUBLIC_ENDPOINT must be configured to resolve binary URLs")
+	// Validate all four required values for resolve-side operations
+	if s.releaseToolsS3Bucket == "" {
+		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_BUCKET must be configured to resolve binary URLs")
+	}
+	if s.releaseToolsS3Endpoint == "" {
+		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_ENDPOINT (primary/internal S3 endpoint) must be configured to resolve binary URLs")
+	}
+	if s.releaseToolsS3Region == "" {
+		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_REGION must be configured to resolve binary URLs")
+	}
+	if s.releaseToolsS3AccessKey == "" || s.releaseToolsS3SecretKey == "" {
+		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_ACCESS_KEY and RELEASE_TOOLS_S3_SECRET_KEY must be configured to resolve binary URLs")
+	}
+	if s.releaseToolsS3PublicEndpoint == "" {
+		return nil, status.Error(codes.FailedPrecondition, "RELEASE_TOOLS_S3_PUBLIC_ENDPOINT must be configured to resolve binary URLs")
 	}
 	s.releaseToolsS3ClientOnce.Do(func() {
 		s.releaseToolsS3Client, s.releaseToolsS3ClientErr = s3.NewClient(context.Background(), s3.Config{
 			Bucket:         s.releaseToolsS3Bucket,
+			Endpoint:       s.releaseToolsS3Endpoint,
 			PublicEndpoint: s.releaseToolsS3PublicEndpoint,
 			Region:         s.releaseToolsS3Region,
 			AccessKey:      s.releaseToolsS3AccessKey,

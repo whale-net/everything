@@ -41,39 +41,52 @@ Standard `libs/go/logging` environment auto-detection also applies
 (`APP_NAME`, `APP_DOMAIN`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_*_DISABLED`,
 etc.) — see that package's doc comment for the full list.
 
-### CLI binary S3 (issue #979/#983)
+### CLI binary S3 (issue #979/#983/#1160)
 
 `ArtifactRegistry.ResolveBinaryURL` resolves a CLI binary (`release_helper_go`
 / `app-registry`) + version + platform to a *presigned* S3 download URL,
 backed by a dedicated bucket (NFR4: not a reuse of any existing bucket).
 
-NFR2 originally called for the API server to construct *unsigned* public
-URLs against a public-read bucket, needing no credentials of its own. Issue
-#1101: the bucket was never actually configured to grant anonymous/public
-reads, so an unsigned URL always came back `403 Forbidden` regardless of
-addressing style. `ResolveBinaryURL` now presigns with its own S3
-credentials instead (`libs/go/s3`'s `Client.PresignPublicGetURL`) — any
-identity with read access to the object (e.g. the one that wrote it) can
-hand an external consumer (CI) a working, time-limited link without
-granting that consumer S3 access of its own.
+**Rotate procedure (NFR-22).** Rotation invalidates outstanding presigned URLs
+(including GETs and PUTs). To rotate the API server's credential:
+1. Provision a new access key and secret key with the same scoped permissions
+   (write to registry-allocated namespace, read over whole namespace)
+2. Update `RELEASE_TOOLS_S3_ACCESS_KEY` and `RELEASE_TOOLS_S3_SECRET_KEY` in
+   the deployment
+3. Restart the API server (or wait for pods to cycle; the client is built once
+   at startup per `releaseToolsS3ClientOnce`)
+4. Outstanding presigned URLs signed with the old key become invalid
+5. Producers re-broker after resolution fails (FR-60's re-resolve rule):
+   `ResolveBinaryURL` with the old key fails, triggering a retry that calls
+   `ResolveBinaryURL` again and gets a new URL signed with the new key
+6. Consumers must re-resolve to get URLs signed with the new key
+
+**History: unsigned URLs (original intent) → presigned URLs (actual fix).**
+NFR2 originally called for *unsigned* public URLs against a public-read
+bucket, needing no credentials. Issue #1101: the bucket was never configured
+for anonymous/public reads, so unsigned URLs came back `403 Forbidden`.
+Issue #1160 (FR-72) moves to *presigned* GETs signed by the API server itself
+— the endpoint-addressed URL still routes to public DNS, but only a signed
+request succeeds. The resolve-side now needs all four values: primary endpoint
+(for internal operations), region (for signing), credential (NFR-22's scoped
+grant), and public endpoint (for presigned URL addressing).
 
 | Variable | Default | Description |
 |----------|---------|--------------|
-| `RELEASE_TOOLS_S3_BUCKET` | `""` | Bucket name for CLI binary artifacts. Required for `ResolveBinaryURL` to return a usable URL. |
-| `RELEASE_TOOLS_S3_PUBLIC_ENDPOINT` | `""` | Public-facing endpoint `ResolveBinaryURL`'s presigned URLs are addressed against, virtual-hosted-style (OVH's public endpoint rejects path-style with HTTP 400): `PresignPublicGetURL(key)` signs a request to `"<scheme>://<bucket>.<endpoint-host>/<key>"`. |
-| `RELEASE_TOOLS_S3_REGION` | `""` | Region for the server-side (read/presign) `s3.Client`. |
-| `RELEASE_TOOLS_S3_ACCESS_KEY` | `""` | Static access key for the server-side (read/presign) `s3.Client`. Needs read access to `RELEASE_TOOLS_S3_BUCKET` — reusing the publish side's write credentials below is sufficient. |
-| `RELEASE_TOOLS_S3_SECRET_KEY` | `""` | Static secret key for the server-side (read/presign) `s3.Client`. |
+| `RELEASE_TOOLS_S3_BUCKET` | `""` | Bucket name for CLI binary artifacts. **Required** for `ResolveBinaryURL`. |
+| `RELEASE_TOOLS_S3_ENDPOINT` | `""` | Primary/internal S3 endpoint the API server connects to for FR-27's existence check and FR-46's read-back (path-style addressing). **Required** for resolve-side operations. |
+| `RELEASE_TOOLS_S3_REGION` | `""` | AWS region for signing requests. **Required** for credential-based presigning. |
+| `RELEASE_TOOLS_S3_ACCESS_KEY` | `""` | Static access key for the API server's scoped object-store credential (NFR-22: write over the allocated namespace, read over the whole namespace the registry must serve). **Required** for signing. |
+| `RELEASE_TOOLS_S3_SECRET_KEY` | `""` | Static secret key for the API server's credential. **Required** for signing. |
+| `RELEASE_TOOLS_S3_PUBLIC_ENDPOINT` | `""` | Public-facing endpoint `ResolveBinaryURL`'s presigned URLs are addressed against, virtual-hosted-style. `PresignPublicGetURL(key)` signs a request to `"<scheme>://<bucket>.<endpoint-host>/<key>"`. **Required** for addressing presigned GETs to external consumers. |
 
-The following are consumed by the *publish* side (the FinalizePublish
-S3-publish task, `worker/release/finalize.go`), not by `ResolveBinaryURL` —
-documented here so the full `RELEASE_TOOLS_S3_*` var set lives in one place.
-Same variable names as the read-side REGION/ACCESS_KEY/SECRET_KEY above, but
-these are two independently-configured deployments (`app-registry-api` vs.
-`app-registry-worker`) — nothing cross-validates that their actual secret
-values agree on the same bucket/region, so a region or credential mismatch
-between them is a real source of drift to check if `ResolveBinaryURL` starts
-failing again after this fix.
+**Publish-side (worker) — deprecated after cutover.** The following
+configuration was consumed by the *publish* side (the FinalizePublish
+S3-publish task, `worker/release/finalize.go`), but is no longer used after
+DP-1's cutover (issue #1160) when publish ceased to move bytes. The API server
+(documented above) is the only component configured with a write-capable
+credential for this bucket (NFR-23). These variables are documented for
+reference only and should be removed from deployment configuration.
 
 | Variable | Default | Description |
 |----------|---------|--------------|
