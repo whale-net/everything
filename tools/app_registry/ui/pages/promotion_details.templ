@@ -81,24 +81,32 @@ func syncEventSourceLabel(source string) string {
 // check; see components.GatedAction's own doc comment on that split).
 templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 	@components.Shell("Promotion Details", user) {
-		<div class="breadcrumbs text-sm mb-4">
-			<ul>
-				<li><a href="/deployments">Deployments</a></li>
-				<li>Promotion { s.PromotionID }</li>
-			</ul>
-		</div>
-		if s.LoadErr != "" {
-			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
-		} else if s.Details != nil {
-			if s.RetryErr != "" {
-				<div role="alert" class="alert alert-error shadow-md mb-4"><span>Retry failed: { s.RetryErr }</span></div>
+		<div
+			hx-ext="sse"
+			sse-connect={ templ.URL("/promotions/" + s.PromotionID + "/status/sse") }
+			class="promotion-details-container"
+		>
+			<div class="breadcrumbs text-sm mb-4">
+				<ul>
+					<li><a href="/deployments">Deployments</a></li>
+					<li>Promotion { s.PromotionID }</li>
+				</ul>
+			</div>
+			if s.LoadErr != "" {
+				<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
+			} else if s.Details != nil {
+				if s.RetryErr != "" {
+					<div role="alert" class="alert alert-error shadow-md mb-4"><span>Retry failed: { s.RetryErr }</span></div>
+				}
+				<div sse-swap="innerHTML" class="promotion-details-body">
+					@PromotionDetailsBody(user, s.Details.GetDetails())
+				</div>
 			}
-			@promotionDetailsBody(user, s.Details.GetDetails())
-		}
+		</div>
 	}
 }
 
-templ promotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
+templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 	<div class="flex justify-between items-center mb-4">
 		<h2 class="text-xl font-bold">
 			{ d.GetPromotion().GetEnvironmentKey() }: { d.GetFromVersion() }

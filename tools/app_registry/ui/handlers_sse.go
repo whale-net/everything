@@ -3,15 +3,22 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 
+	"github.com/a-h/templ"
+
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxsse"
+	"github.com/whale-net/everything/libs/go/htmxsse/templadapter"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/events"
+	"github.com/whale-net/everything/tools/app_registry/ui/pages"
 )
 
 // handlePromoStatusSSE handles SSE connections for promotion status updates.
-// (FR6, FR27, FR28, NFR4, NFR13)
+// (FR6, FR27, FR28, NFR4, NFR13, issue #1033)
 //
 // This handler:
 // - Receives authenticated requests via RequireAuthFunc (wrapped with noRedirectWriter at route level)
@@ -38,77 +45,20 @@ func (app *App) handlePromoStatusSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	topic := "promotion." + promID // Use events.TopicForPromotion(promID) when events package is wired in Implementation
+	topic := events.TopicForPromotion(promID)
 	topics := []string{topic}
 
 	// Create the fragment function. This closure is called on connect, reconnect,
 	// and heartbeat to produce the current state of the promotion.
 	// (FR3, FR27: re-acquires token on every delivery)
-	fragment := func(r *http.Request, topic string) ([]byte, error) {
-		// Re-acquire the access token on every delivery (FR27).
-		// Note: this is a fresh call, not a stored token.
-		token, err := app.auth.GetAccessToken(r)
-		if err != nil {
-			// Check if this is a terminal error (session gone) or transient (credential failed).
-			// Terminal class: call GetUserInfo on the same session.
-			// If GetUserInfo fails, the session is gone → cancel the stream.
-			// If GetUserInfo succeeds, the session is intact → transient error, no cancel.
-			if app.sessionMgr != nil {
-				_, checkErr := app.sessionMgr.GetUserInfo(r)
-				if checkErr != nil {
-					// Terminal: session is gone, cancel the stream
-					cancel()
-					return nil, fmt.Errorf("session lost: %w", checkErr)
-				}
-			}
-			// Transient: credential failure, don't cancel
-			return nil, fmt.Errorf("token refresh failed: %w", err)
-		}
-
-		// Inject the fresh token into the context for gRPC calls.
-		// (FR27: injecting the token, not just acquiring it)
-		ctx := grpcauth.WithUserToken(r.Context(), token)
-		r = r.WithContext(ctx)
-
-		// Fetch the promotion details from the registry.
-		resp, err := app.registry.Promotion.GetPromotionDetails(ctx, &pb.GetPromotionDetailsRequest{PromotionId: promID})
-		if err != nil {
-			// All gRPC errors during fragment render are treated as transient
-			// (credential, network, timeouts) unless the session is gone.
-			if app.sessionMgr != nil {
-				_, checkErr := app.sessionMgr.GetUserInfo(r)
-				if checkErr != nil {
-					// Terminal: session is gone, cancel the stream
-					cancel()
-					return nil, fmt.Errorf("session lost: %w", checkErr)
-				}
-			}
-			// Transient: gRPC call failed, but session is intact
-			return nil, fmt.Errorf("get promotion details failed: %w", err)
-		}
-
-		// Render the promotion status as an HTML fragment.
-		// For now, return a simple status display with key information.
-		details := resp.Details
-		if details == nil {
-			return nil, fmt.Errorf("promotion details is nil")
-		}
-
-		// Build a simple HTML fragment showing promotion status.
-		// This is a placeholder that can be enhanced later with templ components.
-		fragment := fmt.Sprintf(
-			"<div class=\"promotion-status\" data-promotion-id=\"%s\">\n"+
-				"  <div class=\"status-outcome\">%s</div>\n"+
-				"  <div class=\"status-from\">From: %s</div>\n"+
-				"  <div class=\"status-to\">To: %s</div>\n"+
-				"</div>",
-			promID,
-			details.Outcome.String(),
-			details.FromVersion,
-			details.ToVersion,
-		)
-		return []byte(fragment), nil
+	// Fragment renders exactly @promotionDetailsBody(user, s.Details.GetDetails()) (FR3)
+	componentFunc := func(r *http.Request, topic string) templ.Component {
+		return renderPromoDetailsFragment(r, promID, cancel, app)
 	}
+
+	// Adapt the templ component function to the htmxsse.Fragment interface
+	// (FR4: templ adapter)
+	fragment := templadapter.Adapt(componentFunc)
 
 	// Create the SSE handler with the hub from the app.
 	// (FR5, FR2, FR3: full-state on connect/reconnect, heartbeat, per-connection rendering)
@@ -116,4 +66,81 @@ func (app *App) handlePromoStatusSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Serve the connection.
 	handler(w, r)
+}
+
+// renderPromoDetailsFragment renders the promotion details fragment that gets
+// pushed over SSE. This is the rendering half of FR3 — the auth/token half
+// is implemented in handlePromoStatusSSE.
+//
+// The fragment renders exactly @PromotionDetailsBody(user, s.Details.GetDetails()),
+// reading current state at delivery time (FR3, NFR2, NFR11: deterministic).
+// The publisher payload's advisory field must not be rendered — the fragment
+// is produced from the fresh read; if payload and fragment disagree, fragment wins.
+func renderPromoDetailsFragment(r *http.Request, promID string, cancel context.CancelFunc, app *App) templ.Component {
+	// Use a wrapper component that performs the token refresh and data fetch
+	return renderPromoDetailsFragmentComponent{r, promID, cancel, app}
+}
+
+// renderPromoDetailsFragmentComponent implements templ.Component to render
+// the promotion details body with freshly acquired credentials (FR27).
+type renderPromoDetailsFragmentComponent struct {
+	r      *http.Request
+	promID string
+	cancel context.CancelFunc
+	app    *App
+}
+
+// Render implements templ.Component by fetching fresh data and rendering
+// the promotion details body (FR3).
+func (c renderPromoDetailsFragmentComponent) Render(ctx context.Context, w io.Writer) error {
+	// Re-acquire the access token on every delivery (FR27).
+	token, err := c.app.auth.GetAccessToken(c.r)
+	if err != nil {
+		// Check if this is a terminal error (session gone) or transient (credential failed).
+		if c.app.sessionMgr != nil {
+			_, checkErr := c.app.sessionMgr.GetUserInfo(c.r)
+			if checkErr != nil {
+				// Terminal: session is gone, cancel the stream
+				c.cancel()
+				return fmt.Errorf("session lost: %w", checkErr)
+			}
+		}
+		// Transient: credential failure, don't cancel
+		return fmt.Errorf("token refresh failed: %w", err)
+	}
+
+	// Inject the fresh token into the context for gRPC calls.
+	grpcCtx := grpcauth.WithUserToken(c.r.Context(), token)
+
+	// Fetch the promotion details from the registry.
+	resp, err := c.app.registry.Promotion.GetPromotionDetails(grpcCtx, &pb.GetPromotionDetailsRequest{PromotionId: c.promID})
+	if err != nil {
+		// All gRPC errors during fragment render are treated as transient
+		// unless the session is gone.
+		if c.app.sessionMgr != nil {
+			_, checkErr := c.app.sessionMgr.GetUserInfo(c.r)
+			if checkErr != nil {
+				// Terminal: session is gone, cancel the stream
+				c.cancel()
+				return fmt.Errorf("session lost: %w", checkErr)
+			}
+		}
+		// Transient: gRPC call failed, but session is intact
+		return fmt.Errorf("get promotion details failed: %w", err)
+	}
+
+	// Get the current user (FR3)
+	user := htmxauth.GetUser(c.r.Context())
+	if user == nil {
+		return fmt.Errorf("user not found in context")
+	}
+
+	// Render exactly @PromotionDetailsBody(user, s.Details.GetDetails())
+	// (FR3, NFR2: fragment function produces the exact output the user sees)
+	details := resp.Details
+	if details == nil {
+		return fmt.Errorf("promotion details is nil")
+	}
+
+	return pages.PromotionDetailsBody(user, details).Render(ctx, w)
 }
