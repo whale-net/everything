@@ -402,3 +402,274 @@ func TestPromotionDetails_FR23_IndicatorScript(t *testing.T) {
 		t.Errorf("FR23: script must include heartbeat timeout logic; got: %s", html)
 	}
 }
+
+// TestPromotionDetails_FR24_ReloadLinkPreservesPromotionID tests FR24:
+// the reload link includes the promotion ID so it can be used for redirect through login.
+func TestPromotionDetails_FR24_ReloadLinkPreservesPromotionID(t *testing.T) {
+	promotionID := "test-promotion-xyz"
+	state := pages.PromotionDetailsViewState{
+		PromotionID: promotionID,
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: promotionID, EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:  "",
+		RetryErr: "",
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR24: reload link must include the correct promotion ID
+	expectedHref := `/promotions/` + promotionID
+	if !strings.Contains(html, expectedHref) {
+		t.Errorf("FR24: reload link must point to %q; got: %s", expectedHref, html)
+	}
+}
+
+// TestPromotionDetails_FR23_DebounceUsesAdvertisedRetry tests FR23:
+// the debounce mechanism uses the advertised retry interval, not a hardcoded value.
+func TestPromotionDetails_FR23_DebounceUsesAdvertisedRetry(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:  "",
+		RetryErr: "",
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR23: script must use advertisedRetryMs variable for debounce
+	if !strings.Contains(html, `advertisedRetryMs`) {
+		t.Errorf("FR23: script must use advertisedRetryMs variable for debounce; got: %s", html)
+	}
+}
+
+// TestPromotionDetails_FR23_TimeoutThreshold tests FR23:
+// the timeout threshold for not-live detection is 2x the advertised retry interval.
+func TestPromotionDetails_FR23_TimeoutThreshold(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:  "",
+		RetryErr: "",
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR23: script must calculate timeout threshold as 2x heartbeat interval
+	if !strings.Contains(html, `advertisedRetryMs * 2`) {
+		t.Errorf("FR23: timeout threshold must be 2x advertised retry interval (advertisedRetryMs * 2); got: %s", html)
+	}
+
+	// FR23: script must check this threshold against time since last event
+	if !strings.Contains(html, `timeSinceLastEvent`) {
+		t.Errorf("FR23: script must track time since last event; got: %s", html)
+	}
+}
+
+// TestPromotionDetails_FR23_MutationObserverTracksChanges tests FR23:
+// the script observes mutations on the sse-swap target to update lastEventTime.
+func TestPromotionDetails_FR23_MutationObserverTracksChanges(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:  "",
+		RetryErr: "",
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR23: script must use MutationObserver to track changes in sse-swap
+	if !strings.Contains(html, `MutationObserver`) {
+		t.Errorf("FR23: script must use MutationObserver to track pushed fragments; got: %s", html)
+	}
+
+	// FR23: MutationObserver must update lastEventTime
+	if !strings.Contains(html, `lastEventTime = Date.now()`) {
+		t.Errorf("FR23: MutationObserver must update lastEventTime on mutations; got: %s", html)
+	}
+}
+
+// TestPromotionDetails_NFR12_IndicatorVisibility tests NFR12:
+// the indicator and reload affordance are positioned outside the sse-swap
+// target, so they do not disappear and reappear with pushed updates.
+func TestPromotionDetails_NFR12_IndicatorVisibility(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:  "",
+		RetryErr: "",
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// NFR12: indicator must appear BEFORE the sse-swap target
+	indicatorIdx := strings.Index(html, `id="promo-live-indicator"`)
+	reloadIdx := strings.Index(html, `id="promo-reload-container"`)
+	swapIdx := strings.Index(html, `sse-swap="innerHTML"`)
+
+	if indicatorIdx < 0 || reloadIdx < 0 || swapIdx < 0 {
+		t.Errorf("NFR12: all elements (indicator, reload, sse-swap) must be present in template")
+	}
+
+	// Both indicator and reload must come BEFORE sse-swap
+	if indicatorIdx > swapIdx {
+		t.Errorf("NFR12: indicator must appear before sse-swap target (outside pushed region); got indices %d and %d", indicatorIdx, swapIdx)
+	}
+
+	if reloadIdx > swapIdx {
+		t.Errorf("NFR12: reload affordance must appear before sse-swap target (outside pushed region); got indices %d and %d", reloadIdx, swapIdx)
+	}
+}
+
+// TestPromotionDetails_FR24_ReloadLinkCorrectInContainer tests FR24:
+// the reload link inside the reload container has the correct promotion ID,
+// not just somewhere in the overall HTML.
+func TestPromotionDetails_FR24_ReloadLinkCorrectInContainer(t *testing.T) {
+	promotionID := "test-promo-12345"
+	state := pages.PromotionDetailsViewState{
+		PromotionID: promotionID,
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: promotionID, EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	component.Render(ctx, &buf)
+
+	html := buf.String()
+
+	// Find the reload container specifically
+	containerStart := strings.Index(html, `id="promo-reload-container"`)
+	if containerStart == -1 {
+		t.Fatalf("FR24: reload container not found in template")
+	}
+
+	// Find the closing div of the reload container
+	remaining := html[containerStart:]
+	containerEnd := strings.Index(remaining, `</div>`)
+	if containerEnd == -1 {
+		t.Fatalf("FR24: reload container closing tag not found")
+	}
+
+	reloadSection := remaining[:containerEnd+6]
+
+	// Check that the reload section contains the correct promotion ID
+	expectedLink := `/promotions/` + promotionID
+	if !strings.Contains(reloadSection, expectedLink) {
+		t.Errorf("FR24: reload link must contain %q; got: %s", expectedLink, reloadSection)
+	}
+
+	// Verify it's in the href attribute (not just text)
+	if !strings.Contains(reloadSection, `href=`) {
+		t.Errorf("FR24: reload must have an href attribute; got: %s", reloadSection)
+	}
+
+	// Verify the link text says "Reload"
+	if !strings.Contains(reloadSection, `>Reload</a>`) {
+		t.Errorf("FR24: reload button text must say 'Reload'; got: %s", reloadSection)
+	}
+}
