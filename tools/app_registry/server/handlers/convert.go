@@ -285,6 +285,7 @@ func artifactToPB(a repository.Artifact) *pb.Artifact {
 		Repository:     a.Repository,
 		Version:        a.Version,
 		Digest:         a.Digest,
+		IdentityDigest: a.IdentityDigest,
 		BuildId:        a.BuildID,
 		PublishedAt:    timeToUnix(a.PublishedAt),
 		Promotability:  promotabilityToPB(a.Promotability),

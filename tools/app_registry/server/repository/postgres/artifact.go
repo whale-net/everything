@@ -232,7 +232,7 @@ type artifactRepo struct{ ex dbtx }
 const artifactSelectBase = `
 	SELECT a.artifact_id, a.kind, a.app_id, a.chart_id, a.repository, a.version, a.digest, a.build_id, a.published_at,
 	       a.state, a.provenance, a.version_source, a.state_changed_at, a.fail_reason,
-	       a.manifest_id, COALESCE(app_release_fallback.deploy_unit, app.deploy_unit), chart.deploy_unit
+	       a.identity_digest, a.manifest_id, COALESCE(app_release_fallback.deploy_unit, app.deploy_unit), chart.deploy_unit
 	FROM artifact a
 	LEFT JOIN v_current_app app ON a.app_id = app.app_id
 	LEFT JOIN LATERAL (
@@ -253,10 +253,11 @@ func scanArtifact(row pgx.Row) (repository.Artifact, error) {
 	var kind, state, provenance, versionSource string
 	var appID, chartID, digest, buildID, manifestID, appDeployUnit, chartDeployUnit *string
 	var publishedAt *time.Time
+	var identityDigest *string
 	if err := row.Scan(
 		&a.ArtifactID, &kind, &appID, &chartID, &a.Repository, &a.Version, &digest, &buildID, &publishedAt,
 		&state, &provenance, &versionSource, &a.StateChangedAt, &a.FailReason,
-		&manifestID, &appDeployUnit, &chartDeployUnit,
+		&identityDigest, &manifestID, &appDeployUnit, &chartDeployUnit,
 	); err != nil {
 		return repository.Artifact{}, err
 	}
@@ -281,6 +282,9 @@ func scanArtifact(row pgx.Row) (repository.Artifact, error) {
 	}
 	if manifestID != nil {
 		a.ManifestID = *manifestID
+	}
+	if identityDigest != nil {
+		a.IdentityDigest = *identityDigest
 	}
 	// Live derivation (issue #833): only for published rows -- nothing to
 	// derive promotability from until publish, matching the old (pre-#833)
@@ -322,6 +326,34 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 	// means a same-digest/different-version case correctly falls through
 	// to step 2, which resolves it against the request's own (owner,
 	// kind, version) row instead.
+	// 0. No-op detection (FR-17): check if an artifact with the same
+	// identity_digest already exists and is published. If so, return it
+	// without creating a new version. This is artifact-level no-op detection,
+	// not per-file blob dedupe (FR-1). Only applies when identity_digest is
+	// provided (not empty).
+	if a.IdentityDigest != "" {
+		var existingID string
+		row := r.ex.QueryRow(ctx, `SELECT artifact_id FROM artifact
+			WHERE owner_id = $1 AND kind = $2 AND identity_digest = $3 AND state = 'published'
+			LIMIT 1`,
+			ownerIDOf(a), string(a.Kind), a.IdentityDigest)
+		if err := row.Scan(&existingID); err == nil {
+			// Found an existing published artifact with the same identity_digest.
+			// Load it fully and return it as a no-op.
+			row := r.ex.QueryRow(ctx, artifactSelectBase+` WHERE a.artifact_id = $1`, existingID)
+			if existing, err := scanArtifact(row); err == nil {
+				if existing.Kind == repository.ArtifactKindChart {
+					if links, lerr := r.loadContains(ctx, existing.ArtifactID); lerr == nil {
+						existing.Contains = links
+					}
+				}
+				return &existing, true, nil
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, err
+		}
+	}
+
 	row := r.ex.QueryRow(ctx, artifactSelectBase+`
 		WHERE a.digest = $1 AND a.owner_id = $2 AND a.kind = $3 AND a.version = $4`,
 		a.Digest, ownerIDOf(a), string(a.Kind), a.Version)
@@ -594,14 +626,19 @@ func (r *artifactRepo) insertArtifact(ctx context.Context, a repository.Artifact
 		manifestID = mid
 	}
 
+	var identityDigest any
+	if a.IdentityDigest != "" {
+		identityDigest = a.IdentityDigest
+	}
+
 	if _, err := r.ex.Exec(ctx, `
 		INSERT INTO artifact (artifact_id, kind, app_id, chart_id, repository, version, digest, build_id, published_at,
 		                       version_major, version_minor, version_patch, state, provenance, version_source, state_changed_at,
-		                       manifest_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+		                       identity_digest, manifest_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 		a.ArtifactID, string(a.Kind), appID, chartID, a.Repository, a.Version, digest, buildID, publishedAt,
 		versionMajor, versionMinor, versionPatch, string(a.State), string(a.Provenance), string(a.VersionSource), a.StateChangedAt,
-		manifestID); err != nil {
+		identityDigest, manifestID); err != nil {
 		msg := fmt.Sprintf("artifact %s %s already recorded", ownerName, a.Version)
 		if de, ok := translatePgError(err, msg); ok {
 			return nil, false, de
@@ -649,9 +686,9 @@ func (r *artifactRepo) completePublish(ctx context.Context, existing, a reposito
 
 	if _, err := r.ex.Exec(ctx, `
 		UPDATE artifact SET digest = $1, build_id = $2, published_at = $3, state = 'published', state_changed_at = $4,
-		                     manifest_id = $5
-		WHERE artifact_id = $6`,
-		a.Digest, buildID, publishedAt, now, manifestID, existing.ArtifactID); err != nil {
+		                     identity_digest = $5, manifest_id = $6
+		WHERE artifact_id = $7`,
+		a.Digest, buildID, publishedAt, now, a.IdentityDigest, manifestID, existing.ArtifactID); err != nil {
 		msg := fmt.Sprintf("artifact %s already recorded", a.Digest)
 		if de, ok := translatePgError(err, msg); ok {
 			return nil, de
