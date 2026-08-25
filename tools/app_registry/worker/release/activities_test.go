@@ -246,6 +246,55 @@ func TestActivities_DispatchBuild_ResolvedPlan_ForwardsRawJSONVerbatim(t *testin
 	require.False(t, hasAppVersions, "app_versions must not be sent once resolved_plan carries the full versions map")
 }
 
+// TestActivities_DispatchBuild_RetriedCall_ReturnsExistingRunWithoutRedispatching
+// is the migration-023 regression test: a second DispatchBuild call for the
+// same release run (simulating Temporal's at-least-once activity retry --
+// e.g. after a transient network error on the dispatch POST itself, or on
+// findDispatchedRun's polling, per that method's doc comment) must return
+// the SAME BuildRef without hitting GitHub's dispatches endpoint again.
+// This is the fix for a real production incident (run 32691150140,
+// "Canceling since a higher priority waiting request for release-v2
+// exists"): release-v2.yml's concurrency group only keeps one run queued
+// behind the one in progress, so a second `workflow_dispatch` for the same
+// release evicts its own first, still-queued dispatch.
+func TestActivities_DispatchBuild_RetriedCall_ReturnsExistingRunWithoutRedispatching(t *testing.T) {
+	dispatchCount := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/app/installations/1/access_tokens", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"token":"ghs_test"}`))
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/dispatches", func(w http.ResponseWriter, r *http.Request) {
+		dispatchCount++
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("/repos/whale-net/everything/actions/workflows/release-v2.yml/runs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"workflow_runs":[{"id":303,"html_url":"https://example/303","created_at":"` + time.Now().UTC().Format(time.RFC3339) + `"}]}`))
+	})
+
+	repo := newTestRegistry(t)
+	seedApp(t, repo, "demo", "widget")
+	run, _ := createTestReleaseRun(t, repo, []repository.ReleaseRunTarget{
+		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
+	})
+
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
+	plan := ResolvedPlan{
+		ReleaseRunID: run.ReleaseRunID,
+		Versions:     map[string]string{"image:demo-widget": "v1.0.0"},
+	}
+
+	first, err := a.DispatchBuild(context.Background(), plan, nil)
+	require.NoError(t, err)
+	require.Equal(t, "303", first.RunID)
+	require.Equal(t, 1, dispatchCount)
+
+	second, err := a.DispatchBuild(context.Background(), plan, nil)
+	require.NoError(t, err)
+	require.Equal(t, first, second, "a retried DispatchBuild must return the identical BuildRef")
+	require.Equal(t, 1, dispatchCount, "a retried DispatchBuild must not call workflow_dispatch a second time")
+}
+
 // TestActivities_DispatchBuild_AppVersions_OmittedWhenNoImageTargets proves
 // a chart-only batch (no image-kind entries in plan.Versions) never emits
 // an app_versions input at all, rather than an empty/misleading one.

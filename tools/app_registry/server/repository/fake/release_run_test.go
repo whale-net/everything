@@ -337,6 +337,63 @@ func TestReleaseRunFake_SetResolvedPlan_UnknownReleaseRunNotFound(t *testing.T) 
 	}
 }
 
+// TestReleaseRunFake_SetBuildRef_RoundTrip proves
+// ReleaseRunRepository.SetBuildRef (migration 023) -- the write
+// worker/release/activities.go's DispatchBuild performs once its own
+// GitHub.Dispatch call succeeds -- both stamps the value and makes it
+// readable back through GetReleaseRun.
+func TestReleaseRunFake_SetBuildRef_RoundTrip(t *testing.T) {
+	r := New()
+	created, _, err := createReleaseRunTx(t, r, newReleaseRun("wf-set-build-ref"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	if created.BuildRefRunID != "" || created.BuildRefRunURL != "" {
+		t.Fatalf("expected empty BuildRefRunID/URL immediately after CreateReleaseRun, got %q/%q", created.BuildRefRunID, created.BuildRefRunURL)
+	}
+
+	if err := r.ReleaseRuns().SetBuildRef(context.Background(), created.ReleaseRunID, "12345", "https://example/runs/12345"); err != nil {
+		t.Fatalf("SetBuildRef: %v", err)
+	}
+
+	fetched, _, err := r.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if fetched.BuildRefRunID != "12345" || fetched.BuildRefRunURL != "https://example/runs/12345" {
+		t.Fatalf("BuildRefRunID/URL = %q/%q, want %q/%q", fetched.BuildRefRunID, fetched.BuildRefRunURL, "12345", "https://example/runs/12345")
+	}
+}
+
+// TestReleaseRunFake_SetBuildRef_EmptyRunIDRejected proves the empty-value
+// guard documented on ReleaseRunRepository.SetBuildRef.
+func TestReleaseRunFake_SetBuildRef_EmptyRunIDRejected(t *testing.T) {
+	r := New()
+	created, _, err := createReleaseRunTx(t, r, newReleaseRun("wf-set-build-ref-empty"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+
+	err = r.ReleaseRuns().SetBuildRef(context.Background(), created.ReleaseRunID, "", "https://example/runs/1")
+	if !errors.Is(err, repository.ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument for empty runID, got: %v", err)
+	}
+}
+
+// TestReleaseRunFake_SetBuildRef_UnknownReleaseRunNotFound proves an
+// unknown releaseRunID is rejected with ErrNotFound.
+func TestReleaseRunFake_SetBuildRef_UnknownReleaseRunNotFound(t *testing.T) {
+	r := New()
+	err := r.ReleaseRuns().SetBuildRef(context.Background(), "does-not-exist", "1", "https://example/runs/1")
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
 func TestReleaseRunFake_UpdateTargetState_UnknownTargetNotFound(t *testing.T) {
 	r := New()
 	err := r.ReleaseRuns().UpdateTargetState(context.Background(), "does-not-exist", repository.ReleaseRunTargetStateBuilding, "", "")

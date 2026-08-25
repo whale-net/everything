@@ -619,6 +619,28 @@ type ReleaseRunRepository interface {
 	// SQLSTATE 22P02 this issue closes.
 	SetResolvedPlan(ctx context.Context, releaseRunID string, resolvedPlan []byte) error
 
+	// SetBuildRef stamps release_run.build_ref_run_id/build_ref_run_url
+	// (migration 023) the first time DispatchBuild successfully dispatches
+	// and locates a GitHub Actions run for releaseRunID. DispatchBuild
+	// (worker/release/activities.go) checks GetReleaseRun for an existing,
+	// non-empty BuildRefRunID FIRST, before calling GitHub at all -- so a
+	// retried DispatchBuild (Temporal's at-least-once activity retry, e.g.
+	// after a transient network error on the dispatch POST itself or on
+	// findDispatchedRun's polling -- see that method's doc comment) returns
+	// the already-dispatched run instead of calling `workflow_dispatch` a
+	// second time. This matters beyond wasted work: release-v2.yml's
+	// concurrency group (concurrency: {group: release-v2,
+	// cancel-in-progress: false}) only keeps ONE additional run queued
+	// behind the one currently running -- a third run created while one is
+	// running and one is already queued causes GitHub to silently cancel
+	// the older queued run (observed in production: run 32691150140,
+	// "Canceling since a higher priority waiting request for release-v2
+	// exists", recorded zero jobs -- cancelled before it ever started).
+	// runID must be non-empty; implementations reject an empty value with
+	// ErrInvalidArgument. Naturally idempotent under activity retry:
+	// writing the same runID/runURL twice is a no-op change.
+	SetBuildRef(ctx context.Context, releaseRunID string, runID, runURL string) error
+
 	// UpdateTargetState transitions releaseRunTargetID to newState,
 	// stamping StateChangedAt and optionally BuildID/ErrorDetail --
 	// appending in place (the row IS the current state; this does not

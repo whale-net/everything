@@ -100,6 +100,21 @@ func (f releaseRunFake) SetResolvedPlan(ctx context.Context, releaseRunID string
 	return nil
 }
 
+// SetBuildRef mirrors postgres's releaseRunRepo.SetBuildRef (migration 023).
+func (f releaseRunFake) SetBuildRef(ctx context.Context, releaseRunID string, runID, runURL string) error {
+	if runID == "" {
+		return fmt.Errorf("%w: build ref run id must not be empty", repository.ErrInvalidArgument)
+	}
+	run, ok := f.r.state.ReleaseRuns[releaseRunID]
+	if !ok {
+		return fmt.Errorf("%w: release run %s", repository.ErrNotFound, releaseRunID)
+	}
+	run.BuildRefRunID = runID
+	run.BuildRefRunURL = runURL
+	f.r.state.ReleaseRuns[releaseRunID] = run
+	return nil
+}
+
 // UpdateTargetState mirrors postgres's releaseRunRepo.UpdateTargetState --
 // same legalReleaseRunTargetTransitions table, same
 // preserve-existing-buildID-when-empty behavior.

@@ -79,6 +79,27 @@ is no CI job wired up for this yet (see "Not done" below) — it's a manual chec
   — a pre-existing quirk of the real macro, not something `--fast` introduces). `discover_fast.go`
   matches that behavior rather than "fixing" it.
 
+## CI toggle: `vars.RELEASE_HELPER_FAST_MODE`
+
+`.github/actions/app-registry-reconcile` (the `manifest-set` → `apps reconcile` pipeline invoked
+from `ci.yml`'s `reconcile-app-registry` job) and `ci.yml`'s own `Plan Docker builds using
+release tool` step both consult the repository variable `RELEASE_HELPER_FAST_MODE`: `--fast` is
+passed to `release_helper_go` only when it's exactly `"true"`. An unset variable evaluates to an
+empty string, which is not `"true"`, so **the default is false** with no variable creation
+required — a repo that never sets `RELEASE_HELPER_FAST_MODE` behaves exactly as it did before
+this toggle existed.
+
+To turn it on: `gh variable set RELEASE_HELPER_FAST_MODE --body true` (repo admin), or via repo
+Settings → Secrets and variables → Actions → Variables. This is a live CI-behavior change, so
+treat it the same as any other production toggle — a human decision, not something to flip from
+a PR. To turn it back off, delete the variable or set it to `false`.
+
+Not every discovery call site is wired to this variable — only the two above (the `manifest-set`/
+`apps reconcile` "reconcileapps" pipeline and the PR/push build-planning `plan` call). Other
+`release_helper_go` commands (`build-app`, `build-chart`, `list`, `release-notes`, ...) still
+default to real Bazel discovery everywhere, including when run locally; pass `--fast` by hand for
+those, or extend this same pattern if a future workflow needs it.
+
 ## Not done / possible follow-ups
 
 - No CI job runs the fast-vs-slow diff automatically; it was checked manually against this
@@ -86,7 +107,7 @@ is no CI job wired up for this yet (see "Not done" below) — it's a manual chec
   (e.g. an integration test gated behind a real Bazel invocation, which `bazel test` doesn't
   normally allow) or a periodic CI check would close the gap between "checked once" and "stays
   correct."
-- `--fast` is opt-in everywhere, including in `.github/workflows/release.yml` — no production
-  workflow has been switched over. That's a deliberate choice (see `AGENTS.md`: "Do not patch
-  production environments — rely on release actions and human inputs"), not a limitation of the
-  flag itself.
+- `release.yml`/`release-v2.yml` are not wired to `RELEASE_HELPER_FAST_MODE` — their `plan`
+  invocations either aren't discovery calls (`--from-resolved-plan` skips `ListAllApps`/
+  `ListAllHelmCharts` entirely) or weren't found to shell out to `release_helper_go` discovery
+  commands directly. Revisit if that changes.

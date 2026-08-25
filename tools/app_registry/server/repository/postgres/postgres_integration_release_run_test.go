@@ -299,6 +299,74 @@ func TestReleaseRun_SetResolvedPlan_UnknownReleaseRunNotFound(t *testing.T) {
 	}
 }
 
+// TestReleaseRun_SetBuildRef_RoundTrip proves
+// ReleaseRunRepository.SetBuildRef (migration 023) against real Postgres:
+// a freshly created release_run starts with an empty BuildRefRunID/URL,
+// SetBuildRef stamps a value in, and it is readable back through
+// GetReleaseRun -- the write worker/release/activities.go's DispatchBuild
+// performs once its own GitHub.Dispatch call succeeds.
+func TestReleaseRun_SetBuildRef_RoundTrip(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	created, _, err := createReleaseRunTx(t, reg, newReleaseRun("wf-set-build-ref"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+	if created.BuildRefRunID != "" || created.BuildRefRunURL != "" {
+		t.Fatalf("expected empty BuildRefRunID/URL immediately after CreateReleaseRun, got %q/%q", created.BuildRefRunID, created.BuildRefRunURL)
+	}
+
+	if err := reg.ReleaseRuns().SetBuildRef(context.Background(), created.ReleaseRunID, "12345", "https://example/runs/12345"); err != nil {
+		t.Fatalf("SetBuildRef: %v", err)
+	}
+
+	fetched, _, err := reg.ReleaseRuns().GetReleaseRun(context.Background(), created.ReleaseRunID)
+	if err != nil {
+		t.Fatalf("GetReleaseRun: %v", err)
+	}
+	if fetched.BuildRefRunID != "12345" {
+		t.Fatalf("BuildRefRunID = %q, want %q", fetched.BuildRefRunID, "12345")
+	}
+	if fetched.BuildRefRunURL != "https://example/runs/12345" {
+		t.Fatalf("BuildRefRunURL = %q, want %q", fetched.BuildRefRunURL, "https://example/runs/12345")
+	}
+}
+
+// TestReleaseRun_SetBuildRef_EmptyRunIDRejected proves the empty-value
+// guard documented on ReleaseRunRepository.SetBuildRef holds against real
+// Postgres too -- an empty runID is rejected with ErrInvalidArgument before
+// any UPDATE reaches the database.
+func TestReleaseRun_SetBuildRef_EmptyRunIDRejected(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	created, _, err := createReleaseRunTx(t, reg, newReleaseRun("wf-set-build-ref-empty"), []repository.ReleaseRunTarget{
+		{OwnerFullName: "acme-widget", Kind: repository.ArtifactKindImage},
+	})
+	if err != nil {
+		t.Fatalf("CreateReleaseRun: %v", err)
+	}
+
+	err = reg.ReleaseRuns().SetBuildRef(context.Background(), created.ReleaseRunID, "", "https://example/runs/1")
+	if !errors.Is(err, repository.ErrInvalidArgument) {
+		t.Fatalf("expected ErrInvalidArgument for empty runID, got: %v", err)
+	}
+}
+
+// TestReleaseRun_SetBuildRef_UnknownReleaseRunNotFound proves an unknown
+// releaseRunID is rejected with ErrNotFound (the zero-rows-affected branch
+// in releaseRunRepo.SetBuildRef), not silently accepted as a no-op UPDATE
+// matching nothing.
+func TestReleaseRun_SetBuildRef_UnknownReleaseRunNotFound(t *testing.T) {
+	reg, _ := newTestRegistry(t)
+
+	err := reg.ReleaseRuns().SetBuildRef(context.Background(), "00000000-0000-0000-0000-000000000000", "1", "https://example/runs/1")
+	if !errors.Is(err, repository.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+}
+
 // TestReleaseRun_CreateReleaseRun_PartialTargetFailureRollsBackWholeBatch
 // proves CreateReleaseRun's doc comment claim: a failure partway through
 // target inserts (here, a CHECK-constraint-violating kind on the second
