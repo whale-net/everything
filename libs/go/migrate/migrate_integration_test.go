@@ -145,6 +145,93 @@ func TestRunner_Steps_AppliesOneMigrationAtATime(t *testing.T) {
 	}
 }
 
+func TestRunner_Migrate_AppliesUpWhenTargetIsAheadOfCurrent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+	sqlDB := openDB(t, db)
+
+	runner := migrate.NewRunner(sqlDB, testMigrations, "testdata/migrations")
+	if err := runner.Steps(1); err != nil {
+		t.Fatalf("Steps(1): %v", err)
+	}
+
+	// Migrate(2) from version 1 exercises the "bypass to an explicit
+	// version" path going up, same as it exercises going down elsewhere.
+	if err := runner.Migrate(2); err != nil {
+		t.Fatalf("Migrate(2): %v", err)
+	}
+
+	version, dirty, err := runner.Version()
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+	if dirty {
+		t.Fatalf("expected clean state after Migrate, got dirty")
+	}
+	if version != 2 {
+		t.Fatalf("expected version 2 after Migrate(2), got %d", version)
+	}
+	if _, err := db.Pool.Exec(ctx, `SELECT price FROM widgets`); err != nil {
+		t.Fatalf("expected price column to exist after migrating up to version 2: %v", err)
+	}
+}
+
+func TestRunner_LatestVersion_ReturnsHighestSourceVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+	sqlDB := openDB(t, db)
+
+	runner := migrate.NewRunner(sqlDB, testMigrations, "testdata/migrations")
+	latest, err := runner.LatestVersion()
+	if err != nil {
+		t.Fatalf("LatestVersion: %v", err)
+	}
+	if latest != 2 {
+		t.Fatalf("expected latest version 2, got %d", latest)
+	}
+}
+
+func TestRunner_Migrate_RollsBackWhenTargetIsBehindCurrent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+	sqlDB := openDB(t, db)
+
+	runner := migrate.NewRunner(sqlDB, testMigrations, "testdata/migrations")
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Simulate an older image running after a rollback: target version 1,
+	// even though the DB is currently at 2. Migrate should detect the DB is
+	// ahead and step down, rather than no-op like Up() would.
+	if err := runner.Migrate(1); err != nil {
+		t.Fatalf("Migrate(1): %v", err)
+	}
+
+	version, dirty, err := runner.Version()
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+	if dirty {
+		t.Fatalf("expected clean state after Migrate, got dirty")
+	}
+	if version != 1 {
+		t.Fatalf("expected version 1 after Migrate(1), got %d", version)
+	}
+
+	// price was added by migration 0002 - it should be gone again after
+	// rolling back to version 1.
+	if _, err := db.Pool.Exec(ctx, `SELECT price FROM widgets`); err == nil {
+		t.Fatal("expected price column to no longer exist after rolling back to version 1")
+	}
+}
+
 func TestRunner_UpWithTracking_RecordsHistory(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()

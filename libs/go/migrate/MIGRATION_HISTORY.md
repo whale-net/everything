@@ -267,6 +267,7 @@ rm migrations/999_test.*
 
 ## See Also
 
+- `README.md` - CLI flags/env vars, embedding, and rollback detection (`-auto-down`/`MIGRATE_AUTO_DOWN`, `-bypass-version`/`MIGRATE_BYPASS_VERSION`)
 - `example_usage.md` - Detailed usage examples
 - `history.go` - Core history tracking implementation
 - `history_repo.go` - Simplified repository interface
