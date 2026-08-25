@@ -704,6 +704,78 @@ type Registry interface {
 	DomainAdoption() DomainAdoptionRepository
 	ReleaseRuns() ReleaseRunRepository
 	AppBuildLogs() AppBuildLogRepository
+	UploadRecords() UploadRecordRepository
+	BlobRecords() BlobRecordRepository
+	BlobVersions() BlobVersionRepository
+	StoredObjectKeys() StoredObjectKeyRepository
 
 	WithTx(ctx context.Context, fn func(ctx context.Context, r Registry) error) error
+}
+
+// UploadRecordRepository covers the `upload_record` table (migration 023, FR-7, FR-52).
+type UploadRecordRepository interface {
+	// CreateUploadRecord inserts a new upload record, returning the created record.
+	// Returns ErrAlreadyExists if an upload_id is provided and already exists.
+	CreateUploadRecord(ctx context.Context, record *UploadRecord) (*UploadRecord, error)
+
+	// GetUploadRecord returns the upload record with the given upload_id, or ErrNotFound.
+	GetUploadRecord(ctx context.Context, uploadID string) (*UploadRecord, error)
+
+	// ListUnconfirmedUploads returns all upload records in allocated or uploading state,
+	// useful for FR-7's distinction between completed and unreported records.
+	// Optional filter on artifact_identity/version_reference for FR-10's retry checks.
+	ListUnconfirmedUploads(ctx context.Context, artifactIdentity, versionReference string) ([]UploadRecord, error)
+
+	// UpdateUploadState transitions uploadID to newState, stamping state_changed_at.
+	// Implementations must enforce UploadState's legal transitions per migration 023.
+	UpdateUploadState(ctx context.Context, uploadID string, newState UploadState) error
+}
+
+// BlobRecordRepository covers the `blob_record` table (migration 023, FR-12, FR-46, FR-61).
+type BlobRecordRepository interface {
+	// CreateBlobRecord inserts a new blob record with the three-tuple key
+	// (uncompressed_content_digest, stored_encoding, content_type). Returns the created record
+	// if new, or ErrAlreadyExists if the three-tuple key already exists (dedupe case).
+	CreateBlobRecord(ctx context.Context, record *BlobRecord) (*BlobRecord, error)
+
+	// GetBlobRecordByDigest returns the blob record matching the three-tuple key,
+	// or ErrNotFound. Used for FR-12 dedupe lookups and content verification.
+	GetBlobRecordByDigest(ctx context.Context, digest, encoding, contentType string) (*BlobRecord, error)
+
+	// GetBlobRecord returns the blob record with the given blob_id, or ErrNotFound.
+	GetBlobRecord(ctx context.Context, blobID string) (*BlobRecord, error)
+
+	// UpdateBlobConfirmation transitions blobID's confirmation_state to newState,
+	// stamping confirmation_changed_at. Used after verification completes (FR-46).
+	UpdateBlobConfirmation(ctx context.Context, blobID string, newState BlobConfirmationState) error
+}
+
+// BlobVersionRepository covers the `blob_version` table (migration 023, FR-12).
+// The many-to-one relationship: one blob may reference multiple versions.
+type BlobVersionRepository interface {
+	// CreateBlobVersion records that artifact_id references blob_id.
+	// Inserts into blob_version(blob_id, artifact_id). Returns ErrAlreadyExists
+	// if the relationship already exists.
+	CreateBlobVersion(ctx context.Context, blobVersion *BlobVersion) error
+
+	// CountBlobVersionReferences returns how many artifact rows reference blobID.
+	// Used to answer FR-12's "for any stored blob the model can answer how many
+	// live versions reference it" requirement.
+	CountBlobVersionReferences(ctx context.Context, blobID string) (int32, error)
+
+	// ListVersionsForBlob returns all artifact_ids that reference blobID.
+	ListVersionsForBlob(ctx context.Context, blobID string) ([]string, error)
+}
+
+// StoredObjectKeyRepository covers the `stored_object_key` table (migration 023, FR-25).
+type StoredObjectKeyRepository interface {
+	// CreateStoredObjectKey records the actual object key for a version+variant pair.
+	// Returns ErrAlreadyExists if the (artifact_id, variant_key) pair already exists.
+	CreateStoredObjectKey(ctx context.Context, key *StoredObjectKey) (*StoredObjectKey, error)
+
+	// GetStoredObjectKey returns the stored key for artifact_id+variant_key, or ErrNotFound.
+	GetStoredObjectKey(ctx context.Context, artifactID, variantKey string) (*StoredObjectKey, error)
+
+	// ListStoredObjectKeysForArtifact returns all stored keys for a given artifact_id.
+	ListStoredObjectKeysForArtifact(ctx context.Context, artifactID string) ([]StoredObjectKey, error)
 }

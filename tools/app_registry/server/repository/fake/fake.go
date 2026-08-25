@@ -92,8 +92,12 @@ type state struct {
 	// every RecordBuildLog call (see AppBuildLogRepository's doc comment)
 	// -- unlike every other SCD2-shaped map here, there is no
 	// same-content-skip branch in the write path this mirrors.
-	AppBuildLogs map[string]repository.AppBuildLog
-}
+	AppBuildLogs        map[string]repository.AppBuildLog
+		UploadRecords        map[string]repository.UploadRecord        // keyed by upload_id
+		BlobRecords          map[string]repository.BlobRecord          // keyed by blob_id
+		BlobVersions         map[string]repository.BlobVersion         // composite key: blob_id:artifact_id
+		StoredObjectKeys     map[string]repository.StoredObjectKey     // keyed by stored_object_key_id
+	}
 
 func newState() *state {
 	return &state{
@@ -112,6 +116,10 @@ func newState() *state {
 		ReleaseRuns:         map[string]repository.ReleaseRun{},
 		ReleaseRunTargets:   map[string]repository.ReleaseRunTarget{},
 		AppBuildLogs:        map[string]repository.AppBuildLog{},
+			UploadRecords:    map[string]repository.UploadRecord{},
+			BlobRecords:      map[string]repository.BlobRecord{},
+			BlobVersions:     map[string]repository.BlobVersion{},
+			StoredObjectKeys: map[string]repository.StoredObjectKey{},
 	}
 }
 
@@ -255,6 +263,18 @@ func (r *Registry) ReleaseRuns() repository.ReleaseRunRepository { return releas
 // AppBuildLogs returns a distinct type for the same reason Environments
 // does.
 func (r *Registry) AppBuildLogs() repository.AppBuildLogRepository { return appBuildLogFake{r} }
+
+// UploadRecords returns a distinct type for the same reason Environments does.
+func (r *Registry) UploadRecords() repository.UploadRecordRepository { return uploadRecordFake{r} }
+
+// BlobRecords returns a distinct type for the same reason Environments does.
+func (r *Registry) BlobRecords() repository.BlobRecordRepository { return blobRecordFake{r} }
+
+// BlobVersions returns a distinct type for the same reason Environments does.
+func (r *Registry) BlobVersions() repository.BlobVersionRepository { return blobVersionFake{r} }
+
+// StoredObjectKeys returns a distinct type for the same reason Environments does.
+func (r *Registry) StoredObjectKeys() repository.StoredObjectKeyRepository { return storedObjectKeyFake{r} }
 
 // WithTx snapshots state, runs fn against a Registry sharing that snapshot,
 // and commits the snapshot back only if fn succeeds — giving the fake the

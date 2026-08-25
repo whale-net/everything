@@ -17,6 +17,7 @@ go_library(
         "release_run.go",
         "repository.go",
         "writeback.go",
+        "upload_blob.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/server/repository/postgres",
     visibility = ["//visibility:public"],

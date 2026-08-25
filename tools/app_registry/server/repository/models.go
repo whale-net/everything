@@ -842,3 +842,88 @@ type ReleaseRunTarget struct {
 	// text for operator diagnosis, empty otherwise.
 	ErrorDetail string
 }
+
+// UploadState mirrors upload_record.state (migration 023, FR-7, FR-52).
+// Legal transitions (per schema constraints): allocated -> uploading/failed,
+// uploading -> confirmed/failed, confirmed/failed are terminal.
+type UploadState string
+
+const (
+	UploadStateAllocated UploadState = "allocated"
+	UploadStateUploading UploadState = "uploading"
+	UploadStateConfirmed UploadState = "confirmed"
+	UploadStateFailed    UploadState = "failed"
+)
+
+// UploadRecord is one row per issued upload authorization (FR-7, FR-52).
+// Deliberately NOT SCD2: an upload is an entity converging on a terminal
+// state, not a slowly-changing attribute. Lifecycle state is a single field
+// per row, not a history-tracking mechanism; append-only transition history
+// (if needed) would be a separate log table. See migration 023's doc comment
+// for the detailed rationale.
+type UploadRecord struct {
+	UploadID              string
+	ObjectKey             string
+	ArtifactKind          ArtifactKind
+	ArtifactIdentity      string
+	VersionReference      string
+	RequestingPrincipal   string
+	IssuedAt              time.Time
+	State                 UploadState
+	StateChangedAt        time.Time
+	AttributionPrincipal  string
+	WorkflowRunID         string
+	AttributionTimestamp  time.Time
+}
+
+// BlobConfirmationState mirrors blob_record.confirmation_state (FR-46).
+// Only a confirmed blob is ever a dedupe target; unconfirmed and
+// failed-verification blobs are representable and queryable but not selectable
+// as dedupe hits.
+type BlobConfirmationState string
+
+const (
+	BlobConfirmationStateUnconfirmed         BlobConfirmationState = "unconfirmed"
+	BlobConfirmationStateConfirmed           BlobConfirmationState = "confirmed"
+	BlobConfirmationStateFailedVerification  BlobConfirmationState = "failed_verification"
+)
+
+// BlobRecord is one stored blob, identified by the three-tuple
+// (uncompressed_content_digest, stored_encoding, content_type) per FR-61.
+// Deliberately NOT SCD2: a blob is an immutable, content-addressed entity.
+// Its existence is append-only; it never "becomes" something else. The
+// confirmation_state is not a slowly-changing attribute of an environment or
+// version; it is a property of the blob itself converging toward terminal
+// confirmation. See migration 023's doc comment for the detailed rationale.
+type BlobRecord struct {
+	BlobID                      string
+	UncompressedContentDigest   string
+	StoredEncoding              string
+	ContentType                 string
+	ConfirmationState           BlobConfirmationState
+	CreatedAt                   time.Time
+	ConfirmationChangedAt       time.Time
+}
+
+// BlobVersion records the many-to-one relationship between stored blobs and
+// published versions (FR-12). One stored blob may be referenced by multiple
+// published versions across different minor series, different majors, and
+// different owners/kinds. A published version's blob reference is immutable:
+// never updated after publish. Changing which bytes a version resolves to
+// requires a new version.
+type BlobVersion struct {
+	BlobID     string
+	ArtifactID string
+}
+
+// StoredObjectKey records the actual object key of every object the registry
+// publishes, per version and per declared variant (FR-25). The resolution
+// task reads from here, and FR-40's recovery route can discover a key from
+// the database with the API server down.
+type StoredObjectKey struct {
+	StoredObjectKeyID string
+	ArtifactID        string
+	VariantKey        string
+	ObjectKey         string
+	RecordedAt        time.Time
+}
