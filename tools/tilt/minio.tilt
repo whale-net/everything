@@ -2,7 +2,7 @@
 #
 # Provides a minimal MinIO deployment for S3 testing
 
-def deploy_minio(namespace, resource_name='minio-dev', port_forward=True):
+def deploy_minio(namespace, resource_name='minio-dev', port_forward=True, bucket_name='manmanv2-dev'):
     """
     Deploy MinIO for local S3-compatible storage.
 
@@ -10,11 +10,13 @@ def deploy_minio(namespace, resource_name='minio-dev', port_forward=True):
         namespace: Kubernetes namespace
         resource_name: K8s resource name
         port_forward: Whether to forward ports 9000 (API) and 9001 (Console)
+        bucket_name: S3 bucket name to create (default: 'manmanv2-dev')
 
     Returns:
         Dict with connection info:
         {
             'endpoint': 'http://minio-dev.namespace.svc.cluster.local:9000',
+            'public_endpoint': 'http://localhost:9000',
             'console_endpoint': 'http://minio-dev.namespace.svc.cluster.local:9001',
             'access_key': 'minioadmin',
             'secret_key': 'minioadmin',
@@ -137,25 +139,25 @@ kubectl exec -n {namespace} {resource_name}-0 -- sh -c '
   mc alias set local http://localhost:9000 minioadmin minioadmin
 
   # Create bucket if it does not exist
-  if ! mc ls local/manmanv2-dev >/dev/null 2>&1; then
-    echo "Creating bucket manmanv2-dev..."
-    mc mb local/manmanv2-dev
+  if ! mc ls local/{bucket_name} >/dev/null 2>&1; then
+    echo "Creating bucket {bucket_name}..."
+    mc mb local/{bucket_name}
     echo "✓ Bucket created"
   else
     echo "✓ Bucket already exists"
   fi
 
   # Set anonymous download policy for easier testing (optional)
-  mc anonymous set download local/manmanv2-dev
+  mc anonymous set download local/{bucket_name}
 '
 
 echo ""
-echo "✓ MinIO bucket 'manmanv2-dev' configured successfully"
+echo "✓ MinIO bucket '{bucket_name}' configured successfully"
 echo "  - Endpoint: http://localhost:9000"
 echo "  - Console:  http://localhost:9001"
 echo "  - Access Key: minioadmin"
 echo "  - Secret Key: minioadmin"
-        '''.format(namespace=namespace, resource_name=resource_name),
+        '''.format(namespace=namespace, resource_name=resource_name, bucket_name=bucket_name),
         resource_deps=[resource_name],
         labels=['infrastructure'],
     )
@@ -164,6 +166,7 @@ echo "  - Secret Key: minioadmin"
 
     return {
         'endpoint': 'http://{}:9000'.format(host),
+        'public_endpoint': 'http://localhost:9000',
         'console_endpoint': 'http://{}:9001'.format(host),
         'access_key': 'minioadmin',
         'secret_key': 'minioadmin',
