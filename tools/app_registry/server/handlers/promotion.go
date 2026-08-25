@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/tools/app_registry/events"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -31,6 +32,7 @@ import (
 // requires -- see that method's doc comment.
 type PromotionServer struct {
 	pb.UnimplementedPromotionRegistryServer
+	pub  events.PublisherInterface
 	repo repository.Registry
 	// temporal starts the RetryArgoSyncWorkflow execution RetryArgoSync
 	// creates (FR12, issue #1033) -- see that method's doc comment. May be
@@ -47,8 +49,8 @@ type PromotionServer struct {
 
 // NewPromotionServer constructs a PromotionServer over repo, starting
 // RetryArgoSyncWorkflow executions via temporalClient (see RetryArgoSync).
-func NewPromotionServer(repo repository.Registry, temporalClient client.Client) *PromotionServer {
-	return &PromotionServer{repo: repo, temporal: temporalClient}
+func NewPromotionServer(repo repository.Registry, temporalClient client.Client, pub events.PublisherInterface) *PromotionServer {
+	return &PromotionServer{repo: repo, temporal: temporalClient, pub: pub}
 }
 
 // Promote resolves the target artifact, enforces promotability (rejecting
@@ -106,7 +108,7 @@ func (s *PromotionServer) Promote(ctx context.Context, req *pb.PromoteRequest) (
 		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
 	}
 
-	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "Promote",
+	resp, replayed, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "Promote",
 		func() proto.Message { return &pb.PromoteResponse{} },
 		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
 			// Short-circuit an already-current artifact rather than writing
@@ -152,7 +154,16 @@ func (s *PromotionServer) Promote(ctx context.Context, req *pb.PromoteRequest) (
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
-	return resp.(*pb.PromoteResponse), nil
+	promoteResp := resp.(*pb.PromoteResponse)
+
+	// FR7a: publish after write commits, but only if not a replayed response and not AlreadyPromoted.
+	// Publish errors are discarded; see #1130 for details.
+	if !replayed && !promoteResp.AlreadyPromoted && s.pub != nil {
+		// Cross-reference #800 for request-scoped logging considerations.
+		s.pub.Publish(promoteResp.Promotion.PromotionId, "promotion_started", "pending")
+	}
+
+	return promoteResp, nil
 }
 
 // buildCandidatePromotion resolves artifact's promotability against
@@ -289,7 +300,7 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 		return nil, status.Error(codes.InvalidArgument, "idempotency_key is required")
 	}
 
-	resp, _, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "Rollback",
+	resp, replayed, err := runIdempotent(ctx, s.repo, req.IdempotencyKey, "Rollback",
 		func() proto.Message { return &pb.RollbackResponse{} },
 		func(ctx context.Context, r repository.Registry) (proto.Message, error) {
 			current, superseded, perr := r.Promotions().Promote(ctx, candidate)
@@ -320,7 +331,15 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
-	return resp.(*pb.RollbackResponse), nil
+	rollbackResp := resp.(*pb.RollbackResponse)
+
+	// FR7a: publish after write commits, but only if not a replayed response.
+	// Publish errors are discarded; see #1130 for details.
+	if !replayed && s.pub != nil {
+		// Cross-reference #800 for request-scoped logging considerations.
+		s.pub.Publish(rollbackResp.Promotion.PromotionId, "promotion_started", "pending")
+	}
+	return rollbackResp, nil
 }
 
 // GetEnvironmentState is the deploy-tooling read path: current state, or
