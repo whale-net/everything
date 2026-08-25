@@ -3,6 +3,7 @@ package conformance
 import (
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -147,17 +148,57 @@ func TestFR63_HookSetClosure(t *testing.T) {
 //
 // See FR-63(b).
 func TestFR63_KindIdentityBan(t *testing.T) {
+	// Vacuity guard: fail if no common mechanisms are declared, rather than skip.
+	// The declaration of common mechanisms is itself a requirement; an empty
+	// list means the requirement is not met. As mechanisms are implemented and
+	// added to CommonMechanisms, this test will verify they don't branch on kind.
 	if len(kinds.CommonMechanisms) == 0 {
-		t.Skip("no common mechanisms declared yet; skipping kind-identity ban check")
+		t.Errorf("VACUITY GUARD FAILED: CommonMechanisms is empty; check (b) cannot be verified. " +
+			"This is expected during early phases, but the test must fail rather than skip " +
+			"to detect under-resolution. Once common mechanisms are implemented and added to " +
+			"kinds.CommonMechanisms, this test will scan them for kind-identity branches.")
+		return
 	}
 
-	// For now, just check that the common mechanisms list is non-empty
-	// A full implementation would parse Go files and search for kind comparisons
-	// Since CommonMechanisms is currently empty with placeholder comments,
-	// we'll verify the infrastructure is in place
+	// For each declared common mechanism, search for kind-identity comparisons.
+	for _, mechanism := range kinds.CommonMechanisms {
+		files := globFilesForPackage(t, mechanism)
+		if len(files) == 0 {
+			t.Errorf("common mechanism %q resolved to no files (cannot verify kind-identity ban)",
+				mechanism)
+			continue
+		}
 
-	// TODO: Implement full kind-identity ban check when common mechanisms are declared
-	t.Logf("kind-identity ban check: %d common mechanisms to verify", len(kinds.CommonMechanisms))
+		for filePath, fileContent := range files {
+			// Parse the Go file
+			fset := token.NewFileSet()
+			node, err := parser.ParseFile(fset, filePath, fileContent, 0)
+			if err != nil {
+				// If it's not a Go file, skip it
+				if strings.HasSuffix(filePath, ".go") {
+					t.Logf("warning: could not parse Go file %q: %v", filePath, err)
+				}
+				continue
+			}
+
+			// Walk the AST looking for kind-identity comparisons
+			ast.Inspect(node, func(n ast.Node) bool {
+				switch stmt := n.(type) {
+				case *ast.BinaryExpr:
+					if isKindNameComparison(stmt) {
+						t.Errorf("kind-identity ban violation in %s: found kind.Name() comparison "+
+							"outside hook dispatch", filePath)
+					}
+				case *ast.SwitchStmt:
+					if isSwitchOnKindName(stmt) {
+						t.Errorf("kind-identity ban violation in %s: found switch on kind.Name() "+
+							"outside hook dispatch", filePath)
+					}
+				}
+				return true
+			})
+		}
+	}
 }
 
 // TestFR63_VacuityGuard verifies check (c): the declared common-mechanism
@@ -166,8 +207,15 @@ func TestFR63_KindIdentityBan(t *testing.T) {
 //
 // See FR-63(c).
 func TestFR63_VacuityGuard(t *testing.T) {
+	// Vacuity guard: fail if no common mechanisms are declared, rather than skip.
+	// The declaration of common mechanisms is itself a requirement; an empty list
+	// means under-resolution and must fail the test.
 	if len(kinds.CommonMechanisms) == 0 {
-		t.Skip("no common mechanisms declared; skipping vacuity guard")
+		t.Errorf("VACUITY GUARD FAILED: CommonMechanisms is empty; check (c) cannot be verified. " +
+			"The test must fail on under-resolution to detect when the mechanism list is incomplete. " +
+			"Once common mechanisms are implemented and added to kinds.CommonMechanisms, " +
+			"this test will verify they all resolve to actual files.")
+		return
 	}
 
 	resolvedCount := 0
@@ -200,7 +248,9 @@ func TestFR63_LiteralBan(t *testing.T) {
 	// Get all registered kinds and their value-shaped hook policies
 	kindPolicies := extractValueShapedPolicies(t)
 	if len(kindPolicies) == 0 {
-		t.Log("no value-shaped hook policies to check; skipping literal ban test")
+		t.Errorf("VACUITY GUARD FAILED: No value-shaped hook policies found; check (d) cannot be verified. " +
+			"This indicates either no kinds are registered or no value-shaped hooks are defined. " +
+			"The test must fail on under-resolution rather than skip.")
 		return
 	}
 
@@ -284,7 +334,8 @@ func exprToString(expr ast.Expr) string {
 }
 
 // globFilesForPackage returns all Go and YAML files in a Go package directory,
-// resolved relative to tools/app_registry.
+// resolved relative to tools/app_registry. It searches for the file from the current
+// working directory and from the repository root.
 func globFilesForPackage(t *testing.T, importPath string) map[string]string {
 	t.Helper()
 
@@ -307,13 +358,29 @@ func globFilesForPackage(t *testing.T, importPath string) map[string]string {
 		return nil
 	}
 
-	// Try to find the directory
+	// Build the target directory path
+	targetPath := strings.Join(dirParts, "/")
+
+	// Try to find the directory from current location and repository root
 	var dir string
+	
+	// First try relative paths from current directory
 	for _, c := range []string{".", "..", "../..", "../../..", "../../../.."} {
-		candidate := filepath.Join(c, strings.Join(dirParts, "/"))
+		candidate := filepath.Join(c, targetPath)
 		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
 			dir = candidate
 			break
+		}
+	}
+	
+	// If not found, try from repository root
+	if dir == "" {
+		repoRoot := getRepositoryRoot(t)
+		if repoRoot != "" {
+			candidate := filepath.Join(repoRoot, targetPath)
+			if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+				dir = candidate
+			}
 		}
 	}
 
@@ -423,14 +490,13 @@ func isValueShaped(hook string) bool {
 // checkLiteralBanForPolicy verifies that a policy value appears only in
 // allowed locations.
 func checkLiteralBanForPolicy(t *testing.T, hook string, policy string) {
-	t.Logf("checking literal ban for %s policy: %q", hook, policy)
+	t.Helper()
 
 	// Build a list of allowed file paths where this policy is permitted
 	allowedLocations := make(map[string]bool)
 
 	// 1. Kind declarations (tools/app_registry/kinds/*.go)
-	allowedLocations["tools/app_registry/kinds/binary.go"] = true // and others when they exist
-	allowedLocations["tools/app_registry/kinds/"] = true           // entire kinds directory
+	allowedLocations["tools/app_registry/kinds/"] = true
 
 	// 2. Common mechanisms
 	for _, mechanism := range kinds.CommonMechanisms {
@@ -456,9 +522,124 @@ func checkLiteralBanForPolicy(t *testing.T, hook string, policy string) {
 		}
 	}
 
-	// Now search the repository for this policy value
-	// For now, skip this check since we don't have the full repo to search
-	// In a real implementation, we would scan all files
-	t.Logf("literal ban check for %s: policy %q has %d allowed locations",
-		hook, policy, len(allowedLocations))
+	// Now search the repository for this policy value across Go, YAML, shell, and docs
+	searchPolicyInRepository(t, hook, policy, allowedLocations)
 }
+
+// searchPolicyInRepository searches the repository for a policy value in Go, YAML,
+// shell scripts, and documentation files, and fails if it's found in unauthorized locations.
+func searchPolicyInRepository(t *testing.T, hook string, policy string, allowedLocations map[string]bool) {
+	t.Helper()
+
+	// Get the repository root (traverse up from current directory)
+	repoRoot := getRepositoryRoot(t)
+	if repoRoot == "" {
+		t.Logf("warning: could not find repository root; skipping literal ban search for %s", hook)
+		return
+	}
+
+	// Search for the policy value in various file types
+	searchPatterns := []struct {
+		fileExt string
+		pattern string
+	}{
+		{".go", policy},                   // Go files
+		{".yaml", policy},                 // YAML files (workflows, etc.)
+		{".yml", policy},                  // YAML files
+		{".sh", policy},                   // Shell scripts
+		{".md", policy},                   // Documentation files
+	}
+
+	violations := make([]string, 0)
+
+	for _, pattern := range searchPatterns {
+		filepath.Walk(repoRoot, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+
+			if info.IsDir() {
+				// Skip certain directories
+				if strings.HasPrefix(filepath.Base(path), ".") ||
+					strings.Contains(path, "vendor") ||
+					strings.Contains(path, "node_modules") {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+
+			if !strings.HasSuffix(path, pattern.fileExt) {
+				return nil
+			}
+
+			// Read the file and search for the policy value
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+
+			if !strings.Contains(string(content), policy) {
+				return nil
+			}
+
+			// Check if this location is allowed
+			relPath, err := filepath.Rel(repoRoot, path)
+			if err != nil {
+				relPath = path
+			}
+
+			// Check against allowed locations
+			isAllowed := false
+			for allowed := range allowedLocations {
+				if strings.HasPrefix(relPath, allowed) ||
+					strings.HasPrefix(relPath, "./"+allowed) {
+					isAllowed = true
+					break
+				}
+				// Also check exact match
+				if relPath == allowed || "./"+relPath == allowed {
+					isAllowed = true
+					break
+				}
+			}
+
+			if !isAllowed {
+				violations = append(violations, relPath)
+			}
+
+			return nil
+		})
+	}
+
+	// Fail if any violations were found
+	if len(violations) > 0 {
+		t.Errorf("literal ban violation for hook %s (policy %q): found in unauthorized locations:\n  %s",
+			hook, policy, strings.Join(violations, "\n  "))
+	}
+}
+
+// getRepositoryRoot finds the repository root by traversing up until it finds a .git directory
+func getRepositoryRoot(t *testing.T) string {
+	t.Helper()
+
+	pwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+
+	current := pwd
+	for {
+		if _, err := os.Stat(filepath.Join(current, ".git")); err == nil {
+			return current
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Reached filesystem root
+			return ""
+		}
+		current = parent
+	}
+}
+
+
