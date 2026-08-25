@@ -2127,7 +2127,7 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 // matches an already-published artifact's identity_digest (same owner/kind),
 // the existing artifact is returned and no new version is allocated.
 func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
-	_, artifactSrv, _ := setup(t)
+	appSrv, artifactSrv, _ := setup(t)
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-noop-detect")
 
@@ -2185,12 +2185,22 @@ func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
 	}
 
 	// 3. Verify that a separate app is NOT affected by this identity_digest
-	// (no-op detection is per-owner, not global)
+	// (no-op detection is per-owner, not global). First, reconcile a new app
+	// so it exists in the registry.
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet([]*appmetapb.AppManifest{
+			{Domain: "demo", Name: "different-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+		}, nil),
+		IdempotencyKey: "setup-different-app",
+	}); err != nil {
+		t.Fatalf("reconcile different app: %v", err)
+	}
+
 	const differentAppDigest = "sha256:different-app-content"
 	resp3, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-		OwnerFullName:  "different-demo-app",
+		OwnerFullName:  "demo-different-app",
 		Digest:         differentAppDigest,
 		IdentityDigest: identityDigest, // same identity_digest
 		Version:        "v2.0.0",

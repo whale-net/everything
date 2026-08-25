@@ -618,6 +618,25 @@ func (r *Registry) ListBuilds(ctx context.Context, since time.Time, pageSize int
 // repository.ArtifactRepository.RecordArtifact's doc comment for the full
 // state-machine contract.
 func (r *Registry) RecordArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, domainStage repository.DomainAdoptionStage) (*repository.Artifact, bool, error) {
+		// 0. No-op detection (FR-17): check if an artifact with the same
+	// identity_digest already exists and is published. If so, return it
+	// without creating a new version. This is artifact-level no-op detection,
+	// not per-file blob dedupe (FR-1). Only applies when identity_digest is
+	// provided (not empty).
+	if a.IdentityDigest != "" {
+		for _, existing := range r.state.Artifacts {
+			if existing.State == repository.ArtifactStatePublished &&
+				existing.Kind == a.Kind &&
+				existing.IdentityDigest == a.IdentityDigest &&
+				ownerID(existing) == ownerID(a) {
+				// Found an existing published artifact with the same identity_digest.
+				// Load it fully and return it as a no-op.
+				out := r.livePromotability(existing)
+				return &out, true, nil
+			}
+		}
+	}
+
 	for _, existing := range r.state.Artifacts {
 		// digest is empty on every non-published row (mirrors migration
 		// 007's artifact_state_shape CHECK) -- guard explicitly rather than
