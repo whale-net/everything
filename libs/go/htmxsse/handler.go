@@ -96,6 +96,8 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 		// Produce full-state fragments on connect for each topic (FR5)
 		// Build the initial baseline set
 		currentBaseline := make(map[string][]byte)
+
+		// Produce all fragments first to ensure complete baseline set for all emitted frames (PN15)
 		for _, topic := range sortedTopics {
 			frag, err := fragment(r, topic)
 			if err != nil {
@@ -104,16 +106,25 @@ func Handler(hub *Hub, topics []string, fragment Fragment) http.HandlerFunc {
 				currentBaseline[topic] = nil
 			} else {
 				currentBaseline[topic] = frag
-				// Emit swap or keepalive based on reconnect baseline (FR5)
-				clientHash, exists := clientBaseline[topic]
-				fragmentHash := hashFragment(frag)
-				if exists && clientHash == fragmentHash {
-					// Client already has this state, emit keepalive (no id)
-					emitKeepalive(w, flusher, topic)
-				} else {
-					// New or stale state, emit swap with id
-					emitSwap(w, flusher, topic, frag, encodeBaseline(sortedTopics, currentBaseline))
-				}
+			}
+		}
+
+		// Now emit swap or keepalive for each topic based on reconnect baseline (FR5)
+		// At this point, currentBaseline contains all topics' fragments
+		for _, topic := range sortedTopics {
+			frag := currentBaseline[topic]
+			if frag == nil {
+				// Fragment was nil (error during production), emit nothing
+				continue
+			}
+			clientHash, exists := clientBaseline[topic]
+			fragmentHash := hashFragment(frag)
+			if exists && clientHash == fragmentHash {
+				// Client already has this state, emit keepalive (no id)
+				emitKeepalive(w, flusher, topic)
+			} else {
+				// New or stale state, emit swap with id containing full baseline set
+				emitSwap(w, flusher, topic, frag, encodeBaseline(sortedTopics, currentBaseline))
 			}
 		}
 

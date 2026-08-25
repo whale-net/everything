@@ -731,3 +731,308 @@ func (f *fakeLifetimeTicker) C() <-chan time.Time {
 }
 
 func (f *fakeLifetimeTicker) Stop() {}
+
+// TestPN15_WholeBaselineSetInID verifies that each emitted swap carries the whole baseline set
+// in its id field (Planner note 15), not just the topic that changed.
+func TestPN15_WholeBaselineSetInID(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+
+	config := DefaultConfig()
+	h := NewHub(attachFunc, config)
+	defer h.Close()
+
+	fragment := func(r *http.Request, topic string) ([]byte, error) {
+		return []byte(fmt.Sprintf(`{"topic": "%s"}`, topic)), nil
+	}
+
+	handler := Handler(h, []string{"topic-a", "topic-b"}, fragment)
+
+	// First request to get baselines
+	req1 := httptest.NewRequest("GET", "/events", nil)
+	ctx1, cancel1 := context.WithCancel(req1.Context())
+	req1 = req1.WithContext(ctx1)
+
+	w1 := httptest.NewRecorder()
+
+	done1 := make(chan struct{})
+	go func() {
+		handler(w1, req1)
+		close(done1)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	body1 := w1.Body.String()
+	// Extract all id values from the first response
+	idToTopicSwap := make(map[string]string) // Maps id to the event topic
+	lines := strings.Split(body1, "\n")
+	var lastID string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "id: ") {
+			lastID = strings.TrimPrefix(line, "id: ")
+		} else if strings.HasPrefix(line, "event: ") {
+			topic := strings.TrimPrefix(line, "event: ")
+			// Only track actual swaps, not keepalives
+			if !strings.HasSuffix(topic, "-keepalive") && lastID != "" {
+				idToTopicSwap[lastID] = topic
+			}
+		}
+	}
+
+	// Should have received swaps for both topics
+	require.Greater(t, len(idToTopicSwap), 0, "should have at least one swap event")
+
+	// Verify that each swap's id contains both topic-a and topic-b hashes
+	for id, topic := range idToTopicSwap {
+		parts := strings.Split(id, "|")
+		require.Greater(t, len(parts), 0, "id for topic %s should contain at least one hash", topic)
+		topicCount := 0
+		for _, part := range parts {
+			if strings.HasPrefix(part, "topic-") {
+				topicCount++
+			}
+		}
+		require.Equal(t, 2, topicCount, "id for topic %s should contain hashes for both topics, got %s", topic, id)
+	}
+
+	cancel1()
+	<-done1
+}
+
+// TestFR5_MultiTopicBaselineRuleComprehensive tests multi-topic baseline suppression in detail
+func TestFR5_MultiTopicBaselineRuleComprehensive(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+
+	config := DefaultConfig()
+	h := NewHub(attachFunc, config)
+	defer h.Close()
+
+	fragment := func(r *http.Request, topic string) ([]byte, error) {
+		return []byte(fmt.Sprintf(`{"topic": "%s"}`, topic)), nil
+	}
+
+	handler := Handler(h, []string{"topic-a", "topic-b"}, fragment)
+
+	// First request to get full baselines
+	req1 := httptest.NewRequest("GET", "/events", nil)
+	ctx1, cancel1 := context.WithCancel(req1.Context())
+	req1 = req1.WithContext(ctx1)
+
+	w1 := httptest.NewRecorder()
+
+	done1 := make(chan struct{})
+	go func() {
+		handler(w1, req1)
+		close(done1)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	body1 := w1.Body.String()
+	// Extract the most recent id (full baseline set)
+	var fullID string
+	lines := strings.Split(body1, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "id: ") {
+			fullID = strings.TrimPrefix(line, "id: ")
+		}
+	}
+
+	require.NotEmpty(t, fullID, "should have id in first response")
+	// Verify the full id contains both topics
+	require.Contains(t, fullID, "topic-a")
+	require.Contains(t, fullID, "topic-b")
+
+	cancel1()
+	<-done1
+
+	// Test case 1: Reconnect with baseline matching only topic-a
+	// Should suppress topic-a and swap topic-b
+	partialID := strings.Split(fullID, "|")[0] // Only topic-a:hash
+
+	req2 := httptest.NewRequest("GET", "/events", nil)
+	req2.Header.Set("Last-Event-ID", partialID)
+	ctx2, cancel2 := context.WithCancel(req2.Context())
+	req2 = req2.WithContext(ctx2)
+
+	w2 := httptest.NewRecorder()
+
+	done2 := make(chan struct{})
+	go func() {
+		handler(w2, req2)
+		close(done2)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	body2 := w2.Body.String()
+	// Extract events
+	var aHasSwap, aHasKeepalive, bHasSwap, bHasKeepalive bool
+	lines = strings.Split(body2, "\n")
+	for _, line := range lines {
+		if line == "event: topic-a" {
+			aHasSwap = true
+		} else if line == "event: topic-a-keepalive" {
+			aHasKeepalive = true
+		} else if line == "event: topic-b" {
+			bHasSwap = true
+		} else if line == "event: topic-b-keepalive" {
+			bHasKeepalive = true
+		}
+	}
+
+	require.False(t, aHasSwap, "topic-a should NOT swap (baseline matches)")
+	require.True(t, aHasKeepalive, "topic-a should have keepalive")
+	require.True(t, bHasSwap, "topic-b should swap (baseline missing/mismatch)")
+	require.False(t, bHasKeepalive, "topic-b should NOT have only keepalive when it swaps")
+
+	cancel2()
+	<-done2
+
+	// Test case 2: Reconnect with completely absent baseline
+	// Should swap both topics
+	req3 := httptest.NewRequest("GET", "/events", nil)
+	// No Last-Event-ID header
+	ctx3, cancel3 := context.WithCancel(req3.Context())
+	req3 = req3.WithContext(ctx3)
+
+	w3 := httptest.NewRecorder()
+
+	done3 := make(chan struct{})
+	go func() {
+		handler(w3, req3)
+		close(done3)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	body3 := w3.Body.String()
+	require.Contains(t, body3, "event: topic-a\n", "topic-a should swap on fresh connect")
+	require.Contains(t, body3, "event: topic-b\n", "topic-b should swap on fresh connect")
+
+	cancel3()
+	<-done3
+}
+
+// TestFR2_ContextCancellationDuringFragment tests context cancellation from inside fragment function
+func TestFR2_ContextCancellationDuringFragment(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+
+	config := DefaultConfig()
+	config.HeartbeatInterval = 50 * time.Millisecond
+	h := NewHub(attachFunc, config)
+	defer h.Close()
+
+	var cancelFn context.CancelFunc
+	fragment := func(r *http.Request, topic string) ([]byte, error) {
+		// On heartbeat, cancel the context from within the fragment function
+		if cancelFn != nil {
+			cancelFn()
+		}
+		return []byte(`{"state": "ok"}`), nil
+	}
+
+	handler := Handler(h, []string{"topic-a"}, fragment)
+
+	req := httptest.NewRequest("GET", "/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	cancelFn = cancel
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		handler(w, req)
+		close(done)
+	}()
+
+	// Wait for heartbeat to trigger and cancel
+	select {
+	case <-done:
+		// Expected - handler should return even when cancelled from within fragment
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler should return when context is cancelled from within fragment function")
+	}
+}
+
+// TestNFR12_ForcedCloseReleasesSubscriptions tests that forced close releases all subscriptions
+func TestNFR12_ForcedCloseReleasesSubscriptions(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+
+	mockClock := &mockClock{
+		now: time.Now(),
+	}
+
+	config := DefaultConfig()
+	config.MaxStreamLifetime = 100 * time.Millisecond
+	h := NewHubWithClock(attachFunc, config, mockClock)
+	defer h.Close()
+
+	fragment := func(r *http.Request, topic string) ([]byte, error) {
+		return []byte(`{}`), nil
+	}
+
+	handler := Handler(h, []string{"topic-a", "topic-b"}, fragment)
+
+	req := httptest.NewRequest("GET", "/events", nil)
+	ctx, cancel := context.WithCancel(req.Context())
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	w := httptest.NewRecorder()
+
+	handlerReturned := make(chan struct{})
+	go func() {
+		handler(w, req)
+		close(handlerReturned)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Check subscriptions exist before forced close
+	h.mu.RLock()
+	subsCountBefore := len(h.subscribers["topic-a"]) + len(h.subscribers["topic-b"])
+	h.mu.RUnlock()
+	require.Greater(t, subsCountBefore, 0)
+
+	// Mock the lifetime ticker to fire
+	lifetimeFired := false
+	mockClock.tickerFn = func(d time.Duration) Ticker {
+		if d == config.MaxStreamLifetime {
+			return &fakeLifetimeTicker{
+				onC: func() {
+					if !lifetimeFired {
+						lifetimeFired = true
+					}
+				},
+			}
+		}
+		return &defaultTicker{time.NewTicker(d)}
+	}
+
+	select {
+	case <-handlerReturned:
+		// Handler should return due to forced close
+	case <-time.After(1 * time.Second):
+		t.Fatal("handler should return after max stream lifetime")
+	}
+
+	// Check subscriptions are cleaned up after forced close
+	h.mu.RLock()
+	subsCountAfter := len(h.subscribers["topic-a"]) + len(h.subscribers["topic-b"])
+	h.mu.RUnlock()
+	require.Equal(t, 0, subsCountAfter)
+}
