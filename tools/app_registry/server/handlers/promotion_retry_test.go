@@ -100,7 +100,7 @@ func TestRetryArgoSync_NonChartPromotion_FailedPrecondition(t *testing.T) {
 // pattern worker/outbox/drain_test.go uses for Drainer.Temporal.
 func newMockTemporalPromotionServer(f *promotionFixture) (*PromotionServer, *mocks.Client) {
 	temporalClient := &mocks.Client{}
-	return NewPromotionServer(f.repo, temporalClient), temporalClient
+	return NewPromotionServer(f.repo, temporalClient, nil), temporalClient
 }
 
 // TestRetryArgoSync_Success_StartsWorkflowWithCorrectInput proves FR12: a

@@ -107,7 +107,7 @@ type ArgoSyncActivities struct {
 	PollInterval time.Duration
 	// Publisher enqueues sync-state transition events for subscribers;
 	// see #1130 (FR7b). Nil in tests that do not verify publishing behavior.
-	Publisher *events.Publisher
+	Publisher events.PublisherInterface
 }
 
 // ArgoSync is the interface both *ArgoSyncActivities and

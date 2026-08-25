@@ -32,7 +32,7 @@ import (
 // requires -- see that method's doc comment.
 type PromotionServer struct {
 	pb.UnimplementedPromotionRegistryServer
-	pub  *events.Publisher
+	pub  events.PublisherInterface
 	repo repository.Registry
 	// temporal starts the RetryArgoSyncWorkflow execution RetryArgoSync
 	// creates (FR12, issue #1033) -- see that method's doc comment. May be
@@ -49,7 +49,7 @@ type PromotionServer struct {
 
 // NewPromotionServer constructs a PromotionServer over repo, starting
 // RetryArgoSyncWorkflow executions via temporalClient (see RetryArgoSync).
-func NewPromotionServer(repo repository.Registry, temporalClient client.Client, pub *events.Publisher) *PromotionServer {
+func NewPromotionServer(repo repository.Registry, temporalClient client.Client, pub events.PublisherInterface) *PromotionServer {
 	return &PromotionServer{repo: repo, temporal: temporalClient, pub: pub}
 }
 

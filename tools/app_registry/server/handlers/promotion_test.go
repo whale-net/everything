@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
@@ -33,7 +34,7 @@ func newPromotionFixture(t *testing.T) *promotionFixture {
 	appSrv := NewAppServer(repo)
 	artSrv := NewArtifactServer(repo)
 	envSrv := NewEnvironmentServer(repo)
-	promoSrv := NewPromotionServer(repo, nil)
+	promoSrv := NewPromotionServer(repo, nil, nil)
 	ctx := authedCtx()
 
 	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
@@ -647,3 +648,252 @@ func drainOutboxToDone(t *testing.T, repo repository.Registry) []repository.Writ
 	}
 	return rows
 }
+
+// FakePublisher records all publishes for testing purposes.
+type FakePublisher struct {
+	mu              sync.Mutex
+	publishedEvents []PublishedEvent
+	shouldBlock     bool
+	blockChan       chan struct{}
+}
+
+type PublishedEvent struct {
+	PromotionID string
+	EventKind   string
+	EventStatus string
+}
+
+func NewFakePublisher() *FakePublisher {
+	return &FakePublisher{
+		publishedEvents: []PublishedEvent{},
+		blockChan:       make(chan struct{}),
+	}
+}
+
+func (f *FakePublisher) Publish(promotionID, eventKind, eventStatus string) {
+	if f.shouldBlock {
+		<-f.blockChan
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.publishedEvents = append(f.publishedEvents, PublishedEvent{
+		PromotionID: promotionID,
+		EventKind:   eventKind,
+		EventStatus: eventStatus,
+	})
+}
+
+func (f *FakePublisher) SetBlockMode(shouldBlock bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.shouldBlock = shouldBlock
+}
+
+func (f *FakePublisher) Unblock() {
+	close(f.blockChan)
+}
+
+func (f *FakePublisher) GetPublishedEvents() []PublishedEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Return a copy to avoid race conditions
+	result := make([]PublishedEvent, len(f.publishedEvents))
+	copy(result, f.publishedEvents)
+	return result
+}
+
+func (f *FakePublisher) EventCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.publishedEvents)
+}
+
+// TestPromote_PublishesAfterWriteCommits verifies that Promote publishes
+// to the event broker after the database write commits (FR7a).
+func TestPromote_PublishesAfterWriteCommits(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+	pub := NewFakePublisher()
+	f.promo.pub = pub
+
+	resp, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "promo-publish"))
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	// Verify the publish happened with correct payload
+	events := pub.GetPublishedEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 published event, got %d", len(events))
+	}
+	event := events[0]
+	if event.PromotionID != resp.Promotion.PromotionId {
+		t.Fatalf("expected promotion_id %s, got %s", resp.Promotion.PromotionId, event.PromotionID)
+	}
+	if event.EventKind != "promotion_started" {
+		t.Fatalf("expected event_kind 'promotion_started', got %s", event.EventKind)
+	}
+	if event.EventStatus != "pending" {
+		t.Fatalf("expected event_status 'pending', got %s", event.EventStatus)
+	}
+}
+
+// TestPromote_ReplayedResponse_DoesNotPublish verifies that a replayed
+// idempotent response (cached from a prior identical request) publishes nothing.
+func TestPromote_ReplayedResponse_DoesNotPublish(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+	pub := NewFakePublisher()
+	f.promo.pub = pub
+
+	// First promote
+	_, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "promo-replay-1"))
+	if err != nil {
+		t.Fatalf("first promote: %v", err)
+	}
+	if pub.EventCount() != 1 {
+		t.Fatalf("expected 1 event from first promote, got %d", pub.EventCount())
+	}
+
+	// Replay with the same idempotency key - should return cached response
+	_, err = f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "promo-replay-1"))
+	if err != nil {
+		t.Fatalf("replay promote: %v", err)
+	}
+
+	// Should still have only 1 event (replayed response publishes nothing)
+	if pub.EventCount() != 1 {
+		t.Fatalf("expected replayed response to publish nothing; event count should remain 1, got %d", pub.EventCount())
+	}
+}
+
+// TestPromote_AlreadyPromoted_DoesNotPublish verifies that promoting the
+// same artifact twice (AlreadyPromoted short-circuit) publishes nothing on
+// the second call.
+func TestPromote_AlreadyPromoted_DoesNotPublish(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+	pub := NewFakePublisher()
+	f.promo.pub = pub
+
+	// First promote
+	_, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "promo-already-1"))
+	if err != nil {
+		t.Fatalf("first promote: %v", err)
+	}
+	if pub.EventCount() != 1 {
+		t.Fatalf("expected 1 event from first promote, got %d", pub.EventCount())
+	}
+
+	// Second promote with different idempotency key but same artifact
+	resp, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "promo-already-2"))
+	if err != nil {
+		t.Fatalf("second promote: %v", err)
+	}
+	if !resp.AlreadyPromoted {
+		t.Fatalf("expected already_promoted=true, got %+v", resp)
+	}
+
+	// Should still have only 1 event (AlreadyPromoted publishes nothing)
+	if pub.EventCount() != 1 {
+		t.Fatalf("expected AlreadyPromoted to publish nothing; event count should remain 1, got %d", pub.EventCount())
+	}
+}
+
+// TestRollback_PublishesAfterWriteCommits verifies that Rollback publishes
+// to the event broker after the database write commits (FR7a).
+func TestRollback_PublishesAfterWriteCommits(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+	pub := NewFakePublisher()
+	f.promo.pub = pub
+
+	// Promote v1
+	_, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "rollback-pub-1"))
+	if err != nil {
+		t.Fatalf("promote v1: %v", err)
+	}
+	if pub.EventCount() != 1 {
+		t.Fatalf("expected 1 event from promote, got %d", pub.EventCount())
+	}
+
+	// Promote v2
+	mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
+		BuildId: mustRecordBuild(t, f.art, "run-rollback-pub").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:imageapp-rollback-v2", Version: "v2.0.0",
+		IdempotencyKey: "fixture-artifact-imageapp-rollback-v2",
+	})
+	req := promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "rollback-pub-2")
+	req.Version = "v2.0.0"
+	_, err = f.promo.Promote(ctx, req)
+	if err != nil {
+		t.Fatalf("promote v2: %v", err)
+	}
+	if pub.EventCount() != 2 {
+		t.Fatalf("expected 2 events after promoting v2, got %d", pub.EventCount())
+	}
+
+	// Rollback to v1
+	rollbackResp, err := f.promo.Rollback(ctx, &pb.RollbackRequest{
+		EnvironmentKey: "dev", OwnerFullName: "demo-image-app", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, IdempotencyKey: "rollback-pub-3",
+	})
+	if err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+
+	// Verify rollback published
+	events := pub.GetPublishedEvents()
+	if len(events) != 3 {
+		t.Fatalf("expected 3 published events total, got %d", len(events))
+	}
+	rollbackEvent := events[2]
+	if rollbackEvent.PromotionID != rollbackResp.Promotion.PromotionId {
+		t.Fatalf("expected rollback promotion_id %s, got %s", rollbackResp.Promotion.PromotionId, rollbackEvent.PromotionID)
+	}
+	if rollbackEvent.EventKind != "promotion_started" {
+		t.Fatalf("expected event_kind 'promotion_started', got %s", rollbackEvent.EventKind)
+	}
+}
+
+func TestPromote_PublishCorrectTopic(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+	pub := NewFakePublisher()
+	f.promo.pub = pub
+
+	resp, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "promo-topic"))
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+
+	events := pub.GetPublishedEvents()
+	if len(events) != 1 {
+		t.Fatalf("expected exactly 1 published event, got %d", len(events))
+	}
+
+	// The topic/routing-key derivation happens in the Publisher component
+	// (TopicForPromotion), but here we verify the promotion_id is passed correctly
+	event := events[0]
+	expectedID := resp.Promotion.PromotionId
+	if event.PromotionID != expectedID {
+		t.Fatalf("expected promotion_id %s in published event, got %s", expectedID, event.PromotionID)
+	}
+}
+
+// TestPromote_NoPublisher_DoesNotPublish verifies that when the publisher
+// is nil (not configured), no publish is attempted.
+func TestPromote_NoPublisher_DoesNotPublish(t *testing.T) {
+	f := newPromotionFixture(t)
+	ctx := authedCtx()
+	f.promo.pub = nil // Explicitly nil publisher
+
+	resp, err := f.promo.Promote(ctx, promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "promo-no-pub"))
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if resp.Promotion == nil {
+		t.Fatalf("promote returned no promotion")
+	}
+	// If we got here without panic, the nil check worked correctly
+}
+

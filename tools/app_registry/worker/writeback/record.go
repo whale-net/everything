@@ -31,7 +31,7 @@ type Recorder struct {
 	Registry repository.Registry
 	// Publisher enqueues writeback-result transition events for subscribers;
 	// see #1130 (FR7c). Nil in tests that do not verify publishing behavior.
-	Publisher *events.Publisher
+	Publisher events.PublisherInterface
 }
 
 // RecordWritebackResult persists location/commitSHA onto the
