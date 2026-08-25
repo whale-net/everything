@@ -329,8 +329,10 @@ these instead of re-copying the `env:` block or the bash.
 `release_helper_go manifest-set` (and every other `release_helper_go` discovery command) also
 accepts a `--fast` flag that statically parses `BUILD.bazel` files instead of shelling out to
 `bazel query`/`cquery` — see
-[`../../docs/RELEASE_HELPER_FAST_MODE.md`](../../docs/RELEASE_HELPER_FAST_MODE.md). It's opt-in
-and not wired into `app-registry-reconcile` or any other composite action today.
+[`../../docs/RELEASE_HELPER_FAST_MODE.md`](../../docs/RELEASE_HELPER_FAST_MODE.md).
+`app-registry-reconcile`'s `manifest-set` call takes a `fast-mode` input wired to the repo
+variable `RELEASE_HELPER_FAST_MODE` (default/unset = off); no other composite action passes it
+through today.
 
 **`app-registry-reconcile` runs from `ci.yml`, not `release.yml`.** It's a
 `build-release-tools` → `reconcile-app-registry` job pair gated

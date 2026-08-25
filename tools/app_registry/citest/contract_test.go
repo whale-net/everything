@@ -221,6 +221,8 @@ func sample(typ, v string) string {
 		return "1"
 	case "float32", "float64":
 		return "1.0"
+	case "bool":
+		return "true"
 	default:
 		return "placeholder"
 	}
