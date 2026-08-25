@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/whale-net/everything/tools/app_registry/events"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
@@ -28,6 +29,9 @@ type Recorder struct {
 	// worker/release.Activities.Registry (see that field's doc comment):
 	// WritebackRepository.RecordResult has no mutating gRPC RPC equivalent.
 	Registry repository.Registry
+	// Publisher enqueues writeback-result transition events for subscribers;
+	// see #1130 (FR7c). Nil in tests that do not verify publishing behavior.
+	Publisher *events.Publisher
 }
 
 // RecordWritebackResult persists location/commitSHA onto the
@@ -42,6 +46,12 @@ func (r *Recorder) RecordWritebackResult(ctx context.Context, promotionID, locat
 	}
 	if err := r.Registry.Writeback().RecordResult(ctx, "", promotionID, location, commitSHA); err != nil {
 		return fmt.Errorf("record writeback result for promotion %s: %w", promotionID, err)
+	}
+
+	// FR7a/FR7c: publish after write commits, but only if publisher is configured.
+	// Publish errors are discarded and logged by the publisher; see #1130 for details.
+	if r.Publisher != nil {
+		r.Publisher.Publish(promotionID, "writeback_completed", "success")
 	}
 	return nil
 }
