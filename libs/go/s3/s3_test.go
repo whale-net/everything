@@ -14,8 +14,8 @@ import (
 // Virtual-hosted-style (<bucket>.<host>/<key>), not path-style
 // (<host>/<bucket>/<key>): OVH's public endpoint rejects path-style
 // requests with HTTP 400 (issue #1101 -- prod v0.10.0 release-tools
-// download broke because of this, back when this used an unsigned
-// PublicURL built by hand rather than the SDK's own presigner).
+// download broke because of this, back when a manual unsigned URL builder
+// was used instead of the SDK's own presigner).
 //
 // Signed rather than unsigned: OVH's release-tools bucket was never
 // actually configured for anonymous/public reads, so an unsigned URL came
