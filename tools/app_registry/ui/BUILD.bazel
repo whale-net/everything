@@ -94,6 +94,7 @@ go_test(
         "//libs/go/htmxauth",
         "//libs/go/htmxsse",
         "//libs/go/htmxui",
+        "//libs/go/rmq",
         "//tools/app_registry/events",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/appmeta/proto:appmetapb",

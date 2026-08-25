@@ -14,7 +14,7 @@ import (
 // (FR6, FR27, FR28, NFR4, NFR13)
 //
 // This handler:
-// - Requires authentication via RequireAuthFunc (wrapped with noRedirectWriter)
+// - Receives authenticated requests via RequireAuthFunc (wrapped with noRedirectWriter at route level)
 // - Does NOT use WithAccessToken (which redirects, violating FR28)
 // - Re-acquires access token on every delivery via GetAccessToken(r)
 // - Implements FR27 failure discrimination between terminal and transient errors
@@ -24,11 +24,6 @@ import (
 // The context is cancellable per-request (FR2, FR28e) so FR27's terminal
 // class can cancel the stream mid-flight.
 func (app *App) handlePromoStatusSSE(w http.ResponseWriter, r *http.Request) {
-	// Wrap the response writer with noRedirectWriter to prevent any redirects.
-	// RequireAuthFunc is composed with this shim, ensuring auth failures never
-	// emit a 3xx status or Location header (FR28b).
-	w = newNoRedirectWriter(w)
-
 	// Per-request cancellable context (FR28e).
 	// The fragment closure captures this cancel function and calls it on
 	// terminal errors (FR27's terminal class).

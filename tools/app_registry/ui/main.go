@@ -295,9 +295,14 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// SSE route for promotion status updates (FR6, FR27, FR28, NFR4, NFR13).
 	// Wrapped with noRedirectWriter to prevent redirects mid-stream.
 	// Does NOT use WithAccessToken (which redirects), instead re-acquires token per read.
-	mux.HandleFunc("/promotions/{id}/status/sse", app.auth.RequireAuthFunc(func(w http.ResponseWriter, r *http.Request) {
-		app.handlePromoStatusSSE(w, r)
-	}))
+	mux.HandleFunc("/promotions/{id}/status/sse", func(w http.ResponseWriter, r *http.Request) {
+		// Wrap with noRedirectWriter before RequireAuthFunc processes the request
+		// This ensures auth failures return 401 with no redirect headers/body
+		w = newNoRedirectWriter(w)
+		app.auth.RequireAuthFunc(func(w http.ResponseWriter, r *http.Request) {
+			app.handlePromoStatusSSE(w, r)
+		})(w, r)
+	})
 	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppsCatalog)))
 	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppDetail)))
 
