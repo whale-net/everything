@@ -113,7 +113,7 @@ The fragment re-checks the session (via `GetUserInfo`, lines 101, 121) on every 
 
 **NFR8 bound computation:** IdP-side revocation is not detected until the token is within 2 minutes of expiry. The **real bound is not a fixed 3–3.5 minute figure** — it is a **function of the realm's access-token lifespan**. If the realm issues tokens with a 1-hour expiry, the window is (1 hour − 2 minutes) from the token's issue time until its revocation is noticed. If tokens are 10 minutes, the window is (10 minutes − 2 minutes = 8 minutes). **A second adopter must compute its own bound** rather than copying the 3–3.5 minute figure as a property of the design.
 
-**Two token-expiry writes to check:** The refresh path (lines 266–270 in `db_session.go`) applies the same `token.Expiry`-with-5-minute-fallback rule as the initial write (lines 157–160). Both write to `token_expires_at`. A reader reasoning about when the NFR8 window reopens must find both, so they are cited here together.
+**Two token-expiry writes to check:** The refresh path applies the same `token.Expiry`-with-5-minute-fallback rule (lines 261–264 in `db_session.go`) as the initial write (lines 157–160), then writes to `token_expires_at` via the UPDATE statement (lines 266–270). A reader reasoning about when the NFR8 window reopens must find both, so they are cited here together.
 
 **Tracked limitation:** #1114 is the accepted, tracked limitation. It gates nothing in this plan — revocation detection is best-effort, and the SSE stream is expected to handle transient failures via the reconnect loop.
 
