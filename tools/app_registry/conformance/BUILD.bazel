@@ -7,6 +7,7 @@ go_test(
     srcs = [
         "chart_membership_test.go",
         "env_doc_test.go",
+        "fr63_test.go",
         "nfr3_test.go",
         "paths_test.go",
         "tiltfile_test.go",
@@ -19,5 +20,8 @@ go_test(
         "//tools/app_registry/ui/components:conformance_srcs",
         "//tools/app_registry/ui/matrix:conformance_srcs",
         "//tools/app_registry/ui/pages:conformance_srcs",
+    ],
+    deps = [
+        "//tools/app_registry/kinds",
     ],
 )

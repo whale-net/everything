@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "kinds",
+    srcs = [
+        "binary.go",
+        "conformance.go",
+        "dispatch.go",
+        "hooks.go",
+    ],
+    importpath = "github.com/whale-net/everything/tools/app_registry/kinds",
+    visibility = ["//tools/app_registry:__subpackages__"],
+)
+
+go_test(
+    name = "kinds_test",
+    srcs = ["kinds_test.go"],
+    embed = [":kinds"],
+)
