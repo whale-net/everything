@@ -311,6 +311,53 @@ to whatever the SCD2 history shows as the immediately preceding promotion for
 that target — there is no version argument, and no history means rollback is
 rejected outright (nothing to roll back to).
 
+## Understanding live updates on the Promotion Details page
+
+The Promotion Details page (`/promotions/{id}`) updates itself in real-time via Server-Sent Events (SSE). This means **manual reload is no longer the way to get current state while it is live** — the page automatically reflects status changes from the registry and ArgoCD without requiring user intervention.
+
+### What "live" and "not-live" mean
+
+**The page is live** when:
+- The SSE connection is open and heartbeats are arriving at regular intervals.
+- The page is actively streaming updates from the registry.
+- You will see changes reflected automatically: promotions completing, ArgoCD sync results, retry status, etc.
+
+**The page is not-live** when:
+- The SSE connection is closed (you closed the tab, network failed, server restarted, or your session expired).
+- **Important:** "not-live" refers to the feed, not the promotion itself. A promotion that is not-live in the UI may still be progressing in the registry and ArgoCD; you simply won't see it until you reload.
+
+### The key inference rule: live and not moving = system stuck
+
+**This is the single most valuable thing the live indicator gives you.** If the page says it is **live and has not moved (no updates) for more than a few heartbeats**, **the system is stuck** — check ArgoCD or use "Retry refresh/sync" to investigate. This is the opposite of the browser-stale case:
+
+- **Live and not moving** (stale despite active connection) → System is stuck. Check ArgoCD for sync failures or other issues.
+- **Not-live** (no connection) → Either your session is gone, or the server is down. Use the reload affordance (see below).
+- **Live and moving** (updates arriving) → Everything is working. Wait for completion or manual action.
+
+Without the live indicator, you had no way to tell whether the page was stale because your browser cache was old or because the system was actually stuck. With it, the distinction is clear.
+
+### What to do when the page is not-live
+
+Use the reload affordance (a reload button on the page) to try reconnecting. This is **correct for both cases**:
+1. If your session expired (terminal error), reload will show you the login page.
+2. If the server restarted or a network hiccup occurred (transient error), reload will reconnect and resume streaming.
+
+There is no manual retry on transient errors — the browser's built-in SSE reconnect logic handles that with backoff.
+
+### Error banners: when a retry fails
+
+If you click "Retry refresh/sync" (the button to manually trigger an ArgoCD retry) and it fails, an error banner appears on the page. **This banner stays until you navigate away** — its presence (or absence) tells you whether the most recent retry succeeded or failed:
+
+- **Error banner visible** → The most recent retry failed; the error message tells you why.
+- **Error banner absent** → Either no retry has been attempted, or the most recent one succeeded.
+
+The page does not auto-dismiss the error banner, so you won't miss it by looking away.
+
+### Exception: red load-failure alert
+
+There is one exception to the inference rule above. **If the page shows the red load-failure alert** (the page itself never loaded), **the page has no live region to update, so live-and-static means the page itself never loaded, not that the system is stuck.** Reload is the answer in that state — a page that failed to load is always worth retrying.
+
+
 ## A release run didn't complete
 
 **AR-7d (issue #558).** A release run spans real GHCR pushes across a GitHub
