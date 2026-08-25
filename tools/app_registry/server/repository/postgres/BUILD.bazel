@@ -74,6 +74,7 @@ go_test(
         "postgres_integration_promotion_sync_event_test.go",
         "postgres_integration_promotion_test.go",
         "postgres_integration_release_run_test.go",
+        "postgres_integration_upload_blob_test.go",
     ],
     embed = [":postgres"],
     gotags = ["integration"],
