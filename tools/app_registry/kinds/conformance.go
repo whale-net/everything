@@ -26,10 +26,12 @@ package kinds
 //
 // See FR-63(c).
 var CommonMechanisms = []string{
-	// TODO: Populated during Implementation phase.
-	// Example entries:
+	// TODO: Placeholder entries will be populated as common mechanisms are implemented.
+	// Examples of what will go here:
 	// "github.com/whale-net/everything/tools/app_registry/publish/compression",
 	// "github.com/whale-net/everything/tools/app_registry/publish/manifest",
+	// "github.com/whale-net/everything/tools/app_registry/publish/upload",
+	// "github.com/whale-net/everything/tools/app_registry/publish/variants",
 }
 
 // StructuralHookExemptions lists hook names that are exempt from the
@@ -88,18 +90,18 @@ type BanExemptLocation struct {
 // exemptions live in the same checked-in declaration as (c)'s common-mechanism
 // set."
 var BanExemptLocations = []BanExemptLocation{
-	// TODO: Populated during Implementation phase.
-	// Example entry for H8's pre-cutover template:
-	// {
-	//   Hook:   "H8",
-	//   Path:   "tools/app_registry/ENV.md",
-	//   Reason: "ENV.md key-naming convention block for pre-cutover template",
-	// },
-	// {
-	//   Hook:   "H8",
-	//   Path:   "tools/release_helper_go/docs/RECOVERY.md",
-	//   Reason: "FR-40 step 3's recovery-only appendix",
-	// },
+	// H8 exemption: pre-cutover template documentation in ENV.md
+	{
+		Hook:   "H8",
+		Path:   "tools/app_registry/ENV.md",
+		Reason: "ENV.md key-naming convention block for pre-cutover template derivation",
+	},
+	// H8 exemption: pre-cutover recovery procedure in recovery documentation
+	{
+		Hook:   "H8",
+		Path:   "tools/release_helper_go/docs/RECOVERY.md",
+		Reason: "FR-40 step 3's recovery-only appendix for artifact key derivation",
+	},
 }
 
 // AffordanceExemptions is a map for extension points that other tasks will add

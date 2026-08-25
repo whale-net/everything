@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "binary.go",
         "conformance.go",
+        "dispatch.go",
         "hooks.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/kinds",

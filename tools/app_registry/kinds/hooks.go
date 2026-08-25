@@ -28,7 +28,10 @@ type Hook interface {
 // Example: binaries publish one file per {os, arch} pair. Structural hook.
 type H1 interface {
 	Hook
-	// TODO: Implementation will populate this during Phase 2 (Implementation).
+	// Policy returns a description of which build outputs constitute the artifact set
+	// and how they are produced. For binaries, this describes the multi-file per-variant
+	// publishing model.
+	Policy() string
 }
 
 // H2 is the hook for "the variant selector's dimensions and their enumeration".
@@ -36,14 +39,16 @@ type H1 interface {
 // promoted. Example: binaries use {os, arch}. Structural hook.
 type H2 interface {
 	Hook
-	// TODO: Implementation will populate this during Phase 2 (Implementation).
+	// Dimensions returns the list of variant dimension names (e.g., []string{"os", "arch"}).
+	Dimensions() []string
 }
 
 // H3 is the hook for "per-file content type sent on upload and stored on the
 // object". Part of blob identity (FR-61). Value-shaped hook.
 type H3 interface {
 	Hook
-	// TODO: Implementation will populate this during Phase 2 (Implementation).
+	// ContentType returns the MIME type for files of this kind (e.g., "application/octet-stream").
+	ContentType() string
 }
 
 // H4 is the hook for "stored compression/encoding policy". Determines whether
@@ -51,7 +56,8 @@ type H3 interface {
 // to FR-30 (compression handling) and FR-61 (blob identity). Value-shaped hook.
 type H4 interface {
 	Hook
-	// TODO: Implementation will populate this during Phase 2 (Implementation).
+	// Encoding returns the compression/encoding policy (e.g., "gzip", "none").
+	Encoding() string
 }
 
 // H5 is the hook for "consumer-facing file naming within a version". Determines
@@ -59,7 +65,9 @@ type H4 interface {
 // consumers (FR-67). Value-shaped hook.
 type H5 interface {
 	Hook
-	// TODO: Implementation will populate this during Phase 2 (Implementation).
+	// FileNaming returns a description or template of how files are named
+	// within a version (e.g., "{name}-{version}-{os}-{arch}").
+	FileNaming() string
 }
 
 // H6 is the hook for "the checksum manifest's format, granularity, and
@@ -68,15 +76,19 @@ type H5 interface {
 // required for all kinds. Value-shaped hook.
 type H6 interface {
 	Hook
-	// TODO: Implementation will populate this during Phase 2 (Implementation).
+	// ManifestPolicy returns the manifest format and configuration
+	// (e.g., "checksums.txt, SHA256, one per line").
+	ManifestPolicy() string
 }
 
 // H7 is the hook for "the app-type → artifact-kind mapping value".
-// Maps deploy_unit.app_type values to artifact kinds (e.g. "external-api" →
+// Maps deploy_unit.app_type values to artifact kinds (e.g., "external-api" →
 // ARTIFACT_KIND_IMAGE). Structural hook (FR-64).
 type H7 interface {
 	Hook
-	// TODO: Implementation will populate this during Phase 2 (Implementation).
+	// AppTypeMapping returns the mapping from app types to this artifact kind
+	// (e.g., []string{"external-api", "web-api"}).
+	AppTypeMapping() []string
 }
 
 // H8 is the hook for "the kind's pre-cutover key and file-name derivation
@@ -85,7 +97,9 @@ type H7 interface {
 // means no derivation, not found — never a fabricated key. Value-shaped hook.
 type H8 interface {
 	Hook
-	// TODO: Implementation will populate this during Phase 2 (Implementation).
+	// PreCutoverTemplate returns the pre-cutover naming template, or empty string
+	// if this kind has no pre-cutover history.
+	PreCutoverTemplate() string
 }
 
 // HookSet defines all eight hooks a kind must supply.
@@ -102,7 +116,7 @@ type HookSet interface {
 
 // Kind represents a publishable artifact kind. Every kind supplies a HookSet.
 type Kind interface {
-	// Name returns the kind's name (e.g. "binary", "firmware", "image", "chart").
+	// Name returns the kind's name (e.g., "binary", "firmware", "image", "chart").
 	Name() string
 
 	// Hooks returns the full set of eight hooks this kind supplies.
