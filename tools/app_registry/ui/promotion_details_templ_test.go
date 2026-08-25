@@ -231,3 +231,174 @@ func TestPromotionDetails_FR29_NoHTMXAttributesExceptPromoDetails(t *testing.T) 
 		}
 	}
 }
+
+// TestPromotionDetails_FR23_IndicatorPresent tests FR23:
+// the live/not-live indicator is present and visible on the page.
+func TestPromotionDetails_FR23_IndicatorPresent(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:  "",
+		RetryErr: "",
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR23: indicator element must be present
+	if !strings.Contains(html, `id="live-status"`) {
+		t.Errorf("FR23: live status indicator element must be present with id='live-status'; got: %s", html)
+	}
+
+	// FR23: indicator must show "Live" initially
+	if !strings.Contains(html, `<div id="live-status" class="badge badge-success"`) {
+		t.Errorf("FR23: indicator must be present with success badge and 'Live' text; got: %s", html)
+	}
+
+	// FR23: indicator must be outside the sse-swap target
+	indicatorIdx := strings.Index(html, `id="live-status"`)
+	swapIdx := strings.Index(html, `sse-swap="innerHTML"`)
+	if indicatorIdx < 0 || swapIdx < 0 {
+		t.Errorf("FR23: both indicator and swap target must be present")
+	}
+	if indicatorIdx > swapIdx {
+		t.Errorf("FR23: indicator must come before (be outside) sse-swap target; got indices %d and %d", indicatorIdx, swapIdx)
+	}
+}
+
+// TestPromotionDetails_FR24_ReloadAffordancePresent tests FR24:
+// the reload affordance is present and hidden by default.
+func TestPromotionDetails_FR24_ReloadAffordancePresent(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:  "",
+		RetryErr: "",
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR24: reload container must be present
+	if !strings.Contains(html, `id="promo-reload-container"`) {
+		t.Errorf("FR24: reload container must be present with id='promo-reload-container'; got: %s", html)
+	}
+
+	// FR24: reload link must point to the same promotion
+	if !strings.Contains(html, `/promotions/test-promo`) {
+		t.Errorf("FR24: reload link must point to /promotions/test-promo; got: %s", html)
+	}
+
+	// FR24: reload affordance must have btn-warning class
+	if !strings.Contains(html, `class="btn btn-sm btn-warning">Reload`) {
+		t.Errorf("FR24: reload button must have btn-warning class; got: %s", html)
+	}
+
+	// FR24: reload container must be outside the sse-swap target
+	reloadIdx := strings.Index(html, `id="promo-reload-container"`)
+	swapIdx := strings.Index(html, `sse-swap="innerHTML"`)
+	if reloadIdx < 0 || swapIdx < 0 {
+		t.Errorf("FR24: both reload and swap target must be present")
+	}
+	if reloadIdx > swapIdx {
+		t.Errorf("FR24: reload must come before (be outside) sse-swap target; got indices %d and %d", reloadIdx, swapIdx)
+	}
+
+	// FR24: reload container must be hidden by default (style="display: none")
+	if !strings.Contains(html, `style="display: none;"`) {
+		t.Errorf("FR24: reload container must be hidden by default; got: %s", html)
+	}
+}
+
+// TestPromotionDetails_FR23_IndicatorScript tests FR23/FR24:
+// the JavaScript for managing the live/not-live indicator is included.
+func TestPromotionDetails_FR23_IndicatorScript(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:  "",
+		RetryErr: "",
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR23/FR24: script must be present
+	if !strings.Contains(html, `<script type="module">`) {
+		t.Errorf("FR23/FR24: script tag must be present; got: %s", html)
+	}
+
+	// FR23: script must contain live indicator logic
+	if !strings.Contains(html, `live-status`) {
+		t.Errorf("FR23: script must reference live-status element; got: %s", html)
+	}
+
+	// FR24: script must contain reload affordance logic
+	if !strings.Contains(html, `promo-reload-container`) {
+		t.Errorf("FR24: script must reference promo-reload-container element; got: %s", html)
+	}
+
+	// FR23: script must include connection error handling
+	if !strings.Contains(html, `htmx:sseError`) {
+		t.Errorf("FR23: script must handle htmx:sseError events; got: %s", html)
+	}
+
+	// FR23: script must include heartbeat timeout logic
+	if !strings.Contains(html, `timeoutThreshold`) {
+		t.Errorf("FR23: script must include heartbeat timeout logic; got: %s", html)
+	}
+}
