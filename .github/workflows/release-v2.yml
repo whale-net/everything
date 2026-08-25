@@ -83,7 +83,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
 
 jobs:
   # Job skeleton mirrors release.yml's (FR1). Machine-only dispatch is
@@ -383,7 +382,6 @@ jobs:
         id: plan
         if: github.event.inputs.resolved_plan == ''
         env:
-          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
@@ -398,7 +396,6 @@ jobs:
           [[ "${{ github.event.inputs.increment_patch }}" == "true" ]] && ARGS+=(--increment-patch)
           [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
-          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
           "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_OUTPUT"
 
   # Issue #928: merges the old `release` (apps) and `release-helm-charts`

@@ -282,25 +282,9 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
-	// registryOptedIn() (release_helper_go/cmd/plan.go) requires
-	// APP_REGISTRY_CICD_OPT_IN=true to call AllocateVersion at all --
-	// without it, resolveVersion's client stays nil and every version
-	// resolution silently takes the git-tag tagFallback path instead,
-	// which is always broken here (this activity's cwd is the bare
-	// scratch `dir` above, with no .git -- see this file's package doc
-	// comment). APP_REGISTRY_CICD_OPT_IN is documented as a GitHub
-	// Actions repository variable (DEPLOY.md/ENV.md) with no equivalent
-	// ever set on this worker's own process env (unlike
-	// APP_REGISTRY_ADDRESS/GRPC_AUTH_* below, which main.go already sets
-	// for the writeback stub's own gRPC client and this subprocess
-	// inherits via os.Environ()) -- so registryOptedIn() was always false
-	// here regardless of the target domain's adoption stage or its
-	// actual App Registry version history, and every batch silently
-	// resolved to v0.0.1. This activity's whole reason to exist is to
-	// call the App Registry-backed release path, so force it on
-	// unconditionally rather than depending on a CI-oriented repository
-	// variable that was never wired to this deployment.
-	cmd.Env = append(os.Environ(), "APP_REGISTRY_CICD_OPT_IN=true")
+	// Registry calls are now unconditionally enabled (ED-1: APP_REGISTRY_CICD_OPT_IN
+	// is now mandatory). resolveVersion's client is always created and
+	// AllocateVersion is always called.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

@@ -60,15 +60,14 @@ func newBuildHelmChartCmd() *cobra.Command {
 				ctx := cmd.Context()
 				publishedName := strings.TrimPrefix(chart.Name, "helm-")
 
+
 				var client pb.ArtifactRegistryClient
-				if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
-					c, closeFn, derr := dialVersioningClient(ctx, nil)
-					if derr != nil {
-						return derr
-					}
-					defer closeFn() //nolint:errcheck
-					client = c
+				c, closeFn, derr := dialVersioningClient(ctx, nil)
+				if derr != nil {
+					return derr
 				}
+				defer closeFn() //nolint:errcheck
+				client = c
 
 				version, _, err = resolveVersion(ctx, client, pb.ArtifactKind_ARTIFACT_KIND_CHART, publishedName, bumpType,
 					fmt.Sprintf("build-helm-chart-%s-%s", envOrDefault("GITHUB_RUN_ID", "local"), publishedName),

@@ -103,9 +103,6 @@ func envOrDefault(key, fallback string) string {
 // of it. No domain is at "allocate" today, so in practice this function
 // currently never fails a build -- see PLAN.md's AR-7f "ships inert" note.
 func checkChartHermeticity(ctx context.Context, warn func(string), chartDomain string, appVersions map[string]string) error {
-	if defaultEnv("APP_REGISTRY_CICD_OPT_IN") != "true" {
-		return nil
-	}
 
 	pins := make([]ChartPin, 0, len(appVersions))
 	for appFullName, version := range appVersions {

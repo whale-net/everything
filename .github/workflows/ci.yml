@@ -47,7 +47,6 @@ jobs:
       uses: actions/checkout@v7
 
     - name: App Registry Auth
-      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
       uses: ./.github/actions/app-registry-auth
       with:
         address: ${{ vars.APP_REGISTRY_ADDRESS }}
@@ -63,7 +62,6 @@ jobs:
         fallback_to_source: 'true'
 
     - name: Reconcile apps/charts in App Registry
-      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
       timeout-minutes: 5
       uses: ./.github/actions/app-registry-reconcile
       with:
@@ -82,7 +80,6 @@ jobs:
     # literal `main` branch pointer (see buildref.go's resolveBuildRef and
     # migration 019's doc comment).
     - name: Record build (App Registry, watermark for release ref resolution)
-      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
       id: record-build
       shell: bash
       run: |
@@ -102,7 +99,6 @@ jobs:
         echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
 
     - name: Record app_build_log for every discovered app/chart (App Registry, FR8)
-      if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
       timeout-minutes: 5
       shell: bash
       run: |

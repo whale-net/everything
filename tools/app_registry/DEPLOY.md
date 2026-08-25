@@ -303,10 +303,10 @@ manifest, deliberately.
 > The `Record build and artifact in App Registry` and `Record chart artifacts
 > in App Registry` steps now set `GRPC_AUTH_MODE: oidc` and read the builder
 > client's credentials from the repository secret/variable named below. Their
-> `continue-on-error` and `APP_REGISTRY_CICD_OPT_IN` gating are unchanged —
-> recording is still best-effort and still off by default. What changed is
-> that when it *is* on, it can now actually authenticate once the server runs
-> `oidc`.
+> `continue-on-error` gating remains: recording is best-effort and a registry
+> outage must never fail a real push. What changed is that when the server is
+> running `oidc`, recording steps can now authenticate (ED-1: recording is now
+> always enabled, no longer gated on a repository variable).
 >
 > `promote.yml` (§5 below) exists as of AR-3d too, reading each environment's
 > promoter secret the same way.
@@ -381,20 +381,15 @@ Repository *variables* (not secrets):
 |---|---|
 | `APP_REGISTRY_ADDRESS` | the API's ingress host:port — **must include the port** (e.g. `dev-app-registry.whalenet.dev:443`); `libs/go/grpcclient`'s TLS auto-detect only fires on `:443` or an `https://` prefix, so a bare hostname dials plaintext against a TLS-only ingress and hangs (issue #539) |
 | `APP_REGISTRY_AUTH_TOKEN_URL` | the Keycloak token endpoint, e.g. `https://<host>/realms/<realm>/protocol/openid-connect/token` — same for every client, so it is a variable, not a secret |
-| `APP_REGISTRY_CICD_OPT_IN` | `true` to enable recording — see below |
 | `APP_REGISTRY_BUILDER_ENV` | which builder client `release.yml` authenticates as: `dev` or `prod`, matching a provisioned `app-registry-builder-<env>` client. Falls back to `dev` when unset — only `dev` is wired up in CI today. |
 
 ---
 
-## 5. Turn CI recording on
+## 5. CI recording is now always on
 
-Set `APP_REGISTRY_CICD_OPT_IN=true` as a repository variable. With it unset —
-the default, and how the repo ships — CI makes **no registry calls whatever**,
-which is what lets the pipeline that builds and releases the registry run before
-the registry exists.
-
-Turn it on only once §4's warning is resolved, or recording will silently no-op.
-
+App Registry recording (ED-1) is now unconditionally enabled — there is no
+opt-in variable to set. Recording always runs in `release.yml` and `ci.yml`. The
+recording steps are `continue-on-error`, so **check the
 Verify with a real release: the `Record build and artifact in App Registry` step
 should run and succeed, and
 

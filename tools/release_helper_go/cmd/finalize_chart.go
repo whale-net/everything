@@ -223,7 +223,7 @@ func ExecuteFinalizeChart(p FinalizeChartParams) (*ReleaseResult, error) {
 	// packaging (AR-7f) -- reused unchanged so an allocate-mode domain
 	// cannot finalize a chart pinning an unpublished app any more than it
 	// could before this split. See release_charts.go's identical check.
-	if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" && !p.SkipRegistry {
+	if !p.SkipRegistry {
 		pins := make([]ChartPin, 0, len(p.AppVersions))
 		for appFullName, v := range p.AppVersions {
 			pins = append(pins, ChartPin{AppFullName: appFullName, Version: v})

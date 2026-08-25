@@ -100,13 +100,12 @@ func newReleaseNotesCmd() *cobra.Command {
 				}
 			}
 
+
 			var artifactClient pb.ArtifactRegistryClient
-			if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
-				c, closeConn, err := NewArtifactRegistryClient(cmd.Context())
-				if err == nil && c != nil {
-					artifactClient = c
-					defer closeConn()
-				}
+			c, closeConn, err := NewArtifactRegistryClient(cmd.Context())
+			if err == nil && c != nil {
+				artifactClient = c
+				defer closeConn()
 			}
 
 			if matchedChart != nil {
@@ -239,13 +238,12 @@ func newReleaseNotesAllCmd() *cobra.Command {
 				return err
 			}
 
+
 			var artifactClient pb.ArtifactRegistryClient
-			if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
-				c, closeConn, err := NewArtifactRegistryClient(cmd.Context())
-				if err == nil && c != nil {
-					artifactClient = c
-					defer closeConn()
-				}
+			c, closeConn, err := NewArtifactRegistryClient(cmd.Context())
+			if err == nil && c != nil {
+				artifactClient = c
+				defer closeConn()
 			}
 
 			if outputDir != "" {
@@ -361,7 +359,7 @@ func resolvePreviousRef(
 	git GitRunner,
 	artifactClient pb.ArtifactRegistryClient,
 ) (prevVersion, prevSHA, prevTag string) {
-	if artifactClient != nil && defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
+	if artifactClient != nil {
 		isAllocate, err := isDomainAtAllocateStage(ctx, artifactClient, domain)
 		if err == nil && isAllocate {
 			getResp, getErr := artifactClient.GetArtifact(ctx, &pb.GetArtifactRequest{

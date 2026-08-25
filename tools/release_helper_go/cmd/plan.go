@@ -451,11 +451,11 @@ func (p planParams) idempotencyPrefix() string {
 }
 
 // registryOptedIn reports whether this plan run may call App Registry RPCs
-// with side effects (AllocateVersion included): opted into CI/CD via
-// APP_REGISTRY_CICD_OPT_IN, and neither a dry run (which must not allocate
-// a real version, an AllocateVersion side effect) nor --skip-registry.
+// with side effects (AllocateVersion included): neither a dry run (which must
+// not allocate a real version, an AllocateVersion side effect) nor
+// --skip-registry.
 func (p planParams) registryOptedIn() bool {
-	return !p.dryRun && !p.skipRegistry && defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true"
+	return !p.dryRun && !p.skipRegistry
 }
 
 func planRelease(p planParams) (*PlanResult, error) {

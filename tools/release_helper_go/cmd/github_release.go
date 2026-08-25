@@ -161,9 +161,6 @@ func (c *ghReleaseClient) uploadAsset(releaseID int, filePath, assetName string)
 // (currently disabled, pending live Keycloak promoter clients) promote.yml
 // workflow. Recording an artifact here just makes it a promotable candidate.
 func recordPublishedArtifact(ctx context.Context, warn func(string), meta AppMetadata, version, digest, repoOwner, repoName, buildID string) error {
-	if defaultEnv("APP_REGISTRY_CICD_OPT_IN") != "true" {
-		return nil
-	}
 	var kind pb.ArtifactKind
 	switch meta.AppType {
 	case "firmware":
@@ -351,13 +348,12 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 				return err
 			}
 
+
 			var artifactClient pb.ArtifactRegistryClient
-			if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
-				c, closeConn, err := NewArtifactRegistryClient(cmd.Context())
-				if err == nil && c != nil {
-					artifactClient = c
-					defer closeConn()
-				}
+			c, closeConn, err := NewArtifactRegistryClient(cmd.Context())
+			if err == nil && c != nil {
+				artifactClient = c
+				defer closeConn()
 			}
 
 			gh := newGHReleaseClient(owner, repo, token)
@@ -712,13 +708,12 @@ func newCreateCombinedGithubReleaseCmd() *cobra.Command {
 					}
 				}
 
-				// Record in App Registry if opt-in is enabled
-				if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
-					warn := func(msg string) { fmt.Fprintf(cmd.ErrOrStderr(), "::warning::%s\n", msg) }
-					buildID := defaultEnv("APP_REGISTRY_BUILD_ID")
-					if recordErr := recordPublishedArtifact(cmd.Context(), warn, meta, appVer, primaryDigest, owner, repo, buildID); recordErr != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "⚠ App Registry record failed for %s: %v\n", fullName, recordErr)
-					}
+
+				// Record in App Registry
+				warn := func(msg string) { fmt.Fprintf(cmd.ErrOrStderr(), "::warning::%s\n", msg) }
+				buildID := defaultEnv("APP_REGISTRY_BUILD_ID")
+				if recordErr := recordPublishedArtifact(cmd.Context(), warn, meta, appVer, primaryDigest, owner, repo, buildID); recordErr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "⚠ App Registry record failed for %s: %v\n", fullName, recordErr)
 				}
 			}
 

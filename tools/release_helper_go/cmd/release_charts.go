@@ -505,7 +505,7 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 			// -- it reserves the version by inserting an "allocated" artifact
 			// row -- so a dry run must never call it.
 			var versionClient pb.ArtifactRegistryClient
-			if !p.DryRun && defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" && !p.SkipRegistry {
+				if !p.DryRun && !p.SkipRegistry {
 				if artifactClient != nil {
 					versionClient = artifactClient
 				} else {
@@ -535,7 +535,7 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 		}
 
 		// 2. Validate contained image pins using CheckChartHermeticity (AR-7f)
-		if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" && !p.SkipRegistry {
+			if !p.SkipRegistry {
 			pins := make([]ChartPin, 0, len(appVersions))
 			for appFullName, v := range appVersions {
 				pins = append(pins, ChartPin{AppFullName: appFullName, Version: v})

@@ -151,8 +151,7 @@ placement rationale:
 AR-7f (issue #558) adds one more consumer of the builder credential: the
 release plan step's "Build helm charts with versioning" reuses these same
 four variables so `tools/release_helper_go`'s `build-helm-chart` can call
-`ArtifactRegistry.CheckChartHermeticity` when `APP_REGISTRY_CICD_OPT_IN` is
-`true` — see ARCHITECTURE.md "Compose-time chart hermeticity (AR-7f, issue
+`ArtifactRegistry.CheckChartHermeticity` unconditionally — see ARCHITECTURE.md "Compose-time chart hermeticity (AR-7f, issue
 #558)". No new variable was introduced for this; it dials the same server
 with the same credential the later steps in that job already use.
 

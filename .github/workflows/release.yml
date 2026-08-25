@@ -59,7 +59,7 @@ concurrency:
 # v2 release job -- migration checklist" for per-domain v1/v2 status.
 
 env:
-  APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
+env: {}
 
 jobs:
   # Probe for prebuilt release tools or build from source if missing / requested.
@@ -352,7 +352,6 @@ jobs:
       - name: Plan release
         id: plan
         env:
-          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
@@ -367,7 +366,6 @@ jobs:
           [[ "${{ github.event.inputs.increment_patch }}" == "true" ]] && ARGS+=(--increment-patch)
           [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
-          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
           "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_OUTPUT"
 
   build-openapi-specs:
@@ -466,7 +464,6 @@ jobs:
 
       - name: Release applications
         env:
-          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
@@ -495,7 +492,6 @@ jobs:
             ARGS=(release-app --domain "$DOMAIN" --app "$APP" --version "$VER" --create-git-tag)
             [[ -n "$BUILD_ID" ]] && ARGS+=(--build-id "$BUILD_ID")
             [[ "$DRY_RUN" == "true" ]] && ARGS+=(--dry-run)
-            [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
 
             "$RELEASE_HELPER" "${ARGS[@]}"
 
@@ -574,7 +570,7 @@ jobs:
           git config --global user.email "${{ github.actor }}@users.noreply.github.com"
 
       - name: Log in to GitHub Container Registry
-        if: ${{ github.event.inputs.dry_run == 'false' && vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
+        if: ${{ github.event.inputs.dry_run == 'false' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -631,7 +627,6 @@ jobs:
 
       - name: Release Helm charts
         env:
-          APP_REGISTRY_CICD_OPT_IN: ${{ vars.APP_REGISTRY_CICD_OPT_IN }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_MODE: oidc
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
@@ -658,7 +653,6 @@ jobs:
           [[ -n "${{ needs.plan-release.outputs.build-id }}" ]] && ARGS+=(--build-id "${{ needs.plan-release.outputs.build-id }}")
           [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
-          [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
           # Prefer the Temporal-dispatched batch's actual resolved plan
           # (github.event.inputs.app_versions, set by DispatchBuild -- issue
           # #901) over this job's own freshly-resolved plan-release output:

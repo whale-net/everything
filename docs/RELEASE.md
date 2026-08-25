@@ -315,13 +315,12 @@ indexes published artifacts and, once actually used, tracks per-environment
 promotion state. This is additive on top of everything above, not a
 replacement for it — keep two things straight:
 
-- **Recording is best-effort and opt-in.** Every registry call in
-  `release.yml` is gated behind the repository variable
-  `APP_REGISTRY_CICD_OPT_IN`. Unset — the default, and how this repo ships
-  today — means CI makes **zero** calls to the registry; the pipeline
-  behaves exactly as described everywhere else in this document. Even when
-  the opt-in is `true`, the recording steps are `continue-on-error`: a
-  registry outage warns but never fails a release.
+- **Recording is automatic and always on.** App Registry recording (ED-1) is now
+  unconditionally enabled — every registry call in `release.yml` is always
+  executed. The recording steps are `continue-on-error`: a registry outage warns
+  but never fails a release. See
+  [`tools/app_registry/ARCHITECTURE.md`](../tools/app_registry/ARCHITECTURE.md)
+  for details.
 - **Version allocation is still git-tag based.** Everything under "Version
   Validation & Protection" above — `autoIncrementVersion`, tag existence
   checks, `--increment-minor`/`--increment-patch` — is unchanged and remains
@@ -468,7 +467,7 @@ bazel run //tools:release -- create-combined-github-release-with-notes v1.2.3 \
 **GitHub Release Features:**
 - **Top-Level Entity Scoping**: Publishes Helm chart releases with nested member images, skipping duplicate individual releases for chart members.
 - **Asset Attachments**: Packages and attaches Helm chart `.tgz` archives, OpenAPI specifications, and binary assets.
-- **App Registry Recording**: Automatically records released artifacts in App Registry when opted in (`APP_REGISTRY_CICD_OPT_IN=true`).
+- **App Registry Recording**: Automatically records released artifacts in App Registry (always enabled as of ED-1).
 - **Existing Release Detection**: Idempotently skips creation if release already exists.
 
 **Requirements:**

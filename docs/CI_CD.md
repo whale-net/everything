@@ -152,8 +152,6 @@ for the operator runbook.
 
 ### Recording (`release.yml`)
 
-Two `continue-on-error` steps, both gated on `vars.APP_REGISTRY_CICD_OPT_IN
-== 'true'`:
 
 - **`Record build and artifact in App Registry`** (in the `release` job) —
   after an image is pushed, resolves its digest and calls `app-registry
@@ -163,7 +161,7 @@ Two `continue-on-error` steps, both gated on `vars.APP_REGISTRY_CICD_OPT_IN
   compose-time lockfile) to digests and calls `artifacts record --kind
   chart --contains ...`.
 
-`APP_REGISTRY_CICD_OPT_IN` is unset by default. With it unset, CI makes no
+Recording steps always run (app-registry integration is now mandatory as of ED-1).
 registry calls at all — the recording steps do not run. The recording steps
 themselves are still `continue-on-error` (a registry outage must never fail
 a real release), but each job that has any also ends with an **App Registry

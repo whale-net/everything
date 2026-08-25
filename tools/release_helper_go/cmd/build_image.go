@@ -230,8 +230,9 @@ func newReleaseMultiarchCmd() *cobra.Command {
 					}
 				}
 
-				// Record in App Registry if opt-in is enabled
-				if defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" && len(assets) > 0 {
+
+				// Record in App Registry
+				if len(assets) > 0 {
 					owner := defaultEnv("GITHUB_REPOSITORY_OWNER")
 					repo := defaultEnv("GITHUB_REPOSITORY_NAME")
 					buildID := defaultEnv("APP_REGISTRY_BUILD_ID")

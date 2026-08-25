@@ -94,44 +94,44 @@ miss) is the same either way, and a red run is a far better prompt for that
 than a warning nobody reads. See OPERATIONS.md "Recording (automatic,
 best-effort)" for what an operator sees and does next.
 
-## `APP_REGISTRY_CICD_OPT_IN` — the bootstrap kill switch
+## CI registry integration — now unconditional (ED-1)
 
-"Best-effort" is not enough on its own. The registry is built and released by
-the very pipeline that would call it, so before it is deployed and its secrets
-exist there is a genuine chicken-and-egg risk: **you must never be unable to
-build the app because the app is not yet deployed.**
+The registry integration in CI is now **unconditionally enabled** (issue #1149,
+external dependency ED-1). The opt-in kill switch `APP_REGISTRY_CICD_OPT_IN` is
+deprecated and no longer used.
 
-Every CI step that talks to the registry is therefore gated on a GitHub repo
-variable:
+### Historical context
 
-```yaml
-if: vars.APP_REGISTRY_CICD_OPT_IN == 'true'
-```
+Before this change, every CI step that talked to the registry was gated on a
+GitHub repo variable to handle the bootstrap chicken-and-egg problem: the
+registry is built and released by the very pipeline that calls it, so before it
+is deployed and its secrets exist, you must never be unable to build the app
+because the app is not yet deployed.
 
-- **Unset or anything other than `true` (the default): CI makes no registry
-  calls at all.** The pipeline behaves exactly as it does today. This is the
-  state the repo ships in and stays in until the registry is deployed and its
-  credentials are configured.
-- **`true`:** recording steps run, still `continue-on-error` so a registry
-  outage warns rather than failing a release. Each job's own **App Registry
-  recording health** step still runs last and turns the JOB red on a
-  recording failure — but only after the real release work in that job has
-  already completed. See "App Registry recording health" above.
+That gating was the single-lever rollback for the entire CI integration:
+- **Unset or anything other than `true` (the default): CI made no registry calls
+  at all.** The pipeline behaved without the registry. This was the state the
+  repo shipped in, stayed in until the registry was deployed and its credentials
+  were configured.
+- **`true`:** recording steps ran, still `continue-on-error` so a registry
+  outage warned rather than failing a release.
 
-Two independent gates, easily confused — keep them distinct:
+### Current state (ED-1)
 
-| Gate | Layer | Question it answers |
-|---|---|---|
-| `APP_REGISTRY_CICD_OPT_IN` | GitHub Actions | Does CI talk to the registry **at all**? |
-| `domain_adoption.stage` | Registry server | For a given domain, what is the registry **authoritative for**? |
+With the opt-in now mandatory, CI **always** calls the registry unconditionally:
+- AllocateVersion is always called for version resolution (no fallback to
+  tag-based paths).
+- Recording steps always run for builds and artifacts.
+- The **App Registry recording health** step still runs last in each job and
+  turns the JOB red on a recording failure — but only after the real release
+  work in that job has already completed, so a registry outage still does not
+  block a real image/chart push. See "App Registry recording health" above.
 
-The first is a global bootstrap/kill switch owned by whoever administers the
-repo; the second is the per-domain rollout described under
-[Resolved questions](#resolved-questions). The opt-in must be `true` before any
-domain's stage matters, and turning it off is the single-lever rollback for the
-entire CI integration.
+The per-domain rollout gate (`domain_adoption.stage`) remains unchanged and
+independent — it answers a separate question: for a given domain, what is the
+registry authoritative for? A domain at `observe` records but doesn't require
+recording; at `promote`, promotion writes to the registry; at `allocate`, the
+registry owns version allocation and a registry outage becomes a release outage.
 
-Applies from AR-2c (the first phase to add CI steps) onward, including AR-5's
-`AllocateVersion` — version allocation must fall back to the tag-based path
-when the opt-in is off, or a registry outage becomes a release outage.
-
+Applies from the first phase that added CI steps (AR-2c) onward, including
+AR-5's `AllocateVersion`.
