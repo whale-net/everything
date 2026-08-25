@@ -341,19 +341,36 @@ ENABLE_APP_REGISTRY_WORKER=true
 ENABLE_APP_REGISTRY_UI=true
 ENABLE_TEMPORAL=true
 
-# Infrastructure — set to 'custom' to use an external Postgres
+# Infrastructure — set to 'custom' to use external services
 BUILD_POSTGRES_ENV=default       # or 'custom'
 PG_DATABASE_URL=postgres://...   # if BUILD_POSTGRES_ENV=custom
+BUILD_MINIO_ENV=default          # or 'custom'
+RELEASE_TOOLS_S3_ENDPOINT=...    # if BUILD_MINIO_ENV=custom
+RELEASE_TOOLS_S3_PUBLIC_ENDPOINT=...  # if BUILD_MINIO_ENV=custom
+RELEASE_TOOLS_S3_BUCKET=...      # if BUILD_MINIO_ENV=custom
+RELEASE_TOOLS_S3_REGION=...      # if BUILD_MINIO_ENV=custom
+RELEASE_TOOLS_S3_ACCESS_KEY=...  # if BUILD_MINIO_ENV=custom
+RELEASE_TOOLS_S3_SECRET_KEY=...  # if BUILD_MINIO_ENV=custom
 ```
 
 Local access (`tilt up` from `tools/app_registry/`): API forwarded to
 `localhost:50061`, UI forwarded to `localhost:8090`, Postgres to
 `localhost:5432`, Temporal gRPC to `localhost:7233` and Web UI to
-`localhost:8233`. The UI's `PG_DATABASE_URL` is set by the Tiltfile from the
+`localhost:8233`, MinIO API to `localhost:9000`, MinIO Console to
+`localhost:9001` (infrastructure mode, no port forward). The UI's `PG_DATABASE_URL` is set by the Tiltfile from the
 **same** `pg_database_url` value fed to the API/migration/worker above — one
 local database, not two (see "UI" above). `AUTH_MODE=none` and
-`GRPC_AUTH_MODE=none` in Tilt, same as the API. The worker has no forwarded
-port (it serves nothing) — inspect it via `tilt logs app-registry-worker` or
+`GRPC_AUTH_MODE=none` in Tilt, same as the API. 
+
+**MinIO (FR-58):** The local environment uses MinIO with two distinct endpoints
+for S3 access:
+- **Internal endpoint** (`RELEASE_TOOLS_S3_ENDPOINT`): `http://minio-dev.app-registry-local-dev.svc.cluster.local:9000` — used by API and worker within the cluster.
+- **Public endpoint** (`RELEASE_TOOLS_S3_PUBLIC_ENDPOINT`): `http://localhost:9000` — used by external clients (e.g. CI, browser).
+- **Bucket**: `app-registry-dev` (created automatically by the Tiltfile).
+- **Credentials**: `minioadmin` / `minioadmin` (default MinIO credentials).
+- **Region**: `us-east-1` (default for S3-compatible services).
+
+The worker has no forwarded port (it serves nothing) — inspect it via `tilt logs app-registry-worker` or
 a shell into its pod (`WRITEBACK_OUTPUT_DIR` lives inside the container).
 `ENABLE_APP_REGISTRY_WORKER=true` with `ENABLE_TEMPORAL=false` skips the
 worker (it has nothing to poll) with a printed warning rather than deploying
