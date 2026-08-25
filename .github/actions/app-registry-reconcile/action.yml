@@ -32,8 +32,9 @@ inputs:
       When 'true', passes --fast to `release_helper_go manifest-set`, which
       statically parses BUILD.bazel files instead of shelling out to bazel
       query/cquery -- see docs/RELEASE_HELPER_FAST_MODE.md. Callers should
-      pass ${{ vars.RELEASE_HELPER_FAST_MODE }} through here rather than
-      hardcoding 'true'/'false', so the toggle stays a single repo variable.
+      pass the RELEASE_HELPER_FAST_MODE repo variable through here rather
+      than hardcoding 'true'/'false', so the toggle stays a single repo
+      variable.
     required: false
     default: 'false'
 
