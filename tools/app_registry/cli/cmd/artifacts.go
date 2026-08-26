@@ -25,6 +25,8 @@ func newArtifactsCmd() *cobra.Command {
 		newArtifactsBeginPublishBatchCmd(),
 		newArtifactsFailPublishCmd(),
 		newArtifactsAdoptCmd(),
+		newArtifactsBrokerCmd(),
+		newArtifactsConfirmCmd(),
 	)
 	return artifactsCmd
 }
@@ -531,4 +533,121 @@ func parseArtifactProvenance(s string) (pb.ArtifactProvenance, error) {
 	default:
 		return pb.ArtifactProvenance_ARTIFACT_PROVENANCE_UNSPECIFIED, fmt.Errorf("unknown provenance %q (want observed|adopted)", s)
 	}
+}
+
+// newArtifactsBrokerCmd calls the upload broker with artifact identity and file set.
+// Returns presigned URLs (case a) or "already stored" results (case b) per FR-1.
+// Used in the CI producer path before any bytes are written.
+func newArtifactsBrokerCmd() *cobra.Command {
+	var artifactKind, version, artifactIdentity, versionReference, filesFile string
+	c := &cobra.Command{
+		Use:   "broker",
+		Short: "Broker an artifact upload, getting presigned URLs or 'already stored' results (CI)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Read files JSON array
+			data, err := os.ReadFile(filesFile)
+			if err != nil {
+				return fmt.Errorf("read --files %s: %w", filesFile, err)
+			}
+
+			type brokerFileJSON struct {
+				VariantKey         string `json:"variant_key"`
+				UncompressedDigest string `json:"uncompressed_digest"`
+			}
+
+			var filesData []brokerFileJSON
+			if err := json.Unmarshal(data, &filesData); err != nil {
+				return fmt.Errorf("parse --files %s: %w", filesFile, err)
+			}
+
+			// Build BrokerUploadRequest
+			req := &pb.BrokerUploadRequest{
+				ArtifactKind:     artifactKind,
+				Version:          version,
+				ArtifactIdentity: artifactIdentity,
+				VersionReference: versionReference,
+			}
+			for _, f := range filesData {
+				req.Files = append(req.Files, &pb.BrokerUploadFile{
+					VariantKey:         f.VariantKey,
+					UncompressedDigest: f.UncompressedDigest,
+				})
+			}
+
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.BrokerUpload(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				return printResponse(resp)
+			})
+		},
+	}
+	c.Flags().StringVar(&artifactKind, "artifact-kind", "", "Artifact kind (e.g., image, binary)")
+	c.Flags().StringVar(&version, "version", "", "Semantic version of artifact (e.g., v1.2.3)")
+	c.Flags().StringVar(&artifactIdentity, "artifact-identity", "", "Artifact identity (e.g., <domain>-<app>)")
+	c.Flags().StringVar(&versionReference, "version-reference", "", "Version reference for this upload (e.g., same as --version)")
+	c.Flags().StringVar(&filesFile, "files", "", "Path to JSON array of {variant_key, uncompressed_digest} files")
+	_ = c.MarkFlagRequired("artifact-kind")
+	_ = c.MarkFlagRequired("version")
+	_ = c.MarkFlagRequired("artifact-identity")
+	_ = c.MarkFlagRequired("files")
+	return c
+}
+
+// newArtifactsConfirmCmd confirms an upload by reading back bytes, decoding,
+// and verifying digests match. One request confirms all files from a single
+// BrokerUpload session (FR-46).
+func newArtifactsConfirmCmd() *cobra.Command {
+	var uploadSessionID, artifactKind, filesFile string
+	c := &cobra.Command{
+		Use:   "confirm",
+		Short: "Confirm an artifact upload by reading back and verifying digests (CI)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Read files JSON array
+			data, err := os.ReadFile(filesFile)
+			if err != nil {
+				return fmt.Errorf("read --files %s: %w", filesFile, err)
+			}
+
+			type confirmFileJSON struct {
+				VariantKey    string `json:"variant_key"`
+				ObjectKey     string `json:"object_key"`
+				ClaimedDigest string `json:"claimed_digest"`
+			}
+
+			var filesData []confirmFileJSON
+			if err := json.Unmarshal(data, &filesData); err != nil {
+				return fmt.Errorf("parse --files %s: %w", filesFile, err)
+			}
+
+			// Build ConfirmUploadRequest
+			req := &pb.ConfirmUploadRequest{
+				UploadSessionId: uploadSessionID,
+				ArtifactKind:    artifactKind,
+			}
+			for _, f := range filesData {
+				req.Files = append(req.Files, &pb.ConfirmUploadFile{
+					VariantKey:    f.VariantKey,
+					ObjectKey:     f.ObjectKey,
+					ClaimedDigest: f.ClaimedDigest,
+				})
+			}
+
+			return withClient(cmd, func(rc *registryClient) error {
+				resp, err := rc.Artifact.ConfirmUpload(cmd.Context(), req)
+				if err != nil {
+					return err
+				}
+				return printResponse(resp)
+			})
+		},
+	}
+	c.Flags().StringVar(&uploadSessionID, "upload-session-id", "", "Upload session ID returned by broker command")
+	c.Flags().StringVar(&artifactKind, "artifact-kind", "", "Artifact kind (e.g., image, binary)")
+	c.Flags().StringVar(&filesFile, "files", "", "Path to JSON array of {variant_key, object_key, claimed_digest} files")
+	_ = c.MarkFlagRequired("upload-session-id")
+	_ = c.MarkFlagRequired("artifact-kind")
+	_ = c.MarkFlagRequired("files")
+	return c
 }
