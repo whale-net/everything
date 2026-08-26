@@ -180,6 +180,17 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, status.Errorf(codes.Internal, "publish config: %v", err)
 	}
 
+	// FR8: every write produces an append-only audit record.
+	if err := s.repo.RecordAuditWithConfig(ctx, subject, householdID, "push_config", "device_config",
+		version, &version, nil, nil, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"device_id", req.DeviceId,
+			"version", version,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
 	s.logger.Info("device config pushed",
 		"device_id", req.DeviceId,
 		"version", version,

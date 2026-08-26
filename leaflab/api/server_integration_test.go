@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS audit_record (
     occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     reason TEXT,
     config_version BIGINT,
-    i2c_address UINT32,
+    i2c_address SMALLINT,
     mux_path JSONB
 );
 
@@ -522,21 +522,36 @@ func TestListActivityRecords_KeysetPagination(t *testing.T) {
 		}
 	}
 
-	// Query final page
+	// Query third page: 10 records, page size 3 → pages of 3,3,3,1. One record remains
+	// after two pages of 3, so page 3 is a full page of 3 with a next token.
 	page3, nextToken3, err := repo.ListActivityRecords(ctx, householdID, nextToken2, 3)
 	if err != nil {
 		t.Fatalf("ListActivityRecords page 3: %v", err)
 	}
 
-	if len(page3) != 4 {
-		t.Errorf("page 3: expected 4 remaining records, got %d", len(page3))
+	if len(page3) != 3 {
+		t.Errorf("page 3: expected 3 records, got %d", len(page3))
 	}
 
-	if nextToken3 != "" {
-		t.Errorf("page 3: expected empty nextToken (no more pages), got %q", nextToken3)
+	if nextToken3 == "" {
+		t.Error("page 3: expected nextToken (one record remains), got empty")
 	}
 
-	t.Logf("Pagination works correctly: page1=%d, page2=%d, page3=%d", len(page1), len(page2), len(page3))
+	// Query final page: the last remaining record, with no further token.
+	page4, nextToken4, err := repo.ListActivityRecords(ctx, householdID, nextToken3, 3)
+	if err != nil {
+		t.Fatalf("ListActivityRecords page 4: %v", err)
+	}
+
+	if len(page4) != 1 {
+		t.Errorf("page 4: expected 1 remaining record, got %d", len(page4))
+	}
+
+	if nextToken4 != "" {
+		t.Errorf("page 4: expected empty nextToken (no more pages), got %q", nextToken4)
+	}
+
+	t.Logf("Pagination works correctly: page1=%d, page2=%d, page3=%d, page4=%d", len(page1), len(page2), len(page3), len(page4))
 }
 
 // TestAuditRecord_NonHumanActor verifies that a non-human actor (e.g., a system service)
