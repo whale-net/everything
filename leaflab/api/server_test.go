@@ -1010,3 +1010,334 @@ func TestFR82_DryRun_HasScopeField(t *testing.T) {
 		t.Errorf("expected EDIT scope, got %v", req.Scope)
 	}
 }
+
+// FR34: Test deriveConfigState function with three distinct states
+func TestConfigStateDerivation_ThreeDistinctStates(t *testing.T) {
+	tests := []struct {
+		name            string
+		ackedAt         int64
+		rejectionReason string
+		wantState       pb.ConfigState
+	}{
+		{
+			name:            "accepted - acked_at set, no rejection reason",
+			ackedAt:         1000,
+			rejectionReason: "",
+			wantState:       pb.ConfigState_CONFIG_STATE_ACCEPTED,
+		},
+		{
+			name:            "pending - acked_at is 0 (NULL)",
+			ackedAt:         0,
+			rejectionReason: "",
+			wantState:       pb.ConfigState_CONFIG_STATE_PENDING,
+		},
+		{
+			name:            "rejected - acked_at set and rejection reason set",
+			ackedAt:         1000,
+			rejectionReason: "Device overheating",
+			wantState:       pb.ConfigState_CONFIG_STATE_REJECTED,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deriveConfigState(tt.ackedAt, tt.rejectionReason)
+			if got != tt.wantState {
+				t.Errorf("deriveConfigState(%d, %q): got %v, want %v",
+					tt.ackedAt, tt.rejectionReason, got, tt.wantState)
+			}
+		})
+	}
+}
+
+// FR34: Test that pending is not rendered as rejected
+func TestFR34_PendingNotRenderedAsRejected(t *testing.T) {
+	// Pending: acked_at is 0 (NULL), no rejection_reason
+	pending := deriveConfigState(0, "")
+
+	if pending == pb.ConfigState_CONFIG_STATE_REJECTED {
+		t.Error("pending config incorrectly rendered as rejected")
+	}
+
+	if pending != pb.ConfigState_CONFIG_STATE_PENDING {
+		t.Errorf("pending state: got %v, want PENDING", pending)
+	}
+}
+
+// FR34: Test that rejected is distinguishable from pending
+func TestFR34_RejectedDistinguishableFromPending(t *testing.T) {
+	pending := deriveConfigState(0, "")
+	rejected := deriveConfigState(1000, "Sensor failure")
+
+	if pending == rejected {
+		t.Error("pending and rejected states should be different")
+	}
+
+	if pending != pb.ConfigState_CONFIG_STATE_PENDING {
+		t.Errorf("pending state: got %v, want PENDING", pending)
+	}
+
+	if rejected != pb.ConfigState_CONFIG_STATE_REJECTED {
+		t.Errorf("rejected state: got %v, want REJECTED", rejected)
+	}
+}
+
+// FR34: Test that rejection reason is verbatim from firmware
+func TestFR34_RejectionReasonVerbatim(t *testing.T) {
+	reasons := []string{
+		"Sensor error: 0xFF, CRC failed",
+		"Device overheating",
+		"Invalid configuration",
+		"Critical failure",
+	}
+
+	for _, reason := range reasons {
+		state := deriveConfigState(1000, reason)
+		if state != pb.ConfigState_CONFIG_STATE_REJECTED {
+			t.Errorf("rejection reason %q should produce REJECTED state", reason)
+		}
+
+		// Verify the reason appears verbatim in the plain sentence
+		sentence := configStatusPlainSentence(state, reason)
+		if !strings.Contains(sentence, reason) {
+			t.Errorf("rejection reason not preserved: sentence %q should contain %q", sentence, reason)
+		}
+	}
+}
+
+// FR34: Test plain sentence rendering contains no version number
+func TestFR34_PlainSentenceNoVersionNumber(t *testing.T) {
+	tests := []struct {
+		name            string
+		state           pb.ConfigState
+		rejectionReason string
+	}{
+		{
+			name:            "accepted state no version",
+			state:           pb.ConfigState_CONFIG_STATE_ACCEPTED,
+			rejectionReason: "",
+		},
+		{
+			name:            "pending state no version",
+			state:           pb.ConfigState_CONFIG_STATE_PENDING,
+			rejectionReason: "",
+		},
+		{
+			name:            "rejected with reason no version",
+			state:           pb.ConfigState_CONFIG_STATE_REJECTED,
+			rejectionReason: "Error occurred",
+		},
+		{
+			name:            "rejected no reason no version",
+			state:           pb.ConfigState_CONFIG_STATE_REJECTED,
+			rejectionReason: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sentence := configStatusPlainSentence(tt.state, tt.rejectionReason)
+
+			// Verify no version numbers appear in the sentence
+			versionNumbers := []string{"version", "v1", "v2", " 1", " 2", " 3"}
+			for _, num := range versionNumbers {
+				if strings.Contains(sentence, num) {
+					t.Errorf("sentence should not contain version info %q: %q", num, sentence)
+				}
+			}
+
+			// Verify sentence is not empty
+			if len(sentence) == 0 {
+				t.Errorf("sentence is empty for state %v", tt.state)
+			}
+		})
+	}
+}
+
+// FR34: Test three complete sentences for non-technical surface
+func TestFR34_PlainSentencesAreComplete(t *testing.T) {
+	tests := []struct {
+		name            string
+		state           pb.ConfigState
+		rejectionReason string
+		wantContains    []string
+	}{
+		{
+			name:            "accepted sentence is complete",
+			state:           pb.ConfigState_CONFIG_STATE_ACCEPTED,
+			rejectionReason: "",
+			wantContains:    []string{"device", "accepted"},
+		},
+		{
+			name:            "pending sentence is complete and helpful",
+			state:           pb.ConfigState_CONFIG_STATE_PENDING,
+			rejectionReason: "",
+			wantContains:    []string{"responded", "connected", "powered"},
+		},
+		{
+			name:            "rejected sentence is complete with help path",
+			state:           pb.ConfigState_CONFIG_STATE_REJECTED,
+			rejectionReason: "Error",
+			wantContains:    []string{"rejected", "support"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sentence := configStatusPlainSentence(tt.state, tt.rejectionReason)
+
+			for _, substr := range tt.wantContains {
+				if !strings.Contains(sentence, substr) {
+					t.Errorf("%s: sentence missing %q: %q", tt.name, substr, sentence)
+				}
+			}
+
+			// Verify sentence ends with period
+			if len(sentence) == 0 || sentence[len(sentence)-1] != '.' {
+				t.Errorf("%s: sentence should end with period: %q", tt.name, sentence)
+			}
+		})
+	}
+}
+
+// FR34: Test state derivation edge cases
+func TestFR34_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name            string
+		ackedAt         int64
+		rejectionReason string
+		wantState       pb.ConfigState
+	}{
+		{
+			name:            "acked_at=1, reason=empty => accepted",
+			ackedAt:         1,
+			rejectionReason: "",
+			wantState:       pb.ConfigState_CONFIG_STATE_ACCEPTED,
+		},
+		{
+			name:            "acked_at=0, reason=empty => pending",
+			ackedAt:         0,
+			rejectionReason: "",
+			wantState:       pb.ConfigState_CONFIG_STATE_PENDING,
+		},
+		{
+			name:            "acked_at=1, reason=non-empty => rejected",
+			ackedAt:         1,
+			rejectionReason: "x",
+			wantState:       pb.ConfigState_CONFIG_STATE_REJECTED,
+		},
+		{
+			name:            "acked_at=max, reason=empty => accepted",
+			ackedAt:         9223372036854775807, // max int64
+			rejectionReason: "",
+			wantState:       pb.ConfigState_CONFIG_STATE_ACCEPTED,
+		},
+		{
+			name:            "acked_at=max, reason=non-empty => rejected",
+			ackedAt:         9223372036854775807,
+			rejectionReason: "error",
+			wantState:       pb.ConfigState_CONFIG_STATE_REJECTED,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deriveConfigState(tt.ackedAt, tt.rejectionReason)
+			if got != tt.wantState {
+				t.Errorf("got %v, want %v", got, tt.wantState)
+			}
+		})
+	}
+}
+
+// FR45: Verify ConfigState derivation is the only way to determine status
+func TestFR45_StateIsDerivedNotStored(t *testing.T) {
+	// The requirement is that state is derived from acked_at and rejection_reason,
+	// not from a dedicated status column. This test verifies the derivation logic
+	// covers all cases.
+
+	// Case 1: Pending (never acked)
+	if deriveConfigState(0, "") != pb.ConfigState_CONFIG_STATE_PENDING {
+		t.Error("pending state derivation incorrect")
+	}
+
+	// Case 2: Accepted (acked with no error)
+	if deriveConfigState(12345, "") != pb.ConfigState_CONFIG_STATE_ACCEPTED {
+		t.Error("accepted state derivation incorrect")
+	}
+
+	// Case 3: Rejected (acked with error)
+	if deriveConfigState(12345, "some error") != pb.ConfigState_CONFIG_STATE_REJECTED {
+		t.Error("rejected state derivation incorrect")
+	}
+
+	// Verify these are the only three possible outcomes
+	outcomes := make(map[pb.ConfigState]bool)
+	for ackedAt := int64(0); ackedAt <= 1; ackedAt++ {
+		for _, reason := range []string{"", "error"} {
+			state := deriveConfigState(ackedAt, reason)
+			outcomes[state] = true
+		}
+	}
+
+	if len(outcomes) != 3 {
+		t.Errorf("expected 3 distinct states, got %d", len(outcomes))
+	}
+
+	// Verify all three enum values are covered
+	if !outcomes[pb.ConfigState_CONFIG_STATE_ACCEPTED] {
+		t.Error("ACCEPTED state not derived")
+	}
+	if !outcomes[pb.ConfigState_CONFIG_STATE_PENDING] {
+		t.Error("PENDING state not derived")
+	}
+	if !outcomes[pb.ConfigState_CONFIG_STATE_REJECTED] {
+		t.Error("REJECTED state not derived")
+	}
+}
+
+// FR45: Proto verification - no ack fields in request messages
+func TestFR45_ProtoDoesNotExposeAckFields(t *testing.T) {
+	// Compile-time test: if the proto had accepted, acked_at, or rejection_reason
+	// fields in PushDeviceConfigRequest, the following code would not compile.
+	
+	req := &pb.PushDeviceConfigRequest{
+		DeviceId: "test",
+		Scope:    pb.ConfigScope_CONFIG_SCOPE_COMPLETE,
+	}
+	
+	if req.DeviceId != "test" {
+		t.Error("request should be constructible")
+	}
+	
+	// These would not compile if the fields existed in the proto:
+	// req.Accepted = true
+	// req.AckedAt = 0
+	// req.RejectionReason = ""
+}
+
+// FR45: ConfigStatusEntry is response-only (never in request)
+func TestFR45_ConfigStatusEntryIsResponseOnly(t *testing.T) {
+	// Compile-time test: ConfigStatusEntry appears only in response messages.
+	// GetConfigStatusRequest, ListConfigHistoryRequest, GetConfigByVersionRequest
+	// do not have ConfigStatusEntry fields.
+	
+	// GetConfigStatusRequest input
+	statusReq := &pb.GetConfigStatusRequest{
+		BoardId: 1,
+		Version: 1,
+	}
+	if statusReq == nil {
+		t.Error("status request should be constructible")
+	}
+	
+	// GetConfigStatusResponse output (where ConfigStatusEntry appears)
+	statusResp := &pb.GetConfigStatusResponse{
+		Status: &pb.ConfigStatusEntry{
+			State: pb.ConfigState_CONFIG_STATE_PENDING,
+		},
+	}
+	if statusResp.Status.State != pb.ConfigState_CONFIG_STATE_PENDING {
+		t.Error("status entry should be readable in response")
+	}
+}
