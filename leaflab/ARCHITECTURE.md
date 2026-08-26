@@ -2,30 +2,75 @@
 
 ## System Overview
 
+Phase 1 introduces two deployables: the gRPC API server and the browser-facing UI server (BFF).
+
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    LeafLab Device (ESP32)                │
-│                                                         │
-│  sensorboard_dynamic_main.cc  ← boot: load NVS config  │
-│    ↓                                                    │
-│  *_dynamic_config.cc  ← hardware wiring (compile-time)  │
-│    ↓ GetSensors() / GetBus()                            │
-│  FirmwarePublisher                                      │
-│    ↓ subscribes leaflab/<id>/config                     │
-│    ↓ publishes manifest, readings, config/ack           │
-└───────────────────────┬─────────────────────────────────┘
-                        │ MQTT / TLS / Wi-Fi
-                   MQTT Broker (RabbitMQ + MQTT plugin)
-                        │ amq.topic exchange (leaflab.#)
-               ┌────────┴────────┐
-               │  leaflab/processor (Go)              │
-               │  consumes AMQP, writes TimescaleDB   │
-               └────────┬────────┘
-                        │
-               TimescaleDB (PostgreSQL)
-                        │
-               Dashboards / future API
+┌──────────────────────────────────┐
+│   Browser (web client)           │
+└──────────────────────────────────┘
+        │ HTTP/HTMX
+        │
+┌──────────────────────────────────────────────┐
+│ leaflab-ui (BFF, Python FastAPI)             │
+│ • htmxauth session + cookie holder           │
+│ • Routes browser requests → leaflab-api      │
+│ • Forwards user token via gRPC metadata      │
+└──────────────────┬───────────────────────────┘
+                   │ gRPC (user token in metadata)
+                   │
+┌──────────────────────────────────────────────┐
+│ leaflab-api (Go gRPC server)                 │
+│ • grpcauth middleware validates tokens       │
+│ • Reads sensor data and configs              │
+│ • Serves analytics queries                   │
+└──────────────────┬───────────────────────────┘
+                   │
+         TimescaleDB (PostgreSQL)
 ```
+
+**Device data path (unchanged from Phase 0):**
+```
+Physical sensor (BH1750, etc.)
+    ↓ I2C
+ESP32 (leaflab/sensorboard firmware)
+    ↓ MQTT over Wi-Fi / TLS
+RabbitMQ (MQTT plugin, amq.topic exchange)
+    ↓ AMQP
+leaflab/processor (Go, single-writer)
+    ↓
+TimescaleDB (PostgreSQL)
+```
+
+---
+
+## Auth Boundary
+
+The UI server (leaflab-ui) is an htmxauth BFF (Backend for Frontend):
+
+1. **Browser sessions** — managed via secure cookies (session storage in PostgreSQL)
+2. **Authentication** — OIDC flow runs on the UI server; browser never contacts the IdP
+3. **Token forwarding** — the UI server extracts the user token from its session and forwards it to leaflab-api as gRPC metadata
+4. **API-side validation** — leaflab-api uses a grpcauth middleware to validate the token from metadata
+
+This pattern decouples the UI's auth mode from the API's, allowing:
+- The UI to support browser-friendly auth flows (sessions, cookies, form redirects)
+- The API to support token validation at the gRPC level (no browser cookie stack needed)
+
+Both servers can run in `auth_mode=none` for local development.
+
+---
+
+## Deployables
+
+### leaflab-processor
+
+The processor is the sole writer of the reading-timestamp path: it consumes AMQP messages from the broker and writes sensor readings to the database with `recorded_at` timestamps. **This is a single-replica, single-writer constraint by construction.** Scaling it horizontally requires cache coherence between replicas, not a configuration change — that's a Phase 3 feature, not a tuning knob (see NFR9 in `processor/BUILD.bazel`).
+
+The device-facing contract — MQTT/AMQP message format, firmware image binary interface, USB provisioning protocol — is **frozen** as of Phase 1. Changes to these require coordinated firmware updates and are out of scope for near-term evolution. The processor's internal implementation is not frozen and may be refactored.
+
+### leaflab-ui
+
+The browser-facing BFF built with Python FastAPI. Handles HTMX form requests, manages session authentication, and proxies queries to leaflab-api. Responds with HTML templates; no separate client app.
 
 ---
 

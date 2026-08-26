@@ -13,10 +13,14 @@ LeafLab devices read sensors (light, temperature, soil moisture, etc.), publish 
 | `sensorboard/` | ESP32 firmware that reads sensors via I2C and publishes via MQTT |
 | `processor/` | Go service that consumes MQTT messages from RabbitMQ and writes to the database |
 | `migrate/` | Database migration runner (TimescaleDB) |
+| `api/` | Go gRPC server for sensor data queries and device configuration |
+| `ui/` | Python FastAPI server (BFF) that serves web UI and manages browser sessions |
 
 ---
 
 ## Quick Start
+
+### Device Firmware
 
 ```bash
 # Build sensorboard firmware
@@ -36,6 +40,38 @@ bazel run //leaflab/sensorboard:provision -- /dev/ttyUSB0 \
 
 See [`sensorboard/README.md`](sensorboard/README.md) for full build, flash, and extension instructions.
 
+### Server-Side Services
+
+Run all services locally with Tilt:
+
+```bash
+cd leaflab && tilt up
+```
+
+This starts:
+- RabbitMQ (MQTT plugin enabled) on port 5672
+- PostgreSQL on port 5432
+- leaflab-processor (AMQP consumer)
+- leaflab-migrate (schema initialization)
+- leaflab-api on port 50051 (gRPC)
+- leaflab-ui on port 8000 (HTTP)
+
+Open your browser to `http://localhost:8000` to access the web UI.
+
+---
+
+## Deployables
+
+**Phase 1 introduces two deployable services** (in addition to the processor which was already running):
+
+| Service | Language | Port | Purpose |
+|---------|----------|------|---------|
+| leaflab-processor | Go | N/A (AMQP consumer) | Consumes MQTT readings from RabbitMQ, writes to database |
+| leaflab-api | Go | 50051 | gRPC API server — sensor queries, device config, user auth validation |
+| leaflab-ui | Python | 8000 | HTTP BFF — browser UI, session management, gRPC proxy |
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for design rationale, especially the auth boundary between the UI (session holder) and API (token validator).
+
 ---
 
 ## Architecture Overview
@@ -51,7 +87,11 @@ leaflab/processor (Go)
     ↓
 TimescaleDB (PostgreSQL + timescaledb extension)
     ↓
-Dashboards / analytics
+leaflab-api (gRPC, read-only queries)
+    ↑
+leaflab-ui (BFF, session holder)
+    ↑
+Browser (HTTP/HTMX)
 ```
 
 The sensor firmware layer is fully unit-tested on the host — no hardware required for most development work. See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full design.

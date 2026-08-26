@@ -48,5 +48,9 @@ release_app(
     domain = "leaflab",
     description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
     app_type = "worker",
+    # NFR9: Single-writer constraint by construction. The processor is single-replica
+    # because it is the sole writer of the sensor reading timestamp stamping path.
+    # Scaling to multiple replicas is a correctness change requiring cache coherence,
+    # not a configuration tuning knob. See #1189.
     replicas = 1,
 )
