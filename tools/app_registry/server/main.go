@@ -16,7 +16,9 @@ import (
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/rmq"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
+	"github.com/whale-net/everything/tools/app_registry/events"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	registryauth "github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/handlers"
@@ -110,7 +112,9 @@ func run() error {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	healthServer := registerServices(grpcServer, repo, temporalClient, releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)
+	publisher := initializePublisher(ctx)
+
+	healthServer := registerServices(grpcServer, repo, temporalClient, publisher, releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)
 
 	// Start listening
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
@@ -150,7 +154,7 @@ func run() error {
 // real database or gRPC auth setup required — see main_test.go, which passes
 // a fake repository.Registry (and a nil temporalClient -- see
 // handlers.ReleaseServer's temporal field doc comment).
-func registerServices(grpcServer *grpc.Server, repo repository.Registry, temporalClient client.Client, releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey string) *health.Server {
+func registerServices(grpcServer *grpc.Server, repo repository.Registry, temporalClient client.Client, publisher events.PublisherInterface, releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey string) *health.Server {
 	// AppRegistry and ArtifactRegistry are real as of AR-2a (AllocateVersion
 	// stays Unimplemented — that's AR-5). EnvironmentRegistry is real as of
 	// AR-3b. PromotionRegistry is real as of AR-3c. ReleaseRegistry is real
@@ -159,7 +163,7 @@ func registerServices(grpcServer *grpc.Server, repo repository.Registry, tempora
 	// half first).
 	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer(repo))
 	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)))
-	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo, temporalClient, nil))
+	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo, temporalClient, publisher))
 	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer(repo))
 	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo, temporalClient))
 
@@ -174,6 +178,33 @@ func registerServices(grpcServer *grpc.Server, repo repository.Registry, tempora
 	reflection.Register(grpcServer)
 
 	return healthServer
+}
+
+// initializePublisher constructs the FR7b event-publisher component (#1130)
+// for the three FR7 publish points (Promote/Rollback here; ArgoSyncActivities
+// and Recorder in the worker binary have their own identical construction).
+// Construction is non-fatal (NFR7): with RABBITMQ_URL unset or the broker
+// unreachable at startup, this returns nil and every publish point silently
+// no-ops (each is nil-checked) -- the server still serves every RPC
+// normally, it just never announces those transitions over SSE. Once
+// connected, the Publisher's own background goroutine self-heals broker-side
+// channel/exchange failures; a connection that never dialed successfully at
+// startup is not retried by this process (matches *rmq.Connection's own
+// dial-once-then-self-heal contract) -- restart once the broker is back.
+func initializePublisher(ctx context.Context) events.PublisherInterface {
+	brokerURL := getEnv("RABBITMQ_URL", "")
+	if brokerURL == "" {
+		log.Println("RABBITMQ_URL not set; promotion events will not be published")
+		return nil
+	}
+
+	conn, err := rmq.NewConnectionFromURL(brokerURL)
+	if err != nil {
+		log.Printf("WARNING: failed to connect to RabbitMQ for event publishing, promotion events will not be published: %v", err)
+		return nil
+	}
+
+	return events.NewPublisher(ctx, conn, logging.Get("app-registry-api"), 100, rmq.NewPublisherWithExchange)
 }
 
 func getEnv(key, defaultValue string) string {
