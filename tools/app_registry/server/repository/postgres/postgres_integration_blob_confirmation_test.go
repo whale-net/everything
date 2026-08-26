@@ -10,11 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/whale-net/everything/libs/go/dbtest"
-	"github.com/whale-net/everything/libs/go/migrate"
-	"github.com/whale-net/everything/tools/app_registry/migrate/schema"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
@@ -155,14 +151,4 @@ func TestCompletePublish_NoBlobs_FR46(t *testing.T) {
 	if result.State != repository.ArtifactStatePublished {
 		t.Fatalf("expected state=published, got %v", result.State)
 	}
-}
-
-// newTestRegistry is borrowed from postgres_integration_helpers_test.go
-func newTestRegistry(t *testing.T) (repository.Registry, *pgxpool.Pool) {
-	t.Helper()
-	pool := dbtest.Pool(t, schema.Migrations())
-	if err := migrate.Migrate(context.Background(), pool, schema.Migrations(), "app_registry_test"); err != nil {
-		t.Fatalf("schema migrations: %v", err)
-	}
-	return NewRegistry(pool), pool
 }
