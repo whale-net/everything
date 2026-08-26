@@ -628,6 +628,23 @@ func (r *artifactRepo) insertArtifact(ctx context.Context, a repository.Artifact
 // insertArtifact's direct-create path does, just as an UPDATE instead of an
 // INSERT because the row (and its artifact_id) already exists.
 func (r *artifactRepo) completePublish(ctx context.Context, existing, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, error) {
+	// FR-46: Verify that every blob referenced by this artifact has a confirmation record
+	// with confirmation_state == 'confirmed'. This gates the publish transition on
+	// confirmed blobs, not on object-store existence checks.
+	unconfirmedCount := 0
+	row := r.ex.QueryRow(ctx, `
+		SELECT COUNT(*) FROM blob_version bv
+		LEFT JOIN blob_record br ON bv.blob_id = br.blob_id
+		WHERE bv.artifact_id = $1 AND (br.confirmation_state IS NULL OR br.confirmation_state != 'confirmed')`,
+		existing.ArtifactID)
+	if err := row.Scan(&unconfirmedCount); err != nil {
+		return nil, fmt.Errorf("verify blob confirmation for artifact %s: %w", existing.ArtifactID, err)
+	}
+	if unconfirmedCount > 0 {
+		return nil, fmt.Errorf("%w: artifact %s has %d unconfirmed blobs; all blobs must have confirmation_state = 'confirmed' before publishing",
+			repository.ErrFailedPrecondition, existing.ArtifactID, unconfirmedCount)
+	}
+
 	publishedAt := a.PublishedAt
 	if publishedAt.IsZero() {
 		publishedAt = time.Now().UTC()

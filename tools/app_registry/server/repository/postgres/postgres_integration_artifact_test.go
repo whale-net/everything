@@ -2643,3 +2643,5 @@ func TestGetArtifact_LatestPublished_Integration(t *testing.T) {
 		t.Fatalf("expected ErrNotFound for BeforeVersion=v1.0.0, got %v", err)
 	}
 }
+
+
