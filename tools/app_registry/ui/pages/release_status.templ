@@ -211,7 +211,7 @@ templ releaseStatusTargetsBody(rel *pb.GetReleaseResponse, commits map[string]Bu
 
 templ releaseStatusResolvedPlanBody(rel *pb.GetReleaseResponse) {
 	<h3 class="card-title text-base">Resolved plan</h3>
-	<pre class="text-xs overflow-x-auto bg-base-200 p-3 rounded">{ rel.GetResolvedPlanJson() }</pre>
+	<pre class="text-xs overflow-x-auto bg-base-200 p-3 rounded">{ prettyJSON(rel.GetResolvedPlanJson()) }</pre>
 }
 
 // Retry (FR6/FR11) posts directly to /releases/trigger with "do=trigger",

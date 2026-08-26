@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -52,4 +53,18 @@ func timeAgo(timestamp int64) string {
 		}
 		return fmt.Sprintf("%d days ago", days)
 	}
+}
+
+// prettyJSON re-indents a JSON document for display in a <pre> block,
+// falling back to the raw string if it isn't valid JSON.
+func prettyJSON(raw string) string {
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return raw
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return raw
+	}
+	return string(b)
 }
