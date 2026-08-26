@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/whale-net/everything/libs/go/db"
@@ -153,7 +154,39 @@ func run() error {
 // real database or gRPC auth setup required — see main_test.go, which passes
 // a fake repository.Registry (and a nil temporalClient -- see
 // handlers.ReleaseServer's temporal field doc comment).
+//
+// FR-72 (issue #1160): startup validation for resolve-side S3 configuration.
+// If any of the four required values are configured, all must be present.
+// A deployment missing any of them fails at startup with an explicit error
+// naming what is missing, rather than degrading to unsigned URLs or failing
+// per request.
 func registerServices(grpcServer *grpc.Server, repo repository.Registry, temporalClient client.Client, releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey string) *health.Server {
+	// Check if any S3 configuration is present; if so, all four values are required
+	hasAnyConfig := releaseToolsS3Bucket != "" || releaseToolsS3Endpoint != "" ||
+		releaseToolsS3PublicEndpoint != "" || releaseToolsS3Region != "" ||
+		releaseToolsS3AccessKey != "" || releaseToolsS3SecretKey != ""
+	if hasAnyConfig {
+		var missing []string
+		if releaseToolsS3Bucket == "" {
+			missing = append(missing, "RELEASE_TOOLS_S3_BUCKET")
+		}
+		if releaseToolsS3Endpoint == "" {
+			missing = append(missing, "RELEASE_TOOLS_S3_ENDPOINT")
+		}
+		if releaseToolsS3PublicEndpoint == "" {
+			missing = append(missing, "RELEASE_TOOLS_S3_PUBLIC_ENDPOINT")
+		}
+		if releaseToolsS3Region == "" {
+			missing = append(missing, "RELEASE_TOOLS_S3_REGION")
+		}
+		if releaseToolsS3AccessKey == "" || releaseToolsS3SecretKey == "" {
+			missing = append(missing, "RELEASE_TOOLS_S3_ACCESS_KEY and RELEASE_TOOLS_S3_SECRET_KEY")
+		}
+		if len(missing) > 0 {
+			panic(fmt.Sprintf("resolve-side S3 configuration incomplete; missing: %s", strings.Join(missing, ", ")))
+		}
+	}
+
 	// AppRegistry and ArtifactRegistry are real as of AR-2a (AllocateVersion
 	// stays Unimplemented — that's AR-5). EnvironmentRegistry is real as of
 	// AR-3b. PromotionRegistry is real as of AR-3c. ReleaseRegistry is real
