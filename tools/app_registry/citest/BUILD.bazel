@@ -26,3 +26,20 @@ go_test(
         "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )
+
+go_test(
+    name = "rehearsal_test",
+    srcs = [
+        "rehearsal_test.go",
+    ],
+    # FR-58: Integration test for the full upload/confirm/publish/resolve flow.
+    # Can run against a live app-registry server (e.g., tilt up).
+    tags = ["integration"],
+    deps = [
+        "//tools/app_registry/protos:appregistrypb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//status",
+    ],
+)
