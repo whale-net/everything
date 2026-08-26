@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -299,4 +300,103 @@ func (r *Repository) TransferBoardOwnership(ctx context.Context, boardID int64, 
 	}
 
 	return nil
+}
+
+// ── Plant placement (region) history ─────────────────────────────────────────
+
+// BackdatingRefusal captures details of a rejected back-dating attempt (FR59.3).
+// Placement boundaries are never back-dated: an interval opens at the instant
+// the change is recorded. This error is returned when a caller attempts to set
+// a valid_from earlier than the current time.
+type BackdatingRefusal struct {
+	PlantID       int64       // plant_id being moved
+	AttemptedFrom time.Time   // the timestamp the caller requested
+	CurrentTime   time.Time   // the actual current time
+	Reason        string      // human-readable explanation
+}
+
+func (e *BackdatingRefusal) Error() string {
+	return fmt.Sprintf(
+		"back-dating rejected for plant %d: attempted valid_from %v is earlier than current time %v (%s)",
+		e.PlantID, e.AttemptedFrom, e.CurrentTime, e.Reason,
+	)
+}
+
+// MovePlantRegion moves a plant to a new region via SCD2 close-and-open.
+// Closes the current (valid_to IS NULL) interval and opens a new one.
+// Per SCD2 pattern: UPDATE valid_to on current placement, then INSERT new placement.
+// Returns error if the plant is not found or if a back-dating attempt is made.
+func (r *Repository) MovePlantRegion(ctx context.Context, plantID int64, newRegionID int64) error {
+	// Per FR19/FR21: placement boundaries are never back-dated.
+	// The interval opens at NOW(); any attempt to set an earlier valid_from is refused.
+	// This is enforced by always using NOW() in the INSERT — the caller cannot override it.
+
+	// Use a transaction to ensure atomicity of placement close and open.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin move plant %d to region %d: %w", plantID, newRegionID, err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Close the current placement record (set valid_to = NOW()).
+	result, err := tx.Exec(ctx, `
+		UPDATE plant_region_history
+		SET valid_to = NOW()
+		WHERE plant_id = $1 AND valid_to IS NULL
+	`, plantID)
+	if err != nil {
+		return fmt.Errorf("close placement for plant %d: %w", plantID, err)
+	}
+	
+	// Verify the plant had an active placement (if no row was updated, the plant doesn't exist or has no active placement).
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("plant %d has no active placement or does not exist", plantID)
+	}
+
+	// Insert new placement record. valid_from defaults to NOW() per table definition.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
+		VALUES ($1, $2, NOW())
+	`, plantID, newRegionID)
+	if err != nil {
+		return fmt.Errorf("insert new placement for plant %d to region %d: %w", plantID, newRegionID, err)
+	}
+
+	// Commit the transaction.
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit move plant %d to region %d: %w", plantID, newRegionID, err)
+	}
+
+	return nil
+}
+
+// GetPlantCurrentRegion returns the current (valid_to IS NULL) region_id for a plant.
+// Returns pgx.ErrNoRows if the plant has no active placement.
+func (r *Repository) GetPlantCurrentRegion(ctx context.Context, plantID int64) (int64, error) {
+	var regionID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT region_id FROM plant_region_history
+		WHERE plant_id = $1 AND valid_to IS NULL
+	`, plantID).Scan(&regionID)
+	if err != nil {
+		return 0, fmt.Errorf("get plant %d current region: %w", plantID, err)
+	}
+	return regionID, nil
+}
+
+// GetPlantRegionAtTime returns the region_id a plant was in at a specific timestamp.
+// Used for temporal joins (e.g., v_sensor_reading_with_plant attribution).
+// Returns pgx.ErrNoRows if no placement interval contains the timestamp.
+func (r *Repository) GetPlantRegionAtTime(ctx context.Context, plantID int64, atTime time.Time) (int64, error) {
+	var regionID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT region_id FROM plant_region_history
+		WHERE plant_id = $1
+		  AND valid_from <= $2
+		  AND (valid_to IS NULL OR valid_to > $2)
+	`, plantID, atTime).Scan(&regionID)
+	if err != nil {
+		return 0, fmt.Errorf("get plant %d region at time %v: %w", plantID, atTime, err)
+	}
+	return regionID, nil
 }
