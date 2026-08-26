@@ -18,6 +18,10 @@ service LeafLabAPI {
 
   // List all known boards (boards that have sent at least one manifest).
   rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
+
+  // Health returns the service health status without requiring authentication.
+  // It returns up or degraded and no other details.
+  rpc Health(HealthRequest) returns (HealthResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -51,4 +55,16 @@ message ListBoardsRequest {}
 
 message ListBoardsResponse {
   repeated BoardInfo boards = 1;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  // Status is the health status.
+  enum Status {
+    UNKNOWN = 0;
+    UP = 1;
+    DEGRADED = 2;
+  }
+  Status status = 1;
 }

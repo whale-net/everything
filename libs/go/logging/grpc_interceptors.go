@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -60,11 +61,8 @@ func extractOrGenerateCorrelationID(ctx context.Context) context.Context {
 }
 
 // generateCorrelationID generates a new correlation ID.
-// This is a scaffold implementation; the actual format can be refined in Implementation.
 func generateCorrelationID() string {
-	// Simple UUID-like generation for now; can be enhanced with proper UUID library
-	// Using format: "req-" + timestamp + random suffix
-	return fmt.Sprintf("req-%d", timeNowUnixNanos())
+	return fmt.Sprintf("req-%d", time.Now().UnixNano())
 }
 
 // CorrelationIDFromContext retrieves the correlation ID from the context.
@@ -87,11 +85,4 @@ type wrappedStreamWithContext struct {
 // Context returns the wrapped context
 func (w *wrappedStreamWithContext) Context() context.Context {
 	return w.ctx
-}
-
-// timeNowUnixNanos returns current time in nanoseconds since Unix epoch.
-// This is used for generating correlation IDs.
-func timeNowUnixNanos() int64 {
-	// We use time.Now() indirectly through a helper to allow mocking in tests
-	return 0 // Will be replaced with actual implementation in the next phase
 }

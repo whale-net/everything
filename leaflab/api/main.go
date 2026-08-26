@@ -81,10 +81,15 @@ func run() error {
 		return fmt.Errorf("failed to create auth interceptors: %w", err)
 	}
 
-	// Create gRPC server with auth interceptors
+	// Create correlation ID interceptors
+	correlationUnaryInt := logging.NewCorrelationIDUnaryInterceptor()
+	correlationStreamInt := logging.NewCorrelationIDStreamInterceptor()
+
+	// Create gRPC server with auth and correlation ID interceptors
+	// Chain: correlation ID first (to attach to context), then auth (to verify credentials)
 	grpcServer := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(unaryInt),
-		grpc.ChainStreamInterceptor(streamInt),
+		grpc.ChainUnaryInterceptor(correlationUnaryInt, unaryInt),
+		grpc.ChainStreamInterceptor(correlationStreamInt, streamInt),
 	)
 
 	pb.RegisterLeafLabAPIServer(grpcServer, apiServer)
