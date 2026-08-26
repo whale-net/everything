@@ -71,7 +71,8 @@ func run() error {
 	defer publisher.Close() //nolint:errcheck
 
 	repo := NewRepository(pool)
-	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"))
+	claimConfig := LoadClaimConfig(getEnvInt)
+	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"), claimConfig)
 
 	// Create auth interceptors
 	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{

@@ -36,16 +36,18 @@ const mqttExchange = "amq.topic"
 
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
-	repo      *Repository
-	publisher *rmq.Publisher
-	logger    *slog.Logger
+	repo        *Repository
+	publisher   *rmq.Publisher
+	logger      *slog.Logger
+	claimConfig ClaimConfig
 }
 
-func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger, claimConfig ClaimConfig) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
-		repo:      repo,
-		publisher: publisher,
-		logger:    logger,
+		repo:        repo,
+		publisher:   publisher,
+		logger:      logger,
+		claimConfig: claimConfig,
 	}
 }
 

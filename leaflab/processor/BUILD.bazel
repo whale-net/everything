@@ -9,6 +9,7 @@ go_library(
         "handler.go",
         "main.go",
         "repository.go",
+        "restart_observer.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/processor",
     visibility = ["//visibility:private"],

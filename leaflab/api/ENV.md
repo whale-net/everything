@@ -33,6 +33,23 @@ LEAFLAB_RATELIMIT_READ_RPS=10000
 LEAFLAB_RATELIMIT_CLAIM_INITIATE_RPS=1000
 ```
 
+## Self-Service Board Claim (FR76)
+
+A28's constants govern the possession challenge that discharges a self-service
+board claim. All are configurable; the defaults below are the round-2-reviewed
+product tradeoff (r >= 2 is the hard requirement, r = 2 is the chosen default —
+see discussion 1131, round-2 architect confirmation). None of these change what
+is disclosed to the caller: initiation, round acknowledgements and terminal
+states are uniform regardless of these values (FR76.1, FR76.3, NFR2).
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `LEAFLAB_CLAIM_ROUNDS_REQUIRED` | 2 | Number of distinct challenger-marked restarts (r) required to discharge a challenge (FR76.3) |
+| `LEAFLAB_CLAIM_ROUND_BOUND_SECONDS` | 180 | Time window after marking a round (t0) within which the restart signal must land (FR76.3) |
+| `LEAFLAB_CLAIM_LIFETIME_SECONDS` | 900 | Total time budget for a challenge, long enough to walk to the greenhouse and back (FR76.9) |
+| `LEAFLAB_CLAIM_ATTEMPTS_PER_ROUND` | 2 | Bounded number of restart attempts allowed per round before the challenge is exhausted (FR76.6) |
+| `LEAFLAB_CLAIM_COOLDOWN_SECONDS` | 900 | Cooldown applied to a (principal, device_id) pair after a challenge terminates without discharge (FR76.6) |
+
 ## Other Configuration
 
 | Variable | Default | Description |

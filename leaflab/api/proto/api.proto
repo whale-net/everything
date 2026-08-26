@@ -52,6 +52,22 @@ service LeafLabAPI {
 
   // ListActiveGrants lists all active (non-expired, non-revoked) grants (FR7).
   rpc ListActiveGrants(ListActiveGrantsRequest) returns (ListActiveGrantsResponse);
+
+  // OpenChallenge opens a self-service board claim possession challenge
+  // (FR76). Uniform initiation: the response is identical in status, body
+  // shape, field set and timing whether device_id is never-claimed, resolves
+  // to Unadopted, is owned by a real household, or does not exist at all.
+  rpc OpenChallenge(OpenChallengeRequest) returns (OpenChallengeResponse);
+
+  // MarkRound marks t0, the start of one challenge round (FR76.3). The
+  // response is a uniform acknowledgement carrying no result — it never
+  // discloses whether a prior round was satisfied.
+  rpc MarkRound(MarkRoundRequest) returns (MarkRoundResponse);
+
+  // PollChallengeState reports a challenge's state (FR76.9). NOT_DISCHARGED
+  // covers exhausted lifetime, exhausted attempts, and a discharge against an
+  // already-owned board (FR76.7) indistinguishably.
+  rpc PollChallengeState(PollChallengeStateRequest) returns (PollChallengeStateResponse);
 }
 
 
@@ -217,4 +233,58 @@ message ListActiveGrantsRequest {}
 
 message ListActiveGrantsResponse {
   repeated Grant grants = 1;
+}
+
+// ── FR76: Self-service board claim (possession challenge) ────────────────────
+
+// OpenChallengeRequest opens a possession challenge against a device_id.
+// Uniform initiation (FR76.1): device_id is not validated against board
+// existence before the challenge is opened.
+message OpenChallengeRequest {
+  string device_id = 1;
+}
+
+// OpenChallengeResponse is identical in status, body shape, field set and
+// timing regardless of device_id resolution (FR76.1, NFR2). Every field here
+// is a static configuration value (A28), never derived from device_id.
+message OpenChallengeResponse {
+  // challenge_token: opaque handle for this challenge.
+  string challenge_token = 1;
+  // lifetime_seconds: total time budget for the challenge (A28).
+  int64 lifetime_seconds = 2;
+  // rounds_required: number of distinct challenger-marked rounds needed (A28: r >= 2).
+  int32 rounds_required = 3;
+  // round_bound_seconds: time window after marking a round in which a restart must land (A28).
+  int64 round_bound_seconds = 4;
+}
+
+// MarkRoundRequest marks t0, the start of one challenge round. The claimant
+// power-cycles the board after calling this; the round is satisfied by an
+// observed restart within round_bound_seconds of t0 (FR76.3).
+message MarkRoundRequest {
+  string challenge_token = 1;
+}
+
+// MarkRoundResponse is a uniform acknowledgement carrying no result (FR76.3) —
+// it never discloses whether a prior round was satisfied or how many attempts
+// remain, so the round protocol is not an oracle either.
+message MarkRoundResponse {}
+
+// PollChallengeStateRequest asks for the current state of a challenge.
+message PollChallengeStateRequest {
+  string challenge_token = 1;
+}
+
+// PollChallengeStateResponse reports the challenge's state. NOT_DISCHARGED
+// covers exhausted lifetime, exhausted attempts, and a discharge against a
+// board already owned by a real household (FR76.7) — these are
+// indistinguishable to the challenger by design.
+message PollChallengeStateResponse {
+  enum State {
+    UNKNOWN = 0;
+    WAITING = 1;
+    NOT_DISCHARGED = 2;
+    CLAIMED = 3;
+  }
+  State state = 1;
 }

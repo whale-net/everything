@@ -32,13 +32,21 @@ type SensorRepository interface {
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
 type MessageHandler struct {
-	logger *slog.Logger
-	repo   SensorRepository
-	cache  *SensorCache
+	logger          *slog.Logger
+	repo            SensorRepository
+	cache           *SensorCache
+	restartObserver RestartObserver
 }
 
 func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache) *MessageHandler {
-	return &MessageHandler{logger: logger, repo: repo, cache: cache}
+	return &MessageHandler{logger: logger, repo: repo, cache: cache, restartObserver: noopRestartObserver{}}
+}
+
+// SetRestartObserver wires the FR76 claim-challenge restart-signal observer.
+// Until called, restart signals observed on the reading and manifest paths
+// are discarded (noopRestartObserver).
+func (h *MessageHandler) SetRestartObserver(o RestartObserver) {
+	h.restartObserver = o
 }
 
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
@@ -76,6 +84,18 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 		return err
 	}
 	h.logger.Info("board registered", "device_id", deviceID, "board_id", boardID)
+
+	// FR76.4 narrow exception hook (scaffold — see detectManifestRestartException).
+	// Retained-vs-non-retained plumbing from the MQTT/AMQP consumer, and the
+	// "no reading ever received" lookup, are Implementation phase work (#1195);
+	// this call is wired but always reports false today.
+	if detectManifestRestartException(false, false) {
+		h.restartObserver.ObserveRestart(ctx, RestartSignal{
+			DeviceID:   deviceID,
+			ObservedAt: time.Now(),
+			Evidence:   RestartEvidenceManifestNoReading,
+		})
+	}
 
 	var firstErr error
 	for _, sd := range manifest.Sensors {
@@ -180,13 +200,27 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		configVersion = &v
 	}
 
+	// FR76.4 restart-signal observation: an uptime_s regression on a reading
+	// from this board is evidence of a restart. detectUptimeRegression is a
+	// scaffold stub (#1195 Implementation fills in the wrap-aware test and the
+	// "last recorded uptime_s for the board" lookup); it always reports no
+	// regression today, so this never fires yet.
+	currentUptimeS := reading.UptimeMs / 1000
+	if detectUptimeRegression(0, false, currentUptimeS) {
+		h.restartObserver.ObserveRestart(ctx, RestartSignal{
+			DeviceID:   deviceID,
+			ObservedAt: time.Now(),
+			Evidence:   RestartEvidenceUptimeRegression,
+		})
+	}
+
 	if err := h.repo.InsertReading(
 		ctx,
 		info.SensorID,
 		info.RegionID,
 		float64(reading.Value),
 		true,
-		reading.UptimeMs/1000,
+		currentUptimeS,
 		time.Now(),
 		configVersion,
 	); err != nil {
@@ -201,7 +235,7 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		"device_id", deviceID,
 		"sensor", sensorName,
 		"value", reading.Value,
-		"uptime_s", reading.UptimeMs/1000,
+		"uptime_s", currentUptimeS,
 		"config_version", cvLog,
 	)
 	return nil
