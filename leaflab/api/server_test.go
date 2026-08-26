@@ -1,9 +1,9 @@
 package main
 
 import (
-	"strings"
 	"context"
 	"net"
+	"strings"
 	"testing"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -312,8 +312,8 @@ func TestRenderActivityItem_PlainLanguage(t *testing.T) {
 		TargetHouseholdID: 1,
 		Action:            "claim_board",
 		EntityType:        "board",
-		EntityID:          ptrInt64(1),
-		OccurredAt:        "2026-08-25T14:30:00Z",
+		EntityID:          1,
+		OccurredAtUnix:         1756131000,
 	}
 
 	item := renderActivityItem(record)
@@ -359,8 +359,8 @@ func TestRenderActionDescription_NoProtoTerms(t *testing.T) {
 			record: AuditRecord{
 				Action:     "claim_board",
 				EntityType: "board",
-				EntityID:   ptrInt64(1),
-				OccurredAt: "2026-08-25T14:30:00Z",
+				EntityID:   1,
+				OccurredAtUnix:  1756131000,
 			},
 		},
 		{
@@ -368,8 +368,8 @@ func TestRenderActionDescription_NoProtoTerms(t *testing.T) {
 			record: AuditRecord{
 				Action:     "grant_access",
 				EntityType: "board",
-				EntityID:   ptrInt64(1),
-				OccurredAt: "2026-08-25T14:45:00Z",
+				EntityID:   1,
+				OccurredAtUnix:  1756131900,
 			},
 		},
 	}
@@ -456,11 +456,6 @@ func TestActivityItem_AllFieldsPopulated(t *testing.T) {
 // Helper function to check if a string contains a substring (case-insensitive).
 func contains(s, substr string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
-}
-
-// ptrInt64 is a helper to create an int64 pointer.
-func ptrInt64(v int64) *int64 {
-	return &v
 }
 
 // ptrString is a helper to create a string pointer.

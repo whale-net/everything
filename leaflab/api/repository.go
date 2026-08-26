@@ -301,7 +301,6 @@ func (r *Repository) TransferBoardOwnership(ctx context.Context, boardID int64, 
 	return nil
 }
 
-
 // GetPrincipalHousehold returns the current household for a principal.
 // Returns 0, nil if the principal has no active household membership.
 func (r *Repository) GetPrincipalHousehold(ctx context.Context, principalID string) (int64, error) {
@@ -321,24 +320,150 @@ func (r *Repository) GetPrincipalHousehold(ctx context.Context, principalID stri
 }
 
 // ListActivityRecords returns audit records for a household in reverse chronological order,
-// for pagination. The audit_record table is managed by #1192 via FR8 infrastructure.
-// This method will be called by ListActivity RPC after the audit_record table is merged in.
+// using keyset pagination on audit_id (monotonic, so also chronological for ties).
+// The audit_record table and RecordAudit/RecordAuditWithConfig writers are FR8 infrastructure
+// shared with #1192.
 func (r *Repository) ListActivityRecords(ctx context.Context, householdID int64, pageToken string, pageSize int32) (records []AuditRecord, nextToken string, err error) {
-	// Placeholder implementation - will reference audit_record table after merge with #1192.
-	// For now, return empty records to allow the proto/handler to compile.
-	return []AuditRecord{}, "", nil
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	var lastAuditID int64
+	if pageToken != "" {
+		if _, err := fmt.Sscanf(pageToken, "%d", &lastAuditID); err != nil {
+			return nil, "", fmt.Errorf("invalid page token: %w", err)
+		}
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT audit_id, actor_subject, target_household_id, action, entity_type, entity_id,
+		       EXTRACT(EPOCH FROM occurred_at)::bigint, reason, config_version, i2c_address, mux_path
+		FROM audit_record
+		WHERE target_household_id = $1
+		  AND ($2 = 0 OR audit_id < $2)
+		ORDER BY audit_id DESC
+		LIMIT $3
+	`, householdID, lastAuditID, pageSize+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("list activity for household %d: %w", householdID, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var rec AuditRecord
+		var occurredAtEpoch int64
+		var muxPathJSON []byte
+		if err := rows.Scan(&rec.AuditID, &rec.ActorSubject, &rec.TargetHouseholdID, &rec.Action,
+			&rec.EntityType, &rec.EntityID, &occurredAtEpoch, &rec.Reason, &rec.ConfigVersion,
+			&rec.I2CAddress, &muxPathJSON); err != nil {
+			return nil, "", fmt.Errorf("scan audit record: %w", err)
+		}
+		rec.OccurredAtUnix = occurredAtEpoch
+		rec.MuxPath = muxPathJSON
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("rows error: %w", err)
+	}
+
+	if len(records) > int(pageSize) {
+		records = records[:pageSize]
+		nextToken = fmt.Sprintf("%d", records[len(records)-1].AuditID)
+	}
+
+	return records, nextToken, nil
 }
 
 type AuditRecord struct {
-	AuditID         int64
-	ActorSubject    string
+	AuditID           int64
+	ActorSubject      string
 	TargetHouseholdID int64
-	Action          string
-	EntityType      string
-	EntityID        *int64
-	OccurredAt      string // timestamp
-	Reason          *string
-	ConfigVersion   *int64
-	I2CAddress      *string
-	MuxPath         *string
+	Action            string
+	EntityType        string
+	EntityID          int64
+	OccurredAtUnix    int64
+	Reason            *string
+	ConfigVersion     *int64
+	I2CAddress        *uint32
+	MuxPath           []byte
+}
+
+// ── Household validation (FR1.2 write invariant enforcement) ─────────────────
+
+// ValidateRegionBelongsToHousehold checks whether a region belongs to the given household.
+// A region belongs to a household if it is a root region (parent_region_id IS NULL) with
+// matching household_id, or a descendant of such a root.
+// Returns (true, nil) if the region belongs to the household.
+// Returns (false, nil) if the region belongs to a different household or does not exist.
+// Returns (false, err) on database error.
+func (r *Repository) ValidateRegionBelongsToHousehold(ctx context.Context, regionID int64, householdID int64) (bool, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE region_ancestry AS (
+			-- Base case: the region itself (if it's a root)
+			SELECT region_id, household_id FROM region
+			WHERE region_id = $1 AND parent_region_id IS NULL
+			UNION ALL
+			-- Recursive case: traverse up to find the root
+			SELECT r.region_id, r.household_id FROM region r
+			INNER JOIN region_ancestry ra ON ra.region_id = r.parent_region_id
+			WHERE r.region_id = $1
+		)
+		SELECT COUNT(*) FROM region_ancestry WHERE household_id = $2
+	`, regionID, householdID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("validate region %d household %d: %w", regionID, householdID, err)
+	}
+	return count > 0, nil
+}
+
+// ValidateBoardBelongsToHousehold checks whether a board belongs to the given household
+// by examining board.household_id (current ownership).
+// Returns (true, nil) if the board currently belongs to the household.
+// Returns (false, nil) if the board belongs to a different household or does not exist.
+// Returns (false, err) on database error.
+func (r *Repository) ValidateBoardBelongsToHousehold(ctx context.Context, boardID int64, householdID int64) (bool, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM board
+		WHERE board_id = $1 AND household_id = $2
+	`, boardID, householdID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("validate board %d household %d: %w", boardID, householdID, err)
+	}
+	return count > 0, nil
+}
+
+// ── Audit logging (FR8) ────────────────────────────────────────────────────
+
+// RecordAudit writes an audit record to the audit_record table.
+// This is the single audit-writing helper used by every write path.
+func (r *Repository) RecordAudit(ctx context.Context, actorSubject string, targetHouseholdID int64,
+	action, entityType string, entityID int64, reason string) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type, entity_id, reason)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, actorSubject, targetHouseholdID, action, entityType, entityID, reason)
+	if err != nil {
+		return fmt.Errorf("record audit: %w", err)
+	}
+	return nil
+}
+
+// RecordAuditWithConfig writes an audit record for a config-related action,
+// including optional config_version and sensor hardware address context.
+func (r *Repository) RecordAuditWithConfig(ctx context.Context, actorSubject string, targetHouseholdID int64,
+	action, entityType string, entityID int64, configVersion *int64, i2cAddress *uint32, muxPath []byte, reason string) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type, entity_id,
+		                           config_version, i2c_address, mux_path, reason)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+	`, actorSubject, targetHouseholdID, action, entityType, entityID, configVersion, i2cAddress, muxPath, reason)
+	if err != nil {
+		return fmt.Errorf("record audit with config: %w", err)
+	}
+	return nil
 }
