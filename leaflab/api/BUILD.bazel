@@ -36,7 +36,9 @@ go_test(
     embed = [":api_lib"],
     deps = [
         "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/db",
         "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "//libs/go/logging",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
