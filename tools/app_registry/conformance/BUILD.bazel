@@ -12,6 +12,7 @@ go_test(
         "nfr3_test.go",
         "paths_test.go",
         "tiltfile_test.go",
+        "unsigned_fetch_test.go",
     ],
     data = [
         "//tools/app_registry:build_file",
@@ -24,5 +25,8 @@ go_test(
     ],
     deps = [
         "//tools/app_registry/kinds",
+        "//tools/app_registry/protos:appregistrypb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
     ],
 )
