@@ -55,7 +55,7 @@ type Limiter struct {
 	mu            sync.RWMutex
 	registry      *Registry
 	principalLims map[string]*tokenBucket // keyed by principal
-	sessionLims   map[string]*tokenBucket  // keyed by principal:session
+	sessionLims   map[string]*tokenBucket // keyed by principal:session
 }
 
 // NewLimiter creates a new rate limiter with the given registry.
