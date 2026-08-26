@@ -457,11 +457,15 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 // encoding policy. For pre-cutover versions, an empty string is returned
 // (meaning uncompressed).
 func (s *ArtifactServer) resolveContentEncoding(ctx context.Context, kind string) (string, error) {
-	// TODO: Implement in the Implementation phase
-	// - Resolve the kind
-	// - Dispatch to hook H4
-	// - Return the encoding descriptor
-	return "", nil
+	k := kinds.Get(kind)
+	if k == nil {
+		return "", fmt.Errorf("kind %q not found", kind)
+	}
+	h4 := k.Hooks().H4()
+	if h4 == nil {
+		return "", fmt.Errorf("kind %q has no H4 hook", kind)
+	}
+	return h4.Encoding(), nil
 }
 
 // resolveConsumerFileName returns the declared consumer-facing file name for a
@@ -469,12 +473,41 @@ func (s *ArtifactServer) resolveContentEncoding(ctx context.Context, kind string
 // determine the file name. For post-cutover versions, this returns the declared
 // name for the binary file. For pre-cutover versions, an empty string is returned
 // (meaning consumers keep their current behavior).
-func (s *ArtifactServer) resolveConsumerFileName(ctx context.Context, kind string, version string) (string, error) {
-	// TODO: Implement in the Implementation phase
-	// - Resolve the kind
-	// - Check if version is pre-cutover (dispatch to H8) or post-cutover (dispatch to H5)
-	// - Return the file name or empty string for pre-cutover
-	return "", nil
+//
+// The fileName template (from H5) contains placeholders like {name}, {version},
+// {os}, {arch} that are interpolated with actual values to produce the final
+// consumer-facing name.
+func (s *ArtifactServer) resolveConsumerFileName(ctx context.Context, artifact *repository.Artifact, kindName string, binaryName string, os string, arch string) (string, error) {
+	// Pre-cutover versions (VersionSourceTag) return empty string for backward compatibility:
+	// the consumer uses the name already in their manifest
+	if artifact.VersionSource == repository.VersionSourceTag {
+		return "", nil
+	}
+
+	// Post-cutover versions (VersionSourceRegistry) use H5 to derive the declared name
+	k := kinds.Get(kindName)
+	if k == nil {
+		return "", fmt.Errorf("kind %q not found", kindName)
+	}
+	h5 := k.Hooks().H5()
+	if h5 == nil {
+		return "", fmt.Errorf("kind %q has no H5 hook", kindName)
+	}
+
+	template := h5.FileNaming()
+	if template == "" {
+		return "", nil
+	}
+
+	// Interpolate the template with actual values
+	// Template format for binary: "{name}-{version}-{os}-{arch}"
+	fileName := template
+	fileName = strings.ReplaceAll(fileName, "{name}", binaryName)
+	fileName = strings.ReplaceAll(fileName, "{version}", artifact.Version)
+	fileName = strings.ReplaceAll(fileName, "{os}", os)
+	fileName = strings.ReplaceAll(fileName, "{arch}", arch)
+
+	return fileName, nil
 }
 
 // resolveVariantSelector resolves the opaque variant selector for the request.
@@ -483,11 +516,16 @@ func (s *ArtifactServer) resolveConsumerFileName(ctx context.Context, kind strin
 // compatibility with existing {os, arch} callers, the os and arch fields are
 // converted to a variant map.
 func (s *ArtifactServer) resolveVariantSelector(req *pb.ResolveBinaryURLRequest) map[string]string {
-	// TODO: Implement in the Implementation phase
-	// - If variant map is provided and non-empty, return it
-	// - Otherwise, if os and arch are provided, return {"os": req.Os, "arch": req.Arch}
-	// - Handle backward compatibility with pre-variant-selector callers
-	return map[string]string{}
+	// If variant map is provided and non-empty, return it
+	if len(req.Variant) > 0 {
+		return req.Variant
+	}
+
+	// Backward compatibility: convert os and arch fields to a variant map
+	return map[string]string{
+		"os":   req.Os,
+		"arch": req.Arch,
+	}
 }
 
 func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
@@ -569,18 +607,25 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, status.Errorf(codes.Internal, "failed to resolve content encoding: %v", err)
 	}
 
-	filename, err := s.resolveConsumerFileName(ctx, "binary", req.Version)
+	// For checksum manifest, use the same H4 encoding as for the binary
+	manifestEncoding := encoding
+
+	filename, err := s.resolveConsumerFileName(ctx, artifact, "binary", req.Binary, req.Os, req.Arch)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to resolve consumer filename: %v", err)
 	}
+
+	// For checksum manifest, use "checksums.txt" as the standard filename
+	// (consumers look for this exact name in the manifest)
+	manifestFilename := "checksums.txt"
 
 	return &pb.ResolveBinaryURLResponse{
 		DownloadUrl:                 downloadURL,
 		ChecksumManifestUrl:         checksumURL,
 		DownloadUrlContentEncoding:  encoding,
 		DownloadUrlFilename:         filename,
-		ChecksumManifestContentEncoding: "", // TODO: populate from H4 if needed
-		ChecksumManifestFilename:    "", // TODO: populate from H5 if needed
+		ChecksumManifestContentEncoding: manifestEncoding,
+		ChecksumManifestFilename:    manifestFilename,
 	}, nil
 }
 
