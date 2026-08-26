@@ -25,6 +25,8 @@ import (
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -106,6 +108,12 @@ type ArtifactServer struct {
 	// release_app declarations. Used to resolve app names to full names
 	// dynamically instead of hardcoded enumerations.
 	MetadataRegistry *kinds.AppMetadataRegistry
+
+	// existenceCache (NFR-19) caches positive existence check results.
+	// Key is objectKey, value is true (meaning object exists).
+	// Negative results are never cached (per NFR-19(b)).
+	existenceCacheMu sync.RWMutex
+	existenceCache   map[string]bool
 }
 
 // ArtifactServerOption configures an optional ArtifactServer dependency --
@@ -150,7 +158,10 @@ func WithMetadataRegistry(registry *kinds.AppMetadataRegistry) ArtifactServerOpt
 
 // NewArtifactServer constructs an ArtifactServer over repo.
 func NewArtifactServer(repo repository.Registry, opts ...ArtifactServerOption) *ArtifactServer {
-	s := &ArtifactServer{repo: repo}
+	s := &ArtifactServer{
+		repo:           repo,
+		existenceCache: make(map[string]bool),
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -481,6 +492,150 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 	return &pb.ListArtifactPinsResponse{ChartArtifacts: artifactsToPB(chartArtifacts)}, nil
 }
 
+// existenceCheckResult represents the three-way outcome of an existence check.
+// FR-42 defines these three states: present (object exists and is readable),
+// absent (object doesn't exist), and indeterminate (can't determine presence).
+type existenceCheckResult int
+
+const (
+	existenceCheckPresent existenceCheckResult = iota
+	existenceCheckAbsent
+	existenceCheckIndeterminate
+)
+
+// existenceCheckErr represents an indeterminate state with its cause class.
+type existenceCheckErr struct {
+	cause string // "permission-denied", "timeout", "transport-failure", "5xx"
+}
+
+// resolveObjectKey attempts to get an object key for the given variant,
+// first from stored keys, then by deriving from H8 if no stored key exists.
+// Returns (objectKey, isStored, error):
+// - isStored=true if the key came from the database
+// - isStored=false if the key was derived from H8
+// - error is returned if no stored key exists and H8 derivation fails/isn't available
+func (s *ArtifactServer) resolveObjectKey(ctx context.Context, artifact *repository.Artifact, variant string) (string, bool, error) {
+	// FR-25, FR-60: First try to use stored object keys
+	storedKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, variant)
+	if err == nil {
+		return storedKey.ObjectKey, true, nil
+	}
+	if !errors.Is(err, repository.ErrNotFound) {
+		// Some other error occurred (not "not found")
+		return "", false, mapRepoErr(err)
+	}
+
+	// No stored key found. FR-27: Try to derive from H8.
+	// Get the kind to access its H8 hook
+	kind := kinds.Get(string(artifact.Kind))
+	if kind == nil {
+		return "", false, status.Errorf(codes.Internal, "unknown artifact kind: %q", artifact.Kind)
+	}
+
+	h8Hook := kind.Hooks().H8()
+	template := h8Hook.PreCutoverTemplate()
+	if template == "" {
+		// Kind has no pre-cutover history (empty H8). FR-27: no derivation.
+		return "", false, nil
+	}
+
+	// Derive the key from the H8 template
+	derivedKey := s.deriveObjectKey(template, artifact.Repository, artifact.Version, variant)
+	return derivedKey, false, nil
+}
+
+// deriveObjectKey derives an object key from an H8 template by interpolating
+// placeholders. The template uses {name}, {version}, {os}, {arch} placeholders.
+// variant is in the format "os-arch" for binaries.
+func (s *ArtifactServer) deriveObjectKey(template, binaryName, version, variant string) string {
+	// For pre-cutover binaries, the template is typically:
+	// "{name}-{version}-{os}-{arch}" or similar.
+	// variant is "os-arch" (e.g., "linux-amd64")
+	parts := strings.Split(variant, "-")
+	os := ""
+	arch := ""
+	if len(parts) >= 2 {
+		os = parts[0]
+		arch = parts[1]
+	}
+
+	key := strings.ReplaceAll(template, "{name}", binaryName)
+	key = strings.ReplaceAll(key, "{version}", version)
+	key = strings.ReplaceAll(key, "{os}", os)
+	key = strings.ReplaceAll(key, "{arch}", arch)
+	return key
+}
+
+// checkObjectExistence performs a credentialed existence check on an object key.
+// Returns (present, error) where error is non-nil only for indeterminate results.
+// FR-42: permission-denied maps to indeterminate, not to absent or present.
+// FR-27: checks existence via credentialed read on primary client.
+// NFR-19: positive results are cached, negative results are not.
+func (s *ArtifactServer) checkObjectExistence(ctx context.Context, client *s3.Client, objectKey string) (existenceCheckResult, *existenceCheckErr) {
+	// Check positive cache first (NFR-19)
+	s.existenceCacheMu.RLock()
+	if cached, exists := s.existenceCache[objectKey]; exists && cached {
+		s.existenceCacheMu.RUnlock()
+		return existenceCheckPresent, nil
+	}
+	s.existenceCacheMu.RUnlock()
+
+	// Perform the credentialed existence check via HeadObject on primary client
+	exists, err := client.Exists(ctx, objectKey)
+	if err == nil {
+		if exists {
+			// Positive result: cache it (NFR-19(a))
+			s.existenceCacheMu.Lock()
+			s.existenceCache[objectKey] = true
+			s.existenceCacheMu.Unlock()
+			return existenceCheckPresent, nil
+		}
+		// Absent: don't cache (NFR-19(b))
+		return existenceCheckAbsent, nil
+	}
+
+	// An error occurred. Classify it to determine if it's indeterminate.
+	errMsg := err.Error()
+
+	// FR-42: Permission-denied (403) maps to indeterminate
+	if strings.Contains(errMsg, "Forbidden") || strings.Contains(errMsg, "AccessDenied") || strings.Contains(errMsg, "403") {
+		return existenceCheckIndeterminate, &existenceCheckErr{cause: "permission-denied"}
+	}
+
+	// FR-42: Timeout maps to indeterminate
+	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "Timeout") {
+		return existenceCheckIndeterminate, &existenceCheckErr{cause: "timeout"}
+	}
+
+	// FR-42: 5xx errors map to indeterminate
+	if strings.Contains(errMsg, "StatusCode: 5") || strings.Contains(errMsg, "InternalError") || strings.Contains(errMsg, "ServiceUnavailable") {
+		return existenceCheckIndeterminate, &existenceCheckErr{cause: "5xx"}
+	}
+
+	// FR-42: Network/transport failures map to indeterminate
+	// (anything not a 4xx error other than 403)
+	if !strings.Contains(errMsg, "StatusCode: 4") || strings.Contains(errMsg, "403") {
+		return existenceCheckIndeterminate, &existenceCheckErr{cause: "transport-failure"}
+	}
+
+	// Treat other 4xx errors as absence (object not found)
+	return existenceCheckAbsent, nil
+}
+
+// incrementIndeterminateCounter increments the OTel counter for indeterminate outcomes.
+// NFR-11: counts indeterminates by cause class through libs/go/logging's OTel path.
+func (s *ArtifactServer) incrementIndeterminateCounter(cause string) {
+	meter := logging.Meter("app-registry-resolution")
+	counter, err := meter.Int64Counter("resolution_indeterminates_total")
+	if err != nil {
+		// Log but don't fail -- telemetry shouldn't break the request
+		artifactLog.Warn("failed to create indeterminate counter", slog.String("error", err.Error()))
+		return
+	}
+	// Increment with the cause class as an attribute
+	counter.Add(context.Background(), 1, metric.WithAttributes(attribute.String("cause", cause)))
+}
+
 // ResolveBinaryURL implements issue #979/#983 (FR12-FR14, FR16): resolves a
 // CLI binary + version + platform to a presigned S3 download URL (issue
 // #1101: the bucket isn't actually public-read, so this signs with the
@@ -610,36 +765,75 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, mapRepoErr(err)
 	}
 
-	// FR-25, FR-60: Use the stored object key from the database, not a
-	// constructed key. Stored keys are the sole source of truth for object keys.
-	// The variant is the os-arch combination for binaries.
-	variant := fmt.Sprintf("%s-%s", req.Os, req.Arch)
-	storedKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, variant)
-	if err != nil {
-		return nil, mapRepoErr(err)
-	}
-
-	// Presign the binary key
+	// Get the S3 client for existence checks (primary endpoint, not presign-public)
 	client, err := s.releaseToolsS3PresignClient()
 	if err != nil {
 		return nil, err
 	}
 
-	downloadURL, err := client.PresignPublicGetURL(ctx, storedKey.ObjectKey, resolveBinaryURLTTL)
+	// FR-62: Resolve the opaque variant selector (explicit req.Variant if
+	// provided, else backward-compatible os/arch conversion).
+	variantSelector := s.resolveVariantSelector(req)
+
+	// FR-25, FR-60, FR-27: Resolve the binary object key
+	variant := fmt.Sprintf("%s-%s", variantSelector["os"], variantSelector["arch"])
+	binaryObjectKey, isStored, err := s.resolveObjectKey(ctx, artifact, variant)
+	if err != nil {
+		return nil, err
+	}
+	if binaryObjectKey == "" {
+		// FR-27: No stored key and no H8 derivation available -> not-found
+		return nil, status.Error(codes.NotFound, "binary not found (no stored key and no H8 pre-cutover convention)")
+	}
+
+	// FR-29, FR-42, FR-27: Check existence of binary object if it was derived from H8
+	// (stored keys are assumed to exist per FR-46)
+	if !isStored {
+		result, indeterminateErr := s.checkObjectExistence(ctx, client, binaryObjectKey)
+		if indeterminateErr != nil {
+			s.incrementIndeterminateCounter(indeterminateErr.cause)
+			return nil, status.Errorf(codes.Unavailable, "unable to confirm object existence (FR-42 indeterminate: %s)", indeterminateErr.cause)
+		}
+		if result == existenceCheckAbsent {
+			// FR-27: Derived key whose object is absent -> not-found
+			return nil, status.Error(codes.NotFound, "derived binary object not found in storage")
+		}
+		// result == existenceCheckPresent, continue
+	}
+
+	// Presign the binary URL
+	downloadURL, err := client.PresignPublicGetURL(ctx, binaryObjectKey, resolveBinaryURLTTL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to presign binary download URL: %v", err)
 	}
 
-	// Presign the checksums manifest. The manifest variant is typically just
-	// the version (checksums cover all platform variants). Look up the stored
-	// key for the checksums variant.
+	// FR-29, FR-27: Resolve and check the checksum manifest key
 	checksumVariant := "checksums"
-	checksumStoredKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, checksumVariant)
+	checksumObjectKey, isStoredChecksum, err := s.resolveObjectKey(ctx, artifact, checksumVariant)
 	if err != nil {
-		return nil, mapRepoErr(err)
+		return nil, err
+	}
+	if checksumObjectKey == "" {
+		// No checksum manifest (not stored, not derivable) -> not-found for whole request
+		return nil, status.Error(codes.NotFound, "checksum manifest not found")
 	}
 
-	checksumURL, err := client.PresignPublicGetURL(ctx, checksumStoredKey.ObjectKey, resolveBinaryURLTTL)
+	// FR-29, FR-42, FR-27: Check existence of checksum manifest if it was derived from H8
+	if !isStoredChecksum {
+		result, indeterminateErr := s.checkObjectExistence(ctx, client, checksumObjectKey)
+		if indeterminateErr != nil {
+			s.incrementIndeterminateCounter(indeterminateErr.cause)
+			return nil, status.Errorf(codes.Unavailable, "unable to confirm checksum manifest object existence (FR-42 indeterminate: %s)", indeterminateErr.cause)
+		}
+		if result == existenceCheckAbsent {
+			// FR-29: Manifest object absent -> not-found for whole request (not a working download URL + dangling manifest)
+			return nil, status.Error(codes.NotFound, "checksum manifest object not found in storage")
+		}
+		// result == existenceCheckPresent, continue
+	}
+
+	// Presign the checksum URL
+	checksumURL, err := client.PresignPublicGetURL(ctx, checksumObjectKey, resolveBinaryURLTTL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to presign checksum manifest URL: %v", err)
 	}
@@ -661,16 +855,16 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 	// (consumers look for this exact name in the manifest)
 	manifestFilename := "checksums.txt"
 
+	// FR-29: All URLs are existence-established. Return them together.
 	return &pb.ResolveBinaryURLResponse{
-		DownloadUrl:                 downloadURL,
-		ChecksumManifestUrl:         checksumURL,
-		DownloadUrlContentEncoding:  encoding,
-		DownloadUrlFilename:         filename,
+		DownloadUrl:                     downloadURL,
+		ChecksumManifestUrl:             checksumURL,
+		DownloadUrlContentEncoding:      encoding,
+		DownloadUrlFilename:             filename,
 		ChecksumManifestContentEncoding: manifestEncoding,
-		ChecksumManifestFilename:    manifestFilename,
+		ChecksumManifestFilename:        manifestFilename,
 	}, nil
 }
-
 
 // resolveBinaryURLTTL bounds how long a ResolveBinaryURL response's
 // presigned URLs stay valid. Callers (CI's "check prebuilt tool

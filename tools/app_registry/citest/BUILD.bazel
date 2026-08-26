@@ -10,6 +10,7 @@ go_library(
 go_test(
     name = "citest_test",
     srcs = [
+        "action_contract_test.go",
         "brokered_upload_test.go",
         "contract_test.go",
         "isolation_test.go",
