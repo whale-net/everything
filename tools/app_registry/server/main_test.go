@@ -11,6 +11,7 @@ import (
 	registryauth "github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	"google.golang.org/grpc"
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -45,7 +46,7 @@ func startTestServer(t *testing.T) *grpc.ClientConn {
 		grpc.ChainUnaryInterceptor(unaryInt),
 		grpc.ChainStreamInterceptor(streamInt),
 	)
-	registerServices(grpcServer, fake.New(), nil, "", "", "", "", "")
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(), "", "", "", "", "")
 
 	go func() {
 		// Serve returns a non-nil error on Stop()/GracefulStop() too; the
