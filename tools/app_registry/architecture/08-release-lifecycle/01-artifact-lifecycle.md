@@ -36,6 +36,17 @@ Legal transitions, enforced server-side; anything else is `FailedPrecondition`:
   success; recording a *different* digest for an already-`published` version
   is rejected — that is a real conflict, not a retry.
 
+**Byte-free publishing over confirmed blobs.** Publishing (`RecordArtifact`,
+`BeginPublish`, and `completePublish`) is a state transition entirely over
+database writes; no S3 object-store calls happen during the publish phase
+itself. Instead, publish verifies that the referenced blob(s) carry
+`confirmation_state = 'confirmed'` (set earlier by the upload-confirm
+read-back-digest-verification path), then transitions the artifact state
+machine from `allocated` → `publishing` → `published`/`failed` via database
+writes alone. This decouples the blob storage layer from the publish
+orchestration, allowing concurrent uploads to proceed without blocking
+publish, and enabling idempotent publish retries if metadata recording fails.
+
 **What this buys.** Ordering 3's hard reject stops being a trap: the image row
 exists from `publishing` onward, so a chart failing on "pins an image the
 registry doesn't have" now means the image genuinely was never published,
