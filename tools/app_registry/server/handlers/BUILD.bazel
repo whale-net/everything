@@ -16,6 +16,7 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/app_registry/server/handlers",
     visibility = ["//visibility:public"],
     deps = [
+        "@com_github_google_uuid//:uuid",
         "//tools/app_registry/kinds",
         "//libs/go/grpcauth",
         "//libs/go/logging",
@@ -59,6 +60,7 @@ go_test(
     ],
     embed = [":handlers"],
     deps = [
+        "@com_github_google_uuid//:uuid",
         "//libs/go/grpcauth",
         "//tools/app_registry/apierrors",
         "//tools/app_registry/protos:appregistrypb",

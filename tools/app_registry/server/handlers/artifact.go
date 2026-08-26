@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/s3"
@@ -1094,7 +1095,14 @@ func (s *ArtifactServer) BrokerUpload(ctx context.Context, req *pb.BrokerUploadR
 
 	// Create the upload record BEFORE presigning any URLs (FR-7).
 	// This ensures no code path returns a URL without a durable record.
+	// Generate UploadID and ObjectKey before the transaction so they can be persisted
+	// as part of the initial CreateUploadRecord call (not in a separate UPDATE).
+	uploadID := uuid.NewString()
+	uploadBatchKey := s.generateUploadBatchKey(req.ArtifactIdentity, uploadID)
+
 	uploadRecord := &repository.UploadRecord{
+		UploadID:            uploadID,
+		ObjectKey:           uploadBatchKey,
 		ArtifactKind:        repository.ArtifactKind(req.ArtifactKind),
 		ArtifactIdentity:    req.ArtifactIdentity,
 		VersionReference:    req.VersionReference,
@@ -1193,10 +1201,7 @@ func (s *ArtifactServer) brokerUploadFile(ctx context.Context, r repository.Regi
 	}
 
 	// File needs uploading: generate a unique object key and presign a URL.
-	objectKey := s.generateObjectKey(uploadRecord.ArtifactIdentity, file.VariantKey, uploadRecord.UploadID)
-
-	// Store the object key in the upload record (FR-7, FR-2: registry owns the key).
-	uploadRecord.ObjectKey = objectKey
+	objectKey := s.generateObjectKey(uploadRecord.ObjectKey, file.VariantKey)
 
 	// Presign a PUT URL with the required headers (FR-1).
 	presignedURL, headers, err := s.presignUploadURL(ctx, objectKey, contentType)
@@ -1213,12 +1218,20 @@ func (s *ArtifactServer) brokerUploadFile(ctx context.Context, r repository.Regi
 	}, nil
 }
 
+// generateUploadBatchKey creates a batch-level key prefix for an upload (FR-7, FR-2).
+// Format: "artifacts/{artifact_identity}/{upload_session_id}"
+// This is persisted in the upload_record to satisfy FR-7 (record before URL).
+func (s *ArtifactServer) generateUploadBatchKey(artifactIdentity, uploadSessionID string) string {
+	return fmt.Sprintf("artifacts/%s/%s", artifactIdentity, uploadSessionID)
+}
+
 // generateObjectKey creates a registry-chosen, unique object key for a file (FR-2).
-// Format: "artifacts/{artifact_identity}/{upload_session_id}/{variant_key}"
+// Takes the batch key prefix and appends the variant_key.
+// Format: "{batch_key}/{variant_key}"
 // This ensures uniqueness: same identity/version with different session IDs get
 // different keys (two concurrent unconfirmed uploads get distinct keys per FR-2).
-func (s *ArtifactServer) generateObjectKey(artifactIdentity, variantKey, uploadSessionID string) string {
-	return fmt.Sprintf("artifacts/%s/%s/%s", artifactIdentity, uploadSessionID, variantKey)
+func (s *ArtifactServer) generateObjectKey(batchKey, variantKey string) string {
+	return fmt.Sprintf("%s/%s", batchKey, variantKey)
 }
 
 // presignUploadURL generates a presigned PUT URL and required headers (FR-1, NFR-2).

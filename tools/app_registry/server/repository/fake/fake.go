@@ -139,8 +139,9 @@ func (s *state) clone() *state {
 
 // Registry is the in-memory repository.Registry implementation.
 type Registry struct {
-	mu    *sync.Mutex
+	mu   *sync.Mutex
 	state *state
+	inTx bool // true if we're already inside a WithTx callback
 }
 
 // New constructs an empty fake Registry.
@@ -284,7 +285,7 @@ func (r *Registry) WithTx(ctx context.Context, fn func(ctx context.Context, reg 
 	defer r.mu.Unlock()
 
 	txState := r.state.clone()
-	tx := &Registry{mu: r.mu, state: txState}
+	tx := &Registry{mu: r.mu, state: txState, inTx: true}
 	// fn must not re-lock r.mu; tx shares the outer lock so this is safe as
 	// long as fn only calls methods on the Registry it was given.
 	if err := fn(ctx, txHandle{tx}); err != nil {
