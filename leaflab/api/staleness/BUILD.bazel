@@ -1,0 +1,16 @@
+"""A23 staleness-threshold evaluator — the one place FR79, FR42.2 and FR62 derive a board's "not reporting" threshold from."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "staleness",
+    srcs = ["staleness.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/staleness",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "staleness_test",
+    srcs = ["staleness_test.go"],
+    embed = [":staleness"],
+)

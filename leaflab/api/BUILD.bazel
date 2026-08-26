@@ -6,6 +6,8 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "admin_config.go",
+        "authorization.go",
         "main.go",
         "repository.go",
         "server.go",
@@ -18,6 +20,7 @@ go_library(
         "//leaflab/api/pagetoken",
         "//leaflab/api/ratelimit",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/staleness",
         "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/logging",

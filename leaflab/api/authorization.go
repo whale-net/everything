@@ -132,3 +132,47 @@ func (ap *AuthorizationPredicates) GetGrantDetails(ctx context.Context, grantID 
 	}
 	return grantee, expiresAt, nil
 }
+
+// ── FR10: Admin elevation predicates ──────────────────────────────────────────
+// The standing (non-elevated) admin lane is resolution only (FR10.2). Every
+// other admin read and every admin write requires an active elevation
+// against the named target household (FR10.3). These predicates are the
+// interface Implementation gates on; ElevationState computation (remaining
+// time, renewal) lives in the Repository once the elevation write path is
+// implemented.
+
+// IsAdmin reports whether the authenticated caller carries the "admin" role.
+// It does not check elevation — the standing lane is available to any admin
+// without elevation, per FR10.2.
+func IsAdmin(ctx context.Context) bool {
+	claims, ok := grpcauth.ClaimsFromContext(ctx)
+	if !ok {
+		return false
+	}
+	for _, role := range claims.Roles {
+		if role == "admin" {
+			return true
+		}
+	}
+	return false
+}
+
+// ActiveElevation checks whether adminSubject holds a currently active
+// elevation (not expired) against targetHouseholdID (FR10.1). Returns
+// (true, nil) if an active elevation exists, (false, nil) if not, or
+// (false, error) on DB error.
+func (ap *AuthorizationPredicates) ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (bool, error) {
+	var active bool
+	err := ap.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM elevation
+			WHERE admin_subject = $1
+			  AND target_household_id = $2
+			  AND expires_at > NOW()
+		)
+	`, adminSubject, targetHouseholdID).Scan(&active)
+	if err != nil {
+		return false, fmt.Errorf("check active elevation: %w", err)
+	}
+	return active, nil
+}

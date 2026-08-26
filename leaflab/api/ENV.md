@@ -33,6 +33,27 @@ LEAFLAB_RATELIMIT_READ_RPS=10000
 LEAFLAB_RATELIMIT_CLAIM_INITIATE_RPS=1000
 ```
 
+## Admin Elevation (FR10)
+
+Cross-household reach is not standing. An admin enters elevation deliberately
+against a named target household with a stated reason; it is time-boxed and
+expires automatically. Renewal re-applies the same configured duration.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LEAFLAB_ELEVATION_DURATION_SECONDS` | 3600 | Duration of an admin elevation window (FR10, A22); 60 minutes by default |
+
+## Staleness Threshold (A23)
+
+A23 governs "not reporting" classification everywhere it is used: FR79 (fleet
+health listing), FR42.2 and FR62. Computed in one place — see
+`leaflab/api/staleness/staleness.go`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LEAFLAB_STALENESS_MULTIPLIER` | 3 | Multiplier applied to a board's longest configured poll interval (A23) |
+| `LEAFLAB_STALENESS_FLOOR_SECONDS` | 900 | Minimum not-reporting threshold regardless of poll interval (A23); 15 minutes by default |
+
 ## Other Configuration
 
 | Variable | Default | Description |

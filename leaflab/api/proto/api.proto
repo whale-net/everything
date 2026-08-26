@@ -96,6 +96,40 @@ service LeafLabAPI {
 
   // ListActiveGrants lists all active (non-expired, non-revoked) grants (FR7).
   rpc ListActiveGrants(ListActiveGrantsRequest) returns (ListActiveGrantsResponse);
+
+  // EnterElevation starts a 60-minute, time-boxed elevation against a named
+  // target household with a stated reason (FR10). Required before any
+  // non-standing admin read or any admin write against that household.
+  rpc EnterElevation(EnterElevationRequest) returns (ElevationState);
+
+  // RenewElevation extends the caller's active elevation against the same
+  // target household by re-stating a reason (FR10). Fails if there is no
+  // active elevation to renew.
+  rpc RenewElevation(RenewElevationRequest) returns (ElevationState);
+
+  // GetElevationState reads the caller's current elevation state against a
+  // target household, including remaining time (FR10, A22).
+  rpc GetElevationState(GetElevationStateRequest) returns (ElevationState);
+
+  // Resolve is the admin standing lane (FR10): without elevation, resolve a
+  // person, a support reference (FR80), or a partial device identifier to
+  // the owning household, and return the FR79 health fields for its boards
+  // and nothing else.
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+
+  // ListFleetHealth returns the FR79 fleet health listing: per board,
+  // last-seen age against the A23 staleness threshold, active accepted
+  // config version, outstanding push duration, and sensor count. Standing
+  // lane; no computed health score or severity ranking.
+  rpc ListFleetHealth(ListFleetHealthRequest) returns (ListFleetHealthResponse);
+
+  // CreateSupportReference produces a short-lived, opaque, revocable support
+  // reference for the caller's household (FR80). Requires no description of
+  // the problem and discloses no household data.
+  rpc CreateSupportReference(CreateSupportReferenceRequest) returns (CreateSupportReferenceResponse);
+
+  // RevokeSupportReference revokes a support reference before it expires (FR80).
+  rpc RevokeSupportReference(RevokeSupportReferenceRequest) returns (RevokeSupportReferenceResponse);
 }
 
 // ============================================================================
@@ -292,3 +326,126 @@ message ListActiveGrantsRequest {}
 message ListActiveGrantsResponse {
   repeated Grant grants = 1;
 }
+
+// ── FR10: Admin elevation ─────────────────────────────────────────────────────
+// Cross-household reach is not standing. Elevation is entered deliberately
+// with a stated reason, is time-boxed (60 minutes), expires automatically,
+// and stamps both admin subject and target household on every resulting
+// write. Remaining time is readable while elevated (A22).
+
+message EnterElevationRequest {
+  int64 target_household_id = 1;
+  // reason is required and non-empty.
+  string reason = 2;
+}
+
+message RenewElevationRequest {
+  int64 target_household_id = 1;
+  // reason is required and non-empty; renewal is only permitted with a
+  // freshly-stated reason, not a reuse of the original.
+  string reason = 2;
+}
+
+message GetElevationStateRequest {
+  int64 target_household_id = 1;
+}
+
+// ElevationState describes an admin's elevation against a target household,
+// or the absence of one when active is false.
+message ElevationState {
+  bool active = 1;
+  int64 target_household_id = 2;
+  string reason = 3;
+  // remaining_seconds is the time left before this elevation expires.
+  // 0 when active is false.
+  int64 remaining_seconds = 4;
+  // expires_at is an absolute instant (Unix timestamp in seconds).
+  int64 expires_at = 5;
+}
+
+// ── FR10: Admin standing lane — resolution only ───────────────────────────────
+// Across all households, without elevation, an admin may resolve a person, a
+// support reference (FR80), or a partial device identifier to the owning
+// household, and read the FR79 health fields for the boards it returns.
+// That is the whole lane.
+
+message ResolveRequest {
+  oneof target {
+    // person: a household principal identifier (email or ID).
+    string person = 1;
+    // support_reference: an FR80 opaque support code.
+    string support_reference = 2;
+    // device_id_prefix: a partial device identifier.
+    string device_id_prefix = 3;
+  }
+}
+
+// ResolveResponse returns the resolved household and the FR79 health fields
+// for the boards it owns — exactly those fields, nothing else.
+message ResolveResponse {
+  int64 household_id = 1;
+  repeated BoardHealth boards = 2;
+}
+
+// ── FR79: Fleet health listing ─────────────────────────────────────────────────
+// Per board: last-seen age evaluated against the A23 staleness threshold,
+// active accepted config version, whether a push is outstanding and for how
+// long, and sensor count. No computed health score or severity ranking.
+// Retired boards (FR22.4) are excluded from offline counts.
+
+message BoardHealth {
+  string device_id = 1;
+  int64 board_id = 2;
+  // last_seen_age_seconds is how long since this board's last reading.
+  int64 last_seen_age_seconds = 3;
+  // reporting is false when last_seen_age_seconds exceeds the A23 threshold
+  // for this board's longest configured poll interval.
+  bool reporting = 4;
+  int64 active_config_version = 5;
+  // push_outstanding is true when a pushed config has not yet been accepted.
+  bool push_outstanding = 6;
+  // push_outstanding_seconds is how long the outstanding push has been
+  // pending; 0 when push_outstanding is false.
+  int64 push_outstanding_seconds = 7;
+  int32 sensor_count = 8;
+}
+
+// ListFleetHealthRequest lists board health across the fleet (standing lane).
+// Narrowable by device-id prefix, household, region and reporting state.
+message ListFleetHealthRequest {
+  string device_id_prefix = 1;
+  // household_id: 0 means unfiltered.
+  int64 household_id = 2;
+  // region_id: 0 means unfiltered.
+  int64 region_id = 3;
+  // unhealthy_only restricts results to boards that are not reporting.
+  bool unhealthy_only = 4;
+  PageRequest page = 5;
+}
+
+message ListFleetHealthResponse {
+  repeated BoardHealth boards = 1;
+  PageResponse page = 2;
+}
+
+// ── FR80: Owner-initiated support request ─────────────────────────────────────
+// A household member can produce a support reference: a short-lived, opaque,
+// revocable code that resolves — for an admin, in the standing lane — to
+// that household. Producing one requires no description of the problem and
+// discloses no household data in itself. It is a short-lived token with
+// expiry, not SCD2 (NFR6.3).
+
+message CreateSupportReferenceRequest {}
+
+message CreateSupportReferenceResponse {
+  // reference is the opaque short code, disclosed to the household member.
+  string reference = 1;
+  // expires_at is an absolute instant (Unix timestamp in seconds).
+  int64 expires_at = 2;
+}
+
+message RevokeSupportReferenceRequest {
+  string reference = 1;
+}
+
+message RevokeSupportReferenceResponse {}
