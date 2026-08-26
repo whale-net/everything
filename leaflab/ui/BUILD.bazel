@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -26,6 +26,32 @@ go_binary(
     name = "ui",
     embed = [":ui_lib"],
     visibility = ["//visibility:public"],
+)
+
+# Unit tests for main.go: configuration, app initialization, and route handlers.
+# These tests use dbtest.NewPostgres for the session database but do not require
+# external services (gRPC API mocks would be needed for full integration).
+go_test(
+    name = "main_test",
+    srcs = ["main_test.go"],
+    embed = [":ui_lib"],
+    size = "large",
+    timeout = "long",
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/dbtest",
+        "//libs/go/htmxauth",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
 release_app(
