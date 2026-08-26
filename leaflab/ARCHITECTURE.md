@@ -201,3 +201,42 @@ LeafLab firmware is built on top of the board-agnostic libraries in [`firmware/`
 - `firmware/device_id` — stable eFuse MAC-based device ID
 
 LeafLab board configs (`*_config.cc`) wire these libraries to concrete hardware addresses and pin assignments. The libraries themselves have no LeafLab-specific knowledge.
+
+
+## Config Acknowledgement Observability (FR47 — Bounded Wait)
+
+**Phase 4 reuses the Phase 3 broadcast signalling path** (leaflab.cache-invalidations exchange).
+A new exchange for acks is created as a separate fanout to avoid mixing concerns, but the
+mechanism and deployment model are identical: AMQP fanout broadcast ensures every API replica
+receives ack signals.
+
+### Signalling Path: Processor → All API Replicas
+
+When the processor receives a device acknowledgement:
+
+1. **Processor receives ack** over MQTT (`leaflab.<id>/config.ack` topic)
+2. **Processor publishes ConfigAckSignal** to `leaflab.config-ack` fanout exchange
+   - Exchange ensures all API replicas receive the signal (not a competing-consumer queue)
+   - Signal carries device_id, config_version, accepted/rejected flag, rejection reason
+3. **Each API replica** has a LocalConfigAckListener subscribed to the fanout
+   - Delivers signals to any waiting callers via callback registration
+4. **Waiting client** receives the result within 2 s at p95 (bounded by NFR15)
+
+### Bounded Wait Constraint
+
+The API's `WaitForConfigAck` RPC:
+- Takes board_id, version, and a deadline (seconds since epoch)
+- Pins the caller to one replica for the duration of the wait (required by NFR15)
+- Clamps the deadline to 30 seconds maximum
+- Returns accepted/rejected/still-pending-at-deadline plus the verbatim rejection reason
+- Enforces concurrent open waits per principal via the "concurrent-wait" rate-limit bucket
+
+### Why Not a Work Queue?
+
+A competing-consumer queue (e.g., RabbitMQ default queue) would fail the N-replica test:
+- With N API replicas, only one replica receives an ack from a queue
+- A caller pinned to a different replica would time out
+- This violates NFR15's "every replica" broadcast constraint
+
+The fanout exchange solves this: all replicas receive every ack, so any replica can
+satisfy a waiting caller.

@@ -4,6 +4,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "processor_lib",
     srcs = [
+        "ack_signal.go",
         "cache.go",
         "config.go",
         "handler.go",

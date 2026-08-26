@@ -135,6 +135,48 @@ enum ConfigState {
   CONFIG_STATE_REJECTED = 3;
 }
 
+// ============================================================================
+// Bounded-wait config acknowledgement (FR47)
+// ============================================================================
+
+// ConfigAckResolution represents the outcome of a bounded wait for config acknowledgement.
+enum ConfigAckResolution {
+  CONFIG_ACK_RESOLUTION_UNSPECIFIED = 0;
+
+  // The device accepted the config.
+  CONFIG_ACK_RESOLUTION_ACCEPTED = 1;
+
+  // The device rejected the config with a verbatim reason.
+  CONFIG_ACK_RESOLUTION_REJECTED = 2;
+
+  // The deadline was reached before receiving an ack.
+  CONFIG_ACK_RESOLUTION_STILL_PENDING = 3;
+}
+
+// WaitForConfigAckRequest requests a bounded wait for config acknowledgement.
+// The client specifies a maximum deadline; the server honors a 30-second maximum.
+message WaitForConfigAckRequest {
+  int64 board_id = 1;
+  uint64 version = 2;
+  // deadline_seconds is seconds since Unix epoch (UTC).
+  // The server clamps this to min(deadline_seconds, now + 30s).
+  int64 deadline_seconds = 3;
+}
+
+// WaitForConfigAckResponse carries the outcome of the bounded wait.
+message WaitForConfigAckResponse {
+  // resolution is one of ACCEPTED, REJECTED, or STILL_PENDING.
+  ConfigAckResolution resolution = 1;
+  
+  // rejection_reason is set only if resolution == REJECTED.
+  // Contains the verbatim reason from the device.
+  string rejection_reason = 2;
+  
+  // acked_at is the Unix timestamp (seconds) when the device acked,
+  // set only if resolution == ACCEPTED or REJECTED.
+  int64 acked_at = 3;
+}
+
 // ConfigStatusEntry represents the status of a config version.
 message ConfigStatusEntry {
   // version is the config version this status describes.
@@ -242,6 +284,13 @@ service LeafLabAPI {
   // Get a specific config version by (board_id, version), regardless of acceptance.
   // FR35: returns the config and its status/provenance.
   rpc GetConfigByVersion(GetConfigByVersionRequest) returns (GetConfigByVersionResponse);
+
+  // WaitForConfigAck performs a bounded wait for device acknowledgement of a config push.
+  // The server honors a maximum wait of 30 seconds; a longer deadline is clamped to it
+  // and returns STILL_PENDING rather than an error. Concurrent open waits per principal
+  // are capped via the "concurrent-wait" rate limit bucket (NFR10).
+  // This RPC pins the caller to a single API replica for the duration of the wait.
+  rpc WaitForConfigAck(WaitForConfigAckRequest) returns (WaitForConfigAckResponse);
 
   rpc Health(HealthRequest) returns (HealthResponse);
 }
