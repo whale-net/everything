@@ -474,16 +474,16 @@ runs:
             echo "Release tooling versions: release_helper_go=${RH_VER:-<not set>}, app_registry_cli=${AR_VER:-<not set>}"
             [[ -n "$TARGET_ENV_INPUT" ]] && echo "Target environment for version resolution: $TARGET_ENV_INPUT"
 
-            # download_single_tool_s3 resolves tool's public S3 download/
-            # checksum-manifest URLs via ResolveBinaryURL (#983) and fetches
-            # both directly (public, unauthenticated -- FR14/NFR2; only the
-            # ResolveBinaryURL call itself is authenticated). The binary is
-            # saved locally under its exact S3 basename
-            # ("<tool>-<os>-<arch>") so this file's existing verify_checksum
-            # (unchanged) matches it against its checksums.txt line -- see
+            # download_single_tool_s3 resolves tool's download/
+            # checksum-manifest URLs via the authenticated ResolveBinaryURL RPC
+            # (FR-60), which returns presigned S3 URLs. The binary is fetched
+            # directly from the presigned URL and verified using the declared
+            # filename from the resolution response (FR-67). The verify_checksum
+            # function accepts the declared_filename parameter and uses it as the
+            # lookup key into the checksums.txt manifest -- see FR-67 and
             # tools/app_registry/worker/release/finalize.go's
-            # cliBinaryS3Key/generateChecksumFiles for why that naming
-            # convention is what checksums.txt actually contains.
+            # cliBinaryS3Key/generateChecksumFiles for how the manifest
+            # entries are keyed to declared filenames.
             download_single_tool_s3() {
               local tool="$1"
               local ver="$2"
