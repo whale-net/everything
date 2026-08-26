@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "canonkey",
+    srcs = ["canonkey.go"],
+    importpath = "github.com/whale-net/everything/leaflab/canonkey",
+    visibility = ["//leaflab:__subpackages__"],
+    deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
+    ],
+)
+
+go_test(
+    name = "canonkey_test",
+    srcs = ["canonkey_test.go"],
+    embed = [":canonkey"],
+    deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
+    ],
+)
