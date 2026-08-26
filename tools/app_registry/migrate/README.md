@@ -43,7 +43,7 @@ ArgoCD sync waves. See `friendly_computing_machine/docs/argocd-integration.md`.
 | `014_drop_stored_promotability` (issue #833) | Drops `artifact.promotability` and its `artifact_promotability_shape` CHECK (added in `008`) — reverses AR-7c's "store once at publish time" for promotability ONLY (`artifact.manifest_id` is untouched). `postgres/artifact.go`'s read paths now derive `Promotability` live via a join to the owning app's/chart's CURRENT `deploy_unit` (`v_current_app`/`v_current_chart`, plus an `app_manifest_release` fallback for owners never swept by `ReconcileApps`) and `repository.DerivePromotability`, instead of reading a stored value. No backfill needed for existing rows — they resolve correctly automatically on their next read. See `architecture/08-release-lifecycle/02-manifest-snapshot.md` "As built (issue #833, migration `014`)" for the full history. (Migrations `012`/`013`/`015`-`019` are not yet documented in this table — a pre-existing gap, out of scope here.) |
 | `020_promotion_sync_event` (issue #1028, FR6, NFR4, NFR5) | Adds `promotion_sync_event`: append-only ArgoCD sync/health observation log, `promotion_id` FK, `source` CHECK (`refresh_triggered`/`poll_observed`/`retry_triggered`/`retry_observed`), `sync_status`/`health_status` free text, `promotion_sync_event_promotion_id_idx`/`promotion_sync_event_occurred_at_idx` (mirroring `promotion_event`'s pair from `003`). NOT SCD2 — see that migration's own doc comment. Schema-and-repository-only: nothing writes real rows yet, that's a later task once the poll/retry activities exist. |
 | `021_writeback_outbox_result` (issue #1029, FR7a) | Adds `writeback_outbox.location`/`commit_sha` (`TEXT NOT NULL DEFAULT ''`) — what `GitOpsActivities.Publish` actually produced, set by `RecordWritebackResult` after `Publish` succeeds. Distinct write from `MarkDone` (fires when the workflow *starts*, not when `Publish` *completes*); `commit_sha` stays `''` on the no-op `Skipped` path and on `StubActivities`' no-git dev/test path. |
-| `023_drop_domain_adoption` | Drops `domain_adoption` — `AllocateVersion`, `CheckChartHermeticity`, and `RecordArtifact` no longer branch on a per-domain stage; every domain is unconditionally allocated. |
+| `024_drop_domain_adoption` | Drops `domain_adoption` — `AllocateVersion`, `CheckChartHermeticity`, and `RecordArtifact` no longer branch on a per-domain stage; every domain is unconditionally allocated. |
 
 Split this way so AR-2 needs only `001`, AR-3b adds `002`, AR-3c adds `003`,
 AR-4b adds `004`, and AR-5a adds `005` — each phase ships an independently
@@ -125,12 +125,12 @@ empty table gives two concurrent "first ever reconcile" calls nothing to
 serialize against. See the migration's own comments for the full rationale
 and how the sentinel row is distinguished from a "real" watermark.
 
-`domain_adoption` existed from migration `001` through migration `022` —
+`domain_adoption` existed from migration `001` through migration `023` —
 one row per domain, with a stage of `observe` / `promote` / `allocate`,
 gating recording/promotion/allocation per domain (see
 [ARCHITECTURE.md "Resolved questions"](../architecture/19-resolved-questions.md)
 for the original design). Every domain was made unconditional instead, so
-the table had nothing left to gate; migration `023` drops it.
+the table had nothing left to gate; migration `024` drops it.
 
 See the SCD2 section of [ARCHITECTURE.md's "Data model"](../architecture/03-data-model.md#scd2-on-promotion)
 and the repo-wide convention in `AGENTS.md`.

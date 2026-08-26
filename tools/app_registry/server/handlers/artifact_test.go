@@ -971,9 +971,8 @@ func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
 // times without exhausting the minor/patch sequence. Only once the version
 // actually publishes does the next call advance past it.
 func TestAllocateVersion_ReusesFailedVersionOnRetry(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	alloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
