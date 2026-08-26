@@ -41,13 +41,17 @@ type LeafLabAPIServer struct {
 	repo      *Repository
 	publisher *rmq.Publisher
 	logger    *slog.Logger
+	// phase1GateOpen controls access to Phase 1 boards (A30: non-exposed to production).
+	// See #1187 for enforcement; removable in Phase 2 when FR5 scoping lands.
+	phase1GateOpen string
 }
 
-func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger, phase1GateOpen string) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
-		repo:      repo,
-		publisher: publisher,
-		logger:    logger,
+		repo:           repo,
+		publisher:      publisher,
+		logger:         logger,
+		phase1GateOpen: phase1GateOpen,
 	}
 }
 

@@ -55,6 +55,10 @@ type Config struct {
 	// gRPC auth mode for forwarding the user's own token to leaflab-api
 	GRPCAuthMode string
 
+	// Phase 1 access gate (A30: non-exposed to production).
+	// See #1187 for enforcement; removable in Phase 2 when FR5 scoping lands.
+	Phase1GateOpen string
+
 	// DatabaseURL backs htmxauth's DB-backed session manager. Always
 	// required — this UI never falls back to cookie-only sessions.
 	DatabaseURL string
@@ -74,6 +78,7 @@ func LoadConfig() *Config {
 		SessionSecret:             getEnv("SECRET_KEY", "dev-secret-key-change-in-production"),
 		LeafLabAPIURL:             getEnv("LEAFLAB_API_URL", "leaflab-api:50051"),
 		GRPCAuthMode:              strings.ToLower(getEnv("GRPC_AUTH_MODE", "none")),
+		Phase1GateOpen:            getEnv("LEAFLAB_PHASE1_GATE_OPEN", "false"),
 		// PG_DATABASE_URL matches the variable every other component reads.
 		DatabaseURL: getEnv("PG_DATABASE_URL", ""),
 	}

@@ -47,6 +47,7 @@ func run() error {
 	grpcOIDCIssuer := getEnv("LEAFLAB_API_OIDC_ISSUER", "")
 	grpcOIDCClientID := getEnv("LEAFLAB_API_OIDC_CLIENT_ID", "")
 	reflectionEnabled := getEnv("LEAFLAB_API_REFLECTION_ENABLED", "false")
+	phase1GateOpen := getEnv("LEAFLAB_PHASE1_GATE_OPEN", "false")
 
 	pool, err := db.NewPool(ctx, databaseURL)
 	if err != nil {
@@ -69,7 +70,7 @@ func run() error {
 	defer publisher.Close() //nolint:errcheck
 
 	repo := NewRepository(pool)
-	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"))
+	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"), phase1GateOpen)
 
 	// Create auth interceptors
 	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{

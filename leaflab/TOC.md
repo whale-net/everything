@@ -21,3 +21,8 @@ Plant and environment monitoring firmware and data pipeline.
 
 - [firmware/README.md](../firmware/README.md) — ISensor, SensorReading, II2CBus, MQTTWriter, test doubles, adding sensors
 - [tools/firmware/README.md](../tools/firmware/README.md) — Bazel toolchain, esp32_firmware() macro, flashing, WSL2 USB setup
+
+## API and UI Configuration
+
+- [api/ENV.md](api/ENV.md) — Environment variables for the leaflab-api gRPC service
+- [ui/ENV.md](ui/ENV.md) — Environment variables for the leaflab-ui BFF service
