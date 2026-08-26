@@ -326,7 +326,7 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 	// means a same-digest/different-version case correctly falls through
 	// to step 2, which resolves it against the request's own (owner,
 	// kind, version) row instead.
-	// 0. No-op detection (FR-17): check if an artifact with the same
+	// 0. No-op detection (FR-17): check if an artifact with the SAME version and
 	// identity_digest already exists and is published. If so, return it
 	// without creating a new version. This is artifact-level no-op detection,
 	// not per-file blob dedupe (FR-1). Only applies when identity_digest is
@@ -334,11 +334,11 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 	if a.IdentityDigest != "" {
 		var existingID string
 		row := r.ex.QueryRow(ctx, `SELECT artifact_id FROM artifact
-			WHERE owner_id = $1 AND kind = $2 AND identity_digest = $3 AND state = 'published'
+			WHERE owner_id = $1 AND kind = $2 AND version = $3 AND identity_digest = $4 AND state = 'published'
 			LIMIT 1`,
-			ownerIDOf(a), string(a.Kind), a.IdentityDigest)
+			ownerIDOf(a), string(a.Kind), a.Version, a.IdentityDigest)
 		if err := row.Scan(&existingID); err == nil {
-			// Found an existing published artifact with the same identity_digest.
+			// Found an existing published artifact with the same version and identity_digest.
 			// Load it fully and return it as a no-op.
 			row := r.ex.QueryRow(ctx, artifactSelectBase+` WHERE a.artifact_id = $1`, existingID)
 			if existing, err := scanArtifact(row); err == nil {

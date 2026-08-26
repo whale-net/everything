@@ -2198,10 +2198,11 @@ func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
 	firstArtifactID := resp1.Artifact.ArtifactId
 
 	// 2. Try to record v1.0.1 with a different content digest but the SAME
-	// identity_digest. This should trigger no-op detection and return v1.0.0
-	// (the existing published artifact with that identity_digest).
+	// identity_digest. This should FAIL with a uniqueness constraint violation
+	// because v1.0.0 and v1.0.1 are in the same major.minor series (v1.0.x)
+	// and can't both have the same identity_digest (same content).
 	const contentDigest2 = "sha256:content-pushed-second"
-	resp2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	_, err = artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
@@ -2210,23 +2211,50 @@ func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
 		Version:        "v1.0.1",
 		IdempotencyKey: "record-noop-v101",
 	})
+	if err == nil {
+		t.Fatalf("expected RecordArtifact for v1.0.1 with same identity_digest to fail on uniqueness constraint")
+	}
+	if !strings.Contains(err.Error(), "already published with identity_digest") {
+		t.Fatalf("expected uniqueness constraint error mentioning identity_digest, got: %v", err)
+	}
+
+	// 3. Record v1.1.0 (different minor version) with the SAME identity_digest.
+	// This should SUCCEED because v1.1.0 is in a different series (v1.1.x).
+	resp2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         contentDigest2,
+		IdentityDigest: identityDigest,
+		Version:        "v1.1.0",
+		IdempotencyKey: "record-v110",
+	})
 	if err != nil {
-		t.Fatalf("RecordArtifact(v1.0.1): %v", err)
+		t.Fatalf("RecordArtifact(v1.1.0): %v", err)
+	}
+	if resp2.Artifact.Version != "v1.1.0" {
+		t.Fatalf("expected v1.1.0, got %s", resp2.Artifact.Version)
 	}
 
-	// The returned artifact should be v1.0.0 (the existing published artifact),
-	// not v1.0.1, because they have the same identity_digest (no-op detection).
-	if resp2.Artifact.Version != "v1.0.0" {
-		t.Fatalf("expected no-op to return v1.0.0, got %s", resp2.Artifact.Version)
+	// 4. Record v2.0.0 (different major version) with the SAME identity_digest.
+	// This should SUCCEED because v2.0.0 is in a completely different series (v2.x).
+	resp3, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         contentDigest2,
+		IdentityDigest: identityDigest,
+		Version:        "v2.0.0",
+		IdempotencyKey: "record-v200",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v2.0.0): %v", err)
 	}
-	if resp2.Artifact.Digest != contentDigest1 {
-		t.Fatalf("expected digest %s, got %s", contentDigest1, resp2.Artifact.Digest)
-	}
-	if resp2.Artifact.ArtifactId != firstArtifactID {
-		t.Fatalf("expected same artifact ID as first record, got different IDs")
+	if resp3.Artifact.Version != "v2.0.0" {
+		t.Fatalf("expected v2.0.0, got %s", resp3.Artifact.Version)
 	}
 
-	// 3. Verify that a separate app is NOT affected by this identity_digest
+	// 5. Verify that a separate app is NOT affected by this identity_digest
 	// (no-op detection is per-owner, not global). First, reconcile a new app
 	// so it exists in the registry.
 	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
@@ -2239,7 +2267,7 @@ func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
 	}
 
 	const differentAppDigest = "sha256:different-app-content"
-	resp3, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	resp4, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-different-app",
@@ -2251,13 +2279,13 @@ func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecordArtifact(different app, v2.0.0): %v", err)
 	}
-	if resp3.Artifact.Version != "v2.0.0" {
-		t.Fatalf("expected v2.0.0 for different app, got %s", resp3.Artifact.Version)
+	if resp4.Artifact.Version != "v2.0.0" {
+		t.Fatalf("expected v2.0.0 for different app, got %s", resp4.Artifact.Version)
 	}
-	if resp3.Artifact.Digest != differentAppDigest {
-		t.Fatalf("expected digest %s for different app, got %s", differentAppDigest, resp3.Artifact.Digest)
+	if resp4.Artifact.Digest != differentAppDigest {
+		t.Fatalf("expected digest %s for different app, got %s", differentAppDigest, resp4.Artifact.Digest)
 	}
-	if resp3.Artifact.ArtifactId == firstArtifactID {
+	if resp4.Artifact.ArtifactId == firstArtifactID {
 		t.Fatalf("expected different artifact ID for different app")
 	}
 }
