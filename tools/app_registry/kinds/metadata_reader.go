@@ -128,3 +128,38 @@ func (r *AppMetadataRegistry) AllApps() map[string]*appmetapb.AppManifest {
 	}
 	return result
 }
+
+// AppsWithKind returns all apps that have the given artifact kind.
+func (r *AppMetadataRegistry) AppsWithKind(kind appmetapb.ArtifactKind) map[string]*appmetapb.AppManifest {
+	result := make(map[string]*appmetapb.AppManifest)
+	for fullName, app := range r.appsByFullName {
+		if app.ArtifactKind == kind {
+			result[fullName] = app
+		}
+	}
+	return result
+}
+
+// BinaryNameForApp returns the "binary name" (app name without domain prefix)
+// for a CLI binary app. This is used by S3 key conventions and file naming.
+// Returns empty string if the app is not found.
+func (r *AppMetadataRegistry) BinaryNameForApp(fullName string) string {
+	app := r.GetApp(fullName)
+	if app == nil {
+		return ""
+	}
+	return app.Name
+}
+
+// FullNameForBinaryName returns the full app name for a given binary name.
+// Returns empty string if no app with that binary name exists.
+// Note: this assumes binary names are unique; if multiple apps share the same
+// Name but different Domain, this returns the first match found.
+func (r *AppMetadataRegistry) FullNameForBinaryName(binaryName string) string {
+	for fullName, app := range r.appsByFullName {
+		if app.Name == binaryName {
+			return fullName
+		}
+	}
+	return ""
+}

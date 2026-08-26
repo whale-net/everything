@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"context"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/libs/go/semver"
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
@@ -70,6 +72,11 @@ type ArtifactServer struct {
 	releaseToolsS3Client     *s3.Client
 	releaseToolsS3ClientErr  error
 	releaseToolsS3ClientOnce sync.Once
+
+	// MetadataRegistry provides access to app metadata loaded from the Bazel
+	// release_app declarations. Used to resolve app names to full names
+	// dynamically instead of hardcoded enumerations.
+	MetadataRegistry *kinds.AppMetadataRegistry
 }
 
 // ArtifactServerOption configures an optional ArtifactServer dependency --
@@ -441,9 +448,22 @@ var binaryOwnerFullName = map[string]string{
 // exist in that table, so an unpublished or guessed version simply isn't
 // found -- there is no separate "is this confirmed?" check to get wrong.
 func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
-	ownerFullName, ok := binaryOwnerFullName[req.Binary]
+	ownerFullName, ok := s.lookupBinaryOwner(req.Binary)
 	if !ok {
-		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: release_helper_go, app-registry)", req.Binary)
+		// Build a list of known binaries from metadata
+		knownBinaries := ""
+		if s.MetadataRegistry != nil {
+			for _, app := range s.MetadataRegistry.AppsWithKind(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY) {
+				if knownBinaries != "" {
+					knownBinaries += ", "
+				}
+				knownBinaries += app.Name
+			}
+		}
+		if knownBinaries == "" {
+			knownBinaries = "release_helper_go, app-registry"
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: %s)", req.Binary, knownBinaries)
 	}
 	if req.Os == "" {
 		return nil, status.Error(codes.InvalidArgument, "os is required")
@@ -895,6 +915,24 @@ func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRu
 // see ARCHITECTURE.md "ListBuilds" for the pagination contract. Additive to
 // GetReleaseRun/GetBuildByWorkflowRun above and the CLI's `builds status`
 // (FR2.5) -- neither is changed by this RPC.
+// lookupBinaryOwner resolves a binary name to its app owner full name.
+// Uses the metadata registry if available; falls back to hardcoded map otherwise.
+func (s *ArtifactServer) lookupBinaryOwner(binaryName string) (string, bool) {
+	if s.MetadataRegistry != nil {
+		// Query the metadata registry for apps with ArtifactKindBinary
+		for fullName, app := range s.MetadataRegistry.AppsWithKind(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY) {
+			if app.Name == binaryName {
+				return fullName, true
+			}
+		}
+		return "", false
+	}
+	// Fallback to hardcoded map for backward compatibility
+	fullName, ok := binaryOwnerFullName[binaryName]
+	return fullName, ok
+}
+
+
 func (s *ArtifactServer) ListBuilds(ctx context.Context, req *pb.ListBuildsRequest) (*pb.ListBuildsResponse, error) {
 	since := time.Time{}
 	if req.Since != 0 {

@@ -16,8 +16,10 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//libs/go/s3",
+        "//tools/app_registry/kinds",
         "//tools/app_registry/server/repository",
         "//tools/app_registry/worker/writeback",
+        "//tools/appmeta/proto:appmetapb",
         "@com_github_google_uuid//:uuid",
         "@io_temporal_go_sdk//activity",
         "@io_temporal_go_sdk//temporal",
@@ -38,6 +40,7 @@ go_test(
     ],
     embed = [":release"],
     deps = [
+        "//tools/app_registry/kinds",
         "//tools/app_registry/server/repository",
         "//tools/app_registry/server/repository/fake",
         "//tools/app_registry/worker/writeback",

@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
@@ -124,7 +125,7 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 				result.Failed[key] = fmt.Sprintf("look up app %q to resolve its published artifact kind: %v", t.OwnerFullName, aerr)
 				continue
 			}
-			if app.AppType == "cli" || app.AppType == "binary" {
+			if a.isCLIBinaryAppType(app) {
 				lookupKind = repository.ArtifactKindBinary
 			}
 		}
@@ -159,6 +160,22 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 	}
 	return result, nil
 }
+
+// isCLIBinaryAppType checks if an app is a CLI binary app by querying the
+// metadata registry. Falls back to checking app.AppType for backward compatibility.
+func (a *Activities) isCLIBinaryAppType(app *repository.App) bool {
+	if a.MetadataRegistry != nil {
+		// Query the metadata registry to get the artifact kind
+		appMetadata := a.MetadataRegistry.GetApp(fmt.Sprintf("%s-%s", app.Domain, app.Name))
+		if appMetadata != nil && appMetadata.ArtifactKind == appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY {
+			return true
+		}
+		// If metadata registry doesn't have it, fall through to app type check
+	}
+	// Fallback to app_type check
+	return app.AppType == "cli" || app.AppType == "binary"
+}
+
 
 // releaseRunTargetStateOrder is the legal linear progression
 // repository.ReleaseRunTargetState's doc comment describes: queued ->

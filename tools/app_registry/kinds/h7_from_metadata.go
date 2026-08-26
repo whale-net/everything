@@ -41,18 +41,27 @@ func (h *MetadataH7Hook) AppTypeMapping() []string {
 
 // InitializeMetadataH7 initializes H7 hooks for all registered kinds using
 // the given metadata registry. This must be called after all kinds are
-// registered but before dispatch begins.
+// registered but before dispatch begins (i.e., before any code consults
+// kind.Hooks().H7()).
 //
-// TODO(FR-36 Implementation): This is a scaffold for the full implementation.
-// Future work will wire this into the kind system and replace hardcoded H7
-// implementations across all kinds.
+// For each registered kind that has a Binary-like structure, this updates
+// its H7 hook to use the metadata-based version, replacing hardcoded
+// app-type enumerations with lookups from the registry.
 func InitializeMetadataH7(registry *AppMetadataRegistry) {
 	if registry == nil {
 		return
 	}
 
-	// Future: loop through kindRegistry and update each kind's H7 hook
-	// to use the metadata-based version. For now, this is a placeholder
-	// that demonstrates the structure.
-	_ = registry
+	// For the Binary kind, update its H7 hook to use metadata.
+	// Binary currently publishes ARTIFACT_KIND_BINARY.
+	binaryKind := Get("binary")
+	if binaryKind != nil {
+		if binary, ok := binaryKind.(*Binary); ok {
+			binary.h7Metadata = NewMetadataH7Hook(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY, registry)
+		}
+	}
+
+	// Future kinds (image, chart, etc.) can be updated similarly here.
+	// For now, only binary is handled since that's the only kind that
+	// currently has hardcoded app-type mappings.
 }

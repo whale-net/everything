@@ -49,6 +49,7 @@
 package release
 
 import (
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"archive/zip"
 	"bytes"
 	"context"
@@ -102,6 +103,40 @@ const (
 var cliBinaryTargets = map[string]string{
 	"tools-release_helper_go": "release_helper_go",
 	"tools-app-registry":      "app-registry",
+}
+
+// isCLIBinaryApp checks if the given fullName corresponds to a CLI binary app.
+// Uses the metadata registry if available; falls back to the hardcoded map otherwise.
+// This replaces the hardcoded cliBinaryTargets enumerations with metadata lookups.
+func (a *Activities) isCLIBinaryApp(fullName string) bool {
+	if a.MetadataRegistry != nil {
+		app := a.MetadataRegistry.GetApp(fullName)
+		if app != nil && app.ArtifactKind == appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY {
+			return true
+		}
+		return false
+	}
+	// Fallback to hardcoded map for backward compatibility during transition
+	_, ok := cliBinaryTargets[fullName]
+	return ok
+}
+
+// binaryNameForCLIApp returns the binary name for a CLI binary app.
+// Returns empty string if the app is not a CLI binary app.
+func (a *Activities) binaryNameForCLIApp(fullName string) string {
+	if a.MetadataRegistry != nil {
+		app := a.MetadataRegistry.GetApp(fullName)
+		if app != nil && app.ArtifactKind == appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY {
+			return app.Name
+		}
+		return ""
+	}
+	// Fallback to hardcoded map
+	name, ok := cliBinaryTargets[fullName]
+	if ok {
+		return name
+	}
+	return ""
 }
 
 // binaryUploader is the S3 upload seam FinalizePublish's CLI-binary publish
@@ -334,7 +369,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	// that was never supposed to exist, failing every CLI-only batch.
 	nonCLIAppCount := 0
 	for _, fullName := range apps {
-		if _, isCLI := cliBinaryTargets[fullName]; !isCLI {
+		if !a.isCLIBinaryApp(fullName) {
 			nonCLIAppCount++
 		}
 	}
@@ -481,7 +516,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		// publishCLIBinaries below is their actual publish step, keyed off
 		// plan.Versions directly rather than a finalize-app confirmation
 		// that will never come.
-		if _, isCLI := cliBinaryTargets[fullName]; isCLI {
+		if a.isCLIBinaryApp(fullName) {
 			continue
 		}
 
@@ -851,8 +886,8 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 	var uploader binaryUploader
 
 	for _, fullName := range apps {
-		binaryName, ok := cliBinaryTargets[fullName]
-		if !ok {
+		binaryName := a.binaryNameForCLIApp(fullName)
+		if binaryName == "" {
 			continue
 		}
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)

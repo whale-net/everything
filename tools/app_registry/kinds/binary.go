@@ -6,6 +6,7 @@ package kinds
 type Binary struct {
 	// h1, h2, h3, h4, h5, h6, h7, h8 are the eight hooks this kind supplies.
 	// Each hook is initialized with its actual policy value.
+	// Note: h7 may be overridden by InitializeMetadataH7 after registry loading.
 	h1 h1Hook
 	h2 h2Hook
 	h3 h3Hook
@@ -13,6 +14,7 @@ type Binary struct {
 	h5 h5Hook
 	h6 h6Hook
 	h7 h7Hook
+	h7Metadata *MetadataH7Hook // Set by InitializeMetadataH7 to override the default h7
 	h8 h8Hook
 }
 
@@ -57,7 +59,12 @@ func (k *Binary) H6() H6 {
 }
 
 // H7 returns this kind's H7 hook (app-type mapping).
+// If metadata-based H7 has been initialized (via InitializeMetadataH7),
+// returns that; otherwise returns the default hardcoded hook.
 func (k *Binary) H7() H7 {
+	if k.h7Metadata != nil {
+		return k.h7Metadata
+	}
 	return &k.h7
 }
 

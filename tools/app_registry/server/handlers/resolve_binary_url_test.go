@@ -134,9 +134,11 @@ func TestResolveBinaryURL_UnknownVersionIsNotFound(t *testing.T) {
 	}
 }
 
-// TestResolveBinaryURL_InvalidBinaryNameIsRejected covers the binaryOwnerFullName
-// allowlist: any binary name outside {release_helper_go, app-registry} is
+// TestResolveBinaryURL_InvalidBinaryNameIsRejected covers metadata-based
+// binary resolution: any binary name not in the metadata registry
+// (i.e., no app with ArtifactKindBinary has that Name) is
 // rejected with InvalidArgument before any repository lookup happens.
+// This replaces the prior hardcoded allowlist with FR-36's metadata lookups.
 func TestResolveBinaryURL_InvalidBinaryNameIsRejected(t *testing.T) {
 	artifactSrv, _ := setupResolveBinaryURL(t)
 	ctx := authedCtx()

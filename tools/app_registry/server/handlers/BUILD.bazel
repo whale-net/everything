@@ -21,6 +21,7 @@ go_library(
         "//libs/go/s3",
         "//libs/go/semver",
         "//tools/app_registry/apierrors",
+        "//tools/app_registry/kinds",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/auth",
         "//tools/app_registry/server/repository",
@@ -59,6 +60,7 @@ go_test(
     deps = [
         "//libs/go/grpcauth",
         "//tools/app_registry/apierrors",
+        "//tools/app_registry/kinds",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/auth",
         "//tools/app_registry/server/repository",

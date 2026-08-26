@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
@@ -95,6 +96,13 @@ type Activities struct {
 	// lazily constructs a real client from ReleaseToolsS3* the first time a
 	// batch actually needs one.
 	S3Uploader binaryUploader
+
+	// MetadataRegistry provides access to app metadata loaded from the Bazel
+	// release_app declarations (the single authoring site for FR-36).
+	// Used by FinalizePublish and other activities to resolve app types,
+	// artifact kinds, and binary names from the metadata instead of
+	// hardcoded enumerations.
+	MetadataRegistry *kinds.AppMetadataRegistry
 }
 
 var _ ReleaseActivities = (*Activities)(nil)
