@@ -239,6 +239,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 
 	// Protected routes.
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDashboard)))
+	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoards)))
 }
 
 // handleHealth returns a health check response.

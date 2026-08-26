@@ -1,0 +1,89 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/leaflab/ui/viewdata"
+)
+
+// Boards is screen: board list (FR13, FR61, FR64). Every authenticated user sees
+// every board — household scoping is FR5 and lands in Phase 2. Times are rendered
+// as elapsed from FR64's absolute instants in the viewer's timezone; no raw UTC
+// string as primary text (NFR19 applies to all fields: board device IDs,
+// firmware and config details are private by default).
+templ Boards(user *htmxauth.UserInfo, data *viewdata.BoardsData) {
+	<div class="navbar bg-neutral text-neutral-content shadow-sm">
+		<div class="flex-1 flex items-center gap-4">
+			<a href="/" class="btn btn-ghost text-xl">LeafLab</a>
+			<ul class="menu menu-horizontal gap-2">
+				<li><a href="/">Dashboard</a></li>
+				<li><a href="/boards" class="active">Boards</a></li>
+				<li><a href="/sensors">Sensors</a></li>
+			</ul>
+		</div>
+		<div class="flex-none flex items-center gap-2">
+			<div class="dropdown dropdown-end">
+				<div tabindex="0" role="button" class="btn btn-ghost btn-sm" aria-label="Account menu">
+					{ user.PreferredUsername }
+				</div>
+				<ul tabindex="0" class="dropdown-content menu bg-base-100 text-base-content rounded-box z-10 w-40 p-2 shadow">
+					<li><a href="/auth/logout">Logout</a></li>
+				</ul>
+			</div>
+		</div>
+	</div>
+	<main class="min-h-screen bg-base-200 p-6">
+		<div class="mx-auto max-w-4xl space-y-6">
+			<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100 flex flex-col md:flex-row justify-between md:items-center gap-4">
+				<div>
+					<h1 class="text-2xl md:text-3xl font-bold mb-2">Sensor Boards</h1>
+					<p class="text-sm opacity-80">All boards managed in this installation.</p>
+				</div>
+			</div>
+
+			if data.Err != nil {
+				<div class="alert alert-error">
+					<div>
+						<span>Failed to load boards: { data.Err.Error() }</span>
+					</div>
+				</div>
+			} else if len(data.Boards) == 0 {
+				<div class="alert alert-info">
+					<div>
+						<span>No boards have been registered yet.</span>
+					</div>
+				</div>
+			} else {
+				<div class="card bg-base-100 shadow-md">
+					<div class="card-body p-0">
+						<table class="table">
+							<thead>
+								<tr>
+									<th>Device ID</th>
+									<th>Board ID</th>
+									<th>Last Seen</th>
+								</tr>
+							</thead>
+							<tbody>
+								for _, board := range data.Boards {
+									<tr class="hover">
+										<td class="font-mono text-sm">{ board.GetDeviceId() }</td>
+										<td class="text-sm">{ fmt.Sprint(board.GetBoardId()) }</td>
+										<td class="text-sm">{ elapsedTime(board.GetRecordedAt()) }</td>
+									</tr>
+								}
+							</tbody>
+						</table>
+					</div>
+				</div>
+
+				if data.NextPageToken != "" {
+					<div class="mt-4 flex justify-center gap-2">
+						<a href={ templ.URL(fmt.Sprintf("/boards?page_token=%s", data.NextPageToken)) } class="btn btn-primary">Load more</a>
+					</div>
+				}
+			}
+		</div>
+	</main>
+}
