@@ -29,6 +29,7 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/worker/reaper"
 	"github.com/whale-net/everything/tools/app_registry/worker/release"
 	"github.com/whale-net/everything/tools/app_registry/worker/writeback"
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 )
 
 func main() {
@@ -50,6 +51,15 @@ func run() error {
 	})
 	defer logging.Shutdown(ctx) //nolint:errcheck
 	logger := logging.Get("app-registry-worker")
+	// Load app metadata from the checkout (FR-36: central authoring site)
+	logger.Info("loading app metadata from checkout")
+	metadataRegistry := kinds.NewAppMetadataRegistry()
+	checkoutRoot := getEnv("CHECKOUT_ROOT", ".")
+	if err := metadataRegistry.LoadFromCheckout(ctx, checkoutRoot); err != nil {
+		// Log but do not fail: if metadata files are unavailable, the registry
+		// simply stays empty and metadata lookups fall back gracefully.
+		logger.Warn("failed to load app metadata from checkout", "error", err)
+	}
 
 	// Direct Postgres connection for draining the outbox -- see
 	// outbox.Drainer's Store field doc comment for why this is not routed
@@ -209,6 +219,7 @@ func run() error {
 		ReleaseToolsS3Region:    os.Getenv("RELEASE_TOOLS_S3_REGION"),
 		ReleaseToolsS3AccessKey: os.Getenv("RELEASE_TOOLS_S3_ACCESS_KEY"),
 		ReleaseToolsS3SecretKey: os.Getenv("RELEASE_TOOLS_S3_SECRET_KEY"),
+		MetadataRegistry: metadataRegistry,
 	}
 	if appID := os.Getenv("RELEASE_GITHUB_APP_ID"); appID != "" {
 		dispatcher, derr := release.NewGitHubDispatcher(release.GitHubDispatcherConfig{

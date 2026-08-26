@@ -96,6 +96,14 @@ func WithReleaseToolsS3(bucket, publicEndpoint, region, accessKey, secretKey str
 	}
 }
 
+// WithMetadataRegistry configures the AppMetadataRegistry for metadata-based
+// lookups (FR-36). This is the central authoring site for app and kind definitions.
+func WithMetadataRegistry(registry *kinds.AppMetadataRegistry) ArtifactServerOption {
+	return func(s *ArtifactServer) {
+		s.MetadataRegistry = registry
+	}
+}
+
 // NewArtifactServer constructs an ArtifactServer over repo.
 func NewArtifactServer(repo repository.Registry, opts ...ArtifactServerOption) *ArtifactServer {
 	s := &ArtifactServer{repo: repo}

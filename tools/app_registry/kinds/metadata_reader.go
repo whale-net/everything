@@ -163,3 +163,20 @@ func (r *AppMetadataRegistry) FullNameForBinaryName(binaryName string) string {
 	}
 	return ""
 }
+
+// RegisterApp directly registers an app manifest in the registry, without
+// reading from disk. This is used in tests and for programmatic construction
+// of the registry.
+func (r *AppMetadataRegistry) RegisterApp(app *appmetapb.AppManifest) {
+	if app == nil {
+		return
+	}
+	// Index the app by full_name
+	fullName := fmt.Sprintf("%s-%s", app.Domain, app.Name)
+	r.appsByFullName[fullName] = app
+
+	// Index by app_type for H7 dispatch
+	if app.AppType != "" {
+		r.appsByAppType[app.AppType] = append(r.appsByAppType[app.AppType], app)
+	}
+}

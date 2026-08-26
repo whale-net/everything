@@ -6,6 +6,7 @@ import (
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -24,23 +25,34 @@ func setupResolveBinaryURL(t *testing.T) (*ArtifactServer, *pb.Build) {
 	repo := fake.New()
 	appSrv := NewAppServer(repo)
 	ctx := authedCtx()
+	
+	// Create test apps for both the repository and the metadata registry
+	testApps := []*appmetapb.AppManifest{
+		{Domain: "tools", Name: "release_helper_go", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE, ArtifactKind: appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY},
+		{Domain: "tools", Name: "app-registry", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE, ArtifactKind: appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY},
+	}
+	
 	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
-		Manifests: manifestSet([]*appmetapb.AppManifest{
-			{Domain: "tools", Name: "release_helper_go", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
-			{Domain: "tools", Name: "app-registry", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE},
-		}, nil),
+		Manifests: manifestSet(testApps, nil),
 		IdempotencyKey: "setup-resolve-binary-url",
 	}); err != nil {
 		t.Fatalf("reconcile tools apps: %v", err)
 	}
 
-	artifactSrv := NewArtifactServer(repo, WithReleaseToolsS3(
+	// Create and wire the MetadataRegistry with the same apps
+	metadataRegistry := kinds.NewAppMetadataRegistry()
+	for _, app := range testApps {
+		metadataRegistry.RegisterApp(app)
+	}
+
+	artifactSrv := NewArtifactServer(repo, WithMetadataRegistry(metadataRegistry), WithReleaseToolsS3(
 		"release-tools-bucket", "https://s3.example.com/",
 		"us-east-1", "test-access-key", "test-secret-key",
 	))
 	build := recordBuild(t, artifactSrv, "run-resolve-binary-url")
 	return artifactSrv, build
 }
+
 
 // TestResolveBinaryURL_KnownBinaryAndVersion is the FR12-FR14 happy path:
 // a published binary+version+os+arch resolves presigned URLs addressed at

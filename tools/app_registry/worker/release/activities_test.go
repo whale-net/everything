@@ -26,7 +26,7 @@ import (
 // below for the RawJSON branch, which must accept exactly this same
 // heterogeneous input.
 func TestActivities_DispatchBuild_HeterogeneousVersions_ReturnsClearError(t *testing.T) {
-	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux()), Registry: newTestRegistry(t)}
+	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux()), Registry: newTestRegistry(t), MetadataRegistry: newTestMetadataRegistry(t)}
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-1",
 		Versions: map[string]string{
@@ -74,7 +74,7 @@ func TestActivities_DispatchBuild_HeterogeneousVersionsWithRawJSON_DispatchesSuc
 
 	rawJSON := []byte(`{"matrix":{"include":[{"app":"widget","domain":"demo","version":"v2.0.0"}]},"apps":["demo-widget"],"versions":{"demo-widget":"v2.0.0","demo-achart":"v1.0.1"},"event_type":"workflow_dispatch","has_specs":false}`)
 
-	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-2",
 		Versions: map[string]string{
@@ -97,7 +97,7 @@ func TestActivities_DispatchBuild_HeterogeneousVersionsWithRawJSON_DispatchesSuc
 // digestOverrides must fail clearly, never silently build fresh or silently
 // ignore it (see activities.go's DispatchBuild doc comment).
 func TestActivities_DispatchBuild_DigestOverrides_ReturnsUnimplementedError(t *testing.T) {
-	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux())}
+	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux()), MetadataRegistry: newTestMetadataRegistry(t)}
 	plan := ResolvedPlan{Versions: map[string]string{"image:demo-widget": "v1.0.0"}}
 	_, err := a.DispatchBuild(context.Background(), plan, map[string]string{"image:demo-widget": "sha256:abc"})
 	require.Error(t, err)
@@ -108,7 +108,7 @@ func TestActivities_DispatchBuild_DigestOverrides_ReturnsUnimplementedError(t *t
 // worker/main.go's "leave GitHub nil unless configured" path -- DispatchBuild
 // must fail fast rather than nil-panic.
 func TestActivities_DispatchBuild_GitHubNotConfigured_ReturnsClearError(t *testing.T) {
-	a := &Activities{}
+	a := &Activities{MetadataRegistry: newTestMetadataRegistry(t)}
 	plan := ResolvedPlan{Versions: map[string]string{"image:demo-widget": "v1.0.0"}}
 	_, err := a.DispatchBuild(context.Background(), plan, nil)
 	require.Error(t, err)
@@ -118,7 +118,7 @@ func TestActivities_DispatchBuild_GitHubNotConfigured_ReturnsClearError(t *testi
 // TestActivities_DispatchBuild_EmptyPlan_ReturnsClearError covers a
 // ResolvePlan result with no versions reaching DispatchBuild.
 func TestActivities_DispatchBuild_EmptyPlan_ReturnsClearError(t *testing.T) {
-	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux()), Registry: newTestRegistry(t)}
+	a := &Activities{GitHub: newTestDispatcher(t, http.NewServeMux()), Registry: newTestRegistry(t), MetadataRegistry: newTestMetadataRegistry(t)}
 	_, err := a.DispatchBuild(context.Background(), ResolvedPlan{}, nil)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "no versions")
@@ -159,7 +159,7 @@ func TestActivities_DispatchBuild_HappyPath_DispatchesUniformVersionWithSplitTar
 	}, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
 
-	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-1",
 		Versions: map[string]string{
@@ -221,7 +221,7 @@ func TestActivities_DispatchBuild_ResolvedPlan_ForwardsRawJSONVerbatim(t *testin
 
 	rawJSON := []byte(`{"matrix":{"include":[{"app":"widget","domain":"demo","version":"v1.2.3"}]},"apps":["demo-widget"],"version":"v1.2.3","versions":{"demo-widget":"v1.2.3","demo-achart":"v1.2.3"},"event_type":"workflow_dispatch","has_specs":false}`)
 
-	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-3",
 		Versions: map[string]string{
@@ -272,7 +272,7 @@ func TestActivities_DispatchBuild_AppVersions_OmittedWhenNoImageTargets(t *testi
 	}, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
 
-	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo}
+	a := &Activities{GitHub: newTestDispatcher(t, mux), Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	plan := ResolvedPlan{
 		ReleaseRunID: "release-run-2",
 		Versions:     map[string]string{"chart:demo-achart": "v1.2.3"},
