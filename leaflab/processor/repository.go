@@ -470,3 +470,47 @@ func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID
 	}
 	return nil
 }
+
+// ValidateRegionBelongsToHousehold checks whether a region belongs to the given household.
+// A region belongs to a household if it is a root region (parent_region_id IS NULL) with
+// matching household_id, or a descendant of such a root.
+// Returns (true, nil) if the region belongs to the household.
+// Returns (false, nil) if the region belongs to a different household or does not exist.
+// Returns (false, err) on database error.
+func (r *Repository) ValidateRegionBelongsToHousehold(ctx context.Context, regionID int64, householdID int64) (bool, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE region_ancestry AS (
+			-- Base case: the region itself (if it's a root)
+			SELECT region_id, household_id FROM region
+			WHERE region_id = $1 AND parent_region_id IS NULL
+			UNION ALL
+			-- Recursive case: traverse up to find the root
+			SELECT r.region_id, r.household_id FROM region r
+			INNER JOIN region_ancestry ra ON ra.region_id = r.parent_region_id
+			WHERE r.region_id = $1
+		)
+		SELECT COUNT(*) FROM region_ancestry WHERE household_id = $2
+	`, regionID, householdID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("validate region %d household %d: %w", regionID, householdID, err)
+	}
+	return count > 0, nil
+}
+
+// ValidateBoardBelongsToHousehold checks whether a board belongs to the given household
+// by examining the current board ownership row (where valid_to IS NULL).
+// Returns (true, nil) if the board currently belongs to the household.
+// Returns (false, nil) if the board belongs to a different household or does not exist.
+// Returns (false, err) on database error.
+func (r *Repository) ValidateBoardBelongsToHousehold(ctx context.Context, boardID int64, householdID int64) (bool, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM board
+		WHERE board_id = $1 AND household_id = $2
+	`, boardID, householdID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("validate board %d household %d: %w", boardID, householdID, err)
+	}
+	return count > 0, nil
+}

@@ -300,3 +300,80 @@ func (r *Repository) TransferBoardOwnership(ctx context.Context, boardID int64, 
 
 	return nil
 }
+
+// ── Household validation (FR1.2 write invariant enforcement) ─────────────────
+
+// ValidateRegionBelongsToHousehold checks whether a region belongs to the given household.
+// A region belongs to a household if it is a root region (parent_region_id IS NULL) with
+// matching household_id, or a descendant of such a root.
+// Returns (true, nil) if the region belongs to the household.
+// Returns (false, nil) if the region belongs to a different household or does not exist.
+// Returns (false, err) on database error.
+func (r *Repository) ValidateRegionBelongsToHousehold(ctx context.Context, regionID int64, householdID int64) (bool, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE region_ancestry AS (
+			-- Base case: the region itself (if it's a root)
+			SELECT region_id, household_id FROM region
+			WHERE region_id = $1 AND parent_region_id IS NULL
+			UNION ALL
+			-- Recursive case: traverse up to find the root
+			SELECT r.region_id, r.household_id FROM region r
+			INNER JOIN region_ancestry ra ON ra.region_id = r.parent_region_id
+			WHERE r.region_id = $1
+		)
+		SELECT COUNT(*) FROM region_ancestry WHERE household_id = $2
+	`, regionID, householdID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("validate region %d household %d: %w", regionID, householdID, err)
+	}
+	return count > 0, nil
+}
+
+// ValidateBoardBelongsToHousehold checks whether a board belongs to the given household
+// by examining board.household_id (current ownership).
+// Returns (true, nil) if the board currently belongs to the household.
+// Returns (false, nil) if the board belongs to a different household or does not exist.
+// Returns (false, err) on database error.
+func (r *Repository) ValidateBoardBelongsToHousehold(ctx context.Context, boardID int64, householdID int64) (bool, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM board
+		WHERE board_id = $1 AND household_id = $2
+	`, boardID, householdID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("validate board %d household %d: %w", boardID, householdID, err)
+	}
+	return count > 0, nil
+}
+
+// ── Audit logging (FR8) ────────────────────────────────────────────────────
+
+// RecordAudit writes an audit record to the audit_record table.
+// This is the single audit-writing helper used by every write path.
+func (r *Repository) RecordAudit(ctx context.Context, actorSubject string, targetHouseholdID int64,
+	action, entityType string, entityID int64, reason string) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type, entity_id, reason)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, actorSubject, targetHouseholdID, action, entityType, entityID, reason)
+	if err != nil {
+		return fmt.Errorf("record audit: %w", err)
+	}
+	return nil
+}
+
+// RecordAuditWithConfig writes an audit record for a config-related action,
+// including optional config_version and sensor hardware address context.
+func (r *Repository) RecordAuditWithConfig(ctx context.Context, actorSubject string, targetHouseholdID int64,
+	action, entityType string, entityID int64, configVersion *int64, i2cAddress *uint32, muxPath []byte, reason string) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type, entity_id,
+		                           config_version, i2c_address, mux_path, reason)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+	`, actorSubject, targetHouseholdID, action, entityType, entityID, configVersion, i2cAddress, muxPath, reason)
+	if err != nil {
+		return fmt.Errorf("record audit with config: %w", err)
+	}
+	return nil
+}

@@ -68,3 +68,16 @@ message HealthResponse {
   }
   Status status = 1;
 }
+
+// OpaqueEntityReference represents a foreign entity (owned by a different household)
+// in a history response. It renders as an opaque placeholder — that an entity existed,
+// and nothing about what it was, who owns it, or whether it still exists.
+// This is symmetrical for both households: a household cannot resolve entities
+// owned by another household, even in historical views.
+message OpaqueEntityReference {
+  // Entity type name (e.g., "region", "plant", "board") — visible to indicate
+  // what kind of entity crossed a household boundary, but not resolvable.
+  string entity_type = 1;
+  // The foreign entity_id — not resolvable within the current household context.
+  int64 entity_id = 2;
+}
