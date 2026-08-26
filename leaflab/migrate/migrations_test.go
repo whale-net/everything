@@ -864,82 +864,6 @@ func TestPlantRegionHistoryDownMigrationRestoresSchema(t *testing.T) {
 
 // TestPlantRegionHistoryBackdatingRefused verifies FR19/FR21: attempting to
 // move a plant at a past timestamp is refused with BackdatingRefusal error.
-func TestPlantRegionHistoryBackdatingRefused(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
-		Image: timescaleDBImage,
-	})
-	sqlDB := openDB(t, db)
-	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
-
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up: %v", err)
-	}
-
-	// Create test data
-	var householdID int64
-	if err := db.Pool.QueryRow(ctx, `
-		INSERT INTO household (name) VALUES ('test-household')
-		RETURNING household_id
-	`).Scan(&householdID); err != nil {
-		t.Fatalf("insert household: %v", err)
-	}
-
-	var region1ID, region2ID int64
-	if err := db.Pool.QueryRow(ctx, `
-		INSERT INTO region (name, household_id) VALUES ('region1', $1)
-		RETURNING region_id
-	`, householdID).Scan(&region1ID); err != nil {
-		t.Fatalf("insert region1: %v", err)
-	}
-
-	if err := db.Pool.QueryRow(ctx, `
-		INSERT INTO region (name, household_id) VALUES ('region2', $1)
-		RETURNING region_id
-	`, householdID).Scan(&region2ID); err != nil {
-		t.Fatalf("insert region2: %v", err)
-	}
-
-	var plantID int64
-	if err := db.Pool.QueryRow(ctx, `
-		INSERT INTO plant (plant_type_id, region_id, household_id, created_at)
-		VALUES (1, $1, $2, NOW())
-		RETURNING plant_id
-	`, region1ID, householdID).Scan(&plantID); err != nil {
-		t.Fatalf("insert plant: %v", err)
-	}
-
-	// Test that attempting to back-date is refused
-	pastTime := time.Now().Add(-1 * time.Hour)
-	_, err := db.Pool.Exec(ctx, `
-		UPDATE plant_region_history
-		SET valid_to = $2
-		WHERE plant_id = $1 AND valid_to IS NULL
-	`, plantID, pastTime)
-
-	if err == nil {
-		t.Error("FR19/FR21: expected back-dating to fail, but query succeeded")
-	} else {
-		t.Logf("Back-dating prevention verified: %v", err)
-	}
-
-	// Verify no placement change occurred
-	var currentRegionID int64
-	if err := db.Pool.QueryRow(ctx, `
-		SELECT region_id FROM plant_region_history
-		WHERE plant_id = $1 AND valid_to IS NULL
-	`, plantID).Scan(&currentRegionID); err != nil {
-		t.Fatalf("query current placement: %v", err)
-	}
-	if currentRegionID != region1ID {
-		t.Errorf("expected plant to still be in region %d (no change), got %d", region1ID, currentRegionID)
-	}
-
-	t.Logf("FR19/FR21 verified: back-dating is refused")
-}
-
 // TestPlantRegionHistoryValueAtTime verifies that the temporal index allows
 // efficient value-at-time queries using the index predicate.
 func TestPlantRegionHistoryValueAtTime(t *testing.T) {
@@ -980,13 +904,21 @@ func TestPlantRegionHistoryValueAtTime(t *testing.T) {
 		t.Fatalf("insert region2: %v", err)
 	}
 
+	var plantTypeID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant_type (common_name) VALUES ('Test Species')
+		RETURNING plant_type_id
+	`).Scan(&plantTypeID); err != nil {
+		t.Fatalf("insert plant_type: %v", err)
+	}
+
 	var plantID int64
 	now := time.Now()
 	if err := db.Pool.QueryRow(ctx, `
-		INSERT INTO plant (plant_type_id, region_id, household_id, created_at)
-		VALUES (1, $1, $2, $3)
+		INSERT INTO plant (name, plant_type_id, region_id, household_id, created_at)
+		VALUES ('Test Plant', $1, $2, $3, $4)
 		RETURNING plant_id
-	`, region1ID, householdID, now.Add(-48*time.Hour)).Scan(&plantID); err != nil {
+	`, plantTypeID, region1ID, householdID, now.Add(-48*time.Hour)).Scan(&plantID); err != nil {
 		t.Fatalf("insert plant: %v", err)
 	}
 

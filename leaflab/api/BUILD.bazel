@@ -47,6 +47,24 @@ go_test(
     ],
 )
 
+go_test(
+    name = "api_integration_test",
+    srcs = ["plant_region_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    timeout = "long",
+    deps = [
+        "//libs/go/dbtest",
+    ],
+)
+
 go_binary(
     name = "api",
     embed = [":api_lib"],
