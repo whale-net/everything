@@ -1,0 +1,17 @@
+"""LeafLab scripts — push-config.sh and tests."""
+
+# Test suite for push-config.sh script
+sh_test(
+    name = "push_config_test",
+    srcs = ["push_config_test.sh"],
+    data = [
+        "push-config.sh",
+        ":scenarios",
+    ],
+)
+
+# Scenarios directory as a filegroup for distribution
+filegroup(
+    name = "scenarios",
+    srcs = glob(["scenarios/*.json"]),
+)
