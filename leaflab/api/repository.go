@@ -300,3 +300,29 @@ func (r *Repository) TransferBoardOwnership(ctx context.Context, boardID int64, 
 
 	return nil
 }
+
+// ── Audit logging ────────────────────────────────────────────────────────────
+
+// EmitAudit records an audit record for the given action.
+// Called by every write path (and elevated/granted reads) to satisfy FR8 and FR9.
+// 
+// Parameters:
+// - ctx: request context
+// - actorSubject: the principal performing the action (NOT restricted to human IdP subjects)
+// - targetHouseholdID: the household being operated on
+// - action: the operation (e.g., "claim_board", "update_plant", "grant_access")
+// - entityType: the kind of entity affected (e.g., "board", "plant", "membership")
+// - entityID: the specific entity being operated on (may be null for household-level actions)
+// - reason: optional justification (required for some actions, e.g., membership denial)
+//
+// Returns an error if the audit record could not be inserted.
+func (r *Repository) EmitAudit(ctx context.Context, actorSubject string, targetHouseholdID int64, action string, entityType string, entityID *int64, reason *string) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type, entity_id, reason)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, actorSubject, targetHouseholdID, action, entityType, entityID, reason)
+	if err != nil {
+		return fmt.Errorf("emit audit: actor=%s household=%d action=%s: %w", actorSubject, targetHouseholdID, action, err)
+	}
+	return nil
+}
