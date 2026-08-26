@@ -117,6 +117,86 @@ message SensorIdentityChange {
   string suggested_rewire_path = 4;
 }
 
+// ============================================================================
+// Config status and history (FR34, FR35)
+// ============================================================================
+
+// ConfigState represents the three distinct states of a device config.
+enum ConfigState {
+  CONFIG_STATE_UNSPECIFIED = 0;
+
+  // The device has accepted this config (acked_at is set and rejection_reason is NULL).
+  CONFIG_STATE_ACCEPTED = 1;
+
+  // The device has not yet acknowledged this config (acked_at is NULL).
+  CONFIG_STATE_PENDING = 2;
+
+  // The device has rejected this config (acked_at is set and rejection_reason is set).
+  CONFIG_STATE_REJECTED = 3;
+}
+
+// ConfigStatusEntry represents the status of a config version.
+message ConfigStatusEntry {
+  // version is the config version this status describes.
+  uint64 version = 1;
+
+  // state is one of the three distinct states: ACCEPTED, PENDING, or REJECTED.
+  ConfigState state = 2;
+
+  // pushed_at is the Unix timestamp (seconds) when this config was pushed to the device.
+  int64 pushed_at = 3;
+
+  // acked_at is the Unix timestamp (seconds) when the device acknowledged this config.
+  // 0 means the config has not yet been acknowledged (pending state).
+  int64 acked_at = 4;
+
+  // rejection_reason is the verbatim rejection reason from the firmware (if rejected).
+  // Empty for accepted or pending configs.
+  string rejection_reason = 5;
+}
+
+message GetConfigStatusRequest {
+  int64 board_id = 1;
+  uint64 version = 2;
+}
+
+message GetConfigStatusResponse {
+  ConfigStatusEntry status = 1;
+}
+
+// ConfigHistoryEntry represents one entry in a board's config history.
+message ConfigHistoryEntry {
+  uint64 version = 1;
+  ConfigState state = 2;
+  int64 pushed_at = 3;
+  int64 acked_at = 4;
+  string rejection_reason = 5;
+}
+
+message ListConfigHistoryRequest {
+  int64 board_id = 1;
+  PageRequest page = 2;
+}
+
+message ListConfigHistoryResponse {
+  // entries are ordered newest first (highest version first).
+  repeated ConfigHistoryEntry entries = 1;
+  PageResponse page = 2;
+}
+
+message GetConfigByVersionRequest {
+  int64 board_id = 1;
+  uint64 version = 2;
+}
+
+message GetConfigByVersionResponse {
+  // config is the actual device configuration.
+  firmware.DeviceConfig config = 1;
+
+  // status contains the config's current state and metadata.
+  ConfigStatusEntry status = 2;
+}
+
 // LeafLabAPI is the control-plane API for managing leaflab sensor boards.
 service LeafLabAPI {
   // Push a new DeviceConfig to a board over MQTT.
@@ -150,6 +230,19 @@ service LeafLabAPI {
 
   // Health returns the service health status without requiring authentication.
   // It returns up or degraded and no other details.
+
+  // Get the status of a specific config version (accepted, pending, or rejected).
+  // FR34: three distinct states are derived from existing columns.
+  rpc GetConfigStatus(GetConfigStatusRequest) returns (GetConfigStatusResponse);
+
+  // List all config versions for a board, newest first, paginated.
+  // FR35: includes rejected and pending versions, each visibly marked.
+  rpc ListConfigHistory(ListConfigHistoryRequest) returns (ListConfigHistoryResponse);
+
+  // Get a specific config version by (board_id, version), regardless of acceptance.
+  // FR35: returns the config and its status/provenance.
+  rpc GetConfigByVersion(GetConfigByVersionRequest) returns (GetConfigByVersionResponse);
+
   rpc Health(HealthRequest) returns (HealthResponse);
 }
 

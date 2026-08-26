@@ -769,6 +769,237 @@ func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSe
 	}, nil
 }
 
+// deriveConfigState derives the ConfigState from the database columns.
+func deriveConfigState(ackedAt int64, rejectionReason string) pb.ConfigState {
+	if ackedAt == 0 {
+		// acked_at is NULL - config is pending
+		return pb.ConfigState_CONFIG_STATE_PENDING
+	}
+	if rejectionReason != "" {
+		// rejection_reason is set - config was rejected
+		return pb.ConfigState_CONFIG_STATE_REJECTED
+	}
+	// acked_at is set and no rejection reason - config was accepted
+	return pb.ConfigState_CONFIG_STATE_ACCEPTED
+}
+
+func (s *LeafLabAPIServer) GetConfigStatus(ctx context.Context, req *pb.GetConfigStatusRequest) (*pb.GetConfigStatusResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if req.BoardId <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_config",
+			"board_id",
+			apierrors.InvalidArgument,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "board_id must be positive", detail)
+	}
+
+	if req.Version <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_config",
+			"version",
+			apierrors.InvalidArgument,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "version must be positive", detail)
+	}
+
+	status, err := s.repo.GetConfigStatus(ctx, req.BoardId, req.Version)
+	if err != nil {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	if status == nil {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+			"device_config",
+			"version",
+			apierrors.ConfigVersionNotFound,
+		)
+		return nil, apierrors.StatusWithDetail(codes.NotFound, "config version not found", detail)
+	}
+
+	s.logger.Info("config status retrieved",
+		"board_id", req.BoardId,
+		"version", req.Version,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.GetConfigStatusResponse{
+		Status: &pb.ConfigStatusEntry{
+			Version:         uint64(status.Version),
+			State:           deriveConfigState(status.AckedAt, status.RejectionReason),
+			PushedAt:        status.PushedAt,
+			AckedAt:         status.AckedAt,
+			RejectionReason: status.RejectionReason,
+		},
+	}, nil
+}
+
+func (s *LeafLabAPIServer) ListConfigHistory(ctx context.Context, req *pb.ListConfigHistoryRequest) (*pb.ListConfigHistoryResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if req.BoardId <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_config",
+			"board_id",
+			apierrors.InvalidArgument,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "board_id must be positive", detail)
+	}
+
+	// Decode page token if provided
+	var pageToken *pagetoken.Token
+	if req.Page != nil && req.Page.PageToken != "" {
+		var err error
+		pageToken, err = pagetoken.Decode(req.Page.PageToken)
+		if err != nil {
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"device_config",
+				"page_token",
+				apierrors.InvalidPageToken,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "invalid page token", detail)
+		}
+	}
+
+	pageSize := int32(10)
+	if req.Page != nil && req.Page.PageSize > 0 {
+		pageSize = req.Page.PageSize
+	}
+
+	configs, nextToken, err := s.repo.ListConfigHistory(ctx, req.BoardId, pageSize, pageToken)
+	if err != nil {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Convert to proto entries
+	entries := make([]*pb.ConfigHistoryEntry, len(configs))
+	for i, c := range configs {
+		entries[i] = &pb.ConfigHistoryEntry{
+			Version:         uint64(c.Version),
+			State:           deriveConfigState(c.AckedAt, c.RejectionReason),
+			PushedAt:        c.PushedAt,
+			AckedAt:         c.AckedAt,
+			RejectionReason: c.RejectionReason,
+		}
+	}
+
+	var nextPageToken string
+	if nextToken != nil {
+		encoded, err := pagetoken.Encode(nextToken)
+		if err != nil {
+			s.logger.Error("failed to encode next page token", "error", err)
+			nextPageToken = ""
+		} else {
+			nextPageToken = encoded
+		}
+	}
+
+	s.logger.Info("config history listed",
+		"board_id", req.BoardId,
+		"entry_count", len(entries),
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.ListConfigHistoryResponse{
+		Entries: entries,
+		Page: &pb.PageResponse{
+			NextPageToken: nextPageToken,
+		},
+	}, nil
+}
+
+func (s *LeafLabAPIServer) GetConfigByVersion(ctx context.Context, req *pb.GetConfigByVersionRequest) (*pb.GetConfigByVersionResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if req.BoardId <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_config",
+			"board_id",
+			apierrors.InvalidArgument,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "board_id must be positive", detail)
+	}
+
+	if req.Version <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_config",
+			"version",
+			apierrors.InvalidArgument,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "version must be positive", detail)
+	}
+
+	config, status, err := s.repo.GetConfigByVersion(ctx, req.BoardId, req.Version)
+	if err != nil {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	if config == nil || status == nil {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+			"device_config",
+			"version",
+			apierrors.ConfigVersionNotFound,
+		)
+		return nil, apierrors.StatusWithDetail(codes.NotFound, "config version not found", detail)
+	}
+
+	s.logger.Info("config fetched by version",
+		"board_id", req.BoardId,
+		"version", req.Version,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.GetConfigByVersionResponse{
+		Config: config,
+		Status: &pb.ConfigStatusEntry{
+			Version:         uint64(status.Version),
+			State:           deriveConfigState(status.AckedAt, status.RejectionReason),
+			PushedAt:        status.PushedAt,
+			AckedAt:         status.AckedAt,
+			RejectionReason: status.RejectionReason,
+		},
+	}, nil
+}
+
 func (s *LeafLabAPIServer) Health(ctx context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
 	// Health is the only unauthenticated endpoint.
 	// It returns no household data, only service health status.

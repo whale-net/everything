@@ -39,6 +39,9 @@ const (
 	// that has never had a config pushed to it.
 	ConfigNotFound = "CONFIG_NOT_FOUND"
 
+	// ConfigVersionNotFound is returned when a config version does not exist.
+	ConfigVersionNotFound = "CONFIG_VERSION_NOT_FOUND"
+
 	// InternalError is returned when a database, MQTT, or system error occurs.
 	InternalError = "INTERNAL_ERROR"
 

@@ -627,3 +627,138 @@ func (r *Repository) InsertDeviceConfigNextVersionWithProvenance(ctx context.Con
 		return 0, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
 	}
 }
+
+
+// ConfigStatusRow represents the status columns of a device config.
+type ConfigStatusRow struct {
+	Version         uint64
+	PushedAt        int64  // Unix timestamp (seconds)
+	AckedAt         int64  // Unix timestamp (seconds), 0 if not acked
+	RejectionReason string // Empty if accepted or pending
+}
+
+// GetConfigStatus retrieves the status of a specific config version.
+// Returns nil, nil if the version doesn't exist.
+func (r *Repository) GetConfigStatus(ctx context.Context, boardID int64, version uint64) (*ConfigStatusRow, error) {
+	var row ConfigStatusRow
+	err := r.db.QueryRow(ctx, `
+		SELECT version, EXTRACT(EPOCH FROM pushed_at)::bigint, 
+		       COALESCE(EXTRACT(EPOCH FROM acked_at)::bigint, 0), 
+		       COALESCE(rejection_reason, '')
+		FROM device_config
+		WHERE board_id = $1 AND version = $2
+	`, boardID, int64(version)).Scan(&row.Version, &row.PushedAt, &row.AckedAt, &row.RejectionReason)
+	if err == nil {
+		// Convert version back to uint64 for consistency
+	}
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get config status for board %d version %d: %w", boardID, version, err)
+	}
+	return &row, nil
+}
+
+// ListConfigHistory returns a page of config versions for a board, newest first, using keyset pagination.
+// pageToken can be nil for the first page, or a decoded token from a previous response.
+// Returns the configs, a next page token (nil if this is the last page), and any error.
+func (r *Repository) ListConfigHistory(ctx context.Context, boardID int64, pageSize int32, pageToken *pagetoken.Token) ([]ConfigStatusRow, *pagetoken.Token, error) {
+	// Clamp page size to maximum; enforce a default if not specified
+	if pageSize <= 0 {
+		pageSize = DefaultPageSize
+	}
+	if pageSize > MaxPageSize {
+		pageSize = MaxPageSize
+	}
+
+	// Build the keyset pagination query.
+	// We want to fetch configs ordered by (version DESC).
+	// If we have a token, we start after the last config's version.
+	var query string
+	var args []interface{}
+
+	if pageToken == nil || pageToken.LastVersion == 0 {
+		// First page: fetch the first pageSize rows, plus one extra to detect more pages
+		query = `
+			SELECT version, EXTRACT(EPOCH FROM pushed_at)::bigint, 
+			       COALESCE(EXTRACT(EPOCH FROM acked_at)::bigint, 0), 
+			       COALESCE(rejection_reason, '')
+			FROM device_config
+			WHERE board_id = $1
+			ORDER BY version DESC
+			LIMIT $2
+		`
+		args = []interface{}{boardID, pageSize + 1}
+	} else {
+		// Subsequent page: fetch rows after the token's position.
+		// The condition is: version < token.version in DESC order
+		query = `
+			SELECT version, EXTRACT(EPOCH FROM pushed_at)::bigint, 
+			       COALESCE(EXTRACT(EPOCH FROM acked_at)::bigint, 0), 
+			       COALESCE(rejection_reason, '')
+			FROM device_config
+			WHERE board_id = $1 AND version < $2
+			ORDER BY version DESC
+			LIMIT $3
+		`
+		args = []interface{}{boardID, pageToken.LastVersion, pageSize + 1}
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list config history for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var configs []ConfigStatusRow
+	for rows.Next() {
+		var c ConfigStatusRow
+		if err := rows.Scan(&c.Version, &c.PushedAt, &c.AckedAt, &c.RejectionReason); err != nil {
+			return nil, nil, fmt.Errorf("scan config: %w", err)
+		}
+		configs = append(configs, c)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterate config rows: %w", err)
+	}
+
+	// Check if there are more pages
+	var nextToken *pagetoken.Token
+	if len(configs) > int(pageSize) {
+		// Remove the extra row
+		configs = configs[:pageSize]
+		// Create next page token
+		lastConfig := configs[len(configs)-1]
+		nextToken = &pagetoken.Token{LastVersion: int64(lastConfig.Version)}
+	}
+
+	return configs, nextToken, nil
+}
+
+// GetConfigByVersion retrieves a config by board_id and version, along with its status.
+// Returns nil, nil if the version doesn't exist.
+func (r *Repository) GetConfigByVersion(ctx context.Context, boardID int64, version uint64) (*configpb.DeviceConfig, *ConfigStatusRow, error) {
+	var configJSON []byte
+	var row ConfigStatusRow
+	err := r.db.QueryRow(ctx, `
+		SELECT config_json, version, EXTRACT(EPOCH FROM pushed_at)::bigint,
+		       COALESCE(EXTRACT(EPOCH FROM acked_at)::bigint, 0),
+		       COALESCE(rejection_reason, '')
+		FROM device_config
+		WHERE board_id = $1 AND version = $2
+	`, boardID, int64(version)).Scan(&configJSON, &row.Version, &row.PushedAt, &row.AckedAt, &row.RejectionReason)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("get config by version for board %d version %d: %w", boardID, version, err)
+	}
+
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(configJSON, &cfg); err != nil {
+		return nil, nil, fmt.Errorf("unmarshal config for board %d version %d: %w", boardID, version, err)
+	}
+	return &cfg, &row, nil
+}

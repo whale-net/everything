@@ -21,6 +21,7 @@ type Token struct {
 	// whatever values the keyset pagination is indexed on.
 	LastRecordedAt int64  `json:"last_recorded_at,omitempty"`
 	LastBoardID    int64  `json:"last_board_id,omitempty"`
+	LastVersion    int64  `json:"last_version,omitempty"`
 }
 
 // Encode marshals a token to an opaque base64 string. The result is not
