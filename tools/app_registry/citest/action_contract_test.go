@@ -299,3 +299,196 @@ func TestActionCallSitesUnchanged(t *testing.T) {
 		t.Logf("Found %d call sites to download-release-tools (expected 12+); extraction may be incomplete", callSites)
 	}
 }
+
+// TestFR68DownloadReleaseToolsNoHeadProbe verifies that the action does not
+// HEAD a resolved download URL. FR-68 removes the consumer-side HEAD probe.
+func TestFR68DownloadReleaseToolsNoHeadProbe(t *testing.T) {
+	dir := githubDir(t)
+	actionPath := filepath.Join(dir, "actions", "download-release-tools", "action.yml")
+	data, err := os.ReadFile(actionPath)
+	if err != nil {
+		t.Fatalf("read action.yml: %v", err)
+	}
+
+	content := string(data)
+
+	// The action script should NOT contain "curl -I" or "curl -X HEAD"
+	// or any other HEAD-request pattern for the resolved URL.
+	headPatterns := []string{
+		"curl -I",
+		"curl -X HEAD",
+	}
+
+	for _, pattern := range headPatterns {
+		if strings.Contains(content, pattern) {
+			t.Errorf("FR-68: HEAD probe pattern found: %q; action must not HEAD resolved URLs", pattern)
+		}
+	}
+
+	// Verify that download_single_tool_s3 downloads directly without HEAD
+	if !strings.Contains(content, "curl -fsSL -m 60 -o") {
+		t.Error("FR-68: direct S3 download (curl -fsSL) not found; should download without HEAD probe")
+	}
+}
+
+// TestFR68FiveClassFailureRouting verifies that all five failure classes
+// are named and routed in the action. This is FR-68 requirement (a).
+func TestFR68FiveClassFailureRouting(t *testing.T) {
+	dir := githubDir(t)
+	actionPath := filepath.Join(dir, "actions", "download-release-tools", "action.yml")
+	data, err := os.ReadFile(actionPath)
+	if err != nil {
+		t.Fatalf("read action.yml: %v", err)
+	}
+
+	content := string(data)
+
+	// Five failure classes must be explicitly named in diagnostics:
+	// 1. not-found (FR-29)
+	// 2. indeterminate (FR-42)
+	// 3. repeated-expiry (FR-60)
+	// 4. registry-unreachable (NFR-21)
+	// 5. verification-failure (FR-66)
+
+	failureClasses := []string{
+		"not-found",
+		"indeterminate",
+		"repeated-expiry",
+		"registry-unreachable",
+		"verification-failure",
+	}
+
+	for _, class := range failureClasses {
+		if !strings.Contains(content, class) {
+			t.Errorf("FR-68(a): failure class %q not found in action script; must name all five classes", class)
+		}
+	}
+
+	// Each class should have a class-naming diagnostic with the class name
+	for _, class := range failureClasses {
+		if !strings.Contains(content, "Failure class: "+class) {
+			t.Errorf("FR-68(a): class-naming diagnostic for %q not found; each class must emit 'Failure class: %s'", class, class)
+		}
+	}
+}
+
+// TestFR68BudgetAndRetryLimits verifies that the action enforces a 120s
+// budget per tool and at most 3 re-resolve attempts. This is FR-68 requirement (b).
+func TestFR68BudgetAndRetryLimits(t *testing.T) {
+	dir := githubDir(t)
+	actionPath := filepath.Join(dir, "actions", "download-release-tools", "action.yml")
+	data, err := os.ReadFile(actionPath)
+	if err != nil {
+		t.Fatalf("read action.yml: %v", err)
+	}
+
+	content := string(data)
+
+	// Must have 120s budget per tool
+	if !strings.Contains(content, "120") {
+		t.Error("FR-68(b): 120s budget not found in action; must have max_budget_seconds=120")
+	}
+
+	// Must have at most 3 re-resolve attempts
+	if !strings.Contains(content, "max_resolves=3") && !strings.Contains(content, "max_resolves = 3") {
+		t.Error("FR-68(b): max_resolves=3 not found in action; must limit to 3 re-resolve attempts")
+	}
+
+	// Budget must be checked before critical operations
+	budgetCheckPatterns := []string{
+		"elapsed_seconds",
+		"max_budget_seconds",
+		"start_time",
+	}
+
+	for _, pattern := range budgetCheckPatterns {
+		if !strings.Contains(content, pattern) {
+			t.Errorf("FR-68(b): budget tracking variable %q not found; must track elapsed time", pattern)
+		}
+	}
+
+	// Exhaustion must trigger fall-through with diagnostic
+	if !strings.Contains(content, "budget-exhausted") {
+		t.Error("FR-68(b): 'budget-exhausted' diagnostic not found; must emit diagnostic when budget exceeded")
+	}
+}
+
+// TestFR68FallbackToSourceHardFailsWhenDisabled verifies that with
+// fallback_to_source=false, the action still fails rather than silently
+// falling back to source. This is a regression check.
+func TestFR68FallbackToSourceHardFailsWhenDisabled(t *testing.T) {
+	dir := githubDir(t)
+	actionPath := filepath.Join(dir, "actions", "download-release-tools", "action.yml")
+	data, err := os.ReadFile(actionPath)
+	if err != nil {
+		t.Fatalf("read action.yml: %v", err)
+	}
+
+	content := string(data)
+
+	// When FALLBACK_TO_SOURCE is false, hard failures must emit ::error and exit 1
+	if !strings.Contains(content, "::error") {
+		t.Error("action must emit ::error for hard failures (fallback_to_source=false)")
+	}
+
+	if !strings.Contains(content, "exit 1") {
+		t.Error("action must exit 1 for hard failures (fallback_to_source=false)")
+	}
+
+	// Verify the logic: when fallback_to_source is false and prebuilt fails,
+	// it should emit error, not silently fall through to source
+	if !strings.Contains(content, "FALLBACK_TO_SOURCE") {
+		t.Error("action must check FALLBACK_TO_SOURCE env var to control hard-fail vs fall-through")
+	}
+}
+
+// TestFR68WarningAnnotationsForFallThrough verifies that each fall-through
+// emits a workflow warning annotation. This is FR-68 requirement (c).
+func TestFR68WarningAnnotationsForFallThrough(t *testing.T) {
+	dir := githubDir(t)
+	actionPath := filepath.Join(dir, "actions", "download-release-tools", "action.yml")
+	data, err := os.ReadFile(actionPath)
+	if err != nil {
+		t.Fatalf("read action.yml: %v", err)
+	}
+
+	content := string(data)
+
+	// Each fall-through must emit a ::warning annotation with a title
+	if !strings.Contains(content, "::warning") {
+		t.Error("FR-68(c): ::warning annotation not found; each fall-through must emit workflow warning")
+	}
+
+	// Check that warning titles are informative
+	if !strings.Contains(content, "title=Acquisition failed") {
+		t.Error("FR-68(c): warning title pattern not found; warnings must be informative")
+	}
+}
+
+// TestFR68ModeReporting verifies that the action reports which mode was
+// actually used (published, source, or artifact). This is FR-68 requirement (c).
+func TestFR68ModeReporting(t *testing.T) {
+	dir := githubDir(t)
+	actionPath := filepath.Join(dir, "actions", "download-release-tools", "action.yml")
+	data, err := os.ReadFile(actionPath)
+	if err != nil {
+		t.Fatalf("read action.yml: %v", err)
+	}
+
+	content := string(data)
+
+	// Must track and report source_used
+	if !strings.Contains(content, "source_used") {
+		t.Error("FR-68(c): source_used output not found; action must report which mode was used")
+	}
+
+	// Must output to GITHUB_OUTPUT
+	if !strings.Contains(content, "GITHUB_OUTPUT") {
+		t.Error("FR-68(c): source_used not being written to GITHUB_OUTPUT")
+	}
+
+	// SOURCE_USED variable should track this
+	if !strings.Contains(content, "SOURCE_USED") {
+		t.Error("FR-68(c): SOURCE_USED variable not found; must track actual mode used")
+	}
+}
