@@ -1285,3 +1285,63 @@ func TestCacheInvalidation_PublishedOnConfigAck(t *testing.T) {
 func ptrInt64(v int64) *int64 {
 	return &v
 }
+
+// TestHandleConfigAck_ApplyConfigRegionsCalledOnAccept verifies that when a
+// config ack arrives with accepted=true, the handler calls repo.ApplyConfigRegions
+// to process region assignments at apply time (FR1.3).
+func TestHandleConfigAck_ApplyConfigRegionsCalledOnAccept(t *testing.T) {
+	repo := &stubRepo{boardID: 1}
+	h := newTestHandler(repo)
+
+	// When the handler acks a config with accepted=true,
+	// it should call ApplyConfigRegions
+	err := h.handleConfigAck(context.Background(), "leaflab-test", marshalConfigAck(t, &configpb.DeviceConfigAck{
+		AppliedVersion: 123,
+		Accepted:       true,
+		Reason:         "",
+	}))
+	if err != nil {
+		t.Fatalf("handleConfigAck: %v", err)
+	}
+
+	// Verify ApplyConfigRegions was called
+	if len(repo.applyConfigRegionsCalls) != 1 {
+		t.Fatalf("expected 1 ApplyConfigRegions call, got %d", len(repo.applyConfigRegionsCalls))
+	}
+	if repo.applyConfigRegionsCalls[0].version != 123 {
+		t.Errorf("ApplyConfigRegions version: expected 123, got %d", repo.applyConfigRegionsCalls[0].version)
+	}
+}
+
+// TestHandleConfigAck_ApplyConfigRegionsNotCalledOnReject verifies that when
+// a config ack arrives with accepted=false, ApplyConfigRegions is NOT called.
+func TestHandleConfigAck_ApplyConfigRegionsNotCalledOnReject(t *testing.T) {
+	repo := &stubRepo{boardID: 1}
+	h := newTestHandler(repo)
+
+	// When the handler acks a config with accepted=false,
+	// it should NOT call ApplyConfigRegions
+	err := h.handleConfigAck(context.Background(), "leaflab-test", marshalConfigAck(t, &configpb.DeviceConfigAck{
+		AppliedVersion: 123,
+		Accepted:       false,
+		Reason:         "device error",
+	}))
+	if err != nil {
+		t.Fatalf("handleConfigAck: %v", err)
+	}
+
+	// Verify ApplyConfigRegions was NOT called
+	if len(repo.applyConfigRegionsCalls) != 0 {
+		t.Fatalf("expected 0 ApplyConfigRegions calls, got %d", len(repo.applyConfigRegionsCalls))
+	}
+}
+
+// marshalConfigAck encodes a DeviceConfigAck to wire bytes.
+func marshalConfigAck(t *testing.T, ack *configpb.DeviceConfigAck) []byte {
+	t.Helper()
+	b, err := proto.Marshal(ack)
+	if err != nil {
+		t.Fatalf("marshal config ack: %v", err)
+	}
+	return b
+}

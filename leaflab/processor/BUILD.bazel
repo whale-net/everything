@@ -48,6 +48,16 @@ go_test(
     ],
 )
 
+go_test(
+    name = "processor_integration_test",
+    srcs = ["repository_household_test.go"],
+    embed = [":processor_lib"],
+    tags = ["integration", "manual"],
+    deps = [
+        "//libs/go/dbtest",
+    ],
+)
+
 release_app(
     name = "processor",
     binary_name = ":processor",
