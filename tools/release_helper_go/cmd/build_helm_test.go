@@ -280,6 +280,33 @@ func TestPackageChartWithVersionErrorsOnMissingAppsMap(t *testing.T) {
 	}
 }
 
+// Regression test for issue #1259: finalize-chart passes the whole release
+// batch's appVersions map (shared across every chart in the batch) to
+// packageChartWithVersion. A chart must ignore batch entries for apps it
+// doesn't compose rather than hard-failing on them.
+func TestPackageChartWithVersionIgnoresAppsOutsideChartScope(t *testing.T) {
+	chartDir := t.TempDir()
+	writeFile(t, filepath.Join(chartDir, "Chart.yaml"), "name: hello-fastapi-enhanced\nversion: 0.0.0-dev\n")
+	writeFile(t, filepath.Join(chartDir, "values.yaml"), "apps:\n  demo-hello-fastapi:\n    imageTag: latest\n")
+
+	// A batch-wide appVersions map containing apps not composed by this
+	// chart must not trip the "no entry to set imageTag on" guardrail.
+	appVersions := map[string]string{
+		"demo-hello-fastapi": "v1.0.0",
+		"demo-hello-go":      "v1.0.0",
+		"demo-hello-worker":  "v1.0.0",
+	}
+
+	// helm isn't available in the Bazel test sandbox, so this is expected to
+	// still fail once it reaches `helm package` -- we only need to confirm
+	// it gets past the values.yaml guardrail without erroring on the
+	// out-of-scope batch apps.
+	_, err := packageChartWithVersion(chartDir, "helm-demo-hello-fastapi-enhanced", "v1.0.0", t.TempDir(), appVersions)
+	if err != nil && strings.Contains(err.Error(), "values.yaml") {
+		t.Fatalf("unexpected values.yaml guardrail error for out-of-scope batch app: %v", err)
+	}
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
