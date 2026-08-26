@@ -6,6 +6,50 @@ option go_package = "github.com/whale-net/everything/leaflab/api/proto;leaflabap
 
 import "firmware/proto/config.proto";
 
+// ============================================================================
+// Error handling
+// ============================================================================
+
+// FailureClass is a machine-readable classification of API failures, allowing
+// callers to branch on error type without parsing prose. Intended to be used
+// in an ErrorDetail attached to gRPC status details.
+enum FailureClass {
+  FAILURE_CLASS_UNSPECIFIED = 0;
+  
+  // A required input field is missing or invalid.
+  FAILURE_CLASS_INVALID_ARGUMENT = 1;
+  
+  // The operation cannot be performed because it would violate an
+  // invariant (e.g., renaming an entity to a name that is already taken,
+  // or operating on a board that doesn't exist). Includes "refuse before
+  // writing" failures.
+  FAILURE_CLASS_PRECONDITION = 2;
+  
+  // An internal system error (database, MQTT, etc.).
+  FAILURE_CLASS_INTERNAL = 3;
+}
+
+// ErrorDetail carries structured machine-readable failure information
+// alongside a gRPC status, so a caller can classify failures without
+// parsing the human-readable message string.
+message ErrorDetail {
+  FailureClass failure_class = 1;
+  
+  // The entity that the failure relates to (e.g., "board", "device_config").
+  // Machine-readable; used to construct or context in UI/logs.
+  string entity = 2;
+  
+  // The field within the entity that caused or is affected by the failure.
+  // Empty if the failure is about the entity as a whole.
+  string field = 3;
+  
+  // A key to look up the human-readable failure description from a message
+  // catalog. Allows non-technical surfaces to render personalized prose
+  // without receiving status codes, proto field names, or stack traces.
+  // Format: "MESSAGE_KEY_LIKE_THIS" or similar, resolved by the UI layer.
+  string message_key = 4;
+}
+
 // LeafLabAPI is the control-plane API for managing leaflab sensor boards.
 service LeafLabAPI {
   // Push a new DeviceConfig to a board over MQTT.
@@ -23,6 +67,29 @@ service LeafLabAPI {
   // It returns up or degraded and no other details.
   rpc Health(HealthRequest) returns (HealthResponse);
 }
+
+// ============================================================================
+// Pagination
+// ============================================================================
+
+// PageRequest carries opaque keyset pagination state for list operations.
+// The page_token is never an offset encoding and does not round-trip
+// caller-controlled SQL. The server clamped page_size; a request for more
+// than the cap is silently reduced, not errored.
+message PageRequest {
+  int32 page_size = 1;   // 0 means server default; server clamps to max
+  string page_token = 2; // opaque, never an offset; "" for first page
+}
+
+// PageResponse carries the next page token and total item count.
+message PageResponse {
+  string next_page_token = 1; // opaque; "" means no more pages
+  int32 total_size = 2;       // total count of items (for progress display)
+}
+
+// ============================================================================
+// Messages
+// ============================================================================
 
 message PushDeviceConfigRequest {
   string device_id = 1;
@@ -49,12 +116,20 @@ message GetDeviceConfigResponse {
 message BoardInfo {
   string device_id = 1;
   int64  board_id  = 2;
+  // recorded_at is an absolute instant (Unix timestamp in seconds) when
+  // this board last sent a manifest. Callers rendering elapsed time should
+  // compute this plus their own local time to show "last seen N minutes ago",
+  // not present a raw UTC string to end users.
+  int64 recorded_at = 3;
 }
 
-message ListBoardsRequest {}
+message ListBoardsRequest {
+  PageRequest page = 1;
+}
 
 message ListBoardsResponse {
   repeated BoardInfo boards = 1;
+  PageResponse page = 2;
 }
 
 message HealthRequest {}
