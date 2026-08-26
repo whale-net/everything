@@ -1,0 +1,19 @@
+"""Rate limiting key types and bucket registry for LeafLab API."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ratelimit",
+    srcs = [
+        "key.go",
+        "registry.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/api/ratelimit",
+    visibility = ["//leaflab/api:__pkg__"],
+)
+
+go_test(
+    name = "ratelimit_test",
+    srcs = ["ratelimit_test.go"],
+    embed = [":ratelimit"],
+)
