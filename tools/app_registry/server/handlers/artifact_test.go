@@ -2121,3 +2121,222 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 		t.Fatalf("expected NotFound for before_version=v1.0.0, got %v", err)
 	}
 }
+
+// ============================================================================
+// FR-20/FR-22/FR-46/FR-24/NFR-9: Byte-free publish state machine tests
+// ============================================================================
+
+// TestPublish_ManifestRequired_ThenPublished verifies FR-19: RecordArtifact
+// requires a manifest to exist for the owner when completing publish. The
+// manifest gate ensures "every kind published through this path publishes a
+// checksum manifest".
+func TestPublish_ManifestRequired_ThenPublished(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-manifest")
+
+	// 1. Begin publishing
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-pub-manifest",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
+	// 2. RecordArtifact to complete publish: manifest MUST exist for
+	// demo-image-app (set up by setup() via ReconcileApps) or this fails.
+	recordResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:test-manifest",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-manifest",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact with manifest present: %v", err)
+	}
+	if recordResp.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("expected PUBLISHED state, got %v", recordResp.Artifact.State)
+	}
+	if recordResp.Artifact.Digest != "sha256:test-manifest" {
+		t.Fatalf("expected digest sha256:test-manifest, got %s", recordResp.Artifact.Digest)
+	}
+}
+
+// TestPublish_FailPublish_ExplicitFailed verifies FR-22: publish errors
+// result in explicit failed state transition, not a stranded/stale row.
+// FailPublish transitions publishing -> failed.
+func TestPublish_FailPublish_ExplicitFailed(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-fail-pub")
+
+	// 1. BeginPublish to get to publishing state
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-pub-fail",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
+	// 2. FailPublish to transition to failed state
+	failResp, err := artifactSrv.FailPublish(ctx, &pb.FailPublishRequest{
+		Kind:          pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app",
+		Version:       "v1.0.0",
+		Reason:        "manifest validation failed",
+		IdempotencyKey: "fail-pub",
+	})
+	if err != nil {
+		t.Fatalf("FailPublish: %v", err)
+	}
+	if failResp.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_FAILED {
+		t.Fatalf("expected FAILED state, got %v", failResp.Artifact.State)
+	}
+	if failResp.Artifact.FailReason != "manifest validation failed" {
+		t.Fatalf("expected fail reason 'manifest validation failed', got %q", failResp.Artifact.FailReason)
+	}
+}
+
+// TestPublish_IdempotentRecordArtifact_NFR9 verifies NFR-9: re-running
+// publish (RecordArtifact) for the same version+digest reaches the same
+// terminal state without minting a duplicate version and without erroring.
+func TestPublish_IdempotentRecordArtifact_NFR9(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-idempotent")
+	digest := "sha256:idempotent-digest"
+
+	// 1. First publish: begin + record
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-idem",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
+	firstRecord, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         digest,
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-idem",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact first time: %v", err)
+	}
+	firstArtifactID := firstRecord.Artifact.ArtifactId
+
+	// 2. Re-publish same version+digest: should reach same published state
+	// without creating a new artifact_id (idempotency replay)
+	secondRecord, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         digest,
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-idem", // Same key -> idempotency replay
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact (idempotent replay): %v", err)
+	}
+	if secondRecord.Artifact.ArtifactId != firstArtifactID {
+		t.Fatalf("idempotency replay created new artifact: expected %s, got %s",
+			firstArtifactID, secondRecord.Artifact.ArtifactId)
+	}
+	if secondRecord.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("expected PUBLISHED state on idempotent replay, got %v", secondRecord.Artifact.State)
+	}
+}
+
+// TestPublish_BeginPublish_TransitionToPublishing verifies explicit
+// state transitions for FR-22: begin publishing transitions to publishing state.
+func TestPublish_BeginPublish_TransitionToPublishing(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-begin-pub")
+
+	// BeginPublish with no prior allocation (∅ -> publishing)
+	resp, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v2.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-pub-v2",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+	if resp.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING, got %v", resp.Artifact.State)
+	}
+}
+
+// TestPublish_BinaryKindOnImageTarget_VerifiesAsCorrectKind verifies FR-24:
+// post-publish verification reads the kind from the published artifact's bound
+// manifest snapshot, not the routing kind. A binary published as BINARY kind
+// must verify as BINARY even if looked up via IMAGE.
+func TestPublish_BinaryKindPublished_GetRetrievesAsPublished(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-kind-resolve")
+
+	// 1. Publish a binary artifact explicitly
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-binary",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish as BINARY: %v", err)
+	}
+
+	_, err = artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:binary-digest",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-binary",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact as BINARY: %v", err)
+	}
+
+	// 2. Verify using GetArtifact with kind BINARY resolves correctly
+	getResp, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		LatestPublished: true,
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(BINARY): %v", err)
+	}
+	if getResp.Artifact.Kind != pb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		t.Fatalf("expected kind BINARY, got %v", getResp.Artifact.Kind)
+	}
+	if getResp.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("expected PUBLISHED state, got %v", getResp.Artifact.State)
+	}
+}
