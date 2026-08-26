@@ -1,16 +1,17 @@
 package handlers
 
 import (
-	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"context"
 	"errors"
 	"fmt"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/s3"
@@ -59,7 +60,7 @@ type ArtifactServer struct {
 	// external CI job a working download link without giving it S3
 	// credentials of its own.
 	releaseToolsS3Bucket         string
-	releaseToolsS3Endpoint         string
+	releaseToolsS3Endpoint       string
 	releaseToolsS3PublicEndpoint string
 	releaseToolsS3Region         string
 	releaseToolsS3AccessKey      string
@@ -73,6 +74,21 @@ type ArtifactServer struct {
 	releaseToolsS3Client     *s3.Client
 	releaseToolsS3ClientErr  error
 	releaseToolsS3ClientOnce sync.Once
+
+	// artifactsS3* fields back BrokerUpload (issue #1142) -- the bucket
+	// CI build artifacts are uploaded to, the public endpoint used for
+	// presigned PUT URLs, and the credentials.
+	artifactsS3Bucket         string
+	artifactsS3PublicEndpoint string
+	artifactsS3Region         string
+	artifactsS3AccessKey      string
+	artifactsS3SecretKey      string
+
+	// artifactsS3Client/artifactsS3ClientErr/artifactsS3ClientOnce lazily
+	// build and cache the s3.Client BrokerUpload presigns through.
+	artifactsS3Client     *s3.Client
+	artifactsS3ClientErr  error
+	artifactsS3ClientOnce sync.Once
 
 	// MetadataRegistry provides access to app metadata loaded from the Bazel
 	// release_app declarations. Used to resolve app names to full names
@@ -97,6 +113,18 @@ func WithReleaseToolsS3(bucket, endpoint, publicEndpoint, region, accessKey, sec
 		s.releaseToolsS3Region = region
 		s.releaseToolsS3AccessKey = accessKey
 		s.releaseToolsS3SecretKey = secretKey
+	}
+}
+
+// WithArtifactsS3 configures the S3 bucket and credentials BrokerUpload
+// presigns PUT URLs against for CI build artifacts.
+func WithArtifactsS3(bucket, publicEndpoint, region, accessKey, secretKey string) ArtifactServerOption {
+	return func(s *ArtifactServer) {
+		s.artifactsS3Bucket = bucket
+		s.artifactsS3PublicEndpoint = publicEndpoint
+		s.artifactsS3Region = region
+		s.artifactsS3AccessKey = accessKey
+		s.artifactsS3SecretKey = secretKey
 	}
 }
 
@@ -437,8 +465,6 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 	return &pb.ListArtifactPinsResponse{ChartArtifacts: artifactsToPB(chartArtifacts)}, nil
 }
 
-
-
 // ResolveBinaryURL implements issue #979/#983 (FR12-FR14, FR16): resolves a
 // CLI binary + version + platform to a presigned S3 download URL (issue
 // #1101: the bucket isn't actually public-read, so this signs with the
@@ -620,15 +646,14 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 	manifestFilename := "checksums.txt"
 
 	return &pb.ResolveBinaryURLResponse{
-		DownloadUrl:                 downloadURL,
-		ChecksumManifestUrl:         checksumURL,
-		DownloadUrlContentEncoding:  encoding,
-		DownloadUrlFilename:         filename,
+		DownloadUrl:                     downloadURL,
+		ChecksumManifestUrl:             checksumURL,
+		DownloadUrlContentEncoding:      encoding,
+		DownloadUrlFilename:             filename,
 		ChecksumManifestContentEncoding: manifestEncoding,
-		ChecksumManifestFilename:    manifestFilename,
+		ChecksumManifestFilename:        manifestFilename,
 	}, nil
 }
-
 
 // resolveBinaryURLTTL bounds how long a ResolveBinaryURL response's
 // presigned URLs stay valid. Callers (CI's "check prebuilt tool
@@ -1073,7 +1098,6 @@ func (s *ArtifactServer) lookupBinaryOwner(binaryName string) (string, bool) {
 	return "", false
 }
 
-
 func (s *ArtifactServer) ListBuilds(ctx context.Context, req *pb.ListBuildsRequest) (*pb.ListBuildsResponse, error) {
 	since := time.Time{}
 	if req.Since != 0 {
@@ -1211,4 +1235,217 @@ func (s *ArtifactServer) AdoptArtifact(ctx context.Context, req *pb.AdoptArtifac
 		slog.Bool("already_recorded", out.AlreadyRecorded),
 	)
 	return out, nil
+}
+
+// BrokerUpload implements FR-1: the upload brokering API for CI build artifacts.
+// Returns either a presigned PUT URL + registry-chosen object key + required headers,
+// or an "already stored" result for files whose confirmed blob already exists.
+// A durable upload record is created BEFORE any URL is returned (FR-7).
+//
+// Authorization uses existing registry credentials (FR-4); unauthenticated or
+// unauthorized callers receive an authorization failure with no URL (FR-4/NFR-1).
+func (s *ArtifactServer) BrokerUpload(ctx context.Context, req *pb.BrokerUploadRequest) (*pb.BrokerUploadResponse, error) {
+	// Authorization check (FR-4): require builder role.
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "authorization required: %v", err)
+	}
+
+	// Validate request (FR-1, FR-2).
+	if err := s.validateBrokerUploadRequest(req); err != nil {
+		return nil, err
+	}
+
+	// Get the artifact kind to resolve hook policies (H3, H4).
+	kind := kinds.GetKind(req.ArtifactKind)
+	if kind == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "unknown artifact kind %q", req.ArtifactKind)
+	}
+
+	// Extract hook policies.
+	contentType := kind.Hooks().H3().ContentType()
+	encoding := kind.Hooks().H4().Encoding()
+
+	// Create the upload record BEFORE presigning any URLs (FR-7).
+	// This ensures no code path returns a URL without a durable record.
+	// Generate UploadID and ObjectKey before the transaction so they can be persisted
+	// as part of the initial CreateUploadRecord call (not in a separate UPDATE).
+	uploadID := uuid.NewString()
+	uploadBatchKey := s.generateUploadBatchKey(req.ArtifactIdentity, uploadID)
+
+	uploadRecord := &repository.UploadRecord{
+		UploadID:            uploadID,
+		ObjectKey:           uploadBatchKey,
+		ArtifactKind:        repository.ArtifactKind(req.ArtifactKind),
+		ArtifactIdentity:    req.ArtifactIdentity,
+		VersionReference:    req.VersionReference,
+		RequestingPrincipal: extractPrincipal(ctx),
+		State:               repository.UploadStateAllocated,
+	}
+
+	var resp *pb.BrokerUploadResponse
+	if err := s.repo.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
+		// Create the upload record within a transaction.
+		created, err := r.UploadRecords().CreateUploadRecord(ctx, uploadRecord)
+		if err != nil {
+			return fmt.Errorf("create upload record: %w", err)
+		}
+		uploadRecord = created
+
+		// Process each file in the request.
+		results := make([]*pb.BrokerUploadFileResult, 0, len(req.Files))
+		for _, file := range req.Files {
+			result, err := s.brokerUploadFile(ctx, r, uploadRecord, file, contentType, encoding)
+			if err != nil {
+				return fmt.Errorf("broker file %q: %w", file.VariantKey, err)
+			}
+			results = append(results, result)
+		}
+
+		resp = &pb.BrokerUploadResponse{
+			Results:         results,
+			UploadSessionId: uploadRecord.UploadID,
+		}
+		return nil
+	}); err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	// Audit logging (NFR-12).
+	artifactLog.Info("upload broker",
+		slog.String("kind", req.ArtifactKind),
+		slog.String("artifact_identity", req.ArtifactIdentity),
+		slog.String("version", req.Version),
+		slog.String("upload_session_id", uploadRecord.UploadID),
+		slog.Int("file_count", len(req.Files)),
+	)
+
+	return resp, nil
+}
+
+// validateBrokerUploadRequest ensures the request is well-formed (FR-1, FR-2).
+func (s *ArtifactServer) validateBrokerUploadRequest(req *pb.BrokerUploadRequest) error {
+	if req.ArtifactKind == "" {
+		return status.Error(codes.InvalidArgument, "artifact_kind is required")
+	}
+	if req.Version == "" {
+		return status.Error(codes.InvalidArgument, "version is required")
+	}
+	if !semverRe.MatchString(req.Version) {
+		return status.Errorf(codes.InvalidArgument, "version must be semver: %q", req.Version)
+	}
+	if req.ArtifactIdentity == "" {
+		return status.Error(codes.InvalidArgument, "artifact_identity is required")
+	}
+	if len(req.Files) == 0 {
+		return status.Error(codes.InvalidArgument, "files must be non-empty")
+	}
+	for _, file := range req.Files {
+		if file.VariantKey == "" {
+			return status.Error(codes.InvalidArgument, "file variant_key is required")
+		}
+		if file.UncompressedDigest == "" {
+			return status.Error(codes.InvalidArgument, "file uncompressed_digest is required")
+		}
+	}
+	return nil
+}
+
+// brokerUploadFile processes one file in the upload batch, returning either
+// a presigned URL or "already stored" per FR-1.
+func (s *ArtifactServer) brokerUploadFile(ctx context.Context, r repository.Registry,
+	uploadRecord *repository.UploadRecord, file *pb.BrokerUploadFile,
+	contentType, encoding string) (*pb.BrokerUploadFileResult, error) {
+
+	// FR-61: Check if a confirmed blob already exists for this three-tuple.
+	existing, err := r.BlobRecords().GetBlobRecordByDigest(ctx, file.UncompressedDigest, encoding, contentType)
+	if err == nil && existing.ConfirmationState == repository.BlobConfirmationStateConfirmed {
+		// Already stored: return a result with no URL.
+		return &pb.BrokerUploadFileResult{
+			VariantKey:      file.VariantKey,
+			AlreadyStored:   true,
+			PresignedUrl:    "",
+			ObjectKey:       "",
+			RequiredHeaders: nil,
+		}, nil
+	}
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, fmt.Errorf("check existing blob: %w", err)
+	}
+
+	// File needs uploading: generate a unique object key and presign a URL.
+	objectKey := s.generateObjectKey(uploadRecord.ObjectKey, file.VariantKey)
+
+	// Presign a PUT URL with the required headers (FR-1).
+	presignedURL, headers, err := s.presignUploadURL(ctx, objectKey, contentType)
+	if err != nil {
+		return nil, fmt.Errorf("presign URL: %w", err)
+	}
+
+	return &pb.BrokerUploadFileResult{
+		VariantKey:      file.VariantKey,
+		PresignedUrl:    presignedURL,
+		ObjectKey:       objectKey,
+		RequiredHeaders: headers,
+		AlreadyStored:   false,
+	}, nil
+}
+
+// generateUploadBatchKey creates a batch-level key prefix for an upload (FR-7, FR-2).
+// Format: "artifacts/{artifact_identity}/{upload_session_id}"
+// This is persisted in the upload_record to satisfy FR-7 (record before URL).
+func (s *ArtifactServer) generateUploadBatchKey(artifactIdentity, uploadSessionID string) string {
+	return fmt.Sprintf("artifacts/%s/%s", artifactIdentity, uploadSessionID)
+}
+
+// generateObjectKey creates a registry-chosen, unique object key for a file (FR-2).
+// Takes the batch key prefix and appends the variant_key.
+// Format: "{batch_key}/{variant_key}"
+// This ensures uniqueness: same identity/version with different session IDs get
+// different keys (two concurrent unconfirmed uploads get distinct keys per FR-2).
+func (s *ArtifactServer) generateObjectKey(batchKey, variantKey string) string {
+	return fmt.Sprintf("%s/%s", batchKey, variantKey)
+}
+
+// presignUploadURL generates a presigned PUT URL and required headers (FR-1, NFR-2).
+// TTL is 30 minutes (less than the 60-minute NFR-2 limit, with margin for upload time).
+func (s *ArtifactServer) presignUploadURL(ctx context.Context, objectKey, contentType string) (url string, headers map[string]string, err error) {
+	client, err := s.getArtifactsS3Client()
+	if err != nil {
+		return "", nil, err
+	}
+
+	// NFR-2: presigned URL TTL ≤ 60 min; use 30 min for safety margin.
+	ttl := 30 * time.Minute
+	url, headers, err = client.PresignPublicPutURL(ctx, objectKey, contentType, ttl)
+	if err != nil {
+		return "", nil, fmt.Errorf("presign public PUT URL: %w", err)
+	}
+	return url, headers, nil
+}
+
+// getArtifactsS3Client returns a lazily-constructed and cached S3 client for
+// presigning artifact uploads. Follows the same pattern as releaseToolsS3PresignClient.
+func (s *ArtifactServer) getArtifactsS3Client() (*s3.Client, error) {
+	s.artifactsS3ClientOnce.Do(func() {
+		s.artifactsS3Client, s.artifactsS3ClientErr = s3.NewClient(context.Background(), s3.Config{
+			Bucket:         s.artifactsS3Bucket,
+			Region:         s.artifactsS3Region,
+			Endpoint:       "", // use default AWS endpoint
+			PublicEndpoint: s.artifactsS3PublicEndpoint,
+			AccessKey:      s.artifactsS3AccessKey,
+			SecretKey:      s.artifactsS3SecretKey,
+		})
+	})
+	if s.artifactsS3ClientErr != nil {
+		return nil, status.Errorf(codes.Internal, "failed to construct artifacts S3 client: %v", s.artifactsS3ClientErr)
+	}
+	return s.artifactsS3Client, nil
+}
+
+// extractPrincipal extracts the requesting principal from gRPC context claims.
+func extractPrincipal(ctx context.Context) string {
+	if claims, ok := grpcauth.ClaimsFromContext(ctx); ok && claims.Subject != "" {
+		return claims.Subject
+	}
+	return ""
 }

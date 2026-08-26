@@ -15,9 +15,21 @@ import (
 
 type uploadRecordFake struct{ r *Registry }
 
-func (f uploadRecordFake) CreateUploadRecord(ctx context.Context, record *repository.UploadRecord) (*repository.UploadRecord, error) {
+// safeLock acquires the mutex only if we're not already inside a transaction.
+func (f uploadRecordFake) safeLock() func() {
+	if f.r.inTx {
+		// Already holding the lock, return a no-op unlock
+		return func() {}
+	}
 	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	return f.r.mu.Unlock
+}
+
+
+
+func (f uploadRecordFake) CreateUploadRecord(ctx context.Context, record *repository.UploadRecord) (*repository.UploadRecord, error) {
+	unlock := f.safeLock()
+	defer unlock()
 
 	if record.UploadID == "" {
 		record.UploadID = uuid.NewString()
@@ -44,8 +56,8 @@ func (f uploadRecordFake) CreateUploadRecord(ctx context.Context, record *reposi
 }
 
 func (f uploadRecordFake) GetUploadRecord(ctx context.Context, uploadID string) (*repository.UploadRecord, error) {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	record, ok := f.r.state.UploadRecords[uploadID]
 	if !ok {
@@ -55,8 +67,8 @@ func (f uploadRecordFake) GetUploadRecord(ctx context.Context, uploadID string) 
 }
 
 func (f uploadRecordFake) ListUnconfirmedUploads(ctx context.Context, artifactIdentity, versionReference string) ([]repository.UploadRecord, error) {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	var result []repository.UploadRecord
 	for _, record := range f.r.state.UploadRecords {
@@ -77,8 +89,8 @@ func (f uploadRecordFake) ListUnconfirmedUploads(ctx context.Context, artifactId
 }
 
 func (f uploadRecordFake) UpdateUploadState(ctx context.Context, uploadID string, newState repository.UploadState) error {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	record, ok := f.r.state.UploadRecords[uploadID]
 	if !ok {
@@ -97,9 +109,19 @@ func (f uploadRecordFake) UpdateUploadState(ctx context.Context, uploadID string
 
 type blobRecordFake struct{ r *Registry }
 
-func (f blobRecordFake) CreateBlobRecord(ctx context.Context, record *repository.BlobRecord) (*repository.BlobRecord, error) {
+// safeLock acquires the mutex only if we're not already inside a transaction.
+func (f blobRecordFake) safeLock() func() {
+	if f.r.inTx {
+		// Already holding the lock, return a no-op unlock
+		return func() {}
+	}
 	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	return f.r.mu.Unlock
+}
+
+func (f blobRecordFake) CreateBlobRecord(ctx context.Context, record *repository.BlobRecord) (*repository.BlobRecord, error) {
+	unlock := f.safeLock()
+	defer unlock()
 
 	// Check for duplicate three-tuple key
 	for _, existing := range f.r.state.BlobRecords {
@@ -128,8 +150,8 @@ func (f blobRecordFake) CreateBlobRecord(ctx context.Context, record *repository
 }
 
 func (f blobRecordFake) GetBlobRecordByDigest(ctx context.Context, digest, encoding, contentType string) (*repository.BlobRecord, error) {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	for _, record := range f.r.state.BlobRecords {
 		if record.UncompressedContentDigest == digest &&
@@ -142,8 +164,8 @@ func (f blobRecordFake) GetBlobRecordByDigest(ctx context.Context, digest, encod
 }
 
 func (f blobRecordFake) GetBlobRecord(ctx context.Context, blobID string) (*repository.BlobRecord, error) {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	record, ok := f.r.state.BlobRecords[blobID]
 	if !ok {
@@ -153,8 +175,8 @@ func (f blobRecordFake) GetBlobRecord(ctx context.Context, blobID string) (*repo
 }
 
 func (f blobRecordFake) UpdateBlobConfirmation(ctx context.Context, blobID string, newState repository.BlobConfirmationState) error {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	record, ok := f.r.state.BlobRecords[blobID]
 	if !ok {
@@ -173,13 +195,23 @@ func (f blobRecordFake) UpdateBlobConfirmation(ctx context.Context, blobID strin
 
 type blobVersionFake struct{ r *Registry }
 
+// safeLock acquires the mutex only if we're not already inside a transaction.
+func (f blobVersionFake) safeLock() func() {
+	if f.r.inTx {
+		// Already holding the lock, return a no-op unlock
+		return func() {}
+	}
+	f.r.mu.Lock()
+	return f.r.mu.Unlock
+}
+
 func blobVersionKey(blobID, artifactID string) string {
 	return blobID + ":" + artifactID
 }
 
 func (f blobVersionFake) CreateBlobVersion(ctx context.Context, blobVersion *repository.BlobVersion) error {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	key := blobVersionKey(blobVersion.BlobID, blobVersion.ArtifactID)
 	if _, ok := f.r.state.BlobVersions[key]; ok {
@@ -191,8 +223,8 @@ func (f blobVersionFake) CreateBlobVersion(ctx context.Context, blobVersion *rep
 }
 
 func (f blobVersionFake) CountBlobVersionReferences(ctx context.Context, blobID string) (int32, error) {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	count := 0
 	for _, bv := range f.r.state.BlobVersions {
@@ -204,8 +236,8 @@ func (f blobVersionFake) CountBlobVersionReferences(ctx context.Context, blobID 
 }
 
 func (f blobVersionFake) ListVersionsForBlob(ctx context.Context, blobID string) ([]string, error) {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	var artifactIDs []string
 	for _, bv := range f.r.state.BlobVersions {
@@ -222,9 +254,19 @@ func (f blobVersionFake) ListVersionsForBlob(ctx context.Context, blobID string)
 
 type storedObjectKeyFake struct{ r *Registry }
 
-func (f storedObjectKeyFake) CreateStoredObjectKey(ctx context.Context, key *repository.StoredObjectKey) (*repository.StoredObjectKey, error) {
+// safeLock acquires the mutex only if we're not already inside a transaction.
+func (f storedObjectKeyFake) safeLock() func() {
+	if f.r.inTx {
+		// Already holding the lock, return a no-op unlock
+		return func() {}
+	}
 	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	return f.r.mu.Unlock
+}
+
+func (f storedObjectKeyFake) CreateStoredObjectKey(ctx context.Context, key *repository.StoredObjectKey) (*repository.StoredObjectKey, error) {
+	unlock := f.safeLock()
+	defer unlock()
 
 	// Check for duplicate (artifact_id, variant_key) pair
 	for _, existing := range f.r.state.StoredObjectKeys {
@@ -245,8 +287,8 @@ func (f storedObjectKeyFake) CreateStoredObjectKey(ctx context.Context, key *rep
 }
 
 func (f storedObjectKeyFake) GetStoredObjectKey(ctx context.Context, artifactID, variantKey string) (*repository.StoredObjectKey, error) {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	for _, key := range f.r.state.StoredObjectKeys {
 		if key.ArtifactID == artifactID && key.VariantKey == variantKey {
@@ -257,8 +299,8 @@ func (f storedObjectKeyFake) GetStoredObjectKey(ctx context.Context, artifactID,
 }
 
 func (f storedObjectKeyFake) ListStoredObjectKeysForArtifact(ctx context.Context, artifactID string) ([]repository.StoredObjectKey, error) {
-	f.r.mu.Lock()
-	defer f.r.mu.Unlock()
+	unlock := f.safeLock()
+	defer unlock()
 
 	var keys []repository.StoredObjectKey
 	for _, key := range f.r.state.StoredObjectKeys {
