@@ -10,5 +10,6 @@ release_helm_chart(
         "//leaflab/api:leaflab-api_metadata",
         "//leaflab/migrate:migrate_metadata",
         "//leaflab/processor:processor_metadata",
+        "//leaflab/ui:leaflab-ui_metadata",
     ],
 )

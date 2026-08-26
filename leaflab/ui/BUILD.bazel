@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "grpc_client.go",
+        "main.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//libs/go/logging",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+go_binary(
+    name = "ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+release_app(
+    name = "ui",
+    app_type = "external-api",
+    binary_name = ":ui",
+    description = "HTMX-based browser UI for LeafLab sensor board management",
+    domain = "leaflab",
+    language = "go",
+    port = 8000,
+)
