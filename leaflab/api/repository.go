@@ -113,3 +113,59 @@ type BoardRow struct {
 	BoardID  int64
 	DeviceID string
 }
+
+// ── Household resolution accessors ───────────────────────────────────────────
+// Per FR1.1: every entity (board, region, plant, sensor, reading) resolves to
+// exactly one household. These accessors provide the resolution paths.
+
+// GetBoardHousehold resolves a board to its owning household_id.
+// Returns pgx.ErrNoRows if board not found or not yet claimed.
+func (r *Repository) GetBoardHousehold(ctx context.Context, boardID int64) (int64, error) {
+	var householdID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id FROM board
+		WHERE board_id = $1
+	`, boardID).Scan(&householdID)
+	if err != nil {
+		return 0, fmt.Errorf("get board %d household: %w", boardID, err)
+	}
+	return householdID, nil
+}
+
+// GetRegionHousehold resolves a region to its owning household_id.
+// For non-root regions, traverses the parent tree to find the root's household_id.
+func (r *Repository) GetRegionHousehold(ctx context.Context, regionID int64) (int64, error) {
+	var householdID int64
+	// TODO: Implement recursive parent traversal to find root region's household_id
+	_ = ctx
+	_ = regionID
+	return householdID, fmt.Errorf("GetRegionHousehold not yet implemented")
+}
+
+// GetPlantHousehold resolves a plant to its owning household_id.
+func (r *Repository) GetPlantHousehold(ctx context.Context, plantID int64) (int64, error) {
+	var householdID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id FROM plant
+		WHERE plant_id = $1
+	`, plantID).Scan(&householdID)
+	if err != nil {
+		return 0, fmt.Errorf("get plant %d household: %w", plantID, err)
+	}
+	return householdID, nil
+}
+
+// GetSensorHousehold resolves a sensor to its owning household_id through the board.
+// Per FR1.1: sensors inherit household through board.
+func (r *Repository) GetSensorHousehold(ctx context.Context, sensorID int64) (int64, error) {
+	var householdID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT b.household_id FROM sensor s
+		JOIN board b ON b.board_id = s.board_id
+		WHERE s.sensor_id = $1
+	`, sensorID).Scan(&householdID)
+	if err != nil {
+		return 0, fmt.Errorf("get sensor %d household: %w", sensorID, err)
+	}
+	return householdID, nil
+}
