@@ -131,9 +131,21 @@ service ArtifactRegistry {
   // before the URL is returned (FR-7). Unauthenticated or unauthorized callers
   // receive an authorization failure (FR-4).
   rpc BrokerUpload(BrokerUploadRequest) returns (BrokerUploadResponse);
+  
+  // Issue #1142: upload confirmation (read-back and digest verification).
+  // Confirms that a file uploaded via BrokerUpload has been stored correctly
+  // by reading the bytes back from the object store, decoding per the kind's
+  // H4 encoding policy, and verifying the digest. On mismatch, the blob is
+  // left as an orphan and not registered for resolution (FR-46, FR-47).
+  // Authorization uses existing registry credentials (FR-4).
+  rpc ConfirmUpload(ConfirmUploadRequest) returns (ConfirmUploadResponse);
+  
   rpc CheckChartHermeticity(CheckChartHermeticityRequest) returns (CheckChartHermeticityResponse);
 }
 
+// ============================================================================
+// PromotionRegistry — what is deployed where.
+// Role: promoter (writes, environment-scoped), any (reads).
 // ============================================================================
 // PromotionRegistry — what is deployed where.
 // Role: promoter (writes, environment-scoped), any (reads).

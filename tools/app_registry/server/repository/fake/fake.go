@@ -1803,6 +1803,113 @@ func timeNow() time.Time { return time.Now().UTC() }
 
 // ============================================================================
 // DomainAdoptionRepository
+
+// ============================================================================
+// UploadRecordRepository
+// ============================================================================
+
+type uploadRecordFake struct{ r *Registry }
+
+func (f uploadRecordFake) CreateUploadRecord(ctx context.Context, record *repository.UploadRecord) (*repository.UploadRecord, error) {
+	if f.r.state.UploadRecords == nil {
+		f.r.state.UploadRecords = make(map[string]repository.UploadRecord)
+	}
+	if record.UploadID == "" {
+		record.UploadID = uuid.NewString()
+	}
+	f.r.state.UploadRecords[record.UploadID] = *record
+	return record, nil
+}
+
+func (f uploadRecordFake) GetUploadRecord(ctx context.Context, uploadID string) (*repository.UploadRecord, error) {
+	if rec, ok := f.r.state.UploadRecords[uploadID]; ok {
+		return &rec, nil
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f uploadRecordFake) ListUnconfirmedUploads(ctx context.Context, artifactIdentity, versionReference string) ([]repository.UploadRecord, error) {
+	return nil, nil
+}
+
+func (f uploadRecordFake) UpdateUploadState(ctx context.Context, uploadID string, newState repository.UploadState) (*repository.UploadRecord, error) {
+	rec, ok := f.r.state.UploadRecords[uploadID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	rec.State = newState
+	f.r.state.UploadRecords[uploadID] = rec
+	return &rec, nil
+}
+
+// ============================================================================
+// BlobRecordRepository
+// ============================================================================
+
+type blobRecordFake struct{ r *Registry }
+
+func (f blobRecordFake) CreateBlobRecord(ctx context.Context, record *repository.BlobRecord) (*repository.BlobRecord, error) {
+	if f.r.state.BlobRecords == nil {
+		f.r.state.BlobRecords = make(map[string]repository.BlobRecord)
+	}
+	f.r.state.BlobRecords[record.BlobID] = *record
+	return record, nil
+}
+
+func (f blobRecordFake) GetBlobRecordByDigest(ctx context.Context, digest, encoding, contentType string) (*repository.BlobRecord, error) {
+	for _, rec := range f.r.state.BlobRecords {
+		if rec.UncompressedContentDigest == digest && rec.StoredEncoding == encoding && rec.ContentType == contentType {
+			return &rec, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f blobRecordFake) GetBlobRecord(ctx context.Context, blobID string) (*repository.BlobRecord, error) {
+	if rec, ok := f.r.state.BlobRecords[blobID]; ok {
+		return &rec, nil
+	}
+	return nil, repository.ErrNotFound
+}
+
+func (f blobRecordFake) UpdateBlobConfirmation(ctx context.Context, blobID string, newState repository.BlobConfirmationState) (*repository.BlobRecord, error) {
+	rec, ok := f.r.state.BlobRecords[blobID]
+	if !ok {
+		return nil, repository.ErrNotFound
+	}
+	rec.ConfirmationState = newState
+	f.r.state.BlobRecords[blobID] = rec
+	return &rec, nil
+}
+
+// ============================================================================
+// BlobVersionRepository
+// ============================================================================
+
+type blobVersionFake struct{ r *Registry }
+
+func (f blobVersionFake) CreateBlobVersion(ctx context.Context, blobVersion *repository.BlobVersion) error { return nil }
+func (f blobVersionFake) CountBlobVersionReferences(ctx context.Context, blobID string) (int32, error) { return 0, nil }
+func (f blobVersionFake) ListVersionsForBlob(ctx context.Context, blobID string) ([]string, error) { return nil, nil }
+
+// ============================================================================
+// StoredObjectKeyRepository
+// ============================================================================
+
+type storedObjectKeyFake struct{ r *Registry }
+
+func (f storedObjectKeyFake) CreateStoredObjectKey(ctx context.Context, key *repository.StoredObjectKey) (*repository.StoredObjectKey, error) {
+	return key, nil
+}
+
+func (f storedObjectKeyFake) GetStoredObjectKey(ctx context.Context, artifactID, variantKey string) (*repository.StoredObjectKey, error) {
+	return nil, repository.ErrNotFound
+}
+
+func (f storedObjectKeyFake) ListStoredObjectKeysForArtifact(ctx context.Context, artifactID string) ([]repository.StoredObjectKey, error) {
+	return nil, nil
+}
+
 // ============================================================================
 
 // domainAdoptionFake implements repository.DomainAdoptionRepository over

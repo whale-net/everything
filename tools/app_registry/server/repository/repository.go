@@ -392,7 +392,6 @@ type ArtifactRepository interface {
 // DomainAdoptionRepository covers the `domain_adoption` table (migration
 // 001), which gates the per-domain cutover described in ARCHITECTURE.md
 // "Resolved questions" #3. Recording (AR-2) is never gated on this; only
-// AllocateVersion (AR-5) is.
 type DomainAdoptionRepository interface {
 	// GetStage returns domain's current adoption stage, defaulting to
 	// DomainAdoptionStageObserve when no row exists yet — every domain
@@ -748,9 +747,11 @@ type UploadRecordRepository interface {
 	// Optional filter on artifact_identity/version_reference for FR-10's retry checks.
 	ListUnconfirmedUploads(ctx context.Context, artifactIdentity, versionReference string) ([]UploadRecord, error)
 
-	// UpdateUploadState transitions uploadID to newState, stamping state_changed_at.
+	// UpdateUploadState transitions uploadID to newState, stamping state_changed_at
+	// and returning the updated record. Must be called inside Registry.WithTx.
 	// Implementations must enforce UploadState's legal transitions per migration 023.
-	UpdateUploadState(ctx context.Context, uploadID string, newState UploadState) error
+	// Returns ErrNotFound if the upload doesn't exist.
+	UpdateUploadState(ctx context.Context, uploadID string, newState UploadState) (*UploadRecord, error)
 }
 
 // BlobRecordRepository covers the `blob_record` table (migration 023, FR-12, FR-46, FR-61).
@@ -768,8 +769,10 @@ type BlobRecordRepository interface {
 	GetBlobRecord(ctx context.Context, blobID string) (*BlobRecord, error)
 
 	// UpdateBlobConfirmation transitions blobID's confirmation_state to newState,
-	// stamping confirmation_changed_at. Used after verification completes (FR-46).
-	UpdateBlobConfirmation(ctx context.Context, blobID string, newState BlobConfirmationState) error
+	// stamping confirmation_changed_at and returning the updated record.
+	// Used after verification completes (FR-46). Must be called inside Registry.WithTx.
+	// Returns ErrNotFound if the blob doesn't exist.
+	UpdateBlobConfirmation(ctx context.Context, blobID string, newState BlobConfirmationState) (*BlobRecord, error)
 }
 
 // BlobVersionRepository covers the `blob_version` table (migration 023, FR-12).

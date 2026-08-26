@@ -106,18 +106,18 @@ func (r *uploadRecordRepo) ListUnconfirmedUploads(ctx context.Context, artifactI
 	return uploads, nil
 }
 
-func (r *uploadRecordRepo) UpdateUploadState(ctx context.Context, uploadID string, newState repository.UploadState) error {
+func (r *uploadRecordRepo) UpdateUploadState(ctx context.Context, uploadID string, newState repository.UploadState) (*repository.UploadRecord, error) {
 	now := time.Now().UTC()
 	result, err := r.ex.Exec(ctx, `
 		UPDATE upload_record SET state = $1, state_changed_at = $2 WHERE upload_id = $3`,
 		newState, now, uploadID)
 	if err != nil {
-		return fmt.Errorf("update upload state %s to %s: %w", uploadID, newState, err)
+		return nil, fmt.Errorf("update upload state %s to %s: %w", uploadID, newState, err)
 	}
 	if result.RowsAffected() == 0 {
-		return repository.ErrNotFound
+		return nil, repository.ErrNotFound
 	}
-	return nil
+	return r.GetUploadRecord(ctx, uploadID)
 }
 
 // ============================================================================
@@ -186,18 +186,18 @@ func (r *blobRecordRepo) GetBlobRecord(ctx context.Context, blobID string) (*rep
 	return &b, nil
 }
 
-func (r *blobRecordRepo) UpdateBlobConfirmation(ctx context.Context, blobID string, newState repository.BlobConfirmationState) error {
+func (r *blobRecordRepo) UpdateBlobConfirmation(ctx context.Context, blobID string, newState repository.BlobConfirmationState) (*repository.BlobRecord, error) {
 	now := time.Now().UTC()
 	result, err := r.ex.Exec(ctx, `
 		UPDATE blob_record SET confirmation_state = $1, confirmation_changed_at = $2 WHERE blob_id = $3`,
 		newState, now, blobID)
 	if err != nil {
-		return fmt.Errorf("update blob confirmation %s to %s: %w", blobID, newState, err)
+		return nil, fmt.Errorf("update blob confirmation %s to %s: %w", blobID, newState, err)
 	}
 	if result.RowsAffected() == 0 {
-		return repository.ErrNotFound
+		return nil, repository.ErrNotFound
 	}
-	return nil
+	return r.GetBlobRecord(ctx, blobID)
 }
 
 // ============================================================================

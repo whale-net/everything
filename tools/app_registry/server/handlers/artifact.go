@@ -1,9 +1,13 @@
 package handlers
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -1298,4 +1302,165 @@ func extractPrincipal(ctx context.Context) string {
 		return claims.Subject
 	}
 	return ""
+}
+
+// ConfirmUpload confirms an upload by reading back the bytes from S3,
+// decoding per the kind's H4 policy, and verifying the digest (FR-46, FR-47).
+// On mismatch, the blob is left as an orphan, not registered for resolution.
+func (s *ArtifactServer) ConfirmUpload(ctx context.Context, req *pb.ConfirmUploadRequest) (*pb.ConfirmUploadResponse, error) {
+	// Authorization check (FR-4): require builder role.
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "authorization required: %v", err)
+	}
+
+	// Validate request
+	if err := s.validateConfirmUploadRequest(req); err != nil {
+		return nil, err
+	}
+
+	// Get the artifact kind to resolve hook policies (H4).
+	kind := kinds.GetKind(req.ArtifactKind)
+	if kind == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "unknown artifact kind %q", req.ArtifactKind)
+	}
+
+	// Get the encoding policy (H4).
+	encoding := kind.Hooks().H4().Encoding()
+	contentType := kind.Hooks().H3().ContentType()
+
+	// Get S3 client for read-back.
+	s3Client, err := s.getArtifactsS3Client()
+	if err != nil {
+		return nil, err
+	}
+
+	// Process each file in a transaction.
+	results := make([]*pb.ConfirmUploadFileResult, 0, len(req.Files))
+	allConfirmed := true
+
+	for _, file := range req.Files {
+		result, err := s.confirmUploadFile(ctx, s3Client, encoding, contentType, file)
+		if err != nil {
+			return nil, fmt.Errorf("confirm file %q: %w", file.VariantKey, err)
+		}
+		results = append(results, result)
+		if !result.Confirmed {
+			allConfirmed = false
+		}
+	}
+
+	// Update upload record state based on confirmation results.
+	if err := s.repo.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
+		// Update state based on results.
+		if allConfirmed {
+			_, err := r.UploadRecords().UpdateUploadState(ctx, req.UploadSessionId, repository.UploadStateConfirmed)
+			if err != nil {
+				return fmt.Errorf("update upload state: %w", err)
+			}
+		} else {
+			// Mark as failed if any file failed verification.
+			_, err := r.UploadRecords().UpdateUploadState(ctx, req.UploadSessionId, repository.UploadStateFailed)
+			if err != nil {
+				return fmt.Errorf("update upload state: %w", err)
+			}
+		}
+
+		return nil
+	}); err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	// Audit logging (NFR-12).
+	artifactLog.Info("upload confirmation",
+		slog.String("artifact_kind", req.ArtifactKind),
+		slog.String("upload_session_id", req.UploadSessionId),
+		slog.Int("file_count", len(req.Files)),
+		slog.Bool("all_confirmed", allConfirmed),
+	)
+
+	return &pb.ConfirmUploadResponse{
+		Results:     results,
+		AllConfirmed: allConfirmed,
+	}, nil
+}
+
+// confirmUploadFile processes one file: downloads from S3, decodes, hashes,
+// and compares against the claimed digest.
+func (s *ArtifactServer) confirmUploadFile(ctx context.Context, s3Client *s3.Client, encoding string, contentType string, file *pb.ConfirmUploadFile) (*pb.ConfirmUploadFileResult, error) {
+	result := &pb.ConfirmUploadFileResult{
+		VariantKey:    file.VariantKey,
+		ObjectKey:      file.ObjectKey,
+		ClaimedDigest:  file.ClaimedDigest,
+	}
+
+	// Download from S3
+	data, err := s3Client.Download(ctx, file.ObjectKey)
+	if err != nil {
+		result.Confirmed = false
+		result.ErrorMessage = fmt.Sprintf("failed to download from S3: %v", err)
+		return result, nil
+	}
+
+	// Create a reader from the downloaded bytes
+	reader := bytes.NewReader(data)
+
+	// Decompress if needed (H4 policy).
+	var decompressed io.Reader = reader
+	if encoding == "gzip" {
+		gzipReader, err := gzip.NewReader(reader)
+		if err != nil {
+			result.Confirmed = false
+			result.ErrorMessage = fmt.Sprintf("failed to create gzip reader: %v", err)
+			return result, nil
+		}
+		defer gzipReader.Close()
+		decompressed = gzipReader
+	}
+
+	// Hash the decompressed bytes (FR-46).
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, decompressed); err != nil {
+		result.Confirmed = false
+		result.ErrorMessage = fmt.Sprintf("failed to hash bytes: %v", err)
+		return result, nil
+	}
+
+	// Compute the digest.
+	computedDigest := "sha256:" + fmt.Sprintf("%x", hasher.Sum(nil))
+	result.ComputedDigest = computedDigest
+
+	// Compare against claimed digest (FR-46, FR-47).
+	if computedDigest != file.ClaimedDigest {
+		result.Confirmed = false
+		result.ErrorMessage = fmt.Sprintf("digest mismatch: claimed %s, computed %s", file.ClaimedDigest, computedDigest)
+		return result, nil
+	}
+
+	result.Confirmed = true
+	return result, nil
+}
+
+// validateConfirmUploadRequest ensures the request is well-formed.
+func (s *ArtifactServer) validateConfirmUploadRequest(req *pb.ConfirmUploadRequest) error {
+	if req.UploadSessionId == "" {
+		return status.Error(codes.InvalidArgument, "upload_session_id is required")
+	}
+	if req.ArtifactKind == "" {
+		return status.Error(codes.InvalidArgument, "artifact_kind is required")
+	}
+	if len(req.Files) == 0 {
+		return status.Error(codes.InvalidArgument, "files must be non-empty")
+	}
+	for _, file := range req.Files {
+		if file.VariantKey == "" {
+			return status.Error(codes.InvalidArgument, "file variant_key is required")
+		}
+		if file.ObjectKey == "" {
+			return status.Error(codes.InvalidArgument, "file object_key is required")
+		}
+		if file.ClaimedDigest == "" {
+			return status.Error(codes.InvalidArgument, "file claimed_digest is required")
+		}
+	}
+	return nil
 }
