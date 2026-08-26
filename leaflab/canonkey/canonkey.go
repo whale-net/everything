@@ -213,3 +213,26 @@ func ValidateSensorType(name string) (int32, error) {
 	}
 	return val, nil
 }
+
+// ValidateAndCanonicalizeSensorConfig validates that a SensorConfig has valid
+// fields and canonicalizes the mux_path. This should be called on ingress at 
+// the proto/JSON boundary, before validation and storage.
+// Returns an error if sensor_type is not a valid enum value.
+func ValidateAndCanonicalizeSensorConfig(cfg *configpb.SensorConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("SensorConfig is nil")
+	}
+
+	// Ensure sensor_type is a valid enum value (protobuf deserialization already 
+	// validates this, but we check to be explicit)
+	if _, ok := firmwarepb.SensorType_name[int32(cfg.SensorType)]; !ok {
+		return fmt.Errorf("invalid sensor_type value: %d", cfg.SensorType)
+	}
+
+	// Canonicalize mux_path: ensure it's not nil, replace with empty slice if nil
+	if cfg.MuxPath == nil {
+		cfg.MuxPath = []*configpb.MuxHop{}
+	}
+
+	return nil
+}

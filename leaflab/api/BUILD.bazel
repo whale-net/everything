@@ -16,6 +16,7 @@ go_library(
         "//firmware/proto:configpb",
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
+        "//leaflab/canonkey",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
         "//libs/go/logging",
@@ -44,6 +45,7 @@ go_test(
     deps = [
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
+        "//leaflab/canonkey",
         "//leaflab/api/proto:leaflabapipb",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/whale-net/everything/leaflab/api/apierrors"
+	"github.com/whale-net/everything/leaflab/canonkey"
 	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -59,6 +60,20 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		)
 		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
 	}
+	// Canonicalize sensors on ingress at the proto/JSON boundary
+	for _, sensor := range req.Sensors {
+		if err := canonkey.ValidateAndCanonicalizeSensorConfig(sensor); err != nil {
+			// Sensor validation failure
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"sensors",
+				"sensor_type",
+				apierrors.InvalidSensorConfig,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+		}
+	}
+
 
 	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
 	if err != nil {

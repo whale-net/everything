@@ -44,6 +44,9 @@ const (
 
 	// InvalidPageToken is returned when a page_token is malformed or foreign.
 	InvalidPageToken = "INVALID_PAGE_TOKEN"
+
+	// InvalidSensorConfig is returned when a sensor config has missing or invalid fields.
+	InvalidSensorConfig = "INVALID_SENSOR_CONFIG"
 )
 
 // ErrorDetailFromStatus attempts to extract the ErrorDetail from a gRPC

@@ -10,6 +10,7 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/leaflab/canonkey"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -212,6 +213,14 @@ func (h *MessageHandler) handleConfigPush(ctx context.Context, deviceID string, 
 	var cfg configpb.DeviceConfig
 	if err := proto.Unmarshal(body, &cfg); err != nil {
 		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceConfig: %w", err)}
+	}
+
+	// Canonicalize sensors on ingress at the proto/JSON boundary
+	for _, sensor := range cfg.Sensors {
+		if err := canonkey.ValidateAndCanonicalizeSensorConfig(sensor); err != nil {
+			h.logger.Warn("invalid sensor config in DeviceConfig push", "device_id", deviceID, "version", cfg.Version, "err", err)
+			// Continue processing despite invalid sensor; log the issue but don't fail the whole push
+		}
 	}
 
 	if cfg.Version > 1<<63-1 {
