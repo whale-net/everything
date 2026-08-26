@@ -493,24 +493,85 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 // FR13: only RecordArtifact'd (i.e. FinalizePublish-confirmed) versions ever
 // exist in that table, so an unpublished or guessed version simply isn't
 // found -- there is no separate "is this confirmed?" check to get wrong.
-func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
-	ownerFullName, ok := s.lookupBinaryOwner(req.Binary)
-	if !ok {
-		// Build a list of known binaries from metadata
-		knownBinaries := ""
-		if s.MetadataRegistry != nil {
-			for _, app := range s.MetadataRegistry.AppsWithKind(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY) {
-				if knownBinaries != "" {
-					knownBinaries += ", "
-				}
-				knownBinaries += app.Name
-			}
-		}
-		if knownBinaries == "" {
-			knownBinaries = "release_helper_go, app-registry"
-		}
-		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: %s)", req.Binary, knownBinaries)
+// resolveContentEncoding returns the content encoding for a binary artifact.
+// Dispatches to hook H4 (encoding policy) to determine the encoding descriptor
+// (e.g., "gzip"). For post-cutover versions, this returns the kind's declared
+// encoding policy. For pre-cutover versions, an empty string is returned
+// (meaning uncompressed).
+func (s *ArtifactServer) resolveContentEncoding(ctx context.Context, kind string) (string, error) {
+	k := kinds.Get(kind)
+	if k == nil {
+		return "", fmt.Errorf("kind %q not found", kind)
 	}
+	h4 := k.Hooks().H4()
+	if h4 == nil {
+		return "", fmt.Errorf("kind %q has no H4 hook", kind)
+	}
+	return h4.Encoding(), nil
+}
+
+// resolveConsumerFileName returns the declared consumer-facing file name for a
+// binary artifact. Dispatches to hook H5 (post-cutover) or H8 (pre-cutover) to
+// determine the file name. For post-cutover versions, this returns the declared
+// name for the binary file. For pre-cutover versions, an empty string is returned
+// (meaning consumers keep their current behavior).
+//
+// The fileName template (from H5) contains placeholders like {name}, {version},
+// {os}, {arch} that are interpolated with actual values to produce the final
+// consumer-facing name.
+func (s *ArtifactServer) resolveConsumerFileName(ctx context.Context, artifact *repository.Artifact, kindName string, binaryName string, os string, arch string) (string, error) {
+	// Pre-cutover versions (VersionSourceTag) return empty string for backward compatibility:
+	// the consumer uses the name already in their manifest
+	if artifact.VersionSource == repository.VersionSourceTag {
+		return "", nil
+	}
+
+	// Post-cutover versions (VersionSourceRegistry) use H5 to derive the declared name
+	k := kinds.Get(kindName)
+	if k == nil {
+		return "", fmt.Errorf("kind %q not found", kindName)
+	}
+	h5 := k.Hooks().H5()
+	if h5 == nil {
+		return "", fmt.Errorf("kind %q has no H5 hook", kindName)
+	}
+
+	template := h5.FileNaming()
+	if template == "" {
+		return "", nil
+	}
+
+	// Interpolate the template with actual values
+	// Template format for binary: "{name}-{version}-{os}-{arch}"
+	fileName := template
+	fileName = strings.ReplaceAll(fileName, "{name}", binaryName)
+	fileName = strings.ReplaceAll(fileName, "{version}", artifact.Version)
+	fileName = strings.ReplaceAll(fileName, "{os}", os)
+	fileName = strings.ReplaceAll(fileName, "{arch}", arch)
+
+	return fileName, nil
+}
+
+// resolveVariantSelector resolves the opaque variant selector for the request.
+// FR-62: The variant selector is kind-declared and opaque. If the request
+// provides an explicit variant map, it is used. Otherwise, for backward
+// compatibility with existing {os, arch} callers, the os and arch fields are
+// converted to a variant map.
+func (s *ArtifactServer) resolveVariantSelector(req *pb.ResolveBinaryURLRequest) map[string]string {
+	// If variant map is provided and non-empty, return it
+	if len(req.Variant) > 0 {
+		return req.Variant
+	}
+
+	// Backward compatibility: convert os and arch fields to a variant map
+	return map[string]string{
+		"os":   req.Os,
+		"arch": req.Arch,
+	}
+}
+
+func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
+	// Validate required fields upfront
 	if req.Os == "" {
 		return nil, status.Error(codes.InvalidArgument, "os is required")
 	}
@@ -521,7 +582,26 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, status.Error(codes.InvalidArgument, "version is required")
 	}
 
-	_, err := s.repo.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+	// FR-56: Resolution from registry state. Try to resolve the artifact by
+	// binary name. First attempt: look up the owner from metadata registry if
+	// available. If that fails, try using the binary name as the app name in
+	// the "tools" domain.
+	var ownerFullName string
+	metadataOwner, hasMetadata := s.lookupBinaryOwner(req.Binary)
+	if hasMetadata {
+		ownerFullName = metadataOwner
+	} else {
+		// Fallback: assume "tools" domain with the binary name as app name
+		// This allows any binary published under any domain to resolve, not just
+		// those listed in metadata.
+		ownerFullName = "tools-" + req.Binary
+	}
+
+	// Look up the artifact in the registry. If it doesn't exist (either because
+	// the owner doesn't exist or the version wasn't published), return NotFound.
+	// This is different from FR-56's predecessor, which rejected unknown binary
+	// names with InvalidArgument upfront.
+	artifact, err := s.repo.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
 		OwnerFullName: ownerFullName,
 		Kind:          repository.ArtifactKindBinary,
 		Version:       req.Version,
@@ -530,27 +610,67 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, mapRepoErr(err)
 	}
 
+	// FR-25, FR-60: Use the stored object key from the database, not a
+	// constructed key. Stored keys are the sole source of truth for object keys.
+	// The variant is the os-arch combination for binaries.
+	variant := fmt.Sprintf("%s-%s", req.Os, req.Arch)
+	storedKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, variant)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	// Presign the binary key
 	client, err := s.releaseToolsS3PresignClient()
 	if err != nil {
 		return nil, err
 	}
 
-	binaryKey := fmt.Sprintf("%s/%s/%s-%s-%s", req.Binary, req.Version, req.Binary, req.Os, req.Arch)
-	checksumKey := fmt.Sprintf("%s/%s/checksums.txt", req.Binary, req.Version)
-
-	downloadURL, err := client.PresignPublicGetURL(ctx, binaryKey, resolveBinaryURLTTL)
+	downloadURL, err := client.PresignPublicGetURL(ctx, storedKey.ObjectKey, resolveBinaryURLTTL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to presign binary download URL: %v", err)
 	}
-	checksumURL, err := client.PresignPublicGetURL(ctx, checksumKey, resolveBinaryURLTTL)
+
+	// Presign the checksums manifest. The manifest variant is typically just
+	// the version (checksums cover all platform variants). Look up the stored
+	// key for the checksums variant.
+	checksumVariant := "checksums"
+	checksumStoredKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, checksumVariant)
+	if err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	checksumURL, err := client.PresignPublicGetURL(ctx, checksumStoredKey.ObjectKey, resolveBinaryURLTTL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to presign checksum manifest URL: %v", err)
 	}
+
+	encoding, err := s.resolveContentEncoding(ctx, "binary")
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resolve content encoding: %v", err)
+	}
+
+	// For checksum manifest, use the same H4 encoding as for the binary
+	manifestEncoding := encoding
+
+	filename, err := s.resolveConsumerFileName(ctx, artifact, "binary", req.Binary, req.Os, req.Arch)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resolve consumer filename: %v", err)
+	}
+
+	// For checksum manifest, use "checksums.txt" as the standard filename
+	// (consumers look for this exact name in the manifest)
+	manifestFilename := "checksums.txt"
+
 	return &pb.ResolveBinaryURLResponse{
-		DownloadUrl:         downloadURL,
-		ChecksumManifestUrl: checksumURL,
+		DownloadUrl:                 downloadURL,
+		ChecksumManifestUrl:         checksumURL,
+		DownloadUrlContentEncoding:  encoding,
+		DownloadUrlFilename:         filename,
+		ChecksumManifestContentEncoding: manifestEncoding,
+		ChecksumManifestFilename:    manifestFilename,
 	}, nil
 }
+
 
 // resolveBinaryURLTTL bounds how long a ResolveBinaryURL response's
 // presigned URLs stay valid. Callers (CI's "check prebuilt tool

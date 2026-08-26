@@ -448,20 +448,33 @@ message ListArtifactPinsResponse {
 // "tools-app-registry"), the same mapping release-v2.yml's
 // build-release-tools probe and download-release-tools/action.yml already
 // use.
+// FR-62: Resolution takes an opaque, kind-declared variant selector, not a
+// fixed OS/arch pair. The set of variant dimensions and their permitted
+// values is kind-specific declared policy (hook H2). Backward compatibility:
+// an existing caller supplying {os, arch} for a binary artifact resolves
+// exactly as it does today.
 message ResolveBinaryURLRequest {
   // "release_helper_go" or "app-registry".
   string binary = 1;
 
   string version = 2;  // semver tag, e.g. "v1.2.3"
-  string os = 3;        // "linux" | "darwin"
-  string arch = 4;       // "amd64" | "arm64"
+  string os = 3;        // "linux" | "darwin" (deprecated: use variant instead)
+  string arch = 4;       // "amd64" | "arm64" (deprecated: use variant instead)
+
+  // Opaque variant selector for the artifact kind (e.g., {os, arch} for binary).
+  // Declared and validated by the kind's policy (hook H2). Optional for
+  // backward compatibility: if not set, os and arch fields above are used.
+  map<string, string> variant = 5;
 }
 
-// ResolveBinaryURLResponse carries unsigned, public-read download URLs (see
-// libs/go/s3's Client.PublicURL) matching the S3 key convention:
-// "<binary>/<version>/<binary>-<os>-<arch>" for download_url and
-// "<binary>/<version>/checksums.txt" for checksum_manifest_url -- the same
-// convention FinalizePublish's S3-publish task writes to.
+// ResolveBinaryURLResponse carries presigned GET URLs with a bounded lifetime
+// (FR-26, NFR-25). The response's URLs are valid for a single acquisition
+// attempt and must not be cached, persisted, or reused (NFR-19(c)).
+//
+// The response URL's shape, signature algorithm, expiry time, and other
+// parameters are opaque to consumers and subject to change (FR-60, DP-1).
+// Only the resolution API is the supported way to obtain download URLs;
+// consumers must not construct, parse, cache, or re-sign URLs.
 //
 // An unknown/unpublished binary+version returns a NotFound gRPC error
 // instead of this response -- never a fabricated URL (FR13).
@@ -469,8 +482,33 @@ message ResolveBinaryURLResponse {
   string download_url = 1;
 
   // checksums.txt for this binary+version, covering all its platform
-  // variants (FR16).
+  // variants (FR16). Like download_url, this is a presigned GET with a
+  // bounded lifetime, valid for a single acquisition.
   string checksum_manifest_url = 2;
+
+  // FR-43: Explicit content-encoding descriptor for the downloaded binary.
+  // This field indicates the encoding of the download_url content (e.g., "gzip").
+  // Absent or empty value means uncompressed. Consumers determine decompression
+  // need from this field alone — never from the object key, filename, extension,
+  // or response headers. This is additive: a consumer built before this change
+  // behaves correctly against pre-cutover objects, and a consumer pinned to a
+  // pre-cutover, uncompressed version continues to work.
+  string download_url_content_encoding = 3;
+
+  // FR-67: Declared consumer-facing file name for the binary file.
+  // This is the name a consumer writes to disk and uses as the lookup key
+  // into the checksum manifest (FR-66). Derived from hook H5 (post-cutover)
+  // or H8 (pre-cutover). Absent or empty value means the consumer keeps its
+  // current behavior (for backward compatibility with pre-cutover versions).
+  string download_url_filename = 4;
+
+  // FR-43: Explicit content-encoding descriptor for the checksum manifest.
+  // Same semantics as download_url_content_encoding.
+  string checksum_manifest_content_encoding = 5;
+
+  // FR-67: Declared consumer-facing file name for the checksum manifest.
+  // Same semantics as download_url_filename.
+  string checksum_manifest_filename = 6;
 }
 
 // ============================================================================
