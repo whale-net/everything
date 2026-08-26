@@ -45,7 +45,7 @@ func startTestServer(t *testing.T) *grpc.ClientConn {
 		grpc.ChainUnaryInterceptor(unaryInt),
 		grpc.ChainStreamInterceptor(streamInt),
 	)
-	registerServices(grpcServer, fake.New(), nil, "", "", "", "", "")
+	registerServices(grpcServer, fake.New(), nil, "", "", "", "", "", "")
 
 	go func() {
 		// Serve returns a non-nil error on Stop()/GracefulStop() too; the
@@ -223,4 +223,228 @@ func TestRegisterServices_HealthCheckServing(t *testing.T) {
 	if resp.Status != grpc_health_v1.HealthCheckResponse_SERVING {
 		t.Fatalf("expected SERVING, got %v", resp.Status)
 	}
+}
+
+// TestRegisterServices_FR72_MissingBucketPanics verifies FR-72's startup
+// validation: if ANY S3 config is provided, BUCKET must be present, or the
+// server panics at startup with an explicit error naming the missing value.
+func TestRegisterServices_FR72_MissingBucketPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic for missing RELEASE_TOOLS_S3_BUCKET, got none")
+		} else if !strings.Contains(r.(string), "RELEASE_TOOLS_S3_BUCKET") {
+			t.Fatalf("expected panic mentioning RELEASE_TOOLS_S3_BUCKET, got: %v", r)
+		}
+	}()
+
+	grpcServer := grpc.NewServer()
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer = grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
+	registerServices(grpcServer, fake.New(), nil,
+		"", // BUCKET (missing — should trigger panic)
+		"https://s3.example.com/", "https://public.example.com/", "us-east-1", "key", "secret")
+}
+
+// TestRegisterServices_FR72_MissingEndpointPanics verifies FR-72's startup
+// validation for the primary/internal S3 endpoint.
+func TestRegisterServices_FR72_MissingEndpointPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic for missing RELEASE_TOOLS_S3_ENDPOINT, got none")
+		} else if !strings.Contains(r.(string), "RELEASE_TOOLS_S3_ENDPOINT") {
+			t.Fatalf("expected panic mentioning RELEASE_TOOLS_S3_ENDPOINT, got: %v", r)
+		}
+	}()
+
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
+	registerServices(grpcServer, fake.New(), nil,
+		"bucket", "", // ENDPOINT (missing — should trigger panic)
+		"https://public.example.com/", "us-east-1", "key", "secret")
+}
+
+// TestRegisterServices_FR72_MissingPublicEndpointPanics verifies FR-72's
+// startup validation for the public endpoint.
+func TestRegisterServices_FR72_MissingPublicEndpointPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic for missing RELEASE_TOOLS_S3_PUBLIC_ENDPOINT, got none")
+		} else if !strings.Contains(r.(string), "RELEASE_TOOLS_S3_PUBLIC_ENDPOINT") {
+			t.Fatalf("expected panic mentioning RELEASE_TOOLS_S3_PUBLIC_ENDPOINT, got: %v", r)
+		}
+	}()
+
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
+	registerServices(grpcServer, fake.New(), nil,
+		"bucket", "https://s3.example.com/", "", // PUBLIC_ENDPOINT (missing — should trigger panic)
+		"us-east-1", "key", "secret")
+}
+
+// TestRegisterServices_FR72_MissingRegionPanics verifies FR-72's startup
+// validation for the region (needed for signing).
+func TestRegisterServices_FR72_MissingRegionPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic for missing RELEASE_TOOLS_S3_REGION, got none")
+		} else if !strings.Contains(r.(string), "RELEASE_TOOLS_S3_REGION") {
+			t.Fatalf("expected panic mentioning RELEASE_TOOLS_S3_REGION, got: %v", r)
+		}
+	}()
+
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
+	registerServices(grpcServer, fake.New(), nil,
+		"bucket", "https://s3.example.com/", "https://public.example.com/",
+		"", // REGION (missing — should trigger panic)
+		"key", "secret")
+}
+
+// TestRegisterServices_FR72_MissingAccessKeyPanics verifies FR-72's startup
+// validation for the access key credential (NFR-22's grant).
+func TestRegisterServices_FR72_MissingAccessKeyPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic for missing RELEASE_TOOLS_S3_ACCESS_KEY, got none")
+		} else if !strings.Contains(r.(string), "RELEASE_TOOLS_S3_ACCESS_KEY") {
+			t.Fatalf("expected panic mentioning RELEASE_TOOLS_S3_ACCESS_KEY, got: %v", r)
+		}
+	}()
+
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
+	registerServices(grpcServer, fake.New(), nil,
+		"bucket", "https://s3.example.com/", "https://public.example.com/", "us-east-1",
+		"", // ACCESS_KEY (missing — should trigger panic)
+		"secret")
+}
+
+// TestRegisterServices_FR72_MissingSecretKeyPanics verifies FR-72's startup
+// validation for the secret key credential.
+func TestRegisterServices_FR72_MissingSecretKeyPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected a panic for missing RELEASE_TOOLS_S3_SECRET_KEY, got none")
+		} else if !strings.Contains(r.(string), "RELEASE_TOOLS_S3_SECRET_KEY") {
+			t.Fatalf("expected panic mentioning RELEASE_TOOLS_S3_SECRET_KEY, got: %v", r)
+		}
+	}()
+
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
+	registerServices(grpcServer, fake.New(), nil,
+		"bucket", "https://s3.example.com/", "https://public.example.com/", "us-east-1", "key",
+		"") // SECRET_KEY (missing — should trigger panic)
+}
+
+// TestRegisterServices_FR72_AllConfigPresentNosPanic verifies that when all
+// four S3 config values are present, registerServices does not panic.
+func TestRegisterServices_FR72_AllConfigPresentNoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("expected no panic when all S3 config is present, got: %v", r)
+		}
+	}()
+
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
+	registerServices(grpcServer, fake.New(), nil,
+		"bucket", "https://s3.example.com/", "https://public.example.com/", "us-east-1",
+		"key", "secret")
+}
+
+// TestRegisterServices_FR72_NoConfigNoPanic verifies that when NO S3 config
+// is provided (all empty strings), registerServices does not panic. This is
+// the expected path for deployments not doing binary resolution.
+func TestRegisterServices_FR72_NoConfigNoPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("expected no panic when no S3 config is present, got: %v", r)
+		}
+	}()
+
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode:     grpcauth.AuthModeNone,
+		DevRoles: registryauth.AllRoles(),
+	})
+	if err != nil {
+		t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
+	registerServices(grpcServer, fake.New(), nil,
+		"", "", "", "", "", "") // All empty — should not panic
 }

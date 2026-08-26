@@ -36,7 +36,7 @@ func setupResolveBinaryURL(t *testing.T) (*ArtifactServer, *pb.Build) {
 
 	artifactSrv := NewArtifactServer(repo, WithReleaseToolsS3(
 		"release-tools-bucket", "https://s3.example.com/",
-		"us-east-1", "test-access-key", "test-secret-key",
+		"https://public.example.com/", "us-east-1", "test-access-key", "test-secret-key",
 	))
 	build := recordBuild(t, artifactSrv, "run-resolve-binary-url")
 	return artifactSrv, build
@@ -82,7 +82,7 @@ func TestResolveBinaryURL_KnownBinaryAndVersion(t *testing.T) {
 		t.Fatalf("ResolveBinaryURL: %v", err)
 	}
 
-	wantHost := "release-tools-bucket.s3.example.com"
+	wantHost := "release-tools-bucket.public.example.com"
 	assertPresignedURL(t, "download_url", resp.DownloadUrl, wantHost, "/release_helper_go/v1.2.3/release_helper_go-linux-amd64")
 	assertPresignedURL(t, "checksum_manifest_url", resp.ChecksumManifestUrl, wantHost, "/release_helper_go/v1.2.3/checksums.txt")
 }
