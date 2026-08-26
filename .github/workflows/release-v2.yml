@@ -697,3 +697,48 @@ jobs:
           # of undecodable content to old resolvers.
           # TODO: Implement resolver capability check when FR-43 endpoint exists
           echo "Checking resolver capabilities for FR-44 handshake..."
+
+
+      - name: Broker artifact uploads
+        run: |
+          # Call the broker with artifact identity and file set to get presigned URLs
+          # (case a) or "already stored" results (case b). FR-1, FR-14.
+          # No object-store credential is used (NFR-1, NFR-3).
+          # 10s per call, 2min total per release run (NFR-20).
+          APP_REGISTRY_CLI="${{ runner.temp }}/release-tools/app-registry"
+
+          # TODO: Parse release matrix, compute file set and claimed digests,
+          # call broker for each artifact with proper timeout/budget handling.
+          # Placeholder invocation for citest extraction: extract the real call site
+          # from build-release-artifacts' output, derive presigned URLs.
+          "$APP_REGISTRY_CLI" artifacts broker \
+            --artifact-kind image \
+            --version "${{ needs.plan-release.outputs.version }}" \
+            --artifact-identity placeholder \
+            --files /tmp/artifacts-files.json \
+            || (echo "::error title=Broker failure::Failed to broker artifact uploads"; exit 1)
+
+      - name: Upload artifacts (presigned URLs only)
+        run: |
+          # For each case (a) result from broker: PUT to the presigned URL with
+          # exactly the required headers (FR-14). Case (b) "already stored" results
+          # require no PUT (FR-1).
+          # TODO: Implement presigned URL PUT with proper header set and timeout.
+          echo "Uploading to presigned URLs..."
+
+      - name: Confirm artifact uploads
+        run: |
+          # Confirm upload completion by reading back bytes, decoding, and verifying
+          # digests match (FR-46). One request confirms all files from a single
+          # BrokerUpload session. 60s per file, 180s total (NFR-24).
+          APP_REGISTRY_CLI="${{ runner.temp }}/release-tools/app-registry"
+
+          # TODO: Parse upload results, construct confirm request with session ID,
+          # call confirm with proper timeout/budget handling.
+          # Placeholder invocation for citest extraction: extract the real call site
+          # from broker's output, read back and verify digests.
+          "$APP_REGISTRY_CLI" artifacts confirm \
+            --upload-session-id placeholder-session-id \
+            --artifact-kind image \
+            --files /tmp/artifacts-confirm-files.json \
+            || (echo "::error title=Confirm failure::Failed to confirm artifact uploads"; exit 1)
