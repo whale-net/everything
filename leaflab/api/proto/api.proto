@@ -149,6 +149,15 @@ service LeafLabAPI {
   // A reason for the push must be provided (for audit purposes).
   rpc PushDeviceConfigMultiBoard(PushDeviceConfigMultiBoardRequest) returns (PushDeviceConfigMultiBoardResponse);
 
+  // Dry run a multi-board push — validate each board in the set without storing
+  // or publishing anything for any of them. Returns one PushBoardDryRunResult per
+  // board (its own effective config, diff, and version preview, since different
+  // boards can have different base versions), so a blast-radius preview covers
+  // the same board set a real multi-board push would (FR38 composes with FR48).
+  // A board-level failure (e.g. an EDIT with no accepted base config) is reported
+  // in that board's result and does not abort the rest of the set.
+  rpc PushDeviceConfigMultiBoardDryRun(PushDeviceConfigMultiBoardDryRunRequest) returns (PushDeviceConfigMultiBoardDryRunResponse);
+
   // Get the latest config that was accepted by a board.
   rpc GetDeviceConfig(GetDeviceConfigRequest) returns (GetDeviceConfigResponse);
 
@@ -310,8 +319,11 @@ message PushDeviceConfigDryRunResponse {
   // diff is the configuration change against the base version.
   ConfigDiff diff = 3;
 
-  // per_board_results would be returned for multi-board dry runs.
-  // For single-board dry run, this is a list with one result.
+  // per_board_results carries this single board's result as a one-element list,
+  // for shape parity with PushDeviceConfigMultiBoardDryRunResponse.per_board_results.
+  // A real multi-board dry run goes through PushDeviceConfigMultiBoardDryRun, which
+  // returns one PushBoardDryRunResult per board (each with its own diff and
+  // effective config, since different boards can have different base versions).
   repeated PushBoardResult per_board_results = 4;
 }
 
@@ -377,6 +389,63 @@ message PushDeviceConfigMultiBoardResponse {
 
   // per_board_results is the outcome for each board.
   repeated PushBoardResult per_board_results = 2;
+}
+
+// PushBoardDryRunResult represents a dry-run preview for a single board in a
+// multi-board dry run — the same information a single-board dry run returns
+// (PushDeviceConfigDryRunResponse), scoped to one board within a request that
+// covers multiple boards. Each board can have a different base version, so
+// each result carries its own effective config and diff.
+message PushBoardDryRunResult {
+  string device_id = 1;
+
+  // success is true if the dry run validated cleanly for this board.
+  bool success = 2;
+
+  // version_preview is the version that would be assigned to this board if
+  // the equivalent real push were executed. Only meaningful when success is true.
+  uint64 version_preview = 3;
+
+  // effective_config is the complete configuration that would result for this
+  // board. For CONFIG_SCOPE_COMPLETE: equals the requested config. For
+  // CONFIG_SCOPE_EDIT: includes materialised entries carried forward from this
+  // board's base version. Only set when success is true.
+  firmware.DeviceConfig effective_config = 4;
+
+  // diff is this board's configuration change against its base version,
+  // including the named removal set (chip keys expanded). Only set when
+  // success is true.
+  ConfigDiff diff = 5;
+
+  // error_detail carries structured error information if validation failed
+  // for this board (e.g. an EDIT with no accepted base config to complete from).
+  ErrorDetail error_detail = 6;
+}
+
+// PushDeviceConfigMultiBoardDryRunRequest previews a multi-board push without
+// writing or publishing anything, returning per-board results (FR38 composed
+// with FR48). Unlike PushDeviceConfigMultiBoardRequest, no reason is required:
+// a dry run performs no audited write, so there is nothing to justify yet.
+message PushDeviceConfigMultiBoardDryRunRequest {
+  // device_ids is the list of boards to preview the push against.
+  repeated string device_ids = 1;
+
+  // scope declares the semantic interpretation of this push.
+  ConfigScope scope = 2;
+
+  // Sensor entries.
+  repeated firmware.SensorConfig sensors = 3;
+
+  // Removal list (for CONFIG_SCOPE_EDIT).
+  repeated RemovalKey remove = 4;
+}
+
+// PushDeviceConfigMultiBoardDryRunResponse returns a per-board dry-run preview
+// for a multi-board push. Writes no row and publishes nothing for any board.
+message PushDeviceConfigMultiBoardDryRunResponse {
+  // per_board_results is the dry-run preview for each requested board, in the
+  // same order as the request's device_ids.
+  repeated PushBoardDryRunResult per_board_results = 1;
 }
 
 // GetPushGroupAckStateRequest asks for the ack state of a multi-board push group.
