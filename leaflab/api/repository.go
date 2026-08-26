@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -90,28 +91,95 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 	return &cfg, nil
 }
 
-// ListBoards returns all known boards.
-func (r *Repository) ListBoards(ctx context.Context) ([]BoardRow, error) {
-	rows, err := r.db.Query(ctx, `SELECT board_id, device_id FROM board ORDER BY board_id`)
+// ListBoards returns a page of boards using keyset pagination on (recorded_at DESC, board_id).
+// recorded_at is the Unix timestamp (seconds since epoch) of last_seen_at.
+// pageToken can be nil for the first page, or a decoded token from a previous response.
+// Returns the boards, a next page token (nil if this is the last page), and any error.
+func (r *Repository) ListBoards(ctx context.Context, pageSize int32, pageToken *pagetoken.Token) ([]BoardRow, *pagetoken.Token, error) {
+	// Clamp page size to maximum; enforce a default if not specified
+	if pageSize <= 0 {
+		pageSize = DefaultPageSize
+	}
+	if pageSize > MaxPageSize {
+		pageSize = MaxPageSize
+	}
+
+	// Build the keyset pagination query.
+	// We want to fetch boards ordered by (recorded_at DESC, board_id ASC).
+	// If we have a token, we start after the last board's (recorded_at, board_id).
+	var query string
+	var args []interface{}
+
+	if pageToken == nil || (pageToken.LastRecordedAt == 0 && pageToken.LastBoardID == 0) {
+		// First page: fetch the first pageSize rows, plus one extra to detect more pages
+		query = `
+			SELECT board_id, device_id, EXTRACT(EPOCH FROM last_seen_at)::bigint AS recorded_at
+			FROM board
+			ORDER BY last_seen_at DESC, board_id ASC
+			LIMIT $1
+		`
+		args = []interface{}{pageSize + 1}
+	} else {
+		// Subsequent page: fetch rows after the token's position.
+		// The condition is: (recorded_at, board_id) < (token.recorded_at, token.board_id)
+		// in DESC order, which means (recorded_at < token.recorded_at) OR (recorded_at = token.recorded_at AND board_id < token.board_id)
+		query = `
+			SELECT board_id, device_id, EXTRACT(EPOCH FROM last_seen_at)::bigint AS recorded_at
+			FROM board
+			WHERE (EXTRACT(EPOCH FROM last_seen_at)::bigint < $1)
+			   OR (EXTRACT(EPOCH FROM last_seen_at)::bigint = $1 AND board_id < $2)
+			ORDER BY last_seen_at DESC, board_id ASC
+			LIMIT $3
+		`
+		args = []interface{}{pageToken.LastRecordedAt, pageToken.LastBoardID, pageSize + 1}
+	}
+
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list boards: %w", err)
+		return nil, nil, fmt.Errorf("list boards: %w", err)
 	}
 	defer rows.Close()
 
 	var boards []BoardRow
 	for rows.Next() {
 		var b BoardRow
-		if err := rows.Scan(&b.BoardID, &b.DeviceID); err != nil {
-			return nil, fmt.Errorf("scan board: %w", err)
+		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.RecordedAt); err != nil {
+			return nil, nil, fmt.Errorf("scan board: %w", err)
 		}
 		boards = append(boards, b)
 	}
-	return boards, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	// Check if there are more pages
+	var nextToken *pagetoken.Token
+	if len(boards) > int(pageSize) {
+		// We have more pages; truncate to pageSize and create next token
+		nextToken = &pagetoken.Token{
+			LastRecordedAt: boards[pageSize-1].RecordedAt,
+			LastBoardID:    boards[pageSize-1].BoardID,
+		}
+		boards = boards[:pageSize]
+	}
+
+	return boards, nextToken, nil
+}
+
+// GetTotalBoardCount returns the total number of boards.
+func (r *Repository) GetTotalBoardCount(ctx context.Context) (int32, error) {
+	var count int32
+	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM board`).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("get board count: %w", err)
+	}
+	return count, nil
 }
 
 type BoardRow struct {
-	BoardID  int64
-	DeviceID string
+	BoardID    int64
+	DeviceID   string
+	RecordedAt int64 // Unix timestamp in seconds
 }
 
 // ── Household resolution accessors ───────────────────────────────────────────
@@ -643,3 +711,8 @@ func (r *Repository) GetGrantHousehold(ctx context.Context, grantID int64) (int6
 	}
 	return householdID, nil
 }
+
+const (
+	DefaultPageSize = 50
+	MaxPageSize     = 1000
+)
