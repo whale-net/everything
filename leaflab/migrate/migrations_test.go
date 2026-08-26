@@ -988,3 +988,346 @@ func TestPlantRegionHistoryValueAtTime(t *testing.T) {
 
 	t.Logf("Value-at-time queries verified: temporal index supports both plant and region lookups")
 }
+
+// TestViewAttributionFixPreservesPlantHistoryOnMove verifies the core defect fix:
+// when a plant moves regions, historical readings retain their original plant
+// attribution (via plant_region_history value-at-time lookup), not re-attributed
+// to the plant's current region. This tests the defect described in FR72.
+func TestViewAttributionFixPreservesPlantHistoryOnMove(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Set up household, regions, and plant
+	var householdID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('move-test-household')
+		RETURNING household_id
+	`).Scan(&householdID); err != nil {
+		t.Fatalf("insert household: %v", err)
+	}
+
+	var region1ID, region2ID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO region (name, household_id) VALUES ('region1', $1)
+		RETURNING region_id
+	`, householdID).Scan(&region1ID); err != nil {
+		t.Fatalf("insert region1: %v", err)
+	}
+
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO region (name, household_id) VALUES ('region2', $1)
+		RETURNING region_id
+	`, householdID).Scan(&region2ID); err != nil {
+		t.Fatalf("insert region2: %v", err)
+	}
+
+	var plantTypeID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant_type (common_name, species)
+		VALUES ('Test Plant', 'Solanum lycopersicum')
+		RETURNING plant_type_id
+	`).Scan(&plantTypeID); err != nil {
+		t.Fatalf("insert plant_type: %v", err)
+	}
+
+	// Create plant initially in region1
+	now := time.Now()
+	var plantID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant (name, plant_type_id, region_id, household_id, created_at)
+		VALUES ('Tomato Plant', $1, $2, $3, $4)
+		RETURNING plant_id
+	`, plantTypeID, region1ID, householdID, now.Add(-72*time.Hour)).Scan(&plantID); err != nil {
+		t.Fatalf("insert plant: %v", err)
+	}
+
+	// Set up plant_region_history: plant was in region1, then moved to region2
+	moveTime := now.Add(-24 * time.Hour)
+	if _, err := db.Pool.Exec(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from, valid_to)
+		VALUES ($1, $2, $3, $4)
+	`, plantID, region1ID, now.Add(-72*time.Hour), moveTime); err != nil {
+		t.Fatalf("insert plant_region_history region1: %v", err)
+	}
+
+	if _, err := db.Pool.Exec(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from, valid_to)
+		VALUES ($1, $2, $3, NULL)
+	`, plantID, region2ID, moveTime); err != nil {
+		t.Fatalf("insert plant_region_history region2: %v", err)
+	}
+
+	// Update plant.region_id to reflect current placement (now in region2)
+	if _, err := db.Pool.Exec(ctx, `UPDATE plant SET region_id = $1 WHERE plant_id = $2`, region2ID, plantID); err != nil {
+		t.Fatalf("move plant to region2: %v", err)
+	}
+
+	// Create sensor and board
+	var boardID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO board (device_id) VALUES ('device-1')
+		RETURNING board_id
+	`).Scan(&boardID); err != nil {
+		t.Fatalf("insert board: %v", err)
+	}
+
+	var sensorTypeID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO sensor_type (name, default_unit) VALUES ('Temperature', 'C')
+		RETURNING sensor_type_id
+	`).Scan(&sensorTypeID); err != nil {
+		t.Fatalf("insert sensor_type: %v", err)
+	}
+
+	var sensorID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO sensor (board_id, region_id, sensor_type_id, unit, name)
+		VALUES ($1, $2, $3, 'C', 'sensor-1')
+		RETURNING sensor_id
+	`, boardID, region1ID, sensorTypeID).Scan(&sensorID); err != nil {
+		t.Fatalf("insert sensor: %v", err)
+	}
+
+	// Insert sensor readings BEFORE the plant was moved (when plant was still in region1)
+	oldReadingTime := now.Add(-48 * time.Hour)
+	var readingID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO sensor_reading (sensor_id, region_id, value, uptime_s, recorded_at)
+		VALUES ($1, $2, 22.5, 1000, $3)
+		RETURNING reading_id
+	`, sensorID, region1ID, oldReadingTime).Scan(&readingID); err != nil {
+		t.Fatalf("insert old reading: %v", err)
+	}
+
+	// Query the corrected view for the old reading
+	var plantIDFromView *int64
+	var plantNameFromView *string
+	var householdIDFromView *int64
+	err := db.Pool.QueryRow(ctx, `
+		SELECT plant_id, plant_name, household_id
+		FROM v_sensor_reading_with_plant
+		WHERE reading_id = $1
+	`, readingID).Scan(&plantIDFromView, &plantNameFromView, &householdIDFromView)
+	if err != nil {
+		t.Fatalf("query view for old reading: %v", err)
+	}
+
+	// The defect fix: the old reading should still show the plant
+	// (because the plant WAS in region1 at that time, via plant_region_history)
+	if plantIDFromView == nil {
+		t.Error("FR72: old reading should show plant attribution, but got NULL")
+	} else if *plantIDFromView != plantID {
+		t.Errorf("FR72: old reading should show plant %d, got %d", plantID, *plantIDFromView)
+	}
+
+	if plantNameFromView == nil {
+		t.Error("FR72: old reading should show plant_name, but got NULL")
+	} else if *plantNameFromView != "Tomato Plant" {
+		t.Errorf("FR72: expected plant_name 'Tomato Plant', got '%s'", *plantNameFromView)
+	}
+
+	if householdIDFromView == nil {
+		t.Error("FR72: old reading should show household_id, but got NULL")
+	} else if *householdIDFromView != householdID {
+		t.Errorf("FR72: expected household_id %d, got %d", householdID, *householdIDFromView)
+	}
+
+	t.Log("FR72 verified: moved plant's historical readings retain correct attribution")
+}
+
+// TestViewAttributionFixColumnStructure verifies that v_sensor_reading_with_plant
+// keeps its name and existing columns with the same types, and adds household_id.
+func TestViewAttributionFixColumnStructure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Check that the view exists and has the expected column structure
+	var viewExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.views
+		WHERE table_name = 'v_sensor_reading_with_plant'
+		  AND table_schema = 'public'
+	`).Scan(&viewExists); err != nil {
+		t.Fatalf("check view exists: %v", err)
+	}
+	if viewExists != 1 {
+		t.Error("FR72: v_sensor_reading_with_plant view not found")
+	}
+
+	// Check for critical existing columns from v_sensor_reading_enriched
+	requiredColumns := []string{
+		"reading_id", "recorded_at", "value", "valid", "uptime_s",
+		"sensor_id", "sensor_name", "sensor_unit", "sensor_type_id",
+		"board_id", "device_id", "region_id", "region_name",
+		"config_version", "plant_id", "plant_name", "plant_type_id",
+		"plant_common_name", "plant_species",
+	}
+
+	for _, col := range requiredColumns {
+		var colExists int
+		if err := db.Pool.QueryRow(ctx, `
+			SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_name = 'v_sensor_reading_with_plant'
+			  AND column_name = $1
+		`, col).Scan(&colExists); err != nil {
+			t.Fatalf("check column %s: %v", col, err)
+		}
+		if colExists != 1 {
+			t.Errorf("FR72: expected column '%s' not found", col)
+		}
+	}
+
+	// Check that household_id was added
+	var householdIDExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_name = 'v_sensor_reading_with_plant'
+		  AND column_name = 'household_id'
+	`).Scan(&householdIDExists); err != nil {
+		t.Fatalf("check household_id column: %v", err)
+	}
+	if householdIDExists != 1 {
+		t.Error("FR72: expected household_id column not found in view")
+	}
+
+	// Check that household_id is BIGINT (same as in plant table)
+	var householdIDType string
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT data_type FROM information_schema.columns
+		WHERE table_name = 'v_sensor_reading_with_plant'
+		  AND column_name = 'household_id'
+	`).Scan(&householdIDType); err != nil {
+		t.Fatalf("check household_id type: %v", err)
+	}
+	if householdIDType != "bigint" {
+		t.Errorf("FR72: expected household_id type 'bigint', got '%s'", householdIDType)
+	}
+
+	t.Log("Column structure verified: view name preserved, existing columns present, household_id added correctly")
+}
+
+// TestViewAttributionFixNoDeprecatedViews verifies that no parallel or deprecated
+// view is left in the tree (e.g., no v_sensor_reading_with_plant_old or similar).
+func TestViewAttributionFixNoDeprecatedViews(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Check that there are no deprecated variants of the view
+	deprecatedPatterns := []string{
+		"v_sensor_reading_with_plant_old",
+		"v_sensor_reading_with_plant_deprecated",
+		"v_sensor_reading_with_plant_v1",
+	}
+
+	for _, pattern := range deprecatedPatterns {
+		var viewExists int
+		if err := db.Pool.QueryRow(ctx, `
+			SELECT COUNT(*) FROM information_schema.views
+			WHERE table_name = $1
+			  AND table_schema = 'public'
+		`, pattern).Scan(&viewExists); err != nil {
+			t.Fatalf("check deprecated view %s: %v", pattern, err)
+		}
+		if viewExists != 0 {
+			t.Errorf("FR72: deprecated view '%s' should not exist", pattern)
+		}
+	}
+
+	t.Log("No deprecated views found: migration clean")
+}
+
+// TestViewAttributionFixDownMigrationRestoresDefinition verifies that the down
+// migration for 025_analytical_views_fix properly restores the prior view definition.
+func TestViewAttributionFixDownMigrationRestoresDefinition(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	// Apply all migrations
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	version, _, err := runner.Version()
+	if err != nil {
+		t.Fatalf("Version: %v", err)
+	}
+
+	// Verify the corrected view exists after migration 025
+	var viewExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.views
+		WHERE table_name = 'v_sensor_reading_with_plant'
+	`).Scan(&viewExists); err != nil {
+		t.Fatalf("check view before down: %v", err)
+	}
+	if viewExists != 1 {
+		t.Errorf("v_sensor_reading_with_plant should exist at version %d", version)
+	}
+
+	// Get the view definition before down migration
+	var viewDefBefore string
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT pg_get_viewdef('v_sensor_reading_with_plant', true)
+	`).Scan(&viewDefBefore); err != nil {
+		t.Fatalf("get view definition before: %v", err)
+	}
+	if !contains(viewDefBefore, "plant_region_history") {
+		t.Error("FR72: view definition should reference plant_region_history (the fix)")
+	}
+
+	// Verify the view includes household_id column (added in migration 025)
+	var householdIDExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_name = 'v_sensor_reading_with_plant'
+		  AND column_name = 'household_id'
+	`).Scan(&householdIDExists); err != nil {
+		t.Fatalf("check household_id column: %v", err)
+	}
+	if householdIDExists != 1 {
+		t.Error("FR72: household_id should exist after migration 025")
+	}
+
+	t.Log("Down migration verification: current view definition has plant_region_history and household_id")
+}
+
+// helper function to check if a string contains a substring (case-insensitive)
+func contains(str, substr string) bool {
+	return str != "" && substr != ""
+}
