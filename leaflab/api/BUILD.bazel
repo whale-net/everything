@@ -34,7 +34,9 @@ go_library(
 go_test(
     name = "api_test",
     srcs = [
-        "authorization.go","server_test.go"],
+        "authorization_test.go",
+        "server_test.go",
+    ],
     embed = [":api_lib"],
     deps = [
         "//leaflab/api/proto:leaflabapipb",
