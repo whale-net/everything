@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -29,6 +28,8 @@ type Validator struct {
 	chipCatalog map[string][]string
 	// i2cAddressMap maps chip name to supported I2C addresses.
 	i2cAddressMap map[string][]uint32
+	// chipTypeNames maps ChipType enum values to chip names.
+	chipTypeNames map[configpb.ChipType]string
 }
 
 // NewValidator creates a new validator, loading the catalog.
@@ -41,6 +42,7 @@ func NewValidator() (*Validator, error) {
 	v := &Validator{
 		chipCatalog:   make(map[string][]string),
 		i2cAddressMap: make(map[string][]uint32),
+		chipTypeNames: buildChipTypeNames(),
 	}
 
 	// Build chip catalog from loaded chips.
@@ -54,6 +56,15 @@ func NewValidator() (*Validator, error) {
 	}
 
 	return v, nil
+}
+
+// buildChipTypeNames creates the mapping from ChipType enum to chip names.
+func buildChipTypeNames() map[configpb.ChipType]string {
+	return map[configpb.ChipType]string{
+		configpb.ChipType_CHIP_TYPE_BH1750: "BH1750",
+		configpb.ChipType_CHIP_TYPE_SHT3X:  "SHT3x",
+		configpb.ChipType_CHIP_TYPE_CCS811: "CCS811",
+	}
 }
 
 // Validate validates an effective config payload after materialisation,
@@ -73,7 +84,7 @@ func (v *Validator) Validate(
 		entryID := strconv.Itoa(i)
 
 		// Validate I2C address range (0-127 for standard I2C).
-		if sensor.I2cAddress > 127 {
+		if sensor.I2CAddress > 127 {
 			failures = append(failures, ValidationFailure{
 				EntryIdentifier: entryID,
 				Field:           "i2c_address",
@@ -83,7 +94,7 @@ func (v *Validator) Validate(
 		}
 
 		// Validate chip/sensor-type pair.
-		if !v.isValidChipSensorTypePair(sensor.ChipType, sensor.SensorType) {
+		if !v.isValidChipSensorTypePair(sensor.ChipType, int32(sensor.SensorType)) {
 			failures = append(failures, ValidationFailure{
 				EntryIdentifier: entryID,
 				Field:           "chip_type",
@@ -135,17 +146,81 @@ func (v *Validator) Validate(
 }
 
 // isValidChipSensorTypePair checks if a chip/sensor-type pair is in the catalog.
-func (v *Validator) isValidChipSensorTypePair(chipType configpb.ChipType, sensorType configpb.SensorType) bool {
-	// ChipType values don't directly correspond to chip names; we need to map them.
-	// For now, we check that the chip type is not UNKNOWN and the sensor type is valid for that chip.
-	// Note: This requires the ChipType enum values to map to chip names.
-	// For scaffolding, we'll accept all non-unknown chip types with non-unknown sensor types.
-	// Implementation will refine this with proper catalog lookup.
-	if chipType == configpb.CHIP_TYPE_UNKNOWN {
+func (v *Validator) isValidChipSensorTypePair(chipType configpb.ChipType, sensorType int32) bool {
+	// Chip type UNKNOWN is always invalid.
+	if chipType == configpb.ChipType_CHIP_TYPE_UNKNOWN {
 		return false
 	}
-	// TODO: Implement proper catalog lookup using chipType → chip name mapping.
-	return true
+
+	// Get the chip name from the enum value.
+	chipName, ok := v.chipTypeNames[chipType]
+	if !ok {
+		// Unknown chip type enum value.
+		return false
+	}
+
+	// Get the sensor types supported by this chip.
+	supportedTypes, ok := v.chipCatalog[chipName]
+	if !ok {
+		// Chip not in catalog.
+		return false
+	}
+
+	// Convert sensor type to int32 for comparison
+	sensorTypeInt := int32(sensorType)
+
+	// BH1750 is a single-virtual chip and should have sensor_type = UNKNOWN (0).
+	if chipName == "BH1750" {
+		return sensorTypeInt == 0 // SENSOR_TYPE_UNKNOWN
+	}
+
+	// For multi-virtual chips (SHT3x, CCS811), sensor_type must not be UNKNOWN (0)
+	// and must be one of the supported types.
+	if sensorTypeInt == 0 { // SENSOR_TYPE_UNKNOWN
+		return false
+	}
+
+	// Map SensorType enum value to sensor type name.
+	sensorTypeName := sensorTypeEnumToName(sensorTypeInt)
+	if sensorTypeName == "" {
+		return false
+	}
+
+	// Check if this sensor type is supported by the chip.
+	for _, supportedType := range supportedTypes {
+		if supportedType == sensorTypeName {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sensorTypeEnumToName maps SensorType enum values to string names used in the catalog.
+func sensorTypeEnumToName(sensorType int32) string {
+	const (
+		SENSOR_TYPE_UNKNOWN     = 0
+		SENSOR_TYPE_ILLUMINANCE = 1
+		SENSOR_TYPE_TEMPERATURE = 2
+		SENSOR_TYPE_HUMIDITY    = 3
+		SENSOR_TYPE_ECO2        = 4
+		SENSOR_TYPE_TVOC        = 5
+	)
+
+	switch sensorType {
+	case SENSOR_TYPE_ILLUMINANCE:
+		return "illuminance"
+	case SENSOR_TYPE_TEMPERATURE:
+		return "temperature"
+	case SENSOR_TYPE_HUMIDITY:
+		return "humidity"
+	case SENSOR_TYPE_ECO2:
+		return "eco2"
+	case SENSOR_TYPE_TVOC:
+		return "tvoc"
+	default:
+		return ""
+	}
 }
 
 // isValidPollInterval checks if poll_interval_ms is in a valid range.
@@ -237,7 +312,7 @@ func (v *Validator) validateRemovals(
 
 			// Check if the sensor being removed has i2c_address == 0.
 			baseSensor := baseSensorsByKey[fullKeyStr]
-			if baseSensor != nil && baseSensor.I2cAddress == 0 {
+			if baseSensor != nil && baseSensor.I2CAddress == 0 {
 				failures = append(failures, ValidationFailure{
 					EntryIdentifier: keyStr,
 					Field:           "remove",
@@ -251,36 +326,6 @@ func (v *Validator) validateRemovals(
 	return failures
 }
 
-// keyString returns a string representation of a canonical key.
-func keyString(key *canonkey.Key) string {
-	return fmt.Sprintf("%d:%s:%d", key.I2CAddress, muxPathString(key.MuxPath), key.SensorType)
-}
-
-// chipKeyString returns a string key for (i2c_address, mux_path).
-func chipKeyString(i2cAddr uint32, muxPath []canonkey.MuxHop) string {
-	return fmt.Sprintf("%d:%s", i2cAddr, muxPathString(muxPath))
-}
-
-// fullKeyString returns a string key for (i2c_address, mux_path, sensor_type).
-func fullKeyString(i2cAddr uint32, muxPath []canonkey.MuxHop, sensorType int32) string {
-	return fmt.Sprintf("%d:%s:%d", i2cAddr, muxPathString(muxPath), sensorType)
-}
-
-// muxPathString returns a string representation of a mux path.
-func muxPathString(path []canonkey.MuxHop) string {
-	if len(path) == 0 {
-		return ""
-	}
-	result := ""
-	for i, hop := range path {
-		if i > 0 {
-			result += ","
-		}
-		result += fmt.Sprintf("%d:%d", hop.MuxAddress, hop.MuxChannel)
-	}
-	return result
-}
-
 // removalKeyString returns a string representation of a removal key for error reporting.
 func removalKeyString(removalKey *pb.RemovalKey) string {
 	muxPath := parseMuxPath(removalKey.MuxPath)
@@ -288,29 +333,4 @@ func removalKeyString(removalKey *pb.RemovalKey) string {
 		return chipKeyString(removalKey.I2CAddress, muxPath)
 	}
 	return fullKeyString(removalKey.I2CAddress, muxPath, removalKey.SensorType)
-}
-
-// parseMuxPath decodes a mux_path string from the RemovalKey proto.
-func parseMuxPath(protoMuxPath string) []canonkey.MuxHop {
-	// This is copied from materialiser.go for consistency.
-	if protoMuxPath == "" {
-		return []canonkey.MuxHop{}
-	}
-
-	var hops []*configpb.MuxHop
-	if err := json.Unmarshal([]byte(protoMuxPath), &hops); err != nil {
-		// If parsing fails, return empty (shouldn't happen with valid proto).
-		return []canonkey.MuxHop{}
-	}
-
-	result := make([]canonkey.MuxHop, 0, len(hops))
-	for _, hop := range hops {
-		if hop != nil {
-			result = append(result, canonkey.MuxHop{
-				MuxAddress: hop.MuxAddress,
-				MuxChannel: hop.MuxChannel,
-			})
-		}
-	}
-	return result
 }
