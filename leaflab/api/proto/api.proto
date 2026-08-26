@@ -68,3 +68,22 @@ message HealthResponse {
   }
   Status status = 1;
 }
+
+// PlantInfo represents a plant and its metadata for attribution disclosure.
+message PlantInfo {
+  int64  plant_id     = 1;
+  string plant_name   = 2;
+  int64  plant_type_id = 3;
+}
+
+// ReadingAttribution resolves a reading to the nearest ancestor region holding
+// active plants at the reading's timestamp, and the set of all active plants in
+// that region (sibling disclosure). Used by FR23.
+message ReadingAttribution {
+  // The nearest ancestor region (including the reading's own region) holding
+  // at least one active plant at the reading time.
+  int64  attributed_region_id = 1;
+  // All active plants in the attributed region at reading time.
+  // Empty if no plants active in the attributed region.
+  repeated PlantInfo active_plants = 2;
+}

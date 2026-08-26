@@ -491,3 +491,155 @@ func (r *Repository) RemovePlantPlacement(ctx context.Context, plantID int64, re
 
 	return nil
 }
+
+// ── Reading attribution (FR23) ──────────────────────────────────────────────
+//
+// FR23: nearest-ancestor attribution with sibling disclosure and no double-counting.
+// A reading attributes to the nearest ancestor region (including its own) holding
+// an active plant at reading time, and to all active plants in that one region.
+
+// PlantAtRegionAtTime represents a plant active in a region at a specific time.
+type PlantAtRegionAtTime struct {
+	PlantID    int64
+	PlantName  string
+	PlantTypeID int64
+}
+
+// ReadingAttributionResult holds the resolution of a reading's attribution:
+// the nearest ancestor region holding an active plant and all active plants
+// in that region at the reading time.
+type ReadingAttributionResult struct {
+	AttributedRegionID int64
+	ActivePlants       []PlantAtRegionAtTime
+}
+
+// ResolveReadingAttribution resolves a reading to its nearest ancestor region
+// holding an active plant at the reading time, and returns all active plants
+// in that region. Implements FR23 nearest-ancestor attribution.
+//
+// Given a reading's region_id and recorded_at timestamp, walks the region tree
+// upward until finding a region with at least one active plant at that instant.
+// Returns the attributed region and the full set of active plants in it (sibling
+// disclosure). If no ancestor (including the reading's own region) has an active
+// plant, returns an error.
+//
+// Active plant determination uses plant_region_history: a plant is active in a
+// region at time T if there exists a row with:
+//   valid_from <= T AND (valid_to IS NULL OR valid_to > T)
+func (r *Repository) ResolveReadingAttribution(ctx context.Context, regionID int64, readingTime time.Time) (*ReadingAttributionResult, error) {
+	// Recursive CTE to walk up the region tree, stopping at the first region
+	// with an active plant at readingTime.
+	var attributedRegionID int64
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE region_path AS (
+			-- Base case: start with the given region
+			SELECT region_id, parent_region_id
+			FROM region
+			WHERE region_id = $1
+
+			UNION ALL
+
+			-- Recursive case: move up to parent
+			SELECT r.region_id, r.parent_region_id
+			FROM region r
+			JOIN region_path rp ON r.region_id = rp.parent_region_id
+		)
+		-- Find the first region in the path that has an active plant at reading time
+		SELECT rp.region_id
+		FROM region_path rp
+		WHERE EXISTS (
+			SELECT 1 FROM plant_region_history prh
+			WHERE prh.region_id = rp.region_id
+			  AND prh.valid_from <= $2
+			  AND (prh.valid_to IS NULL OR prh.valid_to > $2)
+		)
+		ORDER BY (
+			-- Order by distance from the given region (nearest first)
+			-- Count how many steps up the tree this region is
+			WITH counted AS (
+				SELECT region_id, 
+					   ROW_NUMBER() OVER (ORDER BY region_id) AS step_count
+				FROM region_path
+				WHERE region_id = rp.region_id
+			)
+			SELECT COUNT(*) FROM counted
+		) ASC
+		LIMIT 1
+	`, regionID, readingTime).Scan(&attributedRegionID)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("no ancestor region holds an active plant at time %v for region %d", readingTime, regionID)
+		}
+		return nil, fmt.Errorf("resolve reading attribution for region %d at %v: %w", regionID, readingTime, err)
+	}
+
+	// Fetch all active plants in the attributed region at reading time.
+	rows, err := r.db.Query(ctx, `
+		SELECT p.plant_id, p.name, p.plant_type_id
+		FROM plant p
+		JOIN plant_region_history prh ON prh.plant_id = p.plant_id
+		WHERE prh.region_id = $1
+		  AND prh.valid_from <= $2
+		  AND (prh.valid_to IS NULL OR prh.valid_to > $2)
+		ORDER BY p.plant_id
+	`, attributedRegionID, readingTime)
+
+	if err != nil {
+		return nil, fmt.Errorf("fetch active plants in region %d at %v: %w", attributedRegionID, readingTime, err)
+	}
+	defer rows.Close()
+
+	var activePlants []PlantAtRegionAtTime
+	for rows.Next() {
+		var p PlantAtRegionAtTime
+		if err := rows.Scan(&p.PlantID, &p.PlantName, &p.PlantTypeID); err != nil {
+			return nil, fmt.Errorf("scan active plant: %w", err)
+		}
+		activePlants = append(activePlants, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active plants: %w", err)
+	}
+
+	return &ReadingAttributionResult{
+		AttributedRegionID: attributedRegionID,
+		ActivePlants:       activePlants,
+	}, nil
+}
+
+// GetActivePlantsInRegionAtTime returns all active plants in a specific region
+// at a given timestamp. Used internally by attribution and by other features
+// that need to enumerate plants in a region at a point in time.
+func (r *Repository) GetActivePlantsInRegionAtTime(ctx context.Context, regionID int64, atTime time.Time) ([]PlantAtRegionAtTime, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT p.plant_id, p.name, p.plant_type_id
+		FROM plant p
+		JOIN plant_region_history prh ON prh.plant_id = p.plant_id
+		WHERE prh.region_id = $1
+		  AND prh.valid_from <= $2
+		  AND (prh.valid_to IS NULL OR prh.valid_to > $2)
+		ORDER BY p.plant_id
+	`, regionID, atTime)
+
+	if err != nil {
+		return nil, fmt.Errorf("get active plants in region %d at %v: %w", regionID, atTime, err)
+	}
+	defer rows.Close()
+
+	var plants []PlantAtRegionAtTime
+	for rows.Next() {
+		var p PlantAtRegionAtTime
+		if err := rows.Scan(&p.PlantID, &p.PlantName, &p.PlantTypeID); err != nil {
+			return nil, fmt.Errorf("scan active plant: %w", err)
+		}
+		plants = append(plants, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active plants: %w", err)
+	}
+
+	return plants, nil
+}
