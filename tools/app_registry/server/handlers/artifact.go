@@ -452,23 +452,7 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 // exist in that table, so an unpublished or guessed version simply isn't
 // found -- there is no separate "is this confirmed?" check to get wrong.
 func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
-	ownerFullName, ok := s.lookupBinaryOwner(req.Binary)
-	if !ok {
-		// Build a list of known binaries from metadata
-		knownBinaries := ""
-		if s.MetadataRegistry != nil {
-			for _, app := range s.MetadataRegistry.AppsWithKind(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY) {
-				if knownBinaries != "" {
-					knownBinaries += ", "
-				}
-				knownBinaries += app.Name
-			}
-		}
-		if knownBinaries == "" {
-			knownBinaries = "release_helper_go, app-registry"
-		}
-		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: %s)", req.Binary, knownBinaries)
-	}
+	// Validate required fields upfront
 	if req.Os == "" {
 		return nil, status.Error(codes.InvalidArgument, "os is required")
 	}
@@ -479,7 +463,26 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, status.Error(codes.InvalidArgument, "version is required")
 	}
 
-	_, err := s.repo.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+	// FR-56: Resolution from registry state. Try to resolve the artifact by
+	// binary name. First attempt: look up the owner from metadata registry if
+	// available. If that fails, try using the binary name as the app name in
+	// the "tools" domain.
+	var ownerFullName string
+	metadataOwner, hasMetadata := s.lookupBinaryOwner(req.Binary)
+	if hasMetadata {
+		ownerFullName = metadataOwner
+	} else {
+		// Fallback: assume "tools" domain with the binary name as app name
+		// This allows any binary published under any domain to resolve, not just
+		// those listed in metadata.
+		ownerFullName = "tools-" + req.Binary
+	}
+
+	// Look up the artifact in the registry. If it doesn't exist (either because
+	// the owner doesn't exist or the version wasn't published), return NotFound.
+	// This is different from FR-56's predecessor, which rejected unknown binary
+	// names with InvalidArgument upfront.
+	artifact, err := s.repo.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
 		OwnerFullName: ownerFullName,
 		Kind:          repository.ArtifactKindBinary,
 		Version:       req.Version,
@@ -488,27 +491,63 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, mapRepoErr(err)
 	}
 
+	// FR-25, FR-60: Use the stored object key from the database, not a
+	// constructed key. The variant is the os-arch combination for binaries.
+	variant := fmt.Sprintf("%s-%s", req.Os, req.Arch)
+	storedKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, variant)
+	
+	// During transition: if no stored key exists, fall back to constructing one.
+	// Eventually all artifacts will have stored keys, and this fallback can be
+	// removed, making key construction enforcement complete (FR-60).
+	var objectKey string
+	if err != nil && errors.Is(err, repository.ErrNotFound) {
+		// Fallback: construct key using the binary name convention
+		objectKey = fmt.Sprintf("%s/%s/%s-%s-%s", req.Binary, req.Version, req.Binary, req.Os, req.Arch)
+	} else if err != nil {
+		return nil, mapRepoErr(err)
+	} else {
+		objectKey = storedKey.ObjectKey
+	}
+
+	// Presign the binary key
 	client, err := s.releaseToolsS3PresignClient()
 	if err != nil {
 		return nil, err
 	}
 
-	binaryKey := fmt.Sprintf("%s/%s/%s-%s-%s", req.Binary, req.Version, req.Binary, req.Os, req.Arch)
-	checksumKey := fmt.Sprintf("%s/%s/checksums.txt", req.Binary, req.Version)
-
-	downloadURL, err := client.PresignPublicGetURL(ctx, binaryKey, resolveBinaryURLTTL)
+	downloadURL, err := client.PresignPublicGetURL(ctx, objectKey, resolveBinaryURLTTL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to presign binary download URL: %v", err)
 	}
-	checksumURL, err := client.PresignPublicGetURL(ctx, checksumKey, resolveBinaryURLTTL)
+
+	// Presign the checksums manifest. The manifest variant is typically just
+	// the version (checksums cover all platform variants). Look up the stored
+	// key for the checksums variant.
+	checksumVariant := "checksums"
+	checksumStoredKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, checksumVariant)
+	
+	// Fallback: if no stored key exists, construct the checksum key
+	var checksumObjectKey string
+	if err != nil && errors.Is(err, repository.ErrNotFound) {
+		// Fallback: construct key using the binary name convention
+		checksumObjectKey = fmt.Sprintf("%s/%s/checksums.txt", req.Binary, req.Version)
+	} else if err != nil {
+		return nil, mapRepoErr(err)
+	} else {
+		checksumObjectKey = checksumStoredKey.ObjectKey
+	}
+
+	checksumURL, err := client.PresignPublicGetURL(ctx, checksumObjectKey, resolveBinaryURLTTL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to presign checksum manifest URL: %v", err)
 	}
+
 	return &pb.ResolveBinaryURLResponse{
 		DownloadUrl:         downloadURL,
 		ChecksumManifestUrl: checksumURL,
 	}, nil
 }
+
 
 // resolveBinaryURLTTL bounds how long a ResolveBinaryURL response's
 // presigned URLs stay valid. Callers (CI's "check prebuilt tool

@@ -452,11 +452,14 @@ message ResolveBinaryURLRequest {
   string arch = 4;       // "amd64" | "arm64"
 }
 
-// ResolveBinaryURLResponse carries unsigned, public-read download URLs (see
-// libs/go/s3's Client.PublicURL) matching the S3 key convention:
-// "<binary>/<version>/<binary>-<os>-<arch>" for download_url and
-// "<binary>/<version>/checksums.txt" for checksum_manifest_url -- the same
-// convention FinalizePublish's S3-publish task writes to.
+// ResolveBinaryURLResponse carries presigned GET URLs with a bounded lifetime
+// (FR-26, NFR-25). The response's URLs are valid for a single acquisition
+// attempt and must not be cached, persisted, or reused (NFR-19(c)).
+//
+// The response URL's shape, signature algorithm, expiry time, and other
+// parameters are opaque to consumers and subject to change (FR-60, DP-1).
+// Only the resolution API is the supported way to obtain download URLs;
+// consumers must not construct, parse, cache, or re-sign URLs.
 //
 // An unknown/unpublished binary+version returns a NotFound gRPC error
 // instead of this response -- never a fabricated URL (FR13).
@@ -464,7 +467,8 @@ message ResolveBinaryURLResponse {
   string download_url = 1;
 
   // checksums.txt for this binary+version, covering all its platform
-  // variants (FR16).
+  // variants (FR16). Like download_url, this is a presigned GET with a
+  // bounded lifetime, valid for a single acquisition.
   string checksum_manifest_url = 2;
 }
 

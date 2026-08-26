@@ -95,15 +95,15 @@ reference only and should be removed from deployment configuration.
 | `RELEASE_TOOLS_S3_ACCESS_KEY` | *(unset)* | Static access key for the publish-side `s3.Client`. Used by the publish side, see the FinalizePublish S3-publish task. |
 | `RELEASE_TOOLS_S3_SECRET_KEY` | *(unset)* | Static secret key for the publish-side `s3.Client`. Used by the publish side, see the FinalizePublish S3-publish task. |
 
-**S3 key convention** (must match exactly between the publish side and
-`ResolveBinaryURL`):
-- Binary: `<binary>/<version>/<binary>-<os>-<arch>`, e.g.
-  `release_helper_go/v1.2.3/release_helper_go-linux-amd64` (`os` ∈
-  {`linux`,`darwin`}, `arch` ∈ {`amd64`,`arm64`}, matching
-  `package_assets.go`'s `<name>-<os>-<arch>` output).
-- Checksum manifest: `<binary>/<version>/checksums.txt` — one manifest per
-  binary+version, covering all its platform variants, same `checksums.txt`
-  format `package_assets.go`'s `generateChecksumFiles` already produces.
+**S3 key convention** (FR-60, FR-25): The registry stores actual object keys
+per version and variant, rather than deriving them from a contract. Keys are
+not a consumer contract — their shape is determined solely by the registry and
+subject to change. **Keys are not consumed or constructed by any caller.** Only
+the resolution API produces download URLs; `ResolveBinaryURL` retrieves keys
+from the registry's `stored_object_key` table and presigns them. The original
+binary naming convention (`<binary>/<version>/<binary>-<os>-<arch>` for binaries,
+`<binary>/<version>/checksums.txt` for checksums) remains the internal registry
+convention (H8, out of scope) but is not a consumer-facing contract.
 
 ### Role model (AR-3a)
 

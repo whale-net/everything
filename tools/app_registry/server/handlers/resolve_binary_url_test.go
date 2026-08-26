@@ -146,12 +146,15 @@ func TestResolveBinaryURL_UnknownVersionIsNotFound(t *testing.T) {
 	}
 }
 
-// TestResolveBinaryURL_InvalidBinaryNameIsRejected covers metadata-based
-// binary resolution: any binary name not in the metadata registry
-// (i.e., no app with ArtifactKindBinary has that Name) is
-// rejected with InvalidArgument before any repository lookup happens.
-// This replaces the prior hardcoded allowlist with FR-36's metadata lookups.
-func TestResolveBinaryURL_InvalidBinaryNameIsRejected(t *testing.T) {
+// TestResolveBinaryURL_UnknownBinaryIsNotFound covers FR-56's "ownership
+// from registry state" requirement: an unknown binary name (not in metadata
+// registry) is no longer rejected with InvalidArgument upfront. Instead, the
+// artifact lookup determines if the artifact exists. Since no artifact with
+// that name was published, resolution returns NotFound.
+//
+// This changes the error from InvalidArgument (name not in allowlist) to
+// NotFound (no published artifact), removing the hardcoded allowlist check.
+func TestResolveBinaryURL_UnknownBinaryIsNotFound(t *testing.T) {
 	artifactSrv, _ := setupResolveBinaryURL(t)
 	ctx := authedCtx()
 
@@ -159,10 +162,10 @@ func TestResolveBinaryURL_InvalidBinaryNameIsRejected(t *testing.T) {
 		Binary: "not-a-real-binary", Version: "v1.0.0", Os: "linux", Arch: "amd64",
 	})
 	if err == nil {
-		t.Fatal("expected an error for an unknown binary name")
+		t.Fatal("expected NotFound for an unpublished binary, got a response")
 	}
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("expected InvalidArgument, got %v (%v)", status.Code(err), err)
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v (%v)", status.Code(err), err)
 	}
 }
 
