@@ -102,6 +102,7 @@ func TestGetPromotionDetails_FromVersion_SecondPromotion(t *testing.T) {
 	mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
 		BuildId: mustRecordBuild(t, f.art, "run-details-2").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:imageapp-details-v2", Version: "v2.0.0",
+		IdentityDigest: "sha256:imageapp-details-v2",
 		IdempotencyKey: "fixture-artifact-imageapp-details-v2",
 	})
 	req := promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "details-from-2")

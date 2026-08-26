@@ -1004,6 +1004,7 @@ func TestAssertApps_ThenRecordArtifact_NoReconcileNeeded(t *testing.T) {
 	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-new-app", Version: "v1.0.0", Digest: "sha256:new1",
+		IdentityDigest: "sha256:new1",
 		IdempotencyKey: "artifact-1",
 	})
 	if err != nil {
@@ -1049,6 +1050,7 @@ func TestAssertApps_ThenRecordArtifact_ChartOwnerFullNameMatches(t *testing.T) {
 	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "app-registry-app-registry", Version: "v0.0.13", Digest: "sha256:chart13",
+		IdentityDigest: "sha256:chart13",
 		IdempotencyKey: "artifact-2",
 	})
 	if err != nil {
@@ -1096,6 +1098,7 @@ func TestRecordArtifact_RejectsArchivedOwner(t *testing.T) {
 	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-svc", Version: "v1.0.0", Digest: "sha256:archived1",
+		IdentityDigest: "sha256:archived1",
 		IdempotencyKey: "artifact-2",
 	})
 	if err == nil {

@@ -294,6 +294,7 @@ func TestListBuilds_GetReleaseRunAndBuildsStatusUnaffected(t *testing.T) {
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:getrun-unaffected", Version: "v1.0.0",
+		IdentityDigest: "sha256:getrun-unaffected",
 		IdempotencyKey: "record-getrun-unaffected",
 	}); err != nil {
 		t.Fatalf("RecordArtifact: %v", err)

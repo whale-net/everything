@@ -57,21 +57,25 @@ func newPromotionFixture(t *testing.T) *promotionFixture {
 	mustRecordArtifact(t, artSrv, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-chart-app", Digest: "sha256:chartapp-v1", Version: "v1.0.0",
+		IdentityDigest: "sha256:chartapp-v1",
 		IdempotencyKey: "fixture-artifact-chartapp-image",
 	})
 	mustRecordArtifact(t, artSrv, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:imageapp-v1", Version: "v1.0.0",
+		IdentityDigest: "sha256:imageapp-v1",
 		IdempotencyKey: "fixture-artifact-imageapp",
 	})
 	mustRecordArtifact(t, artSrv, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-none-app", Digest: "sha256:noneapp-v1", Version: "v1.0.0",
+		IdentityDigest: "sha256:noneapp-v1",
 		IdempotencyKey: "fixture-artifact-noneapp",
 	})
 	mustRecordArtifact(t, artSrv, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:achart-v1", Version: "v1.0.0",
+		IdentityDigest: "sha256:achart-v1",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-chart-app", Repository: "ghcr.io/demo/chart-app", Version: "v1.0.0", Digest: "sha256:chartapp-v1"},
 		},
@@ -206,6 +210,7 @@ func TestPromote_PromoteAgain_ExactlyOneCurrentRow(t *testing.T) {
 	mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
 		BuildId: mustRecordBuild(t, f.art, "run-2").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:imageapp-v2", Version: "v2.0.0",
+		IdentityDigest: "sha256:imageapp-v2",
 		IdempotencyKey: "fixture-artifact-imageapp-v2",
 	})
 
@@ -321,6 +326,7 @@ func TestRollback_RoundTrips(t *testing.T) {
 	mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
 		BuildId: mustRecordBuild(t, f.art, "run-rollback-2").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:imageapp-rb-v2", Version: "v2.0.0",
+		IdentityDigest: "sha256:imageapp-rb-v2",
 		IdempotencyKey: "fixture-artifact-imageapp-rb-v2",
 	})
 	req := promoteReq("dev", "demo-image-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "rollback-promo-2")
@@ -378,6 +384,7 @@ func TestGetEnvironmentState_ReportsDrift(t *testing.T) {
 	mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
 		BuildId: mustRecordBuild(t, f.art, "run-drift-hotfix").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-chart-app", Digest: "sha256:chartapp-hotfix", Version: "v1.0.1",
+		IdentityDigest: "sha256:chartapp-hotfix",
 		IdempotencyKey: "fixture-artifact-chartapp-hotfix",
 	})
 	req := promoteReq("dev", "demo-chart-app", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "drift-override", withOverride())
@@ -524,6 +531,7 @@ func TestRollback_EnqueuesWritebackOutbox(t *testing.T) {
 	mustRecordArtifact(t, f.art, &pb.RecordArtifactRequest{
 		BuildId: mustRecordBuild(t, f.art, "run-rb-outbox").BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:achart-rb-v2", Version: "v2.0.0",
+		IdentityDigest: "sha256:achart-rb-v2",
 		IdempotencyKey: "rb-outbox-artifact-v2",
 	})
 	v2Req := promoteReq("dev", "demo-achart", pb.ArtifactKind_ARTIFACT_KIND_CHART, "rb-outbox-2")
@@ -588,6 +596,7 @@ func TestPromote_BinaryArtifact(t *testing.T) {
 		OwnerFullName:  "demo-image-app",
 		Version:        "v1.0.0",
 		Digest:         "sha256:binary-digest-1",
+		IdentityDigest: "sha256:binary-digest-1",
 		IdempotencyKey: "record-binary-promo",
 	})
 	if err != nil {

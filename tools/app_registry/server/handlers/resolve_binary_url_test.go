@@ -70,6 +70,7 @@ func TestResolveBinaryURL_KnownBinaryAndVersion(t *testing.T) {
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName: "tools-release_helper_go", Digest: "sha256:resolvebinary", Version: "v1.2.3",
+		IdentityDigest: "sha256:resolvebinary",
 		IdempotencyKey: "record-resolve-binary",
 	}); err != nil {
 		t.Fatalf("RecordArtifact: %v", err)
