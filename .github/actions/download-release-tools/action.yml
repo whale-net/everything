@@ -3,13 +3,14 @@ description: >-
   Acquires the release_helper_go and app-registry CLI binaries for CI/release workflows.
   In 'published' mode (default), resolves versions in precedence order: explicit
   version overrides, then the version currently promoted to target_env via the App Registry
-  gRPC API, then resolves each binary's public S3 download URL via the App Registry's
-  ArtifactRegistry/ResolveBinaryURL RPC and downloads it directly (unauthenticated) in <3s
-  with automatic SHA256 checksum verification against the published checksums.txt manifest.
-  If prebuilt acquisition fails, fails and prompts the user to re-run with build tools per
-  pipeline (or builds from source if fallback_to_source is true).
-  In 'source' mode, builds tools directly from source via Bazel.
-  Exports RELEASE_HELPER and APP_REGISTRY_CLI env vars and outputs.
+  gRPC API, then resolves each binary's S3 download URL and checksum manifest via the App
+  Registry's authenticated ArtifactRegistry/ResolveBinaryURL RPC. Each binary is fetched
+  immediately after resolution (presigned URLs valid for 15 min), decompressed if needed,
+  verified against the checksums manifest with fail-closed semantics (any verification
+  failure aborts the acquisition), and made executable in <3s total per binary. If prebuilt
+  acquisition fails, fails and prompts the user to re-run with build tools per pipeline
+  (or builds from source if fallback_to_source is true). In 'source' mode, builds tools
+  directly from source via Bazel. Exports RELEASE_HELPER and APP_REGISTRY_CLI env vars and outputs.
 
 branding:
   icon: 'download'
@@ -108,42 +109,41 @@ runs:
         verify_checksum() {
           local binary_file="$1"
           local sum_dir="$2"
-          local bin_name
-          bin_name="$(basename "$binary_file")"
+          local declared_filename="$3"  # FR-67: declared name from resolution response
           local actual_hash
           actual_hash="$(compute_sha256 "$binary_file")" || return 1
 
-          local checksum_files=()
-          for name in "checksums.txt" "SHA256SUMS" "checksums.sha256" "${bin_name}.sha256"; do
-            if [[ -f "$sum_dir/$name" ]]; then
-              checksum_files+=("$sum_dir/$name")
-            fi
-          done
-
-          if [[ ${#checksum_files[@]} -eq 0 ]]; then
-            echo "Notice: No checksum file found in $sum_dir for $bin_name"
-            return 0
+          # FR-66: Mandatory checksum manifest fetch and verification.
+          # Look for checksums.txt in the manifest directory.
+          if [[ ! -f "$sum_dir/checksums.txt" ]]; then
+            echo "ERROR: Checksum manifest not found at $sum_dir/checksums.txt" >&2
+            return 1
           fi
 
-          for sum_file in "${checksum_files[@]}"; do
-            local expected_hash
-            expected_hash=$(grep -E "(^|[ /])${bin_name}\$" "$sum_file" 2>/dev/null | awk '{print $1}' | head -n1 || true)
-            if [[ -z "$expected_hash" && "$sum_file" == *".sha256" ]]; then
-              expected_hash=$(awk '{print $1}' "$sum_file" | head -n1 || true)
-            fi
-            if [[ -n "$expected_hash" ]]; then
-              if [[ "$actual_hash" != "$expected_hash" ]]; then
-                echo "ERROR: SHA256 checksum mismatch for $binary_file!" >&2
-                echo "  Expected: $expected_hash" >&2
-                echo "  Actual:   $actual_hash" >&2
-                return 1
-              fi
-              echo "✓ Verified SHA256 checksum for $bin_name: $actual_hash"
-              return 0
-            fi
-          done
+          # FR-67: Use declared filename as the lookup key into the manifest.
+          # If declared_filename is empty, fall back to the basename (backward compat).
+          local lookup_name="$declared_filename"
+          if [[ -z "$lookup_name" ]]; then
+            lookup_name="$(basename "$binary_file")"
+          fi
 
-          echo "Notice: $bin_name not explicitly listed in checksum file(s)"
+          # Look up the entry for this filename in the manifest.
+          local expected_hash
+          expected_hash=$(grep -E "(^|[ /])${lookup_name}$" "$sum_dir/checksums.txt" 2>/dev/null | awk '{print $1}' | head -n1 || true)
+          
+          if [[ -z "$expected_hash" ]]; then
+            echo "ERROR: $lookup_name not found in checksum manifest" >&2
+            return 1
+          fi
+
+          if [[ "$actual_hash" != "$expected_hash" ]]; then
+            echo "ERROR: SHA256 checksum mismatch for $lookup_name!" >&2
+            echo "  Expected: $expected_hash" >&2
+            echo "  Actual:   $actual_hash" >&2
+            return 1
+          fi
+
+          echo "Verified SHA256 checksum for $lookup_name: $actual_hash"
           return 0
         }
 
@@ -181,6 +181,8 @@ runs:
         AR_PATH="$DEST_DIR/app-registry"
         SOURCE_USED=""
 
+        # FR-66: Verification-not-applicable branch #1 — Workflow artifact mode.
+        # Binaries handed over by the workflow-artifact mechanism are pre-verified.
         if [[ "$SOURCE_MODE" == "artifact" ]]; then
           echo "Using artifact mode in $DEST_DIR..."
           if [[ -f "$RH_PATH" ]]; then
@@ -190,6 +192,7 @@ runs:
             chmod +x "$AR_PATH"
           fi
           SOURCE_USED="artifact"
+        # FR-66: Object-store acquisition mode — Requires mandatory decompression, verification, and fail-closed semantics.
         elif [[ "$SOURCE_MODE" == "published" ]]; then
           echo "Mode 'published': Attempting fast download of prebuilt binaries from the App Registry (S3)..."
           echo "Target OS: $TARGET_OS, Target Arch: $TARGET_ARCH"
@@ -377,15 +380,15 @@ runs:
               return 1
             fi
 
-            local download_url checksum_url
+            local download_url
             download_url="$(echo "$resp_json" | jq -r '.downloadUrl // .download_url // empty' 2>/dev/null)" || true
-            checksum_url="$(echo "$resp_json" | jq -r '.checksumManifestUrl // .checksum_manifest_url // empty' 2>/dev/null)" || true
             if [[ -z "$download_url" ]]; then
               echo "Notice: ResolveBinaryURL did not return a download_url for $tool $ver ($TARGET_OS/$TARGET_ARCH)" >&2
               return 1
             fi
 
-            echo "$download_url $checksum_url"
+            # Output the full response JSON (caller will extract all fields)
+            echo "$resp_json"
             return 0
           }
 
@@ -496,41 +499,84 @@ runs:
                 return 1
               fi
 
-              local urls download_url checksum_url
-              if ! urls="$(resolve_binary_url "$tool" "$ver")"; then
+              # FR-60: Resolve immediately before fetch (no URL caching)
+              local resp_json
+              if ! resp_json="$(resolve_binary_url "$tool" "$ver")"; then
                 return 1
               fi
-              download_url="${urls%% *}"
-              checksum_url="${urls#* }"
-              [[ "$checksum_url" == "$urls" ]] && checksum_url=""
 
-              local tmp_dl bin_basename bin_dest
+              # Extract fields from resolution response
+              local download_url checksum_url encoding checksum_encoding filename
+              download_url="$(echo "$resp_json" | jq -r '.downloadUrl // .download_url // empty' 2>/dev/null)" || true
+              checksum_url="$(echo "$resp_json" | jq -r '.checksumManifestUrl // .checksum_manifest_url // empty' 2>/dev/null)" || true
+              encoding="$(echo "$resp_json" | jq -r '.downloadUrlContentEncoding // .download_url_content_encoding // empty' 2>/dev/null)" || true
+              checksum_encoding="$(echo "$resp_json" | jq -r '.checksumManifestContentEncoding // .checksum_manifest_content_encoding // empty' 2>/dev/null)" || true
+              filename="$(echo "$resp_json" | jq -r '.downloadUrlFilename // .download_url_filename // empty' 2>/dev/null)" || true
+
+              if [[ -z "$download_url" ]]; then
+                echo "Notice: ResolveBinaryURL did not return a download_url for $tool $ver" >&2
+                return 1
+              fi
+
+              local tmp_dl bin_download_path bin_uncompressed_path
               tmp_dl="$(mktemp -d)"
-              bin_basename="${tool}-${TARGET_OS}-${TARGET_ARCH}"
-              bin_dest="$tmp_dl/$bin_basename"
+              bin_download_path="$tmp_dl/download.bin"
+              bin_uncompressed_path="$tmp_dl/uncompressed.bin"
 
               echo "Downloading $tool ($ver) from S3: $download_url"
-              if ! curl -fsSL -m 60 -o "$bin_dest" "$download_url"; then
+              if ! curl -fsSL -m 60 -o "$bin_download_path" "$download_url"; then
                 echo "Notice: failed to download $tool binary from $download_url" >&2
                 rm -rf "$tmp_dl"
                 return 1
               fi
 
-              if [[ -n "$checksum_url" ]]; then
-                echo "Downloading checksum manifest for $tool ($ver) from S3: $checksum_url"
-                if ! curl -fsSL -m 30 -o "$tmp_dl/checksums.txt" "$checksum_url"; then
-                  echo "Notice: failed to download checksum manifest from $checksum_url; proceeding without checksum verification for $tool" >&2
-                  rm -f "$tmp_dl/checksums.txt"
+              # FR-43: Decompress if needed (before verification)
+              local bin_to_verify="$bin_download_path"
+              if [[ "$encoding" == "gzip" ]]; then
+                echo "Decompressing $tool binary (gzip)..."
+                if ! gunzip -c "$bin_download_path" > "$bin_uncompressed_path"; then
+                  echo "ERROR: Failed to decompress $tool binary" >&2
+                  rm -rf "$tmp_dl"
+                  return 1
                 fi
+                bin_to_verify="$bin_uncompressed_path"
               fi
 
-              if ! verify_checksum "$bin_dest" "$tmp_dl"; then
-                echo "ERROR: Checksum verification failed for $bin_dest" >&2
+              # FR-66: Fetch and decompress checksum manifest (must succeed)
+              if [[ -z "$checksum_url" ]]; then
+                echo "ERROR: ResolveBinaryURL did not return a checksum_manifest_url for $tool $ver" >&2
                 rm -rf "$tmp_dl"
                 return 1
               fi
 
-              cp "$bin_dest" "$out_bin"
+              echo "Downloading checksum manifest for $tool ($ver) from S3: $checksum_url"
+              local manifest_path="$tmp_dl/checksums.txt"
+              if ! curl -fsSL -m 30 -o "$tmp_dl/manifest.bin" "$checksum_url"; then
+                echo "ERROR: Failed to fetch checksum manifest from $checksum_url" >&2
+                rm -rf "$tmp_dl"
+                return 1
+              fi
+
+              # Decompress manifest if needed
+              if [[ "$checksum_encoding" == "gzip" ]]; then
+                if ! gunzip -c "$tmp_dl/manifest.bin" > "$manifest_path"; then
+                  echo "ERROR: Failed to decompress checksum manifest" >&2
+                  rm -rf "$tmp_dl"
+                  return 1
+                fi
+              else
+                mv "$tmp_dl/manifest.bin" "$manifest_path"
+              fi
+
+              # FR-66: Verify checksum (fail-closed)
+              if ! verify_checksum "$bin_to_verify" "$tmp_dl" "$filename"; then
+                echo "ERROR: Checksum verification failed for $tool binary" >&2
+                rm -rf "$tmp_dl"
+                return 1
+              fi
+
+              # FR-66: Place file at output path and make executable
+              cp "$bin_to_verify" "$out_bin"
               chmod +x "$out_bin"
               rm -rf "$tmp_dl"
               return 0
@@ -579,6 +625,8 @@ runs:
           fi
         fi
 
+        # FR-66: Verification-not-applicable branch #2 — Build from source.
+        # Source builds trust the Bazel build system's integrity.
         if [[ "$SOURCE_MODE" == "source" ]]; then
           echo "Building release tools from source using Bazel..."
           if ! bazel build --config=ci-images \
