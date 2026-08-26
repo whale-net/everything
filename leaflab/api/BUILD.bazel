@@ -17,6 +17,7 @@ go_library(
         "//firmware/proto:configpb",
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
+        "//leaflab/api/ratelimit",
         "//leaflab/canonkey",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
