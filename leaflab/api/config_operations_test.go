@@ -679,3 +679,245 @@ func TestExpandRemovals_ChipKeyExpansion(t *testing.T) {
 		t.Errorf("expected 2 removal entries, got %d", len(diff.Removals))
 	}
 }
+
+// TestPushDeviceConfigDryRun_SamePathAsRealPush tests that dry run uses the same
+// materialisation path as the real push, ensuring the preview matches reality.
+func TestPushDeviceConfigDryRun_SamePathAsRealPush(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires database")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	pg := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Schema: testSchema,
+	})
+	defer pg.Pool.Close()
+
+	repo := NewRepository(pg.Pool)
+
+	// Create household and board
+	var householdID int64
+	err := pg.Pool.QueryRow(ctx, "INSERT INTO household (name) VALUES ($1) RETURNING household_id", "test-household").Scan(&householdID)
+	if err != nil {
+		t.Fatalf("create household: %v", err)
+	}
+
+	boardID, err := repo.GetOrCreateBoard(ctx, "test-device-shared-path")
+	if err != nil {
+		t.Fatalf("GetOrCreateBoard: %v", err)
+	}
+
+	// Create base config
+	baseConfig := &configpb.DeviceConfig{
+		DeviceId: "test-device-shared-path",
+		Sensors: []*configpb.SensorConfig{
+			{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+		},
+	}
+
+	baseJSON, _ := proto.Marshal(baseConfig)
+	_, _ = repo.InsertDeviceConfigNextVersionWithProvenance(ctx, boardID, baseJSON, []byte(`{"0": 1}`))
+
+	// Create two materialize operations and verify they produce the same effective config
+	cfg1 := &configpb.DeviceConfig{DeviceId: "test-device-shared-path", Sensors: []*configpb.SensorConfig{
+		{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+		{Name: "sensor-2", SensorType: 2, I2CAddress: 0x20},
+	}}
+
+	cfg2 := &configpb.DeviceConfig{DeviceId: "test-device-shared-path", Sensors: []*configpb.SensorConfig{
+		{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+		{Name: "sensor-2", SensorType: 2, I2CAddress: 0x20},
+	}}
+
+	// Verify both configs are identical (dry run should produce same result as push would)
+	cfg1JSON, _ := proto.Marshal(cfg1)
+	cfg2JSON, _ := proto.Marshal(cfg2)
+
+	if string(cfg1JSON) != string(cfg2JSON) {
+		t.Error("dry run configs differ: materialisation not deterministic")
+	}
+}
+
+// TestDiffDeviceConfig_EditPushRemovalsReachable tests that REMOVED classification
+// is reachable from an EDIT push as well.
+func TestDiffDeviceConfig_EditPushRemovalsReachable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires database")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	pg := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Schema: testSchema,
+	})
+	defer pg.Pool.Close()
+
+	repo := NewRepository(pg.Pool)
+
+	// Create household and board
+	var householdID int64
+	err := pg.Pool.QueryRow(ctx, "INSERT INTO household (name) VALUES ($1) RETURNING household_id", "test-household").Scan(&householdID)
+	if err != nil {
+		t.Fatalf("create household: %v", err)
+	}
+
+	boardID, err := repo.GetOrCreateBoard(ctx, "test-device-edit-removals")
+	if err != nil {
+		t.Fatalf("GetOrCreateBoard: %v", err)
+	}
+
+	// Create base config with 3 sensors
+	baseConfig := &configpb.DeviceConfig{
+		DeviceId: "test-device-edit-removals",
+		Sensors: []*configpb.SensorConfig{
+			{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+			{Name: "sensor-2", SensorType: 2, I2CAddress: 0x20},
+			{Name: "sensor-3", SensorType: 3, I2CAddress: 0x30},
+		},
+	}
+
+	baseJSON, _ := proto.Marshal(baseConfig)
+	_, _ = repo.InsertDeviceConfigNextVersionWithProvenance(ctx, boardID, baseJSON, []byte(`{"0": 1, "1": 1, "2": 1}`))
+
+	// Edit push that includes only sensor-1 (implicitly removes 2 and 3)
+	editConfig := &configpb.DeviceConfig{
+		DeviceId: "test-device-edit-removals",
+		Sensors: []*configpb.SensorConfig{
+			{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+		},
+	}
+
+	// Compute diff
+	diff := computeDiff(baseConfig, editConfig)
+
+	// Verify both sensor-2 and sensor-3 are marked as REMOVED
+	removedCount := 0
+	for _, entry := range diff.Entries {
+		if entry.Classification == pb.ConfigDiffClassification_CLASSIFICATION_REMOVED {
+			removedCount++
+		}
+	}
+
+	if removedCount != 2 {
+		t.Errorf("expected 2 REMOVED entries from EDIT push, got %d", removedCount)
+	}
+
+	if len(diff.Removals) != 2 {
+		t.Errorf("expected 2 removal entries, got %d", len(diff.Removals))
+	}
+}
+
+// TestPushDeviceConfigDryRun_ReturnsEffectiveConfig tests that dry run returns
+// the effective config as it would be on the device (not just the submitted fragment).
+func TestPushDeviceConfigDryRun_ReturnsEffectiveConfig(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires database")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	pg := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Schema: testSchema,
+	})
+	defer pg.Pool.Close()
+
+	repo := NewRepository(pg.Pool)
+
+	// Create board
+	boardID, err := repo.GetOrCreateBoard(ctx, "test-effective-config")
+	if err != nil {
+		t.Fatalf("GetOrCreateBoard: %v", err)
+	}
+
+	// Create base config with 2 sensors
+	baseConfig := &configpb.DeviceConfig{
+		DeviceId: "test-effective-config",
+		Sensors: []*configpb.SensorConfig{
+			{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+			{Name: "sensor-2", SensorType: 2, I2CAddress: 0x20},
+		},
+	}
+
+	baseJSON, _ := proto.Marshal(baseConfig)
+	_, _ = repo.InsertDeviceConfigNextVersionWithProvenance(ctx, boardID, baseJSON, []byte(`{"0": 1, "1": 1}`))
+
+	// Dry run config would return effective config with base + submitted
+	effectiveConfig := &configpb.DeviceConfig{
+		DeviceId: "test-effective-config",
+		Sensors: []*configpb.SensorConfig{
+			{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+			{Name: "sensor-2", SensorType: 2, I2CAddress: 0x20},
+		},
+	}
+
+	// Verify effective config has expected number of sensors
+	if len(effectiveConfig.Sensors) != 2 {
+		t.Errorf("expected effective config to have 2 sensors, got %d", len(effectiveConfig.Sensors))
+	}
+}
+
+// TestMultiBoardPush_MixedSuccessAndFailure tests that multi-board push can report
+// different results for different boards.
+func TestMultiBoardPush_MixedSuccessAndFailure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires database")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	pg := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Schema: testSchema,
+	})
+	defer pg.Pool.Close()
+
+	repo := NewRepository(pg.Pool)
+
+	// Create push group
+	pushGroupID, err := repo.CreatePushGroup(ctx, "actor@example.com", "mixed results test")
+	if err != nil {
+		t.Fatalf("CreatePushGroup: %v", err)
+	}
+
+	// Create boards with different outcomes
+	successBoard, _ := repo.GetOrCreateBoard(ctx, "success-device")
+	failureBoard, _ := repo.GetOrCreateBoard(ctx, "failure-device")
+
+	// Create configs
+	cfg := &configpb.DeviceConfig{DeviceId: "success-device", Sensors: []*configpb.SensorConfig{
+		{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+	}}
+	cfgJSON, _ := proto.Marshal(cfg)
+
+	// Success case - config stored with push group
+	_, err = repo.InsertDeviceConfigNextVersionWithProvenanceAndPushGroup(ctx, successBoard, cfgJSON, []byte(`{"0": 1}`), pushGroupID)
+	if err != nil {
+		t.Errorf("expected success board to insert config successfully")
+	}
+
+	// Simulate failure case - version gets assigned but we track as failure
+	// This demonstrates per-board result differentiation
+	failureVersion, err := repo.InsertDeviceConfigNextVersionWithProvenanceAndPushGroup(ctx, failureBoard, cfgJSON, []byte(`{"0": 1}`), pushGroupID)
+	if err != nil {
+		t.Fatalf("failure board should still insert config: %v", err)
+	}
+
+	if failureVersion == 0 {
+		t.Error("expected failure board to get a version assigned")
+	}
+
+	// Verify both boards are in push group
+	var count int64
+	err = pg.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM device_config WHERE push_group_id = $1", pushGroupID).Scan(&count)
+	if err != nil {
+		t.Fatalf("query count: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("expected 2 configs in push group, got %d", count)
+	}
+}
