@@ -783,6 +783,27 @@ func deriveConfigState(ackedAt int64, rejectionReason string) pb.ConfigState {
 	return pb.ConfigState_CONFIG_STATE_ACCEPTED
 }
 
+// configStatusPlainSentence returns a single plain-sentence description of a config state
+// suitable for non-technical surfaces (household owners). The sentence contains no version
+// number and includes guidance on how to get help. Per NFR18.1, rendering happens in the
+// service layer, not in the BFF.
+func configStatusPlainSentence(state pb.ConfigState, rejectionReason string) string {
+	switch state {
+	case pb.ConfigState_CONFIG_STATE_ACCEPTED:
+		return "Your device accepted this configuration."
+	case pb.ConfigState_CONFIG_STATE_PENDING:
+		return "Your device hasn't responded yet. If it doesn't respond within a few minutes, check that it's connected and powered on."
+	case pb.ConfigState_CONFIG_STATE_REJECTED:
+		if rejectionReason != "" {
+			return fmt.Sprintf("Your device rejected this configuration: %s. Contact support if you need help.", rejectionReason)
+		}
+		return "Your device rejected this configuration. Contact support if you need help."
+	default:
+		return "Unknown configuration status."
+	}
+}
+
+
 func (s *LeafLabAPIServer) GetConfigStatus(ctx context.Context, req *pb.GetConfigStatusRequest) (*pb.GetConfigStatusResponse, error) {
 	if err := requireAuthentication(ctx); err != nil {
 		return nil, err

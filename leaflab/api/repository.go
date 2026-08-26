@@ -635,6 +635,7 @@ type ConfigStatusRow struct {
 	PushedAt        int64  // Unix timestamp (seconds)
 	AckedAt         int64  // Unix timestamp (seconds), 0 if not acked
 	RejectionReason string // Empty if accepted or pending
+	ProvenanceJSON  []byte // JSONB encoding of provenance map (sensor index to Provenance enum)
 }
 
 // GetConfigStatus retrieves the status of a specific config version.
@@ -644,10 +645,10 @@ func (r *Repository) GetConfigStatus(ctx context.Context, boardID int64, version
 	err := r.db.QueryRow(ctx, `
 		SELECT version, EXTRACT(EPOCH FROM pushed_at)::bigint, 
 		       COALESCE(EXTRACT(EPOCH FROM acked_at)::bigint, 0), 
-		       COALESCE(rejection_reason, '')
+		       COALESCE(rejection_reason, ''), COALESCE(provenance_json, '{}')
 		FROM device_config
 		WHERE board_id = $1 AND version = $2
-	`, boardID, int64(version)).Scan(&row.Version, &row.PushedAt, &row.AckedAt, &row.RejectionReason)
+	`, boardID, int64(version)).Scan(&row.Version, &row.PushedAt, &row.AckedAt, &row.RejectionReason, &row.ProvenanceJSON)
 	if err == nil {
 		// Convert version back to uint64 for consistency
 	}
@@ -683,7 +684,7 @@ func (r *Repository) ListConfigHistory(ctx context.Context, boardID int64, pageS
 		query = `
 			SELECT version, EXTRACT(EPOCH FROM pushed_at)::bigint, 
 			       COALESCE(EXTRACT(EPOCH FROM acked_at)::bigint, 0), 
-			       COALESCE(rejection_reason, '')
+			       COALESCE(rejection_reason, ''), COALESCE(provenance_json, '{}')
 			FROM device_config
 			WHERE board_id = $1
 			ORDER BY version DESC
@@ -696,7 +697,7 @@ func (r *Repository) ListConfigHistory(ctx context.Context, boardID int64, pageS
 		query = `
 			SELECT version, EXTRACT(EPOCH FROM pushed_at)::bigint, 
 			       COALESCE(EXTRACT(EPOCH FROM acked_at)::bigint, 0), 
-			       COALESCE(rejection_reason, '')
+			       COALESCE(rejection_reason, ''), COALESCE(provenance_json, '{}')
 			FROM device_config
 			WHERE board_id = $1 AND version < $2
 			ORDER BY version DESC
@@ -714,7 +715,7 @@ func (r *Repository) ListConfigHistory(ctx context.Context, boardID int64, pageS
 	var configs []ConfigStatusRow
 	for rows.Next() {
 		var c ConfigStatusRow
-		if err := rows.Scan(&c.Version, &c.PushedAt, &c.AckedAt, &c.RejectionReason); err != nil {
+		if err := rows.Scan(&c.Version, &c.PushedAt, &c.AckedAt, &c.RejectionReason, &c.ProvenanceJSON); err != nil {
 			return nil, nil, fmt.Errorf("scan config: %w", err)
 		}
 		configs = append(configs, c)
@@ -745,10 +746,10 @@ func (r *Repository) GetConfigByVersion(ctx context.Context, boardID int64, vers
 	err := r.db.QueryRow(ctx, `
 		SELECT config_json, version, EXTRACT(EPOCH FROM pushed_at)::bigint,
 		       COALESCE(EXTRACT(EPOCH FROM acked_at)::bigint, 0),
-		       COALESCE(rejection_reason, '')
+		       COALESCE(rejection_reason, ''), COALESCE(provenance_json, '{}')
 		FROM device_config
 		WHERE board_id = $1 AND version = $2
-	`, boardID, int64(version)).Scan(&configJSON, &row.Version, &row.PushedAt, &row.AckedAt, &row.RejectionReason)
+	`, boardID, int64(version)).Scan(&configJSON, &row.Version, &row.PushedAt, &row.AckedAt, &row.RejectionReason, &row.ProvenanceJSON)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil, nil
