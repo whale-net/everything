@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -38,13 +39,15 @@ const mqttExchange = "amq.topic"
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
 	repo      *Repository
+	authz     *AuthorizationPredicates
 	publisher *rmq.Publisher
 	logger    *slog.Logger
 }
 
-func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo *Repository, authz *AuthorizationPredicates, publisher *rmq.Publisher, logger *slog.Logger) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
 		repo:      repo,
+		authz:     authz,
 		publisher: publisher,
 		logger:    logger,
 	}
@@ -907,4 +910,459 @@ func (s *LeafLabAPIServer) ListActiveGrants(ctx context.Context, _ *pb.ListActiv
 		"correlation_id", corrID)
 
 	return &pb.ListActiveGrantsResponse{Grants: pbGrants}, nil
+}
+
+// ── FR50 / FR22.2 / NFR6.2: Region CRUD ──────────────────────────────────────
+//
+// Region CRUD is a member-or-grantee capability (FR7), not admin-only — every
+// handler below authorizes via the single AuthorizationPredicates.MemberOrGrantee
+// predicate (#1194), resolved against the region's own household. This is
+// intentionally distinct from the reach-aggregated AuthorizationDecision used
+// for board listings: a region operation always has (or, for a new root
+// region, resolves to) exactly one target household, so the predicate is
+// called directly against that household rather than through a decision
+// object built from membership alone.
+
+const (
+	// maxRegionChildren is the structural cap on direct children per region (FR50.1).
+	maxRegionChildren = 12
+	// maxRegionDepth is the number of tiers a region tree may nest to, canonically
+	// named Room (depth 0), Shelf (depth 1), Pot (depth 2) (FR50.1). A region whose
+	// parent is already at the deepest tier is refused.
+	maxRegionDepth = 3
+)
+
+// regionRowToProto converts a repository RegionRow to the wire RegionInfo shape.
+func regionRowToProto(row RegionRow) *pb.RegionInfo {
+	info := &pb.RegionInfo{
+		RegionId:          row.RegionID,
+		Name:              row.Name,
+		ParentRegionId:    row.ParentRegionID,
+		PathNames:         row.PathNames,
+		SuccessorRegionId: row.SuccessorRegionID,
+	}
+	if row.RetiredAt != nil {
+		info.RetiredAt = row.RetiredAt.Unix()
+	}
+	if row.RetiredOperation != nil {
+		info.RetiredOperation = *row.RetiredOperation
+	}
+	if row.RetiredPrincipal != nil {
+		info.RetiredPrincipal = *row.RetiredPrincipal
+	}
+	return info
+}
+
+// validateRegionParent enforces the structural rules (FR50.1) for the region
+// a new or re-parented region would sit under: at most maxRegionChildren
+// children, and no deeper than maxRegionDepth tiers (Room / Shelf / Pot).
+// Returns pgx.ErrNoRows if the parent region does not exist; otherwise every
+// error returned is already a gRPC status error.
+func (s *LeafLabAPIServer) validateRegionParent(ctx context.Context, parentRegionID int64) error {
+	depth, err := s.repo.GetRegionDepth(ctx, parentRegionID)
+	if err != nil {
+		return err
+	}
+	if depth+1 >= maxRegionDepth {
+		return status.Errorf(codes.FailedPrecondition,
+			"region tree does not nest deeper than %d tiers (Room / Shelf / Pot)", maxRegionDepth)
+	}
+	childCount, err := s.repo.CountChildren(ctx, parentRegionID)
+	if err != nil {
+		return status.Errorf(codes.Internal, "count children: %v", err)
+	}
+	if childCount >= maxRegionChildren {
+		return status.Errorf(codes.FailedPrecondition,
+			"region %d already has the maximum of %d children", parentRegionID, maxRegionChildren)
+	}
+	return nil
+}
+
+// CreateRegion creates a new region (FR50.1). Member-or-grantee, not admin-only.
+// Parentage is set here and is immutable once any reading is attributed to
+// the region or a descendant — see UpdateRegionParent.
+func (s *LeafLabAPIServer) CreateRegion(ctx context.Context, req *pb.CreateRegionRequest) (*pb.CreateRegionResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	var parentRegionID *int64
+	if req.ParentRegionId != 0 {
+		p := req.ParentRegionId
+		parentRegionID = &p
+	}
+
+	var householdID int64
+	if parentRegionID != nil {
+		hid, err := s.repo.GetRegionHousehold(ctx, *parentRegionID)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, status.Error(codes.InvalidArgument, "parent region not found")
+			}
+			s.logger.Error("resolve parent region household failed",
+				"parent_region_id", *parentRegionID, "subject", subject, "correlation_id", corrID, "error", err)
+			return nil, status.Errorf(codes.Internal, "resolve parent household: %v", err)
+		}
+		householdID = hid
+	} else {
+		// Root region: no parent to resolve household from. V1 assumes a
+		// single-household caller; a principal reachable in more than one
+		// household gets the lowest-id household deterministically.
+		households, err := s.repo.GetReachableHouseholds(ctx, subject)
+		if err != nil {
+			s.logger.Error("get reachable households failed",
+				"subject", subject, "correlation_id", corrID, "error", err)
+			return nil, status.Errorf(codes.Internal, "get reachable households: %v", err)
+		}
+		if len(households) == 0 {
+			return nil, status.Error(codes.PermissionDenied, "principal has no household membership or grant")
+		}
+		householdID = households[0]
+	}
+
+	authorized, err := s.authz.MemberOrGrantee(ctx, householdID, subject)
+	if err != nil {
+		s.logger.Error("authorization check failed",
+			"household_id", householdID, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+	if !authorized {
+		return nil, status.Error(codes.PermissionDenied, "only a member or grantee of the household may create a region")
+	}
+
+	if parentRegionID != nil {
+		if err := s.validateRegionParent(ctx, *parentRegionID); err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, status.Error(codes.InvalidArgument, "parent region not found")
+			}
+			return nil, err
+		}
+	}
+
+	regionID, err := s.repo.CreateRegion(ctx, name, req.Description, parentRegionID, householdID)
+	if err != nil {
+		s.logger.Error("create region failed",
+			"name", name, "parent_region_id", req.ParentRegionId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "create region: %v", err)
+	}
+
+	if err := s.repo.RecordAudit(ctx, subject, householdID, "create_region", "region", regionID, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"region_id", regionID, "subject", subject, "correlation_id", corrID, "error", err)
+	}
+
+	s.logger.Info("region created",
+		"region_id", regionID, "name", name, "parent_region_id", req.ParentRegionId,
+		"household_id", householdID, "subject", subject, "correlation_id", corrID)
+
+	return &pb.CreateRegionResponse{RegionId: regionID}, nil
+}
+
+// RenameRegion changes a region's display name (FR50.1). Member-or-grantee.
+// Never touches parentage, so it is never refused by the parentage-freeze
+// trigger (NFR6.2). Refused if the region is retired — retirement accepts no
+// new writes (FR22.5).
+func (s *LeafLabAPIServer) RenameRegion(ctx context.Context, req *pb.RenameRegionRequest) (*pb.RenameRegionResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	region, err := s.repo.GetRegion(ctx, req.RegionId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "region not found")
+		}
+		s.logger.Error("get region failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "get region: %v", err)
+	}
+
+	authorized, err := s.authz.MemberOrGrantee(ctx, region.HouseholdID, subject)
+	if err != nil {
+		s.logger.Error("authorization check failed",
+			"household_id", region.HouseholdID, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+	if !authorized {
+		return nil, status.Error(codes.PermissionDenied, "only a member or grantee of the household may rename a region")
+	}
+
+	if region.RetiredAt != nil {
+		return nil, status.Error(codes.FailedPrecondition, "region is retired and accepts no new writes")
+	}
+
+	if err := s.repo.RenameRegion(ctx, req.RegionId, name); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "region not found")
+		}
+		s.logger.Error("rename region failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "rename region: %v", err)
+	}
+
+	if err := s.repo.RecordAudit(ctx, subject, region.HouseholdID, "rename_region", "region", req.RegionId, name); err != nil {
+		s.logger.Error("record audit failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+	}
+
+	s.logger.Info("region renamed",
+		"region_id", req.RegionId, "name", name, "subject", subject, "correlation_id", corrID)
+
+	return &pb.RenameRegionResponse{}, nil
+}
+
+// ListRegions lists regions in every household the caller can reach as a
+// member or grantee (FR50.1). Retired regions are excluded by default
+// (FR22.5); IncludeRetired opts back in.
+func (s *LeafLabAPIServer) ListRegions(ctx context.Context, req *pb.ListRegionsRequest) (*pb.ListRegionsResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	households, err := s.repo.GetReachableHouseholds(ctx, subject)
+	if err != nil {
+		s.logger.Error("get reachable households failed",
+			"subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "get reachable households: %v", err)
+	}
+
+	var regions []*pb.RegionInfo
+	for _, hid := range households {
+		rows, err := s.repo.ListRegionsByHousehold(ctx, hid, req.IncludeRetired)
+		if err != nil {
+			s.logger.Error("list regions failed",
+				"household_id", hid, "subject", subject, "correlation_id", corrID, "error", err)
+			return nil, status.Errorf(codes.Internal, "list regions: %v", err)
+		}
+		for _, row := range rows {
+			regions = append(regions, regionRowToProto(row))
+		}
+	}
+
+	s.logger.Info("regions listed",
+		"region_count", len(regions), "include_retired", req.IncludeRetired, "subject", subject, "correlation_id", corrID)
+
+	return &pb.ListRegionsResponse{Regions: regions}, nil
+}
+
+// GetRegion reads a single region by id, including a retired one (FR22.5:
+// "still readable by explicit id"). Returns the root-to-leaf path (FR50.2).
+func (s *LeafLabAPIServer) GetRegion(ctx context.Context, req *pb.GetRegionRequest) (*pb.GetRegionResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	region, err := s.repo.GetRegion(ctx, req.RegionId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "region not found")
+		}
+		s.logger.Error("get region failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "get region: %v", err)
+	}
+
+	authorized, err := s.authz.MemberOrGrantee(ctx, region.HouseholdID, subject)
+	if err != nil {
+		s.logger.Error("authorization check failed",
+			"household_id", region.HouseholdID, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+	if !authorized {
+		return nil, status.Error(codes.PermissionDenied, "only a member or grantee of the household may read this region")
+	}
+
+	s.logger.Info("region read",
+		"region_id", req.RegionId, "subject", subject, "correlation_id", corrID)
+
+	return &pb.GetRegionResponse{Region: regionRowToProto(region)}, nil
+}
+
+// UpdateRegionParent re-parents a region while no reading exists anywhere in
+// its subtree — in practice a create-time grace window for a mis-typed
+// parent, not a re-parenting capability (FR50.3). The immutability check is
+// enforced entirely by the region_freeze_parent_once_attributed trigger
+// (NFR6.2, migration 025); this handler never re-implements it, only
+// translates a refusal into a clear message naming FR74 (subtree relocation)
+// as the alternative (FR59.3).
+func (s *LeafLabAPIServer) UpdateRegionParent(ctx context.Context, req *pb.UpdateRegionParentRequest) (*pb.UpdateRegionParentResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	region, err := s.repo.GetRegion(ctx, req.RegionId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "region not found")
+		}
+		s.logger.Error("get region failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "get region: %v", err)
+	}
+
+	authorized, err := s.authz.MemberOrGrantee(ctx, region.HouseholdID, subject)
+	if err != nil {
+		s.logger.Error("authorization check failed",
+			"household_id", region.HouseholdID, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+	if !authorized {
+		return nil, status.Error(codes.PermissionDenied, "only a member or grantee of the household may re-parent a region")
+	}
+
+	if region.RetiredAt != nil {
+		return nil, status.Error(codes.FailedPrecondition, "region is retired and accepts no new writes")
+	}
+
+	if req.RegionId == req.NewParentRegionId {
+		return nil, status.Error(codes.InvalidArgument, "a region cannot be its own parent")
+	}
+
+	var newParentRegionID *int64
+	if req.NewParentRegionId != 0 {
+		p := req.NewParentRegionId
+		newParentRegionID = &p
+
+		newParentHousehold, err := s.repo.GetRegionHousehold(ctx, *newParentRegionID)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, status.Error(codes.InvalidArgument, "new parent region not found")
+			}
+			s.logger.Error("resolve new parent household failed",
+				"new_parent_region_id", *newParentRegionID, "subject", subject, "correlation_id", corrID, "error", err)
+			return nil, status.Errorf(codes.Internal, "resolve new parent household: %v", err)
+		}
+		if newParentHousehold != region.HouseholdID {
+			return nil, status.Error(codes.InvalidArgument, "new parent region belongs to a different household")
+		}
+
+		if err := s.validateRegionParent(ctx, *newParentRegionID); err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, status.Error(codes.InvalidArgument, "new parent region not found")
+			}
+			return nil, err
+		}
+	}
+
+	if err := s.repo.UpdateRegionParent(ctx, req.RegionId, newParentRegionID); err != nil {
+		if errors.Is(err, ErrParentageFrozen) {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"region %d parentage is frozen: a reading has been attributed to this region or a descendant; use subtree relocation (FR74) instead of re-parenting",
+				req.RegionId)
+		}
+		if err == pgx.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "region not found")
+		}
+		s.logger.Error("update region parent failed",
+			"region_id", req.RegionId, "new_parent_region_id", req.NewParentRegionId,
+			"subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "update region parent: %v", err)
+	}
+
+	if err := s.repo.RecordAudit(ctx, subject, region.HouseholdID, "update_region_parent", "region", req.RegionId, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+	}
+
+	s.logger.Info("region re-parented",
+		"region_id", req.RegionId, "new_parent_region_id", req.NewParentRegionId,
+		"subject", subject, "correlation_id", corrID)
+
+	return &pb.UpdateRegionParentResponse{}, nil
+}
+
+// RetireRegion soft-retires a region (FR22.2, FR22.5). A retired region
+// remains resolvable for attribution of readings recorded while it was
+// active; its parentage remains immutable; it is excluded from default
+// listings and accepts no new writes. Retirement does not unfreeze
+// parentage. An optional successor_region_id names the region that replaced
+// it when retirement is the result of a relocation (FR74), so region-keyed
+// series join across the reorganisation.
+func (s *LeafLabAPIServer) RetireRegion(ctx context.Context, req *pb.RetireRegionRequest) (*pb.RetireRegionResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	region, err := s.repo.GetRegion(ctx, req.RegionId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "region not found")
+		}
+		s.logger.Error("get region failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "get region: %v", err)
+	}
+
+	authorized, err := s.authz.MemberOrGrantee(ctx, region.HouseholdID, subject)
+	if err != nil {
+		s.logger.Error("authorization check failed",
+			"household_id", region.HouseholdID, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+	if !authorized {
+		return nil, status.Error(codes.PermissionDenied, "only a member or grantee of the household may retire a region")
+	}
+
+	if region.RetiredAt != nil {
+		return nil, status.Error(codes.FailedPrecondition, "region is already retired")
+	}
+
+	var successorRegionID *int64
+	if req.SuccessorRegionId != 0 {
+		s2 := req.SuccessorRegionId
+		successorRegionID = &s2
+
+		if *successorRegionID == req.RegionId {
+			return nil, status.Error(codes.InvalidArgument, "a region cannot be its own successor")
+		}
+
+		successorHousehold, err := s.repo.GetRegionHousehold(ctx, *successorRegionID)
+		if err != nil {
+			if err == pgx.ErrNoRows {
+				return nil, status.Error(codes.InvalidArgument, "successor region not found")
+			}
+			s.logger.Error("resolve successor region household failed",
+				"successor_region_id", *successorRegionID, "subject", subject, "correlation_id", corrID, "error", err)
+			return nil, status.Errorf(codes.Internal, "resolve successor household: %v", err)
+		}
+		if successorHousehold != region.HouseholdID {
+			return nil, status.Error(codes.InvalidArgument, "successor region belongs to a different household")
+		}
+	}
+
+	if err := s.repo.RetireRegion(ctx, req.RegionId, "retire_region", subject, successorRegionID); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, status.Error(codes.NotFound, "region not found")
+		}
+		s.logger.Error("retire region failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "retire region: %v", err)
+	}
+
+	if err := s.repo.RecordAudit(ctx, subject, region.HouseholdID, "retire_region", "region", req.RegionId, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"region_id", req.RegionId, "subject", subject, "correlation_id", corrID, "error", err)
+	}
+
+	s.logger.Info("region retired",
+		"region_id", req.RegionId, "successor_region_id", req.SuccessorRegionId,
+		"subject", subject, "correlation_id", corrID)
+
+	return &pb.RetireRegionResponse{}, nil
 }

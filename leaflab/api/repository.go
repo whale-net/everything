@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -896,4 +897,278 @@ func (r *Repository) RemovePlantPlacement(ctx context.Context, plantID int64, re
 	}
 
 	return nil
+}
+
+// ── Region CRUD (FR50, FR22.2, FR22.5, NFR6.2) ────────────────────────────────
+//
+// Region lifecycle write paths. Parentage immutability is enforced entirely by
+// the region_freeze_parent_once_attributed trigger (migration 025) — this file
+// never re-implements that recursive descendant test; it only translates the
+// trigger's raised exception into ErrParentageFrozen for the server layer.
+
+// ErrParentageFrozen is returned when the database trigger
+// (region_freeze_parent_once_attributed, NFR6.2) refuses a re-parent because a
+// reading has already been attributed to the region or a descendant. This is a
+// translation of the trigger's RAISE EXCEPTION (SQLSTATE 23514, check_violation)
+// — the immutability check itself lives only in the trigger, per NFR6.2.
+var ErrParentageFrozen = errors.New("region parentage is frozen: a reading has been attributed to this region or a descendant")
+
+// RegionRow carries a region's identity, root-to-leaf path, retirement state,
+// and resolved household — everything a single GetRegion/ListRegions row needs
+// (FR50.2, FR22.5).
+type RegionRow struct {
+	RegionID          int64
+	Name              string
+	ParentRegionID    int64 // 0 means root
+	PathNames         []string
+	RetiredAt         *time.Time
+	RetiredOperation  *string
+	RetiredPrincipal  *string
+	SuccessorRegionID int64 // 0 means no successor
+	HouseholdID       int64
+}
+
+// regionRowFromScan converts the nullable scan targets used by GetRegion /
+// ListRegionsByHousehold into the RegionRow's zero-means-absent convention.
+func regionRowFromScan(regionID int64, name string, parentRegionID *int64, pathNames []string,
+	retiredAt *time.Time, retiredOperation, retiredPrincipal *string, successorRegionID *int64,
+	householdID int64) RegionRow {
+	row := RegionRow{
+		RegionID:         regionID,
+		Name:             name,
+		PathNames:        pathNames,
+		RetiredAt:        retiredAt,
+		RetiredOperation: retiredOperation,
+		RetiredPrincipal: retiredPrincipal,
+		HouseholdID:      householdID,
+	}
+	if parentRegionID != nil {
+		row.ParentRegionID = *parentRegionID
+	}
+	if successorRegionID != nil {
+		row.SuccessorRegionID = *successorRegionID
+	}
+	return row
+}
+
+// GetRegionDepth returns a region's depth in its tree (root = 0), via
+// v_region_path (migration 012). Returns pgx.ErrNoRows if the region does not
+// exist.
+func (r *Repository) GetRegionDepth(ctx context.Context, regionID int64) (int64, error) {
+	var depth int64
+	err := r.db.QueryRow(ctx, `
+		SELECT depth FROM v_region_path WHERE region_id = $1
+	`, regionID).Scan(&depth)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, pgx.ErrNoRows
+		}
+		return 0, fmt.Errorf("get region %d depth: %w", regionID, err)
+	}
+	return depth, nil
+}
+
+// CountChildren returns the number of direct children of a region (retired or
+// not — retirement does not free up a structural slot).
+func (r *Repository) CountChildren(ctx context.Context, parentRegionID int64) (int64, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM region WHERE parent_region_id = $1
+	`, parentRegionID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count children of region %d: %w", parentRegionID, err)
+	}
+	return count, nil
+}
+
+// CreateRegion inserts a new region (FR50.1). household_id is stamped on the
+// row only when parentRegionID is nil (root); descendants inherit household
+// through tree traversal (GetRegionHousehold), per FR1.1.
+func (r *Repository) CreateRegion(ctx context.Context, name, description string, parentRegionID *int64, householdID int64) (int64, error) {
+	var regionID int64
+	var rootHouseholdID *int64
+	if parentRegionID == nil {
+		rootHouseholdID = &householdID
+	}
+	err := r.db.QueryRow(ctx, `
+		INSERT INTO region (parent_region_id, name, description, household_id)
+		VALUES ($1, $2, $3, $4)
+		RETURNING region_id
+	`, parentRegionID, name, description, rootHouseholdID).Scan(&regionID)
+	if err != nil {
+		return 0, fmt.Errorf("create region %q: %w", name, err)
+	}
+	return regionID, nil
+}
+
+// GetRegion returns a single region's full row (identity, root-to-leaf path,
+// retirement state, resolved household) by id — including a retired region
+// (FR22.5: "still readable by explicit id"). Returns pgx.ErrNoRows if the
+// region does not exist.
+func (r *Repository) GetRegion(ctx context.Context, regionID int64) (RegionRow, error) {
+	var (
+		name                               string
+		parentRegionID, successorID        *int64
+		pathNames                          []string
+		retiredAt                          *time.Time
+		retiredOperation, retiredPrincipal *string
+		householdID                        int64
+	)
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE ancestry AS (
+			SELECT region_id, parent_region_id, household_id FROM region WHERE region_id = $1
+			UNION ALL
+			SELECT r.region_id, r.parent_region_id, r.household_id
+			FROM region r
+			JOIN ancestry a ON r.region_id = a.parent_region_id
+		)
+		SELECT r.region_id, r.name, r.parent_region_id, rp.path_names,
+		       r.retired_at, r.retired_operation, r.retired_principal, r.successor_region_id,
+		       (SELECT household_id FROM ancestry WHERE parent_region_id IS NULL LIMIT 1) AS household_id
+		FROM region r
+		JOIN v_region_path rp ON rp.region_id = r.region_id
+		WHERE r.region_id = $1
+	`, regionID).Scan(&regionID, &name, &parentRegionID, &pathNames,
+		&retiredAt, &retiredOperation, &retiredPrincipal, &successorID, &householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RegionRow{}, pgx.ErrNoRows
+		}
+		return RegionRow{}, fmt.Errorf("get region %d: %w", regionID, err)
+	}
+	return regionRowFromScan(regionID, name, parentRegionID, pathNames, retiredAt, retiredOperation, retiredPrincipal, successorID, householdID), nil
+}
+
+// ListRegionsByHousehold lists regions belonging to a household (root region's
+// household plus all descendants), ordered by region_id. Retired regions are
+// excluded unless includeRetired is set (FR22.5).
+func (r *Repository) ListRegionsByHousehold(ctx context.Context, householdID int64, includeRetired bool) ([]RegionRow, error) {
+	rows, err := r.db.Query(ctx, `
+		WITH RECURSIVE region_household AS (
+			SELECT region_id, household_id FROM region WHERE parent_region_id IS NULL
+			UNION ALL
+			SELECT r.region_id, rh.household_id
+			FROM region r
+			JOIN region_household rh ON r.parent_region_id = rh.region_id
+		)
+		SELECT r.region_id, r.name, r.parent_region_id, rp.path_names,
+		       r.retired_at, r.retired_operation, r.retired_principal, r.successor_region_id,
+		       rh.household_id
+		FROM region r
+		JOIN region_household rh ON rh.region_id = r.region_id
+		JOIN v_region_path rp ON rp.region_id = r.region_id
+		WHERE rh.household_id = $1
+		  AND ($2::boolean OR r.retired_at IS NULL)
+		ORDER BY r.region_id
+	`, householdID, includeRetired)
+	if err != nil {
+		return nil, fmt.Errorf("list regions for household %d: %w", householdID, err)
+	}
+	defer rows.Close()
+
+	var result []RegionRow
+	for rows.Next() {
+		var (
+			regionID, hid                      int64
+			name                               string
+			parentRegionID, successorID        *int64
+			pathNames                          []string
+			retiredAt                          *time.Time
+			retiredOperation, retiredPrincipal *string
+		)
+		if err := rows.Scan(&regionID, &name, &parentRegionID, &pathNames,
+			&retiredAt, &retiredOperation, &retiredPrincipal, &successorID, &hid); err != nil {
+			return nil, fmt.Errorf("scan region: %w", err)
+		}
+		result = append(result, regionRowFromScan(regionID, name, parentRegionID, pathNames, retiredAt, retiredOperation, retiredPrincipal, successorID, hid))
+	}
+	return result, rows.Err()
+}
+
+// RenameRegion updates a region's display name (FR50.1). Never touches
+// parentage, so it never invokes the parentage-freeze trigger (NFR6.2).
+// Returns pgx.ErrNoRows if the region does not exist.
+func (r *Repository) RenameRegion(ctx context.Context, regionID int64, name string) error {
+	result, err := r.db.Exec(ctx, `UPDATE region SET name = $2 WHERE region_id = $1`, regionID, name)
+	if err != nil {
+		return fmt.Errorf("rename region %d: %w", regionID, err)
+	}
+	if result.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// UpdateRegionParent re-parents a region (FR50.3). The immutability check
+// lives entirely in the region_freeze_parent_once_attributed trigger
+// (NFR6.2, migration 025) — this method never re-implements it; it only
+// translates the trigger's raised exception (SQLSTATE 23514) into
+// ErrParentageFrozen. Returns pgx.ErrNoRows if the region does not exist.
+func (r *Repository) UpdateRegionParent(ctx context.Context, regionID int64, newParentRegionID *int64) error {
+	var updated int64
+	err := r.db.QueryRow(ctx, `
+		UPDATE region SET parent_region_id = $2
+		WHERE region_id = $1
+		RETURNING region_id
+	`, regionID, newParentRegionID).Scan(&updated)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return pgx.ErrNoRows
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23514" {
+			return ErrParentageFrozen
+		}
+		return fmt.Errorf("update region %d parent: %w", regionID, err)
+	}
+	return nil
+}
+
+// RetireRegion soft-retires a region (FR22.2, FR22.5): sets retired_at,
+// names the operation and acting principal, and optionally names a successor
+// region (FR74 relocation). Retirement never touches parent_region_id, so it
+// never invokes the parentage-freeze trigger and never unfreezes parentage.
+// Returns pgx.ErrNoRows if the region does not exist.
+func (r *Repository) RetireRegion(ctx context.Context, regionID int64, operation, principal string, successorRegionID *int64) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE region
+		SET retired_at = NOW(), retired_operation = $2, retired_principal = $3, successor_region_id = $4
+		WHERE region_id = $1
+	`, regionID, operation, principal, successorRegionID)
+	if err != nil {
+		return fmt.Errorf("retire region %d: %w", regionID, err)
+	}
+	if result.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+// GetReachableHouseholds returns every household a principal can reach either
+// as a current member or as an active (non-expired, non-revoked) grantee
+// (FR7: member-or-grantee). Ordered by household_id so callers needing a
+// single deterministic choice (e.g. resolving the household for a new root
+// region) can take the first.
+func (r *Repository) GetReachableHouseholds(ctx context.Context, principalID string) ([]int64, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT household_id FROM household_member WHERE principal_id = $1 AND valid_to IS NULL
+		UNION
+		SELECT household_id FROM household_grant
+		WHERE grantee = $1 AND expires_at > NOW() AND revoked_at IS NULL
+		ORDER BY household_id
+	`, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("get reachable households for principal %s: %w", principalID, err)
+	}
+	defer rows.Close()
+
+	var households []int64
+	for rows.Next() {
+		var hid int64
+		if err := rows.Scan(&hid); err != nil {
+			return nil, fmt.Errorf("scan household_id: %w", err)
+		}
+		households = append(households, hid)
+	}
+	return households, rows.Err()
 }
