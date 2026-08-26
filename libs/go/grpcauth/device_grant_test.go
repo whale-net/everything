@@ -436,3 +436,381 @@ func TestRequireTransportSecurity(t *testing.T) {
 		t.Errorf("expected RequireTransportSecurity to be true")
 	}
 }
+
+// TestPerformDeviceFlow_AuthorizationPending verifies polling continues when authorization_pending.
+func TestPerformDeviceFlow_AuthorizationPending(t *testing.T) {
+	pollCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/device") || r.Method == "POST" && r.FormValue("device_code") == "" {
+			// Device code request
+			resp := deviceFlowResponse{
+				DeviceCode:      "test-device-code",
+				UserCode:        "TEST-CODE",
+				VerificationURI: "https://auth.example.com/device",
+				ExpiresIn:       600,
+				Interval:        1,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		} else {
+			// Token polling request
+			pollCount++
+			var resp interface{}
+			if pollCount <= 2 {
+				// First two polls: still pending
+				resp = tokenResponse{
+					Error:     "authorization_pending",
+					ErrorDesc: "User has not yet authorized",
+				}
+			} else {
+				// Third poll: success
+				resp = tokenResponse{
+					AccessToken:  "final-access-token",
+					TokenType:    "Bearer",
+					ExpiresIn:    3600,
+					RefreshToken: "final-refresh-token",
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	cacheFile := filepath.Join(tempDir, "device_grant.json")
+
+	creds := &deviceGrantCreds{
+		config: DeviceGrantConfig{
+			TokenURL: server.URL,
+			ClientID: "test-client",
+		},
+		cacheFile: cacheFile,
+	}
+
+	// Mock stdin
+	oldStdin := os.Stdin
+	defer func() { os.Stdin = oldStdin }()
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		io.WriteString(w, "\n")
+		w.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := creds.performDeviceFlow(ctx)
+	if err != nil {
+		t.Fatalf("performDeviceFlow failed: %v", err)
+	}
+
+	creds.mu.RLock()
+	token := creds.token
+	creds.mu.RUnlock()
+
+	if token.AccessToken != "final-access-token" {
+		t.Errorf("got access token %q, want final-access-token", token.AccessToken)
+	}
+	if pollCount != 3 {
+		t.Errorf("expected 3 polls, got %d", pollCount)
+	}
+}
+
+// TestPerformDeviceFlow_SlowDown verifies polling interval increases with slow_down.
+func TestPerformDeviceFlow_SlowDown(t *testing.T) {
+	pollCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/device") || r.Method == "POST" && r.FormValue("device_code") == "" {
+			// Device code request
+			resp := deviceFlowResponse{
+				DeviceCode:      "test-device-code",
+				UserCode:        "TEST-CODE",
+				VerificationURI: "https://auth.example.com/device",
+				ExpiresIn:       600,
+				Interval:        2,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		} else {
+			// Token polling request
+			pollCount++
+			var resp interface{}
+			if pollCount == 1 {
+				// First poll: slow_down
+				resp = tokenResponse{
+					Error:     "slow_down",
+					ErrorDesc: "Polling too fast",
+				}
+			} else {
+				// Second poll: success
+				resp = tokenResponse{
+					AccessToken:  "slowdown-token",
+					TokenType:    "Bearer",
+					ExpiresIn:    3600,
+					RefreshToken: "slowdown-refresh",
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	cacheFile := filepath.Join(tempDir, "device_grant.json")
+
+	creds := &deviceGrantCreds{
+		config: DeviceGrantConfig{
+			TokenURL: server.URL,
+			ClientID: "test-client",
+		},
+		cacheFile: cacheFile,
+	}
+
+	// Mock stdin
+	oldStdin := os.Stdin
+	defer func() { os.Stdin = oldStdin }()
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		io.WriteString(w, "\n")
+		w.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	err := creds.performDeviceFlow(ctx)
+	if err != nil {
+		t.Fatalf("performDeviceFlow failed: %v", err)
+	}
+
+	creds.mu.RLock()
+	token := creds.token
+	creds.mu.RUnlock()
+
+	if token.AccessToken != "slowdown-token" {
+		t.Errorf("got access token %q, want slowdown-token", token.AccessToken)
+	}
+	if pollCount != 2 {
+		t.Errorf("expected 2 polls, got %d", pollCount)
+	}
+}
+
+// TestPerformDeviceFlow_Success verifies successful device flow with proper token caching.
+func TestPerformDeviceFlow_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/device") || r.Method == "POST" && r.FormValue("device_code") == "" {
+			// Device code request
+			resp := deviceFlowResponse{
+				DeviceCode:      "success-device-code",
+				UserCode:        "SUCCESS",
+				VerificationURI: "https://auth.example.com/device",
+				ExpiresIn:       600,
+				Interval:        1,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		} else {
+			// Token request
+			resp := tokenResponse{
+				AccessToken:  "success-access-token",
+				TokenType:    "Bearer",
+				ExpiresIn:    3600,
+				RefreshToken: "success-refresh-token",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+		}
+	}))
+	defer server.Close()
+
+	tempDir := t.TempDir()
+	cacheFile := filepath.Join(tempDir, "device_grant.json")
+
+	creds := &deviceGrantCreds{
+		config: DeviceGrantConfig{
+			TokenURL: server.URL,
+			ClientID: "test-client",
+		},
+		cacheFile: cacheFile,
+	}
+
+	// Mock stdin
+	oldStdin := os.Stdin
+	defer func() { os.Stdin = oldStdin }()
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	go func() {
+		io.WriteString(w, "\n")
+		w.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := creds.performDeviceFlow(ctx)
+	if err != nil {
+		t.Fatalf("performDeviceFlow failed: %v", err)
+	}
+
+	creds.mu.RLock()
+	token := creds.token
+	creds.mu.RUnlock()
+
+	if token.AccessToken != "success-access-token" {
+		t.Errorf("got access token %q, want success-access-token", token.AccessToken)
+	}
+	if token.RefreshToken != "success-refresh-token" {
+		t.Errorf("got refresh token %q, want success-refresh-token", token.RefreshToken)
+	}
+
+	// Verify token was cached
+	if _, err := os.Stat(cacheFile); err != nil {
+		t.Fatalf("expected cache file to exist: %v", err)
+	}
+
+	// Verify cache has restrictive permissions
+	info, _ := os.Stat(cacheFile)
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("cache file has mode %o, want 0600", perm)
+	}
+}
+
+// TestRefreshToken_ErrorHandling verifies various token refresh error cases.
+func TestRefreshToken_ErrorHandling(t *testing.T) {
+	tests := []struct {
+		name      string
+		errorCode string
+		errorDesc string
+		wantErr   string
+	}{
+		{
+			name:      "invalid_grant",
+			errorCode: "invalid_grant",
+			errorDesc: "Token has expired",
+			wantErr:   "expired",
+		},
+		{
+			name:      "server_error",
+			errorCode: "server_error",
+			errorDesc: "Internal server error",
+			wantErr:   "server_error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				resp := tokenResponse{
+					Error:     tt.errorCode,
+					ErrorDesc: tt.errorDesc,
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(resp)
+			}))
+			defer server.Close()
+
+			creds := &deviceGrantCreds{
+				config: DeviceGrantConfig{
+					TokenURL: server.URL,
+					ClientID: "test-client",
+				},
+				token: &oauth2.Token{
+					RefreshToken: "old-refresh",
+				},
+			}
+
+			err := creds.refreshToken(context.Background())
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected %q in error, got: %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+// TestNoTokenInErrorMessages verifies token material never appears in error messages.
+func TestNoTokenInErrorMessages(t *testing.T) {
+	tests := []struct {
+		name       string
+		testFunc   func(t *testing.T) error
+		shouldHave []string // strings that should NOT be in the error
+	}{
+		{
+			name: "refresh_token_error",
+			testFunc: func(t *testing.T) error {
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					resp := tokenResponse{
+						Error:     "invalid_grant",
+						ErrorDesc: "Token expired",
+					}
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(resp)
+				}))
+				defer server.Close()
+
+				creds := &deviceGrantCreds{
+					config: DeviceGrantConfig{
+						TokenURL: server.URL,
+						ClientID: "test-client",
+					},
+					token: &oauth2.Token{
+						RefreshToken: "secret-refresh-token-12345",
+					},
+				}
+
+				return creds.refreshToken(context.Background())
+			},
+			shouldHave: []string{
+				"secret-refresh-token-12345",
+				"refresh_token=secret",
+			},
+		},
+		{
+			name: "load_cached_token_error",
+			testFunc: func(t *testing.T) error {
+				tempDir := t.TempDir()
+				cacheFile := filepath.Join(tempDir, "device_grant.json")
+
+				ct := cachedToken{
+					AccessToken:  "secret-access-token-67890",
+					RefreshToken: "secret-refresh-token-67890",
+					ExpiresAt:    time.Now().Add(-1 * time.Hour).Unix(),
+				}
+				data, _ := json.Marshal(ct)
+				os.WriteFile(cacheFile, data, 0600)
+
+				creds := &deviceGrantCreds{
+					cacheFile: cacheFile,
+				}
+
+				return creds.loadCachedToken()
+			},
+			shouldHave: []string{
+				"secret-access-token-67890",
+				"secret-refresh-token-67890",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.testFunc(t)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+
+			errMsg := err.Error()
+			for _, forbidden := range tt.shouldHave {
+				if strings.Contains(errMsg, forbidden) {
+					t.Errorf("token material leaked in error message: %q found in %q", forbidden, errMsg)
+				}
+			}
+		})
+	}
+}
