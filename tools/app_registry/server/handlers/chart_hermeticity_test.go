@@ -26,6 +26,7 @@ func publishImage(t *testing.T, artifactSrv *ArtifactServer, version, idemPrefix
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:" + idemPrefix, Version: version,
+		IdentityDigest: "sha256:" + idemPrefix,
 		IdempotencyKey: idemPrefix + "-record",
 	}); err != nil {
 		t.Fatalf("RecordArtifact: %v", err)

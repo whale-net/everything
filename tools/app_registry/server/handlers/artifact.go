@@ -268,6 +268,9 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 	if req.Digest == "" || !strings.HasPrefix(req.Digest, "sha256:") {
 		return nil, status.Error(codes.InvalidArgument, `digest is required and must be "sha256:..."`)
 	}
+	if req.IdentityDigest == "" {
+		return nil, status.Error(codes.InvalidArgument, "identity_digest is required (FR-13)")
+	}
 	if req.Version != "" && !semverRe.MatchString(req.Version) {
 		return nil, status.Errorf(codes.InvalidArgument, "version %q must match v<major>.<minor>.<patch>", req.Version)
 	}
@@ -296,12 +299,13 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 			}
 
 			a := repository.Artifact{
-				Kind:        kind,
-				Repository:  req.Repository,
-				Version:     req.Version,
-				Digest:      req.Digest,
-				BuildID:     req.BuildId,
-				PublishedAt: unixToTime(req.PublishedAt),
+				Kind:           kind,
+				Repository:     req.Repository,
+				Version:        req.Version,
+				Digest:         req.Digest,
+				IdentityDigest: req.IdentityDigest,
+				BuildID:        req.BuildId,
+				PublishedAt:    unixToTime(req.PublishedAt),
 			}
 			if kind != repository.ArtifactKindChart {
 				a.AppID = owner

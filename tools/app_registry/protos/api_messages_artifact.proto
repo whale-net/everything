@@ -112,6 +112,11 @@ message RecordArtifactRequest {
   string version = 5;  // semver tag, validated as v<major>.<minor>.<patch>
   string digest = 6;   // "sha256:..." — required
 
+  // FR-13/FR-14: identity_digest computed over uncompressed content,
+  // invariant to compression, file ordering, archive metadata, and manifest
+  // formatting. Required for no-op detection (FR-17).
+  string identity_digest = 10;
+
   // Only valid for kind == CHART. Every referenced image must already be
   // recorded, or the call fails — a chart may not pin an unknown digest.
   repeated ContainedImage contains = 7;

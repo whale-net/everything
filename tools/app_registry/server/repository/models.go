@@ -356,6 +356,7 @@ type Artifact struct {
 	Repository  string
 	Version     string
 	Digest      string // empty until State == ArtifactStatePublished
+	IdentityDigest string // FR-13/FR-14: computed over uncompressed content, invariant to compression; used for no-op detection
 	BuildID     string // empty while State == ArtifactStateAllocated
 	PublishedAt time.Time
 

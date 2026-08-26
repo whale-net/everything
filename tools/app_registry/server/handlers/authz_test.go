@@ -250,6 +250,7 @@ func TestRecordArtifact_Authorization(t *testing.T) {
 		return &pb.RecordArtifactRequest{
 			BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 			OwnerFullName: "demo-svc", Digest: "sha256:authz", Version: "v1.0.0",
+			IdentityDigest: "sha256:authz",
 			IdempotencyKey: "authz-record-artifact",
 		}
 	}

@@ -210,6 +210,12 @@ message Artifact {
   string version = 6;     // semver tag, e.g. "v1.4.0"
   string digest = 7;      // "sha256:..." — the real identity, globally unique
 
+  // FR-13: identity_digest is computed over uncompressed content as a canonical
+  // hash of (relative path, size, sha256-of-uncompressed-bytes) triples, sorted
+  // by path. It is invariant to compression level, file ordering, archive
+  // metadata, and manifest formatting. Used for no-op detection (FR-17).
+  string identity_digest = 17;
+
   string build_id = 8;
   int64 published_at = 9;
 
