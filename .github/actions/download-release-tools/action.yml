@@ -484,6 +484,15 @@ runs:
             # tools/app_registry/worker/release/finalize.go's
             # cliBinaryS3Key/generateChecksumFiles for how the manifest
             # entries are keyed to declared filenames.
+            #
+            # FR-68: Five-class routing with terminal budget (120s per tool,
+            # at most 3 re-resolve attempts). Each failure class must route
+            # identically to fall-through with a class-naming diagnostic:
+            # (1) not-found (FR-29)
+            # (2) indeterminate/permission-denied (FR-42)
+            # (3) repeated expiry (FR-60)
+            # (4) registry unreachable (NFR-21)
+            # (5) verification/decompression failure (FR-66)
             download_single_tool_s3() {
               local tool="$1"
               local ver="$2"
@@ -495,15 +504,69 @@ runs:
               fi
 
               if ! ensure_app_registry_client; then
-                echo "Notice: Could not set up the App Registry gRPC client to resolve $tool binary URL" >&2
+                echo "::warning title=Acquisition failed (registry-unreachable)::App Registry client setup failed for $tool; falling through to source build (NFR-21). Failure class: registry-unreachable." >&2
                 return 1
               fi
 
-              # FR-60: Resolve immediately before fetch (no URL caching)
-              local resp_json
-              if ! resp_json="$(resolve_binary_url "$tool" "$ver")"; then
-                return 1
-              fi
+              # FR-68: Terminal budget: 120s per tool, at most 3 re-resolve attempts
+              local start_time resolve_attempts max_resolves max_budget_seconds
+              start_time="$(date +%s)"
+              resolve_attempts=0
+              max_resolves=3
+              max_budget_seconds=120
+
+              local resp_json resolve_status
+              while (( resolve_attempts < max_resolves )); do
+                resolve_attempts=$((resolve_attempts + 1))
+                
+                # Check elapsed time before attempting resolution
+                local elapsed_seconds
+                elapsed_seconds=$(($(date +%s) - start_time))
+                if (( elapsed_seconds > max_budget_seconds )); then
+                  echo "::warning title=Acquisition failed (budget-exhausted)::$tool acquisition exceeded 120s budget; falling through to source build (FR-68). Failure class: repeated-expiry." >&2
+                  return 1
+                fi
+
+                echo "Resolving $tool ($ver) — attempt $resolve_attempts/$max_resolves..."
+
+                # FR-60: Resolve immediately before fetch (no URL caching)
+                resp_json="$(resolve_binary_url "$tool" "$ver" 2>&1)" || true
+                resolve_status=$?
+
+                # Classify resolution failure by examining response
+                if [[ $resolve_status -eq 0 && -n "$resp_json" ]]; then
+                  # Check for not-found in response
+                  if echo "$resp_json" | jq -e '.code == 5' >/dev/null 2>&1; then
+                    echo "::warning title=Acquisition failed (not-found)::$tool $ver not found in App Registry; falling through to source build (FR-29). Failure class: not-found." >&2
+                    return 1
+                  fi
+                  # Success case: valid response
+                  break
+                else
+                  # Resolution RPC failed - check the error type
+                  if echo "$resp_json" | grep -qi "unavailable\|deadline.*exceeded"; then
+                    # Registry unreachable
+                    if (( resolve_attempts >= max_resolves )); then
+                      echo "::warning title=Acquisition failed (registry-unreachable)::$tool resolution exhausted attempts; registry unreachable; falling through to source build (NFR-21). Failure class: registry-unreachable." >&2
+                      return 1
+                    fi
+                    echo "Notice: Registry unreachable when resolving $tool (attempt $resolve_attempts/$max_resolves); retrying..."
+                    sleep 2
+                  elif echo "$resp_json" | grep -qi "permission\|unauthenticated"; then
+                    # Indeterminate: permission-denied or credential issue
+                    echo "::warning title=Acquisition failed (indeterminate)::$tool resolution failed (permission/auth); falling through to source build (FR-42). Failure class: indeterminate." >&2
+                    return 1
+                  else
+                    # Other errors: treat as indeterminate
+                    if (( resolve_attempts >= max_resolves )); then
+                      echo "::warning title=Acquisition failed (indeterminate)::$tool resolution exhausted attempts; falling through to source build (FR-42). Failure class: indeterminate." >&2
+                      return 1
+                    fi
+                    echo "Notice: $tool resolution attempt $resolve_attempts/$max_resolves failed; retrying..."
+                    sleep 2
+                  fi
+                fi
+              done
 
               # Extract fields from resolution response
               local download_url checksum_url encoding checksum_encoding filename
@@ -514,7 +577,7 @@ runs:
               filename="$(echo "$resp_json" | jq -r '.downloadUrlFilename // .download_url_filename // empty' 2>/dev/null)" || true
 
               if [[ -z "$download_url" ]]; then
-                echo "Notice: ResolveBinaryURL did not return a download_url for $tool $ver" >&2
+                echo "::warning title=Acquisition failed (not-found)::ResolveBinaryURL did not return download_url for $tool $ver; falling through to source build (FR-29). Failure class: not-found." >&2
                 return 1
               fi
 
@@ -523,9 +586,18 @@ runs:
               bin_download_path="$tmp_dl/download.bin"
               bin_uncompressed_path="$tmp_dl/uncompressed.bin"
 
+              # Check budget before S3 download
+              local elapsed_seconds
+              elapsed_seconds=$(($(date +%s) - start_time))
+              if (( elapsed_seconds > max_budget_seconds )); then
+                echo "::warning title=Acquisition failed (budget-exhausted)::$tool acquisition exceeded 120s budget before S3 download; falling through to source build (FR-68). Failure class: repeated-expiry." >&2
+                rm -rf "$tmp_dl"
+                return 1
+              fi
+
               echo "Downloading $tool ($ver) from S3: $download_url"
               if ! curl -fsSL -m 60 -o "$bin_download_path" "$download_url"; then
-                echo "Notice: failed to download $tool binary from $download_url" >&2
+                echo "::warning title=Acquisition failed (indeterminate)::S3 download failed for $tool; falling through to source build (FR-42). Failure class: indeterminate." >&2
                 rm -rf "$tmp_dl"
                 return 1
               fi
@@ -535,7 +607,7 @@ runs:
               if [[ "$encoding" == "gzip" ]]; then
                 echo "Decompressing $tool binary (gzip)..."
                 if ! gunzip -c "$bin_download_path" > "$bin_uncompressed_path"; then
-                  echo "ERROR: Failed to decompress $tool binary" >&2
+                  echo "::warning title=Acquisition failed (verification-failure)::Failed to decompress $tool binary; falling through to source build (FR-66). Failure class: verification-failure." >&2
                   rm -rf "$tmp_dl"
                   return 1
                 fi
@@ -544,7 +616,7 @@ runs:
 
               # FR-66: Fetch and decompress checksum manifest (must succeed)
               if [[ -z "$checksum_url" ]]; then
-                echo "ERROR: ResolveBinaryURL did not return a checksum_manifest_url for $tool $ver" >&2
+                echo "::warning title=Acquisition failed (verification-failure)::ResolveBinaryURL did not return checksum_manifest_url for $tool $ver; falling through to source build (FR-66). Failure class: verification-failure." >&2
                 rm -rf "$tmp_dl"
                 return 1
               fi
@@ -552,7 +624,7 @@ runs:
               echo "Downloading checksum manifest for $tool ($ver) from S3: $checksum_url"
               local manifest_path="$tmp_dl/checksums.txt"
               if ! curl -fsSL -m 30 -o "$tmp_dl/manifest.bin" "$checksum_url"; then
-                echo "ERROR: Failed to fetch checksum manifest from $checksum_url" >&2
+                echo "::warning title=Acquisition failed (verification-failure)::Failed to fetch checksum manifest for $tool; falling through to source build (FR-66). Failure class: verification-failure." >&2
                 rm -rf "$tmp_dl"
                 return 1
               fi
@@ -560,7 +632,7 @@ runs:
               # Decompress manifest if needed
               if [[ "$checksum_encoding" == "gzip" ]]; then
                 if ! gunzip -c "$tmp_dl/manifest.bin" > "$manifest_path"; then
-                  echo "ERROR: Failed to decompress checksum manifest" >&2
+                  echo "::warning title=Acquisition failed (verification-failure)::Failed to decompress checksum manifest for $tool; falling through to source build (FR-66). Failure class: verification-failure." >&2
                   rm -rf "$tmp_dl"
                   return 1
                 fi
@@ -570,7 +642,7 @@ runs:
 
               # FR-66: Verify checksum (fail-closed)
               if ! verify_checksum "$bin_to_verify" "$tmp_dl" "$filename"; then
-                echo "ERROR: Checksum verification failed for $tool binary" >&2
+                echo "::warning title=Acquisition failed (verification-failure)::Checksum verification failed for $tool; falling through to source build (FR-66). Failure class: verification-failure." >&2
                 rm -rf "$tmp_dl"
                 return 1
               fi
@@ -592,6 +664,10 @@ runs:
 
             if [[ "$DL_OK" == "true" ]]; then
               echo "✓ Successfully acquired and verified prebuilt release tools from the App Registry (S3)."
+              {
+                echo "### Release Tools Acquisition"
+                echo "**Acquisition Mode:** ⚡ Prebuilt Binaries (Downloaded from App Registry S3)"
+              } >> "$GITHUB_STEP_SUMMARY"
               SOURCE_USED="published"
             else
               echo "Notice: Prebuilt release tools download from the App Registry (S3) did not succeed."
@@ -607,6 +683,10 @@ runs:
                   fi
                   if [[ -x "$RH_PATH" || -x "$AR_PATH" ]]; then
                     echo "✓ Successfully retrieved release tools from workflow artifact."
+                    {
+                      echo "### Release Tools Acquisition"
+                      echo "**Acquisition Mode:** 🗃️ Workflow Artifact (from prior build-release-tools job)"
+                    } >> "$GITHUB_STEP_SUMMARY"
                     SOURCE_USED="artifact"
                   fi
                 fi
@@ -614,7 +694,7 @@ runs:
 
               if [[ -z "$SOURCE_USED" ]]; then
                 if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                  echo "::warning title=Prebuilt release tools download failed::Could not download prebuilt release tools or workflow artifact. Falling back to source build via Bazel."
+                  echo "::warning title=Acquisition falling through to source build::Could not download prebuilt release tools or workflow artifact. Falling back to source build via Bazel."
                   SOURCE_MODE="source"
                 else
                   echo "::error title=Prebuilt release tools download failed::Failed to acquire prebuilt release tools. Fallback to inline source compilation is disabled. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') to build release tools from source."

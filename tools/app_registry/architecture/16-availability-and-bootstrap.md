@@ -135,3 +135,34 @@ Applies from AR-2c (the first phase to add CI steps) onward, including AR-5's
 `AllocateVersion` — version allocation must fall back to the tag-based path
 when the opt-in is off, or a registry outage becomes a release outage.
 
+
+## Post-cutover release behaviour (issue ED-1, #1149)
+
+After ED-1's kill-switch removal (issue #1149), the CI publishing path gains a
+synchronous registry dependency that does not exist today. This section describes
+the new availability contract, which trades off a registry outage blocking
+*publishing* for the ability to always acquire *tooling* from source:
+
+- **Binary publishing requires a live, reachable registry.** A registry outage
+  blocks the `plan-release` and `brokered-upload` jobs, and the release run
+  fails. This is a new and accepted failure mode — it did not exist before
+  ED-1's cutover. The registry is now part of the critical path for any domain
+  at stage `observe` or higher, and an operator must ensure it is deployed and
+  healthy.
+
+- **Tool acquisition (release_helper_go and app_registry CLI) still succeeds from
+  source when the registry is unreachable.** The `download-release-tools` action
+  implements five-class fallback routing (issue #1170, FR-68): when resolution
+  fails with any of the five terminal failure classes — not-found, indeterminate,
+  repeated-expiry, registry-unreachable, or verification-failure — the action
+  falls through to a Bazel source build instead of failing the `build-release-tools`
+  job. The 120-second per-tool budget and at-most-3-re-resolve-attempt limit
+  ensure that a misconfigured or stuck registry does not hang the release
+  indefinitely. Each fallback emits a diagnostic naming the failure class and
+  raises a workflow warning annotation.
+
+The single-lever kill switch (APP_REGISTRY_CICD_OPT_IN) remains the rollback for
+the entire integration. Turning it off disables all registry calls and restores
+the pre-ED-1 release behaviour (tag-based versioning, source-built tooling).
+The bootstrap safety described above under "`APP_REGISTRY_CICD_OPT_IN` — the
+bootstrap kill switch" is unchanged.
