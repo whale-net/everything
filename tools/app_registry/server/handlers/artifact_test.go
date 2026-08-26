@@ -2219,3 +2219,41 @@ func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
 		t.Fatalf("expected different artifact ID for different app")
 	}
 }
+
+// TestRecordArtifact_RequiresIdentityDigest verifies FR-14: missing
+// identity_digest is a hard error and is never accepted. This prevents
+// run-specific or synthesized digests from entering the system.
+func TestRecordArtifact_RequiresIdentityDigest(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-identity-required")
+
+	// Try to record an artifact without providing identity_digest.
+	// This should fail with InvalidArgument.
+	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:somecontent",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-no-identity-digest",
+		// IdentityDigest is deliberately omitted
+	})
+
+	if err == nil {
+		t.Fatalf("expected RecordArtifact to reject missing identity_digest, got nil error")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+
+	if st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument code, got %v: %v", st.Code(), st.Message())
+	}
+
+	if !strings.Contains(st.Message(), "identity_digest is required") {
+		t.Fatalf("expected error message to mention identity_digest requirement, got: %s", st.Message())
+	}
+}
