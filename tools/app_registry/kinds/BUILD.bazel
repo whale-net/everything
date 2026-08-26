@@ -6,9 +6,15 @@ go_library(
         "binary.go",
         "conformance.go",
         "dispatch.go",
+        "h7_from_metadata.go",
         "hooks.go",
+        "metadata_reader.go",
     ],
     importpath = "github.com/whale-net/everything/tools/app_registry/kinds",
+    deps = [
+        "//tools/appmeta/proto:appmetapb",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
     visibility = ["//tools/app_registry:__subpackages__"],
 )
 

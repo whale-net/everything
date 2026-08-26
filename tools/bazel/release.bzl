@@ -21,6 +21,14 @@ _DEPLOY_UNIT_TO_PROTO_ENUM = {
     "image": "DEPLOY_UNIT_IMAGE",
     "none": "DEPLOY_UNIT_NONE",
 }
+# Valid values for the artifact_kind attr, mapped to the appmetapb.ArtifactKind
+# enum's JSON name so protojson (used by Go consumers) can decode the emitted string directly as the enum.
+_ARTIFACT_KIND_TO_PROTO_ENUM = {
+    "image": "ARTIFACT_KIND_IMAGE",
+    "chart": "ARTIFACT_KIND_CHART",
+    "binary": "ARTIFACT_KIND_BINARY",
+    "firmware": "ARTIFACT_KIND_FIRMWARE",
+}
 
 def _app_metadata_impl(ctx):
     """Implementation for app_metadata rule."""
@@ -89,6 +97,17 @@ def _app_metadata_impl(ctx):
         ))
     metadata["deploy_unit"] = _DEPLOY_UNIT_TO_PROTO_ENUM[ctx.attr.deploy_unit]
 
+    # artifact_kind maps app-type → artifact-kind via H7 hook dispatch (FR-36).
+    # Stored as the appmetapb.ArtifactKind enum's JSON name so protojson can
+    # decode it directly; see _ARTIFACT_KIND_TO_PROTO_ENUM above.
+    if ctx.attr.artifact_kind:
+        if ctx.attr.artifact_kind not in _ARTIFACT_KIND_TO_PROTO_ENUM:
+            fail("artifact_kind must be one of {} (got {})".format(
+                sorted(_ARTIFACT_KIND_TO_PROTO_ENUM.keys()),
+                ctx.attr.artifact_kind,
+            ))
+        metadata["artifact_kind"] = _ARTIFACT_KIND_TO_PROTO_ENUM[ctx.attr.artifact_kind]
+
     output = ctx.actions.declare_file(ctx.label.name + "_metadata.json")
     ctx.actions.write(
         output = output,
@@ -128,6 +147,7 @@ app_metadata = rule(
         "resources_limits_memory": attr.string(default = ""),
         "openapi_spec_target": attr.label(default = None),
         "deploy_unit": attr.string(default = "chart", values = ["chart", "image", "none"]),
+        "artifact_kind": attr.string(default = "", values = ["", "image", "chart", "binary", "firmware"]),
     },
 )
 
@@ -142,7 +162,7 @@ app_metadata = rule(
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None, base = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None, base = None, artifact_kind = ""):
     """Convenience macro to set up release metadata and OCI images for an app.
 
     This macro consolidates the creation of OCI images and release metadata,
@@ -312,6 +332,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         resources_limits_memory = resources_limits_memory,
         openapi_spec_target = openapi_spec_target_ref,
         deploy_unit = deploy_unit,
+        artifact_kind = artifact_kind,
         tags = ["release-metadata"],
         visibility = ["//visibility:public"],
     )
