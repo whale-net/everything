@@ -50,11 +50,45 @@ message ErrorDetail {
   string message_key = 4;
 }
 
+// ============================================================================
+// Sensor identity changes (FR17)
+// ============================================================================
+
+// SensorIdentityChange announces a new sensor identity creation with its
+// consequence and the rewire path as an alternative (FR17).
+// This detail is attached to a gRPC status response before any write occurs,
+// allowing callers to understand the impact and choose the rewire path if needed.
+message SensorIdentityChange {
+  // sensor_name is the name that will identify the new sensor.
+  string sensor_name = 1;
+  
+  // hardware_key_description is a human-readable description of the new sensor's
+  // hardware key (i2c_address, mux_path, sensor_type).
+  string hardware_key_description = 2;
+  
+  // history_will_not_follow is a structured message indicating that this
+  // new identity has no predecessor: name_history, hw_history, and region_history
+  // will all start fresh at this change point. Existing readings under an old
+  // identity will not be carried forward.
+  bool history_will_not_follow = 3;
+  
+  // suggested_rewire_path is the canonical hardware key of an existing sensor
+  // with the same hardware signature but different name, if one exists.
+  // If set, the caller can use this as the target of a rewire operation
+  // (changing the sensor's name without changing its identity).
+  string suggested_rewire_path = 4;
+}
+
 // LeafLabAPI is the control-plane API for managing leaflab sensor boards.
 service LeafLabAPI {
   // Push a new DeviceConfig to a board over MQTT.
   // The server assigns a monotonically increasing version; the caller supplies
   // only the sensor overrides (names, enabled state, poll interval).
+  // 
+  // If the push would create a new sensor identity (FR17), an ErrorDetail with
+  // FailureClass PRECONDITION is returned as a status detail before any write,
+  // containing SensorIdentityChange to announce the consequence and suggest
+  // the rewire path as an alternative.
   rpc PushDeviceConfig(PushDeviceConfigRequest) returns (PushDeviceConfigResponse);
 
   // Get the latest config that was accepted by a board.
@@ -62,6 +96,12 @@ service LeafLabAPI {
 
   // List all known boards (boards that have sent at least one manifest).
   rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
+
+  // Get the three aligned timelines (name, hardware, region) for a sensor.
+  // All three timelines use the same valid_from/valid_to interval structure;
+  // their intervals align on change points, allowing efficient point-in-time queries.
+  // A sensor dropped from desired state keeps all three timelines.
+  rpc GetSensorTimelines(GetSensorTimelinesRequest) returns (GetSensorTimelinesResponse);
 }
 
 // ============================================================================
@@ -126,4 +166,67 @@ message ListBoardsRequest {
 message ListBoardsResponse {
   repeated BoardInfo boards = 1;
   PageResponse page = 2;
+}
+
+// ============================================================================
+// Sensor timelines (FR53)
+// ============================================================================
+
+// SensorNameEntry represents one interval in a sensor's name history.
+message SensorNameEntry {
+  string name = 1;
+  // valid_from is the Unix timestamp (seconds) when this name became active.
+  int64 valid_from = 2;
+  // valid_to is the Unix timestamp (seconds) when this name was superseded.
+  // Null (0) means this is the current name.
+  int64 valid_to = 3;
+}
+
+// SensorHardwareEntry represents one interval in a sensor's hardware history.
+// It carries the full canonical hardware key: (i2c_address, mux_path, sensor_type).
+message SensorHardwareEntry {
+  // i2c_address is the I2C address of this sensor during this interval.
+  // 0 means not recorded (pre-migration 013).
+  uint32 i2c_address = 1;
+  // mux_path is the JSONB-encoded cascaded mux chain [{"muxAddress":..,"muxChannel":..}, ...].
+  // Empty string means sensor is directly on the root I2C bus.
+  string mux_path = 2;
+  // sensor_type is the firmware.SensorType enum value (e.g., SENSOR_TYPE_SHT3X).
+  int32 sensor_type = 3;
+  // valid_from is the Unix timestamp (seconds) when this hardware configuration became active.
+  int64 valid_from = 4;
+  // valid_to is the Unix timestamp (seconds) when this configuration was superseded.
+  // Null (0) means this is the current configuration.
+  int64 valid_to = 5;
+}
+
+// SensorRegionEntry represents one interval in a sensor's region history.
+message SensorRegionEntry {
+  // region_id is the ID of the region this sensor was assigned to.
+  // 0 means no region (not yet assigned).
+  int64 region_id = 1;
+  // region_name is the human-readable name of the region during this interval.
+  // Empty if region_id is 0.
+  string region_name = 2;
+  // valid_from is the Unix timestamp (seconds) when this region assignment became active.
+  int64 valid_from = 3;
+  // valid_to is the Unix timestamp (seconds) when this region assignment was superseded.
+  // Null (0) means this is the current region assignment.
+  int64 valid_to = 4;
+}
+
+// SensorTimelines holds the three aligned timelines for a sensor (FR53).
+message SensorTimelines {
+  int64 sensor_id = 1;
+  repeated SensorNameEntry name_timeline = 2;
+  repeated SensorHardwareEntry hardware_timeline = 3;
+  repeated SensorRegionEntry region_timeline = 4;
+}
+
+message GetSensorTimelinesRequest {
+  int64 sensor_id = 1;
+}
+
+message GetSensorTimelinesResponse {
+  SensorTimelines timelines = 1;
 }
