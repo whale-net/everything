@@ -458,6 +458,62 @@ func (p planParams) registryOptedIn() bool {
 	return !p.dryRun && !p.skipRegistry && defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true"
 }
 
+
+// compareCarriers performs FR-64's fatal carrier-1/carrier-2 comparison:
+// when both Bazel metadata (carrier 1) and registry metadata (carrier 2) are
+// readable (i.e., a path with a checkout and appsMetadata from the registry),
+// verify they agree on artifact kind. A disagreement is the "release ran ahead
+// of reconcile" condition and produces an explicit error naming both stores and
+// both values, with no version allocated.
+//
+// carrier1 is the Bazel-discovered metadata (requires a workspace root).
+// carrier2 is the registry metadata passed as input (AppMetadataInput).
+// Returns an error if the kinds disagree.
+func compareCarriers(carrier1 []AppMetadata, carrier2 []AppMetadataInput) error {
+	// Build maps for easy lookup
+	carrier1Map := make(map[string]AppMetadata)
+	for _, app := range carrier1 {
+		carrier1Map[app.FullName()] = app
+	}
+
+	carrier2Map := make(map[string]AppMetadataInput)
+	for _, app := range carrier2 {
+		fullName := app.Domain + "-" + app.Name
+		carrier2Map[fullName] = app
+	}
+
+	// Check that every app in carrier 2 (registry) has a matching app in carrier 1 (Bazel)
+	// with the same artifact kind
+	for fullName, c2App := range carrier2Map {
+		c1App, exists := carrier1Map[fullName]
+		if !exists {
+			// App exists in registry but not in Bazel checkout -- release ran ahead
+			// of reconcile (the app was added to the registry but the checkout hasn't
+			// been updated yet, or was removed from Bazel)
+			return fmt.Errorf("carrier-1/carrier-2 mismatch for %s: app exists in registry (kind %s) but not found in Bazel checkout -- release ran ahead of reconciliation (has the checkout been updated?)", fullName, c2App.AppType)
+		}
+
+		// Determine what kind Bazel expects vs what the registry says
+		bazelKind := determineArtifactKind(c1App)
+		var registryKind pb.ArtifactKind
+		switch c2App.AppType {
+		case "cli", "binary":
+			registryKind = pb.ArtifactKind_ARTIFACT_KIND_BINARY
+		case "firmware":
+			registryKind = pb.ArtifactKind_ARTIFACT_KIND_FIRMWARE
+		default:
+			registryKind = pb.ArtifactKind_ARTIFACT_KIND_IMAGE
+		}
+
+		// Compare the kinds
+		if bazelKind != registryKind {
+			return fmt.Errorf("carrier-1/carrier-2 mismatch for %s: Bazel declares app_type %q (kind %s), but registry has app_type %q (kind %s) -- release ran ahead of reconciliation (is the registry's app_type outdated?)", fullName, c1App.AppType, bazelKind, c2App.AppType, registryKind)
+		}
+	}
+
+	return nil
+}
+
 func planRelease(p planParams) (*PlanResult, error) {
 	ctx := p.ctx
 	if ctx == nil {
@@ -481,6 +537,21 @@ func planRelease(p planParams) (*PlanResult, error) {
 				// (ResolvePlan) already resolved this exact target list
 				// against App Registry -- see AppMetadataFromInputs.
 				releaseApps = AppMetadataFromInputs(p.appsMetadata)
+				
+				// FR-64: Fatal carrier-1/carrier-2 comparison on checkout-bearing paths.
+				// When appsMetadata is provided (carrier 2: registry) AND a workspace root
+				// is available (carrier 1: Bazel), compare them and fail if they disagree.
+				if p.workspaceRoot != "" {
+					bazelApps, err := ListAllApps(p.bazel, p.fs, p.workspaceRoot)
+					if err != nil {
+						return nil, fmt.Errorf("carrier-1/carrier-2 comparison: discover Bazel apps: %w", err)
+					}
+					if err := compareCarriers(bazelApps, p.appsMetadata); err != nil {
+						// Carrier mismatch is fatal (FR-64): "release ran ahead of reconcile" condition
+						// Return the error with no version allocated
+						return nil, err
+					}
+				}
 			} else {
 				allApps, err := ListAllApps(p.bazel, p.fs, p.workspaceRoot)
 				if err != nil {
