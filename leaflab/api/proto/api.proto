@@ -15,16 +15,16 @@ import "firmware/proto/config.proto";
 // in an ErrorDetail attached to gRPC status details.
 enum FailureClass {
   FAILURE_CLASS_UNSPECIFIED = 0;
-  
+
   // A required input field is missing or invalid.
   FAILURE_CLASS_INVALID_ARGUMENT = 1;
-  
+
   // The operation cannot be performed because it would violate an
   // invariant (e.g., renaming an entity to a name that is already taken,
   // or operating on a board that doesn't exist). Includes "refuse before
   // writing" failures.
   FAILURE_CLASS_PRECONDITION = 2;
-  
+
   // An internal system error (database, MQTT, etc.).
   FAILURE_CLASS_INTERNAL = 3;
 }
@@ -72,15 +72,15 @@ enum Provenance {
 // parsing the human-readable message string.
 message ErrorDetail {
   FailureClass failure_class = 1;
-  
+
   // The entity that the failure relates to (e.g., "board", "device_config").
   // Machine-readable; used to construct or context in UI/logs.
   string entity = 2;
-  
+
   // The field within the entity that caused or is affected by the failure.
   // Empty if the failure is about the entity as a whole.
   string field = 3;
-  
+
   // A key to look up the human-readable failure description from a message
   // catalog. Allows non-technical surfaces to render personalized prose
   // without receiving status codes, proto field names, or stack traces.
@@ -99,17 +99,17 @@ message ErrorDetail {
 message SensorIdentityChange {
   // sensor_name is the name that will identify the new sensor.
   string sensor_name = 1;
-  
+
   // hardware_key_description is a human-readable description of the new sensor's
   // hardware key (i2c_address, mux_path, sensor_type).
   string hardware_key_description = 2;
-  
+
   // history_will_not_follow is a structured message indicating that this
   // new identity has no predecessor: name_history, hw_history, and region_history
   // will all start fresh at this change point. Existing readings under an old
   // identity will not be carried forward.
   bool history_will_not_follow = 3;
-  
+
   // suggested_rewire_path is the canonical hardware key of an existing sensor
   // with the same hardware signature but different name, if one exists.
   // If set, the caller can use this as the target of a rewire operation
@@ -123,7 +123,7 @@ service LeafLabAPI {
   // Scope declares the push's semantic interpretation (COMPLETE or EDIT).
   // A request without scope is rejected with a distinct failure class naming the field;
   // nothing is stored, nothing is published, no version is assigned.
-  // 
+  //
   // If the push would create a new sensor identity (FR17), an ErrorDetail with
   // FailureClass PRECONDITION is returned as a status detail before any write,
   // containing SensorIdentityChange to announce the consequence and suggest
@@ -134,7 +134,20 @@ service LeafLabAPI {
   // Accepts the same scope and payload structure as PushDeviceConfig;
   // returns what would be stored (with materialised entries for EDIT),
   // but does not assign a version or persist to the database.
-  rpc PushDeviceConfigDryRun(PushDeviceConfigRequest) returns (PushDeviceConfigResponse);
+  // Returns the effective config (not the partial payload), the diff against the
+  // base version, the version that would be assigned, and the named removal set.
+  // Does not write to the database or publish to MQTT.
+  rpc PushDeviceConfigDryRun(PushDeviceConfigRequest) returns (PushDeviceConfigDryRunResponse);
+
+  // Compute a diff between two config versions or between a version and an unpushed draft.
+  // The diff classifies each sensor entry as added / removed / changed / unchanged,
+  // with both raw payloads (from and to) available.
+  rpc DiffDeviceConfig(DiffDeviceConfigRequest) returns (DiffDeviceConfigResponse);
+
+  // Push a config to multiple boards in a single operation.
+  // Each board receives the same config, but results are returned per-board.
+  // A reason for the push must be provided (for audit purposes).
+  rpc PushDeviceConfigMultiBoard(PushDeviceConfigMultiBoardRequest) returns (PushDeviceConfigMultiBoardResponse);
 
   // Get the latest config that was accepted by a board.
   rpc GetDeviceConfig(GetDeviceConfigRequest) returns (GetDeviceConfigResponse);
@@ -147,6 +160,10 @@ service LeafLabAPI {
   // their intervals align on change points, allowing efficient point-in-time queries.
   // A sensor dropped from desired state keeps all three timelines.
   rpc GetSensorTimelines(GetSensorTimelinesRequest) returns (GetSensorTimelinesResponse);
+
+  // Get the ack state of a multi-board push group.
+  // Returns per-board ack state (acked / rejected / silent) for all boards in the group.
+  rpc GetPushGroupAckState(GetPushGroupAckStateRequest) returns (GetPushGroupAckStateResponse);
 
   // Health returns the service health status without requiring authentication.
   // It returns up or degraded and no other details.
@@ -184,11 +201,11 @@ message PageResponse {
 message RemovalKey {
   // A removal key identifies sensors to be removed by canonical hardware identity.
   // Either a full key (with sensor_type) or a chip key (without sensor_type).
-  
+
   // For full key: the canonical (i2c_address, mux_path, sensor_type) of the sensor to remove.
   // For chip key: the canonical (i2c_address, mux_path) of the chip; all sensors at
   // this address and mux path are removed.
-  
+
   uint32 i2c_address = 1;
   // mux_path is the JSONB-encoded cascaded mux chain [{"muxAddress":..,"muxChannel":..}, ...].
   // Empty string means sensor is directly on the root I2C bus.
@@ -199,17 +216,17 @@ message RemovalKey {
 
 message PushDeviceConfigRequest {
   string device_id = 1;
-  
+
   // scope declares the semantic interpretation of this push.
   // Required; no default. A request omitting scope is rejected with a distinct
   // failure class naming the field (FR59.1).
   ConfigScope scope = 2;
-  
+
   // Sensor entries — interpretation depends on scope.
   // For CONFIG_SCOPE_COMPLETE: the board's entire desired sensor set.
   // For CONFIG_SCOPE_EDIT: only entries being added or changed.
   repeated firmware.SensorConfig sensors = 3;
-  
+
   // Removal list — only used for CONFIG_SCOPE_EDIT.
   // Names sensors to be removed by canonical hardware identity.
   // Each removal key names either a full key (drops one entry) or a chip key
@@ -221,6 +238,171 @@ message PushDeviceConfigRequest {
 message PushDeviceConfigResponse {
   // Version assigned to this push.
   uint64 version = 1;
+}
+
+// ConfigDiffClassification describes the relationship between entries in a diff.
+enum ConfigDiffClassification {
+  CLASSIFICATION_UNSPECIFIED = 0;
+
+  // Entry present in target but not in base.
+  CLASSIFICATION_ADDED = 1;
+
+  // Entry present in base but not in target.
+  CLASSIFICATION_REMOVED = 2;
+
+  // Entry present in both but with different values.
+  CLASSIFICATION_CHANGED = 3;
+
+  // Entry present in both with identical values.
+  CLASSIFICATION_UNCHANGED = 4;
+}
+
+// ConfigDiffEntry represents a single sensor config entry in a diff.
+// It includes the classification and both raw payloads for comparison.
+message ConfigDiffEntry {
+  // classification describes what changed for this entry.
+  ConfigDiffClassification classification = 1;
+
+  // sensor_hardware_key identifies the sensor by hardware address.
+  // Format: canonical (i2c_address, mux_path, sensor_type).
+  string sensor_hardware_key = 2;
+
+  // from_payload is the raw SensorConfig proto from the base version (if any).
+  // Empty if classification is ADDED.
+  bytes from_payload = 3;
+
+  // to_payload is the raw SensorConfig proto in the target version (if any).
+  // Empty if classification is REMOVED.
+  bytes to_payload = 4;
+}
+
+// RemovalEntry represents a single sensor that would stop being polled.
+// Used in dry run and diff responses to show which entries would be removed.
+message RemovalEntry {
+  // sensor_hardware_key identifies the sensor by hardware address.
+  string sensor_hardware_key = 1;
+
+  // sensor_name is the logical name of the sensor being removed (current name).
+  string sensor_name = 2;
+}
+
+// ConfigDiff represents the differences between two config versions.
+message ConfigDiff {
+  // entries is the per-entry classification and both payloads.
+  repeated ConfigDiffEntry entries = 1;
+
+  // removals is the named set of entries that would stop being polled.
+  // This is computed against the effective resulting payload (FR37, FR38).
+  repeated RemovalEntry removals = 2;
+}
+
+// PushDeviceConfigDryRunResponse is returned by PushDeviceConfigDryRun.
+// It contains the effective config, the diff, the version preview, and the named removals.
+message PushDeviceConfigDryRunResponse {
+  // Version that would be assigned if this push were executed (preview).
+  uint64 version_preview = 1;
+
+  // effective_config is the complete configuration that would result.
+  // For CONFIG_SCOPE_COMPLETE: equals the requested config.
+  // For CONFIG_SCOPE_EDIT: includes materialised entries carried forward from the base version.
+  firmware.DeviceConfig effective_config = 2;
+
+  // diff is the configuration change against the base version.
+  ConfigDiff diff = 3;
+
+  // per_board_results would be returned for multi-board dry runs.
+  // For single-board dry run, this is a list with one result.
+  repeated PushBoardResult per_board_results = 4;
+}
+
+// DiffDeviceConfigRequest asks for the diff between two versions or between a version and a draft.
+message DiffDeviceConfigRequest {
+  string device_id = 1;
+
+  // from_version is the base version to diff from.
+  // Set to 0 to indicate the current accepted version.
+  uint64 from_version = 2;
+
+  // to_version is the target version to diff to.
+  // Set to 0 to indicate a diff against a draft (unpushed config, provided in to_draft).
+  uint64 to_version = 3;
+
+  // to_draft is an optional unpushed config to diff against.
+  // Only used if to_version is 0.
+  PushDeviceConfigRequest to_draft = 4;
+}
+
+// DiffDeviceConfigResponse returns the diff between two versions or a version and a draft.
+message DiffDeviceConfigResponse {
+  ConfigDiff diff = 1;
+}
+
+// PushBoardResult represents the result of a push operation for a single board.
+message PushBoardResult {
+  string device_id = 1;
+
+  // success is true if the push succeeded for this board.
+  bool success = 2;
+
+  // version is the version assigned to this board (if successful).
+  uint64 version = 3;
+
+  // error_detail carries structured error information (if unsuccessful).
+  ErrorDetail error_detail = 4;
+}
+
+// PushDeviceConfigMultiBoardRequest pushes a config to multiple boards.
+message PushDeviceConfigMultiBoardRequest {
+  // device_ids is the list of target boards.
+  repeated string device_ids = 1;
+
+  // scope declares the semantic interpretation of this push.
+  ConfigScope scope = 2;
+
+  // Sensor entries.
+  repeated firmware.SensorConfig sensors = 3;
+
+  // Removal list (for CONFIG_SCOPE_EDIT).
+  repeated RemovalKey remove = 4;
+
+  // reason is a required justification for the push (for audit purposes, FR48).
+  string reason = 5;
+}
+
+// PushDeviceConfigMultiBoardResponse returns per-board results for a multi-board push.
+message PushDeviceConfigMultiBoardResponse {
+  // push_group_id is the stable group identifier for this multi-board push.
+  // The ack state of all boards in this group is readable via GetPushGroupAckState.
+  string push_group_id = 1;
+
+  // per_board_results is the outcome for each board.
+  repeated PushBoardResult per_board_results = 2;
+}
+
+// GetPushGroupAckStateRequest asks for the ack state of a multi-board push group.
+message GetPushGroupAckStateRequest {
+  string push_group_id = 1;
+}
+
+// BoardAckState represents the ack state of a single board in a push group.
+enum BoardAckState {
+  ACK_STATE_UNSPECIFIED = 0;
+  ACK_STATE_ACKED = 1;
+  ACK_STATE_REJECTED = 2;
+  ACK_STATE_SILENT = 3;
+}
+
+// PushGroupBoardState represents the ack state for a single board in a push group.
+message PushGroupBoardState {
+  string device_id = 1;
+  BoardAckState ack_state = 2;
+}
+
+// GetPushGroupAckStateResponse returns the ack state for all boards in a push group.
+message GetPushGroupAckStateResponse {
+  string push_group_id = 1;
+  // board_states is the per-board ack state.
+  repeated PushGroupBoardState board_states = 2;
 }
 
 message GetDeviceConfigRequest {
