@@ -17,10 +17,28 @@ import (
 //
 // Adding an unauthenticated RPC that serves household data FAILS the build.
 func TestAuthCoverage_NoRPCWithoutAuthentication(t *testing.T) {
-	// Placeholder: Implementation phase will add the full conformance check
-	// that enumerates RPCs from the proto, verifies auth coverage, and fails
-	// the build if an unauthenticated route is found.
-	_ = t
+	rpcs := enumerateRPCsFromProto(t)
+	if len(rpcs) == 0 {
+		t.Fatalf("no RPCs found in api.proto (check data dependencies)")
+	}
+
+	rpcsWithAuth := getRPCsRequiringAuth(t)
+	const anonymousAllowlist = "Health"
+
+	for _, rpc := range rpcs {
+		if rpc == anonymousAllowlist {
+			// Health is the only allowed anonymous endpoint
+			if rpcsWithAuth[rpc] {
+				t.Errorf("RPC %q is on the anonymous allowlist but calls requireAuthentication; remove the auth check", rpc)
+			}
+			continue
+		}
+
+		// All other RPCs must be authenticated
+		if !rpcsWithAuth[rpc] {
+			t.Errorf("RPC %q does not call requireAuthentication -- every RPC serving household data must be authenticated (NFR1.a)", rpc)
+		}
+	}
 }
 
 // TestAuthCoverage_BFFRoutesProtected is the NFR1.a conformance check
@@ -37,17 +55,78 @@ func TestAuthCoverage_NoRPCWithoutAuthentication(t *testing.T) {
 //
 // Adding an unauthenticated route that serves household data FAILS the build.
 func TestAuthCoverage_BFFRoutesProtected(t *testing.T) {
-	// Placeholder: Implementation phase will add the full conformance check
-	// that enumerates routes from the UI source, verifies auth coverage,
-	// and fails the build if an unauthenticated route is found.
-	_ = t
+	routes := enumerateBFFRoutes(t)
+	if len(routes) == 0 {
+		t.Fatalf("no routes found in ui/main.go (check data dependencies)")
+	}
+
+	// These routes are explicitly on the anonymous allowlist
+	anonymousAllowlist := map[string]bool{
+		"/health":        true,
+		"/auth/login":    true,
+		"/auth/callback": true,
+		"/auth/logout":   true,
+	}
+
+	for route, isProtected := range routes {
+		if anonymousAllowlist[route] {
+			// These routes are allowed to be unprotected
+			if isProtected {
+				t.Errorf("route %q is on the anonymous allowlist but is wrapped in RequireAuthFunc; remove the auth wrapper", route)
+			}
+			continue
+		}
+
+		// All other routes must be protected
+		if !isProtected {
+			t.Errorf("route %q is not wrapped in RequireAuthFunc -- every route serving household data must be authenticated (NFR1.a)", route)
+		}
+	}
 }
 
 // TestAuthCoverage_SingleEntryAnonymousAllowlist verifies that the anonymous
-// allowlist has exactly one entry: the Health endpoint (FR63).
+// allowlist has exactly one entry per service: the Health endpoint (FR63) for
+// the gRPC API, and the /health and auth routes for the BFF.
 // If additional endpoints are added to the allowlist, this test fails.
 func TestAuthCoverage_SingleEntryAnonymousAllowlist(t *testing.T) {
-	// Placeholder: Implementation phase will enumerate the allowlist and
-	// verify it contains exactly one entry.
-	_ = t
+	// Check gRPC API: only Health should be unauthenticated
+	rpcs := enumerateRPCsFromProto(t)
+	rpcsWithAuth := getRPCsRequiringAuth(t)
+
+	unauthRPCs := []string{}
+	for _, rpc := range rpcs {
+		if !rpcsWithAuth[rpc] {
+			unauthRPCs = append(unauthRPCs, rpc)
+		}
+	}
+
+	if len(unauthRPCs) != 1 || unauthRPCs[0] != "Health" {
+		t.Errorf("API allowlist has %v; expected only [Health]. NFR1.a requires exactly one anonymous RPC endpoint", unauthRPCs)
+	}
+
+	// Check BFF: /health, /auth/login, /auth/callback, /auth/logout should be unprotected
+	routes := enumerateBFFRoutes(t)
+	unauthRoutes := []string{}
+	for route, isProtected := range routes {
+		if !isProtected {
+			unauthRoutes = append(unauthRoutes, route)
+		}
+	}
+
+	expectedUnauth := map[string]bool{
+		"/health":        true,
+		"/auth/login":    true,
+		"/auth/callback": true,
+		"/auth/logout":   true,
+	}
+
+	if len(unauthRoutes) != len(expectedUnauth) {
+		t.Errorf("BFF has %d unauthenticated routes; expected %d (health and auth routes)", len(unauthRoutes), len(expectedUnauth))
+	}
+
+	for _, route := range unauthRoutes {
+		if !expectedUnauth[route] {
+			t.Errorf("unexpected unauthenticated route %q in BFF", route)
+		}
+	}
 }

@@ -14,6 +14,7 @@ go_test(
     ],
     data = [
         "//leaflab:build_file",
+        "//leaflab/api:conformance_srcs",
         "//leaflab/api/proto:proto_file",
         "//leaflab/ui:conformance_srcs",
     ],
