@@ -134,12 +134,36 @@ func (r *Repository) GetBoardHousehold(ctx context.Context, boardID int64) (int6
 
 // GetRegionHousehold resolves a region to its owning household_id.
 // For non-root regions, traverses the parent tree to find the root's household_id.
+// Per FR1.1: region trees carry household_id only on root; descendants inherit.
 func (r *Repository) GetRegionHousehold(ctx context.Context, regionID int64) (int64, error) {
 	var householdID int64
-	// TODO: Implement recursive parent traversal to find root region's household_id
-	_ = ctx
-	_ = regionID
-	return householdID, fmt.Errorf("GetRegionHousehold not yet implemented")
+	// Use a recursive CTE to find the root region (parent_region_id IS NULL)
+	// and return its household_id.
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE region_path AS (
+			-- Base case: the given region
+			SELECT region_id, parent_region_id, household_id
+			FROM region
+			WHERE region_id = $1
+			
+			UNION ALL
+			
+			-- Recursive case: traverse up to parent
+			SELECT r.region_id, r.parent_region_id, r.household_id
+			FROM region r
+			JOIN region_path rp ON r.region_id = rp.parent_region_id
+		)
+		-- Return the household_id of the root (where parent_region_id IS NULL)
+		SELECT household_id
+		FROM region_path
+		WHERE parent_region_id IS NULL
+		LIMIT 1
+	`, regionID).Scan(&householdID)
+	if err != nil {
+		return 0, fmt.Errorf("get region %d household: %w", regionID, err)
+	}
+
+	return householdID, nil
 }
 
 // GetPlantHousehold resolves a plant to its owning household_id.
@@ -168,4 +192,111 @@ func (r *Repository) GetSensorHousehold(ctx context.Context, sensorID int64) (in
 		return 0, fmt.Errorf("get sensor %d household: %w", sensorID, err)
 	}
 	return householdID, nil
+}
+
+// ── SCD2 write helpers (close-and-open pattern) ───────────────────────────────
+
+// UpdateHouseholdMember closes the current membership record and opens a new one.
+// Per SCD2 pattern: UPDATE valid_to, then INSERT new row.
+// Returns the new member_id if successful.
+func (r *Repository) UpdateHouseholdMember(ctx context.Context, householdID int64, principalID string, newRole string) (int64, error) {
+	// Close the current membership record.
+	_, err := r.db.Exec(ctx, `
+		UPDATE household_member
+		SET valid_to = NOW()
+		WHERE household_id = $1 AND principal_id = $2 AND valid_to IS NULL
+	`, householdID, principalID)
+	if err != nil {
+		return 0, fmt.Errorf("close household_member for household %d principal %s: %w", householdID, principalID, err)
+	}
+
+	// Insert new membership record with updated role.
+	var memberID int64
+	err = r.db.QueryRow(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, $2, $3, NOW())
+		RETURNING member_id
+	`, householdID, principalID, newRole).Scan(&memberID)
+	if err != nil {
+		return 0, fmt.Errorf("insert new household_member for household %d principal %s: %w", householdID, principalID, err)
+	}
+
+	return memberID, nil
+}
+
+// AddHouseholdMember adds a new principal to a household.
+// Per SCD2 pattern: INSERT new row (initial membership).
+func (r *Repository) AddHouseholdMember(ctx context.Context, householdID int64, principalID string, role string) (int64, error) {
+	var memberID int64
+	err := r.db.QueryRow(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, $2, $3, NOW())
+		RETURNING member_id
+	`, householdID, principalID, role).Scan(&memberID)
+	if err != nil {
+		return 0, fmt.Errorf("add household_member to household %d principal %s: %w", householdID, principalID, err)
+	}
+
+	return memberID, nil
+}
+
+// RemoveHouseholdMember closes the current membership record (soft-delete via SCD2).
+func (r *Repository) RemoveHouseholdMember(ctx context.Context, householdID int64, principalID string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE household_member
+		SET valid_to = NOW()
+		WHERE household_id = $1 AND principal_id = $2 AND valid_to IS NULL
+	`, householdID, principalID)
+	if err != nil {
+		return fmt.Errorf("remove household_member from household %d principal %s: %w", householdID, principalID, err)
+	}
+
+	return nil
+}
+
+// TransferBoardOwnership transfers a board to a new household (close-and-open on board_ownership).
+// Per SCD2 pattern: UPDATE valid_to on current owner, then INSERT new ownership row.
+// Also updates board.household_id to the new household (O(1) current-value access).
+func (r *Repository) TransferBoardOwnership(ctx context.Context, boardID int64, newHouseholdID int64) error {
+	// Use a transaction to ensure atomicity of board_ownership update and board.household_id update.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transfer board %d ownership: %w", boardID, err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Close the current ownership record.
+	_, err = tx.Exec(ctx, `
+		UPDATE board_ownership
+		SET valid_to = NOW()
+		WHERE board_id = $1 AND valid_to IS NULL
+	`, boardID)
+	if err != nil {
+		return fmt.Errorf("close board_ownership for board %d: %w", boardID, err)
+	}
+
+	// Insert new ownership record.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO board_ownership (board_id, household_id, valid_from)
+		VALUES ($1, $2, NOW())
+	`, boardID, newHouseholdID)
+	if err != nil {
+		return fmt.Errorf("insert new board_ownership for board %d to household %d: %w", boardID, newHouseholdID, err)
+	}
+
+	// Update board.household_id to the new household (O(1) current-value access).
+	_, err = tx.Exec(ctx, `
+		UPDATE board SET household_id = $2
+		WHERE board_id = $1
+	`, boardID, newHouseholdID)
+	if err != nil {
+		return fmt.Errorf("update board %d household_id: %w", boardID, err)
+	}
+
+	// Commit the transaction.
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit transfer board %d ownership: %w", boardID, err)
+	}
+
+	return nil
 }
