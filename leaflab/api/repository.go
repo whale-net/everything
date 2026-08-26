@@ -840,3 +840,67 @@ type SensorRegionEntry struct {
 	ValidFrom  int64
 	ValidTo    int64
 }
+
+// ListBoardsByHousehold returns boards owned by a specific household.
+// FR5: Board listings are household-scoped.
+func (r *Repository) ListBoardsByHousehold(ctx context.Context, householdID int64) ([]BoardRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT board_id, device_id, EXTRACT(EPOCH FROM last_seen_at)::bigint AS recorded_at
+		FROM board
+		WHERE household_id = $1
+		ORDER BY last_seen_at DESC, board_id ASC
+	`, householdID)
+	if err != nil {
+		return nil, fmt.Errorf("list boards by household %d: %w", householdID, err)
+	}
+	defer rows.Close()
+
+	var boards []BoardRow
+	for rows.Next() {
+		var b BoardRow
+		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.RecordedAt); err != nil {
+			return nil, fmt.Errorf("scan board: %w", err)
+		}
+		boards = append(boards, b)
+	}
+	return boards, rows.Err()
+}
+
+// GetBoardByDeviceID resolves a device_id to its board_id and household_id.
+// Returns pgx.ErrNoRows if the board doesn't exist.
+// Used for per-entity authorization checks in PushDeviceConfig and GetDeviceConfig.
+func (r *Repository) GetBoardByDeviceID(ctx context.Context, deviceID string) (boardID, householdID int64, err error) {
+	err = r.db.QueryRow(ctx, `
+		SELECT board_id, household_id FROM board
+		WHERE device_id = $1
+	`, deviceID).Scan(&boardID, &householdID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return boardID, householdID, nil
+}
+
+// GetPrincipalHouseholds returns all households the principal is currently a member of.
+// FR75: Membership is the mechanism by which non-admin principals obtain access.
+// Returns only households where valid_to IS NULL (current membership).
+func (r *Repository) GetPrincipalHouseholds(ctx context.Context, principalID string) ([]int64, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT DISTINCT household_id FROM household_member
+		WHERE principal_id = $1 AND valid_to IS NULL
+		ORDER BY household_id
+	`, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("get households for principal %s: %w", principalID, err)
+	}
+	defer rows.Close()
+
+	var householdIDs []int64
+	for rows.Next() {
+		var hid int64
+		if err := rows.Scan(&hid); err != nil {
+			return nil, fmt.Errorf("scan household_id: %w", err)
+		}
+		householdIDs = append(householdIDs, hid)
+	}
+	return householdIDs, rows.Err()
+}

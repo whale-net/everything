@@ -43,3 +43,10 @@ go_test(
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
+
+# Filegroup for migrations used by tests
+filegroup(
+    name = "migrations",
+    srcs = glob(["migrations/*.sql"]),
+    visibility = ["//leaflab:__subpackages__"],
+)
