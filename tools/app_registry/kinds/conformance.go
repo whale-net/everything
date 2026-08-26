@@ -99,7 +99,7 @@ var BanExemptLocations = []BanExemptLocation{
 	// H8 exemption: pre-cutover recovery procedure in recovery documentation
 	{
 		Hook:   "H8",
-		Path:   "tools/release_helper_go/docs/RECOVERY.md",
+		Path:   "tools/app_registry/RECOVERY.md",
 		Reason: "FR-40 step 3's recovery-only appendix for artifact key derivation",
 	},
 }
