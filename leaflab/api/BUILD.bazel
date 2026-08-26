@@ -101,3 +101,28 @@ release_app(
     port = 50051,
     replicas = 1,
 )
+
+# Integration tests for config operations (diff, dry run, multi-board pushes)
+go_test(
+    name = "config_operations_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["config_operations_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
