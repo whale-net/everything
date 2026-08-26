@@ -16,6 +16,11 @@ import (
 // exercises keyset pagination per FR61's token contract; times are rendered as
 // elapsed instants per FR64.
 func (app *App) handleBoards(w http.ResponseWriter, r *http.Request) {
+	if err := app.requirePhase1Gate(); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+
 	user := htmxauth.GetUser(r.Context())
 	if user == nil {
 		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)

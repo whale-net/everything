@@ -179,6 +179,18 @@ func (app *App) Close() error {
 	return nil
 }
 
+// requirePhase1Gate ensures the Phase 1 access gate is open (A30: non-exposed to production).
+// See #1187 for enforcement; removable in Phase 2 when FR5 scoping lands.
+func (app *App) requirePhase1Gate() error {
+	// Parse the gate value as a boolean. The default is "false" (closed).
+	gateOpen := strings.ToLower(app.config.Phase1GateOpen) == "true"
+	if !gateOpen {
+		return fmt.Errorf("Phase 1 is not available in this deployment")
+	}
+	return nil
+}
+
+
 func main() {
 	log.Println("Starting LeafLab UI...")
 

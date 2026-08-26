@@ -44,6 +44,11 @@ const (
 
 	// InvalidPageToken is returned when a page_token is malformed or foreign.
 	InvalidPageToken = "INVALID_PAGE_TOKEN"
+	// Phase1Unavailable is returned when the Phase 1 access gate is closed.
+	// Phase 1 has authentication but no ownership; it is not exposed to
+	// production users. See #1187 for enforcement; removable in Phase 2 when
+	// FR5 scoping lands.
+	Phase1Unavailable = "PHASE1_UNAVAILABLE"
 )
 
 // ErrorDetailFromStatus attempts to extract the ErrorDetail from a gRPC

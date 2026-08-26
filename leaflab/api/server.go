@@ -76,6 +76,29 @@ func requireAuthentication(ctx context.Context) error {
 	return nil
 }
 
+// requirePhase1Gate ensures the Phase 1 access gate is open (A30: non-exposed to production).
+// The gate is evaluated in the API service (NFR18.1). See #1187 for enforcement;
+// removable in Phase 2 when FR5 scoping lands.
+func (s *LeafLabAPIServer) requirePhase1Gate(ctx context.Context) error {
+	// Parse the gate value as a boolean. The default is "false" (closed).
+	gateOpen := strings.ToLower(s.phase1GateOpen) == "true"
+	if !gateOpen {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+			"service",
+			"",
+			apierrors.Phase1Unavailable,
+		)
+		return apierrors.StatusWithDetail(
+			codes.FailedPrecondition,
+			"Phase 1 is not available in this deployment",
+			detail,
+		)
+	}
+	return nil
+}
+
+
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
 	if err := requireAuthentication(ctx); err != nil {
 		return nil, err
@@ -245,6 +268,10 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 
 func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
 	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	if err := s.requirePhase1Gate(ctx); err != nil {
 		return nil, err
 	}
 
