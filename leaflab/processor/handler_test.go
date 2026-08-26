@@ -103,6 +103,11 @@ func (s *stubRepo) GetSensorsByBoard(_ context.Context, _ int64) ([]SensorState,
 	return nil, nil
 }
 
+func (s *stubRepo) GetAffectedSensorsForConfig(_ context.Context, _ int64, _ int64) ([]AffectedSensor, error) {
+	return nil, nil
+}
+
+
 // marshalManifest encodes a DeviceManifest to wire bytes.
 func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 	t.Helper()

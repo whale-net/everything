@@ -92,10 +92,28 @@ func run() error {
 		logger.Info("config version cache pre-loaded", "devices", len(versions))
 	}
 
+	// Declare the cache invalidation fanout exchange.
+	// This must be declared before the publisher and consumer use it.
+	ch, err := rmqConn.Channel()
+	if err != nil {
+		return fmt.Errorf("failed to open channel for exchange declaration: %w", err)
+	}
+	if err := ch.ExchangeDeclare(
+		"leaflab.cache-invalidations", // exchange name
+		"fanout",                       // exchange type (broadcast to all subscribers)
+		true,                           // durable
+		false,                          // auto-deleted
+		false,                          // internal
+		false,                          // no-wait
+		nil,                            // arguments
+	); err != nil {
+		ch.Close()
+		return fmt.Errorf("failed to declare cache invalidation fanout exchange: %w", err)
+	}
+	ch.Close()
+
 	// Create the cache invalidation publisher and invalidator.
-	// This is passed to MessageHandler so it can publish signals when regions/identity change.
-	// TODO(#1203 Implementation): Create a CacheInvalidationPublisher that properly handles
-	// the fanout exchange declaration and publishing.
+	// The publisher uses the fanout exchange declared above for broadcast delivery.
 	invalidationPublisher, err := rmq.NewPublisher(rmqConn)
 	if err != nil {
 		return fmt.Errorf("failed to create cache invalidation publisher: %w", err)

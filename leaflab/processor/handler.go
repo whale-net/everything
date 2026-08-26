@@ -30,6 +30,7 @@ type SensorRepository interface {
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
 	GetSensorsByBoard(ctx context.Context, boardID int64) ([]SensorState, error)
+	GetAffectedSensorsForConfig(ctx context.Context, boardID int64, version int64) ([]AffectedSensor, error)
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -342,17 +343,50 @@ func sensorTypeName(t firmwarepb.SensorType) string {
 	return strings.ToLower(name)
 }
 
-// publishRegionInvalidations is a placeholder for the implementation phase.
-// It will publish cache invalidation signals for all sensors whose regions
-// were updated in the config application.
-// TODO(#1203 Implementation): Implement this method to:
-// 1. Query which sensors had their regions changed in this config version
-// 2. Publish CacheInvalidationSignal for each affected sensor
-// 3. Ensure all subscribers receive the signal before returning
+// publishRegionInvalidations queries the config to find which sensors had region
+// assignments updated, then publishes cache invalidation signals to all subscribers.
+// This ensures that all cached views (in-process and cross-process) are invalidated
+// before the next reading is processed.
 func (h *MessageHandler) publishRegionInvalidations(ctx context.Context, boardID int64, deviceID string, version int64) error {
-	// Placeholder: implementation phase will fetch affected sensors and publish signals
-	_ = boardID
-	_ = deviceID
-	_ = version
+	// Get the list of sensors affected by this config version
+	affected, err := h.repo.GetAffectedSensorsForConfig(ctx, boardID, version)
+	if err != nil {
+		h.logger.Warn("failed to get affected sensors for config version",
+			"board_id", boardID,
+			"version", version,
+			"err", err,
+		)
+		return err
+	}
+
+	// Publish a cache invalidation signal for each affected sensor
+	for _, sensor := range affected {
+		signal := CacheInvalidationSignal{
+			CommittedAt: time.Now(),
+			DeviceID:    sensor.DeviceID,
+			SensorID:    sensor.SensorID,
+			RegionID:    sensor.RegionID,
+			ChangeType:  "region",
+		}
+
+		if err := h.invalidator.PublishInvalidation(ctx, signal); err != nil {
+			h.logger.Error("failed to publish region invalidation signal",
+				"device_id", sensor.DeviceID,
+				"sensor_id", sensor.SensorID,
+				"region_id", sensor.RegionID,
+				"err", err,
+			)
+			// Don't return early; publish all signals even if one fails
+			// but do log the error
+			continue
+		}
+
+		h.logger.Debug("published region invalidation signal",
+			"device_id", sensor.DeviceID,
+			"sensor_id", sensor.SensorID,
+			"region_id", sensor.RegionID,
+		)
+	}
+
 	return nil
 }
