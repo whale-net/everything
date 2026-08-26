@@ -492,21 +492,12 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 	}
 
 	// FR-25, FR-60: Use the stored object key from the database, not a
-	// constructed key. The variant is the os-arch combination for binaries.
+	// constructed key. Stored keys are the sole source of truth for object keys.
+	// The variant is the os-arch combination for binaries.
 	variant := fmt.Sprintf("%s-%s", req.Os, req.Arch)
 	storedKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, variant)
-	
-	// During transition: if no stored key exists, fall back to constructing one.
-	// Eventually all artifacts will have stored keys, and this fallback can be
-	// removed, making key construction enforcement complete (FR-60).
-	var objectKey string
-	if err != nil && errors.Is(err, repository.ErrNotFound) {
-		// Fallback: construct key using the binary name convention
-		objectKey = fmt.Sprintf("%s/%s/%s-%s-%s", req.Binary, req.Version, req.Binary, req.Os, req.Arch)
-	} else if err != nil {
+	if err != nil {
 		return nil, mapRepoErr(err)
-	} else {
-		objectKey = storedKey.ObjectKey
 	}
 
 	// Presign the binary key
@@ -515,7 +506,7 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, err
 	}
 
-	downloadURL, err := client.PresignPublicGetURL(ctx, objectKey, resolveBinaryURLTTL)
+	downloadURL, err := client.PresignPublicGetURL(ctx, storedKey.ObjectKey, resolveBinaryURLTTL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to presign binary download URL: %v", err)
 	}
@@ -525,19 +516,11 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 	// key for the checksums variant.
 	checksumVariant := "checksums"
 	checksumStoredKey, err := s.repo.StoredObjectKeys().GetStoredObjectKey(ctx, artifact.ArtifactID, checksumVariant)
-	
-	// Fallback: if no stored key exists, construct the checksum key
-	var checksumObjectKey string
-	if err != nil && errors.Is(err, repository.ErrNotFound) {
-		// Fallback: construct key using the binary name convention
-		checksumObjectKey = fmt.Sprintf("%s/%s/checksums.txt", req.Binary, req.Version)
-	} else if err != nil {
+	if err != nil {
 		return nil, mapRepoErr(err)
-	} else {
-		checksumObjectKey = checksumStoredKey.ObjectKey
 	}
 
-	checksumURL, err := client.PresignPublicGetURL(ctx, checksumObjectKey, resolveBinaryURLTTL)
+	checksumURL, err := client.PresignPublicGetURL(ctx, checksumStoredKey.ObjectKey, resolveBinaryURLTTL)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to presign checksum manifest URL: %v", err)
 	}
