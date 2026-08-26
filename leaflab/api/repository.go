@@ -573,7 +573,7 @@ func (r *Repository) CreateGrant(ctx context.Context, householdID int64, grantee
 	var grantID int64
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO household_grant (household_id, grantee, granted_by, expires_at, created_at)
-		VALUES ($1, $2, $3, NOW() + ($4 || ' seconds')::INTERVAL, NOW())
+		VALUES ($1, $2, $3, NOW() + MAKE_INTERVAL(secs => $4::float8), NOW())
 		RETURNING grant_id
 	`, householdID, granteeID, grantedByID, durationSeconds).Scan(&grantID)
 	if err != nil {

@@ -54,7 +54,10 @@ go_test(
     name = "api_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["server_integration_test.go"],
+    srcs = [
+        "server_integration_test.go",
+        "household_integration_test.go",
+    ],
     embed = [":api_lib"],
     gotags = ["integration"],
     tags = [
