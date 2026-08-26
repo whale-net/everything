@@ -251,7 +251,7 @@ func TestRegisterServices_FR72_MissingBucketPanics(t *testing.T) {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	registerServices(grpcServer, fake.New(), nil,
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(),
 		"", // BUCKET (missing — should trigger panic)
 		"https://s3.example.com/", "https://public.example.com/", "us-east-1", "key", "secret")
 }
@@ -279,7 +279,7 @@ func TestRegisterServices_FR72_MissingEndpointPanics(t *testing.T) {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	registerServices(grpcServer, fake.New(), nil,
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(),
 		"bucket", "", // ENDPOINT (missing — should trigger panic)
 		"https://public.example.com/", "us-east-1", "key", "secret")
 }
@@ -307,7 +307,7 @@ func TestRegisterServices_FR72_MissingPublicEndpointPanics(t *testing.T) {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	registerServices(grpcServer, fake.New(), nil,
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(),
 		"bucket", "https://s3.example.com/", "", // PUBLIC_ENDPOINT (missing — should trigger panic)
 		"us-east-1", "key", "secret")
 }
@@ -335,7 +335,7 @@ func TestRegisterServices_FR72_MissingRegionPanics(t *testing.T) {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	registerServices(grpcServer, fake.New(), nil,
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(),
 		"bucket", "https://s3.example.com/", "https://public.example.com/",
 		"", // REGION (missing — should trigger panic)
 		"key", "secret")
@@ -364,7 +364,7 @@ func TestRegisterServices_FR72_MissingAccessKeyPanics(t *testing.T) {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	registerServices(grpcServer, fake.New(), nil,
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(),
 		"bucket", "https://s3.example.com/", "https://public.example.com/", "us-east-1",
 		"", // ACCESS_KEY (missing — should trigger panic)
 		"secret")
@@ -393,7 +393,7 @@ func TestRegisterServices_FR72_MissingSecretKeyPanics(t *testing.T) {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	registerServices(grpcServer, fake.New(), nil,
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(),
 		"bucket", "https://s3.example.com/", "https://public.example.com/", "us-east-1", "key",
 		"") // SECRET_KEY (missing — should trigger panic)
 }
@@ -419,7 +419,7 @@ func TestRegisterServices_FR72_AllConfigPresentNoPanic(t *testing.T) {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	registerServices(grpcServer, fake.New(), nil,
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(),
 		"bucket", "https://s3.example.com/", "https://public.example.com/", "us-east-1",
 		"key", "secret")
 }
@@ -446,6 +446,6 @@ func TestRegisterServices_FR72_NoConfigNoPanic(t *testing.T) {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	registerServices(grpcServer, fake.New(), nil,
+	registerServices(grpcServer, fake.New(), nil, kinds.NewAppMetadataRegistry(),
 		"", "", "", "", "", "") // All empty — should not panic
 }
