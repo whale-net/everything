@@ -645,3 +645,160 @@ func TestGetActivePlantsInRegionAtTime(t *testing.T) {
 		return
 	}
 }
+
+// TestResolveReadingAttribution_DoesNotIncludeFurtherAncestors verifies that
+// when a reading attributes to a region with an active plant, further ancestor
+// plants do not receive the reading. This guards against FR23's rule that
+// attribution is to the nearest ancestor only, not every ancestor level.
+func TestResolveReadingAttribution_DoesNotIncludeFurtherAncestors(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: plantRegionTestSchema})
+	repo := NewRepository(db.Pool)
+
+	householdID, rootID, shelfID, potID, plantTypeID := setupTreeForAttributionTest(ctx, t, db)
+
+	readTime := time.Now()
+
+	// Create a plant in the root region (furthest ancestor)
+	var rootPlantID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant (name, plant_type_id, region_id, household_id)
+		VALUES ('Root Plant', $1, $2, $3)
+		RETURNING plant_id
+	`, plantTypeID, rootID, householdID).Scan(&rootPlantID); err != nil {
+		t.Fatalf("insert root plant: %v", err)
+	}
+
+	// Place the root plant in the root region
+	if _, err := db.Pool.Exec(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
+		VALUES ($1, $2, $3)
+	`, rootPlantID, rootID, readTime.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("insert root plant placement: %v", err)
+	}
+
+	// Create a plant in the shelf region (nearer ancestor)
+	var shelfPlantID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant (name, plant_type_id, region_id, household_id)
+		VALUES ('Shelf Plant', $1, $2, $3)
+		RETURNING plant_id
+	`, plantTypeID, shelfID, householdID).Scan(&shelfPlantID); err != nil {
+		t.Fatalf("insert shelf plant: %v", err)
+	}
+
+	// Place the shelf plant in the shelf region
+	if _, err := db.Pool.Exec(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
+		VALUES ($1, $2, $3)
+	`, shelfPlantID, shelfID, readTime.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("insert shelf plant placement: %v", err)
+	}
+
+	// Resolve the reading at the pot level (child of shelf)
+	result, err := repo.ResolveReadingAttribution(ctx, potID, readTime)
+	if err != nil {
+		t.Fatalf("ResolveReadingAttribution: %v", err)
+	}
+
+	// Should attribute to shelf region, not root
+	if result.AttributedRegionID != shelfID {
+		t.Errorf("expected attribution to nearest ancestor shelf %d, got %d", shelfID, result.AttributedRegionID)
+	}
+
+	// Should include only the shelf plant, not the root plant
+	if len(result.ActivePlants) != 1 {
+		t.Errorf("expected 1 active plant (shelf only), got %d", len(result.ActivePlants))
+		return
+	}
+
+	if result.ActivePlants[0].PlantID != shelfPlantID {
+		t.Errorf("expected shelf plant %d, got %d", shelfPlantID, result.ActivePlants[0].PlantID)
+	}
+}
+
+// TestResolveReadingAttribution_AllSiblingsReturned verifies that when multiple
+// plants are in the same region, the result includes all of them (complete
+// sibling disclosure). This guards against accidentally losing siblings in
+// the response due to aggregation bugs or DISTINCT/LIMIT issues.
+func TestResolveReadingAttribution_AllSiblingsReturned(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: plantRegionTestSchema})
+	repo := NewRepository(db.Pool)
+
+	householdID, _, _, potID, plantTypeID := setupTreeForAttributionTest(ctx, t, db)
+
+	readTime := time.Now()
+
+	// Create three plants in the same pot region
+	var plant1ID, plant2ID, plant3ID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant (name, plant_type_id, region_id, household_id)
+		VALUES ('Plant One', $1, $2, $3)
+		RETURNING plant_id
+	`, plantTypeID, potID, householdID).Scan(&plant1ID); err != nil {
+		t.Fatalf("insert plant 1: %v", err)
+	}
+
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant (name, plant_type_id, region_id, household_id)
+		VALUES ('Plant Two', $1, $2, $3)
+		RETURNING plant_id
+	`, plantTypeID, potID, householdID).Scan(&plant2ID); err != nil {
+		t.Fatalf("insert plant 2: %v", err)
+	}
+
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant (name, plant_type_id, region_id, household_id)
+		VALUES ('Plant Three', $1, $2, $3)
+		RETURNING plant_id
+	`, plantTypeID, potID, householdID).Scan(&plant3ID); err != nil {
+		t.Fatalf("insert plant 3: %v", err)
+	}
+
+	// Place all three plants in the pot region
+	if _, err := db.Pool.Exec(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
+		VALUES ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)
+	`, plant1ID, potID, readTime.Add(-1*time.Hour), 
+		plant2ID, potID, readTime.Add(-1*time.Hour),
+		plant3ID, potID, readTime.Add(-1*time.Hour)); err != nil {
+		t.Fatalf("insert placements: %v", err)
+	}
+
+	// Resolve the reading
+	result, err := repo.ResolveReadingAttribution(ctx, potID, readTime)
+	if err != nil {
+		t.Fatalf("ResolveReadingAttribution: %v", err)
+	}
+
+	if result.AttributedRegionID != potID {
+		t.Errorf("expected attribution to pot region %d, got %d", potID, result.AttributedRegionID)
+	}
+
+	// Verify all three plants are returned (complete sibling disclosure)
+	if len(result.ActivePlants) != 3 {
+		t.Errorf("expected 3 active plants, got %d", len(result.ActivePlants))
+		return
+	}
+
+	// Verify each plant is in the result
+	foundPlants := make(map[int64]bool)
+	for _, p := range result.ActivePlants {
+		foundPlants[p.PlantID] = true
+	}
+
+	if !foundPlants[plant1ID] {
+		t.Errorf("plant 1 missing from siblings")
+	}
+	if !foundPlants[plant2ID] {
+		t.Errorf("plant 2 missing from siblings")
+	}
+	if !foundPlants[plant3ID] {
+		t.Errorf("plant 3 missing from siblings")
+	}
+}
