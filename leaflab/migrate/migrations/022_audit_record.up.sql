@@ -19,7 +19,7 @@ CREATE TABLE audit_record (
     reason          TEXT,                   -- optional explanation (e.g., skip reason)
     -- Additional columns for config application context (supporting FR1.3):
     config_version  BIGINT,                 -- device_config.version being applied
-    i2c_address     UINT32,                 -- hardware address of the affected sensor (if applicable)
+    i2c_address     SMALLINT,               -- hardware address of the affected sensor (if applicable)
     mux_path        JSONB                   -- mux path of the affected sensor (if applicable)
 );
 
