@@ -9,6 +9,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
@@ -96,8 +97,8 @@ func getEnvBool(key string, defaultValue bool) bool {
 
 // App holds the application state.
 type App struct {
-	config   *Config
-	auth     *htmxauth.Authenticator
+	config    *Config
+	auth      *htmxauth.Authenticator
 	apiClient *LeafLabClient
 }
 
@@ -247,18 +248,100 @@ func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"status":"ok"}`)
 }
 
-// handleDashboard is a placeholder dashboard handler.
+// handleDashboard renders the main dashboard page with user menu and navigation.
 func (app *App) handleDashboard(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	
-	data := htmxbase.LayoutData{
-		Title:   "LeafLab",
-		Content: `<div class="container"><h1>LeafLab Dashboard</h1><p>Welcome to LeafLab sensor board management.</p></div>`,
+	user := htmxauth.GetUser(r.Context())
+	if user == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusSeeOther)
+		return
 	}
-	
-	if err := htmxbase.Render(w, data); err != nil {
-		log.Printf("Error rendering template: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+
+	// Build user label for the navbar
+	userLabel := "User"
+	if user.PreferredUsername != "" {
+		userLabel = user.PreferredUsername
+	} else if user.Name != "" {
+		userLabel = user.Name
 	}
+
+	// Render the dashboard HTML
+	dashboardHTML := renderDashboard(userLabel)
+
+	// Wrap it in the base layout with Tailwind and daisyUI
+	layoutData := htmxbase.LayoutData{
+		Title:      "LeafLab Dashboard",
+		Content:    template.HTML(dashboardHTML), //nolint:gosec // generated content
+		CustomHead: template.HTML(buildHead()),   //nolint:gosec // fixed pinned CDN markup
+	}
+
+	if err := htmxbase.Render(w, layoutData); err != nil {
+		log.Printf("Failed to render dashboard: %v", err)
+		if r.Header.Get("HX-Request") == "true" {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `<div class="alert alert-error"><p>Failed to render page</p></div>`)
+		} else {
+			http.Error(w, "Failed to render dashboard", http.StatusInternalServerError)
+		}
+	}
+}
+
+// renderDashboard creates the dashboard HTML with navbar and content.
+func renderDashboard(userLabel string) string {
+	return fmt.Sprintf(`<div class="navbar bg-neutral text-neutral-content shadow-sm">
+	<div class="flex-1 flex items-center gap-4">
+		<a href="/" class="btn btn-ghost text-xl">LeafLab</a>
+		<ul class="menu menu-horizontal gap-2">
+			<li><a href="/" class="active">Dashboard</a></li>
+			<li><a href="/boards">Boards</a></li>
+			<li><a href="/sensors">Sensors</a></li>
+		</ul>
+	</div>
+	<div class="flex-none flex items-center gap-2">
+		<div class="dropdown dropdown-end" data-htmxui-user-menu>
+			<div tabindex="0" role="button" class="btn btn-ghost btn-sm" aria-label="Account menu">
+				%s
+			</div>
+			<ul tabindex="0" class="dropdown-content menu bg-base-100 text-base-content rounded-box z-10 w-40 p-2 shadow">
+				<li><a href="/auth/logout">Logout</a></li>
+			</ul>
+		</div>
+	</div>
+</div>
+<main class="min-h-screen bg-base-200 p-6">
+	<div class="mx-auto max-w-4xl space-y-6">
+		<div class="prose prose-sm max-w-none">
+			<h1>Sensor Board Management</h1>
+			<p class="text-lg">Welcome to LeafLab, %s.</p>
+			<div class="grid gap-6 md:grid-cols-2">
+				<div class="card bg-base-100 shadow-sm">
+					<div class="card-body">
+						<h2 class="card-title text-lg">Boards</h2>
+						<p>Manage your sensor boards and their deployments.</p>
+						<div class="card-actions">
+							<a href="/boards" class="btn btn-sm btn-primary">View Boards</a>
+						</div>
+					</div>
+				</div>
+				<div class="card bg-base-100 shadow-sm">
+					<div class="card-body">
+						<h2 class="card-title text-lg">Sensors</h2>
+						<p>Monitor and configure individual sensors.</p>
+						<div class="card-actions">
+							<a href="/sensors" class="btn btn-sm btn-primary">View Sensors</a>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</main>`, userLabel, userLabel)
+}
+
+// buildHead constructs the CustomHead markup: pinned Tailwind browser build
+// + daisyUI CDN link.
+func buildHead() string {
+	return `<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js"></script>
+<style type="text/tailwindcss">@import "tailwindcss";</style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">`
 }
