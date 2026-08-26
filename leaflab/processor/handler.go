@@ -34,13 +34,14 @@ type SensorRepository interface {
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
 type MessageHandler struct {
-	logger *slog.Logger
-	repo   SensorRepository
-	cache  *SensorCache
+	logger      *slog.Logger
+	repo        SensorRepository
+	cache       *SensorCache
+	invalidator CacheInvalidator
 }
 
-func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache) *MessageHandler {
-	return &MessageHandler{logger: logger, repo: repo, cache: cache}
+func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache, invalidator CacheInvalidator) *MessageHandler {
+	return &MessageHandler{logger: logger, repo: repo, cache: cache, invalidator: invalidator}
 }
 
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
@@ -318,6 +319,12 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
 		}
 		h.cache.SetConfigVersion(deviceID, int64(ack.AppliedVersion))
+		// TODO(#1203): Publish cache invalidation signals for affected sensors.
+		// ApplyConfigRegions applies region assignments; we need to fetch which sensors
+		// were affected and publish invalidation signals for each.
+		if err := h.publishRegionInvalidations(ctx, boardID, deviceID, int64(ack.AppliedVersion)); err != nil {
+			h.logger.Warn("failed to publish cache invalidation signals", "device_id", deviceID, "err", err)
+		}
 		h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)
 	} else {
 		h.logger.Warn("device rejected config",
@@ -333,4 +340,19 @@ func sensorTypeName(t firmwarepb.SensorType) string {
 	raw := t.String()
 	name, _ := strings.CutPrefix(raw, "SENSOR_TYPE_")
 	return strings.ToLower(name)
+}
+
+// publishRegionInvalidations is a placeholder for the implementation phase.
+// It will publish cache invalidation signals for all sensors whose regions
+// were updated in the config application.
+// TODO(#1203 Implementation): Implement this method to:
+// 1. Query which sensors had their regions changed in this config version
+// 2. Publish CacheInvalidationSignal for each affected sensor
+// 3. Ensure all subscribers receive the signal before returning
+func (h *MessageHandler) publishRegionInvalidations(ctx context.Context, boardID int64, deviceID string, version int64) error {
+	// Placeholder: implementation phase will fetch affected sensors and publish signals
+	_ = boardID
+	_ = deviceID
+	_ = version
+	return nil
 }

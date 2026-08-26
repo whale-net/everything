@@ -127,6 +127,59 @@ FirmwarePublisher.HandleConfigMessage():
 | `leaflab.<dev>.config` | Decode `DeviceConfig`, persist as JSONB to `device_config` table |
 | `leaflab.<dev>.config.ack` | On accept: apply region assignments, update config version cache |
 
+
+## FR73 Cache Invalidation Signalling (Phase 3)
+
+### The Problem
+
+The processor's `SensorCache` holds a current-value view of each sensor's region, name, and hardware key. When these properties change (via `ApplyConfigRegions`, API assignment, rename, or rewire), the cache becomes stale and continues to stamp readings with outdated values until the board reboots or the cache entry expires. This violates FR73: "no cached view of a sensor may outlive the fact it caches, in any process."
+
+### The Solution: Broadcast Cache Invalidation
+
+**Mechanism: AMQP fanout exchange + in-process event handlers**
+
+1. **Publisher:** Every writer of sensor properties publishes a `CacheInvalidationSignal` to a dedicated fanout exchange (`leaflab.cache-invalidations`) when a change commits:
+   - `ApplyConfigRegions` (processor, Phase 3)
+   - API region assignment (Phase 5, FR51)
+   - Rename (Phase 5, FR52)
+   - Rewire (Phase 2, #1202, when identity changes)
+
+2. **Subscriber:** The processor (and any future multi-replica components in Phase 4) subscribes to the fanout exchange and applies changes to the in-memory cache in real time.
+
+3. **Guarantee:** Fanout delivery ensures all subscribers receive the signal (broadcast, not queue). A competing-consumer queue would pass CI with N=1 but fail when Phase 4 introduces multiple API replicas pinned to a single reader (FR47).
+
+### Signal Flow
+
+```
+Writer (Processor, API, etc.)
+  ↓ commits region/identity change to DB
+  ↓ publishes CacheInvalidationSignal to fanout exchange
+  ↓
+AMQP Fanout Exchange (leaflab.cache-invalidations)
+  ↓ (broadcast to all subscribed queues)
+  ├→ Processor's queue → ApplyInvalidation → SensorCache updated
+  ├→ API's queue (Phase 4) → ApplyInvalidation → in-memory cache updated
+  └→ (future replicas all receive)
+```
+
+### Invalidation Types
+
+- **"region":** RegionID changed; update the cached value in place.
+- **"rename":** Sensor name changed; delete the old name key, insert the new name key.
+- **"rewire":** Hardware key (canonical key: i2c_address, mux_path, sensor_type) changed; invalidate all entries for the device (full reload on next access required).
+- **"identity":** Catch-all for other structural changes; invalidate device entries.
+
+### Phase 4 Reuse
+
+Phase 4 (NFR15 ack observability) will reuse this same broadcast mechanism to publish acknowledgement signals. **One signalling path, not two.** Phase 4 will extend the signal type but not create a second channel.
+
+### Design Constraints
+
+- **Single-replica processor:** The processor is declared as single-replica (see `leaflab/processor/BUILD.bazel` line ~57). This is a correctness constraint: the processor is the sole writer of the read path, and fanout ensures consistency without race conditions.
+- **5-second response bound:** A reading recorded more than 5 seconds after a region assignment commits must reflect the new region (FR73 acceptance criterion 3). Achieved by synchronous signal publication + immediate in-process handling.
+- **No poll-based sync:** The old approach (cache expiry + periodic DB checks) was replaced by event-driven invalidation to meet the 5-second bound.
+
+---
 ---
 
 ## Database Schema

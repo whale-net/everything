@@ -5,6 +5,7 @@ go_library(
     name = "processor_lib",
     srcs = [
         "cache.go",
+        "cache_invalidation.go",
         "config.go",
         "handler.go",
         "handler_swap_detection.go",
