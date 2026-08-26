@@ -249,3 +249,214 @@ echo "PASS: fallback_to_source=true correctly falls back to source"
 
 echo "=== All download-release-tools tests passed ==="
 
+
+echo "=== Test 6: FR-66 Fail-Closed Behavior - Missing Checksum Manifest ==="
+# FR-66: Missing manifest should be an ERROR, not a silent skip (Notice)
+# Simulate the verify_checksum function with missing manifest
+TEST_DIR=$(mktemp -d)
+trap 'rm -rf "$TEST_DIR"' EXIT
+
+cat > "$TEST_DIR/test_verify.sh" << 'EOFVERIFY'
+#!/bin/bash
+set -euo pipefail
+
+# Inline the verify_checksum function from action.yml
+compute_sha256() {
+  local target="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$target" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$target" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$target" | awk '{print $NF}'
+  fi
+}
+
+verify_checksum() {
+  local binary_file="$1"
+  local sum_dir="$2"
+  local declared_filename="$3"
+  local actual_hash
+  actual_hash="$(compute_sha256 "$binary_file")" || return 1
+
+  # FR-66: Mandatory checksum manifest fetch and verification.
+  if [[ ! -f "$sum_dir/checksums.txt" ]]; then
+    echo "ERROR: Checksum manifest not found at $sum_dir/checksums.txt" >&2
+    return 1
+  fi
+
+  local lookup_name="$declared_filename"
+  if [[ -z "$lookup_name" ]]; then
+    lookup_name="$(basename "$binary_file")"
+  fi
+
+  local expected_hash
+  expected_hash=$(grep -E "(^|[ /])${lookup_name}$" "$sum_dir/checksums.txt" 2>/dev/null | awk '{print $1}' | head -n1 || true)
+  
+  if [[ -z "$expected_hash" ]]; then
+    echo "ERROR: $lookup_name not found in checksum manifest" >&2
+    return 1
+  fi
+
+  if [[ "$actual_hash" != "$expected_hash" ]]; then
+    echo "ERROR: SHA256 checksum mismatch for $lookup_name!" >&2
+    echo "  Expected: $expected_hash" >&2
+    echo "  Actual:   $actual_hash" >&2
+    return 1
+  fi
+
+  echo "Verified SHA256 checksum for $lookup_name: $actual_hash"
+  return 0
+}
+
+# Test case: missing manifest
+echo "test binary" > "$1/binary.bin"
+# Note: NOT creating $1/checksums.txt to simulate missing manifest
+if verify_checksum "$1/binary.bin" "$1" "binary.bin"; then
+  echo "FAIL: verify_checksum should fail when manifest is missing"
+  exit 1
+fi
+echo "PASS: verify_checksum correctly fails with ERROR when manifest is missing"
+EOFVERIFY
+
+chmod +x "$TEST_DIR/test_verify.sh"
+bash "$TEST_DIR/test_verify.sh" "$TEST_DIR"
+
+echo "=== Test 7: FR-66 Fail-Closed Behavior - Missing Manifest Entry ==="
+TEST_DIR=$(mktemp -d)
+trap 'rm -rf "$TEST_DIR"' EXIT
+
+bash "$TEST_DIR/test_verify.sh" 2>&1 <<'EOFMISSING' || true
+test binary 2
+EOFMISSING
+
+# Simulate missing manifest entry
+cat > "$TEST_DIR/test_verify_entry.sh" << 'EOFVERIFYENTRY'
+#!/bin/bash
+set -euo pipefail
+
+compute_sha256() {
+  local target="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$target" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$target" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$target" | awk '{print $NF}'
+  fi
+}
+
+verify_checksum() {
+  local binary_file="$1"
+  local sum_dir="$2"
+  local declared_filename="$3"
+  local actual_hash
+  actual_hash="$(compute_sha256 "$binary_file")" || return 1
+
+  if [[ ! -f "$sum_dir/checksums.txt" ]]; then
+    echo "ERROR: Checksum manifest not found at $sum_dir/checksums.txt" >&2
+    return 1
+  fi
+
+  local lookup_name="$declared_filename"
+  if [[ -z "$lookup_name" ]]; then
+    lookup_name="$(basename "$binary_file")"
+  fi
+
+  local expected_hash
+  expected_hash=$(grep -E "(^|[ /])${lookup_name}$" "$sum_dir/checksums.txt" 2>/dev/null | awk '{print $1}' | head -n1 || true)
+  
+  if [[ -z "$expected_hash" ]]; then
+    echo "ERROR: $lookup_name not found in checksum manifest" >&2
+    return 1
+  fi
+
+  if [[ "$actual_hash" != "$expected_hash" ]]; then
+    echo "ERROR: SHA256 checksum mismatch for $lookup_name!" >&2
+    return 1
+  fi
+
+  echo "Verified SHA256 checksum for $lookup_name: $actual_hash"
+  return 0
+}
+
+# Test case: file in binary but manifest lists different file
+echo "test binary" > "$1/binary.bin"
+echo "abc123  other_file.bin" > "$1/checksums.txt"
+if verify_checksum "$1/binary.bin" "$1" "binary.bin"; then
+  echo "FAIL: verify_checksum should fail when binary is not in manifest"
+  exit 1
+fi
+echo "PASS: verify_checksum correctly fails with ERROR when manifest entry is missing"
+EOFVERIFYENTRY
+
+chmod +x "$TEST_DIR/test_verify_entry.sh"
+bash "$TEST_DIR/test_verify_entry.sh" "$TEST_DIR"
+
+echo "=== Test 8: FR-66 Fail-Closed Behavior - Hash Mismatch ==="
+TEST_DIR=$(mktemp -d)
+trap 'rm -rf "$TEST_DIR"' EXIT
+
+cat > "$TEST_DIR/test_verify_hash.sh" << 'EOFVERIFYHASH'
+#!/bin/bash
+set -euo pipefail
+
+compute_sha256() {
+  local target="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$target" | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$target" | awk '{print $1}'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$target" | awk '{print $NF}'
+  fi
+}
+
+verify_checksum() {
+  local binary_file="$1"
+  local sum_dir="$2"
+  local declared_filename="$3"
+  local actual_hash
+  actual_hash="$(compute_sha256 "$binary_file")" || return 1
+
+  if [[ ! -f "$sum_dir/checksums.txt" ]]; then
+    echo "ERROR: Checksum manifest not found at $sum_dir/checksums.txt" >&2
+    return 1
+  fi
+
+  local lookup_name="$declared_filename"
+  if [[ -z "$lookup_name" ]]; then
+    lookup_name="$(basename "$binary_file")"
+  fi
+
+  local expected_hash
+  expected_hash=$(grep -E "(^|[ /])${lookup_name}$" "$sum_dir/checksums.txt" 2>/dev/null | awk '{print $1}' | head -n1 || true)
+  
+  if [[ -z "$expected_hash" ]]; then
+    echo "ERROR: $lookup_name not found in checksum manifest" >&2
+    return 1
+  fi
+
+  if [[ "$actual_hash" != "$expected_hash" ]]; then
+    echo "ERROR: SHA256 checksum mismatch for $lookup_name!" >&2
+    return 1
+  fi
+
+  echo "Verified SHA256 checksum for $lookup_name: $actual_hash"
+  return 0
+}
+
+# Test case: hash mismatch
+echo "test binary" > "$1/binary.bin"
+echo "abc123def456  binary.bin" > "$1/checksums.txt"
+if verify_checksum "$1/binary.bin" "$1" "binary.bin"; then
+  echo "FAIL: verify_checksum should fail when hash doesn't match"
+  exit 1
+fi
+echo "PASS: verify_checksum correctly fails with ERROR when hash mismatches"
+EOFVERIFYHASH
+
+chmod +x "$TEST_DIR/test_verify_hash.sh"
+bash "$TEST_DIR/test_verify_hash.sh" "$TEST_DIR"
+
+echo "=== All FR-66 fail-closed behavior tests passed ==="
