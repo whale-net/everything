@@ -850,8 +850,8 @@ func TestRollback_PublishesAfterWriteCommits(t *testing.T) {
 	if rollbackEvent.PromotionID != rollbackResp.Promotion.PromotionId {
 		t.Fatalf("expected rollback promotion_id %s, got %s", rollbackResp.Promotion.PromotionId, rollbackEvent.PromotionID)
 	}
-	if rollbackEvent.EventKind != "promotion_started" {
-		t.Fatalf("expected event_kind 'promotion_started', got %s", rollbackEvent.EventKind)
+	if rollbackEvent.EventKind != "rollback_started" {
+		t.Fatalf("expected event_kind 'rollback_started', got %s", rollbackEvent.EventKind)
 	}
 }
 
