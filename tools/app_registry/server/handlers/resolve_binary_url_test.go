@@ -853,6 +853,7 @@ func TestResolveBinaryURL_FR29_PartialValidityReturnsError(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:partial",
+		IdentityDigest: "sha256:partial-identity",
 		Version:        "v1.2.0",
 		IdempotencyKey: "record-partial",
 	})
@@ -904,6 +905,7 @@ func TestResolveBinaryURL_NoH8MeansNoDerivation(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:no-h8",
+		IdentityDigest: "sha256:no-h8-identity",
 		Version:        "v1.3.0",
 		IdempotencyKey: "record-no-h8",
 	})
@@ -947,6 +949,7 @@ func TestResolveBinaryURL_FR29_PreCutoverVersionNeverWritten(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:never-written",
+		IdentityDigest: "sha256:never-written-identity",
 		Version:        "v1.4.0",
 		IdempotencyKey: "record-never-written",
 	})
@@ -1037,6 +1040,7 @@ func TestResolveBinaryURL_NFR19_PositiveExistenceIsCached(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:cache-positive",
+		IdentityDigest: "sha256:cache-positive-identity",
 		Version:        "v1.5.0",
 		IdempotencyKey: "record-cache-positive",
 	})
@@ -1177,6 +1181,7 @@ func TestResolveBinaryURL_ResolveObjectKey_StoredThenDerived(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:stored",
+		IdentityDigest: "sha256:stored-identity",
 		Version:        "v1.6.0",
 		IdempotencyKey: "record-resolve-stored",
 	})
@@ -1189,6 +1194,7 @@ func TestResolveBinaryURL_ResolveObjectKey_StoredThenDerived(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:derived",
+		IdentityDigest: "sha256:derived-identity",
 		Version:        "v1.7.0",
 		IdempotencyKey: "record-resolve-derived",
 	})
