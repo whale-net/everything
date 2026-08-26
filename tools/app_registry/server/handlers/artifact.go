@@ -451,6 +451,45 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 // FR13: only RecordArtifact'd (i.e. FinalizePublish-confirmed) versions ever
 // exist in that table, so an unpublished or guessed version simply isn't
 // found -- there is no separate "is this confirmed?" check to get wrong.
+// resolveContentEncoding returns the content encoding for a binary artifact.
+// Dispatches to hook H4 (encoding policy) to determine the encoding descriptor
+// (e.g., "gzip"). For post-cutover versions, this returns the kind's declared
+// encoding policy. For pre-cutover versions, an empty string is returned
+// (meaning uncompressed).
+func (s *ArtifactServer) resolveContentEncoding(ctx context.Context, kind string) (string, error) {
+	// TODO: Implement in the Implementation phase
+	// - Resolve the kind
+	// - Dispatch to hook H4
+	// - Return the encoding descriptor
+	return "", nil
+}
+
+// resolveConsumerFileName returns the declared consumer-facing file name for a
+// binary artifact. Dispatches to hook H5 (post-cutover) or H8 (pre-cutover) to
+// determine the file name. For post-cutover versions, this returns the declared
+// name for the binary file. For pre-cutover versions, an empty string is returned
+// (meaning consumers keep their current behavior).
+func (s *ArtifactServer) resolveConsumerFileName(ctx context.Context, kind string, version string) (string, error) {
+	// TODO: Implement in the Implementation phase
+	// - Resolve the kind
+	// - Check if version is pre-cutover (dispatch to H8) or post-cutover (dispatch to H5)
+	// - Return the file name or empty string for pre-cutover
+	return "", nil
+}
+
+// resolveVariantSelector resolves the opaque variant selector for the request.
+// FR-62: The variant selector is kind-declared and opaque. If the request
+// provides an explicit variant map, it is used. Otherwise, for backward
+// compatibility with existing {os, arch} callers, the os and arch fields are
+// converted to a variant map.
+func (s *ArtifactServer) resolveVariantSelector(req *pb.ResolveBinaryURLRequest) map[string]string {
+	// TODO: Implement in the Implementation phase
+	// - If variant map is provided and non-empty, return it
+	// - Otherwise, if os and arch are provided, return {"os": req.Os, "arch": req.Arch}
+	// - Handle backward compatibility with pre-variant-selector callers
+	return map[string]string{}
+}
+
 func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
 	// Validate required fields upfront
 	if req.Os == "" {
@@ -525,9 +564,23 @@ func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBi
 		return nil, status.Errorf(codes.Internal, "failed to presign checksum manifest URL: %v", err)
 	}
 
+	encoding, err := s.resolveContentEncoding(ctx, "binary")
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resolve content encoding: %v", err)
+	}
+
+	filename, err := s.resolveConsumerFileName(ctx, "binary", req.Version)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to resolve consumer filename: %v", err)
+	}
+
 	return &pb.ResolveBinaryURLResponse{
-		DownloadUrl:         downloadURL,
-		ChecksumManifestUrl: checksumURL,
+		DownloadUrl:                 downloadURL,
+		ChecksumManifestUrl:         checksumURL,
+		DownloadUrlContentEncoding:  encoding,
+		DownloadUrlFilename:         filename,
+		ChecksumManifestContentEncoding: "", // TODO: populate from H4 if needed
+		ChecksumManifestFilename:    "", // TODO: populate from H5 if needed
 	}, nil
 }
 
