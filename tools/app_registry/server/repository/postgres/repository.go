@@ -58,6 +58,18 @@ func (r *Registry) ReleaseRuns() repository.ReleaseRunRepository { return &relea
 func (r *Registry) AppBuildLogs() repository.AppBuildLogRepository {
 	return &appBuildLogRepo{ex: r.ex}
 }
+func (r *Registry) UploadRecords() repository.UploadRecordRepository {
+	return &uploadRecordRepo{ex: r.ex}
+}
+func (r *Registry) BlobRecords() repository.BlobRecordRepository {
+	return &blobRecordRepo{ex: r.ex}
+}
+func (r *Registry) BlobVersions() repository.BlobVersionRepository {
+	return &blobVersionRepo{ex: r.ex}
+}
+func (r *Registry) StoredObjectKeys() repository.StoredObjectKeyRepository {
+	return &storedObjectKeyRepo{ex: r.ex}
+}
 
 // WithTx runs fn inside a single Postgres transaction, committing iff fn
 // returns nil and rolling back otherwise. This is the atomicity boundary

@@ -4,6 +4,7 @@ go_library(
     name = "fake",
     srcs = [
         "app_build_log.go",
+        "upload_blob.go",
         "fake.go",
         "keyset_cursor.go",
         "promotion_details.go",
@@ -25,6 +26,7 @@ go_test(
     name = "fake_test",
     srcs = [
         "promotion_details_test.go",
+        "upload_blob_test.go",
         "promotion_sync_event_test.go",
         "release_run_test.go",
         "writeback_test.go",
