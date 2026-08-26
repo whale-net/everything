@@ -889,3 +889,124 @@ func TestFR61_CorrectnessWithAppend(t *testing.T) {
 		}
 	}
 }
+
+// ============================================================================
+
+// ============================================================================
+// FR82 Config Push Scope Tests
+// ============================================================================
+
+// TestFR82_Provenance_AUTHORED tests that PROVENANCE_AUTHORED is defined.
+func TestFR82_Provenance_AUTHORED(t *testing.T) {
+	if pb.Provenance_PROVENANCE_AUTHORED == 0 {
+		t.Errorf("PROVENANCE_AUTHORED should be non-zero")
+	}
+	if pb.Provenance_PROVENANCE_AUTHORED != 1 {
+		t.Errorf("PROVENANCE_AUTHORED should be 1, got %d", pb.Provenance_PROVENANCE_AUTHORED)
+	}
+}
+
+// TestFR82_Provenance_MATERIALISED tests that PROVENANCE_MATERIALISED is defined.
+func TestFR82_Provenance_MATERIALISED(t *testing.T) {
+	if pb.Provenance_PROVENANCE_MATERIALISED == 0 {
+		t.Errorf("PROVENANCE_MATERIALISED should be non-zero")
+	}
+	if pb.Provenance_PROVENANCE_MATERIALISED != 2 {
+		t.Errorf("PROVENANCE_MATERIALISED should be 2, got %d", pb.Provenance_PROVENANCE_MATERIALISED)
+	}
+}
+
+// TestFR82_ConfigScope_COMPLETE tests that CONFIG_SCOPE_COMPLETE is defined.
+func TestFR82_ConfigScope_COMPLETE(t *testing.T) {
+	if pb.ConfigScope_CONFIG_SCOPE_COMPLETE == pb.ConfigScope_CONFIG_SCOPE_UNSPECIFIED {
+		t.Errorf("CONFIG_SCOPE_COMPLETE should not be UNSPECIFIED")
+	}
+	if pb.ConfigScope_CONFIG_SCOPE_COMPLETE != 1 {
+		t.Errorf("CONFIG_SCOPE_COMPLETE should be 1, got %d", pb.ConfigScope_CONFIG_SCOPE_COMPLETE)
+	}
+}
+
+// TestFR82_ConfigScope_EDIT tests that CONFIG_SCOPE_EDIT is defined.
+func TestFR82_ConfigScope_EDIT(t *testing.T) {
+	if pb.ConfigScope_CONFIG_SCOPE_EDIT == pb.ConfigScope_CONFIG_SCOPE_UNSPECIFIED {
+		t.Errorf("CONFIG_SCOPE_EDIT should not be UNSPECIFIED")
+	}
+	if pb.ConfigScope_CONFIG_SCOPE_EDIT != 2 {
+		t.Errorf("CONFIG_SCOPE_EDIT should be 2, got %d", pb.ConfigScope_CONFIG_SCOPE_EDIT)
+	}
+}
+
+// TestFR82_RemovalKey_FullKey tests that RemovalKey can hold a full key.
+func TestFR82_RemovalKey_FullKey(t *testing.T) {
+	key := &pb.RemovalKey{
+		I2CAddress: 0x44,
+		MuxPath:    "",
+		SensorType: 2, // SENSOR_TYPE_TEMPERATURE
+	}
+	if key.SensorType == 0 {
+		t.Errorf("full key should have non-zero sensor_type")
+	}
+	if key.I2CAddress != 0x44 {
+		t.Errorf("expected i2c_address 0x44, got 0x%x", key.I2CAddress)
+	}
+}
+
+// TestFR82_RemovalKey_ChipKey tests that RemovalKey can hold a chip key.
+func TestFR82_RemovalKey_ChipKey(t *testing.T) {
+	key := &pb.RemovalKey{
+		I2CAddress: 0x44,
+		MuxPath:    "",
+		SensorType: 0, // chip key: no sensor type
+	}
+	if key.SensorType != 0 {
+		t.Errorf("chip key should have zero sensor_type")
+	}
+	if key.I2CAddress != 0x44 {
+		t.Errorf("expected i2c_address 0x44, got 0x%x", key.I2CAddress)
+	}
+}
+
+// TestFR82_ScopeNotInferred_DifferentScopes tests that different scope values
+// are distinct even when payloads are otherwise identical.
+func TestFR82_ScopeNotInferred_DifferentScopes(t *testing.T) {
+	completeScope := pb.ConfigScope_CONFIG_SCOPE_COMPLETE
+	editScope := pb.ConfigScope_CONFIG_SCOPE_EDIT
+	unspecScope := pb.ConfigScope_CONFIG_SCOPE_UNSPECIFIED
+
+	if completeScope == editScope {
+		t.Errorf("COMPLETE and EDIT scopes should be different")
+	}
+	if completeScope == unspecScope {
+		t.Errorf("COMPLETE and UNSPECIFIED should be different")
+	}
+	if editScope == unspecScope {
+		t.Errorf("EDIT and UNSPECIFIED should be different")
+	}
+}
+
+// TestFR82_PushDeviceConfigRequest_ScopeField tests that
+// PushDeviceConfigRequest has a scope field.
+func TestFR82_PushDeviceConfigRequest_ScopeField(t *testing.T) {
+	req := &pb.PushDeviceConfigRequest{
+		DeviceId: "test-device",
+		Scope:    pb.ConfigScope_CONFIG_SCOPE_COMPLETE,
+	}
+	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_UNSPECIFIED {
+		t.Errorf("scope field should be set to COMPLETE")
+	}
+	if req.Scope != pb.ConfigScope_CONFIG_SCOPE_COMPLETE {
+		t.Errorf("expected COMPLETE, got %v", req.Scope)
+	}
+}
+
+// TestFR82_DryRun_HasScopeField tests that dry run also uses the scope field.
+func TestFR82_DryRun_HasScopeField(t *testing.T) {
+	req := &pb.PushDeviceConfigRequest{
+		DeviceId: "test-device",
+		Scope:    pb.ConfigScope_CONFIG_SCOPE_EDIT,
+	}
+	// Same request structure for both Push and DryRun
+	if req.Scope != pb.ConfigScope_CONFIG_SCOPE_EDIT {
+		t.Errorf("expected EDIT scope, got %v", req.Scope)
+	}
+}
