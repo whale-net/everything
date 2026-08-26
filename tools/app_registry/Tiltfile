@@ -193,6 +193,8 @@ spec:
           value: "{otel_endpoint}"
         - name: RELEASE_TOOLS_S3_BUCKET
           value: "{s3_bucket}"
+        - name: RELEASE_TOOLS_S3_ENDPOINT
+          value: "{s3_endpoint}"
         - name: RELEASE_TOOLS_S3_PUBLIC_ENDPOINT
           value: "{s3_public_endpoint}"
         - name: RELEASE_TOOLS_S3_REGION
@@ -207,6 +209,7 @@ spec:
         temporal_host=temporal_host,
         otel_endpoint=otel_endpoint,
         s3_bucket=s3_bucket,
+        s3_endpoint=s3_endpoint,
         s3_public_endpoint=s3_public_endpoint,
         s3_region=s3_region,
         s3_access_key=s3_access_key,
