@@ -292,8 +292,8 @@ type ArtifactLink struct {
 // 007. Legal transitions, enforced server-side in
 // server/repository/postgres/artifact.go and mirrored in
 // server/repository/fake/fake.go: ∅ -> allocated (AllocateVersion), ∅ ->
-// publishing (BeginPublish with no prior allocation -- the pre-cutover
-// path), allocated -> publishing (BeginPublish), publishing -> published
+// publishing (BeginPublish with no prior allocation), allocated ->
+// publishing (BeginPublish), publishing -> published
 // (RecordArtifact), publishing -> failed (FailPublish, or the reaper),
 // failed -> publishing (a later run retrying the same version), publishing
 // -> publishing (BeginPublish again -- AR-7d, issue #558: an idempotent
@@ -330,11 +330,11 @@ const (
 )
 
 // VersionSource mirrors artifact.version_source (migration 007): which
-// path authored this row's version. "registry" means AllocateVersion (AR-5)
-// reserved it; "tag" means the pre-cutover git-tag path in
-// tools/release_helper_go chose it and the registry is merely recording the
-// intent -- see ARCHITECTURE.md "The run log" and PLAN.md's AR-5 parity
-// exit criterion, which this column turns into a query.
+// path authored this row's version. "registry" means AllocateVersion
+// reserved it; "tag" means tools/release_helper_go's git-tag path chose it
+// (used when the registry integration is opted out, or for a kind that
+// never calls AllocateVersion) and the registry is merely recording the
+// intent -- see ARCHITECTURE.md "The run log".
 type VersionSource string
 
 const (
@@ -737,18 +737,6 @@ type WritebackOutbox struct {
 	CreatedAt time.Time
 }
 
-// DomainAdoptionStage mirrors the `domain_adoption.stage` CHECK constraint
-// (migration 001) and ARCHITECTURE.md "Resolved questions" #3's per-domain
-// cutover table. AllocateVersion (AR-5) is the only capability gated on
-// this today; recording (AR-2) is deliberately never gated.
-type DomainAdoptionStage string
-
-const (
-	DomainAdoptionStageObserve  DomainAdoptionStage = "observe"
-	DomainAdoptionStagePromote  DomainAdoptionStage = "promote"
-	DomainAdoptionStageAllocate DomainAdoptionStage = "allocate"
-)
-
 // VersionAllocation is the result of a successful AllocateVersion call: the
 // newly reserved version, and what it was incremented from (empty for a
 // first release).
@@ -821,7 +809,18 @@ type ReleaseRun struct {
 	// TemporalRunID is empty until the workflow named by TemporalWorkflowID
 	// actually starts running.
 	TemporalRunID string
-	CreatedAt     time.Time
+	// BuildRefRunID/BuildRefRunURL identify the GitHub Actions run
+	// DispatchBuild dispatched for this release (migration 023). Empty
+	// (not NULL) until DispatchBuild's first successful GitHub dispatch,
+	// mirroring TemporalRunID's "not yet known" convention above.
+	// DispatchBuild (worker/release/activities.go) reads this back first,
+	// before calling GitHub, and returns it unchanged instead of
+	// dispatching a second `workflow_dispatch` for the same release run --
+	// see ReleaseRunRepository.SetBuildRef's doc comment for why a second
+	// dispatch is unsafe, not just wasteful.
+	BuildRefRunID  string
+	BuildRefRunURL string
+	CreatedAt      time.Time
 }
 
 // ReleaseRunTarget is one row per target (app or chart) in a ReleaseRun's

@@ -63,7 +63,7 @@ Runs all unit and integration tests
 Verifies cross-compilation for multi-architecture containers (critical for ARM64 support). Runs on main branch builds only to reduce CI overhead on feature branches.
 
 ### Plan Docker
-Determines which apps need Docker images built based on changes (runs as a lightweight planning job without Bazel cache or Docker Buildx overhead).
+Determines which apps need Docker images built based on changes (runs as a lightweight planning job without Bazel cache or Docker Buildx overhead). Its `release_helper_go plan` call, and the `manifest-set` call in the `reconcile-app-registry` job's App Registry reconcile step, both honor the repo variable `RELEASE_HELPER_FAST_MODE` (`== 'true'` to enable; unset/anything else = real Bazel discovery, the default) — see [`RELEASE_HELPER_FAST_MODE.md`](RELEASE_HELPER_FAST_MODE.md).
 
 ### Docker
 Builds container images for all changed applications sequentially in a single runner to verify compilation (only runs on main branch commits). Images are not pushed to the registry; use the Release workflow for publishing images.

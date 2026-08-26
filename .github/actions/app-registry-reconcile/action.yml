@@ -27,6 +27,16 @@ inputs:
     required: true
   idempotency-key:
     required: true
+  fast-mode:
+    description: >-
+      When 'true', passes --fast to `release_helper_go manifest-set`, which
+      statically parses BUILD.bazel files instead of shelling out to bazel
+      query/cquery -- see docs/RELEASE_HELPER_FAST_MODE.md. Callers should
+      pass the RELEASE_HELPER_FAST_MODE repo variable through here rather
+      than hardcoding 'true'/'false', so the toggle stays a single repo
+      variable.
+    required: false
+    default: 'false'
 
 runs:
   using: composite
@@ -43,6 +53,7 @@ runs:
       env:
         GIT_SHA: ${{ inputs.git-sha }}
         IDEMPOTENCY_KEY: ${{ inputs.idempotency-key }}
+        FAST_MODE: ${{ inputs.fast-mode }}
       # `manifest-set` resolves AppManifestSet.source_committed_at itself
       # via `git log -1 --format=%ct "$GIT_SHA"` -- no new flag needed here,
       # it flows through automatically once release_helper_go supports it
@@ -59,7 +70,14 @@ runs:
       # resolveSourceCommittedAt's doc comment -- rather than failing the
       # step.
       run: |
-        "$RELEASE_HELPER" manifest-set --git-sha "$GIT_SHA" > "$RUNNER_TEMP/manifest-set.json"
+        # FAST_MODE (from inputs.fast-mode, normally the RELEASE_HELPER_FAST_MODE
+        # repo variable) is empty when the variable is unset -- normalize to a
+        # real "true"/"false" so --fast= never gets an empty value.
+        FAST="false"
+        if [[ "$FAST_MODE" == "true" ]]; then
+          FAST="true"
+        fi
+        "$RELEASE_HELPER" manifest-set --fast="$FAST" --git-sha "$GIT_SHA" > "$RUNNER_TEMP/manifest-set.json"
         "$APP_REGISTRY_CLI" apps reconcile \
           --from-plan "$RUNNER_TEMP/manifest-set.json" \
           --idempotency-key "$IDEMPOTENCY_KEY"

@@ -6,7 +6,6 @@ go_library(
         "app.go",
         "app_build_log.go",
         "artifact.go",
-        "domain_adoption.go",
         "environment.go",
         "errors.go",
         "idempotency.go",

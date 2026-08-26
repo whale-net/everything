@@ -29,7 +29,8 @@ import (
 // release_scope_test.go already covers.
 type releaseAppClient struct {
 	pb.AppRegistryClient
-	apps []*pb.App
+	apps   []*pb.App
+	charts []*pb.Chart
 }
 
 func (f *releaseAppClient) ListApps(ctx context.Context, in *pb.ListAppsRequest, opts ...grpc.CallOption) (*pb.ListAppsResponse, error) {
@@ -37,7 +38,7 @@ func (f *releaseAppClient) ListApps(ctx context.Context, in *pb.ListAppsRequest,
 }
 
 func (f *releaseAppClient) ListCharts(ctx context.Context, in *pb.ListChartsRequest, opts ...grpc.CallOption) (*pb.ListChartsResponse, error) {
-	return &pb.ListChartsResponse{}, nil
+	return &pb.ListChartsResponse{Charts: f.charts}, nil
 }
 
 // fakeReleaseClient is a minimal stand-in for pb.ReleaseRegistryClient.
@@ -491,12 +492,12 @@ func TestHandleReleaseTriggerSubmit_PickerTrigger_ThreadsPerTargetVersionSelecti
 	}}
 
 	form := url.Values{
-		"target":                    {"app:platform-worker", "app:platform-api"},
-		"mode__platform-worker":     {"explicit"},
-		"explicit__platform-worker": {"v9.9.9"},
-		"mode__platform-api":        {"bump"},
-		"bump__platform-api":        {"major"},
-		"do":                        {"trigger"},
+		"target": {"app:platform-worker", "app:platform-api"},
+		"mode__ARTIFACT_KIND_IMAGE__platform-worker":     {"explicit"},
+		"explicit__ARTIFACT_KIND_IMAGE__platform-worker": {"v9.9.9"},
+		"mode__ARTIFACT_KIND_IMAGE__platform-api":        {"bump"},
+		"bump__ARTIFACT_KIND_IMAGE__platform-api":        {"major"},
+		"do": {"trigger"},
 	}
 	req := newReleaseTriggerPickerRequest(t, form)
 	w := httptest.NewRecorder()
@@ -514,6 +515,62 @@ func TestHandleReleaseTriggerSubmit_PickerTrigger_ThreadsPerTargetVersionSelecti
 	}
 	if got := byOwner["platform-api"]; got != "major" {
 		t.Errorf("platform-api version_selection = %q, want major", got)
+	}
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusSeeOther)
+	}
+}
+
+// TestHandleReleaseTriggerSubmit_PickerTrigger_AppAndChartSharingFullName_ThreadDistinctVersions
+// is the regression test for issue #1141: an app and a chart with the same
+// full_name (e.g. a demo app named "worker" alongside a chart also named
+// "worker" in the same domain) used to collide on their Draft-step form
+// field names and VersionInputs map entry, since both were keyed by
+// OwnerFullName alone -- picking "Explicit" on one row silently clobbered
+// the other row's selection. TargetFormKey (pages/release_trigger.templ)
+// disambiguates by prefixing with the target's Kind, so both must reach
+// TriggerRelease with their own distinct version_selection.
+func TestHandleReleaseTriggerSubmit_PickerTrigger_AppAndChartSharingFullName_ThreadDistinctVersions(t *testing.T) {
+	rel := &fakeReleaseClient{triggerResp: &pb.TriggerReleaseResponse{ReleaseRunId: "run-1141"}}
+	app := &App{registry: &RegistryClient{
+		App: &releaseAppClient{
+			apps: []*pb.App{
+				{AppId: "a1", FullName: "demo-worker", Name: "worker", Domain: "demo", Status: pb.AppStatus_APP_STATUS_ACTIVE},
+			},
+			charts: []*pb.Chart{
+				{ChartId: "c1", FullName: "demo-worker", Name: "worker", Domain: "demo", Status: pb.AppStatus_APP_STATUS_ACTIVE},
+			},
+		},
+		Release: rel,
+	}}
+
+	form := url.Values{
+		"target":                                     {"app:demo-worker", "chart:demo-worker"},
+		"mode__ARTIFACT_KIND_IMAGE__demo-worker":     {"explicit"},
+		"explicit__ARTIFACT_KIND_IMAGE__demo-worker": {"v9.9.9"},
+		"mode__ARTIFACT_KIND_CHART__demo-worker":     {"bump"},
+		"bump__ARTIFACT_KIND_CHART__demo-worker":     {"major"},
+		"do":                                         {"trigger"},
+	}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(rel.triggerCalls) != 1 {
+		t.Fatalf("TriggerRelease calls = %d, want 1; body = %s", len(rel.triggerCalls), w.Body.String())
+	}
+	byKind := map[pb.ArtifactKind]string{}
+	for _, tgt := range rel.triggerCalls[0].GetTargets() {
+		if tgt.GetOwnerFullName() != "demo-worker" {
+			t.Errorf("unexpected target owner %q", tgt.GetOwnerFullName())
+		}
+		byKind[tgt.GetKind()] = tgt.GetVersionSelection()
+	}
+	if got := byKind[pb.ArtifactKind_ARTIFACT_KIND_IMAGE]; got != "v9.9.9" {
+		t.Errorf("app (image) version_selection = %q, want v9.9.9", got)
+	}
+	if got := byKind[pb.ArtifactKind_ARTIFACT_KIND_CHART]; got != "major" {
+		t.Errorf("chart version_selection = %q, want major", got)
 	}
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusSeeOther)
@@ -557,10 +614,10 @@ func TestHandleReleaseTriggerSubmit_ExplicitModeWithEmptyValue_RejectedBeforeCal
 	}}
 
 	form := url.Values{
-		"target":                    {"app:platform-worker"},
-		"mode__platform-worker":     {"explicit"},
-		"explicit__platform-worker": {""},
-		"do":                        {"trigger"},
+		"target": {"app:platform-worker"},
+		"mode__ARTIFACT_KIND_IMAGE__platform-worker":     {"explicit"},
+		"explicit__ARTIFACT_KIND_IMAGE__platform-worker": {""},
+		"do": {"trigger"},
 	}
 	req := newReleaseTriggerPickerRequest(t, form)
 	w := httptest.NewRecorder()

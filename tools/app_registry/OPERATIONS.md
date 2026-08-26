@@ -10,8 +10,11 @@ don't exist yet, each section says so plainly rather than describing
 aspirational behavior.
 
 > **As of this writing: recording is opt-in and off by default
-> (`APP_REGISTRY_CICD_OPT_IN` is unset), no domain is at adoption stage
-> `allocate`, and no promotion has ever run for real.** No Keycloak clients
+> (`APP_REGISTRY_CICD_OPT_IN` is unset), and no promotion has ever run for
+> real.** The opt-in is now the only gate on the registry's involvement —
+> there is no per-domain adoption stage; once it's on, every domain
+> allocates versions, is chart-hermeticity-enforced, and requires
+> `BeginPublish` before `RecordArtifact`, unconditionally. No Keycloak clients
 > and no GitHub Environments (`dev`/`stage`/`prod`) exist outside a local
 > Tilt session. Read ["Is the registry actually in use right now?"](#is-the-registry-actually-in-use-right-now)
 > before assuming anything below is live.
@@ -25,7 +28,7 @@ answers none of them:
 |---|---|
 | Is CI recording builds/artifacts at all? | Repository variable `APP_REGISTRY_CICD_OPT_IN` in GitHub → Settings → Secrets and variables → Actions → Variables. `true` = recording steps run (best-effort); unset/anything else = CI makes zero registry calls. |
 | Is a given domain's promotion state tracked? | `app-registry status <env> --domain <domain>` returns real data only if that domain has been recording long enough to have artifacts; there is no per-domain "promotion tracked" flag distinct from having promotable artifacts. |
-| Does the registry allocate versions for a domain? | Query `domain_adoption.stage` for that domain (no admin RPC/CLI exists yet — this is a direct `SELECT` against Postgres, see [ARCHITECTURE.md "Resolved questions"](architecture/19-resolved-questions.md) → "3. No backfill; adopt by per-domain cutover"). No row = `observe` (implicit). Only `allocate` lets `AllocateVersion` succeed; `release_helper_go` doesn't call it regardless, so today this is always moot. |
+| Does the registry allocate versions for a domain? | Yes, always, for every domain — `AllocateVersion` serves any domain unconditionally. The only real question is whether `release_helper_go` calls it at all, which is `APP_REGISTRY_CICD_OPT_IN` (see above). |
 
 If `APP_REGISTRY_CICD_OPT_IN` is unset, the honest answer to "is the registry
 in use" is **no** — the service may be deployed and healthy, but nothing is
@@ -341,7 +344,7 @@ as `github.run_id`. Each artifact in the output carries a `state`:
 | `ARTIFACT_STATE_PUBLISHING` | Intent recorded (or the push started), but no digest yet. **Incomplete** — either still running, or was killed before pushing/recording. |
 | `ARTIFACT_STATE_PUBLISHED` | Done. Nothing to do. |
 | `ARTIFACT_STATE_FAILED` | `FailPublish` ran on the error path (or the stale-row reaper timed it out — check `fail_reason`, `"stale"` means the latter). **Incomplete** — needs a re-attempt. |
-| `ARTIFACT_STATE_ALLOCATED` | Reserved a version but never started publishing — only possible for a domain at adoption stage `allocate` (none are, as of this writing; see `domain_adoption`). **Incomplete.** |
+| `ARTIFACT_STATE_ALLOCATED` | Reserved a version but never started publishing. **Incomplete.** |
 
 An empty response with no `NotFound` error and zero artifacts, for a run
 that definitely built something, most likely means `APP_REGISTRY_CICD_OPT_IN`
@@ -551,8 +554,7 @@ build `32065667768`.
 
 **Finding stuck rows (read-only).** There is no CLI filter for artifact
 state across every owner (`artifacts list` only filters by owner/kind/
-provenance/promotability — see `cli/cmd/artifacts.go`), so — same as the
-`domain_adoption.stage` lookup earlier in this doc — this is a direct
+provenance/promotability — see `cli/cmd/artifacts.go`), so this is a direct
 `SELECT` against Postgres, safe to run at any time:
 
 ```sql

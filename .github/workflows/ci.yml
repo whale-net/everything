@@ -60,7 +60,6 @@ jobs:
       with:
         source: published
         target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        fallback_to_source: 'true'
 
     - name: Reconcile apps/charts in App Registry
       if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
@@ -73,6 +72,7 @@ jobs:
         client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
         git-sha: ${{ github.sha }}
         idempotency-key: ${{ github.run_id }}-${{ github.run_attempt }}-reconcile
+        fast-mode: ${{ vars.RELEASE_HELPER_FAST_MODE }}
 
     # FR8 (issue #923): unconditional per-app/chart build log, one row per
     # discovered app/chart, EVERY push -- no digest-diff or content gating
@@ -357,12 +357,12 @@ jobs:
       with:
         source: published
         target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        fallback_to_source: 'true'
 
     - name: Plan Docker builds using release tool
       id: plan
       env:
         GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        FAST_MODE: ${{ vars.RELEASE_HELPER_FAST_MODE }}
       run: |
         # Determine what to build based on changes
         if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -383,8 +383,15 @@ jobs:
         fi
         
         # Use release helper to plan the Docker builds
+        # FAST_MODE is empty when RELEASE_HELPER_FAST_MODE is unset -- normalize
+        # to a real "true"/"false" so --fast= never gets an empty value.
+        FAST="false"
+        if [[ "$FAST_MODE" == "true" ]]; then
+          FAST="true"
+        fi
         echo "Planning Docker builds using release tool..."
         PLAN_OUTPUT=$("$RELEASE_HELPER" plan \
+          --fast="$FAST" \
           --event-type "$EVENT_TYPE" \
           --base-commit="$BASE_COMMIT" \
           --format github)
@@ -433,7 +440,6 @@ jobs:
       with:
         source: published
         target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        fallback_to_source: 'true'
 
     - name: Build Docker images
       env:
