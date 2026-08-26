@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -694,5 +697,339 @@ func TestHandleManifest_MultipleSensorsAllHWHistoryCalled(t *testing.T) {
 	}
 	if repo.hwHistoryCalls[2].hw != nil {
 		t.Errorf("hwHistoryCalls[2]: expected nil, got %+v", repo.hwHistoryCalls[2].hw)
+	}
+}
+
+// TestHandleManifest_SwapDetectionWithRealDB verifies that when a manifest
+// exchanges two sensors' hardware keys (a swap), the manifest is rejected
+// before any changes are persisted. This test uses a real database to verify
+// the swap detection works correctly (FR16 criterion 1b).
+// Note: We test swaps with the same sensor type, since the canonical hardware key
+// includes type_id, so only same-type sensors can truly swap in the key space.
+func TestHandleManifest_SwapDetectionWithRealDB(t *testing.T) {
+	ctx := context.Background()
+
+	// Set up schema with sensor_type, board, sensor, sensor_name_history, sensor_hw_history
+	schema := `
+		CREATE TABLE sensor_type (
+			sensor_type_id BIGSERIAL PRIMARY KEY,
+			name VARCHAR(64) NOT NULL UNIQUE,
+			default_unit VARCHAR(16) NOT NULL
+		);
+
+		INSERT INTO sensor_type (name, default_unit) VALUES
+			('temperature', 'degC');
+
+		CREATE TABLE board (
+			board_id BIGSERIAL PRIMARY KEY,
+			device_id VARCHAR(64) NOT NULL UNIQUE,
+			registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE sensor (
+			sensor_id BIGSERIAL PRIMARY KEY,
+			board_id BIGINT NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
+			sensor_type_id BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
+			region_id BIGINT,
+			name VARCHAR(128) NOT NULL,
+			unit VARCHAR(16) NOT NULL,
+			i2c_address SMALLINT,
+			mux_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+			registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (board_id, name)
+		);
+
+		CREATE UNIQUE INDEX idx_sensor_hw_address
+			ON sensor(board_id, i2c_address, sensor_type_id, (mux_path::text))
+			WHERE i2c_address IS NOT NULL;
+
+		CREATE TABLE sensor_name_history (
+			sensor_name_history_id BIGSERIAL PRIMARY KEY,
+			sensor_id BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			valid_to TIMESTAMPTZ
+		);
+
+		CREATE TABLE sensor_hw_history (
+			history_id BIGSERIAL PRIMARY KEY,
+			sensor_id BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE RESTRICT,
+			i2c_address SMALLINT,
+			mux_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+			valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			valid_to TIMESTAMPTZ
+		);
+
+		CREATE INDEX idx_sensor_hw_history_current
+			ON sensor_hw_history(sensor_id) WHERE valid_to IS NULL;
+	`
+
+	pg := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: schema})
+
+	// Create board and sensor type
+	var boardID, sensorTypeID int64
+	if err := pg.Pool.QueryRow(ctx, `
+		INSERT INTO board (device_id) VALUES ($1) RETURNING board_id
+	`, "test-device").Scan(&boardID); err != nil {
+		t.Fatalf("insert board: %v", err)
+	}
+
+	if err := pg.Pool.QueryRow(ctx, `
+		SELECT sensor_type_id FROM sensor_type WHERE name = 'temperature'
+	`).Scan(&sensorTypeID); err != nil {
+		t.Fatalf("query temperature type: %v", err)
+	}
+
+	// Create two existing sensors of the SAME type with different hardware addresses
+	var tempSensor1ID, tempSensor2ID int64
+	muxPath, _ := json.Marshal([]MuxHop{})
+
+	if err := pg.Pool.QueryRow(ctx, `
+		INSERT INTO sensor (board_id, sensor_type_id, name, unit, i2c_address, mux_path)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		RETURNING sensor_id
+	`, boardID, sensorTypeID, "temperature_1", "degC", 0x40, muxPath).Scan(&tempSensor1ID); err != nil {
+		t.Fatalf("insert temperature sensor 1: %v", err)
+	}
+
+	if err := pg.Pool.QueryRow(ctx, `
+		INSERT INTO sensor (board_id, sensor_type_id, name, unit, i2c_address, mux_path)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		RETURNING sensor_id
+	`, boardID, sensorTypeID, "temperature_2", "degC", 0x23, muxPath).Scan(&tempSensor2ID); err != nil {
+		t.Fatalf("insert temperature sensor 2: %v", err)
+	}
+
+	// Record initial hardware history for both
+	if _, err := pg.Pool.Exec(ctx, `
+		INSERT INTO sensor_name_history (sensor_id, name) VALUES ($1, $2)
+	`, tempSensor1ID, "temperature_1"); err != nil {
+		t.Fatalf("insert temp1 name history: %v", err)
+	}
+
+	if _, err := pg.Pool.Exec(ctx, `
+		INSERT INTO sensor_hw_history (sensor_id, i2c_address, mux_path) VALUES ($1, $2, $3::jsonb)
+	`, tempSensor1ID, 0x40, muxPath); err != nil {
+		t.Fatalf("insert temp1 hw history: %v", err)
+	}
+
+	if _, err := pg.Pool.Exec(ctx, `
+		INSERT INTO sensor_name_history (sensor_id, name) VALUES ($1, $2)
+	`, tempSensor2ID, "temperature_2"); err != nil {
+		t.Fatalf("insert temp2 name history: %v", err)
+	}
+
+	if _, err := pg.Pool.Exec(ctx, `
+		INSERT INTO sensor_hw_history (sensor_id, i2c_address, mux_path) VALUES ($1, $2, $3::jsonb)
+	`, tempSensor2ID, 0x23, muxPath); err != nil {
+		t.Fatalf("insert temp2 hw history: %v", err)
+	}
+
+	// Now send a manifest that SWAPS the hardware addresses (both same type)
+	// temperature_1 now has 0x23 (what temperature_2 had)
+	// temperature_2 now has 0x40 (what temperature_1 had)
+	repo := NewRepository(pg.Pool)
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "test-device",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{
+				Name:       "temperature_1",
+				Type:       firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE,
+				Unit:       "degC",
+				I2CAddress: 0x23, // Swapped: was 0x40
+			},
+			{
+				Name:       "temperature_2",
+				Type:       firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE,
+				Unit:       "degC",
+				I2CAddress: 0x40, // Swapped: was 0x23
+			},
+		},
+	}
+
+	// Attempt to process the swapped manifest
+	err := h.handleManifest(ctx, manifest.DeviceId, marshalManifest(t, manifest))
+
+	// Should get a PermanentError indicating a swap was detected
+	if err == nil {
+		t.Fatal("expected swap to be rejected, but handleManifest returned nil")
+	}
+
+	// The error should be a PermanentError containing information about the swap
+	var permErr *rmq.PermanentError
+	if !errors.As(err, &permErr) {
+		t.Fatalf("expected PermanentError, got %T: %v", err, err)
+	}
+
+	// Verify the error message mentions both sensor names
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "temperature_1") || !strings.Contains(errMsg, "temperature_2") {
+		t.Errorf("error message should mention both sensor names; got: %s", errMsg)
+	}
+
+	// Verify no new sensors were created (should still have exactly 2)
+	var sensorCount int64
+	if err := pg.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM sensor WHERE board_id = $1
+	`, boardID).Scan(&sensorCount); err != nil {
+		t.Fatalf("count sensors: %v", err)
+	}
+
+	if sensorCount != 2 {
+		t.Errorf("expected 2 sensors (no fork from swap attempt), got %d", sensorCount)
+	}
+
+	// Verify sensor addresses were NOT changed by the failed manifest
+	var temp1Addr, temp2Addr int16
+	if err := pg.Pool.QueryRow(ctx, `
+		SELECT i2c_address FROM sensor WHERE sensor_id = $1
+	`, tempSensor1ID).Scan(&temp1Addr); err != nil {
+		t.Fatalf("query temp1 sensor address: %v", err)
+	}
+
+	if temp1Addr != 0x40 {
+		t.Errorf("temperature_1 address should remain 0x40, got 0x%x", temp1Addr)
+	}
+
+	if err := pg.Pool.QueryRow(ctx, `
+		SELECT i2c_address FROM sensor WHERE sensor_id = $1
+	`, tempSensor2ID).Scan(&temp2Addr); err != nil {
+		t.Fatalf("query temp2 sensor address: %v", err)
+	}
+
+	if temp2Addr != 0x23 {
+		t.Errorf("temperature_2 address should remain 0x23, got 0x%x", temp2Addr)
+	}
+}
+
+
+func TestHandleManifest_NoSwapWhenOnlyOneHWAddress(t *testing.T) {
+	ctx := context.Background()
+
+	schema := `
+		CREATE TABLE sensor_type (
+			sensor_type_id BIGSERIAL PRIMARY KEY,
+			name VARCHAR(64) NOT NULL UNIQUE,
+			default_unit VARCHAR(16) NOT NULL
+		);
+
+		INSERT INTO sensor_type (name, default_unit) VALUES
+			('temperature', 'degC');
+
+		CREATE TABLE board (
+			board_id BIGSERIAL PRIMARY KEY,
+			device_id VARCHAR(64) NOT NULL UNIQUE,
+			registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+
+		CREATE TABLE sensor (
+			sensor_id BIGSERIAL PRIMARY KEY,
+			board_id BIGINT NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
+			sensor_type_id BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
+			region_id BIGINT,
+			name VARCHAR(128) NOT NULL,
+			unit VARCHAR(16) NOT NULL,
+			i2c_address SMALLINT,
+			mux_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+			registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			UNIQUE (board_id, name)
+		);
+
+		CREATE UNIQUE INDEX idx_sensor_hw_address
+			ON sensor(board_id, i2c_address, sensor_type_id, (mux_path::text))
+			WHERE i2c_address IS NOT NULL;
+
+		CREATE TABLE sensor_name_history (
+			sensor_name_history_id BIGSERIAL PRIMARY KEY,
+			sensor_id BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			valid_to TIMESTAMPTZ
+		);
+
+		CREATE TABLE sensor_hw_history (
+			history_id BIGSERIAL PRIMARY KEY,
+			sensor_id BIGINT NOT NULL REFERENCES sensor(sensor_id) ON DELETE RESTRICT,
+			i2c_address SMALLINT,
+			mux_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+			valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			valid_to TIMESTAMPTZ
+		);
+
+		CREATE INDEX idx_sensor_hw_history_current
+			ON sensor_hw_history(sensor_id) WHERE valid_to IS NULL;
+	`
+
+	pg := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: schema})
+
+	var boardID, sensorTypeID int64
+	if err := pg.Pool.QueryRow(ctx, `
+		INSERT INTO board (device_id) VALUES ($1) RETURNING board_id
+	`, "test-device").Scan(&boardID); err != nil {
+		t.Fatalf("insert board: %v", err)
+	}
+
+	if err := pg.Pool.QueryRow(ctx, `
+		SELECT sensor_type_id FROM sensor_type WHERE name = 'temperature'
+	`).Scan(&sensorTypeID); err != nil {
+		t.Fatalf("query sensor_type: %v", err)
+	}
+
+	// Create a sensor with a hardware address
+	var sensorID int64
+	muxPath, _ := json.Marshal([]MuxHop{})
+	if err := pg.Pool.QueryRow(ctx, `
+		INSERT INTO sensor (board_id, sensor_type_id, name, unit, i2c_address, mux_path)
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+		RETURNING sensor_id
+	`, boardID, sensorTypeID, "temp1", "degC", 0x40, muxPath).Scan(&sensorID); err != nil {
+		t.Fatalf("insert sensor: %v", err)
+	}
+
+	if _, err := pg.Pool.Exec(ctx, `
+		INSERT INTO sensor_hw_history (sensor_id, i2c_address, mux_path) VALUES ($1, $2, $3::jsonb)
+	`, sensorID, 0x40, muxPath); err != nil {
+		t.Fatalf("insert hw history: %v", err)
+	}
+
+	// Send a manifest that changes the name and hardware address simultaneously
+	// (this is a rewire+rename, not a swap)
+	repo := NewRepository(pg.Pool)
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "test-device",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{
+				Name:       "temp2", // Different name
+				Type:       firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE,
+				Unit:       "degC",
+				I2CAddress: 0x42, // Different address
+			},
+		},
+	}
+
+	// This should NOT be rejected (no swap possible with only one sensor)
+	err := h.handleManifest(ctx, manifest.DeviceId, marshalManifest(t, manifest))
+	if err != nil {
+		t.Fatalf("expected no error for single-sensor rewire+rename, got: %v", err)
+	}
+
+	// Verify the sensor was updated in place (same sensor_id)
+	var actualSensorID int64
+	if err := pg.Pool.QueryRow(ctx, `
+		SELECT sensor_id FROM sensor WHERE name = $1
+	`, "temp2").Scan(&actualSensorID); err != nil {
+		t.Fatalf("query updated sensor: %v", err)
+	}
+
+	if actualSensorID != sensorID {
+		t.Errorf("sensor should be updated in place, not forked; expected sensor_id=%d, got %d", sensorID, actualSensorID)
 	}
 }
