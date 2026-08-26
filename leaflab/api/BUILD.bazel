@@ -6,6 +6,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "authorization.go",
         "main.go",
         "repository.go",
         "server.go",
@@ -35,15 +36,34 @@ go_library(
 
 go_test(
     name = "api_test",
-    srcs = ["server_test.go"],
+    srcs = [
+        "authorization_test.go",
+        "server_test.go",
+    ],
     embed = [":api_lib"],
+    data = [
+        "//leaflab/migrate:migrations",
+    ],
+    tags = [
+        "external",
+        "integration",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    timeout = "long",
     deps = [
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/canonkey",
+        "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "//libs/go/logging",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",

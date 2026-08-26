@@ -91,17 +91,23 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 	return &cfg, nil
 }
 
-// ListBoards returns a page of boards using keyset pagination on (recorded_at DESC, board_id).
+// ListBoards returns a page of boards using keyset pagination on (recorded_at DESC, board_id),
+// restricted to the given household IDs (FR5: household-scoped listing).
 // recorded_at is the Unix timestamp (seconds since epoch) of last_seen_at.
 // pageToken can be nil for the first page, or a decoded token from a previous response.
 // Returns the boards, a next page token (nil if this is the last page), and any error.
-func (r *Repository) ListBoards(ctx context.Context, pageSize int32, pageToken *pagetoken.Token) ([]BoardRow, *pagetoken.Token, error) {
+func (r *Repository) ListBoards(ctx context.Context, householdIDs []int64, pageSize int32, pageToken *pagetoken.Token) ([]BoardRow, *pagetoken.Token, error) {
 	// Clamp page size to maximum; enforce a default if not specified
 	if pageSize <= 0 {
 		pageSize = DefaultPageSize
 	}
 	if pageSize > MaxPageSize {
 		pageSize = MaxPageSize
+	}
+
+	// No reachable households means no boards, regardless of what exists globally (FR5).
+	if len(householdIDs) == 0 {
+		return nil, nil, nil
 	}
 
 	// Build the keyset pagination query.
@@ -115,10 +121,11 @@ func (r *Repository) ListBoards(ctx context.Context, pageSize int32, pageToken *
 		query = `
 			SELECT board_id, device_id, EXTRACT(EPOCH FROM last_seen_at)::bigint AS recorded_at
 			FROM board
+			WHERE household_id = ANY($1)
 			ORDER BY last_seen_at DESC, board_id ASC
-			LIMIT $1
+			LIMIT $2
 		`
-		args = []interface{}{pageSize + 1}
+		args = []interface{}{householdIDs, pageSize + 1}
 	} else {
 		// Subsequent page: fetch rows after the token's position.
 		// The condition is: (recorded_at, board_id) < (token.recorded_at, token.board_id)
@@ -126,12 +133,13 @@ func (r *Repository) ListBoards(ctx context.Context, pageSize int32, pageToken *
 		query = `
 			SELECT board_id, device_id, EXTRACT(EPOCH FROM last_seen_at)::bigint AS recorded_at
 			FROM board
-			WHERE (EXTRACT(EPOCH FROM last_seen_at)::bigint < $1)
-			   OR (EXTRACT(EPOCH FROM last_seen_at)::bigint = $1 AND board_id < $2)
+			WHERE household_id = ANY($1)
+			  AND ((EXTRACT(EPOCH FROM last_seen_at)::bigint < $2)
+			   OR (EXTRACT(EPOCH FROM last_seen_at)::bigint = $2 AND board_id < $3))
 			ORDER BY last_seen_at DESC, board_id ASC
-			LIMIT $3
+			LIMIT $4
 		`
-		args = []interface{}{pageToken.LastRecordedAt, pageToken.LastBoardID, pageSize + 1}
+		args = []interface{}{householdIDs, pageToken.LastRecordedAt, pageToken.LastBoardID, pageSize + 1}
 	}
 
 	rows, err := r.db.Query(ctx, query, args...)
@@ -166,10 +174,14 @@ func (r *Repository) ListBoards(ctx context.Context, pageSize int32, pageToken *
 	return boards, nextToken, nil
 }
 
-// GetTotalBoardCount returns the total number of boards.
-func (r *Repository) GetTotalBoardCount(ctx context.Context) (int32, error) {
+// GetTotalBoardCount returns the total number of boards reachable within the given
+// household IDs (FR5: no aggregate anywhere leaks another household's existence).
+func (r *Repository) GetTotalBoardCount(ctx context.Context, householdIDs []int64) (int32, error) {
+	if len(householdIDs) == 0 {
+		return 0, nil
+	}
 	var count int32
-	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM board`).Scan(&count)
+	err := r.db.QueryRow(ctx, `SELECT COUNT(*) FROM board WHERE household_id = ANY($1)`, householdIDs).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("get board count: %w", err)
 	}
@@ -572,4 +584,43 @@ func (r *Repository) RecordAuditWithConfig(ctx context.Context, actorSubject str
 		return fmt.Errorf("record audit with config: %w", err)
 	}
 	return nil
+}
+
+// GetBoardByDeviceID resolves a device_id to its board_id and household_id.
+// Returns pgx.ErrNoRows if the board doesn't exist.
+// Used for per-entity authorization checks in PushDeviceConfig and GetDeviceConfig.
+func (r *Repository) GetBoardByDeviceID(ctx context.Context, deviceID string) (boardID, householdID int64, err error) {
+	err = r.db.QueryRow(ctx, `
+		SELECT board_id, household_id FROM board
+		WHERE device_id = $1
+	`, deviceID).Scan(&boardID, &householdID)
+	if err != nil {
+		return 0, 0, err
+	}
+	return boardID, householdID, nil
+}
+
+// GetPrincipalHouseholds returns all households the principal is currently a member of.
+// FR75: Membership is the mechanism by which non-admin principals obtain access.
+// Returns only households where valid_to IS NULL (current membership).
+func (r *Repository) GetPrincipalHouseholds(ctx context.Context, principalID string) ([]int64, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT DISTINCT household_id FROM household_member
+		WHERE principal_id = $1 AND valid_to IS NULL
+		ORDER BY household_id
+	`, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("get households for principal %s: %w", principalID, err)
+	}
+	defer rows.Close()
+
+	var householdIDs []int64
+	for rows.Next() {
+		var hid int64
+		if err := rows.Scan(&hid); err != nil {
+			return nil, fmt.Errorf("scan household_id: %w", err)
+		}
+		householdIDs = append(householdIDs, hid)
+	}
+	return householdIDs, rows.Err()
 }
