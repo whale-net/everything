@@ -379,10 +379,20 @@ func packageChartWithVersion(chartDir, chartName, version, outDir string, appVer
 		if !ok {
 			return "", fmt.Errorf("values.yaml has no \"apps\" map to set imageTag on")
 		}
-		for appKey, ver := range appVersions {
-			appEntry, ok := apps[appKey].(map[string]interface{})
+		// Iterate the chart's own apps map, not appVersions: appVersions may
+		// be a whole release batch's version map shared across multiple
+		// charts (see finalize-chart), so it can legitimately contain keys
+		// for apps this chart doesn't compose. Only entries actually present
+		// in this chart's values.yaml "apps" map need a resolved version;
+		// anything else in appVersions is out of scope and ignored.
+		for appKey, entry := range apps {
+			ver, ok := appVersions[appKey]
 			if !ok {
-				return "", fmt.Errorf("values.yaml \"apps\" has no entry %q to set imageTag on (chart's apps map may use a different key convention than the resolved app versions)", appKey)
+				return "", fmt.Errorf("resolved app versions has no entry %q for values.yaml \"apps\" key (chart's apps map may use a different key convention than the resolved app versions)", appKey)
+			}
+			appEntry, ok := entry.(map[string]interface{})
+			if !ok {
+				return "", fmt.Errorf("values.yaml \"apps\" entry %q is not a map", appKey)
 			}
 			appEntry["imageTag"] = ver
 			fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)
