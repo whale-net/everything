@@ -265,3 +265,67 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 		},
 	}, nil
 }
+
+func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSensorTimelinesRequest) (*pb.GetSensorTimelinesResponse, error) {
+	if req.SensorId <= 0 {
+		// Invalid sensor_id
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"sensor",
+			"sensor_id",
+			apierrors.InvalidSensorConfig,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "sensor_id must be positive", detail)
+	}
+
+	timelines, err := s.repo.GetSensorTimelines(ctx, req.SensorId)
+	if err != nil {
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"sensor",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Convert database results to proto messages
+	pbTimelines := &pb.SensorTimelines{
+		SensorId:         timelines.SensorID,
+		NameTimeline:     make([]*pb.SensorNameEntry, len(timelines.NameTimeline)),
+		HardwareTimeline: make([]*pb.SensorHardwareEntry, len(timelines.HardwareTimeline)),
+		RegionTimeline:   make([]*pb.SensorRegionEntry, len(timelines.RegionTimeline)),
+	}
+
+	for i, entry := range timelines.NameTimeline {
+		pbTimelines.NameTimeline[i] = &pb.SensorNameEntry{
+			Name:      entry.Name,
+			ValidFrom: entry.ValidFrom,
+			ValidTo:   entry.ValidTo,
+		}
+	}
+
+	for i, entry := range timelines.HardwareTimeline {
+		pbTimelines.HardwareTimeline[i] = &pb.SensorHardwareEntry{
+			I2CAddress: entry.I2CAddress,
+			MuxPath:    entry.MuxPath,
+			ValidFrom:  entry.ValidFrom,
+			ValidTo:    entry.ValidTo,
+		}
+	}
+
+	for i, entry := range timelines.RegionTimeline {
+		pbTimelines.RegionTimeline[i] = &pb.SensorRegionEntry{
+			RegionId:   entry.RegionID,
+			RegionName: entry.RegionName,
+			ValidFrom:  entry.ValidFrom,
+			ValidTo:    entry.ValidTo,
+		}
+	}
+
+	return &pb.GetSensorTimelinesResponse{
+		Timelines: pbTimelines,
+	}, nil
+}
+

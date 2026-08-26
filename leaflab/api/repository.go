@@ -186,3 +186,127 @@ const (
 	DefaultPageSize = 50
 	MaxPageSize     = 1000
 )
+
+// GetSensorTimelines retrieves the three aligned timelines (name, hardware, region)
+// for a sensor identified by sensor_id. Returns all historical entries in order.
+// A sensor dropped from desired state keeps all three timelines.
+func (r *Repository) GetSensorTimelines(ctx context.Context, sensorID int64) (*SensorTimelinesResult, error) {
+	result := &SensorTimelinesResult{
+		SensorID:        sensorID,
+		NameTimeline:    []*SensorNameEntry{},
+		HardwareTimeline: []*SensorHardwareEntry{},
+		RegionTimeline:  []*SensorRegionEntry{},
+	}
+
+	// Fetch name timeline
+	rows, err := r.db.Query(ctx, `
+		SELECT name, EXTRACT(EPOCH FROM valid_from)::int64, COALESCE(EXTRACT(EPOCH FROM valid_to)::int64, 0)
+		FROM sensor_name_history
+		WHERE sensor_id = $1
+		ORDER BY valid_from ASC
+	`, sensorID)
+	if err != nil {
+		return nil, fmt.Errorf("query sensor_name_history: %w", err)
+	}
+	for rows.Next() {
+		var name string
+		var validFrom, validTo int64
+		if err := rows.Scan(&name, &validFrom, &validTo); err != nil {
+			return nil, fmt.Errorf("scan sensor_name_history: %w", err)
+		}
+		result.NameTimeline = append(result.NameTimeline, &SensorNameEntry{
+			Name:      name,
+			ValidFrom: validFrom,
+			ValidTo:   validTo,
+		})
+	}
+	rows.Close()
+
+	// Fetch hardware timeline (carrying full canonical key)
+	rows, err = r.db.Query(ctx, `
+		SELECT i2c_address, mux_path, EXTRACT(EPOCH FROM valid_from)::int64, COALESCE(EXTRACT(EPOCH FROM valid_to)::int64, 0)
+		FROM sensor_hw_history
+		WHERE sensor_id = $1
+		ORDER BY valid_from ASC
+	`, sensorID)
+	if err != nil {
+		return nil, fmt.Errorf("query sensor_hw_history: %w", err)
+	}
+	for rows.Next() {
+		var i2cAddr *uint32
+		var muxPathJSON string
+		var validFrom, validTo int64
+		if err := rows.Scan(&i2cAddr, &muxPathJSON, &validFrom, &validTo); err != nil {
+			return nil, fmt.Errorf("scan sensor_hw_history: %w", err)
+		}
+		// i2cAddr is NULL for closed intervals pre-migration 013
+		i2cAddrVal := uint32(0)
+		if i2cAddr != nil {
+			i2cAddrVal = *i2cAddr
+		}
+		result.HardwareTimeline = append(result.HardwareTimeline, &SensorHardwareEntry{
+			I2CAddress: i2cAddrVal,
+			MuxPath:    muxPathJSON,
+			ValidFrom:  validFrom,
+			ValidTo:    validTo,
+		})
+	}
+	rows.Close()
+
+	// Fetch region timeline
+	rows, err = r.db.Query(ctx, `
+		SELECT region_id, COALESCE((SELECT name FROM region WHERE region_id = srh.region_id), ''), 
+		       EXTRACT(EPOCH FROM valid_from)::int64, COALESCE(EXTRACT(EPOCH FROM valid_to)::int64, 0)
+		FROM sensor_region_history srh
+		WHERE sensor_id = $1
+		ORDER BY valid_from ASC
+	`, sensorID)
+	if err != nil {
+		return nil, fmt.Errorf("query sensor_region_history: %w", err)
+	}
+	for rows.Next() {
+		var regionID int64
+		var regionName string
+		var validFrom, validTo int64
+		if err := rows.Scan(&regionID, &regionName, &validFrom, &validTo); err != nil {
+			return nil, fmt.Errorf("scan sensor_region_history: %w", err)
+		}
+		result.RegionTimeline = append(result.RegionTimeline, &SensorRegionEntry{
+			RegionID:   regionID,
+			RegionName: regionName,
+			ValidFrom:  validFrom,
+			ValidTo:    validTo,
+		})
+	}
+	rows.Close()
+
+	return result, nil
+}
+
+type SensorTimelinesResult struct {
+	SensorID         int64
+	NameTimeline     []*SensorNameEntry
+	HardwareTimeline []*SensorHardwareEntry
+	RegionTimeline   []*SensorRegionEntry
+}
+
+type SensorNameEntry struct {
+	Name      string
+	ValidFrom int64
+	ValidTo   int64
+}
+
+type SensorHardwareEntry struct {
+	I2CAddress uint32
+	MuxPath    string // JSONB as string
+	ValidFrom  int64
+	ValidTo    int64
+}
+
+type SensorRegionEntry struct {
+	RegionID   int64
+	RegionName string
+	ValidFrom  int64
+	ValidTo    int64
+}
+

@@ -250,22 +250,33 @@ func (r *Repository) LoadConfigVersionCache(ctx context.Context) (map[string]int
 	return out, rows.Err()
 }
 
-// UpsertSensorHWHistory records the current mux_path for a sensor.
-// Closes the previous open row when the path has changed.
+// UpsertSensorHWHistory records the current i2c_address and mux_path for a sensor,
+// carrying the full canonical hardware key. Closes the previous open row when the
+// hardware configuration has changed.
+//
+// The i2c_address is recorded along with mux_path; together they form part of the
+// canonical key (i2c_address, mux_path, sensor_type). The sensor type is carried
+// by the sensor row the interval belongs to.
 func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
+	if hw == nil || hw.I2CAddress == 0 {
+		// No hardware address to record; treat as no-op.
+		return nil
+	}
+
 	muxJSON, err := json.Marshal(hw.muxHops())
 	if err != nil {
 		return fmt.Errorf("marshal mux_path for hw history: %w", err)
 	}
 
-	// If an open row with this exact path already exists, nothing to do.
+	// If an open row with this exact i2c_address and mux_path already exists, nothing to do.
 	var unchanged bool
 	err = r.db.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM sensor_hw_history
-			WHERE sensor_id = $1 AND valid_to IS NULL AND mux_path = $2::jsonb
+			WHERE sensor_id = $1 AND valid_to IS NULL
+			  AND i2c_address = $2 AND mux_path = $3::jsonb
 		)
-	`, sensorID, muxJSON).Scan(&unchanged)
+	`, sensorID, hw.I2CAddress, muxJSON).Scan(&unchanged)
 	if err != nil {
 		return fmt.Errorf("check hw history for sensor %d: %w", sensorID, err)
 	}
@@ -281,9 +292,10 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 		return fmt.Errorf("close hw history for sensor %d: %w", sensorID, err)
 	}
 
+	// Insert the new open interval with i2c_address and mux_path.
 	if _, err := r.db.Exec(ctx, `
-		INSERT INTO sensor_hw_history (sensor_id, mux_path) VALUES ($1, $2::jsonb)
-	`, sensorID, muxJSON); err != nil {
+		INSERT INTO sensor_hw_history (sensor_id, i2c_address, mux_path) VALUES ($1, $2, $3::jsonb)
+	`, sensorID, hw.I2CAddress, muxJSON); err != nil {
 		return fmt.Errorf("insert hw history for sensor %d: %w", sensorID, err)
 	}
 	return nil
