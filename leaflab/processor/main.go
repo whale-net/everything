@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -64,6 +65,14 @@ func run() error {
 		return fmt.Errorf("failed to bind exchange: %w", err)
 	}
 
+	// Cache invalidation is broadcast via a separate fanout exchange.
+	// This ensures every subscriber (including multiple processor replicas in future)
+	// receives invalidation signals, not just one arbitrary consumer.
+	// See leaflab/ARCHITECTURE.md "FR73 Cache Invalidation Signalling" for design.
+	if err := consumer.BindExchange("leaflab.cache-invalidations", []string{"leaflab.cache-invalidation"}); err != nil {
+		return fmt.Errorf("failed to bind cache invalidation exchange: %w", err)
+	}
+
 	repo := NewRepository(dbPool)
 	cache := NewSensorCache()
 
@@ -83,7 +92,57 @@ func run() error {
 		logger.Info("config version cache pre-loaded", "devices", len(versions))
 	}
 
-	handler := NewMessageHandler(logger, repo, cache)
+	// Declare the cache invalidation fanout exchange.
+	// This must be declared before the publisher and consumer use it.
+	ch, err := rmqConn.Channel()
+	if err != nil {
+		return fmt.Errorf("failed to open channel for exchange declaration: %w", err)
+	}
+	if err := ch.ExchangeDeclare(
+		"leaflab.cache-invalidations", // exchange name
+		"fanout",                      // exchange type (broadcast to all subscribers)
+		true,                          // durable
+		false,                         // auto-deleted
+		false,                         // internal
+		false,                         // no-wait
+		nil,                           // arguments
+	); err != nil {
+		ch.Close()
+		return fmt.Errorf("failed to declare cache invalidation fanout exchange: %w", err)
+	}
+	ch.Close()
+
+	// Create the cache invalidation publisher and invalidator.
+	// The publisher uses the fanout exchange declared above for broadcast delivery.
+	invalidationPublisher, err := rmq.NewPublisher(rmqConn)
+	if err != nil {
+		return fmt.Errorf("failed to create cache invalidation publisher: %w", err)
+	}
+	defer invalidationPublisher.Close() //nolint:errcheck
+
+	invalidator := NewRabbitMQInvalidator(logger, invalidationPublisher, "leaflab.cache-invalidations")
+
+	// Register handler for cache invalidation signals. This runs in the same consumer loop
+	// and receives all invalidation broadcasts from all publishers (including other processes).
+	consumer.RegisterHandler("leaflab.cache-invalidation", func(ctx context.Context, msg rmq.Message) error {
+		var signal CacheInvalidationSignal
+		if err := json.Unmarshal(msg.Body, &signal); err != nil {
+			logger.Warn("failed to unmarshal cache invalidation signal",
+				"routing_key", msg.RoutingKey,
+				"err", err,
+			)
+			return &rmq.PermanentError{Err: err}
+		}
+		logger.Debug("cache invalidation signal received",
+			"device_id", signal.DeviceID,
+			"sensor_id", signal.SensorID,
+			"change_type", signal.ChangeType,
+		)
+		cache.ApplyInvalidation(&signal)
+		return nil
+	})
+
+	handler := NewMessageHandler(logger, repo, cache, invalidator)
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
@@ -92,7 +151,12 @@ func run() error {
 	if err := consumer.Start(appCtx); err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}
-	logger.Info("consuming messages", "exchange", "amq.topic", "routing_key", "leaflab.#")
+	logger.Info("consuming messages",
+		"sensor_exchange", "amq.topic",
+		"sensor_routing_key", "leaflab.#",
+		"invalidation_exchange", "leaflab.cache-invalidations",
+		"invalidation_routing_key", "leaflab.cache-invalidation",
+	)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

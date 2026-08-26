@@ -764,7 +764,7 @@ func TestResolveReadingAttribution_AllSiblingsReturned(t *testing.T) {
 	if _, err := db.Pool.Exec(ctx, `
 		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
 		VALUES ($1, $2, $3), ($4, $5, $6), ($7, $8, $9)
-	`, plant1ID, potID, readTime.Add(-1*time.Hour), 
+	`, plant1ID, potID, readTime.Add(-1*time.Hour),
 		plant2ID, potID, readTime.Add(-1*time.Hour),
 		plant3ID, potID, readTime.Add(-1*time.Hour)); err != nil {
 		t.Fatalf("insert placements: %v", err)

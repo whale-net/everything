@@ -8,7 +8,10 @@ import (
 	"strings"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/apierrors"
+	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/canonkey"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -78,7 +81,27 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	subject, corrID := getSubjectAndCorrelationID(ctx)
 
 	if err := validateDeviceID(req.DeviceId); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		// device_id validation failure
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_id",
+			"device_id",
+			apierrors.InvalidDeviceID,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+	}
+	// Canonicalize sensors on ingress at the proto/JSON boundary
+	for _, sensor := range req.Sensors {
+		if err := canonkey.ValidateAndCanonicalizeSensorConfig(sensor); err != nil {
+			// Sensor validation failure
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"sensors",
+				"sensor_type",
+				apierrors.InvalidSensorConfig,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+		}
 	}
 
 	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
@@ -88,7 +111,13 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			"subject", subject,
 			"correlation_id", corrID,
 			"error", err)
-		return nil, status.Errorf(codes.Internal, "board lookup: %v", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"board",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	// Build the proto with a placeholder version; we need configJSON for the
@@ -104,7 +133,13 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			"subject", subject,
 			"correlation_id", corrID,
 			"error", err)
-		return nil, status.Errorf(codes.Internal, "protojson marshal: %v", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	// Atomically assign version and record the pending push before publishing.
@@ -116,7 +151,13 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			"subject", subject,
 			"correlation_id", corrID,
 			"error", err)
-		return nil, status.Errorf(codes.Internal, "record config push: %v", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	// Re-marshal with the real version for the wire payload.
@@ -128,7 +169,13 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			"subject", subject,
 			"correlation_id", corrID,
 			"error", err)
-		return nil, status.Errorf(codes.Internal, "proto marshal: %v", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	// MQTT '/' → AMQP '.'; device_id should not contain '/' but sanitize to be safe.
@@ -141,7 +188,13 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			"subject", subject,
 			"correlation_id", corrID,
 			"error", err)
-		return nil, status.Errorf(codes.Internal, "publish config: %v", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	s.logger.Info("device config pushed",
@@ -162,7 +215,14 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 	subject, corrID := getSubjectAndCorrelationID(ctx)
 
 	if err := validateDeviceID(req.DeviceId); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		// device_id validation failure
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_id",
+			"device_id",
+			apierrors.InvalidDeviceID,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
 	}
 
 	cfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
@@ -172,7 +232,13 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 			"subject", subject,
 			"correlation_id", corrID,
 			"error", err)
-		return nil, status.Errorf(codes.Internal, "get config: %v", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	s.logger.Info("device config retrieved",
@@ -187,27 +253,69 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
 }
 
-func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
+func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
 	if err := requireAuthentication(ctx); err != nil {
 		return nil, err
 	}
 
 	subject, corrID := getSubjectAndCorrelationID(ctx)
 
-	rows, err := s.repo.ListBoards(ctx)
-	if err != nil {
-		s.logger.Error("list boards failed",
-			"subject", subject,
-			"correlation_id", corrID,
-			"error", err)
-		return nil, status.Errorf(codes.Internal, "list boards: %v", err)
+	// Parse page token
+	var decodedToken *pagetoken.Token
+	if req.Page != nil && req.Page.PageToken != "" {
+		var err error
+		decodedToken, err = pagetoken.Decode(req.Page.PageToken)
+		if err != nil {
+			// Invalid page token
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"page",
+				"page_token",
+				apierrors.InvalidPageToken,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+		}
 	}
 
+	// Determine page size
+	var pageSize int32 = DefaultPageSize
+	if req.Page != nil && req.Page.PageSize > 0 {
+		pageSize = req.Page.PageSize
+	}
+
+	// Fetch boards from repository
+	rows, nextToken, err := s.repo.ListBoards(ctx, pageSize, decodedToken)
+	if err != nil {
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"board",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Get total board count for progress display
+	totalSize, err := s.repo.GetTotalBoardCount(ctx)
+	if err != nil {
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"board",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Convert database rows to proto messages
 	boards := make([]*pb.BoardInfo, 0, len(rows))
 	for _, r := range rows {
 		boards = append(boards, &pb.BoardInfo{
-			DeviceId: r.DeviceID,
-			BoardId:  r.BoardID,
+			DeviceId:   r.DeviceID,
+			BoardId:    r.BoardID,
+			RecordedAt: r.RecordedAt,
 		})
 	}
 
@@ -216,7 +324,26 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsReque
 		"subject", subject,
 		"correlation_id", corrID)
 
-	return &pb.ListBoardsResponse{Boards: boards}, nil
+	// Encode next page token
+	var nextPageToken string
+	if nextToken != nil {
+		encoded, err := pagetoken.Encode(nextToken)
+		if err != nil {
+			// This should not happen in normal operation; log and return empty token
+			s.logger.Error("failed to encode next page token", "error", err)
+			nextPageToken = ""
+		} else {
+			nextPageToken = encoded
+		}
+	}
+
+	return &pb.ListBoardsResponse{
+		Boards: boards,
+		Page: &pb.PageResponse{
+			NextPageToken: nextPageToken,
+			TotalSize:     totalSize,
+		},
+	}, nil
 }
 
 func (s *LeafLabAPIServer) Health(ctx context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
@@ -230,4 +357,78 @@ func (s *LeafLabAPIServer) Health(ctx context.Context, _ *pb.HealthRequest) (*pb
 		"correlation_id", corrID)
 
 	return &pb.HealthResponse{Status: pb.HealthResponse_UP}, nil
+}
+
+func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSensorTimelinesRequest) (*pb.GetSensorTimelinesResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if req.SensorId <= 0 {
+		// Invalid sensor_id
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"sensor",
+			"sensor_id",
+			apierrors.InvalidSensorConfig,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "sensor_id must be positive", detail)
+	}
+
+	timelines, err := s.repo.GetSensorTimelines(ctx, req.SensorId)
+	if err != nil {
+		s.logger.Error("get sensor timelines failed",
+			"sensor_id", req.SensorId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"sensor",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Convert database results to proto messages
+	pbTimelines := &pb.SensorTimelines{
+		SensorId:         timelines.SensorID,
+		NameTimeline:     make([]*pb.SensorNameEntry, len(timelines.NameTimeline)),
+		HardwareTimeline: make([]*pb.SensorHardwareEntry, len(timelines.HardwareTimeline)),
+		RegionTimeline:   make([]*pb.SensorRegionEntry, len(timelines.RegionTimeline)),
+	}
+
+	for i, entry := range timelines.NameTimeline {
+		pbTimelines.NameTimeline[i] = &pb.SensorNameEntry{
+			Name:      entry.Name,
+			ValidFrom: entry.ValidFrom,
+			ValidTo:   entry.ValidTo,
+		}
+	}
+
+	for i, entry := range timelines.HardwareTimeline {
+		pbTimelines.HardwareTimeline[i] = &pb.SensorHardwareEntry{
+			I2CAddress: entry.I2CAddress,
+			MuxPath:    entry.MuxPath,
+			ValidFrom:  entry.ValidFrom,
+			ValidTo:    entry.ValidTo,
+		}
+	}
+
+	for i, entry := range timelines.RegionTimeline {
+		pbTimelines.RegionTimeline[i] = &pb.SensorRegionEntry{
+			RegionId:   entry.RegionID,
+			RegionName: entry.RegionName,
+			ValidFrom:  entry.ValidFrom,
+			ValidTo:    entry.ValidTo,
+		}
+	}
+
+	return &pb.GetSensorTimelinesResponse{
+		Timelines: pbTimelines,
+	}, nil
 }

@@ -14,6 +14,9 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/apierrors",
+        "//leaflab/api/pagetoken",
+        "//leaflab/canonkey",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
         "//libs/go/grpcauth",
@@ -35,7 +38,10 @@ go_test(
     srcs = ["server_test.go"],
     embed = [":api_lib"],
     deps = [
+        "//leaflab/api/apierrors",
+        "//leaflab/api/pagetoken",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/canonkey",
         "//libs/go/grpcauth",
         "//libs/go/logging",
         "@org_golang_google_grpc//:grpc",
