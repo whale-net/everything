@@ -542,3 +542,93 @@ message CheckChartHermeticityResponse {
   bool enforced = 1;
   repeated ChartPinViolation violations = 2;
 }
+
+// ============================================================================
+// Upload brokering (FR-1, FR-2, FR-4, FR-7, FR-61; issue #1142)
+// ============================================================================
+
+// BrokerUploadFile is one file in a BrokerUploadRequest. The caller supplies
+// the file's claimed uncompressed content digest (the identity for dedup
+// lookups), and the broker returns either a presigned PUT URL or an
+// "already stored" result.
+message BrokerUploadFile {
+  // The file's identifier within the upload batch (e.g., "linux-amd64" for
+  // a binary). Used in error messages and logging (NFR-12).
+  string variant_key = 1;
+
+  // Uncompressed content digest (e.g., "sha256:...") for this file.
+  // Used by the broker to check if a blob with this digest (and the
+  // kind's H3 content type and H4 encoding) already exists (FR-61).
+  string uncompressed_digest = 2;
+}
+
+// BrokerUploadRequest is the input to the upload broker. Given an artifact
+// identity and a set of files to upload, the broker returns either a
+// presigned PUT URL or an "already stored" result for each file (FR-1).
+//
+// The caller must NOT supply an object key; any attempt to do so is rejected
+// with an error (FR-2).
+message BrokerUploadRequest {
+  // Identifying the artifact this upload is for (required, non-empty).
+  // Example: "manmanv2-control-api" for an image, "tools-release_helper_go"
+  // for a binary. Used to resolve the kind and get H3/H4 hook policies.
+  string artifact_kind = 1;
+
+  // Semantic version of the artifact being uploaded (required, semver format).
+  // Validated and used in logging and error messages (NFR-12).
+  string version = 2;
+
+  // The set of files to upload in this request (required, non-empty).
+  // The broker processes each file independently, returning either a URL
+  // or "already stored" for each.
+  repeated BrokerUploadFile files = 3;
+
+  // Artifact identity this upload is for (required, non-empty). Format:
+  // "<domain>-<app/chart/binary>" for images/charts/binaries,
+  // "<firmware>-<device-type>" for firmware. Used for audit logging (NFR-12).
+  string artifact_identity = 4;
+
+  // Version reference for this upload (optional, context-dependent).
+  // For images/charts: same as version. For binaries: "{name}-{version}".
+  // Used to link uploads to published versions in the database (FR-7).
+  string version_reference = 5;
+}
+
+// BrokerUploadFileResult is the broker's response for one file: either a
+// presigned URL (case a) or "already stored" (case b) per FR-1.
+message BrokerUploadFileResult {
+  // The variant key this result is for (echoed from the request).
+  string variant_key = 1;
+
+  // (a) Presigned PUT URL, if the file needs to be uploaded. Nil/empty if
+  // the file is already stored. The URL is short-lived (NFR-2: ≤ 60 min).
+  string presigned_url = 2;
+
+  // (a) The registry-chosen object key for this file. Provided alongside
+  // presigned_url if the file needs uploading. The caller never chooses or
+  // influences this key (FR-2); attempting to supply one is rejected.
+  string object_key = 3;
+
+  // (a) Exact set of headers required for the PUT. A PUT deviating from
+  // these headers is rejected; a PUT sending exactly them succeeds (FR-1).
+  // Map from header name to value.
+  map<string, string> required_headers = 4;
+
+  // (b) True if this file is already stored (confirmed blob exists for the
+  // claimed digest/encoding/content-type three-tuple per FR-61).
+  // When true, presigned_url, object_key, and required_headers are all empty.
+  bool already_stored = 5;
+}
+
+// BrokerUploadResponse is the broker's output: for each file in the request,
+// either a presigned URL + key + headers, or an "already stored" result.
+message BrokerUploadResponse {
+  // One result per file in the request, in the same order. Each file gets
+  // either a URL (case a) or "already stored" (case b), per FR-1.
+  repeated BrokerUploadFileResult results = 1;
+
+  // Upload record ID for this broker session. Links all files in this batch
+  // to a single upload authorization record in the database (FR-7).
+  // Callers use this ID to report upload completion.
+  string upload_session_id = 2;
+}

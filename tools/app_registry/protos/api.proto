@@ -123,6 +123,14 @@ service ArtifactRegistry {
   // image lockfile") right after a chart's member app versions are resolved
   // and before the chart is packaged or anything is pushed. Read-only: it
   // never writes, so it needs no idempotency_key.
+  // Issue #1142: upload brokering API for CI build artifacts. Returns either
+  // a presigned PUT URL + registry-chosen object key + required headers (FR-1),
+  // or an "already stored" result when a confirmed blob already exists for the
+  // claimed digest/encoding/content-type tuple (FR-61). Authorization uses
+  // existing registry credentials (FR-4); a durable upload record is created
+  // before the URL is returned (FR-7). Unauthenticated or unauthorized callers
+  // receive an authorization failure (FR-4).
+  rpc BrokerUpload(BrokerUploadRequest) returns (BrokerUploadResponse);
   rpc CheckChartHermeticity(CheckChartHermeticityRequest) returns (CheckChartHermeticityResponse);
 }
 
