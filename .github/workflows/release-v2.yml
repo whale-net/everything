@@ -114,10 +114,17 @@ jobs:
     needs: [authorize-trigger]
     if: needs.authorize-trigger.result == 'success'
     outputs:
-      needs_build: ${{ steps.probe.outputs.needs_build }}
-      source: ${{ steps.probe.outputs.source }}
-      release_helper_version: ${{ steps.probe.outputs.release_helper_version }}
-      app_registry_version: ${{ steps.probe.outputs.app_registry_version }}
+      # Deliberately a literal, not a step output: this job either acquires
+      # both binaries (via the shared download-release-tools action, S3 or
+      # source-build fallback) and uploads them as the 'release-tools'
+      # workflow artifact, or it fails outright. On success, downstream
+      # jobs should always consume that artifact rather than re-resolving
+      # versions and re-hitting S3/gRPC themselves in 4 separate places. On
+      # job failure this output is unavailable (resolves empty), and every
+      # downstream call site's `|| 'published'` fallback (see plan-release,
+      # build-release-artifacts, release-summary below) takes over as the
+      # existing operator escape hatch (RELEASE_TOOLS_FALLBACK_TO_SOURCE).
+      source: 'artifact'
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -134,267 +141,31 @@ jobs:
           client-id: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           client-secret: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
 
-      - name: Check prebuilt tool availability
-        id: probe
+      # Consolidated onto the shared download-release-tools action (previously
+      # a hand-rolled fork of its version-resolution/S3-download logic, which
+      # had drifted to probe availability with a HEAD request against a
+      # GetObject-signed presigned URL -- always a 403, since SigV4 binds the
+      # HTTP method into the signature; see run 32684790873 and PR #1110). Two
+      # steps instead of one: try the fast published path without its own
+      # fallback first (continue-on-error), and only pay for Bazel setup +
+      # a source build when that didn't succeed -- preserving this job's
+      # original fast-path-by-default behavior.
+      - name: Acquire release tools (published)
+        id: acquire-published
+        if: inputs.use_source_tools != true && github.event.inputs.use_source_tools != 'true'
+        continue-on-error: true
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: published
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
         env:
-          USE_SOURCE: ${{ inputs.use_source_tools == true || github.event.inputs.use_source_tools == 'true' }}
-          GH_TOKEN: ${{ github.token }}
-          TARGET_ENV: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
           GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-        run: |
-          if [[ "$USE_SOURCE" == "true" ]]; then
-            echo "Explicit use_source_tools requested. Building from source."
-            echo "needs_build=true" >> "$GITHUB_OUTPUT"
-            echo "source=artifact" >> "$GITHUB_OUTPUT"
-            {
-              echo "### Release Tools Acquisition"
-              echo "**Acquisition Mode:** 🛠️ Source Build (\`use_source_tools: true\` requested)"
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          echo "Resolving release tooling versions from App Registry (env=$TARGET_ENV)..."
-
-          GRPCURL_VERSION="1.9.3"
-          grpcurl_checksum() {
-            case "$1" in
-              linux_x86_64) echo "a926b62a85787ccf73ef8736b3ae554f1242e39d92bb8767a79d6dd23b11d1d5" ;;
-              linux_arm64)  echo "b20a00c1cb82ab81ec32696766d4076e99b4cb5ca0823a71767ba64dbea0f263" ;;
-              osx_x86_64)   echo "246a6669e58c282dcaf0e9dcb06dd1c8681833d59df24eb83d3123ec64c2d2e5" ;;
-              osx_arm64)    echo "d8391485e99a728a3a4e82af3fd621f9fdea0c417a74e5122803ad20b207b623" ;;
-              *) return 1 ;;
-            esac
-          }
-
-          install_grpcurl() {
-            if command -v grpcurl >/dev/null 2>&1; then
-              GRPCURL_BIN="$(command -v grpcurl)"
-              return 0
-            fi
-            local cache_root="${RUNNER_TOOL_CACHE:-${RUNNER_TEMP:-/tmp}}/grpcurl/${GRPCURL_VERSION}"
-            local cached_bin="$cache_root/grpcurl"
-            if [[ -x "$cached_bin" ]]; then
-              GRPCURL_BIN="$cached_bin"
-              return 0
-            fi
-            local host_os host_arch key
-            host_os="$(uname -s)"
-            host_arch="$(uname -m)"
-            [[ "$host_os" == "Linux" ]] && host_os="linux" || host_os="osx"
-            [[ "$host_arch" == "x86_64" || "$host_arch" == "amd64" ]] && host_arch="x86_64" || host_arch="arm64"
-            key="${host_os}_${host_arch}"
-            if ! expected_sha="$(grpcurl_checksum "$key")"; then
-              return 1
-            fi
-            local tmp_dl
-            tmp_dl="$(mktemp -d)"
-            local url="https://github.com/fullstorydev/grpcurl/releases/download/v${GRPCURL_VERSION}/grpcurl_${GRPCURL_VERSION}_${key}.tar.gz"
-            if ! curl -sSL -m 30 -o "$tmp_dl/grpcurl.tar.gz" "$url"; then
-              rm -rf "$tmp_dl"
-              return 1
-            fi
-            local actual_sha
-            actual_sha="$(sha256sum "$tmp_dl/grpcurl.tar.gz" | awk '{print $1}')"
-            if [[ "$actual_sha" != "$expected_sha" ]]; then
-              rm -rf "$tmp_dl"
-              return 1
-            fi
-            if ! tar -xzf "$tmp_dl/grpcurl.tar.gz" -C "$tmp_dl" grpcurl; then
-              rm -rf "$tmp_dl"
-              return 1
-            fi
-            mkdir -p "$cache_root"
-            cp "$tmp_dl/grpcurl" "$cached_bin"
-            chmod +x "$cached_bin"
-            rm -rf "$tmp_dl"
-            GRPCURL_BIN="$cached_bin"
-            return 0
-          }
-
-          resolve_registry_version() {
-            local app_full_name="$1"
-            local grpc_target="$APP_REGISTRY_ADDRESS"
-            grpc_target="${grpc_target#https://}"
-            grpc_target="${grpc_target#http://}"
-
-            local use_tls=false
-            if [[ "$APP_REGISTRY_ADDRESS" == https://* || "$APP_REGISTRY_ADDRESS" == *:443* ]]; then
-              use_tls=true
-            fi
-            if [[ -n "${GRPC_USE_TLS:-}" ]]; then
-              [[ "$GRPC_USE_TLS" == "true" ]] && use_tls=true || use_tls=false
-            fi
-            local -a tls_opt=()
-            [[ "$use_tls" == "false" ]] && tls_opt=(-plaintext)
-
-            local -a auth_opt=()
-            if [[ -n "$REGISTRY_TOKEN" ]]; then
-              auth_opt=(-H "authorization: Bearer $REGISTRY_TOKEN")
-            fi
-
-            local get_app_json app_id
-            get_app_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
-              -d "{\"full_name\":\"${app_full_name}\"}" \
-              "$grpc_target" appregistry.v1.AppRegistry/GetApp 2>/dev/null)" || true
-            app_id="$(echo "$get_app_json" | jq -r '.app.appId // .app.app_id // empty' 2>/dev/null)" || true
-            if [[ -z "$app_id" ]]; then
-              return 1
-            fi
-
-            local env_state_json version
-            env_state_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
-              -d "{\"environment_key\":\"${TARGET_ENV}\"}" \
-              "$grpc_target" appregistry.v1.PromotionRegistry/GetEnvironmentState 2>/dev/null)" || true
-            if [[ -z "$env_state_json" ]]; then
-              return 1
-            fi
-
-            version="$(echo "$env_state_json" | jq -r --arg app_id "$app_id" '
-              [.entries[]?
-                | select((.artifact.appId // .artifact.app_id) == $app_id)
-                | select((.artifact.kind // "") == "ARTIFACT_KIND_BINARY")
-              ][0].artifact.version // empty
-            ' 2>/dev/null)" || true
-            if [[ -z "$version" || "$version" == "null" ]]; then
-              return 1
-            fi
-
-            echo "$version"
-            return 0
-          }
-
-          # resolve_binary_url mirrors download-release-tools/action.yml's
-          # function of the same name (#983/#985): calls
-          # ArtifactRegistry/ResolveBinaryURL for tool+ver+os/arch, then HEADs
-          # the returned download_url itself before trusting it -- a promoted/
-          # recorded version in App Registry's DB does not guarantee the S3
-          # object was actually written (the publish-side upload is best-
-          # effort/non-blocking, see worker/release/finalize.go's
-          # publishCLIBinaries), so ResolveBinaryURL alone can return a URL
-          # for an object that was never uploaded (observed in run
-          # 32615125644: RPC succeeded, S3 GET 400'd, empty bucket). Returns
-          # non-zero (no stdout) if the binary+version isn't BOTH resolvable
-          # AND actually fetchable -- that failure IS "does not exist" for
-          # this probe's purposes, replacing the old `gh release view` check.
-          # This is what makes this probe self-healing for the bootstrap
-          # case: a phantom promoted-but-unpublished version now falls
-          # through to needs_build=true/source=artifact below, which builds
-          # once via Bazel and uploads a workflow artifact every downstream
-          # job's download-release-tools call already knows how to consume
-          # (source: artifact needs no Bazel toolchain in the consuming job).
-          # TARGET_OS/TARGET_ARCH are hardcoded to this job's own runner
-          # platform (ubuntu-latest == linux/amd64), matching what
-          # download-release-tools auto-detects when its target_os/
-          # target_arch inputs are left empty (as every caller of this job's
-          # release_helper_version/app_registry_version outputs does).
-          resolve_binary_url() {
-            local tool="$1"
-            local ver="$2"
-            local grpc_target="$APP_REGISTRY_ADDRESS"
-            grpc_target="${grpc_target#https://}"
-            grpc_target="${grpc_target#http://}"
-
-            local use_tls=false
-            if [[ "$APP_REGISTRY_ADDRESS" == https://* || "$APP_REGISTRY_ADDRESS" == *:443* ]]; then
-              use_tls=true
-            fi
-            if [[ -n "${GRPC_USE_TLS:-}" ]]; then
-              [[ "$GRPC_USE_TLS" == "true" ]] && use_tls=true || use_tls=false
-            fi
-            local -a tls_opt=()
-            [[ "$use_tls" == "false" ]] && tls_opt=(-plaintext)
-
-            local -a auth_opt=()
-            if [[ -n "$REGISTRY_TOKEN" ]]; then
-              auth_opt=(-H "authorization: Bearer $REGISTRY_TOKEN")
-            fi
-
-            local resp_json download_url
-            resp_json="$("$GRPCURL_BIN" "${tls_opt[@]}" "${auth_opt[@]}" -max-time 15 \
-              -d "{\"binary\":\"${tool}\",\"version\":\"${ver}\",\"os\":\"linux\",\"arch\":\"amd64\"}" \
-              "$grpc_target" appregistry.v1.ArtifactRegistry/ResolveBinaryURL 2>/dev/null)" || true
-            if [[ -z "$resp_json" ]]; then
-              return 1
-            fi
-            download_url="$(echo "$resp_json" | jq -r '.downloadUrl // .download_url // empty' 2>/dev/null)" || true
-            [[ -z "$download_url" ]] && return 1
-
-            local http_code
-            http_code="$(curl -s -o /dev/null -w '%{http_code}' -I -m 15 "$download_url" 2>/dev/null)" || true
-            if [[ "$http_code" != "200" ]]; then
-              echo "Notice: $tool $ver resolved to a download_url but HEAD returned HTTP ${http_code:-<none>} (object not actually available in S3)" >&2
-              return 1
-            fi
-            return 0
-          }
-
-          REGISTRY_TOKEN=""
-          if [[ -n "${GRPC_AUTH_TOKEN_URL:-}" && -n "${GRPC_AUTH_CLIENT_ID:-}" && -n "${GRPC_AUTH_CLIENT_SECRET:-}" ]]; then
-            if token_json=$(curl -sS -m 15 -X POST "$GRPC_AUTH_TOKEN_URL" \
-                  -d grant_type=client_credentials \
-                  -d client_id="$GRPC_AUTH_CLIENT_ID" \
-                  -d client_secret="$GRPC_AUTH_CLIENT_SECRET" 2>/dev/null); then
-              REGISTRY_TOKEN="$(echo "$token_json" | jq -r '.access_token // empty' 2>/dev/null)" || REGISTRY_TOKEN=""
-            fi
-          fi
-
-          RH_VER=""
-          AR_VER=""
-          if [[ -n "${APP_REGISTRY_ADDRESS:-}" ]] && install_grpcurl; then
-            RH_VER="$(resolve_registry_version "tools-release_helper_go" || true)"
-            AR_VER="$(resolve_registry_version "tools-app-registry" || resolve_registry_version "tools-app_registry_cli" || true)"
-          fi
-
-          echo "Resolved release tooling versions from App Registry (env=$TARGET_ENV):"
-          echo "  release_helper_go: ${RH_VER:-<not resolved>}"
-          echo "  app_registry_cli:  ${AR_VER:-<not resolved>}"
-          echo "release_helper_version=$RH_VER" >> "$GITHUB_OUTPUT"
-          echo "app_registry_version=$AR_VER" >> "$GITHUB_OUTPUT"
-
-          RH_EXISTS=false
-          AR_EXISTS=false
-          if [[ -n "$RH_VER" && -n "${GRPCURL_BIN:-}" ]] && resolve_binary_url "release_helper_go" "$RH_VER"; then
-            RH_EXISTS=true
-            echo "✓ Found prebuilt release_helper_go (${RH_VER}) via the App Registry (S3)"
-          else
-            echo "✗ Prebuilt release_helper_go (${RH_VER:-<unset>}) not found via the App Registry (S3)"
-          fi
-          if [[ -n "$AR_VER" && -n "${GRPCURL_BIN:-}" ]] && resolve_binary_url "app-registry" "$AR_VER"; then
-            AR_EXISTS=true
-            echo "✓ Found prebuilt app_registry_cli (${AR_VER}) via the App Registry (S3)"
-          else
-            echo "✗ Prebuilt app_registry_cli (${AR_VER:-<unset>}) not found via the App Registry (S3)"
-          fi
-
-          if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
-            echo "Prebuilt release tools exist in the App Registry (S3) (release_helper_go: $RH_VER, app_registry_cli: $AR_VER). Downstream jobs will download prebuilt binaries directly."
-            echo "needs_build=false" >> "$GITHUB_OUTPUT"
-            echo "source=published" >> "$GITHUB_OUTPUT"
-          else
-            echo "Prebuilt release tools not found in the App Registry (S3) (release_helper_go: ${RH_VER:-<unset>} [exists=$RH_EXISTS], app_registry_cli: ${AR_VER:-<unset>} [exists=$AR_EXISTS]). Building once as workflow artifact for this run."
-            echo "needs_build=true" >> "$GITHUB_OUTPUT"
-            echo "source=artifact" >> "$GITHUB_OUTPUT"
-          fi
-
-          {
-            echo "### Release Tools Acquisition"
-            echo "| Tool | Version | Status |"
-            echo "| --- | --- | --- |"
-            echo "| \`release_helper_go\` | \`${RH_VER:-<not set>}\` | $([[ "$RH_EXISTS" == "true" ]] && echo "✅ Found in App Registry (S3)" || echo "⚠️ Not found (will build)") |"
-            echo "| \`app_registry_cli\` | \`${AR_VER:-<not set>}\` | $([[ "$AR_EXISTS" == "true" ]] && echo "✅ Found in App Registry (S3)" || echo "⚠️ Not found (will build)") |"
-            echo ""
-            if [[ "$RH_EXISTS" == "true" && "$AR_EXISTS" == "true" ]]; then
-              echo "**Acquisition Mode:** ⚡ Prebuilt Binaries (Downloaded from App Registry S3)"
-            else
-              echo "**Acquisition Mode:** 🛠️ Source Build (Artifact uploaded for downstream jobs)"
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Build Environment
-        if: steps.probe.outputs.needs_build == 'true'
+        if: steps.acquire-published.outcome != 'success'
         uses: ./.github/actions/setup-build-env
         with:
           cache-suffix: 'release-tools'
@@ -403,23 +174,33 @@ jobs:
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
-      - name: Build release helper & app registry
-        if: steps.probe.outputs.needs_build == 'true'
+      - name: Acquire release tools (source build)
+        id: acquire-source
+        if: steps.acquire-published.outcome != 'success'
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: source
+
+      - name: Release Tools Acquisition Summary
+        if: always() && (steps.acquire-published.outcome == 'success' || steps.acquire-source.outcome == 'success')
+        env:
+          SOURCE_USED: ${{ steps.acquire-published.outputs.source_used || steps.acquire-source.outputs.source_used }}
         run: |
-          bazel build --config=ci-images \
-            //tools/release_helper_go:release_helper_go \
-            //tools/app_registry/cli:app-registry
-          BAZEL_BIN="$(bazel info bazel-bin --config=ci-images)"
-          mkdir -p /tmp/release-tools
-          cp "$BAZEL_BIN/tools/release_helper_go/release_helper_go_/release_helper_go" /tmp/release-tools/release_helper_go
-          cp "$BAZEL_BIN/tools/app_registry/cli/app-registry_/app-registry" /tmp/release-tools/app-registry
+          {
+            echo "### Release Tools Acquisition"
+            if [[ "$SOURCE_USED" == "published" ]]; then
+              echo "**Acquisition Mode:** ⚡ Prebuilt Binaries (Downloaded from App Registry S3)"
+            else
+              echo "**Acquisition Mode:** 🛠️ Source Build (\`$SOURCE_USED\`, artifact uploaded for downstream jobs)"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release tools artifact
-        if: steps.probe.outputs.needs_build == 'true'
+        if: steps.acquire-published.outcome == 'success' || steps.acquire-source.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: release-tools
-          path: /tmp/release-tools/
+          path: ${{ runner.temp }}/release-tools/
           retention-days: 1
 
   # Issue #986 (FR21/FR22 of #979): reviewed this job (both the
@@ -475,6 +256,11 @@ jobs:
       has-specs: ${{ steps.plan.outputs.has_specs || steps.resolved-plan.outputs.has_specs }}
       build-id: ${{ steps.plan.outputs.build_id || steps.resolved-plan.outputs.build_id }}
       versions: ${{ steps.plan.outputs.versions || steps.resolved-plan.outputs.versions }}
+      # Issue #1024/#1055: the same PlanResult JSON as the individual
+      # outputs above, in one blob -- lets build-release-artifacts forward
+      # the whole plan to `release-helper build-release --from-resolved-plan`
+      # verbatim instead of reconstructing it field-by-field in YAML.
+      resolved-plan: ${{ steps.plan.outputs.resolved_plan || steps.resolved-plan.outputs.resolved_plan }}
     steps:
       # Issue #927/#929: when App Registry's Temporal DispatchBuild has
       # already computed the full release plan (the normal case for this
@@ -494,23 +280,51 @@ jobs:
       # against a checked-out repository -- but a plain shallow one (no
       # fetch-depth:0, no fetch-tags: those are only needed by the
       # `release-helper plan` re-derivation in the fallback path below), and
-      # no Bazel toolchain setup (setup-build-env): download-release-tools
-      # in its default 'published' source mode only downloads a prebuilt
-      # binary (see release-summary job below for the same shallow-checkout
-      # + download-release-tools pattern with no bazel setup). The
-      # RELEASE_TOOLS_FALLBACK_TO_SOURCE safety valve below is the one thing
-      # that needs Bazel here despite that -- see the step ahead of the
-      # download for why.
+      # no Bazel toolchain setup up front (setup-build-env): the download
+      # step below in its default 'published' source mode only downloads a
+      # prebuilt binary (see release-summary job below for the same
+      # shallow-checkout + download-release-tools pattern with no bazel
+      # setup). Bazel is only set up afterwards, and only if that download
+      # actually fails -- see the safety-valve steps below.
       - name: Checkout code (resolved plan)
         if: github.event.inputs.resolved_plan != ''
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 
-      # Only runs when the safety valve (below) is armed -- see its comment.
-      # Skipped by default so this fast path stays fast.
+      - name: Download release tools (resolved plan)
+        id: download-tools-resolved
+        if: github.event.inputs.resolved_plan != ''
+        continue-on-error: true
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      # Safety valve (issue surfaced by run 32615125644): repo variable
+      # RELEASE_TOOLS_FALLBACK_TO_SOURCE, unset/false by default, preserves
+      # today's behavior exactly -- a failed prebuilt/artifact acquisition
+      # fails the job via the "Verify release tools acquired" check below.
+      # Set it to 'true' (`gh variable set RELEASE_TOOLS_FALLBACK_TO_SOURCE
+      # --body true`) to build release tools from source via Bazel instead,
+      # when neither the S3 download nor the release-tools workflow
+      # artifact are available. These two steps only run once the download
+      # above has actually failed, so the fast path pays nothing for the
+      # valve being armed. Meant as a temporary operator escape hatch (e.g.
+      # while an App Registry/S3 publish-path issue like #1036 is being
+      # fixed) -- flip it back to false/unset once the underlying
+      # acquisition path is healthy again, since source builds are slower
+      # and skip the checksum-verified prebuilt-binary supply chain.
       - name: Setup Build Environment (fallback safety valve)
-        if: github.event.inputs.resolved_plan != '' && vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
+        if: |
+          github.event.inputs.resolved_plan != '' &&
+          steps.download-tools-resolved.outcome == 'failure' &&
+          vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
         uses: ./.github/actions/setup-build-env
         with:
           cache-suffix: 'release-tools'
@@ -519,33 +333,22 @@ jobs:
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
-      - name: Download release tools (resolved plan)
-        if: github.event.inputs.resolved_plan != ''
+      - name: Build release tools from source (fallback safety valve)
+        if: |
+          github.event.inputs.resolved_plan != '' &&
+          steps.download-tools-resolved.outcome == 'failure' &&
+          vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
-          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
-          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
-          # Safety valve (issue surfaced by run 32615125644): repo variable
-          # RELEASE_TOOLS_FALLBACK_TO_SOURCE, unset/false by default,
-          # preserves today's behavior exactly -- a failed prebuilt/artifact
-          # acquisition fails the job with the existing clear error message.
-          # Set it to 'true' (`gh variable set RELEASE_TOOLS_FALLBACK_TO_SOURCE
-          # --body true`) to make download-release-tools build release tools
-          # from source via Bazel instead of failing, when neither the S3
-          # download nor the release-tools workflow artifact are available.
-          # Meant as a temporary operator escape hatch (e.g. while an App
-          # Registry/S3 publish-path issue like #1036 is being fixed) --
-          # flip it back to false/unset once the underlying acquisition path
-          # is healthy again, since source builds are slower and skip the
-          # checksum-verified prebuilt-binary supply chain.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
-        env:
-          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+          source: 'source'
+
+      - name: Verify release tools acquired (resolved plan)
+        if: github.event.inputs.resolved_plan != ''
+        run: |
+          if [[ -z "${RELEASE_HELPER:-}" || -z "${APP_REGISTRY_CLI:-}" ]]; then
+            echo "::error::Failed to acquire release tools (resolved plan): neither the prebuilt download nor the source-build fallback succeeded. Re-run with RELEASE_TOOLS_FALLBACK_TO_SOURCE=true to build from source, or fix the App Registry/S3 acquisition path."
+            exit 1
+          fi
 
       - name: Parse resolved plan
         id: resolved-plan
@@ -579,22 +382,39 @@ jobs:
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Download release tools
+        id: download-tools-fallback
         if: github.event.inputs.resolved_plan == ''
+        continue-on-error: true
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
-          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
-          # Safety valve -- see the "Download release tools (resolved plan)"
-          # step above for the full explanation. Bazel is already set up
-          # unconditionally in this path, so no extra wiring is needed here.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
         env:
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
           GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      # Safety valve -- see the "Download release tools (resolved plan)"
+      # step above for the full explanation. Bazel is already set up
+      # unconditionally in this path, so this only needs to re-invoke the
+      # download action in source mode once the published attempt fails.
+      - name: Build release tools from source (fallback safety valve)
+        if: |
+          github.event.inputs.resolved_plan == '' &&
+          steps.download-tools-fallback.outcome == 'failure' &&
+          vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: 'source'
+
+      - name: Verify release tools acquired
+        if: github.event.inputs.resolved_plan == ''
+        run: |
+          if [[ -z "${RELEASE_HELPER:-}" || -z "${APP_REGISTRY_CLI:-}" ]]; then
+            echo "::error::Failed to acquire release tools: neither the prebuilt download nor the source-build fallback succeeded. Re-run with RELEASE_TOOLS_FALLBACK_TO_SOURCE=true to build from source, or fix the App Registry/S3 acquisition path."
+            exit 1
+          fi
 
       - name: Plan release
         id: plan
@@ -618,66 +438,19 @@ jobs:
           [[ "${{ vars.APP_REGISTRY_CICD_OPT_IN }}" != "true" ]] && ARGS+=(--skip-registry)
           "$RELEASE_HELPER" "${ARGS[@]}" >> "$GITHUB_OUTPUT"
 
-  # Issue #986 (FR21/FR22 of #979): reviewed -- only `bazel build`s each
-  # OpenAPI spec target and uploads the resulting JSON as a workflow
-  # artifact. No App Registry call, no publish, no versioned side effect.
-  # Clean.
-  build-openapi-specs:
-    name: Build OpenAPI Specs
-    runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, build-release-tools]
-    if: needs.authorize-trigger.result == 'success' && needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.inputs.build_ref || github.sha }}
-
-      - name: Setup Build Environment
-        uses: ./.github/actions/setup-build-env
-        with:
-          cache-suffix: 'docker'
-          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
-          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
-          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
-          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-
-      - name: Build OpenAPI specs
-        env:
-          OPENAPI_MATRIX: ${{ needs.plan-release.outputs.openapi-matrix }}
-        run: |
-          mkdir -p /tmp/openapi-specs
-          BAZEL_BIN=$(bazel info bazel-bin --config=ci-images)
-
-          echo "$OPENAPI_MATRIX" | jq -c '.include[]' | while read -r item; do
-            TARGET=$(echo "$item" | jq -r '.openapi_target')
-            DOMAIN=$(echo "$item" | jq -r '.domain')
-            APP=$(echo "$item" | jq -r '.app')
-
-            echo "Building OpenAPI spec for ${DOMAIN}-${APP} (target: $TARGET)..."
-            bazel build --config=ci-images "$TARGET"
-
-            TARGET_PATH="${TARGET#@@//}"
-            TARGET_PATH="${TARGET_PATH#//}"
-            TARGET_DIR=$(echo "$TARGET_PATH" | sed 's#:#/#' | sed 's#/[^/]*$##')
-            SPEC_FILE="${BAZEL_BIN}/${TARGET_DIR}/${DOMAIN}-${APP}_openapi_spec.json"
-            [[ ! -f "$SPEC_FILE" ]] && SPEC_FILE="${BAZEL_BIN}/$(echo "$TARGET_PATH" | sed 's#:#/#').json"
-
-            cp "$SPEC_FILE" "/tmp/openapi-specs/${DOMAIN}-${APP}_openapi_spec.json"
-          done
-
-      - name: Upload OpenAPI spec artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: openapi-specs
-          path: /tmp/openapi-specs/*.json
-
   # Issue #928: merges the old `release` (apps) and `release-helm-charts`
   # (charts) jobs into one -- a single checkout/setup-build-env/bazel
   # session amortized across both app images and chart packages for the
   # whole batch (FR1 of #928), mirroring the amortization reasoning the
   # now-superseded FR10 used for push-time compose (closed #917), applied
-  # here at release-trigger time instead.
+  # here at release-trigger time instead. Issue #1024 folded the formerly
+  # separate build-openapi-specs and build-cli-binaries jobs into this one
+  # too, for the same reason (#991/FR7 had reintroduced the per-job
+  # checkout+setup-build-env+Bazel-server-startup cost #928 eliminated) --
+  # each artifact type's steps below are guarded by that type's own
+  # `if:` condition (mirroring how apps vs. charts already coexist in this
+  # job), and the job-level `if:` is the union of all three former jobs'
+  # conditions.
   #
   # This job's responsibility deliberately SHRANK relative to the two jobs
   # it replaces: it builds and pushes every app image (tagged only with
@@ -692,7 +465,7 @@ jobs:
   # unchanged (issue #928's explicit ask: do not reinvent this). See that
   # file's package doc comment for the full design, including how build
   # outputs (image digests, chart source trees) get from this job back to
-  # Temporal: the two `actions/upload-artifact` steps below, downloaded by
+  # Temporal: the `actions/upload-artifact` steps below, downloaded by
   # FinalizePublish via the GitHub Actions API after PollBuild reports
   # this run terminal -- the same workflow-artifact mechanism this
   # workflow already used for release-notes/digest-check/helm-charts
@@ -702,23 +475,34 @@ jobs:
   # GitHub Release creation, release notes, and the implicit git-tag side
   # effect it produced have been removed entirely from this workflow (see
   # issue #979) -- not relocated or deferred, just gone. This job's build
-  # outputs (image digests, chart source trees) are consumed solely by
-  # FinalizePublish via the two `actions/upload-artifact` steps below.
+  # outputs (image digests, chart source trees, OpenAPI specs, CLI
+  # binaries) are consumed solely by FinalizePublish via the
+  # `actions/upload-artifact` steps below.
   #
   # Issue #986 (FR21/FR22 of #979): reviewed step-by-step -- build-app
   # pushes by digest only (--tag is the build-scoped git SHA; see its own
   # `Short`/`Long` help text), build-chart composes a source tree only (no
   # `helm package`, no ChartMuseum upload, no version resolution), and
   # neither step calls any App Registry RPC. Matches this header comment's
-  # design. Clean.
+  # design. Clean. The folded-in OpenAPI (bazel build + upload only) and
+  # CLI-binaries (package-assets + upload only) steps were reviewed the
+  # same way when they were still separate jobs -- see their original
+  # header comments, preserved below on each step group -- and neither
+  # gained any new side effect by moving here.
   build-release-artifacts:
     name: Build Release Artifacts
     runs-on: ubuntu-latest
     needs: [authorize-trigger, plan-release, build-release-tools]
     if: |
       needs.authorize-trigger.result == 'success' &&
-      ((needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) ||
-       github.event.inputs.helm_charts != '')
+      (
+        (needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) ||
+        github.event.inputs.helm_charts != '' ||
+        (needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false') ||
+        (github.event.inputs.dry_run == 'false' && needs.plan-release.outputs.release-matrix != '' &&
+         (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
+          contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"')))
+      )
     permissions:
       contents: read
       packages: write
@@ -741,21 +525,34 @@ jobs:
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Download release tools
+        id: download-tools-artifacts
+        continue-on-error: true
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
-          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
-          # Safety valve -- see "Download release tools (resolved plan)" in
-          # plan-release above for the full explanation. Bazel is already
-          # set up unconditionally in this job, so no extra wiring is needed.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
         env:
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
           GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      # Safety valve -- see "Download release tools (resolved plan)" in
+      # plan-release above for the full explanation. Bazel is already set
+      # up unconditionally in this job, so this only needs to re-invoke the
+      # download action in source mode once the published attempt fails.
+      - name: Build release tools from source (fallback safety valve)
+        if: steps.download-tools-artifacts.outcome == 'failure' && vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: 'source'
+
+      - name: Verify release tools acquired
+        run: |
+          if [[ -z "${RELEASE_HELPER:-}" || -z "${APP_REGISTRY_CLI:-}" ]]; then
+            echo "::error::Failed to acquire release tools: neither the prebuilt download nor the source-build fallback succeeded. Re-run with RELEASE_TOOLS_FALLBACK_TO_SOURCE=true to build from source, or fix the App Registry/S3 acquisition path."
+            exit 1
+          fi
 
       - name: Install Helm
         if: ${{ github.event.inputs.helm_charts != '' }}
@@ -771,35 +568,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
-      # Push-by-digest only -- no version tag, no "latest", no App
-      # Registry mutation, no git tag. See this job's header comment.
-      - name: Build app images (push by digest)
-        if: ${{ github.event.inputs.dry_run == 'false' && needs.plan-release.outputs.release-matrix != '' }}
+      # Issue #1024/#1055: replaces four separate steps (build-app looped
+      # per app in bash, build-chart, an OpenAPI bazel-build/jq loop, and
+      # package-assets looped per CLI app in bash) with one call into
+      # `release-helper build-release`, which does that looping/dispatch in
+      # Go instead -- see tools/release_helper_go/cmd/build_release.go's
+      # ExecuteBuildReleaseArtifacts. Each artifact type's own "should I
+      # build this" gating (dry-run, has-specs, app-presence, an empty
+      # charts list) now lives in that Go code, driven off the resolved
+      # plan below, rather than as per-step YAML `if:` conditions -- this
+      # job's own `if:` above still gates whether the job runs at all. This
+      # CLI stays behind the same push-by-digest-only / no-final-version /
+      # no-ChartMuseum-upload boundary described in this job's header
+      # comment; ExecuteBuildReleaseArtifacts calls the exact same
+      # ExecuteBuildApp/ExecuteBuildCharts/PackageAppAssets primitives the
+      # former per-type steps did.
+      - name: Build release artifacts
         env:
-          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
+          RESOLVED_PLAN: ${{ needs.plan-release.outputs.resolved-plan }}
           BUILD_SHA: ${{ github.event.inputs.build_ref || github.sha }}
         run: |
-          mkdir -p /tmp/build-manifest/apps
-
-          echo "$RELEASE_MATRIX" | jq -c '.include[]' | while read -r item; do
-            DOMAIN=$(echo "$item" | jq -r '.domain')
-            APP=$(echo "$item" | jq -r '.app')
-
-            echo "=========================================="
-            echo "Building application: ${DOMAIN}-${APP} (build tag: ${BUILD_SHA})"
-            echo "=========================================="
-
-            "$RELEASE_HELPER" build-app --domain "$DOMAIN" --app "$APP" --git-sha "$BUILD_SHA" --output-dir /tmp/build-manifest/apps
-          done
-
-      # Composes each chart's source tree only -- no `helm package`, no
-      # final version, no ChartMuseum upload. See this job's header
-      # comment.
-      - name: Build chart source trees
-        if: ${{ github.event.inputs.helm_charts != '' }}
-        run: |
-          ARGS=(build-chart --charts "${{ github.event.inputs.helm_charts }}" --output-dir /tmp/build-manifest/charts)
-          [[ "${{ github.event.inputs.include_demo }}" == "true" ]] && ARGS+=(--include-demo)
+          ARGS=(build-release --from-resolved-plan "$RESOLVED_PLAN" --git-sha "$BUILD_SHA")
+          [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)
           "$RELEASE_HELPER" "${ARGS[@]}"
 
       - name: Upload build manifest artifact
@@ -818,84 +608,20 @@ jobs:
           path: /tmp/build-manifest/charts/
           if-no-files-found: ignore
 
-  # FR7 of #979: cross-compiles release_helper_go/app-registry (only, not
-  # every cli app) for all four supported CLI platforms and stages them as
-  # a build-scoped `cli-binaries` workflow artifact, distinct from the
-  # `release-tools` artifact build-release-tools produces above (that one
-  # is this-run's-host-platform only, meant for downstream jobs in *this*
-  # run to exec; this one is multi-platform and meant for Temporal's
-  # FinalizePublish to later download and publish to S3 once a version is
-  # confirmed -- see issue #981). This job assigns no final version and
-  # performs no S3 upload itself (FR9/FR10's job, done later once
-  # FinalizePublish knows the confirmed EffectiveVersion).
-  build-cli-binaries:
-    name: Build CLI Binaries
-    runs-on: ubuntu-latest
-    needs: [authorize-trigger, plan-release, build-release-tools]
-    if: |
-      needs.authorize-trigger.result == 'success' &&
-      github.event.inputs.dry_run == 'false' &&
-      needs.plan-release.outputs.release-matrix != '' &&
-      (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
-       contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"'))
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
+      - name: Upload OpenAPI spec artifact
+        if: ${{ needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v7
         with:
-          ref: ${{ github.event.inputs.build_ref || github.sha }}
-
-      - name: Setup Build Environment
-        uses: ./.github/actions/setup-build-env
-        with:
-          cache-suffix: 'docker'
-          bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
-          bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
-          bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
-          bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-
-      - name: Download release tools
-        uses: ./.github/actions/download-release-tools
-        with:
-          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
-          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
-          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
-          # Safety valve -- see "Download release tools (resolved plan)" in
-          # plan-release above for the full explanation. Bazel is already
-          # set up unconditionally in this job, so no extra wiring is needed.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
-        env:
-          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
-
-      # Only package whichever of the two apps is actually present in this
-      # run's release matrix -- the job-level `if:` above only guarantees
-      # at least one of them is; a run releasing just one must not fail
-      # trying to package-assets the other (resolveApps would error on an
-      # app name absent from this run's plan). package-assets takes the
-      # full name ("tools-<app>") -- resolveApps only matches full names
-      # and domain sweeps, not bare app names, since a bare name can
-      # collide with an unrelated same-named domain (e.g. "app-registry"
-      # is both this CLI's bare name and the app-registry domain).
-      - name: Package CLI binaries (multi-platform)
-        env:
-          RELEASE_MATRIX: ${{ needs.plan-release.outputs.release-matrix }}
-        run: |
-          mkdir -p /tmp/cli-binaries
-          for APP_NAME in release_helper_go app-registry; do
-            if echo "$RELEASE_MATRIX" | jq -e --arg app "$APP_NAME" '.include[] | select(.app == $app)' >/dev/null; then
-              echo "Packaging CLI binaries for ${APP_NAME} (linux_amd64, linux_arm64, darwin_arm64, darwin_amd64)..."
-              "$RELEASE_HELPER" package-assets "tools-${APP_NAME}" \
-                --platforms linux_amd64,linux_arm64,darwin_arm64,darwin_amd64 \
-                --output-dir "/tmp/cli-binaries/${APP_NAME}"
-            else
-              echo "${APP_NAME} not in this run's release matrix, skipping."
-            fi
-          done
+          name: openapi-specs
+          path: /tmp/openapi-specs/*.json
+          if-no-files-found: ignore
 
       - name: Upload CLI binaries artifact
+        if: |
+          github.event.inputs.dry_run == 'false' &&
+          needs.plan-release.outputs.release-matrix != '' &&
+          (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
+           contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"'))
         uses: actions/upload-artifact@v7
         with:
           name: cli-binaries
@@ -919,12 +645,28 @@ jobs:
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 
-      # Only runs when the safety valve (below) is armed -- see the
-      # "Download release tools (resolved plan)" step in plan-release above
-      # for the full explanation. Skipped by default so this job's normal
-      # shallow-checkout, no-bazel path stays fast.
+      - name: Download release tools
+        id: download-tools
+        continue-on-error: true
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      # These two only run when the download above has actually failed AND
+      # the safety valve is armed -- see "Download release tools (resolved
+      # plan)" in plan-release above for the full explanation. Skipped by
+      # default so this job's normal shallow-checkout, no-bazel path stays
+      # fast. This job is best-effort (needs: ... && always()), so a
+      # failed source build here (continue-on-error) just means "Generate
+      # summary" below is skipped rather than failing the job.
       - name: Setup Build Environment (fallback safety valve)
-        if: vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
+        if: steps.download-tools.outcome == 'failure' && vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
         uses: ./.github/actions/setup-build-env
         with:
           cache-suffix: 'release-tools'
@@ -933,26 +675,16 @@ jobs:
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
-      - name: Download release tools
-        id: download-tools
+      - name: Build release tools from source (fallback safety valve)
+        id: build-tools-source
+        if: steps.download-tools.outcome == 'failure' && vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
         continue-on-error: true
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
-          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          release_helper_version: ${{ needs.build-release-tools.outputs.release_helper_version }}
-          app_registry_version: ${{ needs.build-release-tools.outputs.app_registry_version }}
-          # Safety valve -- see "Download release tools (resolved plan)" in
-          # plan-release above for the full explanation.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
-        env:
-          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+          source: 'source'
 
       - name: Generate summary
-        if: steps.download-tools.outcome == 'success'
+        if: steps.download-tools.outcome == 'success' || steps.build-tools-source.outcome == 'success'
         run: |
           ARGS=(summary --matrix '${{ needs.plan-release.outputs.release-matrix }}' --version "${{ needs.plan-release.outputs.version }}" --event-type workflow_dispatch --repository-owner "${{ github.repository_owner }}")
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)

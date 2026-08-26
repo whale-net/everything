@@ -858,22 +858,32 @@ func (r *Registry) linkContains(contains []repository.ContainedImageInput) ([]re
 func (r *Registry) AllocateVersion(ctx context.Context, kind repository.ArtifactKind, owner, repo, increment, explicitVersion string) (*repository.VersionAllocation, error) {
 	var hasPrevious bool
 	var previous semver.Version
-	var previousText string
-	consider := func(text string) {
-		v, err := semver.Parse(text)
+	var latest repository.Artifact
+	consider := func(a repository.Artifact) {
+		v, err := semver.Parse(a.Version)
 		if err != nil {
 			return
 		}
 		if !hasPrevious || semver.Compare(v, previous) > 0 {
 			hasPrevious = true
 			previous = v
-			previousText = text
+			latest = a
 		}
 	}
 	for _, a := range r.state.Artifacts {
 		if a.Kind == kind && owner == ownerID(a) {
-			consider(a.Version)
+			consider(a)
 		}
+	}
+
+	// See postgres artifactRepo.AllocateVersion's identical comment: reuse
+	// the highest version if (and only if) it already failed, instead of
+	// minting a new one past it, so a retried release keeps retrying the
+	// SAME version rather than permanently burning a version slot per
+	// attempt. Deliberately NOT allocated/publishing -- those may still be
+	// legitimately in flight from a concurrent caller.
+	if explicitVersion == "" && hasPrevious && latest.State == repository.ArtifactStateFailed {
+		return &repository.VersionAllocation{Version: latest.Version, PreviousVersion: r.latestPublishedVersion(kind, owner)}, nil
 	}
 
 	var next semver.Version
@@ -910,7 +920,33 @@ func (r *Registry) AllocateVersion(ctx context.Context, kind repository.Artifact
 		return nil, err
 	}
 
-	return &repository.VersionAllocation{Version: versionStr, PreviousVersion: previousText}, nil
+	prevText := ""
+	if hasPrevious {
+		prevText = latest.Version
+	}
+	return &repository.VersionAllocation{Version: versionStr, PreviousVersion: prevText}, nil
+}
+
+// latestPublishedVersion mirrors postgres's artifactRepo.latestPublishedVersion.
+func (r *Registry) latestPublishedVersion(kind repository.ArtifactKind, owner string) string {
+	var hasPrev bool
+	var prev semver.Version
+	var prevText string
+	for _, a := range r.state.Artifacts {
+		if a.Kind != kind || owner != ownerID(a) || a.State != repository.ArtifactStatePublished {
+			continue
+		}
+		v, err := semver.Parse(a.Version)
+		if err != nil {
+			continue
+		}
+		if !hasPrev || semver.Compare(v, prev) > 0 {
+			hasPrev = true
+			prev = v
+			prevText = a.Version
+		}
+	}
+	return prevText
 }
 
 // ============================================================================

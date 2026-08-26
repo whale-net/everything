@@ -35,6 +35,9 @@ type ReleaseAppParams struct {
 	FS             FileSystem
 	WorkspaceRoot  string
 	ArtifactClient pb.ArtifactRegistryClient
+	// Tagger overrides ImageReleaser's registry-side retag in Publish; nil
+	// uses defaultImageTagger (production). Test-only seam.
+	Tagger ImageTagger
 }
 
 // ReleaseAppResult contains the outcome of an image release execution.
@@ -285,6 +288,7 @@ func ExecuteReleaseApp(p ReleaseAppParams) (*ReleaseAppResult, error) {
 			GitSHA:     sha,
 			Bazel:      bazel,
 			Docker:     docker,
+			Tagger:     p.Tagger,
 		}
 	} else {
 		artifactRepo = fmt.Sprintf("github.com/%s/everything", owner)

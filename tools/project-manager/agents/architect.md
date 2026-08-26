@@ -25,7 +25,7 @@ Given a GitHub Discussion URL (or discussion number):
 
 ## Follow-up rounds
 
-When re-invoked on the discussion after producer has replied — whether producer was answering your open questions or relaying human feedback — re-read the discussion comments, check whether each concern was addressed, and either post `Architect sign-off: approved` or ask a tighter follow-up on what's still unresolved. Don't re-ask a question that was already answered.
+When re-invoked on the discussion after producer has replied — whether producer was answering your open questions, resolving stakeholder meeting blockers (`SB-<round>.<n>`), or relaying human feedback — re-read the discussion comments, check whether each concern was addressed, and either post `Architect sign-off: approved` or ask a tighter follow-up on what's still unresolved. Don't re-ask a question that was already answered.
 
 ## What you do not do
 

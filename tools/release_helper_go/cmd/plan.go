@@ -331,6 +331,18 @@ func newPlanCmd() *cobra.Command {
 					versionsJSON, _ := json.Marshal(result.Versions)
 					fmt.Fprintf(cmd.OutOrStdout(), "versions=%s\n", versionsJSON)
 				}
+				// resolved_plan is this same result, marshaled as one line
+				// of JSON -- the identical shape --format=json emits below,
+				// and the identical shape --from-resolved-plan (on this
+				// command and on build-release) unmarshals back. Lets a
+				// downstream job (release-v2.yml's build-release-artifacts,
+				// issue #1024/#1055) forward the whole plan to
+				// `release-helper build-release --from-resolved-plan`
+				// verbatim, instead of re-deriving it field-by-field from
+				// this job's individual matrix/chart_matrix/openapi_matrix/
+				// has_specs/charts outputs.
+				resolvedPlanJSON, _ := json.Marshal(result)
+				fmt.Fprintf(cmd.OutOrStdout(), "resolved_plan=%s\n", resolvedPlanJSON)
 				return nil
 			}
 			enc := json.NewEncoder(cmd.OutOrStdout())
@@ -818,7 +830,7 @@ func buildPlanResult(
 			"bazel_target": chart.BazelTarget,
 			"version":      v,
 		})
-		chartNames = append(chartNames, chart.Name)
+		chartNames = append(chartNames, fullName)
 		versions[fullName] = v
 	}
 

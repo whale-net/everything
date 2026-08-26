@@ -1,0 +1,114 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
+	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/ui/components"
+)
+
+// ReleaseHistoryViewState is the release-history screen's render state,
+// backed by ListReleaseAttempts -- every triggered release run (successes,
+// failures, and in-progress ones) across every owner, most-recent-first.
+// LoadErr is set instead when the RPC itself failed.
+type ReleaseHistoryViewState struct {
+	Releases []*pb.GetReleaseResponse
+	LoadErr  string
+}
+
+// releaseOverallStateLabel derives a single summary badge for a release run
+// from its per-target states (there is no run-level state field on the
+// wire -- see ReleaseRunTarget's doc comment, api_messages_release.proto):
+// any FAILED target makes the run "Failed" (NFR-6: never render a run with
+// a failure as healthy, even if other targets in the same batch
+// succeeded); every target SUCCEEDED makes it "Succeeded"; anything else
+// (queued/building/publishing/recording) is still "In progress".
+func releaseOverallStateLabel(rel *pb.GetReleaseResponse) (label string, variant htmxui.BadgeVariant) {
+	targets := rel.GetTargets()
+	if len(targets) == 0 {
+		return "Unknown", htmxui.BadgeWarning
+	}
+	anyFailed := false
+	allSucceeded := true
+	for _, t := range targets {
+		switch t.GetState() {
+		case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_FAILED:
+			anyFailed = true
+			allSucceeded = false
+		case pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_SUCCEEDED:
+			// still eligible for allSucceeded
+		default:
+			allSucceeded = false
+		}
+	}
+	switch {
+	case anyFailed:
+		return "Failed", htmxui.BadgeError
+	case allSucceeded:
+		return "Succeeded", htmxui.BadgeSuccess
+	default:
+		return "In progress", htmxui.BadgeInfo
+	}
+}
+
+templ releaseOverallStateBadge(rel *pb.GetReleaseResponse) {
+	{{ label, variant := releaseOverallStateLabel(rel) }}
+	@htmxui.Badge(label, variant, htmxui.BadgeSizeMD, false, nil)
+}
+
+// ReleaseHistory is the release-history admin screen: every release attempt
+// ever triggered (ListReleaseAttempts), on its own screen distinct from the
+// single-run ReleaseStatus screen (issue #890's status screen only answers
+// "how is this one run doing"; this answers "what has been tried, when,
+// and with what outcome").
+templ ReleaseHistory(user *htmxauth.UserInfo, s ReleaseHistoryViewState) {
+	@components.Shell("Release History", user) {
+		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100">
+			<h1 class="text-2xl md:text-3xl font-bold mb-2">Release History</h1>
+			<p class="text-sm opacity-80">
+				Every release attempt triggered through this registry, most
+				recent first — including in-progress and failed attempts, not
+				just the ones that succeeded.
+			</p>
+		</div>
+		if s.LoadErr != "" {
+			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
+		} else {
+			<div class="card bg-base-100 shadow-md">
+				<div class="card-body p-0">
+					<table class="table">
+						<thead>
+							<tr>
+								<th>Release</th>
+								<th>Status</th>
+								<th>Triggered by</th>
+								<th class="text-right">Targets</th>
+								<th></th>
+							</tr>
+						</thead>
+						<tbody>
+							if len(s.Releases) == 0 {
+								<tr>
+									<td colspan="5" class="text-sm opacity-60 p-4">No release attempts recorded yet.</td>
+								</tr>
+							}
+							for _, rel := range s.Releases {
+								<tr class="hover">
+									<td>
+										<span class="font-mono text-sm" title={ rel.GetReleaseRunId() }>{ releaseHeaderName(rel) }</span>
+									</td>
+									<td>@releaseOverallStateBadge(rel)</td>
+									<td class="font-mono text-sm">{ rel.GetTriggeredBy() }</td>
+									<td class="text-right text-sm">{ intToStr(int32(len(rel.GetTargets()))) }</td>
+									<td class="text-right">
+										<a href={ templ.URL("/releases/" + rel.GetReleaseRunId()) } class="btn btn-ghost btn-xs">View</a>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		}
+	}
+}

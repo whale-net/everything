@@ -1241,19 +1241,50 @@ func (r *artifactRepo) AllocateVersion(ctx context.Context, kind repository.Arti
 	// so a version reserved a moment ago by a concurrent caller is still
 	// never handed out twice.
 	row := r.ex.QueryRow(ctx, `
-		SELECT version, version_major, version_minor, version_patch
+		SELECT version, version_major, version_minor, version_patch, state
 		  FROM artifact WHERE owner_id = $1 AND kind = $2
 		 ORDER BY version_major DESC, version_minor DESC, version_patch DESC
 		 LIMIT 1`, ownerID, string(kind))
 
-	var previousVersion string
+	var latestVersion string
 	var curMajor, curMinor, curPatch int
+	var curState string
 	hasPrevious := true
-	switch err := row.Scan(&previousVersion, &curMajor, &curMinor, &curPatch); {
+	switch err := row.Scan(&latestVersion, &curMajor, &curMinor, &curPatch, &curState); {
 	case errors.Is(err, pgx.ErrNoRows):
 		hasPrevious = false
 	case err != nil:
 		return nil, fmt.Errorf("determine current version for allocation: %w", err)
+	}
+
+	// The highest version for this owner+kind already failed -- hand it back
+	// for reuse instead of minting a new version past it. Without this,
+	// every failed release attempt permanently burns the version it was
+	// assigned (the `(owner_id, kind, version)` unique index spans every
+	// state, so a `failed` row blocks that exact version forever) and a
+	// caller can never actually retry the SAME version, only skip past it.
+	// `artifact`'s state-shape CHECK constraint (migration 007) still
+	// guarantees at most one attempt ever carries a real digest -- only a
+	// `published` row may have one -- so reuse here is safe: repeated
+	// BeginPublish/FailPublish cycles on the same version can never produce
+	// two valid digests for it.
+	//
+	// Deliberately scoped to `failed` only, NOT `allocated`/`publishing`:
+	// those are still (or may still be) legitimately in flight from another
+	// concurrent caller, and TestAllocateVersion_ConcurrentCallsNeverCollide
+	// depends on N concurrent callers for the same owner each getting a
+	// distinct version rather than piling onto one another's in-progress
+	// allocation. An abandoned `allocated`/`publishing` row still reaches
+	// `failed` (and becomes reusable) via the stale-row reaper
+	// (ExpireStale), just with the reaper's timeout as a bound instead of
+	// being immediate. explicitVersion bypasses this entirely: an explicit
+	// request always gets exactly what it asked for, reuse or not.
+	if explicitVersion == "" && hasPrevious && curState == string(repository.ArtifactStateFailed) {
+		prevPublished, perr := r.latestPublishedVersion(ctx, ownerID, kind)
+		if perr != nil {
+			return nil, perr
+		}
+		return &repository.VersionAllocation{Version: latestVersion, PreviousVersion: prevPublished}, nil
 	}
 
 	var next semver.Version
@@ -1286,5 +1317,26 @@ func (r *artifactRepo) AllocateVersion(ctx context.Context, kind repository.Arti
 		return nil, err
 	}
 
-	return &repository.VersionAllocation{Version: versionStr, PreviousVersion: previousVersion}, nil
+	return &repository.VersionAllocation{Version: versionStr, PreviousVersion: latestVersion}, nil
+}
+
+// latestPublishedVersion returns the highest `published` version for this
+// owner+kind, or "" if none -- used by AllocateVersion's reuse path
+// (above) to report a meaningful "previous version" (for release-notes
+// display) instead of the reused version reporting itself as its own
+// predecessor.
+func (r *artifactRepo) latestPublishedVersion(ctx context.Context, ownerID string, kind repository.ArtifactKind) (string, error) {
+	var version string
+	err := r.ex.QueryRow(ctx, `
+		SELECT version FROM artifact
+		 WHERE owner_id = $1 AND kind = $2 AND state = 'published'
+		 ORDER BY version_major DESC, version_minor DESC, version_patch DESC
+		 LIMIT 1`, ownerID, string(kind)).Scan(&version)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("determine latest published version: %w", err)
+	}
+	return version, nil
 }

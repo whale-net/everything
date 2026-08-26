@@ -29,7 +29,8 @@ import (
 // release_scope_test.go already covers.
 type releaseAppClient struct {
 	pb.AppRegistryClient
-	apps []*pb.App
+	apps   []*pb.App
+	charts []*pb.Chart
 }
 
 func (f *releaseAppClient) ListApps(ctx context.Context, in *pb.ListAppsRequest, opts ...grpc.CallOption) (*pb.ListAppsResponse, error) {
@@ -37,7 +38,7 @@ func (f *releaseAppClient) ListApps(ctx context.Context, in *pb.ListAppsRequest,
 }
 
 func (f *releaseAppClient) ListCharts(ctx context.Context, in *pb.ListChartsRequest, opts ...grpc.CallOption) (*pb.ListChartsResponse, error) {
-	return &pb.ListChartsResponse{}, nil
+	return &pb.ListChartsResponse{Charts: f.charts}, nil
 }
 
 // fakeReleaseClient is a minimal stand-in for pb.ReleaseRegistryClient.
@@ -54,6 +55,9 @@ type fakeReleaseClient struct {
 
 	getResp *pb.GetReleaseResponse
 	getErr  error
+
+	listAttemptsResp *pb.ListReleaseAttemptsResponse
+	listAttemptsErr  error
 }
 
 func (f *fakeReleaseClient) TriggerRelease(ctx context.Context, in *pb.TriggerReleaseRequest, opts ...grpc.CallOption) (*pb.TriggerReleaseResponse, error) {
@@ -75,6 +79,16 @@ func (f *fakeReleaseClient) GetRelease(ctx context.Context, in *pb.GetReleaseReq
 		return f.getResp, nil
 	}
 	return &pb.GetReleaseResponse{ReleaseRunId: in.GetReleaseRunId()}, nil
+}
+
+func (f *fakeReleaseClient) ListReleaseAttempts(ctx context.Context, in *pb.ListReleaseAttemptsRequest, opts ...grpc.CallOption) (*pb.ListReleaseAttemptsResponse, error) {
+	if f.listAttemptsErr != nil {
+		return nil, f.listAttemptsErr
+	}
+	if f.listAttemptsResp != nil {
+		return f.listAttemptsResp, nil
+	}
+	return &pb.ListReleaseAttemptsResponse{}, nil
 }
 
 func oneAppCatalog() []*pb.App {
@@ -282,6 +296,66 @@ func TestHandleReleaseTriggerSubmit_DigestAgainstMultipleTargets_RejectedBeforeC
 	}
 }
 
+// TestHandleReleaseTriggerSubmit_DigestPin_ShowsCommitLinkedToGitHub covers
+// the Trigger Release Draft step's Commit column: pinning a single
+// resolved target to a digest must resolve and render that digest's
+// commit as a GitHub deep link (resolveDigestCommit, handlers_release.go),
+// using the same GetArtifact(digest) lookup screen 21 already relies on.
+// Prevents an accidental release off the wrong digest -- an opaque hex
+// string, easy to mis-paste -- by letting the operator verify the commit
+// before triggering.
+func TestHandleReleaseTriggerSubmit_DigestPin_ShowsCommitLinkedToGitHub(t *testing.T) {
+	artifact := &fakeArtifactClient{
+		getArtifactResps: map[string]*pb.GetArtifactResponse{
+			"sha256:deadbeef": {
+				Artifact: &pb.Artifact{ArtifactId: "art-1", Digest: "sha256:deadbeef"},
+				Build:    &pb.Build{BuildId: "build-1", GitSha: "cafefeedbeef1234"},
+			},
+		},
+	}
+	app := &App{registry: &RegistryClient{
+		App:      &releaseAppClient{apps: oneAppCatalog()},
+		Release:  &fakeReleaseClient{},
+		Artifact: artifact,
+	}}
+
+	form := url.Values{"target": {"app:platform-worker"}, "digest": {"sha256:deadbeef"}, "do": {"resolve"}}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(artifact.getArtifactReqs) != 1 || artifact.getArtifactReqs[0].GetDigest() != "sha256:deadbeef" {
+		t.Fatalf("expected one GetArtifact(digest=sha256:deadbeef) call, got %+v", artifact.getArtifactReqs)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "https://github.com/whale-net/everything/commit/cafefeedbeef1234") {
+		t.Errorf("expected a GitHub commit deep link for the pinned digest; body = %s", body)
+	}
+	if !strings.Contains(body, "cafefeed") {
+		t.Errorf("expected the (truncated) git_sha to render; body = %s", body)
+	}
+}
+
+// A digest that GetArtifact can't resolve must degrade to "unknown" in the
+// Commit column rather than failing the whole Draft preview.
+func TestHandleReleaseTriggerSubmit_DigestPin_UnresolvableDigestShowsUnknown(t *testing.T) {
+	app := &App{registry: &RegistryClient{
+		App:      &releaseAppClient{apps: oneAppCatalog()},
+		Release:  &fakeReleaseClient{},
+		Artifact: &fakeArtifactClient{},
+	}}
+
+	form := url.Values{"target": {"app:platform-worker"}, "digest": {"sha256:unknowndigest"}, "do": {"resolve"}}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "unknown") {
+		t.Errorf("expected the unresolvable digest to degrade to \"unknown\"; body = %s", body)
+	}
+}
+
 // --- status page: retry re-submits via the same TriggerRelease path -----
 
 func TestReleaseStatusRetryForm_PostsScopeToTriggerEndpoint(t *testing.T) {
@@ -304,6 +378,49 @@ func TestReleaseStatusRetryForm_PostsScopeToTriggerEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(body, `name="do"`) || !strings.Contains(body, `value="trigger"`) {
 		t.Errorf("expected the retry control to submit do=trigger so it reaches the confirmed-trigger branch directly; body = %s", body)
+	}
+}
+
+// TestReleaseStatusPage_ShowsTargetCommitLinkedToGitHub covers the release-
+// status screen's Commit column: for a target whose build_id resolves via
+// GetBuild, the page must render the (truncated) git_sha and a GitHub
+// commit deep link (helps catch releasing/promoting the wrong commit
+// before it ships) -- and for a build_id GetBuild can't resolve, it must
+// degrade to "unknown" rather than fail the whole page.
+func TestReleaseStatusPage_ShowsTargetCommitLinkedToGitHub(t *testing.T) {
+	rel := &fakeReleaseClient{
+		getResp: &pb.GetReleaseResponse{
+			ReleaseRunId: "run-7",
+			Targets: []*pb.ReleaseRunTarget{
+				{OwnerFullName: "platform-worker", BuildId: "build-ok"},
+				{OwnerFullName: "platform-api", BuildId: "build-missing"},
+			},
+		},
+	}
+	artifact := &fakeArtifactClient{
+		getBuildResps: map[string]*pb.GetBuildResponse{
+			"build-ok": {Build: &pb.Build{BuildId: "build-ok", GitSha: "deadbeefcafefeed"}},
+		},
+	}
+	app := &App{registry: &RegistryClient{Release: rel, Artifact: artifact}}
+
+	req := httptest.NewRequest(http.MethodGet, "/releases/run-7", nil)
+	req.SetPathValue("id", "run-7")
+	w := httptest.NewRecorder()
+	app.handleReleaseStatus(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "https://github.com/whale-net/everything/commit/deadbeefcafefeed") {
+		t.Errorf("expected a GitHub commit deep link for the resolved build; body = %s", body)
+	}
+	if !strings.Contains(body, "deadbeef") {
+		t.Errorf("expected the (truncated) git_sha to render; body = %s", body)
+	}
+	if !strings.Contains(body, "unknown") {
+		t.Errorf("expected the unresolvable target's build_id to degrade to \"unknown\" rather than fail the page; body = %s", body)
+	}
+	if len(artifact.getBuildReqs) != 2 {
+		t.Errorf("expected one GetBuild call per distinct build_id (2 targets), got %d", len(artifact.getBuildReqs))
 	}
 }
 
@@ -375,12 +492,12 @@ func TestHandleReleaseTriggerSubmit_PickerTrigger_ThreadsPerTargetVersionSelecti
 	}}
 
 	form := url.Values{
-		"target":                    {"app:platform-worker", "app:platform-api"},
-		"mode__platform-worker":     {"explicit"},
-		"explicit__platform-worker": {"v9.9.9"},
-		"mode__platform-api":        {"bump"},
-		"bump__platform-api":        {"major"},
-		"do":                        {"trigger"},
+		"target": {"app:platform-worker", "app:platform-api"},
+		"mode__ARTIFACT_KIND_IMAGE__platform-worker":     {"explicit"},
+		"explicit__ARTIFACT_KIND_IMAGE__platform-worker": {"v9.9.9"},
+		"mode__ARTIFACT_KIND_IMAGE__platform-api":        {"bump"},
+		"bump__ARTIFACT_KIND_IMAGE__platform-api":        {"major"},
+		"do": {"trigger"},
 	}
 	req := newReleaseTriggerPickerRequest(t, form)
 	w := httptest.NewRecorder()
@@ -398,6 +515,62 @@ func TestHandleReleaseTriggerSubmit_PickerTrigger_ThreadsPerTargetVersionSelecti
 	}
 	if got := byOwner["platform-api"]; got != "major" {
 		t.Errorf("platform-api version_selection = %q, want major", got)
+	}
+	if w.Code != http.StatusSeeOther {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusSeeOther)
+	}
+}
+
+// TestHandleReleaseTriggerSubmit_PickerTrigger_AppAndChartSharingFullName_ThreadDistinctVersions
+// is the regression test for issue #1141: an app and a chart with the same
+// full_name (e.g. a demo app named "worker" alongside a chart also named
+// "worker" in the same domain) used to collide on their Draft-step form
+// field names and VersionInputs map entry, since both were keyed by
+// OwnerFullName alone -- picking "Explicit" on one row silently clobbered
+// the other row's selection. TargetFormKey (pages/release_trigger.templ)
+// disambiguates by prefixing with the target's Kind, so both must reach
+// TriggerRelease with their own distinct version_selection.
+func TestHandleReleaseTriggerSubmit_PickerTrigger_AppAndChartSharingFullName_ThreadDistinctVersions(t *testing.T) {
+	rel := &fakeReleaseClient{triggerResp: &pb.TriggerReleaseResponse{ReleaseRunId: "run-1141"}}
+	app := &App{registry: &RegistryClient{
+		App: &releaseAppClient{
+			apps: []*pb.App{
+				{AppId: "a1", FullName: "demo-worker", Name: "worker", Domain: "demo", Status: pb.AppStatus_APP_STATUS_ACTIVE},
+			},
+			charts: []*pb.Chart{
+				{ChartId: "c1", FullName: "demo-worker", Name: "worker", Domain: "demo", Status: pb.AppStatus_APP_STATUS_ACTIVE},
+			},
+		},
+		Release: rel,
+	}}
+
+	form := url.Values{
+		"target":                                     {"app:demo-worker", "chart:demo-worker"},
+		"mode__ARTIFACT_KIND_IMAGE__demo-worker":     {"explicit"},
+		"explicit__ARTIFACT_KIND_IMAGE__demo-worker": {"v9.9.9"},
+		"mode__ARTIFACT_KIND_CHART__demo-worker":     {"bump"},
+		"bump__ARTIFACT_KIND_CHART__demo-worker":     {"major"},
+		"do":                                         {"trigger"},
+	}
+	req := newReleaseTriggerPickerRequest(t, form)
+	w := httptest.NewRecorder()
+	devUserAuth(t).RequireAuthFunc(app.handleReleaseTriggerSubmit)(w, req)
+
+	if len(rel.triggerCalls) != 1 {
+		t.Fatalf("TriggerRelease calls = %d, want 1; body = %s", len(rel.triggerCalls), w.Body.String())
+	}
+	byKind := map[pb.ArtifactKind]string{}
+	for _, tgt := range rel.triggerCalls[0].GetTargets() {
+		if tgt.GetOwnerFullName() != "demo-worker" {
+			t.Errorf("unexpected target owner %q", tgt.GetOwnerFullName())
+		}
+		byKind[tgt.GetKind()] = tgt.GetVersionSelection()
+	}
+	if got := byKind[pb.ArtifactKind_ARTIFACT_KIND_IMAGE]; got != "v9.9.9" {
+		t.Errorf("app (image) version_selection = %q, want v9.9.9", got)
+	}
+	if got := byKind[pb.ArtifactKind_ARTIFACT_KIND_CHART]; got != "major" {
+		t.Errorf("chart version_selection = %q, want major", got)
 	}
 	if w.Code != http.StatusSeeOther {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusSeeOther)
@@ -441,10 +614,10 @@ func TestHandleReleaseTriggerSubmit_ExplicitModeWithEmptyValue_RejectedBeforeCal
 	}}
 
 	form := url.Values{
-		"target":                     {"app:platform-worker"},
-		"mode__platform-worker":      {"explicit"},
-		"explicit__platform-worker":  {""},
-		"do":                         {"trigger"},
+		"target": {"app:platform-worker"},
+		"mode__ARTIFACT_KIND_IMAGE__platform-worker":     {"explicit"},
+		"explicit__ARTIFACT_KIND_IMAGE__platform-worker": {""},
+		"do": {"trigger"},
 	}
 	req := newReleaseTriggerPickerRequest(t, form)
 	w := httptest.NewRecorder()
@@ -485,3 +658,74 @@ func TestHandleReleaseTriggerSubmit_PickerDomainToken_ResolvesEverythingUnderIt(
 // devUserAuth is declared in handlers_promote_rollback_test.go and reused
 // here -- see that file's doc comment for why RequireAuthFunc is the only
 // supported way to inject a *htmxauth.UserInfo into a handler test.
+
+// --- release history --------------------------------------------------
+
+// TestHandleReleaseHistory_RendersEveryAttempt covers the release-history
+// screen: it must call ListReleaseAttempts unscoped (no owner_full_name --
+// this screen shows every owner's attempts, unlike the owner-scoped
+// ListReleases) and render each returned run, including its overall status
+// derived from per-target state.
+func TestHandleReleaseHistory_RendersEveryAttempt(t *testing.T) {
+	rel := &fakeReleaseClient{
+		listAttemptsResp: &pb.ListReleaseAttemptsResponse{
+			Releases: []*pb.GetReleaseResponse{
+				{
+					ReleaseRunId:   "run-ok",
+					TriggeredBy:    "alice",
+					RequestedScope: "platform-worker",
+					Targets: []*pb.ReleaseRunTarget{
+						{OwnerFullName: "platform-worker", State: pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_SUCCEEDED},
+					},
+				},
+				{
+					ReleaseRunId:   "run-failed",
+					TriggeredBy:    "bob",
+					RequestedScope: "platform-api",
+					Targets: []*pb.ReleaseRunTarget{
+						{OwnerFullName: "platform-api", State: pb.ReleaseRunTargetState_RELEASE_RUN_TARGET_STATE_FAILED},
+					},
+				},
+			},
+		},
+	}
+	app := &App{registry: &RegistryClient{Release: rel}}
+
+	req := httptest.NewRequest(http.MethodGet, "/releases", nil)
+	w := httptest.NewRecorder()
+	app.handleReleaseHistory(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "run-ok") {
+		t.Errorf("expected the succeeded run's id in the body; body = %s", body)
+	}
+	if !strings.Contains(body, "run-failed") {
+		t.Errorf("expected the failed run's id in the body; body = %s", body)
+	}
+	if !strings.Contains(body, "Succeeded") {
+		t.Errorf("expected a Succeeded badge; body = %s", body)
+	}
+	if !strings.Contains(body, "Failed") {
+		t.Errorf("expected a Failed badge; body = %s", body)
+	}
+}
+
+// TestHandleReleaseHistory_RPCFailure_RendersErrorBanner covers the load-
+// failure path, mirroring handleBuilds/handleReconcileRuns's error
+// handling.
+func TestHandleReleaseHistory_RPCFailure_RendersErrorBanner(t *testing.T) {
+	rel := &fakeReleaseClient{listAttemptsErr: status.Error(codes.Unavailable, "db down")}
+	app := &App{registry: &RegistryClient{Release: rel}}
+
+	req := httptest.NewRequest(http.MethodGet, "/releases", nil)
+	w := httptest.NewRecorder()
+	app.handleReleaseHistory(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "alert-error") {
+		t.Errorf("expected an error banner on RPC failure; body = %s", body)
+	}
+}

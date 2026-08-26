@@ -95,16 +95,31 @@ type TargetVersionInput struct {
 	Explicit string // "vMAJOR.MINOR.PATCH" -- meaningful when Mode == "explicit"
 }
 
+// TargetFormKey identifies one resolved target's Draft-step form fields and
+// VersionInputs map entry. OwnerFullName alone is NOT unique across
+// ResolvedTargets -- an app and a chart (or, in principle, any two targets
+// of different Kind) can share the same full_name, e.g. a demo app and a
+// chart both named "worker" in the same domain (issue #1141). Keying on
+// full_name alone collided the two rows' "mode__"/"bump__"/"explicit__"
+// input names into one HTML radio group (so picking "Explicit" on one row
+// silently un-checked "Auto-bump" on the other) and collided their
+// VersionInputs map entries. Prefixing with Kind's own String() disambiguates
+// without needing a second lookup table.
+func TargetFormKey(t *pb.ReleaseTargetInput) string {
+	return t.GetKind().String() + "__" + t.GetOwnerFullName()
+}
+
 // modeFieldName/bumpFieldName/explicitFieldName build this target's three
-// Draft-step form field names -- handlers_release.go's
-// parseTargetVersionInputs reads these same names back by iterating the
-// same ResolvedTargets list, so the two must stay in lockstep; kept next to
+// Draft-step form field names from its TargetFormKey --
+// handlers_release.go's parseTargetVersionInputs reads these same names
+// back by iterating the same ResolvedTargets list (computing the identical
+// key via TargetFormKey), so the two must stay in lockstep; kept next to
 // each other in this file and that one respectively rather than shared
 // across the main/pages package boundary (same rationale as PickerToken's
 // doc comment).
-func modeFieldName(fullName string) string     { return "mode__" + fullName }
-func bumpFieldName(fullName string) string     { return "bump__" + fullName }
-func explicitFieldName(fullName string) string { return "explicit__" + fullName }
+func modeFieldName(key string) string     { return "mode__" + key }
+func bumpFieldName(key string) string     { return "bump__" + key }
+func explicitFieldName(key string) string { return "explicit__" + key }
 
 // ReleaseTriggerViewState is the release-trigger screen's render state
 // (FR1-6, FR10, FR4/NFR5; issue #890; issue #889 follow-up for the
@@ -143,10 +158,21 @@ type ReleaseTriggerViewState struct {
 
 	ResolvedTargets []*pb.ReleaseTargetInput
 	// VersionInputs holds each resolved target's version-selection form
-	// state, keyed by OwnerFullName -- defaults to Mode "bump"/Bump "patch"
-	// for a freshly-resolved target, echoed back verbatim on a Draft-step
-	// validation re-render.
+	// state, keyed by TargetFormKey (NOT OwnerFullName alone -- see that
+	// function's doc comment for why) -- defaults to Mode "bump"/Bump
+	// "patch" for a freshly-resolved target, echoed back verbatim on a
+	// Draft-step validation re-render.
 	VersionInputs map[string]TargetVersionInput
+
+	// DigestCommit is the commit behind a digest-pinned target's existing
+	// artifact (handlers_release.go's resolveDigestCommit) -- a digest is an
+	// opaque hex string, easy to mis-paste, so showing which commit it was
+	// actually built from (linked to GitHub) lets the operator catch a
+	// wrong-digest accident before triggering. nil when Digest is empty, or
+	// the lookup found no build for it -- the Draft step then renders
+	// "unknown" for that row rather than blocking the preview. Always nil
+	// for a "build fresh" target: nothing exists yet to look up.
+	DigestCommit *BuildCommitInfo
 }
 
 // releaseTargetKindLabel matches the CLI's --kind flag values ("image" |
@@ -292,12 +318,13 @@ templ releaseDraftBody(s ReleaseTriggerViewState) {
 						<th>Target</th>
 						<th>Kind</th>
 						<th>Digest</th>
+						<th>Commit</th>
 						<th>Version</th>
 					</tr>
 				</thead>
 				<tbody>
 					for _, t := range s.ResolvedTargets {
-						@releaseDraftRow(t, s.VersionInputs[t.GetOwnerFullName()])
+						@releaseDraftRow(t, s.VersionInputs[TargetFormKey(t)], s.DigestCommit)
 					}
 				</tbody>
 			</table>
@@ -310,7 +337,12 @@ templ releaseDraftBody(s ReleaseTriggerViewState) {
 	}
 }
 
-templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput) {
+// releaseDraftRow's commit param is the digest-pinned target's resolved
+// commit (ReleaseTriggerViewState.DigestCommit) -- always nil for a "build
+// fresh" row since nothing exists yet to look up (FR2: digest only applies
+// to a single-target resolution, so there is at most one pinned row per
+// Draft).
+templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput, commit *BuildCommitInfo) {
 	<tr>
 		<td class="font-mono">{ t.GetOwnerFullName() }</td>
 		<td>{ releaseTargetKindLabel(t.GetKind()) }</td>
@@ -321,14 +353,25 @@ templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput) {
 				<span class="opacity-50">build fresh</span>
 			}
 		</td>
+		<td class="font-mono text-xs">
+			if t.GetDigest() == "" {
+				<span class="opacity-50">—</span>
+			} else if commit != nil {
+				<a href={ templ.URL(commit.URL) } target="_blank" rel="noopener" class="link link-hover" title={ commit.GitSha }>
+					{ gitShaShort(commit.GitSha) }
+				</a>
+			} else {
+				<span class="opacity-50" title="Commit lookup unavailable for this digest">unknown</span>
+			}
+		</td>
 		<td>
 			<div class="flex flex-col gap-1">
 				<div class="flex items-center gap-2">
 					<label class="label cursor-pointer justify-start gap-1 p-0">
-						<input type="radio" name={ modeFieldName(t.GetOwnerFullName()) } value="bump" class="radio radio-sm" checked?={ v.Mode != "explicit" }/>
+						<input type="radio" name={ modeFieldName(TargetFormKey(t)) } value="bump" class="radio radio-sm" checked?={ v.Mode != "explicit" }/>
 						<span class="label-text text-xs">Auto-bump</span>
 					</label>
-					<select name={ bumpFieldName(t.GetOwnerFullName()) } class="select select-bordered select-xs">
+					<select name={ bumpFieldName(TargetFormKey(t)) } class="select select-bordered select-xs">
 						<option value="major" selected?={ v.Bump == "major" }>+major</option>
 						<option value="minor" selected?={ v.Bump == "minor" }>+minor</option>
 						<option value="patch" selected?={ v.Bump == "" || v.Bump == "patch" }>+patch</option>
@@ -336,10 +379,10 @@ templ releaseDraftRow(t *pb.ReleaseTargetInput, v TargetVersionInput) {
 				</div>
 				<div class="flex items-center gap-2">
 					<label class="label cursor-pointer justify-start gap-1 p-0">
-						<input type="radio" name={ modeFieldName(t.GetOwnerFullName()) } value="explicit" class="radio radio-sm" checked?={ v.Mode == "explicit" }/>
+						<input type="radio" name={ modeFieldName(TargetFormKey(t)) } value="explicit" class="radio radio-sm" checked?={ v.Mode == "explicit" }/>
 						<span class="label-text text-xs">Explicit</span>
 					</label>
-					<input type="text" name={ explicitFieldName(t.GetOwnerFullName()) } value={ v.Explicit } placeholder="vX.Y.Z" class="input input-bordered input-xs font-mono w-28"/>
+					<input type="text" name={ explicitFieldName(TargetFormKey(t)) } value={ v.Explicit } placeholder="vX.Y.Z" class="input input-bordered input-xs font-mono w-28"/>
 				</div>
 			</div>
 		</td>

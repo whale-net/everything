@@ -18,12 +18,12 @@ import (
 // style).
 type releaseRunRepo struct{ ex dbtx }
 
-const releaseRunColumns = `release_run_id, triggered_by, requested_scope, digest_input, resolved_plan, temporal_workflow_id, temporal_run_id, created_at`
+const releaseRunColumns = `release_run_id, triggered_by, requested_scope, digest_input, resolved_plan, temporal_workflow_id, temporal_run_id, build_ref_run_id, build_ref_run_url, created_at`
 
 // releaseRunColumnsPrefixed is releaseRunColumns qualified with the `rr`
 // alias ListReleaseRunsByTarget's join uses -- release_run_id exists on both
 // joined tables, so an unqualified SELECT list would be ambiguous there.
-const releaseRunColumnsPrefixed = `rr.release_run_id, rr.triggered_by, rr.requested_scope, rr.digest_input, rr.resolved_plan, rr.temporal_workflow_id, rr.temporal_run_id, rr.created_at`
+const releaseRunColumnsPrefixed = `rr.release_run_id, rr.triggered_by, rr.requested_scope, rr.digest_input, rr.resolved_plan, rr.temporal_workflow_id, rr.temporal_run_id, rr.build_ref_run_id, rr.build_ref_run_url, rr.created_at`
 
 const releaseRunTargetColumns = `release_run_target_id, release_run_id, owner_full_name, kind, state, state_changed_at, build_id, error_detail`
 
@@ -38,7 +38,7 @@ func scanReleaseRun(row pgx.Row) (repository.ReleaseRun, error) {
 	var digestInput, resolvedPlan *[]byte
 	if err := row.Scan(
 		&rr.ReleaseRunID, &rr.TriggeredBy, &rr.RequestedScope, &digestInput, &resolvedPlan,
-		&rr.TemporalWorkflowID, &rr.TemporalRunID, &rr.CreatedAt,
+		&rr.TemporalWorkflowID, &rr.TemporalRunID, &rr.BuildRefRunID, &rr.BuildRefRunURL, &rr.CreatedAt,
 	); err != nil {
 		return repository.ReleaseRun{}, err
 	}
@@ -201,6 +201,32 @@ func (r *releaseRunRepo) SetResolvedPlan(ctx context.Context, releaseRunID strin
 	return nil
 }
 
+// SetBuildRef implements repository.ReleaseRunRepository.SetBuildRef
+// (migration 023): the check-before-dispatch write that lets DispatchBuild
+// (worker/release/activities.go) detect an already-dispatched GitHub
+// Actions run on activity retry instead of calling `workflow_dispatch`
+// again -- see that interface method's doc comment for why a second
+// dispatch is unsafe under release-v2.yml's concurrency group, not just
+// wasteful. Naturally idempotent: writing the same runID/runURL twice is a
+// no-op change.
+func (r *releaseRunRepo) SetBuildRef(ctx context.Context, releaseRunID string, runID, runURL string) error {
+	if runID == "" {
+		return fmt.Errorf("%w: build ref run id must not be empty", repository.ErrInvalidArgument)
+	}
+	tag, err := r.ex.Exec(ctx, `UPDATE release_run SET build_ref_run_id = $1, build_ref_run_url = $2 WHERE release_run_id = $3`,
+		runID, runURL, releaseRunID)
+	if err != nil {
+		if de, ok := translatePgError(err, fmt.Sprintf("build ref for release run %s", releaseRunID)); ok {
+			return de
+		}
+		return fmt.Errorf("set build ref for release run %s: %w", releaseRunID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: release run %s", repository.ErrNotFound, releaseRunID)
+	}
+	return nil
+}
+
 // UpdateTargetState implements
 // repository.ReleaseRunRepository.UpdateTargetState -- transitions
 // releaseRunTargetID to newState in place, validating the transition against
@@ -311,4 +337,70 @@ func (r *releaseRunRepo) ListReleaseRunsByTarget(ctx context.Context, ownerFullN
 		out = append(out, run)
 	}
 	return out, rows.Err()
+}
+
+// defaultReleaseRunPageSize is what ListReleaseRuns falls back to when the
+// caller passes pageSize <= 0. Matches defaultArtifactPageSize/
+// defaultBuildPageSize/defaultReconcileRunPageSize (issue #603).
+const defaultReleaseRunPageSize = 50
+
+// ListReleaseRuns implements repository.ReleaseRunRepository.ListReleaseRuns
+// -- the release-history admin page's query. Ordered by created_at DESC,
+// tie-broken by release_run_id DESC: created_at is NOT NULL on every row
+// (set once at CreateReleaseRun), which is what makes it safe as a
+// keyset-pagination cursor column. DISTINCT collapses the owner-filter join
+// back to one row per release_run, same as ListReleaseRunsByTarget.
+func (r *releaseRunRepo) ListReleaseRuns(ctx context.Context, ownerFullName string, pageSize int32, pageToken string) ([]repository.ReleaseRun, string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultReleaseRunPageSize
+	}
+
+	query := `SELECT DISTINCT ` + releaseRunColumnsPrefixed + ` FROM release_run rr`
+	var args []any
+	if ownerFullName != "" {
+		query += ` JOIN release_run_target rrt ON rrt.release_run_id = rr.release_run_id`
+	}
+	query += ` WHERE 1=1`
+	if ownerFullName != "" {
+		args = append(args, ownerFullName)
+		query += fmt.Sprintf(" AND rrt.owner_full_name = $%d", len(args))
+	}
+	if pageToken != "" {
+		cursorTS, cursorID, err := decodeKeysetCursor(pageToken)
+		if err != nil {
+			return nil, "", fmt.Errorf("list release runs: %w", err)
+		}
+		args = append(args, cursorTS, cursorID)
+		query += fmt.Sprintf(" AND (rr.created_at, rr.release_run_id) < ($%d::timestamptz, $%d::uuid)", len(args)-1, len(args))
+	}
+	// Fetch one extra row so we can tell whether there is a next page
+	// without a separate COUNT(*) query (matches ListArtifacts).
+	args = append(args, pageSize+1)
+	query += fmt.Sprintf(" ORDER BY rr.created_at DESC, rr.release_run_id DESC LIMIT $%d", len(args))
+
+	rows, err := r.ex.Query(ctx, query, args...)
+	if err != nil {
+		return nil, "", fmt.Errorf("list release runs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []repository.ReleaseRun
+	for rows.Next() {
+		run, err := scanReleaseRun(rows)
+		if err != nil {
+			return nil, "", err
+		}
+		out = append(out, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+
+	var nextPageToken string
+	if int32(len(out)) > pageSize {
+		last := out[pageSize-1]
+		nextPageToken = encodeKeysetCursor(last.CreatedAt, last.ReleaseRunID)
+		out = out[:pageSize]
+	}
+	return out, nextPageToken, nil
 }

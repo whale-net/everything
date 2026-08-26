@@ -916,7 +916,12 @@ func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 // TestAllocateVersion_IdempotencyKeyReplay proves a repeated call with the
 // same idempotency_key returns the SAME version with already_allocated set,
 // rather than allocating a second version — the AllocateVersion analogue of
-// TestRecordBuild_IdempotencyKeyReplay_DoesNotDoubleWrite.
+// TestRecordBuild_IdempotencyKeyReplay_DoesNotDoubleWrite. A DIFFERENT
+// idempotency key against a version that is merely `allocated` (never
+// published, never failed) still allocates a genuinely new one — that's
+// TestAllocateVersion_ConcurrentCallsNeverCollide's guarantee at the
+// postgres layer; see TestAllocateVersion_ReusesFailedVersionOnRetry for the
+// `failed`-reuse behavior this does NOT cover.
 func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
 	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
@@ -954,6 +959,86 @@ func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
 	}
 	if third.Version == first.Version {
 		t.Fatalf("expected a fresh idempotency key to allocate a NEW version, got the same one: %q", third.Version)
+	}
+}
+
+// TestAllocateVersion_ReusesFailedVersionOnRetry proves the fix for "a
+// failed release attempt permanently burns its version slot": once a
+// version's BeginPublish/FailPublish cycle ends in `failed`, the next
+// AllocateVersion call (a fresh CI run retrying the same release, with its
+// own fresh idempotency key) gets that SAME version back instead of
+// incrementing past it -- so a release can be retried an arbitrary number of
+// times without exhausting the minor/patch sequence. Only once the version
+// actually publishes does the next call advance past it.
+func TestAllocateVersion_ReusesFailedVersionOnRetry(t *testing.T) {
+	repo, artifactSrv := setupAllocate(t)
+	ctx := authedCtx()
+	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+
+	alloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Increment: "patch", IdempotencyKey: "retry-allocate-1",
+	})
+	if err != nil {
+		t.Fatalf("AllocateVersion: %v", err)
+	}
+
+	firstBuild := recordBuild(t, artifactSrv, "run-retry-1")
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: alloc.Version, BuildId: firstBuild.BuildId, IdempotencyKey: "retry-begin-1",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+	if _, err := artifactSrv.FailPublish(ctx, &pb.FailPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: alloc.Version, Reason: "push failed", IdempotencyKey: "retry-fail-1",
+	}); err != nil {
+		t.Fatalf("FailPublish: %v", err)
+	}
+
+	// Retry: a fresh idempotency key (as a new CI run would use) must hand
+	// back the SAME version, not a new one past it.
+	retryAlloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Increment: "patch", IdempotencyKey: "retry-allocate-2",
+	})
+	if err != nil {
+		t.Fatalf("retry AllocateVersion: %v", err)
+	}
+	if retryAlloc.Version != alloc.Version {
+		t.Fatalf("expected retry to reuse failed version %q, got %q", alloc.Version, retryAlloc.Version)
+	}
+
+	// This retry succeeds.
+	secondBuild := recordBuild(t, artifactSrv, "run-retry-2")
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: retryAlloc.Version, BuildId: secondBuild.BuildId, IdempotencyKey: "retry-begin-2",
+	}); err != nil {
+		t.Fatalf("BeginPublish (retry): %v", err)
+	}
+	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId: secondBuild.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Digest: "sha256:retry-succeeded",
+		Version: retryAlloc.Version, IdempotencyKey: "retry-record-2",
+	}); err != nil {
+		t.Fatalf("RecordArtifact (retry): %v", err)
+	}
+
+	// Now that it published, the next allocation must advance past it.
+	next, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Increment: "patch", IdempotencyKey: "retry-allocate-3",
+	})
+	if err != nil {
+		t.Fatalf("post-publish AllocateVersion: %v", err)
+	}
+	if next.Version == alloc.Version {
+		t.Fatalf("expected AllocateVersion to advance past the now-published version %q, got the same one", alloc.Version)
+	}
+	if next.PreviousVersion != alloc.Version {
+		t.Fatalf("expected previous_version %q (the published version), got %q", alloc.Version, next.PreviousVersion)
 	}
 }
 
@@ -1741,6 +1826,47 @@ func TestGetReleaseRun_UnknownRunIsNotFound(t *testing.T) {
 	_, err := artifactSrv.GetReleaseRun(ctx, &pb.GetReleaseRunRequest{WorkflowRunId: "run-does-not-exist"})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound for an unrecorded run id, got %v", err)
+	}
+}
+
+// TestGetBuild_ResolvesByBuildID covers the RPC the release-status UI screen
+// uses to resolve a ReleaseRunTarget's build_id to its git_sha -- a lookup
+// GetReleaseRun (keyed by workflow_run_id) and ListBuilds (no id filter)
+// can't serve directly.
+func TestGetBuild_ResolvesByBuildID(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-getbuild")
+
+	resp, err := artifactSrv.GetBuild(ctx, &pb.GetBuildRequest{BuildId: build.BuildId})
+	if err != nil {
+		t.Fatalf("GetBuild: %v", err)
+	}
+	if resp.Build.BuildId != build.BuildId {
+		t.Fatalf("expected build_id %s, got %s", build.BuildId, resp.Build.BuildId)
+	}
+	if resp.Build.GitSha != "abc123" {
+		t.Fatalf("expected git_sha %q, got %q", "abc123", resp.Build.GitSha)
+	}
+}
+
+func TestGetBuild_UnknownBuildIsNotFound(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+
+	_, err := artifactSrv.GetBuild(ctx, &pb.GetBuildRequest{BuildId: "build-does-not-exist"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for an unrecorded build_id, got %v", err)
+	}
+}
+
+func TestGetBuild_RequiresBuildID(t *testing.T) {
+	_, artifactSrv := setupBatch(t)
+	ctx := authedCtx()
+
+	_, err := artifactSrv.GetBuild(ctx, &pb.GetBuildRequest{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument for an empty build_id, got %v", err)
 	}
 }
 

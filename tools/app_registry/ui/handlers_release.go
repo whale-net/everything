@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -195,6 +196,7 @@ func (app *App) handleReleaseTriggerSubmit(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		targets[0].Digest = digest
+		s.DigestCommit = app.resolveDigestCommit(r.Context(), digest)
 	}
 
 	s.VersionInputs, err = parseTargetVersionInputs(r, targets)
@@ -231,11 +233,14 @@ func (app *App) handleReleaseTriggerSubmit(w http.ResponseWriter, r *http.Reques
 }
 
 // parseTargetVersionInputs reads each resolved target's Draft-step version-
-// selection form fields (pages.modeFieldName/bumpFieldName/explicitFieldName)
-// and applies the chosen value onto that target's own
+// selection form fields (pages.modeFieldName/bumpFieldName/explicitFieldName,
+// keyed by pages.TargetFormKey -- NOT OwnerFullName alone, see that
+// function's doc comment: an app and a chart can share a full_name, and
+// keying on full_name alone collided their form fields into one HTML radio
+// group, issue #1141) and applies the chosen value onto that target's own
 // ReleaseTargetInput.VersionSelection -- an empty target list produces an
 // empty (not nil) map so the Draft page's per-row lookups (s.VersionInputs
-// [owner]) render the "bump"/"patch" zero-value default correctly rather
+// [key]) render the "bump"/"patch" zero-value default correctly rather
 // than panicking on a nil map read (reading a nil map is safe in Go, but
 // being explicit here documents the invariant). An "explicit" mode with an
 // empty text value is rejected here, before ever reaching TriggerRelease --
@@ -245,15 +250,16 @@ func parseTargetVersionInputs(r *http.Request, targets []*pb.ReleaseTargetInput)
 	inputs := make(map[string]pages.TargetVersionInput, len(targets))
 	for _, t := range targets {
 		full := t.GetOwnerFullName()
-		mode := r.FormValue("mode__" + full)
-		bump := r.FormValue("bump__" + full)
-		explicit := strings.TrimSpace(r.FormValue("explicit__" + full))
+		key := pages.TargetFormKey(t)
+		mode := r.FormValue("mode__" + key)
+		bump := r.FormValue("bump__" + key)
+		explicit := strings.TrimSpace(r.FormValue("explicit__" + key))
 
 		if mode == "explicit" {
 			if explicit == "" {
 				return nil, fmt.Errorf("%s: an explicit version is required when \"Explicit\" is selected", full)
 			}
-			inputs[full] = pages.TargetVersionInput{Mode: "explicit", Explicit: explicit}
+			inputs[key] = pages.TargetVersionInput{Mode: "explicit", Explicit: explicit}
 			t.VersionSelection = explicit
 			continue
 		}
@@ -261,7 +267,7 @@ func parseTargetVersionInputs(r *http.Request, targets []*pb.ReleaseTargetInput)
 		if bump == "" {
 			bump = "patch"
 		}
-		inputs[full] = pages.TargetVersionInput{Mode: "bump", Bump: bump, Explicit: explicit}
+		inputs[key] = pages.TargetVersionInput{Mode: "bump", Bump: bump, Explicit: explicit}
 		if bump != "patch" {
 			t.VersionSelection = bump
 		}
@@ -272,6 +278,33 @@ func parseTargetVersionInputs(r *http.Request, targets []*pb.ReleaseTargetInput)
 func (app *App) renderReleaseTrigger(w http.ResponseWriter, r *http.Request, user *htmxauth.UserInfo, s pages.ReleaseTriggerViewState) {
 	if renderErr := RenderTempl(w, r, "Trigger Release", pages.ReleaseTrigger(user, s)); renderErr != nil {
 		log.Printf("Failed to render release trigger page: %v", renderErr)
+		http.Error(w, "Failed to render page", http.StatusInternalServerError)
+	}
+}
+
+// handleReleaseHistory serves the release-history screen: every release
+// attempt ever triggered (ListReleaseAttempts), across every owner, most-
+// recent-first. One RPC call per page load, same simplicity as
+// handleReconcileRuns/handleBuilds -- no pagination controls yet (no
+// precedent for consuming PageResponse.next_page_token anywhere in this UI
+// today; the server-side page defaults to 50 rows).
+func (app *App) handleReleaseHistory(w http.ResponseWriter, r *http.Request) {
+	user := htmxauth.GetUser(r.Context())
+
+	resp, err := app.registry.Release.ListReleaseAttempts(r.Context(), &pb.ListReleaseAttemptsRequest{})
+	if err != nil {
+		log.Printf("ListReleaseAttempts failed: %v", err)
+		s := pages.ReleaseHistoryViewState{LoadErr: grpcErrorMessage(err)}
+		if renderErr := RenderTempl(w, r, "Release History", pages.ReleaseHistory(user, s)); renderErr != nil {
+			log.Printf("Failed to render release history page: %v", renderErr)
+			http.Error(w, "Failed to render page", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	s := pages.ReleaseHistoryViewState{Releases: resp.GetReleases()}
+	if renderErr := RenderTempl(w, r, "Release History", pages.ReleaseHistory(user, s)); renderErr != nil {
+		log.Printf("Failed to render release history page: %v", renderErr)
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
 }
@@ -310,9 +343,77 @@ func (app *App) handleReleaseStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s := pages.ReleaseStatusViewState{ReleaseRunID: releaseRunID, Release: resp}
+	s := pages.ReleaseStatusViewState{
+		ReleaseRunID: releaseRunID,
+		Release:      resp,
+		BuildCommits: app.resolveTargetCommits(r.Context(), resp.GetTargets()),
+	}
 	if renderErr := RenderTempl(w, r, "Release Status", pages.ReleaseStatus(user, s)); renderErr != nil {
 		log.Printf("Failed to render release status page: %v", renderErr)
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
 	}
+}
+
+// resolveDigestCommit resolves the commit behind a digest-pinned target's
+// existing artifact on the Trigger Release Draft step (prevents an
+// accidental release off the wrong commit: a digest is an opaque hex
+// string, easy to mis-paste, and this lets the operator visually verify it
+// against GitHub before triggering). GetArtifact(digest=...) already embeds
+// the artifact's Build in its response when one is on record
+// (server/handlers/artifact.go's GetArtifact -- same call
+// buildArtifactDetail, artifact_data.go, already makes for screen 21) --
+// no separate GetBuild call needed here, unlike resolveTargetCommits below
+// which only has a bare build_id in hand. A lookup failure (unknown digest,
+// or an artifact with no build on record) returns nil -- the Draft step
+// then renders "unknown" rather than blocking the preview.
+func (app *App) resolveDigestCommit(ctx context.Context, digest string) *pages.BuildCommitInfo {
+	resp, err := app.registry.Artifact.GetArtifact(ctx, &pb.GetArtifactRequest{Digest: digest})
+	if err != nil {
+		log.Printf("GetArtifact(digest=%q) failed: %v", digest, err)
+		return nil
+	}
+	sha := resp.GetBuild().GetGitSha()
+	if sha == "" {
+		return nil
+	}
+	return &pages.BuildCommitInfo{GitSha: sha, URL: githubCommitURL(sha)}
+}
+
+// resolveTargetCommits resolves each target's build_id to the commit its
+// build was cut from (issue: show which commit a release targets, and link
+// it to GitHub, so an operator can catch an accidental wrong-commit release
+// before it ships) -- one GetBuild call per DISTINCT build_id among the
+// run's targets, bounded by the run's own target count (release.yml's
+// matrix keeps that small; same N+1-avoidance rationale as
+// ownerIdentityIndex's doc comment in handlers_builds.go, just scoped to one
+// run instead of the whole builds list since ListBuilds has no id filter to
+// batch this into a single call). A GetBuild failure for one build_id is
+// logged and simply omitted from the returned map -- the page renders
+// "unknown" for that target rather than failing the whole page over one
+// commit link.
+func (app *App) resolveTargetCommits(ctx context.Context, targets []*pb.ReleaseRunTarget) map[string]pages.BuildCommitInfo {
+	commits := make(map[string]pages.BuildCommitInfo, len(targets))
+	for _, t := range targets {
+		buildID := t.GetBuildId()
+		if buildID == "" {
+			continue
+		}
+		if _, ok := commits[buildID]; ok {
+			continue
+		}
+		resp, err := app.registry.Artifact.GetBuild(ctx, &pb.GetBuildRequest{BuildId: buildID})
+		if err != nil {
+			log.Printf("GetBuild(%q) failed: %v", buildID, err)
+			continue
+		}
+		sha := resp.GetBuild().GetGitSha()
+		if sha == "" {
+			continue
+		}
+		commits[buildID] = pages.BuildCommitInfo{
+			GitSha: sha,
+			URL:    githubCommitURL(sha),
+		}
+	}
+	return commits
 }

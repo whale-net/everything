@@ -59,7 +59,16 @@ const appMetadataQuery = "kind(app_metadata, //...) except attr(testonly, 1, //.
 //     break discovery.
 //
 // No metadata JSON files are produced — analysis alone yields the data.
-func ListAllApps(bazel BazelRunner, _ FileSystem, _ string) ([]AppMetadata, error) {
+//
+// When --fast is set (fastDiscovery, root.go), this skips bazel entirely
+// and statically parses BUILD.bazel files instead -- see discover_fast.go.
+// workspaceRoot is unused on the bazel path (bazel resolves paths itself
+// relative to its own working directory) but is required by the fast path,
+// so it's threaded through unconditionally rather than only when needed.
+func ListAllApps(bazel BazelRunner, _ FileSystem, workspaceRoot string) ([]AppMetadata, error) {
+	if fastDiscovery {
+		return ListAllAppsFast(workspaceRoot)
+	}
 	labelsOut, err := bazel.Run("query", appMetadataQuery, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
 	if err != nil {
 		return nil, fmt.Errorf("bazel query app_metadata: %w", err)

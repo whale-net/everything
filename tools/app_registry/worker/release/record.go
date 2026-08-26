@@ -84,9 +84,53 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 	result := VerifyResult{AllPublished: true}
 	for _, t := range targets {
 		key := repository.TargetKey(t.Kind, t.OwnerFullName)
+		// Every app target's Kind on the release_run_target row itself is
+		// ArtifactKindImage regardless of the app's own AppType -- see
+		// targetsFromAppsAndCharts' doc comment (ui/release_scope.go) for
+		// why: TriggerRelease's Kind only distinguishes "app" from "chart"
+		// (server/handlers/release.go only accepts IMAGE/CHART), and the
+		// real image-vs-CLI-binary distinction is meant to be "resolved
+		// downstream, per full_name, driven by the app's AppType" (that
+		// same doc comment). recordCLIBinaryArtifact (finalize.go) already
+		// does this resolution on the write side -- app_type "cli"/"binary"
+		// apps get their published artifact recorded under
+		// ArtifactKindBinary, never ArtifactKindImage (build-app skips the
+		// image build for them entirely -- build_app.go's
+		// ExecuteBuildApp). VerifyPublished must do the same resolution on
+		// the read side, or it permanently reports "no published artifact
+		// found" for every cli/binary app release: looking up Kind IMAGE
+		// for an app that will never publish one is not a transient miss,
+		// it can never succeed. Resolve via the app's real AppType (an
+		// extra Registry.Apps() lookup, same one recordCLIBinaryArtifact
+		// already does) rather than a hardcoded app-name list, so a future
+		// cli/binary app is covered automatically instead of needing a
+		// second edit to keep in sync -- mirrors ui/release_scope.go's
+		// releaseTargetKindFromApp and cmd/metadata.go's
+		// determineArtifactKind (both intentionally duplicated rather than
+		// imported across those packages' boundaries; this one can't be
+		// merged into either without introducing a new cross-package
+		// dependency for a single two-line switch). key/expectedVersions
+		// stay keyed by t.Kind (IMAGE) unchanged, matching finalizeTargets'
+		// own ArtifactKindImage-keyed map -- only the actual GetArtifact
+		// lookup kind changes.
+		lookupKind := t.Kind
+		if t.Kind == repository.ArtifactKindImage {
+			app, aerr := a.Registry.Apps().GetAppByFullName(ctx, t.OwnerFullName)
+			if aerr != nil {
+				result.AllPublished = false
+				if result.Failed == nil {
+					result.Failed = map[string]string{}
+				}
+				result.Failed[key] = fmt.Sprintf("look up app %q to resolve its published artifact kind: %v", t.OwnerFullName, aerr)
+				continue
+			}
+			if app.AppType == "cli" || app.AppType == "binary" {
+				lookupKind = repository.ArtifactKindBinary
+			}
+		}
 		artifact, aerr := a.Registry.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
 			OwnerFullName:   t.OwnerFullName,
-			Kind:            t.Kind,
+			Kind:            lookupKind,
 			LatestPublished: true,
 		})
 		if aerr != nil {

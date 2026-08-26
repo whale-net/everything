@@ -19,6 +19,15 @@ func githubActionsRunURL(workflowRunID string) string {
 	return "https://github.com/whale-net/everything/actions/runs/" + workflowRunID
 }
 
+// githubCommitURL builds a GitHub commit deep link from a git_sha -- the
+// release-status screen uses this to show which commit a target's build was
+// cut from (helps catch an accidental release/promote of the wrong commit
+// before it ships). Same NFR-15 rule as githubActionsRunURL above: a link
+// only, never a live GitHub API call from this UI.
+func githubCommitURL(gitSha string) string {
+	return "https://github.com/whale-net/everything/commit/" + gitSha
+}
+
 // handleBuilds is screen 30 (FR-26, FR-56): recent builds, one ListBuilds
 // call per page load (see pages.Builds's doc comment for what this screen
 // deliberately omits and why).

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -57,6 +58,8 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 		history        = flag.Bool("history", false, "Show migration history")
 		historyLimit   = flag.Int("history-limit", 20, "Number of history entries to show")
 		tracked        = flag.Bool("tracked", true, "Use history tracking for migrations (default: true)")
+		autoDown       = flag.Bool("auto-down", false, "Allow automatically migrating down when the DB is ahead of this binary's migrations (e.g. after a rollback). Same effect as MIGRATE_AUTO_DOWN=true. Without one of these, a detected rollback fails loudly instead of running destructive down migrations unattended.")
+		bypassVersion  = flag.Int("bypass-version", -1, "Operator-approved ceiling: if the DB is ahead of this binary's latest migration but at or below this version, leave the schema as-is (no migration run) instead of failing or auto-migrating down. Same effect as MIGRATE_BYPASS_VERSION. For additive-only migrations (e.g. a new column an older binary just ignores) where the extra state is safe to keep.")
 	)
 	flag.Parse()
 
@@ -127,18 +130,72 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 		return
 	}
 
-	// Default: run up
-	log.Println("Running migrations...")
-
-	var migrationErr error
-	if *tracked {
-		migrationErr = runner.UpWithTracking()
-	} else {
-		migrationErr = runner.Up()
+	// bypassCeiling: an operator-approved ceiling on how far AHEAD of this
+	// binary's latest migration the DB is allowed to be without failing or
+	// auto-migrating down (see the rollback-detection block below). Same
+	// effect as MIGRATE_BYPASS_VERSION. This never runs a migration itself
+	// -- it only widens what counts as an acceptable "ahead" state, for
+	// cases like an additive-only migration (a new column an older binary
+	// just ignores) where rolling the schema back would drop data an
+	// operator wants to keep.
+	bypassCeiling := *bypassVersion
+	if bypassCeiling < 0 {
+		bypassCeiling = getEnvInt("MIGRATE_BYPASS_VERSION", -1)
 	}
 
-	if migrationErr != nil {
-		log.Fatalf("Failed to run migrations: %v", migrationErr)
+	// Default: reconcile the schema to this binary's latest known migration
+	// version. Normally that means running up, but if the DB is already
+	// ahead of this image's latest migration (e.g. an older image re-runs
+	// this job after a rollback), Up() would silently no-op and leave the
+	// newer schema in place. Detect that case explicitly rather than
+	// silently doing nothing -- but don't auto-run destructive down
+	// migrations unattended (wrong image, a stray version bump, a racing
+	// job) without -auto-down/MIGRATE_AUTO_DOWN; fail loudly instead so a
+	// human decides. MIGRATE_AUTO_DOWN exists because this binary is
+	// normally deployed as a Helm Job whose args are fixed per chart --
+	// env vars (Helm values' per-app `env` map) are how a team opts in.
+	allowAutoDown := *autoDown || getEnvBool("MIGRATE_AUTO_DOWN", false)
+
+	targetVersion, err := runner.LatestVersion()
+	if err != nil {
+		log.Fatalf("Failed to determine latest migration version: %v", err)
+	}
+
+	currentVersion, dirty, err := runner.Version()
+	if err != nil {
+		log.Fatalf("Failed to get current migration version: %v", err)
+	}
+	if dirty {
+		log.Fatalf("Database is in dirty state (version %d). Use -force to recover", currentVersion)
+	}
+
+	ranUp := false
+	if currentVersion > targetVersion {
+		log.Printf("Detected rollback: DB is at version %d, this image's latest migration is %d.", currentVersion, targetVersion)
+		switch {
+		case bypassCeiling >= 0 && currentVersion <= uint(bypassCeiling):
+			log.Printf("DB version %d is within the operator-approved bypass ceiling %d -- leaving schema as-is, no migration run.", currentVersion, bypassCeiling)
+		case allowAutoDown:
+			log.Println("Migrating down...")
+			if err := runner.Migrate(targetVersion); err != nil {
+				log.Fatalf("Failed to roll back migrations: %v", err)
+			}
+			log.Println("Rollback completed successfully")
+		default:
+			log.Fatalf("Refusing to auto-migrate down (destructive) without -auto-down or MIGRATE_AUTO_DOWN=true. Set one of those to roll back automatically, raise -bypass-version/MIGRATE_BYPASS_VERSION to at least %d if this ahead-state is expected and safe to leave as-is, or use -steps/-down for an explicit, manual rollback.", currentVersion)
+		}
+	} else {
+		log.Println("Running migrations...")
+		var migrationErr error
+		if *tracked {
+			migrationErr = runner.UpWithTracking()
+		} else {
+			migrationErr = runner.Up()
+		}
+		if migrationErr != nil {
+			log.Fatalf("Failed to run migrations: %v", migrationErr)
+		}
+		ranUp = true
 	}
 
 	v, dirty, err := runner.Version()
@@ -147,15 +204,17 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 	}
 	log.Printf("Migration completed successfully. Version: %d (dirty: %v)", v, dirty)
 
-	// Run seeders (up only — already returned above for down/steps/etc.)
-	for i, seeder := range o.seeders {
-		log.Printf("Running seeder %d/%d...", i+1, len(o.seeders))
-		if err := seeder(context.Background(), db); err != nil {
-			log.Fatalf("Seeder %d failed: %v", i+1, err)
+	// Run seeders (up only — skipped on rollback, and already returned above for down/steps/etc.)
+	if ranUp {
+		for i, seeder := range o.seeders {
+			log.Printf("Running seeder %d/%d...", i+1, len(o.seeders))
+			if err := seeder(context.Background(), db); err != nil {
+				log.Fatalf("Seeder %d failed: %v", i+1, err)
+			}
 		}
-	}
-	if len(o.seeders) > 0 {
-		log.Printf("All seeders completed successfully")
+		if len(o.seeders) > 0 {
+			log.Printf("All seeders completed successfully")
+		}
 	}
 }
 
@@ -246,6 +305,15 @@ func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		var result int
 		if _, err := fmt.Sscanf(value, "%d", &result); err == nil {
+			return result
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if result, err := strconv.ParseBool(value); err == nil {
 			return result
 		}
 	}

@@ -9,6 +9,7 @@ Shared conventions all `project-manager` personas follow. Everything lives in Gi
 | What | Lives in | Created by |
 |---|---|---|
 | Intake, drafting & architect reconciliation | GitHub Discussion, category `Ideas` | producer & architect |
+| Stakeholder meeting agenda, per-persona feedback & minutes | Own GitHub Discussion per round, category `Ideas` — linked back with one comment on the intake Discussion (or root Issue) | `stakeholder` personas & the `stakeholder-meeting` skill |
 | Final root plan (requirements doc / spec of record) | GitHub Issue, labeled `plan:approved` | producer (after human review) |
 | Task tracking & orchestration | GitHub Project (v2), one per approved plan | planner |
 | Task issues (moving through swimlanes) | GitHub Issue, added as a Project item | planner / system-validator |
@@ -26,6 +27,7 @@ stateDiagram-v2
     intake: Producer intake interview
     draft: Producer drafts requirements
     reconcile: Architect reconciliation & questions
+    meeting: Stakeholder meeting (optional)
     humanReview: Human review gate
     rootIssue: Final root plan Issue (plan:approved)
     projectBoard: Project board (Planner)
@@ -36,6 +38,9 @@ stateDiagram-v2
     draft --> reconcile: architect reviews against repo conventions
     reconcile --> draft: open questions / producer updates draft
     reconcile --> humanReview: architect signs off
+    reconcile --> meeting: architect signs off (--stakeholder-meeting)
+    meeting --> draft: blockers raised by a persona
+    meeting --> humanReview: meeting cleared
     humanReview --> draft: changes requested (re-loop)
     humanReview --> rootIssue: human approves
     rootIssue --> projectBoard: planner builds Project
@@ -64,7 +69,9 @@ stateDiagram-v2
    - **Nitpicks** — non-blocking suggestions.
    Producer answers open questions in discussion comments and updates the draft. The loop repeats until architect posts an explicit sign-off comment (e.g. `Architect sign-off: approved`).
 
-4. **Human review & issue creation (Mode 3).** Once architect has signed off, the draft is presented to the human reviewer via `/project-manager:review <discussion-url>`.
+4. **Stakeholder meeting (optional).** Off by default; requested with `/project-manager:plan ... --stakeholder-meeting`, or held later against the approved root issue. Every persona named in the spec gets one round of feedback before the human review gate — see § Stakeholder meeting below. Blockers return the draft to the producer/architect loop; guidance and non-blocking feedback do not gate the plan.
+
+5. **Human review & issue creation (Mode 3).** Once architect has signed off — and the stakeholder meeting is cleared, if one was held — the draft is presented to the human reviewer via `/project-manager:review <discussion-url>`.
    - If changes requested: human leaves feedback, producer and architect re-loop in the discussion.
    - If approved: producer creates the root plan Issue representing the final requirements doc of record:
      ```sh
@@ -74,6 +81,38 @@ stateDiagram-v2
      ```sh
      gh discussion comment <discussion-url> --body "Approved root plan issue: <issue-url>"
      ```
+
+## Stakeholder meeting
+
+An optional round in which **every persona named in the plan's spec** reviews the draft from its own seat and reports back, before the plan is handed to the human review gate. Run by `/project-manager:stakeholder-meeting`, either automatically from `/project-manager:plan --stakeholder-meeting` (target: the intake Discussion, after architect sign-off) or on demand against an approved root plan Issue.
+
+It exists because architect reconciles the plan against the *codebase*; nobody otherwise reconciles it against the *people it is for*. A persona that cannot finish its job under the plan as written is a defect in the requirements, and it is cheaper to find before implementation.
+
+**Mechanics.** Each round gets its own GitHub Discussion (category `Ideas`), so the meeting's agenda, per-persona feedback, and minutes never accumulate on the target — the target only ever gains one link comment per round. No new issue kinds, no Project items.
+
+| Artifact | Posted by | Lives in | Title |
+|---|---|---|---|
+| Meeting discussion | the skill | new Discussion, category `Ideas` | `Stakeholder meeting round <N>: <feature>` — body is the agenda (personas attending, spec revision under review, response format) |
+| Link comment | the skill | the target (Discussion or root Issue) | `Stakeholder meeting round <N>: <meeting-discussion-url>` |
+| Per-persona feedback | one `stakeholder` subagent per persona | the meeting discussion | `Stakeholder feedback — <persona> (round <N>)` |
+| Minutes | the skill | the meeting discussion | `Stakeholder meeting minutes (round <N>)` |
+
+Round `N` is `1 +` the count of existing `Stakeholder meeting round <N>: <url>` link comments on the target. Stakeholders still read the spec from the target (unchanged), but post their one feedback comment to the meeting discussion, with three sections:
+
+- **Guidance** — non-binding direction from that persona's world. No reply required.
+- **Feedback** — concrete non-blocking improvements. Producer folds them in, defers them with a reason, or records them under **Out of scope**.
+- **Blockers** — numbered; the persona cannot do its job as written. Each states the FR/NFR/story it attaches to, what breaks, and the outcome that resolves it. A stakeholder with none writes the literal line `Blockers: none`.
+
+Minutes deduplicate blockers across personas and number them `SB-<round>.<n>` (e.g. `SB-2.1`), and end with exactly one of:
+
+```
+Stakeholder meeting: cleared
+Stakeholder meeting: blocked (<k> blockers)
+```
+
+**Routing.** `cleared` → hand off to `/project-manager:review`. `blocked` → producer (Mode 2) reads the consolidated blockers from the meeting discussion's minutes comment, answers each `SB-<round>.<n>` and updates the draft in the target discussion, architect re-reconciles and re-signs off there, then the next meeting round runs (a fresh meeting Discussion). Cap at 2 rounds from `/project-manager:plan` (`--stakeholder-rounds`), 3 when the skill is invoked directly; past the cap, the standing disagreement goes to the human rather than looping. If the target is an already-approved root Issue, the spec of record is never edited silently — producer amends the issue body only after the user confirms, and posts `Amended after stakeholder meeting round <N>: <summary>` as a comment on the root issue.
+
+**Boundaries.** Stakeholders represent one persona each and never speak for another; they do not propose implementations, edit requirements, create task issues, or gate the plan — only the human review gate approves. Blockers change the plan; they never become task issues.
 
 ## Project setup
 
@@ -297,5 +336,6 @@ Any persona noticing scope outside its issue files a scope note issue added to t
 | Persona | Model | Why |
 |---|---|---|
 | producer, architect, planner | `opus` | Deep reasoning for requirements gathering, architecture reconciliation, and task breakdown |
+| stakeholder | `sonnet` | Bounded single-persona critique of an existing draft; runs once per persona in parallel, so cost multiplies |
 | worker, validator | `haiku` | Fast, cost-efficient execution of scoped swimlane tasks |
 | system-validator | `opus` (effort: max) | Comprehensive whole-system validation in running environment |

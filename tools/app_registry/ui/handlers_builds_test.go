@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
@@ -27,6 +29,25 @@ type fakeArtifactClient struct {
 	getReleaseRunReqs  []*pb.GetReleaseRunRequest
 	getReleaseRunResp  *pb.GetReleaseRunResponse
 	getReleaseRunErr   error
+
+	getBuildCalls int
+	getBuildReqs  []*pb.GetBuildRequest
+	// getBuildResps maps build_id -> the response GetBuild should return for
+	// it; a build_id with no entry returns getBuildErr (default NotFound),
+	// letting tests exercise the release-status page's per-target
+	// GetBuild fan-out (handlers_release.go's resolveTargetCommits) with a
+	// mix of resolvable and unresolvable build_ids in one release run.
+	getBuildResps map[string]*pb.GetBuildResponse
+	getBuildErr   error
+
+	getArtifactCalls int
+	getArtifactReqs  []*pb.GetArtifactRequest
+	// getArtifactResps maps digest -> the response GetArtifact should return
+	// for it, for the release-trigger Draft step's digest-pin commit lookup
+	// (handlers_release.go's resolveDigestCommit). A digest with no entry
+	// returns getArtifactErr (default NotFound).
+	getArtifactResps map[string]*pb.GetArtifactResponse
+	getArtifactErr   error
 }
 
 func (f *fakeArtifactClient) ListBuilds(ctx context.Context, in *pb.ListBuildsRequest, opts ...grpc.CallOption) (*pb.ListBuildsResponse, error) {
@@ -41,6 +62,30 @@ func (f *fakeArtifactClient) GetReleaseRun(ctx context.Context, in *pb.GetReleas
 		return nil, f.getReleaseRunErr
 	}
 	return f.getReleaseRunResp, nil
+}
+
+func (f *fakeArtifactClient) GetBuild(ctx context.Context, in *pb.GetBuildRequest, opts ...grpc.CallOption) (*pb.GetBuildResponse, error) {
+	f.getBuildCalls++
+	f.getBuildReqs = append(f.getBuildReqs, in)
+	if resp, ok := f.getBuildResps[in.GetBuildId()]; ok {
+		return resp, nil
+	}
+	if f.getBuildErr != nil {
+		return nil, f.getBuildErr
+	}
+	return nil, status.Error(codes.NotFound, "build not found")
+}
+
+func (f *fakeArtifactClient) GetArtifact(ctx context.Context, in *pb.GetArtifactRequest, opts ...grpc.CallOption) (*pb.GetArtifactResponse, error) {
+	f.getArtifactCalls++
+	f.getArtifactReqs = append(f.getArtifactReqs, in)
+	if resp, ok := f.getArtifactResps[in.GetDigest()]; ok {
+		return resp, nil
+	}
+	if f.getArtifactErr != nil {
+		return nil, f.getArtifactErr
+	}
+	return nil, status.Error(codes.NotFound, "artifact not found")
 }
 
 // fakeAppClient is a minimal stand-in for pb.AppRegistryClient, covering

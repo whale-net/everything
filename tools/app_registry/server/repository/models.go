@@ -809,7 +809,18 @@ type ReleaseRun struct {
 	// TemporalRunID is empty until the workflow named by TemporalWorkflowID
 	// actually starts running.
 	TemporalRunID string
-	CreatedAt     time.Time
+	// BuildRefRunID/BuildRefRunURL identify the GitHub Actions run
+	// DispatchBuild dispatched for this release (migration 023). Empty
+	// (not NULL) until DispatchBuild's first successful GitHub dispatch,
+	// mirroring TemporalRunID's "not yet known" convention above.
+	// DispatchBuild (worker/release/activities.go) reads this back first,
+	// before calling GitHub, and returns it unchanged instead of
+	// dispatching a second `workflow_dispatch` for the same release run --
+	// see ReleaseRunRepository.SetBuildRef's doc comment for why a second
+	// dispatch is unsafe, not just wasteful.
+	BuildRefRunID  string
+	BuildRefRunURL string
+	CreatedAt      time.Time
 }
 
 // ReleaseRunTarget is one row per target (app or chart) in a ReleaseRun's

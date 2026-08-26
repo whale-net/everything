@@ -369,3 +369,59 @@ func TestListReleases_InvalidArgument(t *testing.T) {
 	_, err := srv.ListReleases(context.Background(), &pb.ListReleasesRequest{})
 	requireCode(t, err, codes.InvalidArgument, "ListReleases")
 }
+
+// TestListReleaseAttempts_UnscopedAcrossOwners covers the release-history
+// admin page's query: unlike ListReleases, owner_full_name is optional --
+// an empty request lists every owner's release attempts, most-recent-first.
+func TestListReleaseAttempts_UnscopedAcrossOwners(t *testing.T) {
+	srv, _ := newReleaseFixture()
+
+	first, err := srv.TriggerRelease(authedCtx(), triggerReq("demo", target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "")))
+	if err != nil {
+		t.Fatalf("first TriggerRelease: %v", err)
+	}
+	second, err := srv.TriggerRelease(authedCtx(), triggerReq("demo", target("demo-other", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "")))
+	if err != nil {
+		t.Fatalf("second TriggerRelease: %v", err)
+	}
+
+	resp, err := srv.ListReleaseAttempts(context.Background(), &pb.ListReleaseAttemptsRequest{})
+	if err != nil {
+		t.Fatalf("ListReleaseAttempts: %v", err)
+	}
+	if len(resp.Releases) != 2 {
+		t.Fatalf("expected 2 release attempts across both owners, got %d", len(resp.Releases))
+	}
+	ids := map[string]bool{}
+	for _, r := range resp.Releases {
+		ids[r.ReleaseRunId] = true
+	}
+	if !ids[first.ReleaseRunId] || !ids[second.ReleaseRunId] {
+		t.Fatalf("expected both release runs, got %v", ids)
+	}
+	if resp.Page == nil {
+		t.Fatalf("expected a non-nil Page in the response")
+	}
+}
+
+// TestListReleaseAttempts_OwnerFilter confirms owner_full_name, when set,
+// narrows the result the same way ListReleases does.
+func TestListReleaseAttempts_OwnerFilter(t *testing.T) {
+	srv, _ := newReleaseFixture()
+
+	first, err := srv.TriggerRelease(authedCtx(), triggerReq("demo", target("demo-svc", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "")))
+	if err != nil {
+		t.Fatalf("first TriggerRelease: %v", err)
+	}
+	if _, err := srv.TriggerRelease(authedCtx(), triggerReq("demo", target("demo-other", pb.ArtifactKind_ARTIFACT_KIND_IMAGE, ""))); err != nil {
+		t.Fatalf("second TriggerRelease: %v", err)
+	}
+
+	resp, err := srv.ListReleaseAttempts(context.Background(), &pb.ListReleaseAttemptsRequest{OwnerFullName: "demo-svc"})
+	if err != nil {
+		t.Fatalf("ListReleaseAttempts(demo-svc): %v", err)
+	}
+	if len(resp.Releases) != 1 || resp.Releases[0].ReleaseRunId != first.ReleaseRunId {
+		t.Fatalf("expected exactly [%s] for demo-svc, got %+v", first.ReleaseRunId, resp.Releases)
+	}
+}
