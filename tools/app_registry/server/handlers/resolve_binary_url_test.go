@@ -5,10 +5,10 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
-	"github.com/whale-net/everything/tools/app_registry/kinds"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -27,15 +27,15 @@ func setupResolveBinaryURL(t *testing.T) (*AppServer, *ArtifactServer, *pb.Build
 	repo := fake.New()
 	appSrv := NewAppServer(repo)
 	ctx := authedCtx()
-	
+
 	// Create test apps for both the repository and the metadata registry
 	testApps := []*appmetapb.AppManifest{
 		{Domain: "tools", Name: "release_helper_go", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE, ArtifactKind: appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY},
 		{Domain: "tools", Name: "app-registry", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE, ArtifactKind: appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY},
 	}
-	
+
 	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
-		Manifests: manifestSet(testApps, nil),
+		Manifests:      manifestSet(testApps, nil),
 		IdempotencyKey: "setup-resolve-binary-url",
 	}); err != nil {
 		t.Fatalf("reconcile tools apps: %v", err)
@@ -54,7 +54,6 @@ func setupResolveBinaryURL(t *testing.T) (*AppServer, *ArtifactServer, *pb.Build
 	build := recordBuild(t, artifactSrv, "run-resolve-binary-url")
 	return appSrv, artifactSrv, build
 }
-
 
 // TestResolveBinaryURL_KnownBinaryAndVersion is the FR12-FR14 happy path:
 // a published binary+version+os+arch resolves presigned URLs addressed at
@@ -234,6 +233,7 @@ func TestResolveBinaryURL_NoStoredKeyFails(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:nostoredkey",
+		IdentityDigest: "sha256:nostoredkey-identity",
 		Version:        "v1.0.0",
 		IdempotencyKey: "record-no-stored-key",
 	})
@@ -276,6 +276,7 @@ func TestResolveBinaryURL_PresignedURLCarriesSignature(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:presignedtest",
+		IdentityDigest: "sha256:presignedtest-identity",
 		Version:        "v2.0.0",
 		IdempotencyKey: "record-presigned-test",
 	})
@@ -346,6 +347,7 @@ func TestResolveBinaryURL_KeyOpcityAcrossPlatforms(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:keyopacitytest",
+		IdentityDigest: "sha256:keyopacitytest-identity",
 		Version:        "v3.0.0",
 		IdempotencyKey: "record-key-opacity",
 	})
@@ -437,6 +439,7 @@ func TestResolveBinaryURL_FR56_RegistryStateOwnership(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-fictional-tool",
 		Digest:         "sha256:fictional",
+		IdentityDigest: "sha256:fictional-identity",
 		Version:        "v1.0.0",
 		IdempotencyKey: "record-fictional",
 	})
@@ -496,6 +499,7 @@ func TestResolveBinaryURL_NFR25_PresignedURLExpiry(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:expirytest",
+		IdentityDigest: "sha256:expirytest-identity",
 		Version:        "v4.0.0",
 		IdempotencyKey: "record-expiry-test",
 	})
@@ -583,6 +587,7 @@ func TestResolveBinaryURL_SameURLNotReusedAcrossAttempts(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:nocachetest",
+		IdentityDigest: "sha256:nocachetest-identity",
 		Version:        "v5.0.0",
 		IdempotencyKey: "record-no-cache-test",
 	})
@@ -647,7 +652,6 @@ func TestResolveBinaryURL_SameURLNotReusedAcrossAttempts(t *testing.T) {
 	}
 }
 
-
 // TestResolveBinaryURL_FR43_ContentEncodingDescriptor is FR-43's assertion:
 // the resolution response carries an explicit content-encoding descriptor for
 // each returned URL. Consumers determine decompression need from that field
@@ -667,6 +671,7 @@ func TestResolveBinaryURL_FR43_ContentEncodingDescriptor(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:fr43test",
+		IdentityDigest: "sha256:fr43test-identity",
 		Version:        "v1.0.0",
 		IdempotencyKey: "record-fr43",
 	})
@@ -726,6 +731,7 @@ func TestResolveBinaryURL_FR67_PreCutoverFileName(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:fr67precutover",
+		IdentityDigest: "sha256:fr67precutover-identity",
 		Version:        "v2.0.0",
 		IdempotencyKey: "record-fr67-precutover",
 	})
@@ -782,6 +788,7 @@ func TestResolveBinaryURL_FR62_VariantSelectorBackwardCompat(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-app-registry",
 		Digest:         "sha256:fr62test",
+		IdentityDigest: "sha256:fr62test-identity",
 		Version:        "v3.0.0",
 		IdempotencyKey: "record-fr62",
 	})
