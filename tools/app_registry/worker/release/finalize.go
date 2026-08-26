@@ -49,6 +49,7 @@
 package release
 
 import (
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"archive/zip"
 	"bytes"
 	"context"
@@ -84,24 +85,34 @@ const (
 	cliBinariesArtifactName = "cli-binaries"
 )
 
-// cliBinaryTargets maps the App Registry full_name (repository.TargetKey's
-// ownerFullName, ArtifactKindImage) of release_helper_go's and
-// app-registry's own app records to the "binary name" segment #981's
-// build-cli-binaries job and #983's S3 key convention both use (the bare
-// app.Name, not the domain-qualified full_name) -- e.g. full_name
-// "tools-release_helper_go" packages files under
-// cli-binaries/release_helper_go/ (see release-v2.yml's "Package CLI
-// binaries" step) and publishes under S3 key prefix
-// "release_helper_go/<version>/" (see tools/app_registry/ENV.md's "CLI
-// binary S3" section). Sourced from tools/release_helper_go/BUILD.bazel
-// (domain "tools", app_name "release_helper_go") and
-// tools/app_registry/cli/BUILD.bazel (domain "tools", app_name
-// "app-registry") -- both domain "tools", matching release-v2.yml's
-// resolve_registry_version "tools-release_helper_go"/"tools-app-registry"
-// calls.
-var cliBinaryTargets = map[string]string{
-	"tools-release_helper_go": "release_helper_go",
-	"tools-app-registry":      "app-registry",
+// isCLIBinaryApp checks if the given fullName corresponds to a CLI binary app
+// by querying the metadata registry. The metadata registry is the authoritative
+// source of app-type information; there is no hardcoded fallback to maintain
+// the single source of truth per FR-36.
+func (a *Activities) isCLIBinaryApp(fullName string) bool {
+	if a.MetadataRegistry == nil {
+		return false
+	}
+	app := a.MetadataRegistry.GetApp(fullName)
+	if app != nil && app.ArtifactKind == appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		return true
+	}
+	return false
+}
+
+// binaryNameForCLIApp returns the binary name for a CLI binary app by querying
+// the metadata registry. Returns empty string if the app is not a CLI binary app
+// or if the metadata registry is unavailable. The metadata registry is the
+// authoritative source; there is no hardcoded fallback per FR-36.
+func (a *Activities) binaryNameForCLIApp(fullName string) string {
+	if a.MetadataRegistry == nil {
+		return ""
+	}
+	app := a.MetadataRegistry.GetApp(fullName)
+	if app != nil && app.ArtifactKind == appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		return app.Name
+	}
+	return ""
 }
 
 // binaryUploader is the S3 upload seam FinalizePublish's CLI-binary publish
@@ -334,7 +345,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	// that was never supposed to exist, failing every CLI-only batch.
 	nonCLIAppCount := 0
 	for _, fullName := range apps {
-		if _, isCLI := cliBinaryTargets[fullName]; !isCLI {
+		if !a.isCLIBinaryApp(fullName) {
 			nonCLIAppCount++
 		}
 	}
@@ -481,7 +492,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 		// publishCLIBinaries below is their actual publish step, keyed off
 		// plan.Versions directly rather than a finalize-app confirmation
 		// that will never come.
-		if _, isCLI := cliBinaryTargets[fullName]; isCLI {
+		if a.isCLIBinaryApp(fullName) {
 			continue
 		}
 
@@ -851,8 +862,8 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 	var uploader binaryUploader
 
 	for _, fullName := range apps {
-		binaryName, ok := cliBinaryTargets[fullName]
-		if !ok {
+		binaryName := a.binaryNameForCLIApp(fullName)
+		if binaryName == "" {
 			continue
 		}
 		key := repository.TargetKey(repository.ArtifactKindImage, fullName)

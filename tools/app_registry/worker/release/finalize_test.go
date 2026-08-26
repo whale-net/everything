@@ -225,6 +225,7 @@ func TestActivities_FinalizePublish_WorkspaceRootUnset_Succeeds(t *testing.T) {
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -281,6 +282,7 @@ func TestActivities_FinalizePublish_PassesIdempotencyKeyPrefixToFinalizeApp(t *t
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -332,6 +334,7 @@ func TestActivities_FinalizePublish_NoGHCRToken_FailsBatch(t *testing.T) {
 	a := &Activities{
 		Registry: newTestRegistry(t),
 		GitHub:   newTestDispatcher(t, mux),
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -397,7 +400,8 @@ func TestActivities_FinalizePublish_AllCLITargets_NoBuildManifestOrGHCR_Succeeds
 		GitHub:     newTestDispatcher(t, mux),
 		S3Uploader: uploader,
 		// a.GHCRToken deliberately left unset -- an all-CLI batch must not
-		// require it (the second half of this regression).
+		// require it (the second half of this regression).,
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -528,6 +532,7 @@ exit 0
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -608,6 +613,7 @@ func TestActivities_FinalizePublish_MissingFinalizeAppResult_NoTargetEntry(t *te
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -705,6 +711,7 @@ exit 0
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -762,6 +769,7 @@ func TestActivities_FinalizePublish_FinalizeAppCLIFailure_FailsThatTarget(t *tes
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -818,6 +826,7 @@ exit 0
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -892,6 +901,7 @@ exit 0
 		GitHub:         newTestDispatcher(t, mux),
 		PlanBinaryPath: bin,
 		GHCRToken:      "test-ghcr-token",
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 
 	plan := ResolvedPlan{
@@ -970,7 +980,7 @@ func TestPublishCLIBinaries_ConfirmedVersion_UploadsWithCorrectKeys(t *testing.T
 	writeCLIBinaryFiles(t, cliBinariesDir, "release_helper_go")
 
 	uploader := newFakeUploader()
-	a := &Activities{S3Uploader: uploader}
+	a := &Activities{S3Uploader: uploader, MetadataRegistry: newTestMetadataRegistry(t)}
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
@@ -1025,6 +1035,7 @@ func TestPublishCLIBinaries_RecordsArtifactInAppRegistry(t *testing.T) {
 		Registry:   repo,
 		S3Uploader: uploader,
 		GitHub:     &GitHubDispatcher{Config: GitHubDispatcherConfig{Owner: "whale-net", Repo: "everything"}},
+		MetadataRegistry: newTestMetadataRegistry(t),
 	}
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
@@ -1069,7 +1080,7 @@ func TestPublishCLIBinaries_EmptyBuildID_SkipsRecording(t *testing.T) {
 	// No Registry/GitHub configured -- if the empty-buildID guard didn't
 	// skip recording, this would panic on a nil a.GitHub dereference,
 	// failing the test loudly rather than silently.
-	a := &Activities{S3Uploader: uploader}
+	a := &Activities{S3Uploader: uploader, MetadataRegistry: newTestMetadataRegistry(t)}
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
@@ -1098,7 +1109,7 @@ func TestPublishCLIBinaries_UsesPlanVersion(t *testing.T) {
 	writeCLIBinaryFiles(t, cliBinariesDir, "app-registry")
 
 	uploader := newFakeUploader()
-	a := &Activities{S3Uploader: uploader}
+	a := &Activities{S3Uploader: uploader, MetadataRegistry: newTestMetadataRegistry(t)}
 	versions := map[string]string{"image:tools-app-registry": "v0.9.0"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
@@ -1116,7 +1127,7 @@ func TestPublishCLIBinaries_UsesPlanVersion(t *testing.T) {
 // a cli-binaries artifact is even present.
 func TestPublishCLIBinaries_NonCLIBinaryApp_NeverTouched(t *testing.T) {
 	uploader := &refusingUploader{t: t}
-	a := &Activities{S3Uploader: uploader}
+	a := &Activities{S3Uploader: uploader, MetadataRegistry: newTestMetadataRegistry(t)}
 	versions := map[string]string{"image:demo-widget": "v1.0.0"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{
 		"image:demo-widget": {EffectiveVersion: "v1.0.0"},
@@ -1160,7 +1171,7 @@ func TestPublishCLIBinaries_NoConfirmedVersion_NeverUploads(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			uploader := &refusingUploader{t: t}
-			a := &Activities{S3Uploader: uploader}
+			a := &Activities{S3Uploader: uploader, MetadataRegistry: newTestMetadataRegistry(t)}
 			finalizeTargets := map[string]FinalizeTargetOutcome{}
 
 			failures := a.publishCLIBinaries(context.Background(), tc.apps, tc.versions, finalizeTargets, cliBinariesDir, true, "")
@@ -1181,7 +1192,7 @@ func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
 
 	uploader := newFakeUploader()
 	uploader.err = errors.New("simulated S3 write failure")
-	a := &Activities{S3Uploader: uploader}
+	a := &Activities{S3Uploader: uploader, MetadataRegistry: newTestMetadataRegistry(t)}
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 
@@ -1203,7 +1214,7 @@ func TestPublishCLIBinaries_UploadFailure_MarksTargetFailed(t *testing.T) {
 // false must fail the target, not merely skip it.
 func TestPublishCLIBinaries_MissingCLIBinariesArtifact_FailsThatTarget(t *testing.T) {
 	uploader := newFakeUploader()
-	a := &Activities{S3Uploader: uploader}
+	a := &Activities{S3Uploader: uploader, MetadataRegistry: newTestMetadataRegistry(t)}
 	versions := map[string]string{"image:tools-release_helper_go": "v1.2.3"}
 	finalizeTargets := map[string]FinalizeTargetOutcome{}
 

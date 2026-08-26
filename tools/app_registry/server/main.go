@@ -23,6 +23,7 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/handlers"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/postgres"
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.temporal.io/sdk/client"
 	"google.golang.org/grpc"
@@ -79,6 +80,18 @@ func run() error {
 	repo := postgres.NewRepository(pool)
 	log.Println("Database connection established")
 
+	// Load app metadata from the checkout (FR-36: central authoring site)
+	// This loads all release_app declarations and makes them available to
+	// lookupBinaryOwner and other metadata-based lookups.
+	log.Println("Loading app metadata from checkout...")
+	metadataRegistry := kinds.NewAppMetadataRegistry()
+	checkoutRoot := getEnv("CHECKOUT_ROOT", ".")
+	if err := metadataRegistry.LoadFromCheckout(ctx, checkoutRoot); err != nil {
+		// Log but don't fail: if metadata files are unavailable, the registry
+		// simply stays empty and lookupBinaryOwner falls back gracefully.
+		log.Printf("Warning: failed to load app metadata from checkout: %v", err)
+	}
+
 	// Temporal client, so ReleaseServer.TriggerRelease (issue #889) can
 	// start ReleaseWorkflow executions directly from this process -- see
 	// worker/main.go's identical NewClient construction (the worker
@@ -114,7 +127,7 @@ func run() error {
 		grpc.ChainStreamInterceptor(streamInt),
 	)
 
-	healthServer := registerServices(grpcServer, repo, temporalClient, releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)
+	healthServer := registerServices(grpcServer, repo, temporalClient, metadataRegistry, releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)
 
 	// Start listening
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
@@ -160,7 +173,7 @@ func run() error {
 // A deployment missing any of them fails at startup with an explicit error
 // naming what is missing, rather than degrading to unsigned URLs or failing
 // per request.
-func registerServices(grpcServer *grpc.Server, repo repository.Registry, temporalClient client.Client, releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey string) *health.Server {
+func registerServices(grpcServer *grpc.Server, repo repository.Registry, temporalClient client.Client, metadataRegistry *kinds.AppMetadataRegistry, releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey string) *health.Server {
 	// Check if any S3 configuration is present; if so, all four values are required
 	hasAnyConfig := releaseToolsS3Bucket != "" || releaseToolsS3Endpoint != "" ||
 		releaseToolsS3PublicEndpoint != "" || releaseToolsS3Region != "" ||
@@ -194,7 +207,7 @@ func registerServices(grpcServer *grpc.Server, repo repository.Registry, tempora
 	// temporalClient; #888 landed TriggerRelease/GetRelease's repository
 	// half first).
 	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer(repo))
-	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)))
+	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithMetadataRegistry(metadataRegistry), handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)))
 	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo, temporalClient))
 	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer(repo))
 	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo, temporalClient))

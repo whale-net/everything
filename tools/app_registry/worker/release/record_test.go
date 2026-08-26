@@ -9,6 +9,7 @@ import (
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 )
 
 func newTestRegistry(t *testing.T) *fake.Registry {
@@ -47,6 +48,38 @@ func seedCLIApp(t *testing.T, repo *fake.Registry, domain, name string) string {
 	return app.AppID
 }
 
+// newTestMetadataRegistry creates a test AppMetadataRegistry with CLI binary
+// apps and other standard test apps pre-registered. This is used by release
+// activities tests to enable metadata-based lookups (FR-36).
+func newTestMetadataRegistry(t *testing.T) *kinds.AppMetadataRegistry {
+	t.Helper()
+	registry := kinds.NewAppMetadataRegistry()
+	
+	// Register test CLI binary apps that match those created by seedCLIApp
+	testApps := []*appmetapb.AppManifest{
+		{
+			Domain: "tools",
+			Name: "app-registry",
+			AppType: "cli",
+			DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
+			ArtifactKind: appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		},
+		{
+			Domain: "tools",
+			Name: "release_helper_go",
+			AppType: "cli",
+			DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_NONE,
+			ArtifactKind: appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		},
+	}
+	
+	for _, app := range testApps {
+		registry.RegisterApp(app)
+	}
+	
+	return registry
+}
+
 func createTestReleaseRun(t *testing.T, repo *fake.Registry, targets []repository.ReleaseRunTarget) (*repository.ReleaseRun, []repository.ReleaseRunTarget) {
 	t.Helper()
 	var outRun *repository.ReleaseRun
@@ -81,7 +114,7 @@ func TestActivities_VerifyPublished_AllPublished(t *testing.T) {
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 	})
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	expectedVersions := map[string]string{repository.TargetKey(repository.ArtifactKindImage, "demo-widget"): "v1.0.1"}
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID, expectedVersions)
 	require.NoError(t, err)
@@ -96,7 +129,7 @@ func TestActivities_VerifyPublished_MissingArtifact_ReportsFailed(t *testing.T) 
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 	})
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID, nil)
 	require.NoError(t, err)
 	require.False(t, result.AllPublished)
@@ -123,7 +156,7 @@ func TestActivities_VerifyPublished_PartialFailure(t *testing.T) {
 		repository.TargetKey(repository.ArtifactKindImage, "demo-gadget"): "v1.0.1",
 	}
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID, expectedVersions)
 	require.NoError(t, err)
 	require.False(t, result.AllPublished)
@@ -163,7 +196,7 @@ func TestActivities_VerifyPublished_VersionMismatch_ReportsFailed(t *testing.T) 
 	})
 	expectedVersions := map[string]string{repository.TargetKey(repository.ArtifactKindImage, "demo-widget"): "v0.6.3"}
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID, expectedVersions)
 	require.NoError(t, err)
 	require.False(t, result.AllPublished, "a published-but-stale-version artifact must not satisfy VerifyPublished")
@@ -193,7 +226,7 @@ func TestActivities_VerifyPublished_NoExpectedVersionEntry_FallsBackToPresenceCh
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 	})
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	// No entry for demo-widget in expectedVersions.
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID, map[string]string{})
 	require.NoError(t, err)
@@ -232,7 +265,7 @@ func TestActivities_VerifyPublished_CLIBinaryTarget_LooksUpUnderBinaryKind(t *te
 		repository.TargetKey(repository.ArtifactKindImage, "tools-app-registry"): "v0.9.0",
 	}
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	result, err := a.VerifyPublished(context.Background(), run.ReleaseRunID, expectedVersions)
 	require.NoError(t, err)
 	require.True(t, result.AllPublished, "cli-binary target must be verified against its actual ArtifactKindBinary record, not the release_run_target's ArtifactKindImage")
@@ -247,7 +280,7 @@ func TestActivities_RecordTargetState_WalksQueuedToSucceeded(t *testing.T) {
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 	})
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
 	err := a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", "")
 	require.NoError(t, err)
@@ -265,7 +298,7 @@ func TestActivities_RecordTargetState_FailedDirectFromQueued(t *testing.T) {
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 	})
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
 	err := a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateFailed, "", "build failed")
 	require.NoError(t, err)
@@ -286,7 +319,7 @@ func TestActivities_RecordTargetState_IdempotentRetry(t *testing.T) {
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 	})
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
 	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", ""))
 	// Redelivered retry of the exact same final call.
@@ -307,7 +340,7 @@ func TestActivities_RecordTargetState_DefensiveNoOpOnContradictingTerminalState(
 		{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage},
 	})
 
-	a := &Activities{Registry: repo}
+	a := &Activities{Registry: repo, MetadataRegistry: newTestMetadataRegistry(t)}
 	target := ReleaseTarget{OwnerFullName: "demo-widget", Kind: repository.ArtifactKindImage}
 	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateSucceeded, "build-1", ""))
 	require.NoError(t, a.RecordTargetState(context.Background(), run.ReleaseRunID, target, repository.ReleaseRunTargetStateFailed, "", "too late"))

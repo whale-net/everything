@@ -3,10 +3,12 @@ package handlers
 import (
 	"bytes"
 	"compress/gzip"
+
 	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"io"
 	"log/slog"
 	"regexp"
@@ -19,9 +21,9 @@ import (
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/libs/go/semver"
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
-	"github.com/whale-net/everything/tools/app_registry/kinds"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -70,7 +72,7 @@ type ArtifactServer struct {
 	// external CI job a working download link without giving it S3
 	// credentials of its own.
 	releaseToolsS3Bucket         string
-	releaseToolsS3Endpoint         string
+	releaseToolsS3Endpoint       string
 	releaseToolsS3PublicEndpoint string
 	releaseToolsS3Region         string
 	releaseToolsS3AccessKey      string
@@ -100,6 +102,10 @@ type ArtifactServer struct {
 	artifactsS3ClientErr  error
 	artifactsS3ClientOnce sync.Once
 
+	// MetadataRegistry provides access to app metadata loaded from the Bazel
+	// release_app declarations. Used to resolve app names to full names
+	// dynamically instead of hardcoded enumerations.
+	MetadataRegistry *kinds.AppMetadataRegistry
 }
 
 // ArtifactServerOption configures an optional ArtifactServer dependency --
@@ -122,7 +128,6 @@ func WithReleaseToolsS3(bucket, endpoint, publicEndpoint, region, accessKey, sec
 	}
 }
 
-
 // WithArtifactsS3 configures the S3 bucket and credentials BrokerUpload
 // presigns PUT URLs against for CI build artifacts.
 func WithArtifactsS3(bucket, publicEndpoint, region, accessKey, secretKey string) ArtifactServerOption {
@@ -132,6 +137,14 @@ func WithArtifactsS3(bucket, publicEndpoint, region, accessKey, secretKey string
 		s.artifactsS3Region = region
 		s.artifactsS3AccessKey = accessKey
 		s.artifactsS3SecretKey = secretKey
+	}
+}
+
+// WithMetadataRegistry configures the AppMetadataRegistry for metadata-based
+// lookups (FR-36). This is the central authoring site for app and kind definitions.
+func WithMetadataRegistry(registry *kinds.AppMetadataRegistry) ArtifactServerOption {
+	return func(s *ArtifactServer) {
+		s.MetadataRegistry = registry
 	}
 }
 
@@ -464,16 +477,6 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 	return &pb.ListArtifactPinsResponse{ChartArtifacts: artifactsToPB(chartArtifacts)}, nil
 }
 
-// binaryOwnerFullName maps a CLI binary name to its App Registry owner full
-// name ("<domain>-<name>"), matching the resolution logic already in
-// release-v2.yml's build-release-tools probe and
-// download-release-tools/action.yml. ResolveBinaryURL rejects any binary not
-// in this map with InvalidArgument.
-var binaryOwnerFullName = map[string]string{
-	"release_helper_go": "tools-release_helper_go",
-	"app-registry":      "tools-app-registry",
-}
-
 // ResolveBinaryURL implements issue #979/#983 (FR12-FR14, FR16): resolves a
 // CLI binary + version + platform to a presigned S3 download URL (issue
 // #1101: the bucket isn't actually public-read, so this signs with the
@@ -487,9 +490,22 @@ var binaryOwnerFullName = map[string]string{
 // exist in that table, so an unpublished or guessed version simply isn't
 // found -- there is no separate "is this confirmed?" check to get wrong.
 func (s *ArtifactServer) ResolveBinaryURL(ctx context.Context, req *pb.ResolveBinaryURLRequest) (*pb.ResolveBinaryURLResponse, error) {
-	ownerFullName, ok := binaryOwnerFullName[req.Binary]
+	ownerFullName, ok := s.lookupBinaryOwner(req.Binary)
 	if !ok {
-		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: release_helper_go, app-registry)", req.Binary)
+		// Build a list of known binaries from metadata
+		knownBinaries := ""
+		if s.MetadataRegistry != nil {
+			for _, app := range s.MetadataRegistry.AppsWithKind(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY) {
+				if knownBinaries != "" {
+					knownBinaries += ", "
+				}
+				knownBinaries += app.Name
+			}
+		}
+		if knownBinaries == "" {
+			knownBinaries = "release_helper_go, app-registry"
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "binary %q is not a known CLI binary (must be one of: %s)", req.Binary, knownBinaries)
 	}
 	if req.Os == "" {
 		return nil, status.Error(codes.InvalidArgument, "os is required")
@@ -959,6 +975,22 @@ func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRu
 // see ARCHITECTURE.md "ListBuilds" for the pagination contract. Additive to
 // GetReleaseRun/GetBuildByWorkflowRun above and the CLI's `builds status`
 // (FR2.5) -- neither is changed by this RPC.
+// lookupBinaryOwner resolves a binary name to its app owner full name
+// by querying the metadata registry. The metadata registry is the authoritative
+// source; there is no hardcoded fallback per FR-36.
+func (s *ArtifactServer) lookupBinaryOwner(binaryName string) (string, bool) {
+	if s.MetadataRegistry == nil {
+		return "", false
+	}
+	// Query the metadata registry for apps with ArtifactKindBinary
+	for fullName, app := range s.MetadataRegistry.AppsWithKind(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY) {
+		if app.Name == binaryName {
+			return fullName, true
+		}
+	}
+	return "", false
+}
+
 func (s *ArtifactServer) ListBuilds(ctx context.Context, req *pb.ListBuildsRequest) (*pb.ListBuildsResponse, error) {
 	since := time.Time{}
 	if req.Since != 0 {
@@ -1163,7 +1195,7 @@ func (s *ArtifactServer) BrokerUpload(ctx context.Context, req *pb.BrokerUploadR
 		}
 
 		resp = &pb.BrokerUploadResponse{
-			Results:        results,
+			Results:         results,
 			UploadSessionId: uploadRecord.UploadID,
 		}
 		return nil
@@ -1507,7 +1539,7 @@ func (s *ArtifactServer) confirmUploadFile(ctx context.Context, s3Client s3Clien
 	// Compare against claimed digest (FR-46, FR-47).
 	if computedDigest != file.ClaimedDigest {
 		result.Confirmed = false
-		result.IsTimeout = false  // Mismatch, not timeout
+		result.IsTimeout = false // Mismatch, not timeout
 		result.ErrorMessage = fmt.Sprintf("digest mismatch: claimed %s, computed %s", file.ClaimedDigest, computedDigest)
 		return result, nil
 	}
@@ -1516,7 +1548,6 @@ func (s *ArtifactServer) confirmUploadFile(ctx context.Context, s3Client s3Clien
 	result.IsTimeout = false
 	return result, nil
 }
-
 
 // validateConfirmUploadRequest ensures the request is well-formed.
 func (s *ArtifactServer) validateConfirmUploadRequest(req *pb.ConfirmUploadRequest) error {

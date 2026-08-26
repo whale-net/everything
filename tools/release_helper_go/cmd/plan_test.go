@@ -1616,3 +1616,105 @@ func TestPlanCmd_FromResolvedPlanMalformedJSON(t *testing.T) {
 		t.Errorf("want 'not valid JSON' in stderr, got: %q", stderr)
 	}
 }
+
+
+// ── FR-64: carrier-1/carrier-2 comparison ──────────────────────────────────
+
+// TestCarrierComparison_MatchingKinds verifies that when both carriers
+// (Bazel and registry) are available with matching app_types, the plan succeeds.
+func TestCarrierComparison_MatchingKinds(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit()
+
+	result, err := planRelease(planParams{
+		eventType: "workflow_dispatch",
+		appsMetadata: []AppMetadataInput{
+			{Domain: "manmanv2", Name: "control-api", AppType: "external-api"},
+		},
+		version:       "v1.0.0",
+		bazel:         bazel,
+		git:           git,
+		fs:            fs,
+		workspaceRoot: fakeWorkspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error with matching carriers: %v", err)
+	}
+	if result.Versions["manmanv2-control-api"] != "v1.0.0" {
+		t.Errorf("expected version v1.0.0, got %v", result.Versions["manmanv2-control-api"])
+	}
+}
+
+// TestCarrierComparison_MismatchedKinds_Fatal verifies that when carriers disagree
+// on app_type, the plan fails with a clear error naming both stores and values (FR-64).
+func TestCarrierComparison_MismatchedKinds_Fatal(t *testing.T) {
+	// Create test infrastructure with a Bazel app that has a different type
+	// than what will be passed via appsMetadata
+	apps := []fakeApp{
+		{pkg: "manmanv2/api", targetSuffix: "control-api_metadata", name: "control-api", domain: "manmanv2",
+			// Bazel declares it as "cli" (kind BINARY)
+			customJSON: []byte(`{"name":"control-api","domain":"manmanv2","app_type":"cli","language":"go","registry":"ghcr.io","organization":"whale-net","repo_name":"manmanv2-control-api","image_target":"@@//manmanv2/api:control-api_image","binary_target":"@@//manmanv2/api:control-api","version":"latest"}`)},
+	}
+	fs, bazel := buildFakeInfra(apps)
+	git := newFakeGit()
+
+	// Registry metadata says "external-api" (kind IMAGE) -- disagreement
+	_, err := planRelease(planParams{
+		eventType: "workflow_dispatch",
+		appsMetadata: []AppMetadataInput{
+			{Domain: "manmanv2", Name: "control-api", AppType: "external-api"},
+		},
+		version:       "v1.0.0",
+		bazel:         bazel,
+		git:           git,
+		fs:            fs,
+		workspaceRoot: fakeWorkspaceRoot,
+	})
+
+	if err == nil {
+		t.Fatal("expected error for carrier mismatch, but plan succeeded")
+	}
+
+	// Verify the error message names both stores and both values
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "carrier-1/carrier-2") {
+		t.Errorf("error should mention carrier-1/carrier-2 mismatch, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "manmanv2-control-api") {
+		t.Errorf("error should name the app, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "cli") || !strings.Contains(errMsg, "external-api") {
+		t.Errorf("error should name both app_types (cli and external-api), got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "Bazel") || !strings.Contains(errMsg, "registry") {
+		t.Errorf("error should name both stores (Bazel and registry), got: %s", errMsg)
+	}
+}
+
+// TestCarrierComparison_NoWorkspaceRoot_SkipsComparison verifies that when
+// no workspace root is available (the primary path with no checkout), the
+// carrier-1/carrier-2 comparison is skipped and the plan uses registry metadata.
+func TestCarrierComparison_NoWorkspaceRoot_SkipsComparison(t *testing.T) {
+	_, fs, bazel := makeTestApps()
+	git := newFakeGit()
+
+	result, err := planRelease(planParams{
+		eventType: "workflow_dispatch",
+		appsMetadata: []AppMetadataInput{
+			{Domain: "manmanv2", Name: "control-api", AppType: "external-api"},
+		},
+		version:       "v1.0.0",
+		bazel:         bazel,
+		git:           git,
+		fs:            fs,
+		workspaceRoot: "", // No workspace root -- comparison should be skipped
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error with no workspace root: %v", err)
+	}
+
+	if result.Versions["manmanv2-control-api"] != "v1.0.0" {
+		t.Errorf("expected version v1.0.0, got %v", result.Versions["manmanv2-control-api"])
+	}
+}

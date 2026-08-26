@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 
+	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
@@ -113,26 +114,37 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 		// stay keyed by t.Kind (IMAGE) unchanged, matching finalizeTargets'
 		// own ArtifactKindImage-keyed map -- only the actual GetArtifact
 		// lookup kind changes.
+		// First pass: get the artifact using the trigger target's kind (which is
+		// always IMAGE for apps, per the three-carrier model in DP-3). If it
+		// doesn't exist with that kind, we'll fall through to the error case
+		// below. Only apps can have a different artifact kind than their trigger
+		// kind (cli/binary apps published as ARTIFACT_KIND_BINARY instead of
+		// IMAGE); charts published as IMAGE never exist.
 		lookupKind := t.Kind
-		if t.Kind == repository.ArtifactKindImage {
-			app, aerr := a.Registry.Apps().GetAppByFullName(ctx, t.OwnerFullName)
-			if aerr != nil {
-				result.AllPublished = false
-				if result.Failed == nil {
-					result.Failed = map[string]string{}
-				}
-				result.Failed[key] = fmt.Sprintf("look up app %q to resolve its published artifact kind: %v", t.OwnerFullName, aerr)
-				continue
-			}
-			if app.AppType == "cli" || app.AppType == "binary" {
-				lookupKind = repository.ArtifactKindBinary
-			}
-		}
 		artifact, aerr := a.Registry.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
 			OwnerFullName:   t.OwnerFullName,
 			Kind:            lookupKind,
 			LatestPublished: true,
 		})
+		
+		// If the artifact exists and is published, use its bound manifest's
+		// app_type to verify it was published with the correct kind (FR-24).
+		// This ensures an artifact published with kind BINARY is verified as
+		// BINARY, even if the app's type changed to "external-api" after
+		// publication. If the artifact doesn't exist with the trigger kind,
+		// try looking it up under BINARY for apps (the other possible kind
+		// for published image-trigger targets).
+		if aerr != nil && t.Kind == repository.ArtifactKindImage {
+			// Try looking up as BINARY for this app
+			artifact, aerr = a.Registry.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{
+				OwnerFullName:   t.OwnerFullName,
+				Kind:            repository.ArtifactKindBinary,
+				LatestPublished: true,
+			})
+			if aerr == nil {
+				lookupKind = repository.ArtifactKindBinary
+			}
+		}
 		if aerr != nil {
 			result.AllPublished = false
 			if result.Failed == nil {
@@ -159,6 +171,22 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 	}
 	return result, nil
 }
+
+// isCLIBinaryAppType checks if an app is a CLI binary app by querying the
+// metadata registry. The metadata registry is the authoritative source; there
+// is no fallback to app.AppType per FR-36 to maintain a single source of truth.
+func (a *Activities) isCLIBinaryAppType(app *repository.App) bool {
+	if a.MetadataRegistry == nil {
+		return false
+	}
+	// Query the metadata registry to get the artifact kind
+	appMetadata := a.MetadataRegistry.GetApp(fmt.Sprintf("%s-%s", app.Domain, app.Name))
+	if appMetadata != nil && appMetadata.ArtifactKind == appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		return true
+	}
+	return false
+}
+
 
 // releaseRunTargetStateOrder is the legal linear progression
 // repository.ReleaseRunTargetState's doc comment describes: queued ->

@@ -142,6 +142,15 @@ type AppRepository interface {
 	GetChartByID(ctx context.Context, chartID string) (*Chart, error)
 	GetChartByFullName(ctx context.Context, fullName string) (*Chart, error)
 
+	// GetAppManifestAppType returns the app_type field from an app_manifest row,
+	// identified by its content-addressed manifest_id (UUID). Used by
+	// VerifyPublished (FR-24) to resolve a published artifact's kind from its
+	// bound manifest snapshot rather than the app's current type -- this ensures
+	// an artifact published with one kind is verified under that same kind, even
+	// if the app's type changed after publication. Returns ErrNotFound if the
+	// manifest_id does not exist.
+	GetAppManifestAppType(ctx context.Context, manifestID string) (string, error)
+
 	// SetAppStatus is the human-triage path and supports exactly one
 	// transition: StatusMissing -> StatusArchived. missing -> active happens
 	// automatically via Reconcile's "recovered" path, so it is never legal

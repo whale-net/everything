@@ -404,6 +404,15 @@ func (r *Registry) GetChartByFullName(ctx context.Context, fullName string) (*re
 	return nil, repository.ErrNotFound
 }
 
+// GetAppManifestAppType is a stub for the fake repository. In a real
+// implementation, this would look up the app_type from an app_manifest row.
+// For testing, this just returns an empty string as a placeholder.
+func (r *Registry) GetAppManifestAppType(ctx context.Context, manifestID string) (string, error) {
+	// Stub implementation: just return empty string
+	// Tests that need this will mock it or test with the postgres backend
+	return "", repository.ErrNotFound
+}
+
 // SetAppStatus mirrors the postgres implementation: exactly one human-triage
 // transition (missing -> archived) is legal. missing -> active happens
 // automatically via Reconcile's "recovered" path, never through here.

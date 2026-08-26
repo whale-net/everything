@@ -109,6 +109,12 @@ message AppManifest {
   // Added for the app registry. Defaults to DEPLOY_UNIT_CHART when the
   // Starlark attr is unset, since charts are the normal delivery path.
   DeployUnit deploy_unit = 50;
+
+  // --- artifact kind mapping (FR-36: H7) ---
+  // The artifact kind this app produces (IMAGE, CHART, BINARY, FIRMWARE).
+  // Derived from app_type via H7 hook dispatch; single source of truth
+  // for authoring declaration. Required for apps that publish artifacts.
+  ArtifactKind artifact_kind = 60;
 }
 
 // ChartManifest is one `helm_chart` declaration, as emitted by the

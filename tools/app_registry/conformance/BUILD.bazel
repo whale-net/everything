@@ -7,6 +7,7 @@ go_test(
     srcs = [
         "chart_membership_test.go",
         "env_doc_test.go",
+        "fr36_test.go",
         "fr63_test.go",
         "nfr3_test.go",
         "paths_test.go",
