@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -71,6 +72,20 @@ func requireAuthentication(ctx context.Context) error {
 		return status.Error(codes.Unauthenticated, "authentication required")
 	}
 	return nil
+}
+
+// buildProvenanceJSON builds a JSON representation of the provenance map for storage.
+func buildProvenanceJSON(provenance map[int]pb.Provenance) ([]byte, error) {
+	if len(provenance) == 0 {
+		return json.Marshal(make(map[string]int))
+	}
+
+	// Convert index-based map to string-based for JSON serialization
+	jsonMap := make(map[string]int)
+	for idx, prov := range provenance {
+		jsonMap[fmt.Sprintf("%d", idx)] = int(prov)
+	}
+	return json.Marshal(jsonMap)
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
@@ -147,9 +162,91 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, status.Errorf(codes.Internal, "get board household: %v", err)
 	}
 
+	// FR82: Handle COMPLETE vs EDIT scope
+	var configProto *configpb.DeviceConfig
+	var provenance map[int]pb.Provenance
+
+	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_COMPLETE {
+		// COMPLETE scope: use payload as-is, all entries are AUTHORED
+		configProto = &configpb.DeviceConfig{
+			DeviceId: req.DeviceId,
+			Sensors:  req.Sensors,
+		}
+		provenance = make(map[int]pb.Provenance)
+		for i := range req.Sensors {
+			provenance[i] = pb.Provenance_PROVENANCE_AUTHORED
+		}
+	} else if req.Scope == pb.ConfigScope_CONFIG_SCOPE_EDIT {
+		// EDIT scope: materialize from current accepted config
+		baseConfig, err := s.repo.GetLatestAcceptedConfigByBoardID(ctx, boardID)
+		if err != nil {
+			s.logger.Error("get base config failed",
+				"device_id", req.DeviceId,
+				"board_id", boardID,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INTERNAL,
+				"device_config",
+				"",
+				apierrors.InternalError,
+			)
+			return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+		}
+
+		if baseConfig == nil {
+			// No accepted config to complete from - refuse EDIT
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+				"device_config",
+				"scope",
+				apierrors.InvalidArgument,
+			)
+			s.logger.Info("edit rejected: no accepted config to complete from",
+				"device_id", req.DeviceId,
+				"board_id", boardID,
+				"subject", subject,
+				"correlation_id", corrID)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument,
+				"this board has no accepted config to complete your edit from; send a complete push", detail)
+		}
+
+		// Materialize the config
+		materialiser := NewMaterialiser()
+		var removalResults []RemovalResult
+		configProto, provenance, removalResults, err = materialiser.Materialize(baseConfig, req)
+		if err != nil {
+			s.logger.Error("materialisation failed",
+				"device_id", req.DeviceId,
+				"board_id", boardID,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"device_config",
+				"",
+				apierrors.InvalidArgument,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+		}
+
+		s.logger.Info("edit materialised",
+			"device_id", req.DeviceId,
+			"board_id", boardID,
+			"authored_sensors", len(req.Sensors),
+			"total_sensors", len(configProto.Sensors),
+			"removals", len(removalResults),
+			"subject", subject,
+			"correlation_id", corrID)
+		_ = removalResults // Removal forms tracked for logging/future use
+	}
+
+
 	// FR1.3 push-time validation: validate every region reference against the board's household.
 	// Reject the entire push if any region doesn't belong to the household (no partial application).
-	for i, sensor := range req.Sensors {
+	for i, sensor := range configProto.Sensors {
 		if sensor.RegionId == 0 {
 			continue // unassigned region is allowed
 		}
@@ -176,7 +273,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
 		DeviceId: req.DeviceId,
-		Sensors:  req.Sensors,
+		Sensors:  configProto.Sensors,
 	}
 	configJSON, err := protojson.Marshal(cfgProto)
 	if err != nil {
@@ -194,9 +291,26 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
+	// Build provenance JSON
+	provenanceJSON, err := buildProvenanceJSON(provenance)
+	if err != nil {
+		s.logger.Error("build provenance json failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
 	// Atomically assign version and record the pending push before publishing.
 	// This ensures the DB row always exists before the device can ack.
-	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON)
+	version, err := s.repo.InsertDeviceConfigNextVersionWithProvenance(ctx, boardID, configJSON, provenanceJSON)
 	if err != nil {
 		s.logger.Error("record config push failed",
 			"device_id", req.DeviceId,
@@ -252,7 +366,8 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	s.logger.Info("device config pushed",
 		"device_id", req.DeviceId,
 		"version", version,
-		"sensors", len(req.Sensors),
+		"sensors", len(configProto.Sensors),
+		"scope", req.Scope.String(),
 		"subject", subject,
 		"correlation_id", corrID)
 
@@ -296,13 +411,160 @@ func (s *LeafLabAPIServer) PushDeviceConfigDryRun(ctx context.Context, req *pb.P
 		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "required field missing: scope", detail)
 	}
 
-	// TODO: Implement dry-run logic
-	// 1. Validate device_id and scope
-	// 2. If EDIT scope: materialize from current accepted config
-	// 3. Validate materialised config (FR39)
-	// 4. Return what would be stored, without persisting or assigning version
+	// Canonicalize sensors on ingress at the proto/JSON boundary
+	for _, sensor := range req.Sensors {
+		if err := canonkey.ValidateAndCanonicalizeSensorConfig(sensor); err != nil {
+			// Sensor validation failure
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"sensors",
+				"sensor_type",
+				apierrors.InvalidSensorConfig,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+		}
+	}
 
-	return nil, status.Error(codes.Unimplemented, "PushDeviceConfigDryRun not yet implemented")
+	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("dry run board lookup failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"board",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Get the board's household for validation (FR1.2, FR1.3).
+	householdID, err := s.repo.GetBoardHousehold(ctx, boardID)
+	if err != nil {
+		s.logger.Error("dry run get board household failed",
+			"device_id", req.DeviceId,
+			"board_id", boardID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get board household: %v", err)
+	}
+
+	// FR82: Handle COMPLETE vs EDIT scope (dry run path)
+	var configProto *configpb.DeviceConfig
+	var provenance map[int]pb.Provenance
+
+	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_COMPLETE {
+		// COMPLETE scope: use payload as-is, all entries are AUTHORED
+		configProto = &configpb.DeviceConfig{
+			DeviceId: req.DeviceId,
+			Sensors:  req.Sensors,
+		}
+		provenance = make(map[int]pb.Provenance)
+		for i := range req.Sensors {
+			provenance[i] = pb.Provenance_PROVENANCE_AUTHORED
+		}
+	} else if req.Scope == pb.ConfigScope_CONFIG_SCOPE_EDIT {
+		// EDIT scope: materialize from current accepted config (dry run)
+		baseConfig, err := s.repo.GetLatestAcceptedConfigByBoardID(ctx, boardID)
+		if err != nil {
+			s.logger.Error("dry run get base config failed",
+				"device_id", req.DeviceId,
+				"board_id", boardID,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INTERNAL,
+				"device_config",
+				"",
+				apierrors.InternalError,
+			)
+			return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+		}
+
+		if baseConfig == nil {
+			// No accepted config to complete from - refuse EDIT
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+				"device_config",
+				"scope",
+				apierrors.InvalidArgument,
+			)
+			s.logger.Info("dry run edit rejected: no accepted config to complete from",
+				"device_id", req.DeviceId,
+				"board_id", boardID,
+				"subject", subject,
+				"correlation_id", corrID)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument,
+				"this board has no accepted config to complete your edit from; send a complete push", detail)
+		}
+
+		// Materialize the config
+		materialiser := NewMaterialiser()
+		configProto, provenance, _, err = materialiser.Materialize(baseConfig, req)
+		if err != nil {
+			s.logger.Error("dry run materialisation failed",
+				"device_id", req.DeviceId,
+				"board_id", boardID,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"device_config",
+				"",
+				apierrors.InvalidArgument,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+		}
+
+		s.logger.Info("dry run edit materialised",
+			"device_id", req.DeviceId,
+			"board_id", boardID,
+			"authored_sensors", len(req.Sensors),
+			"total_sensors", len(configProto.Sensors),
+			"subject", subject,
+			"correlation_id", corrID)
+	}
+
+	// FR1.3 push-time validation: validate every region reference against the board's household.
+	// Reject the entire push if any region doesn't belong to the household (no partial application).
+	for i, sensor := range configProto.Sensors {
+		if sensor.RegionId == 0 {
+			continue // unassigned region is allowed
+		}
+		ok, err := s.repo.ValidateRegionBelongsToHousehold(ctx, int64(sensor.RegionId), householdID)
+		if err != nil {
+			s.logger.Error("dry run region validation failed",
+				"device_id", req.DeviceId,
+				"sensor_index", i,
+				"region_id", sensor.RegionId,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			return nil, status.Errorf(codes.Internal, "region validation: %v", err)
+		}
+		if !ok {
+			// Reject the entire push, naming the offending entry and field.
+			return nil, status.Error(codes.InvalidArgument,
+				fmt.Sprintf("invalid region_id in sensor entry %d (name: %q): region %d does not belong to your household",
+					i, sensor.Name, sensor.RegionId))
+		}
+	}
+
+	s.logger.Info("dry run completed",
+		"device_id", req.DeviceId,
+		"sensors", len(configProto.Sensors),
+		"scope", req.Scope.String(),
+		"subject", subject,
+		"correlation_id", corrID)
+
+	// Return what would be stored, but with version = 0 since no version is assigned in dry run
+	return &pb.PushDeviceConfigResponse{Version: 0}, nil
 }
 
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {

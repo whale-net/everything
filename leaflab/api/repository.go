@@ -573,3 +573,57 @@ func (r *Repository) RecordAuditWithConfig(ctx context.Context, actorSubject str
 	}
 	return nil
 }
+
+// GetLatestAcceptedConfigByBoardID returns the highest-version accepted config for a board by ID.
+// Returns nil, nil if no accepted config exists.
+func (r *Repository) GetLatestAcceptedConfigByBoardID(ctx context.Context, boardID int64) (*configpb.DeviceConfig, error) {
+	var jsonBytes []byte
+	err := r.db.QueryRow(ctx, `
+		SELECT dc.config_json
+		FROM device_config dc
+		WHERE dc.board_id = $1
+		  AND dc.accepted = TRUE
+		ORDER BY dc.version DESC
+		LIMIT 1
+	`, boardID).Scan(&jsonBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest config for board %d: %w", boardID, err)
+	}
+
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(jsonBytes, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal stored config for board %d: %w", boardID, err)
+	}
+	return &cfg, nil
+}
+
+// InsertDeviceConfigNextVersionWithProvenance assigns the next version for the board,
+// inserts the config row with provenance data, and returns the assigned version.
+// provenanceJSON should be a JSON object mapping sensor indices to Provenance enum values.
+func (r *Repository) InsertDeviceConfigNextVersionWithProvenance(ctx context.Context, boardID int64, configJSON []byte, provenanceJSON []byte) (int64, error) {
+	for {
+		var version int64
+		err := r.db.QueryRow(ctx, `
+			WITH next AS (
+				SELECT COALESCE(MAX(version), 0) + 1 AS v
+				FROM device_config
+				WHERE board_id = $1
+			)
+			INSERT INTO device_config (board_id, version, config_json, provenance_json)
+			SELECT $1, next.v, $2, $3 FROM next
+			ON CONFLICT (board_id, version) DO NOTHING
+			RETURNING version
+		`, boardID, configJSON, provenanceJSON).Scan(&version)
+		if err == nil {
+			return version, nil
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			// another writer claimed this version; retry with the new MAX
+			continue
+		}
+		return 0, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
+	}
+}
