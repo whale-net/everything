@@ -37,6 +37,13 @@ var semverRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 // repository.ArtifactRepository.AdoptArtifact's doc comment and
 // AppServer.SetAppStatus's identically-shaped `reason` parameter), so this
 // line is load-bearing, not incidental.
+
+// s3Client defines the interface for S3 operations used by confirmUploadFile.
+// This allows for testing with mock implementations.
+type s3Client interface {
+	Download(ctx context.Context, key string) ([]byte, error)
+}
+
 var artifactLog = logging.Get("app-registry-handlers")
 
 // ArtifactServer implements pb.ArtifactRegistryServer, backed by
@@ -1334,31 +1341,72 @@ func (s *ArtifactServer) ConfirmUpload(ctx context.Context, req *pb.ConfirmUploa
 		return nil, err
 	}
 
-	// Process each file in a transaction.
+	// NFR-24: Enforce per-artifact overall deadline of 180s.
+	// If the caller context already has a shorter deadline, respect it.
+	ctxDeadline, ok := ctx.Deadline()
+	var artifactDeadline time.Time
+	if !ok {
+		artifactDeadline = time.Now().Add(180 * time.Second)
+	} else {
+		// Caller has a deadline; use the earlier one.
+		proposedDeadline := time.Now().Add(180 * time.Second)
+		if proposedDeadline.Before(ctxDeadline) {
+			artifactDeadline = proposedDeadline
+		} else {
+			artifactDeadline = ctxDeadline
+		}
+	}
+	artifactCtx, cancel := context.WithDeadline(ctx, artifactDeadline)
+	defer cancel()
+
+	// Process each file with per-file 60s deadline (NFR-24).
 	results := make([]*pb.ConfirmUploadFileResult, 0, len(req.Files))
 	allConfirmed := true
+	hasTimeout := false
 
 	for _, file := range req.Files {
-		result, err := s.confirmUploadFile(ctx, s3Client, encoding, contentType, file)
+		// Create a per-file deadline of 60s (NFR-24).
+		fileDeadline := time.Now().Add(60 * time.Second)
+		fileCtx, fileCancel := context.WithDeadline(artifactCtx, fileDeadline)
+		result, err := s.confirmUploadFile(fileCtx, s3Client, encoding, contentType, file)
+		fileCancel()
+
 		if err != nil {
-			return nil, fmt.Errorf("confirm file %q: %w", file.VariantKey, err)
+			// Handle overall artifact deadline timeout separately from per-file timeout.
+			if errors.Is(err, context.DeadlineExceeded) {
+				result = &pb.ConfirmUploadFileResult{
+					VariantKey:    file.VariantKey,
+					ObjectKey:     file.ObjectKey,
+					ClaimedDigest: file.ClaimedDigest,
+					Confirmed:     false,
+					IsTimeout:     true,
+					ErrorMessage:  "per-artifact confirmation budget (180s) exceeded",
+				}
+				hasTimeout = true
+			} else {
+				return nil, fmt.Errorf("confirm file %q: %w", file.VariantKey, err)
+			}
 		}
+
 		results = append(results, result)
 		if !result.Confirmed {
 			allConfirmed = false
+			if result.IsTimeout {
+				hasTimeout = true
+			}
 		}
 	}
 
 	// Update upload record state based on confirmation results.
-	if err := s.repo.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
-		// Update state based on results.
-		if allConfirmed {
+	// NFR-24: Only mark as Confirmed if all files confirmed AND no timeouts occurred.
+	if err := s.repo.WithTx(artifactCtx, func(ctx context.Context, r repository.Registry) error {
+		if allConfirmed && !hasTimeout {
 			_, err := r.UploadRecords().UpdateUploadState(ctx, req.UploadSessionId, repository.UploadStateConfirmed)
 			if err != nil {
 				return fmt.Errorf("update upload state: %w", err)
 			}
 		} else {
-			// Mark as failed if any file failed verification.
+			// Mark as failed if any file failed verification or timed out.
 			_, err := r.UploadRecords().UpdateUploadState(ctx, req.UploadSessionId, repository.UploadStateFailed)
 			if err != nil {
 				return fmt.Errorf("update upload state: %w", err)
@@ -1376,26 +1424,46 @@ func (s *ArtifactServer) ConfirmUpload(ctx context.Context, req *pb.ConfirmUploa
 		slog.String("upload_session_id", req.UploadSessionId),
 		slog.Int("file_count", len(req.Files)),
 		slog.Bool("all_confirmed", allConfirmed),
+		slog.Bool("has_timeout", hasTimeout),
 	)
 
 	return &pb.ConfirmUploadResponse{
-		Results:     results,
-		AllConfirmed: allConfirmed,
+		Results:      results,
+		AllConfirmed: allConfirmed && !hasTimeout,
 	}, nil
 }
 
 // confirmUploadFile processes one file: downloads from S3, decodes, hashes,
-// and compares against the claimed digest.
-func (s *ArtifactServer) confirmUploadFile(ctx context.Context, s3Client *s3.Client, encoding string, contentType string, file *pb.ConfirmUploadFile) (*pb.ConfirmUploadFileResult, error) {
+// and compares against the claimed digest. Returns an error only for unexpected
+// failures (e.g., S3 connectivity). Timeout and digest mismatch are returned
+// as confirmed=false in the result with is_timeout set appropriately.
+func (s *ArtifactServer) confirmUploadFile(ctx context.Context, s3Client s3Client, encoding string, contentType string, file *pb.ConfirmUploadFile) (*pb.ConfirmUploadFileResult, error) {
 	result := &pb.ConfirmUploadFileResult{
 		VariantKey:    file.VariantKey,
-		ObjectKey:      file.ObjectKey,
-		ClaimedDigest:  file.ClaimedDigest,
+		ObjectKey:     file.ObjectKey,
+		ClaimedDigest: file.ClaimedDigest,
+	}
+
+	// Check for timeout before attempting download (NFR-24).
+	select {
+	case <-ctx.Done():
+		result.Confirmed = false
+		result.IsTimeout = true
+		result.ErrorMessage = "per-file confirmation deadline (60s) exceeded"
+		return result, nil
+	default:
 	}
 
 	// Download from S3
 	data, err := s3Client.Download(ctx, file.ObjectKey)
 	if err != nil {
+		// Check if this is a context timeout.
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Confirmed = false
+			result.IsTimeout = true
+			result.ErrorMessage = "per-file confirmation deadline (60s) exceeded during download"
+			return result, nil
+		}
 		result.Confirmed = false
 		result.ErrorMessage = fmt.Sprintf("failed to download from S3: %v", err)
 		return result, nil
@@ -1420,6 +1488,13 @@ func (s *ArtifactServer) confirmUploadFile(ctx context.Context, s3Client *s3.Cli
 	// Hash the decompressed bytes (FR-46).
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, decompressed); err != nil {
+		// Check if this is a context timeout.
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Confirmed = false
+			result.IsTimeout = true
+			result.ErrorMessage = "per-file confirmation deadline (60s) exceeded during hashing"
+			return result, nil
+		}
 		result.Confirmed = false
 		result.ErrorMessage = fmt.Sprintf("failed to hash bytes: %v", err)
 		return result, nil
@@ -1432,13 +1507,16 @@ func (s *ArtifactServer) confirmUploadFile(ctx context.Context, s3Client *s3.Cli
 	// Compare against claimed digest (FR-46, FR-47).
 	if computedDigest != file.ClaimedDigest {
 		result.Confirmed = false
+		result.IsTimeout = false  // Mismatch, not timeout
 		result.ErrorMessage = fmt.Sprintf("digest mismatch: claimed %s, computed %s", file.ClaimedDigest, computedDigest)
 		return result, nil
 	}
 
 	result.Confirmed = true
+	result.IsTimeout = false
 	return result, nil
 }
+
 
 // validateConfirmUploadRequest ensures the request is well-formed.
 func (s *ArtifactServer) validateConfirmUploadRequest(req *pb.ConfirmUploadRequest) error {

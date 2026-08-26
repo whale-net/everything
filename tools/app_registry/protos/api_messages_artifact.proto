@@ -695,6 +695,11 @@ message ConfirmUploadFileResult {
 
   // On confirmation failure: human-readable error message (NFR-12).
   string error_message = 6;
+  // True if confirmation failed due to a timeout (NFR-24) rather than a
+  // digest mismatch. Timeouts are retryable; a timed-out confirm leaves no
+  // version published and may be retried without re-uploading the blob if it
+  // was already confirmed before the timeout.
+  bool is_timeout = 7;
 }
 
 // ConfirmUploadResponse is the confirmation outcome for the batch.
