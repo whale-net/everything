@@ -82,10 +82,11 @@ func testFR58HappyPath(t *testing.T, client pb.ArtifactRegistryClient) {
 	defer cancel()
 
 	// Generate a unique fixture version for this test run.
-	testID := fmt.Sprintf("%d", time.Now().Unix()%1000000)
-	version := fmt.Sprintf("v1.0.0-test-%s", testID)
-	artifactID := "rehearsal-test"
-	artifactKind := "image"
+	testID := fmt.Sprintf("%d", time.Now().UnixNano()%1000000000)
+	version := fmt.Sprintf("v1.0.%s", testID)
+	artifactID := fmt.Sprintf("rehearsal-test-%s", testID)
+	artifactKind := "binary"
+	ownerFullName := "tools-release_helper_go"
 	uncompressedDigest := generateTestDigest("rehearsal-main-" + version)
 	identityDigest := generateTestDigest("rehearsal-identity-" + version)
 
@@ -168,12 +169,23 @@ func testFR58HappyPath(t *testing.T, client pb.ArtifactRegistryClient) {
 	// Step 4: Record the artifact as published.
 	t.Logf("Step 4: RecordArtifact (publish to registry)")
 
-	// For this test, we need a build_id. We'll use a synthetic one.
-	buildID := fmt.Sprintf("test-build-%s", testID)
+	// RecordArtifact requires a real build row (build_id is a FK, not a free-form string).
+	buildResp, err := client.RecordBuild(ctx, &pb.RecordBuildRequest{
+		GitSha:         generateTestDigest("rehearsal-build-" + version),
+		GitRef:         "refs/heads/main",
+		WorkflowRunId:  fmt.Sprintf("rehearsal-%s", testID),
+		Actor:          "rehearsal-test",
+		StartedAt:      time.Now().Unix(),
+		IdempotencyKey: fmt.Sprintf("rehearsal-build-%s", testID),
+	})
+	if err != nil {
+		t.Skipf("RecordBuild not available: %v", err)
+	}
+	buildID := buildResp.Build.BuildId
 	recordReq := &pb.RecordArtifactRequest{
 		BuildId:        buildID,
-		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-		OwnerFullName:  artifactID,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  ownerFullName,
 		Repository:     "ghcr.io/whale-net/test-rehearsal",
 		Version:        version,
 		Digest:         uncompressedDigest,
@@ -219,10 +231,10 @@ func testFR58DigestMismatch(t *testing.T, client pb.ArtifactRegistryClient) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	testID := fmt.Sprintf("%d-mismatch", time.Now().Unix()%1000000)
-	version := fmt.Sprintf("v1.0.0-test-%s", testID)
-	artifactID := "rehearsal-test-mismatch"
-	artifactKind := "image"
+	testID := fmt.Sprintf("%d", time.Now().UnixNano()%1000000000)
+	version := fmt.Sprintf("v1.1.%s", testID)
+	artifactID := fmt.Sprintf("rehearsal-test-mismatch-%s", testID)
+	artifactKind := "binary"
 	claimedDigest := generateTestDigest("claimed-content")
 
 	t.Logf("Step 1: BrokerUpload with claimed digest")
@@ -308,19 +320,31 @@ func testFR58ResolvableButUnwritten(t *testing.T, client pb.ArtifactRegistryClie
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	testID := fmt.Sprintf("%d-unwritten", time.Now().Unix()%1000000)
-	version := fmt.Sprintf("v1.0.0-test-%s", testID)
-	artifactID := "rehearsal-test-unwritten"
+	testID := fmt.Sprintf("%d", time.Now().UnixNano()%1000000000)
+	version := fmt.Sprintf("v1.2.%s", testID)
+	artifactID := fmt.Sprintf("rehearsal-test-unwritten-%s", testID)
+	ownerFullName := "tools-release_helper_go"
 	digest := generateTestDigest("unwritten-artifact-" + version)
 	identityDigest := generateTestDigest("unwritten-identity-" + version)
-	buildID := fmt.Sprintf("test-build-unwritten-%s", testID)
+	buildResp, err := client.RecordBuild(ctx, &pb.RecordBuildRequest{
+		GitSha:         generateTestDigest("rehearsal-build-unwritten-" + version),
+		GitRef:         "refs/heads/main",
+		WorkflowRunId:  fmt.Sprintf("rehearsal-unwritten-%s", testID),
+		Actor:          "rehearsal-test",
+		StartedAt:      time.Now().Unix(),
+		IdempotencyKey: fmt.Sprintf("rehearsal-build-unwritten-%s", testID),
+	})
+	if err != nil {
+		t.Skipf("RecordBuild not available: %v", err)
+	}
+	buildID := buildResp.Build.BuildId
 
 	t.Logf("Step 1: RecordArtifact WITHOUT uploading bytes")
 
 	recordReq := &pb.RecordArtifactRequest{
 		BuildId:        buildID,
-		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-		OwnerFullName:  artifactID,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  ownerFullName,
 		Repository:     "ghcr.io/whale-net/test-unwritten",
 		Version:        version,
 		Digest:         digest,

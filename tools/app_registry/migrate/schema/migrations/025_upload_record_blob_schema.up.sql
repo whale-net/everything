@@ -26,7 +26,7 @@
 CREATE TABLE upload_record (
     upload_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     object_key             TEXT NOT NULL,
-    artifact_kind          TEXT NOT NULL CHECK (artifact_kind IN ('image', 'chart')),
+    artifact_kind          TEXT NOT NULL CHECK (artifact_kind IN ('image', 'chart', 'binary', 'firmware')),
 
     -- artifact_identity: denormalized owner identification for flexibility.
     -- Typically either app_id or chart_id, but stored as TEXT to allow
