@@ -366,6 +366,7 @@ func (h *MessageHandler) publishRegionInvalidations(ctx context.Context, boardID
 			DeviceID:    sensor.DeviceID,
 			SensorID:    sensor.SensorID,
 			RegionID:    sensor.RegionID,
+			NewName:     sensor.Name,
 			ChangeType:  "region",
 		}
 
