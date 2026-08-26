@@ -207,7 +207,17 @@ func registerServices(grpcServer *grpc.Server, repo repository.Registry, tempora
 	// temporalClient; #888 landed TriggerRelease/GetRelease's repository
 	// half first).
 	pb.RegisterAppRegistryServer(grpcServer, handlers.NewAppServer(repo))
-	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithMetadataRegistry(metadataRegistry), handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)))
+	// ARTIFACTS_S3_* config backs BrokerUpload's CI-build-artifact uploads
+	// (issue #1142/#1156). Read directly here (not threaded through
+	// registerServices' params like releaseToolsS3*) since it's an
+	// independently-optional concern with no test coverage depending on
+	// the parameterized form; unset in test binaries, so this is a no-op there.
+	artifactsS3Bucket := getEnv("ARTIFACTS_S3_BUCKET", "")
+	artifactsS3PublicEndpoint := getEnv("ARTIFACTS_S3_PUBLIC_ENDPOINT", "")
+	artifactsS3Region := getEnv("ARTIFACTS_S3_REGION", "")
+	artifactsS3AccessKey := getEnv("ARTIFACTS_S3_ACCESS_KEY", "")
+	artifactsS3SecretKey := getEnv("ARTIFACTS_S3_SECRET_KEY", "")
+	pb.RegisterArtifactRegistryServer(grpcServer, handlers.NewArtifactServer(repo, handlers.WithMetadataRegistry(metadataRegistry), handlers.WithReleaseToolsS3(releaseToolsS3Bucket, releaseToolsS3Endpoint, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey), handlers.WithArtifactsS3(artifactsS3Bucket, artifactsS3PublicEndpoint, artifactsS3Region, artifactsS3AccessKey, artifactsS3SecretKey)))
 	pb.RegisterPromotionRegistryServer(grpcServer, handlers.NewPromotionServer(repo, temporalClient))
 	pb.RegisterEnvironmentRegistryServer(grpcServer, handlers.NewEnvironmentServer(repo))
 	pb.RegisterReleaseRegistryServer(grpcServer, handlers.NewReleaseServer(repo, temporalClient))
