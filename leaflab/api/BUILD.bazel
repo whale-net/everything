@@ -6,6 +6,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "authorization.go",
         "main.go",
         "repository.go",
         "server.go",
@@ -32,7 +33,8 @@ go_library(
 
 go_test(
     name = "api_test",
-    srcs = ["server_test.go"],
+    srcs = [
+        "authorization.go","server_test.go"],
     embed = [":api_lib"],
     deps = [
         "//leaflab/api/proto:leaflabapipb",
