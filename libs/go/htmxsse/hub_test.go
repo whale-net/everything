@@ -404,7 +404,7 @@ func TestFR1_ConstructionArguments(t *testing.T) {
 	var _ Transport = (*rmq.Consumer)(nil)
 }
 
-// Test 7: Exchange-declare arguments captured
+// Test 7: Exchange-declare arguments captured with configured exchange name
 func TestFR7_ExchangeDeclareArguments(t *testing.T) {
 	fakeTransport := &fakeTransport{}
 
@@ -412,7 +412,11 @@ func TestFR7_ExchangeDeclareArguments(t *testing.T) {
 		return fakeTransport, nil
 	}
 
-	config := Config{SubscriberBufferDepth: 10}
+	configuredExchange := "custom-exchange.htmxsse"
+	config := Config{
+		ExchangeName:         configuredExchange,
+		SubscriberBufferDepth: 10,
+	}
 	h := NewHub(attachFunc, config)
 	defer h.Close()
 
@@ -424,8 +428,68 @@ func TestFR7_ExchangeDeclareArguments(t *testing.T) {
 	call := fakeTransport.bindExchangeCalls[0]
 	fakeTransport.mu.Unlock()
 
-	require.Equal(t, "sse-exchange", call.exchange)
+	// Assert that the exchange name matches the configured value, not a hardcoded literal
+	require.Equal(t, configuredExchange, call.exchange)
 	require.Equal(t, []string{"#"}, call.routingKeys)
+}
+
+// Test 7b: Post-attach-failure backoff is exponential
+func TestFR1b_PostAttachFailureBackoffIsExponential(t *testing.T) {
+	mockClock := &mockClock{
+		now: time.Now(),
+	}
+	sleepDurations := []time.Duration{}
+	var sleepMutex sync.Mutex
+
+	mockClock.sleepFn = func(ctx context.Context, d time.Duration) error {
+		sleepMutex.Lock()
+		sleepDurations = append(sleepDurations, d)
+		sleepMutex.Unlock()
+		return nil
+	}
+
+	failingTransport := &fakeTransport{
+		startErr: fmt.Errorf("post-attach failure"),
+	}
+
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		// Always return the failing transport
+		return failingTransport, nil
+	}
+
+	config := Config{
+		ExchangeName:         "test-exchange",
+		SubscriberBufferDepth: 10,
+	}
+	h := NewHubWithClock(attachFunc, config, mockClock)
+	defer h.Close()
+
+	_, _ = h.Subscribe("topic-a")
+
+	// Let attach succeed but Start() fail multiple times
+	time.Sleep(200 * time.Millisecond)
+
+	sleepMutex.Lock()
+	durations := make([]time.Duration, len(sleepDurations))
+	copy(durations, sleepDurations)
+	sleepMutex.Unlock()
+
+	// Should have multiple sleep calls for post-attach failure backoff
+	require.Greater(t, len(durations), 0, "should have sleep calls for post-attach failure backoff")
+
+	// Verify exponential backoff: sleeps should generally increase in duration
+	// We expect: 100ms, 200ms, 400ms, etc. (or capped at 30s)
+	if len(durations) >= 2 {
+		// At least check that we're not resetting to 100ms immediately after each failure
+		hasExponentialPattern := false
+		for i := 0; i < len(durations)-1; i++ {
+			if durations[i] < durations[i+1] {
+				hasExponentialPattern = true
+				break
+			}
+		}
+		require.True(t, hasExponentialPattern, "should see exponential backoff in sleep durations: %v", durations)
+	}
 }
 
 // Test 8: FR1 subscription release

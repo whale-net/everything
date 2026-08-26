@@ -236,7 +236,9 @@ func initializeSSEHub(ctx context.Context) *htmxsse.Hub {
 		return rmq.NewConsumerWithOpts(conn, "", false, true, 0, 0)
 	}
 
-	hub := htmxsse.NewHub(attachFunc, htmxsse.DefaultConfig())
+	config := htmxsse.DefaultConfig()
+	config.ExchangeName = events.ExchangeName
+	hub := htmxsse.NewHub(attachFunc, config)
 	return hub
 }
 

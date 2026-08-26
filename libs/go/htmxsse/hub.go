@@ -55,6 +55,8 @@ func (t *defaultTicker) C() <-chan time.Time {
 
 // Config holds configuration for the Hub.
 type Config struct {
+	// ExchangeName is the RabbitMQ exchange name for the Hub (required, caller-configured).
+	ExchangeName string
 	// HeartbeatInterval is the interval between heartbeats (default ~30s).
 	HeartbeatInterval time.Duration
 	// MaxStreamLifetime is the maximum lifetime of a stream (default ~1h).
@@ -226,6 +228,7 @@ func (h *Hub) Subscribe(topic string) (<-chan Event, func()) {
 func (h *Hub) attachWithRetry() {
 	delay := 100 * time.Millisecond
 	maxDelay := 30 * time.Second
+	transportSuccessful := false
 
 	for {
 		select {
@@ -282,8 +285,19 @@ func (h *Hub) attachWithRetry() {
 			return
 		}
 
-		// Reset backoff delay for next retry
-		delay = 100 * time.Millisecond
+		// Apply exponential backoff before retry, resetting delay only if transport was successful
+		if transportSuccessful {
+			delay = 100 * time.Millisecond
+		}
+		transportSuccessful = false
+
+		if err := h.clock.Sleep(h.ctx, delay); err != nil {
+			return
+		}
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
 	}
 }
 
@@ -291,6 +305,7 @@ func (h *Hub) attachWithRetry() {
 func (h *Hub) registerHandler() {
 	h.mu.RLock()
 	transport := h.transport
+	exchangeName := h.config.ExchangeName
 	h.mu.RUnlock()
 
 	if transport == nil {
@@ -301,7 +316,7 @@ func (h *Hub) registerHandler() {
 	transport.RegisterHandler("*", h.handleMessage)
 
 	// Bind to the exchange with a wildcard routing key
-	err := transport.BindExchange("sse-exchange", []string{"#"})
+	err := transport.BindExchange(exchangeName, []string{"#"})
 	if err != nil {
 		log.Printf("htmxsse: failed to bind exchange: %v", err)
 	}
