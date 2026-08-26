@@ -7,13 +7,16 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/whale-net/everything/leaflab/api/apierrors"
-	"github.com/whale-net/everything/leaflab/canonkey"
-	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/apierrors"
+	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/canonkey"
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -49,7 +52,34 @@ func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slo
 	}
 }
 
+// getSubjectAndCorrelationID extracts the subject and correlation ID from context.
+// Subject may be empty for unauthenticated requests (e.g., Health).
+func getSubjectAndCorrelationID(ctx context.Context) (subject string, correlationID string) {
+	if claims, ok := grpcauth.ClaimsFromContext(ctx); ok {
+		subject = claims.Subject
+	}
+	if corrID, ok := logging.CorrelationIDFromContext(ctx); ok {
+		correlationID = corrID
+	}
+	return subject, correlationID
+}
+
+// requireAuthentication ensures the caller is authenticated, returning an error if not.
+func requireAuthentication(ctx context.Context) error {
+	_, ok := grpcauth.ClaimsFromContext(ctx)
+	if !ok {
+		return status.Error(codes.Unauthenticated, "authentication required")
+	}
+	return nil
+}
+
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
 	if err := validateDeviceID(req.DeviceId); err != nil {
 		// device_id validation failure
 		detail := apierrors.NewErrorDetail(
@@ -74,10 +104,13 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		}
 	}
 
-
 	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
 	if err != nil {
-		// Internal database error
+		s.logger.Error("board lookup failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
 		detail := apierrors.NewErrorDetail(
 			pb.FailureClass_FAILURE_CLASS_INTERNAL,
 			"board",
@@ -85,6 +118,42 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			apierrors.InternalError,
 		)
 		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+	// Get the board's household for validation (FR1.2, FR1.3 push-time).
+	householdID, err := s.repo.GetBoardHousehold(ctx, boardID)
+	if err != nil {
+		s.logger.Error("get board household failed",
+			"device_id", req.DeviceId,
+			"board_id", boardID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get board household: %v", err)
+	}
+
+	// FR1.3 push-time validation: validate every region reference against the board's household.
+	// Reject the entire push if any region doesn't belong to the household (no partial application).
+	for i, sensor := range req.Sensors {
+		if sensor.RegionId == 0 {
+			continue // unassigned region is allowed
+		}
+		ok, err := s.repo.ValidateRegionBelongsToHousehold(ctx, int64(sensor.RegionId), householdID)
+		if err != nil {
+			s.logger.Error("region validation failed",
+				"device_id", req.DeviceId,
+				"sensor_index", i,
+				"region_id", sensor.RegionId,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			return nil, status.Errorf(codes.Internal, "region validation: %v", err)
+		}
+		if !ok {
+			// Reject the entire push, naming the offending entry and field.
+			return nil, status.Error(codes.InvalidArgument,
+				fmt.Sprintf("invalid region_id in sensor entry %d (name: %q): region %d does not belong to your household",
+					i, sensor.Name, sensor.RegionId))
+		}
 	}
 
 	// Build the proto with a placeholder version; we need configJSON for the
@@ -95,7 +164,11 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	}
 	configJSON, err := protojson.Marshal(cfgProto)
 	if err != nil {
-		// Internal serialization error
+		s.logger.Error("protojson marshal failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
 		detail := apierrors.NewErrorDetail(
 			pb.FailureClass_FAILURE_CLASS_INTERNAL,
 			"device_config",
@@ -109,7 +182,11 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	// This ensures the DB row always exists before the device can ack.
 	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON)
 	if err != nil {
-		// Internal database error
+		s.logger.Error("record config push failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
 		detail := apierrors.NewErrorDetail(
 			pb.FailureClass_FAILURE_CLASS_INTERNAL,
 			"device_config",
@@ -123,7 +200,11 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	cfgProto.Version = uint64(version)
 	wire, err := proto.Marshal(cfgProto)
 	if err != nil {
-		// Internal serialization error
+		s.logger.Error("proto marshal failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
 		detail := apierrors.NewErrorDetail(
 			pb.FailureClass_FAILURE_CLASS_INTERNAL,
 			"device_config",
@@ -138,6 +219,11 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	if err := s.publisher.Publish(ctx, mqttExchange, routingKey, wire); err != nil {
 		// Row is in DB but publish failed — device never received the push.
 		// The row stays accepted=FALSE, which is correct: no ack will arrive.
+		s.logger.Error("publish config failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
 		detail := apierrors.NewErrorDetail(
 			pb.FailureClass_FAILURE_CLASS_INTERNAL,
 			"device_config",
@@ -150,12 +236,20 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	s.logger.Info("device config pushed",
 		"device_id", req.DeviceId,
 		"version", version,
-		"sensors", len(req.Sensors))
+		"sensors", len(req.Sensors),
+		"subject", subject,
+		"correlation_id", corrID)
 
 	return &pb.PushDeviceConfigResponse{Version: uint64(version)}, nil
 }
 
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
 	if err := validateDeviceID(req.DeviceId); err != nil {
 		// device_id validation failure
 		detail := apierrors.NewErrorDetail(
@@ -169,7 +263,11 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 
 	cfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
 	if err != nil {
-		// Internal database error
+		s.logger.Error("get config failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
 		detail := apierrors.NewErrorDetail(
 			pb.FailureClass_FAILURE_CLASS_INTERNAL,
 			"device_config",
@@ -178,6 +276,13 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		)
 		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
+
+	s.logger.Info("device config retrieved",
+		"device_id", req.DeviceId,
+		"found", cfg != nil,
+		"subject", subject,
+		"correlation_id", corrID)
+
 	if cfg == nil {
 		return &pb.GetDeviceConfigResponse{Found: false}, nil
 	}
@@ -185,6 +290,12 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 }
 
 func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
 	// Parse page token
 	var decodedToken *pagetoken.Token
 	if req.Page != nil && req.Page.PageToken != "" {
@@ -256,6 +367,11 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 			nextPageToken = encoded
 		}
 	}
+
+	s.logger.Info("boards listed",
+		"board_count", len(boards),
+		"subject", subject,
+		"correlation_id", corrID)
 
 	return &pb.ListBoardsResponse{
 		Boards: boards,
@@ -329,3 +445,15 @@ func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSe
 	}, nil
 }
 
+func (s *LeafLabAPIServer) Health(ctx context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {
+	// Health is the only unauthenticated endpoint.
+	// It returns no household data, only service health status.
+	corrID, _ := logging.CorrelationIDFromContext(ctx)
+
+	// For now, always return UP.
+	// In production, this would check downstream dependencies (DB, MQTT, etc).
+	s.logger.Info("health check",
+		"correlation_id", corrID)
+
+	return &pb.HealthResponse{Status: pb.HealthResponse_UP}, nil
+}

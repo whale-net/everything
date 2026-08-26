@@ -19,6 +19,7 @@ go_library(
         "//leaflab/canonkey",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
+        "//libs/go/grpcauth",
         "//libs/go/logging",
         "//libs/go/rmq",
         "@com_github_jackc_pgx_v5//:pgx",
@@ -32,12 +33,6 @@ go_library(
     ],
 )
 
-go_binary(
-    name = "api",
-    embed = [":api_lib"],
-    visibility = ["//visibility:public"],
-)
-
 go_test(
     name = "api_test",
     srcs = ["server_test.go"],
@@ -45,14 +40,23 @@ go_test(
     deps = [
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
-        "//leaflab/canonkey",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/canonkey",
+        "//libs/go/grpcauth",
+        "//libs/go/logging",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
     ],
+)
+
+go_binary(
+    name = "api",
+    embed = [":api_lib"],
+    visibility = ["//visibility:public"],
 )
 
 release_app(
