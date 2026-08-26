@@ -96,6 +96,9 @@ func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error {
 func (s *stubRepo) IsKnownChipAddress(_ context.Context, _ string, _ uint32) (bool, error) {
 	return true, nil
 }
+func (s *stubRepo) GetSensorsByBoard(_ context.Context, _ int64) ([]SensorState, error) {
+	return nil, nil
+}
 
 // marshalManifest encodes a DeviceManifest to wire bytes.
 func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
@@ -525,10 +528,10 @@ func TestHandleManifest_RewireAndRenameWithRealDB(t *testing.T) {
 		DeviceId: "test-device",
 		Sensors: []*firmwarepb.SensorDescriptor{
 			{
-				Name:       "new_temp",   // Different name
+				Name:       "new_temp", // Different name
 				Type:       firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE,
 				Unit:       "degC",
-				I2CAddress: 0x42,         // Different address
+				I2CAddress: 0x42, // Different address
 			},
 		},
 	}

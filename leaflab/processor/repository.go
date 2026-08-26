@@ -10,8 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
+	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -131,13 +131,13 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 
 	var sensorID int64
 	var regionID *int64
-	
+
 	// First, try a direct name match (sensor exists with this name already).
 	err := r.db.QueryRow(ctx, `
 		SELECT sensor_id, region_id FROM sensor
 		WHERE board_id = $1 AND name = $2
 	`, boardID, name).Scan(&sensorID, &regionID)
-	
+
 	if err == nil {
 		// Found by name; update it.
 		if i2cAddr != nil {
@@ -171,7 +171,7 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 			ORDER BY s.registered_at DESC
 			LIMIT 1
 		`, boardID, sensorTypeID, hw.I2CAddress, string(muxJSON)).Scan(&candidateID)
-		
+
 		if candidateErr == nil {
 			// Found a sensor of the same type with a different hw address.
 			// Assume it's the rewired sensor and update it in place.
@@ -212,8 +212,6 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 	}
 	return sensorID, regionID, nil
 }
-
-
 
 // UpsertSensorLabel records a name in sensor_name_history.
 // If the current open label already has this name, it is a no-op.

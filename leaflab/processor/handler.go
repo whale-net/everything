@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
-	"github.com/whale-net/everything/libs/go/rmq"
+	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/canonkey"
+	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -29,6 +29,7 @@ type SensorRepository interface {
 	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) error
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
+	GetSensorsByBoard(ctx context.Context, boardID int64) ([]SensorState, error)
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -66,6 +67,7 @@ func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 }
 
 // handleManifest upserts the board and all its sensors, then populates the cache.
+// Before processing, it detects and rejects any hardware key swaps.
 func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, body []byte) error {
 	var manifest firmwarepb.DeviceManifest
 	if err := proto.Unmarshal(body, &manifest); err != nil {
@@ -77,6 +79,57 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 		return err
 	}
 	h.logger.Info("board registered", "device_id", deviceID, "board_id", boardID)
+
+	// Fetch existing sensors to detect swaps before processing
+	existingSensors, err := h.repo.GetSensorsByBoard(ctx, boardID)
+	if err != nil {
+		h.logger.Warn("failed to fetch existing sensors for swap detection", "board_id", boardID, "err", err)
+		// Don't fail the manifest processing if we can't detect swaps;
+		// just log and continue
+	}
+
+	// Build a map of manifest sensors with their type IDs
+	manifestSensors := make(map[string]*ManifestSensorInfo)
+	sensorTypeIDs := make(map[string]int64) // sensor name -> type ID
+
+	// First pass: get/create all sensor types
+	for _, sd := range manifest.Sensors {
+		typeName := sensorTypeName(sd.Type)
+
+		sensorTypeID, err := h.repo.UpsertSensorType(ctx, typeName, sd.Unit)
+		if err != nil {
+			h.logger.Error("failed to upsert sensor_type", "name", typeName, "err", err)
+			// Continue anyway, we'll hit this error again in the main loop
+		} else {
+			sensorTypeIDs[sd.Name] = sensorTypeID
+
+			// Build hardware address
+			var hw *HardwareAddress
+			if sd.I2CAddress > 0 {
+				hw = &HardwareAddress{I2CAddress: sd.I2CAddress}
+				if sd.MuxAddress > 0 {
+					hw.MuxPath = []MuxHop{{MuxAddress: sd.MuxAddress, MuxChannel: sd.MuxChannel}}
+				}
+			}
+
+			manifestSensors[sd.Name] = &ManifestSensorInfo{
+				Name:   sd.Name,
+				TypeID: sensorTypeID,
+				HW:     hw,
+			}
+		}
+	}
+
+	// Detect swaps
+	if existingSensors != nil && len(existingSensors) > 0 && len(manifestSensors) > 0 {
+		swapped, sensor1, sensor2, conflictKey := DetectSwap(existingSensors, manifestSensors)
+		if swapped {
+			msg := fmt.Sprintf("hardware key swap detected in manifest: sensors %q and %q would exchange keys (conflicting key: %s). A swap must be refused or handled atomically; it cannot result in forked sensor identities.",
+				sensor1, sensor2, conflictKey)
+			h.logger.Error("manifest rejected", "reason", msg, "device_id", deviceID, "board_id", boardID)
+			return &rmq.PermanentError{Err: fmt.Errorf(msg)}
+		}
+	}
 
 	var firstErr error
 	for _, sd := range manifest.Sensors {
