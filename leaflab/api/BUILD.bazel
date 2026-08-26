@@ -16,6 +16,7 @@ go_library(
         "//firmware/proto:configpb",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
+        "//libs/go/grpcauth",
         "//libs/go/logging",
         "//libs/go/rmq",
         "@com_github_jackc_pgx_v5//:pgx",

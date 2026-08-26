@@ -13,6 +13,7 @@ import (
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/db"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/grpc"
@@ -42,6 +43,10 @@ func run() error {
 	port := getEnv("PORT", "50051")
 	rabbitmqURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	databaseURL := getEnv("PG_DATABASE_URL", "")
+	grpcAuthMode := getEnv("LEAFLAB_API_AUTH_MODE", "none")
+	grpcOIDCIssuer := getEnv("LEAFLAB_API_OIDC_ISSUER", "")
+	grpcOIDCClientID := getEnv("LEAFLAB_API_OIDC_CLIENT_ID", "")
+	reflectionEnabled := getEnv("LEAFLAB_API_REFLECTION_ENABLED", "false")
 
 	pool, err := db.NewPool(ctx, databaseURL)
 	if err != nil {
@@ -66,9 +71,28 @@ func run() error {
 	repo := NewRepository(pool)
 	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"))
 
-	grpcServer := grpc.NewServer()
+	// Create auth interceptors
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
+		Mode:      grpcauth.AuthMode(grpcAuthMode),
+		IssuerURL: grpcOIDCIssuer,
+		ClientID:  grpcOIDCClientID,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create auth interceptors: %w", err)
+	}
+
+	// Create gRPC server with auth interceptors
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(unaryInt),
+		grpc.ChainStreamInterceptor(streamInt),
+	)
+
 	pb.RegisterLeafLabAPIServer(grpcServer, apiServer)
-	reflection.Register(grpcServer)
+
+	// Register reflection only if explicitly enabled
+	if reflectionEnabled == "true" {
+		reflection.Register(grpcServer)
+	}
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
