@@ -7,9 +7,9 @@
 -- in place. Placement boundaries are never back-dated: an interval opens at the
 -- instant the change is recorded.
 --
--- This migration creates the empty schema; #1205 backfills it from plant.region_id
--- with outward snapping applied at migration time only. No reading changes its
--- attribution as a result of this schema creation.
+-- This migration creates the schema and backfills from plant.region_id with
+-- outward snapping applied at migration time only. No reading changes its
+-- attribution as a result of this migration.
 
 -- ── plant_region_history: SCD2 table with both index shapes ─────────────────
 
@@ -48,3 +48,50 @@ CREATE INDEX idx_plant_region_history_plant_temporal
 
 CREATE INDEX idx_plant_region_history_region_temporal
     ON plant_region_history(region_id, valid_from DESC, valid_to DESC);
+
+-- ── Backfill from plant.region_id with hourly bucket snapping ───────────────
+--
+-- Backfilling preserves attribution neutrality (no reading changes attribution):
+-- - Each plant's initial interval uses its current region_id
+-- - Opening boundary snaps to start of hourly bucket containing earliest reading
+--   in that region (or plant.created_at if no readings exist)
+-- - For removed plants, closing boundary snaps to end of hourly bucket containing
+--   removal time
+-- - Active plants leave valid_to NULL (open interval)
+--
+-- Snapping to hourly boundaries guarantees:
+-- - No straddling bucket at any timestamp (all boundaries on hourly edges)
+-- - Bounded cost: a removed plant may share its final hour with its successor,
+--   marked per FR26.2
+
+WITH region_earliest_readings AS (
+    -- Find the earliest reading timestamp for each region (by any sensor).
+    -- This establishes the lower bound for plant intervals in that region.
+    SELECT
+        sr.region_id,
+        MIN(sr.recorded_at) AS earliest_reading
+    FROM sensor_reading sr
+    WHERE sr.region_id IS NOT NULL
+    GROUP BY sr.region_id
+),
+backfilled_intervals AS (
+    -- Compute the snapped placement intervals from current plant state.
+    -- For each plant, determine:
+    -- - Opening boundary: start of hour containing earliest reading in region, or
+    --   start of hour containing plant creation if no readings exist
+    -- - Closing boundary: end of hour containing removal, or NULL if still active
+    SELECT
+        p.plant_id,
+        p.region_id,
+        DATE_TRUNC('hour', COALESCE(rer.earliest_reading, p.created_at)) AS snapped_valid_from,
+        CASE
+            WHEN p.removed_at IS NOT NULL
+            THEN DATE_TRUNC('hour', p.removed_at) + INTERVAL '1 hour' - INTERVAL '1 microsecond'
+            ELSE NULL
+        END AS snapped_valid_to
+    FROM plant p
+    LEFT JOIN region_earliest_readings rer ON rer.region_id = p.region_id
+)
+INSERT INTO plant_region_history (plant_id, region_id, valid_from, valid_to)
+SELECT plant_id, region_id, snapped_valid_from, snapped_valid_to
+FROM backfilled_intervals;

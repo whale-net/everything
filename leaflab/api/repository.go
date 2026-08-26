@@ -400,3 +400,94 @@ func (r *Repository) GetPlantRegionAtTime(ctx context.Context, plantID int64, at
 	}
 	return regionID, nil
 }
+
+// MovePlantRegionAt moves a plant to a new region at a specific timestamp via SCD2 close-and-open.
+// Closes the current (valid_to IS NULL) interval and opens a new one.
+// Per SCD2 pattern: UPDATE valid_to on current placement, then INSERT new placement.
+// Returns BackdatingRefusal if the requested timestamp is in the past (FR19/FR21).
+// Returns error if the plant is not found or database operations fail.
+func (r *Repository) MovePlantRegionAt(ctx context.Context, plantID int64, newRegionID int64, validFrom time.Time) error {
+	// Validate that the requested timestamp is not in the past (FR19/FR21: no back-dating).
+	now := time.Now()
+	if validFrom.Before(now) {
+		return &BackdatingRefusal{
+			PlantID:       plantID,
+			AttemptedFrom: validFrom,
+			CurrentTime:   now,
+			Reason:        "placement boundaries are immutable once recorded; a new interval opens at the instant the change is recorded",
+		}
+	}
+
+	// Use a transaction to ensure atomicity of placement close and open.
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin move plant %d to region %d: %w", plantID, newRegionID, err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Close the current placement record (set valid_to = validFrom).
+	result, err := tx.Exec(ctx, `
+		UPDATE plant_region_history
+		SET valid_to = $2
+		WHERE plant_id = $1 AND valid_to IS NULL
+	`, plantID, validFrom)
+	if err != nil {
+		return fmt.Errorf("close placement for plant %d: %w", plantID, err)
+	}
+
+	// Verify the plant had an active placement (if no row was updated, the plant doesn't exist or has no active placement).
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("plant %d has no active placement or does not exist", plantID)
+	}
+
+	// Insert new placement record with the requested valid_from timestamp.
+	_, err = tx.Exec(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
+		VALUES ($1, $2, $3)
+	`, plantID, newRegionID, validFrom)
+	if err != nil {
+		return fmt.Errorf("insert new placement for plant %d to region %d: %w", plantID, newRegionID, err)
+	}
+
+	// Commit the transaction.
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit move plant %d to region %d: %w", plantID, newRegionID, err)
+	}
+
+	return nil
+}
+
+// RemovePlantPlacement closes the current placement interval for a plant.
+// Used when a plant is removed from the system.
+// Per SCD2 pattern: UPDATE valid_to on current placement to the given removal time.
+// Returns BackdatingRefusal if the removal time is in the past (FR19/FR21).
+// Returns error if the plant is not found or database operations fail.
+func (r *Repository) RemovePlantPlacement(ctx context.Context, plantID int64, removalTime time.Time) error {
+	// Validate that the removal time is not in the past.
+	now := time.Now()
+	if removalTime.Before(now) {
+		return &BackdatingRefusal{
+			PlantID:       plantID,
+			AttemptedFrom: removalTime,
+			CurrentTime:   now,
+			Reason:        "plant removal timestamp cannot be in the past; the interval closes at the instant removal is recorded",
+		}
+	}
+
+	// Close the current placement record.
+	result, err := r.db.Exec(ctx, `
+		UPDATE plant_region_history
+		SET valid_to = $2
+		WHERE plant_id = $1 AND valid_to IS NULL
+	`, plantID, removalTime)
+	if err != nil {
+		return fmt.Errorf("close placement for removed plant %d: %w", plantID, err)
+	}
+
+	// Verify the plant had an active placement.
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("plant %d has no active placement or does not exist", plantID)
+	}
+
+	return nil
+}
