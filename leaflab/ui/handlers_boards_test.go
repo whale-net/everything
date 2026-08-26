@@ -35,7 +35,14 @@ func (f *testBoardsClient) ListBoards(ctx context.Context, in *pb.ListBoardsRequ
 }
 
 func boardsTestApp(client pb.LeafLabAPIClient) *App {
+	return boardsTestAppWithPhase1Gate(client, "true")
+}
+
+func boardsTestAppWithPhase1Gate(client pb.LeafLabAPIClient, phase1GateOpen string) *App {
 	return &App{
+		config: &Config{
+			Phase1GateOpen: phase1GateOpen,
+		},
 		apiClient: &LeafLabClient{
 			API: client,
 		},
@@ -406,5 +413,72 @@ func TestHandleBoards_NoCapabilityIsUIOnly(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "device-001") {
 		t.Errorf("expected board from ListBoards to appear in rendered page, body: %s", body)
+	}
+}
+
+// TestHandleBoards_Phase1GateClosed verifies that when the Phase 1 gate is
+// closed (A30: non-exposed to production), authenticated users are refused
+// access to the boards page with a Forbidden response, matching the API-layer
+// enforcement already in place (per #1187, exit criterion 5).
+func TestHandleBoards_Phase1GateClosed(t *testing.T) {
+	client := &testBoardsClient{
+		listBoardsResp: &pb.ListBoardsResponse{
+			Boards: []*pb.BoardInfo{},
+		},
+	}
+
+	// Create app with phase1GateOpen="false" (closed gate)
+	app := boardsTestAppWithPhase1Gate(client, "false")
+
+	req := httptest.NewRequest(http.MethodGet, "/boards", nil)
+	w := httptest.NewRecorder()
+
+	// Call with auth wrapper to ensure authenticated request
+	devUserAuth(t).RequireAuthFunc(app.handleBoards)(w, req)
+
+	// Verify the gate check returns Forbidden
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected Forbidden (403) when gate is closed, got %d, body = %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+
+	// Verify the error message is readable (per NFR14: user-friendly)
+	if !strings.Contains(body, "Phase 1") {
+		t.Errorf("error message should mention Phase 1, got: %s", body)
+	}
+}
+
+// TestHandleBoards_Phase1GateOpen verifies that when the Phase 1 gate is
+// open, authenticated users can access the boards page normally.
+func TestHandleBoards_Phase1GateOpen(t *testing.T) {
+	client := &testBoardsClient{
+		listBoardsResp: &pb.ListBoardsResponse{
+			Boards: []*pb.BoardInfo{
+				{BoardId: 1, DeviceId: "device-001", RecordedAt: time.Now().Unix()},
+			},
+			Page: &pb.PageResponse{NextPageToken: ""},
+		},
+	}
+
+	// Create app with phase1GateOpen="true" (gate is open)
+	app := boardsTestAppWithPhase1Gate(client, "true")
+
+	req := httptest.NewRequest(http.MethodGet, "/boards", nil)
+	w := httptest.NewRecorder()
+
+	// Call with auth wrapper
+	devUserAuth(t).RequireAuthFunc(app.handleBoards)(w, req)
+
+	// Verify the request succeeds
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected OK (200) when gate is open, got %d, body = %s", w.Code, w.Body.String())
+	}
+
+	body := w.Body.String()
+
+	// Verify boards are rendered
+	if !strings.Contains(body, "device-001") {
+		t.Errorf("expected device-001 to be rendered when gate is open, body: %s", body)
 	}
 }
