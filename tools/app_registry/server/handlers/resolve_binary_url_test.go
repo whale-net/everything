@@ -645,3 +645,183 @@ func TestResolveBinaryURL_SameURLNotReusedAcrossAttempts(t *testing.T) {
 		t.Errorf("second checksum URL not presigned (cached unsigned URL?)")
 	}
 }
+
+
+// TestResolveBinaryURL_FR43_ContentEncodingDescriptor is FR-43's assertion:
+// the resolution response carries an explicit content-encoding descriptor for
+// each returned URL. Consumers determine decompression need from that field
+// alone. For binary kind, H4 returns "gzip", indicating all binary artifacts
+// are gzip-encoded post-cutover.
+//
+// Red/green: this test calls ResolveBinaryURL and verifies the response's
+// download_url_content_encoding and checksum_manifest_content_encoding fields
+// both carry "gzip". If the implementation returned empty strings, the test
+// would fail on the assertions.
+func TestResolveBinaryURL_FR43_ContentEncodingDescriptor(t *testing.T) {
+	_, artifactSrv, build := setupResolveBinaryURL(t)
+	ctx := authedCtx()
+
+	artifact, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  "tools-release_helper_go",
+		Digest:         "sha256:fr43test",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-fr43",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+
+	// Record stored keys
+	if _, err := artifactSrv.repo.StoredObjectKeys().CreateStoredObjectKey(ctx, &repository.StoredObjectKey{
+		ArtifactID: artifact.Artifact.ArtifactId,
+		VariantKey: "linux-amd64",
+		ObjectKey:  "release_helper_go/v1.0.0/release_helper_go-linux-amd64",
+	}); err != nil {
+		t.Fatalf("CreateStoredObjectKey (binary): %v", err)
+	}
+	if _, err := artifactSrv.repo.StoredObjectKeys().CreateStoredObjectKey(ctx, &repository.StoredObjectKey{
+		ArtifactID: artifact.Artifact.ArtifactId,
+		VariantKey: "checksums",
+		ObjectKey:  "release_helper_go/v1.0.0/checksums.txt",
+	}); err != nil {
+		t.Fatalf("CreateStoredObjectKey (checksums): %v", err)
+	}
+
+	resp, err := artifactSrv.ResolveBinaryURL(ctx, &pb.ResolveBinaryURLRequest{
+		Binary: "release_helper_go", Version: "v1.0.0", Os: "linux", Arch: "amd64",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBinaryURL: %v", err)
+	}
+
+	// FR-43: Both URLs should carry the content-encoding descriptor
+	// For binary kind, H4 returns "gzip"
+	if resp.DownloadUrlContentEncoding != "gzip" {
+		t.Errorf("download_url_content_encoding = %q, want %q (H4 binary encoding)", resp.DownloadUrlContentEncoding, "gzip")
+	}
+	if resp.ChecksumManifestContentEncoding != "gzip" {
+		t.Errorf("checksum_manifest_content_encoding = %q, want %q", resp.ChecksumManifestContentEncoding, "gzip")
+	}
+}
+
+// TestResolveBinaryURL_FR67_PreCutoverFileName is FR-67's assertion for
+// pre-cutover versions: the declared consumer-facing name is absent (empty
+// string), meaning the consumer keeps its current behavior. For pre-cutover
+// artifacts created via RecordArtifact, this returns empty string since the
+// consumer should use whatever name is already in their manifest.
+//
+// Red/green: this test verifies that pre-cutover artifacts (VersionSourceTag)
+// return empty filenames. If the implementation returned a constructed name,
+// this would fail.
+func TestResolveBinaryURL_FR67_PreCutoverFileName(t *testing.T) {
+	_, artifactSrv, build := setupResolveBinaryURL(t)
+	ctx := authedCtx()
+
+	// RecordArtifact creates a pre-cutover artifact (VersionSourceTag)
+	artifact, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  "tools-release_helper_go",
+		Digest:         "sha256:fr67precutover",
+		Version:        "v2.0.0",
+		IdempotencyKey: "record-fr67-precutover",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+
+	// Record stored keys
+	if _, err := artifactSrv.repo.StoredObjectKeys().CreateStoredObjectKey(ctx, &repository.StoredObjectKey{
+		ArtifactID: artifact.Artifact.ArtifactId,
+		VariantKey: "darwin-arm64",
+		ObjectKey:  "release_helper_go/v2.0.0/release_helper_go-darwin-arm64",
+	}); err != nil {
+		t.Fatalf("CreateStoredObjectKey (binary): %v", err)
+	}
+	if _, err := artifactSrv.repo.StoredObjectKeys().CreateStoredObjectKey(ctx, &repository.StoredObjectKey{
+		ArtifactID: artifact.Artifact.ArtifactId,
+		VariantKey: "checksums",
+		ObjectKey:  "release_helper_go/v2.0.0/checksums.txt",
+	}); err != nil {
+		t.Fatalf("CreateStoredObjectKey (checksums): %v", err)
+	}
+
+	resp, err := artifactSrv.ResolveBinaryURL(ctx, &pb.ResolveBinaryURLRequest{
+		Binary: "release_helper_go", Version: "v2.0.0", Os: "darwin", Arch: "arm64",
+	})
+	if err != nil {
+		t.Fatalf("ResolveBinaryURL: %v", err)
+	}
+
+	// FR-67 for pre-cutover: filename should be empty (consumer keeps current behavior)
+	if resp.DownloadUrlFilename != "" {
+		t.Errorf("pre-cutover download_url_filename = %q, want empty (backward compat)", resp.DownloadUrlFilename)
+	}
+
+	// Checksum manifest filename should always be "checksums.txt"
+	if resp.ChecksumManifestFilename != "checksums.txt" {
+		t.Errorf("checksum_manifest_filename = %q, want %q", resp.ChecksumManifestFilename, "checksums.txt")
+	}
+}
+
+// TestResolveBinaryURL_FR62_VariantSelectorBackwardCompat is FR-62's assertion:
+// an existing caller supplying {os, arch} for a binary artifact resolves
+// exactly as it does today. The variant selector is opaque and kind-declared.
+//
+// Red/green: this test uses the old-style os/arch fields and verifies resolution
+// succeeds, returning the correct URLs. This confirms backward compatibility.
+func TestResolveBinaryURL_FR62_VariantSelectorBackwardCompat(t *testing.T) {
+	_, artifactSrv, build := setupResolveBinaryURL(t)
+	ctx := authedCtx()
+
+	artifact, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  "tools-app-registry",
+		Digest:         "sha256:fr62test",
+		Version:        "v3.0.0",
+		IdempotencyKey: "record-fr62",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact: %v", err)
+	}
+
+	// Record stored keys for the os-arch variant
+	if _, err := artifactSrv.repo.StoredObjectKeys().CreateStoredObjectKey(ctx, &repository.StoredObjectKey{
+		ArtifactID: artifact.Artifact.ArtifactId,
+		VariantKey: "linux-amd64",
+		ObjectKey:  "app-registry/v3.0.0/app-registry-linux-amd64",
+	}); err != nil {
+		t.Fatalf("CreateStoredObjectKey (binary): %v", err)
+	}
+	if _, err := artifactSrv.repo.StoredObjectKeys().CreateStoredObjectKey(ctx, &repository.StoredObjectKey{
+		ArtifactID: artifact.Artifact.ArtifactId,
+		VariantKey: "checksums",
+		ObjectKey:  "app-registry/v3.0.0/checksums.txt",
+	}); err != nil {
+		t.Fatalf("CreateStoredObjectKey (checksums): %v", err)
+	}
+
+	// Use old-style os/arch fields (no variant map)
+	resp, err := artifactSrv.ResolveBinaryURL(ctx, &pb.ResolveBinaryURLRequest{
+		Binary: "app-registry", Version: "v3.0.0", Os: "linux", Arch: "amd64",
+		// variant field is intentionally empty to test backward compatibility
+	})
+	if err != nil {
+		t.Fatalf("ResolveBinaryURL (old-style os/arch): %v", err)
+	}
+
+	// Verify URLs are presigned (showing resolution succeeded)
+	u, _ := url.Parse(resp.DownloadUrl)
+	if u.Query().Get("X-Amz-Signature") == "" {
+		t.Errorf("backward-compat os/arch resolution failed: download URL not presigned")
+	}
+
+	// Verify checksum URL is also presigned
+	u, _ = url.Parse(resp.ChecksumManifestUrl)
+	if u.Query().Get("X-Amz-Signature") == "" {
+		t.Errorf("backward-compat os/arch resolution failed: checksum URL not presigned")
+	}
+}
