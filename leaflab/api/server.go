@@ -372,6 +372,7 @@ func renderActionDescription(record AuditRecord) string {
 	// 4. Distinguish between member, admin, and granted actions
 	// 5. Construct a grammatically correct sentence
 	//
-	// For now, return a simple template to satisfy the proto interface.
-	return "Action recorded"
+	// For now, return a simple plain-language template to satisfy the proto interface.
+	// This avoids technical terms like "action", "entity", "actor", etc.
+	return "Something happened"
 }

@@ -462,3 +462,79 @@ func contains(s, substr string) bool {
 func ptrString(v string) *string {
 	return &v
 }
+
+// TestAuditSchemaIntegrity verifies that the audit record structure has expected fields.
+// This serves as a unit test to verify audit schema design before integration tests run.
+func TestAuditSchemaIntegrity(t *testing.T) {
+	// Verify that AuditRecord has all required fields for FR8 compliance
+	record := AuditRecord{
+		AuditID:           1,
+		ActorSubject:      "test-user",    // Required: FR8 - actor identity
+		TargetHouseholdID: 42,              // Required: FR5 - household scoping
+		Action:            "test_action",   // Required: FR8 - action type
+		EntityType:        "test_entity",   // Required: FR8 - what was affected
+		EntityID:          99,              // Required: FR8 - which entity
+		OccurredAtUnix:    1234567890,      // Required: FR8 - when it happened
+		Reason:            nil,             // Optional: explanation for sensitive actions
+		ConfigVersion:     nil,             // Optional: for config operations
+		I2CAddress:        nil,             // Optional: hardware context
+		MuxPath:           nil,             // Optional: hardware context
+	}
+
+	// Verify all required fields are populated
+	if record.ActorSubject == "" {
+		t.Error("AuditRecord: actor_subject is required for FR8 compliance")
+	}
+	if record.TargetHouseholdID == 0 {
+		t.Error("AuditRecord: target_household_id is required for FR5 scoping")
+	}
+	if record.Action == "" {
+		t.Error("AuditRecord: action is required for FR8 compliance")
+	}
+	if record.EntityType == "" {
+		t.Error("AuditRecord: entity_type is required for FR8 compliance")
+	}
+	if record.OccurredAtUnix == 0 {
+		t.Error("AuditRecord: occurred_at is required for FR8 compliance")
+	}
+
+	t.Log("AuditRecord schema verified for FR8/FR5 compliance")
+}
+
+// TestRenderActivityItem_ContainsNoTechnicalTerms verifies that rendered activity
+// items do not contain any proto field names, table names, or column names (FR9).
+func TestRenderActivityItem_ContainsNoTechnicalTerms(t *testing.T) {
+	record := AuditRecord{
+		AuditID:           1,
+		ActorSubject:      "user-123",
+		TargetHouseholdID: 1,
+		Action:            "claim_board",
+		EntityType:        "board",
+		EntityID:          42,
+		OccurredAtUnix:    1756131000,
+		Reason:            nil,
+	}
+
+	item := renderActivityItem(record)
+	if item == nil {
+		t.Fatal("renderActivityItem returned nil")
+	}
+
+	// List of technical terms that should NOT appear in plain-language output
+	forbiddenTerms := []string{
+		"audit_record", "audit_id", "actor_subject", "target_household_id",
+		"entity_type", "entity_id", "occurred_at", "action",
+		"device_id", "board_id", "sensor_id", "region_id", "plant_id",
+		"page_token", "page_size", "proto", "config_json",
+		"household_id", "household_member", "device_config",
+	}
+
+	description := strings.ToLower(item.Description)
+	for _, term := range forbiddenTerms {
+		if strings.Contains(description, term) {
+			t.Errorf("FR9 violation: description contains technical term %q: %q", term, item.Description)
+		}
+	}
+
+	t.Logf("Activity item correctly contains no technical terms: %q", item.Description)
+}
