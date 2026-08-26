@@ -32,6 +32,7 @@ func TestPromotionDetails_FR29_TemplateStructure(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{
@@ -60,8 +61,8 @@ func TestPromotionDetails_FR29_TemplateStructure(t *testing.T) {
 	}
 
 	// FR29: template should have sse-swap target
-	if !strings.Contains(html, `sse-swap="innerHTML"`) {
-		t.Errorf("FR29: template must contain sse-swap=\"innerHTML\" target; got: %s", html)
+	if !strings.Contains(html, `sse-swap="promotion.test-promo"`) {
+		t.Errorf("FR29: template must contain sse-swap=\"promotion.test-promo\" target; got: %s", html)
 	}
 
 	// FR29: sse-swap div must have the promotion-details-body class
@@ -77,7 +78,7 @@ func TestPromotionDetails_FR29_TemplateStructure(t *testing.T) {
 
 	// Verify that the sse-connect element is outside the sse-swap target by checking structure
 	sseConnectIdx := strings.Index(html, `hx-ext="sse"`)
-	sseSwapIdx := strings.Index(html, `sse-swap="innerHTML"`)
+	sseSwapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
 	if sseConnectIdx < 0 || sseSwapIdx < 0 {
 		t.Errorf("FR29: both sse-connect and sse-swap must be present")
 	}
@@ -94,6 +95,7 @@ func TestPromotionDetails_FR29_NoTargetOnLoadError(t *testing.T) {
 		LoadErr:     "promotion not found",
 		Details:     nil, // No details when load fails
 		RetryErr:    "",
+			HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{
@@ -116,7 +118,7 @@ func TestPromotionDetails_FR29_NoTargetOnLoadError(t *testing.T) {
 	}
 
 	// Must NOT have sse-swap target when Details is nil
-	if strings.Contains(html, `sse-swap="innerHTML"`) {
+	if strings.Contains(html, `sse-swap="promotion.test-promo"`) {
 		t.Errorf("FR29: sse-swap target must NOT be present when Details is nil (load failed); got: %s", html)
 	}
 
@@ -142,6 +144,7 @@ func TestPromotionDetails_FR29_RetryBannerOutsideSwapTarget(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "connection refused",
+			HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{
@@ -164,14 +167,14 @@ func TestPromotionDetails_FR29_RetryBannerOutsideSwapTarget(t *testing.T) {
 	}
 
 	// Must have sse-swap target
-	if !strings.Contains(html, `sse-swap="innerHTML"`) {
+	if !strings.Contains(html, `sse-swap="promotion.test-promo"`) {
 		t.Errorf("FR29: sse-swap target must be present when Details is not nil; got: %s", html)
 	}
 
 	// The critical part: verify banner comes BEFORE the sse-swap div
 	// This ensures the banner is outside the pushed region
 	bannerIdx := strings.Index(html, "Retry failed:")
-	swapIdx := strings.Index(html, `sse-swap="innerHTML"`)
+	swapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
 	if bannerIdx < 0 || swapIdx < 0 {
 		t.Errorf("FR29: both banner and swap target must be present")
 	}
@@ -195,6 +198,7 @@ func TestPromotionDetails_FR29_NoHTMXAttributesExceptPromoDetails(t *testing.T) 
 				CurrentHealthStatus: "Healthy",
 			},
 		},
+			HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{
@@ -249,6 +253,7 @@ func TestPromotionDetails_FR23_IndicatorPresent(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}
@@ -275,7 +280,7 @@ func TestPromotionDetails_FR23_IndicatorPresent(t *testing.T) {
 
 	// FR23: indicator must be outside the sse-swap target
 	indicatorIdx := strings.Index(html, `id="live-status"`)
-	swapIdx := strings.Index(html, `sse-swap="innerHTML"`)
+	swapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
 	if indicatorIdx < 0 || swapIdx < 0 {
 		t.Errorf("FR23: both indicator and swap target must be present")
 	}
@@ -301,6 +306,7 @@ func TestPromotionDetails_FR24_ReloadAffordancePresent(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}
@@ -332,7 +338,7 @@ func TestPromotionDetails_FR24_ReloadAffordancePresent(t *testing.T) {
 
 	// FR24: reload container must be outside the sse-swap target
 	reloadIdx := strings.Index(html, `id="promo-reload-container"`)
-	swapIdx := strings.Index(html, `sse-swap="innerHTML"`)
+	swapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
 	if reloadIdx < 0 || swapIdx < 0 {
 		t.Errorf("FR24: both reload and swap target must be present")
 	}
@@ -363,6 +369,7 @@ func TestPromotionDetails_FR23_IndicatorScript(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}
@@ -421,6 +428,7 @@ func TestPromotionDetails_FR24_ReloadLinkPreservesPromotionID(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}
@@ -459,6 +467,7 @@ func TestPromotionDetails_FR23_DebounceUsesAdvertisedRetry(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}
@@ -473,9 +482,9 @@ func TestPromotionDetails_FR23_DebounceUsesAdvertisedRetry(t *testing.T) {
 
 	html := buf.String()
 
-	// FR23: script must use advertisedRetryMs variable for debounce
-	if !strings.Contains(html, `advertisedRetryMs`) {
-		t.Errorf("FR23: script must use advertisedRetryMs variable for debounce; got: %s", html)
+	// FR23: script must use heartbeatMs variable from data attribute for debounce
+	if !strings.Contains(html, `heartbeatMs`) {
+		t.Errorf("FR23: script must use heartbeatMs variable for debounce; got: %s", html)
 	}
 }
 
@@ -496,6 +505,7 @@ func TestPromotionDetails_FR23_TimeoutThreshold(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}
@@ -511,13 +521,99 @@ func TestPromotionDetails_FR23_TimeoutThreshold(t *testing.T) {
 	html := buf.String()
 
 	// FR23: script must calculate timeout threshold as 2x heartbeat interval
-	if !strings.Contains(html, `advertisedRetryMs * 2`) {
-		t.Errorf("FR23: timeout threshold must be 2x advertised retry interval (advertisedRetryMs * 2); got: %s", html)
+	if !strings.Contains(html, `heartbeatMs * 2`) {
+		t.Errorf("FR23: timeout threshold must be 2x heartbeat interval (heartbeatMs * 2); got: %s", html)
 	}
 
 	// FR23: script must check this threshold against time since last event
 	if !strings.Contains(html, `timeSinceLastEvent`) {
 		t.Errorf("FR23: script must track time since last event; got: %s", html)
+	}
+}
+
+// TestPromotionDetails_FR23_HeartbeatIntervalBinding tests FR23:
+// the script reads the heartbeat interval from the data attribute on the container.
+func TestPromotionDetails_FR23_HeartbeatIntervalBinding(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:             "",
+		RetryErr:            "",
+		HeartbeatIntervalMs: 30000,
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR23: container must have data-heartbeat-ms attribute with the correct value
+	if !strings.Contains(html, `data-heartbeat-ms="30000"`) {
+		t.Errorf("FR23: container must have data-heartbeat-ms attribute with correct heartbeat interval; got: %s", html)
+	}
+
+	// FR23: script must read heartbeat from data attribute
+	if !strings.Contains(html, `parseInt(container.getAttribute('data-heartbeat-ms')`) {
+		t.Errorf("FR23: script must read heartbeat interval from data attribute; got: %s", html)
+	}
+}
+
+// TestPromotionDetails_FR23_SSEOpenEventListener tests FR23:
+// the script listens for htmx:sseOpen event to reset the live status.
+func TestPromotionDetails_FR23_SSEOpenEventListener(t *testing.T) {
+	state := pages.PromotionDetailsViewState{
+		PromotionID: "test-promo",
+		Details: &pb.GetPromotionDetailsResponse{
+			Details: &pb.PromotionDetails{
+				Promotion:           &pb.Promotion{PromotionId: "test-promo", EnvironmentKey: "dev"},
+				FromVersion:         "v1.0.0",
+				ToVersion:           "v2.0.0",
+				Outcome:             pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY,
+				CurrentSyncStatus:   "Synced",
+				CurrentHealthStatus: "Healthy",
+			},
+		},
+		LoadErr:             "",
+		RetryErr:            "",
+		HeartbeatIntervalMs: 30000,
+	}
+
+	user := &htmxauth.UserInfo{Sub: "test-user"}
+	component := pages.PromotionDetails(user, state)
+
+	var buf strings.Builder
+	ctx := context.Background()
+	err := component.Render(ctx, &buf)
+	if err != nil {
+		t.Fatalf("failed to render template: %v", err)
+	}
+
+	html := buf.String()
+
+	// FR23: script must listen for htmx:sseOpen, not htmx:sseConnect
+	if !strings.Contains(html, `htmx:sseOpen`) {
+		t.Errorf("FR23: script must listen for htmx:sseOpen event; got: %s", html)
+	}
+
+	// FR23: script must NOT listen for the nonexistent htmx:sseConnect
+	if strings.Contains(html, `htmx:sseConnect`) {
+		t.Errorf("FR23: script must not listen for non-existent htmx:sseConnect event; got: %s", html)
 	}
 }
 
@@ -538,6 +634,7 @@ func TestPromotionDetails_FR23_MutationObserverTracksChanges(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}
@@ -581,6 +678,7 @@ func TestPromotionDetails_NFR12_IndicatorVisibility(t *testing.T) {
 		},
 		LoadErr:  "",
 		RetryErr: "",
+		HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}
@@ -598,7 +696,7 @@ func TestPromotionDetails_NFR12_IndicatorVisibility(t *testing.T) {
 	// NFR12: indicator must appear BEFORE the sse-swap target
 	indicatorIdx := strings.Index(html, `id="promo-live-indicator"`)
 	reloadIdx := strings.Index(html, `id="promo-reload-container"`)
-	swapIdx := strings.Index(html, `sse-swap="innerHTML"`)
+	swapIdx := strings.Index(html, `sse-swap="promotion.test-promo"`)
 
 	if indicatorIdx < 0 || reloadIdx < 0 || swapIdx < 0 {
 		t.Errorf("NFR12: all elements (indicator, reload, sse-swap) must be present in template")
@@ -631,6 +729,7 @@ func TestPromotionDetails_FR24_ReloadLinkCorrectInContainer(t *testing.T) {
 				CurrentHealthStatus: "Healthy",
 			},
 		},
+			HeartbeatIntervalMs: 30000,
 	}
 
 	user := &htmxauth.UserInfo{Sub: "test-user"}

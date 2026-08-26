@@ -168,6 +168,15 @@ func NewHubWithClock(attachFunc AttachFunc, config Config, clock Clock) *Hub {
 	}
 }
 
+// Config returns the Hub's configuration, particularly useful for accessing
+// the HeartbeatInterval for front-end consumption (e.g., to configure
+// not-live detection thresholds in SSE client scripts).
+func (h *Hub) Config() Config {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.config
+}
+
 // Subscribe subscribes to a topic and returns a channel for receiving events
 // and an unsubscribe function.
 func (h *Hub) Subscribe(topic string) (<-chan Event, func()) {

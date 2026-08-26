@@ -1,6 +1,7 @@
 package pages
 
 import (
+	"fmt"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/ui/components"
@@ -15,9 +16,10 @@ import (
 // when the RPC itself failed (unknown promotion_id -> NotFound, transport
 // failure, etc).
 type PromotionDetailsViewState struct {
-	PromotionID string
-	Details     *pb.GetPromotionDetailsResponse
-	LoadErr     string
+	PromotionID          string
+	Details              *pb.GetPromotionDetailsResponse
+	LoadErr              string
+	HeartbeatIntervalMs  int
 	// RetryErr is set when a POST to /promotions/{id}/retry (FR10-FR13,
 	// issue #1033) itself failed -- rendered as its own inline banner near
 	// the retry button, distinct from LoadErr (a failure to read the
@@ -84,6 +86,7 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 		<div
 			hx-ext="sse"
 			sse-connect={ templ.URL("/promotions/" + s.PromotionID + "/status/sse") }
+			data-heartbeat-ms={ fmt.Sprint(s.HeartbeatIntervalMs) }
 			class="promotion-details-container"
 		>
 			<div class="breadcrumbs text-sm mb-4">
@@ -109,7 +112,7 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 				if s.RetryErr != "" {
 					<div role="alert" class="alert alert-error shadow-md mb-4"><span>Retry failed: { s.RetryErr }</span></div>
 				}
-				<div sse-swap="innerHTML" class="promotion-details-body">
+				<div sse-swap={ "promotion." + s.PromotionID } class="promotion-details-body">
 					@PromotionDetailsBody(user, s.Details.GetDetails())
 				</div>
 			}
@@ -127,10 +130,10 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 
   let isLive = true;
   let lastEventTime = Date.now();
-  let advertisedRetryMs = 5000;
+  let heartbeatMs = parseInt(container.getAttribute('data-heartbeat-ms'), 10) || 30000;
   let debounceTimeoutId = null;
 
-  container.addEventListener('htmx:sseConnect', () => {
+  container.addEventListener('htmx:sseOpen', () => {
     console.log('SSE connected');
     cancelDebounce();
     setLive(true);
@@ -159,7 +162,7 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 
   const heartbeatCheckInterval = setInterval(() => {
     const timeSinceLastEvent = Date.now() - lastEventTime;
-    const timeoutThreshold = advertisedRetryMs * 2;
+    const timeoutThreshold = heartbeatMs * 2;
 
     if (isLive && timeSinceLastEvent > timeoutThreshold) {
       handleTimeout();
@@ -171,7 +174,7 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
     debounceTimeoutId = setTimeout(() => {
       setLive(false);
       debounceTimeoutId = null;
-    }, advertisedRetryMs);
+    }, heartbeatMs);
   }
 
   function handleTimeout() {
@@ -179,7 +182,7 @@ templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
     debounceTimeoutId = setTimeout(() => {
       setLive(false);
       debounceTimeoutId = null;
-    }, advertisedRetryMs);
+    }, heartbeatMs);
   }
 
   function cancelDebounce() {
