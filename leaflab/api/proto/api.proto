@@ -29,6 +29,44 @@ enum FailureClass {
   FAILURE_CLASS_INTERNAL = 3;
 }
 
+// ============================================================================
+// Config push scope (FR82)
+// ============================================================================
+
+// ConfigScope declares the semantic interpretation of a push request.
+// A push without an explicit scope is rejected with a distinct failure class
+// naming the field; nothing is stored, nothing is published, no version is assigned.
+enum ConfigScope {
+  CONFIG_SCOPE_UNSPECIFIED = 0;
+
+  // COMPLETE — the payload is the board's entire desired sensor set.
+  // An entry absent from the payload is removed from the desired state.
+  // A scenario file pushed with scope=COMPLETE behaves identically before and after.
+  // Works as a board's first push.
+  CONFIG_SCOPE_COMPLETE = 1;
+
+  // EDIT — the payload names only entries being added or changed, plus an
+  // explicit remove list. An entry named in neither is unchanged and is
+  // materialised server-side from the board's current accepted config version.
+  // Refused with a specific reason if there is no accepted config to complete from.
+  CONFIG_SCOPE_EDIT = 2;
+}
+
+// Provenance tracks whether a stored entry was explicitly authored in a request
+// (named by the caller) or materialised from a base version during an EDIT.
+enum Provenance {
+  PROVENANCE_UNSPECIFIED = 0;
+
+  // AUTHORED — the entry was named in the request, either as a sensor to add/update
+  // or in a remove list.
+  PROVENANCE_AUTHORED = 1;
+
+  // MATERIALISED — the entry was carried forward from the base version's accepted config
+  // during an EDIT and was not named in the request.
+  PROVENANCE_MATERIALISED = 2;
+}
+
+
 // ErrorDetail carries structured machine-readable failure information
 // alongside a gRPC status, so a caller can classify failures without
 // parsing the human-readable message string.
@@ -82,14 +120,21 @@ message SensorIdentityChange {
 // LeafLabAPI is the control-plane API for managing leaflab sensor boards.
 service LeafLabAPI {
   // Push a new DeviceConfig to a board over MQTT.
-  // The server assigns a monotonically increasing version; the caller supplies
-  // only the sensor overrides (names, enabled state, poll interval).
+  // Scope declares the push's semantic interpretation (COMPLETE or EDIT).
+  // A request without scope is rejected with a distinct failure class naming the field;
+  // nothing is stored, nothing is published, no version is assigned.
   // 
   // If the push would create a new sensor identity (FR17), an ErrorDetail with
   // FailureClass PRECONDITION is returned as a status detail before any write,
   // containing SensorIdentityChange to announce the consequence and suggest
   // the rewire path as an alternative.
   rpc PushDeviceConfig(PushDeviceConfigRequest) returns (PushDeviceConfigResponse);
+
+  // Dry run a config push — validate without storing or assigning a version.
+  // Accepts the same scope and payload structure as PushDeviceConfig;
+  // returns what would be stored (with materialised entries for EDIT),
+  // but does not assign a version or persist to the database.
+  rpc PushDeviceConfigDryRun(PushDeviceConfigRequest) returns (PushDeviceConfigResponse);
 
   // Get the latest config that was accepted by a board.
   rpc GetDeviceConfig(GetDeviceConfigRequest) returns (GetDeviceConfigResponse);
@@ -131,11 +176,41 @@ message PageResponse {
 // Messages
 // ============================================================================
 
+message RemovalKey {
+  // A removal key identifies sensors to be removed by canonical hardware identity.
+  // Either a full key (with sensor_type) or a chip key (without sensor_type).
+  
+  // For full key: the canonical (i2c_address, mux_path, sensor_type) of the sensor to remove.
+  // For chip key: the canonical (i2c_address, mux_path) of the chip; all sensors at
+  // this address and mux path are removed.
+  
+  uint32 i2c_address = 1;
+  // mux_path is the JSONB-encoded cascaded mux chain [{"muxAddress":..,"muxChannel":..}, ...].
+  // Empty string means sensor is directly on the root I2C bus.
+  string mux_path = 2;
+  // sensor_type is the firmware.SensorType enum value. Set to 0 (UNSPECIFIED) for chip-key removal.
+  int32 sensor_type = 3;
+}
+
 message PushDeviceConfigRequest {
   string device_id = 1;
-  // Sensor overrides — each entry is matched to a hardware sensor by
-  // (mux_path, i2c_address). Sensors with no matching entry are unchanged.
-  repeated firmware.SensorConfig sensors = 2;
+  
+  // scope declares the semantic interpretation of this push.
+  // Required; no default. A request omitting scope is rejected with a distinct
+  // failure class naming the field (FR59.1).
+  ConfigScope scope = 2;
+  
+  // Sensor entries — interpretation depends on scope.
+  // For CONFIG_SCOPE_COMPLETE: the board's entire desired sensor set.
+  // For CONFIG_SCOPE_EDIT: only entries being added or changed.
+  repeated firmware.SensorConfig sensors = 3;
+  
+  // Removal list — only used for CONFIG_SCOPE_EDIT.
+  // Names sensors to be removed by canonical hardware identity.
+  // Each removal key names either a full key (drops one entry) or a chip key
+  // (drops every entry at that address and mux path).
+  // Ignored for CONFIG_SCOPE_COMPLETE.
+  repeated RemovalKey remove = 4;
 }
 
 message PushDeviceConfigResponse {

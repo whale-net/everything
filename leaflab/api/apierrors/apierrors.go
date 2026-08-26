@@ -47,6 +47,9 @@ const (
 
 	// InvalidSensorConfig is returned when a sensor config has missing or invalid fields.
 	InvalidSensorConfig = "INVALID_SENSOR_CONFIG"
+
+	// InvalidArgument is returned when a required field is missing or invalid.
+	InvalidArgument = "INVALID_ARGUMENT"
 )
 
 // ErrorDetailFromStatus attempts to extract the ErrorDetail from a gRPC

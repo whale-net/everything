@@ -90,6 +90,22 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		)
 		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
 	}
+	// FR82: Validate scope is present and valid
+	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_UNSPECIFIED {
+		// Scope is required; reject with a distinct failure class naming the field
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"PushDeviceConfigRequest",
+			"scope",
+			apierrors.InvalidArgument,
+		)
+		s.logger.Info("push rejected: missing required scope field",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "required field missing: scope", detail)
+	}
+	// Canonicalize sensors on ingress at the proto/JSON boundary
 	// Canonicalize sensors on ingress at the proto/JSON boundary
 	for _, sensor := range req.Sensors {
 		if err := canonkey.ValidateAndCanonicalizeSensorConfig(sensor); err != nil {
@@ -241,6 +257,52 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		"correlation_id", corrID)
 
 	return &pb.PushDeviceConfigResponse{Version: uint64(version)}, nil
+}
+
+// PushDeviceConfigDryRun validates a config push without storing or assigning a version.
+// Accepts the same scope and payload structure as PushDeviceConfig; returns what would
+// be stored (with materialised entries for EDIT), but does not persist to the database.
+func (s *LeafLabAPIServer) PushDeviceConfigDryRun(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if err := validateDeviceID(req.DeviceId); err != nil {
+		// device_id validation failure
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_id",
+			"device_id",
+			apierrors.InvalidDeviceID,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+	}
+
+	// FR82: Validate scope is present and valid
+	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_UNSPECIFIED {
+		// Scope is required; reject with a distinct failure class naming the field
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"PushDeviceConfigRequest",
+			"scope",
+			apierrors.InvalidArgument,
+		)
+		s.logger.Info("dry run rejected: missing required scope field",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "required field missing: scope", detail)
+	}
+
+	// TODO: Implement dry-run logic
+	// 1. Validate device_id and scope
+	// 2. If EDIT scope: materialize from current accepted config
+	// 3. Validate materialised config (FR39)
+	// 4. Return what would be stored, without persisting or assigning version
+
+	return nil, status.Error(codes.Unimplemented, "PushDeviceConfigDryRun not yet implemented")
 }
 
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
