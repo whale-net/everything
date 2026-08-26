@@ -142,6 +142,15 @@ type AppRepository interface {
 	GetChartByID(ctx context.Context, chartID string) (*Chart, error)
 	GetChartByFullName(ctx context.Context, fullName string) (*Chart, error)
 
+	// GetAppManifestAppType returns the app_type field from an app_manifest row,
+	// identified by its content-addressed manifest_id (UUID). Used by
+	// VerifyPublished (FR-24) to resolve a published artifact's kind from its
+	// bound manifest snapshot rather than the app's current type -- this ensures
+	// an artifact published with one kind is verified under that same kind, even
+	// if the app's type changed after publication. Returns ErrNotFound if the
+	// manifest_id does not exist.
+	GetAppManifestAppType(ctx context.Context, manifestID string) (string, error)
+
 	// SetAppStatus is the human-triage path and supports exactly one
 	// transition: StatusMissing -> StatusArchived. missing -> active happens
 	// automatically via Reconcile's "recovered" path, so it is never legal
@@ -392,7 +401,6 @@ type ArtifactRepository interface {
 // DomainAdoptionRepository covers the `domain_adoption` table (migration
 // 001), which gates the per-domain cutover described in ARCHITECTURE.md
 // "Resolved questions" #3. Recording (AR-2) is never gated on this; only
-// AllocateVersion (AR-5) is.
 type DomainAdoptionRepository interface {
 	// GetStage returns domain's current adoption stage, defaulting to
 	// DomainAdoptionStageObserve when no row exists yet — every domain
@@ -748,9 +756,11 @@ type UploadRecordRepository interface {
 	// Optional filter on artifact_identity/version_reference for FR-10's retry checks.
 	ListUnconfirmedUploads(ctx context.Context, artifactIdentity, versionReference string) ([]UploadRecord, error)
 
-	// UpdateUploadState transitions uploadID to newState, stamping state_changed_at.
+	// UpdateUploadState transitions uploadID to newState, stamping state_changed_at
+	// and returning the updated record. Must be called inside Registry.WithTx.
 	// Implementations must enforce UploadState's legal transitions per migration 023.
-	UpdateUploadState(ctx context.Context, uploadID string, newState UploadState) error
+	// Returns ErrNotFound if the upload doesn't exist.
+	UpdateUploadState(ctx context.Context, uploadID string, newState UploadState) (*UploadRecord, error)
 }
 
 // BlobRecordRepository covers the `blob_record` table (migration 023, FR-12, FR-46, FR-61).
@@ -768,8 +778,10 @@ type BlobRecordRepository interface {
 	GetBlobRecord(ctx context.Context, blobID string) (*BlobRecord, error)
 
 	// UpdateBlobConfirmation transitions blobID's confirmation_state to newState,
-	// stamping confirmation_changed_at. Used after verification completes (FR-46).
-	UpdateBlobConfirmation(ctx context.Context, blobID string, newState BlobConfirmationState) error
+	// stamping confirmation_changed_at and returning the updated record.
+	// Used after verification completes (FR-46). Must be called inside Registry.WithTx.
+	// Returns ErrNotFound if the blob doesn't exist.
+	UpdateBlobConfirmation(ctx context.Context, blobID string, newState BlobConfirmationState) (*BlobRecord, error)
 }
 
 // BlobVersionRepository covers the `blob_version` table (migration 023, FR-12).

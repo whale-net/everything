@@ -58,6 +58,7 @@ func TestAdoptArtifact_UnblocksChartPinningPreRegistryImage(t *testing.T) {
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:chart-preadopt", Version: "v1.0.0",
+		IdentityDigest: "sha256:chart-preadopt",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-chart-app", Repository: "ghcr.io/demo/chart-app", Version: "v0.9.0", Digest: "sha256:pre-registry-image"},
 		},
@@ -84,6 +85,7 @@ func TestAdoptArtifact_UnblocksChartPinningPreRegistryImage(t *testing.T) {
 	chartResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:chart-preadopt", Version: "v1.0.0",
+		IdentityDigest: "sha256:chart-preadopt",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-chart-app", Repository: "ghcr.io/demo/chart-app", Version: "v0.9.0", Digest: "sha256:pre-registry-image"},
 		},
@@ -109,6 +111,7 @@ func TestAdoptArtifact_NeverDowngradesObservedProvenance(t *testing.T) {
 	recorded, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:observed-not-downgraded", Version: "v1.0.0",
+		IdentityDigest: "sha256:observed-not-downgraded",
 		IdempotencyKey: "record-observed-1",
 	})
 	if err != nil {
@@ -144,6 +147,7 @@ func TestAdoptArtifact_DifferentDigestConflict(t *testing.T) {
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:conflict-original", Version: "v1.0.0",
+		IdentityDigest: "sha256:conflict-original",
 		IdempotencyKey: "record-conflict-1",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -286,6 +290,7 @@ func TestAdoptArtifact_ChartWithContains(t *testing.T) {
 	imgResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-chart-app", Digest: "sha256:chart-contains-image", Version: "v1.0.0",
+		IdentityDigest: "sha256:chart-contains-image",
 		IdempotencyKey: "chart-contains-image-1",
 	})
 	if err != nil {
@@ -318,6 +323,7 @@ func TestListArtifacts_ProvenanceFilter(t *testing.T) {
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:prov-observed", Version: "v1.0.0",
+		IdentityDigest: "sha256:prov-observed",
 		IdempotencyKey: "prov-observed-1",
 	}); err != nil {
 		t.Fatalf("record observed: %v", err)

@@ -140,6 +140,11 @@ type ResolvedPlan struct {
 	// Versions maps a target's key() (repository.TargetKey format) to the
 	// version resolved for it.
 	Versions map[string]string
+	// Kinds maps a target's key() (repository.TargetKey format) to the
+	// artifact kind (from the registry's app_type) determined at plan resolution.
+	// This is carrier 2 (the registry snapshot) and is used for carrier-1/2
+	// comparison and downstream verification (FR-64, FR-24).
+	Kinds map[string]string
 	// RawJSON is the resolved plan as persisted verbatim onto
 	// release_run.ResolvedPlan (see repository.ReleaseRun's doc comment) --
 	// opaque to the workflow, whatever shape the plan-resolution logic

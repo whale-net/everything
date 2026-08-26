@@ -112,6 +112,11 @@ message RecordArtifactRequest {
   string version = 5;  // semver tag, validated as v<major>.<minor>.<patch>
   string digest = 6;   // "sha256:..." — required
 
+  // FR-13/FR-14: identity_digest computed over uncompressed content,
+  // invariant to compression, file ordering, archive metadata, and manifest
+  // formatting. Required for no-op detection (FR-17).
+  string identity_digest = 10;
+
   // Only valid for kind == CHART. Every referenced image must already be
   // recorded, or the call fails — a chart may not pin an unknown digest.
   repeated ContainedImage contains = 7;
@@ -669,4 +674,82 @@ message BrokerUploadResponse {
   // to a single upload authorization record in the database (FR-7).
   // Callers use this ID to report upload completion.
   string upload_session_id = 2;
+}
+
+// ============================================================================
+// Upload confirmation (FR-46, FR-47, NFR-24)
+//
+// Read-back is the only thing that confirms an upload. An upload is confirmed
+// only after the bytes at the object key have been read back, decoded per the
+// kind's H4 encoding policy, and hashed by the registry; the resulting hash
+// must equal the claimed digest. On mismatch, the blob is not registered,
+// the upload fails with an error naming key + claimed + computed digest, and
+// the mismatched object is left in place as an orphan.
+// ============================================================================
+
+// ConfirmUploadFile is one file in a ConfirmUploadRequest.
+message ConfirmUploadFile {
+  // The file's identifier within the upload batch (e.g., "linux-amd64").
+  // Echoed in the response for correlation.
+  string variant_key = 1;
+
+  // The registry-chosen object key returned by BrokerUpload for this file.
+  // Used to locate the bytes for read-back and hashing.
+  string object_key = 2;
+
+  // The claimed uncompressed content digest (e.g., "sha256:...") that the
+  // uploaded bytes should match after decoding per the kind's H4 encoding.
+  string claimed_digest = 3;
+}
+
+// ConfirmUploadRequest confirms an upload by reading back the bytes,
+// decoding with the kind's H4 policy, and verifying the digest. One request
+// confirms all files from a single BrokerUpload session (FR-46).
+message ConfirmUploadRequest {
+  // The upload_session_id returned by BrokerUpload that links all files in
+  // this batch to a single upload authorization record.
+  string upload_session_id = 1;
+
+  // The artifact kind this upload is for (required, non-empty).
+  // Used to resolve the H4 encoding policy for decode-before-hash.
+  string artifact_kind = 2;
+
+  // The set of files to confirm in this request. Each file's bytes are
+  // read back, decoded, hashed, and compared to its claimed_digest.
+  repeated ConfirmUploadFile files = 3;
+}
+
+// ConfirmUploadFileResult is the confirmation outcome for one file.
+message ConfirmUploadFileResult {
+  // The variant key this result is for (echoed from the request).
+  string variant_key = 1;
+
+  // True if confirmation succeeded: read-back, decode, and hash all matched.
+  bool confirmed = 2;
+
+  // On confirmation failure: the object key that was attempted (NFR-12).
+  string object_key = 3;
+
+  // On confirmation failure: the digest the caller claimed (NFR-12).
+  string claimed_digest = 4;
+
+  // On confirmation failure: the digest computed after decode (NFR-12).
+  string computed_digest = 5;
+
+  // On confirmation failure: human-readable error message (NFR-12).
+  string error_message = 6;
+  // True if confirmation failed due to a timeout (NFR-24) rather than a
+  // digest mismatch. Timeouts are retryable; a timed-out confirm leaves no
+  // version published and may be retried without re-uploading the blob if it
+  // was already confirmed before the timeout.
+  bool is_timeout = 7;
+}
+
+// ConfirmUploadResponse is the confirmation outcome for the batch.
+message ConfirmUploadResponse {
+  // One result per file in the request, in the same order.
+  repeated ConfirmUploadFileResult results = 1;
+
+  // True if all files were confirmed (all results have confirmed=true).
+  bool all_confirmed = 2;
 }

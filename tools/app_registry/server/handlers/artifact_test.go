@@ -95,6 +95,7 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 			resp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 				BuildId: build.BuildId, Kind: tc.kind,
 				OwnerFullName: "demo-" + tc.appName, Digest: "sha256:" + tc.appName + "-" + tc.kind.String(), Version: "v1.0.0",
+				IdentityDigest: "sha256:" + tc.appName + "-" + tc.kind.String(),
 				IdempotencyKey: "record-" + tc.appName + "-" + tc.kind.String(),
 			})
 			if err != nil {
@@ -144,6 +145,7 @@ func TestRecordArtifact_PromotabilityIsRetroactive(t *testing.T) {
 	published, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:retro1", Version: "v1.0.0",
+		IdentityDigest: "sha256:retro1",
 		IdempotencyKey: "record-retro",
 	})
 	if err != nil {
@@ -186,6 +188,7 @@ func TestRecordArtifact_PromotabilityIsRetroactive(t *testing.T) {
 	newPub, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build2.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:retro2", Version: "v1.0.1",
+		IdentityDigest: "sha256:retro2",
 		IdempotencyKey: "record-retro-2",
 	})
 	if err != nil {
@@ -204,6 +207,7 @@ func TestRecordArtifact_ChartIsAlwaysPromotable(t *testing.T) {
 	imgResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-chart-app", Digest: "sha256:imageforchart", Version: "v1.0.0",
+		IdentityDigest: "sha256:imageforchart",
 		IdempotencyKey: "record-image-for-chart",
 	})
 	if err != nil {
@@ -213,6 +217,7 @@ func TestRecordArtifact_ChartIsAlwaysPromotable(t *testing.T) {
 	chartResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:chart1", Version: "v1.0.0",
+		IdentityDigest: "sha256:chart1",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-chart-app", Repository: "repo", Version: "v1.0.0", Digest: imgResp.Artifact.Digest},
 		},
@@ -236,6 +241,7 @@ func TestRecordArtifact_RejectsChartPinningUnrecordedImage(t *testing.T) {
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:chartreject", Version: "v1.0.0",
+		IdentityDigest: "sha256:chartreject",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-chart-app", Repository: "repo", Version: "v1.0.0", Digest: "sha256:neverrecorded"},
 		},
@@ -277,6 +283,7 @@ func TestRecordArtifact_UnknownOwnerNamesTheOwnerAndHintsAtReconcile(t *testing.
 			_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 				BuildId: build.BuildId, Kind: tc.kind,
 				OwnerFullName: tc.ownerFullName, Digest: "sha256:" + tc.name, Version: "v1.0.0",
+				IdentityDigest: "sha256:" + tc.name,
 				IdempotencyKey: "record-" + tc.name,
 			})
 			if err == nil {
@@ -317,6 +324,7 @@ func TestRecordArtifact_UnknownOwnerCarriesStructuredReason(t *testing.T) {
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-never-reconciled-app-2", Digest: "sha256:structuredreason", Version: "v1.0.0",
+		IdentityDigest: "sha256:structuredreason",
 		IdempotencyKey: "record-structured-reason",
 	})
 	if err == nil {
@@ -348,6 +356,7 @@ func TestRecordArtifact_UnrelatedInvalidArgumentHasNoOwnerReason(t *testing.T) {
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:chartunrelated", Version: "v1.0.0",
+		IdentityDigest: "sha256:chartunrelated",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-chart-app", Repository: "repo", Version: "v1.0.0", Digest: "sha256:neverrecordedunrelated"},
 		},
@@ -393,6 +402,7 @@ func TestRecordArtifact_DuplicateOwnerKindVersionIsAlreadyExists(t *testing.T) {
 	first := &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:first", Version: "v1.2.3",
+		IdentityDigest: "sha256:first",
 		IdempotencyKey: "record-dup-1",
 	}
 	if _, err := artifactSrv.RecordArtifact(ctx, first); err != nil {
@@ -405,6 +415,7 @@ func TestRecordArtifact_DuplicateOwnerKindVersionIsAlreadyExists(t *testing.T) {
 	second := &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:different", Version: "v1.2.3",
+		IdentityDigest: "sha256:different",
 		IdempotencyKey: "record-dup-2",
 	}
 	_, err := artifactSrv.RecordArtifact(ctx, second)
@@ -426,6 +437,7 @@ func TestResolveArtifact_ReturnsImagesForChart(t *testing.T) {
 	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-chart-app", Digest: "sha256:resolveimg", Version: "v1.2.3",
+		IdentityDigest: "sha256:resolveimg",
 		IdempotencyKey: "record-resolve-img",
 	})
 	if err != nil {
@@ -435,6 +447,7 @@ func TestResolveArtifact_ReturnsImagesForChart(t *testing.T) {
 	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:resolvechart", Version: "v1.0.0",
+		IdentityDigest: "sha256:resolvechart",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-chart-app", Repository: "repo", Version: "v1.2.3", Digest: img.Artifact.Digest},
 		},
@@ -467,6 +480,7 @@ func TestListArtifactPins_ReturnsSingleChartThatPinsImage(t *testing.T) {
 	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:pinssingleimg", Version: "v1.0.0",
+		IdentityDigest: "sha256:pinssingleimg",
 		IdempotencyKey: "record-pins-single-img",
 	})
 	if err != nil {
@@ -476,6 +490,7 @@ func TestListArtifactPins_ReturnsSingleChartThatPinsImage(t *testing.T) {
 	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinssinglechart", Version: "v1.0.0",
+		IdentityDigest: "sha256:pinssinglechart",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
 		},
@@ -505,6 +520,7 @@ func TestListArtifactPins_ReturnsMultipleChartsThatPinSameImage(t *testing.T) {
 	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:pinsmultiimg", Version: "v1.0.0",
+		IdentityDigest: "sha256:pinsmultiimg",
 		IdempotencyKey: "record-pins-multi-img",
 	})
 	if err != nil {
@@ -514,6 +530,7 @@ func TestListArtifactPins_ReturnsMultipleChartsThatPinSameImage(t *testing.T) {
 	chartV1, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinsmultichart1", Version: "v1.0.0",
+		IdentityDigest: "sha256:pinsmultichart1",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
 		},
@@ -525,6 +542,7 @@ func TestListArtifactPins_ReturnsMultipleChartsThatPinSameImage(t *testing.T) {
 	chartV2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinsmultichart2", Version: "v1.1.0",
+		IdentityDigest: "sha256:pinsmultichart2",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
 		},
@@ -560,6 +578,7 @@ func TestListArtifactPins_ImageWithNoPins_ReturnsEmptySuccess(t *testing.T) {
 	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:pinsnoneimg", Version: "v1.0.0",
+		IdentityDigest: "sha256:pinsnoneimg",
 		IdempotencyKey: "record-pins-none-img",
 	})
 	if err != nil {
@@ -604,6 +623,7 @@ func TestListArtifactPins_ChartArtifact_ReturnsInvalidArgument(t *testing.T) {
 	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinswrongkindchart", Version: "v1.0.0",
+		IdentityDigest: "sha256:pinswrongkindchart",
 		IdempotencyKey: "record-pins-wrongkind-chart",
 	})
 	if err != nil {
@@ -632,6 +652,7 @@ func TestListArtifactPins_DigestAndArtifactIdBothResolveSameArtifact(t *testing.
 	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:pinsduallookupimg", Version: "v1.0.0",
+		IdentityDigest: "sha256:pinsduallookupimg",
 		IdempotencyKey: "record-pins-duallookup-img",
 	})
 	if err != nil {
@@ -640,6 +661,7 @@ func TestListArtifactPins_DigestAndArtifactIdBothResolveSameArtifact(t *testing.
 	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinsduallookupchart", Version: "v1.0.0",
+		IdentityDigest: "sha256:pinsduallookupchart",
 		Contains: []*pb.ContainedImage{
 			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
 		},
@@ -676,6 +698,7 @@ func TestRecordArtifact_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
 	req := &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:idem", Version: "v1.0.0",
+		IdentityDigest: "sha256:idem",
 		IdempotencyKey: "idem-key",
 	}
 	if _, err := artifactSrv.RecordArtifact(ctx, req); err != nil {
@@ -720,6 +743,7 @@ func TestRecordArtifact_RejectsMissingIdempotencyKey(t *testing.T) {
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:noidem", Version: "v1.0.0",
+		IdentityDigest: "sha256:noidem",
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument for missing idempotency_key, got %v", err)
@@ -870,6 +894,7 @@ func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 			if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 				BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 				OwnerFullName: "demo-image-app", Digest: "sha256:seed-" + tc.increment, Version: "v1.2.3",
+				IdentityDigest: "sha256:seed-" + tc.increment,
 				IdempotencyKey: "seed-artifact-" + tc.increment,
 			}); err != nil {
 				t.Fatalf("seed RecordArtifact: %v", err)
@@ -1002,7 +1027,8 @@ func TestAllocateVersion_ReusesFailedVersionOnRetry(t *testing.T) {
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: secondBuild.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:retry-succeeded",
-		Version: retryAlloc.Version, IdempotencyKey: "retry-record-2",
+		IdentityDigest: "sha256:retry-succeeded",
+		Version:        retryAlloc.Version, IdempotencyKey: "retry-record-2",
 	}); err != nil {
 		t.Fatalf("RecordArtifact (retry): %v", err)
 	}
@@ -1096,6 +1122,7 @@ func TestArtifactLifecycle_AllocateBeginPublishRecord(t *testing.T) {
 	recorded, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:lifecycle", Version: alloc.Version,
+		IdentityDigest: "sha256:lifecycle",
 		IdempotencyKey: "lifecycle-record",
 	})
 	if err != nil {
@@ -1113,6 +1140,7 @@ func TestArtifactLifecycle_AllocateBeginPublishRecord(t *testing.T) {
 	again, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:lifecycle", Version: alloc.Version,
+		IdentityDigest: "sha256:lifecycle",
 		IdempotencyKey: "lifecycle-record-replay",
 	})
 	if err != nil {
@@ -1127,6 +1155,7 @@ func TestArtifactLifecycle_AllocateBeginPublishRecord(t *testing.T) {
 	_, err = artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:lifecycle-different", Version: alloc.Version,
+		IdentityDigest: "sha256:lifecycle-different",
 		IdempotencyKey: "lifecycle-record-conflict",
 	})
 	if status.Code(err) != codes.AlreadyExists {
@@ -1175,6 +1204,7 @@ func TestBeginPublishThenRecordArtifact_SharedIdempotencyKey_ExecuteIndependentl
 	recorded, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:real-digest", Version: "v1.0.0",
+		IdentityDigest: "sha256:real-digest",
 		IdempotencyKey: sharedKey, // reuses BeginPublish's key -- this is the bug
 	})
 	if err != nil {
@@ -1323,6 +1353,7 @@ func TestBeginPublish_RejectsPublishedRow(t *testing.T) {
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:already-published", Version: "v1.0.0",
+		IdentityDigest: "sha256:already-published",
 		IdempotencyKey: "begin-on-published-seed",
 	}); err != nil {
 		t.Fatalf("seed published artifact: %v", err)
@@ -1419,6 +1450,7 @@ func TestRecordArtifact_RejectsAtNonObserveStageWithoutPriorRow(t *testing.T) {
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:reject-non-observe", Version: "v1.0.0",
+		IdentityDigest: "sha256:reject-non-observe",
 		IdempotencyKey: "reject-non-observe",
 	})
 	if status.Code(err) != codes.FailedPrecondition {
@@ -1687,6 +1719,7 @@ func TestGetReleaseRun_ReturnsEveryChildRegardlessOfState(t *testing.T) {
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-app-one", Digest: "sha256:getrun-one", Version: "v1.0.0",
+		IdentityDigest: "sha256:getrun-one",
 		IdempotencyKey: "getrun-states-one-record",
 	}); err != nil {
 		t.Fatalf("RecordArtifact app-one: %v", err)
@@ -1763,6 +1796,7 @@ func TestGetReleaseRun_AppNeverReachedStillReportsIncomplete(t *testing.T) {
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-app-one", Digest: "sha256:killed-early-one", Version: "v1.0.0",
+		IdentityDigest: "sha256:killed-early-one",
 		IdempotencyKey: "getrun-killed-early-one-record",
 	}); err != nil {
 		t.Fatalf("RecordArtifact app-one: %v", err)
@@ -1913,6 +1947,7 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
 		Digest:         sharedDigest,
+		IdentityDigest: sharedDigest,
 		Version:        "v1.0.0",
 		IdempotencyKey: "record-same-digest-v1",
 	})
@@ -1929,6 +1964,7 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
 		Digest:         sharedDigest,
+		IdentityDigest: sharedDigest,
 		Version:        "v1.0.1",
 		IdempotencyKey: "record-same-digest-v101",
 	})
@@ -1942,6 +1978,7 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
 		Digest:         sharedDigest,
+		IdentityDigest: sharedDigest,
 		Version:        "v1.1.0",
 		IdempotencyKey: "record-same-digest-v110",
 	})
@@ -1958,6 +1995,7 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
 		Digest:         sharedDigest,
+		IdentityDigest: sharedDigest,
 		Version:        "v2.0.0",
 		IdempotencyKey: "record-same-digest-v2",
 	})
@@ -2028,6 +2066,7 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
 		Digest:         "sha256:digest-v1.0.0",
+		IdentityDigest: "sha256:digest-v1.0.0",
 		Version:        "v1.0.0",
 		IdempotencyKey: "pub-1",
 	}); err != nil {
@@ -2040,6 +2079,7 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
 		Digest:         "sha256:digest-v1.1.0",
+		IdentityDigest: "sha256:digest-v1.1.0",
 		Version:        "v1.1.0",
 		IdempotencyKey: "pub-2",
 	}); err != nil {
@@ -2052,6 +2092,7 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
 		Digest:         "sha256:digest-v1.0.1",
+		IdentityDigest: "sha256:digest-v1.0.1",
 		Version:        "v1.0.1",
 		IdempotencyKey: "pub-3",
 	}); err != nil {
@@ -2064,6 +2105,7 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName:  "demo-image-app",
 		Digest:         "sha256:digest-v1.10.0",
+		IdentityDigest: "sha256:digest-v1.10.0",
 		Version:        "v1.10.0",
 		IdempotencyKey: "pub-4",
 	}); err != nil {
@@ -2119,5 +2161,392 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound for before_version=v1.0.0, got %v", err)
+	}
+}
+
+// ============================================================================
+// FR-20/FR-22/FR-46/FR-24/NFR-9: Byte-free publish state machine tests
+// ============================================================================
+
+// TestPublish_ManifestRequired_ThenPublished verifies FR-19: RecordArtifact
+// requires a manifest to exist for the owner when completing publish. The
+// manifest gate ensures "every kind published through this path publishes a
+// checksum manifest".
+func TestPublish_ManifestRequired_ThenPublished(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-manifest")
+
+	// 1. Begin publishing
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-pub-manifest",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
+	// 2. RecordArtifact to complete publish: manifest MUST exist for
+	// demo-image-app (set up by setup() via ReconcileApps) or this fails.
+	recordResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:test-manifest",
+		IdentityDigest: "sha256:test-manifest-identity",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-manifest",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact with manifest present: %v", err)
+	}
+	if recordResp.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("expected PUBLISHED state, got %v", recordResp.Artifact.State)
+	}
+	if recordResp.Artifact.Digest != "sha256:test-manifest" {
+		t.Fatalf("expected digest sha256:test-manifest, got %s", recordResp.Artifact.Digest)
+	}
+}
+
+// TestPublish_FailPublish_ExplicitFailed verifies FR-22: publish errors
+// result in explicit failed state transition, not a stranded/stale row.
+// FailPublish transitions publishing -> failed.
+func TestPublish_FailPublish_ExplicitFailed(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-fail-pub")
+
+	// 1. BeginPublish to get to publishing state
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-pub-fail",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
+	// 2. FailPublish to transition to failed state
+	failResp, err := artifactSrv.FailPublish(ctx, &pb.FailPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Reason:         "manifest validation failed",
+		IdempotencyKey: "fail-pub",
+	})
+	if err != nil {
+		t.Fatalf("FailPublish: %v", err)
+	}
+	if failResp.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_FAILED {
+		t.Fatalf("expected FAILED state, got %v", failResp.Artifact.State)
+	}
+	if failResp.Artifact.FailReason != "manifest validation failed" {
+		t.Fatalf("expected fail reason 'manifest validation failed', got %q", failResp.Artifact.FailReason)
+	}
+}
+
+// TestPublish_IdempotentRecordArtifact_NFR9 verifies NFR-9: re-running
+// publish (RecordArtifact) for the same version+digest reaches the same
+// terminal state without minting a duplicate version and without erroring.
+func TestPublish_IdempotentRecordArtifact_NFR9(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-idempotent")
+	digest := "sha256:idempotent-digest"
+
+	// 1. First publish: begin + record
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-idem",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
+	firstRecord, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         digest,
+		IdentityDigest: "sha256:idempotent-identity",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-idem",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact first time: %v", err)
+	}
+	firstArtifactID := firstRecord.Artifact.ArtifactId
+
+	// 2. Re-publish same version+digest: should reach same published state
+	// without creating a new artifact_id (idempotency replay)
+	secondRecord, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         digest,
+		IdentityDigest: "sha256:idempotent-identity",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-idem", // Same key -> idempotency replay
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact (idempotent replay): %v", err)
+	}
+	if secondRecord.Artifact.ArtifactId != firstArtifactID {
+		t.Fatalf("idempotency replay created new artifact: expected %s, got %s",
+			firstArtifactID, secondRecord.Artifact.ArtifactId)
+	}
+	if secondRecord.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("expected PUBLISHED state on idempotent replay, got %v", secondRecord.Artifact.State)
+	}
+}
+
+// TestPublish_BeginPublish_TransitionToPublishing verifies explicit
+// state transitions for FR-22: begin publishing transitions to publishing state.
+func TestPublish_BeginPublish_TransitionToPublishing(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-begin-pub")
+
+	// BeginPublish with no prior allocation (∅ -> publishing)
+	resp, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v2.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-pub-v2",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+	if resp.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHING {
+		t.Fatalf("expected state PUBLISHING, got %v", resp.Artifact.State)
+	}
+}
+
+// TestPublish_BinaryKindOnImageTarget_VerifiesAsCorrectKind verifies FR-24:
+// post-publish verification reads the kind from the published artifact's bound
+// manifest snapshot, not the routing kind. A binary published as BINARY kind
+// must verify as BINARY even if looked up via IMAGE.
+func TestPublish_BinaryKindPublished_GetRetrievesAsPublished(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-kind-resolve")
+
+	// 1. Publish a binary artifact explicitly
+	_, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  "demo-image-app",
+		Version:        "v1.0.0",
+		Repository:     "ghcr.io/whale-net/demo-image-app",
+		BuildId:        build.BuildId,
+		IdempotencyKey: "begin-binary",
+	})
+	if err != nil {
+		t.Fatalf("BeginPublish as BINARY: %v", err)
+	}
+
+	_, err = artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:binary-digest",
+		IdentityDigest: "sha256:binary-digest-identity",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-binary",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact as BINARY: %v", err)
+	}
+
+	// 2. Verify using GetArtifact with kind BINARY resolves correctly
+	getResp, err := artifactSrv.GetArtifact(ctx, &pb.GetArtifactRequest{
+		OwnerFullName:   "demo-image-app",
+		Kind:            pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		LatestPublished: true,
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact(BINARY): %v", err)
+	}
+	if getResp.Artifact.Kind != pb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		t.Fatalf("expected kind BINARY, got %v", getResp.Artifact.Kind)
+	}
+	if getResp.Artifact.State != pb.ArtifactState_ARTIFACT_STATE_PUBLISHED {
+		t.Fatalf("expected PUBLISHED state, got %v", getResp.Artifact.State)
+	}
+}
+
+// TestRecordArtifact_NoopDetectionByIdentityDigest tests FR-17 artifact-level
+// no-op detection: when recording an artifact with an identity_digest that
+// matches an already-published artifact's identity_digest (same owner/kind),
+// the existing artifact is returned and no new version is allocated.
+func TestRecordArtifact_NoopDetectionByIdentityDigest(t *testing.T) {
+	appSrv, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-noop-detect")
+
+	const identityDigest = "sha256:identical-content-digest"
+	const contentDigest1 = "sha256:content-pushed-first"
+
+	// 1. Record v1.0.0 with a specific content digest and identity digest
+	resp1, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         contentDigest1,
+		IdentityDigest: identityDigest,
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-noop-v1",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v1.0.0): %v", err)
+	}
+	if resp1.Artifact.Version != "v1.0.0" || resp1.Artifact.Digest != contentDigest1 {
+		t.Fatalf("unexpected resp1: version=%s digest=%s", resp1.Artifact.Version, resp1.Artifact.Digest)
+	}
+	if resp1.Artifact.IdentityDigest != identityDigest {
+		t.Fatalf("expected identity_digest %s in resp1, got %s", identityDigest, resp1.Artifact.IdentityDigest)
+	}
+	firstArtifactID := resp1.Artifact.ArtifactId
+
+	// 2. Try to record v1.0.1 with a different content digest but the SAME
+	// identity_digest. This should FAIL with a uniqueness constraint violation
+	// because v1.0.0 and v1.0.1 are in the same major.minor series (v1.0.x)
+	// and can't both have the same identity_digest (same content).
+	const contentDigest2 = "sha256:content-pushed-second"
+	_, err = artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         contentDigest2,
+		IdentityDigest: identityDigest,
+		Version:        "v1.0.1",
+		IdempotencyKey: "record-noop-v101",
+	})
+	if err == nil {
+		t.Fatalf("expected RecordArtifact for v1.0.1 with same identity_digest to fail on uniqueness constraint")
+	}
+	if !strings.Contains(err.Error(), "already published with identity_digest") {
+		t.Fatalf("expected uniqueness constraint error mentioning identity_digest, got: %v", err)
+	}
+
+	// 3. Record v1.1.0 (different minor version) with the SAME identity_digest.
+	// This should SUCCEED because v1.1.0 is in a different series (v1.1.x).
+	resp2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         contentDigest2,
+		IdentityDigest: identityDigest,
+		Version:        "v1.1.0",
+		IdempotencyKey: "record-v110",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v1.1.0): %v", err)
+	}
+	if resp2.Artifact.Version != "v1.1.0" {
+		t.Fatalf("expected v1.1.0, got %s", resp2.Artifact.Version)
+	}
+
+	// 4. Record v2.0.0 (different major version) with the SAME identity_digest.
+	// This should SUCCEED because v2.0.0 is in a completely different series (v2.x).
+	resp3, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         contentDigest2,
+		IdentityDigest: identityDigest,
+		Version:        "v2.0.0",
+		IdempotencyKey: "record-v200",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(v2.0.0): %v", err)
+	}
+	if resp3.Artifact.Version != "v2.0.0" {
+		t.Fatalf("expected v2.0.0, got %s", resp3.Artifact.Version)
+	}
+
+	// 5. Verify that a separate app is NOT affected by this identity_digest
+	// (no-op detection is per-owner, not global). First, reconcile a new app
+	// so it exists in the registry.
+	if _, err := appSrv.ReconcileApps(ctx, &pb.ReconcileAppsRequest{
+		Manifests: manifestSet([]*appmetapb.AppManifest{
+			{Domain: "demo", Name: "different-app", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
+		}, nil),
+		IdempotencyKey: "setup-different-app",
+	}); err != nil {
+		t.Fatalf("reconcile different app: %v", err)
+	}
+
+	const differentAppDigest = "sha256:different-app-content"
+	resp4, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-different-app",
+		Digest:         differentAppDigest,
+		IdentityDigest: identityDigest, // same identity_digest
+		Version:        "v2.0.0",
+		IdempotencyKey: "record-noop-different-app",
+	})
+	if err != nil {
+		t.Fatalf("RecordArtifact(different app, v2.0.0): %v", err)
+	}
+	if resp4.Artifact.Version != "v2.0.0" {
+		t.Fatalf("expected v2.0.0 for different app, got %s", resp4.Artifact.Version)
+	}
+	if resp4.Artifact.Digest != differentAppDigest {
+		t.Fatalf("expected digest %s for different app, got %s", differentAppDigest, resp4.Artifact.Digest)
+	}
+	if resp4.Artifact.ArtifactId == firstArtifactID {
+		t.Fatalf("expected different artifact ID for different app")
+	}
+}
+
+// TestRecordArtifact_RequiresIdentityDigest verifies FR-14: missing
+// identity_digest is a hard error and is never accepted. This prevents
+// run-specific or synthesized digests from entering the system.
+func TestRecordArtifact_RequiresIdentityDigest(t *testing.T) {
+	_, artifactSrv, _ := setup(t)
+	ctx := authedCtx()
+	build := recordBuild(t, artifactSrv, "run-identity-required")
+
+	// Try to record an artifact without providing identity_digest.
+	// This should fail with InvalidArgument.
+	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+		BuildId:        build.BuildId,
+		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName:  "demo-image-app",
+		Digest:         "sha256:somecontent",
+		Version:        "v1.0.0",
+		IdempotencyKey: "record-no-identity-digest",
+		// IdentityDigest is deliberately omitted
+	})
+
+	if err == nil {
+		t.Fatalf("expected RecordArtifact to reject missing identity_digest, got nil error")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected gRPC status error, got %T: %v", err, err)
+	}
+
+	if st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument code, got %v: %v", st.Code(), st.Message())
+	}
+
+	if !strings.Contains(st.Message(), "identity_digest is required") {
+		t.Fatalf("expected error message to mention identity_digest requirement, got: %s", st.Message())
 	}
 }

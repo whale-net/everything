@@ -50,6 +50,7 @@ go_test(
         "artifact_adopt_test.go",
         "artifact_test.go",
         "broker_upload_test.go",
+        "confirm_upload_test.go",
         "authz_test.go",
         "chart_hermeticity_test.go",
         "environment_test.go",
@@ -64,7 +65,10 @@ go_test(
     embed = [":handlers"],
     deps = [
         "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
         "//libs/go/grpcauth",
+        "//libs/go/s3",
         "//tools/app_registry/apierrors",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/auth",

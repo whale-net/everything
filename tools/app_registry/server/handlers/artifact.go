@@ -1,10 +1,15 @@
 package handlers
 
 import (
+	"bytes"
+	"compress/gzip"
+
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+	"io"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -36,6 +41,13 @@ var semverRe = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
 // repository.ArtifactRepository.AdoptArtifact's doc comment and
 // AppServer.SetAppStatus's identically-shaped `reason` parameter), so this
 // line is load-bearing, not incidental.
+
+// s3Client defines the interface for S3 operations used by confirmUploadFile.
+// This allows for testing with mock implementations.
+type s3Client interface {
+	Download(ctx context.Context, key string) ([]byte, error)
+}
+
 var artifactLog = logging.Get("app-registry-handlers")
 
 // ArtifactServer implements pb.ArtifactRegistryServer, backed by
@@ -267,6 +279,9 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 	if req.Digest == "" || !strings.HasPrefix(req.Digest, "sha256:") {
 		return nil, status.Error(codes.InvalidArgument, `digest is required and must be "sha256:..."`)
 	}
+	if req.IdentityDigest == "" {
+		return nil, status.Error(codes.InvalidArgument, "identity_digest is required (FR-13)")
+	}
 	if req.Version != "" && !semverRe.MatchString(req.Version) {
 		return nil, status.Errorf(codes.InvalidArgument, "version %q must match v<major>.<minor>.<patch>", req.Version)
 	}
@@ -295,12 +310,13 @@ func (s *ArtifactServer) RecordArtifact(ctx context.Context, req *pb.RecordArtif
 			}
 
 			a := repository.Artifact{
-				Kind:        kind,
-				Repository:  req.Repository,
-				Version:     req.Version,
-				Digest:      req.Digest,
-				BuildID:     req.BuildId,
-				PublishedAt: unixToTime(req.PublishedAt),
+				Kind:           kind,
+				Repository:     req.Repository,
+				Version:        req.Version,
+				Digest:         req.Digest,
+				IdentityDigest: req.IdentityDigest,
+				BuildID:        req.BuildId,
+				PublishedAt:    unixToTime(req.PublishedAt),
 			}
 			if kind != repository.ArtifactKindChart {
 				a.AppID = owner
@@ -1643,4 +1659,235 @@ func extractPrincipal(ctx context.Context) string {
 		return claims.Subject
 	}
 	return ""
+}
+
+// ConfirmUpload confirms an upload by reading back the bytes from S3,
+// decoding per the kind's H4 policy, and verifying the digest (FR-46, FR-47).
+// On mismatch, the blob is left as an orphan, not registered for resolution.
+func (s *ArtifactServer) ConfirmUpload(ctx context.Context, req *pb.ConfirmUploadRequest) (*pb.ConfirmUploadResponse, error) {
+	// Authorization check (FR-4): require builder role.
+	if err := auth.Require(ctx, auth.RoleBuilder); err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "authorization required: %v", err)
+	}
+
+	// Validate request
+	if err := s.validateConfirmUploadRequest(req); err != nil {
+		return nil, err
+	}
+
+	// Get the artifact kind to resolve hook policies (H4).
+	kind := kinds.GetKind(req.ArtifactKind)
+	if kind == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "unknown artifact kind %q", req.ArtifactKind)
+	}
+
+	// Get the encoding policy (H4).
+	encoding := kind.Hooks().H4().Encoding()
+	contentType := kind.Hooks().H3().ContentType()
+
+	// Get S3 client for read-back.
+	s3Client, err := s.getArtifactsS3Client()
+	if err != nil {
+		return nil, err
+	}
+
+	// NFR-24: Enforce per-artifact overall deadline of 180s.
+	// If the caller context already has a shorter deadline, respect it.
+	ctxDeadline, ok := ctx.Deadline()
+	var artifactDeadline time.Time
+	if !ok {
+		artifactDeadline = time.Now().Add(180 * time.Second)
+	} else {
+		// Caller has a deadline; use the earlier one.
+		proposedDeadline := time.Now().Add(180 * time.Second)
+		if proposedDeadline.Before(ctxDeadline) {
+			artifactDeadline = proposedDeadline
+		} else {
+			artifactDeadline = ctxDeadline
+		}
+	}
+	artifactCtx, cancel := context.WithDeadline(ctx, artifactDeadline)
+	defer cancel()
+
+	// Process each file with per-file 60s deadline (NFR-24).
+	results := make([]*pb.ConfirmUploadFileResult, 0, len(req.Files))
+	allConfirmed := true
+	hasTimeout := false
+
+	for _, file := range req.Files {
+		// Create a per-file deadline of 60s (NFR-24).
+		fileDeadline := time.Now().Add(60 * time.Second)
+		fileCtx, fileCancel := context.WithDeadline(artifactCtx, fileDeadline)
+		result, err := s.confirmUploadFile(fileCtx, s3Client, encoding, contentType, file)
+		fileCancel()
+
+		if err != nil {
+			// Handle overall artifact deadline timeout separately from per-file timeout.
+			if errors.Is(err, context.DeadlineExceeded) {
+				result = &pb.ConfirmUploadFileResult{
+					VariantKey:    file.VariantKey,
+					ObjectKey:     file.ObjectKey,
+					ClaimedDigest: file.ClaimedDigest,
+					Confirmed:     false,
+					IsTimeout:     true,
+					ErrorMessage:  "per-artifact confirmation budget (180s) exceeded",
+				}
+				hasTimeout = true
+			} else {
+				return nil, fmt.Errorf("confirm file %q: %w", file.VariantKey, err)
+			}
+		}
+
+		results = append(results, result)
+		if !result.Confirmed {
+			allConfirmed = false
+			if result.IsTimeout {
+				hasTimeout = true
+			}
+		}
+	}
+
+	// Update upload record state based on confirmation results.
+	// NFR-24: Only mark as Confirmed if all files confirmed AND no timeouts occurred.
+	if err := s.repo.WithTx(artifactCtx, func(ctx context.Context, r repository.Registry) error {
+		if allConfirmed && !hasTimeout {
+			_, err := r.UploadRecords().UpdateUploadState(ctx, req.UploadSessionId, repository.UploadStateConfirmed)
+			if err != nil {
+				return fmt.Errorf("update upload state: %w", err)
+			}
+		} else {
+			// Mark as failed if any file failed verification or timed out.
+			_, err := r.UploadRecords().UpdateUploadState(ctx, req.UploadSessionId, repository.UploadStateFailed)
+			if err != nil {
+				return fmt.Errorf("update upload state: %w", err)
+			}
+		}
+
+		return nil
+	}); err != nil {
+		return nil, mapRepoErr(err)
+	}
+
+	// Audit logging (NFR-12).
+	artifactLog.Info("upload confirmation",
+		slog.String("artifact_kind", req.ArtifactKind),
+		slog.String("upload_session_id", req.UploadSessionId),
+		slog.Int("file_count", len(req.Files)),
+		slog.Bool("all_confirmed", allConfirmed),
+		slog.Bool("has_timeout", hasTimeout),
+	)
+
+	return &pb.ConfirmUploadResponse{
+		Results:      results,
+		AllConfirmed: allConfirmed && !hasTimeout,
+	}, nil
+}
+
+// confirmUploadFile processes one file: downloads from S3, decodes, hashes,
+// and compares against the claimed digest. Returns an error only for unexpected
+// failures (e.g., S3 connectivity). Timeout and digest mismatch are returned
+// as confirmed=false in the result with is_timeout set appropriately.
+func (s *ArtifactServer) confirmUploadFile(ctx context.Context, s3Client s3Client, encoding string, contentType string, file *pb.ConfirmUploadFile) (*pb.ConfirmUploadFileResult, error) {
+	result := &pb.ConfirmUploadFileResult{
+		VariantKey:    file.VariantKey,
+		ObjectKey:     file.ObjectKey,
+		ClaimedDigest: file.ClaimedDigest,
+	}
+
+	// Check for timeout before attempting download (NFR-24).
+	select {
+	case <-ctx.Done():
+		result.Confirmed = false
+		result.IsTimeout = true
+		result.ErrorMessage = "per-file confirmation deadline (60s) exceeded"
+		return result, nil
+	default:
+	}
+
+	// Download from S3
+	data, err := s3Client.Download(ctx, file.ObjectKey)
+	if err != nil {
+		// Check if this is a context timeout.
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Confirmed = false
+			result.IsTimeout = true
+			result.ErrorMessage = "per-file confirmation deadline (60s) exceeded during download"
+			return result, nil
+		}
+		result.Confirmed = false
+		result.ErrorMessage = fmt.Sprintf("failed to download from S3: %v", err)
+		return result, nil
+	}
+
+	// Create a reader from the downloaded bytes
+	reader := bytes.NewReader(data)
+
+	// Decompress if needed (H4 policy).
+	var decompressed io.Reader = reader
+	if encoding == "gzip" {
+		gzipReader, err := gzip.NewReader(reader)
+		if err != nil {
+			result.Confirmed = false
+			result.ErrorMessage = fmt.Sprintf("failed to create gzip reader: %v", err)
+			return result, nil
+		}
+		defer gzipReader.Close()
+		decompressed = gzipReader
+	}
+
+	// Hash the decompressed bytes (FR-46).
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, decompressed); err != nil {
+		// Check if this is a context timeout.
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Confirmed = false
+			result.IsTimeout = true
+			result.ErrorMessage = "per-file confirmation deadline (60s) exceeded during hashing"
+			return result, nil
+		}
+		result.Confirmed = false
+		result.ErrorMessage = fmt.Sprintf("failed to hash bytes: %v", err)
+		return result, nil
+	}
+
+	// Compute the digest.
+	computedDigest := "sha256:" + fmt.Sprintf("%x", hasher.Sum(nil))
+	result.ComputedDigest = computedDigest
+
+	// Compare against claimed digest (FR-46, FR-47).
+	if computedDigest != file.ClaimedDigest {
+		result.Confirmed = false
+		result.IsTimeout = false // Mismatch, not timeout
+		result.ErrorMessage = fmt.Sprintf("digest mismatch: claimed %s, computed %s", file.ClaimedDigest, computedDigest)
+		return result, nil
+	}
+
+	result.Confirmed = true
+	result.IsTimeout = false
+	return result, nil
+}
+
+// validateConfirmUploadRequest ensures the request is well-formed.
+func (s *ArtifactServer) validateConfirmUploadRequest(req *pb.ConfirmUploadRequest) error {
+	if req.UploadSessionId == "" {
+		return status.Error(codes.InvalidArgument, "upload_session_id is required")
+	}
+	if req.ArtifactKind == "" {
+		return status.Error(codes.InvalidArgument, "artifact_kind is required")
+	}
+	if len(req.Files) == 0 {
+		return status.Error(codes.InvalidArgument, "files must be non-empty")
+	}
+	for _, file := range req.Files {
+		if file.VariantKey == "" {
+			return status.Error(codes.InvalidArgument, "file variant_key is required")
+		}
+		if file.ObjectKey == "" {
+			return status.Error(codes.InvalidArgument, "file object_key is required")
+		}
+		if file.ClaimedDigest == "" {
+			return status.Error(codes.InvalidArgument, "file claimed_digest is required")
+		}
+	}
+	return nil
 }

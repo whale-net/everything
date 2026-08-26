@@ -88,19 +88,19 @@ func (f uploadRecordFake) ListUnconfirmedUploads(ctx context.Context, artifactId
 	return result, nil
 }
 
-func (f uploadRecordFake) UpdateUploadState(ctx context.Context, uploadID string, newState repository.UploadState) error {
+func (f uploadRecordFake) UpdateUploadState(ctx context.Context, uploadID string, newState repository.UploadState) (*repository.UploadRecord, error) {
 	unlock := f.safeLock()
 	defer unlock()
 
 	record, ok := f.r.state.UploadRecords[uploadID]
 	if !ok {
-		return repository.ErrNotFound
+		return nil, repository.ErrNotFound
 	}
 
 	record.State = newState
 	record.StateChangedAt = time.Now().UTC()
 	f.r.state.UploadRecords[uploadID] = record
-	return nil
+	return &record, nil
 }
 
 // ============================================================================
@@ -174,19 +174,19 @@ func (f blobRecordFake) GetBlobRecord(ctx context.Context, blobID string) (*repo
 	return &record, nil
 }
 
-func (f blobRecordFake) UpdateBlobConfirmation(ctx context.Context, blobID string, newState repository.BlobConfirmationState) error {
+func (f blobRecordFake) UpdateBlobConfirmation(ctx context.Context, blobID string, newState repository.BlobConfirmationState) (*repository.BlobRecord, error) {
 	unlock := f.safeLock()
 	defer unlock()
 
 	record, ok := f.r.state.BlobRecords[blobID]
 	if !ok {
-		return repository.ErrNotFound
+		return nil, repository.ErrNotFound
 	}
 
 	record.ConfirmationState = newState
 	record.ConfirmationChangedAt = time.Now().UTC()
 	f.r.state.BlobRecords[blobID] = record
-	return nil
+	return &record, nil
 }
 
 // ============================================================================

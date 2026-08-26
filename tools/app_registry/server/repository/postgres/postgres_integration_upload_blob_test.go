@@ -86,7 +86,7 @@ func TestUploadRecord_StateTransition(t *testing.T) {
 	}
 
 	// Transition from allocated -> uploading
-	if err := reg.UploadRecords().UpdateUploadState(context.Background(), created.UploadID, repository.UploadStateUploading); err != nil {
+	if _, err := reg.UploadRecords().UpdateUploadState(context.Background(), created.UploadID, repository.UploadStateUploading); err != nil {
 		t.Fatalf("UpdateUploadState to uploading: %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestUploadRecord_StateTransition(t *testing.T) {
 	}
 
 	// Transition to confirmed
-	if err := reg.UploadRecords().UpdateUploadState(context.Background(), created.UploadID, repository.UploadStateConfirmed); err != nil {
+	if _, err := reg.UploadRecords().UpdateUploadState(context.Background(), created.UploadID, repository.UploadStateConfirmed); err != nil {
 		t.Fatalf("UpdateUploadState to confirmed: %v", err)
 	}
 
@@ -369,7 +369,7 @@ func TestBlobRecord_ConfirmationState(t *testing.T) {
 	}
 
 	// Transition to confirmed
-	if err := reg.BlobRecords().UpdateBlobConfirmation(context.Background(), created.BlobID, repository.BlobConfirmationStateConfirmed); err != nil {
+	if _, err := reg.BlobRecords().UpdateBlobConfirmation(context.Background(), created.BlobID, repository.BlobConfirmationStateConfirmed); err != nil {
 		t.Fatalf("UpdateBlobConfirmation to confirmed: %v", err)
 	}
 
@@ -383,7 +383,7 @@ func TestBlobRecord_ConfirmationState(t *testing.T) {
 	}
 
 	// Transition to failed
-	if err := reg.BlobRecords().UpdateBlobConfirmation(context.Background(), created.BlobID, repository.BlobConfirmationStateFailedVerification); err != nil {
+	if _, err := reg.BlobRecords().UpdateBlobConfirmation(context.Background(), created.BlobID, repository.BlobConfirmationStateFailedVerification); err != nil {
 		t.Fatalf("UpdateBlobConfirmation to failed: %v", err)
 	}
 

@@ -83,6 +83,7 @@ func TestResolveBinaryURL_KnownBinaryAndVersion(t *testing.T) {
 	artifact, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName: "tools-release_helper_go", Digest: "sha256:resolvebinary", Version: "v1.2.3",
+		IdentityDigest: "sha256:resolvebinary",
 		IdempotencyKey: "record-resolve-binary",
 	})
 	if err != nil {
@@ -232,6 +233,7 @@ func TestResolveBinaryURL_NoStoredKeyFails(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:nostoredkey",
+		IdentityDigest: "sha256:nostoredkey-identity",
 		Version:        "v1.0.0",
 		IdempotencyKey: "record-no-stored-key",
 	})
@@ -274,6 +276,7 @@ func TestResolveBinaryURL_PresignedURLCarriesSignature(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:presignedtest",
+		IdentityDigest: "sha256:presignedtest-identity",
 		Version:        "v2.0.0",
 		IdempotencyKey: "record-presigned-test",
 	})
@@ -344,6 +347,7 @@ func TestResolveBinaryURL_KeyOpcityAcrossPlatforms(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:keyopacitytest",
+		IdentityDigest: "sha256:keyopacitytest-identity",
 		Version:        "v3.0.0",
 		IdempotencyKey: "record-key-opacity",
 	})
@@ -435,6 +439,7 @@ func TestResolveBinaryURL_FR56_RegistryStateOwnership(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-fictional-tool",
 		Digest:         "sha256:fictional",
+		IdentityDigest: "sha256:fictional-identity",
 		Version:        "v1.0.0",
 		IdempotencyKey: "record-fictional",
 	})
@@ -494,6 +499,7 @@ func TestResolveBinaryURL_NFR25_PresignedURLExpiry(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:expirytest",
+		IdentityDigest: "sha256:expirytest-identity",
 		Version:        "v4.0.0",
 		IdempotencyKey: "record-expiry-test",
 	})
@@ -581,6 +587,7 @@ func TestResolveBinaryURL_SameURLNotReusedAcrossAttempts(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:nocachetest",
+		IdentityDigest: "sha256:nocachetest-identity",
 		Version:        "v5.0.0",
 		IdempotencyKey: "record-no-cache-test",
 	})
@@ -664,6 +671,7 @@ func TestResolveBinaryURL_FR43_ContentEncodingDescriptor(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:fr43test",
+		IdentityDigest: "sha256:fr43test-identity",
 		Version:        "v1.0.0",
 		IdempotencyKey: "record-fr43",
 	})
@@ -723,6 +731,7 @@ func TestResolveBinaryURL_FR67_PreCutoverFileName(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-release_helper_go",
 		Digest:         "sha256:fr67precutover",
+		IdentityDigest: "sha256:fr67precutover-identity",
 		Version:        "v2.0.0",
 		IdempotencyKey: "record-fr67-precutover",
 	})
@@ -779,6 +788,7 @@ func TestResolveBinaryURL_FR62_VariantSelectorBackwardCompat(t *testing.T) {
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName:  "tools-app-registry",
 		Digest:         "sha256:fr62test",
+		IdentityDigest: "sha256:fr62test-identity",
 		Version:        "v3.0.0",
 		IdempotencyKey: "record-fr62",
 	})

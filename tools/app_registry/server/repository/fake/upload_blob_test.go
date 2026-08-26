@@ -61,7 +61,7 @@ func TestFake_UploadRecord_StateTransition(t *testing.T) {
 		t.Fatalf("CreateUploadRecord: %v", err)
 	}
 
-	if err := reg.UploadRecords().UpdateUploadState(context.Background(), created.UploadID, repository.UploadStateUploading); err != nil {
+	if _, err := reg.UploadRecords().UpdateUploadState(context.Background(), created.UploadID, repository.UploadStateUploading); err != nil {
 		t.Fatalf("UpdateUploadState: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestFake_BlobRecord_ConfirmationState(t *testing.T) {
 		t.Errorf("Expected unconfirmed, got %s", created.ConfirmationState)
 	}
 
-	if err := reg.BlobRecords().UpdateBlobConfirmation(context.Background(), created.BlobID, repository.BlobConfirmationStateConfirmed); err != nil {
+	if _, err := reg.BlobRecords().UpdateBlobConfirmation(context.Background(), created.BlobID, repository.BlobConfirmationStateConfirmed); err != nil {
 		t.Fatalf("UpdateBlobConfirmation: %v", err)
 	}
 
