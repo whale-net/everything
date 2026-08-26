@@ -1,0 +1,10 @@
+"""LeafLab API keyset pagination token codec."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "pagetoken",
+    srcs = ["pagetoken.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/pagetoken",
+    visibility = ["//visibility:public"],
+)

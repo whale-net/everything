@@ -1,0 +1,15 @@
+"""LeafLab API structured error handling."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "apierrors",
+    srcs = ["apierrors.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/apierrors",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
