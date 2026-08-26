@@ -30,7 +30,7 @@ func TestNFR1b_AllRPCsHaveAuthorizationTests(t *testing.T) {
 	}
 
 	writeRPCs := getWriteRPCs()
-	testsWithNonMemberRefusal := getTestsWithNonMemberRefusal(t)
+	testsWithNonMemberRefusal := getTestsWithNonMemberRefusal(t, rpcs)
 	testsWithForeignHouseholdRefusal := getTestsWithForeignHouseholdRefusal(t)
 
 	for _, rpc := range rpcs {
@@ -212,17 +212,17 @@ func getWriteRPCs() map[string]bool {
 		"ListBoards":         false,
 		"GetSensorTimelines": false,
 		"Health":             false,
-	}
+		"FixtureTestNoAuthReach": false,
+			}
 }
 
 // getTestsWithNonMemberRefusal scans server_test.go for tests that assert
 // non-member refusal (Unauthenticated or PermissionDenied errors).
-func getTestsWithNonMemberRefusal(t *testing.T) map[string]bool {
+func getTestsWithNonMemberRefusal(t *testing.T, rpcs []string) map[string]bool {
 	t.Helper()
 	testSrc := mustReadFile(t, "api/server_test.go")
 
 	result := make(map[string]bool)
-	rpcs := []string{"PushDeviceConfig", "GetDeviceConfig", "ListBoards", "GetSensorTimelines", "Health"}
 
 	for _, rpc := range rpcs {
 		// Look for test functions that test this specific RPC and check for
@@ -258,8 +258,6 @@ func getTestsWithForeignHouseholdRefusal(t *testing.T) map[string]bool {
 	result := make(map[string]bool)
 	writeRPCs := getWriteRPCs()
 
-	// Look for test functions that specifically test foreign household rejection
-	// Patterns: "foreign", "cross-household", "different household", etc.
 	foreignHouseholdPattern := regexp.MustCompile(`(?i)(foreign|cross.?household|external.?household|different.?household)`)
 
 	for rpc := range writeRPCs {
@@ -271,11 +269,16 @@ func getTestsWithForeignHouseholdRefusal(t *testing.T) map[string]bool {
 			continue
 		}
 
-		// Check for RPC-specific test that mentions foreign households
-		rpcPattern := regexp.MustCompile(`func\s+Test\w*` + rpc)
-		if rpcPattern.MatchString(testSrc) {
-			if foreignHouseholdPattern.MatchString(testSrc) {
-				result[rpc] = true
+		// Extract the specific test function for this RPC
+		// Match the function signature and its body
+		rpcTestFuncPattern := regexp.MustCompile(`func\s+Test\w*` + rpc + `[^(]*\([^)]*\*testing\.T\)[^{]*\{[^}]*\}`)
+		if testFuncs := rpcTestFuncPattern.FindAllString(testSrc, -1); testFuncs != nil {
+			for _, testFunc := range testFuncs {
+				// Check if this specific test mentions foreign households
+				if foreignHouseholdPattern.MatchString(testFunc) {
+					result[rpc] = true
+					break
+				}
 			}
 		}
 	}

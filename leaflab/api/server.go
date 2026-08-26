@@ -595,3 +595,26 @@ func (s *LeafLabAPIServer) Health(ctx context.Context, _ *pb.HealthRequest) (*pb
 
 	return &pb.HealthResponse{Status: pb.HealthResponse_UP}, nil
 }
+
+// FixtureTestNoAuthReach is a fixture RPC for red/green testing of NFR1.b conformance.
+// This handler properly consults authorization reach.
+func (s *LeafLabAPIServer) FixtureTestNoAuthReach(ctx context.Context, req *pb.FixtureTestNoAuthReachRequest) (*pb.FixtureTestNoAuthReachResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+	
+	subject, _ := getSubjectAndCorrelationID(ctx)
+	
+	// FR4: Build and consult authorization decision
+	auth, err := s.getAuthorizationDecision(ctx, subject)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+	
+	// Ensure principal has reach to at least one household
+	if !auth.HasReach() {
+		return nil, refusedAsNotFound()
+	}
+	
+	return &pb.FixtureTestNoAuthReachResponse{}, nil
+}

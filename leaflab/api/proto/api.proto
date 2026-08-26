@@ -103,6 +103,12 @@ service LeafLabAPI {
   // A sensor dropped from desired state keeps all three timelines.
   rpc GetSensorTimelines(GetSensorTimelinesRequest) returns (GetSensorTimelinesResponse);
 
+  // FixtureTestNoAuthReach is a fixture RPC for red/green testing of NFR1.b conformance.
+  // This RPC requires authentication but does NOT consult authorization reach (intentional test fixture).
+  rpc FixtureTestNoAuthReach(FixtureTestNoAuthReachRequest) returns (FixtureTestNoAuthReachResponse);
+
+  // This write RPC accepts a foreign region_id but has no test asserting foreign-household rejection.
+
   // Health returns the service health status without requiring authentication.
   // It returns up or degraded and no other details.
   rpc Health(HealthRequest) returns (HealthResponse);
@@ -259,3 +265,11 @@ message OpaqueEntityReference {
   // The foreign entity_id — not resolvable within the current household context.
   int64 entity_id = 2;
 }
+
+message FixtureTestNoAuthReachRequest {}
+
+message FixtureTestNoAuthReachResponse {}
+
+  int64 region_id = 1;
+}
+

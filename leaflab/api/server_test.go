@@ -1466,3 +1466,23 @@ func TestForeignHouseholdReferenceRejected_PushDeviceConfig(t *testing.T) {
 		t.Logf("PushDeviceConfig: error message may not clearly explain the violation: %q", st.Message())
 	}
 }
+
+// TestFixtureTestNoAuthReach_Unauthenticated tests that unauthenticated calls
+// to FixtureTestNoAuthReach are rejected.
+func TestFixtureTestNoAuthReach_Unauthenticated(t *testing.T) {
+	server := &LeafLabAPIServer{}
+	
+	err := server.FixtureTestNoAuthReach(context.Background(), &pb.FixtureTestNoAuthReachRequest{})
+	if err == nil {
+		t.Fatalf("FixtureTestNoAuthReach: expected Unauthenticated error, got nil")
+	}
+	
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("FixtureTestNoAuthReach: error is not a gRPC status: %v", err)
+	}
+	
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("FixtureTestNoAuthReach: expected codes.Unauthenticated, got %v", st.Code())
+	}
+}
