@@ -27,6 +27,31 @@ service LeafLabAPI {
   // Household scope is implicit, derived from caller's identity per FR5.
   // Each record is rendered as plain-language sentences with no proto/table/column names.
   rpc ListActivity(ListActivityRequest) returns (ListActivityResponse);
+
+  // CreateHousehold creates a new household with the caller as the initial member (FR75).
+  rpc CreateHousehold(CreateHouseholdRequest) returns (CreateHouseholdResponse);
+
+  // InviteMember invites a principal to join the household (FR75).
+  // Only callable by members; the invited principal is added to membership.
+  rpc InviteMember(InviteMemberRequest) returns (InviteMemberResponse);
+
+  // RemoveMember removes a member from the household (FR75).
+  // Only callable by members; fails if removing the last member.
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+
+  // ListMembers lists all current members of the household (FR75).
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
+
+  // CreateGrant creates a time-boxed grant for a principal (FR7).
+  // Only callable by members; creates a revocable, expiring grant.
+  rpc CreateGrant(CreateGrantRequest) returns (CreateGrantResponse);
+
+  // RevokeGrant revokes an active grant immediately (FR7).
+  // Only callable by members.
+  rpc RevokeGrant(RevokeGrantRequest) returns (RevokeGrantResponse);
+
+  // ListActiveGrants lists all active (non-expired, non-revoked) grants (FR7).
+  rpc ListActiveGrants(ListActiveGrantsRequest) returns (ListActiveGrantsResponse);
 }
 
 
@@ -123,4 +148,73 @@ message OpaqueEntityReference {
   string entity_type = 1;
   // The foreign entity_id — not resolvable within the current household context.
   int64 entity_id = 2;
+}
+
+// ── FR75: Household membership ───────────────────────────────────────────────
+
+message CreateHouseholdRequest {
+  // Name of the household (required).
+  string name = 1;
+}
+
+message CreateHouseholdResponse {
+  int64 household_id = 1;
+}
+
+message InviteMemberRequest {
+  // Principal to invite (email or ID).
+  string principal = 1;
+  // Role for the invited member (e.g., "Member", "Owner", "Grower").
+  string role = 2;
+}
+
+message InviteMemberResponse {}
+
+message RemoveMemberRequest {
+  // Principal to remove.
+  string principal = 1;
+}
+
+message RemoveMemberResponse {}
+
+message HouseholdMember {
+  string principal = 1;
+  string role = 2;
+}
+
+message ListMembersRequest {}
+
+message ListMembersResponse {
+  repeated HouseholdMember members = 1;
+}
+
+// ── FR7: Household grants ────────────────────────────────────────────────────
+
+message CreateGrantRequest {
+  // Principal to grant access to (email or ID).
+  string grantee = 1;
+  // Seconds from now when the grant expires.
+  int64 duration_seconds = 2;
+}
+
+message CreateGrantResponse {
+  int64 grant_id = 1;
+}
+
+message RevokeGrantRequest {
+  int64 grant_id = 1;
+}
+
+message RevokeGrantResponse {}
+
+message Grant {
+  int64 grant_id = 1;
+  string grantee = 2;
+  int64 expires_at = 3;  // Unix timestamp when the grant expires
+}
+
+message ListActiveGrantsRequest {}
+
+message ListActiveGrantsResponse {
+  repeated Grant grants = 1;
 }
