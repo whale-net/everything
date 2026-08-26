@@ -2,25 +2,25 @@
 
 -- ── 3. sensor_hw_history ─────────────────────────────────────────────────────
 
+ALTER TABLE sensor_hw_history
+    RENAME COLUMN valid_from TO assigned_at;
+ALTER TABLE sensor_hw_history
+    RENAME COLUMN valid_to   TO unassigned_at;
+
 DROP INDEX idx_sensor_hw_history_current;
 CREATE INDEX idx_sensor_hw_history_current
     ON sensor_hw_history(sensor_id) WHERE unassigned_at IS NULL;
 
-ALTER TABLE sensor_hw_history
-    RENAME COLUMN valid_from TO assigned_at;
-ALTER TABLE sensor_hw_history
-    RENAME COLUMN valid_to   TO unassigned_at;
-
 -- ── 2. sensor_region_history ──────────────────────────────────────────────────
+
+ALTER TABLE sensor_region_history
+    RENAME COLUMN valid_from TO assigned_at;
+ALTER TABLE sensor_region_history
+    RENAME COLUMN valid_to   TO unassigned_at;
 
 DROP INDEX idx_sensor_region_history_current;
 CREATE INDEX idx_sensor_region_history_current
     ON sensor_region_history(sensor_id) WHERE unassigned_at IS NULL;
-
-ALTER TABLE sensor_region_history
-    RENAME COLUMN valid_from TO assigned_at;
-ALTER TABLE sensor_region_history
-    RENAME COLUMN valid_to   TO unassigned_at;
 
 -- ── 1. sensor_name_history → sensor_label ────────────────────────────────────
 

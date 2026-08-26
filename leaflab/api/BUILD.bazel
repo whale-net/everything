@@ -76,6 +76,7 @@ go_test(
     srcs = [
         "server_integration_test.go",
         "household_integration_test.go",
+        "plant_region_test.go",
     ],
     embed = [":api_lib"],
     gotags = ["integration"],
