@@ -139,8 +139,9 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, opts *Uplo
 
 // PresignPutURL generates a pre-signed PUT URL for the given key.
 // Always uses the primary (internal) endpoint — presigned URL consumers
-// (e.g. host-manager) are internal infrastructure that reach S3 directly,
+// (e.g. backup scheduler, backup config) are internal infrastructure that reach S3 directly,
 // and the signature must match the endpoint that handles the request.
+// For public-endpoint presigned PUTs with per-file content types, see PresignPublicPutURL.
 func (c *Client) PresignPutURL(ctx context.Context, key string, ttl time.Duration) (string, error) {
 	req, err := c.presign.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
@@ -151,6 +152,37 @@ func (c *Client) PresignPutURL(ctx context.Context, key string, ttl time.Duratio
 		return "", fmt.Errorf("failed to presign PUT URL: %w", err)
 	}
 	return req.URL, nil
+}
+
+// PresignPublicPutURL generates a pre-signed PUT URL for the given key against the
+// client's public endpoint (Config.PublicEndpoint) using virtual-hosted-style addressing.
+// Returns both the presigned URL and the exact set of headers the producer must send
+// with the PUT request — a deviating PUT will fail the signature verification.
+// Returns an error if no public endpoint is configured.
+func (c *Client) PresignPublicPutURL(ctx context.Context, key string, contentType string, ttl time.Duration) (url string, headers map[string]string, err error) {
+	if c.presignPublic == nil {
+		return "", nil, errors.New("no public endpoint configured for presigned PUT URLs")
+	}
+	req, err := c.presignPublic.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.bucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
+	}, s3.WithPresignExpires(ttl))
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to presign public PUT URL: %w", err)
+	}
+
+	// Convert SignedHeader to a map of strings for easier consumption.
+	// SignedHeader is an http.Header which is map[string][]string.
+	headers = make(map[string]string)
+	for k, v := range req.SignedHeader {
+		// For signed headers, typically only one value per key, but take the first if multiple.
+		if len(v) > 0 {
+			headers[k] = v[0]
+		}
+	}
+
+	return req.URL, headers, nil
 }
 
 // noSeekReader wraps an io.Reader to prevent the AWS SDK from seeking it.

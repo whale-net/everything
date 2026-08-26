@@ -121,26 +121,37 @@ var _ ReleaseActivities = (*Activities)(nil)
 // digestOverrides returns a clear error rather than silently building
 // fresh or silently ignoring it.
 //
-// Idempotency (NFR3/FR11): DispatchBuild does not itself check-before-
-// dispatch against an in-flight build for this release run before calling
-// GitHub -- an accepted, narrow gap at this phase: workflow.go's
-// defaultActivityOptions gives DispatchBuild MaximumAttempts: 5, so a
-// retried DispatchBuild (e.g. after a transient network error on the
-// dispatch POST itself, or on findDispatchedRun's polling) could in
-// principle trigger a second GHA run for the same release. This is
-// mitigated, not eliminated, by two things already true at this phase: (1)
+// Idempotency (NFR3/FR11, migration 023): DispatchBuild checks-before-
+// dispatch against release_run.build_ref_run_id/build_ref_run_url before
+// calling GitHub at all, and stamps that pair once its own GitHub.Dispatch
+// call succeeds (see the body below) -- so a retried DispatchBuild
+// (workflow.go's defaultActivityOptions gives it MaximumAttempts: 5, e.g.
+// after a transient network error on the dispatch POST itself, or on
+// findDispatchedRun's polling) returns the already-dispatched run instead
+// of calling `workflow_dispatch` a second time. This was previously an
+// accepted, undocumented-beyond-this-comment gap: a second GHA run for the
+// same release isn't just wasteful -- release-v2.yml's concurrency group
+// (concurrency: {group: release-v2, cancel-in-progress: false}) only keeps
+// ONE additional pending run queued behind the one currently running, so a
+// third run created while one is running and one is already queued causes
+// GitHub to silently cancel the older queued run (observed in production:
+// run 32691150140, "Canceling since a higher priority waiting request for
+// release-v2 exists", recorded zero jobs -- cancelled before it ever
+// started). Two things already true at this phase remain true as
+// additional defense-in-depth, not as the primary guard anymore: (1)
 // VerifyPublished treats already-published targets as satisfied regardless
 // of which of two concurrent runs published them first (see that method's
-// doc comment -- FR11's "retry after partial completion must not double-
-// publish" is enforced there, downstream, not by preventing a second
-// dispatch), and (2) the underlying GHA job's own BeginPublish/
+// doc comment), and (2) the underlying GHA job's own BeginPublish/
 // RecordArtifact calls are already idempotent by digest/version
-// (architecture/08-release-lifecycle/04-run-log.md, unchanged by this
-// task) -- a second concurrent run publishing the same version is a no-op
-// or a detected conflict there, not a corrupted publish. A tighter
-// check-before-dispatch (e.g. recording BuildRef on the release_run row
-// before calling GitHub, and having a retried DispatchBuild read it back
-// first) is documented follow-up, not implemented here.
+// (architecture/08-release-lifecycle/04-run-log.md) -- a second concurrent
+// run publishing the same version is a no-op or a detected conflict there,
+// not a corrupted publish. Note this narrows, but does not by itself
+// close, every path to a duplicate dispatch: two independent
+// ReleaseWorkflow executions for two genuinely different (disjoint)
+// target batches still call DispatchBuild with two different
+// release_run_ids, so this per-release_run check does not serialize them
+// against each other -- see repository.ReleaseRunRepository.SetBuildRef's
+// doc comment.
 //
 // FR9-FR11 (issue #923): resolves app_build_log's current row for this
 // batch's targets (buildref.go's resolveDispatchRef/resolveBuildRef,
@@ -177,6 +188,23 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 	}
 	if len(plan.Versions) == 0 {
 		return BuildRef{}, fmt.Errorf("dispatch build: resolved plan has no versions")
+	}
+
+	// Check-before-dispatch (migration 023): if a prior call for this exact
+	// release run already dispatched and located a GitHub Actions run --
+	// the common case being Temporal redelivering this activity after a
+	// transient error on the dispatch POST itself or on
+	// findDispatchedRun's polling, see this method's doc comment -- return
+	// that run unchanged instead of calling `workflow_dispatch` again.
+	// GetReleaseRun erroring (e.g. a synthetic/test release run id that was
+	// never created via CreateReleaseRun, or a transient read failure) is
+	// treated as "no known prior dispatch", not fatal -- this check is a
+	// best-effort idempotency guard, not a strict precondition, and this
+	// method has never required Registry to hold a release_run row for
+	// plan.ReleaseRunID (see the FR9-FR11 app_build_log resolution below,
+	// which is keyed by target, not by release run).
+	if run, _, err := a.Registry.ReleaseRuns().GetReleaseRun(ctx, plan.ReleaseRunID); err == nil && run.BuildRefRunID != "" {
+		return BuildRef{ReleaseRunID: plan.ReleaseRunID, RunID: run.BuildRefRunID, RunURL: run.BuildRefRunURL}, nil
 	}
 
 	apps, charts, err := splitPlanTargets(plan.Versions)
@@ -270,6 +298,15 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 	if err != nil {
 		return BuildRef{}, fmt.Errorf("dispatch build: %w", err)
 	}
+	// Best-effort persist (migration 023): the GitHub Actions run is
+	// already dispatched and real at this point, so a failure here must
+	// never fail this activity -- doing so would make Temporal retry
+	// DispatchBuild and dispatch yet another run, which is exactly the
+	// duplicate-dispatch failure mode this write exists to prevent on the
+	// NEXT retry. A failed write here just means this one dispatch isn't
+	// remembered, degrading to today's behavior (no check-before-dispatch)
+	// rather than regressing it.
+	_ = a.Registry.ReleaseRuns().SetBuildRef(ctx, plan.ReleaseRunID, ref.RunID, ref.RunURL)
 	return ref, nil
 }
 
