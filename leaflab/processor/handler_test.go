@@ -21,6 +21,7 @@ type stubRepo struct {
 	// Recorded call arguments.
 	upsertSensorCalls       []upsertSensorCall
 	applyConfigRegionsCalls []applyConfigRegionsCall
+	hwHistoryCalls          []hwHistoryCall
 }
 
 type applyConfigRegionsCall struct {
@@ -34,6 +35,11 @@ type upsertSensorCall struct {
 	name         string
 	unit         string
 	hw           *HardwareAddress
+}
+
+type hwHistoryCall struct {
+	sensorID int64
+	hw       *HardwareAddress
 }
 
 func (s *stubRepo) UpsertBoard(_ context.Context, _ string) (int64, error) {
@@ -57,7 +63,8 @@ func (s *stubRepo) UpsertSensor(_ context.Context, boardID, sensorTypeID int64, 
 
 func (s *stubRepo) UpsertSensorLabel(_ context.Context, _ int64, _ string) error { return nil }
 
-func (s *stubRepo) UpsertSensorHWHistory(_ context.Context, _ int64, _ *HardwareAddress) error {
+func (s *stubRepo) UpsertSensorHWHistory(_ context.Context, sensorID int64, hw *HardwareAddress) error {
+	s.hwHistoryCalls = append(s.hwHistoryCalls, hwHistoryCall{sensorID: sensorID, hw: hw})
 	return nil
 }
 
@@ -405,16 +412,9 @@ func TestHandleConfigAck_RejectedSkipsApplyRegions(t *testing.T) {
 // a sensor's hardware address AND its name simultaneously, the sensor is still
 // identifiable by the hardware address and receives name history updates, not
 // a second sensor_id (FR16).
-// This test currently documents the known defect: both lookups fail, creating
-// a second sensor_id. After FR16 is implemented, the test should pass with the
-// same sensor_id.
 func TestHandleManifest_RewireAndRename(t *testing.T) {
 	repo := &stubRepo{boardID: 1, sensorTypeID: 2, sensorID: 10}
 	h := newTestHandler(repo)
-
-	// Simulate a device that previously sent a sensor at 0x40 with name "temp"
-	// (this would normally be from a prior manifest, but for this test we just
-	// check that the manifest handler can handle the new hardware config).
 
 	manifest := &firmwarepb.DeviceManifest{
 		DeviceId: "leaflab-aabbccdd",
@@ -451,3 +451,117 @@ func TestHandleManifest_RewireAndRename(t *testing.T) {
 	// In reality, this should match the old sensor's identity via the canonical key.
 }
 
+// TestHandleManifest_HWHistoryRecordsI2CAddress verifies that the hardware address
+// is being recorded with full information (i2c_address and mux_path) for the
+// canonical key (FR16).
+func TestHandleManifest_HWHistoryRecordsI2CAddress(t *testing.T) {
+	repo := &stubRepo{boardID: 1, sensorTypeID: 2, sensorID: 10}
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "leaflab-aabbccdd",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{
+				Name:       "light",
+				Type:       firmwarepb.SensorType_SENSOR_TYPE_ILLUMINANCE,
+				Unit:       "lx",
+				I2CAddress: 0x23,
+				MuxAddress: 0x70,
+				MuxChannel: 1,
+			},
+		},
+	}
+
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(repo.hwHistoryCalls) != 1 {
+		t.Fatalf("expected 1 UpsertSensorHWHistory call, got %d", len(repo.hwHistoryCalls))
+	}
+	call := repo.hwHistoryCalls[0]
+
+	if call.sensorID != 10 {
+		t.Errorf("UpsertSensorHWHistory sensorID: want 10, got %d", call.sensorID)
+	}
+	if call.hw == nil {
+		t.Fatal("UpsertSensorHWHistory hw: expected non-nil")
+	}
+	if call.hw.I2CAddress != 0x23 {
+		t.Errorf("UpsertSensorHWHistory i2c_address: want 0x23, got 0x%x", call.hw.I2CAddress)
+	}
+	if len(call.hw.MuxPath) != 1 {
+		t.Fatalf("UpsertSensorHWHistory mux_path: want 1 hop, got %d", len(call.hw.MuxPath))
+	}
+	if call.hw.MuxPath[0].MuxAddress != 0x70 || call.hw.MuxPath[0].MuxChannel != 1 {
+		t.Errorf("UpsertSensorHWHistory mux path: want (0x70, 1), got (0x%x, %d)", call.hw.MuxPath[0].MuxAddress, call.hw.MuxPath[0].MuxChannel)
+	}
+}
+
+// TestHandleManifest_HWHistoryNilWhenNoAddress verifies that UpsertSensorHWHistory
+// is called with nil when a sensor has no hardware address (name fallback path).
+func TestHandleManifest_HWHistoryNilWhenNoAddress(t *testing.T) {
+	repo := &stubRepo{boardID: 1, sensorTypeID: 2, sensorID: 10}
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "leaflab-aabbccdd",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{
+				Name: "temp",
+				Type: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE,
+				Unit: "°C",
+				// No I2CAddress
+			},
+		},
+	}
+
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(repo.hwHistoryCalls) != 1 {
+		t.Fatalf("expected 1 UpsertSensorHWHistory call, got %d", len(repo.hwHistoryCalls))
+	}
+	call := repo.hwHistoryCalls[0]
+
+	// When hw is nil, the implementation should still call UpsertSensorHWHistory(ctx, sensorID, nil)
+	if call.hw != nil {
+		t.Errorf("UpsertSensorHWHistory hw: expected nil, got %+v", call.hw)
+	}
+}
+
+// TestHandleManifest_MultipleSensorsAllHWHistoryCalled verifies that UpsertSensorHWHistory
+// is called for each sensor, whether they have hw addresses or not.
+func TestHandleManifest_MultipleSensorsAllHWHistoryCalled(t *testing.T) {
+	repo := &stubRepo{boardID: 1, sensorTypeID: 2, sensorID: 10}
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "leaflab-aabbccdd",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{Name: "light", Type: firmwarepb.SensorType_SENSOR_TYPE_ILLUMINANCE, Unit: "lx", I2CAddress: 0x23},
+			{Name: "temp", Type: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE, Unit: "°C", I2CAddress: 0x44},
+			{Name: "legacy", Type: firmwarepb.SensorType_SENSOR_TYPE_UNKNOWN, Unit: ""},
+		},
+	}
+
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(repo.hwHistoryCalls) != 3 {
+		t.Fatalf("expected 3 UpsertSensorHWHistory calls (one per sensor), got %d", len(repo.hwHistoryCalls))
+	}
+
+	// First two should have hw addresses, third should have nil
+	if repo.hwHistoryCalls[0].hw == nil || repo.hwHistoryCalls[0].hw.I2CAddress != 0x23 {
+		t.Errorf("hwHistoryCalls[0]: expected i2c_address 0x23, got %+v", repo.hwHistoryCalls[0].hw)
+	}
+	if repo.hwHistoryCalls[1].hw == nil || repo.hwHistoryCalls[1].hw.I2CAddress != 0x44 {
+		t.Errorf("hwHistoryCalls[1]: expected i2c_address 0x44, got %+v", repo.hwHistoryCalls[1].hw)
+	}
+	if repo.hwHistoryCalls[2].hw != nil {
+		t.Errorf("hwHistoryCalls[2]: expected nil, got %+v", repo.hwHistoryCalls[2].hw)
+	}
+}
