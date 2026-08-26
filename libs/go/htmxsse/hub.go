@@ -27,7 +27,11 @@ type Transport interface {
 	BindExchange(exchange string, routingKeys []string) error
 	// RegisterHandler registers a message handler for delivery events.
 	RegisterHandler(queue string, handler rmq.MessageHandler)
-	// Start starts consuming messages.
+	// Start starts consuming messages. It must NOT block: implementations
+	// (e.g. *rmq.Consumer) run consumption in their own goroutine and
+	// return promptly, self-healing broker-side failures internally until
+	// ctx is cancelled. A nil return means consumption has begun and will
+	// continue until ctx.Done(); a non-nil return means it never started.
 	Start(context.Context) error
 	// Close closes the transport.
 	Close() error
@@ -94,6 +98,18 @@ func (c *Config) Validate() error {
 type subscriber struct {
 	topic   string
 	eventCh chan Event
+	// closeOnce guards eventCh's close against both the subscriber's own
+	// unsubscribe function and Hub.Close() racing to close it -- both can
+	// legitimately reach the same subscriber (e.g. Close() runs while an
+	// SSE handler's deferred unsubscribe is also firing), and closing an
+	// already-closed channel panics.
+	closeOnce sync.Once
+}
+
+// closeChannel closes eventCh exactly once, however many callers race to
+// close this subscriber.
+func (s *subscriber) closeChannel() {
+	s.closeOnce.Do(func() { close(s.eventCh) })
 }
 
 // Hub manages subscriptions to SSE topics over a message broker.
@@ -198,7 +214,7 @@ func (h *Hub) Subscribe(topic string) (<-chan Event, func()) {
 		defer h.mu.Unlock()
 
 		// Close the channel
-		close(sub.eventCh)
+		sub.closeChannel()
 
 		// Remove from subscribers list
 		subs := h.subscribers[topic]
@@ -225,10 +241,24 @@ func (h *Hub) Subscribe(topic string) (<-chan Event, func()) {
 
 // attachWithRetry attaches to the transport with exponential backoff.
 // This runs in a goroutine and doesn't block the calling goroutine.
+//
+// Transport.Start is NOT assumed to block. The production transport
+// (*rmq.Consumer, via DefaultAttachFunc) launches its own background
+// goroutine and returns nil immediately; it self-heals broker-side channel
+// closures internally, forever, until the context passed to Start is
+// cancelled (consumer.go's own reconnect-with-backoff loop). So a nil
+// return from Start means "attached and running," never "attachment
+// ended" -- this loop waits on h.ctx.Done() in that case instead of
+// looping back into attachFunc, which would otherwise open a brand new
+// connection/consumer on top of the still-running one every backoff
+// interval (each leaked forever, since only h.ctx cancellation -- Hub
+// shutdown -- ever stops one). Only a non-nil return from Start (the
+// transport failed to even begin consuming) retries the whole
+// attach+start cycle with backoff, same as a pre-attach attachFunc
+// failure.
 func (h *Hub) attachWithRetry() {
 	delay := 100 * time.Millisecond
 	maxDelay := 30 * time.Second
-	transportSuccessful := false
 
 	for {
 		select {
@@ -260,20 +290,21 @@ func (h *Hub) attachWithRetry() {
 		// Register the catch-all handler
 		h.registerHandler()
 
-		// Start the transport - this should block until the context is cancelled
-		// or an error occurs
-		err = transport.Start(h.ctx)
+		// Start the transport. A nil return means consumption has begun
+		// and will continue on its own until h.ctx is cancelled.
+		startErr := transport.Start(h.ctx)
+		if startErr == nil {
+			<-h.ctx.Done()
+			h.mu.Lock()
+			h.transport = nil
+			h.mu.Unlock()
+			return
+		}
 
-		// Transport has stopped; prepare to retry
 		h.mu.Lock()
 		h.transport = nil
 		h.mu.Unlock()
-
-		if err != nil {
-			log.Printf("htmxsse: transport failed: %v, will retry", err)
-		} else {
-			log.Printf("htmxsse: transport context cancelled, will retry if subscriptions exist")
-		}
+		log.Printf("htmxsse: transport failed to start: %v, will retry", startErr)
 
 		// Check if there are still subscribers; if not, exit
 		h.mu.RLock()
@@ -284,12 +315,6 @@ func (h *Hub) attachWithRetry() {
 			log.Printf("htmxsse: no subscribers, exiting attach loop")
 			return
 		}
-
-		// Apply exponential backoff before retry, resetting delay only if transport was successful
-		if transportSuccessful {
-			delay = 100 * time.Millisecond
-		}
-		transportSuccessful = false
 
 		if err := h.clock.Sleep(h.ctx, delay); err != nil {
 			return
@@ -334,15 +359,18 @@ func (h *Hub) handleMessage(ctx context.Context, msg rmq.Message) error {
 		Body:       msg.Body,
 	}
 
+	// Held for the whole send loop (sends below are always non-blocking) so
+	// unsubscribe() -- which requires the write lock to close a
+	// subscriber's channel -- cannot close a channel out from under a send
+	// in progress here. Releasing the lock before sending (as a prior
+	// version of this function did) raced unsubscribe's close(sub.eventCh)
+	// and could panic with "send on closed channel".
 	h.mu.RLock()
+	defer h.mu.RUnlock()
 	subs := h.subscribers[topic]
-	// Make a copy to avoid holding the lock while sending
-	subsCopy := make([]*subscriber, len(subs))
-	copy(subsCopy, subs)
-	h.mu.RUnlock()
 
 	// Send to all subscribers on this topic
-	for _, sub := range subsCopy {
+	for _, sub := range subs {
 		select {
 		case sub.eventCh <- event:
 			// Successfully sent
@@ -371,14 +399,16 @@ func (h *Hub) Close() error {
 	// Signal context cancellation
 	h.cancel()
 
-	// Close all subscriber channels
+	// Close all subscriber channels. Closing a buffered channel does not
+	// discard values already in its buffer -- a reader can still drain
+	// them before observing the close -- so no separate drain step is
+	// needed here (a prior version's drain-or-close branch closed only
+	// empty channels, which both leaked the goroutine reading a non-empty
+	// one forever and double-closed with unsubscribe's own close on empty
+	// ones).
 	for _, subs := range h.subscribers {
 		for _, sub := range subs {
-			select {
-			case <-sub.eventCh:
-			default:
-				close(sub.eventCh)
-			}
+			sub.closeChannel()
 		}
 	}
 	h.subscribers = make(map[string][]*subscriber)
