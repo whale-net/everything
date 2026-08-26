@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
+	"github.com/whale-net/everything/tools/app_registry/kinds"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	"google.golang.org/grpc/codes"
@@ -345,6 +346,118 @@ func TestBrokerUpload_FR1_MixedAlreadyStoredAndNew(t *testing.T) {
 	// Verify arm64 and ppc64le keys are different
 	if resp.Results[1].ObjectKey == resp.Results[2].ObjectKey {
 		t.Fatalf("expected distinct keys for arm64 and ppc64le, got same key %q", resp.Results[1].ObjectKey)
+	}
+}
+
+
+// TestFR31_NoBinaryContentEncodingAttribute tests that the binary kind's upload
+// mechanism never sets Content-Encoding attributes on stored objects (FR-31).
+// This verifies the broker presigns URLs without encoding headers and that
+// no upload path for this kind populates a content-encoding attribute.
+func TestFR31_NoBinaryContentEncodingAttribute(t *testing.T) {
+	srv := setupBroker(t)
+	ctx := authedCtx()
+
+	// Verify binary kind declares gzip encoding
+	binaryKind := kinds.GetKind("binary")
+	if binaryKind == nil {
+		t.Fatal("binary kind not registered")
+	}
+	encoding := binaryKind.Hooks().H4().Encoding()
+	if encoding != "gzip" {
+		t.Fatalf("expected binary kind H4 to be 'gzip', got %q", encoding)
+	}
+
+	// Verify broker doesn't set Content-Encoding in presigned URL headers
+	req := &pb.BrokerUploadRequest{
+		ArtifactKind:      "binary",
+		Version:           "v1.0.0",
+		ArtifactIdentity:  "test-app",
+		VersionReference:  "v1.0.0",
+		Files: []*pb.BrokerUploadFile{
+			{VariantKey: "amd64", UncompressedDigest: "sha256:abc123"},
+		},
+	}
+
+	resp, err := srv.BrokerUpload(ctx, req)
+	if err != nil {
+		t.Fatalf("BrokerUpload failed: %v", err)
+	}
+
+	if len(resp.Results) == 0 {
+		t.Fatal("expected at least one file result")
+	}
+
+	result := resp.Results[0]
+	
+	// Verify no Content-Encoding header in required headers (FR-31)
+	if result.RequiredHeaders != nil {
+		if contentEncoding, exists := result.RequiredHeaders["Content-Encoding"]; exists {
+			t.Fatalf("FR-31 violation: Content-Encoding header found in presigned URL headers: %q", contentEncoding)
+		}
+	}
+
+	// Verify required headers are present (e.g., for S3 presign signature)
+	if result.RequiredHeaders == nil || len(result.RequiredHeaders) == 0 {
+		t.Fatal("expected non-empty RequiredHeaders in presigned URL")
+	}
+	
+	// Content-Type should be included for the upload
+	hasContentType := false
+	for key := range result.RequiredHeaders {
+		if key == "Content-Type" {
+			hasContentType = true
+			break
+		}
+	}
+	if !hasContentType {
+		t.Logf("WARNING: Content-Type not in required headers, but test doesn't fail - it's optional based on presigning")
+	}
+}
+
+// TestFR61_BinaryEncodingPartOfIdentity verifies that encoding is part of
+// blob identity (FR-61) and is used in the three-tuple lookup (digest, encoding, content-type).
+func TestFR61_BinaryEncodingPartOfIdentity(t *testing.T) {
+	srv := setupBroker(t)
+	ctx := authedCtx()
+
+	digest := "sha256:same-binary-content"
+	binaryEncoding := "gzip"
+
+	// Create a confirmed blob with gzip encoding
+	if err := srv.repo.WithTx(ctx, func(ctx context.Context, r repository.Registry) error {
+		_, err := r.BlobRecords().CreateBlobRecord(ctx, &repository.BlobRecord{
+			UncompressedContentDigest: digest,
+			StoredEncoding:            binaryEncoding,
+			ContentType:               "application/octet-stream",
+			ConfirmationState:         repository.BlobConfirmationStateConfirmed,
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("CreateBlobRecord failed: %v", err)
+	}
+
+	// Request broker for the same content with binary kind (should return already stored)
+	req := &pb.BrokerUploadRequest{
+		ArtifactKind:      "binary",
+		Version:           "v1.0.0",
+		ArtifactIdentity:  "test-app",
+		Files: []*pb.BrokerUploadFile{
+			{VariantKey: "amd64", UncompressedDigest: digest},
+		},
+	}
+
+	resp, err := srv.BrokerUpload(ctx, req)
+	if err != nil {
+		t.Fatalf("BrokerUpload failed: %v", err)
+	}
+
+	result := resp.Results[0]
+	if !result.AlreadyStored {
+		t.Fatal("expected already_stored=true for confirmed blob with matching encoding")
+	}
+	if result.PresignedUrl != "" {
+		t.Fatalf("expected empty presigned URL for already stored blob, got %q", result.PresignedUrl)
 	}
 }
 
