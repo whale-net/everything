@@ -291,13 +291,17 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 
 // ApplyConfigRegions applies region_id assignments from an accepted config.
 // For each SensorConfig entry with region_id > 0, finds the matching sensor
-// by (board_id, i2c_address, mux_path), updates sensor.region_id, and records
-// the change in sensor_region_history (SCD-2: close old open row, insert new).
+// by (board_id, i2c_address, mux_path), validates the region against the board's household,
+// checks staleness against the sensor's current region interval, then updates
+// sensor.region_id and records the change in sensor_region_history (SCD-2: close old
+// open row, insert new). If validation or staleness check fails, the entry is skipped
+// and an audit record is written. (FR1.3)
 func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) error {
 	var configJSON []byte
+	var pushTime time.Time
 	err := r.db.QueryRow(ctx, `
-		SELECT config_json FROM device_config WHERE board_id = $1 AND version = $2
-	`, boardID, version).Scan(&configJSON)
+		SELECT config_json, pushed_at FROM device_config WHERE board_id = $1 AND version = $2
+	`, boardID, version).Scan(&configJSON, &pushTime)
 	if err != nil {
 		return fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
 	}
@@ -307,13 +311,22 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		return fmt.Errorf("unmarshal config for region apply: %w", err)
 	}
 
+	// Get the board's household for validation (FR1.2 write invariant enforcement).
+	var householdID int64
+	err = r.db.QueryRow(ctx, `
+		SELECT household_id FROM board WHERE board_id = $1
+	`, boardID).Scan(&householdID)
+	if err != nil {
+		return fmt.Errorf("get board household for region apply board=%d: %w", boardID, err)
+	}
+
 	for _, sc := range cfg.Sensors {
 		if sc.RegionId == 0 {
 			continue
 		}
 		hops := make([]MuxHop, len(sc.MuxPath))
-		for i, hop := range sc.MuxPath {
-			hops[i] = MuxHop{MuxAddress: hop.MuxAddress, MuxChannel: hop.MuxChannel}
+		for j, hop := range sc.MuxPath {
+			hops[j] = MuxHop{MuxAddress: hop.MuxAddress, MuxChannel: hop.MuxChannel}
 		}
 		muxJSON, err := json.Marshal(hops)
 		if err != nil {
@@ -355,6 +368,56 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 			continue
 		}
 
+		// FR1.3 apply-time validation: re-validate that the region belongs to the board's household.
+		isValid, err := r.ValidateRegionBelongsToHousehold(ctx, newRegionID, householdID)
+		if err != nil {
+			return fmt.Errorf("validate region %d household %d: %w", newRegionID, householdID, err)
+		}
+		if !isValid {
+			// Skip and audit this entry (FR1.3).
+			// Note: provenance-based skips are keyed on FR82.4; household can query audit_record
+			// to see skipped entries. Architectural decision: skips keyed on provenance (who
+			// authored the entry, i.e., the caller who initiated the push) rather than
+			// differs-from-base. See #1192 discussion.
+			skipReason := fmt.Sprintf("region %d does not belong to household %d", newRegionID, householdID)
+			if _, err := r.db.Exec(ctx, `
+				INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type,
+				                         entity_id, config_version, i2c_address, mux_path, reason)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+			`, "", householdID, "skip_config_entry", "sensor", sensorID, version,
+				sc.I2CAddress, muxJSON, skipReason); err != nil {
+				return fmt.Errorf("audit skip for sensor %d: %w", sensorID, err)
+			}
+			continue
+		}
+
+		// FR1.3 staleness check: only apply if pushed_at >= sensor's current region interval's valid_from.
+		// This ensures that a payload is applied only if it was pushed after the sensor's
+		// current region assignment opened.
+		var regionValidFrom *time.Time
+		err = r.db.QueryRow(ctx, `
+			SELECT valid_from FROM sensor_region_history
+			WHERE sensor_id = $1 AND valid_to IS NULL
+		`, sensorID).Scan(&regionValidFrom)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("get current region interval for sensor %d: %w", sensorID, err)
+		}
+
+		// If sensor has a current region assignment and pushTime is before it opened, skip.
+		if regionValidFrom != nil && pushTime.Before(*regionValidFrom) {
+			skipReason := fmt.Sprintf("payload pushed at %v before current region interval opened at %v",
+				pushTime, regionValidFrom)
+			if _, err := r.db.Exec(ctx, `
+				INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type,
+				                         entity_id, config_version, i2c_address, mux_path, reason)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+			`, "", householdID, "skip_config_entry", "sensor", sensorID, version,
+				sc.I2CAddress, muxJSON, skipReason); err != nil {
+				return fmt.Errorf("audit staleness skip for sensor %d: %w", sensorID, err)
+			}
+			continue
+		}
+
 		if _, err := r.db.Exec(ctx, `
 			UPDATE sensor SET region_id = $2 WHERE sensor_id = $1
 		`, sensorID, newRegionID); err != nil {
@@ -378,6 +441,7 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 	}
 	return nil
 }
+
 
 // UpsertDeviceConfig records a DeviceConfig push.
 func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version int64, configJSON []byte) error {

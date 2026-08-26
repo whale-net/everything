@@ -90,6 +90,43 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			"error", err)
 		return nil, status.Errorf(codes.Internal, "board lookup: %v", err)
 	}
+	// Get the board's household for validation (FR1.2, FR1.3 push-time).
+	householdID, err := s.repo.GetBoardHousehold(ctx, boardID)
+	if err != nil {
+		s.logger.Error("get board household failed",
+			"device_id", req.DeviceId,
+			"board_id", boardID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get board household: %v", err)
+	}
+
+	// FR1.3 push-time validation: validate every region reference against the board's household.
+	// Reject the entire push if any region doesn't belong to the household (no partial application).
+	for i, sensor := range req.Sensors {
+		if sensor.RegionId == 0 {
+			continue // unassigned region is allowed
+		}
+		ok, err := s.repo.ValidateRegionBelongsToHousehold(ctx, int64(sensor.RegionId), householdID)
+		if err != nil {
+			s.logger.Error("region validation failed",
+				"device_id", req.DeviceId,
+				"sensor_index", i,
+				"region_id", sensor.RegionId,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			return nil, status.Errorf(codes.Internal, "region validation: %v", err)
+		}
+		if !ok {
+			// Reject the entire push, naming the offending entry and field.
+			return nil, status.Error(codes.InvalidArgument,
+				fmt.Sprintf("invalid region_id in sensor entry %d (name: %q): region %d does not belong to your household",
+					i, sensor.Name, sensor.RegionId))
+		}
+	}
+
 
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
