@@ -46,6 +46,7 @@ go_test(
     embed = [":api_lib"],
     deps = [
         "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
         "//leaflab/api/proto:leaflabapipb",

@@ -5,9 +5,11 @@ import (
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	firmwarepb "github.com/whale-net/everything/firmware/proto"
 )
 
-func testValidChipSensorPair(t *testing.T, validator *Validator, name string, chipType configpb.ChipType, sensorTypeVal interface{}, wantValid bool) {
+
+func testValidChipSensorPair(t *testing.T, validator *Validator, name string, chipType configpb.ChipType, sensorTypeVal int32, wantValid bool) {
 	config := &configpb.DeviceConfig{
 		DeviceId: "test",
 		Sensors: []*configpb.SensorConfig{
@@ -15,7 +17,7 @@ func testValidChipSensorPair(t *testing.T, validator *Validator, name string, ch
 				Name:           "sensor-1",
 				I2CAddress:     0x23,
 				ChipType:       chipType,
-				SensorType:     sensorTypeVal.(int32),
+				SensorType:     firmwarepb.SensorType(sensorTypeVal),
 				PollIntervalMs: 1000,
 			},
 		},
