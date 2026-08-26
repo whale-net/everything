@@ -123,6 +123,8 @@ go_test(
         "//firmware/proto:configpb",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "//libs/go/logging",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_protobuf//proto",
     ],

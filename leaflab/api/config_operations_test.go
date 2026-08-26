@@ -10,6 +10,9 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -921,5 +924,148 @@ func TestMultiBoardPush_MixedSuccessAndFailure(t *testing.T) {
 
 	if count != 2 {
 		t.Errorf("expected 2 configs in push group, got %d", count)
+	}
+}
+
+// TestPushDeviceConfigMultiBoardDryRun_PerBoardResultsNoWriteNoPublish exercises
+// PushDeviceConfigMultiBoardDryRun directly against the real server (not a
+// simulated/inline check), proving:
+//   - it returns one result per board in the requested set (exit criterion 6:
+//     the blast-radius preview covers the blast radius), including a mix of
+//     success and per-board failure without aborting the rest of the set;
+//   - the successful board's result carries its own effective config, diff,
+//     and version preview (materialised the same way a real EDIT push would);
+//   - it writes no row and publishes nothing for any board in the set — the
+//     server is constructed with a nil publisher, so any code path that tried
+//     to actually commit a push (instead of only previewing it) would panic
+//     on the nil pointer, in addition to the row-count assertion below.
+func TestPushDeviceConfigMultiBoardDryRun_PerBoardResultsNoWriteNoPublish(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires database")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	pg := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Schema: testSchema,
+	})
+	defer pg.Pool.Close()
+
+	repo := NewRepository(pg.Pool)
+
+	var householdID int64
+	if err := pg.Pool.QueryRow(ctx, "INSERT INTO household (name) VALUES ($1) RETURNING household_id", "multi-dry-household").Scan(&householdID); err != nil {
+		t.Fatalf("create household: %v", err)
+	}
+
+	// board-ok has an accepted config, so an EDIT dry run against it can
+	// materialise successfully.
+	boardOK, err := repo.GetOrCreateBoard(ctx, "multi-dry-ok")
+	if err != nil {
+		t.Fatalf("GetOrCreateBoard(multi-dry-ok): %v", err)
+	}
+	if _, err := pg.Pool.Exec(ctx, "UPDATE board SET household_id = $1 WHERE board_id = $2", householdID, boardOK); err != nil {
+		t.Fatalf("claim board multi-dry-ok to household: %v", err)
+	}
+
+	baseConfig := &configpb.DeviceConfig{
+		DeviceId: "multi-dry-ok",
+		Sensors: []*configpb.SensorConfig{
+			{Name: "sensor-1", SensorType: 1, I2CAddress: 0x10},
+		},
+	}
+	// GetLatestAcceptedConfigByBoardID reads config_json back via protojson,
+	// so it must be stored that way (not proto.Marshal's binary wire format).
+	baseJSON, err := protojson.Marshal(baseConfig)
+	if err != nil {
+		t.Fatalf("marshal base config: %v", err)
+	}
+	if _, err := repo.InsertDeviceConfigNextVersionWithProvenance(ctx, boardOK, baseJSON, []byte(`{"0": 1}`)); err != nil {
+		t.Fatalf("insert base config for multi-dry-ok: %v", err)
+	}
+	// Only an accepted (device-acked) config is a materialisation base; mark it
+	// accepted directly since ack-handling is out of scope for this test.
+	if _, err := pg.Pool.Exec(ctx, "UPDATE device_config SET accepted = TRUE WHERE board_id = $1", boardOK); err != nil {
+		t.Fatalf("mark base config accepted: %v", err)
+	}
+
+	// board-fail has never had a config accepted, so an EDIT dry run against
+	// it must fail with "no accepted config to complete from" — a board-level
+	// failure that must show up in that board's own result, not abort the set.
+	boardFail, err := repo.GetOrCreateBoard(ctx, "multi-dry-fail")
+	if err != nil {
+		t.Fatalf("GetOrCreateBoard(multi-dry-fail): %v", err)
+	}
+	if _, err := pg.Pool.Exec(ctx, "UPDATE board SET household_id = $1 WHERE board_id = $2", householdID, boardFail); err != nil {
+		t.Fatalf("claim board multi-dry-fail to household: %v", err)
+	}
+
+	// publisher is intentionally nil: PushDeviceConfigMultiBoardDryRun must never
+	// reach the commit path (which calls s.publisher.Publish), or this test
+	// panics on the nil pointer dereference.
+	server := NewLeafLabAPIServer(repo, nil, logging.Get("api-test"))
+
+	var countBefore int64
+	if err := pg.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM device_config").Scan(&countBefore); err != nil {
+		t.Fatalf("count before: %v", err)
+	}
+
+	authCtx := grpcauth.ContextWithClaims(ctx, &grpcauth.Claims{Subject: "test-actor"})
+
+	resp, err := server.PushDeviceConfigMultiBoardDryRun(authCtx, &pb.PushDeviceConfigMultiBoardDryRunRequest{
+		DeviceIds: []string{"multi-dry-ok", "multi-dry-fail"},
+		Scope:     pb.ConfigScope_CONFIG_SCOPE_EDIT,
+		Sensors: []*configpb.SensorConfig{
+			{Name: "sensor-2", SensorType: 2, I2CAddress: 0x20},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PushDeviceConfigMultiBoardDryRun: %v", err)
+	}
+
+	if len(resp.PerBoardResults) != 2 {
+		t.Fatalf("expected 2 per-board results, got %d", len(resp.PerBoardResults))
+	}
+
+	byDevice := make(map[string]*pb.PushBoardDryRunResult)
+	for _, r := range resp.PerBoardResults {
+		byDevice[r.DeviceId] = r
+	}
+
+	okResult, found := byDevice["multi-dry-ok"]
+	if !found {
+		t.Fatalf("missing result for multi-dry-ok")
+	}
+	if !okResult.Success {
+		t.Errorf("expected multi-dry-ok to succeed, got failure: %v", okResult.ErrorDetail)
+	}
+	if okResult.EffectiveConfig == nil || len(okResult.EffectiveConfig.Sensors) != 2 {
+		t.Errorf("expected effective config with 2 sensors (base + materialised addition), got %v", okResult.EffectiveConfig)
+	}
+	if okResult.VersionPreview != 2 {
+		t.Errorf("expected version preview 2, got %d", okResult.VersionPreview)
+	}
+	if okResult.Diff == nil || len(okResult.Diff.Entries) == 0 {
+		t.Errorf("expected a non-empty diff for multi-dry-ok, got %v", okResult.Diff)
+	}
+
+	failResult, found := byDevice["multi-dry-fail"]
+	if !found {
+		t.Fatalf("missing result for multi-dry-fail")
+	}
+	if failResult.Success {
+		t.Errorf("expected multi-dry-fail to fail (no accepted config to edit from), got success")
+	}
+	if failResult.ErrorDetail == nil {
+		t.Errorf("expected error detail for multi-dry-fail")
+	}
+
+	var countAfter int64
+	if err := pg.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM device_config").Scan(&countAfter); err != nil {
+		t.Fatalf("count after: %v", err)
+	}
+	if countBefore != countAfter {
+		t.Errorf("multi-board dry run wrote to database: before %d, after %d", countBefore, countAfter)
 	}
 }
