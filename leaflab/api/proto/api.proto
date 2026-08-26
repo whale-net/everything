@@ -111,6 +111,45 @@ service LeafLabAPI {
   // Household scope is implicit, derived from caller's identity per FR5.
   // Each record is rendered as plain-language sentences with no proto/table/column names.
   rpc ListActivity(ListActivityRequest) returns (ListActivityResponse);
+
+  // ── Plant lifecycle (FR54, FR24, FR22.3, FR22.5) ────────────────────────
+
+  // CreatePlant creates a plant and places it in a region in one operation
+  // (acquire-and-place). Placement is written through FR19's SCD2 path
+  // (plant_region_history) as the plant's first, never-closed interval. The
+  // target region must belong to the caller's household (FR1.2); a region in
+  // another household is refused.
+  rpc CreatePlant(CreatePlantRequest) returns (CreatePlantResponse);
+
+  // CorrectPlant fixes a typo in the plant's name or corrects a
+  // misidentified plant type (FR24). This is distinct from a move: it does
+  // not touch plant_region_history and does not open a new placement
+  // interval. The response states that a correction, not a move, was
+  // performed.
+  rpc CorrectPlant(CorrectPlantRequest) returns (CorrectPlantResponse);
+
+  // MovePlant moves a plant to a new region (FR54, FR24). Per FR19's SCD2
+  // path, this closes the plant's current plant_region_history interval and
+  // opens a new one; nothing is updated in place. Back-dating is refused
+  // (FR19/FR21). The target region must belong to the caller's household
+  // (FR1.2). The response states that a move, not a correction, was
+  // performed.
+  rpc MovePlant(MovePlantRequest) returns (MovePlantResponse);
+
+  // RetirePlant soft-retires a plant (FR22.5). A retired plant is excluded
+  // from default listings and accepts no new writes, but remains readable by
+  // explicit id and through its placement timeline and readings (FR22.3).
+  // Nothing is hard-deleted (FR22.1). The response names the acting
+  // principal (FR8) and the operation that retired the plant.
+  rpc RetirePlant(RetirePlantRequest) returns (RetirePlantResponse);
+
+  // GetPlantPlacementTimeline returns a plant's full placement history
+  // (FR19 SCD2 intervals). Each entry states whether it was a
+  // relocation-induced placement change (caused by a subtree relocation,
+  // FR74/#1223) or a plant-initiated move, so the timeline distinguishes
+  // "this plant moved" from "the region this plant was in moved" (FR24).
+  // Readable for a retired plant (FR22.3, FR22.5).
+  rpc GetPlantPlacementTimeline(GetPlantPlacementTimelineRequest) returns (GetPlantPlacementTimelineResponse);
 }
 
 // ============================================================================
@@ -319,3 +358,105 @@ message OpaqueEntityReference {
   // The foreign entity_id — not resolvable within the current household context.
   int64 entity_id = 2;
 }
+
+// ============================================================================
+// Plant lifecycle (FR54, FR24, FR22.3, FR22.5)
+// ============================================================================
+
+// CreatePlantRequest creates a plant and places it in a region in one
+// operation (acquire-and-place, FR54). plant_type_id must reference an
+// existing plant_type row. region_id must belong to the caller's household
+// (FR1.2); a region in another household is refused.
+message CreatePlantRequest {
+  string name = 1;
+  int64  plant_type_id = 2;
+  int64  region_id = 3;
+}
+
+message CreatePlantResponse {
+  int64 plant_id = 1;
+}
+
+// CorrectPlantRequest fixes a typo in the plant's name or corrects a
+// misidentified plant type (FR24). At least one of corrected_name /
+// corrected_plant_type_id must be set. This does not open a placement
+// interval in plant_region_history — it is a correction, not a move.
+message CorrectPlantRequest {
+  int64 plant_id = 1;
+  // If non-empty, corrects the plant's name.
+  string corrected_name = 2;
+  // If non-zero, corrects the plant's plant_type_id.
+  int64 corrected_plant_type_id = 3;
+}
+
+// CorrectPlantResponse confirms a correction was performed (not a move),
+// per FR24's "the API states which is being performed".
+message CorrectPlantResponse {
+  int64 plant_id = 1;
+}
+
+// MovePlantRequest moves a plant to a new region (FR54). new_region_id must
+// belong to the caller's household (FR1.2); a region in another household is
+// refused. Back-dating is refused (FR19/FR21) — the new interval always
+// opens at the instant the move is recorded.
+message MovePlantRequest {
+  int64 plant_id = 1;
+  int64 new_region_id = 2;
+}
+
+// MovePlantResponse confirms a move was performed (not a correction), per
+// FR24's "the API states which is being performed".
+message MovePlantResponse {
+  int64 plant_id = 1;
+  int64 new_region_id = 2;
+}
+
+// RetirePlantRequest soft-retires a plant (FR22.5, FR22.1: nothing is
+// hard-deleted).
+message RetirePlantRequest {
+  int64 plant_id = 1;
+}
+
+// RetirePlantResponse names the operation and the acting principal (FR8)
+// that retired the plant, per FR22.5.
+message RetirePlantResponse {
+  int64  plant_id = 1;
+  string retired_operation = 2;
+  string retired_principal = 3;
+  // retired_at is the Unix timestamp (seconds) the plant was retired.
+  int64  retired_at = 4;
+}
+
+// PlantPlacementEntry represents one interval in a plant's placement history
+// (plant_region_history, FR19 SCD2).
+message PlantPlacementEntry {
+  int64  region_id = 1;
+  string region_name = 2;
+  // valid_from is the Unix timestamp (seconds) this placement began.
+  int64  valid_from = 3;
+  // valid_to is the Unix timestamp (seconds) this placement was superseded.
+  // Null (0) means this is the current placement.
+  int64  valid_to = 4;
+  // relocation_induced is true when this placement change was caused by a
+  // subtree relocation (FR74, #1223) rather than a plant-initiated move.
+  // Distinguishes "this plant moved" from "the region this plant was in
+  // moved" (FR24).
+  bool   relocation_induced = 5;
+}
+
+message GetPlantPlacementTimelineRequest {
+  int64 plant_id = 1;
+}
+
+// GetPlantPlacementTimelineResponse returns the plant's full placement
+// history, readable even for a retired plant (FR22.3, FR22.5).
+message GetPlantPlacementTimelineResponse {
+  int64 plant_id = 1;
+  repeated PlantPlacementEntry placements = 2;
+  // retired_at is the Unix timestamp (seconds) the plant was retired;
+  // 0 means the plant is active.
+  int64  retired_at = 3;
+  string retired_operation = 4;
+  string retired_principal = 5;
+}
+
