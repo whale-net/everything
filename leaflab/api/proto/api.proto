@@ -52,6 +52,43 @@ service LeafLabAPI {
 
   // ListActiveGrants lists all active (non-expired, non-revoked) grants (FR7).
   rpc ListActiveGrants(ListActiveGrantsRequest) returns (ListActiveGrantsResponse);
+
+  // ── FR50 / FR22.2 / NFR6.2: Region CRUD ────────────────────────────────
+
+  // CreateRegion creates a new region (FR50). Member-or-grantee, not admin-only.
+  // Parentage is set here and is immutable once any reading has been
+  // attributed to the region or any descendant — see UpdateRegionParent.
+  rpc CreateRegion(CreateRegionRequest) returns (CreateRegionResponse);
+
+  // RenameRegion changes a region's display name (FR50). Member-or-grantee.
+  // Never touches parentage, so it is never refused by the parentage-freeze
+  // trigger (NFR6.2).
+  rpc RenameRegion(RenameRegionRequest) returns (RenameRegionResponse);
+
+  // ListRegions lists regions in the caller's household (FR50). Retired
+  // regions are excluded by default (FR22.5); IncludeRetired opts back in.
+  rpc ListRegions(ListRegionsRequest) returns (ListRegionsResponse);
+
+  // GetRegion reads a single region by id, including a retired one (FR22.5:
+  // \"still readable by explicit id\"). Returns the root-to-leaf path (FR50.2).
+  rpc GetRegion(GetRegionRequest) returns (GetRegionResponse);
+
+  // UpdateRegionParent re-parents a region while no reading exists anywhere in
+  // its subtree — in practice a create-time grace window for a mis-typed
+  // parent, not a re-parenting capability (FR50.3). Once any reading has been
+  // attributed to the region or a descendant, the database trigger refuses
+  // the change (NFR6.2) and the refusal names subtree relocation, FR74
+  // (#1223), as the alternative (FR59.3).
+  rpc UpdateRegionParent(UpdateRegionParentRequest) returns (UpdateRegionParentResponse);
+
+  // RetireRegion soft-retires a region (FR22.2, FR22.5). A retired region
+  // remains resolvable for attribution of readings recorded while it was
+  // active; its parentage remains immutable; it is excluded from default
+  // listings and accepts no new writes. Retirement does not unfreeze
+  // parentage. An optional successor_region_id names the region that replaced
+  // it when retirement is the result of a relocation (FR74), so
+  // region-keyed series join across the reorganisation.
+  rpc RetireRegion(RetireRegionRequest) returns (RetireRegionResponse);
 }
 
 
@@ -218,3 +255,86 @@ message ListActiveGrantsRequest {}
 message ListActiveGrantsResponse {
   repeated Grant grants = 1;
 }
+
+// ── FR50 / FR22.2 / NFR6.2: Region CRUD ──────────────────────────────────────
+
+message CreateRegionRequest {
+  // Display name (required).
+  string name = 1;
+  // Parent region id. 0 (unset) means this is a root region.
+  // Set at create time only; immutable once any reading is attributed to
+  // the region or a descendant (FR50.3, NFR6.2).
+  int64 parent_region_id = 2;
+  string description = 3;
+}
+
+message CreateRegionResponse {
+  int64 region_id = 1;
+}
+
+message RenameRegionRequest {
+  int64 region_id = 1;
+  string name = 2;
+}
+
+message RenameRegionResponse {}
+
+message ListRegionsRequest {
+  // include_retired: when false (default), retired regions are excluded
+  // (FR22.5). When true, retired regions are included, each carrying its
+  // retirement state.
+  bool include_retired = 1;
+}
+
+// RegionInfo carries a region's root-to-leaf path so a nested picker and a
+// breadcrumb have a source (FR50.2), plus its retirement state (FR22.5).
+message RegionInfo {
+  int64 region_id = 1;
+  string name = 2;
+  int64 parent_region_id = 3;  // 0 means root
+  // path_names: root-to-leaf display names, e.g. ["Grow Tent", "Shelf 2", "Pot 4"].
+  repeated string path_names = 4;
+  // retired_at: Unix timestamp the region was retired, or 0 if active (FR22.5).
+  int64 retired_at = 5;
+  // retired_operation: the operation that set the retired state (FR22.5), e.g. "retire_region".
+  string retired_operation = 6;
+  // retired_principal: the acting principal that retired this region (FR8, FR22.5).
+  string retired_principal = 7;
+  // successor_region_id: set only when this region was retired by a relocation
+  // (FR74) — names the region that replaced it, so region-keyed series join
+  // across the reorganisation. 0 means no successor.
+  int64 successor_region_id = 8;
+}
+
+message ListRegionsResponse {
+  repeated RegionInfo regions = 1;
+}
+
+message GetRegionRequest {
+  int64 region_id = 1;
+}
+
+message GetRegionResponse {
+  RegionInfo region = 1;
+}
+
+// UpdateRegionParentRequest re-parents a region. This is only ever accepted
+// while no reading exists anywhere in the region's subtree (the create-time
+// grace window, FR50.3) — the database trigger refuses it otherwise (NFR6.2).
+message UpdateRegionParentRequest {
+  int64 region_id = 1;
+  // new_parent_region_id: 0 means "make this a root region".
+  int64 new_parent_region_id = 2;
+}
+
+message UpdateRegionParentResponse {}
+
+message RetireRegionRequest {
+  int64 region_id = 1;
+  // successor_region_id: optional — set when retirement is the result of a
+  // relocation (FR74), so region-keyed series join across the reorganisation.
+  // 0 means no successor.
+  int64 successor_region_id = 2;
+}
+
+message RetireRegionResponse {}
