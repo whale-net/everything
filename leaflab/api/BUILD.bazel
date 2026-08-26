@@ -39,6 +39,7 @@ go_library(
 go_test(
     name = "api_test",
     srcs = [
+        "api_integration_test.go",
         "materialiser_test.go",
         "server_test.go",
     ],
@@ -48,9 +49,12 @@ go_test(
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
         "//leaflab/canonkey",
+        "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "//libs/go/logging",
+        "//libs/go/rmq",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",
