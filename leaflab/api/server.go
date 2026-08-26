@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -70,6 +71,31 @@ func requireAuthentication(ctx context.Context) error {
 	return nil
 }
 
+// getAuthorizationDecision builds an AuthorizationDecision for the authenticated principal.
+// FR4: Authorization is per entity. The decision reflects the scopes reachable by the principal.
+// For V1, this is the set of households the principal is a member of.
+func (s *LeafLabAPIServer) getAuthorizationDecision(ctx context.Context, principalID string) (*AuthorizationDecision, error) {
+	householdIDs, err := s.repo.GetPrincipalHouseholds(ctx, principalID)
+	if err != nil {
+		return nil, fmt.Errorf("get principal households: %w", err)
+	}
+
+	// Build scopes from household memberships.
+	scopes := make([]Scope, len(householdIDs))
+	for i, hid := range householdIDs {
+		scopes[i] = NewHouseholdScope(hid)
+	}
+
+	return NewAuthorizationDecision(principalID, scopes...), nil
+}
+
+// refusedAsNotFound returns a gRPC status that is byte-identical and timing-equivalent to
+// what is returned when an entity does not exist.
+// NFR2: "Refusal for an out-of-reach entity is indistinguishable from non-existent".
+func refusedAsNotFound() error {
+	return status.Error(codes.NotFound, "")
+}
+
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
 	if err := requireAuthentication(ctx); err != nil {
 		return nil, err
@@ -81,8 +107,26 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
+	// NFR2: No existence oracle — build authorization decision first, before checking board existence.
+	// This ensures identical timing whether board doesn't exist or principal can't access it.
+	// FR4: Per-entity authorization is based on principal's reach.
+	auth, err := s.getAuthorizationDecision(ctx, subject)
 	if err != nil {
+		s.logger.Error("authorization decision failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+
+	// Now check board existence. If it doesn't exist or is out of reach, return the same error.
+	boardID, householdID, err := s.repo.GetBoardByDeviceID(ctx, req.DeviceId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// Board does not exist. Return "not found" without distinguishing from out-of-reach.
+			return nil, refusedAsNotFound()
+		}
 		s.logger.Error("board lookup failed",
 			"device_id", req.DeviceId,
 			"subject", subject,
@@ -90,18 +134,6 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			"error", err)
 		return nil, status.Errorf(codes.Internal, "board lookup: %v", err)
 	}
-	// Get the board's household for validation (FR1.2, FR1.3 push-time).
-	householdID, err := s.repo.GetBoardHousehold(ctx, boardID)
-	if err != nil {
-		s.logger.Error("get board household failed",
-			"device_id", req.DeviceId,
-			"board_id", boardID,
-			"subject", subject,
-			"correlation_id", corrID,
-			"error", err)
-		return nil, status.Errorf(codes.Internal, "get board household: %v", err)
-	}
-
 	// FR1.3 push-time validation: validate every region reference against the board's household.
 	// Reject the entire push if any region doesn't belong to the household (no partial application).
 	for i, sensor := range req.Sensors {
@@ -127,6 +159,14 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		}
 	}
 
+	// Board exists. Check if principal can access it.
+	canAccess := auth.ContainsHousehold(householdID)
+	if !canAccess {
+		// FR4: Out-of-reach entity. Refuse as if it doesn't exist (NFR2).
+		return nil, refusedAsNotFound()
+	}
+
+	// Principal can access this board. Proceed with configuration push.
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
@@ -212,6 +252,42 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	// NFR2: No existence oracle — build authorization decision first, before checking board existence.
+	// This ensures identical timing whether board doesn't exist or principal can't access it.
+	// FR4: Per-entity authorization is based on principal's reach.
+	auth, err := s.getAuthorizationDecision(ctx, subject)
+	if err != nil {
+		s.logger.Error("authorization decision failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+
+	// Now check board existence. If it doesn't exist or is out of reach, return the same error.
+	_, householdID, err := s.repo.GetBoardByDeviceID(ctx, req.DeviceId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// Board does not exist. Return "not found" without distinguishing from out-of-reach.
+			return nil, refusedAsNotFound()
+		}
+		s.logger.Error("board lookup failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "board lookup: %v", err)
+	}
+
+	// Board exists. Check if principal can access it.
+	canAccess := auth.ContainsHousehold(householdID)
+	if !canAccess {
+		// FR4: Out-of-reach entity. Refuse as if it doesn't exist (NFR2).
+		return nil, refusedAsNotFound()
+	}
+
+	// Principal can access this board. Retrieve the config.
 	cfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
 	if err != nil {
 		s.logger.Error("get config failed",
@@ -241,29 +317,45 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsReque
 
 	subject, corrID := getSubjectAndCorrelationID(ctx)
 
-	rows, err := s.repo.ListBoards(ctx)
+	// FR4: Per-entity authorization. Build authorization decision for principal.
+	// FR5: Board listings are household-scoped by default.
+	auth, err := s.getAuthorizationDecision(ctx, subject)
 	if err != nil {
-		s.logger.Error("list boards failed",
+		s.logger.Error("authorization decision failed",
 			"subject", subject,
 			"correlation_id", corrID,
 			"error", err)
-		return nil, status.Errorf(codes.Internal, "list boards: %v", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
 	}
 
-	boards := make([]*pb.BoardInfo, 0, len(rows))
-	for _, r := range rows {
-		boards = append(boards, &pb.BoardInfo{
-			DeviceId: r.DeviceID,
-			BoardId:  r.BoardID,
-		})
+	// Aggregate boards across all reachable households.
+	// FR5: Aggregates computed only over entities the caller can reach.
+	var allBoards []*pb.BoardInfo
+	for _, scope := range auth.HouseholdScopes() {
+		rows, err := s.repo.ListBoardsByHousehold(ctx, scope.HouseholdID())
+		if err != nil {
+			s.logger.Error("list boards failed",
+				"household_id", scope.HouseholdID(),
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			return nil, status.Errorf(codes.Internal, "list boards: %v", err)
+		}
+
+		for _, r := range rows {
+			allBoards = append(allBoards, &pb.BoardInfo{
+				DeviceId: r.DeviceID,
+				BoardId:  r.BoardID,
+			})
+		}
 	}
 
 	s.logger.Info("boards listed",
-		"board_count", len(boards),
+		"board_count", len(allBoards),
 		"subject", subject,
 		"correlation_id", corrID)
 
-	return &pb.ListBoardsResponse{Boards: boards}, nil
+	return &pb.ListBoardsResponse{Boards: allBoards}, nil
 }
 
 func (s *LeafLabAPIServer) Health(ctx context.Context, _ *pb.HealthRequest) (*pb.HealthResponse, error) {

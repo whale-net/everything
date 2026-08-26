@@ -3,10 +3,17 @@ package main
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"google.golang.org/grpc"
@@ -17,7 +24,79 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-const bufSize = 1024 * 1024
+const (
+	bufSize          = 1024 * 1024
+	timescaleDBImage = "timescale/timescaledb:latest-pg16"
+)
+
+// getMigrationsPath finds the migrations directory for test use.
+func getMigrationsPath(t *testing.T) string {
+	t.Helper()
+
+	// Try to find migrations directory in common locations
+	// First, check if RUNFILES_DIR is set (Bazel)
+	if runfilesDir := os.Getenv("RUNFILES_DIR"); runfilesDir != "" {
+		paths := []string{
+			filepath.Join(runfilesDir, "everything/leaflab/migrate/migrations"),
+			filepath.Join(runfilesDir, "leaflab/migrate/migrations"),
+		}
+		for _, path := range paths {
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				return path
+			}
+		}
+	}
+
+	// Fallback: try relative paths from current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working directory: %v", err)
+	}
+
+	possiblePaths := []string{
+		filepath.Join(cwd, "leaflab/migrate/migrations"),
+		filepath.Join(cwd, "../migrate/migrations"),
+		filepath.Join(cwd, "../../leaflab/migrate/migrations"),
+	}
+
+	for _, path := range possiblePaths {
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
+			return path
+		}
+	}
+
+	t.Fatalf("could not find migrations directory from %s", cwd)
+	return ""
+}
+
+// runMigrationsManually runs migrations by reading and executing SQL files manually.
+// This is a workaround for the embed.FS limitation when loading migrations from disk at test time.
+func runMigrationsManually(ctx context.Context, t *testing.T, pool *pgxpool.Pool, migrationsPath string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(migrationsPath)
+	if err != nil {
+		t.Fatalf("read migrations directory: %v", err)
+	}
+
+	// Sort entries by name to ensure consistent migration order
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".up.sql") {
+			continue
+		}
+
+		filePath := filepath.Join(migrationsPath, entry.Name())
+		sqlBytes, err := os.ReadFile(filePath)
+		if err != nil {
+			t.Fatalf("read migration file %s: %v", entry.Name(), err)
+		}
+
+		sql := string(sqlBytes)
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatalf("execute migration %s: %v", entry.Name(), err)
+		}
+	}
+}
 
 // TestUnauthenticatedCallsRejected_PushDeviceConfig tests that unauthenticated
 // calls to PushDeviceConfig are rejected with Unauthenticated code when using
@@ -222,6 +301,325 @@ func TestPrincipalExtractable_FromContext(t *testing.T) {
 	}
 }
 
+// TestNFR2_IndistinguishableUnauthorizedAndNotFound_GetDeviceConfig tests that
+// GetDeviceConfig returns the same gRPC status and body for a non-existent device_id
+// as it does for a device_id that exists but is outside the caller's authorized household.
+// This verifies NFR2: "Refusal and absence are indistinguishable in status, body and timing."
+func TestNFR2_IndistinguishableUnauthorizedAndNotFound_GetDeviceConfig(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires database")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Set up isolated test database
+	dbContainer := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+
+	// Run migrations
+	migrationsPath := getMigrationsPath(t)
+	runMigrationsManually(ctx, t, dbContainer.Pool, migrationsPath)
+
+	// Set up test data:
+	// - household 1 with principal-1 as member
+	// - household 2 with principal-2 as member
+	// - board in household 2 (not accessible to principal-1)
+	var hid1, hid2, memberID, boardID int64
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('Household 1') RETURNING household_id
+	`).Scan(&hid1); err != nil {
+		t.Fatalf("insert household 1: %v", err)
+	}
+
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('Household 2') RETURNING household_id
+	`).Scan(&hid2); err != nil {
+		t.Fatalf("insert household 2: %v", err)
+	}
+
+	// Add principal-1 as member of household 1
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, 'principal-1', 'Owner', NOW())
+		RETURNING member_id
+	`, hid1).Scan(&memberID); err != nil {
+		t.Fatalf("add principal-1 to household 1: %v", err)
+	}
+
+	// Add principal-2 as member of household 2
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, 'principal-2', 'Owner', NOW())
+		RETURNING member_id
+	`, hid2).Scan(&memberID); err != nil {
+		t.Fatalf("add principal-2 to household 2: %v", err)
+	}
+
+	// Create a board in household 2 (not accessible to principal-1)
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO board (device_id, household_id, registered_at, last_seen_at)
+		VALUES ('board-in-household-2', $1, NOW(), NOW())
+		RETURNING board_id
+	`, hid2).Scan(&boardID); err != nil {
+		t.Fatalf("insert board: %v", err)
+	}
+
+	// Set up gRPC server with dev auth and real database
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode: grpcauth.AuthModeNone, // Use dev mode for testing
+	})
+	if err != nil {
+		t.Fatalf("create auth interceptors: %v", err)
+	}
+
+	correlationUnaryInt := logging.NewCorrelationIDUnaryInterceptor()
+	correlationStreamInt := logging.NewCorrelationIDStreamInterceptor()
+
+	lis := bufconn.Listen(bufSize)
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(correlationUnaryInt, unaryInt),
+		grpc.ChainStreamInterceptor(correlationStreamInt, streamInt),
+	)
+
+	repo := NewRepository(dbContainer.Pool)
+	server := &LeafLabAPIServer{
+		repo:      repo,
+		publisher: nil, // Not needed for GetDeviceConfig
+		logger:    logging.Get("api-test"),
+	}
+	pb.RegisterLeafLabAPIServer(grpcServer, server)
+
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+	})
+
+	// Create client with principal-1 context (only has access to household 1)
+	dialer := func(context.Context, string) (net.Conn, error) { return lis.Dial() }
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewLeafLabAPIClient(conn)
+
+	// Inject principal-1 claims in context
+	claims := &grpcauth.Claims{Subject: "principal-1", Roles: []string{}}
+	ctxWithAuth := grpcauth.ContextWithClaims(context.Background(), claims)
+
+	// Request 1: Non-existent device_id (never created in any household)
+	resp1, err1 := client.GetDeviceConfig(ctxWithAuth, &pb.GetDeviceConfigRequest{
+		DeviceId: "completely-nonexistent-device",
+	})
+
+	// Request 2: Existing device_id but in unauthorized household
+	resp2, err2 := client.GetDeviceConfig(ctxWithAuth, &pb.GetDeviceConfigRequest{
+		DeviceId: "board-in-household-2",
+	})
+
+	// Verify both return the same error status and code (NFR2)
+	if (err1 == nil) != (err2 == nil) {
+		t.Errorf("NFR2 violation: one error is nil, the other is not. err1=%v, err2=%v", err1, err2)
+	}
+
+	if err1 != nil && err2 != nil {
+		st1, ok1 := status.FromError(err1)
+		st2, ok2 := status.FromError(err2)
+
+		if !ok1 || !ok2 {
+			t.Fatalf("NFR2: expected both to be gRPC errors. ok1=%v, ok2=%v", ok1, ok2)
+		}
+
+		// Status codes must be identical (NotFound)
+		if st1.Code() != st2.Code() {
+			t.Errorf("NFR2 violation: status codes differ. non-existent=%v, unauthorized=%v", st1.Code(), st2.Code())
+		}
+		if st1.Code() != codes.NotFound {
+			t.Errorf("NFR2: expected codes.NotFound for both cases, got %v and %v", st1.Code(), st2.Code())
+		}
+
+		// Message bodies must be identical (empty for NotFound)
+		if st1.Message() != st2.Message() {
+			t.Errorf("NFR2 violation: error messages differ. non-existent=%q, unauthorized=%q", st1.Message(), st2.Message())
+		}
+		if st1.Message() != "" {
+			t.Errorf("NFR2: expected empty error message, got %q", st1.Message())
+		}
+	} else {
+		t.Errorf("NFR2: expected both requests to fail, got err1=%v, err2=%v", err1, err2)
+	}
+
+	// Verify responses match (should both be nil on error)
+	if resp1 != resp2 && (resp1 != nil || resp2 != nil) {
+		t.Errorf("NFR2: response bodies should be identical on error. resp1=%v, resp2=%v", resp1, resp2)
+	}
+}
+
+// TestNFR2_IndistinguishableUnauthorizedAndNotFound_PushDeviceConfig tests that
+// PushDeviceConfig returns the same gRPC status and body for a non-existent device_id
+// as it does for a device_id that exists but is outside the caller's authorized household.
+func TestNFR2_IndistinguishableUnauthorizedAndNotFound_PushDeviceConfig(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires database")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Set up isolated test database
+	dbContainer := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+
+	// Run migrations
+	migrationsPath := getMigrationsPath(t)
+	runMigrationsManually(ctx, t, dbContainer.Pool, migrationsPath)
+
+	// Set up test data
+	var hid1, hid2, memberID, boardID int64
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('Household 1') RETURNING household_id
+	`).Scan(&hid1); err != nil {
+		t.Fatalf("insert household 1: %v", err)
+	}
+
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('Household 2') RETURNING household_id
+	`).Scan(&hid2); err != nil {
+		t.Fatalf("insert household 2: %v", err)
+	}
+
+	// Add principals to their respective households
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, 'principal-1', 'Owner', NOW())
+		RETURNING member_id
+	`, hid1).Scan(&memberID); err != nil {
+		t.Fatalf("add principal-1: %v", err)
+	}
+
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, 'principal-2', 'Owner', NOW())
+		RETURNING member_id
+	`, hid2).Scan(&memberID); err != nil {
+		t.Fatalf("add principal-2: %v", err)
+	}
+
+	// Create board in household 2
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO board (device_id, household_id, registered_at, last_seen_at)
+		VALUES ('board-in-household-2', $1, NOW(), NOW())
+		RETURNING board_id
+	`, hid2).Scan(&boardID); err != nil {
+		t.Fatalf("insert board: %v", err)
+	}
+
+	// Set up gRPC server
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode: grpcauth.AuthModeNone,
+	})
+	if err != nil {
+		t.Fatalf("create auth interceptors: %v", err)
+	}
+
+	correlationUnaryInt := logging.NewCorrelationIDUnaryInterceptor()
+	correlationStreamInt := logging.NewCorrelationIDStreamInterceptor()
+
+	lis := bufconn.Listen(bufSize)
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(correlationUnaryInt, unaryInt),
+		grpc.ChainStreamInterceptor(correlationStreamInt, streamInt),
+	)
+
+	repo := NewRepository(dbContainer.Pool)
+	server := &LeafLabAPIServer{
+		repo:      repo,
+		publisher: nil, // For PushDeviceConfig this will be needed in real use, but we're testing error paths
+		logger:    logging.Get("api-test"),
+	}
+	pb.RegisterLeafLabAPIServer(grpcServer, server)
+
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+	})
+
+	// Create client
+	dialer := func(context.Context, string) (net.Conn, error) { return lis.Dial() }
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewLeafLabAPIClient(conn)
+
+	// Inject principal-1 claims (only has access to household 1)
+	claims := &grpcauth.Claims{Subject: "principal-1", Roles: []string{}}
+	ctxWithAuth := grpcauth.ContextWithClaims(context.Background(), claims)
+
+	// Request 1: Non-existent device_id
+	resp1, err1 := client.PushDeviceConfig(ctxWithAuth, &pb.PushDeviceConfigRequest{
+		DeviceId: "completely-nonexistent-device",
+	})
+
+	// Request 2: Existing device_id in unauthorized household
+	resp2, err2 := client.PushDeviceConfig(ctxWithAuth, &pb.PushDeviceConfigRequest{
+		DeviceId: "board-in-household-2",
+	})
+
+	// Verify both return the same error status and code (NFR2)
+	if (err1 == nil) != (err2 == nil) {
+		t.Errorf("NFR2 violation: one error is nil, the other is not. err1=%v, err2=%v", err1, err2)
+	}
+
+	if err1 != nil && err2 != nil {
+		st1, ok1 := status.FromError(err1)
+		st2, ok2 := status.FromError(err2)
+
+		if !ok1 || !ok2 {
+			t.Fatalf("NFR2: expected both to be gRPC errors. ok1=%v, ok2=%v", ok1, ok2)
+		}
+
+		// Status codes must be identical (NotFound)
+		if st1.Code() != st2.Code() {
+			t.Errorf("NFR2 violation: status codes differ. non-existent=%v, unauthorized=%v", st1.Code(), st2.Code())
+		}
+		if st1.Code() != codes.NotFound {
+			t.Errorf("NFR2: expected codes.NotFound for both cases, got %v and %v", st1.Code(), st2.Code())
+		}
+
+		// Message bodies must be identical (empty)
+		if st1.Message() != st2.Message() {
+			t.Errorf("NFR2 violation: error messages differ. non-existent=%q, unauthorized=%q", st1.Message(), st2.Message())
+		}
+		if st1.Message() != "" {
+			t.Errorf("NFR2: expected empty error message, got %q", st1.Message())
+		}
+	} else {
+		t.Errorf("NFR2: expected both requests to fail, got err1=%v, err2=%v", err1, err2)
+	}
+
+	// Verify responses match
+	if resp1 != resp2 && (resp1 != nil || resp2 != nil) {
+		t.Errorf("NFR2: response bodies should be identical on error. resp1=%v, resp2=%v", resp1, resp2)
+	}
+}
+
 // newTestServerWithOIDCAuth creates a test gRPC server configured for OIDC
 // authentication, which requires valid tokens (unauthenticated requests rejected).
 func newTestServerWithOIDCAuth(t *testing.T) *grpc.ClientConn {
@@ -313,7 +711,7 @@ func TestRenderActivityItem_PlainLanguage(t *testing.T) {
 		Action:            "claim_board",
 		EntityType:        "board",
 		EntityID:          1,
-		OccurredAtUnix:         1756131000,
+		OccurredAtUnix:    1756131000,
 	}
 
 	item := renderActivityItem(record)
@@ -357,19 +755,19 @@ func TestRenderActionDescription_NoProtoTerms(t *testing.T) {
 		{
 			name: "claim_board action",
 			record: AuditRecord{
-				Action:     "claim_board",
-				EntityType: "board",
-				EntityID:   1,
-				OccurredAtUnix:  1756131000,
+				Action:         "claim_board",
+				EntityType:     "board",
+				EntityID:       1,
+				OccurredAtUnix: 1756131000,
 			},
 		},
 		{
 			name: "grant_access action",
 			record: AuditRecord{
-				Action:     "grant_access",
-				EntityType: "board",
-				EntityID:   1,
-				OccurredAtUnix:  1756131900,
+				Action:         "grant_access",
+				EntityType:     "board",
+				EntityID:       1,
+				OccurredAtUnix: 1756131900,
 			},
 		},
 	}
@@ -469,16 +867,16 @@ func TestAuditSchemaIntegrity(t *testing.T) {
 	// Verify that AuditRecord has all required fields for FR8 compliance
 	record := AuditRecord{
 		AuditID:           1,
-		ActorSubject:      "test-user",    // Required: FR8 - actor identity
-		TargetHouseholdID: 42,              // Required: FR5 - household scoping
-		Action:            "test_action",   // Required: FR8 - action type
-		EntityType:        "test_entity",   // Required: FR8 - what was affected
-		EntityID:          99,              // Required: FR8 - which entity
-		OccurredAtUnix:    1234567890,      // Required: FR8 - when it happened
-		Reason:            nil,             // Optional: explanation for sensitive actions
-		ConfigVersion:     nil,             // Optional: for config operations
-		I2CAddress:        nil,             // Optional: hardware context
-		MuxPath:           nil,             // Optional: hardware context
+		ActorSubject:      "test-user",   // Required: FR8 - actor identity
+		TargetHouseholdID: 42,            // Required: FR5 - household scoping
+		Action:            "test_action", // Required: FR8 - action type
+		EntityType:        "test_entity", // Required: FR8 - what was affected
+		EntityID:          99,            // Required: FR8 - which entity
+		OccurredAtUnix:    1234567890,    // Required: FR8 - when it happened
+		Reason:            nil,           // Optional: explanation for sensitive actions
+		ConfigVersion:     nil,           // Optional: for config operations
+		I2CAddress:        nil,           // Optional: hardware context
+		MuxPath:           nil,           // Optional: hardware context
 	}
 
 	// Verify all required fields are populated
@@ -683,9 +1081,10 @@ func TestAuditRecordingOnGrantChanges(t *testing.T) {
 // TestMembershipIsNotConferredByGrant tests that membership cannot be granted via grants.
 // Design principle verification:
 // - A grant confers write capability equal to a member's except for:
-//   * Cannot grant further access (no CreateGrant for grantees)
-//   * Cannot change membership (no InviteMember/RemoveMember for grantees)
-//   * Cannot transfer boards (no claim/transfer/release for grantees)
+//   - Cannot grant further access (no CreateGrant for grantees)
+//   - Cannot change membership (no InviteMember/RemoveMember for grantees)
+//   - Cannot transfer boards (no claim/transfer/release for grantees)
+//
 // - Membership itself is never conferred by a grant - only explicit invitation adds members
 // - Related: phase #1197 (elevation) should also verify it doesn't confer membership
 func TestMembershipIsNotConferredByGrant(t *testing.T) {
