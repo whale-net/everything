@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
@@ -759,12 +760,11 @@ func (r *Repository) GetDeviceConfigVersion(ctx context.Context, boardID int64, 
 // CreatePushGroup creates a new push group for multi-board operations.
 // Returns the push_group_id.
 func (r *Repository) CreatePushGroup(ctx context.Context, actorSubject string, reason string) (string, error) {
-	var pushGroupID string
-	err := r.db.QueryRow(ctx, `
-		INSERT INTO push_group (actor_subject, reason, created_at)
-		VALUES ($1, $2, NOW())
-		RETURNING push_group_id
-	`, actorSubject, reason).Scan(&pushGroupID)
+	pushGroupID := uuid.NewString()
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO push_group (push_group_id, actor_subject, reason, created_at)
+		VALUES ($1, $2, $3, NOW())
+	`, pushGroupID, actorSubject, reason)
 	if err != nil {
 		return "", fmt.Errorf("create push group: %w", err)
 	}
@@ -802,7 +802,7 @@ func (r *Repository) GetPushGroupAckStates(ctx context.Context, pushGroupID stri
 	rows, err := r.db.Query(ctx, `
 		SELECT b.device_id, COALESCE(pgm.ack_state, 0)
 		FROM push_group_membership pgm
-		RIGHT JOIN device_config dc ON pgm.device_config_id = dc.device_config_id
+		RIGHT JOIN device_config dc ON pgm.device_config_id = dc.config_id
 		RIGHT JOIN board b ON dc.board_id = b.board_id
 		WHERE dc.push_group_id = $1
 		ORDER BY b.device_id

@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS board (
 );
 
 CREATE TABLE IF NOT EXISTS device_config (
-    device_config_id BIGSERIAL PRIMARY KEY,
+    config_id BIGSERIAL PRIMARY KEY,
     board_id BIGINT NOT NULL REFERENCES board(board_id) ON DELETE CASCADE,
     version BIGINT NOT NULL,
     config_json BYTEA NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS push_group (
 CREATE TABLE IF NOT EXISTS push_group_membership (
     membership_id BIGSERIAL PRIMARY KEY,
     push_group_id TEXT NOT NULL REFERENCES push_group(push_group_id) ON DELETE CASCADE,
-    device_config_id BIGINT NOT NULL REFERENCES device_config(device_config_id) ON DELETE CASCADE,
+    device_config_id BIGINT NOT NULL REFERENCES device_config(config_id) ON DELETE CASCADE,
     ack_state INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -176,25 +176,25 @@ func TestDiffDeviceConfig_AddedRemovedChangedUnchanged(t *testing.T) {
 	}
 
 	// sensor-1 should be unchanged
-	key1 := "16::" // 0x10 = 16, no mux path
+	key1 := "16::1" // 0x10 = 16, no mux path, sensor_type=1
 	if classifications[key1] != pb.ConfigDiffClassification_CLASSIFICATION_UNCHANGED {
 		t.Errorf("sensor-1: expected UNCHANGED, got %v", classifications[key1])
 	}
 
 	// sensor-2 should be changed
-	key2 := "32::"
+	key2 := "32::2"
 	if classifications[key2] != pb.ConfigDiffClassification_CLASSIFICATION_CHANGED {
 		t.Errorf("sensor-2: expected CHANGED, got %v", classifications[key2])
 	}
 
 	// sensor-3 should be removed
-	key3 := "48::"
+	key3 := "48::3"
 	if classifications[key3] != pb.ConfigDiffClassification_CLASSIFICATION_REMOVED {
 		t.Errorf("sensor-3: expected REMOVED, got %v", classifications[key3])
 	}
 
 	// sensor-4 should be added
-	key4 := "64::"
+	key4 := "64::4"
 	if classifications[key4] != pb.ConfigDiffClassification_CLASSIFICATION_ADDED {
 		t.Errorf("sensor-4: expected ADDED, got %v", classifications[key4])
 	}
@@ -269,8 +269,8 @@ func TestDiffDeviceConfig_CompletePushRemovalsReachable(t *testing.T) {
 	for _, entry := range diff.Entries {
 		if entry.Classification == pb.ConfigDiffClassification_CLASSIFICATION_REMOVED {
 			found = true
-			if entry.SensorHardwareKey != "32::" {
-				t.Errorf("expected removed sensor key 32::, got %s", entry.SensorHardwareKey)
+			if entry.SensorHardwareKey != "32::2" {
+				t.Errorf("expected removed sensor key 32::2, got %s", entry.SensorHardwareKey)
 			}
 		}
 	}
@@ -314,7 +314,9 @@ func TestPushDeviceConfigDryRun_NoWriteNoPublish(t *testing.T) {
 	}
 
 	// Claim to household
-	pg.Pool.QueryRow(ctx, "UPDATE board SET household_id = $1 WHERE board_id = $2", householdID, boardID)
+	if _, err := pg.Pool.Exec(ctx, "UPDATE board SET household_id = $1 WHERE board_id = $2", householdID, boardID); err != nil {
+		t.Fatalf("claim board to household: %v", err)
+	}
 
 	// Create base config
 	baseConfig := &configpb.DeviceConfig{

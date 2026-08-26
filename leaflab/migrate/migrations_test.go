@@ -267,8 +267,8 @@ func TestAppendOnlyEnforcement(t *testing.T) {
 	// Insert a device_config row
 	var configID int64
 	if err := db.Pool.QueryRow(ctx, `
-		INSERT INTO device_config (board_id, version, config_json, accepted)
-		VALUES ($1, 1, '{}', FALSE)
+		INSERT INTO device_config (board_id, version, config_json, provenance_json, accepted)
+		VALUES ($1, 1, '{}', '{}', FALSE)
 		RETURNING config_id
 	`, boardID).Scan(&configID); err != nil {
 		t.Fatalf("insert device_config: %v", err)
