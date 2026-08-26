@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,7 +23,9 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/grpcclient"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/rmq"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
+	"github.com/whale-net/everything/tools/app_registry/events"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/postgres"
 	"github.com/whale-net/everything/tools/app_registry/worker/outbox"
@@ -138,7 +141,9 @@ func run() error {
 	// comment. Same direct-Postgres repo (repo) the outbox drainer and
 	// release.Activities below use, for the same "no mutating gRPC RPC for
 	// this write" reason.
-	recorder := &writeback.Recorder{Registry: repo}
+	publisher := initializePublisher(ctx, logger)
+
+	recorder := &writeback.Recorder{Registry: repo, Publisher: publisher}
 	w.RegisterActivityWithOptions(recorder.RecordWritebackResult, activityOptions(writeback.ActivityRecordWritebackResult))
 
 	// TriggerArgoRefresh/PollArgoSyncStatus (FR1-FR5, NFR3, NFR6, issue
@@ -157,6 +162,9 @@ func run() error {
 	argoSync, aerr := writeback.SelectArgoSyncActivities(argoServer, os.Getenv("ARGOCD_AUTH_TOKEN"), repo)
 	if aerr != nil {
 		return fmt.Errorf("configure argocd sync activities: %w", aerr)
+	}
+	if real, ok := argoSync.(*writeback.ArgoSyncActivities); ok {
+		real.Publisher = publisher
 	}
 	if argoServer != "" {
 		logger.Info("using real ArgoCD sync activities", "server", argoServer)
@@ -316,6 +324,28 @@ func workerID() string {
 		return "app-registry-worker"
 	}
 	return "app-registry-worker-" + host
+}
+
+// initializePublisher constructs the FR7b event-publisher component (#1130)
+// shared by Recorder.RecordWritebackResult and ArgoSyncActivities' two
+// activities -- see server/main.go's identical construction for
+// PromotionServer's publish points. Construction is non-fatal (NFR7): with
+// RABBITMQ_URL unset or the broker unreachable at startup, this returns nil
+// and every publish point silently no-ops (each is nil-checked).
+func initializePublisher(ctx context.Context, logger *slog.Logger) events.PublisherInterface {
+	brokerURL := getEnv("RABBITMQ_URL", "")
+	if brokerURL == "" {
+		logger.Info("RABBITMQ_URL not set; writeback/sync events will not be published")
+		return nil
+	}
+
+	conn, err := rmq.NewConnectionFromURL(brokerURL)
+	if err != nil {
+		logger.Warn("failed to connect to RabbitMQ for event publishing, writeback/sync events will not be published", "error", err)
+		return nil
+	}
+
+	return events.NewPublisher(ctx, conn, logger, 100, rmq.NewPublisherWithExchange)
 }
 
 func getEnv(key, defaultValue string) string {
