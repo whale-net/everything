@@ -232,18 +232,14 @@ func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string
 //
 // For any app NOT present in resolvedPlanVersions (not part of this
 // release batch), the existing independent-resolution behavior applies
-// unchanged: for domains at adoption stage "allocate", versions are
-// resolved exclusively from the App Registry (GetArtifact with
-// latest_published=true) -- falling back to git tags for an allocate-stage
-// domain is the exact bug that caused issue #876, so any registry failure
-// hard-errors rather than silently reverting to tag scanning. When client
-// is nil or the domain is not yet at "allocate" stage, git tags are used as
-// they always were.
+// unchanged: when a registry client is opted in, versions are resolved
+// exclusively from the App Registry (GetArtifact with latest_published=
+// true) -- falling back to git tags in that case is the exact bug that
+// caused issue #876, so any registry failure hard-errors rather than
+// silently reverting to tag scanning. When client is nil (not opted in),
+// git tags are used as they always were.
 func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allApps []AppMetadata, git GitRunner, client pb.ArtifactRegistryClient, resolvedPlanVersions map[string]string) (map[string]string, error) {
-	allocate, err := isDomainAtAllocateStage(ctx, client, chart.Domain)
-	if err != nil {
-		return nil, fmt.Errorf("resolve chart app versions: check adoption stage for domain %q: %w", chart.Domain, err)
-	}
+	allocate := client != nil
 
 	versions := map[string]string{}
 	for _, appName := range chart.Apps {
@@ -262,10 +258,10 @@ func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allAp
 				LatestPublished: true,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("resolve version for app %q (domain %q at allocate stage): App Registry GetArtifact failed: %w", matched.Name, chart.Domain, err)
+				return nil, fmt.Errorf("resolve version for app %q (domain %q): App Registry GetArtifact failed: %w", matched.Name, chart.Domain, err)
 			}
 			if resp.Artifact == nil || resp.Artifact.Version == "" {
-				return nil, fmt.Errorf("resolve version for app %q (domain %q at allocate stage): App Registry returned no published artifact", matched.Name, chart.Domain)
+				return nil, fmt.Errorf("resolve version for app %q (domain %q): App Registry returned no published artifact", matched.Name, chart.Domain)
 			}
 			versions[matched.FullName()] = resp.Artifact.Version
 		} else {

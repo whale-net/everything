@@ -38,8 +38,8 @@ genuinely was never published.
 
 This reject fires at *record* time, after the chart is already packaged and
 pushed. "Compose-time chart hermeticity (AR-7f, issue #558)" above moves the
-same rule earlier, before anything is pushed, for domains at adoption stage
-`allocate` — still without a registry call inside the Bazel action that
+same rule earlier, before anything is pushed — unconditionally for every
+domain — still without a registry call inside the Bazel action that
 composes the chart, for the reason stated at the top of this section.
 
 **This is also the deploy-time idempotency guarantee for a promoted chart's

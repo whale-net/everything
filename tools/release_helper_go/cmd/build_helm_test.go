@@ -151,10 +151,10 @@ func TestResolveChartAppVersionsAllocateRegistryErrorFails(t *testing.T) {
 
 	_, err := resolveChartAppVersions(context.Background(), chart, testApps(), git, client, nil)
 	if err == nil {
-		t.Fatal("expected error when registry fails for allocate-stage domain, got nil")
+		t.Fatal("expected error when registry fails for a domain with a registry client, got nil")
 	}
-	if !strings.Contains(err.Error(), "allocate stage") {
-		t.Errorf("error should mention allocate stage, got: %v", err)
+	if !strings.Contains(err.Error(), "GetArtifact failed") {
+		t.Errorf("error should mention GetArtifact failed, got: %v", err)
 	}
 }
 

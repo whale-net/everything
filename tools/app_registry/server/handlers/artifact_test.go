@@ -92,6 +92,14 @@ func TestRecordArtifact_PromotabilityDerivation(t *testing.T) {
 	for _, tc := range cases {
 		name := fmt.Sprintf("%s-%v", tc.appName, tc.kind)
 		t.Run(name, func(t *testing.T) {
+			if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+				BuildId: build.BuildId, Kind: tc.kind,
+				OwnerFullName: "demo-" + tc.appName, Version: "v1.0.0",
+				Repository:     "ghcr.io/demo/" + tc.appName,
+				IdempotencyKey: "record-" + tc.appName + "-" + tc.kind.String() + "-begin",
+			}); err != nil {
+				t.Fatalf("BeginPublish(%s, %v): %v", tc.appName, tc.kind, err)
+			}
 			resp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 				BuildId: build.BuildId, Kind: tc.kind,
 				OwnerFullName: "demo-" + tc.appName, Digest: "sha256:" + tc.appName + "-" + tc.kind.String(), Version: "v1.0.0",
@@ -141,6 +149,14 @@ func TestRecordArtifact_PromotabilityIsRetroactive(t *testing.T) {
 	build := recordBuild(t, artifactSrv, "run-retro")
 
 	// image-app is DEPLOY_UNIT_IMAGE at publish time -> PROMOTABLE.
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/image-app",
+		IdempotencyKey: "record-retro-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
 	published, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:retro1", Version: "v1.0.0",
@@ -183,6 +199,14 @@ func TestRecordArtifact_PromotabilityIsRetroactive(t *testing.T) {
 	// A NEW artifact for the SAME (now-edited) app, published after the
 	// edit, also reflects the new deploy_unit.
 	build2 := recordBuild(t, artifactSrv, "run-retro-2")
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build2.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Version: "v1.0.1",
+		Repository:     "ghcr.io/demo/image-app",
+		IdempotencyKey: "record-retro-2-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
 	newPub, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build2.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:retro2", Version: "v1.0.1",
@@ -201,6 +225,14 @@ func TestRecordArtifact_ChartIsAlwaysPromotable(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-chart-promo")
 
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-chart-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/chart-app",
+		IdempotencyKey: "record-image-for-chart-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish image: %v", err)
+	}
 	imgResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-chart-app", Digest: "sha256:imageforchart", Version: "v1.0.0",
@@ -210,6 +242,14 @@ func TestRecordArtifact_ChartIsAlwaysPromotable(t *testing.T) {
 		t.Fatalf("record image: %v", err)
 	}
 
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Version: "v1.0.0",
+		Repository:     "https://charts.example.com/demo-achart",
+		IdempotencyKey: "record-chart1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish chart: %v", err)
+	}
 	chartResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:chart1", Version: "v1.0.0",
@@ -232,6 +272,15 @@ func TestRecordArtifact_RejectsChartPinningUnrecordedImage(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-reject")
+
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Version: "v1.0.0",
+		Repository:     "https://charts.example.com/demo-achart",
+		IdempotencyKey: "record-reject-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
 
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
@@ -345,6 +394,15 @@ func TestRecordArtifact_UnrelatedInvalidArgumentHasNoOwnerReason(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-unrelated-invalid-arg")
 
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Version: "v1.0.0",
+		Repository:     "https://charts.example.com/demo-achart",
+		IdempotencyKey: "record-unrelated-invalid-arg-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:chartunrelated", Version: "v1.0.0",
@@ -395,9 +453,7 @@ func TestRecordArtifact_DuplicateOwnerKindVersionIsAlreadyExists(t *testing.T) {
 		OwnerFullName: "demo-image-app", Digest: "sha256:first", Version: "v1.2.3",
 		IdempotencyKey: "record-dup-1",
 	}
-	if _, err := artifactSrv.RecordArtifact(ctx, first); err != nil {
-		t.Fatalf("first RecordArtifact: %v", err)
-	}
+	mustRecordArtifact(t, artifactSrv, first)
 
 	// Same owner, kind, and version; a different digest and a fresh
 	// idempotency key, so this is not an idempotent replay — it is a
@@ -423,28 +479,22 @@ func TestResolveArtifact_ReturnsImagesForChart(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-resolve")
 
-	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	img := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-chart-app", Digest: "sha256:resolveimg", Version: "v1.2.3",
 		IdempotencyKey: "record-resolve-img",
 	})
-	if err != nil {
-		t.Fatalf("record image: %v", err)
-	}
 
-	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	chart := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:resolvechart", Version: "v1.0.0",
 		Contains: []*pb.ContainedImage{
-			{AppFullName: "demo-chart-app", Repository: "repo", Version: "v1.2.3", Digest: img.Artifact.Digest},
+			{AppFullName: "demo-chart-app", Repository: "repo", Version: "v1.2.3", Digest: img.Digest},
 		},
 		IdempotencyKey: "record-resolve-chart",
 	})
-	if err != nil {
-		t.Fatalf("record chart: %v", err)
-	}
 
-	resolved, err := artifactSrv.ResolveArtifact(ctx, &pb.ResolveArtifactRequest{ArtifactId: chart.Artifact.ArtifactId})
+	resolved, err := artifactSrv.ResolveArtifact(ctx, &pb.ResolveArtifactRequest{ArtifactId: chart.ArtifactId})
 	if err != nil {
 		t.Fatalf("ResolveArtifact: %v", err)
 	}
@@ -464,32 +514,26 @@ func TestListArtifactPins_ReturnsSingleChartThatPinsImage(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-pins-single")
 
-	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	img := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:pinssingleimg", Version: "v1.0.0",
 		IdempotencyKey: "record-pins-single-img",
 	})
-	if err != nil {
-		t.Fatalf("record image: %v", err)
-	}
 
-	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	chart := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinssinglechart", Version: "v1.0.0",
 		Contains: []*pb.ContainedImage{
-			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
+			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Digest},
 		},
 		IdempotencyKey: "record-pins-single-chart",
 	})
-	if err != nil {
-		t.Fatalf("record chart: %v", err)
-	}
 
-	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.Artifact.ArtifactId})
+	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.ArtifactId})
 	if err != nil {
 		t.Fatalf("ListArtifactPins: %v", err)
 	}
-	if len(resp.ChartArtifacts) != 1 || resp.ChartArtifacts[0].ArtifactId != chart.Artifact.ArtifactId {
+	if len(resp.ChartArtifacts) != 1 || resp.ChartArtifacts[0].ArtifactId != chart.ArtifactId {
 		t.Fatalf("expected exactly the one pinning chart artifact, got %+v", resp.ChartArtifacts)
 	}
 }
@@ -502,39 +546,30 @@ func TestListArtifactPins_ReturnsMultipleChartsThatPinSameImage(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-pins-multi")
 
-	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	img := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:pinsmultiimg", Version: "v1.0.0",
 		IdempotencyKey: "record-pins-multi-img",
 	})
-	if err != nil {
-		t.Fatalf("record image: %v", err)
-	}
 
-	chartV1, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	chartV1 := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinsmultichart1", Version: "v1.0.0",
 		Contains: []*pb.ContainedImage{
-			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
+			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Digest},
 		},
 		IdempotencyKey: "record-pins-multi-chart1",
 	})
-	if err != nil {
-		t.Fatalf("record chart v1: %v", err)
-	}
-	chartV2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	chartV2 := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinsmultichart2", Version: "v1.1.0",
 		Contains: []*pb.ContainedImage{
-			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
+			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Digest},
 		},
 		IdempotencyKey: "record-pins-multi-chart2",
 	})
-	if err != nil {
-		t.Fatalf("record chart v2: %v", err)
-	}
 
-	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.Artifact.ArtifactId})
+	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.ArtifactId})
 	if err != nil {
 		t.Fatalf("ListArtifactPins: %v", err)
 	}
@@ -542,7 +577,7 @@ func TestListArtifactPins_ReturnsMultipleChartsThatPinSameImage(t *testing.T) {
 	for _, c := range resp.ChartArtifacts {
 		got[c.ArtifactId] = true
 	}
-	if len(resp.ChartArtifacts) != 2 || !got[chartV1.Artifact.ArtifactId] || !got[chartV2.Artifact.ArtifactId] {
+	if len(resp.ChartArtifacts) != 2 || !got[chartV1.ArtifactId] || !got[chartV2.ArtifactId] {
 		t.Fatalf("expected both pinning charts with no duplicates, got %+v", resp.ChartArtifacts)
 	}
 }
@@ -557,16 +592,13 @@ func TestListArtifactPins_ImageWithNoPins_ReturnsEmptySuccess(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-pins-none")
 
-	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	img := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:pinsnoneimg", Version: "v1.0.0",
 		IdempotencyKey: "record-pins-none-img",
 	})
-	if err != nil {
-		t.Fatalf("record image: %v", err)
-	}
 
-	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.Artifact.ArtifactId})
+	resp, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.ArtifactId})
 	if err != nil {
 		t.Fatalf("expected a success response for an unpinned-but-existing artifact, got err: %v", err)
 	}
@@ -601,16 +633,13 @@ func TestListArtifactPins_ChartArtifact_ReturnsInvalidArgument(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-pins-wrongkind")
 
-	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	chart := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinswrongkindchart", Version: "v1.0.0",
 		IdempotencyKey: "record-pins-wrongkind-chart",
 	})
-	if err != nil {
-		t.Fatalf("record chart: %v", err)
-	}
 
-	_, err = artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: chart.Artifact.ArtifactId})
+	_, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: chart.ArtifactId})
 	if err == nil {
 		t.Fatal("expected an error when looking up pins for a chart artifact")
 	}
@@ -629,38 +658,32 @@ func TestListArtifactPins_DigestAndArtifactIdBothResolveSameArtifact(t *testing.
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-pins-duallookup")
 
-	img, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	img := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:pinsduallookupimg", Version: "v1.0.0",
 		IdempotencyKey: "record-pins-duallookup-img",
 	})
-	if err != nil {
-		t.Fatalf("record image: %v", err)
-	}
-	chart, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
+	chart := mustRecordArtifact(t, artifactSrv, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
 		OwnerFullName: "demo-achart", Digest: "sha256:pinsduallookupchart", Version: "v1.0.0",
 		Contains: []*pb.ContainedImage{
-			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Artifact.Digest},
+			{AppFullName: "demo-image-app", Repository: "repo", Version: "v1.0.0", Digest: img.Digest},
 		},
 		IdempotencyKey: "record-pins-duallookup-chart",
 	})
-	if err != nil {
-		t.Fatalf("record chart: %v", err)
-	}
 
-	byID, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.Artifact.ArtifactId})
+	byID, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{ArtifactId: img.ArtifactId})
 	if err != nil {
 		t.Fatalf("ListArtifactPins by artifact_id: %v", err)
 	}
-	byDigest, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{Digest: img.Artifact.Digest})
+	byDigest, err := artifactSrv.ListArtifactPins(ctx, &pb.ListArtifactPinsRequest{Digest: img.Digest})
 	if err != nil {
 		t.Fatalf("ListArtifactPins by digest: %v", err)
 	}
-	if len(byID.ChartArtifacts) != 1 || byID.ChartArtifacts[0].ArtifactId != chart.Artifact.ArtifactId {
+	if len(byID.ChartArtifacts) != 1 || byID.ChartArtifacts[0].ArtifactId != chart.ArtifactId {
 		t.Fatalf("artifact_id lookup: expected the one pinning chart, got %+v", byID.ChartArtifacts)
 	}
-	if len(byDigest.ChartArtifacts) != 1 || byDigest.ChartArtifacts[0].ArtifactId != chart.Artifact.ArtifactId {
+	if len(byDigest.ChartArtifacts) != 1 || byDigest.ChartArtifacts[0].ArtifactId != chart.ArtifactId {
 		t.Fatalf("digest lookup: expected the one pinning chart, got %+v", byDigest.ChartArtifacts)
 	}
 }
@@ -672,6 +695,15 @@ func TestRecordArtifact_IdempotencyReplaysWithoutDoubleWrite(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-idem")
+
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/image-app",
+		IdempotencyKey: "idem-key-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
 
 	req := &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -727,9 +759,8 @@ func TestRecordArtifact_RejectsMissingIdempotencyKey(t *testing.T) {
 }
 
 // setupAllocate builds its own fake registry (rather than reusing setup(t))
-// because AllocateVersion tests need direct access to the fake so they can
-// set a domain's adoption stage via fake.Registry.SetDomainAdoptionStage —
-// there is no RPC to do that in this change (see PLAN.md's AR-5 status).
+// with a single reconciled image app, ready for AllocateVersion/BeginPublish/
+// RecordArtifact tests.
 func setupAllocate(t *testing.T) (*fake.Registry, *ArtifactServer) {
 	t.Helper()
 	repo := fake.New()
@@ -808,31 +839,19 @@ func TestAllocateVersion_UnknownOwnerNamesTheOwnerAndHintsAtReconcile(t *testing
 	}
 }
 
-// TestAllocateVersion_AdoptionStageGate proves the per-domain cutover gate:
-// a domain that has never been set to "allocate" (every domain, as of
-// AR-5a — see PLAN.md's AR-5 status) is rejected with FailedPrecondition,
-// and only after the fixture explicitly cuts "demo" over does the same
-// request succeed. This is the mechanism a future phase would use to cut a
-// real domain over — see fake.Registry.SetDomainAdoptionStage's doc comment
-// and postgres_integration_artifact_test.go's version of this same proof against a
-// real domain_adoption row.
-func TestAllocateVersion_AdoptionStageGate(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+// TestAllocateVersion_UnconditionalAllocation proves AllocateVersion serves
+// every domain unconditionally -- there is no per-domain adoption gate.
+func TestAllocateVersion_UnconditionalAllocation(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
 
 	req := &pb.AllocateVersionRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
 		Increment: "patch", IdempotencyKey: "gate-1",
 	}
-	_, err := artifactSrv.AllocateVersion(ctx, req)
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition for a domain not at stage 'allocate', got %v", err)
-	}
-
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 	resp, err := artifactSrv.AllocateVersion(ctx, req)
 	if err != nil {
-		t.Fatalf("expected success once 'demo' is cut over to 'allocate', got %v", err)
+		t.Fatalf("expected success, got %v", err)
 	}
 	if resp.Version != "v0.0.1" {
 		t.Fatalf("expected first patch allocation to be v0.0.1, got %q", resp.Version)
@@ -842,7 +861,7 @@ func TestAllocateVersion_AdoptionStageGate(t *testing.T) {
 // TestAllocateVersion_IncrementsFromLatestRecordedArtifact proves
 // AllocateVersion accounts for artifacts already recorded via
 // RecordArtifact, not just prior allocations, and that major/minor/patch
-// all behave as PLAN.md's AR-5 addendum item 1 specifies.
+// all behave as ARCHITECTURE.md's "Version model" specifies.
 func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 	cases := []struct {
 		increment string
@@ -856,17 +875,19 @@ func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 		t.Run(tc.increment, func(t *testing.T) {
 			// A fresh registry per case: each must increment from the SAME
 			// seeded v1.2.3, not from a previous subtest's allocation.
-			repo, artifactSrv := setupAllocate(t)
+			_, artifactSrv := setupAllocate(t)
 			ctx := authedCtx()
 
-			// Seed while "demo" is still at its implicit default stage
-			// (observe) -- AR-7b's RecordArtifact only allows the
-			// create-directly-as-published path there (see
-			// ARCHITECTURE.md "Backward compatibility during rollout");
-			// cutting the domain to "allocate" happens AFTER seeding,
-			// exactly like a real cutover would (existing artifacts predate
-			// it), and only AllocateVersion's own gate below needs it.
+			// Seed a published v1.2.3 via the mandatory BeginPublish ->
+			// RecordArtifact sequence -- there is no direct-create
+			// fallback.
 			build := recordBuild(t, artifactSrv, "run-allocate-seed-"+tc.increment)
+			if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+				Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+				Version: "v1.2.3", BuildId: build.BuildId, IdempotencyKey: "seed-begin-" + tc.increment,
+			}); err != nil {
+				t.Fatalf("seed BeginPublish: %v", err)
+			}
 			if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 				BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 				OwnerFullName: "demo-image-app", Digest: "sha256:seed-" + tc.increment, Version: "v1.2.3",
@@ -874,7 +895,6 @@ func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("seed RecordArtifact: %v", err)
 			}
-			repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 			resp, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
 				Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
@@ -903,9 +923,8 @@ func TestAllocateVersion_IncrementsFromLatestRecordedArtifact(t *testing.T) {
 // postgres layer; see TestAllocateVersion_ReusesFailedVersionOnRetry for the
 // `failed`-reuse behavior this does NOT cover.
 func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	req := &pb.AllocateVersionRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
@@ -952,9 +971,8 @@ func TestAllocateVersion_IdempotencyKeyReplay(t *testing.T) {
 // times without exhausting the minor/patch sequence. Only once the version
 // actually publishes does the next call advance past it.
 func TestAllocateVersion_ReusesFailedVersionOnRetry(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	alloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
@@ -1027,9 +1045,8 @@ func TestAllocateVersion_ReusesFailedVersionOnRetry(t *testing.T) {
 // taken" contract for explicit_version from
 // api_messages_artifact.proto's AllocateVersionRequest doc comment.
 func TestAllocateVersion_ExplicitVersionCollisionFails(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	req := &pb.AllocateVersionRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
@@ -1065,9 +1082,8 @@ func TestAllocateVersion_ExplicitVersionCollisionFails(t *testing.T) {
 // proves published is terminal: the same digest replays idempotently, a
 // different digest for the same version is a real conflict.
 func TestArtifactLifecycle_AllocateBeginPublishRecord(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	alloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
@@ -1203,9 +1219,9 @@ func TestBeginPublishThenRecordArtifact_SharedIdempotencyKey_ExecuteIndependentl
 }
 
 // TestBeginPublish_NoPriorAllocation_TagPath proves the ∅ -> publishing
-// transition (the pre-cutover path, ARCHITECTURE.md "Backward
-// compatibility during rollout"): no AllocateVersion call happened, so
-// BeginPublish creates the row itself, with version_source TAG.
+// transition (ARCHITECTURE.md "Artifact lifecycle"): no AllocateVersion
+// call happened, so BeginPublish creates the row itself, with
+// version_source TAG.
 func TestBeginPublish_NoPriorAllocation_TagPath(t *testing.T) {
 	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
@@ -1222,7 +1238,7 @@ func TestBeginPublish_NoPriorAllocation_TagPath(t *testing.T) {
 		t.Fatalf("expected state PUBLISHING, got %v", begun.Artifact.State)
 	}
 	if begun.Artifact.VersionSource != pb.VersionSource_VERSION_SOURCE_TAG {
-		t.Fatalf("expected version_source TAG for the pre-cutover ∅ -> publishing path, got %v", begun.Artifact.VersionSource)
+		t.Fatalf("expected version_source TAG for the ∅ -> publishing path with no prior allocation, got %v", begun.Artifact.VersionSource)
 	}
 }
 
@@ -1320,6 +1336,12 @@ func TestBeginPublish_RejectsPublishedRow(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-begin-on-published")
 
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
+		Version: "v1.0.0", BuildId: build.BuildId, IdempotencyKey: "begin-on-published-seed-begin",
+	}); err != nil {
+		t.Fatalf("seed BeginPublish: %v", err)
+	}
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:already-published", Version: "v1.0.0",
@@ -1340,9 +1362,8 @@ func TestBeginPublish_RejectsPublishedRow(t *testing.T) {
 // TestFailPublish_RejectsNonPublishingRow proves FailPublish only accepts
 // "publishing" as a starting state -- exercised here against "allocated".
 func TestFailPublish_RejectsNonPublishingRow(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	alloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
 		Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE, OwnerFullName: "demo-image-app",
@@ -1406,23 +1427,21 @@ func TestFailPublish_ThenBeginPublishRetries(t *testing.T) {
 	}
 }
 
-// TestRecordArtifact_RejectsAtNonObserveStageWithoutPriorRow proves the
-// AR-7b backward-compat boundary precisely: RecordArtifact's
-// create-directly-as-published fallback is legal ONLY at adoption stage
-// observe -- ARCHITECTURE.md "Backward compatibility during rollout".
-func TestRecordArtifact_RejectsAtNonObserveStageWithoutPriorRow(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+// TestRecordArtifact_RejectsCreateWithoutPriorBeginPublish proves
+// RecordArtifact has no direct-create fallback: BeginPublish must always
+// run first, for every domain.
+func TestRecordArtifact_RejectsCreateWithoutPriorBeginPublish(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
-	build := recordBuild(t, artifactSrv, "run-reject-non-observe")
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStagePromote)
+	build := recordBuild(t, artifactSrv, "run-reject-no-begin")
 
 	_, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
-		OwnerFullName: "demo-image-app", Digest: "sha256:reject-non-observe", Version: "v1.0.0",
-		IdempotencyKey: "reject-non-observe",
+		OwnerFullName: "demo-image-app", Digest: "sha256:reject-no-begin", Version: "v1.0.0",
+		IdempotencyKey: "reject-no-begin",
 	})
 	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition for a direct RecordArtifact create at stage 'promote' with no prior BeginPublish, got %v", err)
+		t.Fatalf("expected FailedPrecondition for a direct RecordArtifact create with no prior BeginPublish, got %v", err)
 	}
 }
 
@@ -1489,7 +1508,7 @@ func TestBeginPublishBatch_WritesPublishingForEveryTarget(t *testing.T) {
 			t.Fatalf("expected artifact to carry the batch's build_id for %s, got %q", r.OwnerFullName, r.Artifact.BuildId)
 		}
 		if r.Artifact.VersionSource != pb.VersionSource_VERSION_SOURCE_TAG {
-			t.Fatalf("expected version_source TAG (pre-cutover path) for %s, got %v", r.OwnerFullName, r.Artifact.VersionSource)
+			t.Fatalf("expected version_source TAG (no prior allocation) for %s, got %v", r.OwnerFullName, r.Artifact.VersionSource)
 		}
 	}
 }
@@ -1907,7 +1926,20 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 
 	const sharedDigest = "sha256:identical-digest-for-all-versions"
 
+	beginPublish := func(version, key string) {
+		t.Helper()
+		if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+			BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+			OwnerFullName: "demo-image-app", Version: version,
+			Repository:     "ghcr.io/demo/image-app",
+			IdempotencyKey: key,
+		}); err != nil {
+			t.Fatalf("BeginPublish(%s): %v", version, err)
+		}
+	}
+
 	// 1. Record v1.0.0 with sharedDigest
+	beginPublish("v1.0.0", "record-same-digest-v1-begin")
 	resp1, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -1924,6 +1956,7 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 	}
 
 	// 2. Record v1.0.1 (patch bump in same minor series) with the same sharedDigest -> MUST FAIL
+	beginPublish("v1.0.1", "record-same-digest-v101-begin")
 	_, err = artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -1937,6 +1970,7 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 	}
 
 	// 3. Record v1.1.0 (minor bump) with the same sharedDigest -> MUST SUCCEED
+	beginPublish("v1.1.0", "record-same-digest-v110-begin")
 	respMinor, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -1953,6 +1987,7 @@ func TestRecordArtifact_SameDigestMultipleVersions(t *testing.T) {
 	}
 
 	// 4. Record v2.0.0 (major bump) with the same sharedDigest -> MUST SUCCEED
+	beginPublish("v2.0.0", "record-same-digest-v2-begin")
 	resp2, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -2022,7 +2057,20 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 	}
 
 	// 2. Publish several versions
+	beginPublish := func(buildID, version, key string) {
+		t.Helper()
+		if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+			BuildId: buildID, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+			OwnerFullName: "demo-image-app", Version: version,
+			Repository:     "ghcr.io/whale-net/demo-image-app",
+			IdempotencyKey: key,
+		}); err != nil {
+			t.Fatalf("BeginPublish(%s): %v", version, err)
+		}
+	}
+
 	build1 := recordBuild(t, artifactSrv, "run-pub-1")
+	beginPublish(build1.BuildId, "v1.0.0", "pub-1-begin")
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build1.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -2035,6 +2083,7 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 	}
 
 	build2 := recordBuild(t, artifactSrv, "run-pub-2")
+	beginPublish(build2.BuildId, "v1.1.0", "pub-2-begin")
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build2.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -2047,6 +2096,7 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 	}
 
 	build3 := recordBuild(t, artifactSrv, "run-pub-3")
+	beginPublish(build3.BuildId, "v1.0.1", "pub-3-begin")
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build3.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -2059,6 +2109,7 @@ func TestGetArtifact_LatestPublished(t *testing.T) {
 	}
 
 	build4 := recordBuild(t, artifactSrv, "run-pub-4")
+	beginPublish(build4.BuildId, "v1.10.0", "pub-4-begin")
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId:        build4.BuildId,
 		Kind:           pb.ArtifactKind_ARTIFACT_KIND_IMAGE,

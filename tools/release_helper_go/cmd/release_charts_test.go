@@ -740,7 +740,9 @@ func TestExecuteReleaseCharts_RecordArtifactFails_TriggersFailPublish(t *testing
 		return nil, fmt.Errorf("chart pins unrecorded image digest")
 	}
 
-	res, err := ExecuteReleaseCharts(ReleaseChartsParams{
+	// RecordArtifact failure is fatal -- there is no per-domain adoption
+	// stage under which it would be a soft warning.
+	_, err := ExecuteReleaseCharts(ReleaseChartsParams{
 		Charts:         "demo-hello-fastapi",
 		Version:        "v0.2.0",
 		ChartRepoURL:   "https://charts.whalenet.dev",
@@ -754,11 +756,8 @@ func TestExecuteReleaseCharts_RecordArtifactFails_TriggersFailPublish(t *testing
 		WorkspaceRoot:  workspaceRoot,
 		ArtifactClient: fakeArtifactClient,
 	})
-	if err != nil {
-		t.Fatalf("unexpected ExecuteReleaseCharts error: %v", err)
-	}
-	if len(res.Charts) != 1 {
-		t.Fatalf("expected 1 chart result, got %d", len(res.Charts))
+	if err == nil {
+		t.Fatal("expected a fatal error on RecordArtifact failure, got nil")
 	}
 	if len(fakeArtifactClient.BeginPublishCalls) != 1 {
 		t.Errorf("expected 1 BeginPublish call, got %d", len(fakeArtifactClient.BeginPublishCalls))
@@ -885,23 +884,23 @@ func TestExecuteReleaseCharts_AllocateDomainUsesRegistryNotTags(t *testing.T) {
 	}
 }
 
-// TestExecuteReleaseCharts_NotAllocatedFallsBackToTags proves domains not yet
-// cut over to adoption stage "allocate" are unaffected: AllocateVersion's
-// FailedPrecondition falls back to the pre-#829 tag-based bump, unchanged.
-func TestExecuteReleaseCharts_NotAllocatedFallsBackToTags(t *testing.T) {
+// TestExecuteReleaseCharts_AllocateVersionErrorIsFatal proves that once a
+// registry client is opted in, an AllocateVersion error is always fatal --
+// there is no per-domain adoption stage to fall back on (see
+// resolveVersion's doc comment).
+func TestExecuteReleaseCharts_AllocateVersionErrorIsFatal(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
 	uploader := &fakeChartUploader{}
 	packager := &fakeHelmPackager{}
 	artClient := NewFakeArtifactRegistryClient()
 	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
-		return nil, status.Error(codes.FailedPrecondition, `domain "demo" is at adoption stage "observe"`)
+		return nil, status.Error(codes.FailedPrecondition, `domain "demo" allocation failed`)
 	}
 	fakeHermeticity := &fakeHermeticityChecker{enforced: false}
 
-	var res *ReleaseChartsResult
 	var err error
 	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
-		res, err = ExecuteReleaseCharts(ReleaseChartsParams{
+		_, err = ExecuteReleaseCharts(ReleaseChartsParams{
 			Charts:               "demo-hello-fastapi",
 			IncrementMinor:       true,
 			BuildID:              "build-999",
@@ -918,12 +917,11 @@ func TestExecuteReleaseCharts_NotAllocatedFallsBackToTags(t *testing.T) {
 			ArtifactClient:       artClient,
 		})
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if err == nil {
+		t.Fatal("expected a fatal error on AllocateVersion failure, got nil")
 	}
-	// Initial tag fixture was helm-demo-hello-fastapi.v0.1.0 -> minor bump should be v0.2.0
-	if len(res.Charts) != 1 || res.Charts[0].EffectiveVersion != "v0.2.0" {
-		t.Fatalf("expected tag-based fallback version 'v0.2.0', got %+v", res.Charts)
+	if !strings.Contains(err.Error(), "AllocateVersion") {
+		t.Errorf("expected error to mention AllocateVersion, got %v", err)
 	}
 }
 
@@ -1281,9 +1279,13 @@ func TestExecuteReleaseCharts_MinorBumpWithSharedDigestNotCollapsed(t *testing.T
 // repackaged content is unchanged from the immediately previous published
 // version must still be recognized as a no-op and reuse that previous
 // version, rather than tagging/publishing a new one.
+// TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion exercises
+// the tag/ChartMuseum-based no-op path used when no ArtifactClient is
+// supplied (registry not opted in) -- supplying a client makes App
+// Registry unconditionally authoritative for previous-version lookup
+// instead (see releaser.go's isAllocate).
 func TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
-	artClient := NewFakeArtifactRegistryClient()
 
 	files := map[string]string{
 		"demo-hello-fastapi/Chart.yaml":  "apiVersion: v2\nname: demo-hello-fastapi\nversion: v0.1.0\n",
@@ -1313,7 +1315,7 @@ func TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion(t *testin
 		Packager:             packager,
 		Uploader:             uploader,
 		WorkspaceRoot:        workspaceRoot,
-		ArtifactClient:       artClient,
+		SkipRegistry:         true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1337,10 +1339,10 @@ func TestExecuteReleaseCharts_SameMinorPatchRetryReusesPreviousVersion(t *testin
 	}
 }
 
-// TestExecuteReleaseCharts_AllocateStage_RecordArtifactFailureIsFatal proves
+// TestExecuteReleaseCharts_RegistryPath_RecordArtifactFailureIsFatal proves
 // that for a chart in an allocate-stage domain (issue #834), RecordArtifact
 // failure calls FailPublish to clean up the publishing row AND returns a fatal error.
-func TestExecuteReleaseCharts_AllocateStage_RecordArtifactFailureIsFatal(t *testing.T) {
+func TestExecuteReleaseCharts_RegistryPath_RecordArtifactFailureIsFatal(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
 	uploader := &fakeChartUploader{}
 	packager := &fakeHelmPackager{}
@@ -1380,10 +1382,10 @@ func TestExecuteReleaseCharts_AllocateStage_RecordArtifactFailureIsFatal(t *test
 	}
 }
 
-// TestExecuteReleaseCharts_AllocateStage_BeginPublishFailureIsFatal proves
+// TestExecuteReleaseCharts_RegistryPath_BeginPublishFailureIsFatal proves
 // that for a chart in an allocate-stage domain (issue #834), BeginPublish
 // failure returns a fatal error and aborts chart release.
-func TestExecuteReleaseCharts_AllocateStage_BeginPublishFailureIsFatal(t *testing.T) {
+func TestExecuteReleaseCharts_RegistryPath_BeginPublishFailureIsFatal(t *testing.T) {
 	bazel, git, docker, fs, workspaceRoot := setupChartTestFixtures(t)
 	uploader := &fakeChartUploader{}
 	packager := &fakeHelmPackager{}

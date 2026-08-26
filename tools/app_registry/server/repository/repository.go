@@ -220,19 +220,16 @@ type ArtifactRepository interface {
 	// set, state -> published). A "published" row there with a DIFFERENT
 	// digest is a real conflict (ErrAlreadyExists) — a different digest for
 	// an already-published version is rejected, not merged. A "publishing"
-	// row is not found and there is no existing row at all: creating
-	// directly in "published" is allowed only when domainStage ==
-	// DomainAdoptionStageObserve (ARCHITECTURE.md "Backward compatibility
-	// during rollout" — this is what lets CI adopt BeginPublish per domain
-	// instead of in one cutover); any other stage rejects with
-	// ErrFailedPrecondition, since BeginPublish must have run first. An
-	// "allocated" or "failed" row found by (owner, kind, version) is also
-	// ErrFailedPrecondition — those need BeginPublish (allocated/failed ->
-	// publishing) before RecordArtifact can complete them. For kind ==
-	// chart, every entry in contains must already be a PUBLISHED artifact
-	// (matched by digest) or the call fails with ErrInvalidArgument — a
-	// chart may not pin an unknown or not-yet-published artifact.
-	RecordArtifact(ctx context.Context, a Artifact, contains []ContainedImageInput, domainStage DomainAdoptionStage) (artifact *Artifact, alreadyRecorded bool, err error)
+	// row is not found and there is no existing row at all: this is always
+	// ErrFailedPrecondition — BeginPublish must have run first, for every
+	// domain unconditionally. An "allocated" or "failed" row found by (owner, kind,
+	// version) is also ErrFailedPrecondition — those need BeginPublish
+	// (allocated/failed -> publishing) before RecordArtifact can complete
+	// them. For kind == chart, every entry in contains must already be a
+	// PUBLISHED artifact (matched by digest) or the call fails with
+	// ErrInvalidArgument — a chart may not pin an unknown or
+	// not-yet-published artifact.
+	RecordArtifact(ctx context.Context, a Artifact, contains []ContainedImageInput) (artifact *Artifact, alreadyRecorded bool, err error)
 
 	// ListArtifacts returns `artifact` rows matching filter, ordered
 	// most-recent-state-change-first by state_changed_at, tie-broken by
@@ -283,8 +280,8 @@ type ArtifactRepository interface {
 	// ownerID, version). buildID is stamped on the row (refreshed on every
 	// call, including the publishing -> publishing branch — see below).
 	// repositoryHint is used only for the ∅ -> publishing branch (no prior
-	// row exists — the pre-cutover path, or a domain that never called
-	// AllocateVersion for this version): artifact.repository is NOT NULL,
+	// row exists — a kind or version that never called AllocateVersion):
+	// artifact.repository is NOT NULL,
 	// so a fresh row needs one from somewhere, and an existing
 	// allocated/failed/publishing row already carries its own from when it
 	// was created. versionSource is likewise only used on the fresh-create
@@ -387,19 +384,6 @@ type ArtifactRepository interface {
 	// Must be called inside Registry.WithTx — same transactional-write shape
 	// as every other write method here.
 	AdoptArtifact(ctx context.Context, a Artifact, contains []ContainedImageInput, reason, actor string) (artifact *Artifact, alreadyRecorded bool, err error)
-}
-
-// DomainAdoptionRepository covers the `domain_adoption` table (migration
-// 001), which gates the per-domain cutover described in ARCHITECTURE.md
-// "Resolved questions" #3. Recording (AR-2) is never gated on this; only
-// AllocateVersion (AR-5) is.
-type DomainAdoptionRepository interface {
-	// GetStage returns domain's current adoption stage, defaulting to
-	// DomainAdoptionStageObserve when no row exists yet — every domain
-	// starts at "observe" implicitly; a row is written only on explicit
-	// cutover (there is no bulk-seed of one row per domain, unlike
-	// `environment`'s dev/stage/prod seed).
-	GetStage(ctx context.Context, domain string) (DomainAdoptionStage, error)
 }
 
 // IdempotencyRepository stores (key, method) -> serialized response for
@@ -723,7 +707,6 @@ type Registry interface {
 	Environments() EnvironmentRepository
 	Promotions() PromotionRepository
 	Writeback() WritebackRepository
-	DomainAdoption() DomainAdoptionRepository
 	ReleaseRuns() ReleaseRunRepository
 	AppBuildLogs() AppBuildLogRepository
 
