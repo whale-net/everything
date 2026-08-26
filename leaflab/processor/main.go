@@ -56,6 +56,12 @@ func run() error {
 	}
 	defer consumer.Close() //nolint:errcheck
 
+	publisher, err := rmq.NewPublisher(rmqConn)
+	if err != nil {
+		return fmt.Errorf("failed to create publisher: %w", err)
+	}
+	defer publisher.Close() //nolint:errcheck
+
 	// RabbitMQ MQTT plugin routes MQTT topics to amq.topic exchange,
 	// replacing '/' with '.' in routing keys.
 	// leaflab/<device>/sensor/<name> → leaflab.<device>.sensor.<name>
@@ -83,7 +89,10 @@ func run() error {
 		logger.Info("config version cache pre-loaded", "devices", len(versions))
 	}
 
-	handler := NewMessageHandler(logger, repo, cache)
+	// Create the config ack publisher for fanout delivery to all API replicas
+	ackPublisher := NewRabbitMQAckPublisher(logging.Get("ack-publisher"), publisher, "amq.topic")
+
+	handler := NewMessageHandler(logger, repo, cache, ackPublisher)
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 
 	appCtx, appCancel := context.WithCancel(context.Background())

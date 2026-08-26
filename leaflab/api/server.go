@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/leaflab/api/apierrors"
 	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -19,6 +20,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"time"
+
 	"google.golang.org/protobuf/proto"
 )
 
@@ -40,16 +43,20 @@ const mqttExchange = "amq.topic"
 
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
-	repo      *Repository
-	publisher *rmq.Publisher
-	logger    *slog.Logger
+	repo       *Repository
+	publisher  *rmq.Publisher
+	logger     *slog.Logger
+	ackWaiter  *ConfigAckWaiter
+	limiter    *ratelimit.Limiter
 }
 
-func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger, ackWaiter *ConfigAckWaiter, limiter *ratelimit.Limiter) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
 		repo:      repo,
 		publisher: publisher,
 		logger:    logger,
+		ackWaiter: ackWaiter,
+		limiter:   limiter,
 	}
 }
 
@@ -1018,6 +1025,80 @@ func (s *LeafLabAPIServer) GetConfigByVersion(ctx context.Context, req *pb.GetCo
 			AckedAt:         status.AckedAt,
 			RejectionReason: status.RejectionReason,
 		},
+	}, nil
+}
+
+func (s *LeafLabAPIServer) WaitForConfigAck(ctx context.Context, req *pb.WaitForConfigAckRequest) (*pb.WaitForConfigAckResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if req.BoardId <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_config",
+			"board_id",
+			apierrors.InvalidArgument,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "board_id must be positive", detail)
+	}
+
+	if req.Version <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_config",
+			"version",
+			apierrors.InvalidArgument,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "version must be positive", detail)
+	}
+
+	// Check concurrent-wait rate limit per principal
+	limiterKey := ratelimit.ForPrincipal(subject)
+	if !s.limiter.Allow(limiterKey, "concurrent-wait") {
+		return nil, status.Error(codes.ResourceExhausted, "too many concurrent waits; please retry after closing some waits")
+	}
+
+	// Deadline validation: clamp to max 30 seconds from now
+	now := time.Now()
+	deadline := time.Unix(req.DeadlineSeconds, 0)
+	maxDeadline := now.Add(30 * time.Second)
+	
+	if deadline.After(maxDeadline) {
+		deadline = maxDeadline
+	}
+
+	// If deadline has already passed, return immediately
+	if deadline.Before(now) {
+		return &pb.WaitForConfigAckResponse{
+			Resolution: pb.ConfigAckResolution_CONFIG_ACK_RESOLUTION_STILL_PENDING,
+		}, nil
+	}
+
+	// Perform the bounded wait
+	resolution, reason, err := s.ackWaiter.Wait(ctx, req.BoardId, int64(req.Version), deadline)
+	if err != nil {
+		s.logger.Error("bounded wait failed",
+			"board_id", req.BoardId,
+			"version", req.Version,
+			"subject", subject,
+			"correlation_id", corrID,
+			"err", err)
+		return nil, status.Errorf(codes.Internal, "bounded wait failed: %v", err)
+	}
+
+	s.logger.Info("bounded wait resolved",
+		"board_id", req.BoardId,
+		"version", req.Version,
+		"resolution", resolution.String(),
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.WaitForConfigAckResponse{
+		Resolution:       resolution,
+		RejectionReason:  reason,
 	}, nil
 }
 

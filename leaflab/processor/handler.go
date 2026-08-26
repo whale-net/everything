@@ -34,13 +34,14 @@ type SensorRepository interface {
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
 type MessageHandler struct {
-	logger *slog.Logger
-	repo   SensorRepository
-	cache  *SensorCache
+	logger     *slog.Logger
+	repo       SensorRepository
+	cache      *SensorCache
+	ackPublish ConfigAckPublisher
 }
 
-func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache) *MessageHandler {
-	return &MessageHandler{logger: logger, repo: repo, cache: cache}
+func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache, ackPublish ConfigAckPublisher) *MessageHandler {
+	return &MessageHandler{logger: logger, repo: repo, cache: cache, ackPublish: ackPublish}
 }
 
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
@@ -297,7 +298,8 @@ func (h *MessageHandler) handleConfigPush(ctx context.Context, deviceID string, 
 }
 
 // handleConfigAck records the device's ack for a config push.
-// On acceptance, applies region assignments and updates the config version cache.
+// On acceptance, applies region assignments, updates the config version cache,
+// and publishes the ack signal to all API replicas via the fanout exchange.
 func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, body []byte) error {
 	var ack configpb.DeviceConfigAck
 	if err := proto.Unmarshal(body, &ack); err != nil {
@@ -313,6 +315,26 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 	if err := h.repo.AckDeviceConfig(ctx, boardID, int64(ack.AppliedVersion), ack.Accepted, ack.Reason); err != nil {
 		return err
 	}
+
+	// Publish the ack signal to all API replicas over the fanout exchange
+	signal := ConfigAckSignal{
+		AckedAt:         time.Now(),
+		DeviceID:        deviceID,
+		ConfigVersion:   int64(ack.AppliedVersion),
+		Accepted:        ack.Accepted,
+		RejectionReason: ack.Reason,
+	}
+	if err := h.ackPublish.PublishAck(ctx, signal); err != nil {
+		h.logger.Error("failed to publish config ack signal",
+			"device_id", deviceID,
+			"version", ack.AppliedVersion,
+			"accepted", ack.Accepted,
+			"err", err,
+		)
+		// Don't fail the ack if publishing fails; the ack is already persisted in the DB
+		// Callers can still poll the API to discover the ack state.
+	}
+
 	if ack.Accepted {
 		if err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
 			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
