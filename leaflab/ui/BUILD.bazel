@@ -69,3 +69,30 @@ release_app(
     language = "go",
     port = 8000,
 )
+
+# Handler tests for boards screen (FR13, FR61, FR64).
+# Tests verify: pagination with keyset tokens (FR61), elapsed time formatting (FR64),
+# empty/error state rendering (NFR14), capability parity (NFR18.2), and authentication.
+go_test(
+    name = "handlers_boards_test",
+    srcs = ["handlers_boards_test.go"],
+    embed = [":ui_lib"],
+    size = "medium",
+    timeout = "short",
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/htmxauth",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)

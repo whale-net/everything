@@ -45,7 +45,7 @@ templ Boards(user *htmxauth.UserInfo, data *viewdata.BoardsData) {
 			if data.Err != nil {
 				<div class="alert alert-error">
 					<div>
-						<span>Failed to load boards: { data.Err.Error() }</span>
+						<span>We couldn't load the list of boards right now. Please try again shortly.</span>
 					</div>
 				</div>
 			} else if len(data.Boards) == 0 {
