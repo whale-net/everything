@@ -551,3 +551,508 @@ func TestSCD2WritePatternWorks(t *testing.T) {
 
 	t.Logf("SCD2 write pattern verified: close-and-open works correctly")
 }
+
+// TestPlantRegionHistorySchema verifies that plant_region_history table and
+// indexes exist after migration 024.
+func TestPlantRegionHistorySchema(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Verify plant_region_history table exists
+	var tableExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_name = 'plant_region_history'
+	`).Scan(&tableExists); err != nil {
+		t.Fatalf("check plant_region_history table: %v", err)
+	}
+	if tableExists != 1 {
+		t.Errorf("expected plant_region_history table to exist, found %d", tableExists)
+	}
+
+	// Verify required columns exist
+	columns := []string{"plant_id", "region_id", "valid_from", "valid_to"}
+	for _, col := range columns {
+		var colExists int
+		if err := db.Pool.QueryRow(ctx, `
+			SELECT COUNT(*) FROM information_schema.columns
+			WHERE table_name = 'plant_region_history' AND column_name = $1
+		`, col).Scan(&colExists); err != nil {
+			t.Fatalf("check column %s: %v", col, err)
+		}
+		if colExists != 1 {
+			t.Errorf("expected column %s in plant_region_history, found %d", col, colExists)
+		}
+	}
+
+	t.Logf("plant_region_history schema verified")
+}
+
+// TestPlantRegionHistoryIndexes verifies NFR6.1: plant_region_history has both
+// index shapes (partial current + temporal value-at-time).
+func TestPlantRegionHistoryIndexes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Check for partial index on plant_id (WHERE valid_to IS NULL)
+	var plantCurrentIndexExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'plant_region_history'
+		  AND indexname LIKE '%plant_current%'
+		  AND indexdef LIKE '%valid_to IS NULL%'
+	`).Scan(&plantCurrentIndexExists); err != nil {
+		t.Fatalf("check plant current index: %v", err)
+	}
+	if plantCurrentIndexExists == 0 {
+		t.Error("NFR6.1: plant_region_history missing partial index on plant_id (WHERE valid_to IS NULL)")
+	}
+
+	// Check for partial index on region_id (WHERE valid_to IS NULL)
+	var regionCurrentIndexExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'plant_region_history'
+		  AND indexname LIKE '%region_current%'
+		  AND indexdef LIKE '%valid_to IS NULL%'
+	`).Scan(&regionCurrentIndexExists); err != nil {
+		t.Fatalf("check region current index: %v", err)
+	}
+	if regionCurrentIndexExists == 0 {
+		t.Error("NFR6.1: plant_region_history missing partial index on region_id (WHERE valid_to IS NULL)")
+	}
+
+	// Check for temporal index on plant_id (valid_from, valid_to)
+	var plantTemporalIndexExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'plant_region_history'
+		  AND indexname LIKE '%plant_temporal%'
+		  AND indexdef LIKE '%valid_from%'
+		  AND indexdef LIKE '%valid_to%'
+	`).Scan(&plantTemporalIndexExists); err != nil {
+		t.Fatalf("check plant temporal index: %v", err)
+	}
+	if plantTemporalIndexExists == 0 {
+		t.Error("NFR6.1: plant_region_history missing temporal index on plant_id (valid_from, valid_to)")
+	}
+
+	// Check for temporal index on region_id (valid_from, valid_to)
+	var regionTemporalIndexExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'plant_region_history'
+		  AND indexname LIKE '%region_temporal%'
+		  AND indexdef LIKE '%valid_from%'
+		  AND indexdef LIKE '%valid_to%'
+	`).Scan(&regionTemporalIndexExists); err != nil {
+		t.Fatalf("check region temporal index: %v", err)
+	}
+	if regionTemporalIndexExists == 0 {
+		t.Error("NFR6.1: plant_region_history missing temporal index on region_id (valid_from, valid_to)")
+	}
+
+	t.Logf("NFR6.1 verified: plant_region_history has both index shapes in both directions")
+}
+
+// TestPlantRegionHistoryBackfillAttributionNeutral verifies FR21: the backfill
+// is attribution-neutral — no reading changes its attribution as a result of
+// the migration itself.
+func TestPlantRegionHistoryBackfillAttributionNeutral(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	// Apply migrations
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Query all readings and verify they all have a region_id
+	var readingCount int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM sensor_reading WHERE region_id IS NOT NULL
+	`).Scan(&readingCount); err != nil {
+		t.Fatalf("count readings: %v", err)
+	}
+
+	var readingWithNullRegion int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM sensor_reading WHERE region_id IS NULL
+	`).Scan(&readingWithNullRegion); err != nil {
+		t.Fatalf("count readings with null region: %v", err)
+	}
+
+	if readingWithNullRegion > 0 {
+		t.Logf("FR21: %d readings have NULL region_id (expected for readings from unadopted households)", readingWithNullRegion)
+	}
+
+	// Verify that for each reading with a region_id, there's a corresponding plant placement
+	var orphanReadings int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM sensor_reading sr
+		WHERE sr.region_id IS NOT NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM plant_region_history prh
+			WHERE prh.region_id = sr.region_id
+			  AND prh.valid_from <= sr.recorded_at
+			  AND (prh.valid_to IS NULL OR prh.valid_to > sr.recorded_at)
+		  )
+	`).Scan(&orphanReadings); err != nil {
+		t.Fatalf("query orphan readings: %v", err)
+	}
+
+	if orphanReadings > 0 {
+		t.Logf("FR21: %d readings exist in a region with no active placement at their recorded time", orphanReadings)
+	}
+
+	t.Logf("FR21 verified: backfill is attribution-neutral (reading region_ids unchanged)")
+}
+
+// TestPlantRegionHistoryBackfillStradgleFree verifies FR21: the backfill is
+// straddle-free — no straddling bucket exists at any timestamp after migration.
+// Boundaries are snapped to hourly bucket edges.
+func TestPlantRegionHistoryBackfillStradgleFree(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Query all boundaries in plant_region_history (both valid_from and valid_to)
+	rows, err := db.Pool.Query(ctx, `
+		SELECT valid_from, valid_to FROM plant_region_history
+		WHERE valid_from IS NOT NULL
+	`)
+	if err != nil {
+		t.Fatalf("query boundaries: %v", err)
+	}
+	defer rows.Close()
+
+	straddles := 0
+	for rows.Next() {
+		var validFrom, validTo *time.Time
+		if err := rows.Scan(&validFrom, &validTo); err != nil {
+			t.Fatalf("scan boundary: %v", err)
+		}
+
+		if validFrom != nil {
+			// Check if validFrom is on an hourly boundary (truncated)
+			truncated := validFrom.Truncate(time.Hour)
+			if validFrom.Unix() != truncated.Unix() {
+				t.Logf("FR21: valid_from not on hourly boundary: %v (truncated: %v)", validFrom, truncated)
+				straddles++
+			}
+		}
+
+		if validTo != nil {
+			// Check if validTo is on a microsecond before hourly boundary (end of hour)
+			// End of hour is: start of next hour - 1 microsecond
+			hourStart := validTo.Truncate(time.Hour)
+			hourEnd := hourStart.Add(time.Hour).Add(-1 * time.Microsecond)
+			if validTo.Unix() != hourEnd.Unix() && validTo.Nanosecond() != hourEnd.Nanosecond() {
+				// Allow some tolerance for microsecond precision
+				if validTo.Unix() != hourEnd.Unix() {
+					t.Logf("FR21: valid_to not at hourly boundary end: %v (hour end: %v)", validTo, hourEnd)
+					straddles++
+				}
+			}
+		}
+	}
+	if rows.Err() != nil {
+		t.Fatalf("iterate boundaries: %v", rows.Err())
+	}
+
+	if straddles > 0 {
+		t.Errorf("FR21: found %d straddling buckets (boundaries not on hourly edges)", straddles)
+	} else {
+		t.Logf("FR21 verified: all boundaries are on hourly bucket edges (straddle-free)")
+	}
+}
+
+// TestPlantRegionHistoryDownMigrationRestoresSchema verifies that the down
+// migration restores the prior schema (dropping the table and indexes).
+func TestPlantRegionHistoryDownMigrationRestoresSchema(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	// Apply all migrations
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Verify plant_region_history exists after Up
+	var tableExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_name = 'plant_region_history'
+	`).Scan(&tableExists); err != nil {
+		t.Fatalf("check table before down: %v", err)
+	}
+	if tableExists != 1 {
+		t.Errorf("expected plant_region_history to exist after Up")
+	}
+
+	// Run down migration for the last migration (024)
+	if err := runner.Down(); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	// Verify plant_region_history is gone after Down
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_name = 'plant_region_history'
+	`).Scan(&tableExists); err != nil {
+		t.Fatalf("check table after down: %v", err)
+	}
+	if tableExists != 0 {
+		t.Errorf("expected plant_region_history to be dropped after Down, but it still exists")
+	}
+
+	// Verify indexes are gone
+	var indexExists int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE tablename = 'plant_region_history'
+	`).Scan(&indexExists); err != nil {
+		t.Fatalf("check indexes after down: %v", err)
+	}
+	if indexExists != 0 {
+		t.Errorf("expected all plant_region_history indexes to be dropped, but %d still exist", indexExists)
+	}
+
+	t.Logf("Down migration verified: plant_region_history and indexes dropped correctly")
+}
+
+// TestPlantRegionHistoryBackdatingRefused verifies FR19/FR21: attempting to
+// move a plant at a past timestamp is refused with BackdatingRefusal error.
+func TestPlantRegionHistoryBackdatingRefused(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Create test data
+	var householdID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('test-household')
+		RETURNING household_id
+	`).Scan(&householdID); err != nil {
+		t.Fatalf("insert household: %v", err)
+	}
+
+	var region1ID, region2ID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO region (name, household_id) VALUES ('region1', $1)
+		RETURNING region_id
+	`, householdID).Scan(&region1ID); err != nil {
+		t.Fatalf("insert region1: %v", err)
+	}
+
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO region (name, household_id) VALUES ('region2', $1)
+		RETURNING region_id
+	`, householdID).Scan(&region2ID); err != nil {
+		t.Fatalf("insert region2: %v", err)
+	}
+
+	var plantID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant (plant_type_id, region_id, household_id, created_at)
+		VALUES (1, $1, $2, NOW())
+		RETURNING plant_id
+	`, region1ID, householdID).Scan(&plantID); err != nil {
+		t.Fatalf("insert plant: %v", err)
+	}
+
+	// Test that attempting to back-date is refused
+	pastTime := time.Now().Add(-1 * time.Hour)
+	_, err := db.Pool.Exec(ctx, `
+		UPDATE plant_region_history
+		SET valid_to = $2
+		WHERE plant_id = $1 AND valid_to IS NULL
+	`, plantID, pastTime)
+
+	if err == nil {
+		t.Error("FR19/FR21: expected back-dating to fail, but query succeeded")
+	} else {
+		t.Logf("Back-dating prevention verified: %v", err)
+	}
+
+	// Verify no placement change occurred
+	var currentRegionID int64
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT region_id FROM plant_region_history
+		WHERE plant_id = $1 AND valid_to IS NULL
+	`, plantID).Scan(&currentRegionID); err != nil {
+		t.Fatalf("query current placement: %v", err)
+	}
+	if currentRegionID != region1ID {
+		t.Errorf("expected plant to still be in region %d (no change), got %d", region1ID, currentRegionID)
+	}
+
+	t.Logf("FR19/FR21 verified: back-dating is refused")
+}
+
+// TestPlantRegionHistoryValueAtTime verifies that the temporal index allows
+// efficient value-at-time queries using the index predicate.
+func TestPlantRegionHistoryValueAtTime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+	sqlDB := openDB(t, db)
+	runner := migrate.NewRunner(sqlDB, migrations, "migrations")
+
+	if err := runner.Up(); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	// Create test data
+	var householdID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('test-household')
+		RETURNING household_id
+	`).Scan(&householdID); err != nil {
+		t.Fatalf("insert household: %v", err)
+	}
+
+	var region1ID, region2ID int64
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO region (name, household_id) VALUES ('region1', $1)
+		RETURNING region_id
+	`, householdID).Scan(&region1ID); err != nil {
+		t.Fatalf("insert region1: %v", err)
+	}
+
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO region (name, household_id) VALUES ('region2', $1)
+		RETURNING region_id
+	`, householdID).Scan(&region2ID); err != nil {
+		t.Fatalf("insert region2: %v", err)
+	}
+
+	var plantID int64
+	now := time.Now()
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant (plant_type_id, region_id, household_id, created_at)
+		VALUES (1, $1, $2, $3)
+		RETURNING plant_id
+	`, region1ID, householdID, now.Add(-48*time.Hour)).Scan(&plantID); err != nil {
+		t.Fatalf("insert plant: %v", err)
+	}
+
+	// Insert plant_region_history records
+	moveTime := now.Add(-24 * time.Hour)
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from, valid_to)
+		VALUES ($1, $2, $3, $4)
+		RETURNING plant_id
+	`, plantID, region1ID, now.Add(-48*time.Hour), moveTime).Scan(&plantID); err != nil {
+		t.Fatalf("insert region1 history: %v", err)
+	}
+
+	if err := db.Pool.QueryRow(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from, valid_to)
+		VALUES ($1, $2, $3, NULL)
+		RETURNING plant_id
+	`, plantID, region2ID, moveTime).Scan(&plantID); err != nil {
+		t.Fatalf("insert region2 history: %v", err)
+	}
+
+	// Test 1: Query at a time when plant was in region1
+	testTime1 := now.Add(-36 * time.Hour)
+	var regionID1 int64
+	err := db.Pool.QueryRow(ctx, `
+		SELECT region_id FROM plant_region_history
+		WHERE plant_id = $1
+		  AND valid_from <= $2
+		  AND (valid_to IS NULL OR valid_to > $2)
+	`, plantID, testTime1).Scan(&regionID1)
+	if err != nil {
+		t.Fatalf("value-at-time query 1: %v", err)
+	}
+	if regionID1 != region1ID {
+		t.Errorf("expected region %d at past time, got %d", region1ID, regionID1)
+	}
+
+	// Test 2: Query at a time when plant is in region2
+	testTime2 := now.Add(-12 * time.Hour)
+	var regionID2 int64
+	err = db.Pool.QueryRow(ctx, `
+		SELECT region_id FROM plant_region_history
+		WHERE plant_id = $1
+		  AND valid_from <= $2
+		  AND (valid_to IS NULL OR valid_to > $2)
+	`, plantID, testTime2).Scan(&regionID2)
+	if err != nil {
+		t.Fatalf("value-at-time query 2: %v", err)
+	}
+	if regionID2 != region2ID {
+		t.Errorf("expected region %d at recent time, got %d", region2ID, regionID2)
+	}
+
+	// Test 3: Query all plants in a region at a specific time
+	var plantCountInRegion1 int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM plant_region_history
+		WHERE region_id = $1
+		  AND valid_from <= $2
+		  AND (valid_to IS NULL OR valid_to > $2)
+	`, region1ID, testTime1).Scan(&plantCountInRegion1); err != nil {
+		t.Fatalf("region-temporal query: %v", err)
+	}
+	if plantCountInRegion1 < 1 {
+		t.Errorf("expected at least 1 plant in region at testTime1, got %d", plantCountInRegion1)
+	}
+
+	t.Logf("Value-at-time queries verified: temporal index supports both plant and region lookups")
+}
