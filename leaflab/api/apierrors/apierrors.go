@@ -50,6 +50,28 @@ const (
 
 	// InvalidArgument is returned when a required field is missing or invalid.
 	InvalidArgument = "INVALID_ARGUMENT"
+
+	// InvalidI2CAddress is returned when an entry's i2c_address is out of range (FR39).
+	InvalidI2CAddress = "INVALID_I2C_ADDRESS"
+
+	// InvalidChipSensorTypePair is returned when a chip/sensor-type pair is not
+	// in the catalog (FR39).
+	InvalidChipSensorTypePair = "INVALID_CHIP_SENSOR_TYPE_PAIR"
+
+	// InvalidPollInterval is returned when poll_interval_ms is invalid (FR39).
+	InvalidPollInterval = "INVALID_POLL_INTERVAL"
+
+	// DuplicateHardwareKey is returned when two entries collide on the same
+	// canonical hardware key (FR39).
+	DuplicateHardwareKey = "DUPLICATE_HARDWARE_KEY"
+
+	// RemovalKeyNotFound is returned when a removal key matches nothing in the
+	// base config (FR39).
+	RemovalKeyNotFound = "REMOVAL_KEY_NOT_FOUND"
+
+	// RemoveEntryNoAddress is returned when a removal targets an entry with
+	// i2c_address=0, which cannot be removed (FR39, FR82.4).
+	RemoveEntryNoAddress = "REMOVE_ENTRY_NO_ADDRESS"
 )
 
 // ErrorDetailFromStatus attempts to extract the ErrorDetail from a gRPC

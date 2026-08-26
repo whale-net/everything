@@ -10,11 +10,13 @@ go_library(
         "materialiser.go",
         "repository.go",
         "server.go",
+        "validator.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api",
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//firmware/sensor/catalog",
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
         "//leaflab/canonkey",
@@ -39,6 +41,7 @@ go_test(
     srcs = [
         "materialiser_test.go",
         "server_test.go",
+        "validator_test.go",
     ],
     embed = [":api_lib"],
     deps = [
