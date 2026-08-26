@@ -291,16 +291,6 @@ spec:
           value: "{s3_access_key}"
         - name: RELEASE_TOOLS_S3_SECRET_KEY
           value: "{s3_secret_key}"
-        - name: ARTIFACTS_S3_BUCKET
-          value: "{s3_bucket}"
-        - name: ARTIFACTS_S3_PUBLIC_ENDPOINT
-          value: "{s3_public_endpoint}"
-        - name: ARTIFACTS_S3_REGION
-          value: "{s3_region}"
-        - name: ARTIFACTS_S3_ACCESS_KEY
-          value: "{s3_access_key}"
-        - name: ARTIFACTS_S3_SECRET_KEY
-          value: "{s3_secret_key}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
