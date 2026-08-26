@@ -75,3 +75,16 @@ filegroup(
     srcs = ["//leaflab/api/proto:leaflab_api_descriptor"],
     visibility = ["//visibility:public"],
 )
+
+# Conformance test data — API environment variables and main source
+filegroup(
+    name = "env_doc",
+    srcs = ["ENV.md"],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)
+
+filegroup(
+    name = "main_src",
+    srcs = ["main.go"],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)

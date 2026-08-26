@@ -96,3 +96,16 @@ go_test(
         "@org_golang_google_grpc//:grpc",
     ],
 )
+
+# Conformance test data — UI environment variables and main source
+filegroup(
+    name = "env_doc",
+    srcs = ["ENV.md"],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)
+
+filegroup(
+    name = "main_src",
+    srcs = ["main.go"],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)

@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# Documentation conformance tests for leaflab API and UI (#1189).
+# Verifies that every environment variable read by main.go is documented in ENV.md.
+
+go_test(
+    name = "conformance_test",
+    srcs = [
+        "env_doc_test.go",
+        "paths_test.go",
+    ],
+    data = [
+        "//leaflab:build_file",
+        "//leaflab/api:env_doc",
+        "//leaflab/api:main_src",
+        "//leaflab/ui:env_doc",
+        "//leaflab/ui:main_src",
+    ],
+)
