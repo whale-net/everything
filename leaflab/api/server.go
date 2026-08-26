@@ -7,11 +7,12 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/whale-net/everything/leaflab/api/apierrors"
+	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -49,12 +50,26 @@ func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slo
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
 	if err := validateDeviceID(req.DeviceId); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		// device_id validation failure
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_id",
+			"device_id",
+			apierrors.InvalidDeviceID,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
 	}
 
 	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "board lookup: %v", err)
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"board",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	// Build the proto with a placeholder version; we need configJSON for the
@@ -65,21 +80,42 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	}
 	configJSON, err := protojson.Marshal(cfgProto)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "protojson marshal: %v", err)
+		// Internal serialization error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	// Atomically assign version and record the pending push before publishing.
 	// This ensures the DB row always exists before the device can ack.
 	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "record config push: %v", err)
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	// Re-marshal with the real version for the wire payload.
 	cfgProto.Version = uint64(version)
 	wire, err := proto.Marshal(cfgProto)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "proto marshal: %v", err)
+		// Internal serialization error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	// MQTT '/' → AMQP '.'; device_id should not contain '/' but sanitize to be safe.
@@ -87,7 +123,13 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	if err := s.publisher.Publish(ctx, mqttExchange, routingKey, wire); err != nil {
 		// Row is in DB but publish failed — device never received the push.
 		// The row stays accepted=FALSE, which is correct: no ack will arrive.
-		return nil, status.Errorf(codes.Internal, "publish config: %v", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 
 	s.logger.Info("device config pushed",
@@ -100,12 +142,26 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
 	if err := validateDeviceID(req.DeviceId); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+		// device_id validation failure
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_id",
+			"device_id",
+			apierrors.InvalidDeviceID,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
 	}
 
 	cfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get config: %v", err)
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
 	}
 	if cfg == nil {
 		return &pb.GetDeviceConfigResponse{Found: false}, nil
@@ -113,18 +169,84 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
 }
 
-func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
-	rows, err := s.repo.ListBoards(ctx)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list boards: %v", err)
+func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
+	// Parse page token
+	var decodedToken *pagetoken.Token
+	if req.Page != nil && req.Page.PageToken != "" {
+		var err error
+		decodedToken, err = pagetoken.Decode(req.Page.PageToken)
+		if err != nil {
+			// Invalid page token
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"page",
+				"page_token",
+				apierrors.InvalidPageToken,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+		}
 	}
 
+	// Determine page size
+	var pageSize int32 = DefaultPageSize
+	if req.Page != nil && req.Page.PageSize > 0 {
+		pageSize = req.Page.PageSize
+	}
+
+	// Fetch boards from repository
+	rows, nextToken, err := s.repo.ListBoards(ctx, pageSize, decodedToken)
+	if err != nil {
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"board",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Get total board count for progress display
+	totalSize, err := s.repo.GetTotalBoardCount(ctx)
+	if err != nil {
+		// Internal database error
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"board",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Convert database rows to proto messages
 	boards := make([]*pb.BoardInfo, 0, len(rows))
 	for _, r := range rows {
 		boards = append(boards, &pb.BoardInfo{
-			DeviceId: r.DeviceID,
-			BoardId:  r.BoardID,
+			DeviceId:   r.DeviceID,
+			BoardId:    r.BoardID,
+			RecordedAt: r.RecordedAt,
 		})
 	}
-	return &pb.ListBoardsResponse{Boards: boards}, nil
+
+	// Encode next page token
+	var nextPageToken string
+	if nextToken != nil {
+		encoded, err := pagetoken.Encode(nextToken)
+		if err != nil {
+			// This should not happen in normal operation; log and return empty token
+			s.logger.Error("failed to encode next page token", "error", err)
+			nextPageToken = ""
+		} else {
+			nextPageToken = encoded
+		}
+	}
+
+	return &pb.ListBoardsResponse{
+		Boards: boards,
+		Page: &pb.PageResponse{
+			NextPageToken: nextPageToken,
+			TotalSize:     totalSize,
+		},
+	}, nil
 }

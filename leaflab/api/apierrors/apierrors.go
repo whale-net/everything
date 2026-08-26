@@ -38,6 +38,12 @@ const (
 	// ConfigNotFound is returned when GetDeviceConfig is called on a device
 	// that has never had a config pushed to it.
 	ConfigNotFound = "CONFIG_NOT_FOUND"
+
+	// InternalError is returned when a database, MQTT, or system error occurs.
+	InternalError = "INTERNAL_ERROR"
+
+	// InvalidPageToken is returned when a page_token is malformed or foreign.
+	InvalidPageToken = "INVALID_PAGE_TOKEN"
 )
 
 // ErrorDetailFromStatus attempts to extract the ErrorDetail from a gRPC
