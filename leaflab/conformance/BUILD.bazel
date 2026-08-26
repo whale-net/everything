@@ -1,8 +1,9 @@
 load("@rules_go//go:def.bzl", "go_test")
 
-# NFR1 authentication conformance tests for the LeafLab API and UI.
-# Ensures no household data is served without authentication and that
-# the BFF holds no presentation-shaping rules (NFR1.a, NFR18.1).
+# NFR1 authentication and authorization conformance tests for the LeafLab API and UI.
+# Ensures no household data is served without authentication (NFR1.a),
+# that every RPC has authorization tests (NFR1.b), and that the BFF holds
+# no presentation-shaping rules (NFR18.1).
 # See paths_test.go's package doc comment.
 
 go_test(
@@ -10,6 +11,7 @@ go_test(
     srcs = [
         "auth_coverage_test.go",
         "bff_policy_test.go",
+        "nfr1b_test.go",
         "paths_test.go",
     ],
     data = [
