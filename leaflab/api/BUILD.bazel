@@ -62,6 +62,29 @@ go_test(
     ],
 )
 
+# Integration tests for audit functionality (requires Docker)
+go_test(
+    name = "api_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["server_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
 go_binary(
     name = "api",
     embed = [":api_lib"],

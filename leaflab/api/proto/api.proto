@@ -151,6 +151,11 @@ service LeafLabAPI {
   // Health returns the service health status without requiring authentication.
   // It returns up or degraded and no other details.
   rpc Health(HealthRequest) returns (HealthResponse);
+
+  // ListActivity returns the activity log for the caller's household (FR9).
+  // Household scope is implicit, derived from caller's identity per FR5.
+  // Each record is rendered as plain-language sentences with no proto/table/column names.
+  rpc ListActivity(ListActivityRequest) returns (ListActivityResponse);
 }
 
 // ============================================================================
@@ -320,6 +325,43 @@ message HealthResponse {
     DEGRADED = 2;
   }
   Status status = 1;
+}
+
+// ── FR9: Owner-readable activity listing ──────────────────────────────────
+
+// ListActivityRequest asks for the activity log for a household.
+// Household scope is implicit (derived from caller's identity per FR5).
+// Pagination follows FR61.
+message ListActivityRequest {
+  // page_token: an opaque string identifying the position in the result set.
+  // Empty or omitted for the first page.
+  string page_token = 1;
+  // page_size: the maximum number of activity items to return.
+  // Default and maximum bounds TBD per FR61.
+  int32 page_size = 2;
+}
+
+// ActivityItem represents one action in the household's audit log.
+// Every field is rendered as plain language by the service; no proto or DB schema leaks.
+message ActivityItem {
+  // description: a complete plain-language sentence describing the action.
+  // Examples:
+  //   "Your board 'Grow Light' was claimed on Aug 25 at 2:30 PM"
+  //   "Helper Alice was granted access to 'Grow Light' on Aug 25 at 2:45 PM"
+  //   "Admin (elevated) reconfigured 'Humidity Sensor' on Aug 25 at 3:00 PM"
+  // No technical field, proto, table or column names appear in this string.
+  string description = 1;
+  // timestamp: when this action occurred (for sorting, display).
+  // Format TBD by UX (RFC3339, Unix timestamp, or similar).
+  int64 timestamp = 2;
+}
+
+// ListActivityResponse returns a page of activity items.
+message ListActivityResponse {
+  repeated ActivityItem items = 1;
+  // next_page_token: opaque pagination token for fetching the next page.
+  // Empty if this is the last page.
+  string next_page_token = 2;
 }
 
 // OpaqueEntityReference represents a foreign entity (owned by a different household)

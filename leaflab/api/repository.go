@@ -497,6 +497,96 @@ func (r *Repository) TransferBoardOwnership(ctx context.Context, boardID int64, 
 	return nil
 }
 
+// GetPrincipalHousehold returns the current household for a principal.
+// Returns 0, nil if the principal has no active household membership.
+func (r *Repository) GetPrincipalHousehold(ctx context.Context, principalID string) (int64, error) {
+	var householdID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id FROM household_member
+		WHERE principal_id = $1 AND valid_to IS NULL
+		LIMIT 1
+	`, principalID).Scan(&householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("get principal %s household: %w", principalID, err)
+	}
+	return householdID, nil
+}
+
+// ListActivityRecords returns audit records for a household in reverse chronological order,
+// using keyset pagination on audit_id (monotonic, so also chronological for ties).
+// The audit_record table and RecordAudit/RecordAuditWithConfig writers are FR8 infrastructure
+// shared with #1192.
+func (r *Repository) ListActivityRecords(ctx context.Context, householdID int64, pageToken string, pageSize int32) (records []AuditRecord, nextToken string, err error) {
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+
+	var lastAuditID int64
+	if pageToken != "" {
+		if _, err := fmt.Sscanf(pageToken, "%d", &lastAuditID); err != nil {
+			return nil, "", fmt.Errorf("invalid page token: %w", err)
+		}
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT audit_id, actor_subject, target_household_id, action, entity_type, entity_id,
+		       EXTRACT(EPOCH FROM occurred_at)::bigint, reason, config_version, i2c_address, mux_path
+		FROM audit_record
+		WHERE target_household_id = $1
+		  AND ($2 = 0 OR audit_id < $2)
+		ORDER BY audit_id DESC
+		LIMIT $3
+	`, householdID, lastAuditID, pageSize+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("list activity for household %d: %w", householdID, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var rec AuditRecord
+		var occurredAtEpoch int64
+		var muxPathJSON []byte
+		if err := rows.Scan(&rec.AuditID, &rec.ActorSubject, &rec.TargetHouseholdID, &rec.Action,
+			&rec.EntityType, &rec.EntityID, &occurredAtEpoch, &rec.Reason, &rec.ConfigVersion,
+			&rec.I2CAddress, &muxPathJSON); err != nil {
+			return nil, "", fmt.Errorf("scan audit record: %w", err)
+		}
+		rec.OccurredAtUnix = occurredAtEpoch
+		rec.MuxPath = muxPathJSON
+		records = append(records, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("rows error: %w", err)
+	}
+
+	if len(records) > int(pageSize) {
+		records = records[:pageSize]
+		nextToken = fmt.Sprintf("%d", records[len(records)-1].AuditID)
+	}
+
+	return records, nextToken, nil
+}
+
+type AuditRecord struct {
+	AuditID           int64
+	ActorSubject      string
+	TargetHouseholdID int64
+	Action            string
+	EntityType        string
+	EntityID          int64
+	OccurredAtUnix    int64
+	Reason            *string
+	ConfigVersion     *int64
+	I2CAddress        *uint32
+	MuxPath           []byte
+}
+
 // ── Household validation (FR1.2 write invariant enforcement) ─────────────────
 
 // ValidateRegionBelongsToHousehold checks whether a region belongs to the given household.
