@@ -8,10 +8,12 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
@@ -85,11 +87,21 @@ func run() error {
 	correlationUnaryInt := logging.NewCorrelationIDUnaryInterceptor()
 	correlationStreamInt := logging.NewCorrelationIDStreamInterceptor()
 
-	// Create gRPC server with auth and correlation ID interceptors
-	// Chain: correlation ID first (to attach to context), then auth (to verify credentials)
+	// Create rate limiter with registry and configure default buckets
+	registry := ratelimit.NewRegistry()
+	configureDefaultBuckets(registry)
+	limiter := ratelimit.NewLimiter(registry)
+
+	// Create rate limiting interceptors for read operations
+	rateLimitUnaryInt := ratelimit.UnaryServerInterceptor(limiter, "read")
+	rateLimitStreamInt := ratelimit.StreamServerInterceptor(limiter, "read")
+
+	// Create gRPC server with interceptors
+	// Chain: correlation ID first (to attach to context), then auth (to verify credentials),
+	// then rate limiting (to enforce limits)
 	grpcServer := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(correlationUnaryInt, unaryInt),
-		grpc.ChainStreamInterceptor(correlationStreamInt, streamInt),
+		grpc.ChainUnaryInterceptor(correlationUnaryInt, unaryInt, rateLimitUnaryInt),
+		grpc.ChainStreamInterceptor(correlationStreamInt, streamInt, rateLimitStreamInt),
 	)
 
 	pb.RegisterLeafLabAPIServer(grpcServer, apiServer)
@@ -130,9 +142,71 @@ func run() error {
 	return <-done
 }
 
+// configureDefaultBuckets registers the default rate limit buckets.
+// Configuration can be overridden via environment variables.
+func configureDefaultBuckets(registry *ratelimit.Registry) {
+	// Read environment variables for bucket configuration
+	readRateLimit := getEnvInt("LEAFLAB_RATELIMIT_READ_RPS", 1000)
+	claimInitiateRateLimit := getEnvInt("LEAFLAB_RATELIMIT_CLAIM_INITIATE_RPS", 100)
+	challengeRateLimit := getEnvInt("LEAFLAB_RATELIMIT_CHALLENGE_RPS", 100)
+	supportReferenceRateLimit := getEnvInt("LEAFLAB_RATELIMIT_SUPPORT_REFERENCE_RPS", 50)
+	resendRateLimit := getEnvInt("LEAFLAB_RATELIMIT_RESEND_RPS", 100)
+	concurrentWaitRateLimit := getEnvInt("LEAFLAB_RATELIMIT_CONCURRENT_WAIT_RPS", 100)
+
+	// Register named buckets for each operation type
+	registry.Register(ratelimit.Bucket{
+		Name:              "read",
+		RequestsPerSecond: readRateLimit,
+		Description:       "Rate limit for all read operations",
+	})
+
+	registry.Register(ratelimit.Bucket{
+		Name:              "claim-initiate",
+		RequestsPerSecond: claimInitiateRateLimit,
+		Description:       "Rate limit for claim initiation (FR76)",
+	})
+
+	registry.Register(ratelimit.Bucket{
+		Name:              "challenge",
+		RequestsPerSecond: challengeRateLimit,
+		Description:       "Rate limit for challenge operations (FR76)",
+	})
+
+	registry.Register(ratelimit.Bucket{
+		Name:              "support-reference",
+		RequestsPerSecond: supportReferenceRateLimit,
+		Description:       "Rate limit for support reference resolution (FR80)",
+	})
+
+	registry.Register(ratelimit.Bucket{
+		Name:              "resend",
+		RequestsPerSecond: resendRateLimit,
+		Description:       "Rate limit for resend operations (FR42)",
+	})
+
+	registry.Register(ratelimit.Bucket{
+		Name:              "concurrent-wait",
+		RequestsPerSecond: concurrentWaitRateLimit,
+		Description:       "Rate limit for concurrent open bounded waits (FR47)",
+	})
+}
+
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
 	}
 	return def
+}
+
+// getEnvInt reads an integer environment variable with a default fallback.
+func getEnvInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return i
 }

@@ -5,11 +5,18 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "ratelimit",
     srcs = [
+        "interceptor.go",
         "key.go",
+        "limiter.go",
         "registry.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api/ratelimit",
     visibility = ["//leaflab/api:__pkg__"],
+    deps = [
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
 )
 
 go_test(
