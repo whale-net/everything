@@ -13,3 +13,10 @@ release_helm_chart(
         "//leaflab/ui:leaflab-ui_metadata",
     ],
 )
+
+# Conformance test data dependencies
+filegroup(
+    name = "build_file",
+    srcs = ["BUILD.bazel"],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)

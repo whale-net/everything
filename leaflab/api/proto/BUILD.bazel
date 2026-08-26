@@ -10,3 +10,10 @@ go_grpc_library(
     go_deps = ["//firmware/proto:configpb"],
     visibility = ["//visibility:public"],
 )
+
+# Conformance test data dependencies
+filegroup(
+    name = "proto_file",
+    srcs = ["api.proto"],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)

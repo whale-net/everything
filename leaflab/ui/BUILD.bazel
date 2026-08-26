@@ -96,3 +96,12 @@ go_test(
         "@org_golang_google_grpc//:grpc",
     ],
 )
+
+# Conformance test data dependencies
+filegroup(
+    name = "conformance_srcs",
+    srcs = [
+        "main.go",
+    ],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)
