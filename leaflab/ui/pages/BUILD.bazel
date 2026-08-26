@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "pages",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["helpers.go"],
+    visibility = ["//leaflab/ui:__pkg__"],
+    deps = [
+        "//leaflab/ui/viewdata",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxui",
+        "//leaflab/api/proto:leaflabapipb",
+    ],
+)

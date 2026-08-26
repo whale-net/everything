@@ -1,0 +1,107 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "grpc_client.go",
+        "handlers_boards.go",
+        "main.go",
+        "templ_render.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/ui/pages",
+        "//leaflab/ui/viewdata",
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//libs/go/htmxui",
+        "//libs/go/logging",
+        "@com_github_a_h_templ//:templ",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+go_binary(
+    name = "ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Unit tests for main.go: configuration, app initialization, and route handlers.
+# These tests use dbtest.NewPostgres for the session database but do not require
+# external services (gRPC API mocks would be needed for full integration).
+go_test(
+    name = "main_test",
+    srcs = ["main_test.go"],
+    embed = [":ui_lib"],
+    size = "large",
+    timeout = "long",
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/db",
+        "//libs/go/dbtest",
+        "//libs/go/htmxauth",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+release_app(
+    name = "ui",
+    app_type = "external-api",
+    binary_name = ":ui",
+    description = "HTMX-based browser UI for LeafLab sensor board management",
+    domain = "leaflab",
+    language = "go",
+    port = 8000,
+)
+
+# Handler tests for boards screen (FR13, FR61, FR64).
+# Tests verify: pagination with keyset tokens (FR61), elapsed time formatting (FR64),
+# empty/error state rendering (NFR14), capability parity (NFR18.2), and authentication.
+go_test(
+    name = "handlers_boards_test",
+    srcs = ["handlers_boards_test.go"],
+    embed = [":ui_lib"],
+    size = "medium",
+    timeout = "short",
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/htmxauth",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+# Conformance test data dependencies
+filegroup(
+    name = "conformance_srcs",
+    srcs = [
+        "main.go",
+    ],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)

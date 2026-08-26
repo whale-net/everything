@@ -69,3 +69,12 @@ release_app(
     port = 50051,
     replicas = 1,
 )
+
+# Conformance test data dependencies
+filegroup(
+    name = "conformance_srcs",
+    srcs = [
+        "server.go",
+    ],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)

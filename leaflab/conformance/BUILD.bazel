@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# NFR1 authentication conformance tests for the LeafLab API and UI.
+# Ensures no household data is served without authentication and that
+# the BFF holds no presentation-shaping rules (NFR1.a, NFR18.1).
+# See paths_test.go's package doc comment.
+
+go_test(
+    name = "conformance_test",
+    srcs = [
+        "auth_coverage_test.go",
+        "bff_policy_test.go",
+        "paths_test.go",
+    ],
+    data = [
+        "//leaflab:build_file",
+        "//leaflab/api:conformance_srcs",
+        "//leaflab/api/proto:proto_file",
+        "//leaflab/ui:conformance_srcs",
+    ],
+)

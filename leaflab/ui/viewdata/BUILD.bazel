@@ -1,0 +1,11 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "viewdata",
+    srcs = ["boards.go"],
+    importpath = "github.com/whale-net/everything/leaflab/ui/viewdata",
+    visibility = ["//leaflab/ui:__subpackages__"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+    ],
+)
