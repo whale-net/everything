@@ -45,6 +45,7 @@ go_test(
         "app_test.go",
         "artifact_adopt_test.go",
         "artifact_test.go",
+        "broker_upload_test.go",
         "authz_test.go",
         "chart_hermeticity_test.go",
         "environment_test.go",
