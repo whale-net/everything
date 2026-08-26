@@ -22,7 +22,13 @@ service LeafLabAPI {
   // Health returns the service health status without requiring authentication.
   // It returns up or degraded and no other details.
   rpc Health(HealthRequest) returns (HealthResponse);
+
+  // ListActivity returns the activity log for the caller's household (FR9).
+  // Household scope is implicit, derived from caller's identity per FR5.
+  // Each record is rendered as plain-language sentences with no proto/table/column names.
+  rpc ListActivity(ListActivityRequest) returns (ListActivityResponse);
 }
+
 
 message PushDeviceConfigRequest {
   string device_id = 1;

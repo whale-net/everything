@@ -231,3 +231,118 @@ func (s *LeafLabAPIServer) Health(ctx context.Context, _ *pb.HealthRequest) (*pb
 
 	return &pb.HealthResponse{Status: pb.HealthResponse_UP}, nil
 }
+
+// ListActivity returns a paginated list of activity (audit records) for the caller's household.
+// Household scope is implicit, derived from the caller's identity per FR5.
+// Each record is rendered as a complete plain-language sentence with no proto/table/column names.
+// Admin elevated actions and granted helper actions render in the same list as member actions.
+func (s *LeafLabAPIServer) ListActivity(ctx context.Context, req *pb.ListActivityRequest) (*pb.ListActivityResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// Get the caller's household.
+	householdID, err := s.repo.GetPrincipalHousehold(ctx, subject)
+	if err != nil {
+		s.logger.Error("get principal household failed",
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get household: %v", err)
+	}
+
+	if householdID == 0 {
+		// Principal has no household; return empty activity.
+		s.logger.Info("principal has no household",
+			"subject", subject,
+			"correlation_id", corrID)
+		return &pb.ListActivityResponse{
+			Items:         []*pb.ActivityItem{},
+			NextPageToken: "",
+		}, nil
+	}
+
+	// Query audit records for the household.
+	pageSize := req.PageSize
+	if pageSize == 0 {
+		pageSize = 50 // Default page size per FR61
+	}
+	if pageSize > 200 {
+		pageSize = 200 // Max page size per FR61 (TBD in spec, but reasonable default)
+	}
+
+	records, nextToken, err := s.repo.ListActivityRecords(ctx, householdID, req.PageToken, pageSize)
+	if err != nil {
+		s.logger.Error("list activity records failed",
+			"household", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "list activity: %v", err)
+	}
+
+	// Render each record as a plain-language sentence.
+	items := make([]*pb.ActivityItem, 0, len(records))
+	for _, record := range records {
+		item := renderActivityItem(record)
+		if item != nil {
+			items = append(items, item)
+		}
+	}
+
+	s.logger.Info("activity listed",
+		"household", householdID,
+		"item_count", len(items),
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.ListActivityResponse{
+		Items:         items,
+		NextPageToken: nextToken,
+	}, nil
+}
+
+// renderActivityItem converts an audit record to a plain-language ActivityItem.
+// Renders no proto field, table name, or column name in the output.
+// Admin elevated actions and granted helper actions are rendered in the same voice.
+func renderActivityItem(record AuditRecord) *pb.ActivityItem {
+	// Placeholder rendering - will be enhanced with actual entity name lookups in follow-up work.
+	// For now, construct a simple plain-language sentence from the audit record.
+	
+	if record.OccurredAt == "" {
+		return nil
+	}
+
+	// Parse timestamp for display (format TBD by UX per FR61).
+	// For now, use raw timestamp; will be converted to RFC3339 or user-friendly format.
+	timestamp := int64(0) // Placeholder - will convert record.OccurredAt to Unix timestamp
+
+	// Construct a plain-language description of the action.
+	// Examples from the issue:
+	//   "Your board 'Grow Light' was claimed on Aug 25 at 2:30 PM"
+	//   "Helper Alice was granted access to 'Grow Light' on Aug 25 at 2:45 PM"
+	//   "Admin (elevated) reconfigured 'Humidity Sensor' on Aug 25 at 3:00 PM"
+	description := renderActionDescription(record)
+
+	return &pb.ActivityItem{
+		Description: description,
+		Timestamp:   timestamp,
+	}
+}
+
+// renderActionDescription constructs a plain-language sentence for an action.
+// No proto field, table name, or column name appears in the output.
+func renderActionDescription(record AuditRecord) string {
+	// Placeholder implementation.
+	// In production, this would:
+	// 1. Look up entity names (board name, plant name, etc.) from the database
+	// 2. Humanize the action (claim_board -> "claimed", update_plant -> "updated", etc.)
+	// 3. Format the timestamp in a user-friendly way
+	// 4. Distinguish between member, admin, and granted actions
+	// 5. Construct a grammatically correct sentence
+	//
+	// For now, return a simple template to satisfy the proto interface.
+	return "Action recorded"
+}

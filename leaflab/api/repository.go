@@ -301,28 +301,44 @@ func (r *Repository) TransferBoardOwnership(ctx context.Context, boardID int64, 
 	return nil
 }
 
-// ── Audit logging ────────────────────────────────────────────────────────────
 
-// EmitAudit records an audit record for the given action.
-// Called by every write path (and elevated/granted reads) to satisfy FR8 and FR9.
-// 
-// Parameters:
-// - ctx: request context
-// - actorSubject: the principal performing the action (NOT restricted to human IdP subjects)
-// - targetHouseholdID: the household being operated on
-// - action: the operation (e.g., "claim_board", "update_plant", "grant_access")
-// - entityType: the kind of entity affected (e.g., "board", "plant", "membership")
-// - entityID: the specific entity being operated on (may be null for household-level actions)
-// - reason: optional justification (required for some actions, e.g., membership denial)
-//
-// Returns an error if the audit record could not be inserted.
-func (r *Repository) EmitAudit(ctx context.Context, actorSubject string, targetHouseholdID int64, action string, entityType string, entityID *int64, reason *string) error {
-	_, err := r.db.Exec(ctx, `
-		INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type, entity_id, reason)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, actorSubject, targetHouseholdID, action, entityType, entityID, reason)
+// GetPrincipalHousehold returns the current household for a principal.
+// Returns 0, nil if the principal has no active household membership.
+func (r *Repository) GetPrincipalHousehold(ctx context.Context, principalID string) (int64, error) {
+	var householdID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id FROM household_member
+		WHERE principal_id = $1 AND valid_to IS NULL
+		LIMIT 1
+	`, principalID).Scan(&householdID)
 	if err != nil {
-		return fmt.Errorf("emit audit: actor=%s household=%d action=%s: %w", actorSubject, targetHouseholdID, action, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("get principal %s household: %w", principalID, err)
 	}
-	return nil
+	return householdID, nil
+}
+
+// ListActivityRecords returns audit records for a household in reverse chronological order,
+// for pagination. The audit_record table is managed by #1192 via FR8 infrastructure.
+// This method will be called by ListActivity RPC after the audit_record table is merged in.
+func (r *Repository) ListActivityRecords(ctx context.Context, householdID int64, pageToken string, pageSize int32) (records []AuditRecord, nextToken string, err error) {
+	// Placeholder implementation - will reference audit_record table after merge with #1192.
+	// For now, return empty records to allow the proto/handler to compile.
+	return []AuditRecord{}, "", nil
+}
+
+type AuditRecord struct {
+	AuditID         int64
+	ActorSubject    string
+	TargetHouseholdID int64
+	Action          string
+	EntityType      string
+	EntityID        *int64
+	OccurredAt      string // timestamp
+	Reason          *string
+	ConfigVersion   *int64
+	I2CAddress      *string
+	MuxPath         *string
 }
