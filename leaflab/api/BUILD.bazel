@@ -9,6 +9,7 @@ go_library(
         "main.go",
         "repository.go",
         "server.go",
+        "tier.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api",
     visibility = ["//visibility:private"],

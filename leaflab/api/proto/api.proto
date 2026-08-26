@@ -265,3 +265,34 @@ message ReadingAttribution {
   // Empty if no plants active in the attributed region.
   repeated PlantInfo active_plants = 2;
 }
+
+// ============================================================================
+// Granularity tiers (FR71, NFR5)
+// ============================================================================
+
+// GranularityTier identifies which pre-aggregated tier answered a series or
+// summary request. Three tiers exist: raw, 5-minute and hourly -- no tier
+// coarser than hourly exists in V1 (A14).
+//
+// A caller-requested tier is a hint, not a contract: the server coarsens --
+// and must, where the requested tier's retention or NFR3.2's 48-hour raw cap
+// cannot serve the window -- but never silently: every series and summary
+// response carries the tier that actually answered.
+//
+// Pre-aggregated is not de-identified: tiers are keyed by sensor and region,
+// so a min/max over one sensor's bucket is two raw readings wearing a hat.
+enum GranularityTier {
+  GRANULARITY_TIER_UNSPECIFIED = 0;
+
+  // Individual sensor_reading rows. Retained at least 13 months, but served
+  // only for windows no longer than 48 hours (NFR3.2).
+  GRANULARITY_TIER_RAW = 1;
+
+  // 5-minute buckets, defined directly on the hypertable with no dimension
+  // joins. Retained (and thus servable) for 90 days.
+  GRANULARITY_TIER_5_MINUTE = 2;
+
+  // 1-hour buckets, defined directly on the hypertable with no dimension
+  // joins. Retained indefinitely -- the coarsest tier in V1.
+  GRANULARITY_TIER_HOURLY = 3;
+}
