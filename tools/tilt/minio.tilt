@@ -74,6 +74,12 @@ spec:
           value: minioadmin
         - name: MINIO_ROOT_PASSWORD
           value: minioadmin
+        # Public presigned PUT/GET URLs (FR-51) use virtual-hosted-style
+        # addressing (<bucket>.<host>). Without MINIO_DOMAIN, minio parses
+        # every request path-style regardless of Host header, treating the
+        # object key's first path segment as the bucket name instead.
+        - name: MINIO_DOMAIN
+          value: localhost
         ports:
         - containerPort: 9000
           name: api

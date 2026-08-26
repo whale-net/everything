@@ -6,8 +6,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -401,7 +403,25 @@ func uploadViaPresignedURL(ctx context.Context, presignedURL string, content []b
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	// Virtual-hosted-style presigned URLs use "<bucket>.<host>" as the
+	// hostname (FR-51). Local dev's minio only listens on the bare host
+	// (127.0.0.1:9000, forwarded from the cluster); "<bucket>.localhost"
+	// isn't resolvable by every environment's DNS (notably not this one),
+	// so redial any "*.localhost" host straight to the loopback address
+	// while leaving the Host header (and thus the S3 signature) untouched.
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, port, err := net.SplitHostPort(addr)
+				if err == nil && strings.HasSuffix(host, ".localhost") {
+					addr = net.JoinHostPort("127.0.0.1", port)
+				}
+				var d net.Dialer
+				return d.DialContext(ctx, network, addr)
+			},
+		},
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("PUT request failed: %w", err)
