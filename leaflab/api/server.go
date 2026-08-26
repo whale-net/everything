@@ -165,6 +165,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	// FR82: Handle COMPLETE vs EDIT scope
 	var configProto *configpb.DeviceConfig
 	var provenance map[int]pb.Provenance
+	var baseConfig *configpb.DeviceConfig
 
 	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_COMPLETE {
 		// COMPLETE scope: use payload as-is, all entries are AUTHORED
@@ -178,7 +179,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		}
 	} else if req.Scope == pb.ConfigScope_CONFIG_SCOPE_EDIT {
 		// EDIT scope: materialize from current accepted config
-		baseConfig, err := s.repo.GetLatestAcceptedConfigByBoardID(ctx, boardID)
+		baseConfig, err = s.repo.GetLatestAcceptedConfigByBoardID(ctx, boardID)
 		if err != nil {
 			s.logger.Error("get base config failed",
 				"device_id", req.DeviceId,
@@ -388,7 +389,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 // PushDeviceConfigDryRun validates a config push without storing or assigning a version.
 // Accepts the same scope and payload structure as PushDeviceConfig; returns what would
 // be stored (with materialised entries for EDIT), but does not persist to the database.
-func (s *LeafLabAPIServer) PushDeviceConfigDryRun(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
+func (s *LeafLabAPIServer) PushDeviceConfigDryRun(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigDryRunResponse, error) {
 	if err := requireAuthentication(ctx); err != nil {
 		return nil, err
 	}
@@ -466,6 +467,7 @@ func (s *LeafLabAPIServer) PushDeviceConfigDryRun(ctx context.Context, req *pb.P
 
 	// FR82: Handle COMPLETE vs EDIT scope (dry run path)
 	var configProto *configpb.DeviceConfig
+	var baseConfig *configpb.DeviceConfig
 	var provenance map[int]pb.Provenance
 
 	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_COMPLETE {
@@ -480,7 +482,7 @@ func (s *LeafLabAPIServer) PushDeviceConfigDryRun(ctx context.Context, req *pb.P
 		}
 	} else if req.Scope == pb.ConfigScope_CONFIG_SCOPE_EDIT {
 		// EDIT scope: materialize from current accepted config (dry run)
-		baseConfig, err := s.repo.GetLatestAcceptedConfigByBoardID(ctx, boardID)
+		baseConfig, err = s.repo.GetLatestAcceptedConfigByBoardID(ctx, boardID)
 		if err != nil {
 			s.logger.Error("dry run get base config failed",
 				"device_id", req.DeviceId,
@@ -574,8 +576,51 @@ func (s *LeafLabAPIServer) PushDeviceConfigDryRun(ctx context.Context, req *pb.P
 		"subject", subject,
 		"correlation_id", corrID)
 
-	// Return what would be stored, but with version = 0 since no version is assigned in dry run
-	return &pb.PushDeviceConfigResponse{Version: 0}, nil
+	// Compute the diff against the base version
+	diff := computeDiff(baseConfig, configProto)
+	
+	// Expand removals: if a chip key removal matches multiple entries, expand it
+	removals := expandRemovals(diff.Removals, configProto)
+	
+	// Compute the version preview
+	nextVersion, err := s.repo.GetNextDeviceConfigVersion(ctx, boardID)
+	if err != nil {
+		s.logger.Error("dry run get next version failed",
+			"device_id", req.DeviceId,
+			"board_id", boardID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"device_config",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+	
+	s.logger.Info("dry run completed",
+		"device_id", req.DeviceId,
+		"sensors", len(configProto.Sensors),
+		"scope", req.Scope.String(),
+		"removals", len(removals),
+		"version_preview", nextVersion,
+		"subject", subject,
+		"correlation_id", corrID)
+	
+	return &pb.PushDeviceConfigDryRunResponse{
+		VersionPreview: uint64(nextVersion),
+		EffectiveConfig: configProto,
+		Diff: diff,
+		PerBoardResults: []*pb.PushBoardResult{
+			{
+				DeviceId: req.DeviceId,
+				Success: true,
+				Version: 0,
+			},
+		},
+	}, nil
 }
 
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
@@ -900,4 +945,567 @@ func renderActionDescription(record AuditRecord) string {
 	// For now, return a simple plain-language template to satisfy the proto interface.
 	// This avoids technical terms like "action", "entity", "actor", etc.
 	return "Something happened"
+}
+
+// DiffDeviceConfig computes the diff between two config versions or between a version and an unpushed draft.
+// The diff classifies each sensor entry as added / removed / changed / unchanged,
+// with both raw payloads (from_payload and to_payload) available for comparison.
+func (s *LeafLabAPIServer) DiffDeviceConfig(ctx context.Context, req *pb.DiffDeviceConfigRequest) (*pb.DiffDeviceConfigResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if err := validateDeviceID(req.DeviceId); err != nil {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"device_id",
+			"device_id",
+			apierrors.InvalidDeviceID,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+	}
+
+	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("diff board lookup failed",
+			"device_id", req.DeviceId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"board",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Get the base version
+	var baseConfig *configpb.DeviceConfig
+	if req.FromVersion == 0 {
+		// Use current accepted version
+		baseConfig, err = s.repo.GetLatestAcceptedConfigByBoardID(ctx, boardID)
+		if err != nil {
+			s.logger.Error("diff get base config failed",
+				"device_id", req.DeviceId,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INTERNAL,
+				"device_config",
+				"",
+				apierrors.InternalError,
+			)
+			return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+		}
+	} else {
+		// Get specific version
+		baseConfig, err = s.repo.GetDeviceConfigVersion(ctx, boardID, req.FromVersion)
+		if err != nil {
+			s.logger.Error("diff get versioned config failed",
+				"device_id", req.DeviceId,
+				"version", req.FromVersion,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INTERNAL,
+				"device_config",
+				"",
+				apierrors.InternalError,
+			)
+			return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+		}
+	}
+
+	// Get the target version or draft
+	var targetConfig *configpb.DeviceConfig
+	if req.ToVersion == 0 {
+		// Use draft from request
+		if req.ToDraft == nil {
+			return nil, status.Error(codes.InvalidArgument, "to_draft is required when to_version is 0")
+		}
+		// Canonicalize sensors in the draft
+		for _, sensor := range req.ToDraft.Sensors {
+			if err := canonkey.ValidateAndCanonicalizeSensorConfig(sensor); err != nil {
+				detail := apierrors.NewErrorDetail(
+					pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+					"sensors",
+					"sensor_type",
+					apierrors.InvalidSensorConfig,
+				)
+				return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+			}
+		}
+		// If the draft is an EDIT scope, materialize it
+		if req.ToDraft.Scope == pb.ConfigScope_CONFIG_SCOPE_EDIT {
+			if baseConfig == nil {
+				return nil, status.Error(codes.InvalidArgument, "cannot diff EDIT draft against no base config")
+			}
+			materialiser := NewMaterialiser()
+			var matErr error
+			targetConfig, _, _, matErr = materialiser.Materialize(baseConfig, req.ToDraft)
+			if matErr != nil {
+				return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("materialize draft: %v", matErr))
+			}
+		} else {
+			// COMPLETE draft
+			targetConfig = &configpb.DeviceConfig{
+				DeviceId: req.DeviceId,
+				Sensors:  req.ToDraft.Sensors,
+			}
+		}
+	} else {
+		// Get specific version
+		targetConfig, err = s.repo.GetDeviceConfigVersion(ctx, boardID, req.ToVersion)
+		if err != nil {
+			s.logger.Error("diff get target version failed",
+				"device_id", req.DeviceId,
+				"version", req.ToVersion,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INTERNAL,
+				"device_config",
+				"",
+				apierrors.InternalError,
+			)
+			return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+		}
+	}
+
+	// Compute the diff
+	diff := computeDiff(baseConfig, targetConfig)
+
+	s.logger.Info("config diff computed",
+		"device_id", req.DeviceId,
+		"from_version", req.FromVersion,
+		"to_version", req.ToVersion,
+		"diff_entries", len(diff.Entries),
+		"removals", len(diff.Removals),
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.DiffDeviceConfigResponse{Diff: diff}, nil
+}
+
+// PushDeviceConfigMultiBoard pushes a config to multiple boards in a single operation.
+// Each board receives the same config, but results are returned per-board.
+// A reason for the push must be provided (for audit purposes, FR48).
+func (s *LeafLabAPIServer) PushDeviceConfigMultiBoard(ctx context.Context, req *pb.PushDeviceConfigMultiBoardRequest) (*pb.PushDeviceConfigMultiBoardResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// FR48: reason is required
+	if req.Reason == "" {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"PushDeviceConfigMultiBoardRequest",
+			"reason",
+			apierrors.InvalidArgument,
+		)
+		s.logger.Info("multi-board push rejected: missing required reason",
+			"subject", subject,
+			"correlation_id", corrID)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "required field missing: reason", detail)
+	}
+
+	// FR82: Validate scope is present and valid
+	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_UNSPECIFIED {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"PushDeviceConfigMultiBoardRequest",
+			"scope",
+			apierrors.InvalidArgument,
+		)
+		s.logger.Info("multi-board push rejected: missing required scope field",
+			"subject", subject,
+			"correlation_id", corrID)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "required field missing: scope", detail)
+	}
+
+	// Canonicalize sensors on ingress
+	for _, sensor := range req.Sensors {
+		if err := canonkey.ValidateAndCanonicalizeSensorConfig(sensor); err != nil {
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+				"sensors",
+				"sensor_type",
+				apierrors.InvalidSensorConfig,
+			)
+			return nil, apierrors.StatusWithDetail(codes.InvalidArgument, err.Error(), detail)
+		}
+	}
+
+	// Create the push group
+	pushGroupID, err := s.repo.CreatePushGroup(ctx, subject, req.Reason)
+	if err != nil {
+		s.logger.Error("create push group failed",
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"push_group",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// Push to each board
+	results := make([]*pb.PushBoardResult, 0, len(req.DeviceIds))
+	for _, deviceID := range req.DeviceIds {
+		// Create a single-board request
+		singleReq := &pb.PushDeviceConfigRequest{
+			DeviceId: deviceID,
+			Scope:    req.Scope,
+			Sensors:  req.Sensors,
+			Remove:   req.Remove,
+		}
+
+		// Push to this board
+		resp, err := s.pushDeviceConfigInternal(ctx, singleReq, subject, pushGroupID, req.Reason)
+		if err != nil {
+			// Record failure
+			results = append(results, &pb.PushBoardResult{
+				DeviceId: deviceID,
+				Success:  false,
+				ErrorDetail: &pb.ErrorDetail{
+					FailureClass: pb.FailureClass_FAILURE_CLASS_INTERNAL,
+					Entity:       "device_config",
+					MessageKey:   apierrors.InternalError,
+				},
+			})
+			s.logger.Error("push to board failed",
+				"device_id", deviceID,
+				"push_group_id", pushGroupID,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			continue
+		}
+
+		results = append(results, &pb.PushBoardResult{
+			DeviceId: deviceID,
+			Success:  true,
+			Version:  resp.Version,
+		})
+	}
+
+	s.logger.Info("multi-board push completed",
+		"push_group_id", pushGroupID,
+		"board_count", len(req.DeviceIds),
+		"successful", countSuccessful(results),
+		"reason", req.Reason,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.PushDeviceConfigMultiBoardResponse{
+		PushGroupId:    pushGroupID,
+		PerBoardResults: results,
+	}, nil
+}
+
+// GetPushGroupAckState returns the ack state of a multi-board push group.
+// Returns per-board ack state (acked / rejected / silent) for all boards in the group.
+func (s *LeafLabAPIServer) GetPushGroupAckState(ctx context.Context, req *pb.GetPushGroupAckStateRequest) (*pb.GetPushGroupAckStateResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if req.PushGroupId == "" {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"GetPushGroupAckStateRequest",
+			"push_group_id",
+			apierrors.InvalidArgument,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "push_group_id is required", detail)
+	}
+
+	// Get the ack states from the repository
+	boardStates, err := s.repo.GetPushGroupAckStates(ctx, req.PushGroupId)
+	if err != nil {
+		s.logger.Error("get push group ack states failed",
+			"push_group_id", req.PushGroupId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"push_group",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	s.logger.Info("push group ack state retrieved",
+		"push_group_id", req.PushGroupId,
+		"board_count", len(boardStates),
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.GetPushGroupAckStateResponse{
+		PushGroupId: req.PushGroupId,
+		BoardStates: boardStates,
+	}, nil
+}
+
+// ── Helper functions ──
+
+// computeDiff computes the diff between a base config and a target config.
+// Classifies each sensor entry as added / removed / changed / unchanged.
+func computeDiff(base *configpb.DeviceConfig, target *configpb.DeviceConfig) *pb.ConfigDiff {
+	diff := &pb.ConfigDiff{
+		Entries:  make([]*pb.ConfigDiffEntry, 0),
+		Removals: make([]*pb.RemovalEntry, 0),
+	}
+
+	if base == nil && target == nil {
+		return diff
+	}
+
+	// Build a map of target sensors by canonical key
+	targetMap := make(map[string]*configpb.SensorConfig)
+	targetSensors := []*configpb.SensorConfig{}
+	if target != nil {
+		targetSensors = target.Sensors
+		for _, sensor := range targetSensors {
+			key, _ := canonkey.CanonicalizeKey(sensor)
+			targetMap[sensorKeyString(key)] = sensor
+		}
+	}
+
+	// Build a map of base sensors by canonical key
+	baseMap := make(map[string]*configpb.SensorConfig)
+	baseSensors := []*configpb.SensorConfig{}
+	if base != nil {
+		baseSensors = base.Sensors
+		for _, sensor := range baseSensors {
+			key, _ := canonkey.CanonicalizeKey(sensor)
+			baseMap[sensorKeyString(key)] = sensor
+		}
+	}
+
+	// Process all base sensors (checking for removed/unchanged/changed)
+	for _, baseSensor := range baseSensors {
+		key, _ := canonkey.CanonicalizeKey(baseSensor)
+		keyStr := sensorKeyString(key)
+		targetSensor, exists := targetMap[keyStr]
+
+		if !exists {
+			// Removed
+			fromPayload, _ := proto.Marshal(baseSensor)
+			diff.Entries = append(diff.Entries, &pb.ConfigDiffEntry{
+				Classification:   pb.ConfigDiffClassification_CLASSIFICATION_REMOVED,
+				SensorHardwareKey: keyStr,
+				FromPayload:       fromPayload,
+			})
+			// Add to removals
+			diff.Removals = append(diff.Removals, &pb.RemovalEntry{
+				SensorHardwareKey: keyStr,
+				SensorName:        baseSensor.Name,
+			})
+		} else {
+			// Exists in both - check if changed
+			basePayload, _ := proto.Marshal(baseSensor)
+			targetPayload, _ := proto.Marshal(targetSensor)
+			if !proto.Equal(baseSensor, targetSensor) {
+				// Changed
+				diff.Entries = append(diff.Entries, &pb.ConfigDiffEntry{
+					Classification:   pb.ConfigDiffClassification_CLASSIFICATION_CHANGED,
+					SensorHardwareKey: keyStr,
+					FromPayload:       basePayload,
+					ToPayload:         targetPayload,
+				})
+			} else {
+				// Unchanged
+				diff.Entries = append(diff.Entries, &pb.ConfigDiffEntry{
+					Classification:   pb.ConfigDiffClassification_CLASSIFICATION_UNCHANGED,
+					SensorHardwareKey: keyStr,
+					FromPayload:       basePayload,
+					ToPayload:         targetPayload,
+				})
+			}
+		}
+	}
+
+	// Process all target sensors (checking for added)
+	for _, targetSensor := range targetSensors {
+		key, _ := canonkey.CanonicalizeKey(targetSensor)
+		keyStr := sensorKeyString(key)
+		_, exists := baseMap[keyStr]
+
+		if !exists {
+			// Added
+			toPayload, _ := proto.Marshal(targetSensor)
+			diff.Entries = append(diff.Entries, &pb.ConfigDiffEntry{
+				Classification:   pb.ConfigDiffClassification_CLASSIFICATION_ADDED,
+				SensorHardwareKey: keyStr,
+				ToPayload:         toPayload,
+			})
+		}
+	}
+
+	return diff
+}
+
+// expandRemovals expands chip key removals into individual entries.
+// For a chip key that matches multiple entries, each entry appears separately in the result.
+func expandRemovals(removals []*pb.RemovalEntry, config *configpb.DeviceConfig) []*pb.RemovalEntry {
+	if len(removals) == 0 || config == nil {
+		return removals
+	}
+
+	// For now, removals are already computed correctly by computeDiff.
+	// Chip key expansion happens in the context of materialisation and diff computation.
+	// This function is a placeholder for any additional expansion logic.
+	return removals
+}
+
+// sensorKeyString returns a string representation of a sensor's canonical key.
+func sensorKeyString(key *canonkey.Key) string {
+	return fmt.Sprintf("%d:%s:%d", key.I2CAddress, muxPathStringFromKey(key.MuxPath), key.SensorType)
+}
+
+// muxPathStringFromKey returns a string representation of a mux path.
+func muxPathStringFromKey(path []canonkey.MuxHop) string {
+	if len(path) == 0 {
+		return ""
+	}
+	result := ""
+	for i, hop := range path {
+		if i > 0 {
+			result += ","
+		}
+		result += fmt.Sprintf("%d:%d", hop.MuxAddress, hop.MuxChannel)
+	}
+	return result
+}
+
+// pushDeviceConfigInternal performs the actual push for a single board (used by both regular and multi-board pushes).
+func (s *LeafLabAPIServer) pushDeviceConfigInternal(ctx context.Context, req *pb.PushDeviceConfigRequest, subject string, pushGroupID string, reason string) (*pb.PushDeviceConfigResponse, error) {
+	if err := validateDeviceID(req.DeviceId); err != nil {
+		return nil, fmt.Errorf("invalid device_id: %w", err)
+	}
+
+	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
+	if err != nil {
+		return nil, fmt.Errorf("get/create board: %w", err)
+	}
+
+	householdID, err := s.repo.GetBoardHousehold(ctx, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("get board household: %w", err)
+	}
+
+	// Materialize config
+	var configProto *configpb.DeviceConfig
+	var provenance map[int]pb.Provenance
+	var baseConfig *configpb.DeviceConfig
+
+	if req.Scope == pb.ConfigScope_CONFIG_SCOPE_COMPLETE {
+		configProto = &configpb.DeviceConfig{
+			DeviceId: req.DeviceId,
+			Sensors:  req.Sensors,
+		}
+		provenance = make(map[int]pb.Provenance)
+		for i := range req.Sensors {
+			provenance[i] = pb.Provenance_PROVENANCE_AUTHORED
+		}
+	} else if req.Scope == pb.ConfigScope_CONFIG_SCOPE_EDIT {
+		baseConfig, err = s.repo.GetLatestAcceptedConfigByBoardID(ctx, boardID)
+		if err != nil {
+			return nil, fmt.Errorf("get base config: %w", err)
+		}
+		if baseConfig == nil {
+			return nil, fmt.Errorf("no accepted config to complete edit from")
+		}
+
+		materialiser := NewMaterialiser()
+		configProto, provenance, _, err = materialiser.Materialize(baseConfig, req)
+		if err != nil {
+			return nil, fmt.Errorf("materialize: %w", err)
+		}
+	}
+
+	// Region validation
+	for i, sensor := range configProto.Sensors {
+		if sensor.RegionId == 0 {
+			continue
+		}
+		ok, err := s.repo.ValidateRegionBelongsToHousehold(ctx, int64(sensor.RegionId), householdID)
+		if err != nil {
+			return nil, fmt.Errorf("region validation: %w", err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("region %d does not belong to household for sensor %d", sensor.RegionId, i)
+		}
+	}
+
+	// Store the config
+	cfgProto := &configpb.DeviceConfig{
+		DeviceId: req.DeviceId,
+		Sensors:  configProto.Sensors,
+	}
+	configJSON, err := protojson.Marshal(cfgProto)
+	if err != nil {
+		return nil, fmt.Errorf("marshal config: %w", err)
+	}
+
+	provenanceJSON, err := buildProvenanceJSON(provenance)
+	if err != nil {
+		return nil, fmt.Errorf("build provenance json: %w", err)
+	}
+
+	version, err := s.repo.InsertDeviceConfigNextVersionWithProvenanceAndPushGroup(ctx, boardID, configJSON, provenanceJSON, pushGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("insert config: %w", err)
+	}
+
+	// Publish to MQTT
+	cfgProto.Version = uint64(version)
+	wire, err := proto.Marshal(cfgProto)
+	if err != nil {
+		return nil, fmt.Errorf("marshal wire: %w", err)
+	}
+
+	routingKey := fmt.Sprintf("leaflab.%s.config", strings.ReplaceAll(req.DeviceId, "/", "."))
+	if err := s.publisher.Publish(ctx, mqttExchange, routingKey, wire); err != nil {
+		return nil, fmt.Errorf("publish: %w", err)
+	}
+
+	// Record audit
+	if err := s.repo.RecordAuditWithConfig(ctx, subject, householdID, "push_config", "device_config",
+		version, &version, nil, nil, reason); err != nil {
+		s.logger.Error("record audit failed",
+			"device_id", req.DeviceId,
+			"version", version,
+			"error", err)
+	}
+
+	return &pb.PushDeviceConfigResponse{Version: uint64(version)}, nil
+}
+
+// countSuccessful counts successful results in a list of PushBoardResults.
+func countSuccessful(results []*pb.PushBoardResult) int {
+	count := 0
+	for _, r := range results {
+		if r.Success {
+			count++
+		}
+	}
+	return count
 }

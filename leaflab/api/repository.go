@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/pagetoken"
+	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -716,4 +717,116 @@ func (r *Repository) InsertDeviceConfigNextVersionWithProvenance(ctx context.Con
 		}
 		return 0, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
 	}
+}
+
+// GetNextDeviceConfigVersion returns the next version number that would be assigned for a board.
+func (r *Repository) GetNextDeviceConfigVersion(ctx context.Context, boardID int64) (int64, error) {
+	var nextVersion int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COALESCE(MAX(version), 0) + 1
+		FROM device_config
+		WHERE board_id = $1
+	`, boardID).Scan(&nextVersion)
+	if err != nil {
+		return 0, fmt.Errorf("get next version for board %d: %w", boardID, err)
+	}
+	return nextVersion, nil
+}
+
+// GetDeviceConfigVersion returns the config at a specific version for a board.
+func (r *Repository) GetDeviceConfigVersion(ctx context.Context, boardID int64, version uint64) (*configpb.DeviceConfig, error) {
+	var jsonBytes []byte
+	err := r.db.QueryRow(ctx, `
+		SELECT config_json
+		FROM device_config
+		WHERE board_id = $1 AND version = $2
+		LIMIT 1
+	`, boardID, version).Scan(&jsonBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get config version %d for board %d: %w", version, boardID, err)
+	}
+
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(jsonBytes, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config version %d for board %d: %w", version, boardID, err)
+	}
+	return &cfg, nil
+}
+
+// CreatePushGroup creates a new push group for multi-board operations.
+// Returns the push_group_id.
+func (r *Repository) CreatePushGroup(ctx context.Context, actorSubject string, reason string) (string, error) {
+	var pushGroupID string
+	err := r.db.QueryRow(ctx, `
+		INSERT INTO push_group (actor_subject, reason, created_at)
+		VALUES ($1, $2, NOW())
+		RETURNING push_group_id
+	`, actorSubject, reason).Scan(&pushGroupID)
+	if err != nil {
+		return "", fmt.Errorf("create push group: %w", err)
+	}
+	return pushGroupID, nil
+}
+
+// InsertDeviceConfigNextVersionWithProvenanceAndPushGroup inserts a config with push group association.
+func (r *Repository) InsertDeviceConfigNextVersionWithProvenanceAndPushGroup(ctx context.Context, boardID int64, configJSON []byte, provenanceJSON []byte, pushGroupID string) (int64, error) {
+	for {
+		var version int64
+		err := r.db.QueryRow(ctx, `
+			WITH next AS (
+				SELECT COALESCE(MAX(version), 0) + 1 AS v
+				FROM device_config
+				WHERE board_id = $1
+			)
+			INSERT INTO device_config (board_id, version, config_json, provenance_json, push_group_id)
+			SELECT $1, next.v, $2, $3, $4 FROM next
+			ON CONFLICT (board_id, version) DO NOTHING
+			RETURNING version
+		`, boardID, configJSON, provenanceJSON, pushGroupID).Scan(&version)
+		if err == nil {
+			return version, nil
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			// another writer claimed this version; retry with the new MAX
+			continue
+		}
+		return 0, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
+	}
+}
+
+// GetPushGroupAckStates returns the ack states for all boards in a push group.
+func (r *Repository) GetPushGroupAckStates(ctx context.Context, pushGroupID string) ([]*pb.PushGroupBoardState, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT b.device_id, COALESCE(pgm.ack_state, 0)
+		FROM push_group_membership pgm
+		RIGHT JOIN device_config dc ON pgm.device_config_id = dc.device_config_id
+		RIGHT JOIN board b ON dc.board_id = b.board_id
+		WHERE dc.push_group_id = $1
+		ORDER BY b.device_id
+	`, pushGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("query push group ack states: %w", err)
+	}
+	defer rows.Close()
+
+	var states []*pb.PushGroupBoardState
+	for rows.Next() {
+		var deviceID string
+		var ackState int32
+		if err := rows.Scan(&deviceID, &ackState); err != nil {
+			return nil, fmt.Errorf("scan ack state: %w", err)
+		}
+		states = append(states, &pb.PushGroupBoardState{
+			DeviceId: deviceID,
+			AckState: pb.BoardAckState(ackState),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+
+	return states, nil
 }
