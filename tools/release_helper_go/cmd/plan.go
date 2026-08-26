@@ -806,11 +806,13 @@ func buildPlanResult(
 		if assigned, ok := perAppVersions[fullName]; ok {
 			v = assigned
 		}
+		kind := determineArtifactKind(app).String()
 		include = append(include, map[string]string{
 			"app":          app.Name,
 			"domain":       app.Domain,
 			"bazel_target": app.BazelTarget,
 			"version":      v,
+			"kind":         kind,
 		})
 		appNames = append(appNames, fullName)
 		versions[fullName] = v
@@ -829,6 +831,7 @@ func buildPlanResult(
 			"domain":       chart.Domain,
 			"bazel_target": chart.BazelTarget,
 			"version":      v,
+			"kind":         "ARTIFACT_KIND_CHART",
 		})
 		chartNames = append(chartNames, fullName)
 		versions[fullName] = v

@@ -1265,3 +1265,27 @@ func (r *appRepo) ListReconcileRuns(ctx context.Context, since time.Time, pageSi
 	}
 	return out, nextPageToken, nil
 }
+
+
+// GetAppManifestAppType returns the app_type field from an app_manifest row,
+// identified by its content-addressed manifest_id. Used by VerifyPublished
+// (FR-24) to resolve a published artifact's kind from its bound manifest
+// snapshot rather than the app's current type.
+func (r *appRepo) GetAppManifestAppType(ctx context.Context, manifestID string) (string, error) {
+	if manifestID == "" {
+		return "", fmt.Errorf("get app manifest app_type: manifest_id is empty")
+	}
+	row := r.ex.QueryRow(ctx, `
+		SELECT manifest_json ->> 'app_type'
+		FROM app_manifest
+		WHERE app_manifest_id = $1
+	`, manifestID)
+	var appType string
+	if err := row.Scan(&appType); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("%w: app_manifest with id %q not found", repository.ErrNotFound, manifestID)
+		}
+		return "", fmt.Errorf("get app manifest app_type: %w", err)
+	}
+	return appType, nil
+}

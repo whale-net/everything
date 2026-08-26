@@ -314,13 +314,42 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 	}
 
 	versions := make(map[string]string, len(targets))
+	kinds := make(map[string]string, len(targets))
 	for _, t := range targets {
 		v, ok := parsed.Versions[t.OwnerFullName]
 		if !ok || v == "" {
 			return ResolvedPlan{}, fmt.Errorf("resolve plan: no version resolved for target %s (plan output had no entry for %q)", t.key(), t.OwnerFullName)
 		}
 		versions[t.key()] = v
+		
+		// Populate kind from the app/chart metadata that was looked up
+		// Apps are keyed by OwnerFullName (domain-name format) in appsMetadata
+		// Charts are similar in chartsMetadata
+		kind := "ARTIFACT_KIND_UNSPECIFIED"
+		for _, am := range appsMetadata {
+			if am.Domain+"-"+am.Name == t.OwnerFullName {
+				// Determine kind from app_type
+				switch am.AppType {
+				case "cli", "binary":
+					kind = string(repository.ArtifactKindBinary)
+				case "firmware":
+					kind = string(repository.ArtifactKindFirmware)
+				default:
+					kind = string(repository.ArtifactKindImage)
+				}
+				break
+			}
+		}
+		if kind == "ARTIFACT_KIND_UNSPECIFIED" {
+			for _, cm := range chartsMetadata {
+				if cm.Domain+"-"+cm.Name == t.OwnerFullName {
+					kind = string(repository.ArtifactKindChart)
+					break
+				}
+			}
+		}
+		kinds[t.key()] = kind
 	}
 
-	return ResolvedPlan{Versions: versions, RawJSON: stdout.Bytes()}, nil
+	return ResolvedPlan{Versions: versions, Kinds: kinds, RawJSON: stdout.Bytes()}, nil
 }
