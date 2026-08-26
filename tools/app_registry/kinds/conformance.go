@@ -114,5 +114,16 @@ var BanExemptLocations = []BanExemptLocation{
 //
 // See issue #8 in the plan.
 var AffordanceExemptions = map[string]interface{}{
-	// TODO: Populated by future tasks as needed.
+	// FR-37: manifest-seeding exemption for test setup
+	// The firmware fixture (FR-37) seeds a firmware-typed, already-reconciled owner
+	// directly into the manifest snapshot for test setup only, as a declared
+	// exemption from FR-64's "reconcile is the sole propagation mechanism".
+	// This exemption applies only to test setup paths, not production.
+	// See FR-37's test doc comment and citest/firmware_fixture_test.go.
+	"manifest-seeding-test-exemption": map[string]string{
+		"affordance": "Direct manifest seeding for firmware fixture test setup",
+		"location":   "tools/app_registry/citest/firmware_fixture_test.go",
+		"scope":      "Test setup only, not production",
+		"reason":     "FR-37 firmware genericity fixture requires pre-seeded owner to test full upload/confirm/publish/resolve chain",
+	},
 }

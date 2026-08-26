@@ -43,3 +43,20 @@ go_test(
         "@org_golang_google_grpc//status",
     ],
 )
+
+go_test(
+    name = "firmware_fixture_test",
+    srcs = [
+        "firmware_fixture_test.go",
+    ],
+    # FR-37: Integration test for firmware fixture genericity.
+    # Tests the full upload/confirm/publish/resolve flow for a firmware-declared
+    # variant that is neither OS nor architecture.
+    # Can run against a live app-registry server (e.g., tilt up).
+    tags = ["integration"],
+    deps = [
+        "//tools/app_registry/protos:appregistrypb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
+    ],
+)

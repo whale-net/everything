@@ -4,6 +4,7 @@ go_library(
     name = "kinds",
     srcs = [
         "binary.go",
+        "firmware.go",
         "conformance.go",
         "dispatch.go",
         "h7_from_metadata.go",

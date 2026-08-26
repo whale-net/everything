@@ -144,3 +144,133 @@ func TestBinaryHookPolicies(t *testing.T) {
 	h8 := hooks.H8()
 	_ = h8.PreCutoverTemplate() // Should be empty for binary kind
 }
+
+// TestFirmwareKindRegistration verifies that the firmware kind is registered
+// and can be retrieved.
+func TestFirmwareKindRegistration(t *testing.T) {
+	// Firmware kind should be auto-registered at init time
+	kind := Get("firmware")
+	if kind == nil {
+		t.Fatal("firmware kind not registered")
+	}
+	if kind.Name() != "firmware" {
+		t.Errorf("kind.Name() = %q, want %q", kind.Name(), "firmware")
+	}
+}
+
+// TestFirmwareKindHookSet verifies that the firmware kind supplies all eight hooks
+// and that they have the expected non-OS/arch dimensions.
+func TestFirmwareKindHookSet(t *testing.T) {
+	kind := Get("firmware")
+	if kind == nil {
+		t.Fatal("firmware kind not registered")
+	}
+
+	hooks := kind.Hooks()
+	if hooks == nil {
+		t.Fatal("kind.Hooks() returned nil")
+	}
+
+	if hooks.H1() == nil || hooks.H1().Name() != "H1" {
+		t.Errorf("H1 hook missing or malformed")
+	}
+	if hooks.H2() == nil || hooks.H2().Name() != "H2" {
+		t.Errorf("H2 hook missing or malformed")
+	}
+	if hooks.H3() == nil || hooks.H3().Name() != "H3" {
+		t.Errorf("H3 hook missing or malformed")
+	}
+	if hooks.H4() == nil || hooks.H4().Name() != "H4" {
+		t.Errorf("H4 hook missing or malformed")
+	}
+	if hooks.H5() == nil || hooks.H5().Name() != "H5" {
+		t.Errorf("H5 hook missing or malformed")
+	}
+	if hooks.H6() == nil || hooks.H6().Name() != "H6" {
+		t.Errorf("H6 hook missing or malformed")
+	}
+	if hooks.H7() == nil || hooks.H7().Name() != "H7" {
+		t.Errorf("H7 hook missing or malformed")
+	}
+	if hooks.H8() == nil || hooks.H8().Name() != "H8" {
+		t.Errorf("H8 hook missing or malformed")
+	}
+}
+
+// TestFirmwareKindGenericity verifies that the firmware kind demonstrates
+// genericity: it uses board/target dimensions instead of OS/arch.
+func TestFirmwareKindGenericity(t *testing.T) {
+	kind := Get("firmware")
+	if kind == nil {
+		t.Fatal("firmware kind not registered")
+	}
+
+	hooks := kind.Hooks()
+
+	// H2: variant dimensions should be board/target, not os/arch
+	h2 := hooks.H2()
+	dims := h2.Dimensions()
+	if len(dims) != 2 {
+		t.Errorf("H2.Dimensions() returned %d dimensions, expected 2", len(dims))
+	}
+	if len(dims) >= 2 {
+		if dims[0] != "board" || dims[1] != "target" {
+			t.Errorf("H2.Dimensions() = %v, want [board target]", dims)
+		}
+	}
+
+	// H4: encoding should differ from binary's gzip (FR-61 cross-kind dedup test)
+	h4 := hooks.H4()
+	if h4.Encoding() != "none" {
+		t.Errorf("H4.Encoding() = %q, want none (to differ from binary's gzip)", h4.Encoding())
+	}
+
+	// H5: file naming should not follow OS/arch pattern
+	h5 := hooks.H5()
+	naming := h5.FileNaming()
+	if naming != "{name}-{version}-{board}-{target}.bin" {
+		t.Errorf("H5.FileNaming() = %q, want pattern with board/target, not os/arch", naming)
+	}
+
+	// H8: pre-cutover template should be empty (no pre-cutover history)
+	h8 := hooks.H8()
+	if h8.PreCutoverTemplate() != "" {
+		t.Errorf("H8.PreCutoverTemplate() = %q, want empty (no pre-cutover history)", h8.PreCutoverTemplate())
+	}
+}
+
+// TestFirmwareHookPolicies verifies that the firmware kind's hook implementations
+// return proper policy values.
+func TestFirmwareHookPolicies(t *testing.T) {
+	kind := Get("firmware")
+	if kind == nil {
+		t.Fatal("firmware kind not registered")
+	}
+
+	hooks := kind.Hooks()
+
+	// H1: artifact set composition
+	h1 := hooks.H1()
+	if h1.Policy() == "" {
+		t.Error("H1.Policy() returned empty string")
+	}
+
+	// H3: content type
+	h3 := hooks.H3()
+	if h3.ContentType() != "application/x-firmware" {
+		t.Errorf("H3.ContentType() = %q, want application/x-firmware", h3.ContentType())
+	}
+
+	// H6: checksum manifest policy
+	h6 := hooks.H6()
+	if h6.ManifestPolicy() != "manifest.json, SHA256" {
+		t.Errorf("H6.ManifestPolicy() = %q, want manifest.json, SHA256", h6.ManifestPolicy())
+	}
+
+	// H7: app-type mapping (empty for firmware)
+	h7 := hooks.H7()
+	mapping := h7.AppTypeMapping()
+	if len(mapping) != 0 {
+		t.Errorf("H7.AppTypeMapping() = %v, want empty (no app-type mapping for firmware)", mapping)
+	}
+}
