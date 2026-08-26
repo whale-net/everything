@@ -387,3 +387,432 @@ func renderActionDescription(record AuditRecord) string {
 	// This avoids technical terms like "action", "entity", "actor", etc.
 	return "Something happened"
 }
+
+// CreateHousehold creates a new household with the caller as the initial member (FR75).
+func (s *LeafLabAPIServer) CreateHousehold(ctx context.Context, req *pb.CreateHouseholdRequest) (*pb.CreateHouseholdResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// Create the household with the caller as the initial member
+	householdID, err := s.repo.CreateHousehold(ctx, req.Name, subject, "Owner")
+	if err != nil {
+		s.logger.Error("create household failed",
+			"household_name", req.Name,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "create household: %v", err)
+	}
+
+	// Record audit entry for household creation
+	if err := s.repo.RecordAudit(ctx, subject, householdID, "create_household", "household", householdID, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("household created",
+		"household_id", householdID,
+		"household_name", req.Name,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.CreateHouseholdResponse{HouseholdId: householdID}, nil
+}
+
+// InviteMember invites a principal to join the household (FR75, member-only).
+func (s *LeafLabAPIServer) InviteMember(ctx context.Context, req *pb.InviteMemberRequest) (*pb.InviteMemberResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// Get the caller's household
+	householdID, err := s.repo.GetPrincipalHousehold(ctx, subject)
+	if err != nil {
+		s.logger.Error("get principal household failed",
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get household: %v", err)
+	}
+
+	if householdID == 0 {
+		return nil, status.Error(codes.PermissionDenied, "principal has no household")
+	}
+
+	// Check if caller is a member (memberOnly predicate)
+	isMember, err := s.repo.IsHouseholdMember(ctx, householdID, subject)
+	if err != nil {
+		s.logger.Error("check membership failed",
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "check membership: %v", err)
+	}
+
+	if !isMember {
+		return nil, status.Error(codes.PermissionDenied, "only members can invite")
+	}
+
+	// Add the new member to the household
+	_, err = s.repo.AddHouseholdMember(ctx, householdID, req.Principal, req.Role)
+	if err != nil {
+		s.logger.Error("invite member failed",
+			"household_id", householdID,
+			"principal", req.Principal,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "invite member: %v", err)
+	}
+
+	// Record audit entry for member invitation
+	if err := s.repo.RecordAudit(ctx, subject, householdID, "invite_member", "principal", 0, req.Principal); err != nil {
+		s.logger.Error("record audit failed",
+			"household_id", householdID,
+			"principal", req.Principal,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("member invited",
+		"household_id", householdID,
+		"principal", req.Principal,
+		"role", req.Role,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.InviteMemberResponse{}, nil
+}
+
+// RemoveMember removes a member from the household (FR75, member-only).
+// Fails if removing the last member.
+func (s *LeafLabAPIServer) RemoveMember(ctx context.Context, req *pb.RemoveMemberRequest) (*pb.RemoveMemberResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// Get the caller's household
+	householdID, err := s.repo.GetPrincipalHousehold(ctx, subject)
+	if err != nil {
+		s.logger.Error("get principal household failed",
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get household: %v", err)
+	}
+
+	if householdID == 0 {
+		return nil, status.Error(codes.PermissionDenied, "principal has no household")
+	}
+
+	// Check if caller is a member (memberOnly predicate)
+	isMember, err := s.repo.IsHouseholdMember(ctx, householdID, subject)
+	if err != nil {
+		s.logger.Error("check membership failed",
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "check membership: %v", err)
+	}
+
+	if !isMember {
+		return nil, status.Error(codes.PermissionDenied, "only members can remove members")
+	}
+
+	// Count active members - can't remove last member
+	count, err := s.repo.CountActiveMembers(ctx, householdID)
+	if err != nil {
+		s.logger.Error("count active members failed",
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "count members: %v", err)
+	}
+
+	if count <= 1 {
+		return nil, status.Error(codes.FailedPrecondition, "cannot remove the last member from a household")
+	}
+
+	// Remove the member
+	err = s.repo.RemoveHouseholdMember(ctx, householdID, req.Principal)
+	if err != nil {
+		s.logger.Error("remove member failed",
+			"household_id", householdID,
+			"principal", req.Principal,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "remove member: %v", err)
+	}
+
+	// Record audit entry for member removal
+	if err := s.repo.RecordAudit(ctx, subject, householdID, "remove_member", "principal", 0, req.Principal); err != nil {
+		s.logger.Error("record audit failed",
+			"household_id", householdID,
+			"principal", req.Principal,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("member removed",
+		"household_id", householdID,
+		"principal", req.Principal,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.RemoveMemberResponse{}, nil
+}
+
+// ListMembers lists all current members of the household (FR75).
+func (s *LeafLabAPIServer) ListMembers(ctx context.Context, _ *pb.ListMembersRequest) (*pb.ListMembersResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// Get the caller's household
+	householdID, err := s.repo.GetPrincipalHousehold(ctx, subject)
+	if err != nil {
+		s.logger.Error("get principal household failed",
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get household: %v", err)
+	}
+
+	if householdID == 0 {
+		return &pb.ListMembersResponse{Members: []*pb.HouseholdMember{}}, nil
+	}
+
+	// Get all current members
+	members, err := s.repo.GetCurrentMembers(ctx, householdID)
+	if err != nil {
+		s.logger.Error("get current members failed",
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "list members: %v", err)
+	}
+
+	// Convert to proto
+	pbMembers := make([]*pb.HouseholdMember, 0, len(members))
+	for _, m := range members {
+		pbMembers = append(pbMembers, &pb.HouseholdMember{
+			Principal: m.PrincipalID,
+			Role:      m.Role,
+		})
+	}
+
+	s.logger.Info("members listed",
+		"household_id", householdID,
+		"member_count", len(pbMembers),
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.ListMembersResponse{Members: pbMembers}, nil
+}
+
+// CreateGrant creates a time-boxed grant for a principal (FR7, member-only).
+func (s *LeafLabAPIServer) CreateGrant(ctx context.Context, req *pb.CreateGrantRequest) (*pb.CreateGrantResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// Get the caller's household
+	householdID, err := s.repo.GetPrincipalHousehold(ctx, subject)
+	if err != nil {
+		s.logger.Error("get principal household failed",
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get household: %v", err)
+	}
+
+	if householdID == 0 {
+		return nil, status.Error(codes.PermissionDenied, "principal has no household")
+	}
+
+	// Check if caller is a member (memberOnly predicate - only members can grant)
+	isMember, err := s.repo.IsHouseholdMember(ctx, householdID, subject)
+	if err != nil {
+		s.logger.Error("check membership failed",
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "check membership: %v", err)
+	}
+
+	if !isMember {
+		return nil, status.Error(codes.PermissionDenied, "only members can create grants")
+	}
+
+	// Create the grant
+	grantID, err := s.repo.CreateGrant(ctx, householdID, req.Grantee, subject, req.DurationSeconds)
+	if err != nil {
+		s.logger.Error("create grant failed",
+			"household_id", householdID,
+			"grantee", req.Grantee,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "create grant: %v", err)
+	}
+
+	// Record audit entry for grant creation
+	if err := s.repo.RecordAudit(ctx, subject, householdID, "create_grant", "grant", grantID, req.Grantee); err != nil {
+		s.logger.Error("record audit failed",
+			"household_id", householdID,
+			"grant_id", grantID,
+			"grantee", req.Grantee,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("grant created",
+		"household_id", householdID,
+		"grant_id", grantID,
+		"grantee", req.Grantee,
+		"duration_seconds", req.DurationSeconds,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.CreateGrantResponse{GrantId: grantID}, nil
+}
+
+// RevokeGrant revokes an active grant immediately (FR7, member-only).
+func (s *LeafLabAPIServer) RevokeGrant(ctx context.Context, req *pb.RevokeGrantRequest) (*pb.RevokeGrantResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// Get the grant's household
+	householdID, err := s.repo.GetGrantHousehold(ctx, req.GrantId)
+	if err != nil {
+		s.logger.Error("get grant household failed",
+			"grant_id", req.GrantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get grant household: %v", err)
+	}
+
+	// Check if caller is a member of the same household (memberOnly predicate)
+	isMember, err := s.repo.IsHouseholdMember(ctx, householdID, subject)
+	if err != nil {
+		s.logger.Error("check membership failed",
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "check membership: %v", err)
+	}
+
+	if !isMember {
+		return nil, status.Error(codes.PermissionDenied, "only members can revoke grants")
+	}
+
+	// Revoke the grant
+	err = s.repo.RevokeGrant(ctx, req.GrantId)
+	if err != nil {
+		s.logger.Error("revoke grant failed",
+			"grant_id", req.GrantId,
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "revoke grant: %v", err)
+	}
+
+	// Record audit entry for grant revocation
+	if err := s.repo.RecordAudit(ctx, subject, householdID, "revoke_grant", "grant", req.GrantId, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"household_id", householdID,
+			"grant_id", req.GrantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("grant revoked",
+		"household_id", householdID,
+		"grant_id", req.GrantId,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.RevokeGrantResponse{}, nil
+}
+
+// ListActiveGrants lists all active (non-expired, non-revoked) grants (FR7).
+func (s *LeafLabAPIServer) ListActiveGrants(ctx context.Context, _ *pb.ListActiveGrantsRequest) (*pb.ListActiveGrantsResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// Get the caller's household
+	householdID, err := s.repo.GetPrincipalHousehold(ctx, subject)
+	if err != nil {
+		s.logger.Error("get principal household failed",
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "get household: %v", err)
+	}
+
+	if householdID == 0 {
+		return &pb.ListActiveGrantsResponse{Grants: []*pb.Grant{}}, nil
+	}
+
+	// Get all active grants
+	grants, err := s.repo.GetActiveGrants(ctx, householdID)
+	if err != nil {
+		s.logger.Error("get active grants failed",
+			"household_id", householdID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "list grants: %v", err)
+	}
+
+	// Convert to proto
+	pbGrants := make([]*pb.Grant, 0, len(grants))
+	for _, g := range grants {
+		pbGrants = append(pbGrants, &pb.Grant{
+			GrantId:   g.GrantID,
+			Grantee:   g.Grantee,
+			ExpiresAt: g.ExpiresAt,
+		})
+	}
+
+	s.logger.Info("active grants listed",
+		"household_id", householdID,
+		"grant_count", len(pbGrants),
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.ListActiveGrantsResponse{Grants: pbGrants}, nil
+}

@@ -467,3 +467,179 @@ func (r *Repository) RecordAuditWithConfig(ctx context.Context, actorSubject str
 	}
 	return nil
 }
+
+// ── Household management (FR75, FR7) ──────────────────────────────────────────
+
+// CreateHousehold creates a new household and adds the caller as the initial member.
+// Returns the household_id on success.
+func (r *Repository) CreateHousehold(ctx context.Context, householdName string, callerPrincipalID string, role string) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin create household: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Create the household
+	var householdID int64
+	err = tx.QueryRow(ctx, `
+		INSERT INTO household (name, created_at)
+		VALUES ($1, NOW())
+		RETURNING household_id
+	`, householdName).Scan(&householdID)
+	if err != nil {
+		return 0, fmt.Errorf("create household %s: %w", householdName, err)
+	}
+
+	// Add the caller as the initial member
+	_, err = tx.Exec(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, $2, $3, NOW())
+	`, householdID, callerPrincipalID, role)
+	if err != nil {
+		return 0, fmt.Errorf("add initial member to household %d: %w", householdID, err)
+	}
+
+	// Commit the transaction
+	if err = tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit create household: %w", err)
+	}
+
+	return householdID, nil
+}
+
+// GetCurrentMembers returns all current (non-expired) members of a household.
+func (r *Repository) GetCurrentMembers(ctx context.Context, householdID int64) ([]struct {
+	PrincipalID string
+	Role        string
+}, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT principal_id, role FROM household_member
+		WHERE household_id = $1 AND valid_to IS NULL
+		ORDER BY principal_id
+	`, householdID)
+	if err != nil {
+		return nil, fmt.Errorf("get current members for household %d: %w", householdID, err)
+	}
+	defer rows.Close()
+
+	var members []struct {
+		PrincipalID string
+		Role        string
+	}
+	for rows.Next() {
+		var m struct {
+			PrincipalID string
+			Role        string
+		}
+		if err := rows.Scan(&m.PrincipalID, &m.Role); err != nil {
+			return nil, fmt.Errorf("scan member: %w", err)
+		}
+		members = append(members, m)
+	}
+	return members, rows.Err()
+}
+
+// CountActiveMembers returns the number of active (current) members of a household.
+func (r *Repository) CountActiveMembers(ctx context.Context, householdID int64) (int64, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM household_member
+		WHERE household_id = $1 AND valid_to IS NULL
+	`, householdID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count active members for household %d: %w", householdID, err)
+	}
+	return count, nil
+}
+
+// IsHouseholdMember checks if a principal is a current member of a household.
+func (r *Repository) IsHouseholdMember(ctx context.Context, householdID int64, principalID string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM household_member
+			WHERE household_id = $1 AND principal_id = $2 AND valid_to IS NULL
+		)
+	`, householdID, principalID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check household membership for %s in %d: %w", principalID, householdID, err)
+	}
+	return exists, nil
+}
+
+// CreateGrant creates a time-boxed grant for a principal.
+// Returns the grant_id on success.
+func (r *Repository) CreateGrant(ctx context.Context, householdID int64, granteeID string, grantedByID string, durationSeconds int64) (int64, error) {
+	var grantID int64
+	err := r.db.QueryRow(ctx, `
+		INSERT INTO household_grant (household_id, grantee, granted_by, expires_at, created_at)
+		VALUES ($1, $2, $3, NOW() + ($4 || ' seconds')::INTERVAL, NOW())
+		RETURNING grant_id
+	`, householdID, granteeID, grantedByID, durationSeconds).Scan(&grantID)
+	if err != nil {
+		return 0, fmt.Errorf("create grant for household %d grantee %s: %w", householdID, granteeID, err)
+	}
+	return grantID, nil
+}
+
+// RevokeGrant revokes a grant by setting revoked_at to NOW().
+func (r *Repository) RevokeGrant(ctx context.Context, grantID int64) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE household_grant
+		SET revoked_at = NOW()
+		WHERE grant_id = $1
+	`, grantID)
+	if err != nil {
+		return fmt.Errorf("revoke grant %d: %w", grantID, err)
+	}
+	return nil
+}
+
+// GetActiveGrants returns all active (not expired, not revoked) grants for a household.
+func (r *Repository) GetActiveGrants(ctx context.Context, householdID int64) ([]struct {
+	GrantID   int64
+	Grantee   string
+	ExpiresAt int64 // Unix timestamp
+}, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT grant_id, grantee, EXTRACT(EPOCH FROM expires_at)::bigint
+		FROM household_grant
+		WHERE household_id = $1 AND expires_at > NOW() AND revoked_at IS NULL
+		ORDER BY expires_at DESC
+	`, householdID)
+	if err != nil {
+		return nil, fmt.Errorf("get active grants for household %d: %w", householdID, err)
+	}
+	defer rows.Close()
+
+	var grants []struct {
+		GrantID   int64
+		Grantee   string
+		ExpiresAt int64
+	}
+	for rows.Next() {
+		var g struct {
+			GrantID   int64
+			Grantee   string
+			ExpiresAt int64
+		}
+		if err := rows.Scan(&g.GrantID, &g.Grantee, &g.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("scan grant: %w", err)
+		}
+		grants = append(grants, g)
+	}
+	return grants, rows.Err()
+}
+
+// GetGrantHousehold returns the household_id for a grant.
+func (r *Repository) GetGrantHousehold(ctx context.Context, grantID int64) (int64, error) {
+	var householdID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id FROM household_grant
+		WHERE grant_id = $1
+	`, grantID).Scan(&householdID)
+	if err != nil {
+		return 0, fmt.Errorf("get grant %d household: %w", grantID, err)
+	}
+	return householdID, nil
+}
