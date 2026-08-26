@@ -13,6 +13,7 @@ load('../tilt/common.tilt',
      'setup_dev_util', 'setup_postgres', 'setup_otelcollector', 'setup_temporal',
      'get_env_bool', 'get_custom_or_default',
      'print_startup_banner', 'print_footer_info')
+load('../tilt/minio.tilt', 'deploy_minio')
 
 # ===========================
 # Configuration
@@ -56,10 +57,20 @@ else:
     temporal_info = None
     temporal_host = ''
 
+# MinIO (S3-compatible storage) for FR-58
+minio_info = deploy_minio(namespace, bucket_name='app-registry-dev')
+s3_endpoint = get_custom_or_default('BUILD_MINIO_ENV', 'RELEASE_TOOLS_S3_ENDPOINT', minio_info['endpoint'])
+s3_public_endpoint = get_custom_or_default('BUILD_MINIO_ENV', 'RELEASE_TOOLS_S3_PUBLIC_ENDPOINT', minio_info['public_endpoint'])
+s3_region = get_custom_or_default('BUILD_MINIO_ENV', 'RELEASE_TOOLS_S3_REGION', 'us-east-1')
+s3_access_key = get_custom_or_default('BUILD_MINIO_ENV', 'RELEASE_TOOLS_S3_ACCESS_KEY', minio_info['access_key'])
+s3_secret_key = get_custom_or_default('BUILD_MINIO_ENV', 'RELEASE_TOOLS_S3_SECRET_KEY', minio_info['secret_key'])
+s3_bucket = get_custom_or_default('BUILD_MINIO_ENV', 'RELEASE_TOOLS_S3_BUCKET', 'app-registry-dev')
+
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
 print("  OTEL:      {}".format(otel_endpoint))
 print("  Temporal:  {}".format(temporal_host if temporal_info else "disabled"))
+print("  MinIO:     {}".format("custom" if os.environ.get("BUILD_MINIO_ENV") == "custom" else "local"))
 
 # ===========================
 # Application Configuration
@@ -180,11 +191,26 @@ spec:
           value: "{temporal_host}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
+        - name: RELEASE_TOOLS_S3_BUCKET
+          value: "{s3_bucket}"
+        - name: RELEASE_TOOLS_S3_PUBLIC_ENDPOINT
+          value: "{s3_public_endpoint}"
+        - name: RELEASE_TOOLS_S3_REGION
+          value: "{s3_region}"
+        - name: RELEASE_TOOLS_S3_ACCESS_KEY
+          value: "{s3_access_key}"
+        - name: RELEASE_TOOLS_S3_SECRET_KEY
+          value: "{s3_secret_key}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
         temporal_host=temporal_host,
         otel_endpoint=otel_endpoint,
+        s3_bucket=s3_bucket,
+        s3_public_endpoint=s3_public_endpoint,
+        s3_region=s3_region,
+        s3_access_key=s3_access_key,
+        s3_secret_key=s3_secret_key,
     )))
 
     api_deps = []
@@ -242,11 +268,26 @@ spec:
           value: "/tmp/app-registry-writeback"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
+        - name: RELEASE_TOOLS_S3_ENDPOINT
+          value: "{s3_endpoint}"
+        - name: RELEASE_TOOLS_S3_BUCKET
+          value: "{s3_bucket}"
+        - name: RELEASE_TOOLS_S3_REGION
+          value: "{s3_region}"
+        - name: RELEASE_TOOLS_S3_ACCESS_KEY
+          value: "{s3_access_key}"
+        - name: RELEASE_TOOLS_S3_SECRET_KEY
+          value: "{s3_secret_key}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
         temporal_host=temporal_host,
         otel_endpoint=otel_endpoint,
+        s3_endpoint=s3_endpoint,
+        s3_bucket=s3_bucket,
+        s3_region=s3_region,
+        s3_access_key=s3_access_key,
+        s3_secret_key=s3_secret_key,
     )))
 
     worker_deps = []

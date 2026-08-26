@@ -159,6 +159,26 @@ graph LR
 The CLI is deliberately **thin** — no version math, no promotion-legality
 checks. All rules live server-side so a future UI cannot drift from it.
 
+## Local Development (Tilt)
+
+To run the app registry locally with all components:
+
+```bash
+cd tools/app_registry
+tilt up
+```
+
+This starts:
+- PostgreSQL database
+- MinIO S3-compatible object store with distinct internal and public endpoints (FR-58)
+- Temporal dev server
+- App Registry API (gRPC)
+- App Registry worker (Temporal)
+- App Registry UI (HTTP)
+
+See [ENV.md](ENV.md) → "Local Development (Tilt)" for environment variables,
+endpoint configuration, and how to use an external S3 service.
+
 ## Status
 
 Not tracked here — it changes independently of this file and duplicating it
