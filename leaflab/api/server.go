@@ -479,6 +479,8 @@ func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSe
 		return nil, err
 	}
 
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
 	if req.SensorId <= 0 {
 		// Invalid sensor_id
 		detail := apierrors.NewErrorDetail(
@@ -488,6 +490,41 @@ func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSe
 			apierrors.InvalidSensorConfig,
 		)
 		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "sensor_id must be positive", detail)
+	}
+
+	// NFR2: No existence oracle — build authorization decision first, before checking sensor existence.
+	// This ensures identical timing whether sensor doesn't exist or principal can't access it.
+	// FR4: Per-entity authorization is based on principal's reach.
+	auth, err := s.getAuthorizationDecision(ctx, subject)
+	if err != nil {
+		s.logger.Error("authorization decision failed",
+			"sensor_id", req.SensorId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+
+	// Now check sensor existence. If it doesn't exist or is out of reach, return the same error.
+	householdID, err := s.repo.GetSensorHousehold(ctx, req.SensorId)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			// Sensor does not exist. Return "not found" without distinguishing from out-of-reach.
+			return nil, refusedAsNotFound()
+		}
+		s.logger.Error("sensor household lookup failed",
+			"sensor_id", req.SensorId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "sensor lookup: %v", err)
+	}
+
+	// Sensor exists. Check if principal can access it.
+	canAccess := auth.ContainsHousehold(householdID)
+	if !canAccess {
+		// FR4: Out-of-reach entity. Refuse as if it doesn't exist (NFR2).
+		return nil, refusedAsNotFound()
 	}
 
 	timelines, err := s.repo.GetSensorTimelines(ctx, req.SensorId)
@@ -535,6 +572,11 @@ func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSe
 			ValidTo:    entry.ValidTo,
 		}
 	}
+
+	s.logger.Info("sensor timelines retrieved",
+		"sensor_id", req.SensorId,
+		"subject", subject,
+		"correlation_id", corrID)
 
 	return &pb.GetSensorTimelinesResponse{
 		Timelines: pbTimelines,

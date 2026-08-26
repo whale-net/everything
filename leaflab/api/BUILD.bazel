@@ -95,6 +95,7 @@ filegroup(
     name = "conformance_srcs",
     srcs = [
         "server.go",
+        "server_test.go",
     ],
     visibility = ["//leaflab/conformance:__pkg__"],
 )

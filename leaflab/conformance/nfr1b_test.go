@@ -113,55 +113,136 @@ func TestNFR1b_AllHandlersConsultAuthorizationReach(t *testing.T) {
 	}
 }
 
-// TestNFR1b_NoWritePathSetsForignHouseholdForeignKey is the NFR1.b conformance
+// TestNFR1b_NoWritePathSetsForeignHouseholdForeignKey is the NFR1.b conformance
 // check that no write path sets a foreign-household foreign key (FR1.2).
 //
 // This test verifies that write operations do not set foreign keys to entities
-// in other households. It uses a simple pattern check: a write that references
-// a household-scoped entity (like region_id, plant_id, etc.) must validate
-// that the entity belongs to the principal's household before using it.
-//
-// The test is scaffolded to detect potential violations, but will be filled in
-// during Implementation with actual checks.
+// in other households. It looks for patterns in write handlers that validate
+// foreign keys against the household before use.
 func TestNFR1b_NoWritePathSetsForeignHouseholdForeignKey(t *testing.T) {
+	serverSrc := mustReadFile(t, "api/server.go")
+	testSrc := mustReadFile(t, "api/server_test.go")
+	
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "api/server.go", serverSrc, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse api/server.go: %v", err)
+	}
+
 	writeRPCs := getWriteRPCs()
 	if len(writeRPCs) == 0 {
 		t.Fatalf("no write RPCs identified (check getWriteRPCs implementation)")
 	}
 
-	// Enumerate write operations from the server code and check for
-	// foreign key validations. This is scaffolded for Implementation.
-	_ = writeRPCs // TODO: Implementation will add source analysis here
+	// For each write RPC handler, check that it performs validation on foreign keys.
+	// We look for patterns like:
+	// - ValidateRegionBelongsToHousehold
+	// - ValidatePlantBelongsToHousehold
+	// - Similar household-scoped entity validation patterns
+	
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok {
+			return true
+		}
+
+		// Only check methods on LeafLabAPIServer
+		if fn.Recv == nil || len(fn.Recv.List) == 0 {
+			return true
+		}
+		recvType, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+		if !ok {
+			return true
+		}
+		id, ok := recvType.X.(*ast.Ident)
+		if !ok || id.Name != "LeafLabAPIServer" {
+			return true
+		}
+
+		methodName := fn.Name.Name
+		if !writeRPCs[methodName] {
+			return true
+		}
+
+		// This is a write handler. Check for household validation patterns.
+		hasValidation := hasForeignKeyValidation(fn.Body)
+		if !hasValidation {
+			// Only flag if this write handler actually accepts foreign key IDs
+			// (e.g., PushDeviceConfig accepts region_id).
+			// Health and read-only RPCs don't matter.
+			acceptsForeignKeys := doesWriterAcceptForeignKeys(methodName)
+			if acceptsForeignKeys {
+				t.Errorf("write RPC handler %q does not validate foreign-key references against household (FR1.2) -- "+
+					"add household-scoped validation like ValidateRegionBelongsToHousehold before using any foreign IDs", methodName)
+			}
+		}
+
+		return true
+	})
+
+	// Also check that tests exist for foreign-household rejection in write RPC tests
+	for rpc, isWrite := range writeRPCs {
+		if !isWrite {
+			continue
+		}
+
+		if rpc == "Health" {
+			continue
+		}
+
+		// Verify a test exists that asserts foreign-household rejection
+		testPattern := regexp.MustCompile(`(?i)foreign|cross.?household|external.?household|different.?household`)
+		if !testPattern.MatchString(testSrc) {
+			// Check if there's a specific test for this RPC
+			rpcTestPattern := regexp.MustCompile(`func\s+Test\w*` + rpc + `\w*Foreign`)
+			if !rpcTestPattern.MatchString(testSrc) {
+				// It's OK if there's a general foreign household test that covers all write RPCs
+				t.Logf("write RPC %q: consider adding a test asserting foreign-household reference rejection", rpc)
+			}
+		}
+	}
 }
 
 // getWriteRPCs returns a set of RPC method names that perform writes
 // (modify server state). Reads return false.
 func getWriteRPCs() map[string]bool {
 	return map[string]bool{
-		"PushDeviceConfig":  true,
-		"GetDeviceConfig":   false,
-		"ListBoards":        false,
+		"PushDeviceConfig":   true,
+		"GetDeviceConfig":    false,
+		"ListBoards":         false,
 		"GetSensorTimelines": false,
-		"Health":            false,
+		"Health":             false,
 	}
 }
 
 // getTestsWithNonMemberRefusal scans server_test.go for tests that assert
-// non-member refusal. It uses regex and string matching to identify test patterns.
+// non-member refusal (Unauthenticated or PermissionDenied errors).
 func getTestsWithNonMemberRefusal(t *testing.T) map[string]bool {
 	t.Helper()
 	testSrc := mustReadFile(t, "api/server_test.go")
 
 	result := make(map[string]bool)
+	rpcs := []string{"PushDeviceConfig", "GetDeviceConfig", "ListBoards", "GetSensorTimelines", "Health"}
 
-	// Check for specific test patterns that test the actual RPC
-	// A test that checks for Unauthenticated or PermissionDenied is an authorization test
-	for _, rpc := range []string{"PushDeviceConfig", "GetDeviceConfig", "ListBoards", "GetSensorTimelines"} {
-		// Check for test function that tests this RPC
-		testPattern := regexp.MustCompile(`func\s+Test\w*` + rpc)
-		if testPattern.MatchString(testSrc) {
-			// At least one test exists for this RPC
+	for _, rpc := range rpcs {
+		// Look for test functions that test this specific RPC and check for
+		// Unauthenticated or PermissionDenied errors
+		testFuncPattern := regexp.MustCompile(
+			`func\s+Test\w*` + rpc + `[^(]*\([^)]*\*testing\.T\)[^{]*{[^}]*(?:Unauthenticated|PermissionDenied|codes\.Unauthenticated|codes\.PermissionDenied)[^}]*}`)
+
+		if testFuncPattern.MatchString(testSrc) {
 			result[rpc] = true
+		} else {
+			// Also check for simpler pattern: test function that mentions the RPC
+			// and checks for Unauthenticated/PermissionDenied anywhere
+			rpcTestPattern := regexp.MustCompile(`func\s+Test\w*` + rpc)
+			if rpcTestPattern.MatchString(testSrc) {
+				// Check if the test file has any test mentioning Unauthenticated
+				unAuthPattern := regexp.MustCompile(`(?i)Unauthenticated|PermissionDenied`)
+				if unAuthPattern.MatchString(testSrc) {
+					result[rpc] = true
+				}
+			}
 		}
 	}
 
@@ -169,20 +250,33 @@ func getTestsWithNonMemberRefusal(t *testing.T) map[string]bool {
 }
 
 // getTestsWithForeignHouseholdRefusal scans server_test.go for tests that
-// assert foreign-household reference rejection. It looks for test names or
-// code patterns suggesting foreign household or cross-household boundary testing.
+// assert foreign-household reference rejection.
 func getTestsWithForeignHouseholdRefusal(t *testing.T) map[string]bool {
 	t.Helper()
 	testSrc := mustReadFile(t, "api/server_test.go")
 
 	result := make(map[string]bool)
+	writeRPCs := getWriteRPCs()
 
-	// Check for test functions that mention foreign, cross-household, or external households
-	foreignHouseholdTests := regexp.MustCompile(`(?i)foreign|cross.?household|external.?household|different.?household`)
+	// Look for test functions that specifically test foreign household rejection
+	// Patterns: "foreign", "cross-household", "different household", etc.
+	foreignHouseholdPattern := regexp.MustCompile(`(?i)(foreign|cross.?household|external.?household|different.?household)`)
 
-	for _, rpc := range []string{"PushDeviceConfig"} { // Only write RPC currently
-		if foreignHouseholdTests.MatchString(testSrc) {
-			result[rpc] = true
+	for rpc := range writeRPCs {
+		if !writeRPCs[rpc] {
+			continue // only check write RPCs
+		}
+
+		if rpc == "Health" {
+			continue
+		}
+
+		// Check for RPC-specific test that mentions foreign households
+		rpcPattern := regexp.MustCompile(`func\s+Test\w*` + rpc)
+		if rpcPattern.MatchString(testSrc) {
+			if foreignHouseholdPattern.MatchString(testSrc) {
+				result[rpc] = true
+			}
 		}
 	}
 
@@ -222,4 +316,50 @@ func hasAuthorizationReachCheck(body *ast.BlockStmt) bool {
 	})
 
 	return found
+}
+
+// hasForeignKeyValidation checks if a function body contains calls to
+// foreign key validation methods (ValidateRegionBelongsToHousehold, etc.)
+func hasForeignKeyValidation(body *ast.BlockStmt) bool {
+	if body == nil {
+		return false
+	}
+
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		// Check for repo.Validate*BelongsToHousehold methods or s.repo.Validate*BelongsToHousehold
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			methodName := sel.Sel.Name
+			if regexp.MustCompile(`Validate.*BelongsToHousehold`).MatchString(methodName) {
+				found = true
+				return false
+			}
+		}
+
+		return true
+	})
+
+	return found
+}
+
+// doesWriterAcceptForeignKeys checks if a write RPC handler accepts foreign key IDs
+// (e.g., region_id, plant_id) that need to be validated against the household.
+func doesWriterAcceptForeignKeys(rpcName string) bool {
+	// PushDeviceConfig accepts region_id in sensor configs
+	// Other write RPCs may or may not accept foreign keys
+	switch rpcName {
+	case "PushDeviceConfig":
+		return true
+	default:
+		return false
+	}
 }

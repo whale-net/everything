@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 
+	configpb "github.com/whale-net/everything/firmware/proto/config"
 	apierrors "github.com/whale-net/everything/leaflab/api/apierrors"
 	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -1284,5 +1285,184 @@ func TestFR61_CorrectnessWithAppend(t *testing.T) {
 		if count > 1 {
 			t.Errorf("board %d appeared %d times across pages", id, count)
 		}
+	}
+}
+
+
+// TestUnauthenticatedCallsRejected_GetSensorTimelines tests that unauthenticated
+// calls to GetSensorTimelines are rejected with an Unauthenticated error.
+func TestUnauthenticatedCallsRejected_GetSensorTimelines(t *testing.T) {
+	conn := newTestServerWithOIDCAuth(t)
+	client := pb.NewLeafLabAPIClient(conn)
+
+	_, err := client.GetSensorTimelines(context.Background(), &pb.GetSensorTimelinesRequest{
+		SensorId: 123,
+	})
+
+	if err == nil {
+		t.Fatalf("GetSensorTimelines: expected Unauthenticated error, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("GetSensorTimelines: expected a gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.Unauthenticated {
+		t.Errorf("GetSensorTimelines: expected codes.Unauthenticated, got %v", st.Code())
+	}
+}
+
+// TestForeignHouseholdReferenceRejected_PushDeviceConfig tests that
+// PushDeviceConfig rejects attempts to use foreign-household region IDs.
+// This is the FR1.2 cross-household boundary check: a principal can only
+// reference regions owned by their own household.
+func TestForeignHouseholdReferenceRejected_PushDeviceConfig(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires database")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// Set up isolated test database
+	dbContainer := dbtest.NewPostgres(ctx, t, dbtest.Options{
+		Image: timescaleDBImage,
+	})
+
+	// Run migrations
+	migrationsPath := getMigrationsPath(t)
+	runMigrationsManually(ctx, t, dbContainer.Pool, migrationsPath)
+
+	// Set up test data: two households with regions
+	var household1ID, household2ID, region2ID, board1ID int64
+
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('Household 1') RETURNING household_id
+	`).Scan(&household1ID); err != nil {
+		t.Fatalf("insert household 1: %v", err)
+	}
+
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO household (name) VALUES ('Household 2') RETURNING household_id
+	`).Scan(&household2ID); err != nil {
+		t.Fatalf("insert household 2: %v", err)
+	}
+
+	// Add principal-1 to household 1
+	_, err := dbContainer.Pool.Exec(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, 'principal-1', 'Owner', NOW())
+	`, household1ID)
+	if err != nil {
+		t.Fatalf("add principal-1 to household 1: %v", err)
+	}
+
+	// Add principal-2 to household 2
+	_, err = dbContainer.Pool.Exec(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, 'principal-2', 'Owner', NOW())
+	`, household2ID)
+	if err != nil {
+		t.Fatalf("add principal-2 to household 2: %v", err)
+	}
+
+	// Create a region in household 2
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO region (household_id, name) VALUES ($1, 'Region in HH2') RETURNING region_id
+	`, household2ID).Scan(&region2ID); err != nil {
+		t.Fatalf("insert region in household 2: %v", err)
+	}
+
+	// Create a board in household 1
+	if err := dbContainer.Pool.QueryRow(ctx, `
+		INSERT INTO board (device_id, household_id, registered_at, last_seen_at)
+		VALUES ('board-in-household-1', $1, NOW(), NOW()) RETURNING board_id
+	`, household1ID).Scan(&board1ID); err != nil {
+		t.Fatalf("insert board in household 1: %v", err)
+	}
+
+	// Set up gRPC server with dev auth
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
+		Mode: grpcauth.AuthModeNone,
+	})
+	if err != nil {
+		t.Fatalf("create auth interceptors: %v", err)
+	}
+
+	correlationUnaryInt := logging.NewCorrelationIDUnaryInterceptor()
+	correlationStreamInt := logging.NewCorrelationIDStreamInterceptor()
+
+	lis := bufconn.Listen(bufSize)
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(correlationUnaryInt, unaryInt),
+		grpc.ChainStreamInterceptor(correlationStreamInt, streamInt),
+	)
+
+	repo := NewRepository(dbContainer.Pool)
+	server := &LeafLabAPIServer{
+		repo:      repo,
+		publisher: nil, // Not needed for config push in this test
+		logger:    logging.Get("api-test"),
+	}
+	pb.RegisterLeafLabAPIServer(grpcServer, server)
+
+	go func() {
+		_ = grpcServer.Serve(lis)
+	}()
+	t.Cleanup(func() {
+		grpcServer.Stop()
+	})
+
+	// Create client
+	dialer := func(context.Context, string) (net.Conn, error) { return lis.Dial() }
+	conn, err := grpc.NewClient("passthrough:///bufnet",
+		grpc.WithContextDialer(dialer),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewLeafLabAPIClient(conn)
+
+	// Inject principal-1 claims (member of household 1 only)
+	claims := &grpcauth.Claims{Subject: "principal-1", Roles: []string{}}
+	ctxWithAuth := grpcauth.ContextWithClaims(ctx, claims)
+
+	// Try to push a config that references the foreign region (in household 2)
+	// This should be rejected as an InvalidArgument error (FR1.2 violation)
+	_, err = client.PushDeviceConfig(ctxWithAuth, &pb.PushDeviceConfigRequest{
+		DeviceId: "board-in-household-1",
+		Sensors: []*configpb.SensorConfig{
+			{
+				Name:     "sensor-1",
+				RegionId: uint32(region2ID), // Foreign region from household 2
+			},
+		},
+	})
+
+	if err == nil {
+		t.Fatalf("PushDeviceConfig: expected InvalidArgument error for foreign region, got nil")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("PushDeviceConfig: expected a gRPC status error, got %v", err)
+	}
+
+	// Should fail with InvalidArgument, not NotFound or PermissionDenied
+	if st.Code() != codes.InvalidArgument {
+		t.Errorf("PushDeviceConfig: expected codes.InvalidArgument for foreign region reference, got %v", st.Code())
+	}
+
+	// Verify the error message is not empty
+	if st.Message() == "" {
+		t.Errorf("PushDeviceConfig: expected error message explaining the foreign region rejection, got empty string")
+	}
+
+	// Verify the error message mentions the region or household
+	if !strings.Contains(strings.ToLower(st.Message()), "household") &&
+		!strings.Contains(strings.ToLower(st.Message()), "region") {
+		t.Logf("PushDeviceConfig: error message may not clearly explain the violation: %q", st.Message())
 	}
 }
