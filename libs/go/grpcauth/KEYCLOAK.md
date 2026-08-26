@@ -303,3 +303,88 @@ The checklist, stripped of the example:
 - [README.md](README.md) — `grpcauth` API, env vars, dial options
 - [auth.go](auth.go) — the verifier; `realm_access.roles` parsing lives here
 - [`tools/app_registry/ARCHITECTURE.md`](../../../tools/app_registry/ARCHITECTURE.md) — the role split this guide implements
+
+---
+
+## Device Authorization Grant Flow
+
+The device authorization grant (also called device flow) is suitable for CLI tools, development workflows, and non-interactive scenarios where a user may not have a browser readily available. Unlike the service account flow (which uses a secret), the device flow prompts the user once interactively for approval, then non-interactively refreshes the token thereafter.
+
+### Prerequisites for device grant
+
+The Keycloak client must be configured differently than a service account client:
+
+1. **Public client** — The device grant flow requires a *public* client (no secret). The client cannot use `client_credentials` because the user's consent is part of the flow, not a pre-shared secret.
+
+2. **Device authorization flow enabled** — In Keycloak, the device authorization flow is controlled by a feature toggle and must be explicitly enabled on the realm or the client.
+
+3. **Token cache** — The resulting token is persisted to disk with restrictive permissions (`0600`) so subsequent invocations refresh without user interaction. By default, tokens cache to `$HOME/.cache/grpcauth/device_grant.json`. See `DeviceGrantConfig.CacheDir` to override.
+
+### Creating a device grant client
+
+1. **Clients** → **Create client**
+2. **Client ID**: e.g., `leaflab-cli` → Next
+3. **Client authentication**: **Off** ← this must be OFF for public clients
+4. **Authentication flow** — Check **Device Authorization Grant** only. Uncheck all others. → Next
+5. Leave URLs blank → **Save**
+
+### Assigning roles to a device grant client
+
+The same role assignment as service accounts applies:
+
+1. **Service accounts roles** tab (yes, it still exists for public clients in terms of role assignment)
+2. **Assign role** → *Filter by realm roles* → select the appropriate roles → **Assign**
+
+Then add the audience mapper (step 4d from the service account flow):
+
+1. **Client scopes** tab
+2. Click the dedicated scope, named `leaflab-cli-dedicated`
+3. **Add mapper** → **By configuration** → **Audience**
+4. Fill in:
+   - **Name**: `leaflab-api-audience`
+   - **Included Client Audience**: `leaflab-api` (your API client)
+   - **Add to access token**: **On**
+5. **Save**
+
+### Using device grant from Go
+
+```go
+authOpt, err := grpcauth.NewDeviceGrantDialOption(grpcauth.DeviceGrantConfig{
+    TokenURL:                 "https://auth.example.com/realms/whale/protocol/openid-connect/token",
+    ClientID:                 "leaflab-cli",
+    RequireTransportSecurity: false, // internal cluster; set true if using TLS
+})
+if err != nil {
+    log.Fatalf("grpcauth: %v", err)
+}
+
+conn, err := grpc.NewClient(addr,
+    grpc.WithTransportCredentials(insecure.NewCredentials()),
+    authOpt,
+)
+```
+
+On the first run, the user sees:
+
+```
+Please authorize this application by visiting:
+
+https://auth.example.com/device?user_code=ABCD-1234
+
+Press Enter when authorized...
+```
+
+The user visits the URL, logs in, and enters the code. Thereafter, calls to `NewDeviceGrantDialOption` with the same `TokenURL` and `ClientID` silently refresh from the cached token until it expires.
+
+### Keycloak device authorization grant configuration
+
+As of Keycloak 22, device authorization is a realm-level feature. To enable it:
+
+1. **Realm settings** → **Tokens** tab
+2. Find the **Device Authorization Grant** section
+3. Ensure it is enabled
+4. (Optional) Configure timeout and polling intervals
+
+If device authorization is disabled at the realm level, clients cannot use the device flow regardless of their individual settings.
+
+---

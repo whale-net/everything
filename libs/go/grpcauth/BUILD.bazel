@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "auth.go",
         "credentials.go",
+        "device_grant.go",
         "interceptors.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/grpcauth",
@@ -22,7 +23,10 @@ go_library(
 
 go_test(
     name = "grpcauth_test",
-    srcs = ["interceptors_test.go"],
+    srcs = [
+        "interceptors_test.go",
+        "device_grant_test.go",
+    ],
     embed = [":grpcauth"],
     deps = [
         "@org_golang_google_grpc//codes",
@@ -30,4 +34,3 @@ go_test(
         "@org_golang_google_grpc//status",
     ],
 )
-

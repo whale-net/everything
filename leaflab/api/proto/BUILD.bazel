@@ -1,6 +1,8 @@
 """LeafLab API proto — gRPC service definition."""
 
+load("@rules_go//go:def.bzl", "go_test")
 load("//tools/bazel:grpc.bzl", "go_grpc_library")
+load("//tools/bazel:descriptor.bzl", "proto_descriptor_set")
 
 go_grpc_library(
     name = "leaflabapipb",
@@ -9,4 +11,23 @@ go_grpc_library(
     proto_deps = ["//firmware/proto:config_proto"],
     go_deps = ["//firmware/proto:configpb"],
     visibility = ["//visibility:public"],
+)
+
+# Descriptor set for programmatic access to the service contract.
+# Used by clients that cannot use server reflection (e.g., push-config.sh).
+proto_descriptor_set(
+    name = "leaflab_api_descriptor",
+    proto_library = ":leaflabapipb_proto",
+    visibility = ["//visibility:public"],
+)
+
+# Test for descriptor set content and structure
+go_test(
+    name = "descriptor_test",
+    srcs = ["descriptor_test.go"],
+    data = [":leaflab_api_descriptor"],
+    deps = [
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//types/descriptorpb",
+    ],
 )

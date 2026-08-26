@@ -67,3 +67,11 @@ release_app(
     port = 50051,
     replicas = 1,
 )
+
+# Descriptor set for programmatic service contract access.
+# Published alongside the API to enable clients to avoid server reflection.
+filegroup(
+    name = "leaflab_api_descriptors",
+    srcs = ["//leaflab/api/proto:leaflab_api_descriptor"],
+    visibility = ["//visibility:public"],
+)
