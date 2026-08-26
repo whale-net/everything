@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"strings"
 	"testing"
 	"time"
 
@@ -1300,34 +1301,84 @@ func TestViewAttributionFixDownMigrationRestoresDefinition(t *testing.T) {
 		t.Errorf("v_sensor_reading_with_plant should exist at version %d", version)
 	}
 
-	// Get the view definition before down migration
+	// Get the view definition before the down migration - this is the
+	// corrected (025) definition, joined through plant_region_history.
 	var viewDefBefore string
 	if err := db.Pool.QueryRow(ctx, `
 		SELECT pg_get_viewdef('v_sensor_reading_with_plant', true)
 	`).Scan(&viewDefBefore); err != nil {
 		t.Fatalf("get view definition before: %v", err)
 	}
-	if !contains(viewDefBefore, "plant_region_history") {
-		t.Error("FR72: view definition should reference plant_region_history (the fix)")
+	if !strings.Contains(viewDefBefore, "plant_region_history") {
+		t.Fatal("FR72: view definition should reference plant_region_history (the fix) before rollback")
 	}
 
 	// Verify the view includes household_id column (added in migration 025)
-	var householdIDExists int
+	var householdIDExistsBefore int
 	if err := db.Pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM information_schema.columns
 		WHERE table_name = 'v_sensor_reading_with_plant'
 		  AND column_name = 'household_id'
-	`).Scan(&householdIDExists); err != nil {
-		t.Fatalf("check household_id column: %v", err)
+	`).Scan(&householdIDExistsBefore); err != nil {
+		t.Fatalf("check household_id column before down: %v", err)
 	}
-	if householdIDExists != 1 {
-		t.Error("FR72: household_id should exist after migration 025")
+	if householdIDExistsBefore != 1 {
+		t.Fatal("FR72: household_id should exist after migration 025, before rollback")
 	}
 
-	t.Log("Down migration verification: current view definition has plant_region_history and household_id")
-}
+	// Roll back exactly migration 025 (not the whole schema) and verify the
+	// view is restored to its pre-025, defective definition: it keeps its
+	// name, but joins on exact region equality again and loses household_id.
+	if err := runner.Steps(-1); err != nil {
+		t.Fatalf("Steps(-1): %v", err)
+	}
 
-// helper function to check if a string contains a substring (case-insensitive)
-func contains(str, substr string) bool {
-	return str != "" && substr != ""
+	newVersion, dirty, err := runner.Version()
+	if err != nil {
+		t.Fatalf("Version after down: %v", err)
+	}
+	if dirty {
+		t.Fatal("schema is dirty after Steps(-1)")
+	}
+	if newVersion != version-1 {
+		t.Fatalf("expected version %d after rolling back one step from %d, got %d", version-1, version, newVersion)
+	}
+
+	// The view must still exist under the same name after the down migration.
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.views
+		WHERE table_name = 'v_sensor_reading_with_plant'
+	`).Scan(&viewExists); err != nil {
+		t.Fatalf("check view after down: %v", err)
+	}
+	if viewExists != 1 {
+		t.Fatal("v_sensor_reading_with_plant should still exist after rolling back migration 025")
+	}
+
+	var viewDefAfter string
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT pg_get_viewdef('v_sensor_reading_with_plant', true)
+	`).Scan(&viewDefAfter); err != nil {
+		t.Fatalf("get view definition after down: %v", err)
+	}
+	if strings.Contains(viewDefAfter, "plant_region_history") {
+		t.Error("down migration should restore the pre-025 definition, which does not reference plant_region_history")
+	}
+	if !strings.Contains(viewDefAfter, "region_id") {
+		t.Error("restored view should join on region_id equality, per the pre-025 definition")
+	}
+
+	var householdIDExistsAfter int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_name = 'v_sensor_reading_with_plant'
+		  AND column_name = 'household_id'
+	`).Scan(&householdIDExistsAfter); err != nil {
+		t.Fatalf("check household_id column after down: %v", err)
+	}
+	if householdIDExistsAfter != 0 {
+		t.Error("down migration should drop household_id, restoring the pre-025 column set")
+	}
+
+	t.Log("Down migration verified: v_sensor_reading_with_plant restored to pre-025 definition (no plant_region_history reference, no household_id)")
 }
