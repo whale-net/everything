@@ -162,18 +162,18 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 }
 
 // isCLIBinaryAppType checks if an app is a CLI binary app by querying the
-// metadata registry. Falls back to checking app.AppType for backward compatibility.
+// metadata registry. The metadata registry is the authoritative source; there
+// is no fallback to app.AppType per FR-36 to maintain a single source of truth.
 func (a *Activities) isCLIBinaryAppType(app *repository.App) bool {
-	if a.MetadataRegistry != nil {
-		// Query the metadata registry to get the artifact kind
-		appMetadata := a.MetadataRegistry.GetApp(fmt.Sprintf("%s-%s", app.Domain, app.Name))
-		if appMetadata != nil && appMetadata.ArtifactKind == appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY {
-			return true
-		}
-		// If metadata registry doesn't have it, fall through to app type check
+	if a.MetadataRegistry == nil {
+		return false
 	}
-	// Fallback to app_type check
-	return app.AppType == "cli" || app.AppType == "binary"
+	// Query the metadata registry to get the artifact kind
+	appMetadata := a.MetadataRegistry.GetApp(fmt.Sprintf("%s-%s", app.Domain, app.Name))
+	if appMetadata != nil && appMetadata.ArtifactKind == appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY {
+		return true
+	}
+	return false
 }
 
 

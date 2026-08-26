@@ -425,15 +425,7 @@ func (s *ArtifactServer) ListArtifactPins(ctx context.Context, req *pb.ListArtif
 	return &pb.ListArtifactPinsResponse{ChartArtifacts: artifactsToPB(chartArtifacts)}, nil
 }
 
-// binaryOwnerFullName maps a CLI binary name to its App Registry owner full
-// name ("<domain>-<name>"), matching the resolution logic already in
-// release-v2.yml's build-release-tools probe and
-// download-release-tools/action.yml. ResolveBinaryURL rejects any binary not
-// in this map with InvalidArgument.
-var binaryOwnerFullName = map[string]string{
-	"release_helper_go": "tools-release_helper_go",
-	"app-registry":      "tools-app-registry",
-}
+
 
 // ResolveBinaryURL implements issue #979/#983 (FR12-FR14, FR16): resolves a
 // CLI binary + version + platform to a presigned S3 download URL (issue
@@ -915,21 +907,20 @@ func (s *ArtifactServer) GetReleaseRun(ctx context.Context, req *pb.GetReleaseRu
 // see ARCHITECTURE.md "ListBuilds" for the pagination contract. Additive to
 // GetReleaseRun/GetBuildByWorkflowRun above and the CLI's `builds status`
 // (FR2.5) -- neither is changed by this RPC.
-// lookupBinaryOwner resolves a binary name to its app owner full name.
-// Uses the metadata registry if available; falls back to hardcoded map otherwise.
+// lookupBinaryOwner resolves a binary name to its app owner full name
+// by querying the metadata registry. The metadata registry is the authoritative
+// source; there is no hardcoded fallback per FR-36.
 func (s *ArtifactServer) lookupBinaryOwner(binaryName string) (string, bool) {
-	if s.MetadataRegistry != nil {
-		// Query the metadata registry for apps with ArtifactKindBinary
-		for fullName, app := range s.MetadataRegistry.AppsWithKind(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY) {
-			if app.Name == binaryName {
-				return fullName, true
-			}
-		}
+	if s.MetadataRegistry == nil {
 		return "", false
 	}
-	// Fallback to hardcoded map for backward compatibility
-	fullName, ok := binaryOwnerFullName[binaryName]
-	return fullName, ok
+	// Query the metadata registry for apps with ArtifactKindBinary
+	for fullName, app := range s.MetadataRegistry.AppsWithKind(appmetapb.ArtifactKind_ARTIFACT_KIND_BINARY) {
+		if app.Name == binaryName {
+			return fullName, true
+		}
+	}
+	return "", false
 }
 
 
