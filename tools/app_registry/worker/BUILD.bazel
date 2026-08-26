@@ -20,6 +20,7 @@ go_library(
         "//tools/app_registry/worker/writeback",
         "@io_temporal_go_sdk//activity",
         "@io_temporal_go_sdk//worker",
+        "//tools/app_registry/kinds",
     ],
 )
 
