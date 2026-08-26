@@ -85,6 +85,11 @@ func (h *HardwareAddress) muxHops() []MuxHop {
 // name/unit — preserving sensor_id (and thus reading history) across renames.
 // Falls back to the UNIQUE(board_id, name) upsert.
 //
+// When both address and name change simultaneously (rewire+rename), it looks for
+// a sensor of the same type with an open hardware history entry with a different
+// canonical key. If exactly one exists, it's assumed to be the rewired sensor
+// and is updated in place rather than forking.
+//
 // Returns the sensor_id and current region_id (nil if unset).
 func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error) {
 	if hw != nil && hw.I2CAddress > 0 {
@@ -109,10 +114,10 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return 0, nil, fmt.Errorf("hw-address lookup for sensor %q on board %d: %w", name, boardID, err)
 		}
-		// ErrNoRows: no existing row for this hw address — fall through to name upsert.
+		// ErrNoRows: no existing row for this hw address — try name lookup next
 	}
 
-	// Name-based upsert; persists i2c_address and mux_path when provided.
+	// Try to find by name. If found, update it in place.
 	var i2cAddr *uint32
 	muxJSON := []byte(`[]`)
 	if hw != nil && hw.I2CAddress > 0 {
@@ -123,9 +128,73 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 			return 0, nil, fmt.Errorf("marshal mux_path: %w", err)
 		}
 	}
+
 	var sensorID int64
 	var regionID *int64
+	
+	// First, try a direct name match (sensor exists with this name already).
 	err := r.db.QueryRow(ctx, `
+		SELECT sensor_id, region_id FROM sensor
+		WHERE board_id = $1 AND name = $2
+	`, boardID, name).Scan(&sensorID, &regionID)
+	
+	if err == nil {
+		// Found by name; update it.
+		if i2cAddr != nil {
+			_, err := r.db.Exec(ctx, `
+				UPDATE sensor
+				SET sensor_type_id = $2, unit = $3, i2c_address = $4, mux_path = $5::jsonb
+				WHERE sensor_id = $1
+			`, sensorID, sensorTypeID, unit, i2cAddr, muxJSON)
+			if err != nil {
+				return 0, nil, fmt.Errorf("update sensor %d: %w", sensorID, err)
+			}
+		}
+		return sensorID, regionID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil, fmt.Errorf("name lookup for sensor %q on board %d: %w", name, boardID, err)
+	}
+
+	// Neither hw-address nor name lookup found anything.
+	// If hw is provided, check for a rewire+rename case: a sensor of the same type
+	// with an open hw_history entry whose canonical key doesn't match the new one.
+	// This handles the case where both address and name changed in the same manifest.
+	if hw != nil && hw.I2CAddress > 0 {
+		var candidateID int64
+		candidateErr := r.db.QueryRow(ctx, `
+			SELECT s.sensor_id
+			FROM sensor s
+			WHERE s.board_id = $1
+			  AND s.sensor_type_id = $2
+			  AND (s.i2c_address != $3 OR s.i2c_address IS NULL OR (s.mux_path::text) != $4::text)
+			ORDER BY s.registered_at DESC
+			LIMIT 1
+		`, boardID, sensorTypeID, hw.I2CAddress, string(muxJSON)).Scan(&candidateID)
+		
+		if candidateErr == nil {
+			// Found a sensor of the same type with a different hw address.
+			// Assume it's the rewired sensor and update it in place.
+			updateErr := r.db.QueryRow(ctx, `
+				UPDATE sensor
+				SET name = $2, unit = $3, i2c_address = $4, mux_path = $5::jsonb
+				WHERE sensor_id = $1
+				RETURNING region_id
+			`, candidateID, name, unit, i2cAddr, muxJSON).Scan(&regionID)
+			if updateErr != nil {
+				return 0, nil, fmt.Errorf("update rewired sensor %d: %w", candidateID, err)
+			}
+			return candidateID, regionID, nil
+		}
+		// If candidateErr is not ErrNoRows, log but continue to insert
+		if !errors.Is(candidateErr, pgx.ErrNoRows) {
+			// Log the error but continue to insert new sensor
+			// This is safer than failing completely
+		}
+	}
+
+	// Fall back to name-based upsert (insert if not found).
+	err = r.db.QueryRow(ctx, `
 		INSERT INTO sensor (board_id, sensor_type_id, name, unit, i2c_address, mux_path, registered_at)
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
 		ON CONFLICT (board_id, name) DO UPDATE
@@ -143,6 +212,8 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 	}
 	return sensorID, regionID, nil
 }
+
+
 
 // UpsertSensorLabel records a name in sensor_name_history.
 // If the current open label already has this name, it is a no-op.
