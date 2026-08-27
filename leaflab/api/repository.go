@@ -12,6 +12,11 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+// ErrNoHousehold is returned by the household-resolution helpers below when
+// a board/region/plant resolves to no household -- the FR1.1 "unclaimed
+// board" exception aside, this should never occur post-backfill (FR70.1).
+var ErrNoHousehold = errors.New("row resolves to no household")
+
 type Repository struct {
 	db *pgxpool.Pool
 }
@@ -144,4 +149,107 @@ type BoardRow struct {
 	BoardID    int64
 	DeviceID   string
 	LastSeenAt time.Time
+}
+
+// ── Ownership (FR1.1, FR70.1, NFR6.1) ────────────────────────────────────────
+//
+// household_id is carried directly on board and plant, and on the region
+// tree root only (descendants inherit -- see migration 015's
+// enforce_region_household_root trigger). board_ownership additionally
+// tracks board re-ownership history in SCD2 shape; the helpers below read
+// through it rather than board.household_id so that "current household of a
+// board" and the value-at-T variant share one source of truth.
+
+// CurrentHouseholdForBoard returns the household a board currently resolves
+// to. ErrNoHousehold covers both "never claimed" (FR1.1's exception) and any
+// row that should be unreachable post-backfill.
+func (r *Repository) CurrentHouseholdForBoard(ctx context.Context, boardID int64) (int64, error) {
+	var householdID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id
+		FROM board_ownership
+		WHERE board_id = $1
+		  AND valid_to IS NULL
+	`, boardID).Scan(&householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNoHousehold
+		}
+		return 0, fmt.Errorf("current household for board %d: %w", boardID, err)
+	}
+	return householdID, nil
+}
+
+// HouseholdForBoardAtTime resolves the household that owned a board at time
+// t, per AGENTS.md's value-at-time-T predicate over board_ownership.
+func (r *Repository) HouseholdForBoardAtTime(ctx context.Context, boardID int64, t time.Time) (int64, error) {
+	var householdID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id
+		FROM board_ownership
+		WHERE board_id = $1
+		  AND valid_from <= $2
+		  AND (valid_to IS NULL OR valid_to > $2)
+	`, boardID, t).Scan(&householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNoHousehold
+		}
+		return 0, fmt.Errorf("household for board %d at %s: %w", boardID, t, err)
+	}
+	return householdID, nil
+}
+
+// CurrentHouseholdForRegion resolves the household a region currently
+// belongs to, walking up to the tree root if the given region is a
+// descendant (only the root carries household_id).
+func (r *Repository) CurrentHouseholdForRegion(ctx context.Context, regionID int64) (int64, error) {
+	var householdID *int64
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE ancestors AS (
+			SELECT region_id, parent_region_id, household_id
+			FROM region
+			WHERE region_id = $1
+
+			UNION ALL
+
+			SELECT r.region_id, r.parent_region_id, r.household_id
+			FROM region r
+			JOIN ancestors a ON r.region_id = a.parent_region_id
+		)
+		SELECT household_id
+		FROM ancestors
+		WHERE parent_region_id IS NULL
+	`, regionID).Scan(&householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNoHousehold
+		}
+		return 0, fmt.Errorf("current household for region %d: %w", regionID, err)
+	}
+	if householdID == nil {
+		return 0, ErrNoHousehold
+	}
+	return *householdID, nil
+}
+
+// CurrentHouseholdForPlant returns the household a plant currently resolves
+// to. plant.household_id is carried directly (not inherited via region).
+func (r *Repository) CurrentHouseholdForPlant(ctx context.Context, plantID int64) (int64, error) {
+	var householdID *int64
+	err := r.db.QueryRow(ctx, `
+		SELECT household_id
+		FROM plant
+		WHERE plant_id = $1
+	`, plantID).Scan(&householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, ErrNoHousehold
+		}
+		return 0, fmt.Errorf("current household for plant %d: %w", plantID, err)
+	}
+	if householdID == nil {
+		return 0, ErrNoHousehold
+	}
+	return *householdID, nil
 }
