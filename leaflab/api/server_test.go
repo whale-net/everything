@@ -57,6 +57,10 @@ func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter 
 	return f.listBoardsRows, f.listBoardsErr
 }
 
+func (f *fakeRepo) SetBoardDisplayName(ctx context.Context, boardID int64, displayName string, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
 func (f *fakeRepo) Ping(ctx context.Context) error {
 	return f.pingErr
 }

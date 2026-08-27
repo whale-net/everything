@@ -185,7 +185,7 @@ func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfte
 	if hasAfter {
 		filter, filterArgs := scope.Filter(3)
 		sqlQuery = fmt.Sprintf(`
-			SELECT board_id, device_id, last_seen_at
+			SELECT board_id, device_id, last_seen_at, display_name
 			FROM board
 			WHERE board_id > $1
 			  AND retired_at IS NULL
@@ -197,7 +197,7 @@ func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfte
 	} else {
 		filter, filterArgs := scope.Filter(2)
 		sqlQuery = fmt.Sprintf(`
-			SELECT board_id, device_id, last_seen_at
+			SELECT board_id, device_id, last_seen_at, display_name
 			FROM board
 			WHERE retired_at IS NULL
 			  AND (%s)
@@ -216,8 +216,18 @@ func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfte
 	var boards []BoardRow
 	for rows.Next() {
 		var b BoardRow
-		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.LastSeenAt); err != nil {
+		var displayName *string
+		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.LastSeenAt, &displayName); err != nil {
 			return nil, fmt.Errorf("scan board: %w", err)
+		}
+		// NULL (never set, or cleared back to unset -- see
+		// SetBoardDisplayName) becomes "" here; the device_id fallback for
+		// that case is applied by the caller (server.go's ListBoards
+		// handler), not here (NFR18.1: the fallback is a service-layer
+		// rendering decision, and BoardRow is this repository's plain data
+		// shape either way).
+		if displayName != nil {
+			b.DisplayName = *displayName
 		}
 		boards = append(boards, b)
 	}
@@ -225,10 +235,45 @@ func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfte
 }
 
 type BoardRow struct {
-	BoardID    int64
-	DeviceID   string
-	LastSeenAt time.Time
-	RetiredAt  *time.Time
+	BoardID     int64
+	DeviceID    string
+	LastSeenAt  time.Time
+	RetiredAt   *time.Time
+	DisplayName string
+}
+
+// SetBoardDisplayName writes only board.display_name (FR57): no other
+// column is touched by this UPDATE -- device_config, sensor, region and
+// sensor_region_history rows for the same board are untouched by this call,
+// by construction (the statement's column list names exactly one column).
+//
+// An empty displayName clears the column back to NULL ("no household-chosen
+// name set yet" -- see migration 030's doc comment); ListBoards's read path
+// falls back from NULL to the device id server-side (NFR18.1), never here
+// and never in the BFF.
+//
+// entry is the audit record for this rename (FR8); auditedWrite inserts it
+// in the same transaction as the UPDATE, so a rolled-back write leaves no
+// audit row.
+func (r *Repository) SetBoardDisplayName(ctx context.Context, boardID int64, displayName string, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		var value *string
+		if displayName != "" {
+			value = &displayName
+		}
+		ct, err := tx.Exec(ctx, `
+			UPDATE board
+			SET display_name = $1
+			WHERE board_id = $2
+		`, value, boardID)
+		if err != nil {
+			return audit.Entry{}, fmt.Errorf("set display name for board %d: %w", boardID, err)
+		}
+		if ct.RowsAffected() == 0 {
+			return audit.Entry{}, ErrBoardNotFound
+		}
+		return entry, nil
+	})
 }
 
 // GetBoardByID returns a board by its numeric id regardless of retired

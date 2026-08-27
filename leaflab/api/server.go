@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
@@ -36,6 +37,21 @@ func validateDeviceID(id string) string {
 	return ""
 }
 
+// displayNameOrDeviceIDFallback is FR57/NFR18.1's read-path fallback: a
+// board with no household-chosen display name set (displayName == "",
+// meaning board.display_name IS NULL) renders as its device id instead.
+// This is deliberately a service-side (Go) function, not a BFF template
+// helper -- NFR18.1 requires the fallback to be a rendering decision made in
+// the service, so every caller of this API (leaflab-ui and any future
+// caller) sees the same already-resolved value on the wire and never
+// re-implements this substitution itself.
+func displayNameOrDeviceIDFallback(displayName, deviceID string) string {
+	if displayName != "" {
+		return displayName
+	}
+	return deviceID
+}
+
 const mqttExchange = "amq.topic"
 
 // deviceRepository is the subset of *Repository's methods LeafLabAPIServer's
@@ -53,6 +69,12 @@ type deviceRepository interface {
 	// (Scope.Filter) is applied inside the query itself, never as a
 	// post-filter -- see Repository.ListBoards.
 	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error)
+	// SetBoardDisplayName writes only board.display_name (FR57) -- see
+	// Repository.SetBoardDisplayName's doc comment. Called from
+	// LeafLabAPIServer.SetBoardDisplayName only after
+	// authorizeBoardAccessResolved has confirmed the caller reaches boardID
+	// (FR4/NFR2).
+	SetBoardDisplayName(ctx context.Context, boardID int64, displayName string, entry audit.Entry) error
 	Ping(ctx context.Context) error
 }
 
@@ -139,24 +161,36 @@ func boardNotFoundFailure() error {
 // (create-succeeds vs refused becomes distinguishable by response shape
 // alone). Tracked as a scope note pending FR76 (task #1342).
 func (s *LeafLabAPIServer) authorizeBoardAccess(ctx context.Context, deviceID string) error {
+	_, _, err := s.authorizeBoardAccessResolved(ctx, deviceID)
+	return err
+}
+
+// authorizeBoardAccessResolved is authorizeBoardAccess's variant for
+// handlers that need the resolved authz.EntityRef/authz.Resolution after
+// the check passes -- e.g. SetBoardDisplayName needs the board's numeric id
+// for the repository write and the board's household id for the audit
+// entry's TargetHouseholdID, and re-resolving a second time would cost NFR2
+// a second query. authorizeBoardAccess (above) is the thin wrapper read
+// paths use when only the pass/fail outcome matters.
+func (s *LeafLabAPIServer) authorizeBoardAccessResolved(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error) {
 	scope, err := s.scopeForCaller(ctx)
 	if err != nil {
 		s.logger.Error("resolve caller scope failed", "device_id", deviceID, "error", err)
-		return contract.Internal("board", "", "Could not process this request right now. Please try again.")
+		return authz.EntityRef{}, authz.Resolution{}, contract.Internal("board", "", "Could not process this request right now. Please try again.")
 	}
 
 	ref, res, err := s.authzSvc.ResolveBoardByDeviceID(ctx, deviceID)
 	if err != nil {
 		if errors.Is(err, authz.ErrNotFound) {
-			return boardNotFoundFailure()
+			return authz.EntityRef{}, authz.Resolution{}, boardNotFoundFailure()
 		}
 		s.logger.Error("resolve board failed", "device_id", deviceID, "error", err)
-		return contract.Internal("board", "", "Could not process this request right now. Please try again.")
+		return authz.EntityRef{}, authz.Resolution{}, contract.Internal("board", "", "Could not process this request right now. Please try again.")
 	}
 	if !scope.Permits(ref, res) {
-		return boardNotFoundFailure()
+		return authz.EntityRef{}, authz.Resolution{}, boardNotFoundFailure()
 	}
-	return nil
+	return ref, res, nil
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
@@ -254,6 +288,62 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
 }
 
+// SetBoardDisplayName sets (or clears) a board's household-chosen display
+// name (FR57). Authorization today is the same member-reach check every
+// other board-scoped write/read in this file uses
+// (authorizeBoardAccessResolved -- NFR2 not-found for a non-member,
+// FR4/FR5.1). FR7 ultimately wants this to be a member-or-grantee
+// capability, but this branch's ancestry (stacked on #1339/#1338) predates
+// #1344's grantee/capability mechanism (leaflab/api/authz/capability.go,
+// MemberOrGrantee), which landed on a divergent sibling branch -- revisit
+// this handler's authorization once this branch's lineage picks up #1344's
+// capability work.
+//
+// The write touches only board.display_name (Repository.SetBoardDisplayName
+// -- no other column, no config, no region, no sensor row).
+func (s *LeafLabAPIServer) SetBoardDisplayName(ctx context.Context, req *pb.SetBoardDisplayNameRequest) (*pb.SetBoardDisplayNameResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("board", "device_id", reason)
+	}
+
+	ref, res, err := s.authorizeBoardAccessResolved(ctx, req.DeviceId)
+	if err != nil {
+		return nil, err
+	}
+
+	householdID := res.HouseholdID
+	entityID := strconv.FormatInt(ref.ID, 10)
+	reg := auditRegistrations[setBoardDisplayNameFullMethod]
+	entry := audit.Entry{
+		ActorSubject:      actingSubject(ctx),
+		ActorKind:         audit.ActorKindHuman,
+		TargetHouseholdID: &householdID,
+		Action:            reg.Action,
+		EntityKind:        reg.EntityKind,
+		EntityID:          &entityID,
+		CorrelationID:     CorrelationIDFromContext(ctx),
+	}
+
+	if err := s.repo.SetBoardDisplayName(ctx, ref.ID, req.DisplayName, entry); err != nil {
+		if errors.Is(err, ErrBoardNotFound) {
+			// Board existed for authorizeBoardAccessResolved's resolve
+			// query moments ago and no longer does (e.g. concurrently
+			// retired/removed) -- NFR2's not-found shape, not an internal
+			// error.
+			return nil, boardNotFoundFailure()
+		}
+		s.logger.Error("set board display name failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("board", "", "Could not set this board's display name right now. Please try again.")
+	}
+
+	// Echo back exactly what was requested/stored -- never the device_id
+	// fallback ListBoards applies on read (NFR18.1's fallback is a read-path
+	// rendering decision; a caller who just cleared display_name should see
+	// that it's now empty, not a substituted device_id, so they can tell
+	// the write succeeded without a follow-up read).
+	return &pb.SetBoardDisplayNameResponse{DisplayName: req.DisplayName}, nil
+}
+
 // ListBoards returns all known boards, keyset-paginated on (board_id) per
 // FR61: page_token is opaque and carries the last board_id of the previous
 // page, never an offset, so pagination stays correct while boards are
@@ -298,9 +388,10 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 	boards := make([]*pb.BoardInfo, 0, len(rows))
 	for _, r := range rows {
 		boards = append(boards, &pb.BoardInfo{
-			DeviceId:   r.DeviceID,
-			BoardId:    r.BoardID,
-			LastSeenAt: contract.ToInstant(r.LastSeenAt),
+			DeviceId:    r.DeviceID,
+			BoardId:     r.BoardID,
+			LastSeenAt:  contract.ToInstant(r.LastSeenAt),
+			DisplayName: displayNameOrDeviceIDFallback(r.DisplayName, r.DeviceID),
 		})
 	}
 	return &pb.ListBoardsResponse{

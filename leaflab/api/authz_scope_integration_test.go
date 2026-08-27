@@ -44,9 +44,11 @@ import (
 // 015_ownership (board.household_id as a nullable current-value cache,
 // FR1.1's Unclaimed exception; household_membership in SCD2 shape per
 // AGENTS.md's valid_from/valid_to convention) plus the board/device_config
-// tables leaflab/api/repository.go touches. It is intentionally narrower
-// than the real migration -- only what authz.PGResolver and
-// Repository.ListBoards actually read.
+// tables leaflab/api/repository.go touches, and migration
+// 030_board_display_name's plain nullable display_name column (FR57) since
+// Repository.ListBoards now projects it. It is intentionally narrower than
+// the real migration -- only what authz.PGResolver and Repository.ListBoards
+// actually read.
 const authzTestSchema = `
 	CREATE TABLE household (
 		household_id BIGSERIAL PRIMARY KEY
@@ -68,7 +70,8 @@ const authzTestSchema = `
 		household_id  BIGINT REFERENCES household(household_id),
 		registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		retired_at    TIMESTAMPTZ
+		retired_at    TIMESTAMPTZ,
+		display_name  TEXT
 	);
 	CREATE INDEX idx_board_active ON board(board_id) WHERE retired_at IS NULL;
 

@@ -11,6 +11,11 @@ import (
 // healthFullMethod.
 const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 
+// setBoardDisplayNameFullMethod is SetBoardDisplayName's full gRPC method
+// name (FR57, #1349's Implementation-phase handler -- see server.go's
+// SetBoardDisplayName).
+const setBoardDisplayNameFullMethod = "/leaflab.api.v1.LeafLabAPI/SetBoardDisplayName"
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
 // registry for this service: every RPC that performs a write. A method
 // listed here with no corresponding entry in auditRegistrations fails
@@ -21,12 +26,7 @@ const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 // GetDeviceConfig, ListBoards and GetHealth are reads and are deliberately
 // absent. RetireBoard has no RPC surface yet (leaflab/api/repository.go's
 // RetireBoard is called directly by tests only, per #1337's scaffold) --
-// it will be added here in the task that gives it one. SetBoardDisplayName
-// (FR57, #1349's scaffolded RPC) is a write but has no server.go
-// implementation yet either -- it currently falls through to
-// pb.UnimplementedLeafLabAPIServer's codes.Unimplemented -- so it is also
-// deliberately absent here; its audit registration lands with the
-// Implementation-phase handler, not this scaffold.
+// it will be added here in the task that gives it one.
 //
 // This registry is scoped to audit coverage only. #1351 (NFR1.b) adds a
 // separate read/write-kind registry for authorization-conformance
@@ -35,14 +35,16 @@ const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 // independent, though worth a look for consolidation once #1351 lands.
 var declaredWriteMethods = []string{
 	pushDeviceConfigFullMethod,
+	setBoardDisplayNameFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
 // action/entity_kind its audit.Entry must carry (matched against
 // audit.Entry.Action/EntityKind at the call site -- see server.go's
-// PushDeviceConfig).
+// PushDeviceConfig and SetBoardDisplayName).
 var auditRegistrations = map[string]audit.Registration{
-	pushDeviceConfigFullMethod: {Action: "PushConfig", EntityKind: "device_config"},
+	pushDeviceConfigFullMethod:    {Action: "PushConfig", EntityKind: "device_config"},
+	setBoardDisplayNameFullMethod: {Action: "SetBoardDisplayName", EntityKind: "board"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry

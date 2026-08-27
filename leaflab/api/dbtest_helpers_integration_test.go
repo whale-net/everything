@@ -39,7 +39,9 @@ func authedCtx() context.Context {
 // mirror migration 015_ownership's board retirement columns/index (FR22.1,
 // FR22.4, FR22.5) so RetireBoard/GetBoardByID/ListBoards can be exercised
 // against real SQL without pulling in the full ownership schema those RPCs
-// don't touch.
+// don't touch. display_name mirrors migration 030_board_display_name's
+// plain nullable column (FR57) so ListBoards's display_name projection and
+// Repository.SetBoardDisplayName can be exercised the same way.
 //
 // audit_log mirrors migration 016_audit_log's column set (schema only --
 // no household table exists here, so target_household_id carries no FK,
@@ -55,7 +57,8 @@ const testSchema = `
 		device_id     VARCHAR(64) NOT NULL UNIQUE,
 		registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		retired_at    TIMESTAMPTZ
+		retired_at    TIMESTAMPTZ,
+		display_name  TEXT
 	);
 	CREATE INDEX idx_board_active ON board(board_id) WHERE retired_at IS NULL;
 
