@@ -302,3 +302,77 @@ WHERE bsc.version IS DISTINCT FROM (
     WHERE board_id = b.board_id AND accepted = TRUE
 );
 ```
+
+---
+
+## Granularity Tiers (FR71, NFR5)
+
+Three granularity tiers exist over `sensor_reading`: **raw**, **5-minute**
+(`sensor_reading_5m`), **hourly** (`sensor_reading_1h`). No tier coarser than
+hourly exists (A14). The two aggregate tiers are TimescaleDB continuous
+aggregates defined **directly on the hypertable**, with **no dimension
+join** — they are keyed by `(sensor_id, region_id, bucket_start)` only.
+Enrichment (region path, plant attribution) is applied above a tier, never
+inside its definition.
+
+A sensor that changes region mid-bucket produces more than one
+`(sensor_id, region_id)` row for that `bucket_start`, by construction — this
+is what makes an FR20 boundary partial visible in the aggregate rather than
+averaged away.
+
+**Pre-aggregated is not de-identified** (NFR17): a min/max over one sensor's
+bucket is two raw readings wearing a hat. Any future k-suppression happens
+above a tier, over contributors, never inherited from it.
+
+### Retention and serving limits
+
+Retention (how long a tier's data exists) and the serving cap (how long a
+window a caller may request from a tier) are different numbers:
+
+| Tier | Retention | Servable window |
+|---|---|---|
+| raw | ≥ 13 months (`RawRetentionFloor`) | ≤ 48 hours (`RawServingWindowCap`, NFR3.2) |
+| 5-minute | 90 days (`FiveMinuteRetention`) | same as retention |
+| hourly | indefinite | indefinite |
+
+An FR20 boundary partial inherits the retention of the coarsest tier it
+splits — indefinite at the hourly tier — independent of raw retention.
+
+### Tier resolution
+
+`leaflab/api/tier.go`'s `ResolveTier(requested, windowStart, windowEnd, now)`
+decides which tier answers a requested granularity over a window: a
+requested tier is a hint, not a contract, and the server coarsens — never
+serves a finer tier than requested — whenever the requested tier's retention
+or the 48-hour raw cap cannot serve the window. It returns both the tier and
+a human-readable reason, so a caller can always tell whether (and why)
+coarsening happened; the reason is populated even when no coarsening
+occurred.
+
+`Repository.GetSeriesAtTier(ctx, tier, sensorID, windowStart, windowEnd)` in
+`leaflab/api/repository.go` is the query path behind that decision: it reads
+`sensor_reading`, `sensor_reading_5m` or `sensor_reading_1h` directly,
+depending on `tier`, and returns `bucket_start`/min/max/sum/count rows
+(raw rows come back as one-row buckets). It does no attribution or
+measurement-type filtering — those are applied by the caller, above it.
+
+### Policy ordering
+
+Migration `025_granularity_tiers` also encodes NFR5's ordering constraint so
+it is enforced, not merely scheduled correctly by convention:
+
+- **Refresh never reaches into dropped raw.** Both tiers' continuous
+  aggregate policies use `start_offset`/`end_offset` on the order of hours,
+  far inside the 13-month raw floor. `verify_tier_policy_ordering()` asserts
+  this against the *live* policy configuration (not a hardcoded assumption),
+  raising if either tier's `end_offset` could ever reach past the raw
+  retention floor.
+- **Raw for a chunk is not dropped before every FR20 boundary capture in
+  that chunk has completed.** `enforce_raw_retention()` replaces a plain
+  `add_retention_policy()` on `sensor_reading`: it only drops chunks older
+  than the 13-month floor when `raw_retention_captures_complete(cutoff)`
+  also reports the cutoff's captures done. The ordering is stated against
+  *completion*, not the boundary instant. `raw_retention_captures_complete`
+  is a stub (always `TRUE`) until #1208 lands the FR20 boundary-capture
+  table and replaces its body to query it — until then nothing is
+  outstanding to block on, so the gate correctly holds open.

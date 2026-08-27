@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/pagetoken"
+	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -717,6 +718,92 @@ const (
 	DefaultPageSize = 50
 	MaxPageSize     = 1000
 )
+
+// TierReadingBucket is one bucketed row from a granularity tier (FR71,
+// NFR5): bucket_start/min/max/sum/count, keyed by sensor and region only.
+// Raw rows are reported as a bucket of one (BucketStart == the reading's own
+// recorded_at, MinValue == MaxValue == SumValue == the raw value,
+// ReadingCount == 1) so callers can treat every tier uniformly instead of
+// type-switching on Tier. Enrichment (attribution, plant/board identity) is
+// never applied here -- it happens above this function, per NFR5: aggregates
+// carry no dimension joins, and this is their thinnest possible caller.
+type TierReadingBucket struct {
+	SensorID     int64
+	RegionID     int64
+	BucketStart  time.Time
+	MinValue     float64
+	MaxValue     float64
+	SumValue     float64
+	ReadingCount int64
+}
+
+// GetSeriesAtTier queries the pre-aggregated source for the tier ResolveTier
+// selected (FR71/NFR5), for one sensor over [windowStart, windowEnd). It is
+// the real query path behind ResolveTier's decision: ResolveTier says which
+// tier answers and why; this is what actually answers from it.
+//
+// Every tier is queried directly against its own table -- sensor_reading,
+// sensor_reading_5m or sensor_reading_1h -- with no dimension join, matching
+// how the aggregates are defined (NFR5). RegionID is returned per bucket,
+// not filtered on: a sensor that moved regions mid-bucket has more than one
+// region_id in that bucket by construction (the aggregates are grouped by
+// sensor_id, region_id, bucket_start), and collapsing that here would hide
+// exactly the straddling case FR20's boundary capture exists to answer
+// exactly. Filtering by region, and any attribution above sensor identity,
+// is the caller's job.
+//
+// GRANULARITY_TIER_UNSPECIFIED has no query path: ResolveTier never returns
+// it (A14 -- an unspecified or coarser-than-hourly request resolves to
+// hourly), so a caller passing it here is a programming error, not a
+// coarsening decision, and is refused rather than silently guessed at.
+func (r *Repository) GetSeriesAtTier(ctx context.Context, tier pb.GranularityTier, sensorID int64, windowStart, windowEnd time.Time) ([]TierReadingBucket, error) {
+	var query string
+	switch tier {
+	case pb.GranularityTier_GRANULARITY_TIER_RAW:
+		query = `
+			SELECT sensor_id, region_id, recorded_at, value, value, value, 1
+			FROM sensor_reading
+			WHERE sensor_id = $1 AND valid = TRUE
+			  AND recorded_at >= $2 AND recorded_at < $3
+			ORDER BY recorded_at ASC`
+	case pb.GranularityTier_GRANULARITY_TIER_5_MINUTE:
+		query = `
+			SELECT sensor_id, region_id, bucket_start, min_value, max_value, sum_value, reading_count
+			FROM sensor_reading_5m
+			WHERE sensor_id = $1
+			  AND bucket_start >= $2 AND bucket_start < $3
+			ORDER BY bucket_start ASC`
+	case pb.GranularityTier_GRANULARITY_TIER_HOURLY:
+		query = `
+			SELECT sensor_id, region_id, bucket_start, min_value, max_value, sum_value, reading_count
+			FROM sensor_reading_1h
+			WHERE sensor_id = $1
+			  AND bucket_start >= $2 AND bucket_start < $3
+			ORDER BY bucket_start ASC`
+	default:
+		return nil, fmt.Errorf("get series at tier: no query path for tier %v", tier)
+	}
+
+	rows, err := r.db.Query(ctx, query, sensorID, windowStart, windowEnd)
+	if err != nil {
+		return nil, fmt.Errorf("get series at tier %v for sensor %d: %w", tier, sensorID, err)
+	}
+	defer rows.Close()
+
+	var buckets []TierReadingBucket
+	for rows.Next() {
+		var b TierReadingBucket
+		if err := rows.Scan(&b.SensorID, &b.RegionID, &b.BucketStart, &b.MinValue, &b.MaxValue, &b.SumValue, &b.ReadingCount); err != nil {
+			return nil, fmt.Errorf("scan tier %v bucket for sensor %d: %w", tier, sensorID, err)
+		}
+		buckets = append(buckets, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tier %v buckets for sensor %d: %w", tier, sensorID, err)
+	}
+
+	return buckets, nil
+}
 
 // GetSensorTimelines retrieves the three aligned timelines (name, hardware, region)
 // for a sensor identified by sensor_id. Returns all historical entries in order.
