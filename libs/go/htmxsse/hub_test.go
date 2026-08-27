@@ -22,6 +22,10 @@ type fakeTransport struct {
 	bindExchangeCalls []bindExchangeCall
 	bindExchangeFunc  func(string, []string) error
 	startErr          error
+	// startReturnsImmediately models *rmq.Consumer's real Start() contract:
+	// launch consumption in the background and return nil right away,
+	// rather than blocking until ctx is cancelled.
+	startReturnsImmediately bool
 	deliveries        []rmq.Message
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -51,6 +55,9 @@ func (f *fakeTransport) RegisterHandler(queue string, handler rmq.MessageHandler
 func (f *fakeTransport) Start(ctx context.Context) error {
 	if f.startErr != nil {
 		return f.startErr
+	}
+	if f.startReturnsImmediately {
+		return nil
 	}
 	<-ctx.Done()
 	return ctx.Err()
@@ -404,7 +411,7 @@ func TestFR1_ConstructionArguments(t *testing.T) {
 	var _ Transport = (*rmq.Consumer)(nil)
 }
 
-// Test 7: Exchange-declare arguments captured
+// Test 7: Exchange-declare arguments captured with configured exchange name
 func TestFR7_ExchangeDeclareArguments(t *testing.T) {
 	fakeTransport := &fakeTransport{}
 
@@ -412,7 +419,11 @@ func TestFR7_ExchangeDeclareArguments(t *testing.T) {
 		return fakeTransport, nil
 	}
 
-	config := Config{SubscriberBufferDepth: 10}
+	configuredExchange := "custom-exchange.htmxsse"
+	config := Config{
+		ExchangeName:         configuredExchange,
+		SubscriberBufferDepth: 10,
+	}
 	h := NewHub(attachFunc, config)
 	defer h.Close()
 
@@ -424,8 +435,184 @@ func TestFR7_ExchangeDeclareArguments(t *testing.T) {
 	call := fakeTransport.bindExchangeCalls[0]
 	fakeTransport.mu.Unlock()
 
-	require.Equal(t, "sse-exchange", call.exchange)
+	// Assert that the exchange name matches the configured value, not a hardcoded literal
+	require.Equal(t, configuredExchange, call.exchange)
 	require.Equal(t, []string{"#"}, call.routingKeys)
+}
+
+// Test 7b: Post-attach-failure backoff is exponential
+func TestFR1b_PostAttachFailureBackoffIsExponential(t *testing.T) {
+	mockClock := &mockClock{
+		now: time.Now(),
+	}
+	sleepDurations := []time.Duration{}
+	var sleepMutex sync.Mutex
+
+	mockClock.sleepFn = func(ctx context.Context, d time.Duration) error {
+		sleepMutex.Lock()
+		sleepDurations = append(sleepDurations, d)
+		sleepMutex.Unlock()
+		return nil
+	}
+
+	failingTransport := &fakeTransport{
+		startErr: fmt.Errorf("post-attach failure"),
+	}
+
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		// Always return the failing transport
+		return failingTransport, nil
+	}
+
+	config := Config{
+		ExchangeName:         "test-exchange",
+		SubscriberBufferDepth: 10,
+	}
+	h := NewHubWithClock(attachFunc, config, mockClock)
+	defer h.Close()
+
+	_, _ = h.Subscribe("topic-a")
+
+	// Let attach succeed but Start() fail multiple times
+	time.Sleep(200 * time.Millisecond)
+
+	sleepMutex.Lock()
+	durations := make([]time.Duration, len(sleepDurations))
+	copy(durations, sleepDurations)
+	sleepMutex.Unlock()
+
+	// Should have multiple sleep calls for post-attach failure backoff
+	require.Greater(t, len(durations), 0, "should have sleep calls for post-attach failure backoff")
+
+	// Verify exponential backoff: sleeps should generally increase in duration
+	// We expect: 100ms, 200ms, 400ms, etc. (or capped at 30s)
+	if len(durations) >= 2 {
+		// At least check that we're not resetting to 100ms immediately after each failure
+		hasExponentialPattern := false
+		for i := 0; i < len(durations)-1; i++ {
+			if durations[i] < durations[i+1] {
+				hasExponentialPattern = true
+				break
+			}
+		}
+		require.True(t, hasExponentialPattern, "should see exponential backoff in sleep durations: %v", durations)
+	}
+}
+
+// TestFR1b_DoesNotReattachAfterNonBlockingStartSucceeds guards against
+// attachWithRetry wrongly assuming Transport.Start blocks until the
+// transport ends. *rmq.Consumer (the production Transport) launches its
+// own goroutine and returns nil immediately, self-healing internally until
+// ctx is cancelled -- a Hub that treated that immediate nil return as
+// "attachment ended" would tear down and reattach every backoff interval,
+// leaking a brand new connection/consumer each cycle on top of the
+// still-running one.
+func TestFR1b_DoesNotReattachAfterNonBlockingStartSucceeds(t *testing.T) {
+	attachCalls := atomic.Int32{}
+	fakeTransport := &fakeTransport{startReturnsImmediately: true}
+
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		attachCalls.Add(1)
+		return fakeTransport, nil
+	}
+
+	config := Config{SubscriberBufferDepth: 10}
+	h := NewHub(attachFunc, config)
+	defer h.Close()
+
+	ch, _ := h.Subscribe("topic-a")
+
+	// Give attachWithRetry ample time to have looped multiple times if it
+	// were (incorrectly) reattaching after every non-blocking Start().
+	time.Sleep(300 * time.Millisecond)
+
+	require.Equal(t, int32(1), attachCalls.Load(), "a successful non-blocking Start() must not trigger reattachment")
+
+	// The single attached transport must still be the one delivering --
+	// proving the Hub kept using it rather than discarding it for a
+	// (never-created) replacement.
+	fakeTransport.deliver(context.Background(), rmq.Message{
+		RoutingKey: "topic-a",
+		Body:       []byte("still-alive"),
+	})
+	select {
+	case event := <-ch:
+		require.Equal(t, []byte("still-alive"), event.Body)
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected event from the single still-attached transport")
+	}
+}
+
+// TestFR1a_ConcurrentDeliveryAndUnsubscribeDoesNotPanic guards against
+// handleMessage sending to a subscriber's channel after releasing the read
+// lock, racing unsubscribe's close(sub.eventCh) under the write lock.
+// go test -race turns that race into a reliable "send on closed channel"
+// panic when delivery and unsubscribe interleave.
+func TestFR1a_ConcurrentDeliveryAndUnsubscribeDoesNotPanic(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+	config := Config{SubscriberBufferDepth: 1}
+	h := NewHub(attachFunc, config)
+	defer h.Close()
+
+	// One subscribe-deliver-unsubscribe trial per iteration, on a topic
+	// with exactly one live subscriber at a time and waited out before the
+	// next -- isolates the specific race (a delivery to THIS subscriber
+	// racing THIS subscriber's own unsubscribe) instead of piling up many
+	// concurrent subscribers on one growing list, which just produces lock
+	// contention unrelated to the bug under test.
+	for i := 0; i < 200; i++ {
+		_, unsubscribe := h.Subscribe("topic-a")
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			fakeTransport.deliver(context.Background(), rmq.Message{RoutingKey: "topic-a", Body: []byte("x")})
+		}()
+		go func() {
+			defer wg.Done()
+			unsubscribe()
+		}()
+		wg.Wait()
+	}
+}
+
+// TestClose_DoesNotDoubleCloseOrLeakSubscriberChannels guards against
+// Close()'s prior drain-or-close branch, which closed only empty
+// subscriber channels: a channel with a buffered event was left open
+// forever (leaking its reader), while an empty one was closed by Close()
+// and then closed AGAIN by the subscriber's own unsubscribe(), panicking.
+func TestClose_DoesNotDoubleCloseOrLeakSubscriberChannels(t *testing.T) {
+	fakeTransport := &fakeTransport{}
+	attachFunc := func(ctx context.Context) (Transport, error) {
+		return fakeTransport, nil
+	}
+	config := Config{SubscriberBufferDepth: 10}
+	h := NewHub(attachFunc, config)
+
+	ch, unsubscribe := h.Subscribe("topic-a")
+	time.Sleep(50 * time.Millisecond)
+
+	// Leave a buffered event in the channel before Close() -- exercises
+	// the non-empty-channel case the old logic leaked instead of closing.
+	fakeTransport.deliver(context.Background(), rmq.Message{RoutingKey: "topic-a", Body: []byte("buffered")})
+	time.Sleep(50 * time.Millisecond)
+
+	require.NotPanics(t, func() { require.NoError(t, h.Close()) })
+
+	// The channel must be closed -- draining its one buffered value first,
+	// then observing ok=false -- not left open forever.
+	_, ok := <-ch
+	if ok {
+		_, ok = <-ch
+	}
+	require.False(t, ok, "channel must be closed after Hub.Close(), not left open")
+
+	// unsubscribe() called after Close() already closed this channel must
+	// not double-close it.
+	require.NotPanics(t, unsubscribe)
 }
 
 // Test 8: FR1 subscription release

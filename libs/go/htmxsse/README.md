@@ -51,7 +51,8 @@ func main() {
     
     // Create the Hub with a default attach function
     config := htmxsse.DefaultConfig()
-    attachFunc := htmxsse.DefaultAttachFunc(conn)
+    exchangeName := "my-exchange"  // Configured by caller
+    attachFunc := htmxsse.DefaultAttachFunc(exchangeName, conn)
     hub := htmxsse.NewHub(attachFunc, config)
     defer hub.Close()
     
@@ -110,6 +111,12 @@ mux.HandleFunc("/events", htmxsse.Handler(hub, topics, fragment))
 
 ```go
 type Config struct {
+    // ExchangeName is the RabbitMQ exchange name for the Hub.
+    // Required: caller must configure this to match the exchange
+    // declared in the attach function (see DefaultAttachFunc).
+    // Example: "app-registry.htmxsse"
+    ExchangeName string
+    
     // HeartbeatInterval is the interval between heartbeats.
     // Default: 30 seconds
     // Heartbeats check if the fragment has changed; if unchanged,
@@ -136,6 +143,7 @@ type Config struct {
     // debounce to swallow the not-live indicator, hiding disconnection.
     AdvertisedRetryInterval time.Duration
 }
+```
 ```
 
 ### DefaultConfig
@@ -182,12 +190,12 @@ See `tools/app_registry/ENV.md` for the full set of environment variables the in
 
 ### Exchange Declaration
 
-The Hub declares the SSE exchange during transport attachment. The exchange signature is **byte-identical across every process** (FR0.7):
+The Hub binds to a caller-configured RabbitMQ exchange during transport attachment. The exchange name is configured via Config.ExchangeName and passed to the attach function. The exchange signature itself is **byte-identical across every process** (FR0.7):
 
 ```go
 // Declared by DefaultAttachFunc:
 ch.ExchangeDeclare(
-    "sse-exchange",     // exchange name
+    exchangeName,      // Caller-configured (e.g., "app-registry.htmxsse")
     "topic",            // kind (must be "topic" for routing-key-based topic routing)
     true,               // durable: yes (survives broker restart)
     false,              // autoDelete: no (must be explicitly deleted)
@@ -201,14 +209,14 @@ A mismatch in these arguments (typically durable=false when a restart erases mes
 
 ### Topic Derivation and Routing Keys
 
-Topics are derived from RabbitMQ routing keys. A publisher sends messages to `sse-exchange` with a routing key; the Hub binds with `#` (match all) and extracts the routing key as the topic:
+Topics are derived from RabbitMQ routing keys. A publisher sends messages to the configured exchange (via Config.ExchangeName) with a routing key; the Hub binds with `#` (match all) and extracts the routing key as the topic:
 
 ```go
 // Handler subscribes to:
 topics := []string{"promotion-updates", "inventory-changes"}
 
 // Publisher sends to:
-// exchange: "sse-exchange"
+    // exchange: <configured via Config.ExchangeName>
 // routing_key: "promotion-updates" → arrives at Handler as topic "promotion-updates"
 // routing_key: "inventory-changes" → arrives at Handler as topic "inventory-changes"
 ```
@@ -372,7 +380,7 @@ type AttachFunc func(context.Context) (Transport, error)
 
 A function that creates and returns a Transport (typically a RabbitMQ consumer). Called once; the Hub retries on transport failure.
 
-`DefaultAttachFunc(conn *rmq.Connection)` creates an attach function that declares the exchange and returns an ephemeral consumer.
+`DefaultAttachFunc(exchangeName string, conn *rmq.Connection)` creates an attach function that declares the specified exchange and returns an ephemeral consumer. The exchangeName must match the value configured in Config.ExchangeName.
 
 #### `Clock`
 
