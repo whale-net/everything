@@ -1,0 +1,15 @@
+"""LeafLab hardware key -- one canonical encoding for (i2c_address, mux_path, sensor_type) (FR18)."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "hwkey",
+    srcs = [
+        "address.go",
+        "doc.go",
+        "key.go",
+        "muxpath.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/hwkey",
+    visibility = ["//visibility:public"],
+)
