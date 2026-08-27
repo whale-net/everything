@@ -1,6 +1,6 @@
 """FR20 two-phase boundary capture: phase-one recorder (called from the placement writer) and phase-two completer (leaflab/processor). See capture.go's package doc comment."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "capture",
@@ -16,6 +16,40 @@ go_library(
         "//leaflab/api/tiers",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgconn",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-TimescaleDB integration coverage for Recorder/Completer's two-phase
+# boundary capture (FR20, A14, A17, NFR5) -- see
+# boundary_capture_integration_test.go's doc comment and
+# //libs/go/dbtest/README.md. Hand-written (not gazelle-generated), same
+# rationale and EXACT tag set as leaflab/api/placement's
+# move_integration_test target -- gazelle skips generating a rule for a file
+# gated behind `//go:build integration`. `# keep` tells a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api/capture:boundary_capture_integration_test --test_output=all
+go_test(
+    # keep
+    name = "boundary_capture_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["boundary_capture_integration_test.go"],
+    embed = [":capture"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/tiers",
+        "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
