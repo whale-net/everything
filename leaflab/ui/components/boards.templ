@@ -1,6 +1,8 @@
 package components
 
 import (
+	"fmt"
+	"net/url"
 	"strconv"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -17,13 +19,11 @@ import (
 // screen is marked, named, or documented as safe to expose beyond this
 // signed-in session (NFR19: private by default).
 //
-// Scaffold scope (#1330): last-seen renders as a raw unix-millis number
-// and next_page_token is only surfaced as a static hint, not a "load
-// more" control. Elapsed-time formatting computed from the response's
-// server_now (FR64) and wiring next_page_token into an actual keyset
-// "load more" request (FR61) are Implementation-phase work on this same
-// task.
-templ BoardsPage(user *htmxauth.UserInfo, boards []*pb.BoardInfo, nextPageToken string) {
+// serverNow is the same response's own Instant (never this BFF's local
+// clock), so last-seen renders as elapsed text against the same freshness
+// bound a programmatic gRPC caller reading the same response gets
+// (NFR18.2) -- see elapsed.go's formatElapsed.
+templ BoardsPage(user *htmxauth.UserInfo, boards []*pb.BoardInfo, serverNow *pb.Instant, nextPageToken string) {
 	@Shell("Boards", user) {
 		<div class="card bg-base-100 shadow">
 			<div class="card-body">
@@ -36,25 +36,55 @@ templ BoardsPage(user *htmxauth.UserInfo, boards []*pb.BoardInfo, nextPageToken 
 							<th class="text-right">Last seen</th>
 						</tr>
 					</thead>
-					<tbody>
-						if len(boards) == 0 {
+					<tbody id="boards-tbody">
+						if len(boards) == 0 && nextPageToken == "" {
 							<tr>
 								<td colspan="3" class="text-sm opacity-60 p-4">No boards yet.</td>
 							</tr>
 						}
-						for _, b := range boards {
-							<tr class="hover">
-								<td class="font-mono text-xs" title="Device identifier — support use only">{ b.GetDeviceId() }</td>
-								<td class="font-mono text-sm">{ strconv.FormatInt(b.GetBoardId(), 10) }</td>
-								<td class="text-right opacity-60" title="Elapsed-time rendering lands in a later phase of this task">{ strconv.FormatInt(b.GetLastSeenAt().GetUnixMillis(), 10) }</td>
-							</tr>
-						}
+						@BoardsRows(boards, serverNow, nextPageToken)
 					</tbody>
 				</table>
-				if nextPageToken != "" {
-					<p class="text-xs opacity-60 mt-4">More boards available -- paging lands in a later phase of this task.</p>
-				}
 			</div>
 		</div>
+	}
+}
+
+// BoardsRows renders one <tr> per board plus, when nextPageToken is
+// non-empty, a trailing "Load more" row (FR61's keyset "load more"
+// continuation). The button's hx-get re-requests this same fragment for
+// the next page and replaces its own row's outerHTML with the response --
+// htmx's standard click-to-load shape, so paging in another screenful
+// never accumulates an unbounded list client- or server-side: each click
+// fetches exactly one more server-capped page, and the only place the
+// accumulated rows live is the browser's own DOM.
+//
+// BoardsPage's tbody renders this directly for page one; handlers_boards.go's
+// handleBoardsRows renders it standalone (no page shell) for every
+// subsequent "Load more" click.
+templ BoardsRows(boards []*pb.BoardInfo, serverNow *pb.Instant, nextPageToken string) {
+	for _, b := range boards {
+		<tr class="hover">
+			<td class="font-mono text-xs" title="Device identifier — support use only">{ b.GetDeviceId() }</td>
+			<td class="font-mono text-sm">{ strconv.FormatInt(b.GetBoardId(), 10) }</td>
+			<td class="text-right opacity-60" title={ absoluteInstantTitle(b.GetLastSeenAt()) }>
+				{ formatElapsed(instantToTime(serverNow), instantToTime(b.GetLastSeenAt())) }
+			</td>
+		</tr>
+	}
+	if nextPageToken != "" {
+		<tr id="boards-load-more">
+			<td colspan="3" class="text-center p-2">
+				<button
+					type="button"
+					class="btn btn-ghost btn-sm"
+					hx-get={ fmt.Sprintf("/boards/rows?page_token=%s", url.QueryEscape(nextPageToken)) }
+					hx-target="#boards-load-more"
+					hx-swap="outerHTML"
+				>
+					Load more
+				</button>
+			</td>
+		</tr>
 	}
 }
