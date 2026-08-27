@@ -176,24 +176,46 @@ CREATE OR REPLACE FUNCTION verify_tier_policy_ordering()
 RETURNS BOOLEAN AS $$
 DECLARE
     raw_retention_floor INTERVAL := INTERVAL '13 months';
+    expected_tiers TEXT[] := ARRAY['sensor_reading_5m', 'sensor_reading_1h'];
     rec RECORD;
+    checked_count INT := 0;
 BEGIN
+    -- timescaledb_information.jobs.hypertable_name for a
+    -- policy_refresh_continuous_aggregate job holds the continuous
+    -- aggregate's own view name (e.g. 'sensor_reading_5m'), not the
+    -- underlying materialization hypertable's internal name -- so this
+    -- correlates directly, with no join against
+    -- timescaledb_information.continuous_aggregates needed or correct
+    -- here (continuous_aggregates.hypertable_name is the *source*
+    -- hypertable, 'sensor_reading' for both tiers, and therefore not a
+    -- usable key -- this was the original defect).
     FOR rec IN
         SELECT
-            ca.hypertable_name AS cagg_name,
+            js.hypertable_name AS cagg_name,
             (js.config->>'end_offset')::INTERVAL AS end_offset
         FROM timescaledb_information.jobs js
-        JOIN timescaledb_information.continuous_aggregates ca
-          ON ca.materialization_hypertable_name = js.hypertable_name
         WHERE js.proc_name = 'policy_refresh_continuous_aggregate'
-          AND ca.hypertable_name IN ('sensor_reading_5m', 'sensor_reading_1h')
+          AND js.hypertable_name = ANY (expected_tiers)
     LOOP
+        checked_count := checked_count + 1;
+
         IF rec.end_offset IS NULL OR rec.end_offset > raw_retention_floor THEN
             RAISE EXCEPTION
                 'tier % refresh end_offset % reaches past the % raw retention floor -- a refresh could be scheduled against dropped raw',
                 rec.cagg_name, rec.end_offset, raw_retention_floor;
         END IF;
     END LOOP;
+
+    -- Guard against this check silently passing again in the future
+    -- because a rename or catalog-shape change makes the predicate above
+    -- stop matching: it must find exactly the refresh jobs it expects,
+    -- not merely find zero and report success by default (the shape of
+    -- the original defect).
+    IF checked_count <> array_length(expected_tiers, 1) THEN
+        RAISE EXCEPTION
+            'verify_tier_policy_ordering: expected % continuous aggregate refresh policies (%), found % -- the catalog predicate may no longer match, which would let this check silently pass without verifying anything',
+            array_length(expected_tiers, 1), array_to_string(expected_tiers, ', '), checked_count;
+    END IF;
 
     RETURN TRUE;
 END;
