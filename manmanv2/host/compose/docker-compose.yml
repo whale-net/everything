@@ -26,11 +26,13 @@ services:
   # `docker compose`, and ../RESOLVER.md for host-manager-specific notes
   # (bootstrap order, auth gap).
   #
-  # Its GRPC_AUTH_* values come from separate APP_REGISTRY_GRPC_AUTH_* .env
-  # vars, not the GRPC_AUTH_* ones above -- host-manager authenticates to
-  # the ManMan control-plane API, this authenticates to App Registry, and
-  # those are two different Keycloak clients. Do not point both at the
-  # same credential.
+  # GetEnvironmentState is a public read path in App Registry (no auth
+  # required, by design -- see RESOLVER.md "Auth"), so GRPC_AUTH_MODE
+  # defaults to none here. If your App Registry deployment is reachable
+  # only over a private/trusted network that's sufficient. The
+  # APP_REGISTRY_GRPC_AUTH_* vars are separate from host-manager's own
+  # GRPC_AUTH_* above (a different service, a different Keycloak client)
+  # and only need setting if you choose to require auth anyway.
   host-manager-resolver:
     image: ${RESOLVER_REPOSITORY:-ghcr.io/whale-net/compose-resolver}:${RESOLVER_VERSION:-latest}
     container_name: manmanv2-host-manager-resolver
@@ -49,7 +51,7 @@ services:
       LOG_SERVICE_NAME: host-manager-resolver
       LOG_DOMAIN: manmanv2
       OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
-      GRPC_AUTH_MODE: ${APP_REGISTRY_GRPC_AUTH_MODE:-oidc}
+      GRPC_AUTH_MODE: ${APP_REGISTRY_GRPC_AUTH_MODE:-none}
       GRPC_AUTH_TOKEN_URL: ${APP_REGISTRY_GRPC_AUTH_TOKEN_URL}
       GRPC_AUTH_CLIENT_ID: ${APP_REGISTRY_GRPC_AUTH_CLIENT_ID}
       GRPC_AUTH_CLIENT_SECRET: ${APP_REGISTRY_GRPC_AUTH_CLIENT_SECRET}

@@ -53,20 +53,25 @@ before the resolver's first poll tick needs it.
 
 ### Auth
 
-`host-manager` and the resolver each hold their own Keycloak client
-credential, kept as separate `.env` variables
-(`GRPC_AUTH_CLIENT_*` for `host-manager`'s connection to the ManMan
-control-plane API, `APP_REGISTRY_GRPC_AUTH_CLIENT_*` for the resolver's
-connection to App Registry — see `compose/docker-compose.yml`). Do not
-point both at the same client id/secret: they authenticate to different
-services and, in most Keycloak setups, different realms/audiences.
+`GetEnvironmentState` (what the resolver calls) is a public read path in
+App Registry — no credential required, by design, regardless of App
+Registry's own `GRPC_AUTH_MODE` (see
+`tools/app_registry/architecture/13-authorization.md` "Public Read Paths",
+issue #853: deployment tools are meant to query promotion state without
+provisioning Keycloak credentials, the same way you'd pull from a
+container registry anonymously). `APP_REGISTRY_GRPC_AUTH_MODE=none` in
+`.env.example` reflects that; you don't need to provision anything to
+adopt this.
 
-This repo does not yet provision a dedicated read-only Keycloak client id
-for the resolver (existing App Registry client ids —
+If your App Registry deployment isn't otherwise network-isolated and you
+want the resolver to authenticate anyway, `APP_REGISTRY_GRPC_AUTH_CLIENT_*`
+is available for that — but it must be a **different** Keycloak client
+than `host-manager`'s own `GRPC_AUTH_CLIENT_*` (a different service,
+different audience). This repo doesn't provision a read-scoped client id
+for that case today (existing App Registry client ids —
 `app-registry-builder-<env>` and `app-registry-promoter-<env>` — are both
-write-capable). Provision one scoped to read-only before using
-`APP_REGISTRY_GRPC_AUTH_MODE=oidc` in production. For local testing,
-`APP_REGISTRY_GRPC_AUTH_MODE=none` matches App Registry's own dev mode.
+write-capable); you'd need to provision your own, though it buys you
+nothing `GetEnvironmentState` doesn't already grant to anonymous callers.
 
 ## Security
 

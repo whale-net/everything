@@ -86,14 +86,20 @@ crash-looping when the app has no real health endpoint.
 
 ### Auth
 
-`GetEnvironmentState` only needs a read-capable credential (see
-`tools/app_registry/architecture/` for the PromotionRegistry role model —
-reads are open to any authenticated client, writes are role-gated). This
-repo does not yet provision a dedicated read-only Keycloak client id for
-this purpose (existing ones are `app-registry-builder-<env>` and
-`app-registry-promoter-<env>`, both write-capable) — provision one scoped
-to read-only before using `GRPC_AUTH_MODE=oidc` in production. For local
-testing, `GRPC_AUTH_MODE=none` matches App Registry's own dev mode.
+`GetEnvironmentState` is a public read path in App Registry — no
+credential required, by design, regardless of App Registry's own
+`GRPC_AUTH_MODE` (see `tools/app_registry/architecture/13-authorization.md`
+"Public Read Paths", issue #853: deployment tools are meant to query
+promotion state without provisioning Keycloak credentials, the same way
+you'd pull from a container registry anonymously). `GRPC_AUTH_MODE=none`
+(the default here) reflects that.
+
+If you still want the resolver to authenticate — e.g. defense in depth —
+`GRPC_AUTH_MODE=oidc` plus the other `GRPC_AUTH_*` vars work the same as
+every other client in this repo, but this repo doesn't provision a
+read-scoped client id for it (existing ones — `app-registry-builder-<env>`
+and `app-registry-promoter-<env>` — are both write-capable), and it buys
+you nothing `GetEnvironmentState` doesn't already grant anonymously.
 
 ## Security
 
