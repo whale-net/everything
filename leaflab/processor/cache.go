@@ -1,6 +1,10 @@
 package main
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/whale-net/everything/leaflab/invalidation"
+)
 
 // SensorInfo holds the DB IDs needed to write a sensor_reading row.
 type SensorInfo struct {
@@ -113,6 +117,30 @@ func (c *SensorCache) ReplaceAll(entries map[string]map[string]SensorInfo) {
 		fresh[deviceID] = copied
 	}
 	c.devices = fresh
+}
+
+// ApplyInvalidation applies a single FR73 invalidation.Event to cache,
+// evicting exactly the cache key the event describes:
+//
+//   - invalidation.KindRegion / invalidation.KindIdentity evict
+//     ev.DeviceID/ev.SensorName -- the cache key the change was observed
+//     under.
+//   - invalidation.KindName (a rename) evicts ev.DeviceID/ev.PriorSensorName
+//     -- the cache is keyed device_id -> sensor_name, so a rename's *new*
+//     name was never a key to begin with; evicting the prior one is what
+//     prevents the orphaned entry SensorCache.Invalidate's doc comment
+//     describes.
+//
+// This is a package-level function, not a method on MessageHandler or
+// SensorCache, precisely so both main.go's Subscriber.Start handler and a
+// test can call the exact same decision logic without needing a real
+// broker, a MessageHandler, or any of MessageHandler's other dependencies.
+func ApplyInvalidation(cache *SensorCache, ev invalidation.Event) {
+	if ev.Kind == invalidation.KindName {
+		cache.Invalidate(ev.DeviceID, ev.PriorSensorName)
+		return
+	}
+	cache.Invalidate(ev.DeviceID, ev.SensorName)
 }
 
 // Get returns the SensorInfo for a sensor, and whether it was found.

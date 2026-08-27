@@ -113,11 +113,7 @@ func run() error {
 	}
 	defer invalidationSub.Close() //nolint:errcheck
 	if err := invalidationSub.Start(appCtx, func(_ context.Context, ev invalidation.Event) {
-		if ev.Kind == invalidation.KindName {
-			cache.Invalidate(ev.DeviceID, ev.PriorSensorName)
-			return
-		}
-		cache.Invalidate(ev.DeviceID, ev.SensorName)
+		ApplyInvalidation(cache, ev)
 	}); err != nil {
 		return fmt.Errorf("failed to start invalidation subscriber: %w", err)
 	}

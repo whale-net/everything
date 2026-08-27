@@ -9,6 +9,7 @@ import (
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/hwkey"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -773,4 +774,220 @@ func TestHandleConfigAck_RejectedSkipsApplyRegions(t *testing.T) {
 	if _, ok := h.cache.GetConfigVersion("leaflab-aabbccdd"); ok {
 		t.Error("config version should not be set in cache after rejected ack")
 	}
+}
+
+// --- FR73: cross-process cache invalidation (ApplyInvalidation, SensorCache
+// eviction, and the bounded staleness backstop) ---
+//
+// The cross-process broadcast itself (a real RabbitMQ fanout exchange, the
+// every-replica property, publisher/subscriber reconnect after a connection
+// drop) needs a real broker and is covered by
+// leaflab/processor/invalidation_integration_test.go instead -- see that
+// file's doc comment. The tests below cover the pure decision logic every
+// process runs once it has received (or, for the backstop, failed to
+// receive) an event: which cache key to evict, and that ReplaceAll's full
+// replace (not Load's additive merge) is what makes a dropped rename event
+// self-heal instead of leaving an orphan forever.
+
+func int64ptr(v int64) *int64 { return &v }
+
+// TestApplyInvalidation_RegionOrIdentityEvictsObservedKey verifies that a
+// region or identity invalidation.Event evicts the cache entry under the
+// key the event itself carries (DeviceID/SensorName) -- the common case,
+// contrasted with the rename case below where the key to evict is *not*
+// the one the event's own SensorName field names.
+func TestApplyInvalidation_RegionOrIdentityEvictsObservedKey(t *testing.T) {
+	for _, kind := range []invalidation.Kind{invalidation.KindRegion, invalidation.KindIdentity} {
+		t.Run(string(kind), func(t *testing.T) {
+			cache := NewSensorCache()
+			cache.Set("leaflab-aabbccdd", "temp", SensorInfo{SensorID: 1, RegionID: int64ptr(10)})
+
+			ApplyInvalidation(cache, invalidation.Event{
+				Kind:       kind,
+				DeviceID:   "leaflab-aabbccdd",
+				SensorName: "temp",
+			})
+
+			if _, ok := cache.Get("leaflab-aabbccdd", "temp"); ok {
+				t.Fatalf("expected %s invalidation to evict the cache entry, but it is still present", kind)
+			}
+		})
+	}
+}
+
+// TestApplyInvalidation_RenameEvictsPriorNameOnly is the load-bearing
+// rename-case test: the cache is keyed device_id -> sensor_name, so a
+// rename's *new* name (Event.SensorName) was never a cache key to begin
+// with -- what must be evicted is Event.PriorSensorName, or the entry under
+// the old name is an orphan nothing else ever touches (see
+// SensorCache.Invalidate's doc comment). It also asserts the new-name entry
+// (however it got there -- a concurrent handleManifest, or a prior
+// cache-miss DB lookup) is left untouched by this event.
+func TestApplyInvalidation_RenameEvictsPriorNameOnly(t *testing.T) {
+	cache := NewSensorCache()
+	cache.Set("leaflab-aabbccdd", "old_light", SensorInfo{SensorID: 5})
+	cache.Set("leaflab-aabbccdd", "new_light", SensorInfo{SensorID: 5})
+
+	ApplyInvalidation(cache, invalidation.Event{
+		Kind:            invalidation.KindName,
+		DeviceID:        "leaflab-aabbccdd",
+		SensorName:      "new_light",
+		PriorSensorName: "old_light",
+	})
+
+	if _, ok := cache.Get("leaflab-aabbccdd", "old_light"); ok {
+		t.Fatal("expected rename invalidation to evict the prior-name entry, but it left a stale orphan")
+	}
+	if info, ok := cache.Get("leaflab-aabbccdd", "new_light"); !ok || info.SensorID != 5 {
+		t.Fatalf("rename invalidation must not evict/alter the new-name entry, got %+v (ok=%v)", info, ok)
+	}
+}
+
+// TestSensorCache_ReplaceAll_ClearsOrphanedPriorNameEntry is the backstop's
+// load-bearing test: it reproduces the exact state a *dropped* rename
+// invalidation.Event leaves behind (an orphaned entry under the sensor's
+// prior name -- see TestApplyInvalidation_RenameEvictsPriorNameOnly above
+// for the event that would normally have cleared it) and asserts that
+// ReplaceAll, given only current DB state (which has no reason to ever
+// mention the prior name), evicts that orphan. This is precisely the
+// property Load (an additive merge, used only for the one-time startup
+// pre-warm) does not have -- see the contrasting test below.
+func TestSensorCache_ReplaceAll_ClearsOrphanedPriorNameEntry(t *testing.T) {
+	cache := NewSensorCache()
+	// Simulates the cache's state immediately after a rename whose
+	// invalidation.Event never arrived (e.g. lost during a RabbitMQ
+	// reconnect window -- see leaflab/invalidation/subscriber.go's Start
+	// doc comment): the entry under the sensor's prior name is still here,
+	// because nothing ever told this process to evict it.
+	cache.Set("leaflab-aabbccdd", "old_light", SensorInfo{SensorID: 5})
+
+	// A backstop reload snapshots current DB state, which -- after the
+	// rename actually committed -- only has the sensor under its new name.
+	cache.ReplaceAll(map[string]map[string]SensorInfo{
+		"leaflab-aabbccdd": {
+			"new_light": {SensorID: 5},
+		},
+	})
+
+	if _, ok := cache.Get("leaflab-aabbccdd", "old_light"); ok {
+		t.Fatal("ReplaceAll must fully replace the cached set, but the orphaned prior-name entry survived")
+	}
+	if info, ok := cache.Get("leaflab-aabbccdd", "new_light"); !ok || info.SensorID != 5 {
+		t.Fatalf("expected new_light -> SensorID 5 after ReplaceAll, got %+v (ok=%v)", info, ok)
+	}
+}
+
+// TestSensorCache_Load_DoesNotClearOrphanedPriorNameEntry contrasts the
+// previous test: Load is an additive merge (by design -- see its doc
+// comment, it's used only for the one-time startup pre-warm and must not
+// clobber entries a concurrent handleManifest just wrote). If
+// RunCacheBackstop ever regressed to calling Load instead of ReplaceAll, a
+// dropped rename event's orphan would survive every backstop cycle forever
+// -- this test pins down why that regression would be silent without a
+// test like this one.
+func TestSensorCache_Load_DoesNotClearOrphanedPriorNameEntry(t *testing.T) {
+	cache := NewSensorCache()
+	cache.Set("leaflab-aabbccdd", "old_light", SensorInfo{SensorID: 5})
+
+	cache.Load(map[string]map[string]SensorInfo{
+		"leaflab-aabbccdd": {
+			"new_light": {SensorID: 5},
+		},
+	})
+
+	if _, ok := cache.Get("leaflab-aabbccdd", "old_light"); !ok {
+		t.Fatal("expected Load's additive merge to leave the orphaned prior-name entry in place (contrast with ReplaceAll)")
+	}
+}
+
+// fakeCacheLoader is a SensorCacheLoader test double for RunCacheBackstop /
+// reloadCache that returns a fixed snapshot, standing in for a database
+// read.
+type fakeCacheLoader struct {
+	sensors  map[string]map[string]SensorInfo
+	versions map[string]int64
+}
+
+func (f *fakeCacheLoader) LoadSensorCache(_ context.Context) (map[string]map[string]SensorInfo, error) {
+	return f.sensors, nil
+}
+
+func (f *fakeCacheLoader) LoadConfigVersionCache(_ context.Context) (map[string]int64, error) {
+	return f.versions, nil
+}
+
+// TestReloadCache_SelfHealsDroppedRenameEvent exercises reloadCache (the
+// unit RunCacheBackstop calls on each tick) directly against the dropped-
+// rename scenario, and records how long the reload itself took -- the
+// per-cycle cost that, multiplied by however many ticks a paused Subscriber
+// misses, determines how long a dropped event stays wrong for (bounded by
+// Config.CacheBackstopInterval, not by this reload call).
+func TestReloadCache_SelfHealsDroppedRenameEvent(t *testing.T) {
+	cache := NewSensorCache()
+	cache.Set("leaflab-aabbccdd", "old_light", SensorInfo{SensorID: 5})
+
+	loader := &fakeCacheLoader{
+		sensors: map[string]map[string]SensorInfo{
+			"leaflab-aabbccdd": {"new_light": {SensorID: 5}},
+		},
+		versions: map[string]int64{"leaflab-aabbccdd": 1},
+	}
+
+	start := time.Now()
+	reloadCache(context.Background(), loader, cache, nil)
+	elapsed := time.Since(start)
+	t.Logf("backstop reload restored correctness in %s", elapsed)
+
+	if _, ok := cache.Get("leaflab-aabbccdd", "old_light"); ok {
+		t.Fatal("backstop reload did not clear the orphaned prior-name entry left by the dropped rename event")
+	}
+	if _, ok := cache.Get("leaflab-aabbccdd", "new_light"); !ok {
+		t.Fatal("backstop reload did not restore the current entry")
+	}
+	if v, ok := cache.GetConfigVersion("leaflab-aabbccdd"); !ok || v != 1 {
+		t.Fatalf("backstop reload did not restore the config version cache, got %d (ok=%v)", v, ok)
+	}
+}
+
+// TestRunCacheBackstop_SelfHealsWithinInterval runs the real ticker-driven
+// RunCacheBackstop loop (not just one reloadCache call) against a short
+// interval, simulating a Subscriber "paused past the bound" (see this
+// package's BUILD.bazel doc comment and the issue's Testing criteria): no
+// invalidation.Event is ever delivered here, so the cache would stay wrong
+// forever without RunCacheBackstop running in the background. It records
+// how long self-healing actually took.
+func TestRunCacheBackstop_SelfHealsWithinInterval(t *testing.T) {
+	cache := NewSensorCache()
+	cache.Set("leaflab-aabbccdd", "old_light", SensorInfo{SensorID: 5})
+
+	loader := &fakeCacheLoader{
+		sensors: map[string]map[string]SensorInfo{
+			"leaflab-aabbccdd": {"new_light": {SensorID: 5}},
+		},
+	}
+
+	const backstopInterval = 20 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	go RunCacheBackstop(ctx, backstopInterval, loader, cache, nil)
+
+	deadline := time.NewTimer(1 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_, hasNew := cache.Get("leaflab-aabbccdd", "new_light")
+		_, hasOld := cache.Get("leaflab-aabbccdd", "old_light")
+		if hasNew && !hasOld {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("backstop did not self-heal the dropped rename event within 1s (backstop interval %s)", backstopInterval)
+		case <-ticker.C:
+		}
+	}
+	t.Logf("backstop self-healed the dropped rename event in %s (backstop interval %s)", time.Since(start), backstopInterval)
 }
