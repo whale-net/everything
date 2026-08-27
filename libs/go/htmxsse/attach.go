@@ -15,7 +15,8 @@ import (
 // - maxMessages=0 (no length limit)
 //
 // This ensures every process replica receives every event independently.
-func DefaultAttachFunc(conn *rmq.Connection) AttachFunc {
+// The exchangeName parameter must match the exchange name configured in the Hub's Config.
+func DefaultAttachFunc(exchangeName string, conn *rmq.Connection) AttachFunc {
 	return func(ctx context.Context) (Transport, error) {
 		// Declare the exchange as part of the attach path (FR0.7)
 		ch, err := conn.Channel()
@@ -24,7 +25,7 @@ func DefaultAttachFunc(conn *rmq.Connection) AttachFunc {
 		}
 		defer ch.Close()
 
-		err = ch.ExchangeDeclare("sse-exchange", "topic", true, false, false, false, nil)
+		err = ch.ExchangeDeclare(exchangeName, "topic", true, false, false, false, nil)
 		if err != nil {
 			return nil, err
 		}
