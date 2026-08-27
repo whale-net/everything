@@ -164,3 +164,14 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 		ServerNow: contract.Now(),
 	}, nil
 }
+
+// GetHealth is the only anonymous RPC in this service (FR63). It reports
+// exactly one field -- up or degraded -- and nothing else: no version, no
+// dependency names, no per-dependency detail.
+//
+// Scaffold: always reports HEALTH_UP. Probing the pgx pool and the
+// RabbitMQ/MQTT connection to report HEALTH_DEGRADED lands in the
+// Implementation phase (FR63.1).
+func (s *LeafLabAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*pb.GetHealthResponse, error) {
+	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
+}

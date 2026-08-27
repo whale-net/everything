@@ -6,6 +6,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "logging_interceptor.go",
         "main.go",
         "repository.go",
         "server.go",
@@ -17,11 +18,14 @@ go_library(
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
+        "//libs/go/grpcauth",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//reflection",
         "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",

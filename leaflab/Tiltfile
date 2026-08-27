@@ -191,6 +191,10 @@ spec:
           value: "{rabbitmq_url}"
         - name: PG_DATABASE_URL
           value: "{pg_url}"
+        - name: LEAFLAB_API_AUTH_MODE
+          value: "none"
+        - name: LEAFLAB_API_DEV_MODE
+          value: "true"
 ---
 apiVersion: v1
 kind: Service
