@@ -17,6 +17,7 @@ import (
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/hwkey"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -111,16 +112,23 @@ type LeafLabAPIServer struct {
 	// not expose its connection's liveness. May be nil in tests that don't
 	// exercise GetHealth -- see GetHealth's nil handling.
 	rmqConn *rmq.Connection
-	logger  *slog.Logger
+	// invalidationPub broadcasts FR73 invalidation events after every
+	// sensor-affecting write this server commits, so leaflab/processor's
+	// SensorCache (and, from Phase 4, the API's own bounded-wait
+	// observability) never keeps serving a stale cached view. See
+	// leaflab/invalidation's doc comment.
+	invalidationPub *invalidation.Publisher
+	logger          *slog.Logger
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, invalidationPub *invalidation.Publisher, logger *slog.Logger) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
-		repo:      repo,
-		authzSvc:  authzSvc,
-		publisher: publisher,
-		rmqConn:   rmqConn,
-		logger:    logger,
+		repo:            repo,
+		authzSvc:        authzSvc,
+		publisher:       publisher,
+		rmqConn:         rmqConn,
+		invalidationPub: invalidationPub,
+		logger:          logger,
 	}
 }
 
@@ -586,6 +594,23 @@ func (s *LeafLabAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSenso
 	if err := s.repo.RewireSensorHW(ctx, sensorID, hw); err != nil {
 		s.logger.Error("rewire sensor failed", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID, "error", err)
 		return nil, contract.Internal("rewire_sensor", "", "Could not rewire this sensor right now. Please try again.")
+	}
+
+	// FR73: publish only after RewireSensorHW's write has committed (see
+	// invalidation.Publisher.Publish's doc comment) -- never before. A
+	// publish failure here does not fail the RPC: the write already
+	// committed, and the bounded staleness backstop (leaflab/processor's
+	// periodic re-load) self-heals a dropped event.
+	if s.invalidationPub != nil {
+		if err := s.invalidationPub.Publish(ctx, invalidation.Event{
+			Kind:       invalidation.KindIdentity,
+			DeviceID:   req.DeviceId,
+			SensorID:   sensorID,
+			SensorName: req.Name,
+			ObservedAt: time.Now(),
+		}); err != nil {
+			s.logger.Warn("failed to publish invalidation event for rewire", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID, "error", err)
+		}
 	}
 
 	s.logger.Info("sensor rewired", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID)

@@ -4,6 +4,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "processor_lib",
     srcs = [
+        "backstop.go",
         "cache.go",
         "config.go",
         "handler.go",
@@ -17,6 +18,7 @@ go_library(
         "//firmware/proto:firmwarepb",
         "//leaflab/api/audit",
         "//leaflab/hwkey",
+        "//leaflab/invalidation",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
@@ -40,6 +42,7 @@ go_test(
     deps = [
         "//firmware/proto:firmwarepb",
         "//leaflab/hwkey",
+        "//leaflab/invalidation",
         "@org_golang_google_protobuf//proto",
     ],
 )
@@ -139,6 +142,84 @@ go_test(
     ],
     deps = [
         "//libs/go/dbtest",
+    ],
+)
+
+# Real-RabbitMQ integration coverage for FR73/NFR15's cross-process
+# invalidation broadcast: every-replica fanout and publisher/subscriber
+# reconnect after a connection drop -- see
+# invalidation_integration_test.go's doc comment and
+# //libs/go/dbtest/README.md for why this pattern (testcontainers-go,
+# "manual" Bazel target) is used. Hand-written (not gazelle-generated): the
+# test file is gated behind `//go:build integration`, which gazelle skips
+# when scanning for go_test srcs. Same tag set as
+# //leaflab/processor:hw_history_integration_test (see that target's
+# comment for what each tag does). `# keep` markers tell a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/processor:invalidation_integration_test --test_output=all
+go_test(
+    # keep
+    name = "invalidation_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["invalidation_integration_test.go"],
+    embed = [":processor_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/invalidation",
+        "//libs/go/rmq",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
+    ],
+)
+
+# Real-Postgres integration coverage for FR73's load-bearing property and
+# defect 2's closure: a region assignment commits (by a second process, or
+# by this process's own ApplyConfigRegions), this process's SensorCache is
+# invalidated, and the very next reading -- via a real
+# Repository.GetSensor/InsertReading, not stubRepo's hardcoded not-found --
+# is stamped with the new region. See
+# cross_process_defect_integration_test.go's doc comment and
+# //libs/go/dbtest/README.md. Same pattern/tag set as
+# //leaflab/processor:hw_history_integration_test (see that target's
+# comment for what each tag does). `# keep` markers tell a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/processor:cross_process_defect_integration_test --test_output=all
+go_test(
+    # keep
+    name = "cross_process_defect_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["cross_process_defect_integration_test.go"],
+    embed = [":processor_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
+        "//leaflab/invalidation",
+        "//libs/go/dbtest",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 

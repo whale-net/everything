@@ -188,7 +188,7 @@ func newIdentityTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: identitySchema})
 	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, nil, discardLogger()), db.Pool
 }
 
 func insertSensorType(t *testing.T, pool *pgxpool.Pool, name, unit string) int64 {

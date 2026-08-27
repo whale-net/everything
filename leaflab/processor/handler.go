@@ -10,6 +10,7 @@ import (
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/hwkey"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -37,9 +38,11 @@ type SensorRepository interface {
 	// skipped, not failed: it is returned in the RegionApplySkip slice
 	// (each carrying an audit trail per FR8, written by the
 	// implementation) rather than aborting the remaining entries, and
-	// remaining valid entries are still applied. See repository.go's
+	// remaining valid entries are still applied. Also returns every sensor
+	// whose region_id actually changed (RegionChange), for FR73's
+	// cross-process invalidation broadcast -- see repository.go's
 	// ApplyConfigRegions.
-	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) ([]RegionApplySkip, error)
+	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) ([]RegionApplySkip, []RegionChange, error)
 	// CloseRemovedSensorHWHistory is FR82.6's ack-time close: for every
 	// entry this accepted version's EDIT-scope push dropped
 	// (device_config_removal, migration 031), close that entry's
@@ -56,10 +59,17 @@ type MessageHandler struct {
 	logger *slog.Logger
 	repo   SensorRepository
 	cache  *SensorCache
+	// invalidationPub broadcasts an FR73 invalidation event after this
+	// process's own ApplyConfigRegions commits a region change, so every
+	// process's SensorCache -- including this one, via the Subscriber
+	// wired in main.go -- is told, regardless of which process (API or
+	// processor) wrote the assignment. See leaflab/invalidation's doc
+	// comment.
+	invalidationPub *invalidation.Publisher
 }
 
-func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache) *MessageHandler {
-	return &MessageHandler{logger: logger, repo: repo, cache: cache}
+func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache, invalidationPub *invalidation.Publisher) *MessageHandler {
+	return &MessageHandler{logger: logger, repo: repo, cache: cache, invalidationPub: invalidationPub}
 }
 
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
@@ -329,7 +339,7 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 		return err
 	}
 	if ack.Accepted {
-		skips, err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion))
+		skips, changes, err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion))
 		if err != nil {
 			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
 		}
@@ -347,6 +357,27 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 				"version", ack.AppliedVersion,
 				"sensor_id", skip.SensorID,
 				"reason", skip.Reason)
+		}
+		// FR73: publish only after each change has committed (it has, by
+		// the time ApplyConfigRegions returns it -- see RegionChange's doc
+		// comment) -- this is the "processor's own config apply" writer
+		// FR73 requires to be covered, in addition to the API's direct
+		// assignment (Phase 5). A publish failure is non-fatal: the write
+		// already committed, and the bounded staleness backstop
+		// self-heals a dropped event.
+		for _, change := range changes {
+			if h.invalidationPub == nil {
+				break
+			}
+			if err := h.invalidationPub.Publish(ctx, invalidation.Event{
+				Kind:       invalidation.KindRegion,
+				DeviceID:   deviceID,
+				SensorID:   change.SensorID,
+				SensorName: change.SensorName,
+				ObservedAt: time.Now(),
+			}); err != nil {
+				h.logger.Warn("failed to publish invalidation event for region change", "device_id", deviceID, "sensor_id", change.SensorID, "err", err)
+			}
 		}
 		// FR82.6: close the sensor_hw_history interval of every entry this
 		// version's EDIT-scope push dropped, at this accepted-at instant.

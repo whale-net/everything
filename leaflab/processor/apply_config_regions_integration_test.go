@@ -246,7 +246,7 @@ func TestApplyConfigRegions_SameHouseholdReassignment_AppliesAndRecordsHistory(t
 		{I2CAddress: 0x10, RegionId: uint32(regionNew)},
 	}, pushedAt)
 
-	skips, err := repo.ApplyConfigRegions(ctx, boardID, 1)
+	skips, _, err := repo.ApplyConfigRegions(ctx, boardID, 1)
 	if err != nil {
 		t.Fatalf("ApplyConfigRegions: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestApplyConfigRegions_ForeignHouseholdEntry_SkippedNotFailed_AppliesRestAn
 		{I2CAddress: 0x11, RegionId: uint32(regionBForeign)},
 	}, time.Now())
 
-	skips, err := repo.ApplyConfigRegions(ctx, boardID, 1)
+	skips, _, err := repo.ApplyConfigRegions(ctx, boardID, 1)
 	if err != nil {
 		t.Fatalf("ApplyConfigRegions: %v", err)
 	}
@@ -394,7 +394,7 @@ func TestApplyConfigRegions_StalePush_SkippedNotApplied_AuditRowWritten(t *testi
 		{I2CAddress: 0x10, RegionId: uint32(regionNew)},
 	}, stalePushedAt)
 
-	skips, err := repo.ApplyConfigRegions(ctx, boardID, 1)
+	skips, _, err := repo.ApplyConfigRegions(ctx, boardID, 1)
 	if err != nil {
 		t.Fatalf("ApplyConfigRegions: %v", err)
 	}

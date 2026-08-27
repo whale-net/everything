@@ -496,6 +496,20 @@ type RegionApplySkip struct {
 	Reason string
 }
 
+// RegionChange describes one sensor whose region_id ApplyConfigRegions
+// changed, for FR73's cross-process cache invalidation: the caller
+// (handler.go's handleConfigAck) publishes one invalidation event per
+// entry after this method's per-sensor writes have committed (see
+// leaflab/invalidation.Publisher.Publish's doc comment on publishing only
+// after commit), so leaflab/processor's own SensorCache -- and every other
+// process's -- is told about the change regardless of which process
+// applied it.
+type RegionChange struct {
+	SensorID   int64
+	SensorName string
+	RegionID   int64
+}
+
 // reasonForeignHousehold and reasonStalePush are FR59.2-style
 // persona-appropriate sentences for the two ways an entry can fail
 // ApplyConfigRegions' apply-time re-validation (FR1.3). Neither names the
@@ -611,29 +625,35 @@ func (r *Repository) recordApplySkip(ctx context.Context, boardID, sensorID int6
 // nothing is being written, so the invariant this re-validation guards
 // does not apply -- see the "skip if region unchanged" check below, which
 // runs before re-validation for exactly this reason.
-func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) ([]RegionApplySkip, error) {
+//
+// Also returns every sensor whose region_id actually changed (FR73): the
+// caller (handleConfigAck) publishes one invalidation event per entry in
+// that slice after this method's writes have committed -- see
+// RegionChange's doc comment on publish-after-commit.
+func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) ([]RegionApplySkip, []RegionChange, error) {
 	var configJSON []byte
 	var pushedAt time.Time
 	err := r.db.QueryRow(ctx, `
 		SELECT config_json, pushed_at FROM device_config WHERE board_id = $1 AND version = $2
 	`, boardID, version).Scan(&configJSON, &pushedAt)
 	if err != nil {
-		return nil, fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
+		return nil, nil, fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
 	}
 
 	var cfg configpb.DeviceConfig
 	if err := protojson.Unmarshal(configJSON, &cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config for region apply: %w", err)
+		return nil, nil, fmt.Errorf("unmarshal config for region apply: %w", err)
 	}
 
 	// The pushing board's household is the same for every entry in this
 	// config -- resolved once, not per entry.
 	boardHouseholdID, err := r.boardHousehold(ctx, boardID)
 	if err != nil {
-		return nil, fmt.Errorf("apply config regions board=%d: %w", boardID, err)
+		return nil, nil, fmt.Errorf("apply config regions board=%d: %w", boardID, err)
 	}
 
 	var skips []RegionApplySkip
+	var changes []RegionChange
 	for _, sc := range cfg.Sensors {
 		if sc.RegionId == 0 {
 			continue
@@ -653,27 +673,28 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		// its canonical text form (FR18.1), matching idx_sensor_hw_address's
 		// (mux_path::text) expression rather than jsonb value equality.
 		var sensorID int64
+		var sensorName string
 		var oldRegionID *int64
 		typeName := sensorTypeNameFromConfig(sc.SensorType)
 		var lookupErr error
 		if typeName != "" {
 			lookupErr = r.db.QueryRow(ctx, `
-				SELECT s.sensor_id, s.region_id FROM sensor s
+				SELECT s.sensor_id, s.name, s.region_id FROM sensor s
 				JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
 				WHERE s.board_id = $1 AND s.i2c_address = $2 AND s.mux_path::text = $3
 				  AND st.name = $4
-			`, boardID, sc.I2CAddress, muxText, typeName).Scan(&sensorID, &oldRegionID)
+			`, boardID, sc.I2CAddress, muxText, typeName).Scan(&sensorID, &sensorName, &oldRegionID)
 		} else {
 			lookupErr = r.db.QueryRow(ctx, `
-				SELECT sensor_id, region_id FROM sensor
+				SELECT sensor_id, name, region_id FROM sensor
 				WHERE board_id = $1 AND i2c_address = $2 AND mux_path::text = $3
-			`, boardID, sc.I2CAddress, muxText).Scan(&sensorID, &oldRegionID)
+			`, boardID, sc.I2CAddress, muxText).Scan(&sensorID, &sensorName, &oldRegionID)
 		}
 		if errors.Is(lookupErr, pgx.ErrNoRows) {
 			continue // sensor not yet registered — skip silently
 		}
 		if lookupErr != nil {
-			return skips, fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
+			return skips, changes, fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
 		}
 
 		// Skip if region is unchanged -- nothing would be written, so the
@@ -687,12 +708,12 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		// passed between push and ack.
 		regionHouseholdID, err := r.regionHousehold(ctx, newRegionID)
 		if err != nil {
-			return skips, fmt.Errorf("apply config regions sensor=%d region=%d: %w", sensorID, newRegionID, err)
+			return skips, changes, fmt.Errorf("apply config regions sensor=%d region=%d: %w", sensorID, newRegionID, err)
 		}
 		if !sameHousehold(boardHouseholdID, regionHouseholdID) {
 			skips = append(skips, RegionApplySkip{SensorID: sensorID, Reason: reasonForeignHousehold})
 			if auditErr := r.recordApplySkip(ctx, boardID, sensorID, boardHouseholdID, reasonForeignHousehold); auditErr != nil {
-				return skips, fmt.Errorf("audit region apply skip sensor=%d: %w", sensorID, auditErr)
+				return skips, changes, fmt.Errorf("audit region apply skip sensor=%d: %w", sensorID, auditErr)
 			}
 			continue
 		}
@@ -708,12 +729,12 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 				WHERE sensor_id = $1 AND valid_to IS NULL
 			`, sensorID).Scan(&currentValidFrom)
 			if validFromErr != nil && !errors.Is(validFromErr, pgx.ErrNoRows) {
-				return skips, fmt.Errorf("read current region interval for sensor %d: %w", sensorID, validFromErr)
+				return skips, changes, fmt.Errorf("read current region interval for sensor %d: %w", sensorID, validFromErr)
 			}
 			if validFromErr == nil && !pushedAt.After(currentValidFrom) {
 				skips = append(skips, RegionApplySkip{SensorID: sensorID, Reason: reasonStalePush})
 				if auditErr := r.recordApplySkip(ctx, boardID, sensorID, boardHouseholdID, reasonStalePush); auditErr != nil {
-					return skips, fmt.Errorf("audit region apply skip sensor=%d: %w", sensorID, auditErr)
+					return skips, changes, fmt.Errorf("audit region apply skip sensor=%d: %w", sensorID, auditErr)
 				}
 				continue
 			}
@@ -722,7 +743,7 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		if _, err := r.db.Exec(ctx, `
 			UPDATE sensor SET region_id = $2 WHERE sensor_id = $1
 		`, sensorID, newRegionID); err != nil {
-			return skips, fmt.Errorf("set region for sensor %d: %w", sensorID, err)
+			return skips, changes, fmt.Errorf("set region for sensor %d: %w", sensorID, err)
 		}
 
 		// Close any open history row for this sensor.
@@ -730,17 +751,24 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 			UPDATE sensor_region_history SET valid_to = NOW()
 			WHERE sensor_id = $1 AND valid_to IS NULL
 		`, sensorID); err != nil {
-			return skips, fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
+			return skips, changes, fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
 		}
 
 		// Record the new assignment.
 		if _, err := r.db.Exec(ctx, `
 			INSERT INTO sensor_region_history (sensor_id, region_id) VALUES ($1, $2)
 		`, sensorID, newRegionID); err != nil {
-			return skips, fmt.Errorf("insert region history for sensor %d: %w", sensorID, err)
+			return skips, changes, fmt.Errorf("insert region history for sensor %d: %w", sensorID, err)
 		}
+
+		// This sensor's region_id has committed by this point (each
+		// statement above auto-commits individually; ApplyConfigRegions
+		// does not wrap the loop in an explicit transaction) -- safe to
+		// report as a change the caller can now publish (see
+		// RegionChange's doc comment on publish-after-commit).
+		changes = append(changes, RegionChange{SensorID: sensorID, SensorName: sensorName, RegionID: newRegionID})
 	}
-	return skips, nil
+	return skips, changes, nil
 }
 
 // UpsertDeviceConfig records a DeviceConfig push.

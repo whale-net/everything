@@ -1,6 +1,10 @@
 package main
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/whale-net/everything/leaflab/invalidation"
+)
 
 // SensorInfo holds the DB IDs needed to write a sensor_reading row.
 type SensorInfo struct {
@@ -55,6 +59,88 @@ func (c *SensorCache) Set(deviceID, sensorName string, info SensorInfo) {
 		c.devices[deviceID] = make(map[string]SensorInfo)
 	}
 	c.devices[deviceID][sensorName] = info
+}
+
+// Invalidate evicts the cached entry for deviceID/sensorName, if present.
+// FR73: the next handleReading for this device/sensor falls through to
+// MessageHandler.handleSensorReading's existing cache-miss path, which
+// re-reads the current value from the database and repopulates the cache
+// -- so eviction alone is what makes the cache self-heal to the current
+// value, without this method needing to know what that value now is.
+//
+// For a rename (invalidation.KindName), callers must invalidate the
+// sensor's *prior* name (invalidation.Event.PriorSensorName), not its new
+// one: the cache is keyed device_id -> sensor_name, so the prior name's
+// entry is an orphan a rename never touches unless evicted explicitly.
+func (c *SensorCache) Invalidate(deviceID, sensorName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sensors, ok := c.devices[deviceID]; ok {
+		delete(sensors, sensorName)
+	}
+}
+
+// InvalidateDevice evicts every cached sensor entry for deviceID.
+func (c *SensorCache) InvalidateDevice(deviceID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.devices, deviceID)
+}
+
+// ReplaceAll atomically replaces the entire cached sensor set with entries.
+// Unlike Load (an additive merge, used only for the one-time startup
+// pre-warm), ReplaceAll also evicts any entry not present in entries -- this
+// is what lets the bounded staleness backstop (see RunCacheBackstop)
+// self-heal a *dropped* rename event, not just a dropped region/identity
+// one: a Load-style merge would leave a rename's orphaned prior-name entry
+// (see Invalidate's doc comment) in place forever if the invalidation event
+// that would have evicted it explicitly never arrived.
+//
+// A concurrent handleManifest that cache.Set's a brand new sensor while a
+// ReplaceAll from a snapshot taken just before that write is in flight can
+// have its Set overwritten by this call. That's not a correctness bug: the
+// sensor is on the database by the time ReplaceAll's snapshot was read,
+// so it is either in entries already, or, in the rare interleaving above,
+// missing for the moment -- handleSensorReading's existing cache-miss path
+// (repository.GetSensor) re-reads and repopulates it on the very next
+// reading. No reading is ever stamped with a wrong value; at worst one
+// reading takes the DB-lookup path instead of a cache hit.
+func (c *SensorCache) ReplaceAll(entries map[string]map[string]SensorInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fresh := make(map[string]map[string]SensorInfo, len(entries))
+	for deviceID, sensors := range entries {
+		copied := make(map[string]SensorInfo, len(sensors))
+		for name, info := range sensors {
+			copied[name] = info
+		}
+		fresh[deviceID] = copied
+	}
+	c.devices = fresh
+}
+
+// ApplyInvalidation applies a single FR73 invalidation.Event to cache,
+// evicting exactly the cache key the event describes:
+//
+//   - invalidation.KindRegion / invalidation.KindIdentity evict
+//     ev.DeviceID/ev.SensorName -- the cache key the change was observed
+//     under.
+//   - invalidation.KindName (a rename) evicts ev.DeviceID/ev.PriorSensorName
+//     -- the cache is keyed device_id -> sensor_name, so a rename's *new*
+//     name was never a key to begin with; evicting the prior one is what
+//     prevents the orphaned entry SensorCache.Invalidate's doc comment
+//     describes.
+//
+// This is a package-level function, not a method on MessageHandler or
+// SensorCache, precisely so both main.go's Subscriber.Start handler and a
+// test can call the exact same decision logic without needing a real
+// broker, a MessageHandler, or any of MessageHandler's other dependencies.
+func ApplyInvalidation(cache *SensorCache, ev invalidation.Event) {
+	if ev.Kind == invalidation.KindName {
+		cache.Invalidate(ev.DeviceID, ev.PriorSensorName)
+		return
+	}
+	cache.Invalidate(ev.DeviceID, ev.SensorName)
 }
 
 // Get returns the SensorInfo for a sensor, and whether it was found.
