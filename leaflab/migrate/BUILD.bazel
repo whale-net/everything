@@ -55,3 +55,35 @@ go_test(
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
+
+# Real-Postgres integration coverage for migration 017_plant_region_history's
+# schema, attribution-neutral snapped-to-hour backfill and database-side
+# no-back-dating guard (FR19, FR21, NFR6.1, NFR6.2) -- see
+# plant_region_history_migration_integration_test.go's doc comment. Same
+# hand-written rationale, tag set and embed-its-own-migrations pattern as
+# ownership_migration_integration_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/migrate:plant_region_history_migration_integration_test --test_output=all
+go_test(
+    # keep
+    name = "plant_region_history_migration_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["plant_region_history_migration_integration_test.go"],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)

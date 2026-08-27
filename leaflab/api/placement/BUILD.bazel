@@ -1,6 +1,6 @@
 """SCD2 close-and-open writer for plant_region_history and the no-back-dating guard (FR19, FR21, NFR6.1). See placement.go's package doc comment."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "placement",
@@ -9,6 +9,52 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//leaflab/api/contract",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Unit coverage for RefuseIfBackdated (FR19, FR59.3) -- no database required,
+# safe to run in `bazel test //leaflab/...`. See refuse_test.go's doc
+# comment.
+go_test(
+    name = "placement_test",
+    size = "small",
+    srcs = ["refuse_test.go"],
+    embed = [":placement"],
+    deps = [
+        "//leaflab/api/contract",
+    ],
+)
+
+# Real-Postgres integration coverage for Writer.Move's SCD2 close-and-open
+# write path (FR19, NFR6.1) and the database-side no-back-dating guard
+# (NFR6.2) -- see move_integration_test.go's doc comment and
+# //libs/go/dbtest/README.md. Hand-written (not gazelle-generated), same
+# rationale and EXACT tag set as leaflab/migrate's *_integration_test
+# targets -- see this package's gazelle gotcha in leaflab/api/contract and
+# leaflab/api/proto's BUILD.bazel comments. `# keep` tells a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api/placement:move_integration_test --test_output=all
+go_test(
+    # keep
+    name = "move_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["move_integration_test.go"],
+    embed = [":placement"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
