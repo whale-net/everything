@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "attach.go",
         "doc.go",
+        "handler.go",
         "hub.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/htmxsse",
@@ -16,7 +17,10 @@ go_library(
 
 go_test(
     name = "htmxsse_test",
-    srcs = ["hub_test.go"],
+    srcs = [
+        "handler_test.go",
+        "hub_test.go",
+    ],
     embed = [":htmxsse"],
     deps = [
         "//libs/go/rmq",
