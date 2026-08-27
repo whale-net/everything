@@ -2,6 +2,7 @@ package citest
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"fmt"
@@ -92,7 +93,11 @@ func testFR58HappyPath(t *testing.T, client pb.ArtifactRegistryClient) {
 	binaryName := "release_helper_go"
 	resolveOs := "linux"
 	resolveArch := "amd64"
-	uncompressedDigest := generateTestDigest("rehearsal-main-" + version)
+	// The digest BrokerUpload/ConfirmUpload verify is over the uncompressed
+	// content (FR-46); it must match the actual bytes we upload below, not
+	// an unrelated placeholder string.
+	testContent := []byte("test artifact content for " + version)
+	uncompressedDigest := generateTestDigestBytes(testContent)
 	identityDigest := generateTestDigest("rehearsal-identity-" + version)
 
 	// Step 1: Call broker to get presigned URLs.
@@ -143,13 +148,17 @@ func testFR58HappyPath(t *testing.T, client pb.ArtifactRegistryClient) {
 		}
 
 		// Step 2: Upload the file using the presigned URL.
+		// Binary kind's H4 policy is gzip (kinds/binary.go), so ConfirmUpload
+		// decompresses before hashing -- the uploaded bytes must actually be
+		// gzip, not raw content, or read-back fails at "invalid gzip header"
+		// before digest comparison ever runs.
 		t.Logf("Step 2: Upload file via presigned URL")
-		testContent := []byte("test artifact content for " + result.VariantKey)
-		if err := uploadViaPresignedURL(ctx, result.PresignedUrl, testContent, result.RequiredHeaders); err != nil {
+		gzippedContent := gzipCompress(testContent)
+		if err := uploadViaPresignedURL(ctx, result.PresignedUrl, gzippedContent, result.RequiredHeaders); err != nil {
 			t.Errorf("Failed to upload via presigned URL: %v", err)
 			return
 		}
-		t.Logf("Uploaded %d bytes successfully", len(testContent))
+		t.Logf("Uploaded %d bytes (gzip of %d bytes uncompressed) successfully", len(gzippedContent), len(testContent))
 	}
 
 	// Step 3: Confirm the upload by reading back bytes and verifying digests (FR-46).
@@ -173,7 +182,7 @@ func testFR58HappyPath(t *testing.T, client pb.ArtifactRegistryClient) {
 	}
 	t.Logf("ConfirmUpload results:")
 	for _, r := range confirmResp.Results {
-		t.Logf("  Variant %s: confirmed=%v, computed_digest=%s", r.VariantKey, r.Confirmed, r.ComputedDigest)
+		t.Logf("  Variant %s: confirmed=%v, computed_digest=%s, error=%q, is_timeout=%v", r.VariantKey, r.Confirmed, r.ComputedDigest, r.ErrorMessage, r.IsTimeout)
 	}
 
 	// Step 4: Record the artifact as published.
@@ -294,7 +303,7 @@ func testFR58DigestMismatch(t *testing.T, client pb.ArtifactRegistryClient) {
 
 	t.Logf("Step 2: Upload different content (to create digest mismatch)")
 	differentContent := []byte("deliberately different content that does not match claimed digest")
-	if err := uploadViaPresignedURL(ctx, result.PresignedUrl, differentContent, result.RequiredHeaders); err != nil {
+	if err := uploadViaPresignedURL(ctx, result.PresignedUrl, gzipCompress(differentContent), result.RequiredHeaders); err != nil {
 		t.Errorf("Upload failed: %v", err)
 		return
 	}
@@ -313,29 +322,31 @@ func testFR58DigestMismatch(t *testing.T, client pb.ArtifactRegistryClient) {
 		},
 	}
 
+	// FR-47's contract is per-file, not per-RPC: ConfirmUpload returns a
+	// normal (nil-error) response with Confirmed=false and a diagnostic
+	// ErrorMessage for the mismatched file, rather than failing the whole
+	// RPC -- consistent with it accepting a batch of files where some may
+	// confirm and others may not.
 	confirmResp, err := client.ConfirmUpload(ctx, confirmReq)
 	if err != nil {
-		// FR-47: Confirm should fail on digest mismatch
-		t.Logf("ConfirmUpload returned error (expected): %v", err)
-		st, ok := status.FromError(err)
-		if !ok {
-			t.Errorf("Expected gRPC status error, got: %T", err)
-			return
-		}
-		if st.Code() != codes.InvalidArgument {
-			t.Logf("Error code: %v (expected InvalidArgument or similar)", st.Code())
-		}
-		msg := st.Message()
-		t.Logf("Error message: %s", msg)
-		return
+		t.Fatalf("ConfirmUpload failed unexpectedly: %v", err)
 	}
 
-	// If we get here, confirm succeeded when it should have failed.
-	t.Logf("ConfirmUpload unexpectedly succeeded:")
-	for _, r := range confirmResp.Results {
-		t.Logf("  Variant %s: confirmed=%v, computed=%s", r.VariantKey, r.Confirmed, r.ComputedDigest)
+	if len(confirmResp.Results) != 1 {
+		t.Fatalf("ConfirmUpload returned %d results, expected 1", len(confirmResp.Results))
 	}
-	t.Error("FR-47: Expected ConfirmUpload to fail on digest mismatch, but it succeeded")
+	r := confirmResp.Results[0]
+	t.Logf("ConfirmUpload result: confirmed=%v, computed=%s, error=%q, is_timeout=%v", r.Confirmed, r.ComputedDigest, r.ErrorMessage, r.IsTimeout)
+
+	if r.Confirmed {
+		t.Error("FR-47: Expected ConfirmUpload to report confirmed=false on digest mismatch, but it reported confirmed=true")
+		return
+	}
+	if !strings.Contains(r.ErrorMessage, "digest mismatch") {
+		t.Errorf("FR-47: Expected error_message to describe a digest mismatch, got: %q", r.ErrorMessage)
+		return
+	}
+	t.Logf("✓ FR-47: Registry correctly detected digest mismatch and reported confirmed=false")
 }
 
 // testFR58ResolvableButUnwritten exercises FR-68/FR-29 (gate P).
@@ -413,9 +424,24 @@ func testFR58ResolvableButUnwritten(t *testing.T, client pb.ArtifactRegistryClie
 
 // generateTestDigest creates a deterministic sha256 digest for test content.
 func generateTestDigest(content string) string {
+	return generateTestDigestBytes([]byte(content))
+}
+
+// generateTestDigestBytes creates a deterministic sha256 digest for test content.
+func generateTestDigestBytes(content []byte) string {
 	h := sha256.New()
-	h.Write([]byte(content))
+	h.Write(content)
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+}
+
+// gzipCompress compresses content per binary kind's H4 policy (kinds/binary.go),
+// which ConfirmUpload's read-back path decompresses before hashing (FR-46).
+func gzipCompress(content []byte) []byte {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	w.Write(content)
+	w.Close()
+	return buf.Bytes()
 }
 
 // uploadViaPresignedURL uploads bytes to the given presigned URL.
