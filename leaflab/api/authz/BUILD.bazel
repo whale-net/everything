@@ -1,10 +1,6 @@
 """LeafLab API authorization -- per-entity Scope/Resolver (FR4, FR5, NFR2)."""
 
-load("@rules_go//go:def.bzl", "go_library")
-
-# go_test target for this package is added by the Testing phase, once
-# resolver_test.go/scope_test.go exist -- see the task issue's Testing
-# section (FR4.3 type test, fail-closed test, etc).
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "authz",
@@ -17,5 +13,27 @@ go_library(
     deps = [
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Pure Go-level unit tests: Scope/UnionScope/HouseholdScope predicate and
+# SQL-fragment logic (scope_test.go, including the FR4.3 type test), and
+# PGResolver against a fake Queryer/Row/Rows rather than a live Postgres
+# connection (resolver_test.go). No Docker required -- runs in
+# `bazel test //leaflab/...`. Real-SQL coverage (the recursive region CTE,
+# the household_membership join) is exercised indirectly through
+# leaflab/api's own integration tests, which construct a real PGResolver
+# against dbtest's Postgres container.
+go_test(
+    name = "authz_test",
+    size = "small",
+    srcs = [
+        "resolver_test.go",
+        "scope_test.go",
+    ],
+    embed = [":authz"],
+    deps = [
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
     ],
 )
