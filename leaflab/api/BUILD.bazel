@@ -247,3 +247,43 @@ go_test(
         "@org_golang_google_protobuf//proto",
     ],
 )
+
+# Real-Postgres integration coverage for FR75/FR7's households and
+# membership write paths -- see households_integration_test.go's doc
+# comment. Same tag set and hand-written rationale as the other integration
+# go_test targets above. Deliberately does not share srcs with
+# dbtest_helpers_integration_test.go/authz_scope_integration_test.go: this
+# file carries its own self-contained schema (household_membership plus a
+# verbatim copy of migration 020's never-zero-members trigger) and its own
+# helper names, to avoid a symbol collision with those files' schema/helper
+# names within the same compiled test binary.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:households_integration_test --test_output=all
+go_test(
+    # keep
+    name = "households_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "households_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
