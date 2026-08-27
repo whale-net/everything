@@ -34,9 +34,24 @@ func validateDeviceID(id string) string {
 
 const mqttExchange = "amq.topic"
 
+// deviceRepository is the subset of *Repository's methods LeafLabAPIServer's
+// RPCs depend on. Extracted as an interface -- rather than referencing
+// *Repository directly -- so tests can substitute an in-memory fake and
+// exercise real handler logic (e.g. GetHealth's DEGRADED branch) without a
+// live Postgres connection; see server_test.go. *Repository satisfies this
+// with no changes on the production path (NewLeafLabAPIServer is still
+// called with *Repository in main.go).
+type deviceRepository interface {
+	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
+	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
+	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32) ([]BoardRow, error)
+	Ping(ctx context.Context) error
+}
+
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
-	repo      *Repository
+	repo      deviceRepository
 	publisher *rmq.Publisher
 	// rmqConn is the underlying RabbitMQ/MQTT connection GetHealth probes
 	// (FR63.1). Held separately from publisher because rmq.Publisher does
@@ -46,7 +61,7 @@ type LeafLabAPIServer struct {
 	logger  *slog.Logger
 }
 
-func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo deviceRepository, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
 		repo:      repo,
 		publisher: publisher,
