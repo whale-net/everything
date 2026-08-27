@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/whale-net/everything/leaflab/broadcast"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -56,12 +58,6 @@ func run() error {
 	}
 	defer consumer.Close() //nolint:errcheck
 
-	publisher, err := rmq.NewPublisher(rmqConn)
-	if err != nil {
-		return fmt.Errorf("failed to create publisher: %w", err)
-	}
-	defer publisher.Close() //nolint:errcheck
-
 	// RabbitMQ MQTT plugin routes MQTT topics to amq.topic exchange,
 	// replacing '/' with '.' in routing keys.
 	// leaflab/<device>/sensor/<name> → leaflab.<device>.sensor.<name>
@@ -89,10 +85,60 @@ func run() error {
 		logger.Info("config version cache pre-loaded", "devices", len(versions))
 	}
 
-	// Create the config ack publisher for fanout delivery to all API replicas
-	ackPublisher := NewRabbitMQAckPublisher(logging.Get("ack-publisher"), publisher, "amq.topic")
+	// Declare the leaflab broadcast fanout exchange used for cross-process
+	// signalling. This is the single mechanism for cross-process broadcast in
+	// leaflab: cache invalidation (FR73, #1203) and config ack delivery to every
+	// API replica (FR47/NFR15, #1216) both ride this one exchange, distinguished
+	// only by routing key. See leaflab/broadcast and leaflab/ARCHITECTURE.md
+	// "Cross-process broadcast signalling".
+	if err := broadcast.DeclareExchange(rmqConn, broadcast.Exchange); err != nil {
+		return fmt.Errorf("failed to declare broadcast exchange: %w", err)
+	}
 
-	handler := NewMessageHandler(logger, repo, cache, ackPublisher)
+	// Bind this process's queue to the broadcast exchange so it also receives
+	// cache invalidation signals published by any process (including itself).
+	if err := consumer.BindExchange(broadcast.Exchange, []string{broadcast.RoutingKeyCacheInvalidation}); err != nil {
+		return fmt.Errorf("failed to bind cache invalidation exchange: %w", err)
+	}
+
+	// Create ONE publisher shared by both signal types published from this
+	// process, so there is no ambiguity that they ride the same connection,
+	// channel, and exchange.
+	broadcastPublisher, err := rmq.NewPublisher(rmqConn)
+	if err != nil {
+		return fmt.Errorf("failed to create broadcast publisher: %w", err)
+	}
+	defer broadcastPublisher.Close() //nolint:errcheck
+
+	invalidator := NewRabbitMQInvalidator(logger, broadcastPublisher, broadcast.Exchange)
+
+	broadcastAckPub, err := broadcast.NewPublisher(rmqConn, broadcastPublisher, broadcast.Exchange)
+	if err != nil {
+		return fmt.Errorf("failed to create broadcast ack publisher: %w", err)
+	}
+	ackPublisher := NewRabbitMQAckPublisher(logging.Get("ack-publisher"), broadcastAckPub)
+
+	// Register handler for cache invalidation signals. This runs in the same consumer loop
+	// and receives all invalidation broadcasts from all publishers (including other processes).
+	consumer.RegisterHandler(broadcast.RoutingKeyCacheInvalidation, func(ctx context.Context, msg rmq.Message) error {
+		var signal CacheInvalidationSignal
+		if err := json.Unmarshal(msg.Body, &signal); err != nil {
+			logger.Warn("failed to unmarshal cache invalidation signal",
+				"routing_key", msg.RoutingKey,
+				"err", err,
+			)
+			return &rmq.PermanentError{Err: err}
+		}
+		logger.Debug("cache invalidation signal received",
+			"device_id", signal.DeviceID,
+			"sensor_id", signal.SensorID,
+			"change_type", signal.ChangeType,
+		)
+		cache.ApplyInvalidation(&signal)
+		return nil
+	})
+
+	handler := NewMessageHandler(logger, repo, cache, invalidator, ackPublisher)
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
@@ -101,7 +147,13 @@ func run() error {
 	if err := consumer.Start(appCtx); err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}
-	logger.Info("consuming messages", "exchange", "amq.topic", "routing_key", "leaflab.#")
+	logger.Info("consuming messages",
+		"sensor_exchange", "amq.topic",
+		"sensor_routing_key", "leaflab.#",
+		"broadcast_exchange", broadcast.Exchange,
+		"invalidation_routing_key", broadcast.RoutingKeyCacheInvalidation,
+		"config_ack_routing_key", broadcast.RoutingKeyConfigAck,
+	)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "ack_signal.go",
         "cache.go",
+        "cache_invalidation.go",
         "config.go",
         "handler.go",
         "handler_swap_detection.go",
@@ -18,10 +19,11 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/broadcast",
+        "//leaflab/canonkey",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
-        "//leaflab/canonkey",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_protobuf//proto",
@@ -43,8 +45,32 @@ go_test(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/broadcast",
         "//libs/go/dbtest",
+        "//libs/go/rmq",
         "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Real-broker proof that RabbitMQAckPublisher (#1216) and RabbitMQInvalidator
+# (#1203) publish onto the same fanout exchange. Requires Docker; see
+# libs/go/rmqtest/README.md for the exact bazel invocation.
+go_test(
+    name = "processor_broadcast_integration_test",
+    srcs = ["ack_signal_integration_test.go"],
+    embed = [":processor_lib"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/broadcast",
+        "//libs/go/rmq",
+        "//libs/go/rmqtest",
     ],
 )
 

@@ -523,7 +523,6 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 	return nil
 }
 
-
 // UpsertDeviceConfig records a DeviceConfig push.
 func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version int64, configJSON []byte) error {
 	_, err := r.db.Exec(ctx, `
@@ -614,6 +613,98 @@ func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID
 		return fmt.Errorf("insert reading for sensor %d: %w", sensorID, err)
 	}
 	return nil
+}
+
+// AffectedSensor represents a sensor that was affected by a config change.
+type AffectedSensor struct {
+	DeviceID string
+	SensorID int64
+	Name     string
+	RegionID *int64
+}
+
+// GetAffectedSensorsForConfig returns the device_id and sensor_id of all sensors
+// that have region_id assignments in the given config version.
+// This is used to publish cache invalidation signals after ApplyConfigRegions.
+func (r *Repository) GetAffectedSensorsForConfig(ctx context.Context, boardID int64, version int64) ([]AffectedSensor, error) {
+	var configJSON []byte
+	err := r.db.QueryRow(ctx, `
+		SELECT config_json FROM device_config WHERE board_id = $1 AND version = $2
+	`, boardID, version).Scan(&configJSON)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // config not found, return empty
+		}
+		return nil, fmt.Errorf("get config for board=%d v=%d: %w", boardID, version, err)
+	}
+
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(configJSON, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config for affected sensors: %w", err)
+	}
+
+	// Get the device_id for this board
+	var deviceID string
+	err = r.db.QueryRow(ctx, `
+		SELECT device_id FROM board WHERE board_id = $1
+	`, boardID).Scan(&deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("get device_id for board %d: %w", boardID, err)
+	}
+
+	var affected []AffectedSensor
+
+	// For each sensor in the config with a region_id, find the matching sensor in the DB
+	for _, sc := range cfg.Sensors {
+		if sc.RegionId == 0 {
+			continue
+		}
+
+		hops := make([]MuxHop, len(sc.MuxPath))
+		for i, hop := range sc.MuxPath {
+			hops[i] = MuxHop{MuxAddress: hop.MuxAddress, MuxChannel: hop.MuxChannel}
+		}
+		muxJSON, err := json.Marshal(hops)
+		if err != nil {
+			return nil, fmt.Errorf("marshal mux_path for affected sensors: %w", err)
+		}
+
+		newRegionID := int64(sc.RegionId)
+
+		// Find the sensor by hardware key (same logic as ApplyConfigRegions)
+		var sensorID int64
+		var sensorName string
+		typeName := sensorTypeNameFromConfig(sc.SensorType)
+		var lookupErr error
+		if typeName != "" {
+			lookupErr = r.db.QueryRow(ctx, `
+				SELECT s.sensor_id, s.name FROM sensor s
+				JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
+				WHERE s.board_id = $1 AND s.i2c_address = $2 AND s.mux_path = $3::jsonb
+				  AND st.name = $4
+			`, boardID, sc.I2CAddress, muxJSON, typeName).Scan(&sensorID, &sensorName)
+		} else {
+			lookupErr = r.db.QueryRow(ctx, `
+				SELECT sensor_id, name FROM sensor
+				WHERE board_id = $1 AND i2c_address = $2 AND mux_path = $3::jsonb
+			`, boardID, sc.I2CAddress, muxJSON).Scan(&sensorID, &sensorName)
+		}
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			continue // sensor not yet registered
+		}
+		if lookupErr != nil {
+			return nil, fmt.Errorf("find sensor for affected lookup i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
+		}
+
+		affected = append(affected, AffectedSensor{
+			DeviceID: deviceID,
+			SensorID: sensorID,
+			Name:     sensorName,
+			RegionID: &newRegionID,
+		})
+	}
+
+	return affected, nil
 }
 
 // ValidateRegionBelongsToHousehold checks whether a region belongs to the given household.

@@ -6,6 +6,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "ack_listener.go",
         "ack_waiter.go",
         "main.go",
         "materialiser.go",
@@ -18,9 +19,10 @@ go_library(
         "//firmware/proto:configpb",
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
-        "//leaflab/api/ratelimit",
-        "//leaflab/canonkey",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//leaflab/broadcast",
+        "//leaflab/canonkey",
         "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/logging",
@@ -36,9 +38,22 @@ go_library(
     ],
 )
 
+# Container-backed test target: dbtest (Postgres) for every test, rmqtest
+# (RabbitMQ) for ack_fanout_integration_test.go's real-broker fanout proof.
+# Requires Docker; see libs/go/dbtest/README.md and libs/go/rmqtest/README.md
+# for the exact bazel invocation.
 go_test(
     name = "api_test",
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
     srcs = [
+        "ack_fanout_integration_test.go",
         "api_integration_test.go",
         "materialiser_test.go",
         "server_test.go",
@@ -50,17 +65,19 @@ go_test(
         "//leaflab/api/pagetoken",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/api/ratelimit",
-        "//leaflab/canonkey",
+        "//leaflab/broadcast",
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "//libs/go/rmqtest",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//encoding/protojson",
     ],
 )
 
@@ -72,11 +89,11 @@ go_binary(
 
 release_app(
     name = "leaflab-api",
-    binary_name = ":api",
-    language = "go",
-    domain = "leaflab",
-    description = "LeafLab gRPC API — device config push and board management",
     app_type = "internal-api",
+    binary_name = ":api",
+    description = "LeafLab gRPC API — device config push and board management",
+    domain = "leaflab",
+    language = "go",
     port = 50051,
     replicas = 1,
 )

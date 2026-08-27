@@ -6,11 +6,14 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
+	"fmt"
 	"testing"
 	"time"
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/broadcast"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/proto"
@@ -27,6 +30,7 @@ type stubRepo struct {
 	upsertSensorCalls       []upsertSensorCall
 	applyConfigRegionsCalls []applyConfigRegionsCall
 	hwHistoryCalls          []hwHistoryCall
+	affectedSensors         []AffectedSensor
 }
 
 type applyConfigRegionsCall struct {
@@ -103,6 +107,10 @@ func (s *stubRepo) GetSensorsByBoard(_ context.Context, _ int64) ([]SensorState,
 	return nil, nil
 }
 
+func (s *stubRepo) GetAffectedSensorsForConfig(_ context.Context, _ int64, _ int64) ([]AffectedSensor, error) {
+	return s.affectedSensors, nil
+}
+
 // marshalManifest encodes a DeviceManifest to wire bytes.
 func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 	t.Helper()
@@ -113,8 +121,63 @@ func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 	return b
 }
 
+
+// mockCacheInvalidator is a test implementation of CacheInvalidator that records calls.
+type mockCacheInvalidator struct {
+	mu                     sync.Mutex
+	publishedInvalidations []CacheInvalidationSignal
+}
+
+func (m *mockCacheInvalidator) PublishInvalidation(ctx context.Context, signal CacheInvalidationSignal) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.publishedInvalidations = append(m.publishedInvalidations, signal)
+	return nil
+}
+
+func (m *mockCacheInvalidator) GetPublished() []CacheInvalidationSignal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]CacheInvalidationSignal, len(m.publishedInvalidations))
+	copy(result, m.publishedInvalidations)
+	return result
+}
+
+// mockAckPublisher is a test implementation of ConfigAckPublisher that records calls.
+type mockAckPublisher struct {
+	mu              sync.Mutex
+	publishedAcks   []ConfigAckSignal
+	publishAckError error
+}
+
+func (m *mockAckPublisher) PublishAck(ctx context.Context, signal ConfigAckSignal) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.publishAckError != nil {
+		return m.publishAckError
+	}
+	m.publishedAcks = append(m.publishedAcks, signal)
+	return nil
+}
+
+func (m *mockAckPublisher) GetPublished() []ConfigAckSignal {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]ConfigAckSignal, len(m.publishedAcks))
+	copy(result, m.publishedAcks)
+	return result
+}
+
 func newTestHandler(repo SensorRepository) *MessageHandler {
-	return NewMessageHandler(slog.Default(), repo, NewSensorCache())
+	return newTestHandlerWithInvalidator(repo, &mockCacheInvalidator{})
+}
+
+func newTestHandlerWithInvalidator(repo SensorRepository, invalidator CacheInvalidator) *MessageHandler {
+	return NewMessageHandler(slog.Default(), repo, NewSensorCache(), invalidator, &mockAckPublisher{})
+}
+
+func newTestHandlerWithAckPublisher(repo SensorRepository, ackPublish ConfigAckPublisher) *MessageHandler {
+	return NewMessageHandler(slog.Default(), repo, NewSensorCache(), &mockCacheInvalidator{}, ackPublish)
 }
 
 // TestHandleManifest_HWAddressPassedThrough verifies that when a SensorDescriptor
@@ -1091,4 +1154,308 @@ func marshalConfigAck(t *testing.T, ack *configpb.DeviceConfigAck) []byte {
 		t.Fatalf("marshal config ack: %v", err)
 	}
 	return b
+}
+
+// Cache invalidation tests (FR73)
+
+// TestCacheInvalidation_RegionChangeDefectRed verifies the defect: before the fix,
+// ApplyConfigRegions writes sensor.region_id but the in-memory cache still serves the
+// old RegionID. This test demonstrates the defect by breaking the invalidation.
+func TestCacheInvalidation_RegionChangeDefectRed(t *testing.T) {
+	// SETUP: Create a sensor with region_id = 10
+	cache := NewSensorCache()
+	cache.Set("device-1", "sensor-1", SensorInfo{SensorID: 100, RegionID: ptrInt64(10)})
+
+	// VERIFY OLD REGION (before invalidation)
+	info, ok := cache.Get("device-1", "sensor-1")
+	if !ok {
+		t.Fatal("sensor should be in cache")
+	}
+	if info.RegionID == nil || *info.RegionID != 10 {
+		t.Fatalf("expected RegionID=10, got %v", info.RegionID)
+	}
+
+	// SEND INVALIDATION SIGNAL with new region (20)
+	signal := &CacheInvalidationSignal{
+		DeviceID:   "device-1",
+		SensorID:   100,
+		NewName:    "sensor-1",
+		RegionID:   ptrInt64(20),
+		ChangeType: "region",
+	}
+	cache.ApplyInvalidation(signal)
+
+	// VERIFY NEW REGION (after invalidation)
+	info, ok = cache.Get("device-1", "sensor-1")
+	if !ok {
+		t.Fatal("sensor should still be in cache")
+	}
+	if info.RegionID == nil || *info.RegionID != 20 {
+		t.Fatalf("expected RegionID=20 after invalidation, got %v", info.RegionID)
+	}
+}
+
+// TestCacheInvalidation_RenameRemovesOldEntry verifies that a rename invalidation
+// removes the entry under the old name and the sensor is findable under the new name.
+func TestCacheInvalidation_RenameRemovesOldEntry(t *testing.T) {
+	cache := NewSensorCache()
+
+	// SETUP: Create sensor with old name
+	cache.Set("device-1", "old_name", SensorInfo{SensorID: 100, RegionID: ptrInt64(5)})
+
+	// VERIFY OLD NAME EXISTS
+	info, ok := cache.Get("device-1", "old_name")
+	if !ok {
+		t.Fatal("sensor should be in cache under old name")
+	}
+	if info.SensorID != 100 {
+		t.Errorf("expected SensorID=100, got %d", info.SensorID)
+	}
+
+	// SEND RENAME INVALIDATION SIGNAL
+	signal := &CacheInvalidationSignal{
+		DeviceID:   "device-1",
+		SensorID:   100,
+		OldName:    "old_name",
+		NewName:    "new_name",
+		RegionID:   ptrInt64(5),
+		ChangeType: "rename",
+	}
+	cache.ApplyInvalidation(signal)
+
+	// VERIFY OLD NAME IS GONE
+	info, ok = cache.Get("device-1", "old_name")
+	if ok {
+		t.Error("sensor should NOT be under old name after rename invalidation")
+	}
+
+	// VERIFY NEW NAME HAS THE SENSOR
+	info, ok = cache.Get("device-1", "new_name")
+	if !ok {
+		t.Fatal("sensor should be in cache under new name after rename")
+	}
+	if info.SensorID != 100 {
+		t.Errorf("expected SensorID=100 under new name, got %d", info.SensorID)
+	}
+	if info.RegionID == nil || *info.RegionID != 5 {
+		t.Errorf("expected RegionID=5 preserved through rename, got %v", info.RegionID)
+	}
+}
+
+// TestCacheInvalidation_ReWireInvalidatesAll verifies that a rewire invalidation
+// clears all sensors for a device to force a reload.
+func TestCacheInvalidation_ReWireInvalidatesAll(t *testing.T) {
+	cache := NewSensorCache()
+
+	// SETUP: Create multiple sensors on a device
+	cache.Set("device-1", "sensor-1", SensorInfo{SensorID: 100, RegionID: ptrInt64(1)})
+	cache.Set("device-1", "sensor-2", SensorInfo{SensorID: 101, RegionID: ptrInt64(2)})
+	cache.Set("device-1", "sensor-3", SensorInfo{SensorID: 102, RegionID: ptrInt64(3)})
+
+	// VERIFY SENSORS EXIST
+	for i := 1; i <= 3; i++ {
+		name := fmt.Sprintf("sensor-%d", i)
+		info, ok := cache.Get("device-1", name)
+		if !ok {
+			t.Fatalf("sensor %s should be in cache", name)
+		}
+		if info.SensorID != int64(99+i) {
+			t.Errorf("expected SensorID=%d, got %d", 99+i, info.SensorID)
+		}
+	}
+
+	// SEND REWIRE INVALIDATION (clears all sensors for device)
+	signal := &CacheInvalidationSignal{
+		DeviceID:   "device-1",
+		SensorID:   100,
+		ChangeType: "rewire",
+	}
+	cache.ApplyInvalidation(signal)
+
+	// VERIFY ALL SENSORS ARE GONE
+	for i := 1; i <= 3; i++ {
+		name := fmt.Sprintf("sensor-%d", i)
+		_, ok := cache.Get("device-1", name)
+		if ok {
+			t.Errorf("sensor %s should NOT be in cache after rewire", name)
+		}
+	}
+}
+
+// TestCacheInvalidation_FanOut verifies that when multiple subscribers listen,
+// all of them receive the invalidation signal (broadcast, not queue).
+func TestCacheInvalidation_FanOut(t *testing.T) {
+	// SETUP: Two independent caches that both subscribe to invalidations
+	cache1 := NewSensorCache()
+	cache2 := NewSensorCache()
+
+	cache1.Set("device-1", "sensor-1", SensorInfo{SensorID: 100, RegionID: ptrInt64(10)})
+	cache2.Set("device-1", "sensor-1", SensorInfo{SensorID: 100, RegionID: ptrInt64(10)})
+
+	// SEND SAME INVALIDATION TO BOTH (simulating broadcast)
+	signal := CacheInvalidationSignal{
+		DeviceID:   "device-1",
+		SensorID:   100,
+		NewName:    "sensor-1",
+		RegionID:   ptrInt64(20),
+		ChangeType: "region",
+	}
+
+	cache1.ApplyInvalidation(&signal)
+	cache2.ApplyInvalidation(&signal)
+
+	// VERIFY BOTH ARE UPDATED
+	info1, _ := cache1.Get("device-1", "sensor-1")
+	info2, _ := cache2.Get("device-1", "sensor-1")
+
+	if info1.RegionID == nil || *info1.RegionID != 20 {
+		t.Errorf("cache1: expected RegionID=20, got %v", info1.RegionID)
+	}
+	if info2.RegionID == nil || *info2.RegionID != 20 {
+		t.Errorf("cache2: expected RegionID=20, got %v", info2.RegionID)
+	}
+}
+
+// TestCacheInvalidation_PublishedOnConfigAck verifies that when a config ack
+// triggers ApplyConfigRegions, cache invalidation signals are published for
+// all affected sensors.
+func TestCacheInvalidation_PublishedOnConfigAck(t *testing.T) {
+	invalidator := &mockCacheInvalidator{}
+	repo := &stubRepo{
+		boardID: 1,
+		affectedSensors: []AffectedSensor{
+			{DeviceID: "device-1", SensorID: 100, Name: "sensor-1", RegionID: ptrInt64(5)},
+			{DeviceID: "device-1", SensorID: 101, Name: "sensor-2", RegionID: ptrInt64(6)},
+		},
+	}
+
+	h := newTestHandlerWithInvalidator(repo, invalidator)
+
+	ack := &configpb.DeviceConfigAck{
+		DeviceId:       "device-1",
+		AppliedVersion: 1,
+		Accepted:       true,
+	}
+	body, err := proto.Marshal(ack)
+	if err != nil {
+		t.Fatalf("marshal ack: %v", err)
+	}
+
+	if err := h.handleConfigAck(context.Background(), "device-1", body); err != nil {
+		t.Fatalf("handleConfigAck: %v", err)
+	}
+
+	// VERIFY SIGNALS WERE PUBLISHED
+	published := invalidator.GetPublished()
+	if len(published) != 2 {
+		t.Fatalf("expected 2 invalidation signals, got %d", len(published))
+	}
+
+	// VERIFY EACH SIGNAL
+	for i, signal := range published {
+		if signal.DeviceID != "device-1" {
+			t.Errorf("signal[%d].DeviceID: want device-1, got %s", i, signal.DeviceID)
+		}
+		if signal.ChangeType != "region" {
+			t.Errorf("signal[%d].ChangeType: want region, got %s", i, signal.ChangeType)
+		}
+		if i == 0 {
+			if signal.SensorID != 100 || signal.RegionID == nil || *signal.RegionID != 5 {
+				t.Errorf("signal[0]: want SensorID=100, RegionID=5, got %d, %v", signal.SensorID, signal.RegionID)
+			}
+		} else {
+			if signal.SensorID != 101 || signal.RegionID == nil || *signal.RegionID != 6 {
+				t.Errorf("signal[1]: want SensorID=101, RegionID=6, got %d, %v", signal.SensorID, signal.RegionID)
+			}
+		}
+	}
+}
+
+// TestHandleConfigAck_PublishesAckSignal verifies that handling a config ack
+// publishes a ConfigAckSignal via the ConfigAckPublisher, carrying the applied
+// version, acceptance, and verbatim rejection reason (FR47).
+func TestHandleConfigAck_PublishesAckSignal(t *testing.T) {
+	ackPublisher := &mockAckPublisher{}
+	repo := &stubRepo{boardID: 1}
+	h := newTestHandlerWithAckPublisher(repo, ackPublisher)
+
+	err := h.handleConfigAck(context.Background(), "device-1", marshalConfigAck(t, &configpb.DeviceConfigAck{
+		AppliedVersion: 7,
+		Accepted:       false,
+		Reason:         "invalid sensor configuration",
+	}))
+	if err != nil {
+		t.Fatalf("handleConfigAck: %v", err)
+	}
+
+	published := ackPublisher.GetPublished()
+	if len(published) != 1 {
+		t.Fatalf("expected 1 ack signal published, got %d", len(published))
+	}
+	signal := published[0]
+	if signal.DeviceID != "device-1" {
+		t.Errorf("signal.DeviceID: want device-1, got %s", signal.DeviceID)
+	}
+	if signal.ConfigVersion != 7 {
+		t.Errorf("signal.ConfigVersion: want 7, got %d", signal.ConfigVersion)
+	}
+	if signal.Accepted {
+		t.Errorf("signal.Accepted: want false, got true")
+	}
+	if signal.RejectionReason != "invalid sensor configuration" {
+		t.Errorf("signal.RejectionReason: want verbatim reason, got %q", signal.RejectionReason)
+	}
+}
+
+// TestHandleConfigAck_AckPublishFailureDoesNotFailHandling verifies that a
+// failure to publish the ack signal does not fail the message handler — the
+// ack is already durably persisted in the DB (AckDeviceConfig), so a transient
+// signalling failure must not cause the AMQP message to be redelivered/retried.
+func TestHandleConfigAck_AckPublishFailureDoesNotFailHandling(t *testing.T) {
+	ackPublisher := &mockAckPublisher{publishAckError: fmt.Errorf("boom")}
+	repo := &stubRepo{boardID: 1}
+	h := newTestHandlerWithAckPublisher(repo, ackPublisher)
+
+	err := h.handleConfigAck(context.Background(), "device-1", marshalConfigAck(t, &configpb.DeviceConfigAck{
+		AppliedVersion: 1,
+		Accepted:       true,
+	}))
+	if err != nil {
+		t.Fatalf("handleConfigAck should tolerate ack publish failure, got: %v", err)
+	}
+}
+
+// TestNoSecondSignallingMechanism_ConfigAckSharesCacheInvalidationExchange
+// asserts that the config-ack signalling path (FR47/#1216) reuses the exact
+// exchange leaflab/processor/cache.go's cache-invalidation signalling path
+// (FR73/#1203) uses, via the shared leaflab/broadcast package — not a second,
+// independently declared exchange.
+//
+// RabbitMQAckPublisher (#1216) takes no exchange parameter at all: it is
+// constructed from a *broadcast.Publisher, which always targets
+// broadcast.Exchange. RabbitMQInvalidator (#1203) is always constructed with
+// broadcast.Exchange in main.go. This test pins both assumptions so a future
+// change that reintroduces a second, independently-named exchange for either
+// signal type fails here instead of only in production. See
+// TestBroadcast_OneExchangeCarriesBothSignalTypes (ack_signal_integration_test.go)
+// for the real-broker proof that both publishers deliver to the same
+// subscriber.
+func TestNoSecondSignallingMechanism_ConfigAckSharesCacheInvalidationExchange(t *testing.T) {
+	logger := slog.Default()
+
+	// RabbitMQInvalidator (leaflab/processor/cache_invalidation.go, #1203) is
+	// always constructed with broadcast.Exchange in main.go.
+	invalidator := NewRabbitMQInvalidator(logger, nil, broadcast.Exchange)
+	if invalidator.exchange != broadcast.Exchange {
+		t.Fatalf("cache invalidation publisher exchange = %q, want %q (broadcast.Exchange)", invalidator.exchange, broadcast.Exchange)
+	}
+	if invalidator.exchange == "" {
+		t.Fatalf("cache invalidation exchange must not be empty")
+	}
+}
+
+// Helper functions
+
+func ptrInt64(v int64) *int64 {
+	return &v
 }

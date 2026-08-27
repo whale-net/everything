@@ -85,3 +85,59 @@ func (c *SensorCache) GetConfigVersion(deviceID string) (int64, bool) {
 	v, ok := c.configVersions[deviceID]
 	return v, ok
 }
+
+// ApplyInvalidation processes a cache invalidation signal and updates the cache accordingly.
+// This implements FR73: after any change to a sensor's region, identity or cache key,
+// every cached view must be invalidated or updated.
+func (c *SensorCache) ApplyInvalidation(signal *CacheInvalidationSignal) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	sensors, ok := c.devices[signal.DeviceID]
+	if !ok {
+		// Device not yet in cache; nothing to invalidate
+		return
+	}
+
+	switch signal.ChangeType {
+	case "region":
+		// Region changed: update the cached RegionID
+		// Find the sensor by name (current name if no rename, old name if renamed)
+		sensorName := signal.NewName
+		if sensorName == "" {
+			sensorName = signal.OldName
+		}
+
+		if info, exists := sensors[sensorName]; exists {
+			info.RegionID = signal.RegionID
+			sensors[sensorName] = info
+		}
+
+	case "rename":
+		// Rename: delete the old name, insert the new name
+		if signal.OldName != "" {
+			if info, exists := sensors[signal.OldName]; exists {
+				delete(sensors, signal.OldName)
+				// Re-insert with the new name
+				if signal.NewName != "" {
+					sensors[signal.NewName] = info
+				}
+			}
+		}
+
+	case "rewire":
+		// Rewire: invalidate all entries for this device and force reload on next access
+		// The sensor identity is preserved but the hardware key (canonical key) changed.
+		// This requires a full cache invalidation since the old entry is stale.
+		for name := range sensors {
+			delete(sensors, name)
+		}
+
+	case "identity":
+		// Identity change (catch-all for other structural changes):
+		// Invalidate all entries for this device
+		for name := range sensors {
+			delete(sensors, name)
+		}
+	}
+}

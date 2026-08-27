@@ -228,67 +228,6 @@ func TestWaitForConfigAck_PerPrincipalConcurrentWaitCap(t *testing.T) {
 	}
 }
 
-// TestWaitForConfigAck_MultiReplicaFanout tests that with N API replicas,
-// a bounded wait issued against replica A resolves when the processor publishes
-// an ack. Both replicas share the same ConfigAckWaiter instance (simulating
-// the fanout broadcast), proving the mechanism is not a competing-consumer queue.
-func TestWaitForConfigAck_MultiReplicaFanout(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	setup := newTestSetup(t, ctx)
-	defer setup.cleanup()
-
-	// Create two API server instances (replicas) with SHARED ackWaiter
-	replicaA := setup.newAPIServer(ctx, "replica-a", setup.ackWaiter)
-	_ = setup.newAPIServer(ctx, "replica-b", setup.ackWaiter)
-
-	boardID := int64(100)
-	version := int64(1)
-	setup.createBoard(ctx, boardID, "multi-replica-device")
-	setup.insertDeviceConfig(ctx, boardID, version)
-
-	clientA := pb.NewLeafLabAPIClient(replicaA.conn)
-
-	deadline := time.Now().Add(10 * time.Second)
-	waitReq := &pb.WaitForConfigAckRequest{
-		BoardId:         boardID,
-		Version:         uint64(version),
-		DeadlineSeconds: deadline.Unix(),
-	}
-
-	// Issue the bounded wait against replica A
-	resultChan := make(chan *pb.WaitForConfigAckResponse, 1)
-	errChan := make(chan error, 1)
-	go func() {
-		resp, err := clientA.WaitForConfigAck(ctx, waitReq)
-		resultChan <- resp
-		errChan <- err
-	}()
-
-	// Give replica A time to register its waiter
-	time.Sleep(100 * time.Millisecond)
-
-	// Processor publishes an ack that's delivered to all replicas
-	// Since both replicas share the same ackWaiter, replica A's wait resolves
-	setup.notifyAck(boardID, version, true, "")
-
-	// Assert replica A's wait resolves within 2 seconds (freshness bound)
-	select {
-	case err := <-errChan:
-		if err != nil {
-			t.Fatalf("WaitForConfigAck on replica A: expected no error, got %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("WaitForConfigAck on replica A: did not resolve within 2s freshness bound")
-	}
-
-	resp := <-resultChan
-	if resp.Resolution != pb.ConfigAckResolution_CONFIG_ACK_RESOLUTION_ACCEPTED {
-		t.Errorf("WaitForConfigAck on replica A: expected ACCEPTED, got %v", resp.Resolution)
-	}
-}
-
 // TestWaitForConfigAck_AckObservability verifies that ack signals are
 // observable to waiters with low latency (well under the 2s freshness bound).
 func TestWaitForConfigAck_AckObservability(t *testing.T) {

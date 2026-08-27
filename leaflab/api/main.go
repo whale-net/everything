@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -12,7 +11,6 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
-	"time"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/ratelimit"
@@ -23,15 +21,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
-
-// AckSignalMessage represents the JSON structure of config ack signals from the processor.
-type AckSignalMessage struct {
-	AckedAt         time.Time `json:"acked_at"`
-	DeviceID        string    `json:"device_id"`
-	ConfigVersion   int64     `json:"config_version"`
-	Accepted        bool      `json:"accepted"`
-	RejectionReason string    `json:"rejection_reason,omitempty"`
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -91,52 +80,25 @@ func run() error {
 	// Create config ack waiter for bounded-wait RPC
 	ackWaiter := NewConfigAckWaiter()
 
-	// Create consumer for ack signals (using a unique queue name)
-	ackQueueName := "leaflab-api-ack-signals"
-	ackConsumer, err := rmq.NewConsumer(rmqConn, ackQueueName)
+	// Subscribe to config-ack broadcast signals over the shared leaflab
+	// broadcast exchange (leaflab/broadcast) — the same fanout exchange
+	// leaflab/processor/cache.go's cache-invalidation listener uses
+	// (FR73/#1203) — via a private, ephemeral queue exclusive to this
+	// replica. Every API replica does this independently, so every replica
+	// receives every ack signal (NFR15); this is not a competing-consumer
+	// work queue.
+	ackListener, err := NewAckListener(logging.Get("ack-listener"), rmqConn, repo, ackWaiter)
 	if err != nil {
-		return fmt.Errorf("failed to create consumer for ack signals: %w", err)
+		return fmt.Errorf("failed to create ack listener: %w", err)
 	}
-	defer ackConsumer.Close() //nolint:errcheck
+	defer ackListener.Close() //nolint:errcheck
 
-	// Bind to the ack signal exchange (fanout for all replicas)
-	if err := ackConsumer.BindExchange("amq.topic", []string{"leaflab.config-ack"}); err != nil {
-		return fmt.Errorf("failed to bind ack exchange: %w", err)
-	}
-
-	// Create a message handler that bridges ack signals to waiting clients
-	ackMsgHandler := func(msgCtx context.Context, msg rmq.Message) error {
-		var signal AckSignalMessage
-		if err := json.Unmarshal(msg.Body, &signal); err != nil {
-			logger.Warn("failed to unmarshal ack signal",
-				"routing_key", msg.RoutingKey,
-				"err", err)
-			return nil // Non-fatal, don't requeue
-		}
-
-		// Look up the board ID from the device ID
-		boardID, err := repo.GetOrCreateBoard(msgCtx, signal.DeviceID)
-		if err != nil {
-			logger.Warn("failed to look up board for ack notification",
-				"device_id", signal.DeviceID,
-				"err", err)
-			return nil
-		}
-
-		// Notify all waiters for this (board_id, version)
-		ackWaiter.NotifyAck(boardID, signal.ConfigVersion, signal.Accepted, signal.RejectionReason, signal.AckedAt)
-		return nil
-	}
-
-	ackConsumer.RegisterHandler("leaflab.config-ack", ackMsgHandler)
-
-	// Start the ack consumer in a background goroutine
 	listenerCtx, listenerCancel := context.WithCancel(context.Background())
 	defer listenerCancel()
 
 	go func() {
-		if err := ackConsumer.Start(listenerCtx); err != nil && !errors.Is(err, context.Canceled) {
-			logger.Error("ack consumer error", "err", err)
+		if err := ackListener.Start(listenerCtx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("ack listener error", "err", err)
 		}
 	}()
 

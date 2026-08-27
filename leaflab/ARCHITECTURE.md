@@ -127,6 +127,66 @@ FirmwarePublisher.HandleConfigMessage():
 | `leaflab.<dev>.config` | Decode `DeviceConfig`, persist as JSONB to `device_config` table |
 | `leaflab.<dev>.config.ack` | On accept: apply region assignments, update config version cache |
 
+
+## Cross-process broadcast signalling (FR73 Phase 3, FR47/NFR15 Phase 4)
+
+### The Problem
+
+The processor's `SensorCache` holds a current-value view of each sensor's region, name, and hardware key. When these properties change (via `ApplyConfigRegions`, API assignment, rename, or rewire), the cache becomes stale and continues to stamp readings with outdated values until the board reboots or the cache entry expires. This violates FR73: "no cached view of a sensor may outlive the fact it caches, in any process."
+
+### The Solution: Broadcast Cache Invalidation
+
+**Mechanism: AMQP fanout exchange + in-process event handlers**
+
+1. **Publisher:** Every writer of sensor properties publishes a `CacheInvalidationSignal` to a dedicated fanout exchange (`leaflab.cache-invalidations`) when a change commits:
+   - `ApplyConfigRegions` (processor, Phase 3)
+   - API region assignment (Phase 5, FR51)
+   - Rename (Phase 5, FR52)
+   - Rewire (Phase 2, #1202, when identity changes)
+
+2. **Subscriber:** The processor (and any future multi-replica components in Phase 4) subscribes to the fanout exchange and applies changes to the in-memory cache in real time.
+
+3. **Guarantee:** Fanout delivery ensures all subscribers receive the signal (broadcast, not queue). A competing-consumer queue would pass CI with N=1 but fail when Phase 4 introduces multiple API replicas pinned to a single reader (FR47).
+
+### Signal Flow
+
+```
+Writer (Processor, API, etc.)
+  ↓ commits region/identity change to DB
+  ↓ publishes CacheInvalidationSignal to fanout exchange
+  ↓
+AMQP Fanout Exchange (leaflab.cache-invalidations)
+  ↓ (broadcast to all subscribed queues)
+  ├→ Processor's queue → ApplyInvalidation → SensorCache updated
+  ├→ API's queue (Phase 4) → ApplyInvalidation → in-memory cache updated
+  └→ (future replicas all receive)
+```
+
+### Invalidation Types
+
+- **"region":** RegionID changed; update the cached value in place.
+- **"rename":** Sensor name changed; delete the old name key, insert the new name key.
+- **"rewire":** Hardware key (canonical key: i2c_address, mux_path, sensor_type) changed; invalidate all entries for the device (full reload on next access required).
+- **"identity":** Catch-all for other structural changes; invalidate device entries.
+
+### Phase 4 Reuse
+
+Phase 4 (NFR15 ack observability, FR47) reuses this same broadcast mechanism to publish
+acknowledgement signals — **one signalling path, not two.** The shared `leaflab/broadcast`
+Go package is the single place both signal types (and any future one) are declared: it owns
+`Exchange` (`leaflab.cache-invalidations`), the routing key for each signal type, the
+`Publisher` wrapper, and `NewListener` (the ephemeral, per-instance subscriber used for
+components — like API replicas — that need every instance to receive every signal). See
+"Config Acknowledgement Observability (FR47 — Bounded Wait)" below for how the API side uses
+this.
+
+### Design Constraints
+
+- **Single-replica processor:** The processor is declared as single-replica (see `leaflab/processor/BUILD.bazel` line ~57). This is a correctness constraint: the processor is the sole writer of the read path, and fanout ensures consistency without race conditions.
+- **5-second response bound:** A reading recorded more than 5 seconds after a region assignment commits must reflect the new region (FR73 acceptance criterion 3). Achieved by synchronous signal publication + immediate in-process handling.
+- **No poll-based sync:** The old approach (cache expiry + periodic DB checks) was replaced by event-driven invalidation to meet the 5-second bound.
+
+---
 ---
 
 ## Database Schema
@@ -205,21 +265,30 @@ LeafLab board configs (`*_config.cc`) wire these libraries to concrete hardware 
 
 ## Config Acknowledgement Observability (FR47 — Bounded Wait)
 
-**Phase 4 reuses the Phase 3 broadcast signalling path** (leaflab.cache-invalidations exchange).
-A new exchange for acks is created as a separate fanout to avoid mixing concerns, but the
-mechanism and deployment model are identical: AMQP fanout broadcast ensures every API replica
-receives ack signals.
+**Phase 4 reuses the Phase 3 broadcast signalling path exactly** — the same
+`leaflab.cache-invalidations` fanout exchange (`leaflab/broadcast.Exchange`), not a second,
+independently-declared exchange. Ack signals are distinguished from cache-invalidation signals
+purely by routing key (`leaflab/broadcast.RoutingKeyConfigAck` vs.
+`RoutingKeyCacheInvalidation`); both are published from the processor through the same
+`*rmq.Publisher`/channel (see `leaflab/processor/main.go`).
 
 ### Signalling Path: Processor → All API Replicas
 
 When the processor receives a device acknowledgement:
 
 1. **Processor receives ack** over MQTT (`leaflab.<id>/config.ack` topic)
-2. **Processor publishes ConfigAckSignal** to `leaflab.config-ack` fanout exchange
-   - Exchange ensures all API replicas receive the signal (not a competing-consumer queue)
-   - Signal carries device_id, config_version, accepted/rejected flag, rejection reason
-3. **Each API replica** has a LocalConfigAckListener subscribed to the fanout
-   - Delivers signals to any waiting callers via callback registration
+2. **Processor publishes `broadcast.ConfigAckSignal`** (`leaflab/processor/ack_signal.go`'s
+   `RabbitMQAckPublisher`) to the shared `leaflab.cache-invalidations` fanout exchange, routing
+   key `leaflab.config-ack`
+   - The fanout exchange ensures every API replica receives the signal — not a
+     competing-consumer queue
+   - Signal carries device_id, config_version, accepted/rejected flag, verbatim rejection reason
+3. **Each API replica** runs its own `AckListener` (`leaflab/api/ack_listener.go`), built on
+   `broadcast.NewListener` — a private, ephemeral, broker-assigned queue exclusive to that
+   replica's connection, bound to the shared exchange. This is the API-side counterpart to
+   `leaflab/processor/cache.go`'s invalidation subscriber: same exchange, same package
+   (`leaflab/broadcast`), different routing key.
+   - Delivers signals to any waiting callers via `ConfigAckWaiter.NotifyAck`
 4. **Waiting client** receives the result within 2 s at p95 (bounded by NFR15)
 
 ### Bounded Wait Constraint
@@ -233,10 +302,16 @@ The API's `WaitForConfigAck` RPC:
 
 ### Why Not a Work Queue?
 
-A competing-consumer queue (e.g., RabbitMQ default queue) would fail the N-replica test:
-- With N API replicas, only one replica receives an ack from a queue
+A competing-consumer queue (e.g., a durable queue with a fixed name shared by every replica)
+would fail the N-replica test:
+- With N API replicas sharing one named queue, only one replica receives any given ack
 - A caller pinned to a different replica would time out
 - This violates NFR15's "every replica" broadcast constraint
 
-The fanout exchange solves this: all replicas receive every ack, so any replica can
-satisfy a waiting caller.
+`broadcast.NewListener`'s ephemeral, broker-assigned queue per call is what makes every replica
+independent: each replica's queue is exclusive to it, so the fanout exchange delivers a copy of
+every message to every replica, not to one arbitrary consumer.
+`leaflab/broadcast/broadcast_integration_test.go` and
+`leaflab/api/ack_fanout_integration_test.go` prove this against a real RabbitMQ broker with two
+genuinely independent listener instances — the failure mode above is exactly what those tests
+would catch.

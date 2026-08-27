@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "broadcast",
+    srcs = ["broadcast.go"],
+    importpath = "github.com/whale-net/everything/leaflab/broadcast",
+    visibility = ["//visibility:public"],
+    deps = ["//libs/go/rmq"],
+)
+
+# Real-broker fanout proof. Requires Docker; see libs/go/rmqtest/README.md
+# for the exact bazel invocation.
+go_test(
+    name = "broadcast_test",
+    srcs = ["broadcast_integration_test.go"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":broadcast",
+        "//libs/go/rmq",
+        "//libs/go/rmqtest",
+    ],
+)
