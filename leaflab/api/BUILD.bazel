@@ -74,6 +74,7 @@ go_test(
         "audit_registry_test.go",
         "auth_test.go",
         "main_test.go",
+        "server_admin_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
@@ -244,5 +245,44 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Real-Postgres integration coverage for FR10/FR12 activation's admin
+# standing lane and elevation lifecycle -- see
+# admin_elevation_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as the other integration go_test targets above.
+# Does not embed dbtest_helpers_integration_test.go: this file's schema
+# (household, admin_elevation, sensor, etc.) is self-contained and
+# deliberately not shared with the other integration files' schemas, same
+# rationale as authz_scope_integration_test.go's own schema.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:admin_elevation_integration_test --test_output=all
+go_test(
+    # keep
+    name = "admin_elevation_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "admin_elevation_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )

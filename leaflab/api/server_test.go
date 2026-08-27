@@ -38,6 +38,70 @@ type fakeRepo struct {
 	listBoardsScope authz.Scope
 	listBoardsRows  []BoardRow
 	listBoardsErr   error
+
+	// -- Admin (FR10, FR12 activation) fakes -- server_admin_test.go's
+	// tests configure these directly and read the *Calls slices back to
+	// assert delegation shape (e.g. "the exact target household requested,
+	// not a widened one") without a live Postgres connection.
+	adminByPersonArg   string
+	adminByPersonRows  []AdminBoardHealthRow
+	adminByPersonErr   error
+	adminByPersonCalls int
+
+	adminByPartialArg   string
+	adminByPartialRows  []AdminBoardHealthRow
+	adminByPartialErr   error
+	adminByPartialCalls int
+
+	auditEntries   []audit.Entry
+	recordAuditErr error
+
+	householdExistsArg int64
+	householdExists    bool
+	householdExistsErr error
+
+	openElevationCalls []openElevationCall
+	openElevationErr   error
+
+	renewElevationCalls []renewElevationCall
+	renewElevationErr   error
+
+	endElevationCalls []endElevationCall
+	endElevationErr   error
+
+	activeElevationSubject   string
+	activeElevationHousehold int64
+	activeElevationExpiresAt time.Time
+	activeElevationErr       error
+	activeElevationCalls     int
+}
+
+// openElevationCall/renewElevationCall/endElevationCall capture the exact
+// arguments a fakeRepo admin elevation method was called with, so a test
+// can assert the handler passed through the caller's subject and the
+// request's target household unmodified (FR10.3's "an elevation against
+// household A does not open household B" starts with this: the handler
+// must never substitute a different household than the one requested).
+type openElevationCall struct {
+	adminSubject      string
+	targetHouseholdID int64
+	reason            string
+	expiresAt         time.Time
+	entry             audit.Entry
+}
+
+type renewElevationCall struct {
+	adminSubject      string
+	targetHouseholdID int64
+	reason            string
+	newExpiresAt      time.Time
+	entry             audit.Entry
+}
+
+type endElevationCall struct {
+	adminSubject      string
+	targetHouseholdID int64
+	entry             audit.Entry
 }
 
 func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
@@ -62,41 +126,55 @@ func (f *fakeRepo) Ping(ctx context.Context) error {
 	return f.pingErr
 }
 
-// The five admin (FR10, FR12 activation) repository methods below have no
-// coverage in this file yet -- Implementation-phase scope was the five
-// admin RPCs themselves; a fake exercising these lands in the
-// Testing-phase task. Panicking stubs exist only so fakeRepo keeps
-// satisfying the (now wider) deviceRepository interface.
+// The eight admin (FR10, FR12 activation) repository methods below back
+// server_admin_test.go's coverage of the five admin RPCs -- each records
+// its call args (and, where a test needs to assert "called exactly N
+// times regardless of match count", a counter) so a test proves delegation
+// shape without a live Postgres connection. See admin_elevation_integration_test.go
+// for the real-SQL half of this coverage (e.g. RenewElevation only
+// extending an *already open* row).
 func (f *fakeRepo) AdminBoardHealthByPerson(ctx context.Context, personIdentifier string) ([]AdminBoardHealthRow, error) {
-	panic("not used by this file's tests")
+	f.adminByPersonCalls++
+	f.adminByPersonArg = personIdentifier
+	return f.adminByPersonRows, f.adminByPersonErr
 }
 
 func (f *fakeRepo) AdminBoardHealthByPartialDeviceID(ctx context.Context, partial string) ([]AdminBoardHealthRow, error) {
-	panic("not used by this file's tests")
+	f.adminByPartialCalls++
+	f.adminByPartialArg = partial
+	return f.adminByPartialRows, f.adminByPartialErr
 }
 
 func (f *fakeRepo) RecordAuditEntry(ctx context.Context, entry audit.Entry) error {
-	panic("not used by this file's tests")
+	f.auditEntries = append(f.auditEntries, entry)
+	return f.recordAuditErr
 }
 
 func (f *fakeRepo) HouseholdExists(ctx context.Context, householdID int64) (bool, error) {
-	panic("not used by this file's tests")
+	f.householdExistsArg = householdID
+	return f.householdExists, f.householdExistsErr
 }
 
 func (f *fakeRepo) OpenElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, expiresAt time.Time, entry audit.Entry) error {
-	panic("not used by this file's tests")
+	f.openElevationCalls = append(f.openElevationCalls, openElevationCall{adminSubject, targetHouseholdID, reason, expiresAt, entry})
+	return f.openElevationErr
 }
 
 func (f *fakeRepo) RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error {
-	panic("not used by this file's tests")
+	f.renewElevationCalls = append(f.renewElevationCalls, renewElevationCall{adminSubject, targetHouseholdID, reason, newExpiresAt, entry})
+	return f.renewElevationErr
 }
 
 func (f *fakeRepo) EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error {
-	panic("not used by this file's tests")
+	f.endElevationCalls = append(f.endElevationCalls, endElevationCall{adminSubject, targetHouseholdID, entry})
+	return f.endElevationErr
 }
 
 func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error) {
-	panic("not used by this file's tests")
+	f.activeElevationCalls++
+	f.activeElevationSubject = adminSubject
+	f.activeElevationHousehold = targetHouseholdID
+	return f.activeElevationExpiresAt, f.activeElevationErr
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call
