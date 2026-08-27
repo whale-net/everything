@@ -1,0 +1,45 @@
+"""End-to-end tests for leaflab/scripts/push-config.sh (FR81 Testing criteria).
+
+Needs grpcurl and jq on PATH and opens a real TCP listener -- not hermetic,
+same idiom as //leaflab/api:response_contract_integration_test. Tagged
+"manual"/"external"; run explicitly:
+
+    bazel test //leaflab/scripts/pushconfig_test:pushconfig_test --test_output=all
+"""
+
+load("@rules_go//go:def.bzl", "go_test")
+
+go_test(
+    name = "pushconfig_test",
+    size = "medium",
+    srcs = ["push_config_test.go"],
+    # grpcurl/jq (push-config.sh's own documented dependencies) are host
+    # tooling, not vendored via Bazel -- inherit the invoking shell's PATH
+    # so the sandboxed test action can find them, same as a developer
+    # running push-config.sh directly would. Without this, both tests
+    # silently t.Skip() under `bazel test` (Bazel's default sandboxed PATH
+    # is a fixed minimal one, not the user's full PATH) -- passing, not
+    # exercising anything.
+    env_inherit = ["PATH"],
+    data = [
+        "//leaflab/api/proto:leaflabapi_descriptor_set",
+        "//leaflab/scripts:push_config_sh",
+        "//leaflab/scripts:scenarios",
+        "//leaflab/scripts/authtoken",
+        "//leaflab/scripts/pushconfig_test/faketoken",
+    ],
+    tags = [
+        "external",
+        "manual",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
+        "@rules_go//go/runfiles",
+    ],
+)

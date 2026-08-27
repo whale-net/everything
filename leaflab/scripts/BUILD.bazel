@@ -1,0 +1,20 @@
+"""push-config.sh and its scenario fixtures.
+
+push-config.sh itself is not a Bazel-built artifact (it's a developer-run
+shell script -- see its own header comment), but it and its scenarios/*.json
+fixtures are exposed here as data so //leaflab/scripts/pushconfig_test can
+exercise it end to end (FR81 Testing criteria: authenticated push against a
+reflection-off server, and the no-credential actionable-failure path).
+"""
+
+filegroup(
+    name = "push_config_sh",
+    srcs = ["push-config.sh"],
+    visibility = ["//leaflab/scripts/pushconfig_test:__pkg__"],
+)
+
+filegroup(
+    name = "scenarios",
+    srcs = glob(["scenarios/*.json"]),
+    visibility = ["//leaflab/scripts/pushconfig_test:__pkg__"],
+)
