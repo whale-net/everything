@@ -298,8 +298,38 @@ The checklist, stripped of the example:
 10. Enforce in handlers, and write a test that asserts the *low*-privilege role
     is **rejected** — the negative test is the one that proves the boundary.
 
+## Device authorization grant (FR81) — client prerequisites
+
+`NewDeviceFlowDialOption` (`device_flow.go`) lets a human at a terminal obtain
+a credential non-interactively after a one-time interactive approval,
+resolving to **that human's own principal** — never a service account
+(A25). Its Keycloak client is a different shape from every client above, and
+must be created (or fixed) **before the implementation phase of that task
+lands**:
+
+| Setting | Required value | Why |
+|---|---|---|
+| **Client authentication** | **Off** (public client) | A public client has no secret; that absence is what makes this a human-approval flow rather than a machine-credential one. If the client is confidential, `NewDeviceFlowDialOption` becomes indistinguishable from `NewServiceAccountDialOption`, which A25 rejects for this use case. |
+| **Authentication flow** | **Device Authorization Grant** checked; **Standard flow**, **Direct access grants**, **Service accounts roles** unchecked | Restricts this client to exactly the RFC 8628 flow. |
+| **Realm-level device authorization grant** | Enabled (Realm settings → Tokens → Device Authorization Grant) | Keycloak gates the device flow behind a realm feature toggle independent of the per-client checkbox above; both must be on or every device-code request 400s. |
+| **Audience mapper** | Same as every other client (KEYCLOAK.md step 4d above) | Without it the resulting token has `aud: ["account"]` and the API's verifier rejects it — identical failure mode to the service-account gotcha. |
+| **Realm roles** | Assigned to the **human user** (or their group), not to the client | The client has no service account to attach roles to; roles come from the logged-in user exactly as with any browser login (see "Human users" above). |
+
+**This is a real infra prerequisite outside this repo's code** — record its
+status here rather than assuming it. As of this scaffold task, the client's
+device-authorization-grant configuration has **not been verified against a
+running Keycloak instance**; confirming and, if necessary, creating it is
+in scope for the implementation task that lands `device_flow.go`'s actual
+RFC 8628 logic, before that code is exercised against a real realm. Update
+this table with the verified client id and realm once confirmed.
+
+The rest of this document — creating the client, assigning the audience
+mapper, wiring env vars — follows the same steps as any other client in
+this guide; the table above is only the delta specific to the device flow.
+
 ## Related
 
 - [README.md](README.md) — `grpcauth` API, env vars, dial options
 - [auth.go](auth.go) — the verifier; `realm_access.roles` parsing lives here
+- [device_flow.go](device_flow.go) — the device authorization grant credential (FR81)
 - [`tools/app_registry/ARCHITECTURE.md`](../../../tools/app_registry/ARCHITECTURE.md) — the role split this guide implements
