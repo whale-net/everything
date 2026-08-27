@@ -25,11 +25,10 @@
 -- already distinguishes any other empty result, via a separate region
 -- existence check if it needs to.
 --
--- Intended callers, once wired: FR72's repointed v_sensor_reading_with_plant
--- (a view can CROSS JOIN LATERAL a set-returning function) and the read
--- path's per-region aggregate (FR20). Neither is wired to this function yet
--- -- that repoint is out of this task's scope per the issue's "moved out of
--- the plant phase" note.
+-- Callers: FR72's repointed v_sensor_reading_with_plant (migration 021 --
+-- `LEFT JOIN LATERAL attribute_region_plants(...)`) is wired to this
+-- function. The read path's per-region aggregate (FR20) is not wired yet --
+-- that lands with FR20 itself, a later task.
 CREATE FUNCTION attribute_region_plants(p_region_id BIGINT, p_at TIMESTAMPTZ)
 RETURNS TABLE (attributed_region_id BIGINT, plant_id BIGINT, plant_name TEXT)
 AS $$
