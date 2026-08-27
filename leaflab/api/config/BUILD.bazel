@@ -28,16 +28,18 @@ go_library(
 # EDIT-scope materialisation (materialise_test.go) and removal-key
 # resolution (removekey_test.go). FR39/FR37 pure-logic unit tests:
 # server-side push validation (validate_test.go) and server-computed diff
-# (diff_test.go) are added by this same package's Testing-phase task.
-# This package has no database dependency (see doc.go), so these need no
-# Docker/network fixture and run under plain `bazel test //leaflab/...`.
+# (diff_test.go). This package has no database dependency (see doc.go), so
+# these need no Docker/network fixture and run under plain
+# `bazel test //leaflab/...`.
 go_test(
     name = "config_test",
     size = "small",
     srcs = [
         "canonical_test.go",
+        "diff_test.go",
         "materialise_test.go",
         "removekey_test.go",
+        "validate_test.go",
     ],
     embed = [":config"],
     deps = [
