@@ -55,3 +55,70 @@ go_test(
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
+
+# Real-Postgres integration coverage for migration 017_plant_region_history's
+# schema, attribution-neutral snapped-to-hour backfill and database-side
+# no-back-dating guard (FR19, FR21, NFR6.1, NFR6.2) -- see
+# plant_region_history_migration_integration_test.go's doc comment. Same
+# hand-written rationale, tag set and embed-its-own-migrations pattern as
+# ownership_migration_integration_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/migrate:plant_region_history_migration_integration_test --test_output=all
+go_test(
+    # keep
+    name = "plant_region_history_migration_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["plant_region_history_migration_integration_test.go"],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
+
+# Real-Postgres integration coverage for FR23's nearest-ancestor plant
+# attribution rule (A2, A11) -- leaflab/api/attribution.Resolver and its SQL
+# twin, attribute_region_plants (migration 019) -- see
+# attribution_migration_integration_test.go's doc comment. Same
+# hand-written rationale, tag set and embed-its-own-migrations pattern as
+# the sibling integration tests above; additionally depends on
+# //leaflab/api/attribution to exercise the Go implementation directly
+# against the same fixture.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/migrate:attribution_migration_integration_test --test_output=all
+go_test(
+    # keep
+    name = "attribution_migration_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["attribution_migration_integration_test.go"],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/attribution",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
