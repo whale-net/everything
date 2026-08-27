@@ -8,14 +8,16 @@ Plant and environment monitoring firmware and data pipeline.
 
 ## Start Here
 
-- [README.md](README.md) — What LeafLab is, quick start commands, relationship to `//firmware`
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Link-seam board config pattern, dynamic sensor factory, pipeline overview
+- [README.md](README.md) — What LeafLab is, quick start commands, both deployables' ports and `bazel run` commands, relationship to `//firmware`
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Link-seam board config pattern, dynamic sensor factory, pipeline overview, the auth boundary between `leaflab-api`/`leaflab-ui` (A8), the processor's single-writer constraint (NFR9)
 - [DATA.md](DATA.md) — ER diagram, sensor identity model, SCD2 convention, config push flow, reading write path, mux_path format, analytical views reference
 
 ## Projects
 
 - [sensorboard/README.md](sensorboard/README.md) — Build, flash, extend the sensorboard firmware; how to add sensors and board configs
 - [sensorboard/CLAUDE.md](sensorboard/CLAUDE.md) — Agent instructions: flash/validate workflow, I2C hardware notes, config push, DB validation
+- [api/ENV.md](api/ENV.md) — Every `leaflab-api` environment variable: auth mode/dev mode, OIDC settings, the A30 production-exposure gate. Read when configuring, deploying, or debugging `leaflab-api`.
+- [ui/ENV.md](ui/ENV.md) — Every `leaflab-ui` environment variable: port, OIDC settings, session database, gRPC token-forwarding mode. Read when configuring, deploying, or debugging `leaflab-ui`.
 
 ## Related Docs
 
