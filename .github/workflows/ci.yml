@@ -321,6 +321,62 @@ jobs:
         path: bazel-testlogs/
         retention-days: 7
 
+  # NFR15's falsifiable every-replica ack broadcast test (issue #1373's
+  # Validation: "the two-replica test is in CI, not manual").
+  # //leaflab/api:nfr15_ack_broadcast_integration_test is tagged `manual`
+  # (see leaflab/api/BUILD.bazel), so the Test job above skips it. It is
+  # real-RabbitMQ, testcontainers-go backed -- not //libs/go/dbtest --
+  # so it is not picked up by the Test Database Integration job's
+  # rdeps(//libs/go/dbtest:dbtest) query either. It needs the same Docker
+  # daemon prerequisite as that job (setup-docker: 'true' below).
+  #
+  # This job names the target explicitly rather than discovering it by
+  # query, unlike test-database: only this one NFR15-critical test is
+  # in scope for #1373. Other leaflab `manual`-tagged Docker-backed
+  # integration tests (leaflab/processor:invalidation_integration_test,
+  # leaflab/hwkey, leaflab/migrate, leaflab/ui, leaflab/api's other
+  # dbtest-backed integration tests, etc.) remain manual-only; wiring
+  # those into CI is tracked separately, not part of this requirement.
+  test-leaflab-broadcast:
+    name: Test Leaflab NFR15 Ack Broadcast (two-replica)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Setup Build Environment
+      uses: ./.github/actions/setup-build-env
+      with:
+        cache-suffix: 'ci'
+        setup-docker: 'true'
+        bazel-remote-cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+        bazel-remote-cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+        bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+        bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+
+    - name: Run NFR15 ack broadcast integration test
+      run: |
+        set -euo pipefail
+        # No --test_tag_filters: combining it with an explicit label makes
+        # Bazel report "No test targets were found" (see
+        # libs/go/dbtest/README.md's "Running it" section, same underlying
+        # Bazel behavior applies here).
+        bazel test --config=ci \
+          //leaflab/api:nfr15_ack_broadcast_integration_test \
+          --test_output=streamed
+        bazel shutdown
+
+    - name: Upload test results
+      uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: test-results-leaflab-broadcast
+        path: bazel-testlogs/
+        retention-days: 7
+
   # Plan Docker builds - determine which apps need building
   #
   # Disabled: nothing consumes the images this produces right now, and the

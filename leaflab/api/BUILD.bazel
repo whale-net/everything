@@ -479,6 +479,14 @@ go_test(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //leaflab/api:nfr15_ack_broadcast_integration_test --test_output=all
+#
+# Also runs in CI: the `test-leaflab-broadcast` job in
+# .github/workflows/ci.yml invokes this target by name (it is `manual` so
+# the wildcard Test job's `bazel coverage //...` skips it, and it depends
+# on real RabbitMQ via testcontainers-go rather than //libs/go/dbtest, so
+# the Test Database Integration job's rdeps query doesn't pick it up
+# either) -- see issue #1373's Validation: "the two-replica test is in
+# CI, not manual."
 go_test(
     # keep
     name = "nfr15_ack_broadcast_integration_test",
