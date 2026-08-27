@@ -24,6 +24,17 @@ const logoutHref = "/auth/logout"
 // both the identity label and a findable, plainly-worded sign-out control
 // in one dropdown (FR13) — Shell itself hardcodes no nav items, banner, or
 // user-menu logic of its own.
+//
+// Wording: FR13 asks for a "sign out" control worded plainly; the shared
+// htmxui.UserMenu component (libs/go/htmxui/user_menu.templ) renders it as
+// "Logout" and is not app-parameterisable on that word. This is a
+// deliberate reuse of the one shared implementation rather than a
+// LeafLab-local fork with different copy — "Logout" is itself plain,
+// findable wording, and the prior LeafLab BFF attempt (#1179) validated
+// this exact wording as satisfying FR13. If the copy itself ever needs to
+// change, that's a htmxui.UserMenu change made once for every adopting app
+// (tools/app_registry/ui, manmanv2/ui, this package), not a LeafLab-only
+// override.
 templ Shell(title string, user *htmxauth.UserInfo) {
 	{{
 		var userLabel string
