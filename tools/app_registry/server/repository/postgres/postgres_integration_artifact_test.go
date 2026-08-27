@@ -997,7 +997,7 @@ func TestChartArtifact_CompositionPinnedAtRecordTime_SurvivesLaterReconcile(t *t
 	// 2. Handler layer: GetEnvironmentState -- the exact RPC the writeback
 	//    worker and deploy tooling call -- must render the same pinned set,
 	//    not whatever chart_app says today.
-	promotionSrv := handlers.NewPromotionServer(reg, nil)
+	promotionSrv := handlers.NewPromotionServer(reg, nil, nil)
 	stateResp, err := promotionSrv.GetEnvironmentState(ctx, &pb.GetEnvironmentStateRequest{EnvironmentKey: "dev"})
 	if err != nil {
 		t.Fatalf("GetEnvironmentState: %v", err)

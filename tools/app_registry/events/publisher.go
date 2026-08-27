@@ -209,7 +209,15 @@ func (p *Publisher) attach(backoffDuration *time.Duration, maxBackoff time.Durat
 		p.logger.Warn("failed to attach to broker, will retry",
 			"error", err,
 			"backoff", *backoffDuration)
-		time.Sleep(*backoffDuration)
+		// Interruptible by shutdown -- an uninterruptible time.Sleep here
+		// could hold backgroundPublisher's loop for up to maxBackoff before
+		// it ever notices p.doneCtx is done, letting Close() exceed its
+		// documented ~5s bounded-shutdown deadline (Property 4) by up to
+		// 12x on a slow/absent broker.
+		select {
+		case <-p.doneCtx.Done():
+		case <-time.After(*backoffDuration):
+		}
 		// Increase backoff for next attempt (capped at maxBackoff)
 		*backoffDuration *= 2
 		if *backoffDuration > maxBackoff {

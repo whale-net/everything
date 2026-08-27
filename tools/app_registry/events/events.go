@@ -16,6 +16,12 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+// PublisherInterface is the contract for publishing events. Both the real
+// Publisher and test fakes implement this interface.
+type PublisherInterface interface {
+	Publish(promotionID, eventKind, eventStatus string)
+}
+
 // ExchangeName is the RabbitMQ topic exchange name for app-registry's htmxsse
 // events. This is a dedicated exchange shared by UI, writeback worker, and
 // app-registry-server. All three processes must declare this exchange with
