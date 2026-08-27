@@ -2,9 +2,13 @@ package grpcauth
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,9 +72,26 @@ func NewDeviceFlowDialOption(ctx context.Context, config DeviceFlowConfig) (grpc
 		return nil, fmt.Errorf("failed to resolve device flow token cache path: %w", err)
 	}
 
+	// Discovery happens up front -- once here, at startup -- rather than
+	// lazily inside performDeviceFlow, because the resulting oauth2.Config
+	// is also needed later by refreshToken on cache-hit paths that never
+	// call performDeviceFlow at all.
+	endpoints, err := discoverDeviceEndpoints(ctx, config.IssuerURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover device flow endpoints: %w", err)
+	}
+
 	creds := &deviceFlowCreds{
 		config:    config,
 		cachePath: cachePath,
+		oauthConfig: &oauth2.Config{
+			ClientID: config.ClientID,
+			Scopes:   withOpenIDScope(config.Scopes),
+			Endpoint: oauth2.Endpoint{
+				DeviceAuthURL: endpoints.DeviceAuthorizationEndpoint,
+				TokenURL:      endpoints.TokenEndpoint,
+			},
+		},
 	}
 
 	if err := creds.loadCachedToken(); err != nil {
@@ -80,6 +101,20 @@ func NewDeviceFlowDialOption(ctx context.Context, config DeviceFlowConfig) (grpc
 	}
 
 	return grpc.WithPerRPCCredentials(creds), nil
+}
+
+// withOpenIDScope returns scopes with "openid" included, without mutating
+// the caller's slice.
+func withOpenIDScope(scopes []string) []string {
+	for _, s := range scopes {
+		if s == "openid" {
+			return scopes
+		}
+	}
+	out := make([]string, 0, len(scopes)+1)
+	out = append(out, "openid")
+	out = append(out, scopes...)
+	return out
 }
 
 // resolveTokenCachePath returns explicit unmodified when set, else a
@@ -170,57 +205,228 @@ func (d *deviceFlowCreds) RequireTransportSecurity() bool {
 // d.cachePath and populates d.token. Returns an error (triggering the
 // interactive device flow) when no usable cache exists.
 //
-// TODO(Implementation phase): read and parse the cache file, verify its
-// mode is 0600 (reject and re-authenticate rather than trust a
-// world-readable file), and reconstruct an *oauth2.Token. NFR13: do not log
-// the file's contents or include token material in the returned error.
+// NFR13: never log the file's contents or include token material in the
+// returned error -- every error path below is a fixed string or refers only
+// to the file path / mode, never to cachedToken's fields.
 func (d *deviceFlowCreds) loadCachedToken() error {
-	return fmt.Errorf("no cached device flow token")
+	info, err := os.Stat(d.cachePath)
+	if err != nil {
+		return fmt.Errorf("no cached device flow token")
+	}
+
+	if info.Mode().Perm()&0o077 != 0 {
+		// A world- or group-readable cache file is untrustworthy (it may
+		// have been tampered with, or copied somewhere insecure) --
+		// re-authenticate rather than trust it.
+		return fmt.Errorf("cached device flow token file has permissive mode %o (want 0600); re-authenticating", info.Mode().Perm())
+	}
+
+	data, err := os.ReadFile(d.cachePath)
+	if err != nil {
+		return fmt.Errorf("failed to read cached device flow token")
+	}
+
+	var cached cachedToken
+	if err := json.Unmarshal(data, &cached); err != nil {
+		return fmt.Errorf("failed to parse cached device flow token")
+	}
+	if cached.AccessToken == "" || cached.RefreshToken == "" {
+		return fmt.Errorf("cached device flow token is incomplete")
+	}
+
+	d.mu.Lock()
+	d.token = &oauth2.Token{
+		AccessToken:  cached.AccessToken,
+		RefreshToken: cached.RefreshToken,
+		Expiry:       time.Unix(cached.ExpiresAt, 0),
+	}
+	d.mu.Unlock()
+	return nil
 }
 
 // saveCachedToken persists token to d.cachePath with mode 0600.
 //
-// TODO(Implementation phase): create the parent directory, marshal
-// cachedToken to JSON, and write atomically (temp file + rename) with mode
-// 0600 set at creation time -- never a permissive default tightened later.
+// Writes atomically (temp file + rename) with mode 0600 set at file
+// creation time via os.CreateTemp + Chmod, before any data (including the
+// refresh token) is written to it -- never a permissive default tightened
+// after the fact, which would leave a window where the file is readable by
+// others.
 func (d *deviceFlowCreds) saveCachedToken(token *oauth2.Token) error {
-	return fmt.Errorf("device flow token cache persistence not yet implemented")
+	dir := filepath.Dir(d.cachePath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("failed to create device flow token cache directory: %w", err)
+	}
+
+	data, err := json.Marshal(cachedToken{
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		ExpiresAt:    token.Expiry.Unix(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal device flow token cache")
+	}
+
+	tmp, err := os.CreateTemp(dir, ".device-flow-token-*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create device flow token cache temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	// Best-effort cleanup; a no-op once the rename below succeeds since the
+	// temp path no longer exists at that name.
+	defer os.Remove(tmpPath)
+
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to set device flow token cache file permissions: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to write device flow token cache: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close device flow token cache temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, d.cachePath); err != nil {
+		return fmt.Errorf("failed to persist device flow token cache: %w", err)
+	}
+	return nil
 }
 
 // refreshToken exchanges the cached refresh token for a new access token
 // and updates both the in-memory and on-disk cache.
 //
-// TODO(Implementation phase): use d.oauthConfig (populated by
-// performDeviceFlow via issuer discovery) with oauth2's token source, or a
-// manual refresh_token grant against the discovered token endpoint. NFR13:
-// never log the refresh or access token.
+// Uses d.oauthConfig's TokenSource (populated from issuer discovery in
+// NewDeviceFlowDialOption) rather than a hand-rolled refresh_token POST. A
+// bare *oauth2.Token{RefreshToken: ...} with no AccessToken is intentionally
+// passed in: Token.Valid() treats an empty AccessToken as invalid
+// regardless of Expiry, so reuseTokenSource always takes the "refresh via
+// tokenRefresher" path instead of the "still valid, reuse it" path -- this
+// forces an actual refresh_token grant every time refreshToken is called,
+// rather than only once the access token is fully expired.
 func (d *deviceFlowCreds) refreshToken(ctx context.Context) error {
-	return fmt.Errorf("device flow token refresh not yet implemented")
+	d.mu.RLock()
+	current := d.token
+	oauthConfig := d.oauthConfig
+	d.mu.RUnlock()
+
+	if current == nil || current.RefreshToken == "" {
+		return fmt.Errorf("no refresh token available; re-run the device authorization grant")
+	}
+	if oauthConfig == nil {
+		return fmt.Errorf("device flow credential is missing endpoint configuration")
+	}
+
+	ts := oauthConfig.TokenSource(ctx, &oauth2.Token{RefreshToken: current.RefreshToken})
+	newToken, err := ts.Token()
+	if err != nil {
+		// NFR13: never include token material in the error. RetrieveError's
+		// Error() surfaces only the RFC 6749 error/error_description/
+		// error_uri fields, never token values.
+		return fmt.Errorf("failed to refresh device flow token: %w", err)
+	}
+
+	d.mu.Lock()
+	d.token = newToken
+	d.mu.Unlock()
+
+	return d.saveCachedToken(newToken)
 }
 
-// performDeviceFlow discovers the issuer's device authorization and token
-// endpoints, runs the RFC 8628 flow (printing the verification URI and user
-// code, then polling), and populates d.token on success.
+// performDeviceFlow runs the RFC 8628 flow against d.oauthConfig (already
+// populated from issuer discovery by NewDeviceFlowDialOption): requests a
+// device code, prints the verification URI and user code, polls the token
+// endpoint until the human approves it (or it is denied or expires), and
+// populates d.token on success.
 //
-// TODO(Implementation phase): discover endpoints via
-// discoverDeviceEndpoints, build an oauth2.Config from them, call
-// Config.DeviceAuth then Config.DeviceAccessToken (see deviceauth.go in
-// golang.org/x/oauth2 -- it already handles interval, slow_down,
-// authorization_pending, and expired_token per RFC 8628 section 3.5), and
-// cache the result via saveCachedToken. NFR13: print only the verification
-// URI and user code, never a token.
+// Delegates the polling loop itself to oauth2.Config.DeviceAuth /
+// DeviceAccessToken (deviceauth.go in golang.org/x/oauth2), which already
+// implements RFC 8628 section 3.5's interval, slow_down,
+// authorization_pending, and expired_token handling -- this function only
+// wires it up, prints the human-facing prompt, and persists the result.
+//
+// NFR13: prints only the verification URI and user code, never a token.
 func (d *deviceFlowCreds) performDeviceFlow(ctx context.Context) error {
-	return fmt.Errorf("device authorization grant flow not yet implemented")
+	if d.oauthConfig == nil {
+		return fmt.Errorf("device flow credential is missing endpoint configuration")
+	}
+
+	da, err := d.oauthConfig.DeviceAuth(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to start device authorization: %w", err)
+	}
+
+	if da.VerificationURIComplete != "" {
+		fmt.Fprintf(os.Stderr, "To sign in, visit:\n\n    %s\n\n", da.VerificationURIComplete)
+	} else {
+		fmt.Fprintf(os.Stderr, "To sign in, visit %s and enter code: %s\n", da.VerificationURI, da.UserCode)
+	}
+
+	token, err := d.oauthConfig.DeviceAccessToken(ctx, da)
+	if err != nil {
+		return classifyDeviceAuthError(err)
+	}
+
+	d.mu.Lock()
+	d.token = token
+	d.mu.Unlock()
+
+	if err := d.saveCachedToken(token); err != nil {
+		return fmt.Errorf("failed to persist device flow token after successful authorization: %w", err)
+	}
+	return nil
+}
+
+// classifyDeviceAuthError turns DeviceAccessToken's terminal RFC 8628
+// errors into clear, human-facing messages instead of a generic wrapped
+// error. NFR13: RetrieveError.Error() surfaces only the RFC 6749
+// error/error_description/error_uri fields -- never token material -- so
+// wrapping it with %w in the default case is safe.
+func classifyDeviceAuthError(err error) error {
+	var retrieveErr *oauth2.RetrieveError
+	if errors.As(err, &retrieveErr) {
+		switch retrieveErr.ErrorCode {
+		case "expired_token":
+			return fmt.Errorf("device authorization code expired before it was approved; run the command again")
+		case "access_denied":
+			return fmt.Errorf("device authorization was denied")
+		}
+	}
+	return fmt.Errorf("device authorization grant failed: %w", err)
 }
 
 // discoverDeviceEndpoints fetches and parses
 // <issuerURL>/.well-known/openid-configuration into deviceEndpoints.
-//
-// TODO(Implementation phase): HTTP GET with ctx, decode JSON, validate both
-// endpoints are non-empty -- an issuer missing device_authorization_endpoint
-// means the Keycloak client/realm has not enabled the device flow, which
-// should be a clear error pointing at KEYCLOAK.md rather than a generic
-// parse failure.
 func discoverDeviceEndpoints(ctx context.Context, issuerURL string) (*deviceEndpoints, error) {
-	return nil, fmt.Errorf("device flow issuer discovery not yet implemented")
+	discoveryURL := strings.TrimSuffix(issuerURL, "/") + "/.well-known/openid-configuration"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build OIDC discovery request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach OIDC discovery endpoint %s: %w", discoveryURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("OIDC discovery endpoint %s returned HTTP %d", discoveryURL, resp.StatusCode)
+	}
+
+	var doc deviceEndpoints
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return nil, fmt.Errorf("failed to parse OIDC discovery document from %s: %w", discoveryURL, err)
+	}
+
+	if doc.DeviceAuthorizationEndpoint == "" {
+		// A missing device_authorization_endpoint means the Keycloak
+		// client/realm has not enabled the device flow -- point at
+		// KEYCLOAK.md rather than surfacing a generic parse failure.
+		return nil, fmt.Errorf("issuer %s does not advertise a device_authorization_endpoint -- the Keycloak client or realm may not have the device authorization grant enabled; see KEYCLOAK.md", issuerURL)
+	}
+	if doc.TokenEndpoint == "" {
+		return nil, fmt.Errorf("issuer %s discovery document is missing token_endpoint", issuerURL)
+	}
+
+	return &doc, nil
 }
