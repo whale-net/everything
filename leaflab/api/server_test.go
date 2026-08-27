@@ -56,6 +56,21 @@ type fakeRepo struct {
 	// per typeName; a name with no entry here resolves to "not found" (see
 	// resolveSensorTypeID's doc comment).
 	resolveSensorTypeIDResponses map[string]int64
+
+	// getLatestAcceptedConfigResponse configures GetLatestAcceptedConfig's
+	// return -- nil (the zero value) means "no accepted config exists for
+	// this board", FR82.3's EDIT-with-no-base refusal condition; a
+	// non-nil *configpb.DeviceConfig is the EDIT materialisation base
+	// server_push_device_config_scope_test.go's FR82 tests configure.
+	getLatestAcceptedConfigResponse *configpb.DeviceConfig
+
+	// loadBoardSensorIdentitiesResponse configures LoadBoardSensorIdentities'
+	// return -- used by server_push_device_config_scope_test.go's
+	// TestPushDeviceConfig_Edit_MaterialisationBase_NeverTheStaleManifest
+	// to simulate a device-reported manifest that disagrees with the
+	// accepted config, proving FR82.3's materialisation base never leaks
+	// from here.
+	loadBoardSensorIdentitiesResponse []BoardSensorIdentity
 }
 
 // getOrCreateBoardID/getOrCreateBoardErr configure GetOrCreateBoard's
@@ -96,7 +111,7 @@ type insertDeviceConfigNextVersionCall struct {
 
 func (f *fakeRepo) GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error) {
 	f.getLatestAcceptedConfigCalls++
-	return nil, nil
+	return f.getLatestAcceptedConfigResponse, nil
 }
 
 func (f *fakeRepo) GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error) {
@@ -128,10 +143,13 @@ func (f *fakeRepo) resolveSensorTypeID(ctx context.Context, typeName string) (in
 }
 
 func (f *fakeRepo) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
-	// Nil (no existing identities) short-circuits checkPushConfigIdentity
-	// (identity.go) to a no-op, matching this file's tests -- none of
-	// which exercise FR16/FR17 sensor identity resolution.
-	return nil, nil
+	// nil (the zero value) short-circuits checkPushConfigIdentity
+	// (identity.go) to a no-op, matching most of this file's tests --
+	// which don't exercise FR16/FR17 sensor identity resolution.
+	// loadBoardSensorIdentitiesResponse lets a test (see
+	// server_push_device_config_scope_test.go's "never the stale
+	// manifest" case) configure a non-nil response instead.
+	return f.loadBoardSensorIdentitiesResponse, nil
 }
 
 func (f *fakeRepo) RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error {

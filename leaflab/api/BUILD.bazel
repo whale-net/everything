@@ -79,12 +79,14 @@ go_test(
         "audit_registry_test.go",
         "auth_test.go",
         "main_test.go",
+        "server_push_device_config_scope_test.go",
         "server_push_device_config_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
     deps = [
         "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/config",
@@ -341,6 +343,54 @@ go_test(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //leaflab/api:identity_integration_test --test_output=all
+# Real-Postgres integration coverage for FR82's config push scope
+# semantics -- per-entry provenance persistence, EDIT materialisation
+# against a real accepted base (never the reported manifest), and the
+# stored-payload <-> scenario-file round trip -- see
+# push_device_config_scope_integration_test.go's doc comment. Same tag set
+# and hand-written rationale as the other integration go_test targets
+# above. `data` carries the real scenario fixture the round-trip test
+# loads via the Bazel runfiles manifest (see leaflab/BUILD.bazel's
+# exports_files), mirroring hwkey_test's own data-attribute pattern
+# (leaflab/hwkey/BUILD.bazel).
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:push_device_config_scope_integration_test --test_output=all
+go_test(
+    # keep
+    name = "push_device_config_scope_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "push_device_config_scope_integration_test.go",
+    ],
+    data = ["//leaflab:scripts/scenarios/light-temp-humi-mux.json"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/config",
+        "//leaflab/hwkey",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+        "@rules_go//go/runfiles",
+    ],
+)
+
 go_test(
     # keep
     name = "identity_integration_test",

@@ -1,11 +1,7 @@
 """FR82 config push scope semantics -- canonicalisation, removal-key resolution, EDIT-scope materialisation."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
-# Testing-phase task adds a go_test target (canonical_test.go,
-# materialise_test.go, removekey_test.go) here -- deliberately not
-# scaffolded: this package's pure, no-DB shape (see doc.go) exists
-# specifically so those tests need no Docker/network fixture.
 go_library(
     name = "config",
     srcs = [
@@ -19,6 +15,28 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/hwkey",
+    ],
+)
+
+# FR82 pure-logic unit tests: canonicalisation (canonical_test.go),
+# EDIT-scope materialisation (materialise_test.go) and removal-key
+# resolution (removekey_test.go). This package has no database dependency
+# (see doc.go), so these need no Docker/network fixture and run under
+# plain `bazel test //leaflab/...`.
+go_test(
+    name = "config_test",
+    size = "small",
+    srcs = [
+        "canonical_test.go",
+        "materialise_test.go",
+        "removekey_test.go",
+    ],
+    embed = [":config"],
+    deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/hwkey",
     ],

@@ -1,5 +1,13 @@
 load("//tools/bazel:release.bzl", "release_helm_chart")
 
+# Real scenario fixtures (leaflab/scripts/push-config.sh's own input format)
+# -- referenced as a `data` dependency by
+# leaflab/api:push_device_config_scope_integration_test's FR82.7 round-trip
+# coverage ("a stored payload is accepted verbatim as a scenario file's
+# sensors array, and vice versa"), so that test exercises the actual
+# on-disk fixture rather than a copy that could drift from it.
+exports_files(["scripts/scenarios/light-temp-humi-mux.json"])
+
 release_helm_chart(
     name = "leaflab_chart",
     chart_name = "leaflab",
