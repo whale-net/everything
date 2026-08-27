@@ -63,7 +63,7 @@ BEGIN
     END IF;
 
     RETURN QUERY
-    SELECT v_attributed_region_id, p.plant_id, p.name
+    SELECT v_attributed_region_id, p.plant_id, p.name::TEXT
     FROM plant_region_history prh
     JOIN plant p ON p.plant_id = prh.plant_id
     WHERE prh.region_id = v_attributed_region_id
