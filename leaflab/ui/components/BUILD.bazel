@@ -9,3 +9,12 @@ templ_library(
         "//libs/go/htmxui",
     ],
 )
+
+# Source exposed to //leaflab/ui:ui_test's NFR18.1 grep-style placeholder
+# conformance check (#1329). Scoped, not public -- mirrors
+# tools/app_registry/ui/components:conformance_srcs.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.templ"]),
+    visibility = ["//leaflab/ui:__subpackages__"],
+)
