@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,8 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
+	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/hwkey"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -57,52 +57,47 @@ func (r *Repository) UpsertSensorType(ctx context.Context, name, unit string) (i
 	return id, nil
 }
 
-// MuxHop is one step in a cascaded I2C mux chain, ordered outer→inner.
-type MuxHop struct {
-	MuxAddress uint32 `json:"muxAddress"`
-	MuxChannel uint32 `json:"muxChannel"`
-}
-
-// HardwareAddress identifies a sensor by its physical wiring.
+// HardwareAddress identifies a sensor by its physical wiring, using
+// hwkey's canonical (FR18) address and mux-path types so this package never
+// re-derives address or mux comparison rules on its own.
 // MuxPath is empty when the sensor is directly on the root I2C bus.
 type HardwareAddress struct {
-	I2CAddress uint32
-	MuxPath    []MuxHop // ordered outer→inner; nil/empty = no mux
+	I2CAddress hwkey.AddressOpt
+	MuxPath    hwkey.MuxPath // ordered outer→inner; nil/empty = no mux
 }
 
-// muxHops returns the mux path as a non-nil slice (safe for json.Marshal).
-func (h *HardwareAddress) muxHops() []MuxHop {
-	if h == nil || len(h.MuxPath) == 0 {
-		return []MuxHop{}
-	}
-	return h.MuxPath
+// hasKnownAddress reports whether hw carries a real, addressable I2C address
+// -- neither absent (no hardware address recorded) nor the legacy "unknown
+// address" sentinel (an explicit 0, see hwkey.AddressOpt).
+func (h *HardwareAddress) hasKnownAddress() bool {
+	return h != nil && !h.I2CAddress.IsAbsent() && !h.I2CAddress.IsUnknownSentinel()
 }
 
 // UpsertSensor upserts a sensor row.
 //
-// When hw is non-nil and I2CAddress > 0, it first attempts to find an existing
-// row by (board_id, sensor_type_id, i2c_address, mux_path) and updates its
-// name/unit — preserving sensor_id (and thus reading history) across renames.
-// Falls back to the UNIQUE(board_id, name) upsert.
+// When hw carries a known hardware address, it first attempts to find an
+// existing row by (board_id, sensor_type_id, i2c_address, mux_path) --
+// hwkey.Key.SQLPredicate matches idx_sensor_hw_address exactly -- and
+// updates its name/unit, preserving sensor_id (and thus reading history)
+// across renames. Falls back to the UNIQUE(board_id, name) upsert.
 //
 // Returns the sensor_id and current region_id (nil if unset).
 func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error) {
-	if hw != nil && hw.I2CAddress > 0 {
-		muxJSON, err := json.Marshal(hw.muxHops())
-		if err != nil {
-			return 0, nil, fmt.Errorf("marshal mux_path: %w", err)
-		}
+	if hw.hasKnownAddress() {
+		key := hwkey.Key{I2CAddress: hw.I2CAddress, MuxPath: hw.MuxPath, SensorTypeID: hwkey.SensorTypeID(sensorTypeID)}
+		pred, predArgs := key.SQLPredicate(1)
+		args := append([]any{boardID}, predArgs...)
+		args = append(args, name, unit)
+
 		var sensorID int64
 		var regionID *int64
-		err = r.db.QueryRow(ctx, `
+		query := fmt.Sprintf(`
 			UPDATE sensor
-			SET name = $3, unit = $5
-			WHERE board_id       = $1
-			  AND sensor_type_id = $4
-			  AND i2c_address    = $2
-			  AND mux_path       = $6::jsonb
+			SET name = $%d, unit = $%d
+			WHERE board_id = $1 AND %s
 			RETURNING sensor_id, region_id
-		`, boardID, hw.I2CAddress, name, sensorTypeID, unit, muxJSON).Scan(&sensorID, &regionID)
+		`, len(args)-1, len(args), pred)
+		err := r.db.QueryRow(ctx, query, args...).Scan(&sensorID, &regionID)
 		if err == nil {
 			return sensorID, regionID, nil // found by hardware address
 		}
@@ -113,15 +108,13 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 	}
 
 	// Name-based upsert; persists i2c_address and mux_path when provided.
-	var i2cAddr *uint32
+	var i2cAddr *int32
 	muxJSON := []byte(`[]`)
-	if hw != nil && hw.I2CAddress > 0 {
-		i2cAddr = &hw.I2CAddress
-		var err error
-		muxJSON, err = json.Marshal(hw.muxHops())
-		if err != nil {
-			return 0, nil, fmt.Errorf("marshal mux_path: %w", err)
-		}
+	if hw.hasKnownAddress() {
+		v, _ := hw.I2CAddress.Value()
+		addr := int32(v)
+		i2cAddr = &addr
+		muxJSON = []byte(hw.MuxPath.SQLText())
 	}
 	var sensorID int64
 	var regionID *int64
@@ -250,22 +243,27 @@ func (r *Repository) LoadConfigVersionCache(ctx context.Context) (map[string]int
 	return out, rows.Err()
 }
 
-// UpsertSensorHWHistory records the current mux_path for a sensor.
+// UpsertSensorHWHistory records the current mux_path for a sensor, using
+// hwkey.MuxPath's canonical text form (FR18.1) so the stored value matches
+// what idx_sensor_hw_address's (mux_path::text) expression -- and any later
+// hwkey.Key.SQLPredicate lookup -- expects.
 // Closes the previous open row when the path has changed.
 func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
-	muxJSON, err := json.Marshal(hw.muxHops())
-	if err != nil {
-		return fmt.Errorf("marshal mux_path for hw history: %w", err)
+	var muxText string
+	if hw != nil {
+		muxText = hw.MuxPath.SQLText()
+	} else {
+		muxText = hwkey.MuxPath(nil).SQLText()
 	}
 
 	// If an open row with this exact path already exists, nothing to do.
 	var unchanged bool
-	err = r.db.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM sensor_hw_history
-			WHERE sensor_id = $1 AND valid_to IS NULL AND mux_path = $2::jsonb
+			WHERE sensor_id = $1 AND valid_to IS NULL AND mux_path::text = $2
 		)
-	`, sensorID, muxJSON).Scan(&unchanged)
+	`, sensorID, muxText).Scan(&unchanged)
 	if err != nil {
 		return fmt.Errorf("check hw history for sensor %d: %w", sensorID, err)
 	}
@@ -283,7 +281,7 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 
 	if _, err := r.db.Exec(ctx, `
 		INSERT INTO sensor_hw_history (sensor_id, mux_path) VALUES ($1, $2::jsonb)
-	`, sensorID, muxJSON); err != nil {
+	`, sensorID, muxText); err != nil {
 		return fmt.Errorf("insert hw history for sensor %d: %w", sensorID, err)
 	}
 	return nil
@@ -311,21 +309,20 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		if sc.RegionId == 0 {
 			continue
 		}
-		hops := make([]MuxHop, len(sc.MuxPath))
+		muxPath := make(hwkey.MuxPath, len(sc.MuxPath))
 		for i, hop := range sc.MuxPath {
-			hops[i] = MuxHop{MuxAddress: hop.MuxAddress, MuxChannel: hop.MuxChannel}
+			muxPath[i] = hwkey.MuxHop{MuxAddress: hop.MuxAddress, MuxChannel: hop.MuxChannel}
 		}
-		muxJSON, err := json.Marshal(hops)
-		if err != nil {
-			return fmt.Errorf("marshal mux_path for region apply: %w", err)
-		}
+		muxText := muxPath.SQLText()
 
 		newRegionID := int64(sc.RegionId)
 
 		// Read current assignment before updating so we can detect changes.
 		// For multi-virtual chips (SHT3x, CCS811) the same i2c_address+mux_path
 		// can map to multiple sensor rows with different sensor_type_id — include
-		// the sensor type in the lookup to disambiguate.
+		// the sensor type in the lookup to disambiguate. mux_path is compared via
+		// its canonical text form (FR18.1), matching idx_sensor_hw_address's
+		// (mux_path::text) expression rather than jsonb value equality.
 		var sensorID int64
 		var oldRegionID *int64
 		typeName := sensorTypeNameFromConfig(sc.SensorType)
@@ -334,14 +331,14 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 			lookupErr = r.db.QueryRow(ctx, `
 				SELECT s.sensor_id, s.region_id FROM sensor s
 				JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
-				WHERE s.board_id = $1 AND s.i2c_address = $2 AND s.mux_path = $3::jsonb
+				WHERE s.board_id = $1 AND s.i2c_address = $2 AND s.mux_path::text = $3
 				  AND st.name = $4
-			`, boardID, sc.I2CAddress, muxJSON, typeName).Scan(&sensorID, &oldRegionID)
+			`, boardID, sc.I2CAddress, muxText, typeName).Scan(&sensorID, &oldRegionID)
 		} else {
 			lookupErr = r.db.QueryRow(ctx, `
 				SELECT sensor_id, region_id FROM sensor
-				WHERE board_id = $1 AND i2c_address = $2 AND mux_path = $3::jsonb
-			`, boardID, sc.I2CAddress, muxJSON).Scan(&sensorID, &oldRegionID)
+				WHERE board_id = $1 AND i2c_address = $2 AND mux_path::text = $3
+			`, boardID, sc.I2CAddress, muxText).Scan(&sensorID, &oldRegionID)
 		}
 		if errors.Is(lookupErr, pgx.ErrNoRows) {
 			continue // sensor not yet registered — skip silently

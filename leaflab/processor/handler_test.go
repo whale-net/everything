@@ -8,6 +8,7 @@ import (
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/hwkey"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -135,8 +136,8 @@ func TestHandleManifest_HWAddressPassedThrough(t *testing.T) {
 	if call.hw == nil {
 		t.Fatal("expected non-nil HardwareAddress, got nil")
 	}
-	if call.hw.I2CAddress != 0x23 {
-		t.Errorf("I2CAddress: want 0x23, got 0x%x", call.hw.I2CAddress)
+	if !call.hw.I2CAddress.Equal(hwkey.Address(0x23)) {
+		t.Errorf("I2CAddress: want 0x23, got %s", call.hw.I2CAddress)
 	}
 	if len(call.hw.MuxPath) != 1 {
 		t.Fatalf("MuxPath: want 1 hop, got %d", len(call.hw.MuxPath))
@@ -211,7 +212,7 @@ func TestHandleManifest_MultipleSensors(t *testing.T) {
 	}
 
 	lightCall := repo.upsertSensorCalls[0]
-	if lightCall.hw == nil || lightCall.hw.I2CAddress != 0x23 {
+	if lightCall.hw == nil || !lightCall.hw.I2CAddress.Equal(hwkey.Address(0x23)) {
 		t.Errorf("light sensor hw address wrong: %+v", lightCall.hw)
 	}
 	if len(lightCall.hw.MuxPath) != 1 || lightCall.hw.MuxPath[0].MuxAddress != 0x70 || lightCall.hw.MuxPath[0].MuxChannel != 1 {
@@ -219,7 +220,7 @@ func TestHandleManifest_MultipleSensors(t *testing.T) {
 	}
 
 	tempCall := repo.upsertSensorCalls[1]
-	if tempCall.hw == nil || tempCall.hw.I2CAddress != 0x44 {
+	if tempCall.hw == nil || !tempCall.hw.I2CAddress.Equal(hwkey.Address(0x44)) {
 		t.Errorf("temp sensor hw address wrong: %+v", tempCall.hw)
 	}
 	// MuxAddress 0x70, channel 0 is a valid mux position (SD0).
