@@ -112,6 +112,34 @@ func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
 
+// Households/membership RPCs (#1341 scaffold) -- canned successes here too,
+// same rationale as the RPCs above: this stub isolates the auth/logging
+// middleware, not household business logic (which has no handler wired in
+// server.go yet -- see households.go).
+func (stubAPIServer) CreateHousehold(ctx context.Context, req *pb.CreateHouseholdRequest) (*pb.CreateHouseholdResponse, error) {
+	return &pb.CreateHouseholdResponse{}, nil
+}
+
+func (stubAPIServer) GetHousehold(ctx context.Context, req *pb.GetHouseholdRequest) (*pb.GetHouseholdResponse, error) {
+	return &pb.GetHouseholdResponse{}, nil
+}
+
+func (stubAPIServer) ListHouseholdMembers(ctx context.Context, req *pb.ListHouseholdMembersRequest) (*pb.ListHouseholdMembersResponse, error) {
+	return &pb.ListHouseholdMembersResponse{}, nil
+}
+
+func (stubAPIServer) InviteMember(ctx context.Context, req *pb.InviteMemberRequest) (*pb.InviteMemberResponse, error) {
+	return &pb.InviteMemberResponse{}, nil
+}
+
+func (stubAPIServer) RemoveMember(ctx context.Context, req *pb.RemoveMemberRequest) (*pb.RemoveMemberResponse, error) {
+	return &pb.RemoveMemberResponse{}, nil
+}
+
+func (stubAPIServer) RenameHousehold(ctx context.Context, req *pb.RenameHouseholdRequest) (*pb.RenameHouseholdResponse, error) {
+	return &pb.RenameHouseholdResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of
