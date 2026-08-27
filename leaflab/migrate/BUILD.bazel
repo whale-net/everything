@@ -87,3 +87,35 @@ go_test(
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
+
+# Real-Postgres integration coverage for migration 022_tiers' continuous
+# aggregates and refresh/retention policy ordering (FR71, NFR5) -- see
+# tiers_migration_integration_test.go's doc comment. Same hand-written
+# rationale, tag set and embed-its-own-migrations pattern as
+# ownership_migration_integration_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/migrate:tiers_migration_integration_test --test_output=all
+go_test(
+    # keep
+    name = "tiers_migration_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["tiers_migration_integration_test.go"],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
