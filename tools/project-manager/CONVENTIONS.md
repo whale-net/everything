@@ -267,6 +267,8 @@ gh issue edit <n> --add-assignee @me
 
 Task work is tracked with [`gh stack`](../../.claude/skills/gh-stack/SKILL.md) — each task issue gets its own branch and, once pushed, its own small reviewable PR, instead of every task piling commits onto one shared branch. Only `/project-manager:implement` (and `/project-manager:validate`, for the final integration branch) run `gh stack`/branch-management commands; `worker` and `validator` receive an already-created worktree and branch, and never touch git branch/stack state themselves — this keeps `gh stack` operations single-threaded even though multiple subagents run concurrently (its stack file is protected by a lock that times out after 5s — see gh-stack skill § Exit codes, code 8 — concurrent callers would just fight it).
 
+**Division of responsibility.** The orchestrator (`implement`/`validate`) owns every step below end to end: creating branches and worktrees, dispatching worker/validator subagents into them, resolving any merge conflict that comes up while doing so, and creating/refreshing each task's PR via `gh stack submit --auto` (step 6). Worker and validator subagents only ever write code inside the worktree path they're handed — they never run `git merge`, `gh stack`, or open a PR themselves. When a conflict is small (a handful of hunks, mechanically resolvable), the orchestrator resolves it inline and continues. When a conflict is large or semantically ambiguous (overlapping logic from two different tasks, unclear which side should win), the orchestrator dispatches an ad-hoc `general-purpose` subagent scoped to just that one merge — hand it the two branch tips, the conflicting files, and both tasks' issue descriptions for context — rather than resolving it blind or stalling the whole batch on it.
+
 1. **Prerequisites**, once per session:
    ```sh
    gh extension list | grep -q github/gh-stack || gh extension install github/gh-stack
@@ -284,7 +286,7 @@ Task work is tracked with [`gh stack`](../../.claude/skills/gh-stack/SKILL.md) �
    `<parent>` is:
    - `main`, if none of the task's `Depends on:` issues have an open branch yet.
    - That dependency's branch (`plan/<root-issue-number>-<dep-issue-number>`), if exactly one does.
-   - Any one dependency's branch, if more than one does — then also pull in the rest before dispatching the worker: `git merge --no-edit plan/<root-issue-number>-<other-dep-issue-number>` for each additional dependency.
+   - Any one dependency's branch, if more than one does — then also pull in the rest before dispatching the worker: `git merge --no-edit plan/<root-issue-number>-<other-dep-issue-number>` for each additional dependency. If this merge conflicts, resolve it per the division of responsibility above before dispatching the worker — an unresolved conflict must never be handed to a worker to sort out.
 
    `gh stack init --base <branch>` accepts any branch as trunk, not just the default branch, so this works whether `<parent>` is `main` or another task's still-open branch. Each task's branch becomes its own single-branch stack chained onto its dependency, rather than literally appending to the dependency's stack object via `gh stack add` — which requires being on the topmost branch of that stack, and can't handle a dependency that has more than one dependent (`gh stack` stacks are strictly linear; see its skill § Known limitations).
 
@@ -304,7 +306,7 @@ Task work is tracked with [`gh stack`](../../.claude/skills/gh-stack/SKILL.md) �
    gh stack submit --auto
    git checkout --detach HEAD
    ```
-   `submit` is idempotent — safe to run after every phase, not just once. It pushes and opens (or refreshes) the task's draft PR.
+   `submit` is idempotent — safe to run after every phase, not just once. It pushes and opens (or refreshes) the task's draft PR. This is the orchestrator's sole PR-creation path — no other persona opens a PR directly.
 
 7. **Whole-system validation.** system-validator needs one local ref containing every task's work merged together, not N separate branch tips. `/project-manager:validate` builds this once, locally, right before dispatching system-validator, and never pushes it:
    ```sh
