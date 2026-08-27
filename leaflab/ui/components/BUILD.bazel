@@ -1,3 +1,4 @@
+load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
 templ_library(
@@ -15,6 +16,20 @@ templ_library(
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/htmxauth",
         "//libs/go/htmxui",
+    ],
+)
+
+# FR64 rendering tests (#1330): formatElapsed/absoluteInstantTitle (elapsed.go,
+# white-box, same package) plus BoardsRows's real templ output -- elapsed text
+# as the primary cell content, the absolute RFC3339 instant only ever inside a
+# title="" hover attribute, never as visible text.
+go_test(
+    name = "elapsed_test",
+    size = "small",
+    srcs = ["elapsed_test.go"],
+    embed = [":components"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
     ],
 )
 
