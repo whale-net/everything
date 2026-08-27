@@ -24,6 +24,50 @@ service LeafLabAPI {
   // principal, so "this is our problem, not yours" is answerable even when
   // the rest of the API is unreachable. Returns no household data.
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+
+  // --- Regions (FR50, FR22.2, FR22.5, NFR6.2) -----------------------------
+  //
+  // A region is a node in a household's Room/Shelf/Pot hierarchy (migration
+  // 001). This task (#1376) is this RPC set's scaffolded wire surface plus
+  // migration 020's retired_at/successor_region_id columns and the
+  // parentage-immutability trigger; the business rules named on each RPC
+  // below (structural limits, the create-time parentage grace window,
+  // member-or-grantee authorization, FR8 audit recording) are
+  // Implementation-phase work, not yet wired into leaflab/api/server.go --
+  // see leaflab/api/regions.go's doc comment for the current state.
+
+  // CreateRegion creates a region, optionally under a parent (FR50.1).
+  // Refused, naming the offending region and field (FR59), if the parent
+  // already has 12 children or if depth would exceed Room/Shelf/Pot.
+  // Parentage is set here and is immutable from this point on, once any
+  // reading is attributed to this region or a descendant (FR50.3) -- a
+  // member-or-grantee capability (FR7), not admin.
+  rpc CreateRegion(CreateRegionRequest) returns (CreateRegionResponse);
+
+  // RenameRegion changes a region's name. Never changes parentage (FR50.3)
+  // -- there is no parent field on this request. Member-or-grantee (FR7).
+  rpc RenameRegion(RenameRegionRequest) returns (RenameRegionResponse);
+
+  // RetireRegion soft-retires a region (FR22.2, FR22.5): excluded from
+  // default listings from this point on, accepts no new writes, remains
+  // readable by explicit id and through the history/readings paths, and
+  // remains resolvable for attribution of readings recorded while it was
+  // active. Retirement does not unfreeze parentage (FR22.2) -- a
+  // subsequent re-parent attempt is refused exactly as it would be for an
+  // active region. Member-or-grantee (FR7).
+  rpc RetireRegion(RetireRegionRequest) returns (RetireRegionResponse);
+
+  // ListRegions lists a household's regions, keyset paginated (FR61).
+  // Retired regions are excluded by default (FR22.5) -- GetRegionPath and a
+  // direct-id lookup are the explicit-id escape hatches for a retired
+  // region, mirroring GetBoardByID's role for a retired board.
+  rpc ListRegions(ListRegionsRequest) returns (ListRegionsResponse);
+
+  // GetRegionPath returns a region's root-to-leaf path (FR50.2), backed by
+  // v_region_path (migration 012) rather than a second recursive CTE, so a
+  // nested picker and a breadcrumb have a source. Works for a retired
+  // region too (FR22.5's "remains readable by explicit id").
+  rpc GetRegionPath(GetRegionPathRequest) returns (GetRegionPathResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -150,4 +194,81 @@ enum HealthStatus {
 message GetHealthResponse {
   // The only populated field in this response (FR63.2).
   HealthStatus status = 1;
+}
+
+// --- Regions (FR50, FR22.2, FR22.5, NFR6.2) -------------------------------
+
+// RegionInfo is one region as returned by every region RPC below.
+message RegionInfo {
+  int64 region_id = 1;
+  // Unset (has_parent_region_id() == false) for a root region.
+  optional int64 parent_region_id = 2;
+  string name = 3;
+  string description = 4;
+  // Set only when this region has been retired (FR22.5), alongside the
+  // response envelope's server_now (FR64).
+  Instant retired_at = 5;
+  // Set only when this region was retired *by a relocation* (FR74) --
+  // names the region that replaced it, so region-keyed series can follow a
+  // reorganisation instead of discontinuing (FR22.2). Unset for every other
+  // retirement reason, and always unset on a still-active region.
+  optional int64 successor_region_id = 6;
+}
+
+message CreateRegionRequest {
+  // Unset requests a root region. See RegionInfo.parent_region_id.
+  optional int64 parent_region_id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message CreateRegionResponse {
+  RegionInfo region = 1;
+}
+
+message RenameRegionRequest {
+  int64 region_id = 1;
+  string name = 2;
+}
+
+message RenameRegionResponse {
+  RegionInfo region = 1;
+}
+
+message RetireRegionRequest {
+  int64 region_id = 1;
+}
+
+message RetireRegionResponse {
+  RegionInfo region = 1;
+}
+
+message ListRegionsRequest {
+  // Keyset page request (FR61). Unset/empty requests the first page.
+  PageRequest page = 1;
+}
+
+message ListRegionsResponse {
+  repeated RegionInfo regions = 1;
+  // Keyset page response (FR61).
+  PageResponse page = 2;
+  // Server's current time (FR64) -- see ListBoardsResponse.server_now.
+  Instant server_now = 3;
+}
+
+message GetRegionPathRequest {
+  int64 region_id = 1;
+}
+
+message GetRegionPathResponse {
+  // True if region_id names a real region. A false response carries no
+  // other populated field -- callers must check this before reading
+  // path_ids/path_names/path_name, same shape as GetDeviceConfigResponse.found.
+  bool found = 1;
+  // Root-to-leaf, mirroring v_region_path.path_ids (migration 012).
+  repeated int64 path_ids = 2;
+  // Root-to-leaf, mirroring v_region_path.path_names.
+  repeated string path_names = 3;
+  // Human-readable ' / '-delimited string, mirroring v_region_path.path_name.
+  string path_name = 4;
 }

@@ -112,6 +112,35 @@ func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
 
+// Canned-success stubs for #1376's five region RPCs (CreateRegion,
+// RenameRegion, RetireRegion, ListRegions, GetRegionPath). Needed as
+// value-receiver overrides -- not just pb.UnimplementedLeafLabAPIServer's
+// promotion -- because that embed's generated methods are pointer-receiver
+// and stubAPIServer{} is used by value in startTestServer below; without
+// these, stubAPIServer stops satisfying pb.LeafLabAPIServer the moment a
+// new RPC is added to the service, same as households/membership's own
+// scaffold commit on a sibling v2 branch.
+
+func (stubAPIServer) CreateRegion(ctx context.Context, req *pb.CreateRegionRequest) (*pb.CreateRegionResponse, error) {
+	return &pb.CreateRegionResponse{}, nil
+}
+
+func (stubAPIServer) RenameRegion(ctx context.Context, req *pb.RenameRegionRequest) (*pb.RenameRegionResponse, error) {
+	return &pb.RenameRegionResponse{}, nil
+}
+
+func (stubAPIServer) RetireRegion(ctx context.Context, req *pb.RetireRegionRequest) (*pb.RetireRegionResponse, error) {
+	return &pb.RetireRegionResponse{}, nil
+}
+
+func (stubAPIServer) ListRegions(ctx context.Context, req *pb.ListRegionsRequest) (*pb.ListRegionsResponse, error) {
+	return &pb.ListRegionsResponse{}, nil
+}
+
+func (stubAPIServer) GetRegionPath(ctx context.Context, req *pb.GetRegionPathRequest) (*pb.GetRegionPathResponse, error) {
+	return &pb.GetRegionPathResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

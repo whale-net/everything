@@ -10,6 +10,7 @@ go_library(
         "auth.go",
         "logging_interceptor.go",
         "main.go",
+        "regions.go",
         "repository.go",
         "server.go",
     ],
