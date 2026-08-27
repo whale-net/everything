@@ -15,8 +15,19 @@ import (
 // that's actually running.
 //
 // Written via a temp file + rename so a crash mid-write can never leave a
-// truncated .env behind.
+// truncated .env behind. The rewritten file keeps the original's
+// permissions (falling back to 0o644 only if it didn't exist yet) rather
+// than a hardcoded mode, since this file commonly holds secrets
+// (GRPC_AUTH_CLIENT_SECRET and friends) that an operator may have locked
+// down to 0600.
 func writeEnvValue(path, key, value string) error {
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
 	var lines []string
 	if data, err := os.ReadFile(path); err == nil {
 		lines = strings.Split(string(data), "\n")
@@ -59,7 +70,7 @@ func writeEnvValue(path, key, value string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(tmpPath, 0o644); err != nil {
+	if err := os.Chmod(tmpPath, mode); err != nil {
 		return err
 	}
 	return os.Rename(tmpPath, path)

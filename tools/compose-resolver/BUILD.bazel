@@ -17,7 +17,9 @@ go_library(
         "//libs/go/grpcclient",
         "//libs/go/logging",
         "//tools/app_registry/protos:appregistrypb",
+        "@com_github_docker_docker//api/types",
         "@com_github_docker_docker//api/types/network",
+        "@com_github_docker_docker//client",
     ],
 )
 

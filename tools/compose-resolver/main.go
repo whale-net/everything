@@ -155,7 +155,6 @@ func reconcile(ctx context.Context, cfg config, dockerClient *docker.Client, log
 
 	oldRef := info.Config.Image
 	newRef := cfg.registry.Repository + ":" + resolved.Version
-	baselineRestarts := info.RestartCount
 
 	logger.Info("new version promoted, deploying", "from", currentVersion, "to", resolved.Version, "digest", resolved.Digest)
 
@@ -164,7 +163,7 @@ func reconcile(ctx context.Context, cfg config, dockerClient *docker.Client, log
 		return fmt.Errorf("deploying %s: %w", newRef, err)
 	}
 
-	if err := waitForHealthy(ctx, dockerClient, newID, baselineRestarts, cfg.healthCheckTimeout, cfg.healthCheckPoll); err != nil {
+	if err := waitForHealthy(ctx, dockerClient, newID, cfg.healthCheckTimeout, cfg.healthCheckPoll); err != nil {
 		logger.Error("new version failed health check, rolling back", "version", resolved.Version, "error", err)
 		if _, rbErr := swapContainer(ctx, dockerClient, cfg.containerName, oldRef); rbErr != nil {
 			return fmt.Errorf("deploy of %s failed health check (%v), and rollback to %s also failed: %w", resolved.Version, err, oldRef, rbErr)
