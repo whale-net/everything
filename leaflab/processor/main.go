@@ -83,7 +83,7 @@ func run() error {
 		logger.Info("config version cache pre-loaded", "devices", len(versions))
 	}
 
-	handler := NewMessageHandler(logger, repo, cache)
+	handler := NewMessageHandler(logger, repo, cache, cfg.RestartUptimeThresholdSeconds)
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 
 	appCtx, appCancel := context.WithCancel(context.Background())

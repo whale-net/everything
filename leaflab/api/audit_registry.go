@@ -20,6 +20,14 @@ const (
 	renameHouseholdFullMethod = "/leaflab.api.v1.LeafLabAPI/RenameHousehold"
 )
 
+// Board claim (FR76, #1342) full method name -- see claim.go and
+// server.go's CompleteClaim handler. Only CompleteClaim is a declared write:
+// OpenClaimChallenge/MarkClaimRound/GetClaimChallengeStatus mutate only
+// claim_challenge/claim_challenge_round/claim_cooldown bookkeeping, which is
+// not itself an FR8-audited entity -- the audited event is the claim taking
+// effect (board ownership moving), which happens only in CompleteClaim.
+const completeClaimFullMethod = "/leaflab.api.v1.LeafLabAPI/CompleteClaim"
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
 // registry for this service: every RPC that performs a write. A method
 // listed here with no corresponding entry in auditRegistrations fails
@@ -44,6 +52,7 @@ var declaredWriteMethods = []string{
 	inviteMemberFullMethod,
 	removeMemberFullMethod,
 	renameHouseholdFullMethod,
+	completeClaimFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
@@ -56,6 +65,7 @@ var auditRegistrations = map[string]audit.Registration{
 	inviteMemberFullMethod:     {Action: "InviteMember", EntityKind: "household_membership"},
 	removeMemberFullMethod:     {Action: "RemoveMember", EntityKind: "household_membership"},
 	renameHouseholdFullMethod:  {Action: "RenameHousehold", EntityKind: "household"},
+	completeClaimFullMethod:    {Action: "ClaimBoard", EntityKind: "board"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry

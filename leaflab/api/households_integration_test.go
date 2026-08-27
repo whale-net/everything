@@ -40,8 +40,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/claim"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 )
@@ -148,7 +150,7 @@ func newHouseholdsTestServer(t *testing.T) (*LeafLabAPIServer, *Repository, *pgx
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: householdsTestSchema})
 	repo := NewRepository(db.Pool)
 	resolver := authz.NewPGResolver(db.Pool)
-	server := NewLeafLabAPIServer(repo, resolver, nil, nil, discardLoggerHouseholds())
+	server := NewLeafLabAPIServer(repo, resolver, nil, nil, discardLoggerHouseholds(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 	return server, repo, db.Pool
 }
 
@@ -582,7 +584,7 @@ func TestInviteMember_GranteeRefused(t *testing.T) {
 	insertMembershipRow(t, pool, household, "member@example.com")
 
 	grantAuthz := grantOrElevationStubAuthz{scope: authz.NewHouseholdScope(household)}
-	server := NewLeafLabAPIServer(repo, grantAuthz, nil, nil, discardLoggerHouseholds())
+	server := NewLeafLabAPIServer(repo, grantAuthz, nil, nil, discardLoggerHouseholds(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 
 	_, err := server.InviteMember(householdsCtxFor("grantee@example.com"), &pb.InviteMemberRequest{
 		HouseholdId:      household,
@@ -610,7 +612,7 @@ func TestRemoveMember_ElevatedAdminRefused(t *testing.T) {
 	insertMembershipRow(t, pool, household, "member@example.com")
 
 	elevatedAuthz := grantOrElevationStubAuthz{scope: authz.NewHouseholdScope(household)}
-	server := NewLeafLabAPIServer(repo, elevatedAuthz, nil, nil, discardLoggerHouseholds())
+	server := NewLeafLabAPIServer(repo, elevatedAuthz, nil, nil, discardLoggerHouseholds(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 
 	_, err := server.RemoveMember(householdsCtxFor("admin@example.com"), &pb.RemoveMemberRequest{
 		HouseholdId:      household,
@@ -638,7 +640,7 @@ func TestRenameHousehold_GranteeRefused(t *testing.T) {
 	insertMembershipRow(t, pool, household, "member@example.com")
 
 	grantAuthz := grantOrElevationStubAuthz{scope: authz.NewHouseholdScope(household)}
-	server := NewLeafLabAPIServer(repo, grantAuthz, nil, nil, discardLoggerHouseholds())
+	server := NewLeafLabAPIServer(repo, grantAuthz, nil, nil, discardLoggerHouseholds(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 
 	_, err := server.RenameHousehold(householdsCtxFor("grantee@example.com"), &pb.RenameHouseholdRequest{
 		HouseholdId: household,

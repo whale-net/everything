@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/claim"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/db"
@@ -90,9 +91,32 @@ func run() error {
 	}
 	defer publisher.Close() //nolint:errcheck
 
+	// NFR10: per-principal and per-session rate limiting, configurable per
+	// environment via leaflab/api/ENV.md's LEAFLAB_API_RATELIMIT_* variables
+	// (see ratelimit.EnvVarNames). Loaded before the server is built -- both
+	// so a malformed variable fails boot immediately (same as the auth
+	// config validated above) and because apiServer itself now holds this
+	// limiter directly for the claim_open/claim_round buckets' composite
+	// (principal, device_id/handle) keys (see server.go's OpenClaimChallenge/
+	// MarkClaimRound) -- those can't go through the generic per-method
+	// interceptor below, which only ever derives a principal-only key.
+	rateLimitConfigs, err := ratelimit.LoadConfigFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("rate limit config: %w", err)
+	}
+	limiter := ratelimit.NewInMemoryLimiter(rateLimitConfigs)
+
+	// FR76: A28's board-claim constants (leaflab/api/claim.Config),
+	// documented in leaflab/api/ENV.md. LoadConfigFromEnv enforces
+	// RoundsRequired >= 2 at boot (the requirement text's explicit floor).
+	claimConfig, err := claim.LoadConfigFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("claim config: %w", err)
+	}
+
 	repo := NewRepository(pool)
 	authzSvc := authz.NewPGResolver(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"))
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"), claimConfig, limiter)
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the
@@ -112,17 +136,6 @@ func run() error {
 	}
 
 	rpcLogger := logging.Get("rpc")
-
-	// NFR10: per-principal and per-session rate limiting, configurable per
-	// environment via leaflab/api/ENV.md's LEAFLAB_API_RATELIMIT_* variables
-	// (see ratelimit.EnvVarNames). Loaded before the server is built so a
-	// malformed variable fails boot immediately, same as the auth config
-	// validated above.
-	rateLimitConfigs, err := ratelimit.LoadConfigFromEnv(os.Getenv)
-	if err != nil {
-		return fmt.Errorf("rate limit config: %w", err)
-	}
-	limiter := ratelimit.NewInMemoryLimiter(rateLimitConfigs)
 
 	grpcServer := buildServer(authUnary, authStream, rpcLogger, apiServer, devMode, limiter)
 

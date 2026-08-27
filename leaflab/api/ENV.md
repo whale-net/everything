@@ -45,9 +45,12 @@ Redis) first, or per-replica windows silently multiply the effective limit.
 A28's constants for the self-service board claim flow (`leaflab/api/claim.Config`,
 `leaflab/api/claim/config.go`), all configurable via a pair of env vars per value — a
 count/duration and, for durations, the unit is always whole seconds. An unset variable falls
-back to `leaflab/api/claim.DefaultConfig`. Scaffold-phase (task #1342): not yet wired into
-`leaflab/api/main.go` — the RPCs (`OpenClaimChallenge`, `MarkClaimRound`,
-`GetClaimChallengeStatus`, `CompleteClaim`) have no handler in `server.go` yet.
+back to `leaflab/api/claim.DefaultConfig`. Wired into `leaflab/api/main.go` (task #1342): the
+RPCs (`OpenClaimChallenge`, `MarkClaimRound`, `GetClaimChallengeStatus`, `CompleteClaim`) have
+handlers in `server.go`, and `claim_open`/`claim_round` are enforced directly by those two
+handlers (composite `principal + device_id`/`challenge_handle` keys — see server.go's
+`claimOpenRateLimitKey`/`claimRoundRateLimitKey` — rather than through the generic per-method
+interceptor, which only ever derives a principal-only key).
 
 | Variable | Default | Description |
 |----------|---------|--------------|
@@ -56,7 +59,8 @@ back to `leaflab/api/claim.DefaultConfig`. Scaffold-phase (task #1342): not yet 
 | `LEAFLAB_API_CLAIM_CHALLENGE_LIFETIME_SECONDS` | `900` (15 minutes) | Total bounded lifetime of a challenge from `OpenClaimChallenge` (requirement 8: "long enough to walk to the greenhouse and back"). |
 | `LEAFLAB_API_CLAIM_ATTEMPTS_PER_ROUND` | `2` | How many times a single round may be re-marked before the challenge is exhausted. |
 | `LEAFLAB_API_CLAIM_COOLDOWN_SECONDS` | `1800` (30 minutes) | How long a `(principal, device_id)` pair spends in `claim_cooldown` after a challenge ends not-discharged. **Not an A28-specified number** — the requirement text names "cooldown after failure" but gives no duration; this default is this task's own choice, flagged per the issue's residual-risk caveat. |
-| `LEAFLAB_API_CLAIM_RESTART_UPTIME_THRESHOLD_SECONDS` | `300` (5 minutes) | The processor's restart-detection threshold (Implementation phase, `leaflab/processor/handler.go`): an `uptime_s` regression below this value is treated as a genuine restart; a larger drop is presumed to be the `uint32` millisecond wrap at ~49.7 days and must not count (requirement 4). Not one of A28's five named constants, but grouped here as the same kind of env-overridable configuration. |
+| `LEAFLAB_API_CLAIM_RESTART_UPTIME_THRESHOLD_SECONDS` | `300` (5 minutes) | The processor's restart-detection threshold (`leaflab/processor/handler.go`/`config.go`, read directly by the processor binary — same variable name shared with `leaflab-api` as the single source of truth, no code coupling): an `uptime_s` regression below this value is treated as a genuine restart; a larger drop is presumed to be the `uint32` millisecond wrap at ~49.7 days and must not count (requirement 4). Not one of A28's five named constants, but grouped here as the same kind of env-overridable configuration. |
+| `LEAFLAB_API_CLAIM_MAX_CONCURRENT_OPEN_CHALLENGES` | `3` | Requirement 2's "bounded number of concurrent open challenges per principal" — distinct from the structural one-open-per-(principal, device_id) uniqueness the schema enforces. **Not an A28-specified number**, same residual-risk flag as the cooldown duration above. |
 
 A malformed value (not a valid integer) fails the boot the same way a malformed rate-limit
 variable does — loudly, before any dependency is dialed.
@@ -65,3 +69,19 @@ variable does — loudly, before any dependency is dialed.
 `claim_challenge_round`, `claim_cooldown` (short-lived, expiring rows; explicitly **not** SCD2,
 NFR6.3 — no `valid_to` column), and `board_uptime_watermark` (the processor's per-board current
 `uptime_s` watermark used to detect a restart).
+
+**Flagged residual gap — the non-retained-manifest evidence class (requirement 4's narrow
+exception) is never satisfied.** `evidence_class = 'manifest_exception'` is valid in the schema
+but no code path ever writes it: the processor consumes MQTT traffic bridged through RabbitMQ's
+`amq.topic` AMQP exchange (`leaflab/processor/main.go`'s `consumer.BindExchange`), and neither
+`amqp091-go`'s `Delivery` type nor the AMQP 0-9-1 wire protocol it speaks carries any equivalent
+of MQTT's retain flag — there is nothing in the message this processor receives that
+distinguishes a live `DeviceManifest` publish from a broker-replayed retained one. Per the
+issue's explicit instruction ("if it cannot be distinguished, the exception must be implemented
+as never satisfied rather than always satisfied"), `leaflab/processor/handler.go`'s
+`handleManifest` never calls into round-satisfaction for the manifest evidence class at all — a
+challenge against a device with zero readings ever can still discharge, but only via the
+`uptime_regression` evidence class once readings start arriving, never via manifest alone.
+Distinguishing retained-vs-live would require the processor to speak native MQTT instead of
+AMQP, or RabbitMQ to expose the flag some other way (e.g. a header) — out of this task's scope;
+flagged for a follow-up rather than smoothed over.

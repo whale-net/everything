@@ -115,7 +115,21 @@ CREATE TABLE claim_challenge_round (
     -- Evidence class 1 (requirement 4): an observed uptime_s regression on
     -- a reading from this board. NULL when this round is satisfied by the
     -- manifest exception instead, or not yet satisfied at all.
-    satisfied_by_reading_id      BIGINT NULL REFERENCES sensor_reading(reading_id),
+    --
+    -- satisfied_by_reading_recorded_at is carried alongside
+    -- satisfied_by_reading_id (and always set together with it -- see
+    -- leaflab/processor's SatisfyOpenClaimRound, which reuses the same
+    -- observed-restart instant for both the reading's own recorded_at and
+    -- this value) purely so the FK below can name sensor_reading's actual
+    -- primary key: sensor_reading is a Timescale hypertable partitioned on
+    -- recorded_at, so its primary/unique key is the composite
+    -- (reading_id, recorded_at), not reading_id alone -- a bare
+    -- REFERENCES sensor_reading(reading_id) fails at migration-apply time
+    -- with "no unique constraint matching given keys". Caught and fixed
+    -- during this task's Implementation phase (#1342); flagged here since
+    -- it was an error inherited from the Scaffold-phase schema.
+    satisfied_by_reading_id            BIGINT NULL,
+    satisfied_by_reading_recorded_at   TIMESTAMPTZ NULL,
     -- Evidence class 2 (requirement 4's narrow exception): a non-retained
     -- DeviceManifest observed after t0, for a device_id from which no
     -- reading has ever been received. NULL when this round is satisfied by
@@ -132,11 +146,19 @@ CREATE TABLE claim_challenge_round (
     -- against a round being satisfied by both, or by neither while still
     -- carrying an evidence_class.
     CONSTRAINT chk_claim_challenge_round_evidence_consistency CHECK (
-        (evidence_class IS NULL AND satisfied_by_reading_id IS NULL AND satisfied_by_manifest_at IS NULL)
-        OR (evidence_class = 'uptime_regression' AND satisfied_by_reading_id IS NOT NULL AND satisfied_by_manifest_at IS NULL)
-        OR (evidence_class = 'manifest_exception' AND satisfied_by_manifest_at IS NOT NULL AND satisfied_by_reading_id IS NULL)
+        (evidence_class IS NULL AND satisfied_by_reading_id IS NULL AND satisfied_by_reading_recorded_at IS NULL AND satisfied_by_manifest_at IS NULL)
+        OR (evidence_class = 'uptime_regression' AND satisfied_by_reading_id IS NOT NULL AND satisfied_by_reading_recorded_at IS NOT NULL AND satisfied_by_manifest_at IS NULL)
+        OR (evidence_class = 'manifest_exception' AND satisfied_by_manifest_at IS NOT NULL AND satisfied_by_reading_id IS NULL AND satisfied_by_reading_recorded_at IS NULL)
     ),
-    UNIQUE (challenge_id, round_index)
+    UNIQUE (challenge_id, round_index),
+    -- Composite FK to sensor_reading's actual primary key (reading_id,
+    -- recorded_at) -- see satisfied_by_reading_recorded_at's doc comment
+    -- above. NULLs on either column skip FK enforcement entirely (standard
+    -- SQL MATCH SIMPLE semantics), which is what we want when this round is
+    -- unsatisfied or satisfied by the manifest exception instead.
+    CONSTRAINT fk_claim_challenge_round_reading
+        FOREIGN KEY (satisfied_by_reading_id, satisfied_by_reading_recorded_at)
+        REFERENCES sensor_reading (reading_id, recorded_at)
 );
 
 -- Round bookkeeping (Implementation section): "a restart signal may satisfy

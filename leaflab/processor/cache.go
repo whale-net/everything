@@ -6,6 +6,10 @@ import "sync"
 type SensorInfo struct {
 	SensorID int64
 	RegionID *int64 // nil if sensor not yet placed in a region
+	// BoardID is the owning board's id -- needed by handleSensorReading
+	// (FR76, #1342) to key board_uptime_watermark and claim_challenge_round
+	// satisfaction, both scoped to board_id rather than device_id/sensor_id.
+	BoardID int64
 }
 
 // SensorCache is an in-memory lookup of registered sensors, keyed by

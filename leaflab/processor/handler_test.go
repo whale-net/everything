@@ -65,7 +65,15 @@ func (s *stubRepo) GetSensor(_ context.Context, _, _ string) (SensorInfo, bool, 
 	return SensorInfo{}, false, nil
 }
 
-func (s *stubRepo) InsertReading(_ context.Context, _ int64, _ *int64, _ float64, _ bool, _ uint32, _ time.Time, _ *int64) error {
+func (s *stubRepo) InsertReading(_ context.Context, _ int64, _ *int64, _ float64, _ bool, _ uint32, _ time.Time, _ *int64) (int64, error) {
+	return 1, nil
+}
+
+func (s *stubRepo) CheckAndUpdateUptimeWatermark(_ context.Context, _ int64, _ uint32, _ time.Time, _ uint32) (bool, error) {
+	return false, nil
+}
+
+func (s *stubRepo) SatisfyOpenClaimRound(_ context.Context, _ string, _ int64, _ time.Time) error {
 	return nil
 }
 
@@ -99,7 +107,7 @@ func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 }
 
 func newTestHandler(repo SensorRepository) *MessageHandler {
-	return NewMessageHandler(slog.Default(), repo, NewSensorCache())
+	return NewMessageHandler(slog.Default(), repo, NewSensorCache(), 300)
 }
 
 // TestHandleManifest_HWAddressPassedThrough verifies that when a SensorDescriptor

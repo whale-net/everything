@@ -10,8 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
+	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -182,11 +182,11 @@ func (r *Repository) UpsertSensorLabel(ctx context.Context, sensorID int64, name
 func (r *Repository) GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error) {
 	var info SensorInfo
 	err := r.db.QueryRow(ctx, `
-		SELECT s.sensor_id, s.region_id
+		SELECT s.sensor_id, s.region_id, s.board_id
 		FROM sensor s
 		JOIN board b ON b.board_id = s.board_id
 		WHERE b.device_id = $1 AND s.name = $2
-	`, deviceID, sensorName).Scan(&info.SensorID, &info.RegionID)
+	`, deviceID, sensorName).Scan(&info.SensorID, &info.RegionID, &info.BoardID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return SensorInfo{}, false, nil
@@ -200,7 +200,7 @@ func (r *Repository) GetSensor(ctx context.Context, deviceID, sensorName string)
 // returns them as a map of device_id → sensor_name → SensorInfo.
 func (r *Repository) LoadSensorCache(ctx context.Context) (map[string]map[string]SensorInfo, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT b.device_id, s.name, s.sensor_id, s.region_id
+		SELECT b.device_id, s.name, s.sensor_id, s.region_id, s.board_id
 		FROM sensor s
 		JOIN board b ON b.board_id = s.board_id
 	`)
@@ -213,7 +213,7 @@ func (r *Repository) LoadSensorCache(ctx context.Context) (map[string]map[string
 	for rows.Next() {
 		var deviceID, sensorName string
 		var info SensorInfo
-		if err := rows.Scan(&deviceID, &sensorName, &info.SensorID, &info.RegionID); err != nil {
+		if err := rows.Scan(&deviceID, &sensorName, &info.SensorID, &info.RegionID, &info.BoardID); err != nil {
 			return nil, fmt.Errorf("scan sensor row: %w", err)
 		}
 		if out[deviceID] == nil {
@@ -458,15 +458,135 @@ func sensorTypeNameFromConfig(t firmwarepb.SensorType) string {
 	return strings.ToLower(name)
 }
 
-// InsertReading writes a sensor_reading row.
+// InsertReading writes a sensor_reading row and returns its reading_id.
 // configVersion is nil when no config has been accepted for this device yet.
-func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error {
-	_, err := r.db.Exec(ctx, `
+// The returned reading_id is FR76's uptime-regression evidence class'
+// satisfying-evidence reference (claim_challenge_round.satisfied_by_reading_id,
+// leaflab/migrate/migrations/021_claim_challenge.up.sql) -- see
+// SatisfyOpenClaimRound below.
+func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) (int64, error) {
+	var readingID int64
+	err := r.db.QueryRow(ctx, `
 		INSERT INTO sensor_reading (sensor_id, region_id, value, valid, uptime_s, recorded_at, config_version)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, sensorID, regionID, value, valid, uptimeS, recordedAt, configVersion)
+		RETURNING reading_id
+	`, sensorID, regionID, value, valid, uptimeS, recordedAt, configVersion).Scan(&readingID)
 	if err != nil {
-		return fmt.Errorf("insert reading for sensor %d: %w", sensorID, err)
+		return 0, fmt.Errorf("insert reading for sensor %d: %w", sensorID, err)
 	}
-	return nil
+	return readingID, nil
+}
+
+// CheckAndUpdateUptimeWatermark upserts board_uptime_watermark for boardID
+// and reports whether uptimeS is a genuine restart signal (FR76 requirement
+// 4): both lower than the board's previously recorded uptime_s and below
+// thresholdSeconds. The threshold check is what excludes the uint32
+// millisecond wrap at ~49.7 days -- a wrap produces a lower-but-large value
+// (nowhere near thresholdSeconds), so it never satisfies "small" and is
+// correctly never counted as a restart, regardless of the wrap's exact
+// arithmetic. A board with no prior watermark row is never a restart (no
+// prior value to regress against) -- this is also the first-reading case
+// requirement 4's non-retained-manifest exception cares about, though that
+// exception itself is implemented in leaflab/api/ENV.md's flagged
+// "never satisfied" fallback, not here.
+func (r *Repository) CheckAndUpdateUptimeWatermark(ctx context.Context, boardID int64, uptimeS uint32, observedAt time.Time, thresholdSeconds uint32) (bool, error) {
+	var lastUptimeS uint32
+	hadPrior := true
+	err := r.db.QueryRow(ctx, `
+		SELECT last_uptime_s FROM board_uptime_watermark WHERE board_id = $1
+	`, boardID).Scan(&lastUptimeS)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, fmt.Errorf("read uptime watermark for board %d: %w", boardID, err)
+		}
+		hadPrior = false
+	}
+
+	isRestart := hadPrior && uptimeS < lastUptimeS && uptimeS < thresholdSeconds
+
+	if _, err := r.db.Exec(ctx, `
+		INSERT INTO board_uptime_watermark (board_id, last_uptime_s, observed_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (board_id) DO UPDATE SET last_uptime_s = EXCLUDED.last_uptime_s, observed_at = EXCLUDED.observed_at
+	`, boardID, uptimeS, observedAt); err != nil {
+		return false, fmt.Errorf("upsert uptime watermark for board %d: %w", boardID, err)
+	}
+
+	return isRestart, nil
+}
+
+// SatisfyOpenClaimRound closes the open claim_challenge_round waiting on
+// deviceID (if any) with the uptime_regression evidence class, advancing its
+// parent claim_challenge's rounds_satisfied and discharging the challenge
+// once rounds_required is reached (FR76 requirements 3, 4, 6). observedAt
+// must fall strictly after the round's t0 and no later than its
+// bound_expires_at -- both enforced in the WHERE clause, so a restart
+// observed outside its round's window is silently ignored: no error, no
+// round closed. FOR UPDATE on the round row serializes against a concurrent
+// MarkClaimRound re-mark of the same round.
+//
+// "A restart signal may satisfy at most one round, ever" (Implementation
+// section) is enforced by the migration's partial unique index on
+// satisfied_by_reading_id, not by this method's logic alone -- readingID
+// naming a sensor_reading row already claimed by another round would fail
+// that constraint and this call would return an error, never silently
+// double-satisfy.
+func (r *Repository) SatisfyOpenClaimRound(ctx context.Context, deviceID string, readingID int64, observedAt time.Time) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck -- no-op once committed
+
+	var roundID, challengeID int64
+	err = tx.QueryRow(ctx, `
+		SELECT ccr.round_id, ccr.challenge_id
+		FROM claim_challenge_round ccr
+		JOIN claim_challenge cc ON cc.challenge_id = ccr.challenge_id
+		WHERE ccr.device_id = $1
+		  AND ccr.closed_at IS NULL
+		  AND ccr.t0 < $2
+		  AND $2 <= ccr.bound_expires_at
+		  AND cc.state = 'open'
+		FOR UPDATE OF ccr
+	`, deviceID, observedAt).Scan(&roundID, &challengeID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // no open round currently waiting on this device_id.
+		}
+		return fmt.Errorf("find open claim round for device %q: %w", deviceID, err)
+	}
+
+	// satisfied_by_reading_recorded_at is set to observedAt -- the same
+	// instant handleSensorReading passed as InsertReading's recordedAt for
+	// this exact reading row -- so the composite FK to sensor_reading's
+	// actual primary key (reading_id, recorded_at) resolves. See migration
+	// 021's doc comment on satisfied_by_reading_recorded_at.
+	if _, err := tx.Exec(ctx, `
+		UPDATE claim_challenge_round
+		SET closed_at = $2, satisfied_by_reading_id = $3, satisfied_by_reading_recorded_at = $2, evidence_class = 'uptime_regression'
+		WHERE round_id = $1
+	`, roundID, observedAt, readingID); err != nil {
+		return fmt.Errorf("close claim round %d: %w", roundID, err)
+	}
+
+	var roundsSatisfied, roundsRequired int
+	if err := tx.QueryRow(ctx, `
+		UPDATE claim_challenge
+		SET rounds_satisfied = rounds_satisfied + 1, attempts_used = 0
+		WHERE challenge_id = $1
+		RETURNING rounds_satisfied, rounds_required
+	`, challengeID).Scan(&roundsSatisfied, &roundsRequired); err != nil {
+		return fmt.Errorf("advance claim challenge %d: %w", challengeID, err)
+	}
+
+	if roundsSatisfied >= roundsRequired {
+		if _, err := tx.Exec(ctx, `
+			UPDATE claim_challenge SET state = 'discharged', discharged_at = NOW() WHERE challenge_id = $1
+		`, challengeID); err != nil {
+			return fmt.Errorf("discharge claim challenge %d: %w", challengeID, err)
+		}
+	}
+
+	return tx.Commit(ctx)
 }

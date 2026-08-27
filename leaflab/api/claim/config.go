@@ -58,18 +58,27 @@ type Config struct {
 	// here because it is configuration of the same kind (env-overridable,
 	// documented in ENV.md) rather than a hardcoded value.
 	RestartUptimeThreshold time.Duration
+	// MaxConcurrentOpenChallenges bounds how many challenges a single
+	// principal may hold in the 'open' state at once (requirement 2's
+	// "a bounded number of concurrent open challenges per principal" --
+	// distinct from the per-(principal, device_id) uniqueness the schema
+	// enforces structurally). Like CooldownDuration, A28 does not name this
+	// number explicitly; this default is this task's own choice, flagged
+	// per the issue's residual-risk caveat.
+	MaxConcurrentOpenChallenges int
 }
 
 // DefaultConfig is Config's A28 fallback, used for any field whose
 // environment variable (see the Env* constants below) is unset.
 // leaflab/api/ENV.md documents these values alongside the variable names.
 var DefaultConfig = Config{
-	RoundsRequired:         2,
-	RoundBound:             3 * time.Minute,
-	ChallengeLifetime:      15 * time.Minute,
-	AttemptsPerRound:       2,
-	CooldownDuration:       30 * time.Minute,
-	RestartUptimeThreshold: 5 * time.Minute,
+	RoundsRequired:              2,
+	RoundBound:                  3 * time.Minute,
+	ChallengeLifetime:           15 * time.Minute,
+	AttemptsPerRound:            2,
+	CooldownDuration:            30 * time.Minute,
+	RestartUptimeThreshold:      5 * time.Minute,
+	MaxConcurrentOpenChallenges: 3,
 }
 
 // envVarPrefix is common to every Config field's environment variable name.
@@ -85,6 +94,7 @@ const (
 	EnvAttemptsPerRound      = envVarPrefix + "ATTEMPTS_PER_ROUND"
 	EnvCooldownSeconds       = envVarPrefix + "COOLDOWN_SECONDS"
 	EnvRestartThresholdSecs  = envVarPrefix + "RESTART_UPTIME_THRESHOLD_SECONDS"
+	EnvMaxConcurrentOpen     = envVarPrefix + "MAX_CONCURRENT_OPEN_CHALLENGES"
 )
 
 // ErrRoundsRequiredTooLow is returned by LoadConfigFromEnv when the
@@ -156,6 +166,14 @@ func LoadConfigFromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("%s=%q: %w", EnvRestartThresholdSecs, raw, err)
 		}
 		cfg.RestartUptimeThreshold = time.Duration(v) * time.Second
+	}
+
+	if raw := getenv(EnvMaxConcurrentOpen); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil {
+			return Config{}, fmt.Errorf("%s=%q: %w", EnvMaxConcurrentOpen, raw, err)
+		}
+		cfg.MaxConcurrentOpenChallenges = v
 	}
 
 	return cfg, nil
