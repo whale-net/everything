@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -42,7 +43,7 @@ func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64
 	panic("not used by this file's tests")
 }
 
-func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error) {
+func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error) {
 	panic("not used by this file's tests")
 }
 

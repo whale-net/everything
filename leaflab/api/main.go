@@ -179,7 +179,14 @@ func validateAuthBootConfig(mode grpcauth.AuthMode, devMode bool) error {
 //
 // Server reflection is a discovery/debugging aid; disabled outside
 // explicit dev mode so a deployed environment never exposes it (FR11).
+//
+// MustValidateAuditRegistrations runs first (FR8/NFR8-adjacent structural
+// check, audit_registry.go): a write RPC registered with no audit
+// registration panics here, at startup, rather than shipping a silently
+// unaudited write RPC to production.
 func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamServerInterceptor, rpcLogger *slog.Logger, apiServer pb.LeafLabAPIServer, devMode bool) *grpc.Server {
+	MustValidateAuditRegistrations()
+
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
 			NewCorrelationUnaryInterceptor(),
