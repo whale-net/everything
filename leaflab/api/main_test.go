@@ -112,15 +112,19 @@ func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
 
-// The five admin RPCs below (FR10, FR12 activation) have no business logic
-// yet -- Scaffold only adds them to the proto (see api.proto's "Admin"
-// section) -- so these canned stubs exist purely so stubAPIServer, a
-// value type embedding pb.UnimplementedLeafLabAPIServer (whose promoted
-// methods have pointer receivers), keeps satisfying pb.LeafLabAPIServer.
-// Real behavior lands in the Implementation-phase task that wires these
-// into server.go.
+// The six admin/fleet-health RPCs below (FR10, FR12 activation, FR79) have
+// no business logic yet -- Scaffold only adds them to the proto (see
+// api.proto's "Admin" and "Fleet health listing" sections) -- so these
+// canned stubs exist purely so stubAPIServer, a value type embedding
+// pb.UnimplementedLeafLabAPIServer (whose promoted methods have pointer
+// receivers), keeps satisfying pb.LeafLabAPIServer. Real behavior lands in
+// the Implementation-phase task that wires these into server.go.
 func (stubAPIServer) ResolveToHousehold(ctx context.Context, req *pb.ResolveToHouseholdRequest) (*pb.ResolveToHouseholdResponse, error) {
 	return &pb.ResolveToHouseholdResponse{}, nil
+}
+
+func (stubAPIServer) ListFleetHealth(ctx context.Context, req *pb.ListFleetHealthRequest) (*pb.ListFleetHealthResponse, error) {
+	return &pb.ListFleetHealthResponse{}, nil
 }
 
 func (stubAPIServer) Elevate(ctx context.Context, req *pb.ElevateRequest) (*pb.ElevateResponse, error) {

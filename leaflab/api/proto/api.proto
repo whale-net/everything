@@ -42,6 +42,19 @@ service LeafLabAPI {
   // call, not one per returned board.
   rpc ResolveToHousehold(ResolveToHouseholdRequest) returns (ResolveToHouseholdResponse);
 
+  // ListFleetHealth is FR79's admin fleet health listing: per board,
+  // last-seen age evaluated against A23's staleness threshold, active
+  // accepted config version, whether a push is outstanding and for how
+  // long, and sensor count -- filterable by device-id prefix, household,
+  // region and reporting state (including unhealthy-only), and paginated
+  // per FR61. Reachable from the standing admin lane (FR10.2) across all
+  // households, and from an elevated lane narrowed to one household
+  // (FR10.1/FR10.3) -- the same computation FR62's household-member
+  // landing view will consume, not a second one. No health score or
+  // severity ranking (FR79) -- see ReportingState and FleetBoardHealth's
+  // doc comments.
+  rpc ListFleetHealth(ListFleetHealthRequest) returns (ListFleetHealthResponse);
+
   // Elevate opens a time-boxed, reasoned elevation against one target
   // household (FR10.1). Requires a non-empty reason. Lasts 60 minutes
   // (configurable, documented) from acceptance.
@@ -253,6 +266,96 @@ message ResolveToHouseholdResponse {
   // Server's current time, so a caller renders last_seen_at as elapsed
   // time without trusting its own clock (FR64).
   Instant server_now = 2;
+}
+
+// --- Fleet health listing (FR79, A23) ------------------------------------
+//
+// ListFleetHealth's request/response pair. FleetBoardHealth is a distinct
+// message from AdminBoardHealth (ResolveToHousehold's projection) even
+// though the two overlap heavily -- it carries the additional fields FR79
+// asks for beyond FR10.2's set (reporting_state, outstanding_push_since,
+// retired) and is filterable/paginated in a way a resolve-by-term lane is
+// not. Neither message is a narrowed reuse of the other, same rationale as
+// AdminBoardHealth's own doc comment: a wider message with fields left
+// unset here would let a future field addition leak into a lane that
+// hasn't asked for it.
+
+// ReportingState is A23's "not reporting" classification, evaluated
+// per-board against that board's own staleness threshold
+// (leaflab/api/health.Threshold) -- REPORTING_STATE_NOT_REPORTING is
+// FR79's "unhealthy". This is deliberately two-valued, never a score or a
+// ranking (FR79 explicitly excludes both) -- a caller branches on this
+// enum, never on a numeric severity.
+enum ReportingState {
+  REPORTING_STATE_UNSPECIFIED = 0;
+  REPORTING_STATE_REPORTING = 1;
+  REPORTING_STATE_NOT_REPORTING = 2;
+}
+
+// ListFleetHealthRequest's filters narrow, never widen, the caller's
+// underlying reach (standing admin lane across all households, or an
+// elevated lane narrowed to one household -- see ListFleetHealth's doc
+// comment). Every filter is optional; an unset/zero-value filter applies
+// no narrowing on that dimension.
+message ListFleetHealthRequest {
+  // Narrows to boards whose device_id starts with this prefix. Empty =
+  // no filter.
+  string device_id_prefix = 1;
+  // Narrows to one household. 0 = no filter.
+  int64 household_id = 2;
+  // Narrows to boards with at least one sensor currently placed in this
+  // region. 0 = no filter.
+  int64 region_id = 3;
+  // Narrows by A23 reporting state. REPORTING_STATE_UNSPECIFIED = no
+  // filter; REPORTING_STATE_NOT_REPORTING is FR79's "unhealthy only".
+  ReportingState reporting_state = 4;
+  // Keyset page request (FR61). Unset/empty requests the first page.
+  PageRequest page = 5;
+}
+
+// FleetBoardHealth is FR79's fleet-listing health projection. No field on
+// this message is a computed health score or severity ranking (FR79) --
+// reporting_state is the closest thing to a summary judgement here, and it
+// is a two-valued classification, not a score.
+message FleetBoardHealth {
+  string device_id = 1;
+  // Board display name. Falls back to device_id until a display-name
+  // field exists elsewhere in the schema (see AdminBoardHealth's doc
+  // comment).
+  string board_display_name = 2;
+  int64 household_id = 3;
+  string household_name = 4;
+  // Absolute instant the board was last seen -- render as elapsed age
+  // against ListFleetHealthResponse.server_now (FR64).
+  Instant last_seen_at = 5;
+  // A23 classification of last_seen_at against this board's own
+  // staleness threshold (leaflab/api/health.Threshold) -- global, not
+  // per-household.
+  ReportingState reporting_state = 6;
+  // Highest config version currently accepted by this board.
+  uint64 active_version = 7;
+  // True when a pushed config version has not yet been accepted.
+  bool outstanding_push = 8;
+  // Absolute instant the outstanding version was pushed. Meaningful only
+  // when outstanding_push is true -- render "how long outstanding" as
+  // server_now - outstanding_push_since (FR64), the same convention as
+  // last_seen_at.
+  Instant outstanding_push_since = 9;
+  int32 sensor_count = 10;
+  // True when this board is retired (board.retired_at IS NOT NULL,
+  // FR22.4). A retired board may still be listed here, marked retired,
+  // but is excluded from any offline/reporting-state count computed over
+  // this listing (FR79).
+  bool retired = 11;
+}
+
+message ListFleetHealthResponse {
+  repeated FleetBoardHealth boards = 1;
+  // Keyset page response (FR61).
+  PageResponse page = 2;
+  // Server's current time, so a caller renders every Instant in this
+  // response as elapsed time without trusting its own clock (FR64).
+  Instant server_now = 3;
 }
 
 // ElevateRequest opens an elevation against target_household_id.

@@ -1,0 +1,10 @@
+"""LeafLab API health -- A23's "not reporting" staleness rule (FR79, FR62, FR42)."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "health",
+    srcs = ["staleness.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/health",
+    visibility = ["//visibility:public"],
+)

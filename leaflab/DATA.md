@@ -224,6 +224,47 @@ GROUP BY config_version ORDER BY 2 DESC;
 
 ---
 
+## A23 Staleness Threshold ("not reporting")
+
+`leaflab/api/health.Threshold` is the single implementation of A23's "not
+reporting" rule: `max(3 * longest_configured_poll_interval_for_the_board, 15
+minutes)`, computed globally (not per-household). FR79 (admin fleet health
+listing), FR62 (household landing classification) and FR42 (re-send
+availability) all call into this one function rather than re-deriving the
+arithmetic at their own call sites.
+
+**Architect standing note and the decision that resolves it:** A23 asks for
+a threshold that "should derive from the effective publish cadence", but the
+firmware does not yet honor per-sensor poll intervals —
+`leaflab/sensorboard/sensorboard_dynamic_main.cc:136` still publishes every
+sensor together on one compile-time `SENSOR_POLL_INTERVAL_MS`, ignoring
+`SensorConfig.poll_interval_ms` entirely (see that file's `TODO: use
+ConfigApplier::PollIntervalMs() for per-sensor scheduling`).
+
+This implementation derives the threshold from the **configured** poll
+interval — the value an operator pushed via `PushDeviceConfig`, read from
+the board's active accepted `device_config` — not from observed publish
+timestamps:
+
+1. A23's text reads "longest configured poll interval", which names the
+   config value, not an inferred one.
+2. An observed-cadence derivation would, today, collapse to the same fixed
+   value for every board regardless of what was configured, since the
+   firmware ignores the configured value and publishes on one global
+   compile-time constant — that would defeat the per-board behavior A23 and
+   its test fixtures require (e.g. a board with a 1-minute configured
+   interval going stale at 15 minutes, floored; a board with a 10-minute
+   configured interval going stale at 30 minutes, not floored).
+
+A `SensorConfig.poll_interval_ms` of `0` ("use device default") is treated
+as `health.DefaultPollInterval` (60s), matching the firmware's own
+compile-time default. When the firmware gap above closes (per-sensor
+intervals actually honored), `health.Threshold`'s output becomes accurate to
+the real publish cadence with no code change here — it already computes from
+the value that will then be true.
+
+---
+
 ## SCD2 Convention
 
 All SCD2 (Slowly Changing Dimension Type 2) history tables follow a uniform column convention:
