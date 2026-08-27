@@ -122,3 +122,35 @@ go_test(
         "@com_github_jackc_pgx_v5//stdlib",
     ],
 )
+
+# Real-Postgres integration coverage for migration 021's repoint of
+# v_sensor_reading_with_plant onto nearest-ancestor attribution (FR72,
+# NFR16 views half) -- see
+# view_attribution_correction_migration_integration_test.go's doc comment.
+# Same hand-written rationale, tag set and embed-its-own-migrations pattern
+# as the sibling integration tests above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/migrate:view_attribution_correction_migration_integration_test --test_output=all
+go_test(
+    # keep
+    name = "view_attribution_correction_migration_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["view_attribution_correction_migration_integration_test.go"],
+    embedsrcs = glob(["migrations/*.sql"]),
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+    ],
+)
