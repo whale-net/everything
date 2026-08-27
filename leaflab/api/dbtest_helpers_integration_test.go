@@ -131,6 +131,17 @@ func (stubAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (a
 	panic("not used by this package's integration tests")
 }
 
+// Resolve satisfies authz.Resolver, which authzResolver now embeds for
+// PushDeviceConfig's FR1.2/FR1.3 push-time invariant check. See
+// ResolveBoardByDeviceID's doc comment above -- none of this package's
+// integration tests exercise PushDeviceConfig past its device_id
+// validation refusal (response_contract_integration_test.go's
+// TestPushDeviceConfig_RefusalWritesNothing), so this panics if that ever
+// changes without wiring a real fixture here.
+func (stubAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
+	panic("not used by this package's integration tests")
+}
+
 // newTestServer starts a real Postgres container, applies testSchema, and
 // returns a LeafLabAPIServer backed by a real Repository plus the raw pool
 // for fixture setup / assertions. publisher is nil: every RPC exercised by

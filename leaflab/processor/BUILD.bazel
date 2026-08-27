@@ -15,6 +15,7 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/api/audit",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",

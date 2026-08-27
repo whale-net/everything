@@ -267,12 +267,14 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 		if err != nil {
 			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
 		}
-		// TODO(#1340 Implementation): surface skips to the caller who
-		// pushed them (FR1.3's caller-visible skip, subject to FR82.4's
-		// provenance rule once #1341/Phase 4 lands) -- this ack path has
-		// no RPC response of its own to carry them on, so that will need
-		// its own delivery mechanism (e.g. a follow-up read keyed by
-		// correlation id). Logged here only in the meantime.
+		// Each skip already wrote its own audit.Entry (FR8) inside
+		// ApplyConfigRegions -- that audit row, read back via
+		// leaflab/api's GetDeviceConfig (server.go), is FR1.3's
+		// caller-visible surface: this ack path has no RPC response of
+		// its own to carry skips on directly. Provenance (FR82.4) is
+		// Phase 4 -- until it lands, GetDeviceConfig shows every skip for
+		// a board to any caller with reach to it, not just the one who
+		// authored the push. Logged here too, for operator visibility.
 		for _, skip := range skips {
 			h.logger.Warn("region assignment skipped at apply time",
 				"device_id", deviceID,

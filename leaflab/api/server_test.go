@@ -52,6 +52,10 @@ func (f *fakeRepo) GetLatestAcceptedConfig(ctx context.Context, deviceID string)
 	return nil, nil
 }
 
+func (f *fakeRepo) GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error) {
+	return nil, nil
+}
+
 func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error) {
 	f.listBoardsScope = scope
 	return f.listBoardsRows, f.listBoardsErr
@@ -84,6 +88,15 @@ func (f *fakeAuthz) ScopeForPrincipal(ctx context.Context, principalSubject stri
 func (f *fakeAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error) {
 	f.resolveCalls++
 	return f.resolveRef, f.resolveRes, f.resolveErr
+}
+
+// Resolve satisfies authz.Resolver, which authzResolver now embeds for
+// PushDeviceConfig's FR1.2/FR1.3 push-time invariant check. Nothing in
+// this file exercises PushDeviceConfig's write path yet (see fakeRepo's
+// doc comment), so this panics if that ever changes without wiring real
+// per-ref configuration here.
+func (f *fakeAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
+	panic("not used by this file's tests")
 }
 
 // allPermittingScope is a test-only Scope that permits everything -- used
