@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "templadapter",
+    srcs = ["templadapter.go"],
+    importpath = "github.com/whale-net/everything/libs/go/htmxsse/templadapter",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/htmxsse",
+        "@com_github_a_h_templ//:templ",
+    ],
+)
+
+go_test(
+    name = "templadapter_test",
+    srcs = ["templadapter_test.go"],
+    embed = [":templadapter"],
+    deps = [
+        "//libs/go/htmxsse",
+        "@com_github_a_h_templ//:templ",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
