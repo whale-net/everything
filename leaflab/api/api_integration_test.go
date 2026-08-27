@@ -10,10 +10,11 @@ import (
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
-	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -308,7 +309,9 @@ func newTestSetup(t *testing.T, ctx context.Context) *testSetup {
 	schema := `
 		CREATE TABLE IF NOT EXISTS board (
 			board_id BIGSERIAL PRIMARY KEY,
-			device_id TEXT NOT NULL UNIQUE
+			device_id TEXT NOT NULL UNIQUE,
+			registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
 
 		CREATE TABLE IF NOT EXISTS device_config (
@@ -382,7 +385,22 @@ func (s *testSetup) notifyAck(boardID int64, version int64, accepted bool, reaso
 
 func (s *testSetup) newAPIServer(ctx context.Context, name string, ackWaiter *ConfigAckWaiter) *apiServerInstance {
 	lis := bufconn.Listen(1024 * 1024)
-	grpcServer := grpc.NewServer()
+
+	// Wire up AuthModeNone interceptors so requests reach the handlers with
+	// dev claims already injected into context. Handlers such as
+	// WaitForConfigAck unconditionally call requireAuthentication, which
+	// looks for claims in context via grpcauth.ClaimsFromContext — without
+	// this, every authenticated RPC call would fail with Unauthenticated.
+	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
+		Mode: grpcauth.AuthModeNone,
+	})
+	if err != nil {
+		s.t.Fatalf("failed to create auth interceptors: %v", err)
+	}
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(unaryInt),
+		grpc.StreamInterceptor(streamInt),
+	)
 
 	repo := &Repository{db: s.db.Pool}
 	registry := ratelimit.NewRegistry()

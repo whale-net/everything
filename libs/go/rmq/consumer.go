@@ -340,22 +340,33 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 		}
 	}
 
+	// Declare using declaredName, not c.queue: for broker-assigned (empty
+	// declaredName) queues, c.queue holds the previously-assigned name
+	// (e.g. "amq.gen-..."), and RabbitMQ rejects client-requested queue
+	// names starting with the reserved "amq." prefix. Passing the original
+	// (empty) declaredName lets the broker assign a fresh name each time,
+	// matching what happens on first declare in NewConsumer.
 	arguments := buildQueueArguments(declaredName, durable, autoDelete, messageTTL, maxMessages)
-	if _, err := ch.QueueDeclare(c.queue, durable, autoDelete, false, false, arguments); err != nil {
+	queue, err := ch.QueueDeclare(declaredName, durable, autoDelete, false, false, arguments)
+	if err != nil {
 		ch.Close()
 		return nil, fmt.Errorf("failed to declare queue: %w", err)
 	}
 
+	c.mu.Lock()
+	c.queue = queue.Name
+	c.mu.Unlock()
+
 	for _, b := range bindings {
 		for _, key := range b.routingKeys {
-			if err := ch.QueueBind(c.queue, key, b.exchange, false, nil); err != nil {
+			if err := ch.QueueBind(queue.Name, key, b.exchange, false, nil); err != nil {
 				ch.Close()
 				return nil, fmt.Errorf("failed to bind queue: %w", err)
 			}
 		}
 	}
 
-	msgs, err := ch.Consume(c.queue, "", false, false, false, false, nil)
+	msgs, err := ch.Consume(queue.Name, "", false, false, false, false, nil)
 	if err != nil {
 		ch.Close()
 		return nil, fmt.Errorf("failed to register consumer: %w", err)
@@ -555,7 +566,7 @@ func matchesRoutingKey(key, pattern string) bool {
 	if pattern == key {
 		return true
 	}
-	
+
 	// Simple prefix matching for now
 	// Full wildcard support can be added later
 	if len(pattern) > 0 && pattern[len(pattern)-1] == '#' {
@@ -564,7 +575,7 @@ func matchesRoutingKey(key, pattern string) bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
