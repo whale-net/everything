@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -102,6 +103,9 @@ func (d *AuthorizationDecision) HouseholdScopes() []*HouseholdScope {
 			households = append(households, hs)
 		}
 	}
+	sort.Slice(households, func(i, j int) bool {
+		return households[i].HouseholdID() < households[j].HouseholdID()
+	})
 	return households
 }
 
