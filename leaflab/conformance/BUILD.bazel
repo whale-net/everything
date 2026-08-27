@@ -18,6 +18,7 @@ go_test(
         "auth_coverage_test.go",
         "bff_policy_test.go",
         "negative_fixtures_test.go",
+        "nfr1b_test.go",
         "paths_test.go",
     ],
     data = [

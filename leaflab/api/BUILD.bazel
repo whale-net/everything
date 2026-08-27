@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "audit_registry.go",
         "auth.go",
+        "authz_registry.go",
         "logging_interceptor.go",
         "main.go",
         "repository.go",

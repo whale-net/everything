@@ -23,11 +23,12 @@ const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 // RetireBoard is called directly by tests only, per #1337's scaffold) --
 // it will be added here in the task that gives it one.
 //
-// This registry is scoped to audit coverage only. #1351 (NFR1.b) adds a
-// separate read/write-kind registry for authorization-conformance
-// purposes over the same RPC set; the two check different things
-// (audit-record presence vs. household-scope enforcement) and are
-// independent, though worth a look for consolidation once #1351 lands.
+// This registry is scoped to audit coverage only. authz_registry.go's
+// rpcAuthzRegistrations is #1351 (NFR1.b)'s separate read/write-kind
+// registry for authorization-conformance purposes over the same RPC set;
+// the two check different things (audit-record presence vs.
+// household-scope enforcement) and are independent, though worth a look
+// for consolidation once #1351's Testing phase lands.
 var declaredWriteMethods = []string{
 	pushDeviceConfigFullMethod,
 }
