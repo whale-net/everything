@@ -217,13 +217,12 @@ func (r *Repository) FindSensorIDByHWKey(ctx context.Context, boardID int64, typ
 		return 0, false, nil
 	}
 
-	var sensorTypeID int64
-	err := r.db.QueryRow(ctx, `SELECT sensor_type_id FROM sensor_type WHERE name = $1`, typeName).Scan(&sensorTypeID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, nil
-	}
+	sensorTypeID, ok, err := r.resolveSensorTypeID(ctx, typeName)
 	if err != nil {
-		return 0, false, fmt.Errorf("find sensor_type_id for %q: %w", typeName, err)
+		return 0, false, err
+	}
+	if !ok {
+		return 0, false, nil
 	}
 
 	key := hwkey.Key{I2CAddress: hw.I2CAddress, MuxPath: hw.MuxPath, SensorTypeID: hwkey.SensorTypeID(sensorTypeID)}
@@ -254,4 +253,133 @@ func (r *Repository) FindSensorIDByName(ctx context.Context, boardID int64, name
 		return 0, false, fmt.Errorf("find sensor by name %q on board %d: %w", name, boardID, err)
 	}
 	return sensorID, true, nil
+}
+
+// resolveSensorTypeID looks up sensor_type_id for typeName, read-only.
+// Returns (0, false, nil) when no sensor_type with that name exists yet --
+// shared by FindSensorIDByHWKey and checkPushConfigIdentity's FR16.4/FR17
+// resolution, both of which need this exact "unknown type name means no
+// sensor of that type can exist yet" behaviour.
+func (r *Repository) resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error) {
+	var sensorTypeID int64
+	err := r.db.QueryRow(ctx, `SELECT sensor_type_id FROM sensor_type WHERE name = $1`, typeName).Scan(&sensorTypeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("find sensor_type_id for %q: %w", typeName, err)
+	}
+	return sensorTypeID, true, nil
+}
+
+// BoardSensorIdentity is one existing sensor's identity snapshot on the API
+// side -- mirrors leaflab/processor/repository.go's type of the same
+// name/shape (see this file's package doc comment on why it isn't shared
+// as a single type across the two binaries). Used by
+// checkPushConfigIdentity's FR16.4 swap detection and FR17 case-3 refusal
+// decision, which need every existing identity on the board at once, not
+// one entry's candidate match in isolation the way
+// FindSensorIDByHWKey/FindSensorIDByName do.
+type BoardSensorIdentity struct {
+	SensorID     int64
+	Name         string
+	SensorTypeID int64
+	HW           *HardwareAddress // nil when the row has no known address
+}
+
+// LoadBoardSensorIdentities returns the current identity snapshot for every
+// sensor on a board, read-only. See BoardSensorIdentity.
+func (r *Repository) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT sensor_id, name, sensor_type_id, i2c_address, mux_path::text
+		FROM sensor
+		WHERE board_id = $1
+		ORDER BY sensor_id
+	`, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("load board sensor identities for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var out []BoardSensorIdentity
+	for rows.Next() {
+		var bsi BoardSensorIdentity
+		var i2cAddr *int32
+		var muxText string
+		if err := rows.Scan(&bsi.SensorID, &bsi.Name, &bsi.SensorTypeID, &i2cAddr, &muxText); err != nil {
+			return nil, fmt.Errorf("scan board sensor identity for board %d: %w", boardID, err)
+		}
+		if i2cAddr != nil {
+			var muxPath hwkey.MuxPath
+			// muxText is mux_path::text in hwkey's own canonical encoding
+			// (SQLText's doc comment) -- MuxPath.UnmarshalJSON is its exact
+			// inverse, so this round-trips without this package re-deriving
+			// mux_path parsing rules of its own.
+			if err := muxPath.UnmarshalJSON([]byte(muxText)); err != nil {
+				return nil, fmt.Errorf("parse mux_path for sensor %d: %w", bsi.SensorID, err)
+			}
+			bsi.HW = &HardwareAddress{I2CAddress: hwkey.Address(uint16(*i2cAddr)), MuxPath: muxPath}
+		}
+		out = append(out, bsi)
+	}
+	return out, rows.Err()
+}
+
+// RewireSensorHW updates sensorID's hardware key in place and records a
+// sensor_hw_history interval, atomically -- FR16's rewire path, applied
+// through the explicit RewireSensor RPC. Unlike
+// leaflab/processor/repository.go's RewireAndRenameSensor +
+// UpsertSensorHWHistory pair (called sequentially, not transactionally,
+// since the device manifest path already tolerates a partial write being
+// corrected by the device's next manifest), this wraps both writes in one
+// transaction: RewireSensor is a one-shot operator action with no retry
+// signal of its own, so the sensor_hw_history interval must never be
+// written without the sensor row's own hardware key changing to match, or
+// vice versa. Callers are expected to have already resolved sensorID via
+// FindSensorIDByName (FR16 case 2 -- name is RewireSensor's stable
+// anchor); this method does not re-resolve identity.
+func (r *Repository) RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin rewire tx for sensor %d: %w", sensorID, err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	var i2cAddr *int32
+	muxJSON := []byte(`[]`)
+	muxText := hwkey.MuxPath(nil).SQLText()
+	if hw.hasKnownAddress() {
+		v, _ := hw.I2CAddress.Value()
+		addr := int32(v)
+		i2cAddr = &addr
+		muxJSON = []byte(hw.MuxPath.SQLText())
+		muxText = hw.MuxPath.SQLText()
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE sensor SET i2c_address = $2, mux_path = $3::jsonb WHERE sensor_id = $1
+	`, sensorID, i2cAddr, muxJSON)
+	if err != nil {
+		return fmt.Errorf("rewire sensor %d: %w", sensorID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("rewire sensor %d: no matching row", sensorID)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor_hw_history SET valid_to = NOW()
+		WHERE sensor_id = $1 AND valid_to IS NULL
+	`, sensorID); err != nil {
+		return fmt.Errorf("close hw history for sensor %d: %w", sensorID, err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO sensor_hw_history (sensor_id, mux_path, i2c_address) VALUES ($1, $2::jsonb, $3)
+	`, sensorID, muxText, i2cAddr); err != nil {
+		return fmt.Errorf("insert hw history for sensor %d: %w", sensorID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit rewire tx for sensor %d: %w", sensorID, err)
+	}
+	return nil
 }

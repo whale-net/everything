@@ -177,6 +177,7 @@ func (r *Repository) LoadBoardSensorIdentities(ctx context.Context, boardID int6
 		SELECT sensor_id, name, sensor_type_id, i2c_address, mux_path::text
 		FROM sensor
 		WHERE board_id = $1
+		ORDER BY sensor_id
 	`, boardID)
 	if err != nil {
 		return nil, fmt.Errorf("load board sensor identities for board %d: %w", boardID, err)
@@ -215,8 +216,11 @@ func (r *Repository) LoadBoardSensorIdentities(ctx context.Context, boardID int6
 // identified sensorID by elimination (see LoadBoardSensorIdentities) and
 // just needs the row updated without another identity lookup that would
 // fail. sensor_id, and everything keyed on it, is unchanged by construction
-// -- this is an UPDATE, never an INSERT.
-func (r *Repository) RewireAndRenameSensor(ctx context.Context, sensorID, sensorTypeID int64, name, unit string, hw *HardwareAddress) error {
+// -- this is an UPDATE, never an INSERT. Returns the sensor's current
+// region_id (nil if unset), mirroring UpsertSensor's return shape so the
+// caller can populate its sensor cache identically regardless of which of
+// the two methods resolved the entry.
+func (r *Repository) RewireAndRenameSensor(ctx context.Context, sensorID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (*int64, error) {
 	var i2cAddr *int32
 	muxJSON := []byte(`[]`)
 	if hw.hasKnownAddress() {
@@ -225,18 +229,87 @@ func (r *Repository) RewireAndRenameSensor(ctx context.Context, sensorID, sensor
 		i2cAddr = &addr
 		muxJSON = []byte(hw.MuxPath.SQLText())
 	}
-	tag, err := r.db.Exec(ctx, `
+	var regionID *int64
+	err := r.db.QueryRow(ctx, `
 		UPDATE sensor
 		SET name = $2, unit = $3, sensor_type_id = $4, i2c_address = $5, mux_path = $6::jsonb
 		WHERE sensor_id = $1
-	`, sensorID, name, unit, sensorTypeID, i2cAddr, muxJSON)
+		RETURNING region_id
+	`, sensorID, name, unit, sensorTypeID, i2cAddr, muxJSON).Scan(&regionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("rewire and rename sensor %d: no matching row", sensorID)
+	}
 	if err != nil {
-		return fmt.Errorf("rewire and rename sensor %d: %w", sensorID, err)
+		return nil, fmt.Errorf("rewire and rename sensor %d: %w", sensorID, err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("rewire and rename sensor %d: no matching row", sensorID)
+	return regionID, nil
+}
+
+// resolveManifestIdentities implements FR16.3's elimination step for a
+// manifest. For each of the parallel entries described by sensorTypeIDs,
+// hws and names (index-aligned with the manifest's own sensor list), it
+// marks every existing identity that entry matches by hardware key (FR16
+// case 1) or by name (FR16 case 2) as "claimed" -- exactly the two checks
+// UpsertSensor's own SQL performs, duplicated here in Go because the
+// elimination step needs to see every entry's claims at once, not one
+// entry's claim in isolation the way a single UPDATE statement does.
+//
+// An entry that claims nothing is left "unresolved"; an existing identity
+// nothing claims is left "unclaimed". When there is exactly one of each,
+// of the same sensor_type, they're paired: that is FR16.3's case -- a
+// manifest entry whose address *and* name both changed in the same
+// message, so it matches neither of UpsertSensor's own lookups
+// individually, yet by elimination there is only one physical sensor it
+// could be. Anything more ambiguous (zero or multiple unresolved entries,
+// zero or multiple unclaimed identities, or a sensor_type mismatch) is
+// left unresolved here and falls through to UpsertSensor's normal
+// resolution, i.e. case 3 -- a genuinely new row -- rather than guessing.
+//
+// Returns manifest-index → sensor_id for every entry resolved this way.
+// handleManifest passes each into RewireAndRenameSensor instead of
+// UpsertSensor.
+func resolveManifestIdentities(existing []BoardSensorIdentity, sensorTypeIDs []int64, hws []*HardwareAddress, names []string) map[int]int64 {
+	entryMatches := func(bsi BoardSensorIdentity, sensorTypeID int64, hw *HardwareAddress, name string) bool {
+		if bsi.Name == name {
+			return true
+		}
+		if hw.hasKnownAddress() && bsi.HW != nil && bsi.SensorTypeID == sensorTypeID {
+			key := hwkey.Key{I2CAddress: hw.I2CAddress, MuxPath: hw.MuxPath, SensorTypeID: hwkey.SensorTypeID(sensorTypeID)}
+			exKey := hwkey.Key{I2CAddress: bsi.HW.I2CAddress, MuxPath: bsi.HW.MuxPath, SensorTypeID: hwkey.SensorTypeID(bsi.SensorTypeID)}
+			if key.Equal(exKey) {
+				return true
+			}
+		}
+		return false
 	}
-	return nil
+
+	claimed := make(map[int64]bool, len(existing))
+	var unresolved []int
+	for i := range hws {
+		claimedThis := false
+		for _, bsi := range existing {
+			if entryMatches(bsi, sensorTypeIDs[i], hws[i], names[i]) {
+				claimed[bsi.SensorID] = true
+				claimedThis = true
+			}
+		}
+		if !claimedThis {
+			unresolved = append(unresolved, i)
+		}
+	}
+
+	var unclaimed []BoardSensorIdentity
+	for _, bsi := range existing {
+		if !claimed[bsi.SensorID] {
+			unclaimed = append(unclaimed, bsi)
+		}
+	}
+
+	out := make(map[int]int64)
+	if len(unresolved) == 1 && len(unclaimed) == 1 && unclaimed[0].SensorTypeID == sensorTypeIDs[unresolved[0]] {
+		out[unresolved[0]] = unclaimed[0].SensorID
+	}
+	return out
 }
 
 // UpsertSensorLabel records a name in sensor_name_history.

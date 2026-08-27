@@ -19,10 +19,25 @@ type stubRepo struct {
 	sensorTypeID int64
 	sensorID     int64
 
+	// Configurable board sensor identity snapshot returned by
+	// LoadBoardSensorIdentities -- empty by default so existing tests (none
+	// of which exercise FR16.3's elimination step) always fall through to
+	// UpsertSensor, unchanged from before this field existed.
+	boardSensorIdentities []BoardSensorIdentity
+
 	// Recorded call arguments.
 	upsertSensorCalls          []upsertSensorCall
 	upsertSensorHWHistoryCalls []upsertSensorHWHistoryCall
 	applyConfigRegionsCalls    []applyConfigRegionsCall
+	rewireAndRenameSensorCalls []rewireAndRenameSensorCall
+}
+
+type rewireAndRenameSensorCall struct {
+	sensorID     int64
+	sensorTypeID int64
+	name         string
+	unit         string
+	hw           *HardwareAddress
 }
 
 type upsertSensorHWHistoryCall struct {
@@ -60,6 +75,21 @@ func (s *stubRepo) UpsertSensor(_ context.Context, boardID, sensorTypeID int64, 
 		hw:           hw,
 	})
 	return s.sensorID, nil, nil
+}
+
+func (s *stubRepo) LoadBoardSensorIdentities(_ context.Context, _ int64) ([]BoardSensorIdentity, error) {
+	return s.boardSensorIdentities, nil
+}
+
+func (s *stubRepo) RewireAndRenameSensor(_ context.Context, sensorID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (*int64, error) {
+	s.rewireAndRenameSensorCalls = append(s.rewireAndRenameSensorCalls, rewireAndRenameSensorCall{
+		sensorID:     sensorID,
+		sensorTypeID: sensorTypeID,
+		name:         name,
+		unit:         unit,
+		hw:           hw,
+	})
+	return nil, nil
 }
 
 func (s *stubRepo) UpsertSensorLabel(_ context.Context, _ int64, _ string) error { return nil }
