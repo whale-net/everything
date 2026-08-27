@@ -1,0 +1,60 @@
+package components
+
+import (
+	"strconv"
+
+	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/libs/go/htmxauth"
+)
+
+// BoardsPage is the Phase 1 read-only boards screen (NFR18.2, NFR19, FR64
+// rendering): one row per BoardInfo returned by leaflab-api's ListBoards,
+// for whichever boards this signed-in user's own forwarded token
+// authorizes (handlers_boards.go never queries a database directly --
+// this screen's only source of data is the gRPC response). The device
+// identifier renders as a copyable support detail (monospace, with a
+// title tooltip), never as a page title or a link -- no field on this
+// screen is marked, named, or documented as safe to expose beyond this
+// signed-in session (NFR19: private by default).
+//
+// Scaffold scope (#1330): last-seen renders as a raw unix-millis number
+// and next_page_token is only surfaced as a static hint, not a "load
+// more" control. Elapsed-time formatting computed from the response's
+// server_now (FR64) and wiring next_page_token into an actual keyset
+// "load more" request (FR61) are Implementation-phase work on this same
+// task.
+templ BoardsPage(user *htmxauth.UserInfo, boards []*pb.BoardInfo, nextPageToken string) {
+	@Shell("Boards", user) {
+		<div class="card bg-base-100 shadow">
+			<div class="card-body">
+				<h1 class="card-title">Boards</h1>
+				<table class="table">
+					<thead>
+						<tr>
+							<th>Device</th>
+							<th>Board</th>
+							<th class="text-right">Last seen</th>
+						</tr>
+					</thead>
+					<tbody>
+						if len(boards) == 0 {
+							<tr>
+								<td colspan="3" class="text-sm opacity-60 p-4">No boards yet.</td>
+							</tr>
+						}
+						for _, b := range boards {
+							<tr class="hover">
+								<td class="font-mono text-xs" title="Device identifier — support use only">{ b.GetDeviceId() }</td>
+								<td class="font-mono text-sm">{ strconv.FormatInt(b.GetBoardId(), 10) }</td>
+								<td class="text-right opacity-60" title="Elapsed-time rendering lands in a later phase of this task">{ strconv.FormatInt(b.GetLastSeenAt().GetUnixMillis(), 10) }</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+				if nextPageToken != "" {
+					<p class="text-xs opacity-60 mt-4">More boards available -- paging lands in a later phase of this task.</p>
+				}
+			</div>
+		</div>
+	}
+}

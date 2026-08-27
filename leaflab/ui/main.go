@@ -246,9 +246,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
 	mux.HandleFunc("/auth/logout", app.auth.HandleLogout)
 
-	// Protected routes. Only "/" is scaffolded here (Phase 1, FR13) — the
-	// device/region/reading screens are later tasks on this plan.
+	// Protected routes. "/" is the Phase 1 (FR13) placeholder landing page;
+	// "/boards" is the Phase 1 read-only boards screen (NFR18.2, NFR19,
+	// FR64 -- #1330), registered on the authenticated router only, same
+	// wrapping as "/". It does not yet replace "/" as the post-login
+	// landing route -- that swap is Implementation-phase work on #1330.
+	// The device/region/reading detail screens are later tasks on this
+	// plan.
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
+	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoards)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

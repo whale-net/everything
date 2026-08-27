@@ -5,6 +5,7 @@ templ_library(
     srcs = glob(["*.templ"]),
     visibility = ["//leaflab/ui:__subpackages__"],
     deps = [
+        "//leaflab/api/proto:leaflabapipb",
         "//libs/go/htmxauth",
         "//libs/go/htmxui",
     ],
