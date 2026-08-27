@@ -37,6 +37,7 @@ import (
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/dbtest"
@@ -47,6 +48,37 @@ import (
 // package doc comment for why (separate go_test target/binary).
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// allScope/stubAuthz are duplicated from dbtest_helpers_integration_test.go
+// (separate go_test target/binary, same rationale as discardLogger above):
+// this file's tests never exercise FR5 household scoping, only FR16/FR16.3/
+// FR16.4/FR17 identity resolution, so a Scope that never filters keeps this
+// fixture hermetic without a household/household_membership schema.
+type allScope struct{}
+
+func (allScope) Permits(ref authz.EntityRef, res authz.Resolution) bool { return true }
+func (allScope) Filter(argStart int) (string, []any)                    { return "TRUE", nil }
+
+type stubAuthz struct{}
+
+func (stubAuthz) ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error) {
+	return allScope{}, nil
+}
+
+func (stubAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error) {
+	panic("not used by this file's tests")
+}
+
+// Resolve always reports Unclaimed: PushDeviceConfig's FR1.2 handler calls
+// this to resolve the pushing board's household before reaching this
+// file's own FR16/FR17 identity check, and this fixture's boards
+// (insertBoard) are never given a household_ownership row -- there is no
+// household schema here, only the identity tables this file's tests
+// actually exercise. FR1.2's own AssertSameHousehold refusal path is
+// covered separately (leaflab/api/push_device_config_invariant_integration_test.go).
+func (stubAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
+	return authz.Resolution{Unclaimed: true}, nil
 }
 
 func countRows(t *testing.T, pool *pgxpool.Pool, table string) int {
@@ -156,7 +188,7 @@ func newIdentityTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: identitySchema})
 	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, discardLogger()), db.Pool
 }
 
 func insertSensorType(t *testing.T, pool *pgxpool.Pool, name, unit string) int64 {
