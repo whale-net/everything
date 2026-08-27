@@ -25,7 +25,18 @@ type SensorRepository interface {
 	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
 	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
-	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) error
+	// ApplyConfigRegions applies region_id assignments from the accepted
+	// config at (boardID, version), re-validating each entry's household
+	// ownership and staleness immediately before the write (FR1.2/FR1.3)
+	// rather than trusting the validation PushDeviceConfig already did at
+	// push time -- the whole point of the two-layer check is that time
+	// passes between the two. An entry that no longer validates is
+	// skipped, not failed: it is returned in the RegionApplySkip slice
+	// (each carrying an audit trail per FR8, written by the
+	// implementation) rather than aborting the remaining entries, and
+	// remaining valid entries are still applied. See repository.go's
+	// ApplyConfigRegions.
+	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) ([]RegionApplySkip, error)
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
 }
@@ -252,8 +263,22 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 		return err
 	}
 	if ack.Accepted {
-		if err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
+		skips, err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion))
+		if err != nil {
 			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
+		}
+		// TODO(#1340 Implementation): surface skips to the caller who
+		// pushed them (FR1.3's caller-visible skip, subject to FR82.4's
+		// provenance rule once #1341/Phase 4 lands) -- this ack path has
+		// no RPC response of its own to carry them on, so that will need
+		// its own delivery mechanism (e.g. a follow-up read keyed by
+		// correlation id). Logged here only in the meantime.
+		for _, skip := range skips {
+			h.logger.Warn("region assignment skipped at apply time",
+				"device_id", deviceID,
+				"version", ack.AppliedVersion,
+				"sensor_id", skip.SensorID,
+				"reason", skip.Reason)
 		}
 		h.cache.SetConfigVersion(deviceID, int64(ack.AppliedVersion))
 		h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)

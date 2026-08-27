@@ -289,24 +289,57 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 	return nil
 }
 
+// RegionApplySkip records one config entry ApplyConfigRegions skipped
+// instead of applying, because it no longer validated at apply time
+// (FR1.3): the sensor's board resolves to a different household than the
+// one the config was pushed for, or the payload is stale against the
+// sensor's current sensor_region_history interval (pushed_at before the
+// interval's valid_from). See ApplyConfigRegions' doc comment -- populating
+// this from real household/staleness re-validation, and writing an
+// audit.Entry (FR8) per skip, is Implementation-phase work; Scaffold only
+// wires the return shape through SensorRepository (handler.go) and this
+// function's signature.
+type RegionApplySkip struct {
+	// SensorID identifies the sensor whose region assignment was skipped.
+	SensorID int64
+	// Reason is a persona-appropriate sentence describing why the entry
+	// was skipped. This rides inside a caller-visible status alongside an
+	// otherwise-successful apply (FR1.3), not a contract.Failure refusal --
+	// ApplyConfigRegions itself never fails because one entry was skipped.
+	Reason string
+}
+
 // ApplyConfigRegions applies region_id assignments from an accepted config.
 // For each SensorConfig entry with region_id > 0, finds the matching sensor
 // by (board_id, i2c_address, mux_path), updates sensor.region_id, and records
 // the change in sensor_region_history (SCD-2: close old open row, insert new).
-func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) error {
+//
+// FR1.2/FR1.3: before writing, an entry must re-validate that its
+// region_id's household still matches the pushing board's household (the
+// same invariant PushDeviceConfig checked at push time -- re-checked here
+// because time passes between push and ack) and that the config's
+// pushed_at is not older than the sensor's current
+// sensor_region_history.valid_from (push-time, not ack-time staleness).
+// An entry that fails either check is skipped, not failed: it is appended
+// to the returned []RegionApplySkip (each carrying an audit trail, FR8)
+// instead of aborting the remaining entries. That re-validation is not
+// implemented yet -- see RegionApplySkip's doc comment; this signature is
+// Scaffold's contribution, the checks themselves are Implementation's.
+func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) ([]RegionApplySkip, error) {
 	var configJSON []byte
 	err := r.db.QueryRow(ctx, `
 		SELECT config_json FROM device_config WHERE board_id = $1 AND version = $2
 	`, boardID, version).Scan(&configJSON)
 	if err != nil {
-		return fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
+		return nil, fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
 	}
 
 	var cfg configpb.DeviceConfig
 	if err := protojson.Unmarshal(configJSON, &cfg); err != nil {
-		return fmt.Errorf("unmarshal config for region apply: %w", err)
+		return nil, fmt.Errorf("unmarshal config for region apply: %w", err)
 	}
 
+	var skips []RegionApplySkip
 	for _, sc := range cfg.Sensors {
 		if sc.RegionId == 0 {
 			continue
@@ -317,7 +350,7 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		}
 		muxJSON, err := json.Marshal(hops)
 		if err != nil {
-			return fmt.Errorf("marshal mux_path for region apply: %w", err)
+			return skips, fmt.Errorf("marshal mux_path for region apply: %w", err)
 		}
 
 		newRegionID := int64(sc.RegionId)
@@ -347,7 +380,7 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 			continue // sensor not yet registered — skip silently
 		}
 		if lookupErr != nil {
-			return fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
+			return skips, fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
 		}
 
 		// Skip if region is unchanged.
@@ -358,7 +391,7 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		if _, err := r.db.Exec(ctx, `
 			UPDATE sensor SET region_id = $2 WHERE sensor_id = $1
 		`, sensorID, newRegionID); err != nil {
-			return fmt.Errorf("set region for sensor %d: %w", sensorID, err)
+			return skips, fmt.Errorf("set region for sensor %d: %w", sensorID, err)
 		}
 
 		// Close any open history row for this sensor.
@@ -366,17 +399,17 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 			UPDATE sensor_region_history SET valid_to = NOW()
 			WHERE sensor_id = $1 AND valid_to IS NULL
 		`, sensorID); err != nil {
-			return fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
+			return skips, fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
 		}
 
 		// Record the new assignment.
 		if _, err := r.db.Exec(ctx, `
 			INSERT INTO sensor_region_history (sensor_id, region_id) VALUES ($1, $2)
 		`, sensorID, newRegionID); err != nil {
-			return fmt.Errorf("insert region history for sensor %d: %w", sensorID, err)
+			return skips, fmt.Errorf("insert region history for sensor %d: %w", sensorID, err)
 		}
 	}
-	return nil
+	return skips, nil
 }
 
 // UpsertDeviceConfig records a DeviceConfig push.
