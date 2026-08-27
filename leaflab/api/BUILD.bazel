@@ -288,3 +288,44 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
+
+# Real-Postgres (TimescaleDB) integration coverage for #1377's plant
+# lifecycle (FR54, FR24, FR22.3, FR22.1) -- see
+# plants_lifecycle_integration_test.go's doc comment. Same tag set as the
+# other integration go_test targets above; requires the TimescaleDB image
+# (not plain postgres) because CreatePlant/MovePlant call
+# capture.Recorder.Record, which calls time_bucket().
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:plants_lifecycle_integration_test --test_output=all
+go_test(
+    # keep
+    name = "plants_lifecycle_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "plants_lifecycle_integration_test.go",
+    ],
+    data = ["plants.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/capture",
+        "//leaflab/api/contract",
+        "//leaflab/api/placement",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@rules_go//go/runfiles",
+    ],
+)
