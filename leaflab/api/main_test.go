@@ -141,6 +141,39 @@ func (stubAPIServer) GetRegionPath(ctx context.Context, req *pb.GetRegionPathReq
 	return &pb.GetRegionPathResponse{}, nil
 }
 
+// Canned-success stubs for #1377's seven plant RPCs (CreatePlant,
+// CorrectPlant, MovePlant, RetirePlant, GetPlant, ListPlants,
+// GetPlantPlacementTimeline). See the region stubs' doc comment above for
+// why value-receiver overrides are required here.
+
+func (stubAPIServer) CreatePlant(ctx context.Context, req *pb.CreatePlantRequest) (*pb.CreatePlantResponse, error) {
+	return &pb.CreatePlantResponse{}, nil
+}
+
+func (stubAPIServer) CorrectPlant(ctx context.Context, req *pb.CorrectPlantRequest) (*pb.CorrectPlantResponse, error) {
+	return &pb.CorrectPlantResponse{}, nil
+}
+
+func (stubAPIServer) MovePlant(ctx context.Context, req *pb.MovePlantRequest) (*pb.MovePlantResponse, error) {
+	return &pb.MovePlantResponse{}, nil
+}
+
+func (stubAPIServer) RetirePlant(ctx context.Context, req *pb.RetirePlantRequest) (*pb.RetirePlantResponse, error) {
+	return &pb.RetirePlantResponse{}, nil
+}
+
+func (stubAPIServer) GetPlant(ctx context.Context, req *pb.GetPlantRequest) (*pb.GetPlantResponse, error) {
+	return &pb.GetPlantResponse{}, nil
+}
+
+func (stubAPIServer) ListPlants(ctx context.Context, req *pb.ListPlantsRequest) (*pb.ListPlantsResponse, error) {
+	return &pb.ListPlantsResponse{}, nil
+}
+
+func (stubAPIServer) GetPlantPlacementTimeline(ctx context.Context, req *pb.GetPlantPlacementTimelineRequest) (*pb.GetPlantPlacementTimelineResponse, error) {
+	return &pb.GetPlantPlacementTimelineResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

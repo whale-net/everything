@@ -68,6 +68,57 @@ service LeafLabAPI {
   // nested picker and a breadcrumb have a source. Works for a retired
   // region too (FR22.5's "remains readable by explicit id").
   rpc GetRegionPath(GetRegionPathRequest) returns (GetRegionPathResponse);
+
+  // --- Plants (FR54, FR24, FR22.3, FR22.1) --------------------------------
+  //
+  // A plant occupies exactly one region at a time; its placement history is
+  // recorded in plant_region_history (migration 017, FR19) rather than
+  // mutated in place. This task (#1377) is this RPC set's scaffolded wire
+  // surface; the business rules named on each RPC below (the Phase 3 SCD2
+  // placement writer, FR20's boundary capture, FR1.2's cross-household
+  // guard, FR7 authorization, FR8 audit recording) are Implementation-phase
+  // work -- see leaflab/api/plants.go's doc comment for the current state.
+
+  // CreatePlant creates a plant and places it into a region in one
+  // operation (FR54). The placement write goes through the same SCD2
+  // writer MovePlant uses (leaflab/api/placement.Writer), opening the
+  // plant's first plant_region_history interval.
+  rpc CreatePlant(CreatePlantRequest) returns (CreatePlantResponse);
+
+  // CorrectPlant fixes a plant's name and/or plant type (FR24): a
+  // correction, distinguishable from MovePlant, which changes placement.
+  // CorrectPlant never writes a plant_region_history interval; there is no
+  // region field on this request.
+  rpc CorrectPlant(CorrectPlantRequest) returns (CorrectPlantResponse);
+
+  // MovePlant relocates a plant to a new region (FR54, FR19): closes the
+  // plant's current open plant_region_history interval and opens a new one
+  // at NOW() -- never back-dated (FR19), refused with the reason stated if
+  // the caller asks for a past boundary (FR59.3). Never renames the plant
+  // or changes its plant_type -- that is CorrectPlant's job (FR24).
+  rpc MovePlant(MovePlantRequest) returns (MovePlantResponse);
+
+  // RetirePlant soft-retires a plant (FR22.1, FR22.3): excluded from
+  // default listings from this point on, accepts no new writes. Its
+  // readings and placement timeline remain reachable through GetPlant,
+  // GetPlantPlacementTimeline and the existing read paths (FR22.3's
+  // postmortem use case) -- nothing is hard-deleted.
+  rpc RetirePlant(RetirePlantRequest) returns (RetirePlantResponse);
+
+  // GetPlant returns a plant by id, regardless of retired state (FR22.3's
+  // "remains readable by explicit id").
+  rpc GetPlant(GetPlantRequest) returns (GetPlantResponse);
+
+  // ListPlants lists a household's plants, keyset paginated (FR61).
+  // Retired plants are excluded by default (FR22.1) -- GetPlant is the
+  // explicit-id escape hatch for a retired plant.
+  rpc ListPlants(ListPlantsRequest) returns (ListPlantsResponse);
+
+  // GetPlantPlacementTimeline returns a plant's plant_region_history
+  // intervals (FR19), each carrying the relocation_induced flag (FR24 --
+  // populated by FR74's sibling task, always false until then). Works for
+  // a retired plant too (FR22.3).
+  rpc GetPlantPlacementTimeline(GetPlantPlacementTimelineRequest) returns (GetPlantPlacementTimelineResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -271,4 +322,113 @@ message GetRegionPathResponse {
   repeated string path_names = 3;
   // Human-readable ' / '-delimited string, mirroring v_region_path.path_name.
   string path_name = 4;
+}
+
+// --- Plants (FR54, FR24, FR22.3, FR22.1) -----------------------------------
+
+// PlantInfo is one plant as returned by every plant RPC below.
+message PlantInfo {
+  int64 plant_id = 1;
+  // Current region (the open plant_region_history interval's region_id).
+  int64 region_id = 2;
+  int64 plant_type_id = 3;
+  string name = 4;
+  Instant created_at = 5;
+  // Set only when this plant has been retired (FR22.1, FR22.3), alongside
+  // the response envelope's server_now (FR64).
+  Instant retired_at = 6;
+}
+
+message CreatePlantRequest {
+  int64 region_id = 1;
+  int64 plant_type_id = 2;
+  string name = 3;
+}
+
+message CreatePlantResponse {
+  PlantInfo plant = 1;
+}
+
+// CorrectPlantRequest fixes a plant's name and/or plant type (FR24) --
+// deliberately has no region field: correcting a typo is not moving a
+// plant. Unset optional fields are left unchanged.
+message CorrectPlantRequest {
+  int64 plant_id = 1;
+  optional string name = 2;
+  optional int64 plant_type_id = 3;
+}
+
+message CorrectPlantResponse {
+  PlantInfo plant = 1;
+}
+
+// MovePlantRequest relocates a plant to a new region (FR54, FR19) --
+// deliberately has no name/plant_type field: moving a plant does not
+// rename it. See MovePlant's RPC comment for the SCD2 write shape.
+message MovePlantRequest {
+  int64 plant_id = 1;
+  int64 region_id = 2;
+}
+
+message MovePlantResponse {
+  PlantInfo plant = 1;
+}
+
+message RetirePlantRequest {
+  int64 plant_id = 1;
+}
+
+message RetirePlantResponse {
+  PlantInfo plant = 1;
+}
+
+message GetPlantRequest {
+  int64 plant_id = 1;
+}
+
+message GetPlantResponse {
+  // True if plant_id names a real plant. A false response carries no other
+  // populated field, same shape as GetRegionPathResponse.found.
+  bool found = 1;
+  PlantInfo plant = 2;
+}
+
+message ListPlantsRequest {
+  // Keyset page request (FR61). Unset/empty requests the first page.
+  PageRequest page = 1;
+}
+
+message ListPlantsResponse {
+  repeated PlantInfo plants = 1;
+  // Keyset page response (FR61).
+  PageResponse page = 2;
+  // Server's current time (FR64) -- see ListBoardsResponse.server_now.
+  Instant server_now = 3;
+}
+
+// PlacementInterval is one plant_region_history row (FR19).
+message PlacementInterval {
+  int64 region_id = 1;
+  Instant valid_from = 2;
+  // Unset (has_valid_to() == false) means this interval is still open --
+  // the plant's current placement.
+  Instant valid_to = 3;
+  // FR24: true only when this interval was opened by a region-lifecycle
+  // relocation (FR74), never by a plain MovePlant. Always false until
+  // FR74's sibling task starts writing it.
+  bool relocation_induced = 4;
+}
+
+message GetPlantPlacementTimelineRequest {
+  int64 plant_id = 1;
+}
+
+message GetPlantPlacementTimelineResponse {
+  // True if plant_id names a real plant. A false response carries no other
+  // populated field, same shape as GetRegionPathResponse.found.
+  bool found = 1;
+  // Ordered oldest-to-newest (ORDER BY valid_from).
+  repeated PlacementInterval intervals = 2;
+  // Server's current time (FR64) -- see ListBoardsResponse.server_now.
+  Instant server_now = 3;
 }
