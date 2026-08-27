@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
-	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
+	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/hwkey"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -19,13 +21,15 @@ type SensorRepository interface {
 	UpsertBoard(ctx context.Context, deviceID string) (int64, error)
 	UpsertSensorType(ctx context.Context, name, unit string) (int64, error)
 	UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error)
+	LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error)
+	RewireAndRenameSensor(ctx context.Context, sensorID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (*int64, error)
 	UpsertSensorLabel(ctx context.Context, sensorID int64, name string) error
 	UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
 	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
 	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
-	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) error
+	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) ([]RegionChange, error)
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
 }
@@ -35,10 +39,17 @@ type MessageHandler struct {
 	logger *slog.Logger
 	repo   SensorRepository
 	cache  *SensorCache
+	// invalidationPub broadcasts an FR73 invalidation event after this
+	// process's own ApplyConfigRegions commits a region change, so every
+	// process's SensorCache -- including this one, via the Subscriber
+	// wired in main.go -- is told, regardless of which process (API or
+	// processor) wrote the assignment. See leaflab/invalidation's doc
+	// comment.
+	invalidationPub *invalidation.Publisher
 }
 
-func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache) *MessageHandler {
-	return &MessageHandler{logger: logger, repo: repo, cache: cache}
+func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache, invalidationPub *invalidation.Publisher) *MessageHandler {
+	return &MessageHandler{logger: logger, repo: repo, cache: cache, invalidationPub: invalidationPub}
 }
 
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
@@ -77,30 +88,86 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 	}
 	h.logger.Info("board registered", "device_id", deviceID, "board_id", boardID)
 
-	var firstErr error
-	for _, sd := range manifest.Sensors {
-		typeName := sensorTypeName(sd.Type)
+	// Loaded once per manifest for FR16.3's elimination step (see
+	// resolveManifestIdentities): a manifest entry that changes hardware
+	// key *and* name in the same message matches neither of UpsertSensor's
+	// own case-1/case-2 lookups individually, so this snapshot -- taken
+	// before any of this manifest's writes -- lets handleManifest resolve
+	// it by elimination instead of falling through to UpsertSensor's case
+	// 3 (which would mint a second sensor row for the same physical
+	// sensor). A load failure here is not fatal to the manifest: it just
+	// means this manifest gets no elimination step and every entry falls
+	// through to UpsertSensor's normal resolution, same as before this
+	// feature existed.
+	existing, err := h.repo.LoadBoardSensorIdentities(ctx, boardID)
+	if err != nil {
+		h.logger.Warn("failed to load board sensor identities; FR16.3 elimination skipped for this manifest", "device_id", deviceID, "err", err)
+		existing = nil
+	}
 
+	// First pass: resolve sensor_type and hardware address for every entry
+	// up front (needed by resolveManifestIdentities before any sensor row
+	// is written), without yet deciding how each entry attaches to a
+	// sensor_id.
+	sensorTypeIDs := make([]int64, len(manifest.Sensors))
+	hws := make([]*HardwareAddress, len(manifest.Sensors))
+	names := make([]string, len(manifest.Sensors))
+	typeUpsertErr := make([]error, len(manifest.Sensors))
+	for i, sd := range manifest.Sensors {
+		typeName := sensorTypeName(sd.Type)
 		sensorTypeID, err := h.repo.UpsertSensorType(ctx, typeName, sd.Unit)
 		if err != nil {
+			typeUpsertErr[i] = err
+			continue
+		}
+		sensorTypeIDs[i] = sensorTypeID
+
+		// Build hardware address. Firmware currently sends single-hop mux via
+		// scalar fields; multi-hop will be added when the firmware proto is updated.
+		// sd.I2CAddress is always "present" on the wire (proto3 has no way to
+		// distinguish absent from 0 for a plain scalar) -- 0 is the legacy
+		// manifests' "unknown address" sentinel (FR18.2, hwkey.AddressOpt), so a
+		// sensor reporting it gets no HardwareAddress at all, same as before.
+		addr := hwkey.Address(uint16(sd.I2CAddress))
+		if !addr.IsUnknownSentinel() {
+			hw := &HardwareAddress{I2CAddress: addr}
+			if sd.MuxAddress > 0 {
+				hw.MuxPath = hwkey.MuxPath{{MuxAddress: sd.MuxAddress, MuxChannel: sd.MuxChannel}}
+			}
+			hws[i] = hw
+		}
+		names[i] = sd.Name
+	}
+
+	eliminated := resolveManifestIdentities(existing, sensorTypeIDs, hws, names)
+
+	var firstErr error
+	for i, sd := range manifest.Sensors {
+		typeName := sensorTypeName(sd.Type)
+
+		if err := typeUpsertErr[i]; err != nil {
 			h.logger.Error("failed to upsert sensor_type", "name", typeName, "err", err)
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
+		sensorTypeID := sensorTypeIDs[i]
+		hw := hws[i]
 
-		// Build hardware address. Firmware currently sends single-hop mux via
-		// scalar fields; multi-hop will be added when the firmware proto is updated.
-		var hw *HardwareAddress
-		if sd.I2CAddress > 0 {
-			hw = &HardwareAddress{I2CAddress: sd.I2CAddress}
-			if sd.MuxAddress > 0 {
-				hw.MuxPath = []MuxHop{{MuxAddress: sd.MuxAddress, MuxChannel: sd.MuxChannel}}
-			}
+		var sensorID int64
+		var regionID *int64
+		if eliminatedID, ok := eliminated[i]; ok {
+			// FR16.3: this entry's address and name both changed in the
+			// same message, so it was resolved by elimination rather than
+			// by UpsertSensor's own case-1/case-2 lookups -- update the
+			// already-identified row in place instead of letting
+			// UpsertSensor fall through to case 3 and mint a new one.
+			sensorID = eliminatedID
+			regionID, err = h.repo.RewireAndRenameSensor(ctx, eliminatedID, sensorTypeID, sd.Name, sd.Unit, hw)
+		} else {
+			sensorID, regionID, err = h.repo.UpsertSensor(ctx, boardID, sensorTypeID, sd.Name, sd.Unit, hw)
 		}
-
-		sensorID, regionID, err := h.repo.UpsertSensor(ctx, boardID, sensorTypeID, sd.Name, sd.Unit, hw)
 		if err != nil {
 			h.logger.Error("failed to upsert sensor", "name", sd.Name, "err", err)
 			if firstErr == nil {
@@ -252,8 +319,30 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 		return err
 	}
 	if ack.Accepted {
-		if err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
+		changes, err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion))
+		if err != nil {
 			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
+		}
+		// FR73: publish only after each change has committed (it has, by
+		// the time ApplyConfigRegions returns it -- see RegionChange's doc
+		// comment) -- this is the "processor's own config apply" writer
+		// FR73 requires to be covered, in addition to the API's direct
+		// assignment (Phase 5). A publish failure is non-fatal: the write
+		// already committed, and the bounded staleness backstop
+		// self-heals a dropped event.
+		for _, change := range changes {
+			if h.invalidationPub == nil {
+				break
+			}
+			if err := h.invalidationPub.Publish(ctx, invalidation.Event{
+				Kind:       invalidation.KindRegion,
+				DeviceID:   deviceID,
+				SensorID:   change.SensorID,
+				SensorName: change.SensorName,
+				ObservedAt: time.Now(),
+			}); err != nil {
+				h.logger.Warn("failed to publish invalidation event for region change", "device_id", deviceID, "sensor_id", change.SensorID, "err", err)
+			}
 		}
 		h.cache.SetConfigVersion(deviceID, int64(ack.AppliedVersion))
 		h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)

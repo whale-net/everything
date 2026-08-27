@@ -141,6 +141,12 @@ func (stubAPIServer) GetRegionPath(ctx context.Context, req *pb.GetRegionPathReq
 	return &pb.GetRegionPathResponse{}, nil
 }
 
+// Canned-success stub for #1356's RewireSensor RPC -- same value-receiver
+// rationale as the region RPCs above.
+func (stubAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSensorRequest) (*pb.RewireSensorResponse, error) {
+	return &pb.RewireSensorResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

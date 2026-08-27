@@ -148,7 +148,7 @@ func newTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: testSchema})
 	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, nil, discardLogger()), db.Pool
 }
 
 // newTestRepository starts a real Postgres container, applies testSchema,

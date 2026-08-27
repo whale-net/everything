@@ -7,12 +7,14 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -54,6 +56,13 @@ type deviceRepository interface {
 	// post-filter -- see Repository.ListBoards.
 	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error)
 	Ping(ctx context.Context) error
+	// FindSensorIDByName, resolveSensorTypeID, LoadBoardSensorIdentities and
+	// RewireSensorHW back RewireSensor (FR16, FR17) -- see identity.go and
+	// RewireSensorHW's doc comment in repository.go.
+	FindSensorIDByName(ctx context.Context, boardID int64, name string) (int64, bool, error)
+	resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error)
+	LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error)
+	RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -78,16 +87,23 @@ type LeafLabAPIServer struct {
 	// not expose its connection's liveness. May be nil in tests that don't
 	// exercise GetHealth -- see GetHealth's nil handling.
 	rmqConn *rmq.Connection
-	logger  *slog.Logger
+	// invalidationPub broadcasts FR73 invalidation events after every
+	// sensor-affecting write this server commits, so leaflab/processor's
+	// SensorCache (and, from Phase 4, the API's own bounded-wait
+	// observability) never keeps serving a stale cached view. See
+	// leaflab/invalidation's doc comment.
+	invalidationPub *invalidation.Publisher
+	logger          *slog.Logger
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, invalidationPub *invalidation.Publisher, logger *slog.Logger) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
-		repo:      repo,
-		authzSvc:  authzSvc,
-		publisher: publisher,
-		rmqConn:   rmqConn,
-		logger:    logger,
+		repo:            repo,
+		authzSvc:        authzSvc,
+		publisher:       publisher,
+		rmqConn:         rmqConn,
+		invalidationPub: invalidationPub,
+		logger:          logger,
 	}
 }
 
@@ -168,6 +184,15 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	if err != nil {
 		s.logger.Error("board lookup failed", "device_id", req.DeviceId, "error", err)
 		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	}
+
+	// FR17 pre-write identity check: refuses before anything is written or
+	// published if any entry would establish a new sensor identity rather
+	// than continue an existing one (or would require an unresolved swap,
+	// FR16.4). This is the real push path, not a dry run -- see
+	// checkPushConfigIdentity's doc comment.
+	if err := s.checkPushConfigIdentity(ctx, boardID, req.Sensors); err != nil {
+		return nil, err
 	}
 
 	// Build the proto with a placeholder version; we need configJSON for the
@@ -252,6 +277,80 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		return &pb.GetDeviceConfigResponse{Found: false}, nil
 	}
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
+}
+
+// RewireSensor is the explicit API rewire path (FR16): it declares that
+// the sensor currently named req.Name on req.DeviceId has moved to a new
+// hardware location, updating it in place rather than establishing a new
+// sensor identity. See leaflab/api/proto/api.proto's RewireSensor doc
+// comment and Repository.FindSensorIDByName/FindSensorIDByHWKey.
+//
+// FR16 case 2 / FR17: the existing sensor is resolved by (board_id,
+// req.Name) -- req.Name is the stable anchor, per the proto doc comment.
+// If none exists, this is refused (FR17) before writing anything rather
+// than silently creating a new sensor identity: there is no rewire
+// alternative to name here (this RPC *is* the rewire path), so the
+// refusal instead explains there is nothing existing to rewire.
+// Otherwise the resolved sensor's hardware key is updated in place and a
+// sensor_hw_history interval closed/opened, atomically
+// (Repository.RewireSensorHW) -- sensor_id, and everything keyed on it
+// (readings, name history, region history), is unchanged by construction.
+func (s *LeafLabAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSensorRequest) (*pb.RewireSensorResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("rewire_sensor", "device_id", reason)
+	}
+	if req.Name == "" {
+		return nil, contract.InvalidArgument("rewire_sensor", "name", "A sensor name is required.")
+	}
+
+	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("board lookup failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	}
+
+	sensorID, found, err := s.repo.FindSensorIDByName(ctx, boardID, req.Name)
+	if err != nil {
+		s.logger.Error("find sensor by name failed", "device_id", req.DeviceId, "name", req.Name, "error", err)
+		return nil, contract.Internal("rewire_sensor", "", "Could not process this request right now. Please try again.")
+	}
+	if !found {
+		// FR17: applying this would establish a new sensor identity, not
+		// continue one, and its reading history would not follow. Refuse
+		// before writing anything.
+		return nil, contract.Refuse(
+			"rewire_sensor",
+			"name",
+			fmt.Sprintf("No sensor named %q exists on this device; rewiring it would create a new sensor identity, and its reading history would not follow.", req.Name),
+			"Wait for the device to report this sensor in a manifest, which registers it as a new sensor; there is no existing sensor here to rewire.",
+		)
+	}
+
+	hw := HardwareAddressFromSensorConfig(req.MuxPath, req.I2CAddress)
+	if err := s.repo.RewireSensorHW(ctx, sensorID, hw); err != nil {
+		s.logger.Error("rewire sensor failed", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID, "error", err)
+		return nil, contract.Internal("rewire_sensor", "", "Could not rewire this sensor right now. Please try again.")
+	}
+
+	// FR73: publish only after RewireSensorHW's write has committed (see
+	// invalidation.Publisher.Publish's doc comment) -- never before. A
+	// publish failure here does not fail the RPC: the write already
+	// committed, and the bounded staleness backstop (leaflab/processor's
+	// periodic re-load) self-heals a dropped event.
+	if s.invalidationPub != nil {
+		if err := s.invalidationPub.Publish(ctx, invalidation.Event{
+			Kind:       invalidation.KindIdentity,
+			DeviceID:   req.DeviceId,
+			SensorID:   sensorID,
+			SensorName: req.Name,
+			ObservedAt: time.Now(),
+		}); err != nil {
+			s.logger.Warn("failed to publish invalidation event for rewire", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID, "error", err)
+		}
+	}
+
+	s.logger.Info("sensor rewired", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID)
+	return &pb.RewireSensorResponse{SensorId: sensorID}, nil
 }
 
 // ListBoards returns all known boards, keyset-paginated on (board_id) per

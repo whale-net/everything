@@ -15,6 +15,7 @@ import (
 
 	"github.com/whale-net/everything/leaflab/api/authz"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
@@ -89,9 +90,19 @@ func run() error {
 	}
 	defer publisher.Close() //nolint:errcheck
 
+	// FR73: broadcasts an invalidation event after every sensor-affecting
+	// write this server commits, so leaflab/processor's SensorCache never
+	// keeps serving a stale cached view. See leaflab/invalidation's doc
+	// comment.
+	invalidationPub, err := invalidation.NewPublisher(rmqConn)
+	if err != nil {
+		return fmt.Errorf("invalidation publisher: %w", err)
+	}
+	defer invalidationPub.Close() //nolint:errcheck
+
 	repo := NewRepository(pool)
 	authzSvc := authz.NewPGResolver(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"))
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, invalidationPub, logging.Get("api"))
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the

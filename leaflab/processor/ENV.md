@@ -26,6 +26,12 @@ RabbitMQ's MQTT plugin routes MQTT topics to this exchange, converting `/` → `
 
 Schema is provisioned by `leaflab-migrate` before the processor starts.
 
+## Cache Invalidation (FR73)
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `CACHE_BACKSTOP_INTERVAL_SECONDS` | `30` | No | How often the bounded staleness backstop (`RunCacheBackstop`) fully reloads `SensorCache` from the database, self-healing a *dropped* invalidation event. Not what satisfies FR73's 5s bound — the RabbitMQ fanout signal (`leaflab/invalidation`) is. See `leaflab/ARCHITECTURE.md`. |
+
 ## Local Development (Tilt)
 
 All values are injected from the Tiltfile. No `.env` file is needed.
