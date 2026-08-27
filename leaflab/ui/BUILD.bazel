@@ -67,6 +67,7 @@ release_app(
 go_test(
     name = "ui_test",
     srcs = [
+        "exposure_test.go",
         "fakes_test.go",
         "handlers_auth_test.go",
         "handlers_boards_test.go",

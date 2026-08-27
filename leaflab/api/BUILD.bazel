@@ -67,6 +67,7 @@ go_test(
     size = "small",
     srcs = [
         "auth_test.go",
+        "exposure_test.go",
         "main_test.go",
         "server_test.go",
     ],
