@@ -12,9 +12,13 @@ import (
 // libs/go/grpcauth/KEYCLOAK.md gotcha 1 (realm roles are global to the
 // realm; an unprefixed "admin" would collide with another service's role
 // of the same name). Eligibility only -- there is no in-application
-// mechanism to grant, hold or revoke it, and no RPC in Phase 1 branches on
-// it beyond recording it (isAdminEligible below, read by the acting-subject
-// logger). Activation and scoping are Phase 2 (FR10, FR7).
+// mechanism to grant, hold or revoke it. Phase 1 read it only for
+// recording (isAdminEligible below, read by the acting-subject logger);
+// Phase 2 (FR10, FR7/FR12 activation) additionally gates the five admin
+// RPCs (server.go's requireAdminEligible) on it, but confers nothing past
+// that gate by itself -- reach is the standing lane's own minimal
+// projection or an explicit, reasoned, time-boxed elevation (FR10.1),
+// never eligibility alone.
 const RoleAdmin = "leaflab-admin"
 
 // healthFullMethod is GetHealth's full gRPC method name, matching the
@@ -70,10 +74,12 @@ func NewAuthEnforcementStreamInterceptor() grpc.StreamServerInterceptor {
 }
 
 // isAdminEligible reports whether ctx's Claims carry the leaflab-admin
-// realm role (FR12). Recording only -- see RoleAdmin's doc comment. Used
-// by the acting-subject logger (logging_interceptor.go) so eligibility is
-// captured in the interim audit record (NFR12) even though nothing else in
-// Phase 1 reads it.
+// realm role (FR12) -- see RoleAdmin's doc comment for what eligibility
+// does and does not confer. Read by the acting-subject logger
+// (logging_interceptor.go), so eligibility is captured in the interim
+// audit record (NFR12) regardless of whether a given request touches an
+// admin RPC, and by server.go's requireAdminEligible, the gate every admin
+// RPC (FR10) applies before doing anything else.
 func isAdminEligible(ctx context.Context) bool {
 	claims, ok := grpcauth.ClaimsFromContext(ctx)
 	if !ok || claims == nil {

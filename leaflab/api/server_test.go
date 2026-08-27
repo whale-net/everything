@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
@@ -59,6 +60,43 @@ func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter 
 
 func (f *fakeRepo) Ping(ctx context.Context) error {
 	return f.pingErr
+}
+
+// The five admin (FR10, FR12 activation) repository methods below have no
+// coverage in this file yet -- Implementation-phase scope was the five
+// admin RPCs themselves; a fake exercising these lands in the
+// Testing-phase task. Panicking stubs exist only so fakeRepo keeps
+// satisfying the (now wider) deviceRepository interface.
+func (f *fakeRepo) AdminBoardHealthByPerson(ctx context.Context, personIdentifier string) ([]AdminBoardHealthRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) AdminBoardHealthByPartialDeviceID(ctx context.Context, partial string) ([]AdminBoardHealthRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) RecordAuditEntry(ctx context.Context, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) HouseholdExists(ctx context.Context, householdID int64) (bool, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) OpenElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, expiresAt time.Time, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error) {
+	panic("not used by this file's tests")
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call
