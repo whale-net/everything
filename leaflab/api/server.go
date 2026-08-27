@@ -59,6 +59,12 @@ type deviceRepository interface {
 	// post-filter -- see Repository.ListBoards.
 	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error)
 	Ping(ctx context.Context) error
+	// FR16/FR16.3/FR16.4/FR17 sensor identity resolution -- see identity.go
+	// and Repository's implementations.
+	FindSensorIDByName(ctx context.Context, boardID int64, name string) (int64, bool, error)
+	resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error)
+	LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error)
+	RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -215,6 +221,15 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, err
 	}
 
+	// FR17 pre-write identity check: refuses before anything is written or
+	// published if any entry would establish a new sensor identity rather
+	// than continue an existing one (or would require an unresolved swap,
+	// FR16.4). This is the real push path, not a dry run -- see
+	// checkPushConfigIdentity's doc comment.
+	if err := s.checkPushConfigIdentity(ctx, boardID, req.Sensors); err != nil {
+		return nil, err
+	}
+
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
@@ -364,6 +379,63 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		return &pb.GetDeviceConfigResponse{Found: false, Skips: skips}, nil
 	}
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true, Skips: skips}, nil
+}
+
+// RewireSensor is the explicit API rewire path (FR16): it declares that
+// the sensor currently named req.Name on req.DeviceId has moved to a new
+// hardware location, updating it in place rather than establishing a new
+// sensor identity. See leaflab/api/proto/api.proto's RewireSensor doc
+// comment and Repository.FindSensorIDByName/FindSensorIDByHWKey.
+//
+// FR16 case 2 / FR17: the existing sensor is resolved by (board_id,
+// req.Name) -- req.Name is the stable anchor, per the proto doc comment.
+// If none exists, this is refused (FR17) before writing anything rather
+// than silently creating a new sensor identity: there is no rewire
+// alternative to name here (this RPC *is* the rewire path), so the
+// refusal instead explains there is nothing existing to rewire.
+// Otherwise the resolved sensor's hardware key is updated in place and a
+// sensor_hw_history interval closed/opened, atomically
+// (Repository.RewireSensorHW) -- sensor_id, and everything keyed on it
+// (readings, name history, region history), is unchanged by construction.
+func (s *LeafLabAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSensorRequest) (*pb.RewireSensorResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("rewire_sensor", "device_id", reason)
+	}
+	if req.Name == "" {
+		return nil, contract.InvalidArgument("rewire_sensor", "name", "A sensor name is required.")
+	}
+
+	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("board lookup failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	}
+
+	sensorID, found, err := s.repo.FindSensorIDByName(ctx, boardID, req.Name)
+	if err != nil {
+		s.logger.Error("find sensor by name failed", "device_id", req.DeviceId, "name", req.Name, "error", err)
+		return nil, contract.Internal("rewire_sensor", "", "Could not process this request right now. Please try again.")
+	}
+	if !found {
+		// FR17: applying this would establish a new sensor identity, not
+		// continue one, and its reading history would not follow. Refuse
+		// before writing anything.
+		return nil, contract.Refuse(
+			"rewire_sensor",
+			"name",
+			fmt.Sprintf("No sensor named %q exists on this device; rewiring it would create a new sensor identity, and its reading history would not follow.", req.Name),
+			"Wait for the device to report this sensor in a manifest, which registers it as a new sensor; there is no existing sensor here to rewire.",
+		)
+	}
+
+	hw := HardwareAddressFromSensorConfig(req.MuxPath, req.I2CAddress)
+	if err := s.repo.RewireSensorHW(ctx, sensorID, hw); err != nil {
+		s.logger.Error("rewire sensor failed", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID, "error", err)
+		return nil, contract.Internal("rewire_sensor", "", "Could not rewire this sensor right now. Please try again.")
+	}
+
+	s.logger.Info("sensor rewired", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID)
+	return &pb.RewireSensorResponse{SensorId: sensorID}, nil
 }
 
 // ListBoards returns all known boards, keyset-paginated on (board_id) per

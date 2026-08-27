@@ -100,6 +100,25 @@ func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter 
 	return f.listBoardsRows, f.listBoardsErr
 }
 
+func (f *fakeRepo) FindSensorIDByName(ctx context.Context, boardID int64, name string) (int64, bool, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
+	// Nil (no existing identities) short-circuits checkPushConfigIdentity
+	// (identity.go) to a no-op, matching this file's tests -- none of
+	// which exercise FR16/FR17 sensor identity resolution.
+	return nil, nil
+}
+
+func (f *fakeRepo) RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
+	panic("not used by this file's tests")
+}
+
 func (f *fakeRepo) Ping(ctx context.Context) error {
 	return f.pingErr
 }

@@ -108,6 +108,10 @@ func (stubAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsRequest) 
 	return &pb.ListBoardsResponse{}, nil
 }
 
+func (stubAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSensorRequest) (*pb.RewireSensorResponse, error) {
+	return &pb.RewireSensorResponse{}, nil
+}
+
 func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*pb.GetHealthResponse, error) {
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
