@@ -27,6 +27,8 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxbase"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/htmxsse"
+	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/tools/app_registry/events"
 )
 
 //go:embed favicon.ico
@@ -185,14 +187,7 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize registry gRPC client: %w", err)
 	}
-
-	// Initialize SSE hub with default config
-	// Create SSE hub with stub transport for scaffold phase
-	stubAttachFunc := func(ctx context.Context) (htmxsse.Transport, error) {
-		// TODO: Implement message broker attachment (RabbitMQ) in Implementation phase
-		return nil, fmt.Errorf("stub: message broker not attached")
-	}
-	sseHub := htmxsse.NewHub(stubAttachFunc, htmxsse.DefaultConfig())
+	sseHub := initializeSSEHub(ctx)
 
 	return &App{
 		config:      config,
@@ -202,6 +197,47 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		sessionMgr:  store, // Retain for FR27 failure discrimination
 		sseHub:      sseHub,
 	}, nil
+}
+
+// initializeSSEHub creates and initializes the SSE Hub with message broker
+// attachment. If attachment fails, returns a Hub that will attempt to attach
+// asynchronously. Startup failure does not fail the overall application boot
+// (FR1b, NFR7).
+func initializeSSEHub(ctx context.Context) *htmxsse.Hub {
+	// Get RabbitMQ connection string from environment
+	brokerURL := os.Getenv("RABBITMQ_URL")
+	if brokerURL == "" {
+		brokerURL = "amqp://guest:guest@localhost:5672/"
+	}
+
+	// Create the attach function using the events package's exchange config
+	attachFunc := func(ctx context.Context) (htmxsse.Transport, error) {
+		conn, err := rmq.NewConnectionFromURL(brokerURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+		}
+
+		// Declare the exchange using app-registry events package config
+		ch, err := conn.Channel()
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to get channel: %w", err)
+		}
+
+		kind, durable, autoDelete, internal, noWait, args := events.DeclareArgs()
+		err = ch.ExchangeDeclare(events.ExchangeName, kind, durable, autoDelete, internal, noWait, args)
+		ch.Close()
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to declare exchange %q: %w", events.ExchangeName, err)
+		}
+
+		// Create ephemeral consumer for this process instance
+		return rmq.NewConsumerWithOpts(conn, "", false, true, 0, 0)
+	}
+
+	hub := htmxsse.NewHub(attachFunc, htmxsse.DefaultConfig())
+	return hub
 }
 
 // Close cleans up application resources.

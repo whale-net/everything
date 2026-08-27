@@ -191,3 +191,4 @@ func TestHandlePromoStatusSSE_MissingPromotionID_Returns400(t *testing.T) {
 		t.Errorf("expected 400, got %d", recorder.Code)
 	}
 }
+
