@@ -1,0 +1,30 @@
+"""FR73 -- cross-process cache invalidation signalling (Publisher/Subscriber over a RabbitMQ fanout exchange)."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "invalidation",
+    srcs = [
+        "event.go",
+        "publisher.go",
+        "subscriber.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/invalidation",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/rmq",
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
+    ],
+)
+
+# Pure unit tests -- no Docker, no network, run everywhere `bazel test //...`
+# runs. Covers Event (de)serialisation. Cross-process broadcast behaviour
+# (fanout to every subscriber, no manifest/config-push shortcut, dropped
+# event recovery) requires a real broker and is covered by
+# leaflab/processor's integration tests, not here -- see this package's doc
+# comment and leaflab/processor/BUILD.bazel.
+go_test(
+    name = "invalidation_test",
+    srcs = ["event_test.go"],
+    embed = [":invalidation"],
+)

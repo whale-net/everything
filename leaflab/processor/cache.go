@@ -57,6 +57,32 @@ func (c *SensorCache) Set(deviceID, sensorName string, info SensorInfo) {
 	c.devices[deviceID][sensorName] = info
 }
 
+// Invalidate evicts the cached entry for deviceID/sensorName, if present.
+// FR73: the next handleReading for this device/sensor falls through to
+// MessageHandler.handleSensorReading's existing cache-miss path, which
+// re-reads the current value from the database and repopulates the cache
+// -- so eviction alone is what makes the cache self-heal to the current
+// value, without this method needing to know what that value now is.
+//
+// For a rename (invalidation.KindName), callers must invalidate the
+// sensor's *prior* name (invalidation.Event.PriorSensorName), not its new
+// one: the cache is keyed device_id -> sensor_name, so the prior name's
+// entry is an orphan a rename never touches unless evicted explicitly.
+func (c *SensorCache) Invalidate(deviceID, sensorName string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sensors, ok := c.devices[deviceID]; ok {
+		delete(sensors, sensorName)
+	}
+}
+
+// InvalidateDevice evicts every cached sensor entry for deviceID.
+func (c *SensorCache) InvalidateDevice(deviceID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.devices, deviceID)
+}
+
 // Get returns the SensorInfo for a sensor, and whether it was found.
 func (c *SensorCache) Get(deviceID, sensorName string) (SensorInfo, bool) {
 	c.mu.RLock()

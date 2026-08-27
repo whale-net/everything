@@ -115,9 +115,9 @@ func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, 
 	return nil
 }
 
-func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) error {
+func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) ([]RegionChange, error) {
 	s.applyConfigRegionsCalls = append(s.applyConfigRegionsCalls, applyConfigRegionsCall{boardID: boardID, version: version})
-	return nil
+	return nil, nil
 }
 
 func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error { return nil }
@@ -137,7 +137,12 @@ func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 }
 
 func newTestHandler(repo SensorRepository) *MessageHandler {
-	return NewMessageHandler(slog.Default(), repo, NewSensorCache())
+	// invalidationPub is nil: none of this file's tests exercise FR73's
+	// cross-process broadcast (that needs a real broker -- see
+	// leaflab/invalidation's BUILD.bazel doc comment), and both call sites
+	// that use it (RewireSensor's caller in leaflab/api, handleConfigAck
+	// here) nil-check before publishing.
+	return NewMessageHandler(slog.Default(), repo, NewSensorCache(), nil)
 }
 
 // TestHandleManifest_HWAddressPassedThrough verifies that when a SensorDescriptor

@@ -10,6 +10,7 @@ import (
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/hwkey"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -28,7 +29,7 @@ type SensorRepository interface {
 	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
 	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
-	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) error
+	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) ([]RegionChange, error)
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
 }
@@ -38,10 +39,17 @@ type MessageHandler struct {
 	logger *slog.Logger
 	repo   SensorRepository
 	cache  *SensorCache
+	// invalidationPub broadcasts an FR73 invalidation event after this
+	// process's own ApplyConfigRegions commits a region change, so every
+	// process's SensorCache -- including this one, via the Subscriber
+	// wired in main.go -- is told, regardless of which process (API or
+	// processor) wrote the assignment. See leaflab/invalidation's doc
+	// comment.
+	invalidationPub *invalidation.Publisher
 }
 
-func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache) *MessageHandler {
-	return &MessageHandler{logger: logger, repo: repo, cache: cache}
+func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache, invalidationPub *invalidation.Publisher) *MessageHandler {
+	return &MessageHandler{logger: logger, repo: repo, cache: cache, invalidationPub: invalidationPub}
 }
 
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
@@ -311,8 +319,30 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 		return err
 	}
 	if ack.Accepted {
-		if err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
+		changes, err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion))
+		if err != nil {
 			h.logger.Warn("failed to apply config regions", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
+		}
+		// FR73: publish only after each change has committed (it has, by
+		// the time ApplyConfigRegions returns it -- see RegionChange's doc
+		// comment) -- this is the "processor's own config apply" writer
+		// FR73 requires to be covered, in addition to the API's direct
+		// assignment (Phase 5). A publish failure is non-fatal: the write
+		// already committed, and the bounded staleness backstop
+		// self-heals a dropped event.
+		for _, change := range changes {
+			if h.invalidationPub == nil {
+				break
+			}
+			if err := h.invalidationPub.Publish(ctx, invalidation.Event{
+				Kind:       invalidation.KindRegion,
+				DeviceID:   deviceID,
+				SensorID:   change.SensorID,
+				SensorName: change.SensorName,
+				ObservedAt: time.Now(),
+			}); err != nil {
+				h.logger.Warn("failed to publish invalidation event for region change", "device_id", deviceID, "sensor_id", change.SensorID, "err", err)
+			}
 		}
 		h.cache.SetConfigVersion(deviceID, int64(ack.AppliedVersion))
 		h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)

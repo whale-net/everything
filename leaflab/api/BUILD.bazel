@@ -19,6 +19,7 @@ go_library(
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/hwkey",
+        "//leaflab/invalidation",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
