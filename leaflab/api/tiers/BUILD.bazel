@@ -1,0 +1,22 @@
+"""FR71 granularity-tier selection over migration 022's raw/5-minute/hourly tiers. See tiers.go's package doc comment."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "tiers",
+    srcs = ["tiers.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/tiers",
+    visibility = ["//visibility:public"],
+)
+
+# Pure unit coverage for Select's coarsening decision (FR71) -- no database,
+# no integration tags: tiers_test.go exercises Select() purely against
+# time.Now()-relative windows. See
+# //leaflab/migrate:tiers_migration_integration_test for the real-TimescaleDB
+# coverage of migration 022's aggregates and policy ordering these constants
+# mirror.
+go_test(
+    name = "tiers_test",
+    srcs = ["tiers_test.go"],
+    embed = [":tiers"],
+)

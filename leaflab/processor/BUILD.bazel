@@ -5,6 +5,7 @@ go_library(
     name = "processor_lib",
     srcs = [
         "cache.go",
+        "capture.go",
         "config.go",
         "handler.go",
         "main.go",
@@ -15,13 +16,14 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/api/capture",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
-        "@org_golang_google_protobuf//proto",
         "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 
@@ -43,10 +45,10 @@ go_test(
 
 release_app(
     name = "processor",
-    binary_name = ":processor",
-    language = "go",
-    domain = "leaflab",
-    description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
     app_type = "worker",
+    binary_name = ":processor",
+    description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
+    domain = "leaflab",
+    language = "go",
     replicas = 1,
 )
