@@ -276,24 +276,31 @@ Task work is tracked with [`gh stack`](../../.claude/skills/gh-stack/SKILL.md) �
    git config remote.pushDefault origin
    ```
 
-2. **Branch naming.** Deterministic from the task issue number: `plan/<root-issue-number>-<task-issue-number>`. No slug needed — the number alone is enough to look up.
+2. **Branch naming:**
+   ```
+   pm[<attempt>]-<root-issue-number>/<task-issue-number>-<slug>
+   ```
+   - `pm` prefix marks every project-manager-owned branch — `git branch --list 'pm*'` (add `-r`, or `git ls-remote --heads origin 'pm*'`, for the remote copies) finds every in-flight or abandoned task branch across every plan with no other state needed. This is what makes recovering an interrupted or crashed session possible: never use a non-`pm`-prefixed name for task work.
+   - `<slug>` is a short kebab-case rendering of the task issue's title (3-5 words, e.g. `add-auth-endpoint`) — derived the same deterministic way every time it's needed from the issue title, never invented fresh or persisted anywhere separately, so any phase can recompute a task's exact branch name on its own.
+   - `<attempt>` is omitted on a task's first branch. **Before creating any task's branch, always check for an existing `pm*-<root-issue-number>/<task-issue-number>-*` branch first** (local, then remote) and reuse it if the task is already mid-flight — this single lookup is what lets later phases (and a resumed session) find the branch a prior phase already created, slug and all. Only mint a new branch, with the next unused `<attempt>` number (`pm2-`, `pm3-`, ...), when the existing one must be abandoned outright — an irrecoverable conflict, or a validation failure serious enough that the work should be redone rather than patched. Never delete and recreate the same branch name; leaving the abandoned attempt in place keeps it inspectable.
+   - Example: `pm-123/456-add-auth-endpoint` (plan issue #123, task issue #456, first attempt); a forced redo becomes `pm2-123/456-add-auth-endpoint`.
 
-3. **Creating a task's branch** (only on the first phase dispatched for that task — later phases reuse the branch already created):
+3. **Creating a task's branch** (only on the first phase dispatched for that task, after the lookup above turns up nothing — later phases reuse the branch already created):
    ```sh
    git fetch origin main
-   gh stack init --base <parent> plan/<root-issue-number>-<task-issue-number>
+   gh stack init --base <parent> pm-<root-issue-number>/<task-issue-number>-<slug>
    ```
    `<parent>` is:
    - `main`, if none of the task's `Depends on:` issues have an open branch yet.
-   - That dependency's branch (`plan/<root-issue-number>-<dep-issue-number>`), if exactly one does.
-   - Any one dependency's branch, if more than one does — then also pull in the rest before dispatching the worker: `git merge --no-edit plan/<root-issue-number>-<other-dep-issue-number>` for each additional dependency. If this merge conflicts, resolve it per the division of responsibility above before dispatching the worker — an unresolved conflict must never be handed to a worker to sort out.
+   - That dependency's branch (`pm-<root-issue-number>/<dep-issue-number>-<dep-slug>`), if exactly one does.
+   - Any one dependency's branch, if more than one does — then also pull in the rest before dispatching the worker: `git merge --no-edit pm-<root-issue-number>/<other-dep-issue-number>-<other-dep-slug>` for each additional dependency. If this merge conflicts, resolve it per the division of responsibility above before dispatching the worker — an unresolved conflict must never be handed to a worker to sort out.
 
    `gh stack init --base <branch>` accepts any branch as trunk, not just the default branch, so this works whether `<parent>` is `main` or another task's still-open branch. Each task's branch becomes its own single-branch stack chained onto its dependency, rather than literally appending to the dependency's stack object via `gh stack add` — which requires being on the topmost branch of that stack, and can't handle a dependency that has more than one dependent (`gh stack` stacks are strictly linear; see its skill § Known limitations).
 
 4. **Isolate the work.** `gh stack init` (and checking out a dependency branch) leaves that branch checked out in the shared worktree — detach before handing off, so it's free for a dedicated worktree:
    ```sh
    git checkout --detach HEAD
-   git worktree add .pm-worktrees/<task-issue-number> plan/<root-issue-number>-<task-issue-number>
+   git worktree add .pm-worktrees/<task-issue-number> pm-<root-issue-number>/<task-issue-number>-<slug>
    ```
    Dispatch the worker/validator with this worktree path — all its `git`, `bazel`, and file-edit work happens there, never in the shared checkout.
 
@@ -302,17 +309,21 @@ Task work is tracked with [`gh stack`](../../.claude/skills/gh-stack/SKILL.md) �
 6. **After a subagent finishes:**
    ```sh
    git worktree remove .pm-worktrees/<task-issue-number>
-   git checkout plan/<root-issue-number>-<task-issue-number>
+   git checkout pm-<root-issue-number>/<task-issue-number>-<slug>
    gh stack submit --auto
    git checkout --detach HEAD
    ```
    `submit` is idempotent — safe to run after every phase, not just once. It pushes and opens (or refreshes) the task's draft PR. This is the orchestrator's sole PR-creation path — no other persona opens a PR directly.
 
+   **PR content.** `submit --auto` generates the title and body from commit messages, which is rarely descriptive enough on its own (gh-stack skill § PR title auto-generation) — a task branch usually carries multiple phase commits (`scaffold:`, `feat:`, `test:`), which collapses the auto title down to just the humanized branch name. The first time `submit` creates a task's PR (not on later idempotent re-submits), immediately follow up with `gh pr edit <number> --title "<title>" --body "<body>"`:
+   - **Title:** the task issue's own title verbatim, or a short imperative rewording of it — never the raw commit subject or humanized branch name.
+   - **Body:** a `Task: #<task-issue-number>` line (deliberately not a closing keyword like `Closes #` — the validator already closes the task issue directly in § Worker lifecycle step 4 ("Validator in `Validation`"), well before the PR is merged), followed by 2-3 sentences of context drawn from the issue: what the task does and why. Not a restatement of the diff.
+
 7. **Whole-system validation.** system-validator needs one local ref containing every task's work merged together, not N separate branch tips. `/project-manager:validate` builds this once, locally, right before dispatching system-validator, and never pushes it:
    ```sh
-   git branch -D plan/<root-issue-number>-integration 2>/dev/null
+   git branch -D pm-<root-issue-number>-integration 2>/dev/null
    git checkout main && git pull
-   git checkout -b plan/<root-issue-number>-integration
+   git checkout -b pm-<root-issue-number>-integration
    for tip in <topmost active branch of every task on this plan>; do
      git merge --no-edit "$tip"
    done
