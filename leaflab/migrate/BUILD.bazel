@@ -22,14 +22,18 @@ release_app(
 )
 
 # Real-Postgres integration coverage for migration 015_ownership's backfill
-# DML (FR70.1, FR1.1, NFR8, A9, NFR6.1, NFR6.3) -- see
-# ownership_migration_integration_test.go's doc comment and
-# //libs/go/dbtest/README.md. Hand-written (not gazelle-generated), same
-# rationale and EXACT tag set as leaflab/api's *_integration_test targets.
-# `# keep` tells a later `bazel run //:gazelle` not to touch or remove this
-# rule. Uses its own embed of migrations/*.sql (independent of the :migrate
-# go_binary above) since this is a standalone test binary, not an embed of
-# :migrate.
+# DML (FR70.1, FR1.1, NFR8, A9, NFR6.1, NFR6.3) and migration 016_audit_log's
+# append-only enforcement (FR8, NFR6.2, NFR6.3) -- see
+# ownership_migration_integration_test.go's and
+# audit_log_migration_integration_test.go's doc comments and
+# //libs/go/dbtest/README.md. Both files share this one target because
+# audit_log_migration_integration_test.go reuses ownership's
+# migrations/timescaleImage package-level fixtures rather than redeclaring
+# them. Hand-written (not gazelle-generated), same rationale and EXACT tag
+# set as leaflab/api's *_integration_test targets. `# keep` tells a later
+# `bazel run //:gazelle` not to touch or remove this rule. Uses its own
+# embed of migrations/*.sql (independent of the :migrate go_binary above)
+# since this is a standalone test binary, not an embed of :migrate.
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //leaflab/migrate:ownership_migration_integration_test --test_output=all
@@ -38,7 +42,10 @@ go_test(
     name = "ownership_migration_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["ownership_migration_integration_test.go"],
+    srcs = [
+        "audit_log_migration_integration_test.go",
+        "ownership_migration_integration_test.go",
+    ],
     embedsrcs = glob(["migrations/*.sql"]),
     gotags = ["integration"],
     tags = [
