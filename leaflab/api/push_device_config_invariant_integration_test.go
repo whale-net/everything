@@ -93,7 +93,7 @@ func newPushInvariantTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool)
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: pushInvariantTestSchema})
 	repo := NewRepository(db.Pool)
 	resolver := authz.NewPGResolver(db.Pool)
-	return NewLeafLabAPIServer(repo, resolver, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, resolver, nil, nil, nil, discardLogger()), db.Pool
 }
 
 func insertPushInvariantHousehold(t *testing.T, pool *pgxpool.Pool) int64 {

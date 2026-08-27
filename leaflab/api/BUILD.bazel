@@ -405,3 +405,38 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
+
+# Real-Postgres (TimescaleDB) integration coverage for #1379's FR51/FR52 --
+# see sensor_region_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as the other integration go_test targets above;
+# uses the timescale/timescaledb image (via dbtest.Options.Image) because
+# AssignSensorRegion's FR20 capture.Recorder call needs a real time_bucket(),
+# same as leaflab/api/capture:boundary_capture_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:sensor_region_integration_test --test_output=all
+go_test(
+    # keep
+    name = "sensor_region_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["sensor_region_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)

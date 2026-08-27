@@ -246,12 +246,21 @@ func TestApplyConfigRegions_SameHouseholdReassignment_AppliesAndRecordsHistory(t
 		{I2CAddress: 0x10, RegionId: uint32(regionNew)},
 	}, pushedAt)
 
-	skips, err := repo.ApplyConfigRegions(ctx, boardID, 1)
+	skips, changes, err := repo.ApplyConfigRegions(ctx, boardID, 1)
 	if err != nil {
 		t.Fatalf("ApplyConfigRegions: %v", err)
 	}
 	if len(skips) != 0 {
 		t.Fatalf("skips = %+v, want none for a same-household reassignment", skips)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want exactly 1 (FR73: sensor.region_id actually changed)", changes)
+	}
+	if changes[0].SensorID != sensorID {
+		t.Errorf("changes[0].SensorID = %d, want %d", changes[0].SensorID, sensorID)
+	}
+	if changes[0].RegionID != regionNew {
+		t.Errorf("changes[0].RegionID = %d, want %d", changes[0].RegionID, regionNew)
 	}
 
 	gotRegionID := acrSensorRegionID(t, pool, sensorID)
@@ -309,12 +318,15 @@ func TestApplyConfigRegions_ForeignHouseholdEntry_SkippedNotFailed_AppliesRestAn
 		{I2CAddress: 0x11, RegionId: uint32(regionBForeign)},
 	}, time.Now())
 
-	skips, err := repo.ApplyConfigRegions(ctx, boardID, 1)
+	skips, changes, err := repo.ApplyConfigRegions(ctx, boardID, 1)
 	if err != nil {
 		t.Fatalf("ApplyConfigRegions: %v", err)
 	}
 	if len(skips) != 1 {
 		t.Fatalf("skips = %+v, want exactly 1 (the foreign-household entry)", skips)
+	}
+	if len(changes) != 1 || changes[0].SensorID != sensorGoodID {
+		t.Errorf("changes = %+v, want exactly 1 entry for sensor-good (%d) -- the skipped entry must not appear here", changes, sensorGoodID)
 	}
 	if skips[0].SensorID != sensorBadID {
 		t.Errorf("skipped SensorID = %d, want %d (sensor-bad)", skips[0].SensorID, sensorBadID)
@@ -369,7 +381,20 @@ func TestApplyConfigRegions_ForeignHouseholdEntry_SkippedNotFailed_AppliesRestAn
 // FR1.3's staleness clause: a payload pushed *before* the sensor's current
 // region interval opened is skipped, not applied, even though the region
 // it names is in the pushing board's own household -- push-time, not
-// ack-time, is what's compared against the interval's valid_from.
+// ack-time, is what's compared against the interval's valid_from. This is
+// also #1379's Testing section "not reverted by a stale ack" case: R1 (the
+// stale push's regionNew, named oddly since the test predates FR51's
+// naming) was pushed at T1; the second writer -- here direct SQL standing
+// in for Repository.AssignSensorRegion (leaflab/api/sensor_region.go),
+// which writes the exact same sensor_region_history close-and-open shape,
+// per that file's own doc comment on "the two intended callers" -- closed
+// and reopened the interval as R2 (regionOld) at T2 > T1; the T1 push's
+// ack arrives after both. Asserted below: the sensor's region is still R2,
+// the entry was skipped and audited, and (proven separately, against real
+// SQL, by TestGetDeviceConfig_SurfacesRegionApplySkip_RealDB in
+// leaflab/api) the skip is visible to the caller who authored the push
+// (FR82.4 provenance) via GetDeviceConfig's Skips field, which reads back
+// exactly the audit_log shape recordApplySkip (repository.go) writes.
 func TestApplyConfigRegions_StalePush_SkippedNotApplied_AuditRowWritten(t *testing.T) {
 	repo, pool := newApplyConfigRegionsTestRepo(t)
 	ctx := context.Background()
@@ -383,7 +408,7 @@ func TestApplyConfigRegions_StalePush_SkippedNotApplied_AuditRowWritten(t *testi
 
 	// The sensor's current region interval opened at intervalOpenedAt --
 	// this represents a *second* writer (e.g. a later, faster-acked push,
-	// or in Phase 5 the API itself per FR51) having reassigned the region
+	// or Phase 5's AssignSensorRegion, FR51) having reassigned the region
 	// after this test's own push was issued but before it was applied.
 	intervalOpenedAt := time.Now()
 	acrInsertOpenRegionHistory(t, pool, sensorID, regionOld, intervalOpenedAt)
@@ -394,12 +419,15 @@ func TestApplyConfigRegions_StalePush_SkippedNotApplied_AuditRowWritten(t *testi
 		{I2CAddress: 0x10, RegionId: uint32(regionNew)},
 	}, stalePushedAt)
 
-	skips, err := repo.ApplyConfigRegions(ctx, boardID, 1)
+	skips, changes, err := repo.ApplyConfigRegions(ctx, boardID, 1)
 	if err != nil {
 		t.Fatalf("ApplyConfigRegions: %v", err)
 	}
 	if len(skips) != 1 {
 		t.Fatalf("skips = %+v, want exactly 1 (the stale push)", skips)
+	}
+	if len(changes) != 0 {
+		t.Errorf("changes = %+v, want none -- a skipped entry must not be reported as an FR73 change", changes)
 	}
 	if skips[0].SensorID != sensorID {
 		t.Errorf("skipped SensorID = %d, want %d", skips[0].SensorID, sensorID)
