@@ -11,6 +11,15 @@ import (
 // healthFullMethod.
 const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 
+// Households and membership (FR75, FR7, #1341) full method names -- see
+// households.go and server.go's handlers for each.
+const (
+	createHouseholdFullMethod = "/leaflab.api.v1.LeafLabAPI/CreateHousehold"
+	inviteMemberFullMethod    = "/leaflab.api.v1.LeafLabAPI/InviteMember"
+	removeMemberFullMethod    = "/leaflab.api.v1.LeafLabAPI/RemoveMember"
+	renameHouseholdFullMethod = "/leaflab.api.v1.LeafLabAPI/RenameHousehold"
+)
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
 // registry for this service: every RPC that performs a write. A method
 // listed here with no corresponding entry in auditRegistrations fails
@@ -18,10 +27,11 @@ const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 // wiring its audit registration is structurally hard to ship, rather than
 // a silently missing audit row discovered later in production.
 //
-// GetDeviceConfig, ListBoards and GetHealth are reads and are deliberately
-// absent. RetireBoard has no RPC surface yet (leaflab/api/repository.go's
-// RetireBoard is called directly by tests only, per #1337's scaffold) --
-// it will be added here in the task that gives it one.
+// GetDeviceConfig, ListBoards, GetHealth, GetHousehold and
+// ListHouseholdMembers are reads and are deliberately absent. RetireBoard
+// has no RPC surface yet (leaflab/api/repository.go's RetireBoard is called
+// directly by tests only, per #1337's scaffold) -- it will be added here in
+// the task that gives it one.
 //
 // This registry is scoped to audit coverage only. #1351 (NFR1.b) adds a
 // separate read/write-kind registry for authorization-conformance
@@ -30,14 +40,22 @@ const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 // independent, though worth a look for consolidation once #1351 lands.
 var declaredWriteMethods = []string{
 	pushDeviceConfigFullMethod,
+	createHouseholdFullMethod,
+	inviteMemberFullMethod,
+	removeMemberFullMethod,
+	renameHouseholdFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
 // action/entity_kind its audit.Entry must carry (matched against
 // audit.Entry.Action/EntityKind at the call site -- see server.go's
-// PushDeviceConfig).
+// PushDeviceConfig and the households.go handlers).
 var auditRegistrations = map[string]audit.Registration{
 	pushDeviceConfigFullMethod: {Action: "PushConfig", EntityKind: "device_config"},
+	createHouseholdFullMethod:  {Action: "CreateHousehold", EntityKind: "household_membership"},
+	inviteMemberFullMethod:     {Action: "InviteMember", EntityKind: "household_membership"},
+	removeMemberFullMethod:     {Action: "RemoveMember", EntityKind: "household_membership"},
+	renameHouseholdFullMethod:  {Action: "RenameHousehold", EntityKind: "household"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry

@@ -1,6 +1,6 @@
 package main
 
-// Households and membership (FR75, FR7) -- scaffold for #1341.
+// Households and membership (FR75, FR7) -- implementation for #1341.
 //
 // Invitation model decision (Scaffold section, FR75): V1 implements (a)
 // direct add by principal subject, not (b) an invitation row the invitee
@@ -13,28 +13,34 @@ package main
 // (a) being acceptable. Recorded here, and in the PR, per the issue's
 // "record the choice in the PR" instruction.
 //
-// This file is the Scaffold-phase skeleton: proto messages/RPCs exist
-// (api.proto) and the read paths below are real, but no RPC handler in
-// server.go calls into this file yet, and the write paths
-// (CreateHousehold, InviteMember, RemoveMember, RenameHousehold) are not
-// implemented -- they return ErrHouseholdOpNotImplemented until the
-// Implementation phase wires in:
-//   - the never-zero-members refusal (FR59.3) plus its database-level
-//     guard, enforced in the same transaction as a removal;
-//   - the SCD2 close-and-open write pattern on household_membership;
-//   - an audit.Entry naming both actor and affected principal, written via
-//     Repository.auditedWrite (see repository.go), for every membership
-//     change;
-//   - the member-only authorization check (FR7's membership-change
-//     exclusion: neither a grantee nor an elevated admin may call these,
-//     even though both may hold general read/write capability elsewhere).
+// Write paths (CreateHousehold, InviteMember, RemoveMember, RenameHousehold)
+// use Repository.auditedWrite (repository.go) so the write and its FR8
+// audit.Entry commit together, exactly like RetireBoard/
+// InsertDeviceConfigNextVersion. Every audit.Entry built here carries
+// EntityID set to the *affected principal's* subject (not a numeric row id)
+// so an audit row for a membership change names both actor
+// (audit.Entry.ActorSubject) and subject (audit.Entry.EntityID) per FR8 --
+// server.go's handlers supply ActorSubject from the authenticated caller,
+// never from a request field.
+//
+// Membership writes never DELETE a household_membership row -- InviteMember
+// INSERTs a new open (valid_to IS NULL) row, RemoveMember closes one
+// (valid_to = NOW()) -- the SCD2 write pattern AGENTS.md documents, applied
+// here as "open on invite, close on remove" rather than a close-and-open
+// pair, since InviteMember never supersedes an existing row's data (a
+// principal either already has no row for this household, or already has a
+// current one -- see ErrHouseholdAlreadyMember).
+//
+// Never-zero-members (FR59.3) is enforced twice, per the issue's explicit
+// requirement: RemoveMember below locks the household row (SELECT ... FOR
+// UPDATE) and counts current members inside the same transaction as the
+// close, so a friendly refusal is what a caller sees even under a race; migration
+// 017_household_never_zero_members's trigger is the independent
+// database-level backstop that does not depend on this code path taking
+// that lock correctly (see the migration's doc comment).
 //
 // household and household_membership tables are #1339's ownership schema
-// (leaflab/migrate/migrations/015_ownership.up.sql) -- this task adds no
-// migration of its own for them. The never-zero-members database-level
-// guard named in the Implementation section, if it needs new schema (e.g.
-// a constraint trigger), is Implementation-phase work and will pick the
-// next free migration number at that time.
+// (leaflab/migrate/migrations/015_ownership.up.sql).
 
 import (
 	"context"
@@ -43,15 +49,40 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-)
 
-// ErrHouseholdOpNotImplemented is returned by the household write paths
-// that are scaffolded (signature only) but not yet implemented -- see this
-// file's doc comment.
-var ErrHouseholdOpNotImplemented = errors.New("household operation not implemented (Implementation phase)")
+	"github.com/whale-net/everything/leaflab/api/audit"
+)
 
 // ErrHouseholdNotFound is returned when a household_id names no row.
 var ErrHouseholdNotFound = errors.New("household not found")
+
+// ErrPrincipalAlreadyHasHousehold is returned by CreateHousehold when
+// principalSubject already holds a current household_membership row --
+// CreateHousehold is reachable only for a principal with no current
+// household (api.proto's CreateHousehold doc comment); a principal already
+// in a household does not get a second one through this path (FR75 permits
+// multi-household membership, but V1 specifies no switching experience, so
+// there is deliberately no second creation entrance).
+var ErrPrincipalAlreadyHasHousehold = errors.New("principal already has a current household")
+
+// ErrHouseholdAlreadyMember is returned by InviteMember when
+// principalSubject already holds a current household_membership row in the
+// target household -- inviting them again would either violate the
+// "exactly one open row per (household, principal)" invariant the
+// never-zero-members count in RemoveMember relies on, or silently no-op; an
+// explicit error is clearer than either.
+var ErrHouseholdAlreadyMember = errors.New("principal is already a current member of this household")
+
+// ErrHouseholdNotMember is returned by RemoveMember when principalSubject
+// holds no current household_membership row in the target household -- there
+// is nothing to remove.
+var ErrHouseholdNotMember = errors.New("principal is not a current member of this household")
+
+// ErrHouseholdLastMember is returned by RemoveMember when removing
+// principalSubject would leave the household with zero members -- FR75's
+// "a household never reaches zero members", refused with FR59.3's
+// refuse-and-name-the-alternative shape at the server.go layer.
+var ErrHouseholdLastMember = errors.New("removing this member would leave the household with zero members")
 
 // HouseholdRow is one household, as returned by GetHouseholdByID.
 type HouseholdRow struct {
@@ -92,7 +123,7 @@ func (r *Repository) GetHouseholdByID(ctx context.Context, householdID int64) (H
 // after-id/hasAfter/limit+1 shape as Repository.ListBoards. Only current
 // rows (valid_to IS NULL) are ever returned; a member's superseded rows are
 // history, not membership, per the SCD2 write pattern InviteMember/
-// RemoveMember will use once implemented.
+// RemoveMember use.
 func (r *Repository) ListHouseholdMembers(ctx context.Context, householdID int64, afterMembershipID int64, hasAfter bool, limit int32) ([]HouseholdMembershipRow, error) {
 	var sqlQuery string
 	var args []any
@@ -138,10 +169,12 @@ func (r *Repository) ListHouseholdMembers(ctx context.Context, householdID int64
 
 // IsCurrentHouseholdMember reports whether principalSubject currently holds
 // a household_membership row (valid_to IS NULL) in householdID. This is the
-// member-only authorization primitive the Implementation section calls
-// for: InviteMember/RemoveMember/RenameHousehold must check membership
-// specifically, never the general write capability a grant or elevation
-// might otherwise confer (FR7).
+// member-only authorization primitive server.go's requireHouseholdMember
+// calls for InviteMember/RemoveMember/RenameHousehold: membership specifically,
+// never the general authz.Scope a grant or elevation might otherwise confer
+// (FR7's "membership change is one of the three exclusions" -- a grantee or
+// an elevated admin may hold a Scope that permits this household's boards
+// without ever being a household_membership row here).
 func (r *Repository) IsCurrentHouseholdMember(ctx context.Context, householdID int64, principalSubject string) (bool, error) {
 	var exists bool
 	err := r.db.QueryRow(ctx, `
@@ -159,10 +192,9 @@ func (r *Repository) IsCurrentHouseholdMember(ctx context.Context, householdID i
 }
 
 // HasCurrentHousehold reports whether principalSubject currently holds any
-// household_membership row. CreateHousehold's Implementation-phase guard
-// ("reachable only ... for a principal with no current household", per
-// api.proto's CreateHousehold doc comment) will call this before creating
-// a new household.
+// household_membership row. CreateHousehold calls this before creating a
+// new household ("reachable only ... for a principal with no current
+// household", per api.proto's CreateHousehold doc comment).
 func (r *Repository) HasCurrentHousehold(ctx context.Context, principalSubject string) (bool, error) {
 	var exists bool
 	err := r.db.QueryRow(ctx, `
@@ -178,26 +210,197 @@ func (r *Repository) HasCurrentHousehold(ctx context.Context, principalSubject s
 	return exists, nil
 }
 
-// CreateHousehold is not yet implemented -- see this file's doc comment.
-// Signature carries what the Implementation phase needs: the creating
-// principal (becomes the sole initial member) and a display name.
-func (r *Repository) CreateHousehold(ctx context.Context, principalSubject, name string) (HouseholdRow, error) {
-	return HouseholdRow{}, ErrHouseholdOpNotImplemented
+// defaultHouseholdName is CreateHouseholdRequest.name's server-chosen
+// fallback (api.proto: "Empty falls back to a server-chosen default") --
+// used when a caller supplies no display name.
+func defaultHouseholdName(principalSubject string) string {
+	return fmt.Sprintf("%s's Household", principalSubject)
 }
 
-// InviteMember is not yet implemented -- see this file's doc comment.
-func (r *Repository) InviteMember(ctx context.Context, householdID int64, principalSubject string) (HouseholdMembershipRow, error) {
-	return HouseholdMembershipRow{}, ErrHouseholdOpNotImplemented
+// CreateHousehold gives principalSubject a new household with them as its
+// sole initial member, refusing (ErrPrincipalAlreadyHasHousehold) if they
+// already hold a current household_membership row anywhere. The
+// no-current-household check, the household INSERT and the initial
+// membership INSERT all run inside the same transaction as entry's audit
+// row (auditedWrite) -- a concurrent CreateHousehold racing on the same
+// principal cannot both succeed, since the second transaction's check runs
+// against the first's already-committed row once it observes it (and if
+// both check concurrently before either commits, at most one commits: the
+// second's INSERT of the initial membership row does not itself prevent a
+// double-create by itself, so the guard is the SELECT ... check above,
+// consistent with every other read-then-write guard in this file -- see
+// RemoveMember's FOR UPDATE lock for the one case in this file that needs a
+// stronger guarantee than a plain SELECT).
+func (r *Repository) CreateHousehold(ctx context.Context, principalSubject, name string, entry audit.Entry) (HouseholdRow, error) {
+	var household HouseholdRow
+	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM household_membership
+				WHERE principal_subject = $1 AND valid_to IS NULL
+			)
+		`, principalSubject).Scan(&exists); err != nil {
+			return audit.Entry{}, fmt.Errorf("check current household for %q: %w", principalSubject, err)
+		}
+		if exists {
+			return audit.Entry{}, ErrPrincipalAlreadyHasHousehold
+		}
+
+		if name == "" {
+			name = defaultHouseholdName(principalSubject)
+		}
+
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO household (name) VALUES ($1)
+			RETURNING household_id, name
+		`, name).Scan(&household.HouseholdID, &household.Name); err != nil {
+			return audit.Entry{}, fmt.Errorf("insert household: %w", err)
+		}
+
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO household_membership (household_id, principal_subject)
+			VALUES ($1, $2)
+		`, household.HouseholdID, principalSubject); err != nil {
+			return audit.Entry{}, fmt.Errorf("insert initial membership for household %d: %w", household.HouseholdID, err)
+		}
+
+		entry.EntityID = &principalSubject
+		entry.TargetHouseholdID = &household.HouseholdID
+		return entry, nil
+	})
+	if err != nil {
+		return HouseholdRow{}, err
+	}
+	return household, nil
 }
 
-// RemoveMember is not yet implemented -- see this file's doc comment. Will
-// refuse (FR59.3) rather than error when the removal would leave the
-// household with zero members.
-func (r *Repository) RemoveMember(ctx context.Context, householdID int64, principalSubject string) error {
-	return ErrHouseholdOpNotImplemented
+// InviteMember adds principalSubject to householdID as a new current member
+// (FR75) -- an INSERT of a new open household_membership row, never a
+// close-and-open pair (there is no prior row of principalSubject's in this
+// household to supersede; ErrHouseholdAlreadyMember covers the case where
+// there already is one). entry's audit row commits in the same transaction
+// (auditedWrite), with EntityID set to principalSubject so the row names
+// both the acting member (entry.ActorSubject, set by server.go from the
+// caller) and the invited principal (FR8).
+func (r *Repository) InviteMember(ctx context.Context, householdID int64, principalSubject string, entry audit.Entry) (HouseholdMembershipRow, error) {
+	var member HouseholdMembershipRow
+	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		var exists bool
+		if err := tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM household_membership
+				WHERE household_id = $1 AND principal_subject = $2 AND valid_to IS NULL
+			)
+		`, householdID, principalSubject).Scan(&exists); err != nil {
+			return audit.Entry{}, fmt.Errorf("check existing membership for %q in household %d: %w", principalSubject, householdID, err)
+		}
+		if exists {
+			return audit.Entry{}, ErrHouseholdAlreadyMember
+		}
+
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO household_membership (household_id, principal_subject)
+			VALUES ($1, $2)
+			RETURNING household_membership_id, principal_subject, valid_from
+		`, householdID, principalSubject).Scan(&member.HouseholdMembershipID, &member.PrincipalSubject, &member.ValidFrom); err != nil {
+			return audit.Entry{}, fmt.Errorf("insert membership for %q in household %d: %w", principalSubject, householdID, err)
+		}
+
+		entry.EntityID = &principalSubject
+		entry.TargetHouseholdID = &householdID
+		return entry, nil
+	})
+	if err != nil {
+		return HouseholdMembershipRow{}, err
+	}
+	return member, nil
 }
 
-// RenameHousehold is not yet implemented -- see this file's doc comment.
-func (r *Repository) RenameHousehold(ctx context.Context, householdID int64, name string) (HouseholdRow, error) {
-	return HouseholdRow{}, ErrHouseholdOpNotImplemented
+// RemoveMember closes principalSubject's current household_membership row
+// in householdID (valid_to = NOW(), never DELETEd), refusing
+// (ErrHouseholdLastMember) if doing so would leave the household with zero
+// members (FR75, FR59.3).
+//
+// The never-zero-members check happens inside the same transaction as the
+// close (auditedWrite), after locking the household row itself (SELECT ...
+// FOR UPDATE): this serializes two concurrent RemoveMember calls on the
+// same household through this method, so "two simultaneous removals of the
+// last two members leave at least one member" holds without relying on
+// Postgres's default READ COMMITTED isolation to save it (each transaction
+// would otherwise still see the other's in-flight close as "not yet
+// closed" and both could pass a naive count check). migration
+// 017_household_never_zero_members's trigger is the second, independent
+// database-level layer named in the issue -- it does not depend on this
+// lock being taken correctly, only on the UPDATE itself.
+func (r *Repository) RemoveMember(ctx context.Context, householdID int64, principalSubject string, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		var locked int64
+		if err := tx.QueryRow(ctx, `
+			SELECT household_id FROM household WHERE household_id = $1 FOR UPDATE
+		`, householdID).Scan(&locked); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return audit.Entry{}, ErrHouseholdNotFound
+			}
+			return audit.Entry{}, fmt.Errorf("lock household %d: %w", householdID, err)
+		}
+
+		var membershipID int64
+		if err := tx.QueryRow(ctx, `
+			SELECT household_membership_id FROM household_membership
+			WHERE household_id = $1 AND principal_subject = $2 AND valid_to IS NULL
+		`, householdID, principalSubject).Scan(&membershipID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return audit.Entry{}, ErrHouseholdNotMember
+			}
+			return audit.Entry{}, fmt.Errorf("find membership for %q in household %d: %w", principalSubject, householdID, err)
+		}
+
+		var currentMembers int
+		if err := tx.QueryRow(ctx, `
+			SELECT COUNT(*) FROM household_membership
+			WHERE household_id = $1 AND valid_to IS NULL
+		`, householdID).Scan(&currentMembers); err != nil {
+			return audit.Entry{}, fmt.Errorf("count current members of household %d: %w", householdID, err)
+		}
+		if currentMembers <= 1 {
+			return audit.Entry{}, ErrHouseholdLastMember
+		}
+
+		if _, err := tx.Exec(ctx, `
+			UPDATE household_membership SET valid_to = NOW() WHERE household_membership_id = $1
+		`, membershipID); err != nil {
+			return audit.Entry{}, fmt.Errorf("close membership %d: %w", membershipID, err)
+		}
+
+		entry.EntityID = &principalSubject
+		entry.TargetHouseholdID = &householdID
+		return entry, nil
+	})
+}
+
+// RenameHousehold changes householdID's display name (FR75). Member-only
+// (FR7), same authorization exclusion as InviteMember/RemoveMember, checked
+// by server.go's requireHouseholdMember before this is ever called -- this
+// method itself performs no membership check, only the write.
+func (r *Repository) RenameHousehold(ctx context.Context, householdID int64, name string, entry audit.Entry) (HouseholdRow, error) {
+	var household HouseholdRow
+	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		if err := tx.QueryRow(ctx, `
+			UPDATE household SET name = $2 WHERE household_id = $1
+			RETURNING household_id, name
+		`, householdID, name).Scan(&household.HouseholdID, &household.Name); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return audit.Entry{}, ErrHouseholdNotFound
+			}
+			return audit.Entry{}, fmt.Errorf("rename household %d: %w", householdID, err)
+		}
+
+		entry.TargetHouseholdID = &householdID
+		return entry, nil
+	})
+	if err != nil {
+		return HouseholdRow{}, err
+	}
+	return household, nil
 }
