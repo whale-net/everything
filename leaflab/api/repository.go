@@ -242,6 +242,70 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 	return &cfg, nil
 }
 
+// GetConfigVersion returns the stored config at exactly version for a
+// board -- FR37's DiffConfigVersions RPC names either side of a diff by
+// its exact version number, not "whichever is latest accepted" (that's
+// GetLatestAcceptedConfig's own, narrower job). Unlike
+// GetLatestAcceptedConfig, this does not filter on accepted: a version
+// this queries always exists as a row the moment InsertDeviceConfigNextVersion
+// commits (accepted starts FALSE and is flipped by the device's ack), so a
+// caller diffing "what I'm about to push" against "what's currently
+// pending ack" must still be able to name a not-yet-accepted version.
+// Returns nil, nil if no row matches (unknown version).
+func (r *Repository) GetConfigVersion(ctx context.Context, deviceID string, version uint64) (*configpb.DeviceConfig, error) {
+	var jsonBytes []byte
+	err := r.db.QueryRow(ctx, `
+		SELECT dc.config_json
+		FROM device_config dc
+		JOIN board b ON b.board_id = dc.board_id
+		WHERE b.device_id = $1
+		  AND dc.version = $2
+	`, deviceID, int64(version)).Scan(&jsonBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get config version %d for %s: %w", version, deviceID, err)
+	}
+
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(jsonBytes, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal stored config version %d for %s: %w", version, deviceID, err)
+	}
+	return &cfg, nil
+}
+
+// LoadCatalog resolves FR39's Catalog snapshot -- every (chip, sensor_type)
+// pair sensor_chip_type actually links (migrations 008/010, populated by
+// catalog.Seeder from chips.yaml on every migrate run) -- for
+// config.Validate's chip/measurement-type check. Read fresh on every push
+// rather than cached in-process: a chips.yaml change only takes effect on
+// the next migrate run regardless, and this keeps the same "no
+// process-lifetime state to go stale" posture as every other per-request
+// repository read on this path (e.g. resolveSensorTypeID).
+func (r *Repository) LoadCatalog(ctx context.Context) (*config.Catalog, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT sc.name, sct.sensor_type_id
+		FROM sensor_chip_type sct
+		JOIN sensor_chip sc ON sc.sensor_chip_id = sct.sensor_chip_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("load catalog: %w", err)
+	}
+	defer rows.Close()
+
+	catalog := config.NewCatalog()
+	for rows.Next() {
+		var chipName string
+		var sensorTypeID int64
+		if err := rows.Scan(&chipName, &sensorTypeID); err != nil {
+			return nil, fmt.Errorf("scan catalog row: %w", err)
+		}
+		catalog.Add(chipName, hwkey.SensorTypeID(sensorTypeID))
+	}
+	return catalog, rows.Err()
+}
+
 // RegionApplySkipRow is one audit_log row leaflab/processor's
 // ApplyConfigRegions wrote for a config entry it skipped instead of
 // applying (FR1.3) -- see GetRegionApplySkips.

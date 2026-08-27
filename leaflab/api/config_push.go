@@ -117,3 +117,80 @@ func (s *LeafLabAPIServer) resolveRemoveKeys(ctx context.Context, removes []*pb.
 	}
 	return keys, nil
 }
+
+// validationFailureError translates a non-OK config.Validation (FR39) into
+// a contract.Many multi-failure error: every failure Validate found is
+// carried as its own pb.Failure detail, never collapsed into the first
+// (FR39's "a single failure must not mask the rest"). A caller uses
+// contract.AllFailures, not contract.FromError, to see every one.
+func validationFailureError(v config.Validation) error {
+	details := make([]contract.FailureDetail, len(v.Failures))
+	for i, f := range v.Failures {
+		details[i] = validationFailureDetail(f)
+	}
+	return contract.Many("device_config", details)
+}
+
+// validationFailureDetail translates one config.Failure into a
+// contract.FailureDetail. Field is FR59's "specific offending entry and
+// field": "sensors[i].<field>" for an add/change check (adds is always
+// req.Sensors' own indexing -- see Validate's doc comment), "removes[i]"
+// for a removal check (removes is always req.Removes' own indexing).
+// FailureUnaddressableRemove is the one class translated as
+// FailureRefusedWithAlternative -- FR82.4's named failure class and stated
+// remedy (FR59.3's refuse-and-name-the-alternative shape); every other
+// class is a plain FailureInvalidArgument, matching FR39's "an error",
+// with no alternative named.
+func validationFailureDetail(f config.Failure) contract.FailureDetail {
+	switch f.Class {
+	case config.FailureInvalidI2CAddress:
+		return contract.FailureDetail{
+			Class:  contract.FailureInvalidArgument,
+			Field:  fmt.Sprintf("sensors[%d].i2c_address", f.EntryIndex),
+			Reason: f.Message,
+		}
+	case config.FailureChipTypeNotProduced:
+		return contract.FailureDetail{
+			Class:  contract.FailureInvalidArgument,
+			Field:  fmt.Sprintf("sensors[%d].sensor_type", f.EntryIndex),
+			Reason: f.Message,
+		}
+	case config.FailureInvalidPollInterval:
+		return contract.FailureDetail{
+			Class:  contract.FailureInvalidArgument,
+			Field:  fmt.Sprintf("sensors[%d].poll_interval_ms", f.EntryIndex),
+			Reason: f.Message,
+		}
+	case config.FailureHardwareKeyCollision:
+		return contract.FailureDetail{
+			Class:  contract.FailureInvalidArgument,
+			Field:  fmt.Sprintf("sensors[%d]", f.EntryIndex),
+			Reason: f.Message,
+		}
+	case config.FailureUnknownRemoveKey:
+		return contract.FailureDetail{
+			Class:  contract.FailureInvalidArgument,
+			Field:  fmt.Sprintf("removes[%d]", f.EntryIndex),
+			Reason: f.Message,
+		}
+	case config.FailureUnaddressableRemove:
+		// FR82.4/FR39: matches the reason/alternative split
+		// config.Materialise's own ErrUnaddressableRemove branch used to
+		// state directly (now unreachable in practice -- Validate catches
+		// this case first -- but kept as the one place this exact wording
+		// lives, so a caller-visible message never depends on which of the
+		// two code paths happened to run).
+		return contract.FailureDetail{
+			Class:       contract.FailureRefusedWithAlternative,
+			Field:       fmt.Sprintf("removes[%d]", f.EntryIndex),
+			Reason:      "This entry has no I2C address on record and cannot be removed by an edit push.",
+			Alternative: "Push scope=COMPLETE with this entry omitted from the sensors list.",
+		}
+	default:
+		return contract.FailureDetail{
+			Class:  contract.FailureInvalidArgument,
+			Field:  fmt.Sprintf("%d", f.EntryIndex),
+			Reason: f.Message,
+		}
+	}
+}
