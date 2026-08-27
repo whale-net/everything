@@ -116,6 +116,24 @@ func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
 
+// GetConfigStatus/ListConfigHistory/GetConfigVersion (FR34/FR35, #1369)
+// are explicitly stubbed here, like every other RPC above, rather than
+// left to the embedded pb.UnimplementedLeafLabAPIServer's promoted
+// methods: those have a pointer receiver (*UnimplementedLeafLabAPIServer),
+// which this value-typed stubAPIServer{} cannot satisfy through promotion
+// alone.
+func (stubAPIServer) GetConfigStatus(ctx context.Context, req *pb.GetConfigStatusRequest) (*pb.GetConfigStatusResponse, error) {
+	return &pb.GetConfigStatusResponse{}, nil
+}
+
+func (stubAPIServer) ListConfigHistory(ctx context.Context, req *pb.ListConfigHistoryRequest) (*pb.ListConfigHistoryResponse, error) {
+	return &pb.ListConfigHistoryResponse{}, nil
+}
+
+func (stubAPIServer) GetConfigVersion(ctx context.Context, req *pb.GetConfigVersionRequest) (*pb.GetConfigVersionResponse, error) {
+	return &pb.GetConfigVersionResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

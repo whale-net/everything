@@ -10,6 +10,7 @@ go_library(
         "entry.go",
         "materialise.go",
         "removekey.go",
+        "state.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api/config",
     visibility = ["//visibility:public"],

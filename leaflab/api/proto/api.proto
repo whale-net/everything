@@ -42,6 +42,131 @@ service LeafLabAPI {
   // identity, not continue an existing one, and its reading history would
   // not follow.
   rpc RewireSensor(RewireSensorRequest) returns (RewireSensorResponse);
+
+  // GetConfigStatus reports one pushed config version's FR34.1 derived
+  // state (accepted/pending/rejected) plus pushed-at, acked-at and the
+  // firmware's verbatim rejection reason. See ConfigState's doc comment.
+  rpc GetConfigStatus(GetConfigStatusRequest) returns (GetConfigStatusResponse);
+
+  // ListConfigHistory lists a board's full config push history, newest
+  // first, keyset paginated (FR61) -- including pending and rejected
+  // versions, each visibly marked with its ConfigState (FR35.1).
+  rpc ListConfigHistory(ListConfigHistoryRequest) returns (ListConfigHistoryResponse);
+
+  // GetConfigVersion fetches any single stored config version by
+  // (device_id, version), regardless of whether it was ever accepted
+  // (FR35.2), returning its stored payload plus each entry's FR82.4
+  // provenance.
+  rpc GetConfigVersion(GetConfigVersionRequest) returns (GetConfigVersionResponse);
+}
+
+// ConfigState is FR34.1's three distinct states a pushed config version can
+// be in -- derived from device_config's existing accepted/acked_at/
+// rejection_reason columns (leaflab/api/config.DeriveState is the one place
+// that computes it); there is no separate stored status column. Pending is
+// never rendered as rejected, and a rejected push is never indistinguishable
+// from "no push at all" -- CONFIG_STATE_UNSPECIFIED exists only as proto3's
+// required zero value and is never a state this API reports for a config
+// version that actually exists.
+enum ConfigState {
+  CONFIG_STATE_UNSPECIFIED = 0;
+  // acked_at is set and device_config.accepted is true.
+  CONFIG_STATE_ACCEPTED = 1;
+  // acked_at IS NULL -- the board has not answered yet.
+  CONFIG_STATE_PENDING = 2;
+  // acked_at is set and device_config.accepted is false. rejection_reason
+  // on the enclosing response carries the firmware's verbatim reason.
+  CONFIG_STATE_REJECTED = 3;
+}
+
+// EntryProvenance is FR82.4's per-entry provenance value, on the wire --
+// mirrors leaflab/api/config.Provenance exactly (see that type's doc
+// comment). Returned per entry by GetConfigVersion.
+enum EntryProvenance {
+  ENTRY_PROVENANCE_UNSPECIFIED = 0;
+  // Named by the caller in the request that stored this entry (an
+  // add/change, or -- for a RemovedEntry -- a removal).
+  ENTRY_PROVENANCE_AUTHORED = 1;
+  // Carried forward unchanged from an EDIT push's materialisation base,
+  // without the caller naming it in that push at all.
+  ENTRY_PROVENANCE_MATERIALISED = 2;
+}
+
+message GetConfigStatusRequest {
+  string device_id = 1;
+  uint64 version = 2;
+}
+
+message GetConfigStatusResponse {
+  ConfigState state = 1;
+  Instant pushed_at = 2;
+  // Unset while state is CONFIG_STATE_PENDING.
+  Instant acked_at = 3;
+  // The firmware's verbatim rejection reason (FR34.1) -- set only when
+  // state is CONFIG_STATE_REJECTED; never paraphrased or normalised.
+  string rejection_reason = 4;
+  // FR34.2/FR59.2: one of three persona-appropriate, complete sentences --
+  // "it worked / it hasn't answered yet / it didn't work" -- with no
+  // version number and no status code, rendered server-side (NFR18.1) so a
+  // BFF picks by `state` rather than composing its own text.
+  string sentence = 5;
+  Instant server_now = 6;
+}
+
+message ListConfigHistoryRequest {
+  string device_id = 1;
+  // Keyset page request (FR61). Unset/empty requests the first (newest)
+  // page.
+  PageRequest page = 2;
+}
+
+// ConfigHistoryEntry is one version in a board's config push history
+// (FR35.1) -- always visibly marked with its ConfigState, including
+// pending and rejected versions, which are never omitted from this list.
+message ConfigHistoryEntry {
+  uint64 version = 1;
+  ConfigState state = 2;
+  Instant pushed_at = 3;
+  Instant acked_at = 4;
+  string rejection_reason = 5;
+  string sentence = 6;
+}
+
+message ListConfigHistoryResponse {
+  // Newest first (FR35.1).
+  repeated ConfigHistoryEntry entries = 1;
+  PageResponse page = 2;
+  Instant server_now = 3;
+}
+
+message GetConfigVersionRequest {
+  string device_id = 1;
+  uint64 version = 2;
+}
+
+// ConfigVersionEntry names one entry in a fetched config version's stored
+// payload and its FR82.4 provenance -- the canonical hardware key shape
+// (mirroring RemovedEntry, above) rather than an index into `sensors`, so
+// a caller can match an entry to its provenance without assuming array
+// order.
+message ConfigVersionEntry {
+  repeated firmware.MuxHop mux_path = 1;
+  uint32 i2c_address = 2;
+  firmware.SensorType sensor_type = 3;
+  EntryProvenance provenance = 4;
+}
+
+message GetConfigVersionResponse {
+  // The stored complete payload for this version, regardless of whether it
+  // was ever accepted (FR35.2).
+  firmware.DeviceConfig config = 1;
+  ConfigState state = 2;
+  Instant pushed_at = 3;
+  Instant acked_at = 4;
+  string rejection_reason = 5;
+  // FR82.4: this version's per-entry provenance.
+  repeated ConfigVersionEntry entries = 6;
+  Instant server_now = 7;
 }
 
 // PushScope states what a PushDeviceConfigRequest's payload means as a

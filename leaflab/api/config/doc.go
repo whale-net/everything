@@ -1,6 +1,10 @@
 // Package config implements FR82's config push scope semantics: canonical
 // entry keying, EDIT-scope materialisation against a base config version,
-// and FR82.4 removal-key resolution (full canonical key vs chip key).
+// and FR82.4 removal-key resolution (full canonical key vs chip key). It
+// also holds FR34.1's State derivation (state.go) -- unrelated to the
+// scope/materialisation logic below beyond sharing this package and its
+// no-DB posture, but kept here rather than a new package since it is a
+// single small pure function with no dependents of its own.
 //
 // This package has no database dependency and never calls
 // leaflab/api/contract: it operates entirely on in-memory hwkey.Key /
