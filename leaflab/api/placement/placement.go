@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/leaflab/api/contract"
@@ -63,47 +64,78 @@ func NewWriter(db *pgxpool.Pool) *Writer {
 // keeps resolving a plant's region correctly until that later task repoints
 // it onto plant_region_history directly.
 func (w *Writer) Move(ctx context.Context, plantID, regionID int64, requestedAt time.Time) error {
-	if err := RefuseIfBackdated(requestedAt); err != nil {
-		return err
-	}
-
 	tx, err := w.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("placement: begin move transaction for plant %d: %w", plantID, err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit succeeds
 
-	// Close-and-open per AGENTS.md's SCD2 write path: close the plant's
-	// current open interval (a plant with no prior interval simply closes
-	// zero rows -- not an error, since this is also the first Move a plant
-	// ever receives after the backfill's initial interval already covers
-	// it), then open the new one. valid_from is left to the column DEFAULT
-	// NOW() rather than requestedAt, per this func's doc comment above.
-	if _, err := tx.Exec(ctx, `
-		UPDATE plant_region_history
-		SET valid_to = NOW()
-		WHERE plant_id = $1 AND valid_to IS NULL
-	`, plantID); err != nil {
-		return fmt.Errorf("placement: close current interval for plant %d: %w", plantID, err)
-	}
-
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO plant_region_history (plant_id, region_id)
-		VALUES ($1, $2)
-	`, plantID, regionID); err != nil {
-		return fmt.Errorf("placement: open new interval for plant %d in region %d: %w", plantID, regionID, err)
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE plant SET region_id = $2 WHERE plant_id = $1
-	`, plantID, regionID); err != nil {
-		return fmt.Errorf("placement: sync plant.region_id cache for plant %d: %w", plantID, err)
+	if _, err := MoveTx(ctx, tx, plantID, regionID, requestedAt); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("placement: commit move for plant %d: %w", plantID, err)
 	}
 	return nil
+}
+
+// MoveTx is Move's transaction-scoped twin: it performs the identical
+// close-and-open write against tx (the caller's own already-open
+// transaction) and returns the written valid_from, without beginning or
+// committing anything itself. Move (above) is now a thin wrapper around
+// this -- begin, MoveTx, commit -- kept as the single-shot entry point for
+// a caller with no transaction of its own (e.g. this package's own
+// integration tests).
+//
+// MoveTx exists for callers that must combine this write with something
+// else in the exact same transaction -- Phase 5's CreatePlant/MovePlant
+// (leaflab/api/plants.go) combine it with FR20's phase-one boundary
+// capture (leaflab/api/capture.Recorder.Record) and FR8's audit record, per
+// FR20's coupling requirement ("every placement boundary written here must
+// trigger phase one of FR20's two-phase boundary capture, in the same
+// transaction"); see capture.Recorder.Record's doc comment, which names
+// this package's writer as one of its two intended callers.
+//
+// Every other behavior (RefuseIfBackdated applied first, valid_from is
+// always the database's own NOW() at INSERT time, plant.region_id synced
+// in the same transaction) is identical to Move -- see Move's doc comment.
+func MoveTx(ctx context.Context, tx pgx.Tx, plantID, regionID int64, requestedAt time.Time) (time.Time, error) {
+	if err := RefuseIfBackdated(requestedAt); err != nil {
+		return time.Time{}, err
+	}
+
+	// Close-and-open per AGENTS.md's SCD2 write path: close the plant's
+	// current open interval (a plant with no prior interval simply closes
+	// zero rows -- not an error, since this is also the first Move a plant
+	// ever receives after the backfill's initial interval already covers
+	// it, or the very first placement CreatePlant ever opens), then open
+	// the new one. valid_from is left to the column DEFAULT NOW() rather
+	// than requestedAt, per Move's doc comment above.
+	if _, err := tx.Exec(ctx, `
+		UPDATE plant_region_history
+		SET valid_to = NOW()
+		WHERE plant_id = $1 AND valid_to IS NULL
+	`, plantID); err != nil {
+		return time.Time{}, fmt.Errorf("placement: close current interval for plant %d: %w", plantID, err)
+	}
+
+	var validFrom time.Time
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id)
+		VALUES ($1, $2)
+		RETURNING valid_from
+	`, plantID, regionID).Scan(&validFrom); err != nil {
+		return time.Time{}, fmt.Errorf("placement: open new interval for plant %d in region %d: %w", plantID, regionID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE plant SET region_id = $2 WHERE plant_id = $1
+	`, plantID, regionID); err != nil {
+		return time.Time{}, fmt.Errorf("placement: sync plant.region_id cache for plant %d: %w", plantID, err)
+	}
+
+	return validFrom, nil
 }
 
 // backdateTolerance absorbs the clock-read gap between a caller capturing
