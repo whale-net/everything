@@ -58,6 +58,18 @@ service LeafLabAPI {
   // (FR35.2), returning its stored payload plus each entry's FR82.4
   // provenance.
   rpc GetConfigVersion(GetConfigVersionRequest) returns (GetConfigVersionResponse);
+
+  // AwaitConfigAck is FR47's bounded wait: it blocks until the board's ack
+  // for (device_id, version) resolves -- accepted or rejected -- or a
+  // deadline elapses, whichever comes first, and returns
+  // still-pending-at-deadline (never an error) if the deadline wins. A
+  // caller must not satisfy this requirement by polling GetConfigStatus's
+  // version integer in a loop instead (FR47); GetConfigStatus remains the
+  // purpose-built RPC that *is* acceptable to poll. Resolution is
+  // delivered by leaflab/invalidation's fanout exchange (NFR15's
+  // every-replica constraint) -- the same mechanism FR73 uses, not a
+  // second transport.
+  rpc AwaitConfigAck(AwaitConfigAckRequest) returns (AwaitConfigAckResponse);
 }
 
 // ConfigState is FR34.1's three distinct states a pushed config version can
@@ -167,6 +179,46 @@ message GetConfigVersionResponse {
   // FR82.4: this version's per-entry provenance.
   repeated ConfigVersionEntry entries = 6;
   Instant server_now = 7;
+}
+
+// AckWaitResult is AwaitConfigAck's FR47 outcome. There is no default:
+// ACK_WAIT_RESULT_UNSPECIFIED exists only as proto3's required zero value
+// and is never a value this RPC actually returns.
+enum AckWaitResult {
+  ACK_WAIT_RESULT_UNSPECIFIED = 0;
+  // The board's ack for this version accepted it. Mirrors ConfigState's
+  // CONFIG_STATE_ACCEPTED (FR45: only ever written from the device's own
+  // ack path -- see AckWaitResult's callers, never any API request
+  // handler).
+  ACK_WAIT_RESULT_ACCEPTED = 1;
+  // The board's ack for this version rejected it. rejection_reason on the
+  // response carries the firmware's verbatim reason.
+  ACK_WAIT_RESULT_REJECTED = 2;
+  // Neither an accepting nor a rejecting ack was observed before the
+  // (possibly clamped) deadline elapsed -- never returned as an error
+  // (FR47). The version may still resolve later; a caller re-issues
+  // AwaitConfigAck or polls GetConfigStatus (never a raw version integer)
+  // to learn the eventual outcome.
+  ACK_WAIT_RESULT_STILL_PENDING_AT_DEADLINE = 3;
+}
+
+message AwaitConfigAckRequest {
+  string device_id = 1;
+  uint64 version = 2;
+  // Requested wait, in whole seconds. The server honours a maximum of 30s
+  // (FR47): a larger value here is silently clamped down to 30, never
+  // rejected as invalid_argument. Zero/unset is also clamped up to the
+  // server's own default wait, not treated as "return immediately" --
+  // see leaflab/api/ackwait.Clamp, the one place this clamping happens.
+  uint32 requested_wait_seconds = 3;
+}
+
+message AwaitConfigAckResponse {
+  AckWaitResult result = 1;
+  // The firmware's verbatim rejection reason (FR45, FR47) -- set only
+  // when result is ACK_WAIT_RESULT_REJECTED; never paraphrased.
+  string rejection_reason = 2;
+  Instant server_now = 3;
 }
 
 // PushScope states what a PushDeviceConfigRequest's payload means as a

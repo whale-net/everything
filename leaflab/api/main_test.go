@@ -135,6 +135,12 @@ func (stubAPIServer) GetConfigVersion(ctx context.Context, req *pb.GetConfigVers
 	return &pb.GetConfigVersionResponse{}, nil
 }
 
+// AwaitConfigAck (FR45/FR47/NFR15, #1373) is stubbed here for the same
+// reason as GetConfigStatus/ListConfigHistory/GetConfigVersion above.
+func (stubAPIServer) AwaitConfigAck(ctx context.Context, req *pb.AwaitConfigAckRequest) (*pb.AwaitConfigAckResponse, error) {
+	return &pb.AwaitConfigAckResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

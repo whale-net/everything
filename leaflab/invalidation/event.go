@@ -14,6 +14,18 @@
 // than inventing a second signalling path. See leaflab/ARCHITECTURE.md for
 // the write-up of why this choice satisfies both FR73's 5s bound and
 // NFR15's every-replica constraint.
+//
+// Phase 4 (FR45/FR47/NFR15) extends this package with KindAck rather than
+// adding a sibling topic or a second exchange: the processor's ack write
+// path (leaflab/processor/handler.go's handleConfigAck) publishes one
+// KindAck Event after leaflab/processor/repository.go's AckDeviceConfig
+// commits, and every API replica's own Subscriber -- the same one already
+// wired for FR73 -- observes it and resolves any AwaitConfigAck waiter
+// registered for that (DeviceID, Version) in that replica (see
+// leaflab/api/ackwait.Registry). Because fanout delivers a copy to every
+// replica rather than one of a competing set, a bounded wait pinned to any
+// one replica (FR47) resolves the same way regardless of which replica
+// received the request -- NFR15's falsifiable claim.
 package invalidation
 
 import "time"
@@ -34,6 +46,16 @@ const (
 	// KindName means the sensor's display name changed -- written by a
 	// rename (FR52, Phase 5). PriorSensorName is always set for this kind.
 	KindName Kind = "name"
+	// KindAck means a pushed device config version's ack resolved --
+	// written only from the processor's ack path (handleConfigAck ->
+	// AckDeviceConfig, FR45: the three ack columns are never written from
+	// any API request handler, in any role). DeviceID and Version
+	// identify which push; Accepted and RejectionReason carry the
+	// board's verbatim outcome. A handler for this kind resolves an
+	// FR47 AwaitConfigAck waiter rather than evicting a cache entry --
+	// see leaflab/api/ackwait.Registry.Notify, this event's only Phase 4
+	// consumer.
+	KindAck Kind = "ack"
 )
 
 // Event is the cross-process signal that a cached view of a sensor is
@@ -59,6 +81,17 @@ type Event struct {
 	// evict the entry under this prior key explicitly, or a rename leaves
 	// an orphaned entry that SensorName alone (the new key) never touches.
 	PriorSensorName string
+
+	// Version is the device_config version this event concerns. Set only
+	// for Kind == KindAck; every other Kind leaves it zero.
+	Version int64
+	// Accepted is the board's ack outcome for (DeviceID, Version). Set
+	// only for Kind == KindAck; meaningless for any other Kind.
+	Accepted bool
+	// RejectionReason is the firmware's verbatim rejection reason. Set
+	// only for Kind == KindAck when Accepted is false -- never paraphrased
+	// or normalised, mirroring device_config.rejection_reason (FR45).
+	RejectionReason string
 
 	// ObservedAt is when the publishing process observed the change that
 	// produced this event -- not necessarily the exact commit timestamp,

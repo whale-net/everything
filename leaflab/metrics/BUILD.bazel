@@ -1,0 +1,15 @@
+"""NFR15 observability: push-to-ack duration and pre-aggregated tier lag -- see ack.go."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "metrics",
+    srcs = ["ack.go"],
+    importpath = "github.com/whale-net/everything/leaflab/metrics",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/logging",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
