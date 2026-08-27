@@ -5,12 +5,17 @@ package leaflab.api.v1;
 option go_package = "github.com/whale-net/everything/leaflab/api/proto;leaflabapipb";
 
 import "firmware/proto/config.proto";
+import "firmware/proto/firmware.proto";
 
 // LeafLabAPI is the control-plane API for managing leaflab sensor boards.
 service LeafLabAPI {
   // Push a new DeviceConfig to a board over MQTT.
-  // The server assigns a monotonically increasing version; the caller supplies
-  // only the sensor overrides (names, enabled state, poll interval).
+  // The server assigns a monotonically increasing version. FR82: this is
+  // replace semantics, not an overlay of overrides -- what the payload
+  // (plus, under scope=EDIT, the board's current accepted config) means as
+  // a whole is the board's new entire desired sensor set. See `scope` and
+  // `removes` on PushDeviceConfigRequest for the two ways a caller states
+  // that desired set.
   rpc PushDeviceConfig(PushDeviceConfigRequest) returns (PushDeviceConfigResponse);
 
   // Get the latest config that was accepted by a board.
@@ -39,11 +44,65 @@ service LeafLabAPI {
   rpc RewireSensor(RewireSensorRequest) returns (RewireSensorResponse);
 }
 
+// PushScope states what a PushDeviceConfigRequest's payload means as a
+// whole (FR82.1). There is no default: PUSH_SCOPE_UNSPECIFIED exists only
+// so an omitted scope is detectable and rejected -- it is never treated as
+// either real value, and scope is never inferred from payload shape, entry
+// count, request size, caller identity, or which endpoint was called
+// (A27).
+enum PushScope {
+  PUSH_SCOPE_UNSPECIFIED = 0;
+  // The payload is the board's entire desired sensor set (FR82.2). An
+  // entry absent from it is removed from the desired state. This is what
+  // a leaflab/scripts/scenarios/*.json file has always meant.
+  PUSH_SCOPE_COMPLETE = 1;
+  // The payload names only the entries being added or changed, plus
+  // `removes` (FR82.3/FR82.4). An entry named in neither is unchanged and
+  // is materialised server-side from the board's current accepted config
+  // version alone -- never from the reported manifest.
+  PUSH_SCOPE_EDIT = 2;
+}
+
+// RemoveKey names one FR82.4 removal. Two forms, distinguished by whether
+// sensor_type is set:
+//   - full canonical key (sensor_type set): drops exactly the one config
+//     entry at (i2c_address, mux_path, sensor_type) -- the same three-part
+//     key FR18 canonicalises and idx_sensor_hw_address enforces uniqueness
+//     on.
+//   - chip key (sensor_type unset): drops every entry at (i2c_address,
+//     mux_path), regardless of sensor_type -- the form that matches the
+//     physical action of unsoldering a part (e.g. one CCS811 is eCO2 and
+//     TVOC at a single address; a chip-key remove drops both).
+// An i2c_address of 0 (the legacy manifests' "unknown address" sentinel,
+// FR18.2) never resolves to a removable entry: such an entry has no
+// removal path via EDIT at all (FR82.4's stated limitation) -- only via a
+// COMPLETE push that omits it.
+message RemoveKey {
+  repeated firmware.MuxHop mux_path = 1;  // empty = directly on root bus
+  uint32 i2c_address = 2;
+  optional firmware.SensorType sensor_type = 3;
+}
+
 message PushDeviceConfigRequest {
   string device_id = 1;
-  // Sensor overrides — each entry is matched to a hardware sensor by
-  // (mux_path, i2c_address). Sensors with no matching entry are unchanged.
+  // The desired-state payload (FR82, NFR17) -- replace semantics, not a
+  // set of overrides layered onto whatever the board already has.
+  // Required; meaning depends on `scope`:
+  //   - scope=COMPLETE: this is the board's entire desired sensor set
+  //     (FR82.2). An entry absent from it is removed.
+  //   - scope=EDIT: this lists only entries being added or changed
+  //     (FR82.3). Everything else carries forward from the board's
+  //     current accepted config version, and `removes` (not omission)
+  //     is how an EDIT push drops an entry.
   repeated firmware.SensorConfig sensors = 2;
+  // Required; no default (FR82.1). A request that omits this (leaves it
+  // PUSH_SCOPE_UNSPECIFIED) is rejected before anything is stored or
+  // published, naming this field.
+  PushScope scope = 3;
+  // EDIT-scope removal list (FR82.4). Unused (must be empty) under
+  // scope=COMPLETE, where an entry is removed by omitting it from
+  // `sensors` instead.
+  repeated RemoveKey removes = 4;
 }
 
 message PushDeviceConfigResponse {
