@@ -39,3 +39,29 @@ for Phase 1 only because `leaflab-api` runs at `replicas = 1` (see `leaflab/api/
 `release_app`) — one process means in-process state is trivially identical across "replicas."
 If `leaflab-api` is ever scaled beyond one replica, this must move to a shared store (e.g.
 Redis) first, or per-replica windows silently multiply the effective limit.
+
+## Board claim — possession challenge (FR76)
+
+A28's constants for the self-service board claim flow (`leaflab/api/claim.Config`,
+`leaflab/api/claim/config.go`), all configurable via a pair of env vars per value — a
+count/duration and, for durations, the unit is always whole seconds. An unset variable falls
+back to `leaflab/api/claim.DefaultConfig`. Scaffold-phase (task #1342): not yet wired into
+`leaflab/api/main.go` — the RPCs (`OpenClaimChallenge`, `MarkClaimRound`,
+`GetClaimChallengeStatus`, `CompleteClaim`) have no handler in `server.go` yet.
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `LEAFLAB_API_CLAIM_ROUNDS_REQUIRED` | `2` | A28's `r`: distinct challenger-marked restarts required to discharge a challenge. **Enforced at startup to be `>= 2`** — the requirement text's explicit floor; a lower value fails boot loudly rather than silently weakening the challenge. |
+| `LEAFLAB_API_CLAIM_ROUND_BOUND_SECONDS` | `180` (3 minutes) | How long after a round's `t0` (set by `MarkClaimRound`) a restart signal still counts for that round. |
+| `LEAFLAB_API_CLAIM_CHALLENGE_LIFETIME_SECONDS` | `900` (15 minutes) | Total bounded lifetime of a challenge from `OpenClaimChallenge` (requirement 8: "long enough to walk to the greenhouse and back"). |
+| `LEAFLAB_API_CLAIM_ATTEMPTS_PER_ROUND` | `2` | How many times a single round may be re-marked before the challenge is exhausted. |
+| `LEAFLAB_API_CLAIM_COOLDOWN_SECONDS` | `1800` (30 minutes) | How long a `(principal, device_id)` pair spends in `claim_cooldown` after a challenge ends not-discharged. **Not an A28-specified number** — the requirement text names "cooldown after failure" but gives no duration; this default is this task's own choice, flagged per the issue's residual-risk caveat. |
+| `LEAFLAB_API_CLAIM_RESTART_UPTIME_THRESHOLD_SECONDS` | `300` (5 minutes) | The processor's restart-detection threshold (Implementation phase, `leaflab/processor/handler.go`): an `uptime_s` regression below this value is treated as a genuine restart; a larger drop is presumed to be the `uint32` millisecond wrap at ~49.7 days and must not count (requirement 4). Not one of A28's five named constants, but grouped here as the same kind of env-overridable configuration. |
+
+A malformed value (not a valid integer) fails the boot the same way a malformed rate-limit
+variable does — loudly, before any dependency is dialed.
+
+**Schema:** `leaflab/migrate/migrations/021_claim_challenge.up.sql` — `claim_challenge`,
+`claim_challenge_round`, `claim_cooldown` (short-lived, expiring rows; explicitly **not** SCD2,
+NFR6.3 — no `valid_to` column), and `board_uptime_watermark` (the processor's per-board current
+`uptime_s` watermark used to detect a restart).

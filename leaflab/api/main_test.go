@@ -141,6 +141,27 @@ func (stubAPIServer) RenameHousehold(ctx context.Context, req *pb.RenameHousehol
 	return &pb.RenameHouseholdResponse{}, nil
 }
 
+// Board claim RPCs (FR76, #1342 scaffold) -- canned successes here too,
+// same rationale as the RPCs above: this stub isolates the auth/logging
+// middleware, not claim business logic (which has no handler wired in
+// server.go yet -- see leaflab/api/claim/config.go and
+// leaflab/migrate/migrations/021_claim_challenge.up.sql).
+func (stubAPIServer) OpenClaimChallenge(ctx context.Context, req *pb.OpenClaimChallengeRequest) (*pb.OpenClaimChallengeResponse, error) {
+	return &pb.OpenClaimChallengeResponse{}, nil
+}
+
+func (stubAPIServer) MarkClaimRound(ctx context.Context, req *pb.MarkClaimRoundRequest) (*pb.MarkClaimRoundResponse, error) {
+	return &pb.MarkClaimRoundResponse{}, nil
+}
+
+func (stubAPIServer) GetClaimChallengeStatus(ctx context.Context, req *pb.GetClaimChallengeStatusRequest) (*pb.GetClaimChallengeStatusResponse, error) {
+	return &pb.GetClaimChallengeStatusResponse{}, nil
+}
+
+func (stubAPIServer) CompleteClaim(ctx context.Context, req *pb.CompleteClaimRequest) (*pb.CompleteClaimResponse, error) {
+	return &pb.CompleteClaimResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

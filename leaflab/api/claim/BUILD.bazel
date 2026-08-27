@@ -1,0 +1,10 @@
+"""FR76 self-service board claim (possession challenge) configuration -- A28's constants."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "claim",
+    srcs = ["config.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/claim",
+    visibility = ["//visibility:public"],
+)
