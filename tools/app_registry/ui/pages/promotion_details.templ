@@ -81,24 +81,134 @@ func syncEventSourceLabel(source string) string {
 // check; see components.GatedAction's own doc comment on that split).
 templ PromotionDetails(user *htmxauth.UserInfo, s PromotionDetailsViewState) {
 	@components.Shell("Promotion Details", user) {
-		<div class="breadcrumbs text-sm mb-4">
-			<ul>
-				<li><a href="/deployments">Deployments</a></li>
-				<li>Promotion { s.PromotionID }</li>
-			</ul>
-		</div>
-		if s.LoadErr != "" {
-			<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
-		} else if s.Details != nil {
-			if s.RetryErr != "" {
-				<div role="alert" class="alert alert-error shadow-md mb-4"><span>Retry failed: { s.RetryErr }</span></div>
+		<div
+			hx-ext="sse"
+			sse-connect={ templ.URL("/promotions/" + s.PromotionID + "/status/sse") }
+			class="promotion-details-container"
+		>
+			<div class="breadcrumbs text-sm mb-4">
+				<ul>
+					<li><a href="/deployments">Deployments</a></li>
+					<li>Promotion { s.PromotionID }</li>
+				</ul>
+			</div>
+
+			<!-- FR23: Live/not-live indicator (outside pushed region) -->
+			<div id="promo-live-indicator" class="flex items-center gap-2 mb-4">
+				<div id="live-status" class="badge badge-success" title="SSE connection is healthy">Live</div>
+			</div>
+
+			<!-- FR24: Reload affordance (only shown when not-live, outside pushed region) -->
+			<div id="promo-reload-container" class="mb-4" style="display: none;">
+				<a href={ templ.URL("/promotions/" + s.PromotionID) } class="btn btn-sm btn-warning">Reload</a>
+			</div>
+
+			if s.LoadErr != "" {
+				<div role="alert" class="alert alert-error shadow-md mb-4"><span>{ s.LoadErr }</span></div>
+			} else if s.Details != nil {
+				if s.RetryErr != "" {
+					<div role="alert" class="alert alert-error shadow-md mb-4"><span>Retry failed: { s.RetryErr }</span></div>
+				}
+				<div sse-swap="innerHTML" class="promotion-details-body">
+					@PromotionDetailsBody(user, s.Details.GetDetails())
+				</div>
 			}
-			@promotionDetailsBody(user, s.Details.GetDetails())
-		}
+		</div>
+
+		<!-- FR23, FR24: SSE connection state management script -->
+		<script type="module">
+(function() {
+  const container = document.querySelector('[hx-ext="sse"]');
+  if (!container) return;
+
+  const indicator = document.getElementById('live-status');
+  const reloadContainer = document.getElementById('promo-reload-container');
+  if (!indicator || !reloadContainer) return;
+
+  let isLive = true;
+  let lastEventTime = Date.now();
+  let advertisedRetryMs = 5000;
+  let debounceTimeoutId = null;
+
+  container.addEventListener('htmx:sseConnect', () => {
+    console.log('SSE connected');
+    cancelDebounce();
+    setLive(true);
+    lastEventTime = Date.now();
+  });
+
+  container.addEventListener('htmx:sseError', () => {
+    console.log('SSE error');
+    handleConnectionError();
+  });
+
+  const swapTarget = container.querySelector('[sse-swap]');
+  if (swapTarget) {
+    const observer = new MutationObserver((mutations) => {
+      lastEventTime = Date.now();
+      cancelDebounce();
+      setLive(true);
+    });
+    observer.observe(swapTarget, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true
+    });
+  }
+
+  const heartbeatCheckInterval = setInterval(() => {
+    const timeSinceLastEvent = Date.now() - lastEventTime;
+    const timeoutThreshold = advertisedRetryMs * 2;
+
+    if (isLive && timeSinceLastEvent > timeoutThreshold) {
+      handleTimeout();
+    }
+  }, 10000);
+
+  function handleConnectionError() {
+    if (debounceTimeoutId) return;
+    debounceTimeoutId = setTimeout(() => {
+      setLive(false);
+      debounceTimeoutId = null;
+    }, advertisedRetryMs);
+  }
+
+  function handleTimeout() {
+    if (debounceTimeoutId) return;
+    debounceTimeoutId = setTimeout(() => {
+      setLive(false);
+      debounceTimeoutId = null;
+    }, advertisedRetryMs);
+  }
+
+  function cancelDebounce() {
+    if (debounceTimeoutId) {
+      clearTimeout(debounceTimeoutId);
+      debounceTimeoutId = null;
+    }
+  }
+
+  function setLive(live) {
+    isLive = live;
+    if (live) {
+      indicator.textContent = 'Live';
+      indicator.className = 'badge badge-success';
+      indicator.title = 'SSE connection is healthy';
+      reloadContainer.style.display = 'none';
+    } else {
+      indicator.textContent = 'Not Live';
+      indicator.className = 'badge badge-warning';
+      indicator.title = 'SSE connection is not live - page updates stopped';
+      reloadContainer.style.display = 'block';
+    }
+  }
+})();
+		</script>
 	}
 }
 
-templ promotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
+templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 	<div class="flex justify-between items-center mb-4">
 		<h2 class="text-xl font-bold">
 			{ d.GetPromotion().GetEnvironmentKey() }: { d.GetFromVersion() }

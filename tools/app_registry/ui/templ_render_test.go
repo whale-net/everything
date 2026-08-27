@@ -35,3 +35,29 @@ func TestRenderTempl_ThemesCSSLoadsAfterDaisyUILink(t *testing.T) {
 		t.Fatalf("NFR5 violation: daisyUI <link> (index %d) must precede ThemesCSS <style> (index %d) in head", linkIdx, styleIdx)
 	}
 }
+
+// TestRenderTempl_SSEExtensionScript_FR20a tests FR20(a): the rendered <head>
+// contains the pinned htmx SSE extension script (htmx.org@1.9.10/dist/ext/sse.js)
+// AFTER the htmx core script, matching the required load order.
+// Failure: htmx 2.x SSE extension is incompatible with 1.9.10 core; the failure is silent.
+func TestRenderTempl_SSEExtensionScript_FR20a(t *testing.T) {
+	head := buildHead()
+
+	// FR20(a): Must contain the pinned SSE extension URL
+	expectedSSEExtURL := "https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"
+	if !strings.Contains(head, expectedSSEExtURL) {
+		t.Fatalf("FR20(a) violation: expected SSE extension script %q in head, got: %s", expectedSSEExtURL, head)
+	}
+
+	// FR20(a): Must be after the htmx core script for proper extension loading
+	coreScriptIdx := strings.Index(head, "https://cdn.jsdelivr.net/npm/htmx.org")
+	if coreScriptIdx < 0 {
+		t.Fatalf("expected htmx core script URL in head, got: %s", head)
+	}
+
+	// The SSE extension should appear after the core htmx script for load order
+	sseExtIdx := strings.Index(head, expectedSSEExtURL)
+	if coreScriptIdx > sseExtIdx {
+		t.Fatalf("FR20(a) violation: htmx core must appear BEFORE SSE extension (got core at %d, SSE at %d)", coreScriptIdx, sseExtIdx)
+	}
+}

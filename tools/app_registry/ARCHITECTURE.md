@@ -33,6 +33,7 @@ itself, for the topic you need.
 | [`architecture/18-future-approval-gate.md`](architecture/18-future-approval-gate.md) | Not built — `PENDING_APPROVAL` exists in the schema only |
 | [`architecture/19-resolved-questions.md`](architecture/19-resolved-questions.md) | Numbered Q&A cited by number elsewhere in this doc and in PLAN.md |
 | [`architecture/20-open-questions.md`](architecture/20-open-questions.md) | What's still genuinely undecided |
+| [`architecture/21-promotion-sse.md`](architecture/21-promotion-sse.md) | SSE integration on `/promotions/{id}` — publish points, token lifecycle, session state, terminal/transient discrimination, and the non-redirecting auth shim |
 
 `architecture/08-release-lifecycle/` is itself split — the parent topic alone
 was too large for one file:
