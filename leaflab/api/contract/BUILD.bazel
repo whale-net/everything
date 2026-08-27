@@ -1,0 +1,18 @@
+"""LeafLab API response contract — structured failure classes (FR59), keyset pagination (FR61), and absolute-instant time fields (FR64)."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "contract",
+    srcs = [
+        "failure.go",
+        "paging.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/api/contract",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
