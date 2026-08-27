@@ -110,9 +110,14 @@ WHERE household_id IS NOT NULL;
 
 -- ── New-arrivals guard (A9) ──────────────────────────────────────────────────
 -- Unadopted receives no new arrivals after this migration's backfill: any
--- INSERT into board_ownership naming the Unadopted household is refused.
--- Created after the backfill INSERT above so the backfill itself is exempt --
--- everything after this point in the transaction is a genuinely new arrival.
+-- INSERT into board_ownership OR household_membership naming the Unadopted
+-- household is refused. household_membership is seeded with zero rows
+-- (Unadopted is member-less, FR70.1) and has no backfill of its own, so its
+-- trigger guards unconditionally; board_ownership's trigger is created after
+-- the backfill INSERT above so that backfill itself is exempt -- everything
+-- after this point in the transaction is a genuinely new arrival. The same
+-- function covers both tables since it only reads NEW.household_id, which
+-- both share.
 
 CREATE FUNCTION enforce_no_unadopted_arrivals() RETURNS TRIGGER AS $$
 BEGIN
@@ -120,7 +125,7 @@ BEGIN
         SELECT 1 FROM household
         WHERE household_id = NEW.household_id AND is_unadopted = TRUE
     ) THEN
-        RAISE EXCEPTION 'household % is Unadopted and accepts no new board_ownership rows (A9)', NEW.household_id;
+        RAISE EXCEPTION 'household % is Unadopted and accepts no new % rows (A9)', NEW.household_id, TG_TABLE_NAME;
     END IF;
     RETURN NEW;
 END;
@@ -128,6 +133,11 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER trg_board_ownership_no_unadopted_arrivals
     BEFORE INSERT ON board_ownership
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_no_unadopted_arrivals();
+
+CREATE TRIGGER trg_household_membership_no_unadopted_arrivals
+    BEFORE INSERT ON household_membership
     FOR EACH ROW
     EXECUTE FUNCTION enforce_no_unadopted_arrivals();
 
