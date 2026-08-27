@@ -38,6 +38,7 @@ go_test(
     name = "api_test",
     srcs = [
         "authorization_test.go",
+        "plant_lifecycle_server_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
@@ -78,6 +79,7 @@ go_test(
     name = "api_integration_test",
     size = "large",
     srcs = [
+        "plant_lifecycle_test.go",
         "plant_region_test.go",
         "server_integration_test.go",
     ],
