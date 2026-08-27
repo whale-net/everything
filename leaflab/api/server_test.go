@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/authz"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -32,7 +33,7 @@ func (f *fakeRepo) GetLatestAcceptedConfig(ctx context.Context, deviceID string)
 	panic("not used by GetHealth tests")
 }
 
-func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32) ([]BoardRow, error) {
+func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error) {
 	panic("not used by GetHealth tests")
 }
 
@@ -66,7 +67,7 @@ func countPopulatedFields(msg protoreflect.Message) int {
 // for the same assertion exercised through the full RPC/interceptor chain,
 // including the allowlist itself.
 func TestGetHealth_NoCredential_Succeeds(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, nil, discardLogger())
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -81,7 +82,7 @@ func TestGetHealth_NoCredential_Succeeds(t *testing.T) {
 // to HEALTH_DEGRADED and nothing more specific -- no error, no detail about
 // which dependency failed (FR63.2).
 func TestGetHealth_DatabaseUnreachable_Degraded(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("connection refused")}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("connection refused")}, nil, nil, nil, discardLogger())
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -99,7 +100,7 @@ func TestGetHealth_DatabaseUnreachable_Degraded(t *testing.T) {
 // RabbitMQ-MQTT connection also maps to HEALTH_DEGRADED, independent of DB
 // health (FR63.1's "pgx pool or the RabbitMQ/MQTT connection").
 func TestGetHealth_MQConnectionNil_Degraded(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, nil, discardLogger())
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -119,7 +120,7 @@ func TestGetHealth_MQConnectionNil_Degraded(t *testing.T) {
 // not yours" must still answer as a successful RPC), so this test simply
 // pins that invariant.
 func TestGetHealth_ErrorNeverCarriesDependencyDetail(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("dial tcp 10.0.0.5:5432: connect: connection refused")}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("dial tcp 10.0.0.5:5432: connect: connection refused")}, nil, nil, nil, discardLogger())
 
 	_, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {

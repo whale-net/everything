@@ -46,11 +46,12 @@ type Resolution struct {
 	Unclaimed bool
 }
 
-// Queryer is the subset of *pgxpool.Pool Resolver depends on, narrowed to
-// an interface so tests substitute a fake without a live Postgres
-// connection.
+// Queryer is the subset of *pgxpool.Pool Resolver and ScopeForPrincipal
+// depend on, narrowed to an interface so tests substitute a fake without a
+// live Postgres connection.
 type Queryer interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // Resolver resolves an EntityRef to the household it currently belongs to,
@@ -204,6 +205,72 @@ func (r *PGResolver) resolveReading(ctx context.Context, readingID int64) (Resol
 		return Resolution{Unclaimed: true}, nil
 	}
 	return Resolution{HouseholdID: *householdID}, nil
+}
+
+// ResolveBoardByDeviceID resolves the board named by deviceID -- the key
+// PushDeviceConfig/GetDeviceConfig receive on the wire, one join short of
+// board_id -- to both its EntityRef (for a later Scope.Permits/Filter
+// call) and its Resolution, in the single query NFR2 requires. Handlers
+// must not look device_id up (e.g. via a repository existence check)
+// before calling this: a separate existence probe ahead of Resolve is
+// exactly the extra round trip NFR2 rules out, since "device_id doesn't
+// exist" and "device_id exists, wrong household" would then take a
+// different number of queries and become distinguishable by timing.
+func (r *PGResolver) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (EntityRef, Resolution, error) {
+	var boardID int64
+	var householdID *int64
+	err := r.db.QueryRow(ctx, `
+		SELECT board_id, household_id
+		FROM board
+		WHERE device_id = $1
+	`, deviceID).Scan(&boardID, &householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return EntityRef{}, Resolution{}, ErrNotFound
+		}
+		return EntityRef{}, Resolution{}, fmt.Errorf("authz: resolve board by device_id %q: %w", deviceID, err)
+	}
+	ref := EntityRef{Kind: EntityBoard, ID: boardID}
+	if householdID == nil {
+		return ref, Resolution{Unclaimed: true}, nil
+	}
+	return ref, Resolution{HouseholdID: *householdID}, nil
+}
+
+// ScopeForPrincipal resolves principalSubject's Scope from their current
+// household_membership rows (household_membership WHERE valid_to IS
+// NULL) -- this is the "every RPC handler obtains a Scope from the
+// authenticated principal's current memberships" step the Implementation
+// section requires. FR75 permits multi-household membership, so this
+// returns the union of every current membership (UnionScope) rather than
+// assuming exactly one. A principal with no current membership gets a
+// Scope that permits nothing, never an error and never a widened/global
+// one -- callers (e.g. ListBoards) must render that as an empty result,
+// per FR5.1.
+func (r *PGResolver) ScopeForPrincipal(ctx context.Context, principalSubject string) (Scope, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT household_id
+		FROM household_membership
+		WHERE principal_subject = $1
+		  AND valid_to IS NULL
+	`, principalSubject)
+	if err != nil {
+		return nil, fmt.Errorf("authz: resolve scope for principal %q: %w", principalSubject, err)
+	}
+	defer rows.Close()
+
+	var scopes []Scope
+	for rows.Next() {
+		var householdID int64
+		if err := rows.Scan(&householdID); err != nil {
+			return nil, fmt.Errorf("authz: scan membership for principal %q: %w", principalSubject, err)
+		}
+		scopes = append(scopes, NewHouseholdScope(householdID))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("authz: iterate membership for principal %q: %w", principalSubject, err)
+	}
+	return NewUnionScope(scopes...), nil
 }
 
 // ResolveInScope resolves ref and checks it against scope in one motion,

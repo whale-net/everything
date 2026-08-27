@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/authz"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -125,27 +126,42 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 // from migration 015. A retired board remains resolvable by explicit id and
 // through its history/readings paths -- those lookups don't go through
 // ListBoards and are unaffected.
-func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32) ([]BoardRow, error) {
-	var rows pgx.Rows
-	var err error
+//
+// scope is FR5.1's household scoping, applied via scope.Filter() **inside**
+// this query (its WHERE clause) rather than as a Go-side post-filter on the
+// returned rows -- FR5.2's "aggregates/listings apply Scope.Filter() inside
+// the query" applies equally to a plain listing. argStart is chosen so the
+// scope's placeholders never collide with the keyset/limit params already
+// bound above them ($1/$2 when hasAfter, $1 otherwise).
+func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error) {
+	var sqlQuery string
+	var args []any
 	if hasAfter {
-		rows, err = r.db.Query(ctx, `
+		filter, filterArgs := scope.Filter(3)
+		sqlQuery = fmt.Sprintf(`
 			SELECT board_id, device_id, last_seen_at
 			FROM board
 			WHERE board_id > $1
 			  AND retired_at IS NULL
+			  AND (%s)
 			ORDER BY board_id
 			LIMIT $2
-		`, afterBoardID, limit)
+		`, filter)
+		args = append([]any{afterBoardID, limit}, filterArgs...)
 	} else {
-		rows, err = r.db.Query(ctx, `
+		filter, filterArgs := scope.Filter(2)
+		sqlQuery = fmt.Sprintf(`
 			SELECT board_id, device_id, last_seen_at
 			FROM board
 			WHERE retired_at IS NULL
+			  AND (%s)
 			ORDER BY board_id
 			LIMIT $1
-		`, limit)
+		`, filter)
+		args = append([]any{limit}, filterArgs...)
 	}
+
+	rows, err := r.db.Query(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list boards: %w", err)
 	}

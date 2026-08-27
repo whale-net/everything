@@ -22,7 +22,6 @@
 package main
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"testing"
@@ -39,7 +38,7 @@ import (
 // ever moved after a write, this test would catch it.
 func TestPushDeviceConfig_RefusalWritesNothing(t *testing.T) {
 	server, pool := newTestServer(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 
 	_, err := server.PushDeviceConfig(ctx, &pb.PushDeviceConfigRequest{
 		DeviceId: "not a valid device id!!",
@@ -71,7 +70,7 @@ func TestPushDeviceConfig_RefusalWritesNothing(t *testing.T) {
 // scan position.
 func TestListBoards_PageTokenTampered_Rejected(t *testing.T) {
 	server, pool := newTestServer(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 	insertBoard(t, pool, "device-a")
 
 	// A real token, then mutated -- e.g. an attacker or client bug flips a
@@ -123,7 +122,7 @@ func TestListBoards_PageTokenTampered_Rejected(t *testing.T) {
 // in contract.ClampPageSize's unit test.
 func TestListBoards_PageSizeAboveCap_ClampedNotRejected(t *testing.T) {
 	server, pool := newTestServer(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 
 	total := int(contract.PageCap) + 5
 	for i := 0; i < total; i++ {
@@ -152,7 +151,7 @@ func TestListBoards_PageSizeAboveCap_ClampedNotRejected(t *testing.T) {
 // carries server_now, per FR64.
 func TestListBoards_KeysetPagination_NoDuplicatesNoSkips_UnderConcurrentInserts(t *testing.T) {
 	server, pool := newTestServer(t)
-	ctx := context.Background()
+	ctx := authedCtx()
 
 	// Seed 5 boards up front (board_id 1..5).
 	for i := 0; i < 5; i++ {

@@ -93,7 +93,7 @@ func TestListBoards_ExcludesRetiredBoards(t *testing.T) {
 		t.Fatalf("test setup: retire board %d: %v", retiredID, err)
 	}
 
-	rows, err := repo.ListBoards(ctx, 0, false, 10)
+	rows, err := repo.ListBoards(ctx, 0, false, 10, allScope{})
 	if err != nil {
 		t.Fatalf("ListBoards: %v", err)
 	}

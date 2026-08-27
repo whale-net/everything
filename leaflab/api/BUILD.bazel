@@ -16,6 +16,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
@@ -72,6 +73,7 @@ go_test(
     embed = [":api_lib"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/grpcauth",
@@ -121,9 +123,11 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/dbtest",
+        "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
@@ -155,7 +159,9 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//leaflab/api/authz",
         "//libs/go/dbtest",
+        "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )

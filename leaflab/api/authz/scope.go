@@ -5,7 +5,10 @@
 // resolution and Scope (this file) for the authorization predicate.
 package authz
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // EntityKind identifies which table/entity type an EntityRef names.
 type EntityKind string
@@ -92,4 +95,58 @@ func (s HouseholdScope) Permits(ref EntityRef, res Resolution) bool {
 // it only ever compares one column to one value.
 func (s HouseholdScope) Filter(argStart int) (string, []any) {
 	return "household_id = $" + strconv.Itoa(argStart), []any{s.householdID}
+}
+
+// UnionScope combines zero or more Scopes with OR semantics: an entity is
+// permitted if any component Scope permits it. This is how a principal
+// holding more than one current household_membership row gets a single
+// Scope to carry down through a handler -- FR75 explicitly permits
+// multi-household membership ("V1 does not specify a switching
+// experience", so every RPC must honor all of a caller's households at
+// once, not just the first one found). Handlers never juggle a slice of
+// HouseholdScopes past ScopeForPrincipal (resolver.go) -- this is that
+// slice, packaged as one Scope.
+//
+// A UnionScope with zero component scopes (a principal currently in no
+// household) permits nothing, and its Filter matches no row: ListBoards
+// renders that as an empty list, not an error (FR5.1) -- never as
+// "everything", which is exactly the atom-of-authorization mistake FR4.3
+// forbids.
+type UnionScope struct {
+	scopes []Scope
+}
+
+// NewUnionScope builds a UnionScope over scopes. Called with zero
+// arguments for "no household" -- see UnionScope's doc comment.
+func NewUnionScope(scopes ...Scope) UnionScope {
+	return UnionScope{scopes: scopes}
+}
+
+func (u UnionScope) Permits(ref EntityRef, res Resolution) bool {
+	for _, s := range u.scopes {
+		if s.Permits(ref, res) {
+			return true
+		}
+	}
+	return false
+}
+
+// Filter ORs every component scope's fragment together, each given its
+// own argStart offset so placeholders never collide. Zero component
+// scopes produces the always-false "FALSE" fragment and no args, matching
+// Permits' "permits nothing" behavior for a principal in no household.
+func (u UnionScope) Filter(argStart int) (string, []any) {
+	if len(u.scopes) == 0 {
+		return "FALSE", nil
+	}
+	fragments := make([]string, 0, len(u.scopes))
+	var args []any
+	next := argStart
+	for _, s := range u.scopes {
+		frag, fargs := s.Filter(next)
+		fragments = append(fragments, "("+frag+")")
+		args = append(args, fargs...)
+		next += len(fargs)
+	}
+	return strings.Join(fragments, " OR "), args
 }

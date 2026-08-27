@@ -16,8 +16,21 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 )
+
+// authedCtx returns a context carrying grpcauth.Claims for a fixed test
+// subject, exactly as the auth interceptor chain would inject them for a
+// real authenticated caller (see grpcauth.ContextWithClaims). Every RPC
+// call in this package's integration tests must use this instead of a bare
+// context.Background(): scopeForCaller (server.go) fails closed -- an
+// empty, permits-nothing Scope -- on a context with no Claims, regardless
+// of what authzSvc would otherwise grant (see stubAuthz above).
+func authedCtx() context.Context {
+	return grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{Subject: "test-caller"})
+}
 
 // testSchema is self-contained hand-written DDL -- it deliberately does not
 // depend on leaflab/migrate's migrations so these tests stay hermetic (see
@@ -55,18 +68,50 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// allScope is a test-only authz.Scope that matches every row -- these
+// files exercise FR59/FR61/FR64's response contract and FR22's board
+// retirement, not FR5's household scoping (leaflab/api/authz carries its
+// own coverage for that once Testing lands), so a Scope that never
+// filters keeps this fixture hermetic without pulling in a
+// household/household_membership schema these tests don't otherwise need.
+type allScope struct{}
+
+func (allScope) Permits(ref authz.EntityRef, res authz.Resolution) bool { return true }
+func (allScope) Filter(argStart int) (string, []any)                    { return "TRUE", nil }
+
+// stubAuthz is a test-only authzResolver that grants allScope to every
+// principal, regardless of subject -- see allScope's doc comment.
+// ResolveBoardByDeviceID is unused by these files' tests today (none of
+// them exercise PushDeviceConfig/GetDeviceConfig's board-scoped path);
+// it panics if that ever changes without updating this fixture.
+type stubAuthz struct{}
+
+func (stubAuthz) ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error) {
+	return allScope{}, nil
+}
+
+func (stubAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error) {
+	panic("not used by this package's integration tests")
+}
+
 // newTestServer starts a real Postgres container, applies testSchema, and
 // returns a LeafLabAPIServer backed by a real Repository plus the raw pool
 // for fixture setup / assertions. publisher is nil: every RPC exercised by
 // these files either never reaches the publish step (PushDeviceConfig is
 // tested only via its pre-write validation refusal) or never touches it at
-// all (ListBoards).
+// all (ListBoards). authzSvc is stubAuthz, not a real authz.PGResolver:
+// these tests assert on the response contract and retirement behavior, not
+// on FR5 scoping, and don't want to carry a household/household_membership
+// fixture just to make ListBoards return non-empty. Callers must still
+// present grpcauth.Claims on ctx (see response_contract_integration_test.go)
+// -- scopeForCaller fails closed on an unauthenticated context regardless
+// of what authzSvc would return.
 func newTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: testSchema})
 	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, discardLogger()), db.Pool
 }
 
 // newTestRepository starts a real Postgres container, applies testSchema,
