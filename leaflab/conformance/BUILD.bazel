@@ -17,6 +17,7 @@ go_test(
     srcs = [
         "auth_coverage_test.go",
         "bff_policy_test.go",
+        "negative_fixtures_test.go",
         "paths_test.go",
     ],
     data = [

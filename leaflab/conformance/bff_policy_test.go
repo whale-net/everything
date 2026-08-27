@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -53,16 +54,30 @@ func TestBFFPolicy_NoRoundingCoarseningSuppressionOrLabelSelectionHelper(t *test
 		t.Fatalf("only found %d ui source files -- check the ui:conformance_srcs / ui/components:conformance_srcs data dependencies in BUILD.bazel", len(files))
 	}
 
+	for _, msg := range nfr181Offenses(files) {
+		t.Error(msg)
+	}
+}
+
+// nfr181Offenses computes NFR18.1's forbidden-pattern failures: for every
+// non-_test.go file in files whose content matches one of nfr181Forbidden,
+// returns the failure message
+// TestBFFPolicy_NoRoundingCoarseningSuppressionOrLabelSelectionHelper would
+// report for it. Factored out of that test's loop so a synthetic fixture
+// (negative_fixtures_test.go) can assert on violation messages directly.
+func nfr181Offenses(files map[string]string) []string {
+	var msgs []string
 	for path, content := range files {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
 		}
 		for _, re := range nfr181Forbidden {
 			if re.MatchString(content) {
-				t.Errorf("%s: matches forbidden pattern %s -- NFR18.1: leaflab/ui holds no rounding/"+
+				msgs = append(msgs, fmt.Sprintf("%s: matches forbidden pattern %s -- NFR18.1: leaflab/ui holds no rounding/"+
 					"coarsening/suppression/label-selection rule; move this shaping into leaflab-api "+
-					"instead", path, re.String())
+					"instead", path, re.String()))
 			}
 		}
 	}
+	return msgs
 }
