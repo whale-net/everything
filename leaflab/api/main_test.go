@@ -117,15 +117,26 @@ func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of
 // Postgres/RabbitMQ and a real OIDC verifier respectively.
+//
+// nil configs: ratelimit.InMemoryLimiter.Allow never throttles a bucket
+// with no configured limit (see NewInMemoryLimiter's doc comment) -- this
+// suite covers auth/logging middleware, not rate limiting itself (see
+// ratelimit_interceptor_test.go for that, via startTestServerWithLimiter).
 func startTestServer(t *testing.T, logger *slog.Logger) *grpc.ClientConn {
+	t.Helper()
+	return startTestServerWithLimiter(t, logger, ratelimit.NewInMemoryLimiter(nil))
+}
+
+// startTestServerWithLimiter is startTestServer with the rate limiter
+// injectable, so ratelimit_interceptor_test.go can prove NFR10's enforcement
+// over the exact same production wiring (buildServer) with a
+// tightly-configured limiter, instead of duplicating the bufconn/dial
+// plumbing.
+func startTestServerWithLimiter(t *testing.T, logger *slog.Logger, limiter ratelimit.Limiter) *grpc.ClientConn {
 	t.Helper()
 
 	lis := bufconn.Listen(bufSize)
-	// nil configs: ratelimit.InMemoryLimiter.Allow never throttles a bucket
-	// with no configured limit (see NewInMemoryLimiter's doc comment) --
-	// this suite covers auth/logging middleware, not rate limiting itself
-	// (see ratelimit_interceptor_test.go for that).
-	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, stubAPIServer{}, false, ratelimit.NewInMemoryLimiter(nil))
+	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, stubAPIServer{}, false, limiter)
 
 	go func() {
 		// Serve returns a non-nil error on Stop() too; cleanup already

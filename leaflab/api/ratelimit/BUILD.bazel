@@ -1,6 +1,6 @@
 """Per-principal and per-session rate limiting primitives (NFR10) shared by every read RPC in leaflab/api."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "ratelimit",
@@ -10,4 +10,19 @@ go_library(
     ],
     importpath = "github.com/whale-net/everything/leaflab/api/ratelimit",
     visibility = ["//visibility:public"],
+)
+
+# NFR10 test suite: InMemoryLimiter's fixed-window rollover, oracle-safety
+# (Allow never branches on whether a key "exists"), principal/session key
+# independence and the sessionless non-human key case (ratelimit_test.go),
+# plus LoadConfigFromEnv's default/override/malformed-value behavior
+# (env_test.go). No network/DB required.
+go_test(
+    name = "ratelimit_test",
+    size = "small",
+    srcs = [
+        "env_test.go",
+        "ratelimit_test.go",
+    ],
+    embed = [":ratelimit"],
 )
