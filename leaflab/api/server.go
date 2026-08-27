@@ -49,10 +49,11 @@ const mqttExchange = "amq.topic"
 type deviceRepository interface {
 	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
 	// InsertDeviceConfigNextVersion also records entries' FR82.4 per-entry
-	// provenance into device_config_entry, in the same transaction as the
-	// device_config row -- see Repository.InsertDeviceConfigNextVersion's
+	// provenance into device_config_entry, and FR82.6's dropped-entry
+	// bookkeeping into device_config_removal, in the same transaction as
+	// the device_config row -- see Repository.InsertDeviceConfigNextVersion's
 	// doc comment.
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, entry audit.Entry) (int64, error)
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
 	// GetRegionApplySkips is FR1.3's caller-visible skip surface: the
 	// audit.Entry rows leaflab/processor's ApplyConfigRegions wrote for
@@ -269,6 +270,8 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 
 	var entries []config.Entry
 	sensorsForStorage := req.Sensors
+	var removedForResponse []*pb.RemovedEntry
+	var removedEntries []config.RemovedEntry
 
 	switch req.Scope {
 	case pb.PushScope_PUSH_SCOPE_COMPLETE:
@@ -332,9 +335,23 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		}
 
 		entries = result.Entries
+		removedEntries = result.Removed
 		sensorsForStorage = make([]*configpb.SensorConfig, len(entries))
 		for i, e := range entries {
 			sensorsForStorage[i] = e.Sensor
+		}
+		// FR82.4: state back to the caller which removal form named each
+		// dropped entry -- config.Materialise already computed this
+		// (RemovedEntry.Form); this is the one place that translates it
+		// onto the wire.
+		removedForResponse = make([]*pb.RemovedEntry, len(result.Removed))
+		for i, re := range result.Removed {
+			removedForResponse[i] = &pb.RemovedEntry{
+				MuxPath:    re.Entry.Sensor.GetMuxPath(),
+				I2CAddress: re.Entry.Sensor.GetI2CAddress(),
+				SensorType: re.Entry.Sensor.GetSensorType(),
+				Form:       removeFormToProto(re.Form),
+			}
 		}
 		s.logger.Info("edit push materialised",
 			"device_id", req.DeviceId,
@@ -370,7 +387,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		EntityKind:        reg.EntityKind,
 		CorrelationID:     CorrelationIDFromContext(ctx),
 	}
-	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, entry)
+	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, removedEntries, entry)
 	if err != nil {
 		s.logger.Error("record config push failed", "device_id", req.DeviceId, "error", err)
 		return nil, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")
@@ -398,7 +415,21 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		"version", version,
 		"sensors", len(req.Sensors))
 
-	return &pb.PushDeviceConfigResponse{Version: uint64(version)}, nil
+	return &pb.PushDeviceConfigResponse{Version: uint64(version), Removed: removedForResponse}, nil
+}
+
+// removeFormToProto translates config.RemoveForm (leaflab/api/config's
+// pure-logic value) onto the wire pb.RemoveForm FR82.4's response states
+// back to the caller.
+func removeFormToProto(f config.RemoveForm) pb.RemoveForm {
+	switch f {
+	case config.RemoveFormFullKey:
+		return pb.RemoveForm_REMOVE_FORM_FULL_KEY
+	case config.RemoveFormChipKey:
+		return pb.RemoveForm_REMOVE_FORM_CHIP_KEY
+	default:
+		return pb.RemoveForm_REMOVE_FORM_UNSPECIFIED
+	}
 }
 
 // validatePushRegions is FR1.2/FR1.3's push-time layer: every region_id

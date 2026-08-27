@@ -435,9 +435,23 @@ func TestPushDeviceConfig_Edit_ChipKeyRemove_DropsBothEntriesAtThatChip(t *testi
 		Removes:  []*pb.RemoveKey{{I2CAddress: 0x5A}}, // chip key: sensor_type absent
 	})
 	assertReachedStorage(t, err)
-	entries := repo.insertDeviceConfigNextVersionCalls[0].entries
-	if len(entries) != 0 {
-		t.Fatalf("entries = %+v, want empty (both eco2 and tvoc dropped)", entries)
+	call := repo.insertDeviceConfigNextVersionCalls[0]
+	if len(call.entries) != 0 {
+		t.Fatalf("entries = %+v, want empty (both eco2 and tvoc dropped)", call.entries)
+	}
+	// FR82.4: both dropped entries carry RemoveFormChipKey -- the
+	// materialisation-side half of "which form was used is stated back to
+	// the caller" (server.go's removeFormToProto/RemovedEntry wiring onto
+	// the wire response is covered separately -- see
+	// TestRemoveFormToProto -- since a genuinely successful push can't be
+	// driven through here; see assertReachedStorage's own doc comment).
+	if len(call.removed) != 2 {
+		t.Fatalf("removed = %+v, want 2 (both eco2 and tvoc)", call.removed)
+	}
+	for _, re := range call.removed {
+		if re.Form != pushconfig.RemoveFormChipKey {
+			t.Errorf("removed entry %q Form = %v, want RemoveFormChipKey", re.Entry.Sensor.Name, re.Form)
+		}
 	}
 }
 
@@ -465,9 +479,19 @@ func TestPushDeviceConfig_Edit_FullKeyRemove_DropsExactlyOneEntry(t *testing.T) 
 		Removes:  []*pb.RemoveKey{{I2CAddress: 0x44, SensorType: &humidity}},
 	})
 	assertReachedStorage(t, err)
-	entries := repo.insertDeviceConfigNextVersionCalls[0].entries
+	call := repo.insertDeviceConfigNextVersionCalls[0]
+	entries := call.entries
 	if len(entries) != 1 || entries[0].Sensor.Name != "temperature" {
 		t.Fatalf("entries = %+v, want only 'temperature' to survive", entries)
+	}
+	// FR82.4: the dropped entry ("humidity") carries RemoveFormFullKey --
+	// see TestPushDeviceConfig_Edit_ChipKeyRemove_DropsBothEntriesAtThatChip's
+	// own comment for why the wire response itself isn't asserted here.
+	if len(call.removed) != 1 || call.removed[0].Entry.Sensor.Name != "humidity" {
+		t.Fatalf("removed = %+v, want exactly 'humidity'", call.removed)
+	}
+	if call.removed[0].Form != pushconfig.RemoveFormFullKey {
+		t.Errorf("removed[0].Form = %v, want RemoveFormFullKey", call.removed[0].Form)
 	}
 }
 
@@ -587,5 +611,38 @@ func TestPushDeviceConfig_UnresolvedSensorType_StillStoredNotRejected(t *testing
 	}
 	if entries[0].Sensor.Name != "light" {
 		t.Errorf("Sensor.Name = %q, want %q -- the entry itself must be unaffected", entries[0].Sensor.Name, "light")
+	}
+}
+
+// -- FR82.4: "which removal form was used" onto the wire response ----------
+
+// TestRemoveFormToProto proves removeFormToProto (server.go) -- the one
+// place that translates config.RemoveForm onto the wire pb.RemoveForm
+// PushDeviceConfigResponse.RemovedEntry.form carries -- maps both real
+// forms correctly and never produces REMOVE_FORM_UNSPECIFIED for either.
+// The rest of the response-population path (building
+// []*pb.RemovedEntry from a Materialise Result.Removed) can't be exercised
+// end to end here -- see assertReachedStorage's doc comment on why a
+// genuinely successful push can't be driven through this file's fakeRepo;
+// TestPushDeviceConfig_Edit_FullKeyRemove_DropsExactlyOneEntry and
+// TestPushDeviceConfig_Edit_ChipKeyRemove_DropsBothEntriesAtThatChip above
+// already prove config.Materialise's Form value survives unchanged up to
+// InsertDeviceConfigNextVersion's removed argument, immediately upstream
+// of where this function is called.
+func TestRemoveFormToProto(t *testing.T) {
+	cases := []struct {
+		name string
+		in   pushconfig.RemoveForm
+		want pb.RemoveForm
+	}{
+		{"full key", pushconfig.RemoveFormFullKey, pb.RemoveForm_REMOVE_FORM_FULL_KEY},
+		{"chip key", pushconfig.RemoveFormChipKey, pb.RemoveForm_REMOVE_FORM_CHIP_KEY},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := removeFormToProto(tc.in); got != tc.want {
+				t.Errorf("removeFormToProto(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
 	}
 }

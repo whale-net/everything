@@ -40,6 +40,13 @@ type SensorRepository interface {
 	// remaining valid entries are still applied. See repository.go's
 	// ApplyConfigRegions.
 	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) ([]RegionApplySkip, error)
+	// CloseRemovedSensorHWHistory is FR82.6's ack-time close: for every
+	// entry this accepted version's EDIT-scope push dropped
+	// (device_config_removal, migration 031), close that entry's
+	// currently-open sensor_hw_history interval at (effectively) this
+	// call's own instant -- "the version's accepted-at time". See
+	// repository.go's CloseRemovedSensorHWHistory.
+	CloseRemovedSensorHWHistory(ctx context.Context, boardID int64, version int64) error
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
 }
@@ -340,6 +347,14 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 				"version", ack.AppliedVersion,
 				"sensor_id", skip.SensorID,
 				"reason", skip.Reason)
+		}
+		// FR82.6: close the sensor_hw_history interval of every entry this
+		// version's EDIT-scope push dropped, at this accepted-at instant.
+		// Logged, not fatal, like ApplyConfigRegions above -- the ack
+		// itself already committed; this is best-effort bookkeeping on top
+		// of it, not a condition for having accepted the config.
+		if err := h.repo.CloseRemovedSensorHWHistory(ctx, boardID, int64(ack.AppliedVersion)); err != nil {
+			h.logger.Warn("failed to close removed sensor hw history", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
 		}
 		h.cache.SetConfigVersion(deviceID, int64(ack.AppliedVersion))
 		h.logger.Info("device_config acked", "device_id", deviceID, "version", ack.AppliedVersion)

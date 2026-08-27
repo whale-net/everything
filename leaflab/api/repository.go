@@ -110,13 +110,27 @@ func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int
 // itself is unaffected, since it was already written into configJSON by
 // the caller regardless of whether this loop can record its provenance.
 //
+// removed is FR82.4/FR82.6's dropped-entry bookkeeping (an EDIT push's
+// config.Materialise Result.Removed; always nil/empty for a COMPLETE
+// push, which has no remove list) -- written to device_config_removal in
+// the same transaction as device_config and device_config_entry
+// (migration 031). This is the only thing that later lets the device's
+// ack (leaflab/processor's AckDeviceConfig) know which
+// sensor_hw_history interval(s) to close at this version's accepted-at
+// time. Like device_config_entry, a removed entry whose SensorTypeID is
+// the unresolved-catalog-type sentinel is skipped here (its
+// device_config_entry row, if it ever had one from an earlier push, is
+// left as-is by this method; only this table's own FK would be
+// violated).
+//
 // entry is the audit record for this push (FR8.2 names config pushes as a
 // write whose acting principal must be recorded); auditedWrite inserts it
 // in the same transaction as the device_config row, with entry.EntityID
 // filled in with the assigned version once it's known. A write that fails
 // (including every retry outcome other than success) leaves neither row,
-// and neither do the device_config_entry rows below (same tx).
-func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, entry audit.Entry) (int64, error) {
+// and neither do the device_config_entry/device_config_removal rows below
+// (same tx).
+func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry) (int64, error) {
 	var version int64
 	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
 		var configID int64
@@ -159,6 +173,35 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 				VALUES ($1, $2, $3::jsonb, $4, $5)
 			`, configID, i2cAddr, muxJSON, int64(e.Key.SensorTypeID), string(e.Provenance)); err != nil {
 				return audit.Entry{}, fmt.Errorf("insert device_config_entry for config_id %d: %w", configID, err)
+			}
+		}
+
+		// FR82.6: record which entries this version dropped, so the
+		// device's ack can later close each one's sensor_hw_history
+		// interval (migration 031's doc comment). RemoveKey.Match already
+		// refuses a remove naming the unaddressable i2c_address=0
+		// sentinel (ErrUnaddressableRemove), so every RemovedEntry here
+		// always has a real i2c_address -- but a resolvable-but-unknown
+		// sensor_type still yields SensorTypeID 0 (resolveConfigEntries'
+		// sentinel), which would violate this table's sensor_type_id FK
+		// just like device_config_entry's; skip those the same way.
+		for _, re := range removed {
+			if re.Entry.Key.SensorTypeID <= 0 {
+				continue
+			}
+			addr, ok := re.Entry.Key.I2CAddress.Value()
+			if !ok {
+				continue
+			}
+			muxJSON, err := json.Marshal(re.Entry.Key.MuxPath)
+			if err != nil {
+				return audit.Entry{}, fmt.Errorf("marshal mux_path for removal on config_id %d: %w", configID, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO device_config_removal (config_id, i2c_address, mux_path, sensor_type_id, form)
+				VALUES ($1, $2, $3::jsonb, $4, $5)
+			`, configID, int32(addr), muxJSON, int64(re.Entry.Key.SensorTypeID), re.Form.String()); err != nil {
+				return audit.Entry{}, fmt.Errorf("insert device_config_removal for config_id %d: %w", configID, err)
 			}
 		}
 

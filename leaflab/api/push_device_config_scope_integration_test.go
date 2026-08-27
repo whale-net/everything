@@ -44,9 +44,10 @@ import (
 // scopeSchema is self-contained hand-written DDL (see this package's other
 // integration test files' own doc comments on why each keeps its own
 // hermetic schema rather than sharing one across go_test targets/binaries):
-// board, sensor_type, device_config (migration 007) and device_config_entry
-// (migration 028) -- FR82's own write surface -- plus a minimal sensor
-// table standing in for a device-reported manifest (used only by
+// board, sensor_type, device_config (migration 007), device_config_entry
+// (migration 028) and device_config_removal (migration 031) -- FR82's own
+// write surface -- plus a minimal sensor table standing in for a
+// device-reported manifest (used only by
 // TestEditMaterialisationBase_NeverTheReportedManifest_RealDB) and
 // sensor_reading/sensor_name_history so a "kept row" assertion has
 // something real to check.
@@ -89,6 +90,17 @@ const scopeSchema = `
 	CREATE UNIQUE INDEX idx_device_config_entry_hw_key
 		ON device_config_entry(config_id, i2c_address, sensor_type_id, (mux_path::text))
 		WHERE i2c_address IS NOT NULL;
+
+	-- Mirrors migration 031_device_config_removal.up.sql exactly.
+	CREATE TABLE device_config_removal (
+		device_config_removal_id BIGSERIAL PRIMARY KEY,
+		config_id      BIGINT NOT NULL REFERENCES device_config(config_id) ON DELETE CASCADE,
+		i2c_address    SMALLINT NOT NULL,
+		mux_path       JSONB NOT NULL DEFAULT '[]'::jsonb,
+		sensor_type_id BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
+		form           TEXT NOT NULL CHECK (form IN ('full_key', 'chip_key'))
+	);
+	CREATE INDEX idx_device_config_removal_config_id ON device_config_removal(config_id);
 
 	-- Stands in for the device-reported manifest FR82.3 says must never
 	-- contribute to an EDIT push's materialisation base.
@@ -223,7 +235,7 @@ func TestInsertDeviceConfigNextVersion_RecordsProvenancePerEntry(t *testing.T) {
 		t.Fatalf("marshal config: %v", err)
 	}
 
-	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, testAuditEntry())
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry())
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion: %v", err)
 	}
@@ -277,7 +289,7 @@ func TestInsertDeviceConfigNextVersion_UnresolvedSensorType_SkipsRowStillStoresJ
 		t.Fatalf("marshal config: %v", err)
 	}
 
-	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, testAuditEntry())
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry())
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion with an unresolved sensor_type returned an error, want success: %v", err)
 	}
@@ -301,6 +313,149 @@ func TestInsertDeviceConfigNextVersion_UnresolvedSensorType_SkipsRowStillStoresJ
 	}
 }
 
+// -- device_config_removal persistence (FR82.4/FR82.6) -----------------------
+
+// TestInsertDeviceConfigNextVersion_RecordsRemovalPerEntry proves an
+// EDIT-scope push's config.Materialise Result.Removed round-trips through
+// real SQL into one device_config_removal row per dropped entry (migration
+// 031), each carrying the correct canonical hardware key and RemoveForm --
+// the bookkeeping leaflab/processor's CloseRemovedSensorHWHistory
+// (FR82.6) later consults at ack time.
+func TestInsertDeviceConfigNextVersion_RecordsRemovalPerEntry(t *testing.T) {
+	server, pool := newScopeIntegrationServer(t)
+	ctx := context.Background()
+
+	boardID, err := server.repo.GetOrCreateBoard(ctx, "device-a")
+	if err != nil {
+		t.Fatalf("GetOrCreateBoard: %v", err)
+	}
+	temperatureID := insertScopeSensorType(t, pool, "temperature", "degC")
+	humidityID := insertScopeSensorType(t, pool, "humidity", "%")
+
+	base := []pushconfig.Entry{
+		{
+			Key:    hwkey.Key{I2CAddress: hwkey.Address(0x44), SensorTypeID: hwkey.SensorTypeID(temperatureID)},
+			Sensor: &configpb.SensorConfig{Name: "temperature", I2CAddress: 0x44},
+		},
+		{
+			Key:    hwkey.Key{I2CAddress: hwkey.Address(0x44), SensorTypeID: hwkey.SensorTypeID(humidityID)},
+			Sensor: &configpb.SensorConfig{Name: "humidity", I2CAddress: 0x44},
+		},
+	}
+	// Chip-key remove: drops both temperature and humidity at 0x44.
+	result, err := pushconfig.Materialise(base, nil, []pushconfig.RemoveKey{{
+		Chip:          base[0].Key.Chip(),
+		HasSensorType: false,
+	}})
+	if err != nil {
+		t.Fatalf("Materialise: %v", err)
+	}
+	if len(result.Entries) != 0 || len(result.Removed) != 2 {
+		t.Fatalf("Materialise result = %+v, want both entries dropped", result)
+	}
+
+	configJSON, err := protojson.Marshal(&configpb.DeviceConfig{DeviceId: "device-a"})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, result.Entries, result.Removed, testAuditEntry())
+	if err != nil {
+		t.Fatalf("InsertDeviceConfigNextVersion: %v", err)
+	}
+
+	var configID int64
+	if err := pool.QueryRow(ctx, `SELECT config_id FROM device_config WHERE board_id = $1 AND version = $2`, boardID, version).Scan(&configID); err != nil {
+		t.Fatalf("look up config_id: %v", err)
+	}
+
+	rows, err := pool.Query(ctx, `
+		SELECT i2c_address, sensor_type_id, form FROM device_config_removal WHERE config_id = $1 ORDER BY sensor_type_id
+	`, configID)
+	if err != nil {
+		t.Fatalf("query device_config_removal: %v", err)
+	}
+	defer rows.Close()
+
+	type removalRow struct {
+		i2cAddress   int16
+		sensorTypeID int64
+		form         string
+	}
+	var got []removalRow
+	for rows.Next() {
+		var r removalRow
+		if err := rows.Scan(&r.i2cAddress, &r.sensorTypeID, &r.form); err != nil {
+			t.Fatalf("scan device_config_removal row: %v", err)
+		}
+		got = append(got, r)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("device_config_removal rows = %d, want 2", len(got))
+	}
+	for _, r := range got {
+		if r.i2cAddress != 0x44 {
+			t.Errorf("i2c_address = %d, want 0x44", r.i2cAddress)
+		}
+		if r.form != "chip_key" {
+			t.Errorf("form = %q, want %q (both dropped by the same chip-key remove)", r.form, "chip_key")
+		}
+	}
+	if got[0].sensorTypeID != temperatureID && got[1].sensorTypeID != temperatureID {
+		t.Errorf("device_config_removal rows = %+v, want one naming temperature's sensor_type_id %d", got, temperatureID)
+	}
+	if got[0].sensorTypeID != humidityID && got[1].sensorTypeID != humidityID {
+		t.Errorf("device_config_removal rows = %+v, want one naming humidity's sensor_type_id %d", got, humidityID)
+	}
+}
+
+// TestInsertDeviceConfigNextVersion_RemovalUnresolvedSensorType_SkipsRowStillSucceeds
+// mirrors TestInsertDeviceConfigNextVersion_UnresolvedSensorType_SkipsRowStillStoresJSON
+// for the removal side: a removed entry whose SensorTypeID is the
+// unresolved-catalog-type sentinel (0) would violate device_config_removal's
+// sensor_type_id NOT NULL FK, so it is skipped rather than failing the
+// whole write.
+func TestInsertDeviceConfigNextVersion_RemovalUnresolvedSensorType_SkipsRowStillSucceeds(t *testing.T) {
+	server, pool := newScopeIntegrationServer(t)
+	ctx := context.Background()
+
+	boardID, err := server.repo.GetOrCreateBoard(ctx, "device-a")
+	if err != nil {
+		t.Fatalf("GetOrCreateBoard: %v", err)
+	}
+
+	removed := []pushconfig.RemovedEntry{
+		{
+			Entry: pushconfig.Entry{
+				Key:    hwkey.Key{I2CAddress: hwkey.Address(0x23), SensorTypeID: hwkey.SensorTypeID(0)},
+				Sensor: &configpb.SensorConfig{Name: "light", I2CAddress: 0x23},
+			},
+			Form: pushconfig.RemoveFormFullKey,
+		},
+	}
+
+	configJSON, err := protojson.Marshal(&configpb.DeviceConfig{DeviceId: "device-a"})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, nil, removed, testAuditEntry())
+	if err != nil {
+		t.Fatalf("InsertDeviceConfigNextVersion with an unresolved removal sensor_type returned an error, want success: %v", err)
+	}
+
+	var configID int64
+	if err := pool.QueryRow(ctx, `SELECT config_id FROM device_config WHERE board_id = $1 AND version = $2`, boardID, version).Scan(&configID); err != nil {
+		t.Fatalf("look up config_id: %v", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_config_removal WHERE config_id = $1`, configID).Scan(&n); err != nil {
+		t.Fatalf("count device_config_removal: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("device_config_removal rows = %d, want 0 -- an unresolved sensor_type must not get a removal row", n)
+	}
+}
+
 // -- GetLatestAcceptedConfig: only accepted=TRUE (the EDIT base) -----------
 
 // TestGetLatestAcceptedConfig_OnlyAcceptedRows proves a higher-versioned
@@ -317,14 +472,14 @@ func TestGetLatestAcceptedConfig_OnlyAcceptedRows(t *testing.T) {
 	}
 
 	v1JSON, _ := protojson.Marshal(&configpb.DeviceConfig{DeviceId: "device-a", Sensors: []*configpb.SensorConfig{{Name: "v1"}}})
-	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, v1JSON, nil, testAuditEntry())
+	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, v1JSON, nil, nil, testAuditEntry())
 	if err != nil {
 		t.Fatalf("insert v1: %v", err)
 	}
 	markAccepted(t, pool, boardID, v1)
 
 	v2JSON, _ := protojson.Marshal(&configpb.DeviceConfig{DeviceId: "device-a", Sensors: []*configpb.SensorConfig{{Name: "v2-pending"}}})
-	if _, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, v2JSON, nil, testAuditEntry()); err != nil {
+	if _, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, v2JSON, nil, nil, testAuditEntry()); err != nil {
 		t.Fatalf("insert v2: %v", err)
 	}
 	// v2 deliberately left un-acked (accepted=FALSE, the column default).
@@ -385,7 +540,7 @@ func TestEditMaterialisationBase_NeverTheReportedManifest_RealDB(t *testing.T) {
 		DeviceId: "device-a",
 		Sensors:  []*configpb.SensorConfig{{Name: "accepted-light", I2CAddress: 0x23}},
 	})
-	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, acceptedJSON, nil, testAuditEntry())
+	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, acceptedJSON, nil, nil, testAuditEntry())
 	if err != nil {
 		t.Fatalf("insert accepted config: %v", err)
 	}
@@ -479,7 +634,7 @@ func TestScenarioFile_RoundTrip_RealDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, testAuditEntry())
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry())
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion: %v", err)
 	}
@@ -507,10 +662,11 @@ func TestScenarioFile_RoundTrip_RealDB(t *testing.T) {
 // dropped from a config version -- removal is removal from desired state,
 // not deletion (FR82.6). This does NOT cover FR82.6's "hardware-history
 // interval is closed at the accepted-at time of the version that dropped
-// it": that requires the device's ack (leaflab/processor's
-// AckDeviceConfig) to know which entries a given version dropped, and
-// nothing on the push side persists that yet -- see this task's own
-// PR/issue notes for the follow-up.
+// it": the push side now persists device_config_removal (migration 031)
+// so the device's ack has something to consult, but closing the interval
+// itself happens in leaflab/processor's AckDeviceConfig/
+// CloseRemovedSensorHWHistory path, which is out of this package's own
+// integration coverage -- see leaflab/processor's own tests.
 func TestDroppedSensor_RowAndReadingsUntouched_RealDB(t *testing.T) {
 	server, pool := newScopeIntegrationServer(t)
 	ctx := context.Background()
@@ -538,7 +694,7 @@ func TestDroppedSensor_RowAndReadingsUntouched_RealDB(t *testing.T) {
 		DeviceId: "device-a",
 		Sensors:  []*configpb.SensorConfig{{Name: "light", I2CAddress: 0x23}},
 	})
-	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, acceptedJSON, nil, testAuditEntry())
+	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, acceptedJSON, nil, nil, testAuditEntry())
 	if err != nil {
 		t.Fatalf("insert accepted config: %v", err)
 	}
@@ -568,7 +724,7 @@ func TestDroppedSensor_RowAndReadingsUntouched_RealDB(t *testing.T) {
 	}
 
 	editJSON, _ := protojson.Marshal(&configpb.DeviceConfig{DeviceId: "device-a", Sensors: nil})
-	if _, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, editJSON, result.Entries, testAuditEntry()); err != nil {
+	if _, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, editJSON, result.Entries, result.Removed, testAuditEntry()); err != nil {
 		t.Fatalf("insert edit config: %v", err)
 	}
 

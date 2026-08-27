@@ -124,6 +124,10 @@ func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64)
 	return s.applyConfigRegionsSkips, nil
 }
 
+func (s *stubRepo) CloseRemovedSensorHWHistory(_ context.Context, _ int64, _ int64) error {
+	return nil
+}
+
 func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error { return nil }
 
 func (s *stubRepo) IsKnownChipAddress(_ context.Context, _ string, _ uint32) (bool, error) {

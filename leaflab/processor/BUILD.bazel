@@ -113,6 +113,35 @@ go_test(
     ],
 )
 
+# Real-Postgres integration coverage for
+# Repository.CloseRemovedSensorHWHistory (FR82.6) -- see
+# repository_close_removed_hw_history_integration_test.go's doc comment.
+# Hand-written (not gazelle-generated) and tagged exactly like this
+# package's other *_integration_test targets above, for the same reasons.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/processor:close_removed_hw_history_integration_test --test_output=all
+go_test(
+    # keep
+    name = "close_removed_hw_history_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["repository_close_removed_hw_history_integration_test.go"],
+    embed = [":processor_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+    ],
+)
+
 release_app(
     name = "processor",
     app_type = "worker",

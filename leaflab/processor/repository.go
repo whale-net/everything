@@ -772,6 +772,91 @@ func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64
 	return nil
 }
 
+// CloseRemovedSensorHWHistory is FR82.6's ack-time close: for every entry
+// this accepted version's EDIT-scope push dropped (device_config_removal,
+// migration 031 -- leaflab/api's InsertDeviceConfigNextVersion wrote these
+// rows at push time from config.Materialise's Result.Removed), close that
+// entry's currently-open sensor_hw_history interval "at the version's
+// accepted-at time" -- i.e. now, since this runs from handleConfigAck the
+// moment AckDeviceConfig records acceptance. Always a no-op for a
+// COMPLETE-scope push or an EDIT push with no removes: device_config_removal
+// has no rows for either.
+//
+// A removed entry resolves to a concrete sensor_id the same way
+// ApplyConfigRegions does -- board_id + the FR18 canonical hardware key
+// (i2c_address, sensor_type_id, mux_path), the same key
+// idx_sensor_hw_address enforces uniqueness on -- rather than trusting any
+// sensor_id recorded elsewhere, since device_config_removal (like
+// device_config_entry) only ever recorded the canonical key, never a
+// sensor_id. A removal naming a sensor this board has no row for (should
+// not happen in practice: the entry had to exist in the accepted base
+// Materialise removed it from) is tolerated as a no-op rather than
+// failing the whole ack -- there is nothing to close.
+//
+// This intentionally only closes the interval; it does not touch the
+// sensor row, its readings, or any of its other timelines (FR82.6:
+// "removal is removal from the desired state, not deletion" -- the row,
+// readings and other timelines are FR22.3/FR53's job, untouched here).
+func (r *Repository) CloseRemovedSensorHWHistory(ctx context.Context, boardID, version int64) error {
+	var configID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT config_id FROM device_config WHERE board_id = $1 AND version = $2
+	`, boardID, version).Scan(&configID)
+	if err != nil {
+		return fmt.Errorf("get config_id for hw history close board=%d v=%d: %w", boardID, version, err)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT i2c_address, mux_path::text, sensor_type_id
+		FROM device_config_removal
+		WHERE config_id = $1
+	`, configID)
+	if err != nil {
+		return fmt.Errorf("query device_config_removal for config_id %d: %w", configID, err)
+	}
+
+	type removal struct {
+		i2cAddress   int32
+		muxPathText  string
+		sensorTypeID int64
+	}
+	var removals []removal
+	for rows.Next() {
+		var rm removal
+		if err := rows.Scan(&rm.i2cAddress, &rm.muxPathText, &rm.sensorTypeID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan device_config_removal row for config_id %d: %w", configID, err)
+		}
+		removals = append(removals, rm)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return fmt.Errorf("iterate device_config_removal for config_id %d: %w", configID, rowsErr)
+	}
+
+	for _, rm := range removals {
+		var sensorID int64
+		lookupErr := r.db.QueryRow(ctx, `
+			SELECT sensor_id FROM sensor
+			WHERE board_id = $1 AND i2c_address = $2 AND sensor_type_id = $3 AND mux_path::text = $4
+		`, boardID, rm.i2cAddress, rm.sensorTypeID, rm.muxPathText).Scan(&sensorID)
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			continue // no matching sensor row on this board -- nothing to close
+		}
+		if lookupErr != nil {
+			return fmt.Errorf("find sensor for hw history close i2c=0x%02x board=%d: %w", rm.i2cAddress, boardID, lookupErr)
+		}
+		if _, err := r.db.Exec(ctx, `
+			UPDATE sensor_hw_history SET valid_to = NOW()
+			WHERE sensor_id = $1 AND valid_to IS NULL
+		`, sensorID); err != nil {
+			return fmt.Errorf("close hw history for removed sensor %d: %w", sensorID, err)
+		}
+	}
+	return nil
+}
+
 // IsKnownChipAddress returns true if i2cAddress is a registered address for the
 // named chip. Returns (true, nil) when chip is unknown to the catalog.
 func (r *Repository) IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error) {

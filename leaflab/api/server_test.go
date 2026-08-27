@@ -90,11 +90,12 @@ func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64
 // empty, not just that PushDeviceConfig returned an error.
 // insertDeviceConfigNextVersionVersion/-Err configure what each call
 // returns.
-func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []pushconfig.Entry, entry audit.Entry) (int64, error) {
+func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []pushconfig.Entry, removed []pushconfig.RemovedEntry, entry audit.Entry) (int64, error) {
 	f.insertDeviceConfigNextVersionCalls = append(f.insertDeviceConfigNextVersionCalls, insertDeviceConfigNextVersionCall{
 		boardID:    boardID,
 		configJSON: configJSON,
 		entries:    entries,
+		removed:    removed,
 		entry:      entry,
 	})
 	return f.insertDeviceConfigNextVersionVersion, f.insertDeviceConfigNextVersionErr
@@ -106,6 +107,7 @@ type insertDeviceConfigNextVersionCall struct {
 	boardID    int64
 	configJSON []byte
 	entries    []pushconfig.Entry
+	removed    []pushconfig.RemovedEntry
 	entry      audit.Entry
 }
 

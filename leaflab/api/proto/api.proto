@@ -83,6 +83,31 @@ message RemoveKey {
   optional firmware.SensorType sensor_type = 3;
 }
 
+// RemoveForm states which of FR82.4's two removal forms named a given
+// RemovedEntry -- full canonical key (sensor_type was set on the wire) or
+// chip key (sensor_type was absent), mirroring RemoveKey's own two forms.
+enum RemoveForm {
+  REMOVE_FORM_UNSPECIFIED = 0;
+  // sensor_type was set on the matching RemoveKey -- this was the one
+  // entry it named.
+  REMOVE_FORM_FULL_KEY = 1;
+  // sensor_type was absent on the matching RemoveKey -- this entry was
+  // one of possibly several dropped alongside it at the same
+  // (i2c_address, mux_path).
+  REMOVE_FORM_CHIP_KEY = 2;
+}
+
+// RemovedEntry states one config entry an EDIT-scope push dropped and
+// which RemoveForm named it (FR82.4: "which form was used is stated back
+// to the caller"). Always empty under scope=COMPLETE, where there is no
+// remove list.
+message RemovedEntry {
+  repeated firmware.MuxHop mux_path = 1;  // empty = directly on root bus
+  uint32 i2c_address = 2;
+  firmware.SensorType sensor_type = 3;
+  RemoveForm form = 4;
+}
+
 message PushDeviceConfigRequest {
   string device_id = 1;
   // The desired-state payload (FR82, NFR17) -- replace semantics, not a
@@ -108,6 +133,9 @@ message PushDeviceConfigRequest {
 message PushDeviceConfigResponse {
   // Version assigned to this push.
   uint64 version = 1;
+  // FR82.4: entries this push's EDIT-scope removal dropped, each stating
+  // which removal form named it. Always empty under scope=COMPLETE.
+  repeated RemovedEntry removed = 2;
 }
 
 message RewireSensorRequest {
