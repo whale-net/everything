@@ -45,12 +45,23 @@ message GetDeviceConfigResponse {
 message BoardInfo {
   string device_id = 1;
   int64  board_id  = 2;
+  // Absolute instant the board was last seen (FR64). Render this as
+  // elapsed time against the response envelope's server_now.
+  Instant last_seen_at = 3;
 }
 
-message ListBoardsRequest {}
+message ListBoardsRequest {
+  // Keyset page request (FR61). Unset/empty requests the first page.
+  PageRequest page = 1;
+}
 
 message ListBoardsResponse {
   repeated BoardInfo boards = 1;
+  // Keyset page response (FR61).
+  PageResponse page = 2;
+  // Server's current time, so a caller renders every Instant in this
+  // response as elapsed time without trusting its own clock (FR64).
+  Instant server_now = 3;
 }
 
 // --- Response contract (FR59, FR61, FR64) -----------------------------

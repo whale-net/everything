@@ -6,6 +6,7 @@ go_library(
     name = "contract",
     srcs = [
         "failure.go",
+        "instant.go",
         "paging.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api/contract",

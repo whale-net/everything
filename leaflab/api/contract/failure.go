@@ -39,6 +39,12 @@ const (
 	// "your input was wrong" apart from "this can't be done, do X
 	// instead".
 	FailureRefusedWithAlternative FailureClass = "refused_with_alternative"
+	// FailureInternal: an unexpected server-side failure (e.g. a database
+	// error) that is not attributable to the caller's input or identity.
+	// The reason carried on this class is always a generic,
+	// non-technical sentence (FR59.2) -- the underlying error is logged
+	// server-side, never placed in the Failure detail or status message.
+	FailureInternal FailureClass = "internal"
 )
 
 // grpcCode maps each FailureClass to the gRPC status code a transport-level
@@ -51,6 +57,7 @@ var grpcCode = map[FailureClass]codes.Code{
 	FailureInvalidArgument:        codes.InvalidArgument,
 	FailureRateLimited:            codes.ResourceExhausted,
 	FailureRefusedWithAlternative: codes.FailedPrecondition,
+	FailureInternal:               codes.Internal,
 }
 
 // New builds a gRPC error for class, carrying a structured pb.Failure
@@ -84,6 +91,14 @@ func InvalidArgument(entity, field, reason string) error {
 // RateLimited builds a FailureRateLimited error. See New.
 func RateLimited(entity, field, reason string) error {
 	return New(FailureRateLimited, entity, field, reason)
+}
+
+// Internal builds a FailureInternal error. reason must already be a
+// generic, persona-appropriate sentence (FR59.2) -- callers log the actual
+// underlying error server-side and pass only that generic sentence here,
+// so no stack trace, table name or driver error ever reaches the client.
+func Internal(entity, field, reason string) error {
+	return New(FailureInternal, entity, field, reason)
 }
 
 // Refuse is the single implementation of FR59.3's refuse-and-name-the-
