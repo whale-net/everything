@@ -1,6 +1,28 @@
 package conformance
 
-import "testing"
+import (
+	"regexp"
+	"strings"
+	"testing"
+)
+
+// nfr181Forbidden are word-boundary-safe patterns for the four shaping
+// operations NFR18.1 reserves to leaflab-api: rounding, coarsening,
+// suppression, and label selection. Matched case-insensitively against Go
+// and templ source text (not AST -- a source-analysis check, mirroring
+// tools/app_registry/conformance's style, not a behavioral test). Mirrors
+// leaflab/ui/nfr18_conformance_test.go's placeholder pattern list -- kept
+// in sync manually since that file scans only leaflab/ui itself and this
+// one is the real, cross-package (ui + ui/components) version referenced
+// by that file's doc comment.
+var nfr181Forbidden = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\bmath\.Round\b`),
+	regexp.MustCompile(`(?i)\bround\(`),
+	regexp.MustCompile(`(?i)\bcoarsen`),
+	regexp.MustCompile(`(?i)\bsuppress\(`),
+	regexp.MustCompile(`(?i)\bselectlabel\b`),
+	regexp.MustCompile(`(?i)\blabelselect`),
+}
 
 // TestBFFPolicy_NoRoundingCoarseningSuppressionOrLabelSelectionHelper is
 // NFR18.1's conformance check: leaflab/ui holds no rounding, coarsening,
@@ -9,18 +31,38 @@ import "testing"
 // no math.Round, no local formatting of numeric measurement values), not a
 // behavioral test.
 //
-// This is the real, cross-package version of the grep-style placeholder in
-// leaflab/ui/nfr18_conformance_test.go (#1329's Testing section) -- see
-// this package's doc comment in paths_test.go. Once this check is filled
-// in, the leaflab/ui placeholder's doc comment referencing "the NFR1.a task
-// later on this plan" is satisfied; whether to remove the now-redundant
-// placeholder is an Implementation-phase call, not a Scaffold one.
-//
-// TODO(Implementation phase): walk globGoFiles(t, "ui") and
-// globGoFiles(t, "ui/components") (plus any .templ sources exposed via
-// //leaflab/ui/components:conformance_srcs) for forbidden patterns
-// (math.Round, round(, coarsen, suppress(, label-selection helpers),
-// failing with the offending file and pattern named.
+// Scans leaflab/ui and leaflab/ui/components -- every checked-in .go and
+// .templ source, excluding _test.go files (a test's own fixtures/patterns,
+// like this file's own nfr181Forbidden literals, must not trip the check
+// on themselves; leaflab/ui's conformance_srcs filegroup is glob(["*.go"])
+// and includes test files, so this exclusion is load-bearing, not
+// defensive dead code).
 func TestBFFPolicy_NoRoundingCoarseningSuppressionOrLabelSelectionHelper(t *testing.T) {
-	t.Skip("TODO(Implementation phase, NFR18.1): scan leaflab/ui + leaflab/ui/components source (via globGoFiles/conformance_srcs data) for rounding/coarsening/suppression/label-selection helpers; fail naming the offending file and pattern.")
+	files := map[string]string{}
+	for k, v := range globFilesWithExt(t, "ui", ".go", ".templ") {
+		files[k] = v
+	}
+	for k, v := range globFilesWithExt(t, "ui/components", ".go", ".templ") {
+		files[k] = v
+	}
+	if len(files) < 5 {
+		// Guards the guard: if the data dependencies silently stopped
+		// resolving (e.g. a filegroup renamed), every check below would
+		// vacuously pass. The real ui/ + ui/components tree has well
+		// over a dozen source files.
+		t.Fatalf("only found %d ui source files -- check the ui:conformance_srcs / ui/components:conformance_srcs data dependencies in BUILD.bazel", len(files))
+	}
+
+	for path, content := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		for _, re := range nfr181Forbidden {
+			if re.MatchString(content) {
+				t.Errorf("%s: matches forbidden pattern %s -- NFR18.1: leaflab/ui holds no rounding/"+
+					"coarsening/suppression/label-selection rule; move this shaping into leaflab-api "+
+					"instead", path, re.String())
+			}
+		}
+	}
 }
