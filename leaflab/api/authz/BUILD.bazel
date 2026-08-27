@@ -1,0 +1,21 @@
+"""LeafLab API authorization -- per-entity Scope/Resolver (FR4, FR5, NFR2)."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+# go_test target for this package is added by the Testing phase, once
+# resolver_test.go/scope_test.go exist -- see the task issue's Testing
+# section (FR4.3 type test, fail-closed test, etc).
+
+go_library(
+    name = "authz",
+    srcs = [
+        "resolver.go",
+        "scope.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/api/authz",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
