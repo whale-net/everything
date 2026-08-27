@@ -2,14 +2,20 @@
 // every read performed under an elevated or granted (non-member) identity,
 // produces an audit record via Auditor.Record.
 //
-// This is the Scaffold: the Entry shape and the Auditor seam. The
-// append-only enforcement (NFR6.2's BEFORE UPDATE OR DELETE trigger plus a
-// REVOKE on the application role -- see
-// leaflab/migrate/migrations/016_audit_log.up.sql), the gRPC
-// interceptor-level "every registered write method has an audit
-// registration" hook, transactional participation (a rolled-back write
-// leaves no audit row), and the reason-required-for-some-actions type
-// tightening are all Implementation-phase work.
+// Entry and Auditor are the seam every audited action writes through.
+// PostgresAuditor (postgres.go) is the production implementation --
+// constructed over a pgx.Tx so the audit INSERT participates in the same
+// transaction as the write it records (NFR6.2). NewElevationEntry /
+// NewMultiBoardPushEntry / NewTransferEntry (reason.go) are the
+// reason-required constructors for FR10/FR48/FR77, which tighten Reason
+// from Entry's general *string to a plain string at the call site.
+// Registration/ValidateRegistrations (registration.go) back the "a write
+// RPC with no audit registration fails at startup" hook each service wires
+// up itself (see leaflab/api/audit_registry.go).
+//
+// Append-only enforcement itself -- the BEFORE UPDATE OR DELETE trigger and
+// the REVOKE on the application role -- lives in the database, not here;
+// see leaflab/migrate/migrations/016_audit_log.up.sql.
 package audit
 
 import "context"
@@ -43,9 +49,11 @@ const (
 //
 // Reason is *string rather than string: FR8's reason is required only for
 // specific actions (FR10 elevation, FR48 multi-board push, FR77 transfer).
-// Tightening reason to non-optional for exactly those actions -- rather
-// than leaving every caller free to omit it -- is Implementation-phase
-// work; this Scaffold's Entry is the field set every audited action shares.
+// A caller building one of those three uses NewElevationEntry /
+// NewMultiBoardPushEntry / NewTransferEntry (reason.go) instead of an Entry
+// literal -- those take reason as a plain string, so the requirement is
+// enforced at compile time for the three named actions. Every other action
+// builds an Entry literal directly, where Reason stays optional.
 type Entry struct {
 	// ActorSubject is the acting principal's subject. Recorded on every
 	// write, including config pushes, re-sends that write no config row,
@@ -58,8 +66,9 @@ type Entry struct {
 	// the action does not resolve to a single household.
 	TargetHouseholdID *int64
 	// Action names the operation performed, e.g. "RetireBoard" or
-	// "PushConfig". Matched against the gRPC interceptor's per-method audit
-	// registration in the Implementation phase.
+	// "PushConfig". Matched against the acting service's per-method audit
+	// registration (see leaflab/api/audit_registry.go's
+	// auditRegistrations).
 	Action string
 	// EntityKind names the kind of entity Action acted on, e.g. "board" or
 	// "device_config".
@@ -82,7 +91,9 @@ type Entry struct {
 // Implementations must:
 //   - participate in the same transaction as the write they record, so a
 //     rolled-back write leaves no audit row and a committed write always
-//     has exactly one (Implementation phase);
+//     has exactly one -- PostgresAuditor does this when constructed over a
+//     pgx.Tx (see postgres.go and leaflab/api/repository.go's
+//     auditedWrite);
 //   - never update or delete an existing row -- enforced close to the data
 //     by a database trigger and role grants, not only by this interface
 //     (NFR6.2; see 016_audit_log.up.sql).

@@ -4,7 +4,13 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "audit",
-    srcs = ["audit.go"],
+    srcs = [
+        "audit.go",
+        "postgres.go",
+        "reason.go",
+        "registration.go",
+    ],
     importpath = "github.com/whale-net/everything/leaflab/api/audit",
     visibility = ["//visibility:public"],
+    deps = ["@com_github_jackc_pgx_v5//pgconn"],
 )

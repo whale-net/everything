@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -43,7 +44,7 @@ const mqttExchange = "amq.topic"
 // called with *Repository in main.go).
 type deviceRepository interface {
 	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
 	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32) ([]BoardRow, error)
 	Ping(ctx context.Context) error
@@ -95,7 +96,23 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 
 	// Atomically assign version and record the pending push before publishing.
 	// This ensures the DB row always exists before the device can ack.
-	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON)
+	//
+	// TargetHouseholdID is left nil: PushDeviceConfig doesn't yet resolve a
+	// board to its owning household (that's FR1.1/NFR2 scoping, #1339's
+	// job) -- wiring a value in ahead of that scoping risks a wrong
+	// household silently shipping, which is worse than the field staying
+	// nil until the real resolution lands. Action/EntityKind come from
+	// auditRegistrations (audit_registry.go) rather than being repeated as
+	// literals here, so the two can't drift out of agreement.
+	reg := auditRegistrations[pushDeviceConfigFullMethod]
+	entry := audit.Entry{
+		ActorSubject:  actingSubject(ctx),
+		ActorKind:     audit.ActorKindHuman,
+		Action:        reg.Action,
+		EntityKind:    reg.EntityKind,
+		CorrelationID: CorrelationIDFromContext(ctx),
+	}
+	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entry)
 	if err != nil {
 		s.logger.Error("record config push failed", "device_id", req.DeviceId, "error", err)
 		return nil, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")

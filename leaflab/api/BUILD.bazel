@@ -6,6 +6,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "audit_registry.go",
         "auth.go",
         "logging_interceptor.go",
         "main.go",
@@ -16,6 +17,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/audit",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
@@ -72,6 +74,7 @@ go_test(
     embed = [":api_lib"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/audit",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/grpcauth",
@@ -121,6 +124,7 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//leaflab/api/audit",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/dbtest",
@@ -155,6 +159,7 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//leaflab/api/audit",
         "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],

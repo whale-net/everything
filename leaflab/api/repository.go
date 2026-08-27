@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/audit"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -42,6 +44,35 @@ func (r *Repository) Ping(ctx context.Context) error {
 	return r.db.Ping(ctx)
 }
 
+// auditedWrite runs fn inside a single transaction: fn performs the write
+// and returns the audit.Entry to record for it (built inside fn so it can
+// carry values -- e.g. an assigned version number -- that are only known
+// once the write has run). The audit row is inserted via the same
+// transaction via audit.PostgresAuditor, and the whole thing commits only
+// if both the write and the audit insert succeed.
+//
+// This is FR8/NFR6.2's "a rolled-back write leaves no audit row; a
+// committed write always has exactly one": if fn returns an error (e.g.
+// RetireBoard's ErrBoardAlreadyRetired), the transaction is rolled back
+// before any audit row is written, and that error is returned unwrapped so
+// callers can still match it with errors.Is.
+func (r *Repository) auditedWrite(ctx context.Context, fn func(tx pgx.Tx) (audit.Entry, error)) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck -- no-op once committed; only matters on the early-return paths above
+
+	entry, err := fn(tx)
+	if err != nil {
+		return err
+	}
+	if err := audit.NewPostgresAuditor(tx).Record(ctx, entry); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // GetOrCreateBoard returns the board_id for the given device_id, creating a row if needed.
 func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
 	var id int64
@@ -61,29 +92,44 @@ func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int
 // inserts the pending config row. ON CONFLICT DO NOTHING retries when two
 // concurrent writers compute the same MAX(version)+1; the unique constraint on
 // (board_id, version) guarantees only one wins per version number.
-func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error) {
-	for {
-		var version int64
-		err := r.db.QueryRow(ctx, `
-			WITH next AS (
-				SELECT COALESCE(MAX(version), 0) + 1 AS v
-				FROM device_config
-				WHERE board_id = $1
-			)
-			INSERT INTO device_config (board_id, version, config_json)
-			SELECT $1, next.v, $2 FROM next
-			ON CONFLICT (board_id, version) DO NOTHING
-			RETURNING version
-		`, boardID, configJSON).Scan(&version)
-		if err == nil {
-			return version, nil
+//
+// entry is the audit record for this push (FR8.2 names config pushes as a
+// write whose acting principal must be recorded); auditedWrite inserts it
+// in the same transaction as the device_config row, with entry.EntityID
+// filled in with the assigned version once it's known. A write that fails
+// (including every retry outcome other than success) leaves neither row.
+func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error) {
+	var version int64
+	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		for {
+			err := tx.QueryRow(ctx, `
+				WITH next AS (
+					SELECT COALESCE(MAX(version), 0) + 1 AS v
+					FROM device_config
+					WHERE board_id = $1
+				)
+				INSERT INTO device_config (board_id, version, config_json)
+				SELECT $1, next.v, $2 FROM next
+				ON CONFLICT (board_id, version) DO NOTHING
+				RETURNING version
+			`, boardID, configJSON).Scan(&version)
+			if err == nil {
+				break
+			}
+			if errors.Is(err, pgx.ErrNoRows) {
+				// another writer claimed this version; retry with the new MAX
+				continue
+			}
+			return audit.Entry{}, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
 		}
-		if errors.Is(err, pgx.ErrNoRows) {
-			// another writer claimed this version; retry with the new MAX
-			continue
-		}
-		return 0, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
+		versionStr := strconv.FormatInt(version, 10)
+		entry.EntityID = &versionStr
+		return entry, nil
+	})
+	if err != nil {
+		return 0, err
 	}
+	return version, nil
 }
 
 // GetLatestAcceptedConfig returns the highest-version accepted config for a board.
@@ -195,37 +241,42 @@ func (r *Repository) GetBoardByID(ctx context.Context, boardID int64) (BoardRow,
 // household-wide classification (both read board population elsewhere),
 // while leaving the row, its history and its readings fully resolvable.
 //
-// It does not record the acting principal -- FR8's append-only audit log is
-// #1338, a sibling task; wiring this operation's audit emission is that
-// task's job, the same way #1296 tracks it for PushDeviceConfig.
-func (r *Repository) RetireBoard(ctx context.Context, boardID int64) error {
-	var id int64
-	err := r.db.QueryRow(ctx, `
-		UPDATE board
-		SET retired_at = NOW()
-		WHERE board_id = $1
-		  AND retired_at IS NULL
-		RETURNING board_id
-	`, boardID).Scan(&id)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("retire board %d: %w", boardID, err)
-	}
+// entry is the audit record for this retirement (FR8.2 names it among the
+// writes whose acting principal must be recorded); auditedWrite inserts it
+// in the same transaction as the retired_at UPDATE. Neither the UPDATE nor
+// the audit row commits when the board doesn't exist or is already
+// retired -- fn returns before entry ever reaches
+// audit.PostgresAuditor.Record.
+func (r *Repository) RetireBoard(ctx context.Context, boardID int64, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		var id int64
+		err := tx.QueryRow(ctx, `
+			UPDATE board
+			SET retired_at = NOW()
+			WHERE board_id = $1
+			  AND retired_at IS NULL
+			RETURNING board_id
+		`, boardID).Scan(&id)
+		if err == nil {
+			return entry, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return audit.Entry{}, fmt.Errorf("retire board %d: %w", boardID, err)
+		}
 
-	// No row updated -- distinguish "doesn't exist" from "already retired" so
-	// callers get the accurate failure class.
-	var exists bool
-	if checkErr := r.db.QueryRow(ctx, `
-		SELECT EXISTS(SELECT 1 FROM board WHERE board_id = $1)
-	`, boardID).Scan(&exists); checkErr != nil {
-		return fmt.Errorf("retire board %d: check existence: %w", boardID, checkErr)
-	}
-	if !exists {
-		return ErrBoardNotFound
-	}
-	return ErrBoardAlreadyRetired
+		// No row updated -- distinguish "doesn't exist" from "already
+		// retired" so callers get the accurate failure class.
+		var exists bool
+		if checkErr := tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM board WHERE board_id = $1)
+		`, boardID).Scan(&exists); checkErr != nil {
+			return audit.Entry{}, fmt.Errorf("retire board %d: check existence: %w", boardID, checkErr)
+		}
+		if !exists {
+			return audit.Entry{}, ErrBoardNotFound
+		}
+		return audit.Entry{}, ErrBoardAlreadyRetired
+	})
 }
 
 // ── Ownership (FR1.1, FR70.1, NFR6.1) ────────────────────────────────────────
