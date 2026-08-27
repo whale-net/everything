@@ -110,6 +110,10 @@ func logRPC(logger *slog.Logger, ctx context.Context, method string) {
 		"correlation_id", CorrelationIDFromContext(ctx),
 		"subject", actingSubject(ctx),
 		"household", "", // Phase 1: households do not exist yet (FR8 is Phase 2).
+		// FR12: leaflab-admin eligibility, recorded only -- see
+		// auth.go's isAdminEligible doc comment. Nothing in Phase 1
+		// branches on this value.
+		"admin_eligible", isAdminEligible(ctx),
 	)
 }
 

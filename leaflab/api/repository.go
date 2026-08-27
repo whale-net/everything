@@ -20,6 +20,14 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
+// Ping reports whether the database is reachable, for FR63's health probe.
+// It carries no result beyond error/no-error -- GetHealth translates that
+// into HEALTH_DEGRADED/HEALTH_UP and nothing more specific reaches a
+// caller.
+func (r *Repository) Ping(ctx context.Context) error {
+	return r.db.Ping(ctx)
+}
+
 // GetOrCreateBoard returns the board_id for the given device_id, creating a row if needed.
 func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
 	var id int64

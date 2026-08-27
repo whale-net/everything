@@ -6,6 +6,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "auth.go",
         "logging_interceptor.go",
         "main.go",
         "repository.go",

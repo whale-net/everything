@@ -57,6 +57,16 @@ func run() error {
 	oidcIssuer := getEnv("LEAFLAB_API_OIDC_ISSUER", "")
 	oidcClientID := getEnv("LEAFLAB_API_OIDC_CLIENT_ID", "")
 
+	// FR11: AuthModeNone injects fake dev Claims with no token required --
+	// refuse to boot with it outside explicit dev mode rather than silently
+	// serving every RPC unauthenticated in a real deployment. Checked
+	// before any dependency (DB, RabbitMQ) is dialed so a misconfigured
+	// deploy fails immediately, not after standing up connections it will
+	// never use.
+	if grpcauth.AuthMode(authMode) == grpcauth.AuthModeNone && !devMode {
+		return fmt.Errorf("LEAFLAB_API_AUTH_MODE=%q requires LEAFLAB_API_DEV_MODE=true; refusing to start unauthenticated outside explicit development configuration", authMode)
+	}
+
 	pool, err := db.NewPool(ctx, databaseURL)
 	if err != nil {
 		return fmt.Errorf("database: %w", err)
@@ -78,16 +88,20 @@ func run() error {
 	defer publisher.Close() //nolint:errcheck
 
 	repo := NewRepository(pool)
-	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"))
+	apiServer := NewLeafLabAPIServer(repo, publisher, rmqConn, logging.Get("api"))
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
-	// Claims and is intended for local development only -- see
-	// LEAFLAB_API_DEV_MODE above and the Implementation phase's boot-time
-	// refusal to serve AuthModeNone outside dev mode.
+	// Claims and is intended for local development only -- see the
+	// boot-time refusal above (LEAFLAB_API_DEV_MODE) that keeps it out of
+	// real deployments. DevRoles is set to leaflab-admin (FR12) rather than
+	// grpcauth's default "admin" so local/Tilt development and dev-mode CI
+	// actually exercise admin-eligibility recording; see
+	// libs/go/grpcauth/README.md's DevRoles note.
 	authUnary, authStream, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
 		Mode:      grpcauth.AuthMode(authMode),
 		IssuerURL: oidcIssuer,
 		ClientID:  oidcClientID,
+		DevRoles:  []string{RoleAdmin},
 	})
 	if err != nil {
 		return fmt.Errorf("grpcauth: %w", err)
@@ -96,18 +110,24 @@ func run() error {
 	rpcLogger := logging.Get("rpc")
 
 	// Chain order (NFR12): correlation-id -> auth -> acting-subject logging
-	// -> handler. Correlation-id runs first so even an auth rejection is
-	// logged against the same id; subject-logging runs after auth so Claims
-	// are already in context.
+	// -> handler. "auth" is two interceptors: grpcauth's own (verifies a
+	// presented token, injects Claims) followed immediately by
+	// auth.go's enforcement interceptor (rejects any non-allowlisted
+	// method that reaches it with no Claims -- see its doc comment for why
+	// grpcauth alone doesn't enforce this). Correlation-id runs first so
+	// even an auth rejection is logged against the same id; subject-logging
+	// runs after auth so Claims are already in context.
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
 			NewCorrelationUnaryInterceptor(),
 			authUnary,
+			NewAuthEnforcementUnaryInterceptor(),
 			NewSubjectLoggingUnaryInterceptor(rpcLogger),
 		),
 		grpc.ChainStreamInterceptor(
 			NewCorrelationStreamInterceptor(),
 			authStream,
+			NewAuthEnforcementStreamInterceptor(),
 			NewSubjectLoggingStreamInterceptor(rpcLogger),
 		),
 	)
