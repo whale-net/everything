@@ -47,3 +47,28 @@ func DeriveState(accepted bool, ackedAt *time.Time, rejectionReason string) Stat
 	}
 	return StateRejected
 }
+
+// Sentence renders FR34.2/FR59.2's persona-appropriate, complete sentence
+// for s -- server-side (NFR18.1), so a BFF picks by State (the wire enum
+// key) rather than composing its own text. Exactly three fixed sentences,
+// each mutually distinguishable, none carrying a version number or a
+// status code: the firmware's verbatim rejection_reason (when state is
+// StateRejected) is returned separately by every caller, alongside this
+// sentence, for a technical surface that asks for it -- never folded into
+// the sentence itself, which stays identical across every rejected
+// version.
+func (s State) Sentence() string {
+	switch s {
+	case StateAccepted:
+		return "The board took the update."
+	case StateRejected:
+		return "The board didn't take the update."
+	case StatePending:
+		fallthrough
+	default:
+		// Pending is never rendered as rejected (FR34.1): an unrecognized
+		// State value falls back to this same sentence rather than ever
+		// producing the rejected one by accident.
+		return "The board hasn't answered yet."
+	}
+}

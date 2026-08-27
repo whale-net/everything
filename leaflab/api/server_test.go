@@ -71,6 +71,30 @@ type fakeRepo struct {
 	// accepted config, proving FR82.3's materialisation base never leaks
 	// from here.
 	loadBoardSensorIdentitiesResponse []BoardSensorIdentity
+
+	// getDeviceConfigVersionResponse/-Err configure GetDeviceConfigVersion's
+	// return for FR34/FR35's three RPCs -- nil, nil (the zero value) means
+	// "no such version", the not-found condition GetConfigStatus/
+	// GetConfigVersion map to configVersionNotFoundFailure.
+	getDeviceConfigVersionResponse *DeviceConfigVersionRow
+	getDeviceConfigVersionErr      error
+	getDeviceConfigVersionCalls    []getDeviceConfigVersionCall
+
+	// getConfigVersionEntriesResponse/-Err configure GetConfigVersionEntries'
+	// return -- GetConfigVersion's per-entry FR82.4 provenance read.
+	getConfigVersionEntriesResponse []ConfigVersionEntryRow
+	getConfigVersionEntriesErr      error
+
+	// listConfigHistoryResponse/-Err configure ListConfigHistory's return.
+	listConfigHistoryResponse []DeviceConfigHistoryRow
+	listConfigHistoryErr      error
+}
+
+// getDeviceConfigVersionCall is one recorded GetDeviceConfigVersion
+// invocation -- see fakeRepo's doc comment.
+type getDeviceConfigVersionCall struct {
+	deviceID string
+	version  int64
 }
 
 // getOrCreateBoardID/getOrCreateBoardErr configure GetOrCreateBoard's
@@ -160,6 +184,19 @@ func (f *fakeRepo) RewireSensorHW(ctx context.Context, sensorID int64, hw *Hardw
 
 func (f *fakeRepo) Ping(ctx context.Context) error {
 	return f.pingErr
+}
+
+func (f *fakeRepo) GetDeviceConfigVersion(ctx context.Context, deviceID string, version int64) (*DeviceConfigVersionRow, error) {
+	f.getDeviceConfigVersionCalls = append(f.getDeviceConfigVersionCalls, getDeviceConfigVersionCall{deviceID: deviceID, version: version})
+	return f.getDeviceConfigVersionResponse, f.getDeviceConfigVersionErr
+}
+
+func (f *fakeRepo) GetConfigVersionEntries(ctx context.Context, configID int64) ([]ConfigVersionEntryRow, error) {
+	return f.getConfigVersionEntriesResponse, f.getConfigVersionEntriesErr
+}
+
+func (f *fakeRepo) ListConfigHistory(ctx context.Context, deviceID string, beforeVersion int64, hasBefore bool, limit int32) ([]DeviceConfigHistoryRow, error) {
+	return f.listConfigHistoryResponse, f.listConfigHistoryErr
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call

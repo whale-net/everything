@@ -242,6 +242,155 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 	return &cfg, nil
 }
 
+// DeviceConfigVersionRow is one device_config row's FR34/FR35 fields --
+// everything GetConfigStatus and GetConfigVersion need about a single
+// stored version, short of its per-entry provenance (see
+// ConfigVersionEntryRow/GetConfigVersionEntries for that). Shared by both
+// RPCs' repository reads (GetDeviceConfigVersion) rather than two
+// near-identical queries, since GetConfigStatus's fields are a strict
+// subset of GetConfigVersion's.
+type DeviceConfigVersionRow struct {
+	ConfigID        int64
+	Version         int64
+	ConfigJSON      []byte
+	Accepted        bool
+	PushedAt        time.Time
+	AckedAt         *time.Time
+	RejectionReason string
+}
+
+// GetDeviceConfigVersion fetches one stored config version by
+// (device_id, version), regardless of whether it was ever accepted
+// (FR35.2) -- nil, nil when no such version exists for a board resolving
+// to deviceID (either the board or the version don't exist; the caller
+// distinguishes "board not found" via authorizeBoardAccess before this is
+// ever called, so a nil result here always means "no such version").
+func (r *Repository) GetDeviceConfigVersion(ctx context.Context, deviceID string, version int64) (*DeviceConfigVersionRow, error) {
+	var row DeviceConfigVersionRow
+	var rejectionReason *string
+	err := r.db.QueryRow(ctx, `
+		SELECT dc.config_id, dc.version, dc.config_json, dc.accepted, dc.pushed_at, dc.acked_at, dc.rejection_reason
+		FROM device_config dc
+		JOIN board b ON b.board_id = dc.board_id
+		WHERE b.device_id = $1
+		  AND dc.version = $2
+	`, deviceID, version).Scan(&row.ConfigID, &row.Version, &row.ConfigJSON, &row.Accepted, &row.PushedAt, &row.AckedAt, &rejectionReason)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get device config version %s/%d: %w", deviceID, version, err)
+	}
+	if rejectionReason != nil {
+		row.RejectionReason = *rejectionReason
+	}
+	return &row, nil
+}
+
+// ConfigVersionEntryRow is one device_config_entry row for a fetched
+// config version, with its sensor_type resolved back to the catalog name
+// (GetConfigVersionEntries joins sensor_type) -- server.go's
+// sensorTypeFromName translates that name back onto the wire
+// firmware.SensorType enum, the inverse of sensorTypeNameFromConfig.
+type ConfigVersionEntryRow struct {
+	I2CAddress     *int32 // nil means no address recorded at all (hwkey.AddressOpt Absent)
+	MuxPath        []byte // jsonb, hwkey.MuxPath's canonical encoding (migration 028)
+	SensorTypeName string
+	Provenance     string
+}
+
+// GetConfigVersionEntries returns configID's FR82.4 per-entry provenance
+// rows (device_config_entry, migration 028), for GetConfigVersion.
+func (r *Repository) GetConfigVersionEntries(ctx context.Context, configID int64) ([]ConfigVersionEntryRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT dce.i2c_address, dce.mux_path, st.name, dce.provenance
+		FROM device_config_entry dce
+		JOIN sensor_type st ON st.sensor_type_id = dce.sensor_type_id
+		WHERE dce.config_id = $1
+		ORDER BY dce.device_config_entry_id
+	`, configID)
+	if err != nil {
+		return nil, fmt.Errorf("get config version entries for config_id %d: %w", configID, err)
+	}
+	defer rows.Close()
+
+	var out []ConfigVersionEntryRow
+	for rows.Next() {
+		var e ConfigVersionEntryRow
+		if err := rows.Scan(&e.I2CAddress, &e.MuxPath, &e.SensorTypeName, &e.Provenance); err != nil {
+			return nil, fmt.Errorf("scan config version entry for config_id %d: %w", configID, err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// DeviceConfigHistoryRow is one version in ListConfigHistory's result --
+// the FR35.1 fields, without config_json (never returned by the listing;
+// GetConfigVersion is the fetch-one-version path that returns the payload).
+type DeviceConfigHistoryRow struct {
+	Version         int64
+	Accepted        bool
+	PushedAt        time.Time
+	AckedAt         *time.Time
+	RejectionReason string
+}
+
+// ListConfigHistory returns up to limit versions for deviceID's board,
+// newest first (ORDER BY version DESC) -- FR35.1: every version is
+// included, pending and rejected alike, never filtered by state. Keyset
+// paginated on (version) per FR61: beforeVersion/hasBefore is the last
+// (lowest) version of the previous page (contract.DecodeConfigHistoryCursor),
+// not an offset, so pagination stays correct while new versions are
+// pushed mid-scan. Callers typically request limit+1 rows so a next page
+// can be detected without a separate COUNT query.
+func (r *Repository) ListConfigHistory(ctx context.Context, deviceID string, beforeVersion int64, hasBefore bool, limit int32) ([]DeviceConfigHistoryRow, error) {
+	var sqlQuery string
+	var args []any
+	if hasBefore {
+		sqlQuery = `
+			SELECT dc.version, dc.accepted, dc.pushed_at, dc.acked_at, dc.rejection_reason
+			FROM device_config dc
+			JOIN board b ON b.board_id = dc.board_id
+			WHERE b.device_id = $1
+			  AND dc.version < $2
+			ORDER BY dc.version DESC
+			LIMIT $3
+		`
+		args = []any{deviceID, beforeVersion, limit}
+	} else {
+		sqlQuery = `
+			SELECT dc.version, dc.accepted, dc.pushed_at, dc.acked_at, dc.rejection_reason
+			FROM device_config dc
+			JOIN board b ON b.board_id = dc.board_id
+			WHERE b.device_id = $1
+			ORDER BY dc.version DESC
+			LIMIT $2
+		`
+		args = []any{deviceID, limit}
+	}
+
+	rows, err := r.db.Query(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list config history for %s: %w", deviceID, err)
+	}
+	defer rows.Close()
+
+	var out []DeviceConfigHistoryRow
+	for rows.Next() {
+		var h DeviceConfigHistoryRow
+		var rejectionReason *string
+		if err := rows.Scan(&h.Version, &h.Accepted, &h.PushedAt, &h.AckedAt, &rejectionReason); err != nil {
+			return nil, fmt.Errorf("scan config history row for %s: %w", deviceID, err)
+		}
+		if rejectionReason != nil {
+			h.RejectionReason = *rejectionReason
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
 // RegionApplySkipRow is one audit_log row leaflab/processor's
 // ApplyConfigRegions wrote for a config entry it skipped instead of
 // applying (FR1.3) -- see GetRegionApplySkips.
