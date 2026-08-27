@@ -1,0 +1,10 @@
+"""FR71 granularity-tier selection over migration 022's raw/5-minute/hourly tiers. See tiers.go's package doc comment."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tiers",
+    srcs = ["tiers.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/tiers",
+    visibility = ["//visibility:public"],
+)
