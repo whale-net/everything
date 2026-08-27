@@ -15,10 +15,12 @@ Drives implementation from `plan:approved` through swimlane task execution. The 
 /project-manager:implement 123
 /project-manager:implement 123 --max-subagents 2
 /project-manager:implement 123 --create-plan-only
+/project-manager:implement 123 --planner-model sonnet
 ```
 
 - `--max-subagents <N>` — how many worker/validator subagents to run concurrently per batch. **Defaults to 4** if the user doesn't specify a number.
 - `--create-plan-only` — stop once the Project board and task issues exist; do not run the swimlane work loop. Recognize close phrasings the user might use instead of the literal flag ("plan only", "just set up the board", "don't implement yet", "create the tasks but don't start work") as the same request.
+- `--planner-model <model>` — model override passed to the `Agent` call that dispatches `planner` in step 3. **Defaults to `opus`.** Task breakdown (swimlaning, dependency wiring, issue scoping) is the highest-leverage reasoning step in this skill and worth the strongest available model; running it as a subagent also keeps that reasoning's tool output out of the orchestrator's own context.
 
 ## Steps
 
@@ -32,7 +34,7 @@ Drives implementation from `plan:approved` through swimlane task execution. The 
    git fetch origin main
    ```
 
-3. **Task breakdown (skip if already done).** `gh issue view <n> --comments` — if a `Project board: <url>` comment exists, extract the project number. Otherwise dispatch `project-manager:planner` with the root issue number to create the Project board with swimlanes, create cohesive task issues, and post the summary comment.
+3. **Task breakdown (skip if already done).** `gh issue view <n> --comments` — if a `Project board: <url>` comment exists, extract the project number. Otherwise dispatch `project-manager:planner` — via `Agent` with `model` set to `--planner-model` (default `opus`) — with the root issue number, to create the Project board with swimlanes, create cohesive task issues, and post the summary comment. Running this as a subagent, on the strongest available model, keeps the orchestrator's own context free of the board/issue-creation tool traffic while giving the task-breakdown reasoning itself the most capable model.
 
    **If a plan-only request was made:** report the Project board URL and the created task issues, grouped by starting swimlane, to the user and **stop here** — do not proceed to step 4.
 
