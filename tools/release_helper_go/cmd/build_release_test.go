@@ -40,6 +40,80 @@ func TestParseOpenAPIMatrixItems(t *testing.T) {
 	}
 }
 
+func TestParseDescriptorSetMatrixItems(t *testing.T) {
+	matrix := map[string]interface{}{
+		"include": []map[string]string{
+			{"app": "leaflab-api", "domain": "leaflab", "descriptor_set_target": "//leaflab/api:leaflab_api_descriptor_set"},
+		},
+	}
+	entries, err := parseDescriptorSetMatrixItems(matrix)
+	if err != nil {
+		t.Fatalf("parseDescriptorSetMatrixItems failed: %v", err)
+	}
+	if len(entries) != 1 || entries[0].DescriptorSetTarget != "//leaflab/api:leaflab_api_descriptor_set" {
+		t.Fatalf("unexpected entries: %+v", entries)
+	}
+
+	if entries, err := parseDescriptorSetMatrixItems(nil); err != nil || entries != nil {
+		t.Fatalf("expected nil, nil for nil matrix, got %+v, %v", entries, err)
+	}
+}
+
+// TestBuildDescriptorSets_ResolvesOutputViaCquery exercises BuildDescriptorSets'
+// cquery-based file resolution (build_release.go's descriptorSetOutputStarlarkExpr) --
+// unlike BuildOpenAPISpecs, it can't guess the output path from the target's
+// own package directory, since a descriptor_set_target can be a filegroup
+// re-exporting a proto_descriptor_set target declared in a different
+// package (leaflab-api's real shape: //leaflab/api:leaflab_api_descriptor_set
+// wraps //leaflab/api/proto:leaflabapi_descriptor_set).
+func TestBuildDescriptorSets_ResolvesOutputViaCquery(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "descriptor-set-test")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	execRoot := filepath.Join(tmpDir, "execroot")
+	// Mirrors a real build: the file lives under a *different* package
+	// directory (proto/) than the release_app() call's own package (api/).
+	realFileDir := filepath.Join(execRoot, "bazel-out", "k8-fastbuild", "bin", "leaflab", "api", "proto")
+	if err := os.MkdirAll(realFileDir, 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	descriptorContent := []byte("fake-file-descriptor-set-bytes")
+	if err := os.WriteFile(filepath.Join(realFileDir, "leaflabapi_descriptor_set.pb"), descriptorContent, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	fakeBazel := newFakeBazel(
+		fakeBazelCall{argsContain: []string{"info", "execution_root", "--config=ci-images"}, output: execRoot},
+		fakeBazelCall{argsContain: []string{"build", "--config=ci-images", "//leaflab/api:leaflab_api_descriptor_set"}, output: ""},
+		fakeBazelCall{
+			argsContain: []string{"cquery", "//leaflab/api:leaflab_api_descriptor_set", "--output=starlark"},
+			output:      "bazel-out/k8-fastbuild/bin/leaflab/api/proto/leaflabapi_descriptor_set.pb",
+		},
+	)
+
+	outDir := filepath.Join(tmpDir, "out")
+	results, err := BuildDescriptorSets(fakeBazel, []descriptorSetEntry{
+		{App: "leaflab-api", Domain: "leaflab", DescriptorSetTarget: "//leaflab/api:leaflab_api_descriptor_set"},
+	}, outDir)
+	if err != nil {
+		t.Fatalf("BuildDescriptorSets failed: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	got, err := os.ReadFile(filepath.Join(outDir, "leaflab-leaflab-api_descriptor_set.pb"))
+	if err != nil {
+		t.Fatalf("expected descriptor set copied to output dir: %v", err)
+	}
+	if string(got) != string(descriptorContent) {
+		t.Fatalf("descriptor set content mismatch: got %q want %q", got, descriptorContent)
+	}
+}
+
 func TestBuildOpenAPISpecs_PrimaryPath(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "openapi-primary-test")
 	if err != nil {
@@ -137,21 +211,22 @@ func TestExecuteBuildReleaseArtifacts_EmptyPlan(t *testing.T) {
 	fakeBazel := newFakeBazel() // no calls expected
 
 	result, err := ExecuteBuildReleaseArtifacts(BuildReleaseArtifactsParams{
-		Plan:                 PlanResult{},
-		GitSHA:               "deadbeef",
-		DryRun:               false,
-		AppsOutputDir:        filepath.Join(tmpDir, "apps"),
-		ChartsOutputDir:      filepath.Join(tmpDir, "charts"),
-		OpenAPIOutputDir:     filepath.Join(tmpDir, "openapi"),
-		CLIBinariesOutputDir: filepath.Join(tmpDir, "cli"),
-		Bazel:                fakeBazel,
-		FS:                   defaultFS,
-		WorkspaceRoot:        tmpDir,
+		Plan:                   PlanResult{},
+		GitSHA:                 "deadbeef",
+		DryRun:                 false,
+		AppsOutputDir:          filepath.Join(tmpDir, "apps"),
+		ChartsOutputDir:        filepath.Join(tmpDir, "charts"),
+		OpenAPIOutputDir:       filepath.Join(tmpDir, "openapi"),
+		DescriptorSetOutputDir: filepath.Join(tmpDir, "descriptor-sets"),
+		CLIBinariesOutputDir:   filepath.Join(tmpDir, "cli"),
+		Bazel:                  fakeBazel,
+		FS:                     defaultFS,
+		WorkspaceRoot:          tmpDir,
 	})
 	if err != nil {
 		t.Fatalf("ExecuteBuildReleaseArtifacts failed: %v", err)
 	}
-	if len(result.Apps) != 0 || len(result.Charts) != 0 || len(result.OpenAPISpecs) != 0 || len(result.CLIBinaries) != 0 {
+	if len(result.Apps) != 0 || len(result.Charts) != 0 || len(result.OpenAPISpecs) != 0 || len(result.DescriptorSets) != 0 || len(result.CLIBinaries) != 0 {
 		t.Fatalf("expected an empty plan to build nothing, got %+v", result)
 	}
 	if len(fakeBazel.recorded) != 0 {
@@ -180,19 +255,26 @@ func TestExecuteBuildReleaseArtifacts_DryRunSkipsAppsSpecsAndCLI(t *testing.T) {
 				{"app": "control-api", "domain": "manmanv2", "openapi_target": "//manmanv2/control_api:openapi_spec"},
 			},
 		},
+		HasDescriptorSets: true,
+		DescriptorSetMatrix: map[string]interface{}{
+			"include": []map[string]string{
+				{"app": "leaflab-api", "domain": "leaflab", "descriptor_set_target": "//leaflab/api:leaflab_api_descriptor_set"},
+			},
+		},
 	}
 
 	result, err := ExecuteBuildReleaseArtifacts(BuildReleaseArtifactsParams{
-		Plan:                 plan,
-		GitSHA:               "deadbeef",
-		DryRun:               true,
-		AppsOutputDir:        filepath.Join(tmpDir, "apps"),
-		ChartsOutputDir:      filepath.Join(tmpDir, "charts"),
-		OpenAPIOutputDir:     filepath.Join(tmpDir, "openapi"),
-		CLIBinariesOutputDir: filepath.Join(tmpDir, "cli"),
-		Bazel:                fakeBazel,
-		FS:                   defaultFS,
-		WorkspaceRoot:        tmpDir,
+		Plan:                   plan,
+		GitSHA:                 "deadbeef",
+		DryRun:                 true,
+		AppsOutputDir:          filepath.Join(tmpDir, "apps"),
+		ChartsOutputDir:        filepath.Join(tmpDir, "charts"),
+		OpenAPIOutputDir:       filepath.Join(tmpDir, "openapi"),
+		DescriptorSetOutputDir: filepath.Join(tmpDir, "descriptor-sets"),
+		CLIBinariesOutputDir:   filepath.Join(tmpDir, "cli"),
+		Bazel:                  fakeBazel,
+		FS:                     defaultFS,
+		WorkspaceRoot:          tmpDir,
 	})
 	if err != nil {
 		t.Fatalf("ExecuteBuildReleaseArtifacts failed: %v", err)
@@ -202,6 +284,9 @@ func TestExecuteBuildReleaseArtifacts_DryRunSkipsAppsSpecsAndCLI(t *testing.T) {
 	}
 	if len(result.OpenAPISpecs) != 0 {
 		t.Fatalf("expected dry-run to skip openapi specs, got %+v", result.OpenAPISpecs)
+	}
+	if len(result.DescriptorSets) != 0 {
+		t.Fatalf("expected dry-run to skip descriptor sets, got %+v", result.DescriptorSets)
 	}
 	if len(result.CLIBinaries) != 0 {
 		t.Fatalf("expected dry-run to skip cli binaries, got %+v", result.CLIBinaries)
