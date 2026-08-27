@@ -13,6 +13,7 @@ go_library(
         "main.go",
         "regions.go",
         "repository.go",
+        "sensor_region.go",
         "server.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api",
