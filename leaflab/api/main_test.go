@@ -162,6 +162,23 @@ func (stubAPIServer) CompleteClaim(ctx context.Context, req *pb.CompleteClaimReq
 	return &pb.CompleteClaimResponse{}, nil
 }
 
+// Ownership closure, release, and transfer RPCs (FR70.2-.4/FR77, #1343
+// scaffold) -- canned successes here too, same rationale as the RPCs above:
+// this stub isolates the auth/logging middleware, not closure business
+// logic (which has no handler wired in server.go yet -- see
+// leaflab/api/closure.go).
+func (stubAPIServer) PreviewClosure(ctx context.Context, req *pb.PreviewClosureRequest) (*pb.PreviewClosureResponse, error) {
+	return &pb.PreviewClosureResponse{}, nil
+}
+
+func (stubAPIServer) ReleaseBoard(ctx context.Context, req *pb.ReleaseBoardRequest) (*pb.ReleaseBoardResponse, error) {
+	return &pb.ReleaseBoardResponse{}, nil
+}
+
+func (stubAPIServer) TransferClosure(ctx context.Context, req *pb.TransferClosureRequest) (*pb.TransferClosureResponse, error) {
+	return &pb.TransferClosureResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

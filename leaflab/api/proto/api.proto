@@ -121,6 +121,41 @@ service LeafLabAPI {
   // server-side either way, readable by an elevated admin as FR77's
   // evidence, but never disclosed to the challenger.
   rpc CompleteClaim(CompleteClaimRequest) returns (CompleteClaimResponse);
+
+  // --- Ownership closure, release, and transfer (FR70.2-.4, FR77) ---------
+  //
+  // FR70's ownership closure of a board is a fixed six-step enumeration
+  // over current placement (see leaflab/api/closure.go's doc comment for
+  // the exact steps) -- not a transitive closure. These three RPCs are
+  // this task's (#1343) scaffolded wire surface; PreviewClosure's handler
+  // is read-only business logic (ComputeClosure, closure.go) but is not
+  // yet wired into leaflab/api/server.go, matching the households/claim
+  // RPCs' scaffold/feat split precedent. ReleaseBoard and TransferClosure
+  // are signature-only skeletons in closure.go until the Implementation
+  // phase.
+
+  // PreviewClosure returns a board's ownership closure without moving
+  // anything -- the read-only preview a caller uses before deciding
+  // whether to adopt or transfer.
+  rpc PreviewClosure(PreviewClosureRequest) returns (PreviewClosureResponse);
+
+  // ReleaseBoard is FR77(a)'s evidence path: a member of the losing
+  // household releases a board's closure, producing a release token
+  // TransferClosure can later present as evidence that the losing
+  // household consented.
+  rpc ReleaseBoard(ReleaseBoardRequest) returns (ReleaseBoardResponse);
+
+  // TransferClosure moves a board's ownership closure to
+  // destination_household_id, gated on evidence (exactly one of the
+  // TransferClosureRequest.evidence oneof branches): either a release
+  // token from ReleaseBoard by a member of the losing household, or an
+  // elevated admin action carrying a discharged FR76 possession-challenge
+  // handle. An admin assertion alone -- neither branch set -- is never
+  // sufficient and is refused. Adoption out of the member-less Unadopted
+  // household is reached through FR76's CompleteClaim instead, never
+  // through this RPC (Unadopted has no losing member and needs no
+  // evidence beyond FR76's own challenge).
+  rpc TransferClosure(TransferClosureRequest) returns (TransferClosureResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -418,6 +453,90 @@ message CompleteClaimResponse {
   // a gRPC failure (contract.Refuse, FR59.3) instead, never as an empty or
   // zero-value success response -- see CompleteClaim's doc comment (api.proto's
   // service block).
+  Household household = 1;
+  // Server's current time (FR64).
+  Instant server_now = 2;
+}
+
+// --- Ownership closure, release, and transfer (FR70.2-.4, FR77) -----------
+
+// OwnershipClosure mirrors leaflab/api.Closure on the wire -- see that
+// type's doc comment for what each field means and the fixed six-step
+// enumeration that produces it. Every id list here is the population as of
+// the instant this response was computed; a caller acting on it (e.g.
+// deciding whether to adopt) should treat it as a preview, not a lock.
+message OwnershipClosure {
+  int64 board_id = 1;
+  repeated int64 sensor_ids = 2;
+  repeated int64 region_ids = 3;
+  repeated int64 subtree_root_ids = 4;
+  // Every OTHER board (never board_id itself) with a sensor currently in
+  // the shared subtree -- FR70's fixed enumeration stops here; an
+  // entangled board's own other sensors are never followed into a second
+  // subtree.
+  repeated int64 entangled_board_ids = 5;
+  repeated int64 plant_ids = 6;
+}
+
+message PreviewClosureRequest {
+  int64 board_id = 1;
+}
+
+message PreviewClosureResponse {
+  OwnershipClosure closure = 1;
+  // Server's current time (FR64).
+  Instant server_now = 2;
+}
+
+message ReleaseBoardRequest {
+  int64 board_id = 1;
+  // Optional context for the release -- persona-appropriate, not required.
+  string reason = 2;
+}
+
+message ReleaseBoardResponse {
+  // Opaque evidence token, presented as TransferClosureRequest.release_token
+  // by the gaining side to prove a losing-household member consented
+  // (FR77(a)). Never the underlying numeric row id -- same rationale as
+  // OpenClaimChallengeResponse.challenge_handle.
+  string release_token = 1;
+  // Server's current time (FR64).
+  Instant server_now = 2;
+}
+
+// AdminTransferEvidence is FR77(b)'s elevated-admin evidence path: an
+// elevated, reasoned admin action carrying a discharged FR76 possession
+// challenge. "An admin assertion alone is never sufficient" -- this message
+// is meaningless without discharged_challenge_handle actually naming a
+// challenge FR76 recorded as discharged.
+message AdminTransferEvidence {
+  // The FR76 claim_challenge.handle (leaflab/api/claim.go,
+  // OpenClaimChallengeResponse.challenge_handle) that discharged against
+  // this board, cited as this transfer's possession evidence.
+  string discharged_challenge_handle = 1;
+}
+
+message TransferClosureRequest {
+  int64 board_id = 1;
+  int64 destination_household_id = 2;
+  // Evidence (FR77): exactly one branch must be set. Neither set is a
+  // bare admin assertion and is refused ("never sufficient").
+  oneof evidence {
+    // FR77(a): a release token produced by ReleaseBoard, by a member of
+    // the losing household.
+    string release_token = 3;
+    // FR77(b): elevated admin action (FR10 task) evidence.
+    AdminTransferEvidence admin_evidence = 4;
+  }
+  // Required for the admin_evidence branch ("elevated, reasoned admin
+  // action") -- optional for the release_token branch, which carries its
+  // own implicit reason (a losing-household member released their own
+  // board).
+  string reason = 5;
+}
+
+message TransferClosureResponse {
+  // The destination household the closure now belongs to.
   Household household = 1;
   // Server's current time (FR64).
   Instant server_now = 2;

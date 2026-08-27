@@ -9,6 +9,7 @@ go_library(
         "audit_registry.go",
         "auth.go",
         "claim.go",
+        "closure.go",
         "households.go",
         "logging_interceptor.go",
         "main.go",
