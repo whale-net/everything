@@ -3,6 +3,13 @@ load("//tools:templ.bzl", "templ_library")
 templ_library(
     name = "components",
     srcs = glob(["*.templ"]),
+    go_srcs = [
+        # Plain-Go FR64 rendering helpers (elapsed text + absolute-instant
+        # hover title) private to boards.templ -- not generated from a
+        # .templ file, so listed explicitly rather than picked up by the
+        # *.templ glob above.
+        "elapsed.go",
+    ],
     visibility = ["//leaflab/ui:__subpackages__"],
     deps = [
         "//leaflab/api/proto:leaflabapipb",
@@ -13,9 +20,11 @@ templ_library(
 
 # Source exposed to //leaflab/ui:ui_test's NFR18.1 grep-style placeholder
 # conformance check (#1329). Scoped, not public -- mirrors
-# tools/app_registry/ui/components:conformance_srcs.
+# tools/app_registry/ui/components:conformance_srcs. Includes elapsed.go
+# alongside the *.templ files so the NFR18.1 scan covers every checked-in
+# source under this package, not just the generated-from-.templ ones.
 filegroup(
     name = "conformance_srcs",
-    srcs = glob(["*.templ"]),
+    srcs = glob(["*.templ"]) + ["elapsed.go"],
     visibility = ["//leaflab/ui:__subpackages__"],
 )

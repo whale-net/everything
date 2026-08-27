@@ -13,11 +13,16 @@ import (
 // pageToken is passed straight through as FR61's opaque keyset page
 // token; an empty token requests the first page.
 //
-// Scaffold scope (#1330): this is the single call site handlers_boards.go
-// and components.BoardsPage build on. Honouring FR61's server-enforced
-// page cap end to end, exposing a "load more" continuation from the
-// returned page, and computing FR64 elapsed text from the response's
-// server_now are Implementation-phase work on this same task.
+// page_size is deliberately left unset: leaflab-api's own
+// contract.ClampPageSize (leaflab/api/contract/paging.go) enforces the
+// FR61 page cap and default size server-side -- "a request above the cap
+// is clamped, not rejected" per ListBoardsRequest's own doc comment -- so
+// this BFF has no cap logic of its own to duplicate or drift out of sync
+// (NFR18.2: the same page-size rule a programmatic gRPC caller gets).
+//
+// The single call site both handlers_boards.go handlers use: handleBoards
+// for the full page-one render, handleBoardsRows for every FR61 "load
+// more" continuation.
 func (app *App) fetchBoardsPage(ctx context.Context, pageToken string) (*pb.ListBoardsResponse, error) {
 	resp, err := app.api.LeafLab.ListBoards(ctx, &pb.ListBoardsRequest{
 		Page: &pb.PageRequest{PageToken: pageToken},
