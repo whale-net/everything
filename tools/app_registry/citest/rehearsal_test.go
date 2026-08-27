@@ -89,6 +89,9 @@ func testFR58HappyPath(t *testing.T, client pb.ArtifactRegistryClient) {
 	artifactID := fmt.Sprintf("rehearsal-test-%s", testID)
 	artifactKind := "binary"
 	ownerFullName := "tools-release_helper_go"
+	binaryName := "release_helper_go"
+	resolveOs := "linux"
+	resolveArch := "amd64"
 	uncompressedDigest := generateTestDigest("rehearsal-main-" + version)
 	identityDigest := generateTestDigest("rehearsal-identity-" + version)
 
@@ -102,7 +105,12 @@ func testFR58HappyPath(t *testing.T, client pb.ArtifactRegistryClient) {
 		VersionReference: version,
 		Files: []*pb.BrokerUploadFile{
 			{
-				VariantKey:         "main",
+				// Named to match ResolveBinaryURL's "{os}-{arch}" variant
+				// convention (see resolveVariantSelector) -- irrelevant to
+				// whether resolution actually succeeds, since BrokerUpload's
+				// object key is never linked into stored_object_key (see
+				// Step 5 below), but kept realistic rather than "main".
+				VariantKey:         fmt.Sprintf("%s-%s", resolveOs, resolveArch),
 				UncompressedDigest: uncompressedDigest,
 			},
 		},
@@ -202,26 +210,41 @@ func testFR58HappyPath(t *testing.T, client pb.ArtifactRegistryClient) {
 	t.Logf("RecordArtifact response: artifact_id=%s, version=%s", recordResp.Artifact.ArtifactId, recordResp.Artifact.Version)
 
 	// Step 5: Resolve the artifact to retrieve it (simulating acquisition path).
-	t.Logf("Step 5: ResolveArtifact (retrieve published version)")
+	// NOTE: ResolveArtifact (used here in earlier drafts of this test) is
+	// chart-only at the repository layer (postgres/artifact.go: "artifact %s
+	// is not a chart") -- it walks a chart's pinned image references and is
+	// never the right call for a binary-kind artifact. ResolveBinaryURL is
+	// the binary-kind equivalent.
+	t.Logf("Step 5: ResolveBinaryURL (retrieve published version)")
 
-	resolveReq := &pb.ResolveArtifactRequest{
-		ArtifactId: recordResp.Artifact.ArtifactId,
+	resolveReq := &pb.ResolveBinaryURLRequest{
+		Binary:  binaryName,
+		Os:      resolveOs,
+		Arch:    resolveArch,
+		Version: version,
 	}
 
-	resolveResp, err := client.ResolveArtifact(ctx, resolveReq)
+	resolveResp, err := client.ResolveBinaryURL(ctx, resolveReq)
 	if err != nil {
-		t.Skipf("ResolveArtifact not available: %v", err)
+		st, ok := status.FromError(err)
+		if ok && st.Code() == codes.NotFound {
+			// FR-58 gate P finding: BrokerUpload writes to an opaque,
+			// session-scoped object key (artifacts/<identity>/<session>/<variant>)
+			// that nothing ever copies into stored_object_key, and no kind
+			// currently derives that key via H8 either. So a binary
+			// artifact uploaded and confirmed through BrokerUpload/
+			// ConfirmUpload/RecordArtifact has no wired path to become
+			// resolvable via ResolveBinaryURL. This is a real production
+			// gap, not a test-fixture bug -- recording it here rather than
+			// masking it as a skip.
+			t.Errorf("FR-58 gate P gap: ResolveBinaryURL returned NotFound for a just-uploaded-and-confirmed binary artifact (%v) -- BrokerUpload's object key is never linked into stored_object_key, so the resolve path can't find it", st.Message())
+			return
+		}
+		t.Fatalf("ResolveBinaryURL failed: %v", err)
 	}
-	t.Logf("ResolveArtifact response:")
-	t.Logf("  Artifact ID: %s", resolveResp.Artifact.ArtifactId)
-	t.Logf("  Digest: %s", resolveResp.Artifact.Digest)
-	t.Logf("  Repository: %s", resolveResp.Artifact.Repository)
-	t.Logf("  Version: %s", resolveResp.Artifact.Version)
-
-	// Verify the resolved digest matches what we recorded.
-	if resolveResp.Artifact.Digest != uncompressedDigest {
-		t.Errorf("Resolved digest %s != recorded digest %s", resolveResp.Artifact.Digest, uncompressedDigest)
-	}
+	t.Logf("ResolveBinaryURL response:")
+	t.Logf("  DownloadUrl: %s", resolveResp.DownloadUrl)
+	t.Logf("  ChecksumManifestUrl: %s", resolveResp.ChecksumManifestUrl)
 
 	t.Logf("FR-58 Happy Path: SUCCESS - Full cycle complete")
 }
@@ -360,28 +383,32 @@ func testFR58ResolvableButUnwritten(t *testing.T, client pb.ArtifactRegistryClie
 	}
 	t.Logf("RecordArtifact succeeded: artifact_id=%s, version=%s", recordResp.Artifact.ArtifactId, recordResp.Artifact.Version)
 
-	t.Logf("Step 2: ResolveArtifact (should detect unwritten object)")
+	t.Logf("Step 2: ResolveBinaryURL (should detect unwritten object)")
 
-	resolveReq := &pb.ResolveArtifactRequest{
-		ArtifactId: recordResp.Artifact.ArtifactId,
+	// NOTE: ResolveArtifact (used here in earlier drafts of this test) is
+	// chart-only -- see the happy-path test's Step 5 comment. ResolveBinaryURL
+	// is the binary-kind equivalent.
+	resolveReq := &pb.ResolveBinaryURLRequest{
+		Binary:  "release_helper_go",
+		Os:      "linux",
+		Arch:    "amd64",
+		Version: version,
 	}
 
-	resolveResp, err := client.ResolveArtifact(ctx, resolveReq)
+	resolveResp, err := client.ResolveBinaryURL(ctx, resolveReq)
 	if err != nil {
-		t.Logf("ResolveArtifact returned error (may be expected): %v", err)
+		t.Logf("ResolveBinaryURL returned error (may be expected): %v", err)
 		st, ok := status.FromError(err)
 		if ok && st.Code() == codes.NotFound {
 			t.Logf("✓ FR-68/FR-29 (gate P): Registry correctly detected unwritten object and returned NotFound")
 			return
 		}
-		t.Logf("ResolveArtifact error code: %v", status.Code(err))
+		t.Logf("ResolveBinaryURL error code: %v", status.Code(err))
 		return
 	}
 
-	t.Logf("ResolveArtifact succeeded (unwritten object still resolvable in registry):")
-	t.Logf("  Artifact ID: %s", resolveResp.Artifact.ArtifactId)
-	t.Logf("  Digest: %s", resolveResp.Artifact.Digest)
-	t.Logf("  Repository: %s", resolveResp.Artifact.Repository)
+	t.Logf("ResolveBinaryURL succeeded (unwritten object still resolvable in registry):")
+	t.Logf("  DownloadUrl: %s", resolveResp.DownloadUrl)
 }
 
 // generateTestDigest creates a deterministic sha256 digest for test content.
