@@ -1,0 +1,23 @@
+package components
+
+import "github.com/whale-net/everything/libs/go/htmxauth"
+
+// DegradedPage is the NFR14 "it's us, not you" surface: rendered whenever
+// leaflab-api is unreachable (dial failure / codes.Unavailable) or reports
+// itself HEALTH_DEGRADED (FR63) via GetHealth. It intentionally carries no
+// technical detail -- no Go error string, no dependency name, no status
+// code -- mirroring FR63.2's coarse GetHealthResponse contract on the
+// browser side: a caller learns "this is our problem, not yours" and
+// nothing else. Still rendered through Shell (not a bare error page) so
+// sign-out and the rest of the chrome stay reachable while the API is
+// unwell.
+templ DegradedPage(user *htmxauth.UserInfo) {
+	@Shell("LeafLab", user) {
+		<div class="card bg-base-100 shadow">
+			<div class="card-body">
+				<h1 class="card-title">We're having trouble right now</h1>
+				<p>This is our problem, not yours. Please try again in a few minutes.</p>
+			</div>
+		</div>
+	}
+}
