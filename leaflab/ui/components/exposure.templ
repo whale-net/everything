@@ -1,0 +1,23 @@
+package components
+
+import "github.com/whale-net/everything/libs/go/htmxauth"
+
+// ExposureRefusalPage is A30's Phase 1 exit-criterion-7 refusal surface: an
+// authenticated user who is not on the exposure allowlist (see
+// leaflab/ui/exposure.go) sees this instead of the route they requested.
+// FR59.2 parity with the API side's PermissionDenied wording -- one plain
+// sentence, no mention of allowlists, environment variables, or any other
+// internal mechanism. Still rendered through Shell (not a bare error page,
+// matching DegradedPage's precedent above) so sign-out stays reachable: a
+// refused user is authenticated, just not yet admitted, and must still be
+// able to leave the session cleanly.
+templ ExposureRefusalPage(user *htmxauth.UserInfo) {
+	@Shell("LeafLab", user) {
+		<div class="card bg-base-100 shadow">
+			<div class="card-body">
+				<h1 class="card-title">This isn't open yet</h1>
+				<p>This isn't open yet. Check back later.</p>
+			</div>
+		</div>
+	}
+}

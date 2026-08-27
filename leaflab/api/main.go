@@ -110,7 +110,16 @@ func run() error {
 
 	rpcLogger := logging.Get("rpc")
 
-	grpcServer := buildServer(authUnary, authStream, rpcLogger, apiServer, devMode)
+	// A30 Phase 1 exit criterion 7: non-exposure to production users is
+	// enforced, not merely intended. Mechanism chosen: a principal
+	// allowlist (see exposure.go's ExposureAllowlistEnvVar doc comment for
+	// why this over a feature gate or non-production-only deployment --
+	// smallest surface area, fail-closed by construction, and removable in
+	// the single change #1339 already names). Loaded once at boot, same as
+	// every other env-sourced config here.
+	exposureAllowlist := LoadExposureAllowlistFromEnv()
+
+	grpcServer := buildServer(authUnary, authStream, rpcLogger, apiServer, devMode, exposureAllowlist)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -165,30 +174,36 @@ func validateAuthBootConfig(mode grpcauth.AuthMode, devMode bool) error {
 // startTestServer in main_test.go) or assert on reflection registration,
 // without a TCP listener or a dialed DB/RabbitMQ connection.
 //
-// Chain order (NFR12): correlation-id -> auth -> acting-subject logging ->
-// handler. "auth" is two interceptors: authUnary/authStream (verifies a
-// presented token, injects Claims -- grpcauth's own in production; see
-// run()) followed immediately by auth.go's enforcement interceptor
-// (rejects any non-allowlisted method that reaches it with no Claims -- see
-// its doc comment for why grpcauth alone doesn't enforce this).
-// Correlation-id runs first so even an auth rejection is logged against the
-// same id; subject-logging runs after auth so Claims are already in
-// context.
+// Chain order (NFR12): correlation-id -> auth -> A30 exposure gate ->
+// acting-subject logging -> handler. "auth" is two interceptors:
+// authUnary/authStream (verifies a presented token, injects Claims --
+// grpcauth's own in production; see run()) followed immediately by auth.go's
+// enforcement interceptor (rejects any non-allowlisted method that reaches
+// it with no Claims -- see its doc comment for why grpcauth alone doesn't
+// enforce this). exposure.go's gate runs immediately after that: by this
+// point Claims are guaranteed present for every non-anonymous method, so it
+// can read Subject unconditionally (A30, Phase 1 exit criterion 7 -- removed
+// in #1339 per exposure.go's TODO). Correlation-id runs first so even a
+// rejection is logged against the same id; subject-logging runs last so
+// Claims are already in context and a refusal from either gate is still
+// attributed to a subject in the log.
 //
 // Server reflection is a discovery/debugging aid; disabled outside
 // explicit dev mode so a deployed environment never exposes it (FR11).
-func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamServerInterceptor, rpcLogger *slog.Logger, apiServer pb.LeafLabAPIServer, devMode bool) *grpc.Server {
+func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamServerInterceptor, rpcLogger *slog.Logger, apiServer pb.LeafLabAPIServer, devMode bool, exposureAllowlist map[string]struct{}) *grpc.Server {
 	grpcServer := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
 			NewCorrelationUnaryInterceptor(),
 			authUnary,
 			NewAuthEnforcementUnaryInterceptor(),
+			NewExposureUnaryInterceptor(exposureAllowlist),
 			NewSubjectLoggingUnaryInterceptor(rpcLogger),
 		),
 		grpc.ChainStreamInterceptor(
 			NewCorrelationStreamInterceptor(),
 			authStream,
 			NewAuthEnforcementStreamInterceptor(),
+			NewExposureStreamInterceptor(exposureAllowlist),
 			NewSubjectLoggingStreamInterceptor(rpcLogger),
 		),
 	)

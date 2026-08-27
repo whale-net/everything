@@ -18,6 +18,17 @@ import (
 // configuration refuses everyone), not by an operator remembering to set
 // it correctly.
 //
+// Implementation's mechanism choice (A30 lists three acceptable options: a
+// principal allowlist, a feature gate defaulting closed, or a
+// non-production-only deployment): a principal allowlist. It is the
+// smallest surface area of the three -- one env var, one interceptor pair,
+// no chart/release-config coupling -- and it is exercised the same way in
+// every environment (dev, staging, prod all read the same gate), so there
+// is no separate "non-prod deploy" code path to keep correct. A feature
+// gate would need the same fail-closed-default discipline for no real
+// benefit over an allowlist here, since Phase 1 has no notion of a
+// per-user feature yet.
+//
 // TODO(FR5/NFR1.b): this entire gate -- this file, its BUILD.bazel entry,
 // and every call site wired to it -- is removed in #1339, the Phase 2 task
 // that lands per-entity household authorization (FR4, FR5, FR1.1, NFR2)
@@ -58,12 +69,12 @@ func LoadExposureAllowlistFromEnv() map[string]struct{} {
 // anonymousMethods, reused here rather than re-derived). An empty
 // allowlist refuses everyone (fail-closed).
 //
-// Not yet wired into main.go's buildServer chain -- picking this as the
-// enforcement mechanism (vs. a feature gate or a non-production-only
-// deployment) and registering it are this task's Implementation phase.
-// When wired, it belongs immediately after NewAuthEnforcementUnaryInterceptor
-// so Claims are already known-present by the time this interceptor reads
-// Subject.
+// Wired into main.go's buildServer chain immediately after
+// NewAuthEnforcementUnaryInterceptor, so Claims are already known-present
+// by the time this interceptor reads Subject. Implementation picked the
+// principal allowlist as the enforcement mechanism (over a feature gate or
+// a non-production-only deployment) -- see this file's package doc comment
+// on ExposureAllowlistEnvVar above for why.
 func NewExposureUnaryInterceptor(allowlist map[string]struct{}) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if anonymousMethods[info.FullMethod] {

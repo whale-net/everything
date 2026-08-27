@@ -35,6 +35,19 @@ const testValidToken = "test-valid-token-should-never-appear-in-logs-or-errors" 
 
 var testClaims = &grpcauth.Claims{Subject: "test-subject", Roles: []string{RoleAdmin}}
 
+// testExposureAllowlist admits testClaims.Subject -- the one authenticated
+// identity every existing test in this file uses. These tests exercise
+// auth.go's enforcement interceptor and logging_interceptor.go's
+// correlation-id/subject logging (this file's own stated scope, see the
+// comment above); exposure.go's allowlist gate is a separate concern
+// covered by its own tests. Admitting test-subject here keeps that
+// unrelated coverage green without weakening it -- every one of these
+// calls is still "an authenticated, allowlisted caller", the same case
+// production exercises, just with the allowlist made explicit instead of
+// left empty (which would fail-closed and break every one of these
+// unrelated assertions).
+var testExposureAllowlist = map[string]struct{}{testClaims.Subject: {}}
+
 func fakeBearerAuthUnary() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		token, ok := bearerToken(ctx)
@@ -120,7 +133,7 @@ func startTestServer(t *testing.T, logger *slog.Logger) *grpc.ClientConn {
 	t.Helper()
 
 	lis := bufconn.Listen(bufSize)
-	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, stubAPIServer{}, false)
+	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, stubAPIServer{}, false, testExposureAllowlist)
 
 	go func() {
 		// Serve returns a non-nil error on Stop() too; cleanup already
@@ -311,12 +324,12 @@ func noopStream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerIn
 // "server reflection is disabled outside development" directly on the
 // production wiring, without dialing Postgres/RabbitMQ.
 func TestBuildServer_ReflectionRegisteredOnlyInDevMode(t *testing.T) {
-	prod := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, false)
+	prod := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, false, testExposureAllowlist)
 	if hasReflectionService(prod) {
 		t.Errorf("reflection registered with devMode=false, want not registered (FR11): %v", prod.GetServiceInfo())
 	}
 
-	dev := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, true)
+	dev := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, true, testExposureAllowlist)
 	if !hasReflectionService(dev) {
 		t.Errorf("reflection not registered with devMode=true, want registered: %v", dev.GetServiceInfo())
 	}

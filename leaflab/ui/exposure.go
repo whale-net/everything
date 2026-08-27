@@ -1,10 +1,12 @@
 package main
 
 import (
+	"log"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/whale-net/everything/leaflab/ui/components"
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
 
@@ -50,10 +52,11 @@ func LoadExposureAllowlistFromEnv() map[string]struct{} {
 
 // exposureAllows reports whether user is on allowlist, keyed by email
 // (htmxauth.UserInfo.Email). Picking email over Sub as the working
-// principal key is a Scaffold-time assumption -- it is the one field a
+// principal key is confirmed at Implementation: it is the one field a
 // human operator can read off an IdP admin screen without dereferencing a
-// subject UUID; Implementation confirms or revises this when it picks the
-// enforcement mechanism.
+// subject UUID, and it is the field this BFF's own session already carries
+// (see htmxauth.UserInfo) with no extra plumbing needed to reach it from
+// RequireExposureFunc below.
 func exposureAllows(user *htmxauth.UserInfo, allowlist map[string]struct{}) bool {
 	if user == nil {
 		return false
@@ -62,27 +65,26 @@ func exposureAllows(user *htmxauth.UserInfo, allowlist map[string]struct{}) bool
 	return allowed
 }
 
-// exposureRefusalHTML is the plain-sentence page a refused caller sees
-// (FR59.2 parity: no technical detail, never a blank screen). Placeholder
-// markup -- Implementation replaces this with a styled templ component
-// matching components.DegradedPage's precedent (see handlers_auth.go).
-const exposureRefusalHTML = "<!DOCTYPE html><html><body><p>This isn't open yet.</p></body></html>"
-
 // RequireExposureFunc wraps a protected handler with A30's gate: an
-// authenticated user not on allowlist sees exposureRefusalHTML instead of
-// the wrapped handler's content.
+// authenticated user not on allowlist sees the styled
+// components.ExposureRefusalPage instead of the wrapped handler's content,
+// with a 403 status matching the API side's PermissionDenied class (FR59).
+// Rendered through RenderTempl/htmxbase's shared layout -- never a JSON
+// body, never a blank page (FR59.2).
 //
-// Not yet registered on any route in main.go's setupRoutes -- wiring
-// (which routes, at what point in the RequireAuthFunc/WithAccessToken
-// chain), the rendered page, and picking the enforcement mechanism are
-// this task's Implementation phase.
+// Registered in main.go's setupRoutes immediately after RequireAuthFunc and
+// before WithAccessToken: the gate only needs the user already placed in
+// context by RequireAuthFunc, and running before WithAccessToken skips that
+// call's access-token fetch (and its own possible redirect-to-login) for a
+// request this gate is about to refuse anyway.
 func RequireExposureFunc(allowlist map[string]struct{}, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		user := htmxauth.GetUser(r.Context())
 		if !exposureAllows(user, allowlist) {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(exposureRefusalHTML))
+			if err := RenderTempl(w, r, "LeafLab", components.ExposureRefusalPage(user)); err != nil {
+				log.Printf("ERROR: failed to render exposure refusal page: %v", err)
+			}
 			return
 		}
 		next(w, r)

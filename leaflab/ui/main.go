@@ -103,6 +103,16 @@ type App struct {
 	auth        *htmxauth.Authenticator
 	api         *APIClient
 	userAuthOpt grpc.DialOption
+
+	// exposureAllowlist is A30's Phase 1 exit-criterion-7 gate (see
+	// exposure.go): the set of authenticated principal emails permitted
+	// past requireExposure. Loaded once at boot in NewApp, same as every
+	// other env-sourced config here. A nil/empty map (the zero value, and
+	// what LoadExposureAllowlistFromEnv returns for missing/empty
+	// configuration) refuses everyone -- fail-closed, including for any
+	// App constructed without going through NewApp (e.g. a future test
+	// that builds &App{} directly and never sets this field).
+	exposureAllowlist map[string]struct{}
 }
 
 // NewApp creates a new application instance.
@@ -170,6 +180,9 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		auth:        auth,
 		api:         api,
 		userAuthOpt: userAuthOpt,
+		// A30 Phase 1 exit criterion 7 -- see exposure.go and the
+		// exposureAllowlist field's doc comment above.
+		exposureAllowlist: LoadExposureAllowlistFromEnv(),
 	}, nil
 }
 
@@ -237,6 +250,15 @@ func main() {
 	}
 }
 
+// requireExposure applies A30's Phase 1 exposure gate (exposure.go) using
+// this App's own exposureAllowlist. A thin method wrapper around
+// RequireExposureFunc so setupRoutes reads the same
+// RequireAuthFunc(...(WithAccessToken(...))) wrapping shape it already
+// uses for every other protected route.
+func (app *App) requireExposure(next http.HandlerFunc) http.HandlerFunc {
+	return RequireExposureFunc(app.exposureAllowlist, next)
+}
+
 func (app *App) setupRoutes(mux *http.ServeMux) {
 	// Public routes — must sit outside the auth wrapper, or the sign-in
 	// page itself would redirect to sign-in.
@@ -253,13 +275,15 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// "load more" continuation base path); "/boards/rows" is the htmx
 	// partial route components.BoardsRows's own "Load more" button hits for
 	// each subsequent keyset page. All three share the same
-	// RequireAuthFunc + WithAccessToken wrapping, so every gRPC call this
-	// screen makes carries the signed-in user's own forwarded token
-	// (NFR18.1). The device/region/reading detail screens are later tasks
-	// on this plan.
-	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
-	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoards)))
-	mux.HandleFunc("/boards/rows", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoardsRows)))
+	// RequireAuthFunc + requireExposure + WithAccessToken wrapping, so
+	// every gRPC call this screen makes carries the signed-in user's own
+	// forwarded token (NFR18.1) and every one of them is refused for a
+	// non-allowlisted principal before that token is even fetched (A30,
+	// Phase 1 exit criterion 7 -- see requireExposure/exposure.go). The
+	// device/region/reading detail screens are later tasks on this plan.
+	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.requireExposure(app.auth.WithAccessToken(app.handleHome))))
+	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.requireExposure(app.auth.WithAccessToken(app.handleBoards))))
+	mux.HandleFunc("/boards/rows", app.auth.RequireAuthFunc(app.requireExposure(app.auth.WithAccessToken(app.handleBoardsRows))))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {
