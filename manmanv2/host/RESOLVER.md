@@ -53,11 +53,20 @@ before the resolver's first poll tick needs it.
 
 ### Auth
 
+`host-manager` and the resolver each hold their own Keycloak client
+credential, kept as separate `.env` variables
+(`GRPC_AUTH_CLIENT_*` for `host-manager`'s connection to the ManMan
+control-plane API, `APP_REGISTRY_GRPC_AUTH_CLIENT_*` for the resolver's
+connection to App Registry — see `compose/docker-compose.yml`). Do not
+point both at the same client id/secret: they authenticate to different
+services and, in most Keycloak setups, different realms/audiences.
+
 This repo does not yet provision a dedicated read-only Keycloak client id
-for the resolver (existing ones — `app-registry-builder-<env>` and
-`app-registry-promoter-<env>` — are both write-capable). Provision one
-scoped to read-only before using `GRPC_AUTH_MODE=oidc` in production. For
-local testing, `GRPC_AUTH_MODE=none` matches App Registry's own dev mode.
+for the resolver (existing App Registry client ids —
+`app-registry-builder-<env>` and `app-registry-promoter-<env>` — are both
+write-capable). Provision one scoped to read-only before using
+`APP_REGISTRY_GRPC_AUTH_MODE=oidc` in production. For local testing,
+`APP_REGISTRY_GRPC_AUTH_MODE=none` matches App Registry's own dev mode.
 
 ## Security
 

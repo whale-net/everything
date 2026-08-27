@@ -5,27 +5,38 @@ services:
     restart: always
     network_mode: host
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ${HOST_DATA_DIR:-./data}:/var/lib/manman/sessions
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${HOST_DATA_DIR}:/var/lib/manman/sessions
     environment:
       SERVER_NAME: ${SERVER_NAME}
       RABBITMQ_URL: ${RABBITMQ_URL}
+      DOCKER_SOCKET: /var/run/docker.sock
       API_ADDRESS: ${API_ADDRESS:-localhost:50051}
       ENVIRONMENT: ${ENVIRONMENT:-production}
-      HOST_DATA_DIR: ${HOST_DATA_DIR:-./data}
-      DOCKER_SOCKET: /var/run/docker.sock
+      HOST_DATA_DIR: ${HOST_DATA_DIR}
+      GRPC_AUTH_MODE: ${GRPC_AUTH_MODE}
+      GRPC_AUTH_TOKEN_URL: ${GRPC_AUTH_TOKEN_URL}
+      GRPC_AUTH_CLIENT_ID: ${GRPC_AUTH_CLIENT_ID}
+      GRPC_AUTH_CLIENT_SECRET: ${GRPC_AUTH_CLIENT_SECRET}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
 
   # This is manmanv2's adoption of the app-agnostic //tools/compose-resolver
   # sidecar -- see tools/compose-resolver/README.md for what it does and
   # why it talks to the Docker Engine API rather than shelling out to
   # `docker compose`, and ../RESOLVER.md for host-manager-specific notes
   # (bootstrap order, auth gap).
+  #
+  # Its GRPC_AUTH_* values come from separate APP_REGISTRY_GRPC_AUTH_* .env
+  # vars, not the GRPC_AUTH_* ones above -- host-manager authenticates to
+  # the ManMan control-plane API, this authenticates to App Registry, and
+  # those are two different Keycloak clients. Do not point both at the
+  # same credential.
   host-manager-resolver:
     image: ${RESOLVER_REPOSITORY:-ghcr.io/whale-net/compose-resolver}:${RESOLVER_VERSION:-latest}
     container_name: manmanv2-host-manager-resolver
     restart: always
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       - ./.env:/workspace/.env
     environment:
       APP_REGISTRY_ADDRESS: ${APP_REGISTRY_ADDRESS}
@@ -37,7 +48,8 @@ services:
       POLL_INTERVAL: ${RESOLVER_POLL_INTERVAL:-60s}
       LOG_SERVICE_NAME: host-manager-resolver
       LOG_DOMAIN: manmanv2
-      GRPC_AUTH_MODE: ${GRPC_AUTH_MODE:-oidc}
-      GRPC_AUTH_TOKEN_URL: ${GRPC_AUTH_TOKEN_URL}
-      GRPC_AUTH_CLIENT_ID: ${GRPC_AUTH_CLIENT_ID}
-      GRPC_AUTH_CLIENT_SECRET: ${GRPC_AUTH_CLIENT_SECRET}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      GRPC_AUTH_MODE: ${APP_REGISTRY_GRPC_AUTH_MODE:-oidc}
+      GRPC_AUTH_TOKEN_URL: ${APP_REGISTRY_GRPC_AUTH_TOKEN_URL}
+      GRPC_AUTH_CLIENT_ID: ${APP_REGISTRY_GRPC_AUTH_CLIENT_ID}
+      GRPC_AUTH_CLIENT_SECRET: ${APP_REGISTRY_GRPC_AUTH_CLIENT_SECRET}
