@@ -39,7 +39,7 @@ func TestRetireBoard_SetsRetiredAtAndDistinguishesNotFoundFromAlreadyRetired(t *
 		t.Fatalf("test setup: board %d already has retired_at set: %v", boardID, *retiredAtBefore)
 	}
 
-	if err := repo.RetireBoard(ctx, boardID); err != nil {
+	if err := repo.RetireBoard(ctx, boardID, testAuditEntry()); err != nil {
 		t.Fatalf("first RetireBoard call: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestRetireBoard_SetsRetiredAtAndDistinguishesNotFoundFromAlreadyRetired(t *
 	}
 
 	// Second call on the same board: refused, distinct from not-found.
-	err := repo.RetireBoard(ctx, boardID)
+	err := repo.RetireBoard(ctx, boardID, testAuditEntry())
 	if err == nil {
 		t.Fatal("second RetireBoard call on an already-retired board returned nil error, want ErrBoardAlreadyRetired")
 	}
@@ -66,7 +66,7 @@ func TestRetireBoard_SetsRetiredAtAndDistinguishesNotFoundFromAlreadyRetired(t *
 	// A board_id that was never inserted: refused as not-found, distinct
 	// from already-retired.
 	const neverInsertedBoardID = int64(999999)
-	err = repo.RetireBoard(ctx, neverInsertedBoardID)
+	err = repo.RetireBoard(ctx, neverInsertedBoardID, testAuditEntry())
 	if err == nil {
 		t.Fatal("RetireBoard on a nonexistent board_id returned nil error, want ErrBoardNotFound")
 	}
@@ -89,7 +89,7 @@ func TestListBoards_ExcludesRetiredBoards(t *testing.T) {
 	activeID := insertBoard(t, pool, "device-active")
 	retiredID := insertBoard(t, pool, "device-retired")
 
-	if err := repo.RetireBoard(ctx, retiredID); err != nil {
+	if err := repo.RetireBoard(ctx, retiredID, testAuditEntry()); err != nil {
 		t.Fatalf("test setup: retire board %d: %v", retiredID, err)
 	}
 
@@ -125,7 +125,7 @@ func TestGetBoardByID_RetiredBoardStillReadableByExplicitID(t *testing.T) {
 	ctx := context.Background()
 
 	boardID := insertBoard(t, pool, "device-explicit-id")
-	if err := repo.RetireBoard(ctx, boardID); err != nil {
+	if err := repo.RetireBoard(ctx, boardID, testAuditEntry()); err != nil {
 		t.Fatalf("test setup: retire board %d: %v", boardID, err)
 	}
 
