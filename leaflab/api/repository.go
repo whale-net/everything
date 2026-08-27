@@ -15,6 +15,7 @@ import (
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/hwkey"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -34,10 +35,29 @@ var ErrBoardAlreadyRetired = errors.New("board already retired")
 
 type Repository struct {
 	db *pgxpool.Pool
+	// invalidationPub broadcasts FR73 invalidation events after a write
+	// that changes what a cached view (a sensor's region, its name)
+	// resolves to -- see sensor_region.go's AssignSensorRegion/RenameSensor,
+	// the two writers that currently use it. Left nil by NewRepository; set
+	// via SetInvalidationPublisher once main.go (or a test) has one to
+	// give it. A nil invalidationPub means "don't publish" rather than a
+	// panic -- every publish call site checks for nil first, the same
+	// nil-safety server.go's own invalidationPub field already has
+	// (RewireSensor's publish call).
+	invalidationPub *invalidation.Publisher
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
+}
+
+// SetInvalidationPublisher wires pub into this Repository so writes that
+// change a cached view (FR73) can publish after they commit. Separate from
+// NewRepository so every existing call site -- production (main.go) and
+// the many test fixtures that never exercise a publish path -- keeps
+// working unchanged; only main.go calls this today.
+func (r *Repository) SetInvalidationPublisher(pub *invalidation.Publisher) {
+	r.invalidationPub = pub
 }
 
 // Ping reports whether the database is reachable, for FR63's health probe.

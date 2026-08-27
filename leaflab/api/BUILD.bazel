@@ -23,6 +23,7 @@ go_library(
         "//firmware/proto:firmwarepb",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
+        "//leaflab/api/capture",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/hwkey",

@@ -101,6 +101,12 @@ func run() error {
 	defer invalidationPub.Close() //nolint:errcheck
 
 	repo := NewRepository(pool)
+	// FR73: AssignSensorRegion/RenameSensor (sensor_region.go) publish
+	// through this Repository directly, not via a handler-layer call like
+	// RewireSensor's -- see Repository.SetInvalidationPublisher's doc
+	// comment for why. Same underlying *invalidation.Publisher instance
+	// LeafLabAPIServer is given below; one connection, two writers.
+	repo.SetInvalidationPublisher(invalidationPub)
 	authzSvc := authz.NewPGResolver(pool)
 	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, invalidationPub, logging.Get("api"))
 
