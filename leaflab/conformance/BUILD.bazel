@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# NFR17 Phase-1 documentation conformance for LeafLab (root plan #1166): the
+# env-doc check (every getEnv(...) variable in leaflab/api and leaflab/ui's
+# main.go is documented in that package's ENV.md) and the TOC-links check
+# (leaflab/TOC.md indexes both new ENV.md files). See env_doc_test.go's
+# package doc comment.
+go_test(
+    name = "conformance_test",
+    srcs = ["env_doc_test.go"],
+    data = [
+        "//leaflab:build_file",
+        "//leaflab:toc",
+        "//leaflab/api:conformance_srcs",
+        "//leaflab/ui:conformance_srcs",
+    ],
+)
