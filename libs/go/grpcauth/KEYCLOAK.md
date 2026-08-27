@@ -316,12 +316,27 @@ lands**:
 | **Realm roles** | Assigned to the **human user** (or their group), not to the client | The client has no service account to attach roles to; roles come from the logged-in user exactly as with any browser login (see "Human users" above). |
 
 **This is a real infra prerequisite outside this repo's code** — record its
-status here rather than assuming it. As of this scaffold task, the client's
-device-authorization-grant configuration has **not been verified against a
-running Keycloak instance**; confirming and, if necessary, creating it is
-in scope for the implementation task that lands `device_flow.go`'s actual
-RFC 8628 logic, before that code is exercised against a real realm. Update
-this table with the verified client id and realm once confirmed.
+status here rather than assuming it.
+
+**Verification status (implementation task, `plan/1166-v2-1332`):** checked
+this dev environment for a reachable Keycloak instance to verify the table
+above against — none exists. `docker ps` / `kubectl get pods -A` show
+`app-registry` and `manmanv2` local-dev stacks (Postgres, RabbitMQ, Temporal,
+MinIO, etc.) but no Keycloak container or pod, and no `Tiltfile` in this repo
+wires one up (`grep -ril keycloak` across `Tiltfile`s only turns up
+`app-registry`'s GitHub Actions/OIDC-CI docs, unrelated to a local Keycloak
+deployment). `libs/go/grpcauth`'s own tests exercise the device flow against
+a fake OIDC HTTP server (RFC 8628 request/response shapes), not real
+Keycloak, so `bazel test //libs/go/grpcauth/...` passing does **not** confirm
+this table.
+
+**The table above therefore remains unverified against a running Keycloak
+instance.** Before relying on it in a real realm: create/confirm the client
+exactly as specified (public, device authorization grant checked, realm-level
+toggle on, audience mapper present) and record the verified client id and
+realm here. Do this the first time a real Keycloak instance for this plan is
+reachable — do not assume the table is correct just because the code compiles
+and its fake-server tests pass.
 
 The rest of this document — creating the client, assigning the audience
 mapper, wiring env vars — follows the same steps as any other client in
