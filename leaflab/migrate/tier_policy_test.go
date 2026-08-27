@@ -237,6 +237,99 @@ func TestEnforceRawRetentionGatedOnCaptureCompletion(t *testing.T) {
 	}
 }
 
+// TestFiveMinuteTierRetentionPolicyConfigured verifies the acceptance
+// criterion "Three tiers exist with the stated retentions" for the
+// 5-minute tier specifically: migration 025 configures an actual
+// policy_retention job for sensor_reading_5m with drop_after == 90 days,
+// not merely a comment claiming so.
+func TestFiveMinuteTierRetentionPolicyConfigured(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := setUpAllMigrations(ctx, t)
+
+	var dropAfterEqualsNinetyDays bool
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT (config->>'drop_after')::INTERVAL = INTERVAL '90 days'
+		FROM timescaledb_information.jobs
+		WHERE proc_name = 'policy_retention' AND hypertable_name = 'sensor_reading_5m'
+	`).Scan(&dropAfterEqualsNinetyDays); err != nil {
+		t.Fatalf("A12: expected a policy_retention job configured for sensor_reading_5m, got: %v", err)
+	}
+	if !dropAfterEqualsNinetyDays {
+		t.Error("A12: expected sensor_reading_5m's retention policy drop_after to equal 90 days")
+	}
+}
+
+// TestHourlyTierHasNoRetentionPolicy verifies the acceptance criterion "No
+// tier coarser than hourly exists" and A12's "hourly indefinitely": no
+// policy_retention job is configured for sensor_reading_1h at all, so
+// nothing ever drops hourly data.
+func TestHourlyTierHasNoRetentionPolicy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := setUpAllMigrations(ctx, t)
+
+	var count int
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM timescaledb_information.jobs
+		WHERE proc_name = 'policy_retention' AND hypertable_name = 'sensor_reading_1h'
+	`).Scan(&count); err != nil {
+		t.Fatalf("query policy_retention jobs for sensor_reading_1h: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("A12: expected no retention policy on sensor_reading_1h (retained indefinitely), found %d", count)
+	}
+}
+
+// TestEnforceRawRetentionDoesNotDropWithinFloor verifies A12's "raw at
+// least 13 months" as a lower bound, not merely that something old
+// eventually gets dropped: with the FR20 gate open, a raw row 12 months
+// old (inside the 13-month floor) must survive a call to
+// enforce_raw_retention, while a row past the floor is dropped in the same
+// call. Without this, a regression that shortened the cutoff (e.g. to 90
+// days) would pass every other test in this file.
+func TestEnforceRawRetentionDoesNotDropWithinFloor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	db := setUpAllMigrations(ctx, t)
+	sensorID, _ := createTestSensor(ctx, t, db, "device-retention-floor")
+
+	withinFloor := time.Now().Add(-12 * 30 * 24 * time.Hour) // ~12 months back: inside the 13-month floor
+	pastFloor := time.Now().Add(-14 * 30 * 24 * time.Hour)   // ~14 months back: past the 13-month floor
+	if _, err := db.Pool.Exec(ctx, `
+		INSERT INTO sensor_reading (sensor_id, value, valid, uptime_s, recorded_at)
+		VALUES ($1, 1.0, TRUE, 0, $2), ($1, 2.0, TRUE, 0, $3)
+	`, sensorID, withinFloor, pastFloor); err != nil {
+		t.Fatalf("insert raw readings: %v", err)
+	}
+
+	rowExists := func(value float64) bool {
+		t.Helper()
+		var n int
+		if err := db.Pool.QueryRow(ctx, `
+			SELECT COUNT(*) FROM sensor_reading WHERE sensor_id = $1 AND value = $2
+		`, sensorID, value).Scan(&n); err != nil {
+			t.Fatalf("count sensor_reading rows for value %v: %v", value, err)
+		}
+		return n > 0
+	}
+
+	if _, err := db.Pool.Exec(ctx, `CALL enforce_raw_retention(0, '{}'::jsonb)`); err != nil {
+		t.Fatalf("CALL enforce_raw_retention: %v", err)
+	}
+
+	if rowExists(2.0) {
+		t.Error("A12: expected the row past the 13-month floor (~14 months old) to be dropped, but it survived")
+	}
+	if !rowExists(1.0) {
+		t.Error("A12: expected the row within the 13-month floor (~12 months old) to survive, but it was dropped")
+	}
+}
+
 // TestHourlyTierMinMaxEqualsRawRestricted verifies the acceptance criterion
 // "Min and max at the hourly tier equal the raw-restricted computation":
 // after refreshing sensor_reading_1h over a window of raw readings, the
@@ -305,4 +398,3 @@ func TestHourlyTierMinMaxEqualsRawRestricted(t *testing.T) {
 		t.Errorf("expected reading_count %d (invalid reading excluded), got %d", len(values), aggCount)
 	}
 }
-
