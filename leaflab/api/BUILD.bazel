@@ -268,6 +268,48 @@ go_test(
     ],
 )
 
+# Real-Postgres integration coverage for FR76's self-service board claim
+# (#1342) -- see claim_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as the other integration go_test targets above.
+# Shares dbtest_helpers_integration_test.go's stubAuthz/allScope/discardLogger
+# (this file's claim RPCs don't exercise authz.Scope at all -- see that
+# file's doc comment).
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:claim_integration_test --test_output=all
+go_test(
+    # keep
+    name = "claim_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "claim_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//leaflab/api/claim",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
 # Real-Postgres integration coverage for FR75/FR7's households and
 # membership write paths -- see households_integration_test.go's doc
 # comment. Same tag set and hand-written rationale as the other integration
