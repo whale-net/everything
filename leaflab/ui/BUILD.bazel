@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -50,4 +50,68 @@ release_app(
     domain = "leaflab",
     language = "go",
     port = 8000,
+)
+
+# Fast, Docker-free handler tests (#1329's Testing section): unauthenticated
+# redirect, authenticated render, the degraded page (NFR14), and the NFR18.1
+# grep-style placeholder conformance check. data exposes this package's own
+# checked-in source (nfr18_conformance_test.go greps it) and BUILD.bazel
+# (used as its own marker file).
+go_test(
+    name = "ui_test",
+    srcs = [
+        "fakes_test.go",
+        "handlers_auth_test.go",
+        "nfr18_conformance_test.go",
+    ],
+    data = glob(["*.go"]) + [
+        "BUILD.bazel",
+        "//leaflab/ui/components:conformance_srcs",
+    ],
+    embed = [":ui_lib"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/htmxauth",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+# Session persistence (survives a store reopen -- i.e. a BFF pod restart)
+# and sign-out (deletes the ui_sessions DB row) against a real Postgres.
+# Gated behind `//go:build integration`, gazelle skips it when scanning for
+# go_test srcs; this go_test is hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` markers
+# tell a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/ui:ui_integration_test --test_output=all
+go_test(
+    # keep
+    name = "ui_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "fakes_test.go",
+        "session_integration_test.go",
+    ],
+    embed = [":ui_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/htmxauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
