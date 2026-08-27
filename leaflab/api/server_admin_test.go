@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/leaflab/api/audit"
+	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -593,5 +594,111 @@ func TestDeviceRepository_HasNoMembershipMutationMethod(t *testing.T) {
 		if containsFold(name, "membership") {
 			t.Errorf("deviceRepository has method %q -- an admin RPC handler holding only this interface could then change household_membership under elevation, which FR75 forbids (membership changes are member-only)", name)
 		}
+	}
+}
+
+// -- FR10.3: GetDeviceConfig routes a non-standing admin read through
+// ElevatedScope ------------------------------------------------------------
+//
+// These are the fast, fakeRepo/fakeAuthz-backed counterpart to
+// TestGetDeviceConfig_ElevatedAdmin_FR10_3 in
+// admin_elevation_integration_test.go (real Postgres). Both prove the same
+// three outcomes; this file's version additionally pins the exact household
+// id authorizeBoardAccess's elevation check is made against, proving it is
+// always the board's *resolved* household -- never a request-supplied one
+// -- which is the mechanism behind "an elevation against household A does
+// not open household B" (FR10.3).
+
+// adminOutOfScopeFixture builds a fakeAuthz/fakeRepo pair for a board that
+// resolves to targetHousehold, with the caller's own membership Scope
+// permitting nothing (as an admin with no household membership of their
+// own would see) -- so authorizeBoardAccess's elevation check is the only
+// thing that can grant access.
+func adminOutOfScopeFixture(targetHousehold int64) (*fakeAuthz, *fakeRepo) {
+	az := &fakeAuthz{
+		scope:      authz.NewUnionScope(),
+		resolveRef: authz.EntityRef{Kind: authz.EntityBoard, ID: 7},
+		resolveRes: authz.Resolution{HouseholdID: targetHousehold},
+	}
+	return az, &fakeRepo{}
+}
+
+// TestGetDeviceConfig_AdminNoElevation_RefusedSameAsNonexistent proves an
+// admin-eligible caller holding no elevation at all gets the exact same
+// refusal a non-admin, non-member caller gets (NFR2) -- eligibility alone
+// (isAdminEligible) confers nothing here, only an actual elevation row
+// does.
+func TestGetDeviceConfig_AdminNoElevation_RefusedSameAsNonexistent(t *testing.T) {
+	az, repo := adminOutOfScopeFixture(9)
+	server := NewLeafLabAPIServer(repo, az, nil, nil, discardLogger())
+
+	_, err := server.GetDeviceConfig(adminCtx("root"), &pb.GetDeviceConfigRequest{DeviceId: "device-9"})
+	if err == nil {
+		t.Fatal("GetDeviceConfig for an admin with no elevation returned nil error, want a refusal")
+	}
+	f, ok := contract.FromError(err)
+	if !ok {
+		t.Fatal("error carries no contract.Failure detail")
+	}
+	if f.Class != string(contract.FailureNotFound) {
+		t.Errorf("Failure.Class = %q, want %q (same shape as a nonexistent device, NFR2)", f.Class, contract.FailureNotFound)
+	}
+	if repo.getLatestAcceptedConfigCalls != 0 {
+		t.Errorf("refusal reached the repository config lookup %d times, want 0", repo.getLatestAcceptedConfigCalls)
+	}
+	if repo.activeElevationHousehold != 9 {
+		t.Errorf("ActiveElevation checked household %d, want the board's resolved household 9", repo.activeElevationHousehold)
+	}
+}
+
+// FR10.3's actual isolation guarantee -- an elevation against household A
+// does not open household B -- requires a repository that can distinguish
+// households by the argument it was queried with; fakeRepo's ActiveElevation
+// stub cannot (it has one activeElevationExpiresAt/Err pair, not a per-
+// household map), so that guarantee is proven against real Postgres by
+// TestElevationLifecycle_OpenRenewEnd_PerHouseholdIsolation and
+// TestGetDeviceConfig_ElevatedAdmin_FR10_3's "different household" subtest
+// (admin_elevation_integration_test.go). What the tests below prove instead
+// is the Go call shape upstream of that SQL: authorizeBoardAccess always
+// checks elevation against the board's *resolved* household, never a
+// household the request happened to carry some other way -- see each
+// test's activeElevationHousehold assertion.
+
+// TestGetDeviceConfig_AdminElevated_TargetHousehold_Succeeds proves an
+// admin-eligible caller holding an active elevation against the board's own
+// resolved household reaches the config lookup -- ElevatedScope, not
+// coincidence, is what grants this (the caller's own membership Scope here
+// permits nothing).
+func TestGetDeviceConfig_AdminElevated_TargetHousehold_Succeeds(t *testing.T) {
+	az, repo := adminOutOfScopeFixture(9)
+	repo.activeElevationExpiresAt = time.Now().Add(30 * time.Minute)
+	server := NewLeafLabAPIServer(repo, az, nil, nil, discardLogger())
+
+	if _, err := server.GetDeviceConfig(adminCtx("root"), &pb.GetDeviceConfigRequest{DeviceId: "device-9"}); err != nil {
+		t.Fatalf("GetDeviceConfig for an elevated admin returned an error, want success: %v", err)
+	}
+	if repo.getLatestAcceptedConfigCalls != 1 {
+		t.Errorf("config lookup reached %d times, want exactly 1", repo.getLatestAcceptedConfigCalls)
+	}
+	if repo.activeElevationSubject != "root" {
+		t.Errorf("ActiveElevation checked subject %q, want the caller's own subject %q", repo.activeElevationSubject, "root")
+	}
+}
+
+// TestGetDeviceConfig_NonAdminWithoutMembership_RefusedWithoutElevationCheckWidening
+// proves a non-admin, non-member caller is still refused (unchanged
+// pre-existing NFR2 behavior) and that ActiveElevation, when it does get
+// called for such a caller, still reports nothing active by fakeRepo's own
+// fail-closed default -- there is no code path where a non-elevated caller
+// of any kind is granted access.
+func TestGetDeviceConfig_NonAdminWithoutMembership_StillRefused(t *testing.T) {
+	az, repo := adminOutOfScopeFixture(9)
+	server := NewLeafLabAPIServer(repo, az, nil, nil, discardLogger())
+
+	if _, err := server.GetDeviceConfig(nonAdminCtx("mallory"), &pb.GetDeviceConfigRequest{DeviceId: "device-9"}); err == nil {
+		t.Fatal("GetDeviceConfig for a non-admin, non-member caller returned nil error, want a refusal")
+	}
+	if repo.getLatestAcceptedConfigCalls != 0 {
+		t.Errorf("refusal reached the repository config lookup %d times, want 0", repo.getLatestAcceptedConfigCalls)
 	}
 }

@@ -172,6 +172,25 @@ func boardNotFoundFailure() error {
 // boardNotFoundFailure -- never a SELECT-then-branch, and never a
 // separate existence probe ahead of the resolve call.
 //
+// A caller's membership Scope not permitting the board is not the final
+// word (FR10.3): "config payloads" is the one non-standing admin read this
+// codebase has today, so before refusing, this function gives
+// elevatedBoardScope one more chance -- it performs the ActiveElevation
+// check ElevatedScope's own doc comment requires precede its construction,
+// scoped to this board's *resolved* household, never a request-supplied
+// one, so an elevation against household A still cannot open household B.
+// This deliberately does not gate on isAdminEligible first: an
+// admin_elevation row can only exist for a subject Elevate's own
+// requireAdminEligible gate already let through, so checking for the row
+// directly (exactly as scopeForCaller checks household_membership
+// directly, with no separate "is this person a member" flag) is enough --
+// it keeps every entity-access handler routing reach entirely through
+// Scope, with "is admin" never itself a branch outside leaflab/api/authz/
+// (see this package's Validation criterion). A non-elevated caller (admin
+// or not), or an elevation against a different household, still gets the
+// exact same boardNotFoundFailure as a nonexistent device_id (NFR2) -- the
+// extra check never introduces a new response shape.
+//
 // Wired into read paths only today (GetDeviceConfig; ListBoards uses
 // Scope.Filter directly, at the repository query, rather than this
 // resolve-one-entity path). PushDeviceConfig is deliberately not gated
@@ -196,10 +215,50 @@ func (s *LeafLabAPIServer) authorizeBoardAccess(ctx context.Context, deviceID st
 		s.logger.Error("resolve board failed", "device_id", deviceID, "error", err)
 		return contract.Internal("board", "", "Could not process this request right now. Please try again.")
 	}
-	if !scope.Permits(ref, res) {
-		return boardNotFoundFailure()
+	if scope.Permits(ref, res) {
+		return nil
 	}
-	return nil
+
+	if !res.Unclaimed {
+		elevatedScope, err := s.elevatedBoardScope(ctx, res.HouseholdID)
+		if err != nil {
+			s.logger.Error("check admin elevation failed", "device_id", deviceID, "error", err)
+			return contract.Internal("board", "", "Could not process this request right now. Please try again.")
+		}
+		if elevatedScope != nil && elevatedScope.Permits(ref, res) {
+			return nil
+		}
+	}
+
+	return boardNotFoundFailure()
+}
+
+// elevatedBoardScope returns an authz.ElevatedScope for targetHouseholdID
+// if ctx's caller holds an unexpired admin_elevation row against that
+// exact household (FR10.1, FR10.3), or (nil, nil) if they do not -- the
+// "no active elevation" case is a normal, expected outcome here (a caller
+// who never elevated, or elevated against a different household), not an
+// error, so callers must check for a nil Scope rather than treating nil as
+// a failure. A genuine repository error is still returned as an error.
+// Deliberately does not check isAdminEligible: an admin_elevation row can
+// only exist for a subject that already passed Elevate's own
+// requireAdminEligible gate, so re-checking the role here would be
+// redundant, and skipping it keeps entity-access call sites like
+// authorizeBoardAccess free of any "is admin" branch (see that function's
+// doc comment). This is the one call site (besides Elevate/RenewElevation/
+// EndElevation/GetElevationStatus's own direct repo.ActiveElevation calls)
+// that turns "an unexpired elevation exists for this specific household"
+// into the Scope ElevatedScope's doc comment requires be verified first.
+func (s *LeafLabAPIServer) elevatedBoardScope(ctx context.Context, targetHouseholdID int64) (authz.Scope, error) {
+	_, err := s.repo.ActiveElevation(ctx, actingSubject(ctx), targetHouseholdID)
+	if err != nil {
+		if errors.Is(err, ErrNoActiveElevation) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	scope := authz.NewElevatedScope(targetHouseholdID)
+	return scope, nil
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
@@ -384,11 +443,15 @@ func (s *LeafLabAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthReque
 // resolution-only (AdminScope permits no entity and is never consulted here --
 // see its doc comment), and every other admin reach requires an elevation row
 // this file writes/reads directly against admin_elevation, never a bare
-// isAdminEligible check standing in for it. No handler outside this section
-// branches on admin eligibility at all (Validation's "no handler branches on
-// 'is admin' outside leaflab/api/authz/" is about entity-access handlers like
-// GetDeviceConfig/ListBoards, which this section leaves untouched). Nor does
-// an elevation confer FR75's membership-change capability: no RPC here
+// isAdminEligible check standing in for it. Entity-access handlers outside
+// this section (GetDeviceConfig today; authorizeBoardAccess) reach that same
+// admin_elevation row through elevatedBoardScope, which checks for the row
+// directly rather than isAdminEligible first (see its doc comment) -- so
+// Validation's "no handler branches on 'is admin' outside
+// leaflab/api/authz/" still holds: isAdminEligible itself is called only
+// here, gating the five RPCs that *are* the admin surface, never by an
+// entity-access handler deciding whether to widen a Scope. Nor does an
+// elevation confer FR75's membership-change capability: no RPC here
 // writes household_membership, and ElevatedScope (authz/scope.go) behaves
 // exactly like HouseholdScope, which was never itself a path to changing
 // membership either.

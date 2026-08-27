@@ -170,11 +170,24 @@ func (f *fakeRepo) EndElevation(ctx context.Context, adminSubject string, target
 	return f.endElevationErr
 }
 
+// ActiveElevation's zero-value default (no activeElevationErr, no
+// activeElevationExpiresAt configured) is ErrNoActiveElevation, not a
+// silently-granted elevation -- mirroring every other fakeRepo/fakeAuthz
+// zero value in this file, which fails closed (e.g. allPermittingScope
+// above is opt-in, never the default). A test that wants ActiveElevation
+// to report an active elevation must set activeElevationExpiresAt to a
+// non-zero time explicitly.
 func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error) {
 	f.activeElevationCalls++
 	f.activeElevationSubject = adminSubject
 	f.activeElevationHousehold = targetHouseholdID
-	return f.activeElevationExpiresAt, f.activeElevationErr
+	if f.activeElevationErr != nil {
+		return time.Time{}, f.activeElevationErr
+	}
+	if f.activeElevationExpiresAt.IsZero() {
+		return time.Time{}, ErrNoActiveElevation
+	}
+	return f.activeElevationExpiresAt, nil
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call

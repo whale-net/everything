@@ -44,7 +44,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/leaflab/api/audit"
+	"github.com/whale-net/everything/leaflab/api/authz"
+	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 )
 
 const adminElevationTestSchema = `
@@ -374,4 +377,107 @@ func TestRecordAuditEntry_WritesStandingLaneAuditRow(t *testing.T) {
 	if actorSubject != "root" || action != "ResolveToHousehold" || entityKind != "admin_resolution" || entityID != queryTerm {
 		t.Errorf("audit_log row = (%q, %q, %q, %q), want (%q, %q, %q, %q)", actorSubject, action, entityKind, entityID, "root", "ResolveToHousehold", "admin_resolution", queryTerm)
 	}
+}
+
+// -- FR10.3: GetDeviceConfig's ElevatedScope wiring, end to end --------------
+//
+// server.go's authorizeBoardAccess/elevatedBoardScope is unit-tested
+// against fakeRepo/fakeAuthz in server_test.go/server_admin_test.go; the
+// test below proves the same behavior against a real Repository and a real
+// authz.PGResolver (the combination authz_scope_integration_test.go's
+// newAuthzTestServer uses for the household path), extended with this
+// file's admin_elevation table -- the one thing newAuthzTestServer's
+// narrower schema doesn't have.
+
+// newAdminElevationTestServer starts a real Postgres container with
+// adminElevationTestSchema applied and returns a LeafLabAPIServer backed by
+// a real Repository and a real authz.PGResolver.
+func newAdminElevationTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: adminElevationTestSchema})
+	repo := NewRepository(db.Pool)
+	resolver := authz.NewPGResolver(db.Pool)
+	return NewLeafLabAPIServer(repo, resolver, nil, nil, discardLogger()), db.Pool
+}
+
+// adminElevationTestCtx returns a context carrying grpcauth.Claims for
+// subject with the leaflab-admin realm role -- eligible to call Elevate,
+// exactly as adminCtx (server_admin_test.go) does for the unit tests.
+func adminElevationTestCtx(subject string) context.Context {
+	return grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{Subject: subject, Roles: []string{RoleAdmin}})
+}
+
+// insertBoardWithAcceptedConfig inserts a board owned by householdID with
+// one accepted device_config row, so a successful GetDeviceConfig has
+// something real to find.
+func insertBoardWithAcceptedConfig(t *testing.T, pool *pgxpool.Pool, deviceID string, householdID int64) int64 {
+	t.Helper()
+	ctx := context.Background()
+	var boardID int64
+	if err := pool.QueryRow(ctx, `INSERT INTO board (device_id, household_id) VALUES ($1, $2) RETURNING board_id`, deviceID, householdID).Scan(&boardID); err != nil {
+		t.Fatalf("test setup: insert board: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO device_config (board_id, version, config_json, accepted) VALUES ($1, 1, '{}', TRUE)`, boardID); err != nil {
+		t.Fatalf("test setup: insert accepted config: %v", err)
+	}
+	return boardID
+}
+
+// insertElevation inserts an admin_elevation row directly (bypassing
+// Elevate's own request validation, which server_admin_test.go already
+// covers) so a test can set up "already elevated" state without an extra
+// RPC round trip.
+func insertElevation(t *testing.T, pool *pgxpool.Pool, adminSubject string, targetHouseholdID int64, reason string, expiresAt time.Time) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO admin_elevation (admin_subject, target_household_id, reason, expires_at)
+		VALUES ($1, $2, $3, $4)
+	`, adminSubject, targetHouseholdID, reason, expiresAt); err != nil {
+		t.Fatalf("test setup: insert elevation: %v", err)
+	}
+}
+
+// TestGetDeviceConfig_ElevatedAdmin_FR10_3 is the Implementation section's
+// core mandate ("every non-standing admin read resolves its scope through
+// ElevatedScope") proven against GetDeviceConfig, the one config-payload
+// read this codebase has today: an admin-eligible caller with no elevation
+// is refused exactly like a nonexistent device (NFR2); the same caller
+// after elevating against the board's own household succeeds; and an
+// elevation against a *different* household still refuses (FR10.3 -- an
+// elevation against household A does not open household B).
+func TestGetDeviceConfig_ElevatedAdmin_FR10_3(t *testing.T) {
+	server, pool := newAdminElevationTestServer(t)
+
+	householdA := insertHousehold(t, pool, "household-a")
+	householdB := insertHousehold(t, pool, "household-b")
+	insertBoardWithAcceptedConfig(t, pool, "device-elevated-a", householdA)
+
+	callerCtx := adminElevationTestCtx("root")
+
+	t.Run("no elevation refused", func(t *testing.T) {
+		_, err := server.GetDeviceConfig(callerCtx, &pb.GetDeviceConfigRequest{DeviceId: "device-elevated-a"})
+		if err == nil {
+			t.Fatal("GetDeviceConfig with no elevation returned nil error, want a refusal")
+		}
+	})
+
+	insertElevation(t, pool, "root", householdB, "wrong household", time.Now().Add(time.Hour))
+	t.Run("elevated against a different household still refused", func(t *testing.T) {
+		_, err := server.GetDeviceConfig(callerCtx, &pb.GetDeviceConfigRequest{DeviceId: "device-elevated-a"})
+		if err == nil {
+			t.Fatal("GetDeviceConfig elevated against a different household returned nil error, want a refusal (FR10.3)")
+		}
+	})
+
+	insertElevation(t, pool, "root", householdA, "investigating a report", time.Now().Add(time.Hour))
+	t.Run("elevated against the right household succeeds", func(t *testing.T) {
+		resp, err := server.GetDeviceConfig(callerCtx, &pb.GetDeviceConfigRequest{DeviceId: "device-elevated-a"})
+		if err != nil {
+			t.Fatalf("GetDeviceConfig elevated against the right household returned an error, want success: %v", err)
+		}
+		if !resp.Found {
+			t.Error("Found = false, want true -- an elevated admin must reach the accepted config")
+		}
+	})
 }
