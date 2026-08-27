@@ -271,3 +271,49 @@ func TestRateLimitInterceptor_OverTheWire_AnonymousAndAuthenticatedKeys_Independ
 		t.Fatalf("authenticated call: expected success (distinct key from the exhausted anonymous peer bucket), got %v", err)
 	}
 }
+
+// TestCheckRateLimitBuckets_AwaitConfigAck_ExceedsAckWaitConcurrentBucket_RateLimited
+// is FR47/NFR10's "concurrent open waits per principal are capped" bullet:
+// AwaitConfigAck is wired (rateLimitBucketByMethod) to
+// ratelimit.BucketAckWaitConcurrent in addition to BucketReadDefault, so a
+// caller who opens more waits than that bucket allows is refused with
+// FR59's rate_limited class -- proven directly against
+// checkRateLimitBuckets/rateLimitBucketByMethod's actual method-name
+// entry, not a re-implementation of it.
+func TestCheckRateLimitBuckets_AwaitConfigAck_ExceedsAckWaitConcurrentBucket_RateLimited(t *testing.T) {
+	limiter := ratelimit.NewInMemoryLimiter(map[ratelimit.Bucket]ratelimit.WindowConfig{
+		ratelimit.BucketReadDefault:       {Limit: 1000, Window: time.Minute}, // effectively unlimited: isolate the ack_wait_concurrent bucket
+		ratelimit.BucketAckWaitConcurrent: {Limit: 2, Window: time.Minute},
+	})
+	ctx := claimsContext("p1")
+	const method = "/leaflab.api.v1.LeafLabAPI/AwaitConfigAck"
+
+	if err := checkRateLimitBuckets(ctx, limiter, method); err != nil {
+		t.Fatalf("call 1 (within cap): unexpected error: %v", err)
+	}
+	if err := checkRateLimitBuckets(ctx, limiter, method); err != nil {
+		t.Fatalf("call 2 (within cap): unexpected error: %v", err)
+	}
+
+	err := checkRateLimitBuckets(ctx, limiter, method)
+	if err == nil {
+		t.Fatal("call 3 (exceeds ack_wait_concurrent cap of 2): got nil error, want rate_limited")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("code = %v, want %v", status.Code(err), codes.ResourceExhausted)
+	}
+	detail, ok := contract.FromError(err)
+	if !ok {
+		t.Fatalf("error carries no Failure detail")
+	}
+	if detail.Class != string(contract.FailureRateLimited) {
+		t.Errorf("Class = %q, want %q", detail.Class, contract.FailureRateLimited)
+	}
+
+	// A distinct method not wired to BucketAckWaitConcurrent must not share
+	// this exhausted bucket -- proves the wiring is scoped to
+	// AwaitConfigAck specifically, not applied globally.
+	if err := checkRateLimitBuckets(ctx, limiter, "/leaflab.api.v1.LeafLabAPI/GetDeviceConfig"); err != nil {
+		t.Fatalf("unrelated method after exhausting ack_wait_concurrent: unexpected error: %v", err)
+	}
+}

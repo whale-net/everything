@@ -224,6 +224,34 @@ go_test(
     ],
 )
 
+# Real-Postgres integration coverage for FR45's database-level ack write
+# guard (migration 032_ack_write_guard) -- see
+# ack_write_guard_integration_test.go's doc comment. Same tag set as this
+# package's other *_integration_test targets above, for the same reasons.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/processor:ack_write_guard_integration_test --test_output=all
+go_test(
+    # keep
+    name = "ack_write_guard_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["ack_write_guard_integration_test.go"],
+    embed = [":processor_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+    ],
+)
+
 release_app(
     name = "processor",
     app_type = "worker",

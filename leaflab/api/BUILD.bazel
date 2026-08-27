@@ -91,6 +91,8 @@ go_test(
         "auth_test.go",
         "main_test.go",
         "ratelimit_interceptor_test.go",
+        "repository_ack_surface_test.go",
+        "server_awaitconfigack_test.go",
         "server_config_lifecycle_test.go",
         "server_push_device_config_scope_test.go",
         "server_push_device_config_test.go",
@@ -100,6 +102,7 @@ go_test(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/api/ackwait",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/config",
@@ -464,5 +467,40 @@ go_test(
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-RabbitMQ integration coverage for NFR15's falsifiable every-replica
+# claim, and the competing-consumer variant that proves it has teeth -- see
+# nfr15_ack_broadcast_integration_test.go's doc comment. Same tag set as
+# leaflab/processor:invalidation_integration_test (see that target's
+# comment for what each tag does). `# keep` marker tells a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:nfr15_ack_broadcast_integration_test --test_output=all
+go_test(
+    # keep
+    name = "nfr15_ack_broadcast_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["nfr15_ack_broadcast_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/ackwait",
+        "//leaflab/invalidation",
+        "//libs/go/rmq",
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
     ],
 )
