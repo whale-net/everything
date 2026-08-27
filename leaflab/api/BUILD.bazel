@@ -40,12 +40,17 @@ go_library(
 
 go_test(
     name = "api_test",
-    srcs = ["server_test.go"],
+    srcs = [
+        "admin_test.go",
+        "server_test.go",
+    ],
     embed = [":api_lib"],
     deps = [
+        "//firmware/proto:configpb",
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/staleness",
         "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/logging",
@@ -56,6 +61,7 @@ go_test(
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//encoding/protojson",
     ],
 )
 
@@ -65,6 +71,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "admin_integration_test.go",
         "household_integration_test.go",
         "server_integration_test.go",
     ],
@@ -79,9 +86,16 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//leaflab/api/apierrors",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//leaflab/api/staleness",
         "//libs/go/dbtest",
+        "//libs/go/grpcauth",
         "//libs/go/migrate",
         "@com_github_jackc_pgx_v5//stdlib",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )
 
