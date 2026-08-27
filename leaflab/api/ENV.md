@@ -43,6 +43,16 @@ expires automatically. Renewal re-applies the same configured duration.
 |----------|---------|-------------|
 | `LEAFLAB_ELEVATION_DURATION_SECONDS` | 3600 | Duration of an admin elevation window (FR10, A22); 60 minutes by default |
 
+## Support References (FR80)
+
+A household member can produce a short-lived, opaque, revocable support
+reference that an admin can resolve — in the standing lane, without
+elevation — to that household.
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `LEAFLAB_SUPPORT_REFERENCE_DURATION_SECONDS` | 900 | How long a support reference remains resolvable after creation (FR80); 15 minutes by default |
+
 ## Staleness Threshold (A23)
 
 A23 governs "not reporting" classification everywhere it is used: FR79 (fleet

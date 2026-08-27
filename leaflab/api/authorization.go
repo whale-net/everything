@@ -176,3 +176,29 @@ func (ap *AuthorizationPredicates) ActiveElevation(ctx context.Context, adminSub
 	}
 	return active, nil
 }
+
+// RequireElevatedAdmin gates a non-standing admin read or an admin write
+// against targetHouseholdID (FR10.3): the caller must carry the admin role
+// and hold a currently active elevation against that exact household.
+// Returns the admin subject on success, or a gRPC status error identifying
+// which precondition failed. This is the single gate future admin-write and
+// admin-target-household-read RPCs call before touching household data —
+// Resolve and ListFleetHealth (FR10.2's standing lane) do not call this, by
+// design: the standing lane is available to any admin without elevation.
+func (ap *AuthorizationPredicates) RequireElevatedAdmin(ctx context.Context, targetHouseholdID int64) (string, error) {
+	claims, ok := grpcauth.ClaimsFromContext(ctx)
+	if !ok {
+		return "", fmt.Errorf("authentication required")
+	}
+	if !IsAdmin(ctx) {
+		return "", fmt.Errorf("admin role required")
+	}
+	active, err := ap.ActiveElevation(ctx, claims.Subject, targetHouseholdID)
+	if err != nil {
+		return "", fmt.Errorf("check elevation: %w", err)
+	}
+	if !active {
+		return "", fmt.Errorf("active elevation required against target household %d", targetHouseholdID)
+	}
+	return claims.Subject, nil
+}

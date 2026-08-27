@@ -11,6 +11,7 @@ import (
 	"github.com/whale-net/everything/leaflab/api/apierrors"
 	"github.com/whale-net/everything/leaflab/api/pagetoken"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -42,14 +43,23 @@ type LeafLabAPIServer struct {
 	publisher   *rmq.Publisher
 	logger      *slog.Logger
 	adminConfig AdminConfig
+	// authz backs the FR10 elevation-gate predicates (IsAdmin is a free
+	// function; ActiveElevation/RequireElevatedAdmin need the DB pool).
+	authz *AuthorizationPredicates
+	// limiter is consulted directly (not just via the blanket "read"
+	// interceptor in main.go) for the FR80 support-reference resolve path,
+	// which needs a narrower bucket than the rest of Resolve's oneof targets.
+	limiter *ratelimit.Limiter
 }
 
-func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger, adminConfig AdminConfig) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger, adminConfig AdminConfig, authz *AuthorizationPredicates, limiter *ratelimit.Limiter) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
 		repo:        repo,
 		publisher:   publisher,
 		logger:      logger,
 		adminConfig: adminConfig,
+		authz:       authz,
+		limiter:     limiter,
 	}
 }
 

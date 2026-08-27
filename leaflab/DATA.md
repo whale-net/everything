@@ -302,3 +302,35 @@ WHERE bsc.version IS DISTINCT FROM (
     WHERE board_id = b.board_id AND accepted = TRUE
 );
 ```
+
+---
+
+## A23: "Not Reporting" Staleness Threshold
+
+A23 governs "not reporting" classification everywhere it is used: FR79 (the
+fleet health listing), FR42.2 and FR62. It is computed in exactly one
+place — `leaflab/api/staleness.Config.Threshold` — and every caller derives
+its classification from that function, not from a locally re-derived
+constant.
+
+**The rule:** a board is "not reporting" when its last reading is older than
+3x its longest configured poll interval, floored at 15 minutes. The
+multiplier and floor are configuration (`LEAFLAB_STALENESS_MULTIPLIER`,
+`LEAFLAB_STALENESS_FLOOR_SECONDS` — see `leaflab/api/ENV.md`), not code
+constants; the threshold is global, not per-household.
+
+**The input, as implemented today:** "longest configured poll interval" is
+read from the board's *active accepted* `device_config` — the maximum
+`poll_interval_ms` across its sensors, with `0` ("use device default") and
+"no accepted config at all" both falling back to the firmware's compile-time
+default (`sensorboard_dynamic_main.cc`'s `SENSOR_POLL_INTERVAL_MS`, 60s).
+
+**Architect note carried from planning, unresolved by design:** this input
+should eventually derive from the board's *effective publish cadence*, not
+a per-sensor interval the firmware does not yet honour — the firmware
+currently publishes readings on a single compile-time interval regardless
+of per-sensor `poll_interval_ms` overrides. When that changes, only the
+input derivation in `leaflab/api/admin_repository.go`'s `toBoardHealth`
+needs to change; `staleness.Config.Threshold` and every caller (FR79,
+FR42.2, FR62) are unaffected, because the threshold computation and its
+input are deliberately kept as separate concerns.

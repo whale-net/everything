@@ -7,6 +7,8 @@ go_library(
     name = "api_lib",
     srcs = [
         "admin_config.go",
+        "admin_repository.go",
+        "admin_server.go",
         "authorization.go",
         "main.go",
         "repository.go",
@@ -18,8 +20,8 @@ go_library(
         "//firmware/proto:configpb",
         "//leaflab/api/apierrors",
         "//leaflab/api/pagetoken",
-        "//leaflab/api/ratelimit",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
         "//leaflab/api/staleness",
         "//libs/go/db",
         "//libs/go/grpcauth",
@@ -63,8 +65,8 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
-        "server_integration_test.go",
         "household_integration_test.go",
+        "server_integration_test.go",
     ],
     embed = [":api_lib"],
     gotags = ["integration"],
@@ -89,14 +91,13 @@ go_binary(
     visibility = ["//visibility:public"],
 )
 
-
 release_app(
     name = "leaflab-api",
-    binary_name = ":api",
-    language = "go",
-    domain = "leaflab",
-    description = "LeafLab gRPC API — device config push and board management",
     app_type = "internal-api",
+    binary_name = ":api",
+    description = "LeafLab gRPC API — device config push and board management",
+    domain = "leaflab",
+    language = "go",
     port = 50051,
     replicas = 1,
 )

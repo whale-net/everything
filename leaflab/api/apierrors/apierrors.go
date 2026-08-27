@@ -44,6 +44,46 @@ const (
 
 	// InvalidPageToken is returned when a page_token is malformed or foreign.
 	InvalidPageToken = "INVALID_PAGE_TOKEN"
+
+	// ReasonRequired is returned when EnterElevation or RenewElevation is
+	// called with an empty reason (FR10).
+	ReasonRequired = "REASON_REQUIRED"
+
+	// ReasonNotRestated is returned when RenewElevation is called with the
+	// same reason as the elevation window it would extend (FR10): renewal
+	// requires a freshly-stated reason, not a reuse.
+	ReasonNotRestated = "REASON_NOT_RESTATED"
+
+	// NoActiveElevation is returned when RenewElevation is called with no
+	// active elevation against the target household to renew (FR10).
+	NoActiveElevation = "NO_ACTIVE_ELEVATION"
+
+	// AdminRoleRequired is returned when a non-admin principal calls an
+	// admin-only RPC (the FR10 standing lane, elevation management).
+	AdminRoleRequired = "ADMIN_ROLE_REQUIRED"
+
+	// HouseholdNotFound is returned when an operation references a
+	// household_id that does not exist.
+	HouseholdNotFound = "HOUSEHOLD_NOT_FOUND"
+
+	// ResolveNotFound is the single, generic failure returned by the FR10.2
+	// standing lane's Resolve RPC for every case that must be
+	// indistinguishable per NFR2: an unknown, expired or revoked support
+	// reference (FR80), an unknown person, an unmatched or ambiguous
+	// device-id prefix. Never branch client-visible behavior on which of
+	// these occurred.
+	ResolveNotFound = "RESOLVE_NOT_FOUND"
+
+	// NoHousehold is returned when an authenticated principal has no
+	// household membership and the operation requires one.
+	NoHousehold = "NO_HOUSEHOLD"
+
+	// SupportReferenceNotFound is returned by RevokeSupportReference when no
+	// matching active reference exists for the caller's household. Unlike
+	// ResolveNotFound, this is the household member managing their own
+	// reference, not an admin-facing existence oracle — indistinguishability
+	// does not apply here.
+	SupportReferenceNotFound = "SUPPORT_REFERENCE_NOT_FOUND"
 )
 
 // ErrorDetailFromStatus attempts to extract the ErrorDetail from a gRPC

@@ -71,8 +71,15 @@ func run() error {
 	defer publisher.Close() //nolint:errcheck
 
 	repo := NewRepository(pool)
+	authz := NewAuthorizationPredicates(pool)
 	adminConfig := LoadAdminConfig(getEnvInt)
-	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"), adminConfig)
+
+	// Create rate limiter with registry and configure default buckets
+	registry := ratelimit.NewRegistry()
+	configureDefaultBuckets(registry)
+	limiter := ratelimit.NewLimiter(registry)
+
+	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"), adminConfig, authz, limiter)
 
 	// Create auth interceptors
 	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
@@ -87,11 +94,6 @@ func run() error {
 	// Create correlation ID interceptors
 	correlationUnaryInt := logging.NewCorrelationIDUnaryInterceptor()
 	correlationStreamInt := logging.NewCorrelationIDStreamInterceptor()
-
-	// Create rate limiter with registry and configure default buckets
-	registry := ratelimit.NewRegistry()
-	configureDefaultBuckets(registry)
-	limiter := ratelimit.NewLimiter(registry)
 
 	// Create rate limiting interceptors for read operations
 	rateLimitUnaryInt := ratelimit.UnaryServerInterceptor(limiter, "read")
