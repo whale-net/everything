@@ -1,6 +1,6 @@
 """FR8 append-only audit trail -- the Entry shape and the Auditor seam."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "audit",
@@ -13,4 +13,15 @@ go_library(
     importpath = "github.com/whale-net/everything/leaflab/api/audit",
     visibility = ["//visibility:public"],
     deps = ["@com_github_jackc_pgx_v5//pgconn"],
+)
+
+# Pure unit coverage for ValidateRegistrations (registration.go) -- no
+# Postgres required. The panic-on-missing-registration behavior this backs
+# (MustValidateAuditRegistrations) is covered against the real
+# leaflab-api registry in //leaflab/api:api_lib_test.
+go_test(
+    name = "audit_test",
+    size = "small",
+    srcs = ["registration_test.go"],
+    embed = [":audit"],
 )
