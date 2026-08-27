@@ -1,6 +1,6 @@
 """LeafLab gRPC API — device config push and board management."""
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 go_library(
@@ -43,4 +43,39 @@ release_app(
     app_type = "internal-api",
     port = 50051,
     replicas = 1,
+)
+
+# Real-Postgres integration coverage for the response contract (FR59, FR61,
+# FR64) -- see response_contract_integration_test.go's doc comment and
+# //libs/go/dbtest/README.md. Hand-written (not gazelle-generated): the test
+# file is gated behind `//go:build integration`, which gazelle skips when
+# scanning for go_test srcs. EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` markers tell
+# a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:response_contract_integration_test --test_output=all
+go_test(
+    # keep
+    name = "response_contract_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["response_contract_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
 )
