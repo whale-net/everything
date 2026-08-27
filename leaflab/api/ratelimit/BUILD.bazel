@@ -4,7 +4,10 @@ load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "ratelimit",
-    srcs = ["ratelimit.go"],
+    srcs = [
+        "env.go",
+        "ratelimit.go",
+    ],
     importpath = "github.com/whale-net/everything/leaflab/api/ratelimit",
     visibility = ["//visibility:public"],
 )
