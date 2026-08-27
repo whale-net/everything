@@ -9,28 +9,29 @@
 // reading's recorded_at, never against plant.region_id's current-value
 // cache.
 //
-// Scaffold only (this task's Scaffold phase): ResolvePlants returns
-// ErrNotImplemented until this task's Implementation phase fills in the
-// ancestor walk, reusing v_region_path (migration 012) rather than writing
-// a second recursive CTE. A SQL form of the identical rule is scaffolded
-// alongside this package as a database function
-// (leaflab/migrate/migrations/018_attribution.up.sql,
-// attribute_region_plants) -- NFR1.c requires the two implementations to
-// agree by construction, which is why they are scaffolded together here
-// rather than one now and one later.
+// This is the Go twin of leaflab/migrate/migrations/019_attribution.up.sql's
+// attribute_region_plants database function -- NFR1.c requires the two to
+// agree by construction. Both walk the same path (v_region_path, migration
+// 012, leaf toward root) and apply the identical stopping rule: the first
+// region -- including the reading's own -- with at least one
+// plant_region_history row whose interval contains the reading's recorded
+// instant. Keep any change to the rule mirrored in both places.
 package attribution
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ErrNotImplemented is returned by ResolvePlants until this task's
-// Implementation phase fills in the nearest-ancestor walk (FR23).
-var ErrNotImplemented = errors.New("attribution: not implemented (Implementation phase, FR23)")
+// ErrRegionNotFound is returned by ResolvePlants when regionID does not
+// exist in v_region_path (and therefore not in region either) -- there is
+// no path to walk.
+var ErrRegionNotFound = errors.New("attribution: region not found")
 
 // PlantRef is one plant attributed to a region at a point in time. Every
 // plant-scoped response carries the full attributed set as each other
@@ -67,7 +68,79 @@ func NewResolver(db *pgxpool.Pool) *Resolver {
 //
 // Implementation walks v_region_path (migration 012) from regionID toward
 // the root rather than issuing a second recursive CTE -- see this
-// package's doc comment.
+// package's doc comment. This is the Go twin of
+// attribute_region_plants (migration 019); keep the two in agreement.
 func (r *Resolver) ResolvePlants(ctx context.Context, regionID int64, at time.Time) ([]PlantRef, int64, error) {
-	return nil, 0, ErrNotImplemented
+	var pathIDs []int64
+	err := r.db.QueryRow(ctx, `
+		SELECT path_ids FROM v_region_path WHERE region_id = $1
+	`, regionID).Scan(&pathIDs)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, fmt.Errorf("%w: region %d", ErrRegionNotFound, regionID)
+	}
+	if err != nil {
+		return nil, 0, fmt.Errorf("attribution: load region path for region %d: %w", regionID, err)
+	}
+
+	// pathIDs is root-to-leaf (v_region_path's convention, migration 012);
+	// walk it leaf-to-root -- i.e. from regionID itself outward to the
+	// root -- stopping at the first region with at least one plant whose
+	// plant_region_history interval contains at (A11: nearest ancestor
+	// only, never every ancestor level).
+	var attributedRegionID int64
+	found := false
+	for i := len(pathIDs) - 1; i >= 0; i-- {
+		candidate := pathIDs[i]
+		var hasPlant bool
+		if err := r.db.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM plant_region_history
+				WHERE region_id = $1
+				  AND valid_from <= $2
+				  AND (valid_to IS NULL OR valid_to > $2)
+			)
+		`, candidate, at).Scan(&hasPlant); err != nil {
+			return nil, 0, fmt.Errorf("attribution: check region %d for an attributing plant: %w", candidate, err)
+		}
+		if hasPlant {
+			attributedRegionID = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		// No region on the path -- including regionID itself -- has an
+		// active plant at at. Not an error: a reading in an unplanted
+		// area attributes to nothing (FR23 is silent on this case beyond
+		// "the first region ... with at least one plant"; there is none).
+		return nil, 0, nil
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT p.plant_id, p.name
+		FROM plant_region_history prh
+		JOIN plant p ON p.plant_id = prh.plant_id
+		WHERE prh.region_id = $1
+		  AND prh.valid_from <= $2
+		  AND (prh.valid_to IS NULL OR prh.valid_to > $2)
+		ORDER BY p.plant_id
+	`, attributedRegionID, at)
+	if err != nil {
+		return nil, 0, fmt.Errorf("attribution: load attributed plants for region %d: %w", attributedRegionID, err)
+	}
+	defer rows.Close()
+
+	var plants []PlantRef
+	for rows.Next() {
+		var ref PlantRef
+		if err := rows.Scan(&ref.PlantID, &ref.Name); err != nil {
+			return nil, 0, fmt.Errorf("attribution: scan attributed plant for region %d: %w", attributedRegionID, err)
+		}
+		plants = append(plants, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("attribution: iterate attributed plants for region %d: %w", attributedRegionID, err)
+	}
+
+	return plants, attributedRegionID, nil
 }
