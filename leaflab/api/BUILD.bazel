@@ -94,6 +94,11 @@ go_test(
 # BUILD.bazel/README.md for why each tag is required). `# keep` markers tell
 # a later `bazel run //:gazelle` not to touch or remove this rule.
 #
+# dbtest_helpers_integration_test.go carries the shared testSchema/helpers
+# both this target and repository_board_lifecycle_integration_test below
+# depend on -- it must be listed in both targets' srcs since Bazel doesn't
+# share compiled test sources across go_test targets.
+#
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //leaflab/api:response_contract_integration_test --test_output=all
 go_test(
@@ -101,7 +106,10 @@ go_test(
     name = "response_contract_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["response_contract_integration_test.go"],
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "response_contract_integration_test.go",
+    ],
     embed = [":api_lib"],
     gotags = ["integration"],
     tags = [
@@ -115,6 +123,38 @@ go_test(
     deps = [
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for the FR22.1/FR22.4/FR22.5 board
+# retirement operation added by migration 015_ownership -- see
+# repository_board_lifecycle_integration_test.go's doc comment. Same tag set
+# and hand-written rationale as response_contract_integration_test above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:repository_board_lifecycle_integration_test --test_output=all
+go_test(
+    # keep
+    name = "repository_board_lifecycle_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "repository_board_lifecycle_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
         "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],

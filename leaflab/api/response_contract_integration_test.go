@@ -15,83 +15,21 @@
 // doc comment on Options.Schema) covering only the two tables this phase's
 // RPCs touch (board, device_config) -- it deliberately does not depend on
 // leaflab/migrate's migrations so this test stays hermetic.
+//
+// Shared fixtures (testSchema, newTestServer, countRows, insertBoard,
+// discardLogger) live in dbtest_helpers_integration_test.go so they can also
+// back repository_board_lifecycle_integration_test.go without duplication.
 package main
 
 import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io"
-	"log/slog"
 	"testing"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
-	"github.com/whale-net/everything/libs/go/dbtest"
 )
-
-const testSchema = `
-	CREATE TABLE board (
-		board_id      BIGSERIAL PRIMARY KEY,
-		device_id     VARCHAR(64) NOT NULL UNIQUE,
-		registered_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-	);
-
-	CREATE TABLE device_config (
-		config_id        BIGSERIAL   PRIMARY KEY,
-		board_id         BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		version          BIGINT      NOT NULL,
-		config_json      JSONB       NOT NULL,
-		accepted         BOOLEAN     NOT NULL DEFAULT FALSE,
-		pushed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		acked_at         TIMESTAMPTZ,
-		rejection_reason TEXT,
-		UNIQUE (board_id, version)
-	);
-`
-
-// discardLogger is a *slog.Logger that throws away everything it's given --
-// these tests assert on returned errors and DB state, not log output.
-func discardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-// newTestServer starts a real Postgres container, applies testSchema, and
-// returns a LeafLabAPIServer backed by a real Repository plus the raw pool
-// for fixture setup / assertions. publisher is nil: every RPC exercised by
-// this file either never reaches the publish step (PushDeviceConfig is
-// tested only via its pre-write validation refusal) or never touches it at
-// all (ListBoards).
-func newTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
-	t.Helper()
-	ctx := context.Background()
-	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: testSchema})
-	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, nil, nil, discardLogger()), db.Pool
-}
-
-func countRows(t *testing.T, pool *pgxpool.Pool, table string) int {
-	t.Helper()
-	var n int
-	if err := pool.QueryRow(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&n); err != nil {
-		t.Fatalf("count rows in %s: %v", table, err)
-	}
-	return n
-}
-
-func insertBoard(t *testing.T, pool *pgxpool.Pool, deviceID string) int64 {
-	t.Helper()
-	var id int64
-	err := pool.QueryRow(context.Background(),
-		`INSERT INTO board (device_id) VALUES ($1) RETURNING board_id`, deviceID).Scan(&id)
-	if err != nil {
-		t.Fatalf("insert board %s: %v", deviceID, err)
-	}
-	return id
-}
 
 // TestPushDeviceConfig_RefusalWritesNothing covers FR59.3's
 // refuse-before-anything-is-written contract as it's actually exercised in
