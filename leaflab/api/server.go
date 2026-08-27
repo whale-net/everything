@@ -11,6 +11,7 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/config"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -47,7 +48,11 @@ const mqttExchange = "amq.topic"
 // called with *Repository in main.go).
 type deviceRepository interface {
 	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error)
+	// InsertDeviceConfigNextVersion also records entries' FR82.4 per-entry
+	// provenance into device_config_entry, in the same transaction as the
+	// device_config row -- see Repository.InsertDeviceConfigNextVersion's
+	// doc comment.
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, entry audit.Entry) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
 	// GetRegionApplySkips is FR1.3's caller-visible skip surface: the
 	// audit.Entry rows leaflab/processor's ApplyConfigRegions wrote for
@@ -181,6 +186,26 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, contract.InvalidArgument("device_config", "device_id", reason)
 	}
 
+	// FR82.1: scope is required, with no default and never inferred from
+	// payload shape/size/caller/endpoint. Checked before any board
+	// bookkeeping or write -- an omitted scope leaves nothing stored,
+	// nothing published, and no version assigned (GetOrCreateBoard's
+	// self-registration upsert hasn't even run yet at this point).
+	if req.Scope == pb.PushScope_PUSH_SCOPE_UNSPECIFIED {
+		return nil, contract.InvalidArgument(
+			"device_config",
+			"scope",
+			"A config push must state scope=COMPLETE or scope=EDIT; there is no default.",
+		)
+	}
+	if req.Scope == pb.PushScope_PUSH_SCOPE_COMPLETE && len(req.Removes) > 0 {
+		return nil, contract.InvalidArgument(
+			"device_config",
+			"removes",
+			"removes is only used with scope=EDIT; a scope=COMPLETE push removes an entry by omitting it from sensors instead.",
+		)
+	}
+
 	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
 	if err != nil {
 		s.logger.Error("board lookup failed", "device_id", req.DeviceId, "error", err)
@@ -230,11 +255,99 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, err
 	}
 
+	// FR82: resolve this push's complete entry set and per-entry provenance,
+	// branching on scope. req.Sensors is always the caller's own
+	// add/change list (COMPLETE: the whole desired set; EDIT: only what's
+	// named) -- validatePushRegions/checkPushConfigIdentity above
+	// deliberately only ever see this authored list, never a materialised
+	// carry-forward entry (those were already checked when they were
+	// themselves accepted).
+	adds, err := s.resolveConfigEntries(ctx, req.Sensors)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []config.Entry
+	sensorsForStorage := req.Sensors
+
+	switch req.Scope {
+	case pb.PushScope_PUSH_SCOPE_COMPLETE:
+		// FR82.2: the payload is the board's entire desired sensor set,
+		// stored as submitted -- every entry is authored, and there is no
+		// base to materialise against.
+		entries = adds
+		for i := range entries {
+			entries[i].Provenance = config.ProvenanceAuthored
+		}
+
+	case pb.PushScope_PUSH_SCOPE_EDIT:
+		baseCfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
+		if err != nil {
+			s.logger.Error("get latest accepted config for edit failed", "device_id", req.DeviceId, "error", err)
+			return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+		}
+		// base stays nil (not an empty, non-nil slice) when baseCfg == nil
+		// -- config.Materialise's documented signal for "no accepted config
+		// exists for this board at all" (FR82.3), distinct from a
+		// genuinely-empty accepted config (baseCfg != nil, zero sensors).
+		var base []config.Entry
+		if baseCfg != nil {
+			base, err = s.resolveConfigEntries(ctx, baseCfg.Sensors)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		removeKeys, err := s.resolveRemoveKeys(ctx, req.Removes)
+		if err != nil {
+			return nil, err
+		}
+
+		result, err := config.Materialise(base, adds, removeKeys)
+		if err != nil {
+			switch {
+			case errors.Is(err, config.ErrNoAcceptedConfig):
+				// FR82.3's exact stated refusal -- never a generic
+				// validation failure.
+				return nil, contract.Refuse(
+					"device_config",
+					"scope",
+					"This board has no accepted config to complete your edit from; send a complete push.",
+					"Push scope=COMPLETE with this device's entire desired sensor set.",
+				)
+			case errors.Is(err, config.ErrUnaddressableRemove):
+				// FR82.4/FR39: a remove named an entry with no I2C address
+				// on record (the legacy "unknown address" sentinel) --
+				// stated reason and remedy, not a silent no-op.
+				return nil, contract.Refuse(
+					"device_config",
+					"removes",
+					"This entry has no I2C address on record and cannot be removed by an edit push.",
+					"Push scope=COMPLETE with this entry omitted from the sensors list.",
+				)
+			default:
+				s.logger.Error("materialise edit push failed", "device_id", req.DeviceId, "error", err)
+				return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+			}
+		}
+
+		entries = result.Entries
+		sensorsForStorage = make([]*configpb.SensorConfig, len(entries))
+		for i, e := range entries {
+			sensorsForStorage[i] = e.Sensor
+		}
+		s.logger.Info("edit push materialised",
+			"device_id", req.DeviceId,
+			"authored", len(adds),
+			"removed", len(result.Removed),
+			"total", len(entries))
+	}
+
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
 		DeviceId: req.DeviceId,
-		Sensors:  req.Sensors,
+		Sensors:  sensorsForStorage,
 	}
 	configJSON, err := protojson.Marshal(cfgProto)
 	if err != nil {
@@ -257,7 +370,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		EntityKind:        reg.EntityKind,
 		CorrelationID:     CorrelationIDFromContext(ctx),
 	}
-	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entry)
+	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, entry)
 	if err != nil {
 		s.logger.Error("record config push failed", "device_id", req.DeviceId, "error", err)
 		return nil, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")

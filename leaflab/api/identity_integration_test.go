@@ -506,6 +506,7 @@ func TestPushDeviceConfig_FR17_NewIdentityRefused_RealPushPath_WritesNothing(t *
 
 	_, err := server.PushDeviceConfig(ctx, &pb.PushDeviceConfigRequest{
 		DeviceId: "leaflab-fr17",
+		Scope:    pb.PushScope_PUSH_SCOPE_COMPLETE,
 		Sensors: []*configpb.SensorConfig{
 			{
 				Name:       "brand_new_sensor",

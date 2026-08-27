@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/config"
 	"github.com/whale-net/everything/leaflab/hwkey"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -97,14 +99,27 @@ func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int
 // concurrent writers compute the same MAX(version)+1; the unique constraint on
 // (board_id, version) guarantees only one wins per version number.
 //
+// entries is FR82.4's per-entry provenance (leaflab/api/config.Entry:
+// canonical hardware key + Provenance) for this exact push, written to
+// device_config_entry in the same transaction as the device_config row --
+// migration 028's own doc comment states these rows are written once, when
+// a device_config row is stored. An entry whose SensorTypeID is the
+// unresolved-catalog-type sentinel (hwkey.SensorTypeID(0); see
+// resolveConfigEntries, config_push.go) is skipped here rather than
+// violate device_config_entry's sensor_type_id NOT NULL FK -- the entry
+// itself is unaffected, since it was already written into configJSON by
+// the caller regardless of whether this loop can record its provenance.
+//
 // entry is the audit record for this push (FR8.2 names config pushes as a
 // write whose acting principal must be recorded); auditedWrite inserts it
 // in the same transaction as the device_config row, with entry.EntityID
 // filled in with the assigned version once it's known. A write that fails
-// (including every retry outcome other than success) leaves neither row.
-func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error) {
+// (including every retry outcome other than success) leaves neither row,
+// and neither do the device_config_entry rows below (same tx).
+func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, entry audit.Entry) (int64, error) {
 	var version int64
 	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		var configID int64
 		for {
 			err := tx.QueryRow(ctx, `
 				WITH next AS (
@@ -115,8 +130,8 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 				INSERT INTO device_config (board_id, version, config_json)
 				SELECT $1, next.v, $2 FROM next
 				ON CONFLICT (board_id, version) DO NOTHING
-				RETURNING version
-			`, boardID, configJSON).Scan(&version)
+				RETURNING config_id, version
+			`, boardID, configJSON).Scan(&configID, &version)
 			if err == nil {
 				break
 			}
@@ -126,6 +141,27 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 			}
 			return audit.Entry{}, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
 		}
+
+		for _, e := range entries {
+			if e.Key.SensorTypeID <= 0 {
+				continue
+			}
+			var i2cAddr any
+			if addr, ok := e.Key.I2CAddress.Value(); ok {
+				i2cAddr = int32(addr)
+			}
+			muxJSON, err := json.Marshal(e.Key.MuxPath)
+			if err != nil {
+				return audit.Entry{}, fmt.Errorf("marshal mux_path for config_id %d: %w", configID, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO device_config_entry (config_id, i2c_address, mux_path, sensor_type_id, provenance)
+				VALUES ($1, $2, $3::jsonb, $4, $5)
+			`, configID, i2cAddr, muxJSON, int64(e.Key.SensorTypeID), string(e.Provenance)); err != nil {
+				return audit.Entry{}, fmt.Errorf("insert device_config_entry for config_id %d: %w", configID, err)
+			}
+		}
+
 		versionStr := strconv.FormatInt(version, 10)
 		entry.EntityID = &versionStr
 		return entry, nil

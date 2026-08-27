@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "audit_registry.go",
         "auth.go",
+        "config_push.go",
         "identity.go",
         "logging_interceptor.go",
         "main.go",
@@ -21,6 +22,7 @@ go_library(
         "//firmware/proto:firmwarepb",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
+        "//leaflab/api/config",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/hwkey",
@@ -85,6 +87,7 @@ go_test(
         "//firmware/proto:configpb",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
+        "//leaflab/api/config",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/grpcauth",

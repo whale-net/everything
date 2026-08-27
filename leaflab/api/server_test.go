@@ -11,6 +11,7 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	pushconfig "github.com/whale-net/everything/leaflab/api/config"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -50,6 +51,11 @@ type fakeRepo struct {
 	insertDeviceConfigNextVersionVersion int64
 	insertDeviceConfigNextVersionErr     error
 	insertDeviceConfigNextVersionCalls   []insertDeviceConfigNextVersionCall
+
+	// resolveSensorTypeIDResponses configures resolveSensorTypeID's return
+	// per typeName; a name with no entry here resolves to "not found" (see
+	// resolveSensorTypeID's doc comment).
+	resolveSensorTypeIDResponses map[string]int64
 }
 
 // getOrCreateBoardID/getOrCreateBoardErr configure GetOrCreateBoard's
@@ -69,10 +75,11 @@ func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64
 // empty, not just that PushDeviceConfig returned an error.
 // insertDeviceConfigNextVersionVersion/-Err configure what each call
 // returns.
-func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error) {
+func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []pushconfig.Entry, entry audit.Entry) (int64, error) {
 	f.insertDeviceConfigNextVersionCalls = append(f.insertDeviceConfigNextVersionCalls, insertDeviceConfigNextVersionCall{
 		boardID:    boardID,
 		configJSON: configJSON,
+		entries:    entries,
 		entry:      entry,
 	})
 	return f.insertDeviceConfigNextVersionVersion, f.insertDeviceConfigNextVersionErr
@@ -83,6 +90,7 @@ func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID in
 type insertDeviceConfigNextVersionCall struct {
 	boardID    int64
 	configJSON []byte
+	entries    []pushconfig.Entry
 	entry      audit.Entry
 }
 
@@ -104,8 +112,19 @@ func (f *fakeRepo) FindSensorIDByName(ctx context.Context, boardID int64, name s
 	panic("not used by this file's tests")
 }
 
+// resolveSensorTypeID returns "not found" by default (never panics): this
+// file's PushDeviceConfig-adjacent tests (server_push_device_config_test.go)
+// reach FR82's resolveConfigEntries, which tolerates an unresolved
+// sensor_type entirely (see its own doc comment in config_push.go) rather
+// than treat it as an error -- so a fixed "not found" default keeps every
+// pre-existing test in this file/package passing without asserting
+// anything about a specific catalog id none of them care about. A test
+// that does care configures resolveSensorTypeIDResponses.
 func (f *fakeRepo) resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error) {
-	panic("not used by this file's tests")
+	if id, ok := f.resolveSensorTypeIDResponses[typeName]; ok {
+		return id, true, nil
+	}
+	return 0, false, nil
 }
 
 func (f *fakeRepo) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
