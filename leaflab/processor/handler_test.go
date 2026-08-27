@@ -26,11 +26,35 @@ type stubRepo struct {
 	// UpsertSensor, unchanged from before this field existed.
 	boardSensorIdentities []BoardSensorIdentity
 
+	// getSensorResults, keyed "deviceID/sensorName", is what GetSensor
+	// returns when present -- lets a test simulate the DB observing a
+	// region/identity/name change committed by another writer (FR73's
+	// cache-miss/invalidation-driven re-read path in handleSensorReading)
+	// without a real database. A key absent from this map falls back to
+	// (SensorInfo{}, false, nil), exactly stubRepo.GetSensor's behaviour
+	// before this field existed -- so every pre-existing test (none of
+	// which populates it) is unaffected.
+	getSensorResults map[string]SensorInfo
+
+	// applyConfigRegionsResult is what ApplyConfigRegions returns -- lets a
+	// test simulate this process's own config-apply writer (FR73's second
+	// writer surface: "the processor's own ApplyConfigRegions") reporting a
+	// real region change, instead of the empty default every pre-existing
+	// test (which doesn't set this field) relies on.
+	applyConfigRegionsResult []RegionChange
+
 	// Recorded call arguments.
 	upsertSensorCalls          []upsertSensorCall
 	upsertSensorHWHistoryCalls []upsertSensorHWHistoryCall
 	applyConfigRegionsCalls    []applyConfigRegionsCall
 	rewireAndRenameSensorCalls []rewireAndRenameSensorCall
+	insertReadingCalls         []insertReadingCall
+}
+
+type insertReadingCall struct {
+	sensorID int64
+	regionID *int64
+	value    float64
 }
 
 type rewireAndRenameSensorCall struct {
@@ -100,11 +124,15 @@ func (s *stubRepo) UpsertSensorHWHistory(_ context.Context, sensorID int64, hw *
 	return nil
 }
 
-func (s *stubRepo) GetSensor(_ context.Context, _, _ string) (SensorInfo, bool, error) {
+func (s *stubRepo) GetSensor(_ context.Context, deviceID, sensorName string) (SensorInfo, bool, error) {
+	if info, ok := s.getSensorResults[deviceID+"/"+sensorName]; ok {
+		return info, true, nil
+	}
 	return SensorInfo{}, false, nil
 }
 
-func (s *stubRepo) InsertReading(_ context.Context, _ int64, _ *int64, _ float64, _ bool, _ uint32, _ time.Time, _ *int64) error {
+func (s *stubRepo) InsertReading(_ context.Context, sensorID int64, regionID *int64, value float64, _ bool, _ uint32, _ time.Time, _ *int64) error {
+	s.insertReadingCalls = append(s.insertReadingCalls, insertReadingCall{sensorID: sensorID, regionID: regionID, value: value})
 	return nil
 }
 
@@ -118,7 +146,7 @@ func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, 
 
 func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) ([]RegionChange, error) {
 	s.applyConfigRegionsCalls = append(s.applyConfigRegionsCalls, applyConfigRegionsCall{boardID: boardID, version: version})
-	return nil, nil
+	return s.applyConfigRegionsResult, nil
 }
 
 func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error { return nil }
@@ -990,4 +1018,279 @@ func TestRunCacheBackstop_SelfHealsWithinInterval(t *testing.T) {
 		}
 	}
 	t.Logf("backstop self-healed the dropped rename event in %s (backstop interval %s)", time.Since(start), backstopInterval)
+}
+
+// --- FR73: handleSensorReading's cache-miss/invalidation-driven re-read
+// path, exercised end-to-end through the handler itself ---
+//
+// The tests above (ApplyInvalidation, SensorCache eviction, ReplaceAll,
+// reloadCache, RunCacheBackstop) each pin down one piece of the decision
+// logic in isolation. None of them ever call handleSensorReading, so none
+// of them prove the pieces actually compose: that an evicted cache entry
+// really does fall through to stubRepo.GetSensor, that the value GetSensor
+// returns is really what gets stamped onto the reading via InsertReading,
+// and that the cache is repopulated with it. The tests below close that
+// gap using getSensorResults/insertReadingCalls above.
+
+// TestHandleSensorReading_CrossProcessRegionChange_CacheMissRereadsNewRegion
+// is the load-bearing test FR73's Testing section names explicitly: a
+// region assignment commits through some other writer -- this test doesn't
+// care which; see the two tests below for the API's and the processor's own
+// two writer surfaces specifically -- while this process has the sensor
+// cached under its old region. Once the cache entry is invalidated (as
+// main.go's Subscriber does on receiving the cross-process event; the
+// broker's every-replica delivery of that event is proven separately by
+// invalidation_integration_test.go's TestInvalidation_EveryReplicaFanout),
+// the very next reading must fall through to repo.GetSensor -- not keep
+// serving the stale cached RegionID -- and the reading must be stamped with
+// the *new* region. No manifest and no config push occurs anywhere in this
+// test.
+func TestHandleSensorReading_CrossProcessRegionChange_CacheMissRereadsNewRegion(t *testing.T) {
+	const deviceID = "leaflab-crossproc"
+	const sensorName = "temp"
+	oldRegion := int64ptr(1)
+	newRegion := int64ptr(2)
+
+	repo := &stubRepo{
+		getSensorResults: map[string]SensorInfo{
+			deviceID + "/" + sensorName: {SensorID: 7, RegionID: newRegion},
+		},
+	}
+	h := newTestHandler(repo)
+
+	// "the processor running ... with a sensor cached": pre-populate the
+	// cache exactly as handleManifest would have, under the *old* region.
+	h.cache.Set(deviceID, sensorName, SensorInfo{SensorID: 7, RegionID: oldRegion})
+
+	// "region assignment happens via a second process": simulated here by
+	// the fact that stubRepo.GetSensor above already reflects the new
+	// region -- some other writer (the API, or this same process's own
+	// ApplyConfigRegions, see the tests below) has already committed it.
+	// The signal that a second process's Subscriber -- here, this one --
+	// received: evict the stale cache entry.
+	ApplyInvalidation(h.cache, invalidation.Event{
+		Kind:       invalidation.KindRegion,
+		DeviceID:   deviceID,
+		SensorName: sensorName,
+	})
+
+	reading := &firmwarepb.SensorReading{Value: 21.5, UptimeMs: 60000}
+	body, err := proto.Marshal(reading)
+	if err != nil {
+		t.Fatalf("marshal reading: %v", err)
+	}
+	// "a reading arrives > 5s later": the bound itself is a real-time
+	// property of the signal (proven by invalidation_integration_test.go
+	// against a real broker); what this test proves is that *whenever* the
+	// reading arrives after invalidation, it is never served the stale
+	// value -- there is no time-based fallback to the old cache entry.
+	if err := h.handleSensorReading(context.Background(), deviceID, sensorName, body); err != nil {
+		t.Fatalf("handleSensorReading: %v", err)
+	}
+
+	if len(repo.insertReadingCalls) != 1 {
+		t.Fatalf("expected 1 InsertReading call, got %d", len(repo.insertReadingCalls))
+	}
+	call := repo.insertReadingCalls[0]
+	if call.sensorID != 7 {
+		t.Errorf("InsertReading sensorID = %d, want 7", call.sensorID)
+	}
+	if call.regionID == nil || *call.regionID != *newRegion {
+		t.Fatalf("sensor_reading.region_id = %v, want the NEW region %d -- a cached view outlived the fact it caches", call.regionID, *newRegion)
+	}
+
+	info, ok := h.cache.Get(deviceID, sensorName)
+	if !ok || info.RegionID == nil || *info.RegionID != *newRegion {
+		t.Errorf("cache after re-read = %+v (ok=%v), want repopulated with the new region", info, ok)
+	}
+}
+
+// TestHandleSensorReading_ProcessorOwnApplyConfigRegions_CacheMissRereadsNewRegion
+// is FR73's Testing section's second load-bearing case: "same test with the
+// assignment written by the processor's own ApplyConfigRegions -- both
+// writers are covered." It drives the region change through
+// handleConfigAck (this process's own accepted-config-apply path,
+// handler.go:322), which is the concrete call site that invokes
+// repo.ApplyConfigRegions and, per its own doc comment, publishes one
+// invalidation.Event per RegionChange after each has committed. This test
+// then applies exactly the event handleConfigAck's loop would have built
+// from the RegionChange it returns (Kind: KindRegion, the change's
+// DeviceID/SensorName) -- standing in for main.go's Subscriber having
+// received it via the broker -- and asserts the very next reading picks up
+// the new region, distinct from TestHandleSensorReading_CrossProcessRegionChange_CacheMissRereadsNewRegion
+// above only in which writer produced the change.
+func TestHandleSensorReading_ProcessorOwnApplyConfigRegions_CacheMissRereadsNewRegion(t *testing.T) {
+	const deviceID = "leaflab-ownapply"
+	const sensorName = "temp"
+	oldRegion := int64ptr(1)
+	newRegion := int64ptr(2)
+
+	repo := &stubRepo{
+		boardID: 9,
+		// stubRepo.ApplyConfigRegions doesn't otherwise report changes (see
+		// its default zero-value behaviour above); this is the writer under
+		// test -- handleConfigAck's call to it -- reporting that sensor_id 7
+		// was reassigned to the new region.
+	}
+	repo.applyConfigRegionsResult = []RegionChange{{SensorID: 7, SensorName: sensorName, RegionID: *newRegion}}
+	repo.getSensorResults = map[string]SensorInfo{
+		deviceID + "/" + sensorName: {SensorID: 7, RegionID: newRegion},
+	}
+	h := newTestHandler(repo)
+	h.cache.Set(deviceID, sensorName, SensorInfo{SensorID: 7, RegionID: oldRegion})
+
+	ack := &configpb.DeviceConfigAck{DeviceId: deviceID, AppliedVersion: 3, Accepted: true}
+	ackBody, err := proto.Marshal(ack)
+	if err != nil {
+		t.Fatalf("marshal ack: %v", err)
+	}
+	// The writer under test: this process's own ApplyConfigRegions, driven
+	// through the real handleConfigAck call site (handler.go:322), not a
+	// hand-rolled substitute.
+	if err := h.handleConfigAck(context.Background(), deviceID, ackBody); err != nil {
+		t.Fatalf("handleConfigAck: %v", err)
+	}
+	if len(repo.applyConfigRegionsCalls) != 1 {
+		t.Fatalf("expected 1 ApplyConfigRegions call, got %d", len(repo.applyConfigRegionsCalls))
+	}
+
+	// Stand in for main.go's Subscriber delivering the event
+	// handleConfigAck's loop published for the RegionChange above (its own
+	// invalidationPub is nil in this test -- see newTestHandler's doc
+	// comment -- so nothing was actually published; what matters here is
+	// that the *change* came from the real ApplyConfigRegions call site).
+	ApplyInvalidation(h.cache, invalidation.Event{
+		Kind:       invalidation.KindRegion,
+		DeviceID:   deviceID,
+		SensorID:   7,
+		SensorName: sensorName,
+	})
+
+	reading := &firmwarepb.SensorReading{Value: 22.0, UptimeMs: 1000}
+	body, err := proto.Marshal(reading)
+	if err != nil {
+		t.Fatalf("marshal reading: %v", err)
+	}
+	if err := h.handleSensorReading(context.Background(), deviceID, sensorName, body); err != nil {
+		t.Fatalf("handleSensorReading: %v", err)
+	}
+
+	if len(repo.insertReadingCalls) != 1 {
+		t.Fatalf("expected 1 InsertReading call, got %d", len(repo.insertReadingCalls))
+	}
+	call := repo.insertReadingCalls[0]
+	if call.regionID == nil || *call.regionID != *newRegion {
+		t.Fatalf("sensor_reading.region_id = %v, want the NEW region %d written by this process's own ApplyConfigRegions", call.regionID, *newRegion)
+	}
+}
+
+// TestHandleSensorReading_RenameResolvesToSameSensorID is the
+// reading-resolution half of the rename load-bearing test --
+// TestApplyInvalidation_RenameEvictsPriorNameOnly above covers only the
+// cache-map-eviction half. After a rename's invalidation.Event evicts the
+// sensor's prior-name cache entry, a reading arriving under the sensor's
+// *new* name is a cache miss (the new name was never a cache key before
+// this rename -- see SensorCache.Invalidate's doc comment) that must
+// resolve, via repo.GetSensor, to the *same* sensor_id the prior name used
+// to map to. FR73: "a reading recorded after a rename resolves to the same
+// sensor identity and leaves no stale entry under the prior key."
+func TestHandleSensorReading_RenameResolvesToSameSensorID(t *testing.T) {
+	const deviceID = "leaflab-rename"
+
+	repo := &stubRepo{
+		getSensorResults: map[string]SensorInfo{
+			deviceID + "/new_light": {SensorID: 5, RegionID: int64ptr(10)},
+		},
+	}
+	h := newTestHandler(repo)
+	h.cache.Set(deviceID, "old_light", SensorInfo{SensorID: 5, RegionID: int64ptr(10)})
+
+	// The rename's invalidation.Event (FR52, Phase 5's writer -- this
+	// package only needs to prove it handles the event correctly once
+	// received, same as the region/identity kinds above).
+	ApplyInvalidation(h.cache, invalidation.Event{
+		Kind:            invalidation.KindName,
+		DeviceID:        deviceID,
+		SensorName:      "new_light",
+		PriorSensorName: "old_light",
+	})
+
+	if _, ok := h.cache.Get(deviceID, "old_light"); ok {
+		t.Fatal("prior-name cache entry must be evicted by the rename invalidation before the next reading arrives")
+	}
+
+	reading := &firmwarepb.SensorReading{Value: 21.5, UptimeMs: 60000}
+	body, err := proto.Marshal(reading)
+	if err != nil {
+		t.Fatalf("marshal reading: %v", err)
+	}
+	if err := h.handleSensorReading(context.Background(), deviceID, "new_light", body); err != nil {
+		t.Fatalf("handleSensorReading: %v", err)
+	}
+
+	if len(repo.insertReadingCalls) != 1 {
+		t.Fatalf("expected 1 InsertReading call, got %d", len(repo.insertReadingCalls))
+	}
+	if got := repo.insertReadingCalls[0].sensorID; got != 5 {
+		t.Errorf("InsertReading sensorID = %d, want unchanged 5 (same sensor identity survives the rename)", got)
+	}
+
+	if info, ok := h.cache.Get(deviceID, "new_light"); !ok || info.SensorID != 5 {
+		t.Errorf("cache after re-read = %+v (ok=%v), want new_light repopulated with SensorID 5", info, ok)
+	}
+}
+
+// TestHandleSensorReading_RewireAPIIdentityEvent_CacheServesCorrectPostRewireIdentity
+// covers FR73 on leaflab/api's explicit RewireSensor RPC (see
+// invalidation.KindIdentity's doc comment and server.go's RewireSensor,
+// which publishes exactly this event shape after RewireSensorHW commits) --
+// the writer surface TestHandleManifest_FR16_3_SimultaneousRewireAndRename_SameSensorID
+// above already covers on the *device manifest* path. It reproduces a stale
+// cached identity for a device/name key -- as if this process cached it
+// before the rewire committed elsewhere -- and asserts the processor's
+// *SensorCache itself*, not just what a fresh DB read would say, ends up
+// serving the correct post-rewire identity: cache.Get, not only
+// repo.GetSensor's return value, must reflect it.
+func TestHandleSensorReading_RewireAPIIdentityEvent_CacheServesCorrectPostRewireIdentity(t *testing.T) {
+	const deviceID = "leaflab-rewire-cache"
+	const sensorName = "temp"
+
+	repo := &stubRepo{
+		getSensorResults: map[string]SensorInfo{
+			deviceID + "/" + sensorName: {SensorID: 42, RegionID: int64ptr(3)},
+		},
+	}
+	h := newTestHandler(repo)
+
+	// A stale cached identity for this device/name key, predating the
+	// rewire.
+	h.cache.Set(deviceID, sensorName, SensorInfo{SensorID: 99, RegionID: int64ptr(3)})
+
+	// The invalidation.Event leaflab/api's RewireSensor RPC publishes after
+	// RewireSensorHW commits (server.go): SensorID/SensorName as the RPC
+	// returns/receives them -- name unchanged, only the hardware key moved.
+	ApplyInvalidation(h.cache, invalidation.Event{
+		Kind:       invalidation.KindIdentity,
+		DeviceID:   deviceID,
+		SensorID:   42,
+		SensorName: sensorName,
+	})
+
+	reading := &firmwarepb.SensorReading{Value: 19.0, UptimeMs: 5000}
+	body, err := proto.Marshal(reading)
+	if err != nil {
+		t.Fatalf("marshal reading: %v", err)
+	}
+	if err := h.handleSensorReading(context.Background(), deviceID, sensorName, body); err != nil {
+		t.Fatalf("handleSensorReading: %v", err)
+	}
+
+	if len(repo.insertReadingCalls) != 1 || repo.insertReadingCalls[0].sensorID != 42 {
+		t.Fatalf("InsertReading calls = %+v, want exactly 1 with sensorID 42 (correct post-rewire identity)", repo.insertReadingCalls)
+	}
+
+	info, ok := h.cache.Get(deviceID, sensorName)
+	if !ok || info.SensorID != 42 {
+		t.Fatalf("processor SensorCache after rewire = %+v (ok=%v), want SensorID 42 -- the cache, not just the DB, must serve the correct post-rewire identity", info, ok)
+	}
 }

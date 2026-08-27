@@ -117,6 +117,46 @@ go_test(
     ],
 )
 
+# Real-Postgres integration coverage for FR73's load-bearing property and
+# defect 2's closure: a region assignment commits (by a second process, or
+# by this process's own ApplyConfigRegions), this process's SensorCache is
+# invalidated, and the very next reading -- via a real
+# Repository.GetSensor/InsertReading, not stubRepo's hardcoded not-found --
+# is stamped with the new region. See
+# cross_process_defect_integration_test.go's doc comment and
+# //libs/go/dbtest/README.md. Same pattern/tag set as
+# //leaflab/processor:hw_history_integration_test (see that target's
+# comment for what each tag does). `# keep` markers tell a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/processor:cross_process_defect_integration_test --test_output=all
+go_test(
+    # keep
+    name = "cross_process_defect_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["cross_process_defect_integration_test.go"],
+    embed = [":processor_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
+        "//leaflab/invalidation",
+        "//libs/go/dbtest",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+    ],
+)
+
 release_app(
     name = "processor",
     app_type = "worker",
