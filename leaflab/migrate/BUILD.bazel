@@ -26,7 +26,10 @@ go_test(
     name = "migrations_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["migrations_test.go"],
+    srcs = [
+        "migrations_test.go",
+        "tier_policy_test.go",
+    ],
     embedsrcs = glob(["migrations/*.sql"]),
     gotags = ["integration"],
     tags = [
