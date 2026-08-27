@@ -53,6 +53,17 @@ type fakeRepo struct {
 	adminByPartialErr   error
 	adminByPartialCalls int
 
+	// listFleetHealthCalls records each ListFleetHealth call's arguments,
+	// in order, so a test can assert the handler's keyset-stepping loop
+	// (server.go's doc comment on ListFleetHealth) requested the filters
+	// unmodified across repository round-trips. listFleetHealthPages lets
+	// a test script a sequence of responses -- one per call -- to exercise
+	// that loop's multi-step behavior; once exhausted, the last page
+	// repeats.
+	listFleetHealthCalls []listFleetHealthCall
+	listFleetHealthPages [][]FleetBoardHealthRow
+	listFleetHealthErr   error
+
 	auditEntries   []audit.Entry
 	recordAuditErr error
 
@@ -104,6 +115,16 @@ type endElevationCall struct {
 	entry             audit.Entry
 }
 
+// listFleetHealthCall captures one Repository.ListFleetHealth call's
+// arguments -- see fakeRepo.listFleetHealthCalls.
+type listFleetHealthCall struct {
+	afterBoardID int64
+	devicePrefix string
+	householdID  int64
+	regionID     int64
+	limit        int32
+}
+
 func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
 	panic("not used by this file's tests")
 }
@@ -143,6 +164,32 @@ func (f *fakeRepo) AdminBoardHealthByPartialDeviceID(ctx context.Context, partia
 	f.adminByPartialCalls++
 	f.adminByPartialArg = partial
 	return f.adminByPartialRows, f.adminByPartialErr
+}
+
+// ListFleetHealth returns the page at listFleetHealthPages[len(calls)-1]
+// (clamped to the last configured page once exhausted), so a test can
+// script a multi-step scan (e.g. an all-filtered-out first batch followed
+// by a matching second batch) across ListFleetHealth's keyset-stepping
+// loop (server.go).
+func (f *fakeRepo) ListFleetHealth(ctx context.Context, afterBoardID int64, devicePrefix string, householdID int64, regionID int64, limit int32) ([]FleetBoardHealthRow, error) {
+	f.listFleetHealthCalls = append(f.listFleetHealthCalls, listFleetHealthCall{
+		afterBoardID: afterBoardID,
+		devicePrefix: devicePrefix,
+		householdID:  householdID,
+		regionID:     regionID,
+		limit:        limit,
+	})
+	if f.listFleetHealthErr != nil {
+		return nil, f.listFleetHealthErr
+	}
+	if len(f.listFleetHealthPages) == 0 {
+		return nil, nil
+	}
+	idx := len(f.listFleetHealthCalls) - 1
+	if idx >= len(f.listFleetHealthPages) {
+		idx = len(f.listFleetHealthPages) - 1
+	}
+	return f.listFleetHealthPages[idx], nil
 }
 
 func (f *fakeRepo) RecordAuditEntry(ctx context.Context, entry audit.Entry) error {

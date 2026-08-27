@@ -412,6 +412,162 @@ func (r *Repository) AdminBoardHealthByPartialDeviceID(ctx context.Context, part
 	return r.scanAdminBoardHealth(ctx, `b.device_id ILIKE $1`, "%"+partial+"%")
 }
 
+// FleetBoardHealthRow is FR79's ListFleetHealth projection: unlike
+// AdminBoardHealthRow (ResolveToHousehold's narrower FR10.2 field set),
+// this carries the fields FR79 asks for beyond it -- the accepted config
+// (for the caller to derive this board's staleness threshold via
+// leaflab/api/health.Threshold; reporting_state is computed by the caller,
+// not this row, so retired boards can be excluded from offline counts
+// without a second query shape), when the latest pushed version became
+// outstanding, and whether the board is retired. Unlike
+// AdminBoardHealthByPerson/AdminBoardHealthByPartialDeviceID, an unclaimed
+// board (HouseholdID == 0, FR1.1's exception) is not excluded -- FR79's
+// admin fleet listing is the whole fleet, not a resolve-to-household
+// projection.
+type FleetBoardHealthRow struct {
+	BoardID              int64
+	DeviceID             string
+	BoardDisplayName     string
+	HouseholdID          int64
+	HouseholdName        string
+	LastSeenAt           time.Time
+	ActiveVersion        uint64
+	OutstandingPush      bool
+	OutstandingPushSince time.Time
+	SensorCount          int32
+	Retired              bool
+	// AcceptedConfigJSON is this board's latest *accepted* device_config
+	// row, protojson-encoded (nil when no config has ever been accepted).
+	// The caller unmarshals it to derive the board's longest configured
+	// poll interval for leaflab/api/health.Threshold -- computed here, in
+	// Go, against the same configpb.DeviceConfig shape
+	// GetLatestAcceptedConfig already unmarshals to, rather than
+	// re-deriving field-name assumptions (protojson's camelCase encoding)
+	// against the raw JSONB in SQL.
+	AcceptedConfigJSON []byte
+}
+
+// fleetBoardHealthQuery backs ListFleetHealth (FR79): unlike
+// adminBoardHealthQuery, it does not exclude retired boards (they are
+// listed, marked retired -- FleetBoardHealth.retired) or unclaimed boards
+// (LEFT JOIN household, not JOIN) and orders/pages by board_id per FR61's
+// keyset convention (contract.EncodeBoardCursor/DecodeBoardCursor, the
+// same single-column cursor ListBoards already uses -- both order by
+// board_id ascending).
+//
+// outstanding_push is "the latest pushed version (by version DESC,
+// regardless of accepted/rejected) has not yet been acked" --
+// acked_at IS NULL -- not adminBoardHealthQuery's "not accepted" (which
+// would also count a rejected-and-therefore-resolved push as outstanding).
+// This task's Implementation note calls out this exact distinction.
+//
+// Every filter argument is always bound ($2-$4): a zero or empty value
+// means no filter on that dimension, expressed as a $n = <zero-value> OR
+// ... disjunction, so callers never need two SQL variants the way
+// ListBoards's hasAfter branch does. $1 (afterBoardID) relies on board_id
+// starting at 1 (BIGSERIAL) -- 0 is never a real board_id, so board_id > 0
+// is equivalent to no cursor for the first page.
+const fleetBoardHealthQuery = `
+	SELECT
+		b.board_id,
+		b.device_id,
+		COALESCE(b.household_id, 0),
+		COALESCE(h.name, ''),
+		b.last_seen_at,
+		b.retired_at IS NOT NULL,
+		COALESCE(av.active_version, 0),
+		latest.version IS NOT NULL AND latest.acked_at IS NULL,
+		latest.pushed_at,
+		COALESCE(sc.sensor_count, 0),
+		accepted_cfg.config_json
+	FROM board b
+	LEFT JOIN household h ON h.household_id = b.household_id
+	LEFT JOIN LATERAL (
+		SELECT MAX(version) AS active_version
+		FROM device_config
+		WHERE board_id = b.board_id AND accepted = TRUE
+	) av ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT version, pushed_at, acked_at
+		FROM device_config
+		WHERE board_id = b.board_id
+		ORDER BY version DESC
+		LIMIT 1
+	) latest ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT config_json
+		FROM device_config
+		WHERE board_id = b.board_id AND accepted = TRUE
+		ORDER BY version DESC
+		LIMIT 1
+	) accepted_cfg ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT COUNT(*) AS sensor_count
+		FROM sensor
+		WHERE board_id = b.board_id
+	) sc ON TRUE
+	WHERE b.board_id > $1
+	  AND ($2 = '' OR b.device_id ILIKE $2)
+	  AND ($3 = 0 OR b.household_id = $3)
+	  AND ($4 = 0 OR EXISTS (
+	        SELECT 1 FROM sensor s WHERE s.board_id = b.board_id AND s.region_id = $4
+	      ))
+	ORDER BY b.board_id
+	LIMIT $5
+`
+
+// ListFleetHealth returns up to limit boards ordered by board_id,
+// keyset-paginated on (board_id) per FR61 -- afterBoardID is the last
+// board_id of the previous page (0 for the first page; see
+// fleetBoardHealthQuery's doc comment). devicePrefix ("" = no filter),
+// householdID (0 = no filter) and regionID (0 = no filter) narrow, never
+// widen, the result (ListFleetHealthRequest's filter contract).
+// reporting_state is not a SQL filter here -- ListFleetHealth (server.go)
+// computes it per row (leaflab/api/health.Threshold needs the row's
+// accepted config, already fetched here) and filters after.
+func (r *Repository) ListFleetHealth(ctx context.Context, afterBoardID int64, devicePrefix string, householdID int64, regionID int64, limit int32) ([]FleetBoardHealthRow, error) {
+	devicePattern := ""
+	if devicePrefix != "" {
+		devicePattern = devicePrefix + "%"
+	}
+
+	rows, err := r.db.Query(ctx, fleetBoardHealthQuery, afterBoardID, devicePattern, householdID, regionID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list fleet health: %w", err)
+	}
+	defer rows.Close()
+
+	var out []FleetBoardHealthRow
+	for rows.Next() {
+		var row FleetBoardHealthRow
+		var outstandingSince *time.Time
+		if err := rows.Scan(
+			&row.BoardID,
+			&row.DeviceID,
+			&row.HouseholdID,
+			&row.HouseholdName,
+			&row.LastSeenAt,
+			&row.Retired,
+			&row.ActiveVersion,
+			&row.OutstandingPush,
+			&outstandingSince,
+			&row.SensorCount,
+			&row.AcceptedConfigJSON,
+		); err != nil {
+			return nil, fmt.Errorf("scan fleet board health: %w", err)
+		}
+		if outstandingSince != nil {
+			row.OutstandingPushSince = *outstandingSince
+		}
+		// board_display_name has no dedicated column yet -- falls back to
+		// device_id (see AdminBoardHealth's proto doc comment; the same
+		// convention applies to FleetBoardHealth).
+		row.BoardDisplayName = row.DeviceID
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // RecordAuditEntry writes entry directly against the connection pool, not
 // inside a transaction -- for an audited action with no accompanying DB
 // write of its own (FR8.1), e.g. ResolveToHousehold's per-query audit row

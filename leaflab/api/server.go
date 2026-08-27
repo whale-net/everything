@@ -13,6 +13,7 @@ import (
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
+	"github.com/whale-net/everything/leaflab/api/health"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -60,6 +61,12 @@ type deviceRepository interface {
 	// "Admin" section for each method's doc comment.
 	AdminBoardHealthByPerson(ctx context.Context, personIdentifier string) ([]AdminBoardHealthRow, error)
 	AdminBoardHealthByPartialDeviceID(ctx context.Context, partial string) ([]AdminBoardHealthRow, error)
+	// ListFleetHealth backs the RPC of the same name (FR79) -- see
+	// Repository.ListFleetHealth's doc comment. Not household-scoped via
+	// authz.Scope, same rationale as AdminBoardHealthByPerson/
+	// AdminBoardHealthByPartialDeviceID above: this is the standing admin
+	// lane's own dedicated projection.
+	ListFleetHealth(ctx context.Context, afterBoardID int64, devicePrefix string, householdID int64, regionID int64, limit int32) ([]FleetBoardHealthRow, error)
 	RecordAuditEntry(ctx context.Context, entry audit.Entry) error
 	HouseholdExists(ctx context.Context, householdID int64) (bool, error)
 	OpenElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, expiresAt time.Time, entry audit.Entry) error
@@ -545,6 +552,179 @@ func (s *LeafLabAPIServer) ResolveToHousehold(ctx context.Context, req *pb.Resol
 		})
 	}
 	return &pb.ResolveToHouseholdResponse{Boards: boards, ServerNow: contract.Now()}, nil
+}
+
+// listFleetHealthDBBatch is how many candidate rows ListFleetHealth pulls
+// from the repository per repository round-trip while narrowing by
+// reporting_state -- see this function's doc comment for why
+// reporting_state is not itself a SQL predicate. Deliberately larger than
+// contract.PageCap so a single round-trip usually satisfies a full page
+// even when a fraction of the batch is filtered out.
+const listFleetHealthDBBatch = 200
+
+// listFleetHealthMaxSteps bounds the repository round-trips a single
+// ListFleetHealth call makes while accumulating reporting_state matches
+// (see this function's doc comment) -- bounded work per call, per FR61,
+// even against a fleet that is almost entirely the state the caller is
+// filtering out.
+const listFleetHealthMaxSteps = 10
+
+// ListFleetHealth is FR79's admin fleet health listing. Like
+// ResolveToHousehold, eligibility alone (requireAdminEligible) is
+// sufficient reach -- this RPC does not route through authz.Scope; it is
+// the standing admin lane's own dedicated projection (FR10.2's field set,
+// extended per FR79), reachable across every household with no elevation
+// required, and narrowed -- never widened -- by this request's filters
+// (an elevated admin reaches the same data by simply setting
+// household_id to the one household they elevated against).
+//
+// device_id_prefix, household_id and region_id are applied as SQL
+// predicates (repository.go's fleetBoardHealthQuery). reporting_state is
+// not: it depends on leaflab/api/health.Threshold, which needs each
+// board's accepted config (already fetched by the same query) and A23's
+// "global, not per-household" arithmetic -- computed here, once, via
+// reportingStateFor, the same function every other A23 consumer calls,
+// never re-derived per RPC. A retired board is never classified
+// REPORTING_STATE_NOT_REPORTING regardless of staleness (FR22.4/FR79:
+// "excluded from its offline counts" -- a caller tallying NOT_REPORTING
+// across this response never double-counts a retired board because it can
+// never appear in that tally).
+//
+// Because reporting_state is filtered after the fact, this handler steps
+// through the keyset up to listFleetHealthMaxSteps repository round-trips,
+// accumulating matches, so a caller filtering unhealthy_only against a
+// mostly-healthy fleet still gets a full page rather than a near-empty one
+// after a single narrow SQL fetch. next_page_token is always derived from
+// the board_id of the last row actually *returned* (mirroring ListBoards'
+// convention exactly) when a next page is known to exist, or from the
+// last row *scanned* when the step budget was exhausted without either
+// filling the page or reaching the end of the fleet -- either way,
+// resuming from it can never skip an unscanned board and never re-returns
+// an already-returned one.
+func (s *LeafLabAPIServer) ListFleetHealth(ctx context.Context, req *pb.ListFleetHealthRequest) (*pb.ListFleetHealthResponse, error) {
+	if err := s.requireAdminEligible(ctx); err != nil {
+		return nil, err
+	}
+
+	afterBoardID, hasAfter, err := contract.DecodeBoardCursor(req.GetPage().GetPageToken())
+	if err != nil {
+		return nil, contract.InvalidArgument("list_fleet_health_request", "page_token", "This page link is no longer valid. Start again from the first page.")
+	}
+	if !hasAfter {
+		afterBoardID = 0
+	}
+
+	limit := contract.ClampPageSize(req.GetPage().GetPageSize())
+	wantState := req.GetReportingState()
+	now := time.Now()
+
+	// matchedBoardIDs runs parallel to matched: matchedBoardIDs[i] is the
+	// board_id matched[i] was built from, so nextToken (below) can be
+	// derived from the last *returned* row's board_id, per ListBoards'
+	// convention, rather than from an excess (limit+1'th) match that gets
+	// trimmed off.
+	var matched []*pb.FleetBoardHealth
+	var matchedBoardIDs []int64
+	cursor := afterBoardID
+	exhausted := false
+
+	for step := 0; step < listFleetHealthMaxSteps; step++ {
+		rows, err := s.repo.ListFleetHealth(ctx, cursor, req.GetDeviceIdPrefix(), req.GetHouseholdId(), req.GetRegionId(), listFleetHealthDBBatch)
+		if err != nil {
+			s.logger.Error("list fleet health failed", "error", err)
+			return nil, contract.Internal("board", "", "Could not list fleet health right now. Please try again.")
+		}
+		if len(rows) < listFleetHealthDBBatch {
+			exhausted = true
+		}
+
+		for _, r := range rows {
+			cursor = r.BoardID
+
+			state := reportingStateFor(r, now)
+			if wantState != pb.ReportingState_REPORTING_STATE_UNSPECIFIED && state != wantState {
+				continue
+			}
+			board := &pb.FleetBoardHealth{
+				DeviceId:         r.DeviceID,
+				BoardDisplayName: r.BoardDisplayName,
+				HouseholdId:      r.HouseholdID,
+				HouseholdName:    r.HouseholdName,
+				LastSeenAt:       contract.ToInstant(r.LastSeenAt),
+				ReportingState:   state,
+				ActiveVersion:    r.ActiveVersion,
+				OutstandingPush:  r.OutstandingPush,
+				SensorCount:      r.SensorCount,
+				Retired:          r.Retired,
+			}
+			// OutstandingPushSince is meaningful only when OutstandingPush
+			// is true (FleetBoardHealth's proto doc comment) -- left unset
+			// otherwise, the same convention GetElevationStatusResponse
+			// uses for expires_at, rather than converting a zero
+			// time.Time into a misleadingly-real-looking Instant.
+			if r.OutstandingPush {
+				board.OutstandingPushSince = contract.ToInstant(r.OutstandingPushSince)
+			}
+			matched = append(matched, board)
+			matchedBoardIDs = append(matchedBoardIDs, r.BoardID)
+			if int32(len(matched)) > limit {
+				break
+			}
+		}
+
+		if int32(len(matched)) > limit || exhausted {
+			break
+		}
+	}
+
+	var nextToken string
+	if int32(len(matched)) > limit {
+		matched = matched[:limit]
+		nextToken = contract.EncodeBoardCursor(matchedBoardIDs[limit-1])
+	} else if !exhausted {
+		// The step budget ran out before either filling the page or
+		// reaching the end of the fleet -- more boards remain unscanned
+		// beyond cursor, so a next page still exists even though this
+		// call is returning fewer than limit matches.
+		nextToken = contract.EncodeBoardCursor(cursor)
+	}
+
+	return &pb.ListFleetHealthResponse{
+		Boards:    matched,
+		Page:      &pb.PageResponse{NextPageToken: nextToken},
+		ServerNow: contract.ToInstant(now),
+	}, nil
+}
+
+// reportingStateFor computes r's A23 reporting_state as of now:
+// REPORTING_STATE_REPORTING for a retired board unconditionally (FR22.4 --
+// never counted "not reporting"), otherwise leaflab/api/health.IsStale
+// against r's own longest configured poll interval, decoded from its
+// accepted config. A board with no accepted config, or an accepted config
+// with no sensors, is treated as a longest-configured-interval of 0, which
+// leaflab/api/health.Threshold floors to StalenessFloor -- the same
+// outcome a freshly-registered, never-configured board should have.
+func reportingStateFor(r FleetBoardHealthRow, now time.Time) pb.ReportingState {
+	if r.Retired {
+		return pb.ReportingState_REPORTING_STATE_REPORTING
+	}
+
+	var longest time.Duration
+	if len(r.AcceptedConfigJSON) > 0 {
+		var cfg configpb.DeviceConfig
+		if err := protojson.Unmarshal(r.AcceptedConfigJSON, &cfg); err == nil {
+			for _, sensor := range cfg.GetSensors() {
+				if interval := health.EffectivePollInterval(sensor.GetPollIntervalMs()); interval > longest {
+					longest = interval
+				}
+			}
+		}
+	}
+
+	if health.IsStale(r.LastSeenAt, now, longest) {
+		return pb.ReportingState_REPORTING_STATE_NOT_REPORTING
+	}
+	return pb.ReportingState_REPORTING_STATE_REPORTING
 }
 
 // Elevate opens a fresh, time-boxed elevation against target_household_id

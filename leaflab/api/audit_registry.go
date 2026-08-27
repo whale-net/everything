@@ -31,9 +31,13 @@ const (
 // wiring its audit registration is structurally hard to ship, rather than
 // a silently missing audit row discovered later in production.
 //
-// GetDeviceConfig, ListBoards, GetHealth and GetElevationStatus are reads
-// with no FR8/FR10.4 audit requirement of their own and are deliberately
-// absent. RetireBoard has no RPC surface yet (leaflab/api/repository.go's
+// GetDeviceConfig, ListBoards, GetHealth, GetElevationStatus and
+// ListFleetHealth are reads with no FR8/FR10.4 audit requirement of their
+// own and are deliberately absent. Unlike ResolveToHousehold,
+// ListFleetHealth's own doc comment (api.proto) and this task's spec
+// (FR79) name no per-query audit requirement -- it is an operational
+// fleet-health view, not a person-identifying resolution. RetireBoard has
+// no RPC surface yet (leaflab/api/repository.go's
 // RetireBoard is called directly by tests only, per #1337's scaffold) --
 // it will be added here in the task that gives it one.
 //
