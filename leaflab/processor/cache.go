@@ -83,6 +83,38 @@ func (c *SensorCache) InvalidateDevice(deviceID string) {
 	delete(c.devices, deviceID)
 }
 
+// ReplaceAll atomically replaces the entire cached sensor set with entries.
+// Unlike Load (an additive merge, used only for the one-time startup
+// pre-warm), ReplaceAll also evicts any entry not present in entries -- this
+// is what lets the bounded staleness backstop (see RunCacheBackstop)
+// self-heal a *dropped* rename event, not just a dropped region/identity
+// one: a Load-style merge would leave a rename's orphaned prior-name entry
+// (see Invalidate's doc comment) in place forever if the invalidation event
+// that would have evicted it explicitly never arrived.
+//
+// A concurrent handleManifest that cache.Set's a brand new sensor while a
+// ReplaceAll from a snapshot taken just before that write is in flight can
+// have its Set overwritten by this call. That's not a correctness bug: the
+// sensor is on the database by the time ReplaceAll's snapshot was read,
+// so it is either in entries already, or, in the rare interleaving above,
+// missing for the moment -- handleSensorReading's existing cache-miss path
+// (repository.GetSensor) re-reads and repopulates it on the very next
+// reading. No reading is ever stamped with a wrong value; at worst one
+// reading takes the DB-lookup path instead of a cache hit.
+func (c *SensorCache) ReplaceAll(entries map[string]map[string]SensorInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fresh := make(map[string]map[string]SensorInfo, len(entries))
+	for deviceID, sensors := range entries {
+		copied := make(map[string]SensorInfo, len(sensors))
+		for name, info := range sensors {
+			copied[name] = info
+		}
+		fresh[deviceID] = copied
+	}
+	c.devices = fresh
+}
+
 // Get returns the SensorInfo for a sensor, and whether it was found.
 func (c *SensorCache) Get(deviceID, sensorName string) (SensorInfo, bool) {
 	c.mu.RLock()

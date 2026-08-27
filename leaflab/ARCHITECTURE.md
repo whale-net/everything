@@ -168,6 +168,52 @@ All three `*_history` tables are SCD-2 using the uniform `valid_from` / `valid_t
 
 ---
 
+## Cross-Process Cache Invalidation — FR73 / NFR15
+
+Every process that keeps an in-memory view of a sensor (today: `leaflab/processor`'s
+`SensorCache`; from Phase 4, the API's own bounded-wait observability) must learn about a
+region, identity or name change **within 5 s of the write committing** (FR73) — and **every
+replica** must learn it, not just one of a competing-consumer set (NFR15's broadcast
+constraint: a caller's bounded wait can be pinned to any one API replica, so a work queue that
+delivers to only one replica does not satisfy it).
+
+**Chosen mechanism: a RabbitMQ fanout exchange** (`leaflab.invalidation`, the
+`leaflab/invalidation` package) — deliberately not the `amq.topic` exchange the device-facing
+MQTT traffic uses, and not a competing-consumer work queue. Every writer (the API's
+`RewireSensor`, and from Phase 5 its direct region/rename assignments; the processor's own
+`ApplyConfigRegions`) publishes a small typed `Event` **after its write commits**, never before.
+Every subscribing process (`invalidation.Subscriber`) binds its **own exclusive, auto-delete
+queue** to the exchange, so a fanout delivers one copy of every event to every currently
+connected replica — satisfying NFR15's every-replica constraint by construction, and
+guaranteeing a bounded-wait caller's own replica never misses an event another replica received
+instead. This is why **Phase 4 reuses this exact package** for the API's NFR15 observability
+rather than introducing a second signalling path.
+
+- **Publish-after-commit + idempotent, re-reading handlers.** A `Subscriber`'s handler never
+  trusts the event payload for the new value; it evicts the stale cache entry (or, for the
+  API's future bounded wait, wakes a waiter), and the next reader re-reads the database. A
+  duplicate, reordered, or replayed event converges to the same result.
+- **Rename orphan.** `SensorCache` is keyed `device_id → sensor_name`; a rename's `Event`
+  carries `PriorSensorName` so the subscriber evicts the *old* key explicitly — the new key
+  alone never touches it.
+- **Bounded staleness backstop.** `leaflab/processor`'s `RunCacheBackstop`
+  (`CACHE_BACKSTOP_INTERVAL_SECONDS`, default 30 s) periodically reloads `SensorCache` from the
+  database in full, so a *dropped* event — one lost during a RabbitMQ reconnect window, or
+  published before a process's `Subscriber` finished attaching — self-heals within that bound
+  instead of indefinitely. **This backstop is not what satisfies FR73's 5 s bound; the signal
+  is.** It only bounds how long a dropped event can leave the cache wrong, and it is a full
+  replace (`SensorCache.ReplaceAll`), not a merge, so it also clears a rename's orphaned
+  prior-name entry if the event that would have evicted it explicitly was itself dropped.
+- **Reconnect handling.** Both `Publisher` and `Subscriber` detect a closed AMQP channel (a
+  RabbitMQ connection drop) and transparently redeclare the exchange/queue and resume, with the
+  same exponential-backoff pattern `libs/go/rmq.Consumer` already uses for the device-facing
+  consumer — a connection blip does not silently and permanently stop delivery until process
+  restart.
+- **No device-facing change.** The invalidation path is entirely server-side (API ↔ processor);
+  it does not touch the MQTT topics, payloads or QoS documented in `MQTT.md`.
+
+---
+
 ## Query Layer — Analytical Views
 
 Seven `v_` views (defined in migration 012) are the contract between the processor's write path and downstream consumers (Grafana panels, ad-hoc SQL). **All join logic lives in these views; consumers should not replicate it.**

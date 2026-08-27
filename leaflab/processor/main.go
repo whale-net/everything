@@ -122,6 +122,14 @@ func run() error {
 		return fmt.Errorf("failed to start invalidation subscriber: %w", err)
 	}
 
+	// FR73 bounded staleness backstop: self-heals a dropped invalidation
+	// event (e.g. one lost during a RabbitMQ reconnect window) within
+	// cfg.CacheBackstopInterval, so a missed signal cannot leave the cache
+	// wrong indefinitely. The 5s bound itself is met by invalidationSub
+	// above, not by this loop — see backstop.go and leaflab/ARCHITECTURE.md.
+	go RunCacheBackstop(appCtx, cfg.CacheBackstopInterval, repo, cache, logger)
+	logger.Info("cache backstop started", "interval", cfg.CacheBackstopInterval)
+
 	if err := consumer.Start(appCtx); err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}
