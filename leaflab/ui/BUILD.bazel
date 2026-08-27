@@ -5,6 +5,7 @@ go_library(
     name = "ui_lib",
     srcs = [
         "boards_data.go",
+        "exposure.go",
         "grpc_client.go",
         "handlers_auth.go",
         "handlers_boards.go",
