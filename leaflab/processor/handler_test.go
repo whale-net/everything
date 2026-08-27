@@ -18,6 +18,10 @@ type stubRepo struct {
 	boardID      int64
 	sensorTypeID int64
 	sensorID     int64
+	// applyConfigRegionsSkips is returned verbatim by every ApplyConfigRegions
+	// call -- tests configure this to exercise handleConfigAck's skip-surfacing
+	// path without a real re-validation implementation behind it.
+	applyConfigRegionsSkips []RegionApplySkip
 
 	// Recorded call arguments.
 	upsertSensorCalls       []upsertSensorCall
@@ -114,9 +118,9 @@ func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, 
 	return nil
 }
 
-func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) error {
+func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) ([]RegionApplySkip, error) {
 	s.applyConfigRegionsCalls = append(s.applyConfigRegionsCalls, applyConfigRegionsCall{boardID: boardID, version: version})
-	return nil
+	return s.applyConfigRegionsSkips, nil
 }
 
 func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error { return nil }

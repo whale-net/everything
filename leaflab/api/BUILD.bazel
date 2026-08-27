@@ -59,7 +59,7 @@ release_app(
     replicas = 1,
 )
 
-# FR11/FR12/FR63/NFR10 auth-health-and-rate-limit test suite: auth.go's
+# FR11/FR12/FR63/NFR10 auth-health-rate-limit-and-config test suite: auth.go's
 # enforcement interceptor and allowlist in isolation (auth_test.go),
 # GetHealth's DEGRADED/UP probe logic against an in-memory fake repository
 # (server_test.go), the full production interceptor chain -- built via
@@ -67,11 +67,13 @@ release_app(
 # with a stub RPC handler standing in for Postgres/RabbitMQ (main_test.go),
 # FR8's startup audit-registration check against both the real production
 # registry and a deliberately unregistered write method
-# (audit_registry_test.go), and NFR10's rate-limit interceptor:
-# principalKey derivation, oracle-safety, principal/session independence
-# and window-rollover recovery, both directly (checkRateLimitBuckets) and
-# over the wire (ratelimit_interceptor_test.go). No Docker/network
-# required; safe to run in `bazel test //leaflab/...`.
+# (audit_registry_test.go), NFR10's rate-limit interceptor: principalKey
+# derivation, oracle-safety, principal/session independence and
+# window-rollover recovery, both directly (checkRateLimitBuckets) and over
+# the wire (ratelimit_interceptor_test.go), and FR1.2/FR1.3's push-time
+# live-reference invariant at the Go-dispatch level
+# (server_push_device_config_test.go). No Docker/network required; safe to
+# run in `bazel test //leaflab/...`.
 # Hand-written (not gazelle-generated) per this package's gazelle gotcha --
 # see the response_contract_integration_test.go rule below. `# keep` tells a
 # later `bazel run //:gazelle` not to touch or remove this rule.
@@ -84,6 +86,7 @@ go_test(
         "auth_test.go",
         "main_test.go",
         "ratelimit_interceptor_test.go",
+        "server_push_device_config_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
@@ -297,7 +300,6 @@ go_test(
         "requires-network",
     ],
     deps = [
-        "//leaflab/api/authz",
         "//leaflab/api/claim",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
@@ -307,6 +309,45 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Real-Postgres integration coverage for FR1.2/FR1.3's push-time
+# live-reference invariant, against the actual SQL authz.PGResolver runs --
+# see push_device_config_invariant_integration_test.go's doc comment. Same
+# tag set and hand-written rationale as the other integration go_test
+# targets above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:push_device_config_invariant_integration_test --test_output=all
+go_test(
+    # keep
+    name = "push_device_config_invariant_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "push_device_config_invariant_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/authz",
+        "//leaflab/api/claim",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
 
@@ -344,6 +385,46 @@ go_test(
         "//leaflab/api/authz",
         "//leaflab/api/claim",
         "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for FR1.3's caller-visible skip
+# surface (the read side -- see leaflab/processor's
+# apply_config_regions_integration_test.go for the write side) -- see
+# get_device_config_skips_integration_test.go's doc comment. Same tag set
+# and hand-written rationale as the other integration go_test targets
+# above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:get_device_config_skips_integration_test --test_output=all
+go_test(
+    # keep
+    name = "get_device_config_skips_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "get_device_config_skips_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/claim",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/api/ratelimit",
         "//libs/go/dbtest",
