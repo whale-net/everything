@@ -1,0 +1,10 @@
+"""Per-principal and per-session rate limiting primitives (NFR10) shared by every read RPC in leaflab/api."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "ratelimit",
+    srcs = ["ratelimit.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/ratelimit",
+    visibility = ["//visibility:public"],
+)
