@@ -1,6 +1,6 @@
--- Migration 017: household never-zero-members database-level guard (Phase 2)
+-- Migration 020: household never-zero-members database-level guard (Phase 2)
 --
--- 017 is the next free number after 016 (audit_log); state in the PR since
+-- 020 is the next free number after 016 (audit_log); state in the PR since
 -- sibling v2 branches on plan/1166 have collided on migration numbers
 -- before.
 --
