@@ -16,6 +16,7 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/api/audit",
         "//leaflab/hwkey",
         "//leaflab/invalidation",
         "//libs/go/db",
@@ -154,6 +155,42 @@ go_test(
         "//libs/go/dbtest",
         "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",
+    ],
+)
+
+# Real-Postgres integration coverage for FR1.2/FR1.3's apply-time
+# re-validation in ApplyConfigRegions (household ownership, staleness,
+# skip-and-audit) -- see apply_config_regions_integration_test.go's doc
+# comment. Hand-written (not gazelle-generated), same rationale as
+# leaflab/api's *_integration_test targets: the file is gated behind
+# `//go:build integration`, which gazelle skips when scanning for go_test
+# srcs. `# keep` tells a later `bazel run //:gazelle` not to touch or
+# remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/processor:apply_config_regions_integration_test --test_output=all
+go_test(
+    # keep
+    name = "apply_config_regions_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["apply_config_regions_integration_test.go"],
+    embed = [":processor_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/audit",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_protobuf//encoding/protojson",
     ],
 )
 

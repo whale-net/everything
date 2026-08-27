@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,17 +12,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/hwkey"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Repository holds all DB write operations for the processor.
 type Repository struct {
-	db *pgxpool.Pool
+	db      *pgxpool.Pool
+	auditor audit.Auditor
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {
-	return &Repository{db: db}
+	return &Repository{db: db, auditor: audit.NewPostgresAuditor(db)}
 }
 
 // UpsertBoard inserts a board row if it doesn't exist, or updates last_seen_at
@@ -490,25 +493,166 @@ type RegionChange struct {
 	RegionID   int64
 }
 
+// RegionApplySkip records one config entry ApplyConfigRegions skipped
+// instead of applying, because it no longer validated at apply time
+// (FR1.3): the sensor's board resolves to a different household than the
+// region it names, or the payload is stale against the sensor's current
+// sensor_region_history interval (pushed_at before the interval's
+// valid_from). Each skip also writes an audit.Entry (FR8) -- see
+// recordApplySkip.
+type RegionApplySkip struct {
+	// SensorID identifies the sensor whose region assignment was skipped.
+	SensorID int64
+	// Reason is a persona-appropriate sentence describing why the entry
+	// was skipped. This rides inside a caller-visible status alongside an
+	// otherwise-successful apply (FR1.3), not a contract.Failure refusal --
+	// ApplyConfigRegions itself never fails because one entry was skipped.
+	Reason string
+}
+
+// reasonForeignHousehold and reasonStalePush are FR59.2-style
+// persona-appropriate sentences for the two ways an entry can fail
+// ApplyConfigRegions' apply-time re-validation (FR1.3). Neither names the
+// region or household involved -- consistent with FR1.2's invariant never
+// disclosing which household a foreign reference actually belongs to.
+const (
+	reasonForeignHousehold = "This sensor's board and its assigned region belong to different households."
+	reasonStalePush        = "This config was pushed before the sensor's current region assignment took effect."
+)
+
+// boardHousehold resolves boardID's current household, or nil if the
+// board has none yet (FR1.1's Unclaimed exception -- board.household_id is
+// nullable until FR76's claim path assigns one).
+func (r *Repository) boardHousehold(ctx context.Context, boardID int64) (*int64, error) {
+	var householdID *int64
+	err := r.db.QueryRow(ctx, `SELECT household_id FROM board WHERE board_id = $1`, boardID).Scan(&householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("resolve board %d household: %w", boardID, err)
+	}
+	return householdID, nil
+}
+
+// regionHousehold resolves regionID's household by walking up to its tree
+// root -- only the root carries household_id (migration 015's
+// enforce_region_household_root trigger keeps that invariant true in the
+// schema; descendants inherit). Mirrors
+// authz.PGResolver.resolveRegion (leaflab/api/authz/resolver.go); this
+// package is a separate binary and does not import that one, so the query
+// is duplicated rather than shared.
+func (r *Repository) regionHousehold(ctx context.Context, regionID int64) (*int64, error) {
+	var householdID *int64
+	err := r.db.QueryRow(ctx, `
+		WITH RECURSIVE ancestors AS (
+			SELECT region_id, parent_region_id, household_id
+			FROM region
+			WHERE region_id = $1
+
+			UNION ALL
+
+			SELECT r.region_id, r.parent_region_id, r.household_id
+			FROM region r
+			JOIN ancestors a ON r.region_id = a.parent_region_id
+		)
+		SELECT household_id
+		FROM ancestors
+		WHERE parent_region_id IS NULL
+	`, regionID).Scan(&householdID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The region no longer resolves to anything -- treat like "no
+			// household" rather than erroring the whole apply; the caller
+			// (ApplyConfigRegions) always compares this against a board's
+			// household, and nil never equals a real (non-nil) household,
+			// so this fails closed the same way a genuine mismatch would.
+			return nil, nil
+		}
+		return nil, fmt.Errorf("resolve region %d household: %w", regionID, err)
+	}
+	return householdID, nil
+}
+
+// sameHousehold reports whether a and b are both non-nil and equal --
+// used to compare a board's and a region's resolved household, where
+// either side may be nil (FR1.1's Unclaimed board, or a region that no
+// longer resolves to anything).
+func sameHousehold(a, b *int64) bool {
+	return a != nil && b != nil && *a == *b
+}
+
+// recordApplySkip writes the FR8 audit row for one ApplyConfigRegions
+// skip. ActorSubject identifies the board rather than a human principal:
+// this runs from an MQTT device_config ack, with no authenticated caller
+// in context (ActorKindSystem, FR8.3). TargetHouseholdID is the pushing
+// board's own household when known -- the household whose write attempt
+// was refused -- or nil when the board itself is Unclaimed.
+func (r *Repository) recordApplySkip(ctx context.Context, boardID, sensorID int64, targetHouseholdID *int64, reason string) error {
+	entityID := strconv.FormatInt(sensorID, 10)
+	return r.auditor.Record(ctx, audit.Entry{
+		ActorSubject:      fmt.Sprintf("board:%d", boardID),
+		ActorKind:         audit.ActorKindSystem,
+		TargetHouseholdID: targetHouseholdID,
+		Action:            audit.ActionApplyConfigRegionSkip,
+		EntityKind:        audit.EntityKindSensor,
+		EntityID:          &entityID,
+		Reason:            &reason,
+	})
+}
+
 // ApplyConfigRegions applies region_id assignments from an accepted config.
 // For each SensorConfig entry with region_id > 0, finds the matching sensor
 // by (board_id, i2c_address, mux_path), updates sensor.region_id, and records
 // the change in sensor_region_history (SCD-2: close old open row, insert new).
-// Returns every sensor whose region_id actually changed.
-func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) ([]RegionChange, error) {
+//
+// FR1.2/FR1.3: immediately before writing, an entry must re-validate that
+// its region_id's household still matches the pushing board's household
+// (the same invariant PushDeviceConfig checked at push time --
+// re-checked here because time passes between push and ack: the region
+// may have been reassigned to a different household in the interim) and
+// that the config's pushed_at is not older than the sensor's current
+// sensor_region_history.valid_from (push-time, not ack-time staleness --
+// both writers are asserting intent, and the comparison belongs between
+// the two intents). An entry that fails either check is skipped, not
+// failed: it is appended to the returned []RegionApplySkip, each also
+// recorded as an audit.Entry (FR8, recordApplySkip), instead of aborting
+// the remaining entries -- one bad entry never blocks the rest of an
+// otherwise-valid apply.
+//
+// An entry whose region is unchanged from the sensor's current assignment
+// is skipped silently (not appended to []RegionApplySkip, no audit row):
+// nothing is being written, so the invariant this re-validation guards
+// does not apply -- see the "skip if region unchanged" check below, which
+// runs before re-validation for exactly this reason.
+//
+// Also returns every sensor whose region_id actually changed (FR73): the
+// caller (handleConfigAck) publishes one invalidation event per entry in
+// that slice after this method's writes have committed -- see
+// RegionChange's doc comment on publish-after-commit.
+func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version int64) ([]RegionApplySkip, []RegionChange, error) {
 	var configJSON []byte
+	var pushedAt time.Time
 	err := r.db.QueryRow(ctx, `
-		SELECT config_json FROM device_config WHERE board_id = $1 AND version = $2
-	`, boardID, version).Scan(&configJSON)
+		SELECT config_json, pushed_at FROM device_config WHERE board_id = $1 AND version = $2
+	`, boardID, version).Scan(&configJSON, &pushedAt)
 	if err != nil {
-		return nil, fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
+		return nil, nil, fmt.Errorf("get config for region apply board=%d v=%d: %w", boardID, version, err)
 	}
 
 	var cfg configpb.DeviceConfig
 	if err := protojson.Unmarshal(configJSON, &cfg); err != nil {
-		return nil, fmt.Errorf("unmarshal config for region apply: %w", err)
+		return nil, nil, fmt.Errorf("unmarshal config for region apply: %w", err)
 	}
 
+	// The pushing board's household is the same for every entry in this
+	// config -- resolved once, not per entry.
+	boardHouseholdID, err := r.boardHousehold(ctx, boardID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("apply config regions board=%d: %w", boardID, err)
+	}
+
+	var skips []RegionApplySkip
 	var changes []RegionChange
 	for _, sc := range cfg.Sensors {
 		if sc.RegionId == 0 {
@@ -550,18 +694,56 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 			continue // sensor not yet registered — skip silently
 		}
 		if lookupErr != nil {
-			return nil, fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
+			return skips, changes, fmt.Errorf("find sensor for region apply i2c=0x%02x board=%d: %w", sc.I2CAddress, boardID, lookupErr)
 		}
 
-		// Skip if region is unchanged.
+		// Skip if region is unchanged -- nothing would be written, so the
+		// re-validation below (which only guards a write) does not apply.
 		if oldRegionID != nil && *oldRegionID == newRegionID {
 			continue
+		}
+
+		// FR1.2 re-validation: the region's household must still match
+		// the pushing board's household, checked again here because time
+		// passed between push and ack.
+		regionHouseholdID, err := r.regionHousehold(ctx, newRegionID)
+		if err != nil {
+			return skips, changes, fmt.Errorf("apply config regions sensor=%d region=%d: %w", sensorID, newRegionID, err)
+		}
+		if !sameHousehold(boardHouseholdID, regionHouseholdID) {
+			skips = append(skips, RegionApplySkip{SensorID: sensorID, Reason: reasonForeignHousehold})
+			if auditErr := r.recordApplySkip(ctx, boardID, sensorID, boardHouseholdID, reasonForeignHousehold); auditErr != nil {
+				return skips, changes, fmt.Errorf("audit region apply skip sensor=%d: %w", sensorID, auditErr)
+			}
+			continue
+		}
+
+		// FR1.3 staleness: only applies when the sensor already has an
+		// open region interval to compare pushedAt against -- a sensor
+		// getting its first-ever region assignment has nothing to be
+		// stale relative to.
+		if oldRegionID != nil {
+			var currentValidFrom time.Time
+			validFromErr := r.db.QueryRow(ctx, `
+				SELECT valid_from FROM sensor_region_history
+				WHERE sensor_id = $1 AND valid_to IS NULL
+			`, sensorID).Scan(&currentValidFrom)
+			if validFromErr != nil && !errors.Is(validFromErr, pgx.ErrNoRows) {
+				return skips, changes, fmt.Errorf("read current region interval for sensor %d: %w", sensorID, validFromErr)
+			}
+			if validFromErr == nil && !pushedAt.After(currentValidFrom) {
+				skips = append(skips, RegionApplySkip{SensorID: sensorID, Reason: reasonStalePush})
+				if auditErr := r.recordApplySkip(ctx, boardID, sensorID, boardHouseholdID, reasonStalePush); auditErr != nil {
+					return skips, changes, fmt.Errorf("audit region apply skip sensor=%d: %w", sensorID, auditErr)
+				}
+				continue
+			}
 		}
 
 		if _, err := r.db.Exec(ctx, `
 			UPDATE sensor SET region_id = $2 WHERE sensor_id = $1
 		`, sensorID, newRegionID); err != nil {
-			return nil, fmt.Errorf("set region for sensor %d: %w", sensorID, err)
+			return skips, changes, fmt.Errorf("set region for sensor %d: %w", sensorID, err)
 		}
 
 		// Close any open history row for this sensor.
@@ -569,14 +751,14 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 			UPDATE sensor_region_history SET valid_to = NOW()
 			WHERE sensor_id = $1 AND valid_to IS NULL
 		`, sensorID); err != nil {
-			return nil, fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
+			return skips, changes, fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
 		}
 
 		// Record the new assignment.
 		if _, err := r.db.Exec(ctx, `
 			INSERT INTO sensor_region_history (sensor_id, region_id) VALUES ($1, $2)
 		`, sensorID, newRegionID); err != nil {
-			return nil, fmt.Errorf("insert region history for sensor %d: %w", sensorID, err)
+			return skips, changes, fmt.Errorf("insert region history for sensor %d: %w", sensorID, err)
 		}
 
 		// This sensor's region_id has committed by this point (each
@@ -586,7 +768,7 @@ func (r *Repository) ApplyConfigRegions(ctx context.Context, boardID, version in
 		// RegionChange's doc comment on publish-after-commit).
 		changes = append(changes, RegionChange{SensorID: sensorID, SensorName: sensorName, RegionID: newRegionID})
 	}
-	return changes, nil
+	return skips, changes, nil
 }
 
 // UpsertDeviceConfig records a DeviceConfig push.

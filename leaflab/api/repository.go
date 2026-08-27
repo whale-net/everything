@@ -163,6 +163,61 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 	return &cfg, nil
 }
 
+// RegionApplySkipRow is one audit_log row leaflab/processor's
+// ApplyConfigRegions wrote for a config entry it skipped instead of
+// applying (FR1.3) -- see GetRegionApplySkips.
+type RegionApplySkipRow struct {
+	SensorID   int64
+	Reason     string
+	OccurredAt time.Time
+}
+
+// GetRegionApplySkips returns the audit_log rows leaflab/processor's
+// ApplyConfigRegions wrote for deviceID's board (audit.ActionApplyConfigRegionSkip),
+// most recent first -- FR1.3's caller-visible skip surface, read back
+// through GetDeviceConfig (server.go). Joins entity_id (the skipped
+// sensor's id, stored as text) to sensor.board_id rather than matching on
+// audit_log.actor_subject's "board:<id>" text, so this stays correct even
+// if that formatting ever changes; entity_kind is narrowed to "sensor" so
+// a numeric entity_id from an unrelated action can never collide with a
+// sensor_id by coincidence.
+//
+// Provenance (FR82.4) is Phase 4 -- until it lands this returns every skip
+// recorded for the board, not only ones the calling principal authored
+// (see ApplyConfigRegions' doc comment in leaflab/processor/repository.go).
+func (r *Repository) GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT al.entity_id, al.reason, al.occurred_at
+		FROM audit_log al
+		JOIN sensor s ON s.sensor_id = al.entity_id::bigint
+		JOIN board b ON b.board_id = s.board_id
+		WHERE al.action = $1
+		  AND al.entity_kind = $2
+		  AND b.device_id = $3
+		ORDER BY al.occurred_at DESC
+	`, audit.ActionApplyConfigRegionSkip, audit.EntityKindSensor, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("get region apply skips for %s: %w", deviceID, err)
+	}
+	defer rows.Close()
+
+	var skips []RegionApplySkipRow
+	for rows.Next() {
+		var entityID string
+		var skip RegionApplySkipRow
+		if err := rows.Scan(&entityID, &skip.Reason, &skip.OccurredAt); err != nil {
+			return nil, fmt.Errorf("scan region apply skip row for %s: %w", deviceID, err)
+		}
+		sensorID, err := strconv.ParseInt(entityID, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse sensor_id %q from audit_log for %s: %w", entityID, deviceID, err)
+		}
+		skip.SensorID = sensorID
+		skips = append(skips, skip)
+	}
+	return skips, rows.Err()
+}
+
 // ListBoards returns up to limit boards ordered by board_id, keyset-paginated
 // on (board_id) per FR61: afterBoardID/hasAfter is the last board_id of the
 // previous page (from contract.DecodeBoardCursor), not an offset, so

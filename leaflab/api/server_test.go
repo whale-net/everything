@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -37,18 +38,60 @@ type fakeRepo struct {
 	listBoardsScope authz.Scope
 	listBoardsRows  []BoardRow
 	listBoardsErr   error
+
+	// getOrCreateBoardID/getOrCreateBoardErr and
+	// insertDeviceConfigNextVersionVersion/-Err configure
+	// GetOrCreateBoard/InsertDeviceConfigNextVersion's returns -- see their
+	// method doc comments below.
+	getOrCreateBoardID    int64
+	getOrCreateBoardErr   error
+	getOrCreateBoardCalls int
+
+	insertDeviceConfigNextVersionVersion int64
+	insertDeviceConfigNextVersionErr     error
+	insertDeviceConfigNextVersionCalls   []insertDeviceConfigNextVersionCall
 }
 
+// getOrCreateBoardID/getOrCreateBoardErr configure GetOrCreateBoard's
+// return, and getOrCreateBoardCalls counts invocations --
+// server_push_device_config_test.go's FR1.2/FR1.3 tests need this to reach
+// PushDeviceConfig's household-resolution/validation step, unlike this
+// file's own tests (which never exercise PushDeviceConfig's write path).
 func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
-	panic("not used by this file's tests")
+	f.getOrCreateBoardCalls++
+	return f.getOrCreateBoardID, f.getOrCreateBoardErr
 }
 
+// insertDeviceConfigNextVersionCalls records every call (each carrying the
+// boardID/configJSON/entry it was invoked with) so a test can assert
+// PushDeviceConfig either did or did not reach the storage step -- FR1.3's
+// "nothing stored" on a refused push is proven by asserting this stays
+// empty, not just that PushDeviceConfig returned an error.
+// insertDeviceConfigNextVersionVersion/-Err configure what each call
+// returns.
 func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error) {
-	panic("not used by this file's tests")
+	f.insertDeviceConfigNextVersionCalls = append(f.insertDeviceConfigNextVersionCalls, insertDeviceConfigNextVersionCall{
+		boardID:    boardID,
+		configJSON: configJSON,
+		entry:      entry,
+	})
+	return f.insertDeviceConfigNextVersionVersion, f.insertDeviceConfigNextVersionErr
+}
+
+// insertDeviceConfigNextVersionCall is one recorded
+// InsertDeviceConfigNextVersion invocation -- see fakeRepo's doc comment.
+type insertDeviceConfigNextVersionCall struct {
+	boardID    int64
+	configJSON []byte
+	entry      audit.Entry
 }
 
 func (f *fakeRepo) GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error) {
 	f.getLatestAcceptedConfigCalls++
+	return nil, nil
+}
+
+func (f *fakeRepo) GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error) {
 	return nil, nil
 }
 
@@ -69,8 +112,16 @@ func (f *fakeRepo) resolveSensorTypeID(ctx context.Context, typeName string) (in
 	panic("not used by this file's tests")
 }
 
+// LoadBoardSensorIdentities returns nil (nothing manifested yet), not a
+// panic: checkPushConfigIdentity (identity.go) calls this unconditionally
+// on every non-empty PushDeviceConfig, including from
+// server_push_device_config_test.go's FR1.2/FR1.3 tests, which exercise a
+// different pre-write check and don't set up sensor identity fixtures. An
+// empty result correctly short-circuits checkPushConfigIdentity's "nothing
+// to protect" early return rather than exercising FR16/17 behavior no test
+// in this file configures.
 func (f *fakeRepo) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
-	panic("not used by this file's tests")
+	return nil, nil
 }
 
 func (f *fakeRepo) RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
@@ -90,6 +141,19 @@ type fakeAuthz struct {
 	resolveRes   authz.Resolution
 	resolveErr   error
 	resolveCalls int
+
+	// resolveResponses/resolveResponseErrs configure Resolve's return
+	// per-ref -- keyed per-ref (rather than a single value like resolveRes
+	// above, which backs ResolveBoardByDeviceID) because FR1.2/FR1.3's
+	// push-time validation calls Resolve once for the pushing board's own
+	// household and once per region_id named in the payload, needing
+	// different results for different refs within the same test.
+	// resolveCallOrder records every ref Resolve was called with, in call
+	// order, so a test can assert AssertSameHousehold stops at the first
+	// violation rather than resolving every ref regardless.
+	resolveResponses    map[authz.EntityRef]authz.Resolution
+	resolveResponseErrs map[authz.EntityRef]error
+	resolveCallOrder    []authz.EntityRef
 }
 
 func (f *fakeAuthz) ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error) {
@@ -100,6 +164,24 @@ func (f *fakeAuthz) ScopeForPrincipal(ctx context.Context, principalSubject stri
 func (f *fakeAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error) {
 	f.resolveCalls++
 	return f.resolveRef, f.resolveRes, f.resolveErr
+}
+
+// Resolve satisfies authz.Resolver, which authzResolver now embeds for
+// PushDeviceConfig's FR1.2/FR1.3 push-time invariant check
+// (server_push_device_config_test.go). It looks resolveResponses/
+// resolveResponseErrs up by ref -- a test must configure a response for
+// every ref its scenario resolves, or this panics naming the
+// unconfigured ref, rather than silently returning a zero Resolution that
+// could mask a validation bug as a false pass.
+func (f *fakeAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
+	f.resolveCallOrder = append(f.resolveCallOrder, ref)
+	if err, ok := f.resolveResponseErrs[ref]; ok {
+		return authz.Resolution{}, err
+	}
+	if res, ok := f.resolveResponses[ref]; ok {
+		return res, nil
+	}
+	panic(fmt.Sprintf("fakeAuthz.Resolve: no configured response for %+v -- configure resolveResponses/resolveResponseErrs for every ref this scenario resolves", ref))
 }
 
 // allPermittingScope is a test-only Scope that permits everything -- used
