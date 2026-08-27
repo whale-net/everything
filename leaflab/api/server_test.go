@@ -84,10 +84,26 @@ type fakeRepo struct {
 	// return -- GetConfigVersion's per-entry FR82.4 provenance read.
 	getConfigVersionEntriesResponse []ConfigVersionEntryRow
 	getConfigVersionEntriesErr      error
+	getConfigVersionEntriesCalls    int
 
 	// listConfigHistoryResponse/-Err configure ListConfigHistory's return.
+	// listConfigHistoryCalls records every (beforeVersion, hasBefore, limit)
+	// this method was invoked with, so a test can assert
+	// ListConfigHistory's handler threads the decoded cursor and clamped
+	// limit+1 through unmodified, and that an NFR2 refusal short-circuits
+	// before this is ever reached.
 	listConfigHistoryResponse []DeviceConfigHistoryRow
 	listConfigHistoryErr      error
+	listConfigHistoryCalls    []listConfigHistoryCall
+}
+
+// listConfigHistoryCall is one recorded ListConfigHistory invocation -- see
+// fakeRepo's doc comment.
+type listConfigHistoryCall struct {
+	deviceID      string
+	beforeVersion int64
+	hasBefore     bool
+	limit         int32
 }
 
 // getDeviceConfigVersionCall is one recorded GetDeviceConfigVersion
@@ -192,10 +208,17 @@ func (f *fakeRepo) GetDeviceConfigVersion(ctx context.Context, deviceID string, 
 }
 
 func (f *fakeRepo) GetConfigVersionEntries(ctx context.Context, configID int64) ([]ConfigVersionEntryRow, error) {
+	f.getConfigVersionEntriesCalls++
 	return f.getConfigVersionEntriesResponse, f.getConfigVersionEntriesErr
 }
 
 func (f *fakeRepo) ListConfigHistory(ctx context.Context, deviceID string, beforeVersion int64, hasBefore bool, limit int32) ([]DeviceConfigHistoryRow, error) {
+	f.listConfigHistoryCalls = append(f.listConfigHistoryCalls, listConfigHistoryCall{
+		deviceID:      deviceID,
+		beforeVersion: beforeVersion,
+		hasBefore:     hasBefore,
+		limit:         limit,
+	})
 	return f.listConfigHistoryResponse, f.listConfigHistoryErr
 }
 

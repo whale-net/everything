@@ -22,10 +22,11 @@ go_library(
 )
 
 # FR82 pure-logic unit tests: canonicalisation (canonical_test.go),
-# EDIT-scope materialisation (materialise_test.go) and removal-key
-# resolution (removekey_test.go). This package has no database dependency
-# (see doc.go), so these need no Docker/network fixture and run under
-# plain `bazel test //leaflab/...`.
+# EDIT-scope materialisation (materialise_test.go), removal-key resolution
+# (removekey_test.go), and FR34's three-state derivation and sentence
+# rendering (state_test.go). This package has no database dependency (see
+# doc.go), so these need no Docker/network fixture and run under plain
+# `bazel test //leaflab/...`.
 go_test(
     name = "config_test",
     size = "small",
@@ -33,6 +34,7 @@ go_test(
         "canonical_test.go",
         "materialise_test.go",
         "removekey_test.go",
+        "state_test.go",
     ],
     embed = [":config"],
     deps = [
