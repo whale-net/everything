@@ -247,3 +247,41 @@ go_test(
         "@org_golang_google_protobuf//proto",
     ],
 )
+
+# Real-Postgres integration coverage for #1376's region lifecycle (FR50,
+# FR22.2, FR22.5, NFR6.2) -- see regions_lifecycle_integration_test.go's doc
+# comment. Same tag set and hand-written rationale as the other integration
+# go_test targets above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:regions_lifecycle_integration_test --test_output=all
+go_test(
+    # keep
+    name = "regions_lifecycle_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "regions_lifecycle_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/attribution",
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
