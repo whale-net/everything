@@ -548,3 +548,24 @@ func TestOwnershipMigration_UpDownUpIsIdempotentSafe(t *testing.T) {
 		t.Errorf("boards with no household after up-down-up = %d, want 0 (post-condition holds again on the second apply)", noHouseholdBoards)
 	}
 }
+
+// NFR6.3 negative (documented here per this task's Testing section; no
+// assertion yet because none of these tables exist as of migration 015):
+// household_membership and board_ownership are the only two SCD2-shaped
+// tables this plan introduces. When a later task lands one of the following,
+// it must NOT carry valid_from/valid_to and must NOT get a
+// TestOwnershipMigration-style SCD2 assertion:
+//   - FR77 departure record -- append-only, one row per departure event.
+//   - FR8 audit rows -- append-only, one row per audited action.
+//   - FR76 claim challenges -- short-lived token with an expiry column, not
+//     an SCD2 interval.
+//   - FR80 support references -- short-lived token with an expiry column,
+//     not an SCD2 interval.
+//
+// The task that adds each table should extend this comment with a real
+// assertion, e.g.:
+//
+//	SELECT EXISTS(SELECT 1 FROM information_schema.columns
+//	  WHERE table_name = '<table>' AND column_name = 'valid_to')
+//
+// asserting false.
