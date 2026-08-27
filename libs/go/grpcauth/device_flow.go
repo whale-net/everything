@@ -60,6 +60,70 @@ type DeviceFlowConfig struct {
 // slow_down, authorization_pending, and expired_token handling -- prefer
 // wiring those over hand-rolling the HTTP calls.
 func NewDeviceFlowDialOption(ctx context.Context, config DeviceFlowConfig) (grpc.DialOption, error) {
+	creds, err := newDeviceFlowCreds(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := creds.loadCachedToken(); err != nil {
+		if err := creds.performDeviceFlow(ctx); err != nil {
+			return nil, fmt.Errorf("device authorization grant failed: %w", err)
+		}
+	}
+
+	return grpc.WithPerRPCCredentials(creds), nil
+}
+
+// DeviceFlowAccessToken performs the same OIDC device authorization grant as
+// NewDeviceFlowDialOption, but returns the raw bearer access token string
+// instead of a grpc.DialOption -- for callers that need the token to hand to
+// a non-Go RPC tool (e.g. `grpcurl -H "authorization: Bearer <token>"`,
+// leaflab's push-config.sh) rather than to dial a Go gRPC connection
+// directly.
+//
+// When interactive is false, this never launches the interactive
+// approval prompt: it only loads and (if needed) refreshes a cached token,
+// returning an error that names the missing credential rather than blocking
+// on human approval. Callers that want the one-time interactive login (e.g.
+// a `login` subcommand) pass interactive = true.
+func DeviceFlowAccessToken(ctx context.Context, config DeviceFlowConfig, interactive bool) (string, error) {
+	creds, err := newDeviceFlowCreds(ctx, config)
+	if err != nil {
+		return "", err
+	}
+
+	if err := creds.loadCachedToken(); err != nil {
+		if !interactive {
+			return "", fmt.Errorf("no cached device flow credential found (or it is invalid/incomplete); run the interactive login first: %w", err)
+		}
+		if err := creds.performDeviceFlow(ctx); err != nil {
+			return "", fmt.Errorf("device authorization grant failed: %w", err)
+		}
+	}
+
+	creds.mu.RLock()
+	needsRefresh := creds.token.Expiry.Before(time.Now().Add(time.Minute))
+	creds.mu.RUnlock()
+	if needsRefresh {
+		if err := creds.refreshToken(ctx); err != nil {
+			// NFR13: never include token material in the error.
+			return "", fmt.Errorf("failed to refresh device flow token: %w", err)
+		}
+	}
+
+	creds.mu.RLock()
+	defer creds.mu.RUnlock()
+	if creds.token == nil || creds.token.AccessToken == "" {
+		return "", fmt.Errorf("device flow credential has no valid access token")
+	}
+	return creds.token.AccessToken, nil
+}
+
+// newDeviceFlowCreds validates config, resolves the token cache path, and
+// discovers the issuer's device authorization/token endpoints -- the setup
+// shared by NewDeviceFlowDialOption and DeviceFlowAccessToken before either
+// loads a cached token or launches the interactive flow.
+func newDeviceFlowCreds(ctx context.Context, config DeviceFlowConfig) (*deviceFlowCreds, error) {
 	if config.IssuerURL == "" {
 		return nil, fmt.Errorf("IssuerURL is required for OIDC device flow auth")
 	}
@@ -72,16 +136,16 @@ func NewDeviceFlowDialOption(ctx context.Context, config DeviceFlowConfig) (grpc
 		return nil, fmt.Errorf("failed to resolve device flow token cache path: %w", err)
 	}
 
-	// Discovery happens up front -- once here, at startup -- rather than
-	// lazily inside performDeviceFlow, because the resulting oauth2.Config
-	// is also needed later by refreshToken on cache-hit paths that never
-	// call performDeviceFlow at all.
+	// Discovery happens up front -- once here -- rather than lazily inside
+	// performDeviceFlow, because the resulting oauth2.Config is also needed
+	// later by refreshToken on cache-hit paths that never call
+	// performDeviceFlow at all.
 	endpoints, err := discoverDeviceEndpoints(ctx, config.IssuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover device flow endpoints: %w", err)
 	}
 
-	creds := &deviceFlowCreds{
+	return &deviceFlowCreds{
 		config:    config,
 		cachePath: cachePath,
 		oauthConfig: &oauth2.Config{
@@ -92,15 +156,7 @@ func NewDeviceFlowDialOption(ctx context.Context, config DeviceFlowConfig) (grpc
 				TokenURL:      endpoints.TokenEndpoint,
 			},
 		},
-	}
-
-	if err := creds.loadCachedToken(); err != nil {
-		if err := creds.performDeviceFlow(ctx); err != nil {
-			return nil, fmt.Errorf("device authorization grant failed: %w", err)
-		}
-	}
-
-	return grpc.WithPerRPCCredentials(creds), nil
+	}, nil
 }
 
 // withOpenIDScope returns scopes with "openid" included, without mutating

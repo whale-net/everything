@@ -118,6 +118,31 @@ There is deliberately no `ClientSecret` field: a public client has none, and a
 confidential-client secret would make this indistinguishable from the
 service-account credential above.
 
+#### `DeviceFlowAccessToken` — for non-Go callers (shell scripts, `grpcurl`)
+
+`NewDeviceFlowDialOption` returns an opaque `grpc.DialOption`, which is only
+usable from a Go `grpc.NewClient` call. A caller that needs the raw bearer
+token string instead — a shell script driving `grpcurl -H "authorization:
+Bearer <token>"`, for example — uses `DeviceFlowAccessToken` directly:
+
+```go
+token, err := grpcauth.DeviceFlowAccessToken(ctx, grpcauth.DeviceFlowConfig{
+    IssuerURL: os.Getenv("GRPC_OIDC_ISSUER"),
+    ClientID:  os.Getenv("GRPC_DEVICE_FLOW_CLIENT_ID"),
+}, interactive) // interactive: true launches the approval prompt if no
+                 // cached token exists; false only loads/refreshes a cached
+                 // token and returns an error naming the missing credential
+                 // instead of blocking on human approval.
+```
+
+This is the same credential and cache as `NewDeviceFlowDialOption` — same
+`DeviceFlowConfig`, same on-disk cache file — just returning the token string
+instead of wrapping it in a dial option. See
+`leaflab/scripts/authtoken/main.go` for a worked example: a tiny CLI with a
+`login` subcommand (`interactive = true`, for the one-time approval) and a
+default mode (`interactive = false`, used by `leaflab/scripts/push-config.sh`
+on every invocation).
+
 ### Client — per-request user token (UI → API / UI → Log-Processor)
 
 Reads the user's access token from context on each call.

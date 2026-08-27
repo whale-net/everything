@@ -1,0 +1,17 @@
+"""authtoken -- device-flow credential helper for push-config.sh (FR81)."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "authtoken_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/leaflab/scripts/authtoken",
+    visibility = ["//visibility:private"],
+    deps = ["//libs/go/grpcauth"],
+)
+
+go_binary(
+    name = "authtoken",
+    embed = [":authtoken_lib"],
+    visibility = ["//visibility:public"],
+)
