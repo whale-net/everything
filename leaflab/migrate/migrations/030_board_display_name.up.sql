@@ -1,6 +1,6 @@
--- Migration 029: household-chosen board display name (Phase 2 scaffold, FR57)
+-- Migration 030: household-chosen board display name (Phase 2 scaffold, FR57)
 --
--- Picked 029 as the next free number: the highest number observed across
+-- Picked 030 as the next free number: the highest number observed across
 -- every worktree under .pm-worktrees/ at scaffold time was 028
 -- (plan/1166-v2-1368's 028_config_entry_provenance) -- sibling v2 branches
 -- on plan/1166 have collided on migration numbers before, so this is
