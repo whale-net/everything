@@ -116,6 +116,10 @@ func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
 
+func (stubAPIServer) DiffConfigVersions(ctx context.Context, req *pb.DiffConfigVersionsRequest) (*pb.DiffConfigVersionsResponse, error) {
+	return &pb.DiffConfigVersionsResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

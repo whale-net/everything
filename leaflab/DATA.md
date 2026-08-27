@@ -292,6 +292,39 @@ package's results into `device_config`/`device_config_entry` rows and
 
 ---
 
+## Push Validation and Diff (FR39, FR37)
+
+`//leaflab/api/config`'s `Validate` (`validate.go`) runs FR39's
+server-side checks against a push payload -- everything the firmware
+would reject anyway, so a caller finds out before publishing rather than
+from a rejected `DeviceConfigAck`: I2C address range, a chip/measurement-
+type pair the catalog (`sensor_chip`/`sensor_chip_type`/`sensor_type`,
+migrations 008/010) does not produce, `poll_interval_ms` bounds
+(`leaflab/api/ENV.md`), within-payload hardware-key collisions, a remove
+key matching nothing in the base (never a silent no-op), and a remove
+naming an entry with no I2C address (FR82.4's named failure class). Every
+failure is collected into one `Validation`, each naming its entry index
+and field -- never just the first. Like the rest of this package, `Validate`
+has no database dependency: the caller resolves a `Catalog` snapshot and
+`PollIntervalBounds` once and passes them in.
+
+`Diff` (`diff.go`) computes FR37's server-side, per-entry diff between two
+complete entry sets (`ADDED`/`REMOVED`/`CHANGED`/`UNCHANGED`), by
+canonical hardware key rather than payload order. Because every stored
+payload is complete (FR82), `REMOVED` is reachable whether the prior
+version was superseded by a `COMPLETE` push that omitted the entry or an
+`EDIT` push whose `removes` dropped it. The `DiffConfigVersions` RPC
+(api.proto) diffs two versions, or a version against an unpushed draft --
+a draft is materialised through the same FR82 scope semantics as an
+actual push, but never stored or published.
+
+Boundary with FR16.4: `Validate`'s within-payload collision check does
+not, and cannot, catch a swap (two entries trading addresses) -- a swap
+produces two distinct canonical keys, not a collision. Swap handling is
+identity resolution's job (`leaflab/api/identity.go`), not validation's.
+
+---
+
 ## SCD2 Convention
 
 All SCD2 (Slowly Changing Dimension Type 2) history tables follow a uniform column convention:

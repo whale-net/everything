@@ -1,6 +1,8 @@
 package config
 
 import (
+	"strings"
+
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/hwkey"
 )
@@ -35,4 +37,24 @@ func canonicalMuxPath(hops []*configpb.MuxHop) hwkey.MuxPath {
 		path[i] = hwkey.MuxHop{MuxAddress: h.GetMuxAddress(), MuxChannel: h.GetMuxChannel()}
 	}
 	return path
+}
+
+// ChipTypeName converts a proto ChipType into the catalog-comparable key
+// FR39's Catalog is keyed on: the enum's CHIP_TYPE_ suffix, e.g.
+// CHIP_TYPE_SHT3X -> "SHT3X". Catalog.Add upper-cases chips.yaml's own
+// (sometimes mixed-case, e.g. "SHT3x") names on the way in -- see
+// firmware/sensor/catalog's catalog_sync_test, which enforces this same
+// upper-cased comparison between chips.yaml and the enum -- so the two
+// sides always compare equal regardless of chips.yaml's casing. Returns
+// "" for CHIP_TYPE_UNKNOWN: config.proto's legacy patch-only case
+// (applies name/enabled overrides to a sensor already compiled in; no new
+// chip is instantiated), which has no chip to validate against the
+// catalog at all.
+func ChipTypeName(t configpb.ChipType) string {
+	raw := t.String()
+	name, ok := strings.CutPrefix(raw, "CHIP_TYPE_")
+	if !ok || name == "UNKNOWN" {
+		return ""
+	}
+	return name
 }

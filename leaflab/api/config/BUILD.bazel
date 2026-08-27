@@ -6,25 +6,31 @@ go_library(
     name = "config",
     srcs = [
         "canonical.go",
+        "diff.go",
         "doc.go",
         "entry.go",
         "materialise.go",
         "removekey.go",
+        "validate.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api/config",
     visibility = ["//visibility:public"],
     deps = [
         "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/hwkey",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 
 # FR82 pure-logic unit tests: canonicalisation (canonical_test.go),
 # EDIT-scope materialisation (materialise_test.go) and removal-key
-# resolution (removekey_test.go). This package has no database dependency
-# (see doc.go), so these need no Docker/network fixture and run under
-# plain `bazel test //leaflab/...`.
+# resolution (removekey_test.go). FR39/FR37 pure-logic unit tests:
+# server-side push validation (validate_test.go) and server-computed diff
+# (diff_test.go) are added by this same package's Testing-phase task.
+# This package has no database dependency (see doc.go), so these need no
+# Docker/network fixture and run under plain `bazel test //leaflab/...`.
 go_test(
     name = "config_test",
     size = "small",

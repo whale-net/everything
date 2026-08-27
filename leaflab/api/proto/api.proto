@@ -42,6 +42,15 @@ service LeafLabAPI {
   // identity, not continue an existing one, and its reading history would
   // not follow.
   rpc RewireSensor(RewireSensorRequest) returns (RewireSensorResponse);
+
+  // DiffConfigVersions computes FR37's server-side, per-entry diff between
+  // any two sides of a board's config history -- two stored accepted
+  // versions, or a stored version against an unpushed draft (see
+  // ConfigSide). Never mutates anything: a draft named on either side is
+  // materialised in memory (FR82's scope semantics) purely to diff it, the
+  // same way PushDeviceConfig would materialise it if it were actually
+  // pushed, but is never stored or published.
+  rpc DiffConfigVersions(DiffConfigVersionsRequest) returns (DiffConfigVersionsResponse);
 }
 
 // PushScope states what a PushDeviceConfigRequest's payload means as a
@@ -155,6 +164,68 @@ message RewireSensorResponse {
   // sensor_id of the rewired sensor -- unchanged from before the rewire,
   // proving identity survived (FR16).
   int64 sensor_id = 1;
+}
+
+// --- Diff (FR37) ---------------------------------------------------------
+
+// ConfigDraft is an unpushed, hypothetical push payload -- the same shape
+// and FR82 scope semantics as PushDeviceConfigRequest, but never stored or
+// published: DiffConfigVersions materialises it in memory (COMPLETE: as
+// submitted; EDIT: against the board's current accepted config, exactly
+// as PushDeviceConfig would) purely to diff it.
+message ConfigDraft {
+  repeated firmware.SensorConfig sensors = 1;
+  PushScope scope = 2;
+  repeated RemoveKey removes = 3;
+}
+
+// ConfigSide names one side of a DiffConfigVersions comparison (FR37):
+// either a specific stored accepted config version, or an unpushed draft.
+// There is no default -- an unset oneof is rejected before anything is
+// diffed, the same "no default, never inferred" posture PushScope takes
+// (FR82.1).
+message ConfigSide {
+  oneof side {
+    uint64 version = 1;
+    ConfigDraft draft = 2;
+  }
+}
+
+message DiffConfigVersionsRequest {
+  string device_id = 1;
+  ConfigSide from = 2;
+  ConfigSide to = 3;
+}
+
+// DiffKind classifies one sensor entry's change between the `from` and
+// `to` sides of a DiffConfigVersionsRequest (FR37).
+enum DiffKind {
+  DIFF_KIND_UNSPECIFIED = 0;
+  DIFF_KIND_ADDED = 1;
+  DIFF_KIND_REMOVED = 2;
+  DIFF_KIND_CHANGED = 3;
+  DIFF_KIND_UNCHANGED = 4;
+}
+
+// EntryDiff is one sensor entry's classification, identified by its
+// canonical hardware key (FR18: mux_path, i2c_address, sensor_type) --
+// the full entry on each side is available in
+// DiffConfigVersionsResponse's `from`/`to` raw payloads, cross-referenced
+// by this same key.
+message EntryDiff {
+  DiffKind kind = 1;
+  repeated firmware.MuxHop mux_path = 2;
+  uint32 i2c_address = 3;
+  firmware.SensorType sensor_type = 4;
+}
+
+message DiffConfigVersionsResponse {
+  repeated EntryDiff entries = 1;
+  // Both raw complete payloads the diff was computed from (FR37) -- a
+  // draft side is included here already materialised, exactly as it was
+  // diffed, not as originally submitted.
+  firmware.DeviceConfig from = 2;
+  firmware.DeviceConfig to = 3;
 }
 
 message GetDeviceConfigRequest {
