@@ -24,6 +24,34 @@ service LeafLabAPI {
   // principal, so "this is our problem, not yours" is answerable even when
   // the rest of the API is unreachable. Returns no household data.
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+
+  // --- Bounded read path (FR25, FR27, FR28, NFR3.2) ---------------------
+  //
+  // See leaflab/api/readings -- the one place the join, enrichment and
+  // attribution logic behind these four RPCs lives (FR25.1). Scaffold
+  // only (this task's Scaffold phase, #1362): handlers are wired in this
+  // task's Implementation phase.
+
+  // A bounded-window reading series for one entity -- sensor, board,
+  // region or plant (FR25.1). Every response states which granularity
+  // tier answered (FR71), never silently. Raw-row responses are capped at
+  // a 48-hour window (NFR3.2); a longer window coarsens automatically
+  // rather than erroring.
+  rpc GetReadingSeries(GetReadingSeriesRequest) returns (GetReadingSeriesResponse);
+
+  // The current value per sensor and per plant, in one call, from the
+  // latest raw readings -- never from a pre-aggregated tier (FR27). The
+  // response's band field is left unpopulated until Phase 5 (FR58).
+  rpc GetCurrentValues(GetCurrentValuesRequest) returns (GetCurrentValuesResponse);
+
+  // Server-side min/max/average summary for one region over a period,
+  // including the overnight-low/daytime-high framing (FR28). Exact at the
+  // hourly tier for min and max (FR71).
+  rpc GetPeriodSummary(GetPeriodSummaryRequest) returns (GetPeriodSummaryResponse);
+
+  // Two or more entities compared over one shared window and one
+  // measurement (FR25.3).
+  rpc CompareSeries(CompareSeriesRequest) returns (CompareSeriesResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -150,4 +178,179 @@ enum HealthStatus {
 message GetHealthResponse {
   // The only populated field in this response (FR63.2).
   HealthStatus status = 1;
+}
+
+// --- Bounded read path (FR25, FR27, FR28, NFR3.2) -----------------------
+
+// EntityRef names one entity a readings RPC answers about -- a sensor,
+// board, region or plant (FR25.1). Exactly one field is set; a request
+// with none or more than one set is rejected (Implementation phase).
+// Mirrors leaflab/api/authz.EntityRef's kind set minus EntityReading
+// (a reading is never itself the subject of a readings query).
+message EntityRef {
+  oneof entity {
+    int64 sensor_id = 1;
+    int64 board_id = 2;
+    int64 region_id = 3;
+    int64 plant_id = 4;
+  }
+}
+
+// TimeWindow is the explicitly bounded [start, end) range every readings
+// request carries (FR25.1). NFR3.2's server-enforced maximum range and
+// result cap are applied against this window server-side -- an unbounded
+// window (start or end unset) is rejected, never served as a scan.
+message TimeWindow {
+  Instant start = 1;
+  Instant end = 2;
+}
+
+// Granularity is the wire form of leaflab/api/tiers.Tier -- a
+// caller-requested hint, not a contract (FR71): the server may coarsen,
+// and every response names which value of this enum actually answered.
+enum Granularity {
+  GRANULARITY_UNSPECIFIED = 0;
+  GRANULARITY_RAW = 1;
+  GRANULARITY_FIVE_MINUTE = 2;
+  GRANULARITY_HOURLY = 3;
+}
+
+// ReadingPoint is one bucket in a series: a single raw reading (TierRaw)
+// or one pre-aggregated bucket (TierFiveMinute/TierHourly). value_min/
+// value_max/value_avg/reading_count are meaningful only for an aggregated
+// tier; a raw point carries value_min == value_max == value_avg == value
+// and reading_count == 1 (Implementation phase fills in this shape).
+message ReadingPoint {
+  Instant recorded_at = 1;
+  double value = 2;
+  double value_min = 3;
+  double value_max = 4;
+  double value_avg = 5;
+  int64 reading_count = 6;
+  // True when this point is an FR20 boundary_partial substitution for a
+  // bucket straddled by a plant-attribution boundary, rather than an
+  // ordinary tier bucket.
+  bool boundary_partial = 7;
+}
+
+message GetReadingSeriesRequest {
+  EntityRef entity = 1;
+  TimeWindow window = 2;
+  // Filters the series by measurement type -- sensor.sensor_type_id
+  // (FR25.2). Zero means unfiltered.
+  int64 measurement_type_id = 3;
+  // A hint, not a contract (FR71) -- see Granularity.
+  Granularity requested_granularity = 4;
+  // Keyset page request (FR61), ordered on (recorded_at DESC, reading_id)
+  // at the raw tier.
+  PageRequest page = 5;
+}
+
+message GetReadingSeriesResponse {
+  repeated ReadingPoint points = 1;
+  // Which tier actually answered (FR71) -- always set, regardless of
+  // requested_granularity.
+  Granularity tier = 2;
+  // True when tier is coarser than requested_granularity (FR71's
+  // disclosure requirement).
+  bool coarsened = 3;
+  PageResponse page = 4;
+  Instant server_now = 5;
+}
+
+message GetCurrentValuesRequest {
+  EntityRef entity = 1;
+}
+
+// Band is FR58's band descriptor, carried alongside a current value.
+// Scaffolded here as an empty field -- Phase 5 populates it. Leaving the
+// field on the response now means FR27's "carries the FR58 band alongside
+// the value" does not require a wire-breaking change later.
+message Band {
+  string label = 1;
+}
+
+message CurrentValue {
+  int64 sensor_id = 1;
+  int64 measurement_type_id = 2;
+  double value = 3;
+  Instant recorded_at = 4;
+  // Populated starting Phase 5 (FR58). Unset until then.
+  Band band = 5;
+}
+
+// CurrentPlantValue is one plant's current value set -- every sensor
+// value from the plant's attributing region (FR23), read from raw
+// (FR27), never a pre-aggregated tier.
+message CurrentPlantValue {
+  int64 plant_id = 1;
+  repeated CurrentValue values = 2;
+}
+
+message GetCurrentValuesResponse {
+  // Populated when the request named a sensor, board or region.
+  repeated CurrentValue values = 1;
+  // Populated when the request named a plant (FR23 attribution).
+  repeated CurrentPlantValue plant_values = 2;
+  Instant server_now = 3;
+}
+
+// PeriodSummary is one measurement type's min/max/average over a period,
+// computed server-side (FR28), exact at the hourly tier for min and max
+// (FR71).
+message PeriodSummary {
+  int64 measurement_type_id = 1;
+  double min = 2;
+  double max = 3;
+  double avg = 4;
+  Instant min_at = 5;
+  Instant max_at = 6;
+}
+
+message GetPeriodSummaryRequest {
+  int64 region_id = 1;
+  TimeWindow period = 2;
+  // Zero means unfiltered -- one PeriodSummary per measurement type
+  // present in the period.
+  int64 measurement_type_id = 3;
+}
+
+message GetPeriodSummaryResponse {
+  repeated PeriodSummary summaries = 1;
+  // The same measurement's overnight-low/daytime-high framing, computed
+  // server-side from the household's (or the server's -- Implementation
+  // phase states which) configured day boundary, never a client
+  // convention.
+  PeriodSummary overnight_low = 2;
+  PeriodSummary daytime_high = 3;
+  // IANA timezone name the day boundary was computed against.
+  string timezone = 4;
+  // Which tier answered (FR71) -- the hourly tier where the period
+  // allows; coarsening beyond that is disclosed the same as any other
+  // read-path RPC.
+  Granularity tier = 5;
+  Instant server_now = 6;
+}
+
+message CompareSeriesRequest {
+  // Two or more entities compared over one shared window and one
+  // measurement (FR25.3).
+  repeated EntityRef entities = 1;
+  TimeWindow window = 2;
+  int64 measurement_type_id = 3;
+  Granularity requested_granularity = 4;
+  PageRequest page = 5;
+}
+
+message EntitySeries {
+  EntityRef entity = 1;
+  repeated ReadingPoint points = 2;
+}
+
+message CompareSeriesResponse {
+  repeated EntitySeries series = 1;
+  Granularity tier = 2;
+  bool coarsened = 3;
+  PageResponse page = 4;
+  Instant server_now = 5;
 }
