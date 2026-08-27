@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -640,6 +641,458 @@ func (r *Repository) GetGrantHousehold(ctx context.Context, grantID int64) (int6
 	`, grantID).Scan(&householdID)
 	if err != nil {
 		return 0, fmt.Errorf("get grant %d household: %w", grantID, err)
+	}
+	return householdID, nil
+}
+
+// ── FR76: Self-service board claim (possession challenge) ────────────────────
+//
+// Every method below is written to cost the same regardless of whether
+// device_id resolves to anything (FR76.1 uniform initiation, NFR2): the same
+// statements run in the same order whether the board is never-claimed,
+// resolves to Unadopted, is owned by a real household, or does not exist.
+
+// ResolveDeviceHousehold resolves device_id to the household that currently
+// owns it, defaulting to the Unadopted household's id when there is no board
+// row or the board has no owner yet. This lets callers treat "never-claimed",
+// "no board row at all", and "explicitly Unadopted" identically (all are
+// claimable), while still reporting whether the resolved household is a real
+// (non-Unadopted) household and whether a board row exists — for internal
+// decision-making only, never returned to the challenger.
+func (r *Repository) ResolveDeviceHousehold(ctx context.Context, deviceID string) (householdID int64, boardID *int64, isRealHousehold bool, err error) {
+	var unadoptedID int64
+	err = r.db.QueryRow(ctx, `
+		SELECT b.board_id, COALESCE(b.household_id, u.household_id), u.household_id
+		FROM (SELECT get_unadopted_household_id() AS household_id) u
+		LEFT JOIN board b ON b.device_id = $1
+	`, deviceID).Scan(&boardID, &householdID, &unadoptedID)
+	if err != nil {
+		return 0, nil, false, fmt.Errorf("resolve device %s household: %w", deviceID, err)
+	}
+	return householdID, boardID, householdID != unadoptedID, nil
+}
+
+// IsClaimCooldownActive reports whether (principal, device_id) is currently
+// in cooldown after a prior exhausted challenge (FR76.6). This depends only
+// on the caller's own history for this pair, never on device_id resolution,
+// so gating on it does not reintroduce the existence oracle.
+func (r *Repository) IsClaimCooldownActive(ctx context.Context, principal, deviceID string) (bool, error) {
+	var active bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM claim_cooldown
+			WHERE principal = $1 AND device_id = $2 AND cooldown_until > NOW()
+		)
+	`, principal, deviceID).Scan(&active)
+	if err != nil {
+		return false, fmt.Errorf("check claim cooldown for %s/%s: %w", principal, deviceID, err)
+	}
+	return active, nil
+}
+
+// CountOpenChallenges returns how many challenges a principal currently has
+// open, across all device_ids (FR76.2 bounded concurrent opens per principal).
+func (r *Repository) CountOpenChallenges(ctx context.Context, principal string) (int64, error) {
+	var count int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM claim_challenge WHERE principal = $1 AND status = 'open'
+	`, principal).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count open challenges for %s: %w", principal, err)
+	}
+	return count, nil
+}
+
+// OpenChallenge opens a new challenge for (principal, device_id), first
+// superseding any existing open challenge for the same pair (FR76.2: one open
+// challenge per pair). The same two statements run whether or not a prior
+// open challenge existed and whether or not device_id resolves to anything.
+func (r *Repository) OpenChallenge(ctx context.Context, token, deviceID, principal string, cfg ClaimConfig) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin open challenge: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE claim_challenge
+		SET status = 'failed', outcome = 'not_discharged', resolved_at = NOW()
+		WHERE principal = $1 AND device_id = $2 AND status = 'open'
+	`, principal, deviceID); err != nil {
+		return fmt.Errorf("supersede prior open challenge: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO claim_challenge
+			(challenge_token, device_id, principal, expires_at,
+			 rounds_required, round_bound_seconds, attempts_per_round, status)
+		VALUES ($1, $2, $3, NOW() + ($4 * INTERVAL '1 second'), $5, $6, $7, 'open')
+	`, token, deviceID, principal,
+		cfg.Lifetime.Seconds(), cfg.RoundsRequired, int(cfg.RoundBound.Seconds()), cfg.AttemptsPerRound); err != nil {
+		return fmt.Errorf("insert challenge: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit open challenge: %w", err)
+	}
+	return nil
+}
+
+// RecordChallengeOpenedNotice writes the FR9 owner-facing "a possession
+// challenge was opened" notice, targeted at the household resolved by
+// ResolveDeviceHousehold (which is the Unadopted household — visible to no
+// one — when device_id does not resolve to a real household). actor_subject
+// is always empty: the attempting principal, who belongs to another
+// household, is never identified to the owner (A29, FR76.8).
+func (r *Repository) RecordChallengeOpenedNotice(ctx context.Context, targetHouseholdID int64, boardID *int64) error {
+	var entityID int64
+	if boardID != nil {
+		entityID = *boardID
+	}
+	return r.RecordAudit(ctx, "", targetHouseholdID, "open_possession_challenge", "board", entityID, "")
+}
+
+// ClaimChallengeRow is the subset of claim_challenge needed to evaluate and
+// mark rounds.
+type ClaimChallengeRow struct {
+	ChallengeID       int64
+	DeviceID          string
+	Principal         string
+	Status            string
+	ExpiresAt         time.Time
+	RoundsRequired    int
+	RoundBoundSeconds int
+	AttemptsPerRound  int
+}
+
+// GetChallengeByToken looks up a challenge by its opaque token.
+// Returns (zero, false, nil) if the token does not resolve to any challenge.
+func (r *Repository) GetChallengeByToken(ctx context.Context, token string) (ClaimChallengeRow, bool, error) {
+	var row ClaimChallengeRow
+	err := r.db.QueryRow(ctx, `
+		SELECT challenge_id, device_id, principal, status, expires_at,
+		       rounds_required, round_bound_seconds, attempts_per_round
+		FROM claim_challenge
+		WHERE challenge_token = $1
+	`, token).Scan(&row.ChallengeID, &row.DeviceID, &row.Principal, &row.Status, &row.ExpiresAt,
+		&row.RoundsRequired, &row.RoundBoundSeconds, &row.AttemptsPerRound)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ClaimChallengeRow{}, false, nil
+		}
+		return ClaimChallengeRow{}, false, fmt.Errorf("get challenge by token: %w", err)
+	}
+	return row, true, nil
+}
+
+// MarkChallengeRound marks t0 for the next round attempt of an open
+// challenge, or finalizes the challenge as failed (with cooldown) when the
+// lifetime or the per-round attempt budget is exhausted. It is a silent no-op
+// when the token does not resolve, belongs to a different principal, or the
+// challenge is no longer open — MarkRound's response is a uniform
+// acknowledgement regardless (FR76.3), so callers never branch on this error
+// beyond logging.
+func (r *Repository) MarkChallengeRound(ctx context.Context, token, principal string, cooldown time.Duration) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin mark round: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var row ClaimChallengeRow
+	err = tx.QueryRow(ctx, `
+		SELECT challenge_id, device_id, principal, status, expires_at,
+		       rounds_required, round_bound_seconds, attempts_per_round
+		FROM claim_challenge
+		WHERE challenge_token = $1
+		FOR UPDATE
+	`, token).Scan(&row.ChallengeID, &row.DeviceID, &row.Principal, &row.Status, &row.ExpiresAt,
+		&row.RoundsRequired, &row.RoundBoundSeconds, &row.AttemptsPerRound)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // unknown token: no-op, uniform ack still returned by caller
+		}
+		return fmt.Errorf("lookup challenge for mark round: %w", err)
+	}
+
+	if row.Principal != principal || row.Status != "open" {
+		return tx.Commit(ctx) // wrong caller or already resolved: no-op
+	}
+
+	if time.Now().After(row.ExpiresAt) {
+		return failChallengeTx(ctx, tx, row, cooldown)
+	}
+
+	var latestRoundNumber, latestAttemptNumber int
+	var latestSatisfied bool
+	err = tx.QueryRow(ctx, `
+		SELECT round_number, attempt_number, satisfied_at IS NOT NULL
+		FROM claim_challenge_round
+		WHERE challenge_id = $1
+		ORDER BY round_number DESC, attempt_number DESC
+		LIMIT 1
+	`, row.ChallengeID).Scan(&latestRoundNumber, &latestAttemptNumber, &latestSatisfied)
+	hasRound := true
+	if errors.Is(err, pgx.ErrNoRows) {
+		hasRound = false
+		err = nil
+	}
+	if err != nil {
+		return fmt.Errorf("get latest round for challenge %d: %w", row.ChallengeID, err)
+	}
+
+	roundNumber, attemptNumber := 1, 1
+	switch {
+	case !hasRound:
+		// First round, first attempt.
+	case latestSatisfied:
+		if latestRoundNumber >= row.RoundsRequired {
+			// All rounds already satisfied — a finalize should already have
+			// run (PollChallengeState); nothing further to mark.
+			return tx.Commit(ctx)
+		}
+		roundNumber, attemptNumber = latestRoundNumber+1, 1
+	default:
+		// Re-marking the still-open (or bound-expired, unsatisfied) current
+		// round: consumes one more of the bounded attempts (FR76.6).
+		roundNumber, attemptNumber = latestRoundNumber, latestAttemptNumber+1
+		if attemptNumber > row.AttemptsPerRound {
+			return failChallengeTx(ctx, tx, row, cooldown)
+		}
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO claim_challenge_round (challenge_id, round_number, attempt_number, marked_at, bound_expires_at)
+		VALUES ($1, $2, $3, NOW(), NOW() + ($4 * INTERVAL '1 second'))
+	`, row.ChallengeID, roundNumber, attemptNumber, row.RoundBoundSeconds); err != nil {
+		return fmt.Errorf("insert round for challenge %d: %w", row.ChallengeID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit mark round: %w", err)
+	}
+	return nil
+}
+
+// failChallengeTx finalizes a challenge as failed/not_discharged and places
+// the (principal, device_id) pair in cooldown, then commits tx. Shared by the
+// lifetime-exhaustion and attempts-exhaustion paths in MarkChallengeRound.
+func failChallengeTx(ctx context.Context, tx pgx.Tx, row ClaimChallengeRow, cooldown time.Duration) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE claim_challenge SET status = 'failed', outcome = 'not_discharged', resolved_at = NOW()
+		WHERE challenge_id = $1 AND status = 'open'
+	`, row.ChallengeID); err != nil {
+		return fmt.Errorf("fail challenge %d: %w", row.ChallengeID, err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO claim_cooldown (principal, device_id, cooldown_until)
+		VALUES ($1, $2, NOW() + ($3 * INTERVAL '1 second'))
+		ON CONFLICT (principal, device_id) DO UPDATE SET cooldown_until = EXCLUDED.cooldown_until
+	`, row.Principal, row.DeviceID, cooldown.Seconds()); err != nil {
+		return fmt.Errorf("set cooldown for %s/%s: %w", row.Principal, row.DeviceID, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit fail challenge %d: %w", row.ChallengeID, err)
+	}
+	return nil
+}
+
+// EvaluateChallenge advances an open challenge's state to completion if its
+// rounds are satisfied or its lifetime has lapsed, then returns the
+// challenge's current (possibly just-updated) status and outcome. It is safe
+// to call repeatedly and concurrently (SELECT ... FOR UPDATE serializes
+// finalization). Called from PollChallengeState; NOT_DISCHARGED covers
+// exhausted lifetime/attempts and a discharge against an already-owned board
+// indistinguishably (FR76.7).
+func (r *Repository) EvaluateChallenge(ctx context.Context, challengeID int64, cooldown time.Duration) (status, outcome string, err error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("begin evaluate challenge: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var row ClaimChallengeRow
+	var outcomePtr *string
+	err = tx.QueryRow(ctx, `
+		SELECT challenge_id, device_id, principal, status, expires_at,
+		       rounds_required, round_bound_seconds, attempts_per_round, outcome
+		FROM claim_challenge
+		WHERE challenge_id = $1
+		FOR UPDATE
+	`, challengeID).Scan(&row.ChallengeID, &row.DeviceID, &row.Principal, &row.Status, &row.ExpiresAt,
+		&row.RoundsRequired, &row.RoundBoundSeconds, &row.AttemptsPerRound, &outcomePtr)
+	if err != nil {
+		return "", "", fmt.Errorf("lookup challenge %d for evaluation: %w", challengeID, err)
+	}
+
+	if row.Status != "open" {
+		if err := tx.Commit(ctx); err != nil {
+			return "", "", fmt.Errorf("commit evaluate challenge (already resolved): %w", err)
+		}
+		outcomeStr := ""
+		if outcomePtr != nil {
+			outcomeStr = *outcomePtr
+		}
+		return row.Status, outcomeStr, nil
+	}
+
+	var satisfiedRounds int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT round_number) FROM claim_challenge_round
+		WHERE challenge_id = $1 AND satisfied_at IS NOT NULL
+	`, challengeID).Scan(&satisfiedRounds); err != nil {
+		return "", "", fmt.Errorf("count satisfied rounds for challenge %d: %w", challengeID, err)
+	}
+
+	if satisfiedRounds >= row.RoundsRequired {
+		finalOutcome, err := finalizeDischargeTx(ctx, tx, row)
+		if err != nil {
+			return "", "", err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return "", "", fmt.Errorf("commit finalize discharge for challenge %d: %w", challengeID, err)
+		}
+		return "discharged", finalOutcome, nil
+	}
+
+	if time.Now().After(row.ExpiresAt) {
+		if err := failChallengeTx(ctx, tx, row, cooldown); err != nil {
+			return "", "", err
+		}
+		return "failed", "not_discharged", nil
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", "", fmt.Errorf("commit evaluate challenge (still open): %w", err)
+	}
+	return "open", "", nil
+}
+
+// finalizeDischargeTx runs the FR76.7 outcome once a challenge's rounds are
+// all satisfied: the claim proceeds only for a never-claimed or Unadopted
+// board (ownership moves, FR70; the claimant gets a household if they have
+// none, FR75), and confers nothing against a board already owned by a real
+// household. Either way the challenge transitions to 'discharged'; the
+// challenger cannot tell the two apart (FR76.7). Must run inside tx, which
+// the caller commits.
+func finalizeDischargeTx(ctx context.Context, tx pgx.Tx, row ClaimChallengeRow) (outcome string, err error) {
+	var boardIDPtr *int64
+	var householdID, unadoptedID int64
+	if err := tx.QueryRow(ctx, `
+		SELECT b.board_id, COALESCE(b.household_id, u.household_id), u.household_id
+		FROM (SELECT get_unadopted_household_id() AS household_id) u
+		LEFT JOIN board b ON b.device_id = $1
+	`, row.DeviceID).Scan(&boardIDPtr, &householdID, &unadoptedID); err != nil {
+		return "", fmt.Errorf("resolve device %s household for discharge: %w", row.DeviceID, err)
+	}
+
+	targetHouseholdID := householdID
+	if householdID != unadoptedID {
+		// Real household already owns this board: discharge confers nothing.
+		outcome = "discharged_no_effect"
+	} else {
+		// Never-claimed or Unadopted: the claim proceeds.
+		boardID, err := ensureBoardRowTx(ctx, tx, row.DeviceID, boardIDPtr)
+		if err != nil {
+			return "", err
+		}
+
+		// FR75 interaction: the claimant obtains a household if they have none.
+		claimantHouseholdID, err := ensurePrincipalHouseholdTx(ctx, tx, row.Principal)
+		if err != nil {
+			return "", err
+		}
+
+		if _, err := tx.Exec(ctx, `
+			UPDATE board_ownership SET valid_to = NOW() WHERE board_id = $1 AND valid_to IS NULL
+		`, boardID); err != nil {
+			return "", fmt.Errorf("close board_ownership for board %d: %w", boardID, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO board_ownership (board_id, household_id, valid_from) VALUES ($1, $2, NOW())
+		`, boardID, claimantHouseholdID); err != nil {
+			return "", fmt.Errorf("insert board_ownership for board %d: %w", boardID, err)
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE board SET household_id = $2 WHERE board_id = $1
+		`, boardID, claimantHouseholdID); err != nil {
+			return "", fmt.Errorf("update board %d household_id: %w", boardID, err)
+		}
+
+		outcome = "claimed"
+		targetHouseholdID = claimantHouseholdID
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE claim_challenge SET status = 'discharged', outcome = $2, resolved_at = NOW()
+		WHERE challenge_id = $1
+	`, row.ChallengeID, outcome); err != nil {
+		return "", fmt.Errorf("finalize challenge %d: %w", row.ChallengeID, err)
+	}
+
+	// FR9 owner notice + FR76.7 audited discharge fact — actor_subject empty:
+	// the attempting principal is never identified to the owner (A29).
+	var entityID int64
+	if boardIDPtr != nil {
+		entityID = *boardIDPtr
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_record (actor_subject, target_household_id, action, entity_type, entity_id, reason)
+		VALUES ('', $1, 'discharge_possession_challenge', 'board', $2, $3)
+	`, targetHouseholdID, entityID, outcome); err != nil {
+		return "", fmt.Errorf("record discharge audit for challenge %d: %w", row.ChallengeID, err)
+	}
+
+	return outcome, nil
+}
+
+// ensureBoardRowTx returns boardIDPtr dereferenced if the board already has a
+// row, or self-registers a bare board row (household_id NULL) for a
+// device_id that has never sent a manifest, mirroring the processor's own
+// self-registration on first contact.
+func ensureBoardRowTx(ctx context.Context, tx pgx.Tx, deviceID string, boardIDPtr *int64) (int64, error) {
+	if boardIDPtr != nil {
+		return *boardIDPtr, nil
+	}
+	var boardID int64
+	err := tx.QueryRow(ctx, `
+		INSERT INTO board (device_id, registered_at, last_seen_at)
+		VALUES ($1, NOW(), NOW())
+		ON CONFLICT (device_id) DO UPDATE SET last_seen_at = NOW()
+		RETURNING board_id
+	`, deviceID).Scan(&boardID)
+	if err != nil {
+		return 0, fmt.Errorf("self-register board %s on claim: %w", deviceID, err)
+	}
+	return boardID, nil
+}
+
+// ensurePrincipalHouseholdTx returns the principal's current household,
+// creating a new one (with the principal as its sole member) if they have
+// none (FR75 interaction with FR76: "a principal holding no household
+// obtains one on their first successful claim").
+func ensurePrincipalHouseholdTx(ctx context.Context, tx pgx.Tx, principal string) (int64, error) {
+	var householdID int64
+	err := tx.QueryRow(ctx, `
+		SELECT household_id FROM household_member WHERE principal_id = $1 AND valid_to IS NULL LIMIT 1
+	`, principal).Scan(&householdID)
+	if err == nil {
+		return householdID, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("get household for principal %s: %w", principal, err)
+	}
+
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO household (name, created_at) VALUES ($1, NOW()) RETURNING household_id
+	`, principal+"'s household").Scan(&householdID); err != nil {
+		return 0, fmt.Errorf("create household for claiming principal %s: %w", principal, err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO household_member (household_id, principal_id, role, valid_from)
+		VALUES ($1, $2, 'Owner', NOW())
+	`, householdID, principal); err != nil {
+		return 0, fmt.Errorf("add claiming principal %s to new household %d: %w", principal, householdID, err)
 	}
 	return householdID, nil
 }

@@ -88,6 +88,14 @@ func (s *stubRepo) IsKnownChipAddress(_ context.Context, _ string, _ uint32) (bo
 	return true, nil
 }
 
+func (s *stubRepo) GetLastUptimeS(_ context.Context, _ string) (uint32, bool, error) {
+	return 0, false, nil
+}
+
+func (s *stubRepo) HasEverReceivedReading(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
 // marshalManifest encodes a DeviceManifest to wire bytes.
 func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 	t.Helper()
@@ -123,7 +131,7 @@ func TestHandleManifest_HWAddressPassedThrough(t *testing.T) {
 		},
 	}
 
-	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, false, marshalManifest(t, manifest)); err != nil {
 		t.Fatalf("handleManifest: %v", err)
 	}
 
@@ -170,7 +178,7 @@ func TestHandleManifest_NoHWAddressUsesNameFallback(t *testing.T) {
 		},
 	}
 
-	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, false, marshalManifest(t, manifest)); err != nil {
 		t.Fatalf("handleManifest: %v", err)
 	}
 
@@ -202,7 +210,7 @@ func TestHandleManifest_MultipleSensors(t *testing.T) {
 		},
 	}
 
-	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, false, marshalManifest(t, manifest)); err != nil {
 		t.Fatalf("handleManifest: %v", err)
 	}
 
@@ -246,7 +254,7 @@ func TestHandleManifest_CachePopulated(t *testing.T) {
 		},
 	}
 
-	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, false, marshalManifest(t, manifest)); err != nil {
 		t.Fatalf("handleManifest: %v", err)
 	}
 
@@ -279,7 +287,7 @@ func TestHandleManifest_MuxPathSingleHop(t *testing.T) {
 		},
 	}
 
-	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, false, marshalManifest(t, manifest)); err != nil {
 		t.Fatalf("handleManifest: %v", err)
 	}
 
@@ -317,7 +325,7 @@ func TestHandleManifest_DirectSensorEmptyMuxPath(t *testing.T) {
 		},
 	}
 
-	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, false, marshalManifest(t, manifest)); err != nil {
 		t.Fatalf("handleManifest: %v", err)
 	}
 

@@ -1,0 +1,67 @@
+<!-- wf: name="claim-board" title="Claim Your Board" parent="dashboard" -->
+
+<div class="breadcrumbs text-sm mb-4">
+  <ul><li><a href="#/dashboard">Dashboard</a></li><li>Claim a Board</li></ul>
+</div>
+
+<div class="max-w-xl mx-auto">
+  <h1 class="text-2xl md:text-3xl font-bold mb-2">Claim Your Board</h1>
+  <p class="text-sm opacity-70 mb-6">Prove you're standing at the board by power-cycling it a couple of times. This takes a few minutes — no rush.</p>
+
+  <!-- Step 1: enter the printed identifier -->
+  <div class="card bg-base-100 shadow-md mb-6">
+    <div class="card-body p-4">
+      <h2 class="text-lg font-semibold mb-2">Step 1 — Find the label on the board</h2>
+      <p class="text-sm opacity-70 mb-3">Look for the sticker on the underside of the board. Type the code exactly as printed.</p>
+      <div class="flex gap-3 items-end">
+        <div class="flex flex-col gap-1 flex-1">
+          <label class="text-sm opacity-60">Code printed on the board</label>
+          <input type="text" placeholder="e.g. LL-4F9A-2C13" class="border-b border-base-300 focus:border-primary outline-none py-2 w-full font-mono text-sm bg-base-200 rounded-box px-3">
+        </div>
+        <button class="btn btn-primary btn-sm">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: waiting for a round -->
+  <div class="card bg-base-100 shadow-md mb-6 border-2 border-primary">
+    <div class="card-body p-4">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="loading loading-spinner loading-sm text-primary"></span>
+        <h2 class="text-lg font-semibold">Step 2 of 2 — Power-cycle the board now</h2>
+      </div>
+      <p class="text-sm opacity-70 mb-4">Unplug the board, wait a few seconds, then plug it back in. Leave this page open — we'll pick it up automatically.</p>
+
+      <div class="flex items-center gap-3">
+        <progress class="progress progress-primary w-full" value="40" max="100"></progress>
+        <span class="text-xs opacity-60 whitespace-nowrap">round 1 of 2</span>
+      </div>
+
+      <p class="text-xs opacity-50 mt-3">You have about 12 minutes left. It's fine to close this and come back — the code stays on the label.</p>
+
+      <div class="flex gap-2 mt-4 justify-end">
+        <button class="btn btn-ghost btn-sm">Cancel</button>
+        <button class="btn btn-secondary btn-sm">I power-cycled it</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Terminal state: could not confirm (waiting / failed / expired all read identically) -->
+  <div class="card bg-base-100 shadow-md border-2 border-warning">
+    <div class="card-body p-4">
+      <h2 class="text-lg font-semibold mb-2">We couldn't confirm you were at the board</h2>
+      <p class="text-sm opacity-70 mb-4">
+        This is the same message whether the attempt is still waiting, didn't go through in time, or expired —
+        it never says why, so it never gives anything away about the board itself.
+      </p>
+
+      <div class="flex flex-col sm:flex-row gap-2">
+        <button class="btn btn-primary btn-sm flex-1">Try Again</button>
+        <button class="btn btn-outline btn-sm flex-1">Ask a household member to invite you</button>
+        <button class="btn btn-outline btn-sm flex-1">Get a support reference</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="wf-note mt-4">note: FR76.9 — the board is always named by what's printed on it, never "device id"; the code field is meant to be pasted, not memorized. FR76.3 — round progress ("round 1 of 2") is shown to the claimant they marked themselves, but no round's individual pass/fail is ever disclosed. The terminal card's copy is identical for waiting-too-long, a failed round, and an outright expiry (FR76.9), and offers "invite me" (FR75) and "support reference" (FR80) as prominently as retry — never a lesser, buried option.</p>

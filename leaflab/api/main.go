@@ -72,7 +72,13 @@ func run() error {
 
 	repo := NewRepository(pool)
 	claimConfig := LoadClaimConfig(getEnvInt)
-	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"), claimConfig)
+
+	// Create rate limiter with registry and configure default buckets
+	registry := ratelimit.NewRegistry()
+	configureDefaultBuckets(registry)
+	limiter := ratelimit.NewLimiter(registry)
+
+	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"), claimConfig, limiter)
 
 	// Create auth interceptors
 	unaryInt, streamInt, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
@@ -88,12 +94,11 @@ func run() error {
 	correlationUnaryInt := logging.NewCorrelationIDUnaryInterceptor()
 	correlationStreamInt := logging.NewCorrelationIDStreamInterceptor()
 
-	// Create rate limiter with registry and configure default buckets
-	registry := ratelimit.NewRegistry()
-	configureDefaultBuckets(registry)
-	limiter := ratelimit.NewLimiter(registry)
-
-	// Create rate limiting interceptors for read operations
+	// Create rate limiting interceptors for read operations. FR76's
+	// claim-initiate/challenge buckets are applied inside OpenChallenge,
+	// MarkRound and PollChallengeState directly (keyed on device_id and
+	// principal together), since this global interceptor only supports one
+	// bucket for every RPC.
 	rateLimitUnaryInt := ratelimit.UnaryServerInterceptor(limiter, "read")
 	rateLimitStreamInt := ratelimit.StreamServerInterceptor(limiter, "read")
 

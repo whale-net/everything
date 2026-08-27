@@ -28,6 +28,13 @@ type SensorRepository interface {
 	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) error
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
+	// GetLastUptimeS returns the most recently recorded uptime_s for
+	// deviceID, across all its sensors, and whether any reading exists at
+	// all (FR76.4 restart-signal detection).
+	GetLastUptimeS(ctx context.Context, deviceID string) (uptimeS uint32, haveLast bool, err error)
+	// HasEverReceivedReading reports whether deviceID has ever had a reading
+	// recorded, for FR76.4's narrow non-retained-manifest exception.
+	HasEverReceivedReading(ctx context.Context, deviceID string) (bool, error)
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -59,7 +66,7 @@ func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 
 	switch {
 	case len(parts) == 3 && parts[2] == "manifest":
-		return h.handleManifest(ctx, deviceID, msg.Body)
+		return h.handleManifest(ctx, deviceID, isRetainedManifest(msg.Headers), msg.Body)
 	case len(parts) == 4 && parts[2] == "sensor":
 		return h.handleSensorReading(ctx, deviceID, parts[3], msg.Body)
 	case len(parts) == 3 && parts[2] == "config":
@@ -72,8 +79,38 @@ func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 	}
 }
 
+// mqttRetainHeader is the AMQP header the RabbitMQ MQTT plugin attaches to a
+// message routed from an MQTT PUBLISH, carrying the original MQTT RETAIN bit
+// (FR76.4). Firmware publishes DeviceManifest with retain=true (MQTT.md), so
+// this header is what distinguishes a genuine live republish (delivered to an
+// already-subscribed AMQP consumer as retain=0 per MQTT semantics — a
+// republish is not "the stored value being handed to a new subscriber") from
+// a broker/plugin-driven redelivery of the stored retained value.
+const mqttRetainHeader = "x-mqtt-retain"
+
+// isRetainedManifest reports whether a manifest delivery is the broker's
+// stored retained value rather than a live device publish. Missing or
+// unrecognized header data defaults to retained=true — the safe direction,
+// since a retained manifest is never accepted as restart-signal evidence
+// (FR76.4): an unplumbed or unavailable header must never manufacture a
+// restart signal that didn't happen.
+func isRetainedManifest(headers map[string]interface{}) bool {
+	if headers == nil {
+		return true
+	}
+	v, ok := headers[mqttRetainHeader]
+	if !ok {
+		return true
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return true
+	}
+	return b
+}
+
 // handleManifest upserts the board and all its sensors, then populates the cache.
-func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, body []byte) error {
+func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, retained bool, body []byte) error {
 	var manifest firmwarepb.DeviceManifest
 	if err := proto.Unmarshal(body, &manifest); err != nil {
 		return &rmq.PermanentError{Err: fmt.Errorf("unmarshal DeviceManifest: %w", err)}
@@ -85,11 +122,14 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 	}
 	h.logger.Info("board registered", "device_id", deviceID, "board_id", boardID)
 
-	// FR76.4 narrow exception hook (scaffold — see detectManifestRestartException).
-	// Retained-vs-non-retained plumbing from the MQTT/AMQP consumer, and the
-	// "no reading ever received" lookup, are Implementation phase work (#1195);
-	// this call is wired but always reports false today.
-	if detectManifestRestartException(false, false) {
+	// FR76.4 narrow exception: a non-retained manifest is accepted as a
+	// restart signal only for a device_id from which no reading has ever
+	// been received — keyed on the observable (has this device ever sent a
+	// reading), not on config state, so the legacy fleet (compile-time
+	// sensor list, no config row, but plenty of readings) never qualifies.
+	if hasEverReceived, err := h.repo.HasEverReceivedReading(ctx, deviceID); err != nil {
+		h.logger.Warn("restart-signal manifest-exception lookup failed", "device_id", deviceID, "err", err)
+	} else if detectManifestRestartException(retained, hasEverReceived) {
 		h.restartObserver.ObserveRestart(ctx, RestartSignal{
 			DeviceID:   deviceID,
 			ObservedAt: time.Now(),
@@ -201,12 +241,12 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 	}
 
 	// FR76.4 restart-signal observation: an uptime_s regression on a reading
-	// from this board is evidence of a restart. detectUptimeRegression is a
-	// scaffold stub (#1195 Implementation fills in the wrap-aware test and the
-	// "last recorded uptime_s for the board" lookup); it always reports no
-	// regression today, so this never fires yet.
+	// from this board — both lower than the last recorded value and small —
+	// is evidence of a restart (wrap-aware: see detectUptimeRegression).
 	currentUptimeS := reading.UptimeMs / 1000
-	if detectUptimeRegression(0, false, currentUptimeS) {
+	if lastUptimeS, haveLast, err := h.repo.GetLastUptimeS(ctx, deviceID); err != nil {
+		h.logger.Warn("restart-signal uptime lookup failed", "device_id", deviceID, "err", err)
+	} else if detectUptimeRegression(lastUptimeS, haveLast, currentUptimeS) {
 		h.restartObserver.ObserveRestart(ctx, RestartSignal{
 			DeviceID:   deviceID,
 			ObservedAt: time.Now(),

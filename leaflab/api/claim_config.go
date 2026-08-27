@@ -27,16 +27,22 @@ type ClaimConfig struct {
 	// Cooldown is applied to a (principal, device_id) pair after a
 	// challenge terminates without discharge (FR76.6).
 	Cooldown time.Duration
+	// MaxConcurrentOpen bounds how many challenges a single principal may
+	// have open at once, across all device_ids (FR76.2: "a bounded number of
+	// concurrent open challenges per principal"). This is deliberately not a
+	// per-board cap — a per-board cap would itself be an existence oracle.
+	MaxConcurrentOpen int
 }
 
 // DefaultClaimConfig returns the round-2-reviewed A28 defaults.
 func DefaultClaimConfig() ClaimConfig {
 	return ClaimConfig{
-		RoundsRequired:   2,
-		RoundBound:       3 * time.Minute,
-		Lifetime:         15 * time.Minute,
-		AttemptsPerRound: 2,
-		Cooldown:         15 * time.Minute,
+		RoundsRequired:    2,
+		RoundBound:        3 * time.Minute,
+		Lifetime:          15 * time.Minute,
+		AttemptsPerRound:  2,
+		Cooldown:          15 * time.Minute,
+		MaxConcurrentOpen: 5,
 	}
 }
 
@@ -45,10 +51,11 @@ func DefaultClaimConfig() ClaimConfig {
 func LoadClaimConfig(getEnvInt func(key string, def int) int) ClaimConfig {
 	def := DefaultClaimConfig()
 	return ClaimConfig{
-		RoundsRequired:   getEnvInt("LEAFLAB_CLAIM_ROUNDS_REQUIRED", def.RoundsRequired),
-		RoundBound:       time.Duration(getEnvInt("LEAFLAB_CLAIM_ROUND_BOUND_SECONDS", int(def.RoundBound.Seconds()))) * time.Second,
-		Lifetime:         time.Duration(getEnvInt("LEAFLAB_CLAIM_LIFETIME_SECONDS", int(def.Lifetime.Seconds()))) * time.Second,
-		AttemptsPerRound: getEnvInt("LEAFLAB_CLAIM_ATTEMPTS_PER_ROUND", def.AttemptsPerRound),
-		Cooldown:         time.Duration(getEnvInt("LEAFLAB_CLAIM_COOLDOWN_SECONDS", int(def.Cooldown.Seconds()))) * time.Second,
+		RoundsRequired:    getEnvInt("LEAFLAB_CLAIM_ROUNDS_REQUIRED", def.RoundsRequired),
+		RoundBound:        time.Duration(getEnvInt("LEAFLAB_CLAIM_ROUND_BOUND_SECONDS", int(def.RoundBound.Seconds()))) * time.Second,
+		Lifetime:          time.Duration(getEnvInt("LEAFLAB_CLAIM_LIFETIME_SECONDS", int(def.Lifetime.Seconds()))) * time.Second,
+		AttemptsPerRound:  getEnvInt("LEAFLAB_CLAIM_ATTEMPTS_PER_ROUND", def.AttemptsPerRound),
+		Cooldown:          time.Duration(getEnvInt("LEAFLAB_CLAIM_COOLDOWN_SECONDS", int(def.Cooldown.Seconds()))) * time.Second,
+		MaxConcurrentOpen: getEnvInt("LEAFLAB_CLAIM_MAX_CONCURRENT_OPEN", def.MaxConcurrentOpen),
 	}
 }

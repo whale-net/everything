@@ -578,3 +578,88 @@ func (r *Repository) ValidateBoardBelongsToHousehold(ctx context.Context, boardI
 	}
 	return count > 0, nil
 }
+
+// GetLastUptimeS returns the most recently recorded uptime_s for a device,
+// across all of its sensors (uptime_s is board-wide, duplicated onto every
+// sensor's reading at record time), and whether any reading exists at all
+// (FR76.4 restart-signal detection).
+func (r *Repository) GetLastUptimeS(ctx context.Context, deviceID string) (uint32, bool, error) {
+	var uptimeS int32
+	err := r.db.QueryRow(ctx, `
+		SELECT sr.uptime_s
+		FROM sensor_reading sr
+		JOIN sensor s ON s.sensor_id = sr.sensor_id
+		JOIN board b ON b.board_id = s.board_id
+		WHERE b.device_id = $1
+		ORDER BY sr.recorded_at DESC
+		LIMIT 1
+	`, deviceID).Scan(&uptimeS)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("get last uptime_s for %s: %w", deviceID, err)
+	}
+	return uint32(uptimeS), true, nil
+}
+
+// HasEverReceivedReading reports whether deviceID has ever had a reading
+// recorded, for FR76.4's narrow non-retained-manifest exception — keyed on
+// this observable, not on whether a config has been accepted, so the legacy
+// fleet (compile-time sensor list, readings but no config row) never
+// qualifies for the exception.
+func (r *Repository) HasEverReceivedReading(ctx context.Context, deviceID string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1
+			FROM sensor_reading sr
+			JOIN sensor s ON s.sensor_id = sr.sensor_id
+			JOIN board b ON b.board_id = s.board_id
+			WHERE b.device_id = $1
+		)
+	`, deviceID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check has-ever-received-reading for %s: %w", deviceID, err)
+	}
+	return exists, nil
+}
+
+// MarkRoundSatisfied matches an observed restart signal against every open
+// challenge on deviceID's current, unsatisfied round (FR76.4/76.5), and
+// records the signal as that round's satisfying evidence. It does not decide
+// a challenge's overall discharge/ownership outcome — leaflab/api evaluates
+// that lazily (e.g. at PollChallengeState), since the household/ownership
+// audit machinery lives there. This keeps the write narrow and idempotent:
+// once a round's satisfied_at is set, this query never matches it again, so
+// "one restart cannot be counted toward two rounds" and round n+1's bound
+// never opens early — MarkRound must be called again to start it.
+func (r *Repository) MarkRoundSatisfied(ctx context.Context, deviceID string, observedAt time.Time, evidenceClass string) error {
+	_, err := r.db.Exec(ctx, `
+		WITH candidate AS (
+			SELECT ccr.round_id
+			FROM claim_challenge_round ccr
+			JOIN claim_challenge cc ON cc.challenge_id = ccr.challenge_id
+			WHERE cc.device_id = $1
+			  AND cc.status = 'open'
+			  AND cc.expires_at > $2
+			  AND ccr.satisfied_at IS NULL
+			  AND ccr.marked_at < $2
+			  AND ccr.bound_expires_at > $2
+			  AND ccr.round_number = (
+			      SELECT MAX(round_number) FROM claim_challenge_round WHERE challenge_id = cc.challenge_id
+			  )
+			  AND ccr.attempt_number = (
+			      SELECT MAX(attempt_number) FROM claim_challenge_round
+			      WHERE challenge_id = cc.challenge_id AND round_number = ccr.round_number
+			  )
+		)
+		UPDATE claim_challenge_round
+		SET satisfied_at = $2, evidence_class = $3
+		WHERE round_id IN (SELECT round_id FROM candidate)
+	`, deviceID, observedAt, evidenceClass)
+	if err != nil {
+		return fmt.Errorf("mark round satisfied for device %s: %w", deviceID, err)
+	}
+	return nil
+}

@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -9,6 +11,7 @@ import (
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -40,14 +43,16 @@ type LeafLabAPIServer struct {
 	publisher   *rmq.Publisher
 	logger      *slog.Logger
 	claimConfig ClaimConfig
+	limiter     *ratelimit.Limiter
 }
 
-func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger, claimConfig ClaimConfig) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger, claimConfig ClaimConfig, limiter *ratelimit.Limiter) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
 		repo:        repo,
 		publisher:   publisher,
 		logger:      logger,
 		claimConfig: claimConfig,
+		limiter:     limiter,
 	}
 }
 
@@ -817,4 +822,169 @@ func (s *LeafLabAPIServer) ListActiveGrants(ctx context.Context, _ *pb.ListActiv
 		"correlation_id", corrID)
 
 	return &pb.ListActiveGrantsResponse{Grants: pbGrants}, nil
+}
+
+// ── FR76: Self-service board claim (possession challenge) ────────────────────
+
+// newChallengeToken generates an opaque, cryptographically random challenge
+// handle. Its unpredictability is what makes it safe to treat as a bearer
+// credential for MarkRound/PollChallengeState without per-call authorization
+// against the resolved board (FR76.1: device_id resolution is never checked
+// at open, so the token is the only thing the caller can present later).
+func newChallengeToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate challenge token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// OpenChallenge opens a possession challenge against device_id (FR76.1).
+// Every response — status, body shape, field set and timing — is identical
+// whether device_id is never-claimed, resolves to Unadopted, is owned by a
+// real household, or does not exist at all: the same statements run in the
+// same order regardless of resolution, and every field returned to the
+// caller is a static configuration value, never derived from device_id.
+func (s *LeafLabAPIServer) OpenChallenge(ctx context.Context, req *pb.OpenChallengeRequest) (*pb.OpenChallengeResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if err := validateDeviceID(req.DeviceId); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	// Cooldown and the concurrent-open cap depend only on the caller's own
+	// history for (principal, device_id) / principal — never on whether
+	// device_id resolves to anything — so gating on them here does not
+	// reintroduce the existence oracle (FR76.2, FR76.6).
+	inCooldown, err := s.repo.IsClaimCooldownActive(ctx, subject, req.DeviceId)
+	if err != nil {
+		s.logger.Error("check claim cooldown failed", "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "check cooldown: %v", err)
+	}
+	if inCooldown {
+		return nil, status.Error(codes.ResourceExhausted, "too many recent attempts; try again later")
+	}
+
+	openCount, err := s.repo.CountOpenChallenges(ctx, subject)
+	if err != nil {
+		s.logger.Error("count open challenges failed", "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "count open challenges: %v", err)
+	}
+	if openCount >= int64(s.claimConfig.MaxConcurrentOpen) {
+		return nil, status.Error(codes.ResourceExhausted, "too many open claim challenges")
+	}
+
+	// Rate limiting is keyed on the submitted device_id AND the calling
+	// principal, and behaves identically whether or not device_id resolves
+	// to anything (FR76.2). There is deliberately no per-board cap.
+	if s.limiter != nil && !s.limiter.Allow(ratelimit.ForSession(subject, req.DeviceId), "claim-initiate") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+
+	token, err := newChallengeToken()
+	if err != nil {
+		s.logger.Error("generate challenge token failed", "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "generate challenge token: %v", err)
+	}
+
+	// Uniform initiation: this lookup and the challenge write below run
+	// identically regardless of device_id resolution (FR76.1, NFR2).
+	householdID, boardID, _, err := s.repo.ResolveDeviceHousehold(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("resolve device household failed", "device_id", req.DeviceId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "resolve device: %v", err)
+	}
+
+	if err := s.repo.OpenChallenge(ctx, token, req.DeviceId, subject, s.claimConfig); err != nil {
+		s.logger.Error("open challenge failed", "device_id", req.DeviceId, "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "open challenge: %v", err)
+	}
+
+	// FR9 owner notice (FR76.8): always attempted, targeted at the resolved
+	// household (the invisible Unadopted household when device_id does not
+	// resolve to a real owner) — never at the challenger, who is never named.
+	if err := s.repo.RecordChallengeOpenedNotice(ctx, householdID, boardID); err != nil {
+		s.logger.Warn("record challenge-opened notice failed", "subject", subject, "correlation_id", corrID, "error", err)
+	}
+
+	s.logger.Info("possession challenge opened", "subject", subject, "correlation_id", corrID)
+
+	return &pb.OpenChallengeResponse{
+		ChallengeToken:    token,
+		LifetimeSeconds:   int64(s.claimConfig.Lifetime.Seconds()),
+		RoundsRequired:    int32(s.claimConfig.RoundsRequired),
+		RoundBoundSeconds: int64(s.claimConfig.RoundBound.Seconds()),
+	}, nil
+}
+
+// MarkRound marks t0, the start of one challenge round (FR76.3). The response
+// is always the same empty acknowledgement — it never discloses whether a
+// prior round was satisfied, how many attempts remain, or whether the token
+// was even valid.
+func (s *LeafLabAPIServer) MarkRound(ctx context.Context, req *pb.MarkRoundRequest) (*pb.MarkRoundResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if s.limiter != nil && !s.limiter.Allow(ratelimit.ForSession(subject, req.ChallengeToken), "challenge") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+
+	if err := s.repo.MarkChallengeRound(ctx, req.ChallengeToken, subject, s.claimConfig.Cooldown); err != nil {
+		s.logger.Warn("mark round failed", "subject", subject, "correlation_id", corrID, "error", err)
+	}
+
+	return &pb.MarkRoundResponse{}, nil
+}
+
+// PollChallengeState reports a challenge's state (FR76.9). NOT_DISCHARGED
+// covers exhausted lifetime, exhausted attempts, and a discharge against an
+// already-owned board (FR76.7) indistinguishably.
+func (s *LeafLabAPIServer) PollChallengeState(ctx context.Context, req *pb.PollChallengeStateRequest) (*pb.PollChallengeStateResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if s.limiter != nil && !s.limiter.Allow(ratelimit.ForSession(subject, req.ChallengeToken), "challenge") {
+		return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
+	}
+
+	row, found, err := s.repo.GetChallengeByToken(ctx, req.ChallengeToken)
+	if err != nil {
+		s.logger.Error("get challenge by token failed", "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "get challenge: %v", err)
+	}
+	if !found || row.Principal != subject {
+		return &pb.PollChallengeStateResponse{State: pb.PollChallengeStateResponse_UNKNOWN}, nil
+	}
+
+	claimStatus, outcome, err := s.repo.EvaluateChallenge(ctx, row.ChallengeID, s.claimConfig.Cooldown)
+	if err != nil {
+		s.logger.Error("evaluate challenge failed", "subject", subject, "correlation_id", corrID, "error", err)
+		return nil, status.Errorf(codes.Internal, "evaluate challenge: %v", err)
+	}
+
+	state := pb.PollChallengeStateResponse_WAITING
+	switch claimStatus {
+	case "discharged":
+		if outcome == "claimed" {
+			state = pb.PollChallengeStateResponse_CLAIMED
+		} else {
+			state = pb.PollChallengeStateResponse_NOT_DISCHARGED
+		}
+	case "failed":
+		state = pb.PollChallengeStateResponse_NOT_DISCHARGED
+	case "open":
+		state = pb.PollChallengeStateResponse_WAITING
+	}
+
+	return &pb.PollChallengeStateResponse{State: state}, nil
 }

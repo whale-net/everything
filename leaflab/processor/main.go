@@ -84,6 +84,7 @@ func run() error {
 	}
 
 	handler := NewMessageHandler(logger, repo, cache)
+	handler.SetRestartObserver(NewClaimRoundObserver(repo, logging.Get("claim-round-observer")))
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 
 	appCtx, appCancel := context.WithCancel(context.Background())

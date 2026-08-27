@@ -18,6 +18,18 @@ The processor binds to the `amq.topic` exchange with routing key `leaflab.#`.
 RabbitMQ's MQTT plugin routes MQTT topics to this exchange, converting `/` → `.`
 (e.g. `leaflab/abc/sensor/light` → `leaflab.abc.sensor.light`).
 
+### FR76.4 restart-signal detection
+
+The processor feeds the FR76 self-service board claim's possession-challenge
+rounds from two observables: an `uptime_s` regression on a sensor reading, and
+(narrow exception, only for a `device_id` with no reading ever received) a
+non-retained `DeviceManifest`. The retained/non-retained distinction is read
+from the `x-mqtt-retain` AMQP header the RabbitMQ MQTT plugin attaches when
+bridging an MQTT PUBLISH to `amq.topic`. If a broker/plugin configuration does
+not set this header, manifest deliveries default to "retained" — the safe
+direction, since a retained manifest is never accepted as restart-signal
+evidence under any circumstances.
+
 ## Database
 
 | Variable | Default | Required | Description |

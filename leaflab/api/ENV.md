@@ -49,6 +49,7 @@ states are uniform regardless of these values (FR76.1, FR76.3, NFR2).
 | `LEAFLAB_CLAIM_LIFETIME_SECONDS` | 900 | Total time budget for a challenge, long enough to walk to the greenhouse and back (FR76.9) |
 | `LEAFLAB_CLAIM_ATTEMPTS_PER_ROUND` | 2 | Bounded number of restart attempts allowed per round before the challenge is exhausted (FR76.6) |
 | `LEAFLAB_CLAIM_COOLDOWN_SECONDS` | 900 | Cooldown applied to a (principal, device_id) pair after a challenge terminates without discharge (FR76.6) |
+| `LEAFLAB_CLAIM_MAX_CONCURRENT_OPEN` | 5 | Bounded number of concurrent open challenges per principal, across all device_ids — deliberately not a per-board cap (FR76.2) |
 
 ## Other Configuration
 

@@ -27,6 +27,11 @@ type Message struct {
 	Body          []byte
 	ReplyTo       string
 	CorrelationID string
+	// Headers carries the raw AMQP message headers as delivered by the
+	// broker, exposed so consumers can read broker- or plugin-specific
+	// metadata (e.g. the RabbitMQ MQTT plugin's x-mqtt-retain header) that
+	// has no place in the message body. nil if the delivery had no headers.
+	Headers map[string]interface{}
 }
 
 // MessageHandler is a function that handles incoming messages
@@ -401,6 +406,7 @@ func (c *Consumer) handleMessage(ctx context.Context, delivery amqp.Delivery) {
 		Body:          delivery.Body,
 		ReplyTo:       delivery.ReplyTo,
 		CorrelationID: delivery.CorrelationId,
+		Headers:       map[string]interface{}(delivery.Headers),
 	}
 
 	// Call handler
