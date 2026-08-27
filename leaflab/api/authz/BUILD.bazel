@@ -5,6 +5,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "authz",
     srcs = [
+        "capability.go",
         "resolver.go",
         "scope.go",
     ],
