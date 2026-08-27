@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -63,8 +64,8 @@ func run() error {
 	// before any dependency (DB, RabbitMQ) is dialed so a misconfigured
 	// deploy fails immediately, not after standing up connections it will
 	// never use.
-	if grpcauth.AuthMode(authMode) == grpcauth.AuthModeNone && !devMode {
-		return fmt.Errorf("LEAFLAB_API_AUTH_MODE=%q requires LEAFLAB_API_DEV_MODE=true; refusing to start unauthenticated outside explicit development configuration", authMode)
+	if err := validateAuthBootConfig(grpcauth.AuthMode(authMode), devMode); err != nil {
+		return err
 	}
 
 	pool, err := db.NewPool(ctx, databaseURL)
@@ -109,35 +110,7 @@ func run() error {
 
 	rpcLogger := logging.Get("rpc")
 
-	// Chain order (NFR12): correlation-id -> auth -> acting-subject logging
-	// -> handler. "auth" is two interceptors: grpcauth's own (verifies a
-	// presented token, injects Claims) followed immediately by
-	// auth.go's enforcement interceptor (rejects any non-allowlisted
-	// method that reaches it with no Claims -- see its doc comment for why
-	// grpcauth alone doesn't enforce this). Correlation-id runs first so
-	// even an auth rejection is logged against the same id; subject-logging
-	// runs after auth so Claims are already in context.
-	grpcServer := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(
-			NewCorrelationUnaryInterceptor(),
-			authUnary,
-			NewAuthEnforcementUnaryInterceptor(),
-			NewSubjectLoggingUnaryInterceptor(rpcLogger),
-		),
-		grpc.ChainStreamInterceptor(
-			NewCorrelationStreamInterceptor(),
-			authStream,
-			NewAuthEnforcementStreamInterceptor(),
-			NewSubjectLoggingStreamInterceptor(rpcLogger),
-		),
-	)
-	pb.RegisterLeafLabAPIServer(grpcServer, apiServer)
-
-	// Server reflection is a discovery/debugging aid; disabled outside
-	// explicit dev mode so a deployed environment never exposes it (FR11).
-	if devMode {
-		reflection.Register(grpcServer)
-	}
+	grpcServer := buildServer(authUnary, authStream, rpcLogger, apiServer, devMode)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -168,6 +141,64 @@ func run() error {
 	}()
 
 	return <-done
+}
+
+// validateAuthBootConfig enforces FR11.1's boot-time refusal:
+// grpcauth.AuthModeNone (the unauthenticated dev bypass, which injects fake
+// Claims for every request with no token required) is never reachable
+// outside explicit LEAFLAB_API_DEV_MODE=true configuration -- never
+// inferred from ENVIRONMENT, hostname, or issuer-URL presence/absence, per
+// FR11.1's "development is determined by explicit configuration, never
+// inferred from an environment." Extracted from run() as a pure function so
+// this is unit-testable without dialing Postgres/RabbitMQ; see
+// main_test.go.
+func validateAuthBootConfig(mode grpcauth.AuthMode, devMode bool) error {
+	if mode == grpcauth.AuthModeNone && !devMode {
+		return fmt.Errorf("LEAFLAB_API_AUTH_MODE=%q requires LEAFLAB_API_DEV_MODE=true; refusing to start unauthenticated outside explicit development configuration", mode)
+	}
+	return nil
+}
+
+// buildServer wires the production interceptor chain and RPC registration
+// around apiServer, exactly as run() serves it. Extracted so tests can
+// build the identical wiring behind a bufconn listener (see
+// startTestServer in main_test.go) or assert on reflection registration,
+// without a TCP listener or a dialed DB/RabbitMQ connection.
+//
+// Chain order (NFR12): correlation-id -> auth -> acting-subject logging ->
+// handler. "auth" is two interceptors: authUnary/authStream (verifies a
+// presented token, injects Claims -- grpcauth's own in production; see
+// run()) followed immediately by auth.go's enforcement interceptor
+// (rejects any non-allowlisted method that reaches it with no Claims -- see
+// its doc comment for why grpcauth alone doesn't enforce this).
+// Correlation-id runs first so even an auth rejection is logged against the
+// same id; subject-logging runs after auth so Claims are already in
+// context.
+//
+// Server reflection is a discovery/debugging aid; disabled outside
+// explicit dev mode so a deployed environment never exposes it (FR11).
+func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamServerInterceptor, rpcLogger *slog.Logger, apiServer pb.LeafLabAPIServer, devMode bool) *grpc.Server {
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			NewCorrelationUnaryInterceptor(),
+			authUnary,
+			NewAuthEnforcementUnaryInterceptor(),
+			NewSubjectLoggingUnaryInterceptor(rpcLogger),
+		),
+		grpc.ChainStreamInterceptor(
+			NewCorrelationStreamInterceptor(),
+			authStream,
+			NewAuthEnforcementStreamInterceptor(),
+			NewSubjectLoggingStreamInterceptor(rpcLogger),
+		),
+	)
+	pb.RegisterLeafLabAPIServer(grpcServer, apiServer)
+
+	if devMode {
+		reflection.Register(grpcServer)
+	}
+
+	return grpcServer
 }
 
 func getEnv(key, def string) string {
