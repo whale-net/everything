@@ -784,20 +784,48 @@ func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version in
 	return nil
 }
 
-// AckDeviceConfig records the device's ack for a config push.
-func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64, accepted bool, reason string) error {
-	tag, err := r.db.Exec(ctx, `
+// AckDeviceConfig records the device's ack for a config push -- FR45's
+// only writer of device_config.accepted/acked_at/rejection_reason.
+// Migration 032_ack_write_guard's BEFORE UPDATE trigger rejects any write
+// to those three columns unless the current transaction has set the
+// leaflab.ack_write marker; this method sets it, inside the same
+// transaction as the UPDATE, so no other caller (no leaflab/api repository
+// method, and no ad-hoc UPDATE run under any DB role -- FR45's "in any
+// role") can carry that exemption. SET LOCAL's scope is exactly this
+// transaction and never survives past COMMIT/ROLLBACK.
+//
+// Returns the row's pushed_at and the acked_at NOW() just wrote, so the
+// caller (handler.go's handleConfigAck) can record NFR15's push-to-ack
+// duration without a second round trip to re-read what this UPDATE just
+// wrote.
+func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64, accepted bool, reason string) (pushedAt, ackedAt time.Time, err error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("begin ack tx board=%d version=%d: %w", boardID, version, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, `SET LOCAL leaflab.ack_write = 'on'`); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("set ack_write marker board=%d version=%d: %w", boardID, version, err)
+	}
+
+	err = tx.QueryRow(ctx, `
 		UPDATE device_config
 		SET accepted = $3, acked_at = NOW(), rejection_reason = $4
 		WHERE board_id = $1 AND version = $2
-	`, boardID, version, accepted, reason)
+		RETURNING pushed_at, acked_at
+	`, boardID, version, accepted, reason).Scan(&pushedAt, &ackedAt)
 	if err != nil {
-		return fmt.Errorf("ack device_config board=%d version=%d: %w", boardID, version, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, time.Time{}, fmt.Errorf("ack device_config board=%d version=%d: no matching row", boardID, version)
+		}
+		return time.Time{}, time.Time{}, fmt.Errorf("ack device_config board=%d version=%d: %w", boardID, version, err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("ack device_config board=%d version=%d: no matching row", boardID, version)
+
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("commit ack tx board=%d version=%d: %w", boardID, version, err)
 	}
-	return nil
+	return pushedAt, ackedAt, nil
 }
 
 // CloseRemovedSensorHWHistory is FR82.6's ack-time close: for every entry

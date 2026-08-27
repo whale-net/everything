@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/whale-net/everything/leaflab/api/ackwait"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/ratelimit"
@@ -103,7 +104,35 @@ func run() error {
 
 	repo := NewRepository(pool)
 	authzSvc := authz.NewPGResolver(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, invalidationPub, logging.Get("api"))
+
+	// FR47/NFR15: this replica's in-memory registry of open AwaitConfigAck
+	// waiters. One Registry per process is sufficient -- see
+	// leaflab/api/ackwait's doc comment for why this satisfies NFR15's
+	// every-replica broadcast constraint without a shared store.
+	ackWaitRegistry := ackwait.NewRegistry()
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, invalidationPub, logging.Get("api")).
+		WithAckWaitRegistry(ackWaitRegistry)
+
+	// NFR15: observes every KindAck event published by leaflab/processor's
+	// ack write path (handleConfigAck), on the same fanout exchange FR73
+	// already uses -- not a second transport -- and resolves this replica's
+	// own ackWaitRegistry waiters. Every API replica runs its own Subscriber
+	// bound to the same exchange, so a bounded wait pinned to any one
+	// replica resolves the same way regardless of which replica received
+	// the AwaitConfigAck call. See leaflab/invalidation's doc comment.
+	ackInvalidationSub, err := invalidation.NewSubscriber(rmqConn, logging.Get("ackwait"))
+	if err != nil {
+		return fmt.Errorf("ack invalidation subscriber: %w", err)
+	}
+	defer ackInvalidationSub.Close() //nolint:errcheck
+	if err := ackInvalidationSub.Start(ctx, func(_ context.Context, ev invalidation.Event) {
+		if ev.Kind != invalidation.KindAck {
+			return
+		}
+		ackWaitRegistry.Notify(ev.DeviceID, ev.Version, ev.Accepted, ev.RejectionReason)
+	}); err != nil {
+		return fmt.Errorf("start ack invalidation subscriber: %w", err)
+	}
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the

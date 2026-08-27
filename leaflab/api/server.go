@@ -11,6 +11,7 @@ import (
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/ackwait"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/config"
@@ -118,7 +119,15 @@ type LeafLabAPIServer struct {
 	// observability) never keeps serving a stale cached view. See
 	// leaflab/invalidation's doc comment.
 	invalidationPub *invalidation.Publisher
-	logger          *slog.Logger
+	// ackWait is FR47's bounded-wait registry (leaflab/api/ackwait): this
+	// replica's own leaflab/invalidation Subscriber (wired in main.go)
+	// resolves an AwaitConfigAck waiter registered here the moment it
+	// observes a KindAck event for that waiter's (device_id, version). Set
+	// via WithAckWaitRegistry rather than a NewLeafLabAPIServer parameter --
+	// see that method's doc comment. nil in every test that doesn't
+	// exercise AwaitConfigAck.
+	ackWait *ackwait.Registry
+	logger  *slog.Logger
 }
 
 func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, invalidationPub *invalidation.Publisher, logger *slog.Logger) *LeafLabAPIServer {
@@ -130,6 +139,17 @@ func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publishe
 		invalidationPub: invalidationPub,
 		logger:          logger,
 	}
+}
+
+// WithAckWaitRegistry attaches FR47's ackwait.Registry to s and returns s,
+// so main.go can wire it in after construction rather than widening
+// NewLeafLabAPIServer's signature (already six parameters, with dozens of
+// existing test call sites) for a dependency only AwaitConfigAck needs. A
+// server with no registry attached (the zero value) fails AwaitConfigAck
+// with an Internal failure rather than panicking -- see AwaitConfigAck.
+func (s *LeafLabAPIServer) WithAckWaitRegistry(r *ackwait.Registry) *LeafLabAPIServer {
+	s.ackWait = r
+	return s
 }
 
 // scopeForCaller resolves the authenticated caller's Scope from their
@@ -937,4 +957,90 @@ func (s *LeafLabAPIServer) GetConfigVersion(ctx context.Context, req *pb.GetConf
 		Entries:         entries,
 		ServerNow:       contract.Now(),
 	}, nil
+}
+
+// AwaitConfigAck is FR47's bounded wait: it blocks until (device_id,
+// version)'s ack resolves, or the (clamped) requested wait elapses,
+// whichever comes first, and never returns still-pending-at-deadline as an
+// error. Household-scoped like GetConfigStatus/GetConfigVersion.
+//
+// Per leaflab/api/ackwait's doc comment, this handler -- not
+// ackwait.Registry -- is responsible for checking device_config's current
+// state before registering a waiter: an ack that committed moments before
+// this call started would never be observed by a bare Wait, since
+// Registry.Notify only resolves waiters already registered at the moment it
+// runs. So an already-resolved version returns immediately from the read
+// below; only a still-pending version reaches s.ackWait.Wait.
+func (s *LeafLabAPIServer) AwaitConfigAck(ctx context.Context, req *pb.AwaitConfigAckRequest) (*pb.AwaitConfigAckResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	}
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
+	row, err := s.repo.GetDeviceConfigVersion(ctx, req.DeviceId, int64(req.Version))
+	if err != nil {
+		s.logger.Error("await config ack: get config version failed", "device_id", req.DeviceId, "version", req.Version, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not look up this config version right now. Please try again.")
+	}
+	if row == nil {
+		return nil, configVersionNotFoundFailure()
+	}
+
+	if state := config.DeriveState(row.Accepted, row.AckedAt, row.RejectionReason); state != config.StatePending {
+		return &pb.AwaitConfigAckResponse{
+			Result:          ackWaitResultFromConfigState(state),
+			RejectionReason: row.RejectionReason,
+			ServerNow:       contract.Now(),
+		}, nil
+	}
+
+	if s.ackWait == nil {
+		s.logger.Error("AwaitConfigAck called with no ackwait.Registry wired", "device_id", req.DeviceId, "version", req.Version)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	// req.RequestedWaitSeconds is clamped to ackwait.MaxWait inside Wait
+	// itself (see Clamp's doc comment) -- a zero/unset request is not
+	// treated as "return immediately", and a request over 30s is not
+	// rejected as invalid_argument (FR47).
+	requested := time.Duration(req.RequestedWaitSeconds) * time.Second
+	result, reason := s.ackWait.Wait(ctx, req.DeviceId, int64(req.Version), requested)
+
+	return &pb.AwaitConfigAckResponse{
+		Result:          ackWaitResultFromRegistryResult(result),
+		RejectionReason: reason,
+		ServerNow:       contract.Now(),
+	}, nil
+}
+
+// ackWaitResultFromConfigState maps config.State (from a device_config row
+// already read back) onto AwaitConfigAck's wire AckWaitResult for an
+// already-resolved version. Never called with config.StatePending -- see
+// AwaitConfigAck's caller.
+func ackWaitResultFromConfigState(s config.State) pb.AckWaitResult {
+	switch s {
+	case config.StateAccepted:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_ACCEPTED
+	case config.StateRejected:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_REJECTED
+	default:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_STILL_PENDING_AT_DEADLINE
+	}
+}
+
+// ackWaitResultFromRegistryResult mirrors ackWaitResultFromConfigState for
+// ackwait.Registry.Wait's outcome -- the two are kept as separate functions
+// (rather than one shared conversion) because they translate from two
+// distinct source types with no shared representation.
+func ackWaitResultFromRegistryResult(r ackwait.Result) pb.AckWaitResult {
+	switch r {
+	case ackwait.ResultAccepted:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_ACCEPTED
+	case ackwait.ResultRejected:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_REJECTED
+	default:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_STILL_PENDING_AT_DEADLINE
+	}
 }

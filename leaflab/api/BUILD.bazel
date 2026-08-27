@@ -21,6 +21,7 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/api/ackwait",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/config",

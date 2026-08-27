@@ -144,8 +144,8 @@ func (s *stubRepo) UpsertDeviceConfig(_ context.Context, _ int64, _ int64, _ []b
 	return nil
 }
 
-func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, _ string) error {
-	return nil
+func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, _ string) (time.Time, time.Time, error) {
+	return time.Time{}, time.Time{}, nil
 }
 
 func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) ([]RegionApplySkip, []RegionChange, error) {

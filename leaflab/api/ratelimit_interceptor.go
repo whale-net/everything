@@ -15,12 +15,18 @@ import (
 // /StreamServerInfo.FullMethod format, e.g. "/leaflab.api.v1.LeafLabAPI/
 // GetHealth") to the named ratelimit.Bucket enforced for it, in addition to
 // ratelimit.BucketReadDefault (every RPC always gets the default check --
-// see NewRateLimitUnaryInterceptor). Empty in Phase 1: registering a bucket
-// (ratelimit.Buckets) is deliberately separate from wiring it to a method,
-// so later tasks (FR42's resend, FR47's ack_wait_concurrent, FR76's
-// claim_open/claim_round, FR80's support_reference_resolve) add an entry
-// here as those RPCs are built, without touching this interceptor.
-var rateLimitBucketByMethod = map[string]ratelimit.Bucket{}
+// see NewRateLimitUnaryInterceptor). Registering a bucket (ratelimit.Buckets)
+// is deliberately separate from wiring it to a method, so later tasks
+// (FR42's resend, FR76's claim_open/claim_round, FR80's
+// support_reference_resolve) add an entry here as those RPCs are built,
+// without touching this interceptor.
+var rateLimitBucketByMethod = map[string]ratelimit.Bucket{
+	// FR47/NFR10: bounds how often a caller opens a new AwaitConfigAck wait
+	// -- a long-lived open wait is a heavier resource per call than a
+	// typical read, so it gets its own, tighter bucket in addition to
+	// BucketReadDefault, not instead of it.
+	"/leaflab.api.v1.LeafLabAPI/AwaitConfigAck": ratelimit.BucketAckWaitConcurrent,
+}
 
 // principalKey derives NFR10's rate-limit Key for ctx's caller. An
 // authenticated principal is keyed on its verified subject -- not the raw

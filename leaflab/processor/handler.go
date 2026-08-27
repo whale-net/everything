@@ -11,6 +11,7 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/hwkey"
 	"github.com/whale-net/everything/leaflab/invalidation"
+	"github.com/whale-net/everything/leaflab/metrics"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -28,7 +29,11 @@ type SensorRepository interface {
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
 	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
-	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
+	// AckDeviceConfig is FR45's only writer of device_config's ack columns
+	// (see Repository.AckDeviceConfig's doc comment for the database-level
+	// guard this depends on). Returns pushed_at/acked_at so the caller
+	// (handleConfigAck) can record NFR15's push-to-ack duration.
+	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) (pushedAt, ackedAt time.Time, err error)
 	// ApplyConfigRegions applies region_id assignments from the accepted
 	// config at (boardID, version), re-validating each entry's household
 	// ownership and staleness immediately before the write (FR1.2/FR1.3)
@@ -321,8 +326,13 @@ func (h *MessageHandler) handleConfigPush(ctx context.Context, deviceID string, 
 	return nil
 }
 
-// handleConfigAck records the device's ack for a config push.
-// On acceptance, applies region assignments and updates the config version cache.
+// handleConfigAck records the device's ack for a config push, then
+// broadcasts an invalidation.KindAck event (FR45/FR47/NFR15) so every API
+// replica's own leaflab/api/ackwait.Registry -- observing this same event
+// through its own Subscriber, see leaflab/invalidation's doc comment --
+// resolves any AwaitConfigAck wait registered for this (device_id,
+// version), regardless of accept or reject. On acceptance, also applies
+// region assignments and updates the config version cache.
 func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, body []byte) error {
 	var ack configpb.DeviceConfigAck
 	if err := proto.Unmarshal(body, &ack); err != nil {
@@ -335,8 +345,35 @@ func (h *MessageHandler) handleConfigAck(ctx context.Context, deviceID string, b
 	if err != nil {
 		return err
 	}
-	if err := h.repo.AckDeviceConfig(ctx, boardID, int64(ack.AppliedVersion), ack.Accepted, ack.Reason); err != nil {
+	pushedAt, ackedAt, err := h.repo.AckDeviceConfig(ctx, boardID, int64(ack.AppliedVersion), ack.Accepted, ack.Reason)
+	if err != nil {
 		return err
+	}
+	// NFR15: push-to-ack duration, per board (device_id attribute) and in
+	// aggregate (the same histogram's no-filter view) -- see
+	// leaflab/metrics.RecordPushToAck's doc comment.
+	metrics.RecordPushToAck(ctx, deviceID, ackedAt.Sub(pushedAt))
+
+	// FR47/NFR15: publish only after AckDeviceConfig's transaction has
+	// committed (it has, by the time AckDeviceConfig returns -- see
+	// Repository.AckDeviceConfig's tx.Commit) -- the same publish-after-commit
+	// rule FR73's RegionChange publish below follows. A publish failure is
+	// non-fatal: the ack already committed and is observable via
+	// GetConfigStatus/AwaitConfigAck's own read of device_config either way;
+	// a dropped event only delays a currently-open AwaitConfigAck wait to
+	// its deadline (STILL_PENDING_AT_DEADLINE, never an error) rather than
+	// losing the ack outcome.
+	if h.invalidationPub != nil {
+		if err := h.invalidationPub.Publish(ctx, invalidation.Event{
+			Kind:            invalidation.KindAck,
+			DeviceID:        deviceID,
+			Version:         int64(ack.AppliedVersion),
+			Accepted:        ack.Accepted,
+			RejectionReason: ack.Reason,
+			ObservedAt:      time.Now(),
+		}); err != nil {
+			h.logger.Warn("failed to publish invalidation event for config ack", "device_id", deviceID, "version", ack.AppliedVersion, "err", err)
+		}
 	}
 	if ack.Accepted {
 		skips, changes, err := h.repo.ApplyConfigRegions(ctx, boardID, int64(ack.AppliedVersion))
