@@ -76,7 +76,16 @@ go_test(
         "auth_test.go",
         "main_test.go",
         "server_admin_test.go",
+        "server_fleet_health_test.go",
         "server_test.go",
+    ],
+    # server_fleet_health_test.go's source-analysis test
+    # (TestReportingStateFor_IsTheOnlyA23CallSiteInLeafLabAPI) greps this
+    # package's own checked-in .go sources at test time, mirroring
+    # leaflab/ui's nfr18_conformance_test.go/BUILD.bazel data convention --
+    # BUILD.bazel itself doubles as that test's marker file.
+    data = glob(["*.go"]) + [
+        "BUILD.bazel",
     ],
     embed = [":api_lib"],
     deps = [
@@ -92,6 +101,7 @@ go_test(
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",
         "@org_golang_google_protobuf//reflect/protoreflect",
     ],
