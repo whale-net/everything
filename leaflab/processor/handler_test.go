@@ -453,6 +453,293 @@ func TestHandleConfigAck_AcceptedCallsApplyRegionsAndSetsCache(t *testing.T) {
 	}
 }
 
+// TestHandleManifest_FR16_3_SimultaneousRewireAndRename_SameSensorID covers
+// FR16.3: a manifest entry whose address *and* name both change in the same
+// message must resolve, by elimination, to the one existing sensor identity
+// nothing else in the manifest claims -- routed through
+// RewireAndRenameSensor, not UpsertSensor, so it never mints a second
+// sensor row for the same physical sensor.
+func TestHandleManifest_FR16_3_SimultaneousRewireAndRename_SameSensorID(t *testing.T) {
+	existing := BoardSensorIdentity{
+		SensorID:     55,
+		Name:         "old_light",
+		SensorTypeID: 2,
+		HW: &HardwareAddress{
+			I2CAddress: hwkey.Address(0x23),
+			MuxPath:    hwkey.MuxPath{{MuxAddress: 0x70, MuxChannel: 1}},
+		},
+	}
+	repo := &stubRepo{
+		boardID:               1,
+		sensorTypeID:          2,
+		sensorID:              999, // must never be used: this entry must not go through UpsertSensor
+		boardSensorIdentities: []BoardSensorIdentity{existing},
+	}
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "leaflab-aabbccdd",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{
+				Name:       "new_light", // renamed
+				Type:       firmwarepb.SensorType_SENSOR_TYPE_ILLUMINANCE,
+				Unit:       "lx",
+				I2CAddress: 0x44, // rewired
+				MuxAddress: 0x71,
+				MuxChannel: 2,
+			},
+		},
+	}
+
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(repo.upsertSensorCalls) != 0 {
+		t.Fatalf("expected 0 UpsertSensor calls (must not mint a second sensor row), got %d", len(repo.upsertSensorCalls))
+	}
+	if len(repo.rewireAndRenameSensorCalls) != 1 {
+		t.Fatalf("expected 1 RewireAndRenameSensor call, got %d", len(repo.rewireAndRenameSensorCalls))
+	}
+	call := repo.rewireAndRenameSensorCalls[0]
+	if call.sensorID != existing.SensorID {
+		t.Errorf("RewireAndRenameSensor sensorID = %d, want unchanged %d (same sensor_id, FR16.3)", call.sensorID, existing.SensorID)
+	}
+	if call.name != "new_light" {
+		t.Errorf("RewireAndRenameSensor name = %q, want %q", call.name, "new_light")
+	}
+	if call.hw == nil || !call.hw.I2CAddress.Equal(hwkey.Address(0x44)) {
+		t.Errorf("RewireAndRenameSensor hw = %+v, want i2c_address 0x44", call.hw)
+	}
+
+	if len(repo.upsertSensorHWHistoryCalls) != 1 || repo.upsertSensorHWHistoryCalls[0].sensorID != existing.SensorID {
+		t.Fatalf("UpsertSensorHWHistory calls = %+v, want exactly one for sensor_id %d", repo.upsertSensorHWHistoryCalls, existing.SensorID)
+	}
+
+	info, ok := h.cache.Get("leaflab-aabbccdd", "new_light")
+	if !ok {
+		t.Fatal("sensor not in cache under its new name after simultaneous rewire+rename")
+	}
+	if info.SensorID != existing.SensorID {
+		t.Errorf("cache SensorID = %d, want unchanged %d", info.SensorID, existing.SensorID)
+	}
+}
+
+// TestHandleManifest_RewireStableName_FallsThroughToUpsertSensor is a
+// regression guard for FR16 case 2 (today's `ON CONFLICT` path): a manifest
+// entry whose name is unchanged but whose hardware address changed must
+// still match by name during resolveManifestIdentities's elimination pass,
+// so it is *not* treated as FR16.3's simultaneous-change case -- it falls
+// through to UpsertSensor exactly as before this feature existed.
+func TestHandleManifest_RewireStableName_FallsThroughToUpsertSensor(t *testing.T) {
+	existing := BoardSensorIdentity{
+		SensorID:     10,
+		Name:         "temp",
+		SensorTypeID: 2,
+		HW:           &HardwareAddress{I2CAddress: hwkey.Address(0x23)},
+	}
+	repo := &stubRepo{
+		boardID:               1,
+		sensorTypeID:          2,
+		sensorID:              10,
+		boardSensorIdentities: []BoardSensorIdentity{existing},
+	}
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "leaflab-aabbccdd",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{Name: "temp", Type: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE, Unit: "°C", I2CAddress: 0x44},
+		},
+	}
+
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(repo.rewireAndRenameSensorCalls) != 0 {
+		t.Fatalf("expected 0 RewireAndRenameSensor calls (name-stable rewire is case 2, not FR16.3's elimination case), got %d", len(repo.rewireAndRenameSensorCalls))
+	}
+	if len(repo.upsertSensorCalls) != 1 {
+		t.Fatalf("expected 1 UpsertSensor call, got %d", len(repo.upsertSensorCalls))
+	}
+}
+
+// TestHandleManifest_RenameStableKey_FallsThroughToUpsertSensor is a
+// regression guard for FR16 case 1: a manifest entry whose hardware address
+// is unchanged but whose name changed must still match by hardware key
+// during elimination, so it also is not treated as FR16.3's case -- it
+// falls through to UpsertSensor, whose own hw-address lookup (not
+// elimination) resolves it.
+func TestHandleManifest_RenameStableKey_FallsThroughToUpsertSensor(t *testing.T) {
+	existing := BoardSensorIdentity{
+		SensorID:     20,
+		Name:         "old_name",
+		SensorTypeID: 2,
+		HW: &HardwareAddress{
+			I2CAddress: hwkey.Address(0x23),
+			MuxPath:    hwkey.MuxPath{{MuxAddress: 0x70, MuxChannel: 1}},
+		},
+	}
+	repo := &stubRepo{
+		boardID:               1,
+		sensorTypeID:          2,
+		sensorID:              20,
+		boardSensorIdentities: []BoardSensorIdentity{existing},
+	}
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "leaflab-aabbccdd",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{
+				Name:       "new_name", // renamed
+				Type:       firmwarepb.SensorType_SENSOR_TYPE_ILLUMINANCE,
+				Unit:       "lx",
+				I2CAddress: 0x23, // unchanged
+				MuxAddress: 0x70,
+				MuxChannel: 1,
+			},
+		},
+	}
+
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(repo.rewireAndRenameSensorCalls) != 0 {
+		t.Fatalf("expected 0 RewireAndRenameSensor calls (key-stable rename is case 1, not FR16.3's elimination case), got %d", len(repo.rewireAndRenameSensorCalls))
+	}
+	if len(repo.upsertSensorCalls) != 1 {
+		t.Fatalf("expected 1 UpsertSensor call, got %d", len(repo.upsertSensorCalls))
+	}
+}
+
+// TestHandleManifest_AmbiguousElimination_FallsThroughToUpsertSensor checks
+// resolveManifestIdentities's own safety valve: when elimination would be
+// ambiguous (more than one unresolved entry chasing one unclaimed identity),
+// it resolves nothing, and every entry falls through to UpsertSensor's own
+// (correct, case-3) resolution instead of guessing which entry gets the
+// existing identity.
+func TestHandleManifest_AmbiguousElimination_FallsThroughToUpsertSensor(t *testing.T) {
+	existing := BoardSensorIdentity{
+		SensorID:     30,
+		Name:         "a",
+		SensorTypeID: 2,
+		HW:           &HardwareAddress{I2CAddress: hwkey.Address(0x23)},
+	}
+	repo := &stubRepo{
+		boardID:               1,
+		sensorTypeID:          2,
+		sensorID:              40,
+		boardSensorIdentities: []BoardSensorIdentity{existing},
+	}
+	h := newTestHandler(repo)
+
+	manifest := &firmwarepb.DeviceManifest{
+		DeviceId: "leaflab-aabbccdd",
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{Name: "b", Type: firmwarepb.SensorType_SENSOR_TYPE_ILLUMINANCE, Unit: "lx", I2CAddress: 0x55},
+			{Name: "c", Type: firmwarepb.SensorType_SENSOR_TYPE_ILLUMINANCE, Unit: "lx", I2CAddress: 0x66},
+		},
+	}
+
+	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(repo.rewireAndRenameSensorCalls) != 0 {
+		t.Fatalf("expected 0 RewireAndRenameSensor calls (2 unresolved entries vs 1 unclaimed identity is ambiguous), got %d", len(repo.rewireAndRenameSensorCalls))
+	}
+	if len(repo.upsertSensorCalls) != 2 {
+		t.Fatalf("expected 2 UpsertSensor calls (both entries fall through as genuinely new), got %d", len(repo.upsertSensorCalls))
+	}
+}
+
+// TestResolveManifestIdentities is a direct table-driven test of the pure
+// elimination function underlying the handler-level tests above, pinning
+// down edge cases (a sensor_type mismatch preventing an otherwise-eligible
+// pairing) that are awkward to drive through handleManifest with stubRepo's
+// fixed sensorTypeID.
+func TestResolveManifestIdentities(t *testing.T) {
+	hwA := &HardwareAddress{I2CAddress: hwkey.Address(0x23)}
+	hwB := &HardwareAddress{I2CAddress: hwkey.Address(0x44)}
+
+	tests := []struct {
+		name          string
+		existing      []BoardSensorIdentity
+		sensorTypeIDs []int64
+		hws           []*HardwareAddress
+		names         []string
+		want          map[int]int64
+	}{
+		{
+			name: "simultaneous address and name change resolves by elimination",
+			existing: []BoardSensorIdentity{
+				{SensorID: 1, Name: "old", SensorTypeID: 2, HW: hwA},
+			},
+			sensorTypeIDs: []int64{2},
+			hws:           []*HardwareAddress{hwB},
+			names:         []string{"new"},
+			want:          map[int]int64{0: 1},
+		},
+		{
+			name: "name match alone is not eliminated (case 2 handles it)",
+			existing: []BoardSensorIdentity{
+				{SensorID: 1, Name: "temp", SensorTypeID: 2, HW: hwA},
+			},
+			sensorTypeIDs: []int64{2},
+			hws:           []*HardwareAddress{hwB},
+			names:         []string{"temp"},
+			want:          map[int]int64{},
+		},
+		{
+			name: "hw match alone is not eliminated (case 1 handles it)",
+			existing: []BoardSensorIdentity{
+				{SensorID: 1, Name: "old", SensorTypeID: 2, HW: hwA},
+			},
+			sensorTypeIDs: []int64{2},
+			hws:           []*HardwareAddress{hwA},
+			names:         []string{"new"},
+			want:          map[int]int64{},
+		},
+		{
+			name: "ambiguous: two unresolved entries, one unclaimed identity",
+			existing: []BoardSensorIdentity{
+				{SensorID: 1, Name: "a", SensorTypeID: 2, HW: hwA},
+			},
+			sensorTypeIDs: []int64{2, 2},
+			hws:           []*HardwareAddress{hwB, hwB},
+			names:         []string{"b", "c"},
+			want:          map[int]int64{},
+		},
+		{
+			name: "sensor_type mismatch prevents an otherwise-eligible pairing",
+			existing: []BoardSensorIdentity{
+				{SensorID: 1, Name: "old", SensorTypeID: 2, HW: hwA},
+			},
+			sensorTypeIDs: []int64{5}, // different sensor_type than the unclaimed identity
+			hws:           []*HardwareAddress{hwB},
+			names:         []string{"new"},
+			want:          map[int]int64{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveManifestIdentities(tt.existing, tt.sensorTypeIDs, tt.hws, tt.names)
+			if len(got) != len(tt.want) {
+				t.Fatalf("resolveManifestIdentities = %+v, want %+v", got, tt.want)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("resolveManifestIdentities[%d] = %d, want %d", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
 // TestHandleConfigAck_RejectedSkipsApplyRegions verifies that a rejected ack
 // does not call ApplyConfigRegions and does not update the config version cache.
 func TestHandleConfigAck_RejectedSkipsApplyRegions(t *testing.T) {
