@@ -1,0 +1,19 @@
+"""FR20 two-phase boundary capture: phase-one recorder (called from the placement writer) and phase-two completer (leaflab/processor). See capture.go's package doc comment."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "capture",
+    srcs = [
+        "capture.go",
+        "completer.go",
+        "recorder.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/api/capture",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//leaflab/api/tiers",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
