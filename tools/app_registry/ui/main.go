@@ -26,6 +26,7 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxbase"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/htmxsse"
 )
 
 //go:embed favicon.ico
@@ -122,6 +123,8 @@ type App struct {
 	auth        *htmxauth.Authenticator
 	registry    *RegistryClient
 	userAuthOpt grpc.DialOption
+	sessionMgr  *htmxauth.DBSessionManager // Retained for FR27 session re-check on failure path
+	sseHub      *htmxsse.Hub               // Hub for SSE connections
 }
 
 // NewApp creates a new application instance.
@@ -183,11 +186,21 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		return nil, fmt.Errorf("failed to initialize registry gRPC client: %w", err)
 	}
 
+	// Initialize SSE hub with default config
+	// Create SSE hub with stub transport for scaffold phase
+	stubAttachFunc := func(ctx context.Context) (htmxsse.Transport, error) {
+		// TODO: Implement message broker attachment (RabbitMQ) in Implementation phase
+		return nil, fmt.Errorf("stub: message broker not attached")
+	}
+	sseHub := htmxsse.NewHub(stubAttachFunc, htmxsse.DefaultConfig())
+
 	return &App{
 		config:      config,
 		auth:        auth,
 		registry:    registry,
 		userAuthOpt: userAuthOpt,
+		sessionMgr:  store, // Retain for FR27 failure discrimination
+		sseHub:      sseHub,
 	}, nil
 }
 
@@ -279,6 +292,17 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// RetryArgoSync's own auth.Require check, not by this route's
 	// (identical-to-every-other-route) session-login requirement.
 	mux.HandleFunc("/promotions/{id}/retry", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRetryArgoSync)))
+	// SSE route for promotion status updates (FR6, FR27, FR28, NFR4, NFR13).
+	// Wrapped with noRedirectWriter to prevent redirects mid-stream.
+	// Does NOT use WithAccessToken (which redirects), instead re-acquires token per read.
+	mux.HandleFunc("/promotions/{id}/status/sse", func(w http.ResponseWriter, r *http.Request) {
+		// Wrap with noRedirectWriter before RequireAuthFunc processes the request
+		// This ensures auth failures return 401 with no redirect headers/body
+		w = newNoRedirectWriter(w)
+		app.auth.RequireAuthFunc(func(w http.ResponseWriter, r *http.Request) {
+			app.handlePromoStatusSSE(w, r)
+		})(w, r)
+	})
 	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppsCatalog)))
 	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppDetail)))
 
