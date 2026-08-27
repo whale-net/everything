@@ -1,0 +1,53 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "grpc_client.go",
+        "handlers_auth.go",
+        "main.go",
+        "templ_render.go",
+    ],
+    embedsrcs = [
+        "favicon.ico",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/ui/components",
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//libs/go/htmxui",
+        "//libs/go/logging",
+        "@com_github_a_h_templ//:templ",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_grpc//:grpc",
+    ],
+)
+
+go_binary(
+    name = "ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# LeafLab's second deployable (A8): gRPC (leaflab-api) stays the
+# programmatic surface, this is the browser surface. domain "leaflab" +
+# name "ui" produces the "leaflab-ui" image/app identity, matching
+# api/BUILD.bazel's "leaflab-api" and migrate/BUILD.bazel's "migrate"
+# naming. Not yet wired into any Helm chart/ingress — deployment
+# integration is a later issue on this plan.
+release_app(
+    name = "ui",
+    app_type = "external-api",
+    binary_name = ":ui",
+    description = "LeafLab HTMX browser UI — interactive login, durable session, sign-out (FR13)",
+    domain = "leaflab",
+    language = "go",
+    port = 8000,
+)

@@ -1,0 +1,42 @@
+// Package components holds LeafLab UI's chrome shared by every page — a
+// thin LeafLab-specific wrapper around libs/go/htmxui's shared Shell, the
+// same convergence point tools/app_registry/ui and manmanv2/ui build on
+// (see those packages' components/layout.templ). Screen-specific markup
+// belongs in a future pages package, not here — Phase 1 (this issue) only
+// scaffolds the shared chrome and a placeholder home page (handlers_auth.go).
+package components
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// logoutHref is the leaflab-ui logout route registered in
+// leaflab/ui/main.go ("/auth/logout" -> app.auth.HandleLogout). UserMenu
+// takes this as a plain parameter (not a hardcoded default of its own), so
+// the value lives here at the one real call site instead of being
+// duplicated across tests — matches tools/app_registry/ui/components's
+// same convention.
+const logoutHref = "/auth/logout"
+
+// Shell wraps page content in LeafLab UI's navbar chrome, built on
+// htmxui.Shell. The top-right user area is htmxui.UserMenu, which renders
+// both the identity label and a findable, plainly-worded sign-out control
+// in one dropdown (FR13) — Shell itself hardcodes no nav items, banner, or
+// user-menu logic of its own.
+templ Shell(title string, user *htmxauth.UserInfo) {
+	{{
+		var userLabel string
+		if user != nil {
+			userLabel = user.PreferredUsername
+		}
+	}}
+	@htmxui.Shell(htmxui.ShellData{
+		Title:       title,
+		BrandLabel:  "LeafLab",
+		BrandHref:   "/",
+		HeaderRight: htmxui.UserMenu(htmxui.UserMenuData{IdentityLabel: userLabel, LogoutHref: logoutHref}),
+	}) {
+		{ children... }
+	}
+}
