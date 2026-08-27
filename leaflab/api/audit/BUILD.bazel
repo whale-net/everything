@@ -1,0 +1,10 @@
+"""FR8 append-only audit trail -- the Entry shape and the Auditor seam."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "audit",
+    srcs = ["audit.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/audit",
+    visibility = ["//visibility:public"],
+)
