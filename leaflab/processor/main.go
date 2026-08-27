@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/whale-net/everything/leaflab/api/capture"
 	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
@@ -125,6 +126,13 @@ func run() error {
 	// above, not by this loop — see backstop.go and leaflab/ARCHITECTURE.md.
 	go RunCacheBackstop(appCtx, cfg.CacheBackstopInterval, repo, cache, logger)
 	logger.Info("cache backstop started", "interval", cfg.CacheBackstopInterval)
+
+	// FR20 phase two: the boundary-capture completer runs on its own ticker
+	// inside this already-always-up, single-replica worker rather than as a
+	// separate scheduled job -- see leaflab/api/capture's package doc
+	// comment and capture.go (this package) for why.
+	completer := capture.NewCompleter(dbPool)
+	go runCaptureCompleter(appCtx, logger, completer)
 
 	if err := consumer.Start(appCtx); err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)

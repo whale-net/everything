@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "backstop.go",
         "cache.go",
+        "capture.go",
         "config.go",
         "handler.go",
         "main.go",
@@ -17,6 +18,7 @@ go_library(
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
         "//leaflab/api/audit",
+        "//leaflab/api/capture",
         "//leaflab/hwkey",
         "//leaflab/invalidation",
         "//libs/go/db",
