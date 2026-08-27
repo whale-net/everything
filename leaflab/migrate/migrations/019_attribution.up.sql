@@ -1,4 +1,4 @@
--- Migration 018: nearest-ancestor plant attribution SQL function (FR23)
+-- Migration 019: nearest-ancestor plant attribution SQL function (FR23)
 --
 -- Scaffold only (this task's Scaffold phase): attribute_region_plants
 -- raises NOT IMPLEMENTED until this task's Implementation phase fills in
