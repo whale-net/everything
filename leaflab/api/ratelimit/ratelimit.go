@@ -5,15 +5,20 @@
 // concurrent open waits, FR76's claim initiation and rounds (FR76.2), and
 // FR80's support-reference resolution.
 //
-// This package is scaffold only -- it declares the Key/Bucket vocabulary
-// and the Limiter interface, and registers the named buckets a later
-// implementation task wires into the interceptor chain. No enforcement
-// happens here yet; see leaflab/api's interceptor wiring (a later task)
-// for that.
+// This package declares the Key/Bucket vocabulary, the Limiter interface, a
+// process-local InMemoryLimiter implementation (see its doc comment for why
+// in-process is NFR10-compliant at leaflab-api's replicas = 1), and an
+// env-var-driven config loader (see env.go, leaflab/api/ENV.md). The six
+// Phase 1 buckets are registered here; only BucketReadDefault is actually
+// wired into the interceptor chain in Phase 1 (see leaflab/api's
+// ratelimit_interceptor.go) -- the rest exist so a later task adds an
+// enforcement point by referencing an existing bucket instead of inventing
+// a new limiter.
 package ratelimit
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -74,10 +79,9 @@ var Buckets = []Bucket{
 // Limiter enforces a rate limit for a Key within a Bucket. Allow reports
 // whether the caller may proceed; when it returns false, retryAfter is the
 // minimum duration the caller should wait before the next attempt is
-// expected to succeed. A future implementation task fills in Allow's
-// behaviour (in-process or shared-store backed, per NFR10's storage note)
-// and wires a grpc.UnaryServerInterceptor that calls it after auth in the
-// chain (see leaflab/api/main.go's buildServer for chain ordering).
+// expected to succeed. See leaflab/api's rate-limit interceptor for the
+// grpc.UnaryServerInterceptor that calls this after auth in the chain (see
+// leaflab/api/main.go's buildServer for chain ordering).
 //
 // Allow must behave identically for a Key that resolves to a real entity
 // and one that does not (NFR10's oracle-safety constraint, forward-binding
@@ -85,4 +89,88 @@ var Buckets = []Bucket{
 // it only ever sees the opaque string.
 type Limiter interface {
 	Allow(ctx context.Context, key Key, bucket Bucket) (allowed bool, retryAfter time.Duration)
+}
+
+// WindowConfig is a single Bucket's fixed-window limit: at most Limit calls
+// for a given Key within Window, after which Allow returns false until the
+// window rolls over.
+type WindowConfig struct {
+	// Limit is the number of calls permitted per Key within Window. A
+	// Limit of zero or less disables enforcement for the bucket (Allow
+	// always returns true) -- see NewInMemoryLimiter.
+	Limit int
+	// Window is the fixed duration a Limit applies over.
+	Window time.Duration
+}
+
+// window is one Key/Bucket pair's live counter within the current fixed
+// window. Not exported -- InMemoryLimiter's internal state.
+type window struct {
+	count   int
+	resetAt time.Time
+}
+
+type keyBucket struct {
+	key    Key
+	bucket Bucket
+}
+
+// InMemoryLimiter is a process-local, fixed-window Limiter. NFR10's storage
+// note permits an in-process store for V1 only where behaviour is identical
+// across replicas; leaflab-api runs with replicas = 1 (see
+// leaflab/api/BUILD.bazel's release_app), so there is exactly one process
+// and in-process state is trivially replica-identical -- no shared store is
+// needed for Phase 1. If leaflab-api is ever scaled beyond one replica,
+// this must move to a shared store (e.g. Redis) before that happens, or
+// per-replica windows silently multiply the effective limit.
+//
+// Safe for concurrent use.
+type InMemoryLimiter struct {
+	mu      sync.Mutex
+	configs map[Bucket]WindowConfig
+	state   map[keyBucket]*window
+	now     func() time.Time
+}
+
+// NewInMemoryLimiter builds an InMemoryLimiter from configs, one
+// WindowConfig per Bucket. A Bucket with no entry in configs -- or an entry
+// with Limit <= 0 -- is never throttled: Allow returns true unconditionally
+// for it. This lets a bucket be registered (ratelimit.Buckets) before an
+// environment supplies a limit for it, per the scaffold's "later tasks add
+// enforcement points without touching the interceptor" goal.
+func NewInMemoryLimiter(configs map[Bucket]WindowConfig) *InMemoryLimiter {
+	return &InMemoryLimiter{
+		configs: configs,
+		state:   make(map[keyBucket]*window),
+		now:     time.Now,
+	}
+}
+
+// Allow implements Limiter. It never inspects key or bucket beyond using
+// them as a map lookup -- no branch here depends on whether key resolves to
+// a real entity, which is what makes Allow's behaviour identical for a
+// synthetic, non-existent key and a real one (NFR10's oracle-safety
+// constraint).
+func (l *InMemoryLimiter) Allow(_ context.Context, key Key, bucket Bucket) (bool, time.Duration) {
+	cfg, ok := l.configs[bucket]
+	if !ok || cfg.Limit <= 0 {
+		return true, 0
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := l.now()
+	kb := keyBucket{key: key, bucket: bucket}
+	w, exists := l.state[kb]
+	if !exists || !now.Before(w.resetAt) {
+		w = &window{count: 0, resetAt: now.Add(cfg.Window)}
+		l.state[kb] = w
+	}
+
+	w.count++
+	if w.count > cfg.Limit {
+		return false, w.resetAt.Sub(now)
+	}
+	return true, 0
 }
