@@ -1,0 +1,13 @@
+"""Nearest-ancestor plant attribution, with sibling disclosure and no double-counting (FR23). Scaffold only -- see attribution.go's package doc comment."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "attribution",
+    srcs = ["attribution.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/attribution",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
