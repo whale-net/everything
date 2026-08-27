@@ -150,3 +150,29 @@ func (u UnionScope) Filter(argStart int) (string, []any) {
 	}
 	return strings.Join(fragments, " OR "), args
 }
+
+// HouseholdIDs returns the concrete household ids scope currently grants
+// reach to, in no particular order. This is deliberately narrow: it exists
+// only for a write path that must anchor a *new* entity to exactly one
+// household when there is no parent/sibling entity to inherit one from
+// (e.g. CreateRegion's root-region case, where the request carries no
+// household field and household_id must come from the caller's own
+// current membership rather than an inherited parent). It is never a
+// substitute for Permits/Filter on a read or on an existing entity --
+// using it that way would be exactly the "one household is the atom of
+// authorization" mistake FR4.3 forbids, since it silently drops any
+// scope this package doesn't happen to know the concrete shape of.
+func HouseholdIDs(s Scope) []int64 {
+	switch v := s.(type) {
+	case HouseholdScope:
+		return []int64{v.householdID}
+	case UnionScope:
+		var ids []int64
+		for _, sub := range v.scopes {
+			ids = append(ids, HouseholdIDs(sub)...)
+		}
+		return ids
+	default:
+		return nil
+	}
+}
