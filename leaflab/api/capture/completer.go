@@ -151,12 +151,16 @@ func (c *Completer) completeBucket(ctx context.Context, tier tiers.Tier, width s
 
 // completeOne settles a single boundary_capture row: it finds the partial
 // (or, for the bucket's first boundary, the implicit whole bucket) that
-// boundaryAt falls inside, replaces it with two partials split at
+// boundaryAt falls inside, and replaces it with two partials split at
 // boundaryAt -- each computed from raw or, for the hourly tier, composed
 // from the five-minute tier (never by subtraction, A17) -- and marks the
-// capture completed. Runs entirely inside one transaction, so a capture is
-// never left half-settled: either both new partials and the completed
-// state land together, or nothing does.
+// capture completed. If boundaryAt lands exactly on the target interval's
+// own from or to (nothing on one side to split off), it writes the whole
+// interval as a single partial instead, since a two-way split there would
+// produce a zero-width partial violating boundary_partial's partial_from <
+// partial_to CHECK (migration 033). Runs entirely inside one transaction,
+// so a capture is never left half-settled: either the new partial(s) and
+// the completed state land together, or nothing does.
 func (c *Completer) completeOne(ctx context.Context, tier tiers.Tier, width string, sensorID int64, bucketStart time.Time, captureID int64, boundaryAt time.Time) error {
 	tx, err := c.db.Begin(ctx)
 	if err != nil {
@@ -192,20 +196,38 @@ func (c *Completer) completeOne(ctx context.Context, tier tiers.Tier, width stri
 		aggregate = fiveMinuteComposedAggregate
 	}
 
-	left, err := aggregate(ctx, tx, sensorID, partialFrom, boundaryAt)
-	if err != nil {
-		return err
-	}
-	right, err := aggregate(ctx, tx, sensorID, boundaryAt, partialTo)
-	if err != nil {
-		return err
-	}
+	// boundaryAt can land exactly on partialFrom or partialTo (e.g. a
+	// boundary aligned to the bucket's own start, the bucket's first
+	// boundary case in findSplitTarget). Splitting [from, to) at either
+	// endpoint would produce a zero-width partial, violating
+	// boundary_partial's partial_from < partial_to CHECK (migration 033).
+	// When there's nothing on one side of the split, there is nothing to
+	// split: write the whole [partialFrom, partialTo) as a single partial
+	// instead of two.
+	if boundaryAt.Equal(partialFrom) || boundaryAt.Equal(partialTo) {
+		whole, err := aggregate(ctx, tx, sensorID, partialFrom, partialTo)
+		if err != nil {
+			return err
+		}
+		if err := insertPartial(ctx, tx, captureID, tier, bucketStart, partialFrom, partialTo, whole); err != nil {
+			return err
+		}
+	} else {
+		left, err := aggregate(ctx, tx, sensorID, partialFrom, boundaryAt)
+		if err != nil {
+			return err
+		}
+		right, err := aggregate(ctx, tx, sensorID, boundaryAt, partialTo)
+		if err != nil {
+			return err
+		}
 
-	if err := insertPartial(ctx, tx, captureID, tier, bucketStart, partialFrom, boundaryAt, left); err != nil {
-		return err
-	}
-	if err := insertPartial(ctx, tx, captureID, tier, bucketStart, boundaryAt, partialTo, right); err != nil {
-		return err
+		if err := insertPartial(ctx, tx, captureID, tier, bucketStart, partialFrom, boundaryAt, left); err != nil {
+			return err
+		}
+		if err := insertPartial(ctx, tx, captureID, tier, bucketStart, boundaryAt, partialTo, right); err != nil {
+			return err
+		}
 	}
 
 	if _, err := tx.Exec(ctx, `
