@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -698,4 +699,488 @@ func renderActionDescription(record AuditRecord) string {
 	// For now, return a simple plain-language template to satisfy the proto interface.
 	// This avoids technical terms like "action", "entity", "actor", etc.
 	return "Something happened"
+}
+
+// ============================================================================
+// Plant lifecycle (FR54, FR24, FR22.3, FR22.5)
+// ============================================================================
+
+// resolvePlantForAccess fetches a plant, refuses it as not-found if it does
+// not exist or is out of the caller's reach (NFR2), and returns it. Callers
+// that need to further refuse a retired plant (FR22.5: no new writes) check
+// plant.RemovedAt themselves — this helper is shared by both read and write
+// paths, and reads are allowed against a retired plant (FR22.3).
+func (s *LeafLabAPIServer) resolvePlantForAccess(ctx context.Context, auth *AuthorizationDecision, plantID int64) (*PlantRecord, error) {
+	plant, err := s.repo.GetPlant(ctx, plantID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, refusedAsNotFound()
+		}
+		return nil, status.Errorf(codes.Internal, "get plant: %v", err)
+	}
+	if !auth.ContainsHousehold(plant.HouseholdID) {
+		// FR4: Out-of-reach entity. Refuse as if it doesn't exist (NFR2).
+		return nil, refusedAsNotFound()
+	}
+	return plant, nil
+}
+
+// plantRetiredError builds the FailureClass_PRECONDITION error for a write
+// attempted against a retired plant (FR22.5: a retired plant accepts no new writes).
+func plantRetiredError(plantID int64) error {
+	detail := apierrors.NewErrorDetail(
+		pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+		"plant",
+		"",
+		apierrors.PlantRetired,
+	)
+	return apierrors.StatusWithDetail(codes.FailedPrecondition,
+		fmt.Sprintf("plant %d is retired and accepts no new writes", plantID), detail)
+}
+
+func (s *LeafLabAPIServer) CreatePlant(ctx context.Context, req *pb.CreatePlantRequest) (*pb.CreatePlantResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if req.Name == "" {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"plant",
+			"name",
+			apierrors.InvalidPlantRequest,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "name is required", detail)
+	}
+	if req.PlantTypeId <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"plant",
+			"plant_type_id",
+			apierrors.InvalidPlantRequest,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "plant_type_id is required", detail)
+	}
+	if req.RegionId <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"plant",
+			"region_id",
+			apierrors.InvalidPlantRequest,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "region_id is required", detail)
+	}
+
+	// NFR2: No existence oracle — build authorization decision first, before checking
+	// region existence. FR4: Per-entity authorization is based on principal's reach.
+	auth, err := s.getAuthorizationDecision(ctx, subject)
+	if err != nil {
+		s.logger.Error("authorization decision failed",
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+
+	// Resolve the target region's household. A region in another household is
+	// refused as not-found (FR1.2, NFR2) — this doubles as existence checking.
+	regionHouseholdID, err := s.repo.GetRegionHousehold(ctx, req.RegionId)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, refusedAsNotFound()
+		}
+		s.logger.Error("region household lookup failed",
+			"region_id", req.RegionId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "region lookup: %v", err)
+	}
+	if !auth.ContainsHousehold(regionHouseholdID) {
+		return nil, refusedAsNotFound()
+	}
+
+	plantTypeExists, err := s.repo.PlantTypeExists(ctx, req.PlantTypeId)
+	if err != nil {
+		s.logger.Error("plant_type existence check failed",
+			"plant_type_id", req.PlantTypeId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "plant_type lookup: %v", err)
+	}
+	if !plantTypeExists {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+			"plant_type",
+			"plant_type_id",
+			apierrors.PlantTypeNotFound,
+		)
+		return nil, apierrors.StatusWithDetail(codes.FailedPrecondition,
+			fmt.Sprintf("plant_type %d does not exist", req.PlantTypeId), detail)
+	}
+
+	plantID, err := s.repo.CreatePlant(ctx, req.Name, req.PlantTypeId, req.RegionId, regionHouseholdID)
+	if err != nil {
+		s.logger.Error("create plant failed",
+			"region_id", req.RegionId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"plant",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// FR8: every write produces an append-only audit record.
+	if err := s.repo.RecordAudit(ctx, subject, regionHouseholdID, "create_plant", "plant", plantID, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"plant_id", plantID,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("plant created",
+		"plant_id", plantID,
+		"region_id", req.RegionId,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.CreatePlantResponse{PlantId: plantID}, nil
+}
+
+func (s *LeafLabAPIServer) CorrectPlant(ctx context.Context, req *pb.CorrectPlantRequest) (*pb.CorrectPlantResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	// FR24: correct is a distinct, named operation from move — at least one
+	// correctable field must be set, and this never opens a placement interval.
+	if req.CorrectedName == "" && req.CorrectedPlantTypeId == 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"plant",
+			"",
+			apierrors.InvalidPlantRequest,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument,
+			"at least one of corrected_name or corrected_plant_type_id must be set", detail)
+	}
+
+	auth, err := s.getAuthorizationDecision(ctx, subject)
+	if err != nil {
+		s.logger.Error("authorization decision failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+
+	plant, err := s.resolvePlantForAccess(ctx, auth, req.PlantId)
+	if err != nil {
+		return nil, err
+	}
+	// FR22.5: a retired plant accepts no new writes.
+	if plant.RemovedAt != nil {
+		return nil, plantRetiredError(req.PlantId)
+	}
+
+	if req.CorrectedPlantTypeId != 0 {
+		plantTypeExists, err := s.repo.PlantTypeExists(ctx, req.CorrectedPlantTypeId)
+		if err != nil {
+			s.logger.Error("plant_type existence check failed",
+				"plant_type_id", req.CorrectedPlantTypeId,
+				"subject", subject,
+				"correlation_id", corrID,
+				"error", err)
+			return nil, status.Errorf(codes.Internal, "plant_type lookup: %v", err)
+		}
+		if !plantTypeExists {
+			detail := apierrors.NewErrorDetail(
+				pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+				"plant_type",
+				"corrected_plant_type_id",
+				apierrors.PlantTypeNotFound,
+			)
+			return nil, apierrors.StatusWithDetail(codes.FailedPrecondition,
+				fmt.Sprintf("plant_type %d does not exist", req.CorrectedPlantTypeId), detail)
+		}
+	}
+
+	if err := s.repo.CorrectPlant(ctx, req.PlantId, req.CorrectedName, req.CorrectedPlantTypeId); err != nil {
+		s.logger.Error("correct plant failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"plant",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// FR8: every write produces an append-only audit record.
+	if err := s.repo.RecordAudit(ctx, subject, plant.HouseholdID, "correct_plant", "plant", req.PlantId, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("plant corrected",
+		"plant_id", req.PlantId,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.CorrectPlantResponse{PlantId: req.PlantId}, nil
+}
+
+func (s *LeafLabAPIServer) MovePlant(ctx context.Context, req *pb.MovePlantRequest) (*pb.MovePlantResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	if req.NewRegionId <= 0 {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INVALID_ARGUMENT,
+			"plant",
+			"new_region_id",
+			apierrors.InvalidPlantRequest,
+		)
+		return nil, apierrors.StatusWithDetail(codes.InvalidArgument, "new_region_id is required", detail)
+	}
+
+	auth, err := s.getAuthorizationDecision(ctx, subject)
+	if err != nil {
+		s.logger.Error("authorization decision failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+
+	plant, err := s.resolvePlantForAccess(ctx, auth, req.PlantId)
+	if err != nil {
+		return nil, err
+	}
+	// FR22.5: a retired plant accepts no new writes.
+	if plant.RemovedAt != nil {
+		return nil, plantRetiredError(req.PlantId)
+	}
+
+	// FR1.2: the target region must belong to the plant's household; a region
+	// in another household is refused.
+	regionOK, err := s.repo.ValidateRegionBelongsToHousehold(ctx, req.NewRegionId, plant.HouseholdID)
+	if err != nil {
+		s.logger.Error("region household validation failed",
+			"plant_id", req.PlantId,
+			"new_region_id", req.NewRegionId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "region validation: %v", err)
+	}
+	if !regionOK {
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_PRECONDITION,
+			"region",
+			"new_region_id",
+			apierrors.InvalidPlantRequest,
+		)
+		return nil, apierrors.StatusWithDetail(codes.FailedPrecondition,
+			fmt.Sprintf("region %d does not belong to your household", req.NewRegionId), detail)
+	}
+
+	// FR24: move is a distinct, named operation from correct — this always closes
+	// the current interval and opens a new one. relocationInduced is false: this
+	// is a plant-initiated move, not a subtree relocation (FR74, #1223).
+	if err := s.repo.MovePlantRegion(ctx, req.PlantId, req.NewRegionId, false); err != nil {
+		s.logger.Error("move plant failed",
+			"plant_id", req.PlantId,
+			"new_region_id", req.NewRegionId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"plant",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// FR8: every write produces an append-only audit record.
+	if err := s.repo.RecordAudit(ctx, subject, plant.HouseholdID, "move_plant", "plant", req.PlantId, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("plant moved",
+		"plant_id", req.PlantId,
+		"new_region_id", req.NewRegionId,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.MovePlantResponse{PlantId: req.PlantId, NewRegionId: req.NewRegionId}, nil
+}
+
+func (s *LeafLabAPIServer) RetirePlant(ctx context.Context, req *pb.RetirePlantRequest) (*pb.RetirePlantResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	auth, err := s.getAuthorizationDecision(ctx, subject)
+	if err != nil {
+		s.logger.Error("authorization decision failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+
+	plant, err := s.resolvePlantForAccess(ctx, auth, req.PlantId)
+	if err != nil {
+		return nil, err
+	}
+	if plant.RemovedAt != nil {
+		return nil, plantRetiredError(req.PlantId)
+	}
+
+	const retireOperation = "retire_plant"
+	retiredAt, err := s.repo.RetirePlant(ctx, req.PlantId, retireOperation, subject)
+	if err != nil {
+		s.logger.Error("retire plant failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"plant",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	// FR8: every write produces an append-only audit record.
+	if err := s.repo.RecordAudit(ctx, subject, plant.HouseholdID, retireOperation, "plant", req.PlantId, ""); err != nil {
+		s.logger.Error("record audit failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+	}
+
+	s.logger.Info("plant retired",
+		"plant_id", req.PlantId,
+		"subject", subject,
+		"correlation_id", corrID)
+
+	return &pb.RetirePlantResponse{
+		PlantId:          req.PlantId,
+		RetiredOperation: retireOperation,
+		RetiredPrincipal: subject,
+		RetiredAt:        retiredAt.Unix(),
+	}, nil
+}
+
+func (s *LeafLabAPIServer) GetPlantPlacementTimeline(ctx context.Context, req *pb.GetPlantPlacementTimelineRequest) (*pb.GetPlantPlacementTimelineResponse, error) {
+	if err := requireAuthentication(ctx); err != nil {
+		return nil, err
+	}
+
+	subject, corrID := getSubjectAndCorrelationID(ctx)
+
+	auth, err := s.getAuthorizationDecision(ctx, subject)
+	if err != nil {
+		s.logger.Error("authorization decision failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		return nil, status.Errorf(codes.Internal, "authorization: %v", err)
+	}
+
+	// FR22.3: readable for a retired plant, so resolvePlantForAccess (which
+	// only checks existence/reach, not retirement state) is reused here.
+	plant, err := s.resolvePlantForAccess(ctx, auth, req.PlantId)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := s.repo.GetPlantPlacementTimeline(ctx, req.PlantId)
+	if err != nil {
+		s.logger.Error("get plant placement timeline failed",
+			"plant_id", req.PlantId,
+			"subject", subject,
+			"correlation_id", corrID,
+			"error", err)
+		detail := apierrors.NewErrorDetail(
+			pb.FailureClass_FAILURE_CLASS_INTERNAL,
+			"plant",
+			"",
+			apierrors.InternalError,
+		)
+		return nil, apierrors.StatusWithDetail(codes.Internal, err.Error(), detail)
+	}
+
+	placements := make([]*pb.PlantPlacementEntry, len(entries))
+	for i, e := range entries {
+		var validTo int64
+		if e.ValidTo != nil {
+			validTo = e.ValidTo.Unix()
+		}
+		placements[i] = &pb.PlantPlacementEntry{
+			RegionId:          e.RegionID,
+			RegionName:        e.RegionName,
+			ValidFrom:         e.ValidFrom.Unix(),
+			ValidTo:           validTo,
+			RelocationInduced: e.RelocationInduced,
+		}
+	}
+
+	var retiredAt int64
+	var retiredOperation, retiredPrincipal string
+	if plant.RemovedAt != nil {
+		retiredAt = plant.RemovedAt.Unix()
+	}
+	if plant.RetiredOperation != nil {
+		retiredOperation = *plant.RetiredOperation
+	}
+	if plant.RetiredPrincipal != nil {
+		retiredPrincipal = *plant.RetiredPrincipal
+	}
+
+	return &pb.GetPlantPlacementTimelineResponse{
+		PlantId:          req.PlantId,
+		Placements:       placements,
+		RetiredAt:        retiredAt,
+		RetiredOperation: retiredOperation,
+		RetiredPrincipal: retiredPrincipal,
+	}, nil
 }

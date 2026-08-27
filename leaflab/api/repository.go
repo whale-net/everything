@@ -393,8 +393,20 @@ func (e *BackdatingRefusal) Error() string {
 // MovePlantRegion moves a plant to a new region via SCD2 close-and-open.
 // Closes the current (valid_to IS NULL) interval and opens a new one.
 // Per SCD2 pattern: UPDATE valid_to on current placement, then INSERT new placement.
-// Returns error if the plant is not found or if a back-dating attempt is made.
-func (r *Repository) MovePlantRegion(ctx context.Context, plantID int64, newRegionID int64) error {
+// Returns error if the plant is not found, has no active placement (including a
+// retired plant, whose interval RetirePlant already closed), or if a back-dating
+// attempt is made.
+//
+// relocationInduced marks the new interval as caused by a subtree relocation
+// (FR74, #1223) rather than a plant-initiated move (FR24): the API-driven
+// MovePlant RPC always passes false; #1223's relocation trigger passes true.
+//
+// plant.region_id is kept as a synced current-value cache of the plant's
+// placement, mirroring board.household_id (TransferBoardOwnership) and
+// sensor.region_id (ApplyConfigRegions): plant_region_history is the
+// authoritative timeline for "at time T" queries, but a cheap "where is this
+// plant right now" read does not require walking history.
+func (r *Repository) MovePlantRegion(ctx context.Context, plantID int64, newRegionID int64, relocationInduced bool) error {
 	// Per FR19/FR21: placement boundaries are never back-dated.
 	// The interval opens at NOW(); any attempt to set an earlier valid_from is refused.
 	// This is enforced by always using NOW() in the INSERT — the caller cannot override it.
@@ -416,18 +428,26 @@ func (r *Repository) MovePlantRegion(ctx context.Context, plantID int64, newRegi
 		return fmt.Errorf("close placement for plant %d: %w", plantID, err)
 	}
 
-	// Verify the plant had an active placement (if no row was updated, the plant doesn't exist or has no active placement).
+	// Verify the plant had an active placement (if no row was updated, the plant doesn't exist,
+	// has no active placement, or is retired — RetirePlant closes the open interval).
 	if result.RowsAffected() == 0 {
 		return fmt.Errorf("plant %d has no active placement or does not exist", plantID)
 	}
 
 	// Insert new placement record. valid_from defaults to NOW() per table definition.
 	_, err = tx.Exec(ctx, `
-		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
-		VALUES ($1, $2, NOW())
-	`, plantID, newRegionID)
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from, relocation_induced)
+		VALUES ($1, $2, NOW(), $3)
+	`, plantID, newRegionID, relocationInduced)
 	if err != nil {
 		return fmt.Errorf("insert new placement for plant %d to region %d: %w", plantID, newRegionID, err)
+	}
+
+	// Sync plant.region_id to the newly opened interval's region (current-value cache).
+	if _, err = tx.Exec(ctx, `
+		UPDATE plant SET region_id = $2 WHERE plant_id = $1
+	`, plantID, newRegionID); err != nil {
+		return fmt.Errorf("sync plant %d region_id cache: %w", plantID, err)
 	}
 
 	// Commit the transaction.
@@ -474,7 +494,11 @@ func (r *Repository) GetPlantRegionAtTime(ctx context.Context, plantID int64, at
 // Per SCD2 pattern: UPDATE valid_to on current placement, then INSERT new placement.
 // Returns BackdatingRefusal if the requested timestamp is in the past (FR19/FR21).
 // Returns error if the plant is not found or database operations fail.
-func (r *Repository) MovePlantRegionAt(ctx context.Context, plantID int64, newRegionID int64, validFrom time.Time) error {
+//
+// relocationInduced marks the new interval as caused by a subtree relocation
+// (FR74, #1223) rather than a plant-initiated move (FR24). plant.region_id is
+// kept as a synced current-value cache — see MovePlantRegion's doc comment.
+func (r *Repository) MovePlantRegionAt(ctx context.Context, plantID int64, newRegionID int64, validFrom time.Time, relocationInduced bool) error {
 	// Validate that the requested timestamp is not in the past (FR19/FR21: no back-dating).
 	now := time.Now()
 	if validFrom.Before(now) {
@@ -510,11 +534,18 @@ func (r *Repository) MovePlantRegionAt(ctx context.Context, plantID int64, newRe
 
 	// Insert new placement record with the requested valid_from timestamp.
 	_, err = tx.Exec(ctx, `
-		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
-		VALUES ($1, $2, $3)
-	`, plantID, newRegionID, validFrom)
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from, relocation_induced)
+		VALUES ($1, $2, $3, $4)
+	`, plantID, newRegionID, validFrom, relocationInduced)
 	if err != nil {
 		return fmt.Errorf("insert new placement for plant %d to region %d: %w", plantID, newRegionID, err)
+	}
+
+	// Sync plant.region_id to the newly opened interval's region (current-value cache).
+	if _, err = tx.Exec(ctx, `
+		UPDATE plant SET region_id = $2 WHERE plant_id = $1
+	`, plantID, newRegionID); err != nil {
+		return fmt.Errorf("sync plant %d region_id cache: %w", plantID, err)
 	}
 
 	// Commit the transaction.
@@ -558,6 +589,203 @@ func (r *Repository) RemovePlantPlacement(ctx context.Context, plantID int64, re
 	}
 
 	return nil
+}
+
+// ── Plant lifecycle writes (FR54, FR24, FR22.5, FR22.1) ─────────────────────
+//
+// plant and plant_type have existed since migration 001; nothing wrote to
+// them before this. These functions are the first writer of the plant table.
+
+// PlantRecord is a plant's full row, including lifecycle state. Used for
+// write-guard checks (is this plant retired?) and for rendering lifecycle
+// metadata on read paths (FR22.5).
+type PlantRecord struct {
+	PlantID          int64
+	Name             string
+	PlantTypeID      int64
+	RegionID         int64
+	HouseholdID      int64
+	CreatedAt        time.Time
+	RemovedAt        *time.Time // NULL means active; non-NULL means retired (FR22.5).
+	RetiredOperation *string
+	RetiredPrincipal *string
+}
+
+// GetPlant fetches a plant's full row, including lifecycle state.
+// Returns pgx.ErrNoRows if the plant does not exist (unwrapped, per
+// GetBoardByDeviceID's convention, so callers can compare directly).
+func (r *Repository) GetPlant(ctx context.Context, plantID int64) (*PlantRecord, error) {
+	var p PlantRecord
+	err := r.db.QueryRow(ctx, `
+		SELECT plant_id, name, plant_type_id, region_id, household_id, created_at,
+		       removed_at, retired_operation, retired_principal
+		FROM plant
+		WHERE plant_id = $1
+	`, plantID).Scan(&p.PlantID, &p.Name, &p.PlantTypeID, &p.RegionID, &p.HouseholdID, &p.CreatedAt,
+		&p.RemovedAt, &p.RetiredOperation, &p.RetiredPrincipal)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// PlantTypeExists checks whether plant_type_id references an existing row.
+func (r *Repository) PlantTypeExists(ctx context.Context, plantTypeID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM plant_type WHERE plant_type_id = $1)
+	`, plantTypeID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check plant_type %d exists: %w", plantTypeID, err)
+	}
+	return exists, nil
+}
+
+// CreatePlant creates a plant and places it in a region in one operation
+// (acquire-and-place, FR54). Writes both the plant row and its first,
+// never-closed plant_region_history interval in the same transaction.
+// household_id is the region's owning household — the caller validates
+// region_id belongs to the caller's household (FR1.2) before calling this.
+func (r *Repository) CreatePlant(ctx context.Context, name string, plantTypeID int64, regionID int64, householdID int64) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin create plant: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var plantID int64
+	err = tx.QueryRow(ctx, `
+		INSERT INTO plant (region_id, plant_type_id, name, household_id)
+		VALUES ($1, $2, $3, $4)
+		RETURNING plant_id
+	`, regionID, plantTypeID, name, householdID).Scan(&plantID)
+	if err != nil {
+		return 0, fmt.Errorf("insert plant: %w", err)
+	}
+
+	// Open the plant's first placement interval (never closed until moved or retired).
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO plant_region_history (plant_id, region_id, valid_from)
+		VALUES ($1, $2, NOW())
+	`, plantID, regionID); err != nil {
+		return 0, fmt.Errorf("insert initial placement for plant %d: %w", plantID, err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit create plant: %w", err)
+	}
+
+	return plantID, nil
+}
+
+// CorrectPlant fixes a typo in a plant's name or corrects a misidentified
+// plant type (FR24). Distinct from a move: it never touches region_id or
+// plant_region_history, and does not open a placement interval. Refuses a
+// retired plant (FR22.5: a retired plant accepts no new writes) — the
+// WHERE clause re-checks retirement at write time, closing the race against
+// a caller that checked GetPlant earlier. An empty correctedName or a zero
+// correctedPlantTypeID leaves that field unchanged.
+func (r *Repository) CorrectPlant(ctx context.Context, plantID int64, correctedName string, correctedPlantTypeID int64) error {
+	result, err := r.db.Exec(ctx, `
+		UPDATE plant
+		SET name = CASE WHEN $2 <> '' THEN $2 ELSE name END,
+		    plant_type_id = CASE WHEN $3 <> 0 THEN $3 ELSE plant_type_id END
+		WHERE plant_id = $1 AND removed_at IS NULL
+	`, plantID, correctedName, correctedPlantTypeID)
+	if err != nil {
+		return fmt.Errorf("correct plant %d: %w", plantID, err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("plant %d not found or is retired", plantID)
+	}
+	return nil
+}
+
+// RetirePlant soft-retires a plant (FR22.5): names the operation, records
+// the acting principal (FR8), and closes the plant's current placement
+// interval at the same instant so ResolveReadingAttribution stops
+// attributing new readings to it. Nothing is hard-deleted (FR22.1): the
+// plant row, its plant_region_history, and its readings remain intact and
+// reachable by explicit id (FR22.3). Returns an error if the plant does not
+// exist or is already retired (removed_at IS NOT NULL).
+func (r *Repository) RetirePlant(ctx context.Context, plantID int64, operation string, principal string) (time.Time, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("begin retire plant %d: %w", plantID, err)
+	}
+	defer tx.Rollback(ctx)
+
+	var retiredAt time.Time
+	err = tx.QueryRow(ctx, `
+		UPDATE plant
+		SET removed_at = NOW(), retired_operation = $2, retired_principal = $3
+		WHERE plant_id = $1 AND removed_at IS NULL
+		RETURNING removed_at
+	`, plantID, operation, principal).Scan(&retiredAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, fmt.Errorf("plant %d not found or already retired", plantID)
+		}
+		return time.Time{}, fmt.Errorf("retire plant %d: %w", plantID, err)
+	}
+
+	// Close the plant's current placement interval at the same instant, if one is
+	// open. A plant should always have exactly one open interval (opened at
+	// creation, kept open across moves), but tolerate none rather than fail
+	// retirement over it — nothing is hard-deleted either way (FR22.1).
+	if _, err = tx.Exec(ctx, `
+		UPDATE plant_region_history
+		SET valid_to = $2
+		WHERE plant_id = $1 AND valid_to IS NULL
+	`, plantID, retiredAt); err != nil {
+		return time.Time{}, fmt.Errorf("close placement for retired plant %d: %w", plantID, err)
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		return time.Time{}, fmt.Errorf("commit retire plant %d: %w", plantID, err)
+	}
+
+	return retiredAt, nil
+}
+
+// PlantPlacementEntry represents one interval in a plant's placement history.
+type PlantPlacementEntry struct {
+	RegionID          int64
+	RegionName        string
+	ValidFrom         time.Time
+	ValidTo           *time.Time
+	RelocationInduced bool
+}
+
+// GetPlantPlacementTimeline returns a plant's full placement history (FR19
+// SCD2 intervals) in chronological order, joined to region names. Each entry
+// states whether it was relocation-induced (FR74, #1223) or a plant-initiated
+// move (FR24). Readable regardless of retirement state (FR22.3, FR22.5).
+func (r *Repository) GetPlantPlacementTimeline(ctx context.Context, plantID int64) ([]PlantPlacementEntry, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT prh.region_id, COALESCE(reg.name, ''), prh.valid_from, prh.valid_to, prh.relocation_induced
+		FROM plant_region_history prh
+		LEFT JOIN region reg ON reg.region_id = prh.region_id
+		WHERE prh.plant_id = $1
+		ORDER BY prh.valid_from ASC
+	`, plantID)
+	if err != nil {
+		return nil, fmt.Errorf("get plant %d placement timeline: %w", plantID, err)
+	}
+	defer rows.Close()
+
+	var entries []PlantPlacementEntry
+	for rows.Next() {
+		var e PlantPlacementEntry
+		if err := rows.Scan(&e.RegionID, &e.RegionName, &e.ValidFrom, &e.ValidTo, &e.RelocationInduced); err != nil {
+			return nil, fmt.Errorf("scan plant %d placement entry: %w", plantID, err)
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error for plant %d placement timeline: %w", plantID, err)
+	}
+	return entries, nil
 }
 
 // ── Reading attribution (FR23) ──────────────────────────────────────────────

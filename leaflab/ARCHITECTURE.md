@@ -194,7 +194,9 @@ board                       — one row per physical device (device_id = eFuse M
 
 sensor_type               — illuminance / temperature / humidity / etc.
 region                    — hierarchical location tree (Room → Shelf → Pot)
-plant / plant_type        — plant instances and their taxonomy (soft-delete via removed_at)
+plant                     — plant instances (soft-retired via removed_at; FR22.5 records retired_operation / retired_principal)
+  └── plant_region_history — placement (SCD-2, valid_from / valid_to; relocation_induced marks subtree-relocation-caused changes, FR74)
+plant_type                — plant taxonomy
 device_config             — pushed DeviceConfig blobs as JSONB, with accepted flag
 sensor_chip               — known chip models (BH1750, SHT3x, ...)
 sensor_chip_address       — known valid I2C addresses per chip (for manifest validation)
@@ -208,6 +210,8 @@ All three `*_history` tables are SCD-2 using the uniform `valid_from` / `valid_t
 - **`sensor` is a stable dimension anchor.** A rename via `DeviceConfig` closes the old `sensor_name_history` row and opens a new one — the `sensor_id` (and all reading history) is unchanged. Continuity of data across renames is the primary reason the sensor table exists as a separate entity rather than denormalizing into readings.
 
 - **`sensor.region_id` is a current-value cache.** `sensor_region_history` records every assignment with open/closed intervals (`valid_to IS NULL` means current). Historical readings carry a snapshotted `region_id` at insert time, so location is preserved even when the sensor moves.
+
+- **`plant.region_id` is a current-value cache, mirroring `sensor.region_id`.** `plant_region_history` (FR19 SCD-2) records every placement; `CreatePlant`, `MovePlant`, and `MovePlantRegion`/`MovePlantRegionAt` write both the history row and the cache column in one transaction (the same pattern `TransferBoardOwnership` uses for `board.household_id`). Reading attribution (FR23) resolves against `plant_region_history` at the reading's `recorded_at`, not this cache, so moving a plant does not retroactively change historical attribution.
 
 - **`sensor.mux_path` is JSONB.** Supports arbitrary-depth mux cascades (`[]` = direct on root bus, `[{muxAddress, muxChannel}, ...]` ordered outer→inner). A functional unique index on `(board_id, i2c_address, sensor_type_id, mux_path::text)` prevents duplicates.
 

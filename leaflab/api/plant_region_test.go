@@ -36,14 +36,18 @@ CREATE TABLE plant (
 	region_id BIGINT NOT NULL REFERENCES region(region_id),
 	plant_type_id BIGINT NOT NULL REFERENCES plant_type(plant_type_id),
 	household_id BIGINT NOT NULL REFERENCES household(household_id),
-	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+	removed_at TIMESTAMPTZ,
+	retired_operation VARCHAR(64),
+	retired_principal VARCHAR(255)
 );
 
 CREATE TABLE plant_region_history (
 	plant_id BIGINT NOT NULL REFERENCES plant(plant_id),
 	region_id BIGINT NOT NULL REFERENCES region(region_id),
 	valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-	valid_to TIMESTAMPTZ
+	valid_to TIMESTAMPTZ,
+	relocation_induced BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE INDEX ON plant_region_history(plant_id) WHERE valid_to IS NULL;
@@ -121,7 +125,7 @@ func TestMovePlantRegionAt_BackdatingRefused(t *testing.T) {
 	plantID, region1ID, region2ID := setupPlantForRegionTest(ctx, t, db)
 
 	pastTime := time.Now().Add(-1 * time.Hour)
-	err := repo.MovePlantRegionAt(ctx, plantID, region2ID, pastTime)
+	err := repo.MovePlantRegionAt(ctx, plantID, region2ID, pastTime, false)
 
 	var refusal *BackdatingRefusal
 	if !errors.As(err, &refusal) {
@@ -153,7 +157,7 @@ func TestMovePlantRegionAt_FutureTimeAccepted(t *testing.T) {
 	plantID, _, region2ID := setupPlantForRegionTest(ctx, t, db)
 
 	futureTime := time.Now().Add(1 * time.Hour)
-	if err := repo.MovePlantRegionAt(ctx, plantID, region2ID, futureTime); err != nil {
+	if err := repo.MovePlantRegionAt(ctx, plantID, region2ID, futureTime, false); err != nil {
 		t.Fatalf("MovePlantRegionAt with future time: %v", err)
 	}
 

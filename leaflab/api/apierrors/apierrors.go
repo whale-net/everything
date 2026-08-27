@@ -47,6 +47,23 @@ const (
 
 	// InvalidSensorConfig is returned when a sensor config has missing or invalid fields.
 	InvalidSensorConfig = "INVALID_SENSOR_CONFIG"
+
+	// PlantNotFound is returned when an operation references a plant_id that
+	// does not exist, or exists but is out of the caller's reach (NFR2: the
+	// two cases are indistinguishable to the caller).
+	PlantNotFound = "PLANT_NOT_FOUND"
+
+	// PlantRetired is returned when a write is attempted against a retired
+	// plant (FR22.5: a retired plant accepts no new writes).
+	PlantRetired = "PLANT_RETIRED"
+
+	// PlantTypeNotFound is returned when plant_type_id does not reference an
+	// existing plant_type row.
+	PlantTypeNotFound = "PLANT_TYPE_NOT_FOUND"
+
+	// InvalidPlantRequest is returned for malformed plant lifecycle requests
+	// (e.g., a CorrectPlant call with neither field set).
+	InvalidPlantRequest = "INVALID_PLANT_REQUEST"
 )
 
 // ErrorDetailFromStatus attempts to extract the ErrorDetail from a gRPC
