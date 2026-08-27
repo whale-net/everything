@@ -17,10 +17,11 @@
 #      testonly passthrough, so this couldn't be expressed by adding a kwarg
 #      to it; calling app_metadata directly sidesteps that entirely.
 #
-# binary_target / image_target / openapi_spec_target only need to be valid
-# labels — app_metadata stores them as strings (str(label)) and never builds
-# or dereferences them — so a single placeholder filegroup stands in for all
-# three rather than a real binary or image.
+# binary_target / image_target / openapi_spec_target / descriptor_set_target
+# only need to be valid labels — app_metadata stores them as strings
+# (str(label)) and never builds or dereferences them — so a single
+# placeholder filegroup stands in for all four rather than a real binary or
+# image.
 
 load("//tools/bazel:release.bzl", "app_metadata", "helm_chart_metadata")
 
@@ -42,6 +43,7 @@ app_metadata(
     command = ["python3"],
     deploy_unit = "image",
     description = "Full-coverage fixture for the appmeta manifest contract test.",
+    descriptor_set_target = ":placeholder-target",
     domain = "appmeta",
     health_check_enabled = True,
     health_check_path = "/healthz",

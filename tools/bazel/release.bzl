@@ -79,6 +79,12 @@ def _app_metadata_impl(ctx):
     if ctx.attr.openapi_spec_target:
         metadata["openapi_spec_target"] = str(ctx.attr.openapi_spec_target.label)
 
+    # Add gRPC descriptor set target if provided (leaflab FR81/NFR11, issue
+    # #1166/#1333) -- unlike openapi_spec_target, never auto-generated; only
+    # set when release_app's descriptor_set_target param is passed.
+    if ctx.attr.descriptor_set_target:
+        metadata["descriptor_set_target"] = str(ctx.attr.descriptor_set_target.label)
+
     # deploy_unit declares how the app reaches an environment. Stored as the
     # appmetapb.DeployUnit enum's JSON name (not the raw attr string) so
     # protojson can decode it directly; see _DEPLOY_UNIT_TO_PROTO_ENUM above.
@@ -127,6 +133,7 @@ app_metadata = rule(
         "resources_limits_cpu": attr.string(default = ""),
         "resources_limits_memory": attr.string(default = ""),
         "openapi_spec_target": attr.label(default = None),
+        "descriptor_set_target": attr.label(default = None),
         "deploy_unit": attr.string(default = "chart", values = ["chart", "image", "none"]),
     },
 )
@@ -142,7 +149,7 @@ app_metadata = rule(
 # - OpenAPI config: fastapi_app
 # - Container config: additional_tars
 # Bazel/Starlark does not support nested struct parameters, so they remain flat.
-def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None, base = None):
+def release_app(name, binary_name = None, language = None, domain = None, description = "", version = "latest", registry = "ghcr.io", organization = "whale-net", custom_repo_name = None, app_type = "", port = 0, replicas = 0, health_check_enabled = False, health_check_path = "/health", ingress_host = "", ingress_tls_secret = "", command = [], args = [], resources_requests_cpu = "", resources_requests_memory = "", resources_limits_cpu = "", resources_limits_memory = "", fastapi_app = None, additional_tars = None, deploy_unit = None, app_name = None, base = None, descriptor_set_target = None):
     """Convenience macro to set up release metadata and OCI images for an app.
 
     This macro consolidates the creation of OCI images and release metadata,
@@ -195,6 +202,13 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
               MODULE.bazel's "git_base" oci.pull). Go binaries here are
               built pure/static, so swapping the base image never affects
               the binary itself -- only what's available on $PATH.
+        descriptor_set_target: Label of a //tools/bazel:grpc.bzl
+              proto_descriptor_set target (a published self-contained
+              protobuf FileDescriptorSet) to publish as a release artifact
+              of this app -- e.g. leaflab-api's
+              //leaflab/api/proto:leaflabapi_descriptor_set (FR81/NFR11,
+              issue #1166/#1333). Unlike fastapi_app's OpenAPI spec, never
+              auto-generated; pass it explicitly.
     """
     effective_name = app_name if app_name else name
     is_container_app = app_type not in ["cli", "binary", "firmware"]
@@ -311,6 +325,7 @@ def release_app(name, binary_name = None, language = None, domain = None, descri
         resources_limits_cpu = resources_limits_cpu,
         resources_limits_memory = resources_limits_memory,
         openapi_spec_target = openapi_spec_target_ref,
+        descriptor_set_target = descriptor_set_target,
         deploy_unit = deploy_unit,
         tags = ["release-metadata"],
         visibility = ["//visibility:public"],

@@ -48,6 +48,27 @@ release_app(
     app_type = "internal-api",
     port = 50051,
     replicas = 1,
+    # FR81 (contract half) / NFR11: publishes the descriptor set through the
+    # release path (release_helper_go's BuildDescriptorSets, mirroring
+    # BuildOpenAPISpecs -- see tools/release_helper_go/cmd/build_release.go
+    # and .github/workflows/release-v2.yml's "Upload descriptor set
+    # artifact" step), not only as a build output.
+    descriptor_set_target = ":leaflab_api_descriptor_set",
+)
+
+# Published descriptor set (FR81 contract half, NFR11): a top-level, public
+# target sitting beside the release_app() call so the leaflab-api release
+# ships this as a first-class artifact of the release -- not merely a build
+# output buried under //leaflab/api/proto -- discoverable the same way the
+# release binary/image targets are (`bazel query //leaflab/api/...`), and
+# fed into release_app's descriptor_set_target param above so it is actually
+# built and uploaded by the release pipeline (not just bazel-queryable).
+# Same FileDescriptorSet the server's protos compile to; see
+# //leaflab/api/proto:leaflabapi_descriptor_set for how it's built.
+filegroup(
+    name = "leaflab_api_descriptor_set",
+    srcs = ["//leaflab/api/proto:leaflabapi_descriptor_set"],
+    visibility = ["//visibility:public"],
 )
 
 # FR11/FR12/FR63 auth-and-health test suite: auth.go's enforcement

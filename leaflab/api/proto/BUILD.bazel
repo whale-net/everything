@@ -1,6 +1,7 @@
 """LeafLab API proto — gRPC service definition."""
 
-load("//tools/bazel:grpc.bzl", "go_grpc_library")
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools/bazel:grpc.bzl", "go_grpc_library", "proto_descriptor_set")
 
 go_grpc_library(
     name = "leaflabapipb",
@@ -9,4 +10,42 @@ go_grpc_library(
     proto_deps = ["//firmware/proto:config_proto"],
     go_deps = ["//firmware/proto:configpb"],
     visibility = ["//visibility:public"],
+)
+
+# Self-contained FileDescriptorSet (FR81 contract half, NFR11) built from the
+# exact same proto_library the server embeds (":leaflabapipb_proto", private
+# to this package but usable here) -- covers leaflab.api.v1.LeafLabAPI plus
+# its transitive //firmware/proto:config_proto dependency. Lets programmatic
+# callers (leaflab/scripts/push-config.sh) learn the service contract without
+# server reflection (FR11.1 turns reflection off). Published as part of the
+# leaflab-api release via //leaflab/api:leaflab_api_descriptor_set.
+proto_descriptor_set(
+    name = "leaflabapi_descriptor_set",
+    proto_library = ":leaflabapipb_proto",
+    visibility = ["//visibility:public"],
+)
+
+# FR81 Testing criteria: (1) the descriptor set resolves
+# leaflab.api.v1.LeafLabAPI with imports included (firmware.SensorConfig
+# looked up transitively); (2) its service/method shape is identical to the
+# protos the server actually registers -- compares against
+# leaflabapipb.File_leaflab_api_proto_api_proto, the same compiled-in
+# FileDescriptor //leaflab/api:api_lib embeds, not a second/stale copy.
+# `# keep`: hand-written, not gazelle-generated (see repo gotcha in this
+# package's sibling BUILD files / the task issue).
+go_test(
+    # keep
+    name = "descriptor_set_test",
+    size = "small",
+    srcs = ["descriptor_set_test.go"],
+    data = [":leaflabapi_descriptor_set"],
+    deps = [
+        ":leaflabapipb",
+        "@rules_go//go/runfiles",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//reflect/protodesc",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//reflect/protoregistry",
+        "@org_golang_google_protobuf//types/descriptorpb",
+    ],
 )

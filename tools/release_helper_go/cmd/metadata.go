@@ -106,6 +106,7 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, workspaceRoot string) ([]AppMe
 		meta.BinaryTarget = canonicalLabel(meta.BinaryTarget)
 		meta.ImageTarget = canonicalLabel(meta.ImageTarget)
 		meta.OpenapiSpecTarget = canonicalLabel(meta.OpenapiSpecTarget)
+		meta.DescriptorSetTarget = canonicalLabel(meta.DescriptorSetTarget)
 		apps = append(apps, meta)
 	}
 

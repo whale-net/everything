@@ -93,22 +93,33 @@ var (
 )
 
 type PlanResult struct {
-	Matrix        map[string]interface{} `json:"matrix"`
-	ChartMatrix   map[string]interface{} `json:"chart_matrix,omitempty"`
-	OpenAPIMatrix map[string]interface{} `json:"openapi_matrix,omitempty"`
-	HasSpecs      bool                   `json:"has_specs"`
-	Apps          []string               `json:"apps"`
-	Charts        []string               `json:"charts,omitempty"`
-	Version       *string                `json:"version"`
-	Versions      map[string]string      `json:"versions"`
-	BuildID       string                 `json:"build_id,omitempty"`
-	EventType     string                 `json:"event_type"`
+	Matrix              map[string]interface{} `json:"matrix"`
+	ChartMatrix         map[string]interface{} `json:"chart_matrix,omitempty"`
+	OpenAPIMatrix       map[string]interface{} `json:"openapi_matrix,omitempty"`
+	HasSpecs            bool                   `json:"has_specs"`
+	DescriptorSetMatrix map[string]interface{} `json:"descriptor_set_matrix,omitempty"`
+	HasDescriptorSets   bool                   `json:"has_descriptor_sets"`
+	Apps                []string               `json:"apps"`
+	Charts              []string               `json:"charts,omitempty"`
+	Version             *string                `json:"version"`
+	Versions            map[string]string      `json:"versions"`
+	BuildID             string                 `json:"build_id,omitempty"`
+	EventType           string                 `json:"event_type"`
 }
 
 type openAPISpecEntry struct {
 	App           string `json:"app"`
 	Domain        string `json:"domain"`
 	OpenAPITarget string `json:"openapi_target"`
+}
+
+// descriptorSetEntry is one app's published gRPC descriptor set (FR81
+// contract half, NFR11 -- issue #1166/#1333), the descriptor-set analogue of
+// openAPISpecEntry.
+type descriptorSetEntry struct {
+	App                 string `json:"app"`
+	Domain              string `json:"domain"`
+	DescriptorSetTarget string `json:"descriptor_set_target"`
 }
 
 func newPlanCmd() *cobra.Command {
@@ -324,6 +335,15 @@ func newPlanCmd() *cobra.Command {
 						fmt.Fprintln(cmd.OutOrStdout(), "has_specs=false")
 					}
 				}
+				if result.DescriptorSetMatrix != nil {
+					descriptorSetMatrixJSON, _ := json.Marshal(result.DescriptorSetMatrix)
+					fmt.Fprintf(cmd.OutOrStdout(), "descriptor_set_matrix=%s\n", descriptorSetMatrixJSON)
+					if result.HasDescriptorSets {
+						fmt.Fprintln(cmd.OutOrStdout(), "has_descriptor_sets=true")
+					} else {
+						fmt.Fprintln(cmd.OutOrStdout(), "has_descriptor_sets=false")
+					}
+				}
 				if result.BuildID != "" {
 					fmt.Fprintf(cmd.OutOrStdout(), "build_id=%s\n", result.BuildID)
 				}
@@ -388,8 +408,8 @@ type planParams struct {
 	// alternative to requestedApps/requestedCharts (a bazel-discovered name
 	// list), not a companion to it -- newPlanCmd validates the two are
 	// mutually exclusive per app/chart axis before planRelease is called.
-	appsMetadata           []AppMetadataInput
-	chartsMetadata         []HelmChartMetadataInput
+	appsMetadata   []AppMetadataInput
+	chartsMetadata []HelmChartMetadataInput
 	// versionSelections (issue #889 follow-up) is a per-target override of
 	// version/incrementMajor/incrementMinor/incrementPatch below, keyed by
 	// full_name. A target present here uses its own entry instead of the
@@ -397,7 +417,7 @@ type planParams struct {
 	// unchanged -- see assignVersions/assignChartVersions for the precedence
 	// order (explicit vX.Y.Z wins, then a bump keyword, then the batch
 	// default).
-	versionSelections map[string]string
+	versionSelections      map[string]string
 	version                string
 	incrementMajor         bool
 	incrementMinor         bool
@@ -566,7 +586,20 @@ func planRelease(p planParams) (*PlanResult, error) {
 		}
 	}
 
-	result := buildPlanResult(releaseApps, selectedCharts, appsWithSpecs, p.version, p.eventType, perAppVersions, perChartVersions)
+	// Identify apps with a published gRPC descriptor set (FR81/NFR11, issue
+	// #1166/#1333) -- the descriptor-set analogue of appsWithSpecs above.
+	var appsWithDescriptorSets []descriptorSetEntry
+	for _, a := range releaseApps {
+		if a.DescriptorSetTarget != "" {
+			appsWithDescriptorSets = append(appsWithDescriptorSets, descriptorSetEntry{
+				App:                 a.Name,
+				Domain:              a.Domain,
+				DescriptorSetTarget: a.DescriptorSetTarget,
+			})
+		}
+	}
+
+	result := buildPlanResult(releaseApps, selectedCharts, appsWithSpecs, appsWithDescriptorSets, p.version, p.eventType, perAppVersions, perChartVersions)
 
 	if err := executeAppRegistryUpfront(ctx, p, releaseApps, selectedCharts, perAppVersions, perChartVersions, result); err != nil {
 		return nil, err
@@ -793,6 +826,7 @@ func buildPlanResult(
 	apps []AppMetadata,
 	charts []HelmChartMetadata,
 	specs []openAPISpecEntry,
+	descriptorSets []descriptorSetEntry,
 	version, eventType string,
 	perAppVersions, perChartVersions map[string]string,
 ) *PlanResult {
@@ -843,6 +877,15 @@ func buildPlanResult(
 		})
 	}
 
+	descriptorSetInclude := make([]map[string]string, 0, len(descriptorSets))
+	for _, ds := range descriptorSets {
+		descriptorSetInclude = append(descriptorSetInclude, map[string]string{
+			"app":                   ds.App,
+			"domain":                ds.Domain,
+			"descriptor_set_target": ds.DescriptorSetTarget,
+		})
+	}
+
 	var versionPtr *string
 	if version != "" {
 		versionPtr = &version
@@ -863,6 +906,10 @@ func buildPlanResult(
 	if len(openapiInclude) > 0 {
 		res.OpenAPIMatrix = map[string]interface{}{"include": openapiInclude}
 		res.HasSpecs = true
+	}
+	if len(descriptorSetInclude) > 0 {
+		res.DescriptorSetMatrix = map[string]interface{}{"include": descriptorSetInclude}
+		res.HasDescriptorSets = true
 	}
 
 	return res

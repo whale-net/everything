@@ -1,0 +1,16 @@
+"""faketoken -- authtoken test double for pushconfig_test (FR81)."""
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "faketoken_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/leaflab/scripts/pushconfig_test/faketoken",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "faketoken",
+    embed = [":faketoken_lib"],
+    visibility = ["//leaflab/scripts/pushconfig_test:__pkg__"],
+)
