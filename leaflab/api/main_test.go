@@ -108,6 +108,10 @@ func (stubAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsRequest) 
 	return &pb.ListBoardsResponse{}, nil
 }
 
+func (stubAPIServer) SetBoardDisplayName(ctx context.Context, req *pb.SetBoardDisplayNameRequest) (*pb.SetBoardDisplayNameResponse, error) {
+	return &pb.SetBoardDisplayNameResponse{DisplayName: req.GetDisplayName()}, nil
+}
+
 func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*pb.GetHealthResponse, error) {
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }

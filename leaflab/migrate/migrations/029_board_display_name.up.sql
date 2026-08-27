@@ -1,0 +1,29 @@
+-- Migration 029: household-chosen board display name (Phase 2 scaffold, FR57)
+--
+-- Picked 029 as the next free number: the highest number observed across
+-- every worktree under .pm-worktrees/ at scaffold time was 028
+-- (plan/1166-v2-1368's 028_config_entry_provenance) -- sibling v2 branches
+-- on plan/1166 have collided on migration numbers before, so this is
+-- called out explicitly.
+--
+-- FR57: a board carries a household-chosen display name the owner can set
+-- and change themselves. Renaming changes a label, not an attribution --
+-- unlike board_ownership (migration 015), which is SCD2 because it tracks
+-- *who* owns a board over time, a display name has no such history
+-- requirement (historised board names are explicitly out of scope), so
+-- this is a plain nullable column.
+--
+-- NULL means "no household-chosen name set yet". The fallback-to-device_id
+-- behavior for an unset name is a rendering decision made in the service
+-- layer (NFR18.1) -- Implementation-phase work (SetBoardDisplayName and its
+-- read-path fallback), not schema here and not the BFF.
+--
+-- NFR19: the display name is private by default. This column carries no
+-- default value, no sharing/publish flag, and this migration describes it
+-- nowhere as publishable or shareable.
+--
+-- Write path (SetBoardDisplayName) and the RPC/response wiring that reads
+-- this column are Implementation-phase work, layered onto this scaffold
+-- per 015_ownership's scaffold-then-feat precedent.
+
+ALTER TABLE board ADD COLUMN display_name TEXT NULL;

@@ -19,6 +19,12 @@ service LeafLabAPI {
   // List all known boards (boards that have sent at least one manifest).
   rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
 
+  // Set (or clear) a board's household-chosen display name (FR57). A
+  // member-or-grantee capability (Implementation phase); touches only
+  // board.display_name -- never device config, region structure, or
+  // anything the device runs.
+  rpc SetBoardDisplayName(SetBoardDisplayNameRequest) returns (SetBoardDisplayNameResponse);
+
   // Service health signal. The only anonymous RPC in this service (FR63) --
   // callable without a household session and without an authenticated
   // principal, so "this is our problem, not yours" is answerable even when
@@ -54,6 +60,28 @@ message BoardInfo {
   // Absolute instant the board was last seen (FR64). Render this as
   // elapsed time against the response envelope's server_now.
   Instant last_seen_at = 3;
+  // Household-chosen display name (FR57). Every board-facing surface
+  // renders this, never device_id -- see leaflab/ui/components's
+  // support_details.templ, the one place device_id renders. Empty when
+  // unset; the device_id fallback for that case is a rendering decision
+  // made server-side (NFR18.1) -- Implementation-phase work, not a BFF
+  // concern. NFR19: private by default, never described as shareable.
+  string display_name = 4;
+}
+
+// SetBoardDisplayNameRequest names the board by device_id (matching every
+// other board-scoped RPC's key) and carries the new display name. Setting
+// display_name to the empty string clears it back to unset (falls back to
+// device_id on read, per BoardInfo.display_name's doc comment).
+message SetBoardDisplayNameRequest {
+  string device_id = 1;
+  string display_name = 2;
+}
+
+message SetBoardDisplayNameResponse {
+  // The board's display name as stored, echoed back so a caller can
+  // confirm the write without a follow-up read.
+  string display_name = 1;
 }
 
 message ListBoardsRequest {

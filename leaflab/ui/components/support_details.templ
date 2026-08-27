@@ -1,0 +1,62 @@
+package components
+
+// Package-level note (FR57, NFR19): device_id is reachable in exactly one
+// place across leaflab-ui -- this component. Every other board-facing
+// surface (board lists, board detail, claim presentation, etc.) renders
+// BoardInfo.display_name instead, never device_id. A source-analysis test
+// enforcing that (Testing phase) greps leaflab/ui/components for device_id
+// and asserts exactly one component references it — this file.
+
+// copySupportValue is a templ script template: a self-contained JS function
+// templ generates and dedupes across every call site, matching
+// tools/app_registry/ui/components/digest.templ's copyDigest -- no new
+// client-side JS dependency (stays within the CDN Tailwind/daisyUI-only
+// toolchain).
+script copySupportValue(value string) {
+	navigator.clipboard.writeText(value);
+}
+
+// SupportDetails is the single home for a board's device id (FR57): a
+// support-details block, not a page heading and not "read aloud" framing --
+// the id is presented copyable (a monospace value plus a copy-to-clipboard
+// button, same interaction as DigestDisplay) so a household member relays
+// it to support by pasting, never by transcribing it letter-by-letter over
+// a call. This block is scaffolding today: it is not yet wired into any
+// board detail page (that page doesn't exist on this branch yet) --
+// Implementation-phase work is to embed it into the board detail page once
+// that page lands, and to ensure no other component ever renders device_id
+// directly.
+//
+// deviceID is the board's device id (immutable, one per board). Callers
+// pass it through unrendered anywhere else.
+templ SupportDetails(deviceID string) {
+	<div class="card bg-base-100 shadow-md">
+		<div class="card-body">
+			<h2 class="card-title text-base opacity-70">Support details</h2>
+			<p class="text-sm opacity-60">
+				If a support agent asks for this board's device id, copy and
+				paste it rather than reading it aloud.
+			</p>
+			<table class="table table-sm">
+				<tbody>
+					<tr>
+						<td class="opacity-60 w-40">Device ID</td>
+						<td>
+							<span class="inline-flex items-center gap-1 font-mono text-xs">
+								<span>{ deviceID }</span>
+								<button
+									type="button"
+									class="btn btn-ghost btn-xs px-1"
+									title="Copy device id"
+									onclick={ copySupportValue(deviceID) }
+								>
+									⧉
+								</button>
+							</span>
+						</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+	</div>
+}
