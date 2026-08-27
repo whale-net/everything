@@ -6,6 +6,7 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "identity.go",
         "main.go",
         "repository.go",
         "server.go",
@@ -14,8 +15,10 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/hwkey",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",

@@ -60,6 +60,15 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
 	}
 
+	// FR17 pre-write identity check: refuses before anything is written or
+	// published if any entry would establish a new sensor identity rather
+	// than continue an existing one (or would require an unresolved swap,
+	// FR16.4). This is the real push path, not a dry run -- see
+	// checkPushConfigIdentity's doc comment.
+	if err := s.checkPushConfigIdentity(ctx, boardID, req.Sensors); err != nil {
+		return nil, err
+	}
+
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
@@ -119,6 +128,32 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		return &pb.GetDeviceConfigResponse{Found: false}, nil
 	}
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
+}
+
+// RewireSensor is the explicit API rewire path (FR16): it declares that
+// the sensor currently named req.Name on req.DeviceId has moved to a new
+// hardware location, updating it in place rather than establishing a new
+// sensor identity. See leaflab/api/proto/api.proto's RewireSensor doc
+// comment and Repository.FindSensorIDByName/FindSensorIDByHWKey.
+//
+// TODO(Implementation phase, FR16 case 2 / FR17): resolve the existing
+// sensor by (board_id, req.Name) via Repository.FindSensorIDByName; if
+// none exists, refuse via contract.Refuse before writing anything (FR17)
+// rather than create a new sensor identity -- naming "history will not
+// follow" as the consequence, since there is no rewire alternative to
+// offer here (this RPC *is* the rewire path). Otherwise update the
+// resolved sensor's hardware key in place and close/open a
+// sensor_hw_history interval, mirroring
+// leaflab/processor/repository.go's UpsertSensorHWHistory.
+func (s *LeafLabAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSensorRequest) (*pb.RewireSensorResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("rewire_sensor", "device_id", reason)
+	}
+	if req.Name == "" {
+		return nil, contract.InvalidArgument("rewire_sensor", "name", "A sensor name is required.")
+	}
+
+	return nil, contract.Internal("rewire_sensor", "", "Not yet implemented.")
 }
 
 // ListBoards returns all known boards, keyset-paginated on (board_id) per

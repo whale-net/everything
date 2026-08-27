@@ -18,6 +18,19 @@ service LeafLabAPI {
 
   // List all known boards (boards that have sent at least one manifest).
   rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
+
+  // RewireSensor is the explicit API rewire path (FR16): it declares that
+  // the sensor currently known by `name` on this device has moved to a new
+  // hardware location (I2C address / mux path), and updates that sensor in
+  // place -- closing/opening a sensor_hw_history interval -- rather than
+  // minting a new sensor identity. `name` is the stable anchor (FR16 case
+  // 2: match on name, update hardware key), mirroring
+  // leaflab/processor/repository.go's UpsertSensor resolution order on the
+  // device manifest path. Refused (FR17) if no sensor named `name`
+  // currently exists for this device: applying it would create a new
+  // identity, not continue an existing one, and its reading history would
+  // not follow.
+  rpc RewireSensor(RewireSensorRequest) returns (RewireSensorResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -30,6 +43,25 @@ message PushDeviceConfigRequest {
 message PushDeviceConfigResponse {
   // Version assigned to this push.
   uint64 version = 1;
+}
+
+message RewireSensorRequest {
+  string device_id = 1;
+  // The sensor's current logical name on this device -- the stable anchor
+  // identifying which existing sensor this rewire applies to. Not the new
+  // name: RewireSensor changes hardware location, not identity or label
+  // (see FR16.3 for the case where a manifest changes both at once).
+  string name = 2;
+  // The sensor's new hardware location. Empty mux_path means directly on
+  // the root I2C bus.
+  repeated firmware.MuxHop mux_path = 3;
+  uint32 i2c_address = 4;
+}
+
+message RewireSensorResponse {
+  // sensor_id of the rewired sensor -- unchanged from before the rewire,
+  // proving identity survived (FR16).
+  int64 sensor_id = 1;
 }
 
 message GetDeviceConfigRequest {

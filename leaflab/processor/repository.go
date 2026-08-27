@@ -73,13 +73,30 @@ func (h *HardwareAddress) hasKnownAddress() bool {
 	return h != nil && !h.I2CAddress.IsAbsent() && !h.I2CAddress.IsUnknownSentinel()
 }
 
-// UpsertSensor upserts a sensor row.
+// UpsertSensor upserts a sensor row, applying FR16's three-case resolution
+// order so a rewire (address/mux change) or a rename (name change) never
+// mints a second sensor row for the same physical sensor:
 //
-// When hw carries a known hardware address, it first attempts to find an
-// existing row by (board_id, sensor_type_id, i2c_address, mux_path) --
-// hwkey.Key.SQLPredicate matches idx_sensor_hw_address exactly -- and
-// updates its name/unit, preserving sensor_id (and thus reading history)
-// across renames. Falls back to the UNIQUE(board_id, name) upsert.
+//  1. Match on (board_id, canonical hardware key) -- when hw carries a
+//     known address, hwkey.Key.SQLPredicate matches idx_sensor_hw_address
+//     exactly. The "rewire-with-rename" case: name may have changed too,
+//     but the hardware key already identifies the row, so its name is
+//     updated in place and sensor_id (and everything keyed on it --
+//     readings, name history, region history) stays attached.
+//  2. Match on (board_id, name) -- the UNIQUE(board_id, name) upsert
+//     fallback. The "rename-stable rewire" case: the hardware key changed
+//     (or was never known) but the name still identifies the row, so its
+//     hardware key is updated in place.
+//  3. Neither matches: this INSERTs a genuinely new sensor row. On the
+//     device manifest path (this method's only caller) that's correct --
+//     NFR9 means the device can never be refused. It's the two cases
+//     above, not this one, that FR16.3 depends on: a manifest entry that
+//     changes address *and* name in the same message matches neither 1 nor
+//     2 individually. handleManifest resolves that case by elimination
+//     before calling UpsertSensor -- see LoadBoardSensorIdentities and
+//     RewireAndRenameSensor -- so this method's own fallback-to-INSERT
+//     here is only ever reached for entries handleManifest has already
+//     determined really are new.
 //
 // Returns the sensor_id and current region_id (nil if unset).
 func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int64, name, unit string, hw *HardwareAddress) (int64, *int64, error) {
@@ -135,6 +152,91 @@ func (r *Repository) UpsertSensor(ctx context.Context, boardID, sensorTypeID int
 		return 0, nil, fmt.Errorf("upsert sensor %q on board %d: %w", name, boardID, err)
 	}
 	return sensorID, regionID, nil
+}
+
+// BoardSensorIdentity is one existing sensor's identity snapshot -- its
+// sensor_id, current name, sensor_type_id and current hardware key -- as
+// recorded in the sensor table before a manifest is applied. handleManifest
+// loads all of a board's sensors this way up front so it can resolve FR16.3
+// (a manifest entry that changes both hardware key and name in the same
+// message) by elimination: an incoming entry is paired with the one
+// existing identity that no entry in the same manifest claims by hardware
+// key or by name, rather than being silently INSERTed as a new row.
+type BoardSensorIdentity struct {
+	SensorID     int64
+	Name         string
+	SensorTypeID int64
+	HW           *HardwareAddress // nil when the row has no known address
+}
+
+// LoadBoardSensorIdentities returns the current identity snapshot for every
+// sensor on a board, for FR16.3's elimination-based resolution (see
+// BoardSensorIdentity and UpsertSensor's doc comment).
+func (r *Repository) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT sensor_id, name, sensor_type_id, i2c_address, mux_path::text
+		FROM sensor
+		WHERE board_id = $1
+	`, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("load board sensor identities for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var out []BoardSensorIdentity
+	for rows.Next() {
+		var bsi BoardSensorIdentity
+		var i2cAddr *int32
+		var muxText string
+		if err := rows.Scan(&bsi.SensorID, &bsi.Name, &bsi.SensorTypeID, &i2cAddr, &muxText); err != nil {
+			return nil, fmt.Errorf("scan board sensor identity for board %d: %w", boardID, err)
+		}
+		if i2cAddr != nil {
+			var muxPath hwkey.MuxPath
+			// muxText is mux_path::text in hwkey's own canonical encoding
+			// (SQLText's doc comment) -- MuxPath.UnmarshalJSON is its exact
+			// inverse, so this round-trips without this package re-deriving
+			// mux_path parsing rules of its own.
+			if err := muxPath.UnmarshalJSON([]byte(muxText)); err != nil {
+				return nil, fmt.Errorf("parse mux_path for sensor %d: %w", bsi.SensorID, err)
+			}
+			bsi.HW = &HardwareAddress{I2CAddress: hwkey.Address(uint16(*i2cAddr)), MuxPath: muxPath}
+		}
+		out = append(out, bsi)
+	}
+	return out, rows.Err()
+}
+
+// RewireAndRenameSensor updates an existing sensor row's name, unit,
+// sensor_type and hardware key in place by primary key, bypassing both the
+// hardware-key lookup and the (board_id, name) upsert that UpsertSensor
+// tries first -- FR16.3's simultaneous-rewire-and-rename case matches
+// neither, by definition, so the caller (handleManifest) has already
+// identified sensorID by elimination (see LoadBoardSensorIdentities) and
+// just needs the row updated without another identity lookup that would
+// fail. sensor_id, and everything keyed on it, is unchanged by construction
+// -- this is an UPDATE, never an INSERT.
+func (r *Repository) RewireAndRenameSensor(ctx context.Context, sensorID, sensorTypeID int64, name, unit string, hw *HardwareAddress) error {
+	var i2cAddr *int32
+	muxJSON := []byte(`[]`)
+	if hw.hasKnownAddress() {
+		v, _ := hw.I2CAddress.Value()
+		addr := int32(v)
+		i2cAddr = &addr
+		muxJSON = []byte(hw.MuxPath.SQLText())
+	}
+	tag, err := r.db.Exec(ctx, `
+		UPDATE sensor
+		SET name = $2, unit = $3, sensor_type_id = $4, i2c_address = $5, mux_path = $6::jsonb
+		WHERE sensor_id = $1
+	`, sensorID, name, unit, sensorTypeID, i2cAddr, muxJSON)
+	if err != nil {
+		return fmt.Errorf("rewire and rename sensor %d: %w", sensorID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("rewire and rename sensor %d: no matching row", sensorID)
+	}
+	return nil
 }
 
 // UpsertSensorLabel records a name in sensor_name_history.
