@@ -1,4 +1,4 @@
--- Migration 016: plant_region_history schema (Phase 3 scaffold, FR19/FR21)
+-- Migration 017: plant_region_history schema (Phase 3 scaffold, FR19/FR21)
 --
 -- Picked 016 as the next free number after 015 (ownership); state in the PR
 -- since sibling v2 branches on plan/1166 have collided on migration numbers
