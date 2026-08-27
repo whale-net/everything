@@ -89,6 +89,20 @@ const rawRetention = 13 * 30 * 24 * time.Hour
 // (sensor_reading_5m, drop_after => INTERVAL '90 days').
 const fiveMinuteRetention = 90 * 24 * time.Hour
 
+// CaptureCompletionWindow and RawRetention re-export captureCompletionWindow
+// and rawRetention (above) for leaflab/api/capture, which needs both to
+// implement FR20's NFR5 ordering check: a boundary_capture row still
+// 'pending' as its raw chunk approaches rawRetention must fail loudly rather
+// than silently losing the raw data its completion depends on.
+// CaptureCompletionWindow is also the outside bound FR20's Implementation
+// section gives the completer to finish a bucket after it closes -- the
+// same margin migration 022's refresh-policy comment derives
+// raw_retention_min from.
+const (
+	CaptureCompletionWindow = captureCompletionWindow
+	RawRetention            = rawRetention
+)
+
 // ErrUnknownTier is returned by Select when requested is not one of
 // TierRaw, TierFiveMinute or TierHourly.
 var ErrUnknownTier = errors.New("tiers: unrecognized requested tier")

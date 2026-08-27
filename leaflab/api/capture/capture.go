@@ -33,21 +33,44 @@
 // capture must complete before raw retention elapses for the chunk
 // containing its boundary -- easy to reason about against migration 022's
 // refresh/retention ordering, without introducing a second scheduling
-// interval (a cron-style Job's own schedule) on top of it. Wiring the
-// ticker into leaflab/processor/main.go, and the actual NFR5 alerting when
-// a capture is still pending as its raw chunk nears retention, are this
-// task's Implementation phase, not this package's scaffold.
+// interval (a cron-style Job's own schedule) on top of it. leaflab/processor
+// wires RunPending onto exactly that ticker (see leaflab/processor/capture.go).
 //
-// Scaffold only (this task's Scaffold phase, #1360): Recorder.Record and
-// Completer.RunPending are stubs returning ErrNotImplemented. This task's
-// Implementation phase fills in the actual bucket-boundary arithmetic,
-// the raw both-side scan, the N-boundary partial split (FR20.3) and the
-// finer-tier composition (FR20.3's "a coarser tier's partials are
-// composed from the finer tier's rather than from a second raw scan").
+// This task's Implementation phase (#1360) fills in the actual
+// bucket-boundary arithmetic, the raw both-side scan, the N-boundary
+// partial split (FR20.3) and the finer-tier composition (FR20.3's "a
+// coarser tier's partials are composed from the finer tier's rather than
+// from a second raw scan"). Wiring Recorder.Record into a caller (the
+// placement writer, FR19) is deliberately left out of this task's scope --
+// see recorder.go's doc comment on why affected-sensor computation is the
+// caller's responsibility, and this task's own scope note on the writer not
+// yet calling in.
 package capture
 
-import "errors"
+import (
+	"context"
+	"errors"
 
-// ErrNotImplemented is returned by Recorder.Record and Completer.RunPending
-// until this task's Implementation phase fills them in.
-var ErrNotImplemented = errors.New("capture: not implemented (Implementation phase, FR20)")
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// ErrPendingNearRetention is returned (wrapped) by Completer.RunPending when
+// NFR5's ordering check finds a boundary_capture row still 'pending' as its
+// raw chunk approaches raw retention -- the completer has fallen far enough
+// behind that the capture is at risk of losing the raw data it depends on.
+// This must surface loudly (a returned error the caller logs/alerts on),
+// never be silently swallowed.
+var ErrPendingNearRetention = errors.New("capture: boundary_capture row(s) still pending near raw retention (NFR5)")
+
+// querier is the minimal SQL surface capture's helpers need -- satisfied by
+// both pgx.Tx (Recorder's caller-supplied transaction, and each of
+// Completer's own per-bucket transactions) and *pgxpool.Pool (Completer's
+// top-level listing queries, which need no transactional isolation of their
+// own). Keeping this as an interface lets every helper below run unchanged
+// whether it is passed a transaction or the pool directly.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}

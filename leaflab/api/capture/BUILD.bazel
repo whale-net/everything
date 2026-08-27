@@ -5,6 +5,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "capture",
     srcs = [
+        "aggregate.go",
         "capture.go",
         "completer.go",
         "recorder.go",
@@ -14,6 +15,7 @@ go_library(
     deps = [
         "//leaflab/api/tiers",
         "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
