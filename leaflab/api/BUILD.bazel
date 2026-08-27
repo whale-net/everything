@@ -394,6 +394,48 @@ go_test(
     ],
 )
 
+# Real-Postgres integration coverage for FR70.2-.4/FR77's ownership
+# closure, transfer evidence gating, and departure record -- see
+# closure_integration_test.go's doc comment. Same tag set and hand-written
+# rationale as the other integration go_test targets above. Shares
+# dbtest_helpers_integration_test.go's stubAuthz/discardLogger (this file's
+# ReleaseBoard/TransferClosure calls don't gate on authz.Scope -- see that
+# file's doc comment) -- this file's own schema/helper names are all
+# closure-prefixed, so there's no symbol collision.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:closure_integration_test --test_output=all
+go_test(
+    # keep
+    name = "closure_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "closure_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/claim",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
 # Real-Postgres integration coverage for FR1.3's caller-visible skip
 # surface (the read side -- see leaflab/processor's
 # apply_config_regions_integration_test.go for the write side) -- see
