@@ -205,6 +205,8 @@ spec:
           value: "{s3_secret_key}"
         - name: ARTIFACTS_S3_BUCKET
           value: "{s3_bucket}"
+        - name: ARTIFACTS_S3_ENDPOINT
+          value: "{s3_endpoint}"
         - name: ARTIFACTS_S3_PUBLIC_ENDPOINT
           value: "{s3_public_endpoint}"
         - name: ARTIFACTS_S3_REGION

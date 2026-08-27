@@ -21,6 +21,7 @@ func setupBroker(t *testing.T) *ArtifactServer {
 		WithArtifactsS3(
 			"test-artifacts-bucket",
 			"https://s3.test.example.com",
+			"https://s3.test.example.com",
 			"us-east-1",
 			"test-access-key",
 			"test-secret-key",

@@ -90,9 +90,12 @@ type ArtifactServer struct {
 	releaseToolsS3ClientOnce sync.Once
 
 	// artifactsS3* fields back BrokerUpload (issue #1142) -- the bucket
-	// CI build artifacts are uploaded to, the public endpoint used for
-	// presigned PUT URLs, and the credentials.
+	// CI build artifacts are uploaded to, the internal endpoint the server
+	// uses for its own S3 calls (read-back/digest verification in
+	// ConfirmUpload), the public endpoint used for presigned PUT URLs, and
+	// the credentials.
 	artifactsS3Bucket         string
+	artifactsS3Endpoint       string
 	artifactsS3PublicEndpoint string
 	artifactsS3Region         string
 	artifactsS3AccessKey      string
@@ -136,11 +139,15 @@ func WithReleaseToolsS3(bucket, endpoint, publicEndpoint, region, accessKey, sec
 	}
 }
 
-// WithArtifactsS3 configures the S3 bucket and credentials BrokerUpload
-// presigns PUT URLs against for CI build artifacts.
-func WithArtifactsS3(bucket, publicEndpoint, region, accessKey, secretKey string) ArtifactServerOption {
+// WithArtifactsS3 configures the S3 bucket, endpoints, and credentials
+// BrokerUpload presigns PUT URLs against for CI build artifacts. The
+// internal endpoint is required for ConfirmUpload's read-back/digest
+// verification (FR-46, FR-47), which downloads via the server's own S3
+// client rather than the public/presigned endpoint.
+func WithArtifactsS3(bucket, endpoint, publicEndpoint, region, accessKey, secretKey string) ArtifactServerOption {
 	return func(s *ArtifactServer) {
 		s.artifactsS3Bucket = bucket
+		s.artifactsS3Endpoint = endpoint
 		s.artifactsS3PublicEndpoint = publicEndpoint
 		s.artifactsS3Region = region
 		s.artifactsS3AccessKey = accessKey
@@ -1641,7 +1648,7 @@ func (s *ArtifactServer) getArtifactsS3Client() (*s3.Client, error) {
 		s.artifactsS3Client, s.artifactsS3ClientErr = s3.NewClient(context.Background(), s3.Config{
 			Bucket:         s.artifactsS3Bucket,
 			Region:         s.artifactsS3Region,
-			Endpoint:       "", // use default AWS endpoint
+			Endpoint:       s.artifactsS3Endpoint,
 			PublicEndpoint: s.artifactsS3PublicEndpoint,
 			AccessKey:      s.artifactsS3AccessKey,
 			SecretKey:      s.artifactsS3SecretKey,
