@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -45,13 +48,29 @@ type deviceRepository interface {
 	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
 	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
-	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32) ([]BoardRow, error)
+	// ListBoards is household-scoped (FR5.1): scope's SQL fragment
+	// (Scope.Filter) is applied inside the query itself, never as a
+	// post-filter -- see Repository.ListBoards.
+	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error)
 	Ping(ctx context.Context) error
+}
+
+// authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
+// depend on for FR4/FR5/NFR2 authorization: resolving an entity a
+// handler was asked about (ResolveBoardByDeviceID today; board/region/
+// plant/sensor/reading via authz.Resolver.Resolve once RPCs exist for
+// them) and resolving the caller's own Scope from their current
+// household_membership rows. Narrowed to an interface, like
+// deviceRepository above, so tests substitute a fake.
+type authzResolver interface {
+	ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error)
+	ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error)
 }
 
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
 	repo      deviceRepository
+	authzSvc  authzResolver
 	publisher *rmq.Publisher
 	// rmqConn is the underlying RabbitMQ/MQTT connection GetHealth probes
 	// (FR63.1). Held separately from publisher because rmq.Publisher does
@@ -61,13 +80,82 @@ type LeafLabAPIServer struct {
 	logger  *slog.Logger
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
 		repo:      repo,
+		authzSvc:  authzSvc,
 		publisher: publisher,
 		rmqConn:   rmqConn,
 		logger:    logger,
 	}
+}
+
+// scopeForCaller resolves the authenticated caller's Scope from their
+// current household_membership rows (FR75), per the Implementation
+// section: "every RPC handler obtains a Scope from the authenticated
+// principal's current memberships ... and applies it." Handlers hold the
+// returned Scope past this point, never a bare household id (FR4.3).
+//
+// The nil-Claims branch is defense in depth, not the primary gate: every
+// non-anonymous RPC already has Claims guaranteed in context by
+// auth.go's enforcement interceptor before a handler runs. If it were
+// ever reached anyway, failing closed to an empty authz.UnionScope (which
+// Permits nothing and whose Filter matches no row) is the FR4/NFR1
+// posture -- never treat "no principal" as "no restriction".
+func (s *LeafLabAPIServer) scopeForCaller(ctx context.Context) (authz.Scope, error) {
+	claims, ok := grpcauth.ClaimsFromContext(ctx)
+	if !ok || claims == nil {
+		return authz.NewUnionScope(), nil
+	}
+	return s.authzSvc.ScopeForPrincipal(ctx, claims.Subject)
+}
+
+// boardNotFoundFailure is the one contract.NotFound value returned for a
+// board that doesn't exist and for a board that exists but falls outside
+// the caller's Scope (NFR2): using the same constructor call site for
+// both keeps status, body and reason text byte-identical between the two
+// cases, so a caller cannot distinguish "no such board" from "not yours"
+// by response shape.
+func boardNotFoundFailure() error {
+	return contract.NotFound("board", "device_id", "No board matches this device id.")
+}
+
+// authorizeBoardAccess resolves the board named by deviceID and checks it
+// against the caller's Scope, per NFR2's "resolve the entity and the
+// scope in one query" shape: authzSvc.ResolveBoardByDeviceID is the one
+// query, scope.Permits is a cheap in-memory check after it returns, and
+// both "doesn't exist" and "exists, out of scope" collapse to the same
+// boardNotFoundFailure -- never a SELECT-then-branch, and never a
+// separate existence probe ahead of the resolve call.
+//
+// Wired into read paths only today (GetDeviceConfig; ListBoards uses
+// Scope.Filter directly, at the repository query, rather than this
+// resolve-one-entity path). PushDeviceConfig is deliberately not gated
+// here: it upserts a board on first push (self-registration, FR1.1's
+// entrance for a never-claimed board), and until FR76's claim RPC exists
+// there's no way to refuse "already claimed by another household" without
+// turning that upsert into a fresh existence oracle of its own
+// (create-succeeds vs refused becomes distinguishable by response shape
+// alone). Tracked as a scope note pending FR76 (task #1342).
+func (s *LeafLabAPIServer) authorizeBoardAccess(ctx context.Context, deviceID string) error {
+	scope, err := s.scopeForCaller(ctx)
+	if err != nil {
+		s.logger.Error("resolve caller scope failed", "device_id", deviceID, "error", err)
+		return contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	}
+
+	ref, res, err := s.authzSvc.ResolveBoardByDeviceID(ctx, deviceID)
+	if err != nil {
+		if errors.Is(err, authz.ErrNotFound) {
+			return boardNotFoundFailure()
+		}
+		s.logger.Error("resolve board failed", "device_id", deviceID, "error", err)
+		return contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	}
+	if !scope.Permits(ref, res) {
+		return boardNotFoundFailure()
+	}
+	return nil
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
@@ -131,6 +219,13 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		return nil, contract.InvalidArgument("device_config", "device_id", reason)
 	}
 
+	// FR4.1: a caller outside this board's household reach gets the exact
+	// same refusal a nonexistent device_id would (NFR2) -- see
+	// authorizeBoardAccess.
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
 	cfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
 	if err != nil {
 		s.logger.Error("get config failed", "device_id", req.DeviceId, "error", err)
@@ -150,6 +245,18 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 // the response envelope's server_now, so a caller renders elapsed time
 // without trusting its own clock (FR64).
 func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
+	// FR5.1: ListBoards is household-scoped by default -- this Scope is
+	// applied inside the repository query (Scope.Filter), never as a
+	// post-filter. A caller in no household gets an empty list (below),
+	// not an error and not everything (FR4.3 -- this handler never widens
+	// on its own; only a caller who supplies a wider Scope, e.g. a future
+	// admin lane, would).
+	scope, err := s.scopeForCaller(ctx)
+	if err != nil {
+		s.logger.Error("resolve caller scope failed", "error", err)
+		return nil, contract.Internal("board", "", "Could not list boards right now. Please try again.")
+	}
+
 	afterBoardID, hasAfter, err := contract.DecodeBoardCursor(req.GetPage().GetPageToken())
 	if err != nil {
 		return nil, contract.InvalidArgument("list_boards_request", "page_token", "This page link is no longer valid. Start again from the first page.")
@@ -159,7 +266,7 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 
 	// Fetch one extra row to detect whether a next page exists without a
 	// separate COUNT query.
-	rows, err := s.repo.ListBoards(ctx, afterBoardID, hasAfter, limit+1)
+	rows, err := s.repo.ListBoards(ctx, afterBoardID, hasAfter, limit+1, scope)
 	if err != nil {
 		s.logger.Error("list boards failed", "error", err)
 		return nil, contract.Internal("board", "", "Could not list boards right now. Please try again.")

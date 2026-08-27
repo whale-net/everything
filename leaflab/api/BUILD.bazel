@@ -16,6 +16,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
@@ -72,6 +73,7 @@ go_test(
     embed = [":api_lib"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/grpcauth",
@@ -81,6 +83,7 @@ go_test(
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//proto",
         "@org_golang_google_protobuf//reflect/protoreflect",
     ],
 )
@@ -121,9 +124,11 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/dbtest",
+        "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
@@ -155,7 +160,47 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//leaflab/api/authz",
         "//libs/go/dbtest",
+        "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for FR4/FR5/NFR2's per-entity
+# household authorization -- see authz_scope_integration_test.go's doc
+# comment. Same tag set and hand-written rationale as the other integration
+# go_test targets above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:authz_scope_integration_test --test_output=all
+go_test(
+    # keep
+    name = "authz_scope_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "authz_scope_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//proto",
     ],
 )

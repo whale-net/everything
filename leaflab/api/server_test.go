@@ -8,36 +8,96 @@ import (
 	"testing"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/libs/go/grpcauth"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// fakeRepo implements deviceRepository entirely in memory so GetHealth's
-// probe logic (FR63.1) is unit-testable without a live Postgres connection.
-// Only Ping is exercised by these tests; the other methods exist to satisfy
-// the interface and panic if unexpectedly called.
+// fakeRepo implements deviceRepository entirely in memory. GetHealth's
+// tests below only exercise Ping; ListBoards is exercised by the FR5/NFR2
+// tests further down, which capture the authz.Scope a call was made with
+// (listBoardsScope) so a test can assert it was threaded through
+// unmodified, rather than widened or dropped, without a live Postgres
+// connection. The remaining methods still panic if unexpectedly called --
+// nothing in this file exercises PushDeviceConfig's write path.
 type fakeRepo struct {
 	pingErr error
+
+	// getLatestAcceptedConfigCalls counts calls to GetLatestAcceptedConfig
+	// -- the NFR2 tests below use this to prove an authorization refusal
+	// short-circuits *before* this repository call is ever reached, not
+	// just that the RPC eventually returns an error.
+	getLatestAcceptedConfigCalls int
+
+	listBoardsScope authz.Scope
+	listBoardsRows  []BoardRow
+	listBoardsErr   error
 }
 
 func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
-	panic("not used by GetHealth tests")
+	panic("not used by this file's tests")
 }
 
 func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error) {
-	panic("not used by GetHealth tests")
+	panic("not used by this file's tests")
 }
 
 func (f *fakeRepo) GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error) {
-	panic("not used by GetHealth tests")
+	f.getLatestAcceptedConfigCalls++
+	return nil, nil
 }
 
-func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32) ([]BoardRow, error) {
-	panic("not used by GetHealth tests")
+func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error) {
+	f.listBoardsScope = scope
+	return f.listBoardsRows, f.listBoardsErr
 }
 
 func (f *fakeRepo) Ping(ctx context.Context) error {
 	return f.pingErr
+}
+
+// fakeAuthz implements authzResolver entirely in memory, with call
+// counters so tests can assert on NFR2's "one query" structural shape
+// (resolve the entity and the scope in the same number of round trips
+// regardless of outcome) without a live Postgres connection.
+type fakeAuthz struct {
+	scope      authz.Scope
+	scopeErr   error
+	scopeCalls int
+
+	resolveRef   authz.EntityRef
+	resolveRes   authz.Resolution
+	resolveErr   error
+	resolveCalls int
+}
+
+func (f *fakeAuthz) ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error) {
+	f.scopeCalls++
+	return f.scope, f.scopeErr
+}
+
+func (f *fakeAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error) {
+	f.resolveCalls++
+	return f.resolveRef, f.resolveRes, f.resolveErr
+}
+
+// allPermittingScope is a test-only Scope that permits everything -- used
+// to prove scopeForCaller's fail-closed branch never even reaches
+// authzSvc.ScopeForPrincipal when the context carries no Claims, rather
+// than proving it merely returns something restrictive by coincidence.
+type allPermittingScope struct{}
+
+func (allPermittingScope) Permits(ref authz.EntityRef, res authz.Resolution) bool { return true }
+func (allPermittingScope) Filter(argStart int) (string, []any)                    { return "TRUE", nil }
+
+// authedTestCtx returns a context carrying grpcauth.Claims for subject,
+// exactly as the auth interceptor chain would inject them.
+func authedTestCtx(subject string) context.Context {
+	return grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{Subject: subject})
 }
 
 func discardLogger() *slog.Logger {
@@ -66,7 +126,7 @@ func countPopulatedFields(msg protoreflect.Message) int {
 // for the same assertion exercised through the full RPC/interceptor chain,
 // including the allowlist itself.
 func TestGetHealth_NoCredential_Succeeds(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, nil, discardLogger())
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -81,7 +141,7 @@ func TestGetHealth_NoCredential_Succeeds(t *testing.T) {
 // to HEALTH_DEGRADED and nothing more specific -- no error, no detail about
 // which dependency failed (FR63.2).
 func TestGetHealth_DatabaseUnreachable_Degraded(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("connection refused")}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("connection refused")}, nil, nil, nil, discardLogger())
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -99,7 +159,7 @@ func TestGetHealth_DatabaseUnreachable_Degraded(t *testing.T) {
 // RabbitMQ-MQTT connection also maps to HEALTH_DEGRADED, independent of DB
 // health (FR63.1's "pgx pool or the RabbitMQ/MQTT connection").
 func TestGetHealth_MQConnectionNil_Degraded(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, nil, discardLogger())
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -119,10 +179,221 @@ func TestGetHealth_MQConnectionNil_Degraded(t *testing.T) {
 // not yours" must still answer as a successful RPC), so this test simply
 // pins that invariant.
 func TestGetHealth_ErrorNeverCarriesDependencyDetail(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("dial tcp 10.0.0.5:5432: connect: connection refused")}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("dial tcp 10.0.0.5:5432: connect: connection refused")}, nil, nil, nil, discardLogger())
 
 	_, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
 		t.Fatalf("GetHealth returned a transport error %v -- FR63.1 requires GetHealth to always succeed and report DEGRADED instead", err)
+	}
+}
+
+// -- FR4/NFR2: GetDeviceConfig's board authorization -------------------------
+
+// failureBytes marshals the full gRPC status (code, message, and the
+// pb.Failure detail) carried by err, for a genuinely byte-identical
+// comparison -- not just "the fields I thought to check are equal". A
+// caller reading raw bytes off the wire would see exactly this.
+func failureBytes(t *testing.T, err error) []byte {
+	t.Helper()
+	st := status.Convert(err)
+	b, marshalErr := proto.Marshal(st.Proto())
+	if marshalErr != nil {
+		t.Fatalf("marshal status proto: %v", marshalErr)
+	}
+	return b
+}
+
+// TestGetDeviceConfig_NonexistentAndOutOfScope_ByteIdenticalFailure is
+// NFR2's core assertion: a request for a board id that does not exist and
+// a request for a board that exists but is outside the caller's
+// household (FR4.1) must produce byte-identical gRPC statuses -- same
+// code, same message, same pb.Failure detail -- so a caller cannot
+// distinguish "no such board" from "not yours" by response shape.
+func TestGetDeviceConfig_NonexistentAndOutOfScope_ByteIdenticalFailure(t *testing.T) {
+	callerScope := authz.NewHouseholdScope(1)
+
+	nonexistentAuthz := &fakeAuthz{
+		scope:      callerScope,
+		resolveErr: authz.ErrNotFound,
+	}
+	nonexistentRepo := &fakeRepo{}
+	nonexistentServer := NewLeafLabAPIServer(nonexistentRepo, nonexistentAuthz, nil, nil, discardLogger())
+	_, nonexistentErr := nonexistentServer.GetDeviceConfig(authedTestCtx("alice"), &pb.GetDeviceConfigRequest{DeviceId: "does-not-exist"})
+	if nonexistentErr == nil {
+		t.Fatal("GetDeviceConfig for a nonexistent device_id returned nil error, want a refusal")
+	}
+	if nonexistentRepo.getLatestAcceptedConfigCalls != 0 {
+		t.Errorf("nonexistent-device refusal reached the repository %d times, want 0 -- authorization must short-circuit before any config lookup", nonexistentRepo.getLatestAcceptedConfigCalls)
+	}
+
+	outOfScopeAuthz := &fakeAuthz{
+		scope:      callerScope,
+		resolveRef: authz.EntityRef{Kind: authz.EntityBoard, ID: 7},
+		resolveRes: authz.Resolution{HouseholdID: 2}, // a different household than callerScope's 1
+	}
+	outOfScopeRepo := &fakeRepo{}
+	outOfScopeServer := NewLeafLabAPIServer(outOfScopeRepo, outOfScopeAuthz, nil, nil, discardLogger())
+	_, outOfScopeErr := outOfScopeServer.GetDeviceConfig(authedTestCtx("alice"), &pb.GetDeviceConfigRequest{DeviceId: "device-belongs-to-household-2"})
+	if outOfScopeErr == nil {
+		t.Fatal("GetDeviceConfig for an out-of-scope device returned nil error, want a refusal")
+	}
+	if outOfScopeRepo.getLatestAcceptedConfigCalls != 0 {
+		t.Errorf("out-of-scope refusal reached the repository %d times, want 0 -- authorization must short-circuit before any config lookup", outOfScopeRepo.getLatestAcceptedConfigCalls)
+	}
+
+	nonexistentDetail, ok := contract.FromError(nonexistentErr)
+	if !ok {
+		t.Fatal("nonexistent-device error carries no Failure detail")
+	}
+	outOfScopeDetail, ok := contract.FromError(outOfScopeErr)
+	if !ok {
+		t.Fatal("out-of-scope error carries no Failure detail")
+	}
+	if nonexistentDetail.Class != string(contract.FailureNotFound) {
+		t.Errorf("nonexistent-device Class = %q, want %q", nonexistentDetail.Class, contract.FailureNotFound)
+	}
+	if !proto.Equal(nonexistentDetail, outOfScopeDetail) {
+		t.Errorf("Failure details differ: nonexistent=%v, out-of-scope=%v", nonexistentDetail, outOfScopeDetail)
+	}
+
+	nonexistentBytes := failureBytes(t, nonexistentErr)
+	outOfScopeBytes := failureBytes(t, outOfScopeErr)
+	if string(nonexistentBytes) != string(outOfScopeBytes) {
+		t.Errorf("marshaled gRPC status differs between nonexistent and out-of-scope refusals -- NFR2 requires byte-identical status and body\nnonexistent:  %x\nout-of-scope: %x", nonexistentBytes, outOfScopeBytes)
+	}
+}
+
+// TestGetDeviceConfig_NonexistentAndOutOfScope_SameQueryShape is NFR2's
+// "resolve the entity and the scope in one query" requirement, at the Go
+// call-count level: both refusal reasons must take the exact same number
+// of round trips -- one caller-scope resolution, one board resolution --
+// so neither branch is distinguishable by an extra query/round trip a
+// timing side channel could observe.
+func TestGetDeviceConfig_NonexistentAndOutOfScope_SameQueryShape(t *testing.T) {
+	callerScope := authz.NewHouseholdScope(1)
+
+	nonexistentAuthz := &fakeAuthz{scope: callerScope, resolveErr: authz.ErrNotFound}
+	nonexistentServer := NewLeafLabAPIServer(&fakeRepo{}, nonexistentAuthz, nil, nil, discardLogger())
+	if _, err := nonexistentServer.GetDeviceConfig(authedTestCtx("alice"), &pb.GetDeviceConfigRequest{DeviceId: "does-not-exist"}); err == nil {
+		t.Fatal("want a refusal")
+	}
+
+	outOfScopeAuthz := &fakeAuthz{
+		scope:      callerScope,
+		resolveRef: authz.EntityRef{Kind: authz.EntityBoard, ID: 7},
+		resolveRes: authz.Resolution{HouseholdID: 2},
+	}
+	outOfScopeServer := NewLeafLabAPIServer(&fakeRepo{}, outOfScopeAuthz, nil, nil, discardLogger())
+	if _, err := outOfScopeServer.GetDeviceConfig(authedTestCtx("alice"), &pb.GetDeviceConfigRequest{DeviceId: "device-b"}); err == nil {
+		t.Fatal("want a refusal")
+	}
+
+	if nonexistentAuthz.scopeCalls != outOfScopeAuthz.scopeCalls {
+		t.Errorf("scopeForCaller call count differs: nonexistent=%d, out-of-scope=%d", nonexistentAuthz.scopeCalls, outOfScopeAuthz.scopeCalls)
+	}
+	if nonexistentAuthz.resolveCalls != outOfScopeAuthz.resolveCalls {
+		t.Errorf("ResolveBoardByDeviceID call count differs: nonexistent=%d, out-of-scope=%d", nonexistentAuthz.resolveCalls, outOfScopeAuthz.resolveCalls)
+	}
+	if nonexistentAuthz.scopeCalls != 1 || nonexistentAuthz.resolveCalls != 1 {
+		t.Errorf("want exactly one scope resolution and one board resolution per call, got scopeCalls=%d resolveCalls=%d", nonexistentAuthz.scopeCalls, nonexistentAuthz.resolveCalls)
+	}
+}
+
+// -- FR5.1: ListBoards is household-scoped, never widened ---------------------
+
+// TestListBoards_ScopeThreadedToRepository_MultiHousehold proves the Scope
+// ListBoards passes to the repository is the caller's actual (possibly
+// multi-household, FR75) Scope, unmodified by the handler -- not a bare
+// household id, and not silently widened.
+func TestListBoards_ScopeThreadedToRepository_MultiHousehold(t *testing.T) {
+	callerScope := authz.NewUnionScope(authz.NewHouseholdScope(10), authz.NewHouseholdScope(20))
+	repo := &fakeRepo{}
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{scope: callerScope}, nil, nil, discardLogger())
+
+	if _, err := server.ListBoards(authedTestCtx("bob"), &pb.ListBoardsRequest{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if repo.listBoardsScope == nil {
+		t.Fatal("Repository.ListBoards was not called with a Scope")
+	}
+	gotFrag, gotArgs := repo.listBoardsScope.Filter(1)
+	wantFrag, wantArgs := callerScope.Filter(1)
+	if gotFrag != wantFrag {
+		t.Errorf("Scope threaded to repository has fragment %q, want %q", gotFrag, wantFrag)
+	}
+	if len(gotArgs) != len(wantArgs) {
+		t.Fatalf("Scope threaded to repository has %d args, want %d", len(gotArgs), len(wantArgs))
+	}
+	for i := range wantArgs {
+		if gotArgs[i] != wantArgs[i] {
+			t.Errorf("arg[%d] = %v, want %v", i, gotArgs[i], wantArgs[i])
+		}
+	}
+}
+
+// TestListBoards_EmptyScope_NotWidened proves a caller with no current
+// household membership gets a Scope that matches no row passed straight
+// through to the repository (never widened to "everything"), and the RPC
+// itself still succeeds with an empty list rather than an error (FR5.1).
+func TestListBoards_EmptyScope_NotWidened(t *testing.T) {
+	repo := &fakeRepo{listBoardsRows: nil}
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{scope: authz.NewUnionScope()}, nil, nil, discardLogger())
+
+	resp, err := server.ListBoards(authedTestCtx("nobody"), &pb.ListBoardsRequest{})
+	if err != nil {
+		t.Fatalf("ListBoards for a caller with no household returned an error, want an empty list: %v", err)
+	}
+	if len(resp.Boards) != 0 {
+		t.Errorf("len(Boards) = %d, want 0", len(resp.Boards))
+	}
+
+	frag, args := repo.listBoardsScope.Filter(1)
+	if frag != "FALSE" || len(args) != 0 {
+		t.Errorf("Scope threaded to repository = (%q, %v), want (\"FALSE\", []) -- must never be widened to unfiltered", frag, args)
+	}
+}
+
+// -- NFR1/FR4: fail-closed with no authenticated principal --------------------
+
+// TestScopeForCaller_NoClaims_FailsClosed proves scopeForCaller denies by
+// default when the context carries no grpcauth.Claims -- the "handler
+// registered with no scope check denies" case the task's Testing section
+// names. authzSvc is stubbed to grant an all-permitting Scope, so if
+// scopeForCaller ever fell through to querying it on a Claims-less
+// context, this test would catch the widening: the correct behavior is to
+// never even call it.
+func TestScopeForCaller_NoClaims_FailsClosed(t *testing.T) {
+	authzSvc := &fakeAuthz{scope: allPermittingScope{}}
+	server := NewLeafLabAPIServer(&fakeRepo{}, authzSvc, nil, nil, discardLogger())
+
+	scope, err := server.scopeForCaller(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if scope.Permits(authz.EntityRef{Kind: authz.EntityBoard, ID: 1}, authz.Resolution{HouseholdID: 1}) {
+		t.Fatal("scopeForCaller with no Claims in context permitted an entity, want fail-closed (permits nothing)")
+	}
+	if authzSvc.scopeCalls != 0 {
+		t.Errorf("authzSvc.ScopeForPrincipal was called %d times with no Claims present, want 0 -- fail-closed must not consult authzSvc at all", authzSvc.scopeCalls)
+	}
+}
+
+// TestScopeForCaller_WithClaims_DelegatesToAuthzSvc is the companion case:
+// once Claims are present, scopeForCaller does consult authzSvc (using the
+// authenticated subject), rather than failing closed unconditionally.
+func TestScopeForCaller_WithClaims_DelegatesToAuthzSvc(t *testing.T) {
+	authzSvc := &fakeAuthz{scope: authz.NewHouseholdScope(5)}
+	server := NewLeafLabAPIServer(&fakeRepo{}, authzSvc, nil, nil, discardLogger())
+
+	scope, err := server.scopeForCaller(authedTestCtx("alice"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !scope.Permits(authz.EntityRef{Kind: authz.EntityBoard, ID: 1}, authz.Resolution{HouseholdID: 5}) {
+		t.Fatal("scope with Claims present did not permit the household authzSvc granted")
+	}
+	if authzSvc.scopeCalls != 1 {
+		t.Errorf("authzSvc.ScopeForPrincipal was called %d times, want exactly 1", authzSvc.scopeCalls)
 	}
 }
