@@ -87,6 +87,15 @@ type deviceRepository interface {
 	MarkClaimRound(ctx context.Context, handle string, cfg claim.Config) error
 	GetClaimChallengeStatus(ctx context.Context, handle string, cfg claim.Config) (waiting bool, err error)
 	CompleteClaim(ctx context.Context, principalSubject, handle string, cfg claim.Config, entry audit.Entry) (HouseholdRow, error)
+
+	// Ownership closure, release and transfer (FR70.2-.4, FR77, #1343) --
+	// see closure.go. PreviewClosure is read-only (a thin wrapper over
+	// ComputeClosure); ReleaseBoard and TransferClosure are auditedWrite
+	// writes, matching the households.go/claim.go entry-in/entry-mutated
+	// convention above.
+	PreviewClosure(ctx context.Context, boardID int64) (Closure, error)
+	ReleaseBoard(ctx context.Context, boardID int64, principalSubject, reason string, entry audit.Entry) (releaseToken string, err error)
+	TransferClosure(ctx context.Context, boardID, destinationHouseholdID int64, releaseToken, dischargedChallengeHandle, actorSubject, reason string, entry audit.Entry) (HouseholdRow, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -207,6 +216,40 @@ func (s *LeafLabAPIServer) authorizeBoardAccess(ctx context.Context, deviceID st
 	}
 	if !scope.Permits(ref, res) {
 		return boardNotFoundFailure()
+	}
+	return nil
+}
+
+// boardIDNotFoundFailure is boardNotFoundFailure's board_id-keyed sibling,
+// for the closure RPCs (PreviewClosure, ReleaseBoard) which take board_id
+// directly rather than device_id -- same NFR2-style masking, naming the
+// field a caller of these RPCs actually supplied.
+func boardIDNotFoundFailure() error {
+	return contract.NotFound("board", "board_id", "No board matches this id.")
+}
+
+// authorizeBoardIDAccess is authorizeBoardAccess's board_id-keyed sibling:
+// same one-query resolve-and-check shape (NFR2), used by PreviewClosure
+// (and any future closure RPC gated the same way) instead of
+// authorizeBoardAccess, which only accepts a device_id.
+func (s *LeafLabAPIServer) authorizeBoardIDAccess(ctx context.Context, boardID int64) error {
+	scope, err := s.scopeForCaller(ctx)
+	if err != nil {
+		s.logger.Error("resolve caller scope failed", "board_id", boardID, "error", err)
+		return contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	}
+
+	ref := authz.EntityRef{Kind: authz.EntityBoard, ID: boardID}
+	res, err := s.authzSvc.Resolve(ctx, ref)
+	if err != nil {
+		if errors.Is(err, authz.ErrNotFound) {
+			return boardIDNotFoundFailure()
+		}
+		s.logger.Error("resolve board failed", "board_id", boardID, "error", err)
+		return contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	}
+	if !scope.Permits(ref, res) {
+		return boardIDNotFoundFailure()
 	}
 	return nil
 }
@@ -904,4 +947,185 @@ func (s *LeafLabAPIServer) CompleteClaim(ctx context.Context, req *pb.CompleteCl
 	}
 
 	return &pb.CompleteClaimResponse{Household: toHouseholdProto(household), ServerNow: contract.Now()}, nil
+}
+
+// --- Ownership closure, release, and transfer (FR70.2-.4, FR77) -----------
+
+// toClosureProto mirrors leaflab/api.Closure onto the wire -- see that
+// type's doc comment (closure.go) for what each field means.
+func toClosureProto(c Closure) *pb.OwnershipClosure {
+	return &pb.OwnershipClosure{
+		BoardId:           c.BoardID,
+		SensorIds:         c.SensorIDs,
+		RegionIds:         c.RegionIDs,
+		SubtreeRootIds:    c.SubtreeRootIDs,
+		EntangledBoardIds: c.EntangledBoardIDs,
+		PlantIds:          c.PlantIDs,
+	}
+}
+
+// PreviewClosure returns a board's ownership closure without moving
+// anything (FR70) -- the read-only preview a caller uses before deciding
+// whether to adopt or transfer. Gated by authorizeBoardIDAccess: the
+// caller must currently be a member of the board's owning household (or
+// hold a wider future grant/elevation Scope) -- same NFR2-style
+// not-found-masking as GetDeviceConfig, so "no such board" and "not yours"
+// are indistinguishable.
+func (s *LeafLabAPIServer) PreviewClosure(ctx context.Context, req *pb.PreviewClosureRequest) (*pb.PreviewClosureResponse, error) {
+	if req.GetBoardId() <= 0 {
+		return nil, contract.InvalidArgument("board", "board_id", "A board id is required.")
+	}
+	if err := s.authorizeBoardIDAccess(ctx, req.GetBoardId()); err != nil {
+		return nil, err
+	}
+
+	closure, err := s.repo.PreviewClosure(ctx, req.GetBoardId())
+	if err != nil {
+		if errors.Is(err, ErrBoardNotFound) {
+			return nil, boardIDNotFoundFailure()
+		}
+		s.logger.Error("preview closure failed", "board_id", req.GetBoardId(), "error", err)
+		return nil, contract.Internal("board", "", "Could not preview this board's closure right now. Please try again.")
+	}
+	return &pb.PreviewClosureResponse{Closure: toClosureProto(closure), ServerNow: contract.Now()}, nil
+}
+
+// releaseBoardAuditEntry builds ReleaseBoard's audit.Entry, matching
+// householdAuditEntry/claimAuditEntry's shape/precedent: Action/EntityKind
+// come from auditRegistrations so the registered audit contract and what's
+// actually written can't drift apart. EntityID/TargetHouseholdID/Reason are
+// filled in by Repository.ReleaseBoard once the board's household is known
+// (closure.go), matching households.go's entry-mutated-inside-repo
+// convention.
+func releaseBoardAuditEntry(ctx context.Context) audit.Entry {
+	reg := auditRegistrations[releaseBoardFullMethod]
+	return audit.Entry{
+		ActorSubject:  actingSubject(ctx),
+		ActorKind:     audit.ActorKindHuman,
+		Action:        reg.Action,
+		EntityKind:    reg.EntityKind,
+		CorrelationID: CorrelationIDFromContext(ctx),
+	}
+}
+
+// ReleaseBoard is FR77(a)'s evidence path: a current member of the board's
+// owning household releases it, producing an opaque release token
+// TransferClosure later presents as evidence that the losing household
+// consented. Authorization is the membership check itself
+// (Repository.ReleaseBoard's ErrClosureNotHouseholdMember) rather than
+// authorizeBoardIDAccess/Scope: TransferClosure's caller may legitimately
+// be a member of the *gaining* household presenting a token issued by
+// someone else entirely, so board-Scope gating would be wrong here --
+// ReleaseBoard itself, not a separate authorization layer, is where "must
+// be a member of the losing household" is enforced.
+func (s *LeafLabAPIServer) ReleaseBoard(ctx context.Context, req *pb.ReleaseBoardRequest) (*pb.ReleaseBoardResponse, error) {
+	if req.GetBoardId() <= 0 {
+		return nil, contract.InvalidArgument("board", "board_id", "A board id is required.")
+	}
+
+	actor := actingSubject(ctx)
+	entry := releaseBoardAuditEntry(ctx)
+
+	token, err := s.repo.ReleaseBoard(ctx, req.GetBoardId(), actor, req.GetReason(), entry)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrBoardNotFound):
+			return nil, boardIDNotFoundFailure()
+		case errors.Is(err, ErrClosureNotRealHousehold):
+			return nil, contract.Refuse("board", "board_id",
+				"This board isn't currently owned by a household.",
+				"Adopt this board first (FR76), then release it.")
+		case errors.Is(err, ErrClosureNotHouseholdMember):
+			return nil, contract.PermissionDenied("board", "board_id",
+				"Only a current member of this board's household can release it.")
+		}
+		s.logger.Error("release board failed", "board_id", req.GetBoardId(), "actor", actor, "error", err)
+		return nil, contract.Internal("board", "", "Could not release this board right now. Please try again.")
+	}
+
+	return &pb.ReleaseBoardResponse{ReleaseToken: token, ServerNow: contract.Now()}, nil
+}
+
+// TransferClosure moves a board's ownership closure to
+// destination_household_id (FR77), gated on evidence: exactly one of
+// TransferClosureRequest.evidence's branches must be set, checked here
+// before any repository call so a caller supplying neither never reaches
+// the DB. "An admin assertion alone is never sufficient" -- the
+// admin_evidence branch additionally requires a non-empty reason
+// (FR77(b)'s "elevated, reasoned admin action"); the release_token branch
+// defaults an empty reason to a fixed, honest description of what
+// happened, since NewTransferEntry's audit row cannot go unreasoned
+// (FR77's transfer-must-carry-a-reason).
+func (s *LeafLabAPIServer) TransferClosure(ctx context.Context, req *pb.TransferClosureRequest) (*pb.TransferClosureResponse, error) {
+	if req.GetBoardId() <= 0 {
+		return nil, contract.InvalidArgument("board", "board_id", "A board id is required.")
+	}
+	if req.GetDestinationHouseholdId() <= 0 {
+		return nil, contract.InvalidArgument("transfer_closure_request", "destination_household_id", "A destination household id is required.")
+	}
+
+	releaseToken := req.GetReleaseToken()
+	adminEvidence := req.GetAdminEvidence()
+	if releaseToken == "" && adminEvidence == nil {
+		return nil, contract.Refuse("board", "",
+			"This transfer needs evidence that the losing household consented.",
+			"Ask a member of the current household to release the board (FR77), or have an admin present a discharged possession challenge.")
+	}
+
+	var dischargedHandle string
+	reason := req.GetReason()
+	if adminEvidence != nil {
+		dischargedHandle = adminEvidence.GetDischargedChallengeHandle()
+		if reason == "" {
+			return nil, contract.InvalidArgument("transfer_closure_request", "reason", "A reason is required for an admin-evidence transfer.")
+		}
+	} else if reason == "" {
+		reason = "Released by a member of the losing household."
+	}
+
+	actor := actingSubject(ctx)
+	boardIDStr := fmt.Sprintf("%d", req.GetBoardId())
+	destHouseholdID := req.GetDestinationHouseholdId()
+	entry := audit.NewTransferEntry(actor, audit.ActorKindHuman, &destHouseholdID, &boardIDStr, reason, CorrelationIDFromContext(ctx))
+
+	household, err := s.repo.TransferClosure(ctx, req.GetBoardId(), destHouseholdID, releaseToken, dischargedHandle, actor, reason, entry)
+	if err != nil {
+		var entangled *ErrEntangledClosure
+		switch {
+		case errors.Is(err, ErrBoardNotFound):
+			return nil, boardIDNotFoundFailure()
+		case errors.Is(err, ErrClosureNotRealHousehold):
+			return nil, contract.Refuse("board", "board_id",
+				"This board has no losing household to transfer from.",
+				"Use board adoption (FR76) instead if this board is unowned.")
+		case errors.Is(err, ErrClosureSameHousehold):
+			return nil, contract.Refuse("transfer_closure_request", "destination_household_id",
+				"This board already belongs to that household.",
+				"Choose a different destination household.")
+		case errors.Is(err, ErrHouseholdNotFound):
+			return nil, householdNotFoundFailure()
+		case errors.Is(err, ErrClosureDestinationUnadopted):
+			return nil, contract.Refuse("transfer_closure_request", "destination_household_id",
+				"Boards cannot be transferred into the Unadopted household.",
+				"Choose a real destination household.")
+		case errors.Is(err, ErrClosureInvalidReleaseToken):
+			return nil, contract.Refuse("transfer_closure_request", "release_token",
+				"This release token is invalid, expired or already used.",
+				"Ask a member of the losing household to release the board again (FR77).")
+		case errors.Is(err, ErrClosureChallengeNotDischarged):
+			return nil, contract.Refuse("transfer_closure_request", "admin_evidence",
+				"This possession challenge is not discharged against this board.",
+				"Complete a possession challenge (FR76) before presenting it as transfer evidence.")
+		case errors.Is(err, ErrClosureAdminReasonRequired):
+			return nil, contract.InvalidArgument("transfer_closure_request", "reason", "A reason is required for an admin-evidence transfer.")
+		case errors.As(err, &entangled):
+			return nil, contract.Refuse("board", "board_id",
+				fmt.Sprintf("This board shares a subtree with board(s) %v that belong to a different household.", entangled.ForeignBoardIDs),
+				"Separate the entangled boards first (FR51, FR54, FR74), then try the transfer again.")
+		}
+		s.logger.Error("transfer closure failed", "board_id", req.GetBoardId(), "actor", actor, "error", err)
+		return nil, contract.Internal("board", "", "Could not complete this transfer right now. Please try again.")
+	}
+
+	return &pb.TransferClosureResponse{Household: toHouseholdProto(household), ServerNow: contract.Now()}, nil
 }

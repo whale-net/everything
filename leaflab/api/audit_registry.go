@@ -28,6 +28,15 @@ const (
 // effect (board ownership moving), which happens only in CompleteClaim.
 const completeClaimFullMethod = "/leaflab.api.v1.LeafLabAPI/CompleteClaim"
 
+// Ownership closure, release and transfer (FR70.2-.4, FR77, #1343) full
+// method names -- see closure.go and server.go's ReleaseBoard/TransferClosure
+// handlers. PreviewClosure is a read and is deliberately absent, matching
+// GetHousehold/ListHouseholdMembers above.
+const (
+	releaseBoardFullMethod    = "/leaflab.api.v1.LeafLabAPI/ReleaseBoard"
+	transferClosureFullMethod = "/leaflab.api.v1.LeafLabAPI/TransferClosure"
+)
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
 // registry for this service: every RPC that performs a write. A method
 // listed here with no corresponding entry in auditRegistrations fails
@@ -53,6 +62,8 @@ var declaredWriteMethods = []string{
 	removeMemberFullMethod,
 	renameHouseholdFullMethod,
 	completeClaimFullMethod,
+	releaseBoardFullMethod,
+	transferClosureFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
@@ -66,6 +77,8 @@ var auditRegistrations = map[string]audit.Registration{
 	removeMemberFullMethod:     {Action: "RemoveMember", EntityKind: "household_membership"},
 	renameHouseholdFullMethod:  {Action: "RenameHousehold", EntityKind: "household"},
 	completeClaimFullMethod:    {Action: "ClaimBoard", EntityKind: "board"},
+	releaseBoardFullMethod:     {Action: "ReleaseBoard", EntityKind: "board"},
+	transferClosureFullMethod:  {Action: audit.ActionTransfer, EntityKind: "board"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry

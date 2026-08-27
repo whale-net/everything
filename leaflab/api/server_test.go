@@ -156,6 +156,22 @@ func (f *fakeRepo) CompleteClaim(ctx context.Context, principalSubject, handle s
 	panic("not used by this file's tests")
 }
 
+// Ownership closure, release and transfer methods (FR70.2-.4, FR77, #1343)
+// -- panic stubs like the ones above: nothing in this file exercises these
+// RPCs yet (Testing phase's job); they exist here only so *fakeRepo keeps
+// satisfying deviceRepository.
+func (f *fakeRepo) PreviewClosure(ctx context.Context, boardID int64) (Closure, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ReleaseBoard(ctx context.Context, boardID int64, principalSubject, reason string, entry audit.Entry) (string, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) TransferClosure(ctx context.Context, boardID, destinationHouseholdID int64, releaseToken, dischargedChallengeHandle, actorSubject, reason string, entry audit.Entry) (HouseholdRow, error) {
+	panic("not used by this file's tests")
+}
+
 // fakeAuthz implements authzResolver entirely in memory, with call
 // counters so tests can assert on NFR2's "one query" structural shape
 // (resolve the entity and the scope in the same number of round trips
