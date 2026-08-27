@@ -1,0 +1,13 @@
+"""SCD2 close-and-open writer for plant_region_history and the no-back-dating guard (FR19, FR21, NFR6.1). Scaffold only -- see placement.go's package doc comment."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "placement",
+    srcs = ["placement.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/placement",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)

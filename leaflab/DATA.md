@@ -242,6 +242,7 @@ SCD2 tables in this schema:
 | `sensor_name_history` | Sensor logical name |
 | `sensor_region_history` | Sensor region assignment |
 | `sensor_hw_history` | Sensor I2C address + mux path |
+| `plant_region_history` | Plant region placement (FR19) — indexed both directions (plant→region at T and region→plant at T, NFR6.1); a move closes and opens, never back-dated (FR19) |
 
 `device_config` is NOT SCD2 — it is an append-only event log keyed by `(board_id, version)`. The view `v_board_state_history` derives a SCD2-shaped representation from it using a window function.
 
