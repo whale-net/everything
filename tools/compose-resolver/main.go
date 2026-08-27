@@ -39,19 +39,25 @@ func loadConfig() (config, error) {
 		registry: registryConfig{
 			Address:      getEnv("APP_REGISTRY_ADDRESS", "localhost:50051"),
 			Environment:  os.Getenv("APP_REGISTRY_ENVIRONMENT"),
-			Repository:   getEnv("APP_REGISTRY_REPOSITORY", "ghcr.io/whale-net/manmanv2-host-manager"),
+			Repository:   os.Getenv("APP_REGISTRY_REPOSITORY"),
 			AuthMode:     getEnv("GRPC_AUTH_MODE", "none"),
 			AuthTokenURL: os.Getenv("GRPC_AUTH_TOKEN_URL"),
 			ClientID:     os.Getenv("GRPC_AUTH_CLIENT_ID"),
 			ClientSecret: os.Getenv("GRPC_AUTH_CLIENT_SECRET"),
 		},
 		dockerSocket:  getEnv("DOCKER_SOCKET", "/var/run/docker.sock"),
-		containerName: getEnv("HOST_MANAGER_CONTAINER_NAME", "manmanv2-host-manager"),
+		containerName: os.Getenv("CONTAINER_NAME"),
 		envFilePath:   getEnv("ENV_FILE_PATH", "/workspace/.env"),
-		versionVar:    getEnv("VERSION_ENV_VAR", "HOST_MANAGER_VERSION"),
+		versionVar:    getEnv("VERSION_ENV_VAR", "IMAGE_VERSION"),
 	}
 	if cfg.registry.Environment == "" {
 		return config{}, fmt.Errorf("APP_REGISTRY_ENVIRONMENT must be set (e.g. \"prod\")")
+	}
+	if cfg.registry.Repository == "" {
+		return config{}, fmt.Errorf("APP_REGISTRY_REPOSITORY must be set (e.g. \"ghcr.io/whale-net/manmanv2-host-manager\")")
+	}
+	if cfg.containerName == "" {
+		return config{}, fmt.Errorf("CONTAINER_NAME must be set to the name of the compose service's container")
 	}
 
 	var err error
@@ -72,8 +78,8 @@ func run() error {
 	defer cancel()
 
 	logging.Configure(logging.Config{
-		ServiceName: "host-manager-resolver",
-		Domain:      "manmanv2",
+		ServiceName: getEnv("LOG_SERVICE_NAME", "compose-resolver"),
+		Domain:      os.Getenv("LOG_DOMAIN"),
 		JSONFormat:  getEnv("LOG_FORMAT", "json") == "json",
 	})
 	defer logging.Shutdown(ctx)
@@ -96,7 +102,7 @@ func run() error {
 	ticker := time.NewTicker(cfg.pollInterval)
 	defer ticker.Stop()
 
-	logger.Info("host-manager-resolver starting",
+	logger.Info("compose-resolver starting",
 		"environment", cfg.registry.Environment,
 		"repository", cfg.registry.Repository,
 		"container", cfg.containerName,
@@ -119,8 +125,8 @@ func run() error {
 }
 
 // reconcile resolves what app-registry says should be running and, if it
-// differs from the host-manager container's current image tag, deploys it:
-// pull, swap the container, wait for health, roll back on failure.
+// differs from the target container's current image tag, deploys it: pull,
+// swap the container, wait for health, roll back on failure.
 //
 // Current version is read from the running container's own image tag, not
 // from .env -- .env is written for operator visibility only (see

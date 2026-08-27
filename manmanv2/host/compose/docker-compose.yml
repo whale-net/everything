@@ -15,17 +15,13 @@ services:
       HOST_DATA_DIR: ${HOST_DATA_DIR:-./data}
       DOCKER_SOCKET: /var/run/docker.sock
 
-  # Resolver sidecar: polls app-registry for what's promoted to
-  # APP_REGISTRY_ENVIRONMENT and, when it changes, pulls the new
-  # host-manager image, swaps the host-manager container to it, health
-  # checks it, and rolls back on failure. See ../RESOLVER.md.
-  #
-  # It never touches this compose file. It talks to the Docker Engine API
-  # directly (same libs/go/docker library host-manager itself uses) rather
-  # than shelling out to `docker compose`, so it only needs the socket and
-  # a single file bind mount for the .env it rewrites for visibility.
+  # This is manmanv2's adoption of the app-agnostic //tools/compose-resolver
+  # sidecar -- see tools/compose-resolver/README.md for what it does and
+  # why it talks to the Docker Engine API rather than shelling out to
+  # `docker compose`, and ../RESOLVER.md for host-manager-specific notes
+  # (bootstrap order, auth gap).
   host-manager-resolver:
-    image: ${RESOLVER_REPOSITORY:-ghcr.io/whale-net/manmanv2-host-resolver}:${RESOLVER_VERSION:-latest}
+    image: ${RESOLVER_REPOSITORY:-ghcr.io/whale-net/compose-resolver}:${RESOLVER_VERSION:-latest}
     container_name: manmanv2-host-manager-resolver
     restart: always
     volumes:
@@ -35,10 +31,12 @@ services:
       APP_REGISTRY_ADDRESS: ${APP_REGISTRY_ADDRESS}
       APP_REGISTRY_ENVIRONMENT: ${APP_REGISTRY_ENVIRONMENT:-prod}
       APP_REGISTRY_REPOSITORY: ${HOST_MANAGER_REPOSITORY:-ghcr.io/whale-net/manmanv2-host-manager}
-      HOST_MANAGER_CONTAINER_NAME: ${HOST_MANAGER_CONTAINER_NAME:-manmanv2-host-manager}
+      CONTAINER_NAME: ${HOST_MANAGER_CONTAINER_NAME:-manmanv2-host-manager}
       VERSION_ENV_VAR: HOST_MANAGER_VERSION
       ENV_FILE_PATH: /workspace/.env
       POLL_INTERVAL: ${RESOLVER_POLL_INTERVAL:-60s}
+      LOG_SERVICE_NAME: host-manager-resolver
+      LOG_DOMAIN: manmanv2
       GRPC_AUTH_MODE: ${GRPC_AUTH_MODE:-oidc}
       GRPC_AUTH_TOKEN_URL: ${GRPC_AUTH_TOKEN_URL}
       GRPC_AUTH_CLIENT_ID: ${GRPC_AUTH_CLIENT_ID}
