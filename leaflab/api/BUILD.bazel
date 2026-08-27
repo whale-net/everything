@@ -246,3 +246,40 @@ go_test(
         "@org_golang_google_protobuf//proto",
     ],
 )
+
+# Real-Postgres integration coverage for this task's "make this a test, not
+# a comment" bullet -- see
+# board_display_name_write_isolation_integration_test.go's doc comment. Same
+# tag set and hand-written rationale as the other *_integration_test targets
+# above. Its own hermetic schema (wider than dbtest_helpers_integration_test.go's
+# testSchema: adds sensor_type/sensor/region/sensor_region_history) lives in
+# the test file itself, not here.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:board_display_name_write_isolation_integration_test --test_output=all
+go_test(
+    # keep
+    name = "board_display_name_write_isolation_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "board_display_name_write_isolation_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)

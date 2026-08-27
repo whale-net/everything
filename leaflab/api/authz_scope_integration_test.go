@@ -26,6 +26,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -48,7 +49,11 @@ import (
 // 030_board_display_name's plain nullable display_name column (FR57) since
 // Repository.ListBoards now projects it. It is intentionally narrower than
 // the real migration -- only what authz.PGResolver and Repository.ListBoards
-// actually read.
+// actually read. audit_log mirrors migration 016_audit_log's column set
+// (schema only, like dbtest_helpers_integration_test.go's testSchema) so the
+// SetBoardDisplayName tests below (which need both a real household schema
+// for FR4/NFR2 and a place for FR8's audit row to land) don't need two
+// separate fixtures.
 const authzTestSchema = `
 	CREATE TABLE household (
 		household_id BIGSERIAL PRIMARY KEY
@@ -85,6 +90,19 @@ const authzTestSchema = `
 		acked_at         TIMESTAMPTZ,
 		rejection_reason TEXT,
 		UNIQUE (board_id, version)
+	);
+
+	CREATE TABLE audit_log (
+		audit_id             BIGSERIAL PRIMARY KEY,
+		actor_subject        TEXT NOT NULL,
+		actor_kind           TEXT NOT NULL,
+		target_household_id  BIGINT NULL,
+		action                TEXT NOT NULL,
+		entity_kind           TEXT NOT NULL,
+		entity_id             TEXT NULL,
+		reason                TEXT NULL,
+		occurred_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		correlation_id        TEXT NULL
 	);
 `
 
@@ -390,5 +408,126 @@ func TestGetDeviceConfig_NFR2_TimingIndistinguishable(t *testing.T) {
 	if ratio := float64(diff) / float64(larger); ratio > toleranceRatio {
 		t.Errorf("mean latency for nonexistent (%v) vs out-of-scope (%v) differs by %.0f%% of the larger mean over N=%d, want <= %.0f%% -- this is the timing side channel NFR2 forbids",
 			meanNonexistent, meanOutOfScope, ratio*100, n, toleranceRatio*100)
+	}
+}
+
+// -- FR57/FR4/FR8/NFR2: SetBoardDisplayName over real SQL ---------------------
+//
+// The grantee half of this task's Testing section ("A grantee can rename
+// (member-or-grantee)") is not covered here: SetBoardDisplayName's
+// authorization is member-only today (server.go's doc comment on
+// SetBoardDisplayName) because this branch's ancestry (stacked on #1339/
+// #1338) predates #1344's grantee/capability mechanism, and #1349 does not
+// list #1344 as a dependency -- see the scope note filed alongside this
+// commit. What member-only authorization does provide -- refusing a
+// non-member with NFR2's not-found shape -- is covered below.
+
+// TestSetBoardDisplayName_Member_SucceedsAndIsAudited is FR57's core
+// success path over real SQL: a member of the board's household can rename
+// it, the stored column reflects the write, and FR8's audit row is
+// recorded with the fields FR8.1 requires.
+func TestSetBoardDisplayName_Member_SucceedsAndIsAudited(t *testing.T) {
+	server, pool := newAuthzTestServer(t)
+
+	household := insertHousehold(t, pool)
+	insertMembership(t, pool, household, "alice")
+	boardID := insertScopedBoard(t, pool, "device-rename-1", household)
+
+	resp, err := server.SetBoardDisplayName(authzCtxFor("alice"), &pb.SetBoardDisplayNameRequest{
+		DeviceId:    "device-rename-1",
+		DisplayName: "Living Room Board",
+	})
+	if err != nil {
+		t.Fatalf("SetBoardDisplayName by a household member: %v", err)
+	}
+	if resp.DisplayName != "Living Room Board" {
+		t.Errorf("response DisplayName = %q, want the request echoed back as-is: %q", resp.DisplayName, "Living Room Board")
+	}
+
+	var stored *string
+	if err := pool.QueryRow(context.Background(), `SELECT display_name FROM board WHERE board_id = $1`, boardID).Scan(&stored); err != nil {
+		t.Fatalf("read back board.display_name: %v", err)
+	}
+	if stored == nil || *stored != "Living Room Board" {
+		t.Errorf("board.display_name = %v, want %q", stored, "Living Room Board")
+	}
+
+	var auditCount int
+	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM audit_log`).Scan(&auditCount); err != nil {
+		t.Fatalf("count audit_log rows: %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("audit_log row count after a successful rename = %d, want exactly 1 (FR8)", auditCount)
+	}
+
+	var actorSubject, action, entityKind, entityID string
+	var targetHouseholdID int64
+	if err := pool.QueryRow(context.Background(), `
+		SELECT actor_subject, action, entity_kind, entity_id, target_household_id FROM audit_log
+	`).Scan(&actorSubject, &action, &entityKind, &entityID, &targetHouseholdID); err != nil {
+		t.Fatalf("read audit_log row: %v", err)
+	}
+	if actorSubject != "alice" {
+		t.Errorf("audit_log actor_subject = %q, want %q", actorSubject, "alice")
+	}
+	wantReg := auditRegistrations[setBoardDisplayNameFullMethod]
+	if action != wantReg.Action {
+		t.Errorf("audit_log action = %q, want the registered action %q", action, wantReg.Action)
+	}
+	if entityKind != wantReg.EntityKind {
+		t.Errorf("audit_log entity_kind = %q, want the registered entity_kind %q", entityKind, wantReg.EntityKind)
+	}
+	wantEntityID := strconv.FormatInt(boardID, 10)
+	if entityID != wantEntityID {
+		t.Errorf("audit_log entity_id = %q, want the board id %q", entityID, wantEntityID)
+	}
+	if targetHouseholdID != household {
+		t.Errorf("audit_log target_household_id = %d, want the board's household %d", targetHouseholdID, household)
+	}
+}
+
+// TestSetBoardDisplayName_NonMember_RefusedNFR2NotFound_BoardUnchanged is
+// the Testing section's named non-member case: a caller who is not a
+// member of the board's household cannot rename it, gets the same
+// not-found refusal a nonexistent device_id would (NFR2), and the board's
+// display_name is left untouched by the refused attempt.
+func TestSetBoardDisplayName_NonMember_RefusedNFR2NotFound_BoardUnchanged(t *testing.T) {
+	server, pool := newAuthzTestServer(t)
+
+	householdA := insertHousehold(t, pool)
+	householdB := insertHousehold(t, pool)
+	insertMembership(t, pool, householdA, "alice")
+	boardID := insertScopedBoard(t, pool, "device-rename-2", householdB)
+
+	_, err := server.SetBoardDisplayName(authzCtxFor("alice"), &pb.SetBoardDisplayNameRequest{
+		DeviceId:    "device-rename-2",
+		DisplayName: "Should Not Apply",
+	})
+	if err == nil {
+		t.Fatal("SetBoardDisplayName by a non-member succeeded, want a refusal")
+	}
+
+	detail, ok := contract.FromError(err)
+	if !ok {
+		t.Fatal("non-member refusal carries no Failure detail")
+	}
+	if detail.Class != string(contract.FailureNotFound) {
+		t.Errorf("Failure Class = %q, want %q (NFR2: a non-member gets the same shape as a nonexistent board)", detail.Class, contract.FailureNotFound)
+	}
+
+	var stored *string
+	if err := pool.QueryRow(context.Background(), `SELECT display_name FROM board WHERE board_id = $1`, boardID).Scan(&stored); err != nil {
+		t.Fatalf("read back board.display_name: %v", err)
+	}
+	if stored != nil {
+		t.Errorf("board.display_name = %q after a refused rename attempt, want unchanged (NULL)", *stored)
+	}
+
+	var auditCount int
+	if err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM audit_log`).Scan(&auditCount); err != nil {
+		t.Fatalf("count audit_log rows: %v", err)
+	}
+	if auditCount != 0 {
+		t.Errorf("audit_log row count after a refused rename = %d, want 0 (no audit row for a refused write)", auditCount)
 	}
 }

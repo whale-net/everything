@@ -37,6 +37,19 @@ type fakeRepo struct {
 	listBoardsScope authz.Scope
 	listBoardsRows  []BoardRow
 	listBoardsErr   error
+
+	// setBoardDisplayName* fields capture SetBoardDisplayName's arguments and
+	// control its return, for the FR57 tests further down: setBoardDisplayNameCalls
+	// proves an authorization refusal short-circuits before this repository
+	// call is ever reached (mirroring getLatestAcceptedConfigCalls above),
+	// and the captured boardID/displayName/entry let a successful-call test
+	// assert the write and its audit.Entry carry exactly what the handler
+	// was asked to record.
+	setBoardDisplayNameCalls   int
+	setBoardDisplayNameBoardID int64
+	setBoardDisplayNameValue   string
+	setBoardDisplayNameEntry   audit.Entry
+	setBoardDisplayNameErr     error
 }
 
 func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
@@ -58,7 +71,11 @@ func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter 
 }
 
 func (f *fakeRepo) SetBoardDisplayName(ctx context.Context, boardID int64, displayName string, entry audit.Entry) error {
-	panic("not used by this file's tests")
+	f.setBoardDisplayNameCalls++
+	f.setBoardDisplayNameBoardID = boardID
+	f.setBoardDisplayNameValue = displayName
+	f.setBoardDisplayNameEntry = entry
+	return f.setBoardDisplayNameErr
 }
 
 func (f *fakeRepo) Ping(ctx context.Context) error {
@@ -400,5 +417,167 @@ func TestScopeForCaller_WithClaims_DelegatesToAuthzSvc(t *testing.T) {
 	}
 	if authzSvc.scopeCalls != 1 {
 		t.Errorf("authzSvc.ScopeForPrincipal was called %d times, want exactly 1", authzSvc.scopeCalls)
+	}
+}
+
+// -- FR57/NFR18.1: ListBoards' display_name projection ------------------------
+
+// TestDisplayNameOrDeviceIDFallback is a plain table-driven unit test of the
+// pure helper displayNameOrDeviceIDFallback: a set name is returned as-is,
+// an unset (empty) name falls back to the device id.
+func TestDisplayNameOrDeviceIDFallback(t *testing.T) {
+	cases := []struct {
+		name        string
+		displayName string
+		deviceID    string
+		want        string
+	}{
+		{"set name returned as-is", "Living Room Board", "leaflab-abc123", "Living Room Board"},
+		{"unset name falls back to device id", "", "leaflab-abc123", "leaflab-abc123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := displayNameOrDeviceIDFallback(tc.displayName, tc.deviceID); got != tc.want {
+				t.Errorf("displayNameOrDeviceIDFallback(%q, %q) = %q, want %q", tc.displayName, tc.deviceID, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestListBoards_DisplayName_ServiceSideFallback proves NFR18.1's "the
+// fallback is a rendering decision in the service, not in the BFF" at the
+// handler level: ListBoards' response carries the device id for a board
+// whose repository row has no display_name, and the stored display_name
+// as-is for one that has it -- with the repository (fakeRepo) contributing
+// only the raw BoardRow, never the substitution itself.
+func TestListBoards_DisplayName_ServiceSideFallback(t *testing.T) {
+	repo := &fakeRepo{listBoardsRows: []BoardRow{
+		{BoardID: 1, DeviceID: "leaflab-unset", DisplayName: ""},
+		{BoardID: 2, DeviceID: "leaflab-set", DisplayName: "Kitchen Board"},
+	}}
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{scope: authz.NewHouseholdScope(1)}, nil, nil, discardLogger())
+
+	resp, err := server.ListBoards(authedTestCtx("alice"), &pb.ListBoardsRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Boards) != 2 {
+		t.Fatalf("len(Boards) = %d, want 2", len(resp.Boards))
+	}
+	if resp.Boards[0].DisplayName != "leaflab-unset" {
+		t.Errorf("Boards[0].DisplayName = %q, want the device id fallback %q", resp.Boards[0].DisplayName, "leaflab-unset")
+	}
+	if resp.Boards[1].DisplayName != "Kitchen Board" {
+		t.Errorf("Boards[1].DisplayName = %q, want the stored display name %q, not device_id", resp.Boards[1].DisplayName, "Kitchen Board")
+	}
+}
+
+// -- FR57/FR4/NFR2: SetBoardDisplayName's authorization and audit trail -------
+
+// TestSetBoardDisplayName_NonexistentAndOutOfScope_RefusedBeforeRepositoryWrite
+// mirrors TestGetDeviceConfig_NonexistentAndOutOfScope_ByteIdenticalFailure:
+// a nonexistent device_id and a device_id that resolves to a board outside
+// the caller's household must both refuse before the repository write is
+// ever reached (repo.SetBoardDisplayName must not be called), and must
+// produce the same NFR2 not-found failure shape.
+func TestSetBoardDisplayName_NonexistentAndOutOfScope_RefusedBeforeRepositoryWrite(t *testing.T) {
+	callerScope := authz.NewHouseholdScope(1)
+
+	nonexistentRepo := &fakeRepo{}
+	nonexistentAuthz := &fakeAuthz{scope: callerScope, resolveErr: authz.ErrNotFound}
+	nonexistentServer := NewLeafLabAPIServer(nonexistentRepo, nonexistentAuthz, nil, nil, discardLogger())
+	_, nonexistentErr := nonexistentServer.SetBoardDisplayName(authedTestCtx("alice"), &pb.SetBoardDisplayNameRequest{DeviceId: "does-not-exist", DisplayName: "New Name"})
+	if nonexistentErr == nil {
+		t.Fatal("SetBoardDisplayName for a nonexistent device_id returned nil error, want a refusal")
+	}
+	if nonexistentRepo.setBoardDisplayNameCalls != 0 {
+		t.Errorf("nonexistent-device refusal reached the repository %d times, want 0", nonexistentRepo.setBoardDisplayNameCalls)
+	}
+
+	outOfScopeRepo := &fakeRepo{}
+	outOfScopeAuthz := &fakeAuthz{
+		scope:      callerScope,
+		resolveRef: authz.EntityRef{Kind: authz.EntityBoard, ID: 7},
+		resolveRes: authz.Resolution{HouseholdID: 2}, // a different household than callerScope's 1
+	}
+	outOfScopeServer := NewLeafLabAPIServer(outOfScopeRepo, outOfScopeAuthz, nil, nil, discardLogger())
+	_, outOfScopeErr := outOfScopeServer.SetBoardDisplayName(authedTestCtx("alice"), &pb.SetBoardDisplayNameRequest{DeviceId: "device-belongs-to-household-2", DisplayName: "New Name"})
+	if outOfScopeErr == nil {
+		t.Fatal("SetBoardDisplayName for an out-of-scope device returned nil error, want a refusal")
+	}
+	if outOfScopeRepo.setBoardDisplayNameCalls != 0 {
+		t.Errorf("out-of-scope refusal reached the repository %d times, want 0", outOfScopeRepo.setBoardDisplayNameCalls)
+	}
+
+	nonexistentDetail, ok := contract.FromError(nonexistentErr)
+	if !ok {
+		t.Fatal("nonexistent-device error carries no Failure detail")
+	}
+	outOfScopeDetail, ok := contract.FromError(outOfScopeErr)
+	if !ok {
+		t.Fatal("out-of-scope error carries no Failure detail")
+	}
+	if nonexistentDetail.Class != string(contract.FailureNotFound) {
+		t.Errorf("nonexistent-device Class = %q, want %q", nonexistentDetail.Class, contract.FailureNotFound)
+	}
+	if !proto.Equal(nonexistentDetail, outOfScopeDetail) {
+		t.Errorf("Failure details differ: nonexistent=%v, out-of-scope=%v -- NFR2 requires a non-member's refusal to be indistinguishable from a nonexistent board", nonexistentDetail, outOfScopeDetail)
+	}
+}
+
+// TestSetBoardDisplayName_Success_EchoesRequestAndRecordsAuditEntry proves
+// the success path's two remaining contracts: the response echoes back
+// exactly what was requested (never the device_id fallback ListBoards
+// applies on read), and the audit.Entry handed to the repository (FR8)
+// carries the acting subject, the resolved board's household id, and the
+// registered action/entity_kind for this RPC (audit_registry.go) -- so a
+// mismatch between the registry and this handler's literal values would
+// fail here, not just at MustValidateAuditRegistrations's structural check.
+func TestSetBoardDisplayName_Success_EchoesRequestAndRecordsAuditEntry(t *testing.T) {
+	repo := &fakeRepo{}
+	authzSvc := &fakeAuthz{
+		scope:      authz.NewHouseholdScope(9),
+		resolveRef: authz.EntityRef{Kind: authz.EntityBoard, ID: 42},
+		resolveRes: authz.Resolution{HouseholdID: 9},
+	}
+	server := NewLeafLabAPIServer(repo, authzSvc, nil, nil, discardLogger())
+
+	resp, err := server.SetBoardDisplayName(authedTestCtx("alice"), &pb.SetBoardDisplayNameRequest{DeviceId: "leaflab-42", DisplayName: "Living Room Board"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.DisplayName != "Living Room Board" {
+		t.Errorf("response DisplayName = %q, want the request's value echoed back as-is: %q", resp.DisplayName, "Living Room Board")
+	}
+
+	if repo.setBoardDisplayNameCalls != 1 {
+		t.Fatalf("repo.SetBoardDisplayName called %d times, want exactly 1", repo.setBoardDisplayNameCalls)
+	}
+	if repo.setBoardDisplayNameBoardID != 42 {
+		t.Errorf("boardID passed to repository = %d, want the resolved board id 42", repo.setBoardDisplayNameBoardID)
+	}
+	if repo.setBoardDisplayNameValue != "Living Room Board" {
+		t.Errorf("displayName passed to repository = %q, want %q", repo.setBoardDisplayNameValue, "Living Room Board")
+	}
+
+	entry := repo.setBoardDisplayNameEntry
+	if entry.ActorSubject != "alice" {
+		t.Errorf("audit entry ActorSubject = %q, want %q", entry.ActorSubject, "alice")
+	}
+	if entry.ActorKind != audit.ActorKindHuman {
+		t.Errorf("audit entry ActorKind = %q, want %q", entry.ActorKind, audit.ActorKindHuman)
+	}
+	if entry.TargetHouseholdID == nil || *entry.TargetHouseholdID != 9 {
+		t.Errorf("audit entry TargetHouseholdID = %v, want a pointer to the resolved board's household (9)", entry.TargetHouseholdID)
+	}
+	wantReg := auditRegistrations[setBoardDisplayNameFullMethod]
+	if entry.Action != wantReg.Action {
+		t.Errorf("audit entry Action = %q, want the registered action %q", entry.Action, wantReg.Action)
+	}
+	if entry.EntityKind != wantReg.EntityKind {
+		t.Errorf("audit entry EntityKind = %q, want the registered entity_kind %q", entry.EntityKind, wantReg.EntityKind)
+	}
+	if entry.EntityID == nil || *entry.EntityID != "42" {
+		t.Errorf("audit entry EntityID = %v, want a pointer to the board id \"42\"", entry.EntityID)
 	}
 }

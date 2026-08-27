@@ -54,12 +54,16 @@ release_app(
 
 # Fast, Docker-free handler tests (#1329's Testing section): unauthenticated
 # redirect, authenticated render, the degraded page (NFR14), and the NFR18.1
-# grep-style placeholder conformance check. data exposes this package's own
-# checked-in source (nfr18_conformance_test.go greps it) and BUILD.bazel
-# (used as its own marker file).
+# grep-style placeholder conformance check. Also #1349's FR57/NFR19
+# source-analysis check (device_id_conformance_test.go): device_id renders
+# in exactly one leaflab/ui/components file. data exposes this package's own
+# checked-in source (nfr18_conformance_test.go greps it), BUILD.bazel (used
+# as its own marker file), and components' conformance_srcs (which
+# device_id_conformance_test.go greps).
 go_test(
     name = "ui_test",
     srcs = [
+        "device_id_conformance_test.go",
         "fakes_test.go",
         "handlers_auth_test.go",
         "nfr18_conformance_test.go",
