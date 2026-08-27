@@ -76,6 +76,27 @@ type fakeRepo struct {
 	activeElevationExpiresAt time.Time
 	activeElevationErr       error
 	activeElevationCalls     int
+
+	// -- Support reference (FR80) fakes -- lookupSupportRefFound defaults
+	// to false (zero value), so a fakeRepo{} used by a test that doesn't
+	// configure it behaves like an unknown code: resolveSupportReference
+	// (support_reference.go) takes the "no match" path, mirroring every
+	// other fakeRepo zero value in this file's fail-closed convention.
+	lookupSupportRefArg   string
+	lookupSupportRefRow   SupportReferenceLookup
+	lookupSupportRefFound bool
+	lookupSupportRefErr   error
+	lookupSupportRefCalls int
+
+	recordSupportRefResolveID    int64
+	recordSupportRefResolveEntry audit.Entry
+	recordSupportRefResolveErr   error
+	recordSupportRefResolveCalls int
+
+	adminByHouseholdArg   int64
+	adminByHouseholdRows  []AdminBoardHealthRow
+	adminByHouseholdErr   error
+	adminByHouseholdCalls int
 }
 
 // openElevationCall/renewElevationCall/endElevationCall capture the exact
@@ -240,6 +261,44 @@ func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, tar
 		return time.Time{}, ErrNoActiveElevation
 	}
 	return f.activeElevationExpiresAt, nil
+}
+
+// Support reference (FR80) fakes. CreateSupportReference/
+// RevokeSupportReference/ListSupportReferences panic -- nothing in this
+// file's tests exercises the owner-facing lifecycle yet -- while
+// LookupSupportReferenceByHash/RecordSupportReferenceResolve/
+// AdminBoardHealthByHousehold back server_admin_test.go's ResolveToHousehold
+// coverage, so they return configurable fakes rather than panicking.
+
+func (f *fakeRepo) CreateSupportReference(ctx context.Context, householdID int64, codeHash string, createdBySubject string, expiresAt time.Time, entry audit.Entry) (int64, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) RevokeSupportReference(ctx context.Context, householdID, supportReferenceID int64, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ListSupportReferences(ctx context.Context, householdID int64, afterID int64, hasAfter bool, limit int32) ([]SupportReferenceRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) LookupSupportReferenceByHash(ctx context.Context, codeHash string) (SupportReferenceLookup, bool, error) {
+	f.lookupSupportRefCalls++
+	f.lookupSupportRefArg = codeHash
+	return f.lookupSupportRefRow, f.lookupSupportRefFound, f.lookupSupportRefErr
+}
+
+func (f *fakeRepo) RecordSupportReferenceResolve(ctx context.Context, supportReferenceID int64, entry audit.Entry) error {
+	f.recordSupportRefResolveCalls++
+	f.recordSupportRefResolveID = supportReferenceID
+	f.recordSupportRefResolveEntry = entry
+	return f.recordSupportRefResolveErr
+}
+
+func (f *fakeRepo) AdminBoardHealthByHousehold(ctx context.Context, householdID int64) ([]AdminBoardHealthRow, error) {
+	f.adminByHouseholdCalls++
+	f.adminByHouseholdArg = householdID
+	return f.adminByHouseholdRows, f.adminByHouseholdErr
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call

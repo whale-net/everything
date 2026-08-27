@@ -128,9 +128,21 @@ func run() error {
 		elevationDuration = time.Duration(minutes) * time.Minute
 	}
 
+	// FR80: "short lifetime (configurable)" -- LEAFLAB_SUPPORT_REFERENCE_TTL_MINUTES
+	// overrides DefaultSupportReferenceTTL when set (documented in
+	// leaflab/api/ENV.md).
+	supportReferenceTTL := DefaultSupportReferenceTTL
+	if raw := getEnv("LEAFLAB_SUPPORT_REFERENCE_TTL_MINUTES", ""); raw != "" {
+		minutes, err := strconv.Atoi(raw)
+		if err != nil || minutes <= 0 {
+			return fmt.Errorf("LEAFLAB_SUPPORT_REFERENCE_TTL_MINUTES: must be a positive integer, got %q", raw)
+		}
+		supportReferenceTTL = time.Duration(minutes) * time.Minute
+	}
+
 	repo := NewRepository(pool)
 	authzSvc := authz.NewPGResolver(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"), claimConfig, limiter, WithElevationDuration(elevationDuration))
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"), claimConfig, limiter, WithElevationDuration(elevationDuration), WithSupportReferenceTTL(supportReferenceTTL))
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the

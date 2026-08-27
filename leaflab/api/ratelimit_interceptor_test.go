@@ -271,3 +271,45 @@ func TestRateLimitInterceptor_OverTheWire_AnonymousAndAuthenticatedKeys_Independ
 		t.Fatalf("authenticated call: expected success (distinct key from the exhausted anonymous peer bucket), got %v", err)
 	}
 }
+
+// TestCheckRateLimitBuckets_SupportReferenceResolve_ExceedsBucket_PerAdminPrincipal
+// is FR80/NFR10's named "rate limiting kicks in per admin principal after
+// the configured number of resolve attempts" criterion: ResolveToHousehold
+// is wired against ratelimit.BucketSupportReferenceResolve
+// (rateLimitBucketByMethod, ratelimit_interceptor.go) -- checked here
+// through checkRateLimitBuckets directly, with resolveToHouseholdFullMethod
+// as the method under test, mirroring
+// TestCheckRateLimitBuckets_ExceedsReadDefault_ReturnsRateLimitedWithRetryHint's
+// shape for BucketReadDefault. BucketReadDefault is configured generously so
+// only the support_reference_resolve bucket is what trips. Independence
+// across two distinct admin principals proves "per admin principal", not a
+// single shared bucket for every admin.
+func TestCheckRateLimitBuckets_SupportReferenceResolve_ExceedsBucket_PerAdminPrincipal(t *testing.T) {
+	limiter := ratelimit.NewInMemoryLimiter(map[ratelimit.Bucket]ratelimit.WindowConfig{
+		ratelimit.BucketReadDefault:             {Limit: 1000, Window: time.Minute},
+		ratelimit.BucketSupportReferenceResolve: {Limit: 3, Window: time.Minute},
+	})
+
+	for i := 0; i < 3; i++ {
+		if err := checkRateLimitBuckets(claimsContext("admin1"), limiter, resolveToHouseholdFullMethod); err != nil {
+			t.Fatalf("admin1 call %d (within the configured limit): unexpected error: %v", i+1, err)
+		}
+	}
+	err := checkRateLimitBuckets(claimsContext("admin1"), limiter, resolveToHouseholdFullMethod)
+	if err == nil {
+		t.Fatal("admin1 call past the configured limit: got nil error, want rate_limited")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("code = %v, want %v", status.Code(err), codes.ResourceExhausted)
+	}
+	if _, ok := contract.RetryAfterFromError(err); !ok {
+		t.Error("rate-limited error carries no RetryInfo detail")
+	}
+
+	// A distinct admin principal has its own budget -- exhausting admin1's
+	// bucket must not throttle admin2 (NFR10: "rate-limited per admin
+	// principal").
+	if err := checkRateLimitBuckets(claimsContext("admin2"), limiter, resolveToHouseholdFullMethod); err != nil {
+		t.Fatalf("admin2 first call: expected success -- admin1's exhausted bucket must not be shared, got %v", err)
+	}
+}

@@ -531,6 +531,199 @@ func (r *Repository) ActiveElevation(ctx context.Context, adminSubject string, t
 	return expiresAt, nil
 }
 
+// ── Support reference (FR80) ─────────────────────────────────────────────────
+//
+// CreateSupportReference/RevokeSupportReference/ListSupportReferences back
+// the owner-facing lifecycle; LookupSupportReferenceByHash/
+// RecordSupportReferenceResolve/AdminBoardHealthByHousehold back FR10.2's
+// admin resolve of a support reference to its household (server.go's
+// resolveSupportReference).
+
+// ErrSupportReferenceNotFound is returned by RevokeSupportReference when
+// (household_id, support_reference_id) names no currently-unrevoked row --
+// covering "doesn't exist", "belongs to a different household" and
+// "already revoked" alike, so a caller (server.go's RevokeSupportReference
+// handler) maps all three to the same failure shape.
+var ErrSupportReferenceNotFound = errors.New("support reference not found")
+
+// SupportReferenceRow is a reference's owner-facing metadata, as listed by
+// ListSupportReferences -- never the plaintext code (FR80), which this
+// package never even reads back out of the database once created.
+type SupportReferenceRow struct {
+	SupportReferenceID int64
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+	RevokedAt          *time.Time
+	LastResolvedAt     *time.Time
+	ResolveCount       int32
+}
+
+// SupportReferenceLookup is LookupSupportReferenceByHash's result: a
+// support_reference row's authorization-relevant state, off the single
+// query NFR2's timing-equalization requires (see that method's doc
+// comment).
+type SupportReferenceLookup struct {
+	SupportReferenceID int64
+	HouseholdID        int64
+	ExpiresAt          time.Time
+	RevokedAt          *time.Time
+}
+
+// CreateSupportReference inserts a fresh support_reference row and records
+// entry in the same transaction (FR8; FR80's "creation ... write audit
+// rows"). codeHash is the caller-computed hash of the generated code
+// (server.go's hashSupportReferenceCode) -- this method never sees, and
+// this package never stores, the plaintext.
+func (r *Repository) CreateSupportReference(ctx context.Context, householdID int64, codeHash string, createdBySubject string, expiresAt time.Time, entry audit.Entry) (int64, error) {
+	var id int64
+	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		if scanErr := tx.QueryRow(ctx, `
+			INSERT INTO support_reference (household_id, code_hash, created_by_subject, expires_at)
+			VALUES ($1, $2, $3, $4)
+			RETURNING support_reference_id
+		`, householdID, codeHash, createdBySubject, expiresAt).Scan(&id); scanErr != nil {
+			return audit.Entry{}, fmt.Errorf("create support reference for household %d: %w", householdID, scanErr)
+		}
+		idStr := strconv.FormatInt(id, 10)
+		entry.EntityID = &idStr
+		return entry, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}
+
+// RevokeSupportReference immediately revokes (household_id,
+// supportReferenceID) and records entry in the same transaction (FR80's
+// "revocation is one call and immediate"; FR8). Returns
+// ErrSupportReferenceNotFound if the row doesn't exist, belongs to a
+// different household, or is already revoked -- revocation is not
+// idempotent-by-design, matching RetireBoard's ErrBoardAlreadyRetired
+// convention above.
+func (r *Repository) RevokeSupportReference(ctx context.Context, householdID, supportReferenceID int64, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		ct, err := tx.Exec(ctx, `
+			UPDATE support_reference
+			SET revoked_at = NOW()
+			WHERE support_reference_id = $1
+			  AND household_id = $2
+			  AND revoked_at IS NULL
+		`, supportReferenceID, householdID)
+		if err != nil {
+			return audit.Entry{}, fmt.Errorf("revoke support reference %d: %w", supportReferenceID, err)
+		}
+		if ct.RowsAffected() == 0 {
+			return audit.Entry{}, ErrSupportReferenceNotFound
+		}
+		return entry, nil
+	})
+}
+
+// ListSupportReferences returns up to limit of householdID's support
+// references, keyset-paginated on (support_reference_id) per FR61 --
+// afterID/hasAfter is the last support_reference_id of the previous page
+// (contract.DecodeSupportReferenceCursor), not an offset. Never returns
+// the plaintext code (FR80) -- this table has no column to return it from.
+func (r *Repository) ListSupportReferences(ctx context.Context, householdID int64, afterID int64, hasAfter bool, limit int32) ([]SupportReferenceRow, error) {
+	var sqlQuery string
+	var args []any
+	if hasAfter {
+		sqlQuery = `
+			SELECT support_reference_id, created_at, expires_at, revoked_at, last_resolved_at, resolve_count
+			FROM support_reference
+			WHERE household_id = $1 AND support_reference_id > $2
+			ORDER BY support_reference_id
+			LIMIT $3
+		`
+		args = []any{householdID, afterID, limit}
+	} else {
+		sqlQuery = `
+			SELECT support_reference_id, created_at, expires_at, revoked_at, last_resolved_at, resolve_count
+			FROM support_reference
+			WHERE household_id = $1
+			ORDER BY support_reference_id
+			LIMIT $2
+		`
+		args = []any{householdID, limit}
+	}
+
+	rows, err := r.db.Query(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list support references for household %d: %w", householdID, err)
+	}
+	defer rows.Close()
+
+	var out []SupportReferenceRow
+	for rows.Next() {
+		var row SupportReferenceRow
+		if err := rows.Scan(&row.SupportReferenceID, &row.CreatedAt, &row.ExpiresAt, &row.RevokedAt, &row.LastResolvedAt, &row.ResolveCount); err != nil {
+			return nil, fmt.Errorf("scan support reference: %w", err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// LookupSupportReferenceByHash is the one query behind FR10.2's
+// support-reference resolution (server.go's resolveSupportReference): it
+// looks up a row by codeHash regardless of whether the code is unknown,
+// expired, revoked or valid, so an unknown hash and a known-but-invalid
+// one cost the same single unique-index lookup (NFR2's timing-
+// equalization clause) -- classification into unknown/expired/revoked/
+// valid happens entirely in Go afterward, off this one result, never as a
+// second query.
+func (r *Repository) LookupSupportReferenceByHash(ctx context.Context, codeHash string) (SupportReferenceLookup, bool, error) {
+	var l SupportReferenceLookup
+	err := r.db.QueryRow(ctx, `
+		SELECT support_reference_id, household_id, expires_at, revoked_at
+		FROM support_reference
+		WHERE code_hash = $1
+	`, codeHash).Scan(&l.SupportReferenceID, &l.HouseholdID, &l.ExpiresAt, &l.RevokedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SupportReferenceLookup{}, false, nil
+		}
+		return SupportReferenceLookup{}, false, fmt.Errorf("lookup support reference by hash: %w", err)
+	}
+	return l, true, nil
+}
+
+// RecordSupportReferenceResolve increments a valid reference's use
+// counters (resolve_count, last_resolved_at) and records entry in the same
+// transaction (FR8; FR80's "every use write audit rows"). Called only
+// after LookupSupportReferenceByHash has classified the row as valid
+// (unexpired, unrevoked) -- never on an unknown/expired/revoked hash, so
+// this extra work is exactly what makes a genuinely successful resolve
+// take more work than a failed one, which NFR2 does not forbid (see
+// resolveSupportReference's doc comment): NFR2 only requires the failure
+// outcomes to be indistinguishable from each other, not from a success.
+func (r *Repository) RecordSupportReferenceResolve(ctx context.Context, supportReferenceID int64, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		ct, err := tx.Exec(ctx, `
+			UPDATE support_reference
+			SET resolve_count = resolve_count + 1,
+			    last_resolved_at = NOW()
+			WHERE support_reference_id = $1
+		`, supportReferenceID)
+		if err != nil {
+			return audit.Entry{}, fmt.Errorf("record support reference resolve %d: %w", supportReferenceID, err)
+		}
+		if ct.RowsAffected() == 0 {
+			return audit.Entry{}, ErrSupportReferenceNotFound
+		}
+		return entry, nil
+	})
+}
+
+// AdminBoardHealthByHousehold resolves a support reference's household
+// directly to FR79's health projection for every board in it -- shares
+// adminBoardHealthQuery with AdminBoardHealthByPerson/
+// AdminBoardHealthByPartialDeviceID above.
+func (r *Repository) AdminBoardHealthByHousehold(ctx context.Context, householdID int64) ([]AdminBoardHealthRow, error) {
+	return r.scanAdminBoardHealth(ctx, `b.household_id = $1`, householdID)
+}
+
 // ── Ownership (FR1.1, FR70.1, NFR6.1) ────────────────────────────────────────
 //
 // household_id is carried directly on board and plant, and on the region

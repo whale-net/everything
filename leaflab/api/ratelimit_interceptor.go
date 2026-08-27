@@ -15,12 +15,26 @@ import (
 // /StreamServerInfo.FullMethod format, e.g. "/leaflab.api.v1.LeafLabAPI/
 // GetHealth") to the named ratelimit.Bucket enforced for it, in addition to
 // ratelimit.BucketReadDefault (every RPC always gets the default check --
-// see NewRateLimitUnaryInterceptor). Empty in Phase 1: registering a bucket
-// (ratelimit.Buckets) is deliberately separate from wiring it to a method,
-// so later tasks (FR42's resend, FR47's ack_wait_concurrent, FR76's
-// claim_open/claim_round, FR80's support_reference_resolve) add an entry
-// here as those RPCs are built, without touching this interceptor.
-var rateLimitBucketByMethod = map[string]ratelimit.Bucket{}
+// see NewRateLimitUnaryInterceptor). Registering a bucket (ratelimit.Buckets)
+// is deliberately separate from wiring it to a method, so a later task adds
+// an entry here as the RPC it protects is built, without touching this
+// interceptor. FR80's resolveToHouseholdFullMethod entry below is the first
+// one wired; FR42's resend, FR47's ack_wait_concurrent and FR76's
+// claim_open/claim_round remain unwired pending their own RPCs.
+//
+// resolveToHouseholdFullMethod is a single RPC serving all three of
+// ResolveToHousehold's query kinds (person_identifier, support_reference,
+// partial_device_id) -- NFR10's support_reference_resolve bucket is applied
+// to the whole method rather than only the support_reference branch,
+// matching this map's method-granularity shape rather than adding a
+// request-body-aware special case to checkRateLimitBuckets for one RPC.
+// BucketSupportReferenceResolve's default (10/minute) is a generous budget
+// for legitimate admin lookups of any kind, so this is not expected to
+// meaningfully constrain person_identifier/partial_device_id use in
+// practice.
+var rateLimitBucketByMethod = map[string]ratelimit.Bucket{
+	resolveToHouseholdFullMethod: ratelimit.BucketSupportReferenceResolve,
+}
 
 // principalKey derives NFR10's rate-limit Key for ctx's caller. An
 // authenticated principal is keyed on its verified subject -- not the raw

@@ -189,6 +189,23 @@ func (stubAPIServer) GetElevationStatus(ctx context.Context, req *pb.GetElevatio
 	return &pb.GetElevationStatusResponse{}, nil
 }
 
+// The three support-reference RPCs below (FR80) have no business logic yet
+// -- Scaffold only adds them to the proto (see api.proto's "Support
+// reference" section) -- same rationale as the five admin stubs above.
+// Real behavior lands in the Implementation-phase task that wires these
+// into server.go.
+func (stubAPIServer) CreateSupportReference(ctx context.Context, req *pb.CreateSupportReferenceRequest) (*pb.CreateSupportReferenceResponse, error) {
+	return &pb.CreateSupportReferenceResponse{}, nil
+}
+
+func (stubAPIServer) RevokeSupportReference(ctx context.Context, req *pb.RevokeSupportReferenceRequest) (*pb.RevokeSupportReferenceResponse, error) {
+	return &pb.RevokeSupportReferenceResponse{}, nil
+}
+
+func (stubAPIServer) ListSupportReferences(ctx context.Context, req *pb.ListSupportReferencesRequest) (*pb.ListSupportReferencesResponse, error) {
+	return &pb.ListSupportReferencesResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

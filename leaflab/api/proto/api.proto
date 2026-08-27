@@ -129,9 +129,9 @@ service LeafLabAPI {
 
   // ResolveToHousehold is the standing (non-elevated) admin lane (FR10.2):
   // across all households, without elevation, resolve a person, a support
-  // reference (FR80, stubbed until it lands), or a partial device
-  // identifier to the owning household and FR79's health fields for the
-  // boards it returns -- device id, board display name, household
+  // reference (FR80), or a partial device identifier to the owning
+  // household and FR79's health fields for the boards it returns -- device
+  // id, board display name, household
   // identity, last-seen age, active version, outstanding push, sensor
   // count. That is the whole lane: no readings, regions, plants, config or
   // audit rows. Audited at query granularity (FR10.4) -- one audit row per
@@ -157,6 +157,28 @@ service LeafLabAPI {
   // unexpired elevation against a target household, and its remaining time
   // (A22) -- readable throughout the elevation, not only at grant time.
   rpc GetElevationStatus(GetElevationStatusRequest) returns (GetElevationStatusResponse);
+
+  // --- Support reference (FR80) -------------------------------------------
+  //
+  // Owner-facing: a household member produces, lists and revokes support
+  // references. The admin-side resolution of a reference is
+  // ResolveToHousehold's support_reference query term (FR10.2), not an RPC
+  // in this section.
+
+  // CreateSupportReference mints a new short-lived, opaque, revocable code
+  // for the caller's household. Takes no problem description and discloses
+  // nothing about the household in its response -- only the code and its
+  // expiry.
+  rpc CreateSupportReference(CreateSupportReferenceRequest) returns (CreateSupportReferenceResponse);
+
+  // RevokeSupportReference immediately revokes an existing reference. One
+  // call, immediate effect.
+  rpc RevokeSupportReference(RevokeSupportReferenceRequest) returns (RevokeSupportReferenceResponse);
+
+  // ListSupportReferences lists a household's support references (never the
+  // plaintext code, which is not recoverable once issued -- only the
+  // per-reference metadata: creation/expiry/revocation and use tracking).
+  rpc ListSupportReferences(ListSupportReferencesRequest) returns (ListSupportReferencesResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -459,7 +481,10 @@ message ResolveToHouseholdRequest {
     // A person identifier (e.g. an email or a principal subject) to
     // resolve to their current household.
     string person_identifier = 1;
-    // An FR80 support reference. Resolution is stubbed until FR80 lands.
+    // An FR80 support reference (the plaintext code CreateSupportReference
+    // returned). Resolution equalizes status, body and timing across an
+    // unknown, expired and revoked code (NFR2) -- see ResolveToHousehold's
+    // implementation doc comment.
     string support_reference = 2;
     // A partial device identifier to resolve to the household owning the
     // matching board(s).
@@ -549,5 +574,72 @@ message GetElevationStatusRequest {
 message GetElevationStatusResponse {
   bool elevated = 1;
   Instant expires_at = 2;
+  Instant server_now = 3;
+}
+
+// --- Support reference (FR80) --------------------------------------------
+//
+// A household member's consented entrance to admin help: a short-lived,
+// opaque, revocable code that resolves -- for an admin, in the standing
+// lane (FR10.2) -- to the issuing household, and nothing else. NFR6.3: a
+// support reference is a short-lived token with expiry, not SCD2 -- there
+// is no valid_to-shaped field anywhere below. The plaintext code is
+// returned exactly once, in CreateSupportReferenceResponse; every other
+// message here describes a reference by its metadata only, never by the
+// code itself (the server stores a hash, not the plaintext -- see
+// leaflab/migrate/migrations/032_support_reference.up.sql).
+
+// CreateSupportReferenceRequest names the household the reference is
+// issued for. No problem description field exists here or anywhere in
+// this section (FR80: "requires no description of the problem and
+// discloses no household data in itself").
+message CreateSupportReferenceRequest {
+  int64 household_id = 1;
+}
+
+// CreateSupportReferenceResponse is the one and only place the plaintext
+// code appears -- it is not retrievable again afterward, including through
+// ListSupportReferences (FR80).
+message CreateSupportReferenceResponse {
+  string code = 1;
+  Instant expires_at = 2;
+}
+
+message RevokeSupportReferenceRequest {
+  int64 household_id = 1;
+  int64 support_reference_id = 2;
+}
+
+message RevokeSupportReferenceResponse {}
+
+message ListSupportReferencesRequest {
+  int64 household_id = 1;
+  // Keyset page request (FR61). Unset/empty requests the first page.
+  PageRequest page = 2;
+}
+
+// SupportReferenceInfo is a reference's owner-facing metadata -- never the
+// plaintext code (FR80). last_resolved_at/resolve_count are the use
+// counters the owner reads directly here; every individual use is also a
+// separate row in FR9's activity list (audit trail), not just this
+// aggregate.
+message SupportReferenceInfo {
+  int64 support_reference_id = 1;
+  Instant created_at = 2;
+  Instant expires_at = 3;
+  // True once revoked. revoked_at is meaningful only when this is true.
+  bool revoked = 4;
+  Instant revoked_at = 5;
+  // Unset (zero-value Instant) if the reference has never been resolved.
+  Instant last_resolved_at = 6;
+  int32 resolve_count = 7;
+}
+
+message ListSupportReferencesResponse {
+  repeated SupportReferenceInfo references = 1;
+  // Keyset page response (FR61).
+  PageResponse page = 2;
+  // Server's current time, so a caller renders every Instant above as
+  // elapsed time without trusting its own clock (FR64).
   Instant server_now = 3;
 }

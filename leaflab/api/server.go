@@ -93,6 +93,15 @@ type deviceRepository interface {
 	RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error
 	EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error
 	ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error)
+
+	// -- Support reference (FR80) -- see leaflab/api/repository.go's
+	// "Support reference" section for each method's doc comment.
+	CreateSupportReference(ctx context.Context, householdID int64, codeHash string, createdBySubject string, expiresAt time.Time, entry audit.Entry) (int64, error)
+	RevokeSupportReference(ctx context.Context, householdID, supportReferenceID int64, entry audit.Entry) error
+	ListSupportReferences(ctx context.Context, householdID int64, afterID int64, hasAfter bool, limit int32) ([]SupportReferenceRow, error)
+	LookupSupportReferenceByHash(ctx context.Context, codeHash string) (SupportReferenceLookup, bool, error)
+	RecordSupportReferenceResolve(ctx context.Context, supportReferenceID int64, entry audit.Entry) error
+	AdminBoardHealthByHousehold(ctx context.Context, householdID int64) ([]AdminBoardHealthRow, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -114,6 +123,13 @@ type authzResolver interface {
 // env var's read site in main.go, since leaflab/api has no ENV.md of its
 // own yet (unlike migrate/processor/ui).
 const DefaultElevationDuration = 60 * time.Minute
+
+// DefaultSupportReferenceTTL is FR80's "short lifetime (configurable)" for
+// a support reference, used unless a ServerOption overrides it (see
+// WithSupportReferenceTTL). main.go wires
+// LEAFLAB_SUPPORT_REFERENCE_TTL_MINUTES to that option (documented in
+// leaflab/api/ENV.md).
+const DefaultSupportReferenceTTL = 15 * time.Minute
 
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
@@ -141,6 +157,10 @@ type LeafLabAPIServer struct {
 	// and RenewElevation. Defaults to DefaultElevationDuration; see
 	// WithElevationDuration.
 	elevationDuration time.Duration
+	// supportReferenceTTL is FR80's expiry window, applied by
+	// CreateSupportReference. Defaults to DefaultSupportReferenceTTL; see
+	// WithSupportReferenceTTL.
+	supportReferenceTTL time.Duration
 }
 
 // ServerOption configures optional LeafLabAPIServer behavior beyond
@@ -157,16 +177,24 @@ func WithElevationDuration(d time.Duration) ServerOption {
 	return func(s *LeafLabAPIServer) { s.elevationDuration = d }
 }
 
+// WithSupportReferenceTTL overrides DefaultSupportReferenceTTL -- FR80's
+// "short lifetime, configurable". See main.go's
+// LEAFLAB_SUPPORT_REFERENCE_TTL_MINUTES for the production wiring.
+func WithSupportReferenceTTL(d time.Duration) ServerOption {
+	return func(s *LeafLabAPIServer) { s.supportReferenceTTL = d }
+}
+
 func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger, claimConfig claim.Config, limiter ratelimit.Limiter, opts ...ServerOption) *LeafLabAPIServer {
 	s := &LeafLabAPIServer{
-		repo:              repo,
-		authzSvc:          authzSvc,
-		publisher:         publisher,
-		rmqConn:           rmqConn,
-		logger:            logger,
-		claimConfig:       claimConfig,
-		limiter:           limiter,
-		elevationDuration: DefaultElevationDuration,
+		repo:                repo,
+		authzSvc:            authzSvc,
+		publisher:           publisher,
+		rmqConn:             rmqConn,
+		logger:              logger,
+		claimConfig:         claimConfig,
+		limiter:             limiter,
+		elevationDuration:   DefaultElevationDuration,
+		supportReferenceTTL: DefaultSupportReferenceTTL,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -192,6 +220,17 @@ func (s *LeafLabAPIServer) scopeForCaller(ctx context.Context) (authz.Scope, err
 		return authz.NewUnionScope(), nil
 	}
 	return s.authzSvc.ScopeForPrincipal(ctx, claims.Subject)
+}
+
+// scopePermitsHousehold reports whether scope grants reach to householdID
+// directly, without resolving through authz.Resolver -- for RPCs (FR80's
+// support-reference lifecycle) that take household_id as an explicit
+// request field rather than an entity id needing resolution. Every Scope
+// implementation's Permits keys off Resolution.HouseholdID only (see
+// authz/scope.go); ref is never inspected, so a zero-value EntityRef is
+// safe to pass here.
+func scopePermitsHousehold(scope authz.Scope, householdID int64) bool {
+	return scope.Permits(authz.EntityRef{}, authz.Resolution{HouseholdID: householdID})
 }
 
 // boardNotFoundFailure is the one contract.NotFound value returned for a
@@ -937,11 +976,13 @@ func (s *LeafLabAPIServer) ResolveToHousehold(ctx context.Context, req *pb.Resol
 		if q.SupportReference == "" {
 			return nil, contract.InvalidArgument("resolve_to_household_request", "support_reference", "A support reference is required.")
 		}
-		queryTerm = "support_reference=" + q.SupportReference
-		// FR80 (support references) has not landed yet -- resolves to no
-		// boards until it does, per the Scaffold's doc comment on this
-		// RPC. Still audited below, at the same query granularity as
-		// every other standing-lane query.
+		// Never the raw code (FR80: a support reference's plaintext must
+		// never be persisted anywhere, including this call-granularity
+		// audit row) -- a fixed marker, so this query kind's FR10.4 audit
+		// entry looks identical regardless of whether the code turned out
+		// to be unknown, expired, revoked or valid.
+		queryTerm = "support_reference"
+		rows, err = s.resolveSupportReference(ctx, q.SupportReference)
 	case *pb.ResolveToHouseholdRequest_PartialDeviceId:
 		if q.PartialDeviceId == "" {
 			return nil, contract.InvalidArgument("resolve_to_household_request", "partial_device_id", "A partial device id is required.")
