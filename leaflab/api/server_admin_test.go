@@ -216,10 +216,14 @@ func TestResolveToHousehold_QueryGranularityAudit_OneRowPerCallRegardlessOfMatch
 }
 
 // TestResolveToHousehold_ResolvesByAllThreeQueryKinds proves the standing
-// lane accepts a person identifier, a support reference (stubbed until
-// FR80 lands -- resolves to zero boards but is still audited), and a
-// partial device id, each delegating to the correct repository method and
-// none other.
+// lane accepts a person identifier, a support reference (FR80 -- an
+// unknown code resolves to zero boards via a single
+// LookupSupportReferenceByHash query, per NFR2, but is still audited), and
+// a partial device id, each delegating to the correct repository method
+// and none other. The valid/expired/revoked support-reference resolution
+// paths and NFR2's timing-equalization claim are Testing-phase coverage
+// (this file only proves the "unknown code" outcome, via fakeRepo's default
+// lookupSupportRefFound=false).
 func TestResolveToHousehold_ResolvesByAllThreeQueryKinds(t *testing.T) {
 	t.Run("person_identifier", func(t *testing.T) {
 		repo := &fakeRepo{adminByPersonRows: []AdminBoardHealthRow{{DeviceID: "d1"}}}
@@ -239,7 +243,10 @@ func TestResolveToHousehold_ResolvesByAllThreeQueryKinds(t *testing.T) {
 		}
 	})
 
-	t.Run("support_reference_stub", func(t *testing.T) {
+	t.Run("support_reference_unknown", func(t *testing.T) {
+		// fakeRepo{} defaults lookupSupportRefFound to false -- "SR-123"
+		// resolves as an unknown code (NFR2: zero boards, no error, same as
+		// any other no-match resolve).
 		repo := &fakeRepo{}
 		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
 		resp, err := server.ResolveToHousehold(adminCtx("root"), &pb.ResolveToHouseholdRequest{Query: &pb.ResolveToHouseholdRequest_SupportReference{SupportReference: "SR-123"}})
@@ -249,8 +256,11 @@ func TestResolveToHousehold_ResolvesByAllThreeQueryKinds(t *testing.T) {
 		if repo.adminByPersonCalls != 0 || repo.adminByPartialCalls != 0 {
 			t.Errorf("a support_reference query reached a person/partial-device repo method: person=%d partial=%d", repo.adminByPersonCalls, repo.adminByPartialCalls)
 		}
+		if repo.lookupSupportRefCalls != 1 {
+			t.Errorf("LookupSupportReferenceByHash calls = %d, want 1", repo.lookupSupportRefCalls)
+		}
 		if len(resp.Boards) != 0 {
-			t.Errorf("got %d boards for a stubbed support_reference query, want 0", len(resp.Boards))
+			t.Errorf("got %d boards for an unknown support_reference query, want 0", len(resp.Boards))
 		}
 		if len(repo.auditEntries) != 1 {
 			t.Errorf("got %d audit entries for a stubbed support_reference query, want 1 (still audited)", len(repo.auditEntries))

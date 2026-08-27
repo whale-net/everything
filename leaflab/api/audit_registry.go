@@ -23,6 +23,22 @@ const (
 	endElevationFullMethod       = "/leaflab.api.v1.LeafLabAPI/EndElevation"
 )
 
+// Support reference full method names (FR80). createSupportReferenceFullMethod
+// and revokeSupportReferenceFullMethod are genuine writes (support_reference.go
+// carries their audit registrations below); ListSupportReferences is a read
+// with no audit requirement of its own, same as GetDeviceConfig/ListBoards,
+// and is deliberately absent from declaredWriteMethods. A support
+// reference's *use* (an admin's successful resolve) writes its own audit
+// row too, via server.go's resolveSupportReference -- that write goes
+// through repository.go's RecordSupportReferenceResolve directly, with a
+// literal audit.Entry rather than a declaredWriteMethods-gated RPC, because
+// it isn't its own RPC (it's a branch inside ResolveToHousehold, which is
+// already registered above).
+const (
+	createSupportReferenceFullMethod = "/leaflab.api.v1.LeafLabAPI/CreateSupportReference"
+	revokeSupportReferenceFullMethod = "/leaflab.api.v1.LeafLabAPI/RevokeSupportReference"
+)
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
 // registry for this service: every RPC that performs a write, plus
 // ResolveToHousehold (see its doc comment above). A method listed here
@@ -48,6 +64,8 @@ var declaredWriteMethods = []string{
 	elevateFullMethod,
 	renewElevationFullMethod,
 	endElevationFullMethod,
+	createSupportReferenceFullMethod,
+	revokeSupportReferenceFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
@@ -55,11 +73,13 @@ var declaredWriteMethods = []string{
 // audit.Entry.Action/EntityKind at the call site -- see server.go's
 // PushDeviceConfig and the admin handlers).
 var auditRegistrations = map[string]audit.Registration{
-	pushDeviceConfigFullMethod:   {Action: "PushConfig", EntityKind: "device_config"},
-	resolveToHouseholdFullMethod: {Action: "ResolveToHousehold", EntityKind: "admin_resolution"},
-	elevateFullMethod:            {Action: audit.ActionElevate, EntityKind: "household"},
-	renewElevationFullMethod:     {Action: "RenewElevation", EntityKind: "household"},
-	endElevationFullMethod:       {Action: "EndElevation", EntityKind: "household"},
+	pushDeviceConfigFullMethod:       {Action: "PushConfig", EntityKind: "device_config"},
+	resolveToHouseholdFullMethod:     {Action: "ResolveToHousehold", EntityKind: "admin_resolution"},
+	elevateFullMethod:                {Action: audit.ActionElevate, EntityKind: "household"},
+	renewElevationFullMethod:         {Action: "RenewElevation", EntityKind: "household"},
+	endElevationFullMethod:           {Action: "EndElevation", EntityKind: "household"},
+	createSupportReferenceFullMethod: {Action: "CreateSupportReference", EntityKind: "support_reference"},
+	revokeSupportReferenceFullMethod: {Action: "RevokeSupportReference", EntityKind: "support_reference"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry

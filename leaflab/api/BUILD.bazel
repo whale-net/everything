@@ -13,6 +13,7 @@ go_library(
         "ratelimit_interceptor.go",
         "repository.go",
         "server.go",
+        "support_reference.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api",
     visibility = ["//visibility:private"],

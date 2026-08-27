@@ -33,9 +33,9 @@ service LeafLabAPI {
 
   // ResolveToHousehold is the standing (non-elevated) admin lane (FR10.2):
   // across all households, without elevation, resolve a person, a support
-  // reference (FR80, stubbed until it lands), or a partial device
-  // identifier to the owning household and FR79's health fields for the
-  // boards it returns -- device id, board display name, household
+  // reference (FR80), or a partial device identifier to the owning
+  // household and FR79's health fields for the boards it returns -- device
+  // id, board display name, household
   // identity, last-seen age, active version, outstanding push, sensor
   // count. That is the whole lane: no readings, regions, plants, config or
   // audit rows. Audited at query granularity (FR10.4) -- one audit row per
@@ -231,7 +231,10 @@ message ResolveToHouseholdRequest {
     // A person identifier (e.g. an email or a principal subject) to
     // resolve to their current household.
     string person_identifier = 1;
-    // An FR80 support reference. Resolution is stubbed until FR80 lands.
+    // An FR80 support reference (the plaintext code CreateSupportReference
+    // returned). Resolution equalizes status, body and timing across an
+    // unknown, expired and revoked code (NFR2) -- see ResolveToHousehold's
+    // implementation doc comment.
     string support_reference = 2;
     // A partial device identifier to resolve to the household owning the
     // matching board(s).
