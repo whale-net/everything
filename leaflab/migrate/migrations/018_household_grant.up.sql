@@ -1,10 +1,11 @@
--- Migration 017: household_grant (Phase 2 scaffold, FR7)
+-- Migration 018: household_grant (Phase 2 scaffold, FR7)
 --
--- 017 is the next free number after 016 (audit_log) in this branch's own
--- migrations/ directory; state in the PR since sibling v2 branches on
--- plan/1166 have collided on migration numbers before (013 collided
--- twice, and 017 was independently claimed on a sibling branch not merged
--- into this branch's ancestry, so it is free here).
+-- Originally scaffolded as 017 (next free after 016/audit_log in this
+-- branch's own migrations/ directory), then renumbered to 018 by the
+-- orchestrator: 017 was independently claimed by plant_region_history on
+-- a sibling branch (#1357) not merged into this branch's ancestry. Sibling
+-- v2 branches on plan/1166 have collided on migration numbers before
+-- (013 twice, then 016/017); state this in the PR.
 --
 -- FR7: a household member grants a named principal time-boxed write
 -- access to their household. household_grant is deliberately NOT SCD2
