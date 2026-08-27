@@ -1,0 +1,11 @@
+"""FR9 owner-readable activity -- the table-driven audit-entry renderer."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "activity",
+    srcs = ["render.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/activity",
+    visibility = ["//visibility:public"],
+    deps = ["//leaflab/api/audit"],
+)

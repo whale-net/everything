@@ -433,8 +433,10 @@ go_test(
     deps = [
         "//leaflab/api/audit",
         "//leaflab/api/authz",
+        "//leaflab/api/claim",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",

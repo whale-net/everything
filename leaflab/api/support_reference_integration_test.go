@@ -55,8 +55,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/claim"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -140,7 +142,7 @@ func newSupportReferenceTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Po
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: supportReferenceTestSchema})
 	repo := NewRepository(db.Pool)
 	resolver := authz.NewPGResolver(db.Pool)
-	return NewLeafLabAPIServer(repo, resolver, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, resolver, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil)), db.Pool
 }
 
 func insertSRHousehold(t *testing.T, pool *pgxpool.Pool, name string) int64 {

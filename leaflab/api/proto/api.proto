@@ -179,6 +179,32 @@ service LeafLabAPI {
   // plaintext code, which is not recoverable once issued -- only the
   // per-reference metadata: creation/expiry/revocation and use tracking).
   rpc ListSupportReferences(ListSupportReferencesRequest) returns (ListSupportReferencesResponse);
+
+  // --- Owner-readable activity (FR9) --------------------------------------
+  //
+  // A household owner reads their own household's audit trail rendered in
+  // plain language -- no proto, table or column names (FR59.2). One list,
+  // one voice: an administrator's elevation and the actions taken under it
+  // render in the same plain sentences and the same list as a granted
+  // helper's or a member's actions, with no separate technical section.
+  // This task's (#1348) scaffolded wire surface; the sentence each entry
+  // carries is produced by leaflab/api/activity's table-driven
+  // (action, entity_kind, actor_kind) -> Template renderer, called from the
+  // handler this RPC has no business logic behind yet -- Implementation
+  // -phase work, matching the households/claim/support-reference RPCs'
+  // scaffold/feat split.
+
+  // ListHouseholdActivity lists household_id's audit-log activity, most
+  // recent first, keyset paginated (FR61). Every entry -- an admin's
+  // elevation and the actions taken under it, a grantee's actions, and a
+  // member's actions -- renders as the same kind of sentence in the same
+  // list (FR9's "one list, one voice"). FR76.7's board-claim detection
+  // ("a possession challenge was opened against one of its boards, and
+  // whether it was discharged") and FR80's support-reference creation and
+  // use also surface here, alongside every other audited action -- never in
+  // a separate section. A claim-attempt entry never identifies the
+  // attempting principal, who belongs to another household (A29).
+  rpc ListHouseholdActivity(ListHouseholdActivityRequest) returns (ListHouseholdActivityResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -641,5 +667,44 @@ message ListSupportReferencesResponse {
   PageResponse page = 2;
   // Server's current time, so a caller renders every Instant above as
   // elapsed time without trusting its own clock (FR64).
+  Instant server_now = 3;
+}
+
+// --- Owner-readable activity (FR9) ---------------------------------------
+
+message ListHouseholdActivityRequest {
+  int64 household_id = 1;
+  // Keyset page request (FR61). Unset/empty requests the first page.
+  PageRequest page = 2;
+}
+
+// ActivityEntry is one rendered row of a household's activity list (FR9).
+// sentence is the only field a non-technical surface renders; entity_kind
+// and occurred_at back a programmatic caller's equivalent capability
+// (NFR18.2 -- the CLI gets the same list) without themselves carrying a
+// table name, proto field name, status code or stack trace (FR59.2).
+message ActivityEntry {
+  // Plain-language rendering (FR9, FR59.2) -- safe to display verbatim on
+  // a non-technical surface. Never contains a table name, proto field
+  // name, status code or the string "_id"
+  // (leaflab/api/activity's renderer test asserts this over every
+  // registered (action, entity_kind, actor_kind) triple).
+  string sentence = 1;
+  // Coarse entity kind this entry concerns (e.g. "board", "household",
+  // "support_reference") -- plain-language vocabulary matching the
+  // sentence, never a raw table name.
+  string entity_kind = 2;
+  // Absolute instant the action occurred (FR64) -- render as elapsed time
+  // against the response envelope's server_now, with the absolute instant
+  // itself available too (FR64).
+  Instant occurred_at = 3;
+}
+
+message ListHouseholdActivityResponse {
+  repeated ActivityEntry entries = 1;
+  // Keyset page response (FR61), capped per contract.PageCap.
+  PageResponse page = 2;
+  // Server's current time, so a caller renders occurred_at as elapsed time
+  // without trusting its own clock (FR64).
   Instant server_now = 3;
 }

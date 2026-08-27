@@ -206,6 +206,15 @@ func (stubAPIServer) ListSupportReferences(ctx context.Context, req *pb.ListSupp
 	return &pb.ListSupportReferencesResponse{}, nil
 }
 
+// ListHouseholdActivity (FR9) has no business logic yet -- Scaffold only
+// adds it to the proto (see api.proto's "Owner-readable activity" section)
+// and leaflab/api/activity's renderer skeleton -- same rationale as the
+// admin and support-reference stubs above. Real behavior lands in the
+// Implementation-phase task that wires this into server.go.
+func (stubAPIServer) ListHouseholdActivity(ctx context.Context, req *pb.ListHouseholdActivityRequest) (*pb.ListHouseholdActivityResponse, error) {
+	return &pb.ListHouseholdActivityResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of
