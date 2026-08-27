@@ -17,6 +17,15 @@ import (
 // board" exception aside, this should never occur post-backfill (FR70.1).
 var ErrNoHousehold = errors.New("row resolves to no household")
 
+// ErrBoardNotFound is returned by board lookups/operations when board_id
+// names no row.
+var ErrBoardNotFound = errors.New("board not found")
+
+// ErrBoardAlreadyRetired is returned by RetireBoard when the board is
+// already retired -- retirement is not idempotent-by-design (FR22.1 names
+// the operation; calling it twice is a caller error, not a no-op).
+var ErrBoardAlreadyRetired = errors.New("board already retired")
+
 type Repository struct {
 	db *pgxpool.Pool
 }
@@ -110,6 +119,12 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 // pagination stays correct while boards are inserted mid-scan. Callers
 // typically request limit+1 rows so a next page can be detected without a
 // separate COUNT query.
+//
+// This is the default listing FR22.1/FR22.4/FR22.5 guard against: a retired
+// board (retired_at IS NOT NULL) is excluded here, backed by idx_board_active
+// from migration 015. A retired board remains resolvable by explicit id and
+// through its history/readings paths -- those lookups don't go through
+// ListBoards and are unaffected.
 func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32) ([]BoardRow, error) {
 	var rows pgx.Rows
 	var err error
@@ -118,6 +133,7 @@ func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfte
 			SELECT board_id, device_id, last_seen_at
 			FROM board
 			WHERE board_id > $1
+			  AND retired_at IS NULL
 			ORDER BY board_id
 			LIMIT $2
 		`, afterBoardID, limit)
@@ -125,6 +141,7 @@ func (r *Repository) ListBoards(ctx context.Context, afterBoardID int64, hasAfte
 		rows, err = r.db.Query(ctx, `
 			SELECT board_id, device_id, last_seen_at
 			FROM board
+			WHERE retired_at IS NULL
 			ORDER BY board_id
 			LIMIT $1
 		`, limit)
@@ -149,6 +166,66 @@ type BoardRow struct {
 	BoardID    int64
 	DeviceID   string
 	LastSeenAt time.Time
+	RetiredAt  *time.Time
+}
+
+// GetBoardByID returns a board by its numeric id regardless of retired
+// state -- the FR22.1/FR22.4/FR22.5 "remains readable by explicit id" half
+// of the retired-board guard. ListBoards is the half that excludes it from
+// default listings; this is the explicit-id escape hatch.
+func (r *Repository) GetBoardByID(ctx context.Context, boardID int64) (BoardRow, error) {
+	var b BoardRow
+	err := r.db.QueryRow(ctx, `
+		SELECT board_id, device_id, last_seen_at, retired_at
+		FROM board
+		WHERE board_id = $1
+	`, boardID).Scan(&b.BoardID, &b.DeviceID, &b.LastSeenAt, &b.RetiredAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BoardRow{}, ErrBoardNotFound
+		}
+		return BoardRow{}, fmt.Errorf("get board %d: %w", boardID, err)
+	}
+	return b, nil
+}
+
+// RetireBoard is the named operation FR22.1/FR22.4/FR22.5 requires: it sets
+// board.retired_at, which removes the board from ListBoards's default
+// listing (idx_board_active) and from FR79's offline counts / FR62's
+// household-wide classification (both read board population elsewhere),
+// while leaving the row, its history and its readings fully resolvable.
+//
+// It does not record the acting principal -- FR8's append-only audit log is
+// #1338, a sibling task; wiring this operation's audit emission is that
+// task's job, the same way #1296 tracks it for PushDeviceConfig.
+func (r *Repository) RetireBoard(ctx context.Context, boardID int64) error {
+	var id int64
+	err := r.db.QueryRow(ctx, `
+		UPDATE board
+		SET retired_at = NOW()
+		WHERE board_id = $1
+		  AND retired_at IS NULL
+		RETURNING board_id
+	`, boardID).Scan(&id)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("retire board %d: %w", boardID, err)
+	}
+
+	// No row updated -- distinguish "doesn't exist" from "already retired" so
+	// callers get the accurate failure class.
+	var exists bool
+	if checkErr := r.db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM board WHERE board_id = $1)
+	`, boardID).Scan(&exists); checkErr != nil {
+		return fmt.Errorf("retire board %d: check existence: %w", boardID, checkErr)
+	}
+	if !exists {
+		return ErrBoardNotFound
+	}
+	return ErrBoardAlreadyRetired
 }
 
 // ── Ownership (FR1.1, FR70.1, NFR6.1) ────────────────────────────────────────

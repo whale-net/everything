@@ -10,15 +10,18 @@
 -- the region tree root (descendants inherit), and on plant; sensors and
 -- readings inherit through their board.
 --
--- This migration is schema-only (DDL): tables, columns, indexes. Seeding the
--- Unadopted household, backfilling existing rows, the new-arrivals guard, and
--- the board retirement operation are Implementation-phase work (FR70.1,
--- NFR8) layered on top of this shape.
+-- Carries both the schema (tables, columns, indexes) and the DML that seeds
+-- the Unadopted household and backfills every pre-existing board, region
+-- root and plant into it (FR70.1, NFR8), plus the new-arrivals guard (A9).
+-- The board retirement operation itself (RetireBoard) lives in
+-- leaflab/api/repository.go -- retired_at and its partial index are the only
+-- schema this migration owns for it.
 
 -- ── household ────────────────────────────────────────────────────────────────
 -- is_unadopted marks the single seeded, member-less household that FR70.1's
 -- backfill assigns every pre-existing row to. A9: it receives no new arrivals
--- after migration -- enforced in the Implementation phase, not here.
+-- after migration -- enforced below by trg_board_ownership_no_unadopted_arrivals,
+-- once board_ownership exists and this migration's own backfill has run.
 
 CREATE TABLE household (
     household_id BIGSERIAL PRIMARY KEY,
@@ -30,6 +33,11 @@ CREATE TABLE household (
 -- At most one Unadopted household can ever exist.
 CREATE UNIQUE INDEX idx_household_unadopted_singleton
     ON household(is_unadopted) WHERE is_unadopted = TRUE;
+
+-- Seed the single Unadopted household (FR70.1). No membership rows -- A9: it
+-- receives no new arrivals after migration, enforced below once
+-- board_ownership exists to guard.
+INSERT INTO household (name, is_unadopted) VALUES ('Unadopted', TRUE);
 
 -- ── household_membership ────────────────────────────────────────────────────
 -- Principal (person) to household. SCD2 per NFR6.1/NFR6.3 -- membership is
@@ -86,6 +94,43 @@ CREATE INDEX idx_board_household_id ON board(household_id);
 -- the idx_plant_active convention from 001_initial_schema.
 CREATE INDEX idx_board_active ON board(board_id) WHERE retired_at IS NULL;
 
+-- ── Backfill: existing boards → Unadopted (FR70.1) ──────────────────────────
+-- Every pre-existing board gets the seeded Unadopted household: a
+-- board_ownership SCD2 row as the record of truth, mirrored onto
+-- board.household_id as the current-value cache the repository helpers and
+-- listing queries read.
+
+UPDATE board
+SET household_id = (SELECT household_id FROM household WHERE is_unadopted = TRUE);
+
+INSERT INTO board_ownership (board_id, household_id, valid_from)
+SELECT board_id, household_id, NOW()
+FROM board
+WHERE household_id IS NOT NULL;
+
+-- ── New-arrivals guard (A9) ──────────────────────────────────────────────────
+-- Unadopted receives no new arrivals after this migration's backfill: any
+-- INSERT into board_ownership naming the Unadopted household is refused.
+-- Created after the backfill INSERT above so the backfill itself is exempt --
+-- everything after this point in the transaction is a genuinely new arrival.
+
+CREATE FUNCTION enforce_no_unadopted_arrivals() RETURNS TRIGGER AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM household
+        WHERE household_id = NEW.household_id AND is_unadopted = TRUE
+    ) THEN
+        RAISE EXCEPTION 'household % is Unadopted and accepts no new board_ownership rows (A9)', NEW.household_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_board_ownership_no_unadopted_arrivals
+    BEFORE INSERT ON board_ownership
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_no_unadopted_arrivals();
+
 -- ── region.household_id ──────────────────────────────────────────────────────
 -- Tree-root only: descendants inherit and must carry NULL. Household is not
 -- derivable through the board for regions (a region subtree can span several
@@ -136,9 +181,28 @@ CREATE TRIGGER trg_region_household_root
     FOR EACH ROW
     EXECUTE FUNCTION enforce_region_household_root();
 
+-- ── Backfill: existing region roots → Unadopted (FR70.1) ────────────────────
+-- Only tree roots carry household_id; descendants stay NULL and inherit.
+-- trg_region_household_root permits this: a root row's own household_id is
+-- unconstrained by the trigger.
+
+UPDATE region
+SET household_id = (SELECT household_id FROM household WHERE is_unadopted = TRUE)
+WHERE parent_region_id IS NULL;
+
 -- ── plant.household_id ───────────────────────────────────────────────────────
 -- Carried directly on plant per FR1.1 -- not inherited through region.
 
 ALTER TABLE plant ADD COLUMN household_id BIGINT REFERENCES household(household_id) ON DELETE RESTRICT;
 
 CREATE INDEX idx_plant_household_id ON plant(household_id);
+
+-- ── Backfill: existing plants → Unadopted (FR70.1) ───────────────────────────
+-- Every plant resolves to exactly one household (FR1.1) -- unlike board,
+-- plant has no "unclaimed" exception, so once backfill completes the column
+-- is tightened to NOT NULL.
+
+UPDATE plant
+SET household_id = (SELECT household_id FROM household WHERE is_unadopted = TRUE);
+
+ALTER TABLE plant ALTER COLUMN household_id SET NOT NULL;
