@@ -19,6 +19,16 @@ const (
 	EntityPlant   EntityKind = "plant"
 	EntitySensor  EntityKind = "sensor"
 	EntityReading EntityKind = "reading"
+	// EntityHousehold names the household itself as the entity being
+	// authorized -- used by FR7's grant RPCs (GrantHouseholdAccess,
+	// RevokeHouseholdAccess, ListHouseholdGrants), which act on the
+	// household directly rather than on a board/region/plant/sensor/
+	// reading resolving into one. Never passed to Resolver.Resolve (the
+	// caller already has the household id in hand, from the request or
+	// from the household_grant row being revoked) -- only to
+	// Scope.Permits, alongside a Resolution{HouseholdID: <id>} built
+	// directly rather than resolved.
+	EntityHousehold EntityKind = "household"
 )
 
 // EntityRef names one entity to authorize: its kind and its numeric id.

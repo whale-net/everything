@@ -377,6 +377,155 @@ func (r *Repository) CurrentHouseholdForRegion(ctx context.Context, regionID int
 	return *householdID, nil
 }
 
+// ── Household grants (FR7) ───────────────────────────────────────────────
+//
+// household_grant is deliberately not SCD2 (NFR6.3) -- see migration
+// 018_household_grant.up.sql's header. Reads through this table never use
+// AGENTS.md's value-at-time-T predicate; "active" is always
+// "revoked_at IS NULL AND expires_at > NOW()", evaluated at request time.
+
+// ErrGrantAlreadyRevoked is returned by RevokeHouseholdGrant when grantID
+// names a real row whose revoked_at is already set. Mirrors
+// ErrBoardAlreadyRetired's convention above -- revocation is not
+// idempotent-by-design, so calling it twice is a caller error, not a
+// no-op.
+var ErrGrantAlreadyRevoked = errors.New("household grant already revoked")
+
+// InsertHouseholdGrant creates a new household_grant row (FR7) and its
+// audit record (entry, with entity_id filled in with the assigned grant_id
+// once known) in one transaction, per auditedWrite's "a rolled-back write
+// leaves no audit row" contract.
+func (r *Repository) InsertHouseholdGrant(ctx context.Context, householdID int64, granteeSubject string, grantedBySubject string, expiresAt time.Time, reason *string, entry audit.Entry) (int64, error) {
+	var grantID int64
+	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO household_grant (household_id, grantee_subject, granted_by_subject, expires_at, reason)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING grant_id
+		`, householdID, granteeSubject, grantedBySubject, expiresAt, reason).Scan(&grantID); err != nil {
+			return audit.Entry{}, fmt.Errorf("insert household_grant for household %d: %w", householdID, err)
+		}
+		grantIDStr := strconv.FormatInt(grantID, 10)
+		entry.EntityID = &grantIDStr
+		return entry, nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return grantID, nil
+}
+
+// RevokeHouseholdGrant sets household_grant.revoked_at (FR7's "revocable in
+// one action") and records entry in the same transaction. Neither the
+// UPDATE nor the audit row commits when the grant doesn't exist or is
+// already revoked -- fn returns before entry ever reaches
+// audit.PostgresAuditor.Record. Callers resolve grantID via
+// authz.PGResolver.ResolveGrantRole before calling this, so "doesn't
+// exist" is already ruled out here in the common case; this method still
+// distinguishes it from ErrGrantAlreadyRevoked for the race where a grant
+// is revoked between resolution and this call.
+func (r *Repository) RevokeHouseholdGrant(ctx context.Context, grantID int64, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		var id int64
+		err := tx.QueryRow(ctx, `
+			UPDATE household_grant
+			SET revoked_at = NOW()
+			WHERE grant_id = $1
+			  AND revoked_at IS NULL
+			RETURNING grant_id
+		`, grantID).Scan(&id)
+		if err == nil {
+			return entry, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return audit.Entry{}, fmt.Errorf("revoke household grant %d: %w", grantID, err)
+		}
+
+		var exists bool
+		if checkErr := tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM household_grant WHERE grant_id = $1)
+		`, grantID).Scan(&exists); checkErr != nil {
+			return audit.Entry{}, fmt.Errorf("revoke household grant %d: check existence: %w", grantID, checkErr)
+		}
+		if !exists {
+			return audit.Entry{}, authz.ErrGrantNotFound
+		}
+		return audit.Entry{}, ErrGrantAlreadyRevoked
+	})
+}
+
+// HouseholdGrantRow is one active household_grant row, as returned by
+// ListActiveHouseholdGrants -- FR7's "visible while active with grantee
+// identity and expiry".
+type HouseholdGrantRow struct {
+	GrantID          int64
+	GranteeSubject   string
+	GrantedBySubject string
+	GrantedAt        time.Time
+	ExpiresAt        time.Time
+}
+
+// ListActiveHouseholdGrants returns up to limit currently active grants
+// (not revoked, not expired) for householdID, keyset-paginated on
+// (grant_id) per FR61 -- same shape as ListBoards. A revoked or expired
+// grant is never returned here (FR7: "the grant disappears from the active
+// list on expiry" with no background job required -- expiry is evaluated
+// against NOW() in this query, at request time).
+func (r *Repository) ListActiveHouseholdGrants(ctx context.Context, householdID int64, afterGrantID int64, hasAfter bool, limit int32) ([]HouseholdGrantRow, error) {
+	var sqlQuery string
+	var args []any
+	if hasAfter {
+		sqlQuery = `
+			SELECT grant_id, grantee_subject, granted_by_subject, granted_at, expires_at
+			FROM household_grant
+			WHERE household_id = $1
+			  AND grant_id > $2
+			  AND revoked_at IS NULL
+			  AND expires_at > NOW()
+			ORDER BY grant_id
+			LIMIT $3
+		`
+		args = []any{householdID, afterGrantID, limit}
+	} else {
+		sqlQuery = `
+			SELECT grant_id, grantee_subject, granted_by_subject, granted_at, expires_at
+			FROM household_grant
+			WHERE household_id = $1
+			  AND revoked_at IS NULL
+			  AND expires_at > NOW()
+			ORDER BY grant_id
+			LIMIT $2
+		`
+		args = []any{householdID, limit}
+	}
+
+	rows, err := r.db.Query(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list active household grants for household %d: %w", householdID, err)
+	}
+	defer rows.Close()
+
+	var grants []HouseholdGrantRow
+	for rows.Next() {
+		var g HouseholdGrantRow
+		if err := rows.Scan(&g.GrantID, &g.GranteeSubject, &g.GrantedBySubject, &g.GrantedAt, &g.ExpiresAt); err != nil {
+			return nil, fmt.Errorf("scan household grant: %w", err)
+		}
+		grants = append(grants, g)
+	}
+	return grants, rows.Err()
+}
+
+// RecordRead writes entry via a PostgresAuditor over the repository's pool
+// directly, outside any transaction -- correct here (rather than a
+// PostgresAuditor bug) because an audited read (FR8.1: "reads performed
+// under a granted (non-member) identity produce an audit record") has no
+// accompanying DB write of its own to share a transaction with. See
+// audit.NewPostgresAuditor's doc comment.
+func (r *Repository) RecordRead(ctx context.Context, entry audit.Entry) error {
+	return audit.NewPostgresAuditor(r.db).Record(ctx, entry)
+}
+
 // CurrentHouseholdForPlant returns the household a plant currently resolves
 // to. plant.household_id is carried directly (not inherited via region).
 func (r *Repository) CurrentHouseholdForPlant(ctx context.Context, plantID int64) (int64, error) {

@@ -90,9 +90,15 @@ message ListBoardsResponse {
 // Time-boxed, revocable household access for a named principal, conferring
 // write capability equal to a member's except the three exclusions
 // (leaflab/api/authz.Capability). Not SCD2 (NFR6.3) -- see
-// leaflab/migrate/migrations/017_household_grant.up.sql.
+// leaflab/migrate/migrations/018_household_grant.up.sql.
 
 message GrantHouseholdAccessRequest {
+  // The granting member's household. Explicit rather than inferred from
+  // the caller's "only" household membership: FR75 permits multi-household
+  // membership, so a caller with more than one current membership must
+  // state which household the grant applies to -- there is no implicit
+  // "the" household to fall back on.
+  int64 household_id = 4;
   string grantee_subject = 1;
   // Absolute expiry instant (FR7: "expires on its own without
   // intervention"). No duration field -- the caller states the instant
@@ -113,6 +119,10 @@ message RevokeHouseholdAccessRequest {
 message RevokeHouseholdAccessResponse {}
 
 message ListHouseholdGrantsRequest {
+  // The household whose active grants to list. See
+  // GrantHouseholdAccessRequest.household_id's doc comment -- same reason,
+  // explicit rather than inferred.
+  int64 household_id = 2;
   // Keyset page request (FR61). Unset/empty requests the first page.
   PageRequest page = 1;
 }

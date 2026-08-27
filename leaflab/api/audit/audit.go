@@ -20,11 +20,25 @@ package audit
 
 import "context"
 
-// ActorKind distinguishes a human principal from a non-human one. FR8.3:
-// "actor" is not defined as something only a human can be -- a scheduled
-// job or an automated re-send must be representable as the acting
-// principal, not just a human subject. Stored verbatim in
-// audit_log.actor_kind.
+// ActorKind distinguishes what kind of principal performed an audited
+// action. Stored verbatim in audit_log.actor_kind.
+//
+// Two independent questions share this one column, and a given audit row
+// answers whichever one its action cares about:
+//   - human vs. non-human (FR8.3: "actor" is not defined as something only
+//     a human can be -- a scheduled job or an automated re-send must be
+//     representable as the acting principal, not just a human subject):
+//     ActorKindHuman / ActorKindSystem.
+//   - member vs. grantee (FR7's "actor_kind distinguishing grantee from
+//     member" on every grant, revocation, and read performed under a
+//     grant): ActorKindMember / ActorKindGrantee.
+//
+// A given write RPC uses whichever pair is relevant to it -- FR7's grant
+// RPCs always involve a human, so they use ActorKindMember/ActorKindGrantee
+// rather than ActorKindHuman, since member-vs-grantee is the FR8.1-relevant
+// distinction there; PushDeviceConfig has no household-grant dimension to
+// it at all, so it uses ActorKindHuman. No audit row is expected to need
+// both dimensions recorded at once in V1.
 type ActorKind string
 
 const (
@@ -35,6 +49,14 @@ const (
 	// names "re-sends that write no config row" as a case that must still
 	// be audited).
 	ActorKindSystem ActorKind = "system"
+	// ActorKindMember is a household member acting on a "member capability"
+	// call site (FR7) -- including a member managing grants themselves
+	// (GrantHouseholdAccess, RevokeHouseholdAccess).
+	ActorKindMember ActorKind = "member"
+	// ActorKindGrantee is a non-member acting under an active household
+	// grant (FR7) -- e.g. RevokeHouseholdAccess called by a grantee, or a
+	// read performed under a granted identity (FR8.1).
+	ActorKindGrantee ActorKind = "grantee"
 )
 
 // Entry carries FR8.1's required fields for a single audit record: actor
@@ -60,7 +82,9 @@ type Entry struct {
 	// claims, adoptions, transfers, relocations and membership changes
 	// (FR8.2).
 	ActorSubject string
-	// ActorKind is ActorKindHuman or ActorKindSystem (FR8.3).
+	// ActorKind is ActorKindHuman/ActorKindSystem (FR8.3) or
+	// ActorKindMember/ActorKindGrantee (FR7) -- see ActorKind's doc comment
+	// for which pair a given action uses.
 	ActorKind ActorKind
 	// TargetHouseholdID is the household the action targets, or nil when
 	// the action does not resolve to a single household.
