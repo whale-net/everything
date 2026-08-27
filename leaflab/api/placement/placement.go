@@ -106,14 +106,28 @@ func (w *Writer) Move(ctx context.Context, plantID, regionID int64, requestedAt 
 	return nil
 }
 
+// backdateTolerance absorbs the clock-read gap between a caller capturing
+// requestedAt and this function's own call to time.Now() -- two sequential
+// time.Now() reads are never equal, so a strict requestedAt.Before(time.Now())
+// comparison refuses every literal "move it now" caller (requestedAt
+// captured a few nanoseconds before this function's Now() call), not just a
+// requestedAt that is genuinely, meaningfully in the past. One second is far
+// larger than that gap ever is in practice while still catching any real
+// back-dated request (FR19's target is minutes/hours/days in the past, not
+// nanoseconds), so it draws the line requestedAt.Before(time.Now()) failed
+// to draw.
+const backdateTolerance = time.Second
+
 // RefuseIfBackdated is the no-back-dating guard (FR19): it returns a
-// contract.Refuse error, stating the reason per FR59.3, when requestedAt
-// is earlier than the moment the check is performed. Move calls this
-// before writing; the database also enforces the same rule independently
-// (NFR6.2, migration 017's trg_plant_region_history_no_future_valid_from)
-// so the rule holds even for a direct insert that bypasses this package.
+// contract.Refuse error, stating the reason per FR59.3, when requestedAt is
+// meaningfully earlier than the moment the check is performed -- "now" and
+// any future instant are both accepted; see backdateTolerance's doc comment
+// for why "now" needs slack at all. Move calls this before writing; the
+// database also enforces the same rule independently (NFR6.2, migration
+// 017's trg_plant_region_history_no_future_valid_from) so the rule holds
+// even for a direct insert that bypasses this package.
 func RefuseIfBackdated(requestedAt time.Time) error {
-	if requestedAt.Before(time.Now()) {
+	if requestedAt.Before(time.Now().Add(-backdateTolerance)) {
 		return contract.Refuse(
 			"plant_region_history",
 			"valid_from",
