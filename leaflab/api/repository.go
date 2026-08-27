@@ -295,6 +295,242 @@ func (r *Repository) RetireBoard(ctx context.Context, boardID int64, entry audit
 	})
 }
 
+// ── Admin (FR10, FR12 activation) ────────────────────────────────────────────
+//
+// AdminBoardHealthByPerson/AdminBoardHealthByPartialDeviceID back
+// ResolveToHousehold (FR10.2's standing lane): both return FR79's health
+// projection only, never a wider board/household row. OpenElevation/
+// RenewElevation/EndElevation/ActiveElevation back the FR10.1 elevation
+// lifecycle over admin_elevation (migration 029).
+
+// ErrNoActiveElevation is returned by RenewElevation/EndElevation/
+// ActiveElevation when adminSubject holds no unexpired, unended
+// admin_elevation row against targetHouseholdID (FR10.1, FR10.3).
+var ErrNoActiveElevation = errors.New("no active elevation for this household")
+
+// AdminBoardHealthRow is FR79's health-field projection: device id, board
+// display name (falls back to device_id -- see AdminBoardHealth's proto
+// doc comment), household identity, last-seen age, active (highest
+// *accepted*) version, whether the latest pushed version is still
+// outstanding (pushed but not yet accepted), and sensor count. Never
+// joined with readings, region/plant structure, config payloads or audit
+// rows -- ResolveToHousehold's "whole lane" (FR10.2).
+type AdminBoardHealthRow struct {
+	DeviceID         string
+	BoardDisplayName string
+	HouseholdID      int64
+	HouseholdName    string
+	LastSeenAt       time.Time
+	ActiveVersion    uint64
+	OutstandingPush  bool
+	SensorCount      int32
+}
+
+// adminBoardHealthQuery is shared by AdminBoardHealthByPerson and
+// AdminBoardHealthByPartialDeviceID: only the WHERE fragment naming the
+// candidate boards differs between a person-identifier resolution and a
+// partial-device-id resolution. Excludes retired boards and boards with no
+// current household (FR1.1's unclaimed exception -- the standing lane
+// resolves *to* a household, so a board with none can't be a match) and
+// orders by board_id for stable output.
+//
+// active_version is the highest *accepted* version (a1), independent of
+// outstanding_push, which reports whether the most recently pushed version
+// (latest, regardless of acceptance) has not been accepted -- matching
+// AdminBoardHealth's "a pushed config version has not yet been accepted"
+// doc comment exactly, including the rejected case.
+const adminBoardHealthQuery = `
+	SELECT
+		b.device_id,
+		b.household_id,
+		h.name,
+		b.last_seen_at,
+		COALESCE(av.active_version, 0),
+		COALESCE(latest.version, 0) != 0 AND NOT latest.accepted,
+		COALESCE(sc.sensor_count, 0)
+	FROM board b
+	JOIN household h ON h.household_id = b.household_id
+	LEFT JOIN LATERAL (
+		SELECT MAX(version) AS active_version
+		FROM device_config
+		WHERE board_id = b.board_id AND accepted = TRUE
+	) av ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT version, accepted
+		FROM device_config
+		WHERE board_id = b.board_id
+		ORDER BY version DESC
+		LIMIT 1
+	) latest ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT COUNT(*) AS sensor_count
+		FROM sensor
+		WHERE board_id = b.board_id
+	) sc ON TRUE
+	WHERE b.retired_at IS NULL
+	  AND b.household_id IS NOT NULL
+	  AND %s
+	ORDER BY b.board_id
+`
+
+func (r *Repository) scanAdminBoardHealth(ctx context.Context, whereFragment string, args ...any) ([]AdminBoardHealthRow, error) {
+	rows, err := r.db.Query(ctx, fmt.Sprintf(adminBoardHealthQuery, whereFragment), args...)
+	if err != nil {
+		return nil, fmt.Errorf("admin board health: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AdminBoardHealthRow
+	for rows.Next() {
+		var row AdminBoardHealthRow
+		if err := rows.Scan(&row.DeviceID, &row.HouseholdID, &row.HouseholdName, &row.LastSeenAt, &row.ActiveVersion, &row.OutstandingPush, &row.SensorCount); err != nil {
+			return nil, fmt.Errorf("scan admin board health: %w", err)
+		}
+		// board_display_name has no dedicated column yet -- falls back to
+		// device_id (see AdminBoardHealth's proto doc comment).
+		row.BoardDisplayName = row.DeviceID
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// AdminBoardHealthByPerson resolves personIdentifier (a
+// household_membership.principal_subject) to every board owned by any
+// household that principal currently belongs to (FR75 permits multi-
+// household membership; the standing lane doesn't special-case a single
+// household any more than ScopeForPrincipal does).
+func (r *Repository) AdminBoardHealthByPerson(ctx context.Context, personIdentifier string) ([]AdminBoardHealthRow, error) {
+	return r.scanAdminBoardHealth(ctx, `b.household_id IN (
+		SELECT household_id FROM household_membership
+		WHERE principal_subject = $1 AND valid_to IS NULL
+	)`, personIdentifier)
+}
+
+// AdminBoardHealthByPartialDeviceID resolves a partial device_id to every
+// currently-owned board whose device_id contains it.
+func (r *Repository) AdminBoardHealthByPartialDeviceID(ctx context.Context, partial string) ([]AdminBoardHealthRow, error) {
+	return r.scanAdminBoardHealth(ctx, `b.device_id ILIKE $1`, "%"+partial+"%")
+}
+
+// RecordAuditEntry writes entry directly against the connection pool, not
+// inside a transaction -- for an audited action with no accompanying DB
+// write of its own (FR8.1), e.g. ResolveToHousehold's per-query audit row
+// (FR10.4). Every other audited write in this file goes through
+// auditedWrite instead, so its audit row commits or rolls back with the
+// write it records -- see audit.NewPostgresAuditor's doc comment for when
+// each shape applies.
+func (r *Repository) RecordAuditEntry(ctx context.Context, entry audit.Entry) error {
+	return audit.NewPostgresAuditor(r.db).Record(ctx, entry)
+}
+
+// HouseholdExists reports whether householdID names a row in household --
+// Elevate's preflight check (FR10.1): elevating against a nonexistent
+// household is refused up front rather than left to an FK violation.
+func (r *Repository) HouseholdExists(ctx context.Context, householdID int64) (bool, error) {
+	var exists bool
+	if err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM household WHERE household_id = $1)`, householdID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check household %d exists: %w", householdID, err)
+	}
+	return exists, nil
+}
+
+// OpenElevation inserts a fresh admin_elevation row for adminSubject
+// against targetHouseholdID, expiring at expiresAt, and records entry in
+// the same transaction (FR10.1, FR8) -- a rolled-back insert leaves no
+// audit row, same auditedWrite guarantee as every other write in this
+// file.
+func (r *Repository) OpenElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, expiresAt time.Time, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO admin_elevation (admin_subject, target_household_id, reason, expires_at)
+			VALUES ($1, $2, $3, $4)
+		`, adminSubject, targetHouseholdID, reason, expiresAt)
+		if err != nil {
+			return audit.Entry{}, fmt.Errorf("open elevation for %q household %d: %w", adminSubject, targetHouseholdID, err)
+		}
+		return entry, nil
+	})
+}
+
+// RenewElevation extends adminSubject's single currently-open (unexpired,
+// unended) elevation against targetHouseholdID to newExpiresAt and
+// restates its reason (FR10.1's "renewable by re-stating a reason").
+// Returns ErrNoActiveElevation if no such elevation is currently open --
+// renewal never opens a new one.
+func (r *Repository) RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		ct, err := tx.Exec(ctx, `
+			UPDATE admin_elevation
+			SET reason = $1, expires_at = $2
+			WHERE elevation_id = (
+				SELECT elevation_id FROM admin_elevation
+				WHERE admin_subject = $3
+				  AND target_household_id = $4
+				  AND ended_at IS NULL
+				  AND expires_at > NOW()
+				ORDER BY started_at DESC
+				LIMIT 1
+			)
+		`, reason, newExpiresAt, adminSubject, targetHouseholdID)
+		if err != nil {
+			return audit.Entry{}, fmt.Errorf("renew elevation for %q household %d: %w", adminSubject, targetHouseholdID, err)
+		}
+		if ct.RowsAffected() == 0 {
+			return audit.Entry{}, ErrNoActiveElevation
+		}
+		return entry, nil
+	})
+}
+
+// EndElevation ends every currently-open elevation adminSubject holds
+// against targetHouseholdID before its natural expiry. Returns
+// ErrNoActiveElevation if none is currently open.
+func (r *Repository) EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error {
+	return r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		ct, err := tx.Exec(ctx, `
+			UPDATE admin_elevation
+			SET ended_at = NOW()
+			WHERE admin_subject = $1
+			  AND target_household_id = $2
+			  AND ended_at IS NULL
+			  AND expires_at > NOW()
+		`, adminSubject, targetHouseholdID)
+		if err != nil {
+			return audit.Entry{}, fmt.Errorf("end elevation for %q household %d: %w", adminSubject, targetHouseholdID, err)
+		}
+		if ct.RowsAffected() == 0 {
+			return audit.Entry{}, ErrNoActiveElevation
+		}
+		return entry, nil
+	})
+}
+
+// ActiveElevation returns the expiry of adminSubject's currently-open
+// elevation against targetHouseholdID, or ErrNoActiveElevation if none is
+// open. Backs GetElevationStatus's remaining-time read and is the gate a
+// handler must pass before constructing an authz.ElevatedScope (see that
+// type's doc comment).
+func (r *Repository) ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error) {
+	var expiresAt time.Time
+	err := r.db.QueryRow(ctx, `
+		SELECT expires_at
+		FROM admin_elevation
+		WHERE admin_subject = $1
+		  AND target_household_id = $2
+		  AND ended_at IS NULL
+		  AND expires_at > NOW()
+		ORDER BY expires_at DESC
+		LIMIT 1
+	`, adminSubject, targetHouseholdID).Scan(&expiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, ErrNoActiveElevation
+		}
+		return time.Time{}, fmt.Errorf("active elevation for %q household %d: %w", adminSubject, targetHouseholdID, err)
+	}
+	return expiresAt, nil
+}
+
 // ── Ownership (FR1.1, FR70.1, NFR6.1) ────────────────────────────────────────
 //
 // household_id is carried directly on board and plant, and on the region
