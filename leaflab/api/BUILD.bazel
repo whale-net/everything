@@ -484,3 +484,37 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
+
+# Real-Postgres (TimescaleDB) integration coverage for #1380's FR74/FR24
+# (relocation-induced half) -- see relocate_integration_test.go's doc
+# comment. Same tag set as the other integration go_test targets above;
+# requires the TimescaleDB image (not plain postgres) because
+# RelocateSubtree's FR20 capture.Recorder call needs a real time_bucket().
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:relocate_integration_test --test_output=all
+go_test(
+    # keep
+    name = "relocate_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["relocate_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
