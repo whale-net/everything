@@ -88,11 +88,6 @@ var ErrTooFewEntities = errors.New("readings: compare requires at least two enti
 // unlike Series/PeriodSummary where zero means unfiltered.
 var ErrMeasurementRequired = errors.New("readings: compare requires exactly one measurement type")
 
-// ErrConfigLagNotImplemented is returned by ConfigLag until this task's
-// Implementation phase (#1364, FR30) fills in the join against
-// device_config's active accepted version.
-var ErrConfigLagNotImplemented = errors.New("readings: ConfigLag not implemented (Implementation phase, FR30)")
-
 // validateWindow enforces NFR3.2's "no unbounded scan" at the one place
 // every read-path method calls through before touching the database.
 func validateWindow(w Window) error {
@@ -507,7 +502,7 @@ func (r *Reader) rawPoints(ctx context.Context, whereBase string, baseArgs []any
 		next += 2
 	}
 	query := fmt.Sprintf(`
-		SELECT recorded_at, reading_id, value
+		SELECT recorded_at, reading_id, value, config_version
 		FROM sensor_reading
 		WHERE %s
 		ORDER BY recorded_at DESC, reading_id DESC
@@ -526,17 +521,19 @@ func (r *Reader) rawPoints(ctx context.Context, whereBase string, baseArgs []any
 		var recordedAt time.Time
 		var readingID int64
 		var value float64
-		if err := rows.Scan(&recordedAt, &readingID, &value); err != nil {
+		var configVersion sql.NullInt64
+		if err := rows.Scan(&recordedAt, &readingID, &value, &configVersion); err != nil {
 			return nil, fmt.Errorf("readings: scan raw series row: %w", err)
 		}
 		points = append(points, Point{
-			RecordedAt: recordedAt,
-			Value:      value,
-			Min:        value,
-			Max:        value,
-			Avg:        value,
-			Count:      1,
-			readingID:  readingID,
+			RecordedAt:    recordedAt,
+			Value:         value,
+			Min:           value,
+			Max:           value,
+			Avg:           value,
+			Count:         1,
+			readingID:     readingID,
+			ConfigVersion: configVersion.Int64,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -860,7 +857,7 @@ func (r *Reader) latestRawValues(ctx context.Context, sensorIDs []int64) ([]Curr
 		return nil, nil
 	}
 	rows, err := r.db.Query(ctx, `
-		SELECT DISTINCT ON (sr.sensor_id) sr.sensor_id, s.sensor_type_id, sr.value, sr.recorded_at
+		SELECT DISTINCT ON (sr.sensor_id) sr.sensor_id, s.sensor_type_id, sr.value, sr.recorded_at, sr.config_version
 		FROM sensor_reading sr
 		JOIN sensor s ON s.sensor_id = sr.sensor_id
 		WHERE sr.sensor_id = ANY($1)
@@ -874,9 +871,13 @@ func (r *Reader) latestRawValues(ctx context.Context, sensorIDs []int64) ([]Curr
 	var values []CurrentValue
 	for rows.Next() {
 		var v CurrentValue
-		if err := rows.Scan(&v.SensorID, &v.MeasurementTypeID, &v.Value, &v.RecordedAt); err != nil {
+		var configVersion sql.NullInt64
+		if err := rows.Scan(&v.SensorID, &v.MeasurementTypeID, &v.Value, &v.RecordedAt, &configVersion); err != nil {
 			return nil, fmt.Errorf("readings: scan latest raw value: %w", err)
 		}
+		// FR27: GetCurrentValues is always served from raw, so this is always
+		// populated -- see CurrentValue.ConfigVersion's doc comment.
+		v.ConfigVersion = configVersion.Int64
 		values = append(values, v)
 	}
 	if err := rows.Err(); err != nil {
@@ -1257,9 +1258,118 @@ type ConfigLagResult struct {
 // a post-filter); the admin form is the same call under a wider Scope, not
 // a separate RPC or method.
 //
-// Scaffold only (this task's Scaffold phase, #1364): returns
-// ErrConfigLagNotImplemented until the Implementation phase fills in the
-// device_config join and the bounded recent-readings lookup.
+// The board page is fetched first (keyset on board_id, FR61, mirroring
+// Repository.ListBoards' retired_at/Scope.Filter shape), then
+// device_config's active accepted version and the board's most recent
+// reading are each joined in, restricted to the boards already selected
+// for this page (board_id IN (SELECT board_id FROM boards)) -- so neither
+// join has to consider a board this page doesn't return. The recent-
+// reading join is additionally bounded to tiers.RawCapWindow (NFR3.2's
+// 48-hour raw cap, reused rather than duplicated) via a recorded_at lower
+// bound, so it never scans the sensor_reading hypertable unbounded: a
+// board with no reading inside that window reports HasRecentReadings =
+// false rather than falling back to an older one.
+//
+// "Lagging since" (FR64 instant, ConfigLagEntry.LaggingSince) is
+// device_config's acked_at for the active accepted version -- the instant
+// that version actually became active (processor/repository.go sets
+// accepted and acked_at together on ack, never separately) -- since a
+// board still reporting an older stamped version has been diverging for
+// exactly that long.
 func (r *Reader) ConfigLag(ctx context.Context, scope authz.Scope, page Page) (ConfigLagResult, error) {
-	return ConfigLagResult{}, ErrConfigLagNotImplemented
+	limit := contract.ClampPageSize(page.Size)
+	afterBoardID, hasAfter, err := contract.DecodeBoardCursor(page.Token)
+	if err != nil {
+		return ConfigLagResult{}, fmt.Errorf("readings: decode page token: %w", err)
+	}
+
+	recentSince := time.Now().Add(-tiers.RawCapWindow)
+
+	args := []any{recentSince}
+	next := 2
+	boardWhere := "retired_at IS NULL"
+	filter, filterArgs := scope.Filter(next)
+	boardWhere += fmt.Sprintf(" AND (%s)", filter)
+	args = append(args, filterArgs...)
+	next += len(filterArgs)
+	if hasAfter {
+		boardWhere += fmt.Sprintf(" AND board_id > $%d", next)
+		args = append(args, afterBoardID)
+		next++
+	}
+	args = append(args, limit+1)
+	limitArg := next
+
+	query := fmt.Sprintf(`
+		WITH boards AS (
+			SELECT board_id, device_id
+			FROM board
+			WHERE %s
+			ORDER BY board_id
+			LIMIT $%d
+		),
+		active_config AS (
+			SELECT DISTINCT ON (dc.board_id) dc.board_id, dc.version AS accepted_version, dc.acked_at
+			FROM device_config dc
+			WHERE dc.accepted = TRUE
+			  AND dc.board_id IN (SELECT board_id FROM boards)
+			ORDER BY dc.board_id, dc.version DESC
+		),
+		recent_reading AS (
+			SELECT DISTINCT ON (s.board_id) s.board_id, sr.config_version, sr.recorded_at
+			FROM sensor_reading sr
+			JOIN sensor s ON s.sensor_id = sr.sensor_id
+			WHERE sr.recorded_at >= $1
+			  AND s.board_id IN (SELECT board_id FROM boards)
+			ORDER BY s.board_id, sr.recorded_at DESC
+		)
+		SELECT b.board_id, b.device_id,
+		       ac.accepted_version, ac.acked_at,
+		       rr.config_version
+		FROM boards b
+		LEFT JOIN active_config ac ON ac.board_id = b.board_id
+		LEFT JOIN recent_reading rr ON rr.board_id = b.board_id
+		ORDER BY b.board_id
+	`, boardWhere, limitArg)
+
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return ConfigLagResult{}, fmt.Errorf("readings: query config lag: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []ConfigLagEntry
+	for rows.Next() {
+		var e ConfigLagEntry
+		var acceptedVersion sql.NullInt64
+		var ackedAt sql.NullTime
+		var observedVersion sql.NullInt64
+		if err := rows.Scan(&e.BoardID, &e.DeviceID, &acceptedVersion, &ackedAt, &observedVersion); err != nil {
+			return ConfigLagResult{}, fmt.Errorf("readings: scan config lag row: %w", err)
+		}
+		e.HasAcceptedConfig = acceptedVersion.Valid
+		e.AcceptedVersion = acceptedVersion.Int64
+		e.HasRecentReadings = observedVersion.Valid
+		e.ObservedVersion = observedVersion.Int64
+		// Lagging is only meaningful when both sides are known -- a board
+		// with no accepted config, or no reading inside the bounded recent
+		// window, is reported as such (HasAcceptedConfig/HasRecentReadings
+		// false) rather than guessed at as lagging or caught up.
+		if e.HasAcceptedConfig && e.HasRecentReadings && e.ObservedVersion < e.AcceptedVersion {
+			e.Lagging = true
+			e.LaggingSince = ackedAt.Time
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return ConfigLagResult{}, fmt.Errorf("readings: iterate config lag: %w", err)
+	}
+
+	var nextToken string
+	if int32(len(entries)) > limit {
+		nextToken = contract.EncodeBoardCursor(entries[limit-1].BoardID)
+		entries = entries[:limit]
+	}
+
+	return ConfigLagResult{Entries: entries, NextPageToken: nextToken}, nil
 }

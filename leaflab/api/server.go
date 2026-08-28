@@ -85,6 +85,11 @@ type readingsReader interface {
 	CurrentValues(ctx context.Context, entity authz.EntityRef) (readings.CurrentValuesResult, error)
 	PeriodSummary(ctx context.Context, regionID int64, period readings.Window, measurementTypeID int64) (readings.PeriodSummaryResult, error)
 	Compare(ctx context.Context, entities []authz.EntityRef, window readings.Window, measurementTypeID int64, requested tiers.Tier, page readings.Page) (readings.CompareResult, error)
+	// ConfigLag answers ListConfigLag (FR30) -- household-scoped by default
+	// (FR5), same as every other bounded-read-path RPC: scope is resolved
+	// server-side from the caller's principal (scopeForCaller), never a
+	// request field.
+	ConfigLag(ctx context.Context, scope authz.Scope, page readings.Page) (readings.ConfigLagResult, error)
 }
 
 type LeafLabAPIServer struct {
@@ -321,6 +326,7 @@ func toReadingPoints(points []readings.Point) []*pb.ReadingPoint {
 			ValueAvg:        p.Avg,
 			ReadingCount:    p.Count,
 			BoundaryPartial: p.BoundaryPartial,
+			ConfigVersion:   p.ConfigVersion,
 		}
 	}
 	return out
@@ -375,6 +381,7 @@ func toCurrentValue(v readings.CurrentValue) *pb.CurrentValue {
 		MeasurementTypeId: v.MeasurementTypeID,
 		Value:             v.Value,
 		RecordedAt:        contract.ToInstant(v.RecordedAt),
+		ConfigVersion:     v.ConfigVersion,
 	}
 }
 
@@ -623,6 +630,51 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 	return &pb.ListBoardsResponse{
 		Boards:    boards,
 		Page:      &pb.PageResponse{NextPageToken: nextToken},
+		ServerNow: contract.Now(),
+	}, nil
+}
+
+// ListConfigLag answers FR30 -- "applied is distinguishable from
+// accepted" -- per board within the caller's Scope: the board's active
+// accepted config version against the version stamped on its most recent
+// readings, and how long the two have diverged. Household-scoped by
+// default (FR5): any caller runs this for their own boards; the admin
+// form is the same call under a wider Scope resolved server-side from the
+// caller's principal (scopeForCaller), never a separate RPC or a request
+// field -- mirroring ListBoards' shape above.
+func (s *LeafLabAPIServer) ListConfigLag(ctx context.Context, req *pb.ListConfigLagRequest) (*pb.ListConfigLagResponse, error) {
+	scope, err := s.scopeForCaller(ctx)
+	if err != nil {
+		s.logger.Error("resolve caller scope failed", "error", err)
+		return nil, contract.Internal("board", "", "Could not check config status right now. Please try again.")
+	}
+
+	page := readings.Page{Token: req.GetPage().GetPageToken(), Size: req.GetPage().GetPageSize()}
+	result, err := s.readings.ConfigLag(ctx, scope, page)
+	if err != nil {
+		return nil, readingsErrorToFailure(s.logger, err)
+	}
+
+	entries := make([]*pb.ConfigLagEntry, len(result.Entries))
+	for i, e := range result.Entries {
+		entry := &pb.ConfigLagEntry{
+			BoardId:           e.BoardID,
+			DeviceId:          e.DeviceID,
+			HasAcceptedConfig: e.HasAcceptedConfig,
+			AcceptedVersion:   e.AcceptedVersion,
+			HasRecentReadings: e.HasRecentReadings,
+			ObservedVersion:   e.ObservedVersion,
+			Lagging:           e.Lagging,
+		}
+		if e.Lagging {
+			entry.LaggingSince = contract.ToInstant(e.LaggingSince)
+		}
+		entries[i] = entry
+	}
+
+	return &pb.ListConfigLagResponse{
+		Entries:   entries,
+		Page:      &pb.PageResponse{NextPageToken: result.NextPageToken},
 		ServerNow: contract.Now(),
 	}, nil
 }
