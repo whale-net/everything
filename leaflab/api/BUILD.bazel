@@ -6,6 +6,8 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "auth.go",
+        "logging_interceptor.go",
         "main.go",
         "repository.go",
         "server.go",
@@ -17,11 +19,14 @@ go_library(
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/db",
+        "//libs/go/grpcauth",
         "//libs/go/logging",
         "//libs/go/rmq",
+        "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//reflection",
         "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",
@@ -43,6 +48,41 @@ release_app(
     app_type = "internal-api",
     port = 50051,
     replicas = 1,
+)
+
+# FR11/FR12/FR63 auth-and-health test suite: auth.go's enforcement
+# interceptor and allowlist in isolation (auth_test.go), GetHealth's
+# DEGRADED/UP probe logic against an in-memory fake repository
+# (server_test.go), and the full production interceptor chain -- built via
+# buildServer, the exact function run() calls -- behind a bufconn listener
+# with a stub RPC handler standing in for Postgres/RabbitMQ (main_test.go).
+# No Docker/network required; safe to run in `bazel test //leaflab/...`.
+# Hand-written (not gazelle-generated) per this package's gazelle gotcha --
+# see the response_contract_integration_test.go rule below. `# keep` tells a
+# later `bazel run //:gazelle` not to touch or remove this rule.
+go_test(
+    # keep
+    name = "api_lib_test",
+    size = "small",
+    srcs = [
+        "auth_test.go",
+        "main_test.go",
+        "server_test.go",
+    ],
+    embed = [":api_lib"],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/grpcauth",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+    ],
 )
 
 # Real-Postgres integration coverage for the response contract (FR59, FR61,

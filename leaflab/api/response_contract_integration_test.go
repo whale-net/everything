@@ -70,7 +70,7 @@ func newTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: testSchema})
 	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, nil, nil, discardLogger()), db.Pool
 }
 
 func countRows(t *testing.T, pool *pgxpool.Pool, table string) int {
