@@ -476,7 +476,23 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		"version", version,
 		"sensors", len(req.Sensors))
 
-	return &pb.PushDeviceConfigResponse{Version: uint64(version), Removed: removedForResponse}, nil
+	// Scaffold shape only (#1371): every push today targets exactly the
+	// one board named by req.DeviceId, so this wraps that single outcome
+	// as PushDeviceConfigResponse's new one-result-per-board shape
+	// (FR48.1). Actually iterating req.DeviceIds, running each board
+	// through its own validation/materialisation, honouring dry_run
+	// (FR38) and requiring/auditing reason for a multi-board push
+	// (FR48.2) is Implementation-phase work.
+	return &pb.PushDeviceConfigResponse{
+		Results: []*pb.BoardPushResult{
+			{
+				DeviceId: req.DeviceId,
+				Success:  true,
+				Version:  uint64(version),
+				Removed:  removedForResponse,
+			},
+		},
+	}, nil
 }
 
 // removeFormToProto translates config.RemoveForm (leaflab/api/config's

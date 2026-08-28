@@ -51,6 +51,15 @@ service LeafLabAPI {
   // same way PushDeviceConfig would materialise it if it were actually
   // pushed, but is never stored or published.
   rpc DiffConfigVersions(DiffConfigVersionsRequest) returns (DiffConfigVersionsResponse);
+
+  // GetPushGroupStatus reads back FR48.1's "the resulting group's ack
+  // state is readable as a group afterwards": per board named in the
+  // push_group PushDeviceConfig created, whether that board's push has
+  // been acked, rejected, or is still silent (no ack has arrived), as of
+  // the moment this is called -- not a value fixed at push time. Also
+  // echoes the group's own FR48.2 bookkeeping (reason, push timestamp,
+  // acting principal). Read-only; never mutates anything.
+  rpc GetPushGroupStatus(GetPushGroupStatusRequest) returns (GetPushGroupStatusResponse);
 }
 
 // PushScope states what a PushDeviceConfigRequest's payload means as a
@@ -118,10 +127,19 @@ message RemovedEntry {
 }
 
 message PushDeviceConfigRequest {
+  // Legacy single-board target, kept for a caller that names exactly one
+  // board: when `device_ids` is empty, this alone is the (singleton)
+  // target set. Superseded by `device_ids` for FR48's multi-board push --
+  // when `device_ids` is non-empty, it is the target board set and this
+  // field is ignored.
   string device_id = 1;
   // The desired-state payload (FR82, NFR17) -- replace semantics, not a
   // set of overrides layered onto whatever the board already has.
-  // Required; meaning depends on `scope`:
+  // Required; meaning depends on `scope`. Applied identically to every
+  // board in the target set (FR48): each board is carried through the
+  // full validation and materialisation against its own accepted base
+  // independently (a board's own current accepted config under
+  // scope=EDIT), never against another named board's.
   //   - scope=COMPLETE: this is the board's entire desired sensor set
   //     (FR82.2). An entry absent from it is removed.
   //   - scope=EDIT: this lists only entries being added or changed
@@ -137,14 +155,79 @@ message PushDeviceConfigRequest {
   // scope=COMPLETE, where an entry is removed by omitting it from
   // `sensors` instead.
   repeated RemoveKey removes = 4;
+  // FR48: the explicit board set this push targets. A board set spanning
+  // more than one household is refused unless the caller reaches all of
+  // them (FR5, FR1.2). If empty, `device_id` (above) is the sole target.
+  repeated string device_ids = 5;
+  // FR38: validate, materialise and diff this push against every named
+  // board without writing a device_config row or publishing anything to
+  // any of them -- asserted, not just achieved by omission (see
+  // BoardPushResult and PushDeviceConfigResponse). Composes with a
+  // multi-board `device_ids` set: the preview covers the same blast
+  // radius the real push would.
+  bool dry_run = 6;
+  // FR48.2: required (refused with none of the named boards pushed) when
+  // `device_ids` names more than one board -- a multi-board push must
+  // state why. Returned back on the response alongside the push
+  // timestamp and acting principal (FR8.2), and written to the audit
+  // log. May be empty for a single-board push.
+  string reason = 7;
+}
+
+// BoardPushResult is FR48.1's per-board push outcome: exactly one board's
+// result, independent of every other board named in the same
+// PushDeviceConfigRequest -- one board's failure or refusal never
+// prevents another named board in the same request from succeeding, and
+// PushDeviceConfigResponse never collapses this list to one aggregate
+// success.
+message BoardPushResult {
+  string device_id = 1;
+  // True if this board's push succeeded, or -- under dry_run -- validated
+  // cleanly and would have succeeded. False for a per-board failure or a
+  // per-board refusal; see `failure`.
+  bool success = 2;
+  // The version this push assigned to this board, or -- under dry_run --
+  // the version it would assign (FR38). Meaningless when success is
+  // false.
+  uint64 version = 3;
+  // FR82.4's per-entry removals this push dropped for this board, with a
+  // chip key already expanded into the individual entries it drops
+  // (FR82.4, FR38). Under dry_run this is FR38's named removal set --
+  // "these N entries would stop being polled" -- computed against
+  // `effective_config`, not written anywhere.
+  repeated RemovedEntry removed = 4;
+  // Set (with success false) when this board's push failed or was
+  // refused.
+  Failure failure = 5;
+  // FR38: the effective resulting config this push produces for this
+  // board -- the board's complete new desired sensor set, not the
+  // partial payload the request submitted (meaningful under
+  // scope=EDIT). Populated whenever success is true, whether or not
+  // dry_run was set.
+  firmware.DeviceConfig effective_config = 6;
+  // FR37/FR38: the diff between this board's prior accepted config and
+  // effective_config, computed the same way DiffConfigVersions computes
+  // one. Populated whenever success is true.
+  repeated EntryDiff diff = 7;
 }
 
 message PushDeviceConfigResponse {
-  // Version assigned to this push.
-  uint64 version = 1;
-  // FR82.4: entries this push's EDIT-scope removal dropped, each stating
-  // which removal form named it. Always empty under scope=COMPLETE.
-  repeated RemovedEntry removed = 2;
+  // FR48.1: one result per board in the request's target set (device_ids,
+  // or the singleton device_id if device_ids was empty) -- never one
+  // aggregate success, and never collapsed even when every board in the
+  // set succeeded or every board in the set failed. See BoardPushResult.
+  repeated BoardPushResult results = 1;
+  // FR48.2: this push's stated reason (required, non-empty, for a
+  // multi-board push; may be empty for a single-board push), the instant
+  // it was pushed, and the acting principal (FR8.2) -- returned back to
+  // the caller and written to the audit log.
+  string reason = 2;
+  Instant pushed_at = 3;
+  string actor_subject = 4;
+  // FR48.1: identifies the push_group this push recorded -- the handle a
+  // caller passes to GetPushGroupStatus to read this group's per-board
+  // ack state after the fact.
+  int64 push_group_id = 5;
 }
 
 message RewireSensorRequest {
@@ -226,6 +309,44 @@ message DiffConfigVersionsResponse {
   // diffed, not as originally submitted.
   firmware.DeviceConfig from = 2;
   firmware.DeviceConfig to = 3;
+}
+
+// --- Push group status (FR48) --------------------------------------------
+
+message GetPushGroupStatusRequest {
+  int64 push_group_id = 1;
+}
+
+// AckState classifies one board's push outcome within a push_group, as of
+// the moment GetPushGroupStatus is called -- not a value fixed at push
+// time: a board silent at push time can still ack or be rejected later,
+// and a later call reflects that.
+enum AckState {
+  ACK_STATE_UNSPECIFIED = 0;
+  // The device accepted this push (device_config.accepted = TRUE).
+  ACK_STATE_ACKED = 1;
+  // The device rejected this push (device_config.accepted = FALSE,
+  // rejection_reason set).
+  ACK_STATE_REJECTED = 2;
+  // No ack has arrived yet for this board's push in this group
+  // (device_config.acked_at IS NULL).
+  ACK_STATE_SILENT = 3;
+}
+
+// BoardAckStatus is one board's AckState within a push_group.
+message BoardAckStatus {
+  string device_id = 1;
+  AckState state = 2;
+}
+
+message GetPushGroupStatusResponse {
+  // FR48.1: one entry per board this push_group targeted, readable as a
+  // group -- never one aggregate ack state for the whole group.
+  repeated BoardAckStatus boards = 1;
+  // The group's own FR48.2 bookkeeping, echoed back for convenience.
+  string reason = 2;
+  Instant pushed_at = 3;
+  string actor_subject = 4;
 }
 
 message GetDeviceConfigRequest {

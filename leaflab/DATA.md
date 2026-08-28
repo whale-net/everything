@@ -71,6 +71,14 @@ erDiagram
         boolean     accepted
         timestamptz pushed_at
         timestamptz acked_at
+        bigint      push_group_id FK
+    }
+
+    push_group {
+        bigserial   push_group_id PK
+        text        reason
+        text        actor_subject
+        timestamptz pushed_at
     }
 
     device_config_entry {
@@ -121,6 +129,7 @@ erDiagram
     region           ||--o{ sensor_region_history: "hosts"
     sensor           ||--o{ sensor_reading       : "produces"
     board            ||--o{ device_config        : "configured by"
+    push_group       |o--o{ device_config        : "grouped push (FR48)"
     device_config    ||--o{ device_config_entry  : "per-entry provenance"
     sensor_type      ||--o{ device_config_entry  : "classifies"
     sensor_chip      ||--o{ sensor_chip_address  : "known addresses"
@@ -322,6 +331,44 @@ Boundary with FR16.4: `Validate`'s within-payload collision check does
 not, and cannot, catch a swap (two entries trading addresses) -- a swap
 produces two distinct canonical keys, not a collision. Swap handling is
 identity resolution's job (`leaflab/api/identity.go`), not validation's.
+
+---
+
+## Dry Run and Multi-Board Push (FR38, FR48) -- scaffold
+
+`PushDeviceConfigRequest` gained three fields on top of FR82's shape:
+`device_ids` (a board set -- FR48), `dry_run` (FR38), and `reason` (FR48.2,
+required once `device_ids` names more than one board). `device_id`
+(singular) still works unchanged for a caller naming exactly one board --
+it is the target set whenever `device_ids` is empty.
+
+`PushDeviceConfigResponse` no longer carries a single `version`/`removed`
+pair. It carries `repeated BoardPushResult results` (FR48.1: one entry per
+targeted board, never collapsed to an aggregate success) plus the group's
+`reason`/`pushed_at`/`actor_subject`/`push_group_id`. Each `BoardPushResult`
+carries its own `success`, `version`, `removed`, `failure`,
+`effective_config` and `diff` -- so a `dry_run` push and a real push return
+the identically-shaped per-board result, the only difference being that a
+`dry_run` push writes no `device_config` row and publishes nothing.
+
+`push_group` (migration 034) is the append-only record one multi-board
+`PushDeviceConfig` call creates: `reason`, `actor_subject` and `pushed_at`,
+shared by every `device_config` row the call produces via that row's
+nullable `push_group_id`. `GetPushGroupStatus(push_group_id)` reads back
+FR48.1's "the resulting group's ack state is readable as a group
+afterwards" -- per targeted board, `ACKED` / `REJECTED` / `SILENT`, derived
+from that board's `device_config.accepted`/`acked_at`/`rejection_reason` at
+the moment of the call, not fixed at push time.
+
+This is scaffold shape only (proto + migration + RPC surface, #1371):
+`leaflab/api/server.go`'s `PushDeviceConfig` handler still only ever
+pushes the one board named by `device_id`, wrapped as a single-element
+`results` list, and `GetPushGroupStatus` has no handler yet (falls through
+to `Unimplemented`). Running every named board through FR82
+materialisation and FR39 validation independently, honouring `dry_run` by
+routing through a repository handle that cannot write, computing FR38's
+named removal set against each board's effective payload, and requiring/
+auditing `reason` for a multi-board push, is Implementation-phase work.
 
 ---
 

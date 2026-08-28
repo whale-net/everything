@@ -97,7 +97,9 @@ type stubAPIServer struct {
 }
 
 func (stubAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
-	return &pb.PushDeviceConfigResponse{Version: 1}, nil
+	return &pb.PushDeviceConfigResponse{
+		Results: []*pb.BoardPushResult{{DeviceId: req.DeviceId, Success: true, Version: 1}},
+	}, nil
 }
 
 func (stubAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
@@ -118,6 +120,10 @@ func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*
 
 func (stubAPIServer) DiffConfigVersions(ctx context.Context, req *pb.DiffConfigVersionsRequest) (*pb.DiffConfigVersionsResponse, error) {
 	return &pb.DiffConfigVersionsResponse{}, nil
+}
+
+func (stubAPIServer) GetPushGroupStatus(ctx context.Context, req *pb.GetPushGroupStatusRequest) (*pb.GetPushGroupStatusResponse, error) {
+	return &pb.GetPushGroupStatusResponse{}, nil
 }
 
 // startTestServer builds the exact production interceptor chain
@@ -203,8 +209,8 @@ func TestRPCs_ValidCredential_Succeeds(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected success with a valid credential, got %v", err)
 		}
-		if resp.Version != 1 {
-			t.Errorf("Version = %d, want 1 (stub response)", resp.Version)
+		if len(resp.Results) != 1 || resp.Results[0].Version != 1 {
+			t.Errorf("Results = %v, want one BoardPushResult with Version 1 (stub response)", resp.Results)
 		}
 	})
 	t.Run("GetDeviceConfig", func(t *testing.T) {
