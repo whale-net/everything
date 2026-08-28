@@ -370,3 +370,42 @@ go_test(
         "@rules_go//go/runfiles",
     ],
 )
+
+# Real-Postgres (TimescaleDB) integration coverage for #1378's plant-type
+# catalog ownership split (FR55, A24) -- see
+# plant_types_integration_test.go's doc comment. Same tag set as the other
+# integration go_test targets above; requires the TimescaleDB image (not
+# plain postgres) because CreatePlantWithNewType calls
+# capture.Recorder.Record, which calls time_bucket().
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:plant_types_integration_test --test_output=all
+go_test(
+    # keep
+    name = "plant_types_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "plant_types_integration_test.go",
+    ],
+    data = ["plant_types.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@rules_go//go/runfiles",
+    ],
+)
