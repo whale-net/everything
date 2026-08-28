@@ -289,6 +289,18 @@ func (f *fakeRepo) CompleteClaim(ctx context.Context, principalSubject, handle s
 	panic("not used by this file's tests")
 }
 
+// Household landing methods (FR62, NFR3.1, #1350) -- panic stubs like the
+// households/claim methods above: nothing in this file exercises
+// GetHouseholdLanding yet (Testing phase's job); they exist here only so
+// *fakeRepo keeps satisfying deviceRepository.
+func (f *fakeRepo) CurrentHouseholdForPrincipal(ctx context.Context, principalSubject string) (int64, bool, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) LandingBoardSignals(ctx context.Context, householdID int64) ([]LandingBoardSignalRow, error) {
+	panic("not used by this file's tests")
+}
+
 // fakeAuthz implements authzResolver entirely in memory, with call
 // counters so tests can assert on NFR2's "one query" structural shape
 // (resolve the entity and the scope in the same number of round trips

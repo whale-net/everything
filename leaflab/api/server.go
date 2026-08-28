@@ -15,6 +15,7 @@ import (
 	"github.com/whale-net/everything/leaflab/api/claim"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	"github.com/whale-net/everything/leaflab/api/health"
+	"github.com/whale-net/everything/leaflab/api/landing"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -100,6 +101,11 @@ type deviceRepository interface {
 	MarkClaimRound(ctx context.Context, handle string, cfg claim.Config) error
 	GetClaimChallengeStatus(ctx context.Context, handle string, cfg claim.Config) (waiting bool, err error)
 	CompleteClaim(ctx context.Context, principalSubject, handle string, cfg claim.Config, entry audit.Entry) (HouseholdRow, error)
+
+	// Household landing (FR62, NFR3.1, #1350) -- see landing.go for both
+	// methods' doc comments.
+	CurrentHouseholdForPrincipal(ctx context.Context, principalSubject string) (int64, bool, error)
+	LandingBoardSignals(ctx context.Context, householdID int64) ([]LandingBoardSignalRow, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -466,6 +472,19 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 // failed, on the response or in an error -- only in the server-side log
 // line, for operator debugging.
 func (s *LeafLabAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*pb.GetHealthResponse, error) {
+	if s.isServiceDegraded(ctx) {
+		return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_DEGRADED}, nil
+	}
+	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
+}
+
+// isServiceDegraded is GetHealth's DEGRADED/UP probe (FR63), factored out so
+// GetHouseholdLanding's FR62 condition 4 ("the service itself degraded")
+// reads the identical signal rather than a second copy of this probe (per
+// this task's Implementation section) -- database reachability
+// (Repository.Ping) and RabbitMQ/MQTT connection liveness, either failing
+// counts as degraded.
+func (s *LeafLabAPIServer) isServiceDegraded(ctx context.Context) bool {
 	dbErr := s.repo.Ping(ctx)
 	if dbErr != nil {
 		s.logger.Warn("health check: database unreachable", "error", dbErr)
@@ -476,10 +495,7 @@ func (s *LeafLabAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthReque
 		s.logger.Warn("health check: rabbitmq/mqtt connection unavailable")
 	}
 
-	if dbErr != nil || !mqUp {
-		return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_DEGRADED}, nil
-	}
-	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
+	return dbErr != nil || !mqUp
 }
 
 
@@ -750,22 +766,54 @@ func reportingStateFor(r FleetBoardHealthRow, now time.Time) pb.ReportingState {
 		return pb.ReportingState_REPORTING_STATE_REPORTING
 	}
 
-	var longest time.Duration
-	if len(r.AcceptedConfigJSON) > 0 {
-		var cfg configpb.DeviceConfig
-		if err := protojson.Unmarshal(r.AcceptedConfigJSON, &cfg); err == nil {
-			for _, sensor := range cfg.GetSensors() {
-				if interval := health.EffectivePollInterval(sensor.GetPollIntervalMs()); interval > longest {
-					longest = interval
-				}
-			}
-		}
-	}
-
-	if health.IsStale(r.LastSeenAt, now, longest) {
+	if isBoardStale(r.LastSeenAt, now, r.AcceptedConfigJSON) {
 		return pb.ReportingState_REPORTING_STATE_NOT_REPORTING
 	}
 	return pb.ReportingState_REPORTING_STATE_REPORTING
+}
+
+// isBoardStale reports whether lastSeenAt is A23-stale as of now, given
+// configJSON (a board's accepted device_config, or nil/empty for a board
+// with none). This is the one call site for leaflab/api/health.IsStale in
+// this package -- see TestReportingStateFor_IsTheOnlyA23CallSiteInLeafLabAPI
+// (server_fleet_health_test.go), whose source-analysis proof this function
+// keeps satisfying now that a second consumer (landingSignalsForHousehold,
+// FR62, landing.go) needs the same staleness check: both route through
+// isBoardStale rather than either calling health.IsStale directly, so A23's
+// arithmetic still has exactly one call site under leaflab/api even though
+// it now backs two RPCs (this task's Validation criterion: "the A23
+// threshold has exactly one implementation across FR62 and FR79").
+func isBoardStale(lastSeenAt, now time.Time, configJSON []byte) bool {
+	return health.IsStale(lastSeenAt, now, longestConfiguredPollInterval(configJSON))
+}
+
+// longestConfiguredPollInterval decodes configJSON (a board's accepted
+// device_config, or nil/empty for a board with none) and returns its
+// longest configured sensor poll interval -- A23's "longest configured
+// poll interval" input to leaflab/api/health.Threshold. Shared by
+// reportingStateFor (FR79) and GetHouseholdLanding/landingSignalsForHousehold
+// (FR62, leaflab/api/landing.go) so both read this arithmetic from one
+// place rather than each re-deriving it, per this task's (#1350) Validation
+// criterion: "the A23 threshold has exactly one implementation across FR62
+// and FR79". A board with no accepted config, or an accepted config with no
+// sensors, returns 0, which leaflab/api/health.Threshold floors to
+// StalenessFloor -- the same outcome a freshly-registered, never-configured
+// board should have.
+func longestConfiguredPollInterval(configJSON []byte) time.Duration {
+	var longest time.Duration
+	if len(configJSON) == 0 {
+		return longest
+	}
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(configJSON, &cfg); err != nil {
+		return longest
+	}
+	for _, sensor := range cfg.GetSensors() {
+		if interval := health.EffectivePollInterval(sensor.GetPollIntervalMs()); interval > longest {
+			longest = interval
+		}
+	}
+	return longest
 }
 
 // Elevate opens a fresh, time-boxed elevation against target_household_id
@@ -1319,4 +1367,58 @@ func (s *LeafLabAPIServer) CompleteClaim(ctx context.Context, req *pb.CompleteCl
 	}
 
 	return &pb.CompleteClaimResponse{Household: toHouseholdProto(household), ServerNow: contract.Now()}, nil
+}
+
+// GetHouseholdLanding is FR62/NFR3.1's household landing classification
+// (Implementation for #1350). household_id=0 resolves to the caller's own
+// current household (Repository.CurrentHouseholdForPrincipal) -- the only
+// way LANDING_CONDITION_NO_HOUSEHOLD is ever reached is a caller with no
+// current household passing 0 here, matching api.proto's doc comment. A
+// non-zero household_id goes through authorizeHouseholdAccess (the same
+// Scope check GetHousehold/ListHouseholdMembers use) rather than being
+// trusted directly -- a caller never gets another principal's landing view
+// just by naming their household_id.
+//
+// Bounded work (NFR3.1): this issues at most three repository round trips
+// total -- CurrentHouseholdForPrincipal or authorizeHouseholdAccess (one),
+// isServiceDegraded's Ping (one), and LandingBoardSignals (one, aggregating
+// over every board and sensor in the household in a single query) -- none
+// of which loops per board, per sensor or per plant. See landing.go's doc
+// comment for the query itself.
+//
+// Classification itself is delegated entirely to leaflab/api/landing.Classify
+// (NFR18.1: this handler decides nothing about wording or priority beyond
+// gathering Classify's Input signals) -- see landingSignalsForHousehold and
+// toLandingResponse in landing.go.
+func (s *LeafLabAPIServer) GetHouseholdLanding(ctx context.Context, req *pb.GetHouseholdLandingRequest) (*pb.GetHouseholdLandingResponse, error) {
+	now := time.Now()
+
+	householdID := req.GetHouseholdId()
+	if householdID == 0 {
+		actor := actingSubject(ctx)
+		resolved, ok, err := s.repo.CurrentHouseholdForPrincipal(ctx, actor)
+		if err != nil {
+			s.logger.Error("resolve current household for landing failed", "actor", actor, "error", err)
+			return nil, contract.Internal("household", "", "Could not load your household landing view right now. Please try again.")
+		}
+		if !ok {
+			result := landing.Classify(landing.Input{HasHousehold: false})
+			return toLandingResponse(result, now), nil
+		}
+		householdID = resolved
+	} else if err := s.authorizeHouseholdAccess(ctx, householdID); err != nil {
+		return nil, err
+	}
+
+	degraded := s.isServiceDegraded(ctx)
+
+	rows, err := s.repo.LandingBoardSignals(ctx, householdID)
+	if err != nil {
+		s.logger.Error("landing board signals failed", "household_id", householdID, "error", err)
+		return nil, contract.Internal("household", "", "Could not load your household landing view right now. Please try again.")
+	}
+
+	input := landingSignalsForHousehold(rows, degraded, now)
+	result := landing.Classify(input)
+	return toLandingResponse(result, now), nil
 }
