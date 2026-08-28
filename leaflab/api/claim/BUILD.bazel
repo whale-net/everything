@@ -1,0 +1,20 @@
+"""FR76 self-service board claim (possession challenge) configuration -- A28's constants."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "claim",
+    srcs = ["config.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/claim",
+    visibility = ["//visibility:public"],
+)
+
+# A28 constants test suite: LoadConfigFromEnv's default/override/malformed-
+# value behavior, and the Validation section's "r >= 2 is enforced at
+# startup" floor (config_test.go). No network/DB required.
+go_test(
+    name = "claim_test",
+    size = "small",
+    srcs = ["config_test.go"],
+    embed = [":claim"],
+)

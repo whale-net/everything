@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
+	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -22,12 +22,16 @@ type SensorRepository interface {
 	UpsertSensorLabel(ctx context.Context, sensorID int64, name string) error
 	UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 	GetSensor(ctx context.Context, deviceID, sensorName string) (SensorInfo, bool, error)
-	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) error
+	InsertReading(ctx context.Context, sensorID int64, regionID *int64, value float64, valid bool, uptimeS uint32, recordedAt time.Time, configVersion *int64) (int64, error)
 	UpsertDeviceConfig(ctx context.Context, boardID int64, version int64, configJSON []byte) error
 	AckDeviceConfig(ctx context.Context, boardID int64, version int64, accepted bool, reason string) error
 	ApplyConfigRegions(ctx context.Context, boardID int64, version int64) error
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
+
+	// Board claim (FR76, #1342) -- see leaflab/processor/repository.go.
+	CheckAndUpdateUptimeWatermark(ctx context.Context, boardID int64, uptimeS uint32, observedAt time.Time, thresholdSeconds uint32) (bool, error)
+	SatisfyOpenClaimRound(ctx context.Context, deviceID string, readingID int64, observedAt time.Time) error
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -35,10 +39,17 @@ type MessageHandler struct {
 	logger *slog.Logger
 	repo   SensorRepository
 	cache  *SensorCache
+	// restartUptimeThresholdSeconds is FR76's A28-adjacent constant
+	// (leaflab/api/claim.Config.RestartUptimeThreshold, shared as the same
+	// LEAFLAB_API_CLAIM_RESTART_UPTIME_THRESHOLD_SECONDS env var -- see
+	// config.go): an uptime_s regression below this value is a genuine
+	// restart signal; a larger drop is presumed to be the uint32
+	// millisecond wrap at ~49.7 days and must not count (requirement 4).
+	restartUptimeThresholdSeconds uint32
 }
 
-func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache) *MessageHandler {
-	return &MessageHandler{logger: logger, repo: repo, cache: cache}
+func NewMessageHandler(logger *slog.Logger, repo SensorRepository, cache *SensorCache, restartUptimeThresholdSeconds uint32) *MessageHandler {
+	return &MessageHandler{logger: logger, repo: repo, cache: cache, restartUptimeThresholdSeconds: restartUptimeThresholdSeconds}
 }
 
 func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
@@ -64,7 +75,23 @@ func (h *MessageHandler) Handle(ctx context.Context, msg rmq.Message) error {
 	}
 }
 
-// handleManifest upserts the board and all its sensors, then populates the cache.
+// handleManifest upserts the board and all its sensors, then populates the
+// cache.
+//
+// FR76 requirement 4's narrow exception -- a non-retained DeviceManifest
+// delivery, for a device_id with zero readings ever, counting as a claim
+// round's restart signal -- is deliberately NOT implemented here. This
+// processor consumes MQTT traffic bridged through RabbitMQ's amq.topic AMQP
+// exchange (see main.go's consumer.BindExchange); neither amqp091-go's
+// Delivery type nor the AMQP 0-9-1 protocol it speaks carries any
+// equivalent of MQTT's retain flag, so a live manifest publish and a
+// broker-replayed retained one are indistinguishable at this layer. Per the
+// issue's explicit instruction, the exception is implemented as *never
+// satisfied* rather than *always satisfied* -- flagged loudly here and in
+// leaflab/api/ENV.md's "Flagged residual gap" note, not smoothed over. A
+// challenge against a never-read device can still discharge once real
+// readings start arriving, via the uptime_regression evidence class in
+// handleSensorReading below.
 func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, body []byte) error {
 	var manifest firmwarepb.DeviceManifest
 	if err := proto.Unmarshal(body, &manifest); err != nil {
@@ -133,7 +160,7 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 			}
 		}
 
-		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID, RegionID: regionID})
+		h.cache.Set(deviceID, sd.Name, SensorInfo{SensorID: sensorID, RegionID: regionID, BoardID: boardID})
 		h.logger.Info("sensor registered",
 			"device_id", deviceID,
 			"sensor", sd.Name,
@@ -180,17 +207,38 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		configVersion = &v
 	}
 
-	if err := h.repo.InsertReading(
+	now := time.Now()
+	uptimeS := reading.UptimeMs / 1000
+
+	readingID, err := h.repo.InsertReading(
 		ctx,
 		info.SensorID,
 		info.RegionID,
 		float64(reading.Value),
 		true,
-		reading.UptimeMs/1000,
-		time.Now(),
+		uptimeS,
+		now,
 		configVersion,
-	); err != nil {
+	)
+	if err != nil {
 		return err
+	}
+
+	// FR76 requirement 4: an uptime_s regression (lower than the board's
+	// last recorded value AND below the configured threshold, excluding the
+	// uint32 millisecond wrap at ~49.7 days) is a restart signal. Recorded
+	// against the board (not the sensor) since a restart is a property of
+	// the device, not any one of its sensors. A failure here is logged, not
+	// returned: a claim-evidence bookkeeping error must never nack/requeue
+	// (and thus re-attempt writing) an already-successfully-written reading.
+	isRestart, watermarkErr := h.repo.CheckAndUpdateUptimeWatermark(ctx, info.BoardID, uptimeS, now, h.restartUptimeThresholdSeconds)
+	if watermarkErr != nil {
+		h.logger.Error("uptime watermark check failed", "device_id", deviceID, "board_id", info.BoardID, "err", watermarkErr)
+	} else if isRestart {
+		h.logger.Info("restart signal observed", "device_id", deviceID, "board_id", info.BoardID, "uptime_s", uptimeS)
+		if err := h.repo.SatisfyOpenClaimRound(ctx, deviceID, readingID, now); err != nil {
+			h.logger.Error("satisfy claim round failed", "device_id", deviceID, "reading_id", readingID, "err", err)
+		}
 	}
 
 	var cvLog any = "none"
@@ -201,7 +249,7 @@ func (h *MessageHandler) handleSensorReading(ctx context.Context, deviceID, sens
 		"device_id", deviceID,
 		"sensor", sensorName,
 		"value", reading.Value,
-		"uptime_s", reading.UptimeMs/1000,
+		"uptime_s", uptimeS,
 		"config_version", cvLog,
 	)
 	return nil

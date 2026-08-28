@@ -116,6 +116,60 @@ service LeafLabAPI {
 
   // RenameHousehold changes a household's display name. Member-only (FR7).
   rpc RenameHousehold(RenameHouseholdRequest) returns (RenameHouseholdResponse);
+
+  // --- Board claim (FR76) -------------------------------------------------
+  //
+  // Self-service possession challenge: a board is claimable by an
+  // authenticated principal who discharges a possession challenge (r >= 2
+  // challenger-marked device restarts, A28) when the board is never-claimed
+  // or resolves to the member-less Unadopted household (FR70.1, migration
+  // 015). These four RPCs are this task's (#1342) scaffolded wire surface;
+  // see leaflab/api/claim/config.go for the A28 constants and
+  // leaflab/migrate/migrations/021_claim_challenge.up.sql for the schema.
+  // No RPC handler wires these into server.go yet -- Implementation-phase
+  // work, matching the households RPCs' scaffold/feat split.
+
+  // OpenClaimChallenge opens a possession challenge against device_id.
+  // Requirement 1 (uniform initiation, "no oracle at open"): the response's
+  // status, body shape, field set and timing must be identical whether
+  // device_id is never-claimed, resolves to Unadopted, is owned by a real
+  // household, or does not exist at all -- only its *syntactic* shape is
+  // checked before this responds; board is never queried first. Whether the
+  // resulting challenge can ever be discharged is decided at CompleteClaim,
+  // never observable here.
+  rpc OpenClaimChallenge(OpenClaimChallengeRequest) returns (OpenClaimChallengeResponse);
+
+  // MarkClaimRound marks the start of one discharge round (requirement 3):
+  // the server records t0 = now and returns a uniform acknowledgement
+  // carrying no result -- the response never discloses whether a prior
+  // round was satisfied, or how many remain. The claimant power-cycles the
+  // board immediately after calling this; the round is satisfied server-side
+  // by an out-of-band restart signal (requirement 4), not by this RPC.
+  rpc MarkClaimRound(MarkClaimRoundRequest) returns (MarkClaimRoundResponse);
+
+  // GetClaimChallengeStatus reports whether a challenge is still waiting or
+  // has ended (requirement 8's waiting/failed/expired presentation states,
+  // rendered by the BFF). The "ended" state is deliberately coarse: it
+  // never distinguishes not-discharged from discharged-but-against-a-real-
+  // household's-board (requirement 6), and never exposes which round(s)
+  // were satisfied (requirement 3's "no per-round outcome is disclosed") --
+  // only CompleteClaim's own response can ever confer an actual claim
+  // outcome.
+  rpc GetClaimChallengeStatus(GetClaimChallengeStatusRequest) returns (GetClaimChallengeStatusResponse);
+
+  // CompleteClaim finalizes a challenge (requirement 6). Succeeds --
+  // transferring the board's ownership closure (FR70) and auditing the
+  // claim (FR8), creating a household for the caller first if they hold
+  // none (FR75) -- only when the challenge discharged AND the board is
+  // never-claimed or resolves to Unadopted. Every other case (not
+  // discharged, exhausted, expired, or discharged against a board owned by
+  // a real household) returns the identical not-discharged failure: same
+  // status, body shape and wording, so a discharge against a real
+  // household's board is indistinguishable to the challenger from a
+  // challenge nobody satisfied. The discharge fact itself is still recorded
+  // server-side either way, readable by an elevated admin as FR77's
+  // evidence, but never disclosed to the challenger.
+  rpc CompleteClaim(CompleteClaimRequest) returns (CompleteClaimResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -445,6 +499,8 @@ message GetElevationStatusResponse {
   bool elevated = 1;
   Instant expires_at = 2;
   Instant server_now = 3;
+}
+
 // --- Households and membership (FR75, FR7) -------------------------------
 
 message Household {
@@ -524,4 +580,78 @@ message RenameHouseholdRequest {
 
 message RenameHouseholdResponse {
   Household household = 1;
+}
+
+// --- Board claim (FR76) ---------------------------------------------------
+
+message OpenClaimChallengeRequest {
+  // Syntactically validated only (requirement 1) -- never looked up
+  // against board before this RPC responds.
+  string device_id = 1;
+}
+
+message OpenClaimChallengeResponse {
+  // Opaque handle for this challenge -- never the underlying numeric row
+  // id, which would leak challenge volume/ordering across principals.
+  string challenge_handle = 1;
+  // Round instructions, persona-appropriate (requirement 8): presented
+  // using the identifier as printed on the board and where to find it --
+  // never as "device id".
+  string instructions = 2;
+  // Rounds required to discharge (A28's r, leaflab/api/claim.Config).
+  // Disclosed so a client can show progress framing without the server
+  // ever disclosing which round(s) were actually satisfied.
+  int32 rounds_required = 3;
+  // Challenge's bounded lifetime (requirement 8: "long enough to walk to
+  // the greenhouse and back"; A28 default 15 minutes).
+  Instant expires_at = 4;
+  // Server's current time (FR64), alongside every other response.
+  Instant server_now = 5;
+}
+
+message MarkClaimRoundRequest {
+  string challenge_handle = 1;
+}
+
+// Deliberately carries nothing but the response envelope's server_now --
+// requirement 3's "uniform acknowledgement carrying no result".
+message MarkClaimRoundResponse {
+  Instant server_now = 1;
+}
+
+message GetClaimChallengeStatusRequest {
+  string challenge_handle = 1;
+}
+
+// ClaimChallengeState is deliberately two-valued -- see
+// GetClaimChallengeStatus's doc comment (api.proto's service block) for why
+// a third "discharged" value would itself be a disclosure the requirement
+// text forbids.
+enum ClaimChallengeState {
+  CLAIM_CHALLENGE_STATE_UNSPECIFIED = 0;
+  CLAIM_CHALLENGE_STATE_WAITING = 1;
+  CLAIM_CHALLENGE_STATE_ENDED = 2;
+}
+
+message GetClaimChallengeStatusResponse {
+  ClaimChallengeState state = 1;
+  // Server's current time (FR64).
+  Instant server_now = 2;
+}
+
+message CompleteClaimRequest {
+  string challenge_handle = 1;
+}
+
+message CompleteClaimResponse {
+  // Present only on success (requirement 6): the household -- existing, or
+  // newly created as the caller's first (FR75's create-on-first-claim) --
+  // the board now belongs to. A not-discharged outcome (including a
+  // discharged challenge against a real household's board) is reported as
+  // a gRPC failure (contract.Refuse, FR59.3) instead, never as an empty or
+  // zero-value success response -- see CompleteClaim's doc comment (api.proto's
+  // service block).
+  Household household = 1;
+  // Server's current time (FR64).
+  Instant server_now = 2;
 }

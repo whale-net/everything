@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -171,15 +172,51 @@ func (stubAPIServer) RenameHousehold(ctx context.Context, req *pb.RenameHousehol
 	return &pb.RenameHouseholdResponse{}, nil
 }
 
+// Board claim RPCs (FR76, #1342 scaffold) -- canned successes here too,
+// same rationale as the RPCs above: this stub isolates the auth/logging
+// middleware, not claim business logic (which has no handler wired in
+// server.go yet -- see leaflab/api/claim/config.go and
+// leaflab/migrate/migrations/021_claim_challenge.up.sql).
+func (stubAPIServer) OpenClaimChallenge(ctx context.Context, req *pb.OpenClaimChallengeRequest) (*pb.OpenClaimChallengeResponse, error) {
+	return &pb.OpenClaimChallengeResponse{}, nil
+}
+
+func (stubAPIServer) MarkClaimRound(ctx context.Context, req *pb.MarkClaimRoundRequest) (*pb.MarkClaimRoundResponse, error) {
+	return &pb.MarkClaimRoundResponse{}, nil
+}
+
+func (stubAPIServer) GetClaimChallengeStatus(ctx context.Context, req *pb.GetClaimChallengeStatusRequest) (*pb.GetClaimChallengeStatusResponse, error) {
+	return &pb.GetClaimChallengeStatusResponse{}, nil
+}
+
+func (stubAPIServer) CompleteClaim(ctx context.Context, req *pb.CompleteClaimRequest) (*pb.CompleteClaimResponse, error) {
+	return &pb.CompleteClaimResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of
 // Postgres/RabbitMQ and a real OIDC verifier respectively.
+//
+// nil configs: ratelimit.InMemoryLimiter.Allow never throttles a bucket
+// with no configured limit (see NewInMemoryLimiter's doc comment) -- this
+// suite covers auth/logging middleware, not rate limiting itself (see
+// ratelimit_interceptor_test.go for that, via startTestServerWithLimiter).
 func startTestServer(t *testing.T, logger *slog.Logger) *grpc.ClientConn {
+	t.Helper()
+	return startTestServerWithLimiter(t, logger, ratelimit.NewInMemoryLimiter(nil))
+}
+
+// startTestServerWithLimiter is startTestServer with the rate limiter
+// injectable, so ratelimit_interceptor_test.go can prove NFR10's enforcement
+// over the exact same production wiring (buildServer) with a
+// tightly-configured limiter, instead of duplicating the bufconn/dial
+// plumbing.
+func startTestServerWithLimiter(t *testing.T, logger *slog.Logger, limiter ratelimit.Limiter) *grpc.ClientConn {
 	t.Helper()
 
 	lis := bufconn.Listen(bufSize)
-	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, stubAPIServer{}, false)
+	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, stubAPIServer{}, false, limiter)
 
 	go func() {
 		// Serve returns a non-nil error on Stop() too; cleanup already
@@ -370,12 +407,12 @@ func noopStream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerIn
 // "server reflection is disabled outside development" directly on the
 // production wiring, without dialing Postgres/RabbitMQ.
 func TestBuildServer_ReflectionRegisteredOnlyInDevMode(t *testing.T) {
-	prod := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, false)
+	prod := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, false, ratelimit.NewInMemoryLimiter(nil))
 	if hasReflectionService(prod) {
 		t.Errorf("reflection registered with devMode=false, want not registered (FR11): %v", prod.GetServiceInfo())
 	}
 
-	dev := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, true)
+	dev := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, true, ratelimit.NewInMemoryLimiter(nil))
 	if !hasReflectionService(dev) {
 		t.Errorf("reflection not registered with devMode=true, want registered: %v", dev.GetServiceInfo())
 	}

@@ -45,7 +45,9 @@ import (
 
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/claim"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 )
@@ -398,7 +400,7 @@ func newAdminElevationTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: adminElevationTestSchema})
 	repo := NewRepository(db.Pool)
 	resolver := authz.NewPGResolver(db.Pool)
-	return NewLeafLabAPIServer(repo, resolver, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, resolver, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil)), db.Pool
 }
 
 // adminElevationTestCtx returns a context carrying grpcauth.Claims for

@@ -12,9 +12,11 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/claim"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	"github.com/whale-net/everything/leaflab/api/health"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -90,6 +92,14 @@ type deviceRepository interface {
 	InviteMember(ctx context.Context, householdID int64, principalSubject string, entry audit.Entry) (HouseholdMembershipRow, error)
 	RemoveMember(ctx context.Context, householdID int64, principalSubject string, entry audit.Entry) error
 	RenameHousehold(ctx context.Context, householdID int64, name string, entry audit.Entry) (HouseholdRow, error)
+
+	// Board claim (FR76, #1342) -- see claim.go. OpenClaimChallenge never
+	// queries board (requirement 1); CompleteClaim is the one write among
+	// these four, auditedWrite-backed like the households.go writes above.
+	OpenClaimChallenge(ctx context.Context, principalSubject, deviceID string, cfg claim.Config) (ClaimChallengeRow, error)
+	MarkClaimRound(ctx context.Context, handle string, cfg claim.Config) error
+	GetClaimChallengeStatus(ctx context.Context, handle string, cfg claim.Config) (waiting bool, err error)
+	CompleteClaim(ctx context.Context, principalSubject, handle string, cfg claim.Config, entry audit.Entry) (HouseholdRow, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -127,6 +137,17 @@ type LeafLabAPIServer struct {
 	// and RenewElevation. Defaults to DefaultElevationDuration; see
 	// WithElevationDuration.
 	elevationDuration time.Duration
+	// claimConfig is FR76's A28 configuration (leaflab/api/claim.Config),
+	// threaded through to every board-claim handler below rather than read
+	// from the environment per-call.
+	claimConfig claim.Config
+	// limiter backs the board-claim handlers' NFR10 enforcement
+	// (claim_open/claim_round buckets), keyed on a composite of principal
+	// and device_id/challenge_handle -- see OpenClaimChallenge/MarkClaimRound
+	// below for why this can't go through the generic per-method interceptor
+	// (ratelimit_interceptor.go), which only ever derives a principal-only
+	// key.
+	limiter ratelimit.Limiter
 }
 
 // ServerOption configures optional LeafLabAPIServer behavior beyond
@@ -143,7 +164,7 @@ func WithElevationDuration(d time.Duration) ServerOption {
 	return func(s *LeafLabAPIServer) { s.elevationDuration = d }
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger, opts ...ServerOption) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger, claimConfig claim.Config, limiter ratelimit.Limiter, opts ...ServerOption) *LeafLabAPIServer {
 	s := &LeafLabAPIServer{
 		repo:              repo,
 		authzSvc:          authzSvc,
@@ -151,6 +172,8 @@ func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publishe
 		rmqConn:           rmqConn,
 		logger:            logger,
 		elevationDuration: DefaultElevationDuration,
+		claimConfig:       claimConfig,
+		limiter:           limiter,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -1117,4 +1140,183 @@ func (s *LeafLabAPIServer) RenameHousehold(ctx context.Context, req *pb.RenameHo
 	}
 
 	return &pb.RenameHouseholdResponse{Household: toHouseholdProto(household)}, nil
+}
+
+// --- Board claim (FR76) ---------------------------------------------------
+
+// claimInstructions is OpenClaimChallengeResponse.instructions (requirement
+// 8): names the identifier as what's printed on the board, never as
+// "device id", and frames the round mechanic without disclosing any
+// per-round outcome. rounds_required is carried as its own response field
+// rather than interpolated here, so this string stays static regardless of
+// A28's configured r.
+const claimInstructions = "Find the ID printed on your board (not a technical \"device ID\") and keep this page open. " +
+	"When you're ready, mark a round, then unplug and replug the board's power. Repeat for each round -- you have plenty of time to walk to the greenhouse and back."
+
+// claimOpenRateLimitKey/claimRoundRateLimitKey build NFR10's composite keys
+// for the claim_open/claim_round buckets (requirement 2: "keyed on the
+// submitted device_id and on the calling principal"). Built from plain
+// strings only -- no board query -- so Allow's oracle-safety guarantee
+// (identical behavior whether or not the key resolves to anything) holds
+// unchanged.
+//
+// claimRoundRateLimitKey uses challenge_handle rather than device_id:
+// MarkClaimRoundRequest carries no device_id, and handle is already a 1:1,
+// caller-held stand-in for (principal, device_id) established at
+// OpenClaimChallenge -- resolving handle to device_id first would cost an
+// extra query for no oracle-safety benefit, since handle itself is already
+// unguessable and scoped to one principal/device pair. Flagged here as a
+// deliberate substitution for requirement 2's literal wording.
+func claimOpenRateLimitKey(principalSubject, deviceID string) ratelimit.Key {
+	return ratelimit.Key("claim_open:" + principalSubject + ":" + deviceID)
+}
+
+func claimRoundRateLimitKey(principalSubject, challengeHandle string) ratelimit.Key {
+	return ratelimit.Key("claim_round:" + principalSubject + ":" + challengeHandle)
+}
+
+func claimRateLimitedFailure(retryAfter time.Duration) error {
+	return contract.RateLimitedWithRetry("claim_challenge", "", "Too many claim attempts. Try again shortly.", retryAfter)
+}
+
+// claimAuditEntry builds CompleteClaim's audit.Entry, matching
+// householdAuditEntry's shape/precedent: actor is always the authenticated
+// caller, Action/EntityKind come from auditRegistrations so the registered
+// audit contract and what's actually written can't drift apart.
+func claimAuditEntry(ctx context.Context) audit.Entry {
+	reg := auditRegistrations[completeClaimFullMethod]
+	return audit.Entry{
+		ActorSubject:  actingSubject(ctx),
+		ActorKind:     audit.ActorKindHuman,
+		Action:        reg.Action,
+		EntityKind:    reg.EntityKind,
+		CorrelationID: CorrelationIDFromContext(ctx),
+	}
+}
+
+// OpenClaimChallenge opens a possession challenge against device_id
+// (requirement 1). validateDeviceID is the *only* check on device_id this
+// handler performs before delegating to the repository -- syntactic shape,
+// never existence -- and s.repo.OpenClaimChallenge itself never queries
+// board (see claim.go's doc comment). Status, body shape and field set are
+// therefore identical for a never-claimed, Unadopted, owned or nonexistent
+// device_id; only the rate-limit/cooldown/concurrency refusals below differ
+// the response, and those are keyed purely on (principal, device_id) as
+// submitted, never on what device_id resolves to.
+func (s *LeafLabAPIServer) OpenClaimChallenge(ctx context.Context, req *pb.OpenClaimChallengeRequest) (*pb.OpenClaimChallengeResponse, error) {
+	if reason := validateDeviceID(req.GetDeviceId()); reason != "" {
+		return nil, contract.InvalidArgument("claim_challenge", "device_id", reason)
+	}
+
+	actor := actingSubject(ctx)
+
+	if allowed, retryAfter := s.limiter.Allow(ctx, claimOpenRateLimitKey(actor, req.GetDeviceId()), ratelimit.BucketClaimOpen); !allowed {
+		return nil, claimRateLimitedFailure(retryAfter)
+	}
+
+	row, err := s.repo.OpenClaimChallenge(ctx, actor, req.GetDeviceId(), s.claimConfig)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrClaimCooldownActive):
+			return nil, contract.Refuse("claim_challenge", "device_id",
+				"You recently tried to claim this board and need to wait before trying again.",
+				"Ask a household member to invite you instead (FR75), or wait for the cooldown to end.")
+		case errors.Is(err, ErrClaimTooManyOpenChallenges):
+			return nil, contract.Refuse("claim_challenge", "",
+				"You have too many claim attempts in progress.",
+				"Finish or let an existing claim attempt expire before starting another.")
+		}
+		s.logger.Error("open claim challenge failed", "actor", actor, "error", err)
+		return nil, contract.Internal("claim_challenge", "", "Could not start a claim attempt right now. Please try again.")
+	}
+
+	return &pb.OpenClaimChallengeResponse{
+		ChallengeHandle: row.Handle,
+		Instructions:    claimInstructions,
+		RoundsRequired:  row.RoundsRequired,
+		ExpiresAt:       contract.ToInstant(row.ExpiresAt),
+		ServerNow:       contract.Now(),
+	}, nil
+}
+
+// MarkClaimRound marks the start of the challenge's next discharge round
+// (requirement 3). The response is a uniform acknowledgement regardless of
+// internal state -- an invalid/expired/already-discharged/attempts-exhausted
+// challenge all ack identically; only a challenge_handle naming no row at
+// all (ErrClaimChallengeNotFound, a caller-error class distinct from FR76's
+// device_id oracle -- see claim.go) is reported differently.
+func (s *LeafLabAPIServer) MarkClaimRound(ctx context.Context, req *pb.MarkClaimRoundRequest) (*pb.MarkClaimRoundResponse, error) {
+	if req.GetChallengeHandle() == "" {
+		return nil, contract.InvalidArgument("claim_challenge", "challenge_handle", "A challenge handle is required.")
+	}
+
+	actor := actingSubject(ctx)
+
+	if allowed, retryAfter := s.limiter.Allow(ctx, claimRoundRateLimitKey(actor, req.GetChallengeHandle()), ratelimit.BucketClaimRound); !allowed {
+		return nil, claimRateLimitedFailure(retryAfter)
+	}
+
+	if err := s.repo.MarkClaimRound(ctx, req.GetChallengeHandle(), s.claimConfig); err != nil {
+		if errors.Is(err, ErrClaimChallengeNotFound) {
+			return nil, contract.NotFound("claim_challenge", "challenge_handle", "This claim attempt could not be found. Start a new one.")
+		}
+		s.logger.Error("mark claim round failed", "actor", actor, "error", err)
+		return nil, contract.Internal("claim_challenge", "", "Could not record this step right now. Please try again.")
+	}
+
+	return &pb.MarkClaimRoundResponse{ServerNow: contract.Now()}, nil
+}
+
+// GetClaimChallengeStatus reports whether handle's challenge is still
+// waiting or has ended (requirement 8's waiting/failed/expired presentation
+// states collapse to this one ENDED value at the RPC layer -- the BFF is
+// responsible for rendering "waiting" vs. an ended challenge's identical
+// failed/expired wording).
+func (s *LeafLabAPIServer) GetClaimChallengeStatus(ctx context.Context, req *pb.GetClaimChallengeStatusRequest) (*pb.GetClaimChallengeStatusResponse, error) {
+	if req.GetChallengeHandle() == "" {
+		return nil, contract.InvalidArgument("claim_challenge", "challenge_handle", "A challenge handle is required.")
+	}
+
+	waiting, err := s.repo.GetClaimChallengeStatus(ctx, req.GetChallengeHandle(), s.claimConfig)
+	if err != nil {
+		if errors.Is(err, ErrClaimChallengeNotFound) {
+			return nil, contract.NotFound("claim_challenge", "challenge_handle", "This claim attempt could not be found. Start a new one.")
+		}
+		s.logger.Error("get claim challenge status failed", "error", err)
+		return nil, contract.Internal("claim_challenge", "", "Could not check this claim attempt right now. Please try again.")
+	}
+
+	state := pb.ClaimChallengeState_CLAIM_CHALLENGE_STATE_ENDED
+	if waiting {
+		state = pb.ClaimChallengeState_CLAIM_CHALLENGE_STATE_WAITING
+	}
+	return &pb.GetClaimChallengeStatusResponse{State: state, ServerNow: contract.Now()}, nil
+}
+
+// CompleteClaim finalizes a challenge (requirement 6). ErrClaimNotDischarged
+// covers every non-success case uniformly -- not found, wrong principal,
+// still open, expired/exhausted, or discharged against a real household's
+// board -- all rendered as the same refusal, worded per requirement 8: "we
+// couldn't confirm you were at the board", with both fallbacks (FR75 invite,
+// FR80 support reference) named as prominently as retry.
+func (s *LeafLabAPIServer) CompleteClaim(ctx context.Context, req *pb.CompleteClaimRequest) (*pb.CompleteClaimResponse, error) {
+	if req.GetChallengeHandle() == "" {
+		return nil, contract.InvalidArgument("claim_challenge", "challenge_handle", "A challenge handle is required.")
+	}
+
+	actor := actingSubject(ctx)
+	entry := claimAuditEntry(ctx)
+
+	household, err := s.repo.CompleteClaim(ctx, actor, req.GetChallengeHandle(), s.claimConfig, entry)
+	if err != nil {
+		if errors.Is(err, ErrClaimNotDischarged) {
+			return nil, contract.Refuse("claim_challenge", "challenge_handle",
+				"We couldn't confirm you were at the board.",
+				"Ask a household member to invite you (FR75), or contact support with a reference (FR80).")
+		}
+		s.logger.Error("complete claim failed", "actor", actor, "error", err)
+		return nil, contract.Internal("claim_challenge", "", "Could not complete this claim right now. Please try again.")
+	}
+
+	return &pb.CompleteClaimResponse{Household: toHouseholdProto(household), ServerNow: contract.Now()}, nil
 }

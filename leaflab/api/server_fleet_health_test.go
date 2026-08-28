@@ -11,8 +11,10 @@ import (
 	"time"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/claim"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -50,7 +52,7 @@ func fleetConfigJSON(t *testing.T, pollIntervalsMs ...uint32) []byte {
 // five admin RPCs -- ListFleetHealth is the sixth.
 func TestListFleetHealth_RequiresAdmin(t *testing.T) {
 	repo := &fakeRepo{}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 	_, err := server.ListFleetHealth(nonAdminCtx("mallory"), &pb.ListFleetHealthRequest{})
 	wantPermissionDenied(t, err)
 	if len(repo.listFleetHealthCalls) != 0 {
@@ -82,7 +84,7 @@ func TestListFleetHealth_FieldsPopulated_FromFixture(t *testing.T) {
 			},
 		}},
 	}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 
 	resp, err := server.ListFleetHealth(adminCtx("root"), &pb.ListFleetHealthRequest{})
 	if err != nil {
@@ -141,7 +143,7 @@ func TestListFleetHealth_OutstandingPushSince_UnsetWhenNotOutstanding(t *testing
 			{BoardID: 1, DeviceID: "d1", LastSeenAt: time.Now(), OutstandingPush: false},
 		}},
 	}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 	resp, err := server.ListFleetHealth(adminCtx("root"), &pb.ListFleetHealthRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -157,7 +159,7 @@ func TestListFleetHealth_OutstandingPushSince_UnsetWhenNotOutstanding(t *testing
 // (fleetBoardHealthQuery's doc comment).
 func TestListFleetHealth_FiltersPassedThroughUnmodified(t *testing.T) {
 	repo := &fakeRepo{}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 
 	token := contract.EncodeBoardCursor(41)
 	_, err := server.ListFleetHealth(adminCtx("root"), &pb.ListFleetHealthRequest{
@@ -201,7 +203,7 @@ func TestListFleetHealth_UnhealthyOnly_ReturnsExactlyTheUnhealthySet(t *testing.
 			{BoardID: 4, DeviceID: "also-unhealthy", LastSeenAt: now.Add(-2 * time.Hour)},
 		}},
 	}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 
 	resp, err := server.ListFleetHealth(adminCtx("root"), &pb.ListFleetHealthRequest{
 		ReportingState: pb.ReportingState_REPORTING_STATE_NOT_REPORTING,
@@ -239,7 +241,7 @@ func TestListFleetHealth_RetiredBoard_NeverNotReporting(t *testing.T) {
 			{BoardID: 1, DeviceID: "retired", LastSeenAt: time.Now().Add(-90 * 24 * time.Hour), Retired: true},
 		}},
 	}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 	resp, err := server.ListFleetHealth(adminCtx("root"), &pb.ListFleetHealthRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -318,7 +320,7 @@ func TestListFleetHealth_PageSizeAboveCap_ClampedNotUnbounded(t *testing.T) {
 		rows = append(rows, FleetBoardHealthRow{BoardID: i, DeviceID: "d", LastSeenAt: time.Now()})
 	}
 	repo := &fakeRepo{listFleetHealthPages: [][]FleetBoardHealthRow{rows}}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 
 	resp, err := server.ListFleetHealth(adminCtx("root"), &pb.ListFleetHealthRequest{
 		Page: &pb.PageRequest{PageSize: contract.PageCap * 1000},
@@ -354,7 +356,7 @@ func TestListFleetHealth_KeysetResume_NoSkipNoDuplicate(t *testing.T) {
 		{BoardID: 3, DeviceID: "d3", LastSeenAt: time.Now()},
 	}
 	repo := &fakeRepo{listFleetHealthPages: [][]FleetBoardHealthRow{firstCallRows, secondCallRows}}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), claim.DefaultConfig, ratelimit.NewInMemoryLimiter(nil))
 
 	first, err := server.ListFleetHealth(adminCtx("root"), &pb.ListFleetHealthRequest{Page: &pb.PageRequest{PageSize: 2}})
 	if err != nil {

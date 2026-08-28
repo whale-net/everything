@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/claim"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
@@ -90,6 +92,29 @@ func run() error {
 	}
 	defer publisher.Close() //nolint:errcheck
 
+	// NFR10: per-principal and per-session rate limiting, configurable per
+	// environment via leaflab/api/ENV.md's LEAFLAB_API_RATELIMIT_* variables
+	// (see ratelimit.EnvVarNames). Loaded before the server is built -- both
+	// so a malformed variable fails boot immediately (same as the auth
+	// config validated above) and because apiServer itself now holds this
+	// limiter directly for the claim_open/claim_round buckets' composite
+	// (principal, device_id/handle) keys (see server.go's OpenClaimChallenge/
+	// MarkClaimRound) -- those can't go through the generic per-method
+	// interceptor below, which only ever derives a principal-only key.
+	rateLimitConfigs, err := ratelimit.LoadConfigFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("rate limit config: %w", err)
+	}
+	limiter := ratelimit.NewInMemoryLimiter(rateLimitConfigs)
+
+	// FR76: A28's board-claim constants (leaflab/api/claim.Config),
+	// documented in leaflab/api/ENV.md. LoadConfigFromEnv enforces
+	// RoundsRequired >= 2 at boot (the requirement text's explicit floor).
+	claimConfig, err := claim.LoadConfigFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("claim config: %w", err)
+	}
+
 	// FR10.1: "60 minutes, configurable" -- LEAFLAB_ADMIN_ELEVATION_MINUTES
 	// overrides DefaultElevationDuration when set. leaflab/api has no
 	// ENV.md of its own yet (see DefaultElevationDuration's doc comment in
@@ -105,7 +130,7 @@ func run() error {
 
 	repo := NewRepository(pool)
 	authzSvc := authz.NewPGResolver(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"), WithElevationDuration(elevationDuration))
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"), claimConfig, limiter, WithElevationDuration(elevationDuration))
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the
@@ -126,7 +151,7 @@ func run() error {
 
 	rpcLogger := logging.Get("rpc")
 
-	grpcServer := buildServer(authUnary, authStream, rpcLogger, apiServer, devMode)
+	grpcServer := buildServer(authUnary, authStream, rpcLogger, apiServer, devMode, limiter)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -181,15 +206,17 @@ func validateAuthBootConfig(mode grpcauth.AuthMode, devMode bool) error {
 // startTestServer in main_test.go) or assert on reflection registration,
 // without a TCP listener or a dialed DB/RabbitMQ connection.
 //
-// Chain order (NFR12): correlation-id -> auth -> acting-subject logging ->
-// handler. "auth" is two interceptors: authUnary/authStream (verifies a
-// presented token, injects Claims -- grpcauth's own in production; see
-// run()) followed immediately by auth.go's enforcement interceptor
-// (rejects any non-allowlisted method that reaches it with no Claims -- see
-// its doc comment for why grpcauth alone doesn't enforce this).
-// Correlation-id runs first so even an auth rejection is logged against the
-// same id; subject-logging runs after auth so Claims are already in
-// context.
+// Chain order (NFR12): correlation-id -> auth -> rate limit -> acting-
+// subject logging -> handler. "auth" is two interceptors: authUnary/
+// authStream (verifies a presented token, injects Claims -- grpcauth's own
+// in production; see run()) followed immediately by auth.go's enforcement
+// interceptor (rejects any non-allowlisted method that reaches it with no
+// Claims -- see its doc comment for why grpcauth alone doesn't enforce
+// this). Correlation-id runs first so even an auth/rate-limit rejection is
+// logged against the same id. Rate limiting (NFR10, ratelimit_interceptor.go)
+// runs immediately after auth, before subject-logging, for two reasons:
+// key derivation needs Claims already in context, and a request auth has
+// already rejected must never consume rate-limit budget.
 //
 // Server reflection is a discovery/debugging aid; disabled outside
 // explicit dev mode so a deployed environment never exposes it (FR11).
@@ -198,7 +225,7 @@ func validateAuthBootConfig(mode grpcauth.AuthMode, devMode bool) error {
 // check, audit_registry.go): a write RPC registered with no audit
 // registration panics here, at startup, rather than shipping a silently
 // unaudited write RPC to production.
-func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamServerInterceptor, rpcLogger *slog.Logger, apiServer pb.LeafLabAPIServer, devMode bool) *grpc.Server {
+func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamServerInterceptor, rpcLogger *slog.Logger, apiServer pb.LeafLabAPIServer, devMode bool, limiter ratelimit.Limiter) *grpc.Server {
 	MustValidateAuditRegistrations()
 
 	grpcServer := grpc.NewServer(
@@ -206,12 +233,14 @@ func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamSe
 			NewCorrelationUnaryInterceptor(),
 			authUnary,
 			NewAuthEnforcementUnaryInterceptor(),
+			NewRateLimitUnaryInterceptor(limiter),
 			NewSubjectLoggingUnaryInterceptor(rpcLogger),
 		),
 		grpc.ChainStreamInterceptor(
 			NewCorrelationStreamInterceptor(),
 			authStream,
 			NewAuthEnforcementStreamInterceptor(),
+			NewRateLimitStreamInterceptor(limiter),
 			NewSubjectLoggingStreamInterceptor(rpcLogger),
 		),
 	)

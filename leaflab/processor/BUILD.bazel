@@ -15,6 +15,7 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/api/claim",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
@@ -49,4 +50,38 @@ release_app(
     description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
     app_type = "worker",
     replicas = 1,
+)
+
+# Real-Postgres integration coverage for FR76's restart-signal evidence
+# (#1342) -- see repository_claim_integration_test.go's doc comment.
+# Hand-written (not gazelle-generated) per leaflab/api's gazelle gotcha: this
+# file is gated behind `//go:build integration`, which gazelle skips when
+# scanning for go_test srcs. Same tag set as //leaflab/api's
+# *_integration_test targets and //libs/go/dbtest:postgres_constraints_test
+# -- see those BUILD.bazel files/README.md for why each tag is required.
+# `# keep` tells a later `bazel run //:gazelle` not to touch or remove this
+# rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/processor:repository_claim_integration_test --test_output=all
+go_test(
+    # keep
+    name = "repository_claim_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["repository_claim_integration_test.go"],
+    embed = [":processor_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
 )
