@@ -187,6 +187,45 @@ func (s *LeafLabAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSenso
 	return &pb.RewireSensorResponse{SensorId: sensorID}, nil
 }
 
+// GetSensorTimelines returns a sensor's three independent history
+// timelines -- name, hardware, region (FR53) -- each paginated on its own
+// (FR61) and sharing the Interval shape so a caller can lay them side by
+// side on one time axis. See leaflab/api/proto/api.proto's
+// GetSensorTimelinesResponse doc comment: the three are never merged
+// server-side into one combined list.
+//
+// TODO(Implementation phase, FR53):
+//   - Query sensor_name_history, sensor_hw_history, sensor_region_history
+//     independently (three separate SELECTs, three separate keyset
+//     cursors mirroring contract.EncodeReadingCursor's pattern) -- never
+//     join them into one merged timeline.
+//   - Render each sensor_hw_history row's i2c_address as absent (not 0)
+//     when NULL (pre-migration-013 closed interval, FR16.2/FR18.2); use
+//     //leaflab/hwkey's AddressOpt so the absent/present-including-0
+//     distinction is canonical, not reinvented here.
+//   - Carry the sensor's sensor_type (from the sensor row, FR16.1) on
+//     every HardwareInterval.
+//   - Apply window_start/window_end as an overlap filter, not an exact
+//     match, when either is set.
+//   - Household-scope the sensor lookup (FR5); require elevation for
+//     cross-household admin access (FR10.3); a non-member (including a
+//     nonexistent sensor_id) gets NFR2's not-found, indistinguishable
+//     from a not-found for a household member's own missing sensor.
+//   - Return an empty (not error) timeline for a sensor with no rows in
+//     one or more of the three tables (e.g. never placed in a region).
+//   - A sensor dropped from a board's desired state (FR82.3, Phase 4)
+//     must still return all three timelines unchanged -- this RPC has no
+//     "desired state" concept to filter on, so this should already hold;
+//     Testing adds a stubbed-"dropped" assertion now so Phase 4 inherits
+//     a passing test.
+func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSensorTimelinesRequest) (*pb.GetSensorTimelinesResponse, error) {
+	if req.SensorId <= 0 {
+		return nil, contract.InvalidArgument("sensor_timelines", "sensor_id", "A sensor ID is required.")
+	}
+
+	return nil, contract.Internal("sensor_timelines", "", "Not yet implemented.")
+}
+
 // ListBoards returns all known boards, keyset-paginated on (board_id) per
 // FR61: page_token is opaque and carries the last board_id of the previous
 // page, never an offset, so pagination stays correct while boards are
