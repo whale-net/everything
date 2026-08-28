@@ -301,6 +301,22 @@ func (f *fakeRepo) AdminBoardHealthByHousehold(ctx context.Context, householdID 
 	return f.adminByHouseholdRows, f.adminByHouseholdErr
 }
 
+// FR9 activity methods (#1348) -- panic stubs like the households/claim
+// methods above: nothing in this file's tests exercises
+// ListHouseholdActivity yet (Testing phase's job); they exist here only so
+// *fakeRepo keeps satisfying deviceRepository.
+func (f *fakeRepo) GetBoardByID(ctx context.Context, boardID int64) (BoardRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ListAuditActivity(ctx context.Context, householdID int64, afterOccurredAt time.Time, afterTag string, hasAfter bool, limit int32) ([]AuditActivityRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ListClaimAttemptActivity(ctx context.Context, householdID int64) ([]ClaimAttemptActivityRow, error) {
+	panic("not used by this file's tests")
+}
+
 // fakeAuthz implements authzResolver entirely in memory, with call
 // counters so tests can assert on NFR2's "one query" structural shape
 // (resolve the entity and the scope in the same number of round trips

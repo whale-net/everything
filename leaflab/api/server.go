@@ -61,6 +61,12 @@ type deviceRepository interface {
 	// (Scope.Filter) is applied inside the query itself, never as a
 	// post-filter -- see Repository.ListBoards.
 	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error)
+	// GetBoardByID backs FR9's ClaimBoard activity entry (activity.go's
+	// boardLabelForEntityID): a board's audit-recorded entity_id is its
+	// numeric board_id, and a household reading its own activity list gets
+	// the same device_id fallback label ListBoards/AdminBoardHealth use,
+	// not a raw id.
+	GetBoardByID(ctx context.Context, boardID int64) (BoardRow, error)
 	Ping(ctx context.Context) error
 
 	// Households and membership (FR75, FR7, #1341) -- see households.go.
@@ -102,6 +108,10 @@ type deviceRepository interface {
 	LookupSupportReferenceByHash(ctx context.Context, codeHash string) (SupportReferenceLookup, bool, error)
 	RecordSupportReferenceResolve(ctx context.Context, supportReferenceID int64, entry audit.Entry) error
 	AdminBoardHealthByHousehold(ctx context.Context, householdID int64) ([]AdminBoardHealthRow, error)
+
+	// -- Owner-readable activity (FR9, #1348) -- see activity_repository.go.
+	ListAuditActivity(ctx context.Context, householdID int64, afterOccurredAt time.Time, afterTag string, hasAfter bool, limit int32) ([]AuditActivityRow, error)
+	ListClaimAttemptActivity(ctx context.Context, householdID int64) ([]ClaimAttemptActivityRow, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs

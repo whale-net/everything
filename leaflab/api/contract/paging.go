@@ -166,6 +166,42 @@ func DecodeSupportReferenceCursor(token string) (supportReferenceID int64, ok bo
 	return id, true, nil
 }
 
+// EncodeActivityCursor seals the keyset ListHouseholdActivity paginates on
+// (FR9, FR61): occurredAt plus tag, an opaque per-source-row identifier
+// (leaflab/api/activity.go builds it as "audit:<zero-padded audit_id>" or
+// "claim:<zero-padded challenge_id>") that disambiguates ties within the
+// same occurred_at and, critically, lets a caller resume correctly
+// regardless of which of the list's two underlying sources (audit_log,
+// claim_challenge) produced the last row of the previous page -- see
+// activity.go's doc comment for why this list has two sources at all.
+// Zero-padding the numeric id inside tag keeps lexicographic string
+// comparison equivalent to numeric comparison within one source, which is
+// what lets the repository query compare tag directly against a SQL TEXT
+// parameter with no per-source branching.
+func EncodeActivityCursor(occurredAt time.Time, tag string) string {
+	return EncodeCursor(strconv.FormatInt(occurredAt.UnixNano(), 10), tag)
+}
+
+// DecodeActivityCursor is EncodeActivityCursor's inverse. An empty token
+// decodes to (zero time, "", false, nil), meaning "first page".
+func DecodeActivityCursor(token string) (occurredAt time.Time, tag string, ok bool, err error) {
+	values, err := DecodeCursor(token)
+	if err != nil {
+		return time.Time{}, "", false, err
+	}
+	if values == nil {
+		return time.Time{}, "", false, nil
+	}
+	if len(values) != 2 {
+		return time.Time{}, "", false, fmt.Errorf("%w: activity cursor expects 2 fields, got %d", ErrInvalidPageToken, len(values))
+	}
+	nanos, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return time.Time{}, "", false, fmt.Errorf("%w: activity cursor timestamp is not an integer", ErrInvalidPageToken)
+	}
+	return time.Unix(0, nanos), values[1], true, nil
+}
+
 // EncodeReadingCursor seals the (recorded_at DESC, reading_id) keyset that
 // matches idx_sensor_reading_sensor_id, for the sensor-reading listing RPC
 // added in a later phase. Defined here, alongside the boards keyset, so

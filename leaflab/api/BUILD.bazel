@@ -6,6 +6,8 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "activity.go",
+        "activity_repository.go",
         "audit_registry.go",
         "auth.go",
         "claim.go",
@@ -21,6 +23,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/activity",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/claim",
