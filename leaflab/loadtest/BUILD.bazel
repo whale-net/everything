@@ -1,0 +1,37 @@
+"""NFR3.3 load harness -- seeded-fixture latency gate, reused by the Phase 3 series gate."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "loadtest",
+    srcs = ["scenario.go"],
+    importpath = "github.com/whale-net/everything/leaflab/loadtest",
+    visibility = ["//visibility:public"],
+)
+
+# NFR3.3's household landing p95 gate. Hand-written (not gazelle-generated):
+# p95_test.go is gated behind `//go:build integration`, which gazelle skips
+# when scanning for go_test srcs -- same rationale as
+# leaflab/api:response_contract_integration_test and
+# libs/go/dbtest:postgres_constraints_test. `# keep` tells a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly:
+#   bazel test //leaflab/loadtest:household_landing_p95_test --test_output=all
+go_test(
+    # keep
+    name = "household_landing_p95_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["p95_test.go"],
+    embed = [":loadtest"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+)

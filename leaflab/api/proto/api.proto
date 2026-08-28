@@ -170,6 +170,26 @@ service LeafLabAPI {
   // server-side either way, readable by an elevated admin as FR77's
   // evidence, but never disclosed to the challenger.
   rpc CompleteClaim(CompleteClaimRequest) returns (CompleteClaimResponse);
+
+  // --- Household landing (FR62, NFR3.1) -----------------------------------
+  //
+  // GetHouseholdLanding is this task's (#1350) scaffolded wire surface: the
+  // five-condition classification and the bounded query plan it depends on
+  // are Implementation-phase work (see leaflab/api/landing/classify.go and
+  // this RPC's request/response doc comments below) -- no handler wires this
+  // into server.go yet, matching the households/claim RPCs' scaffold/feat
+  // split.
+
+  // GetHouseholdLanding returns the server-side classification FR62
+  // requires for a household's landing view: exactly one of five fault
+  // conditions (never a blank page), or none when the household is
+  // healthy, plus the device-scoped top-line sentence every render needs
+  // regardless of condition. NFR3.1: bounded, constant-count query work
+  // independent of the household's board/sensor/plant count. NFR18.1: the
+  // response already carries the final worded sentence(s) -- the BFF
+  // renders them verbatim and performs no classification, rounding,
+  // coarsening or label-selection of its own.
+  rpc GetHouseholdLanding(GetHouseholdLandingRequest) returns (GetHouseholdLandingResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -654,4 +674,90 @@ message CompleteClaimResponse {
   Household household = 1;
   // Server's current time (FR64).
   Instant server_now = 2;
+}
+// --- Household landing (FR62, NFR3.1) -------------------------------------
+
+// LandingCondition is FR62's classification result: exactly one of five
+// fault conditions, or LANDING_CONDITION_HEALTHY when none applies.
+// Deliberately an enum a caller branches on, never a score or ranking --
+// same convention as ReportingState. Priority order when more than one
+// condition's raw signal is true (most broad/severe first, first match
+// wins): NO_HOUSEHOLD, SERVICE_DEGRADED, HOUSEHOLD_SILENT, BOARD_SILENT,
+// SENSOR_SILENT, HEALTHY -- see leaflab/api/landing/classify.go's Classify
+// for the authoritative ordering and rationale.
+enum LandingCondition {
+  LANDING_CONDITION_UNSPECIFIED = 0;
+  // Nominal: no fault condition applies. sentence is unset; top_line alone
+  // is rendered (FR62: "everything is reporting").
+  LANDING_CONDITION_HEALTHY = 1;
+  // FR62 condition 1: one sensor silent while its board still reports.
+  LANDING_CONDITION_SENSOR_SILENT = 2;
+  // FR62 condition 2: the whole board silent.
+  LANDING_CONDITION_BOARD_SILENT = 3;
+  // FR62 condition 3: every board in the household silent at once.
+  // Retired boards (FR22.4) are excluded from this determination.
+  LANDING_CONDITION_HOUSEHOLD_SILENT = 4;
+  // FR62 condition 4: the service itself degraded (same signal as
+  // GetHealth's HEALTH_DEGRADED, FR63).
+  LANDING_CONDITION_SERVICE_DEGRADED = 5;
+  // FR62 condition 5: nothing is linked to the caller's account yet. Always
+  // carries a next_step (claim, FR76; or invite, FR75) -- never a blank
+  // page.
+  LANDING_CONDITION_NO_HOUSEHOLD = 6;
+}
+
+// LandingNextStepAction names FR62 condition 5's two possible named next
+// steps -- never a third, unnamed option.
+enum LandingNextStepAction {
+  LANDING_NEXT_STEP_ACTION_UNSPECIFIED = 0;
+  // Claim a board the caller already has in hand (FR76).
+  LANDING_NEXT_STEP_ACTION_CLAIM_BOARD = 1;
+  // Ask the person who set up an existing household to add the caller to
+  // it (FR75).
+  LANDING_NEXT_STEP_ACTION_REQUEST_INVITE = 2;
+}
+
+// LandingNextStep is one of condition 5's named next steps (FR62: "carrying
+// a named next step (claim a board you have, per FR76; or ask the person
+// who set it up to add you, per FR75)" -- the Implementation section reads
+// this as both links being offered together, "claim ... and invite ...
+// with working links", not a single either/or choice made server-side).
+// label/path are filled in at Implementation (server-named, per NFR18.1 --
+// the BFF renders path as a working link without choosing it).
+message LandingNextStep {
+  LandingNextStepAction action = 1;
+  // Persona-appropriate call-to-action text (e.g. "Claim a board").
+  string label = 2;
+  // Where the BFF links this next step to -- server-named, not chosen by
+  // the BFF (NFR18.1).
+  string path = 3;
+}
+
+message GetHouseholdLandingRequest {
+  // Household to render a landing view for. 0 resolves to the caller's own
+  // current household -- the only way LANDING_CONDITION_NO_HOUSEHOLD is
+  // ever reached is a caller with no current household passing 0 here (a
+  // principal never holds another principal's household_id to pass
+  // instead).
+  int64 household_id = 1;
+}
+
+message GetHouseholdLandingResponse {
+  LandingCondition condition = 1;
+  // The complete, server-worded sentence for `condition` (FR62: "worded
+  // differently ... a complete sentence"). Unset when condition is
+  // LANDING_CONDITION_HEALTHY -- top_line alone covers that case. The BFF
+  // renders this verbatim: it does not classify, and it selects nothing of
+  // its own (NFR18.1).
+  string sentence_key = 2;
+  // Populated only for LANDING_CONDITION_NO_HOUSEHOLD -- both named next
+  // steps (claim, FR76; request an invite, FR75), never one at the
+  // exclusion of the other. Empty for every other condition.
+  repeated LandingNextStep next_steps = 3;
+  // Device-scoped top-line sentence (FR62: "everything is reporting" when
+  // healthy) -- rendered for every condition, including the five fault
+  // conditions above, and never worded as a verdict on the plants.
+  string top_line = 4;
+  // Server's current time (FR64).
+  Instant server_now = 5;
 }

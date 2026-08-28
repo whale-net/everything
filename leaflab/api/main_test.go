@@ -193,6 +193,14 @@ func (stubAPIServer) CompleteClaim(ctx context.Context, req *pb.CompleteClaimReq
 	return &pb.CompleteClaimResponse{}, nil
 }
 
+// GetHouseholdLanding (FR62/NFR3.1, #1350 scaffold) -- canned success here
+// too, same rationale as the RPCs above: this stub isolates the
+// auth/logging middleware, not the five-condition classification (which has
+// no handler wired in server.go yet -- see leaflab/api/landing/classify.go).
+func (stubAPIServer) GetHouseholdLanding(ctx context.Context, req *pb.GetHouseholdLandingRequest) (*pb.GetHouseholdLandingResponse, error) {
+	return &pb.GetHouseholdLandingResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of
