@@ -160,6 +160,58 @@ func (r *Repository) hasPendingDeviceConfig(ctx context.Context, boardID int64) 
 	return pending, nil
 }
 
+// assignSensorRegionTx is the sensor_region_history close-and-open write
+// (FR51), extracted from AssignSensorRegion so FR74's atomic subtree
+// relocation (leaflab/api/relocate.go) can reuse the exact same write path
+// for the "move every current sensor placement into the mirrored regions"
+// clause -- not a third placement path, the same discipline
+// leaflab/api/placement.MoveTx/MoveRelocatedTx follow for plants.
+// relocationInduced marks the opened interval per FR24; AssignSensorRegion
+// itself always passes false. Returns the opened interval's valid_from
+// (assignedAt), the sensor's name and its board's device_id -- both needed
+// by callers to publish an FR73 invalidation.Event after commit.
+func assignSensorRegionTx(ctx context.Context, tx pgx.Tx, sensorID, regionID int64, relocationInduced bool) (assignedAt time.Time, sensorName, deviceID string, err error) {
+	// Close the sensor's current open sensor_region_history interval, if
+	// any -- a sensor getting its first-ever region assignment simply
+	// closes zero rows, not an error (mirrors placement.MoveTx's
+	// close-and-open, and ApplyConfigRegions' own close step).
+	if _, err = tx.Exec(ctx, `
+		UPDATE sensor_region_history SET valid_to = NOW()
+		WHERE sensor_id = $1 AND valid_to IS NULL
+	`, sensorID); err != nil {
+		return time.Time{}, "", "", fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
+	}
+
+	// Open the new interval. valid_from is left to the column DEFAULT
+	// NOW() -- returned here as assignedAt, which is both
+	// AssignSensorRegion's response assigned_at (FR64) / FR1.3's staleness
+	// comparison point for any later ApplyConfigRegions apply, and FR20's
+	// boundaryAt for the caller's own capture call.
+	if err = tx.QueryRow(ctx, `
+		INSERT INTO sensor_region_history (sensor_id, region_id, relocation_induced)
+		VALUES ($1, $2, $3)
+		RETURNING valid_from
+	`, sensorID, regionID, relocationInduced).Scan(&assignedAt); err != nil {
+		return time.Time{}, "", "", fmt.Errorf("open region history for sensor %d: %w", sensorID, err)
+	}
+
+	// Sync sensor.region_id (the current-value cache) and read back the
+	// sensor's name and its board's device_id in the same statement --
+	// both needed for the invalidation.Event a caller publishes after
+	// commit (see this file's doc comment), no second query.
+	if err = tx.QueryRow(ctx, `
+		UPDATE sensor s
+		SET region_id = $2
+		FROM board b
+		WHERE s.sensor_id = $1 AND b.board_id = s.board_id
+		RETURNING s.name, b.device_id
+	`, sensorID, regionID).Scan(&sensorName, &deviceID); err != nil {
+		return time.Time{}, "", "", fmt.Errorf("sync region cache for sensor %d: %w", sensorID, err)
+	}
+
+	return assignedAt, sensorName, deviceID, nil
+}
+
 // AssignSensorRegion is FR51's server-side-fact region write (Phase 5): it
 // commits immediately, with no device round trip, no config version bump
 // and no board availability requirement -- see this file's doc comment for
@@ -177,44 +229,11 @@ func (r *Repository) AssignSensorRegion(ctx context.Context, sensorID, regionID 
 	var result SensorRegionAssignment
 	var deviceID, sensorName string
 	writeErr := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
-		// Close the sensor's current open sensor_region_history interval,
-		// if any -- a sensor getting its first-ever region assignment
-		// simply closes zero rows, not an error (mirrors placement.Move's
-		// close-and-open, and ApplyConfigRegions' own close step).
-		if _, err := tx.Exec(ctx, `
-			UPDATE sensor_region_history SET valid_to = NOW()
-			WHERE sensor_id = $1 AND valid_to IS NULL
-		`, sensorID); err != nil {
-			return audit.Entry{}, fmt.Errorf("close region history for sensor %d: %w", sensorID, err)
+		assignedAt, name, device, err := assignSensorRegionTx(ctx, tx, sensorID, regionID, false)
+		if err != nil {
+			return audit.Entry{}, err
 		}
-
-		// Open the new interval. valid_from is left to the column DEFAULT
-		// NOW() -- returned here as assignedAt, which is both this
-		// response's assigned_at (FR64) and FR1.3's staleness comparison
-		// point for any later ApplyConfigRegions apply, and FR20's
-		// boundaryAt for the capture call below.
-		var assignedAt time.Time
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO sensor_region_history (sensor_id, region_id)
-			VALUES ($1, $2)
-			RETURNING valid_from
-		`, sensorID, regionID).Scan(&assignedAt); err != nil {
-			return audit.Entry{}, fmt.Errorf("open region history for sensor %d: %w", sensorID, err)
-		}
-
-		// Sync sensor.region_id (the current-value cache) and read back
-		// the sensor's name and its board's device_id in the same
-		// statement -- both needed for the invalidation.Event published
-		// after commit (see this file's doc comment), no second query.
-		if err := tx.QueryRow(ctx, `
-			UPDATE sensor s
-			SET region_id = $2
-			FROM board b
-			WHERE s.sensor_id = $1 AND b.board_id = s.board_id
-			RETURNING s.name, b.device_id
-		`, sensorID, regionID).Scan(&sensorName, &deviceID); err != nil {
-			return audit.Entry{}, fmt.Errorf("sync region cache for sensor %d: %w", sensorID, err)
-		}
+		sensorName, deviceID = name, device
 
 		// FR20 phase one: the sensor whose region just changed is the
 		// only affected sensor for this boundary (see the doc comment
