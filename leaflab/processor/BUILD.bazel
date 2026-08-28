@@ -21,8 +21,8 @@ go_library(
         "//libs/go/rmq",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
-        "@org_golang_google_protobuf//proto",
         "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 
@@ -43,12 +43,45 @@ go_test(
     ],
 )
 
+# Real-Postgres integration coverage for Repository.UpsertSensorHWHistory
+# (FR16.1, FR16.2) -- see repository_hw_history_integration_test.go's doc
+# comment and //libs/go/dbtest/README.md. Hand-written (not
+# gazelle-generated): the test file is gated behind `//go:build integration`,
+# which gazelle skips when scanning for go_test srcs. EXACTLY the tag set
+# from //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` markers tell
+# a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/processor:hw_history_integration_test --test_output=all
+go_test(
+    # keep
+    name = "hw_history_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["repository_hw_history_integration_test.go"],
+    embed = [":processor_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/hwkey",
+        "//libs/go/dbtest",
+    ],
+)
+
 release_app(
     name = "processor",
-    binary_name = ":processor",
-    language = "go",
-    domain = "leaflab",
-    description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
     app_type = "worker",
+    binary_name = ":processor",
+    description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
+    domain = "leaflab",
+    language = "go",
     replicas = 1,
 )
