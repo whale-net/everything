@@ -63,19 +63,23 @@ release_app(
     replicas = 1,
 )
 
-# FR8/FR11/FR12/FR63/NFR10 auth-health-audit-and-rate-limit test suite:
-# auth.go's enforcement interceptor and allowlist in isolation
+# FR8/FR9/FR11/FR12/FR63/NFR10 auth-health-audit-activity-and-rate-limit test
+# suite: auth.go's enforcement interceptor and allowlist in isolation
 # (auth_test.go), GetHealth's DEGRADED/UP probe logic against an in-memory
 # fake repository (server_test.go), the full production interceptor chain
 # -- built via buildServer, the exact function run() calls -- behind a
 # bufconn listener with a stub RPC handler standing in for
 # Postgres/RabbitMQ (main_test.go), FR8's startup audit-registration check
 # against both the real production registry and a deliberately
-# unregistered write method (audit_registry_test.go), the admin standing
-# lane and elevation RPCs (server_admin_test.go), and NFR10's rate-limit
-# interceptor: principalKey derivation, oracle-safety, principal/session
-# independence and window-rollover recovery, both directly
-# (checkRateLimitBuckets) and over the wire (ratelimit_interceptor_test.go).
+# unregistered write method (audit_registry_test.go), FR9's exhaustiveness
+# check that every audited action (the real auditRegistrations map, plus
+# SupportReferenceResolve and the ClaimAttempt/board synthetic entry) has a
+# leaflab/api/activity.Registry rendering (activity_registry_test.go), the
+# admin standing lane and elevation RPCs (server_admin_test.go), and
+# NFR10's rate-limit interceptor: principalKey derivation, oracle-safety,
+# principal/session independence and window-rollover recovery, both
+# directly (checkRateLimitBuckets) and over the wire
+# (ratelimit_interceptor_test.go).
 # No Docker/network required; safe to run in `bazel test //leaflab/...`.
 # Hand-written (not gazelle-generated) per this package's gazelle gotcha --
 # see the response_contract_integration_test.go rule below. `# keep` tells a
@@ -85,6 +89,7 @@ go_test(
     name = "api_lib_test",
     size = "small",
     srcs = [
+        "activity_registry_test.go",
         "audit_registry_test.go",
         "auth_test.go",
         "main_test.go",
@@ -95,6 +100,7 @@ go_test(
     embed = [":api_lib"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/activity",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/claim",
@@ -357,6 +363,49 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for FR9's owner-readable activity list
+# (#1348) -- see activity_integration_test.go's doc comment. Same tag set
+# and hand-written rationale as the other integration go_test targets
+# above. Its own activityTestSchema (household, admin_elevation,
+# board/board_ownership, claim_challenge, audit_log) is self-contained,
+# same rationale as admin_elevation_integration_test's rule above -- but it
+# still shares dbtest_helpers_integration_test.go's discardLogger.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:activity_integration_test --test_output=all
+go_test(
+    # keep
+    name = "activity_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "activity_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//leaflab/api/claim",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_google_protobuf//reflect/protoreflect",
     ],
 )
 
