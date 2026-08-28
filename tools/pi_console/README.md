@@ -47,6 +47,19 @@ subscribers).
 
 See [ENV.md](ENV.md) for the full environment variable reference.
 
+### Local dev via Tilt
+
+```bash
+cd tools/pi_console
+tilt up
+```
+
+This runs both binaries locally (`local_resource(serve_cmd=...)`, no Docker
+image or Helm chart — see the comment at the top of `Tiltfile` for why this
+domain skips the usual k8s deployment path) with a single `local` host
+pointed at the bridge on `:8787`, UI on `:8080`. Set `PI_CONSOLE_HOSTS`
+before `tilt up` to point at additional bridges instead.
+
 ## Security
 
 `pi`'s tools (notably `bash`) give it the ability to run arbitrary shell
