@@ -28,9 +28,8 @@ service LeafLabAPI {
   // --- Bounded read path (FR25, FR27, FR28, NFR3.2) ---------------------
   //
   // See leaflab/api/readings -- the one place the join, enrichment and
-  // attribution logic behind these four RPCs lives (FR25.1). Scaffold
-  // only (this task's Scaffold phase, #1362): handlers are wired in this
-  // task's Implementation phase.
+  // attribution logic behind these four RPCs lives (FR25.1). Handlers
+  // (server.go) delegate to it (#1362's Implementation phase).
 
   // A bounded-window reading series for one entity -- sensor, board,
   // region or plant (FR25.1). Every response states which granularity

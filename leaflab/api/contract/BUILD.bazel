@@ -6,6 +6,7 @@ go_library(
     name = "contract",
     srcs = [
         "failure.go",
+        "granularity.go",
         "instant.go",
         "paging.go",
     ],
@@ -13,6 +14,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/tiers",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],

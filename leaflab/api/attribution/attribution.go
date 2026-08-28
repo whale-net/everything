@@ -144,3 +144,62 @@ func (r *Resolver) ResolvePlants(ctx context.Context, regionID int64, at time.Ti
 
 	return plants, attributedRegionID, nil
 }
+
+// SensorRef is one sensor attributed to a region at a point in time --
+// AttributedSensors' result shape. Carries just enough for the read path
+// (leaflab/api/readings) to key a query by sensor_id and disambiguate
+// measurement type via sensor_type_id, mirroring PlantRef's "smallest
+// shape" rationale above.
+type SensorRef struct {
+	SensorID     int64
+	SensorTypeID int64
+}
+
+// AttributedSensors returns every sensor whose reading, at at, attributes
+// to regionID under FR23's nearest-ancestor rule (attribute_region_plants,
+// migration 019) -- the reverse direction of ResolvePlants: given the
+// attributing region, which sensors' readings land there. A candidate
+// sensor is any sensor in regionID's subtree (v_region_path.path_ids
+// contains regionID); it counts only if attribute_region_plants(the
+// sensor's own region, at) resolves back to regionID -- i.e. no region
+// strictly between the sensor and regionID holds an active plant of its
+// own at at, per A11's nearest-ancestor-only rule.
+//
+// Bounded by the household's sensor count, not by anything time-range
+// related -- callers needing this over a series
+// (leaflab/api/readings.Reader.Series) call it once per
+// plant_region_history interval rather than per bucket (documented
+// limitation: this evaluates attribution at one instant, at, for the whole
+// interval it is asked about, so a *different* plant entering or leaving
+// elsewhere on the path strictly inside that interval is not separately
+// detected).
+func (r *Resolver) AttributedSensors(ctx context.Context, regionID int64, at time.Time) ([]SensorRef, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT s.sensor_id, s.sensor_type_id
+		FROM sensor s
+		JOIN v_region_path rp ON rp.region_id = s.region_id
+		WHERE $1 = ANY(rp.path_ids)
+		  AND EXISTS (
+		      SELECT 1 FROM attribute_region_plants(s.region_id, $2) arp
+		      WHERE arp.attributed_region_id = $1
+		  )
+		ORDER BY s.sensor_id
+	`, regionID, at)
+	if err != nil {
+		return nil, fmt.Errorf("attribution: load sensors attributed to region %d at %s: %w", regionID, at, err)
+	}
+	defer rows.Close()
+
+	var sensors []SensorRef
+	for rows.Next() {
+		var ref SensorRef
+		if err := rows.Scan(&ref.SensorID, &ref.SensorTypeID); err != nil {
+			return nil, fmt.Errorf("attribution: scan attributed sensor for region %d: %w", regionID, err)
+		}
+		sensors = append(sensors, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("attribution: iterate attributed sensors for region %d: %w", regionID, err)
+	}
+	return sensors, nil
+}

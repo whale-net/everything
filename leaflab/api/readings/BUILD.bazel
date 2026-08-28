@@ -1,4 +1,4 @@
-"""Bounded read path -- the one place join/enrichment/attribution logic for GetReadingSeries, GetCurrentValues, GetPeriodSummary and CompareSeries lives (FR25.1). Scaffold only -- see readings.go's package doc comment."""
+"""Bounded read path -- the one place join/enrichment/attribution logic for GetReadingSeries, GetCurrentValues, GetPeriodSummary and CompareSeries lives (FR25.1). See readings.go's package doc comment."""
 
 load("@rules_go//go:def.bzl", "go_library")
 
@@ -10,7 +10,9 @@ go_library(
     deps = [
         "//leaflab/api/attribution",
         "//leaflab/api/authz",
+        "//leaflab/api/contract",
         "//leaflab/api/tiers",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
