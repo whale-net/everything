@@ -109,6 +109,36 @@ func DecodeBoardCursor(token string) (boardID int64, ok bool, err error) {
 	return id, true, nil
 }
 
+// EncodeHouseholdMemberCursor seals the (household_membership_id) keyset
+// used by ListHouseholdMembers's page_token, ordered to match ORDER BY
+// household_membership_id -- same single-int64 shape as EncodeBoardCursor,
+// kept as its own named function (rather than reusing EncodeBoardCursor
+// directly) so a caller can't mix up which entity's cursor a token belongs
+// to.
+func EncodeHouseholdMemberCursor(householdMembershipID int64) string {
+	return EncodeCursor(strconv.FormatInt(householdMembershipID, 10))
+}
+
+// DecodeHouseholdMemberCursor is EncodeHouseholdMemberCursor's inverse. An
+// empty token decodes to (0, false, nil), meaning "first page".
+func DecodeHouseholdMemberCursor(token string) (householdMembershipID int64, ok bool, err error) {
+	values, err := DecodeCursor(token)
+	if err != nil {
+		return 0, false, err
+	}
+	if values == nil {
+		return 0, false, nil
+	}
+	if len(values) != 1 {
+		return 0, false, fmt.Errorf("%w: household member cursor expects 1 field, got %d", ErrInvalidPageToken, len(values))
+	}
+	id, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: household member cursor id is not an integer", ErrInvalidPageToken)
+	}
+	return id, true, nil
+}
+
 // EncodeReadingCursor seals the (recorded_at DESC, reading_id) keyset that
 // matches idx_sensor_reading_sensor_id, for the sensor-reading listing RPC
 // added in a later phase. Defined here, alongside the boards keyset, so

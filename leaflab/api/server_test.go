@@ -237,6 +237,37 @@ func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, tar
 	return f.activeElevationExpiresAt, nil
 }
 
+// Households/membership methods (#1341) -- panic stubs like the ones above:
+// nothing in this file exercises the household RPCs yet (Testing phase's
+// job); they exist here only so *fakeRepo keeps satisfying deviceRepository.
+func (f *fakeRepo) GetHouseholdByID(ctx context.Context, householdID int64) (HouseholdRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ListHouseholdMembers(ctx context.Context, householdID int64, afterMembershipID int64, hasAfter bool, limit int32) ([]HouseholdMembershipRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) IsCurrentHouseholdMember(ctx context.Context, householdID int64, principalSubject string) (bool, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) CreateHousehold(ctx context.Context, principalSubject, name string, entry audit.Entry) (HouseholdRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) InviteMember(ctx context.Context, householdID int64, principalSubject string, entry audit.Entry) (HouseholdMembershipRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) RemoveMember(ctx context.Context, householdID int64, principalSubject string, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) RenameHousehold(ctx context.Context, householdID int64, name string, entry audit.Entry) (HouseholdRow, error) {
+	panic("not used by this file's tests")
+}
+
 // fakeAuthz implements authzResolver entirely in memory, with call
 // counters so tests can assert on NFR2's "one query" structural shape
 // (resolve the entity and the scope in the same number of round trips

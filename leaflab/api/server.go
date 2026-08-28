@@ -47,6 +47,11 @@ const mqttExchange = "amq.topic"
 // live Postgres connection; see server_test.go. *Repository satisfies this
 // with no changes on the production path (NewLeafLabAPIServer is still
 // called with *Repository in main.go).
+//
+// Despite the name (kept to minimize diff churn from #1337's scaffold),
+// this interface now also carries the households.go methods #1341's six
+// RPCs depend on -- it is the one repository seam LeafLabAPIServer holds,
+// not "device rows only".
 type deviceRepository interface {
 	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
 	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error)
@@ -73,6 +78,18 @@ type deviceRepository interface {
 	RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error
 	EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error
 	ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error)
+
+	// Households and membership (FR75, FR7, #1341) -- see households.go.
+	GetHouseholdByID(ctx context.Context, householdID int64) (HouseholdRow, error)
+	ListHouseholdMembers(ctx context.Context, householdID int64, afterMembershipID int64, hasAfter bool, limit int32) ([]HouseholdMembershipRow, error)
+	// IsCurrentHouseholdMember is FR7's member-only authorization primitive
+	// -- never authz.Scope, which will eventually include grants (FR7) and
+	// elevation (FR10) as well; see requireHouseholdMember.
+	IsCurrentHouseholdMember(ctx context.Context, householdID int64, principalSubject string) (bool, error)
+	CreateHousehold(ctx context.Context, principalSubject, name string, entry audit.Entry) (HouseholdRow, error)
+	InviteMember(ctx context.Context, householdID int64, principalSubject string, entry audit.Entry) (HouseholdMembershipRow, error)
+	RemoveMember(ctx context.Context, householdID int64, principalSubject string, entry audit.Entry) error
+	RenameHousehold(ctx context.Context, householdID int64, name string, entry audit.Entry) (HouseholdRow, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -441,6 +458,7 @@ func (s *LeafLabAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthReque
 	}
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
+
 
 // ── Admin (FR10, FR12 activation) ────────────────────────────────────────────
 //
@@ -857,4 +875,246 @@ func (s *LeafLabAPIServer) GetElevationStatus(ctx context.Context, req *pb.GetEl
 		return nil, contract.Internal("get_elevation_status_request", "", "Could not check elevation status right now. Please try again.")
 	}
 	return &pb.GetElevationStatusResponse{Elevated: true, ExpiresAt: contract.ToInstant(expiresAt), ServerNow: contract.Now()}, nil
+}
+
+
+// --- Households and membership (FR75, FR7) --------------------------------
+
+// householdNotFoundFailure is the one contract.NotFound value returned for
+// a household that doesn't exist and for a household that exists but falls
+// outside the caller's Scope -- same NFR2-style masking as
+// boardNotFoundFailure above, applied to households: a stranger asking
+// about a real household_id they don't belong to gets an identical
+// response to a made-up id.
+func householdNotFoundFailure() error {
+	return contract.NotFound("household", "household_id", "No household matches this id.")
+}
+
+// authorizeHouseholdAccess checks the caller's Scope permits householdID,
+// for the two read RPCs (GetHousehold, ListHouseholdMembers). Unlike
+// authorizeBoardAccess, this needs no authzSvc.Resolve round trip: a
+// household_id in the request *is* the Resolution's HouseholdID already --
+// there is no separate table lookup that maps one to the other, the way
+// device_id maps to a board's household_id. Scope (not
+// IsCurrentHouseholdMember) is deliberately the check here: FR7 defines
+// household reads as an ordinary "member capability" (member-or-grantee),
+// not one of FR7's three member-only exclusions -- see
+// requireHouseholdMember below for the write-side check that must NOT use
+// Scope.
+func (s *LeafLabAPIServer) authorizeHouseholdAccess(ctx context.Context, householdID int64) error {
+	scope, err := s.scopeForCaller(ctx)
+	if err != nil {
+		s.logger.Error("resolve caller scope failed", "household_id", householdID, "error", err)
+		return contract.Internal("household", "", "Could not process this request right now. Please try again.")
+	}
+	ref := authz.EntityRef{Kind: authz.EntityHousehold, ID: householdID}
+	res := authz.Resolution{HouseholdID: householdID}
+	if !scope.Permits(ref, res) {
+		return householdNotFoundFailure()
+	}
+	return nil
+}
+
+// requireHouseholdMember is FR7's member-only authorization check for
+// InviteMember/RemoveMember/RenameHousehold: "membership change is one of
+// the three exclusions" -- a grantee or an elevated admin must be refused
+// here even though either may hold a Scope that otherwise permits reading
+// or writing within this household. This is why the check below queries
+// household_membership directly (Repository.IsCurrentHouseholdMember)
+// rather than consulting authz.Scope: Scope will eventually be widened by
+// a grant (FR7) or elevation (FR10) Scope implementation composed into the
+// caller's UnionScope, at which point a Scope-based check here would
+// silently start permitting exactly what FR7 forbids.
+func (s *LeafLabAPIServer) requireHouseholdMember(ctx context.Context, householdID int64, actorSubject string) error {
+	isMember, err := s.repo.IsCurrentHouseholdMember(ctx, householdID, actorSubject)
+	if err != nil {
+		s.logger.Error("check household membership failed", "household_id", householdID, "error", err)
+		return contract.Internal("household", "", "Could not process this request right now. Please try again.")
+	}
+	if !isMember {
+		return contract.PermissionDenied("household", "", "Only a current member of this household can make this change.")
+	}
+	return nil
+}
+
+// householdAuditEntry builds the audit.Entry common to every household
+// write RPC below: actor is always the authenticated caller (never a
+// request field -- FR8 names the acting principal, not a caller-asserted
+// one), Action/EntityKind come from auditRegistrations so the RPC's
+// registered audit contract and what actually gets written can't drift
+// apart (see audit_registry.go).
+func householdAuditEntry(ctx context.Context, fullMethod string) audit.Entry {
+	reg := auditRegistrations[fullMethod]
+	return audit.Entry{
+		ActorSubject:  actingSubject(ctx),
+		ActorKind:     audit.ActorKindHuman,
+		Action:        reg.Action,
+		EntityKind:    reg.EntityKind,
+		CorrelationID: CorrelationIDFromContext(ctx),
+	}
+}
+
+func toHouseholdProto(h HouseholdRow) *pb.Household {
+	return &pb.Household{HouseholdId: h.HouseholdID, Name: h.Name}
+}
+
+func toHouseholdMemberProto(m HouseholdMembershipRow) *pb.HouseholdMember {
+	return &pb.HouseholdMember{
+		PrincipalSubject: m.PrincipalSubject,
+		JoinedAt:         contract.ToInstant(m.ValidFrom),
+	}
+}
+
+// CreateHousehold gives the calling principal a new household with them as
+// its sole initial member (FR75, FR76). Reachable only for a principal with
+// no current household -- Repository.CreateHousehold refuses
+// (ErrPrincipalAlreadyHasHousehold) a principal who already has one, per
+// api.proto's CreateHousehold doc comment; that refusal uses FR59.3's
+// refuse-and-name-the-alternative shape rather than an ordinary error, so a
+// caller who mistakenly retries this RPC is told what to do instead.
+func (s *LeafLabAPIServer) CreateHousehold(ctx context.Context, req *pb.CreateHouseholdRequest) (*pb.CreateHouseholdResponse, error) {
+	actor := actingSubject(ctx)
+	entry := householdAuditEntry(ctx, createHouseholdFullMethod)
+
+	household, err := s.repo.CreateHousehold(ctx, actor, req.GetName(), entry)
+	if err != nil {
+		if errors.Is(err, ErrPrincipalAlreadyHasHousehold) {
+			return nil, contract.Refuse("household", "", "You already belong to a household.",
+				"Use your existing household instead of creating a new one.")
+		}
+		s.logger.Error("create household failed", "actor", actor, "error", err)
+		return nil, contract.Internal("household", "", "Could not create a household right now. Please try again.")
+	}
+
+	return &pb.CreateHouseholdResponse{Household: toHouseholdProto(household)}, nil
+}
+
+// GetHousehold returns a household's id and display name, scoped to the
+// caller's reach (authorizeHouseholdAccess).
+func (s *LeafLabAPIServer) GetHousehold(ctx context.Context, req *pb.GetHouseholdRequest) (*pb.GetHouseholdResponse, error) {
+	if err := s.authorizeHouseholdAccess(ctx, req.GetHouseholdId()); err != nil {
+		return nil, err
+	}
+
+	household, err := s.repo.GetHouseholdByID(ctx, req.GetHouseholdId())
+	if err != nil {
+		if errors.Is(err, ErrHouseholdNotFound) {
+			// Scope already passed (authorizeHouseholdAccess above) --
+			// reaching a real not-found here would mean the caller's own
+			// Scope names a household that no longer resolves, which
+			// should not happen in practice. Same masked failure regardless.
+			return nil, householdNotFoundFailure()
+		}
+		s.logger.Error("get household failed", "household_id", req.GetHouseholdId(), "error", err)
+		return nil, contract.Internal("household", "", "Could not look up this household right now. Please try again.")
+	}
+	return &pb.GetHouseholdResponse{Household: toHouseholdProto(household)}, nil
+}
+
+// ListHouseholdMembers lists a household's current members, keyset
+// paginated (FR61), scoped to the caller's reach (authorizeHouseholdAccess).
+func (s *LeafLabAPIServer) ListHouseholdMembers(ctx context.Context, req *pb.ListHouseholdMembersRequest) (*pb.ListHouseholdMembersResponse, error) {
+	if err := s.authorizeHouseholdAccess(ctx, req.GetHouseholdId()); err != nil {
+		return nil, err
+	}
+
+	afterMembershipID, hasAfter, err := contract.DecodeHouseholdMemberCursor(req.GetPage().GetPageToken())
+	if err != nil {
+		return nil, contract.InvalidArgument("list_household_members_request", "page_token", "This page link is no longer valid. Start again from the first page.")
+	}
+
+	limit := contract.ClampPageSize(req.GetPage().GetPageSize())
+
+	rows, err := s.repo.ListHouseholdMembers(ctx, req.GetHouseholdId(), afterMembershipID, hasAfter, limit+1)
+	if err != nil {
+		s.logger.Error("list household members failed", "household_id", req.GetHouseholdId(), "error", err)
+		return nil, contract.Internal("household", "", "Could not list this household's members right now. Please try again.")
+	}
+
+	var nextToken string
+	if int32(len(rows)) > limit {
+		rows = rows[:limit]
+		nextToken = contract.EncodeHouseholdMemberCursor(rows[len(rows)-1].HouseholdMembershipID)
+	}
+
+	members := make([]*pb.HouseholdMember, 0, len(rows))
+	for _, r := range rows {
+		members = append(members, toHouseholdMemberProto(r))
+	}
+	return &pb.ListHouseholdMembersResponse{
+		Members:   members,
+		Page:      &pb.PageResponse{NextPageToken: nextToken},
+		ServerNow: contract.Now(),
+	}, nil
+}
+
+// InviteMember adds another principal to a household (FR75). Member-only
+// (FR7): requireHouseholdMember refuses a grantee or an elevated admin even
+// though either may otherwise read/write within the household.
+func (s *LeafLabAPIServer) InviteMember(ctx context.Context, req *pb.InviteMemberRequest) (*pb.InviteMemberResponse, error) {
+	actor := actingSubject(ctx)
+	if err := s.requireHouseholdMember(ctx, req.GetHouseholdId(), actor); err != nil {
+		return nil, err
+	}
+
+	entry := householdAuditEntry(ctx, inviteMemberFullMethod)
+	member, err := s.repo.InviteMember(ctx, req.GetHouseholdId(), req.GetPrincipalSubject(), entry)
+	if err != nil {
+		if errors.Is(err, ErrHouseholdAlreadyMember) {
+			return nil, contract.Refuse("household_member", "principal_subject", "This principal is already a member of this household.",
+				"No action needed -- they can already access this household.")
+		}
+		s.logger.Error("invite member failed", "household_id", req.GetHouseholdId(), "actor", actor, "error", err)
+		return nil, contract.Internal("household_member", "", "Could not add this member right now. Please try again.")
+	}
+
+	return &pb.InviteMemberResponse{Member: toHouseholdMemberProto(member)}, nil
+}
+
+// RemoveMember removes a member from a household (FR75). A household never
+// reaches zero members: removing the last remaining member is refused with
+// FR59.3's refuse-and-name-the-alternative shape instead of succeeding.
+// Member-only (FR7), same exclusion as InviteMember.
+func (s *LeafLabAPIServer) RemoveMember(ctx context.Context, req *pb.RemoveMemberRequest) (*pb.RemoveMemberResponse, error) {
+	actor := actingSubject(ctx)
+	if err := s.requireHouseholdMember(ctx, req.GetHouseholdId(), actor); err != nil {
+		return nil, err
+	}
+
+	entry := householdAuditEntry(ctx, removeMemberFullMethod)
+	err := s.repo.RemoveMember(ctx, req.GetHouseholdId(), req.GetPrincipalSubject(), entry)
+	if err != nil {
+		if errors.Is(err, ErrHouseholdLastMember) {
+			return nil, contract.Refuse("household_member", "principal_subject", "This is the last member of this household.",
+				"Invite someone else first, or release this household's boards instead.")
+		}
+		if errors.Is(err, ErrHouseholdNotMember) {
+			return nil, contract.NotFound("household_member", "principal_subject", "This principal is not a member of this household.")
+		}
+		s.logger.Error("remove member failed", "household_id", req.GetHouseholdId(), "actor", actor, "error", err)
+		return nil, contract.Internal("household_member", "", "Could not remove this member right now. Please try again.")
+	}
+
+	return &pb.RemoveMemberResponse{}, nil
+}
+
+// RenameHousehold changes a household's display name. Member-only (FR7),
+// same exclusion as InviteMember/RemoveMember.
+func (s *LeafLabAPIServer) RenameHousehold(ctx context.Context, req *pb.RenameHouseholdRequest) (*pb.RenameHouseholdResponse, error) {
+	actor := actingSubject(ctx)
+	if err := s.requireHouseholdMember(ctx, req.GetHouseholdId(), actor); err != nil {
+		return nil, err
+	}
+
+	entry := householdAuditEntry(ctx, renameHouseholdFullMethod)
+	household, err := s.repo.RenameHousehold(ctx, req.GetHouseholdId(), req.GetName(), entry)
+	if err != nil {
+		if errors.Is(err, ErrHouseholdNotFound) {
+			return nil, householdNotFoundFailure()
+		}
+		s.logger.Error("rename household failed", "household_id", req.GetHouseholdId(), "actor", actor, "error", err)
+		return nil, contract.Internal("household", "", "Could not rename this household right now. Please try again.")
+	}
+
+	return &pb.RenameHouseholdResponse{Household: toHouseholdProto(household)}, nil
 }

@@ -23,6 +23,15 @@ const (
 	endElevationFullMethod       = "/leaflab.api.v1.LeafLabAPI/EndElevation"
 )
 
+// Households and membership (FR75, FR7, #1341) full method names -- see
+// households.go and server.go's handlers for each.
+const (
+	createHouseholdFullMethod = "/leaflab.api.v1.LeafLabAPI/CreateHousehold"
+	inviteMemberFullMethod    = "/leaflab.api.v1.LeafLabAPI/InviteMember"
+	removeMemberFullMethod    = "/leaflab.api.v1.LeafLabAPI/RemoveMember"
+	renameHouseholdFullMethod = "/leaflab.api.v1.LeafLabAPI/RenameHousehold"
+)
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
 // registry for this service: every RPC that performs a write, plus
 // ResolveToHousehold (see its doc comment above). A method listed here
@@ -31,13 +40,13 @@ const (
 // wiring its audit registration is structurally hard to ship, rather than
 // a silently missing audit row discovered later in production.
 //
-// GetDeviceConfig, ListBoards, GetHealth, GetElevationStatus and
-// ListFleetHealth are reads with no FR8/FR10.4 audit requirement of their
-// own and are deliberately absent. Unlike ResolveToHousehold,
-// ListFleetHealth's own doc comment (api.proto) and this task's spec
-// (FR79) name no per-query audit requirement -- it is an operational
-// fleet-health view, not a person-identifying resolution. RetireBoard has
-// no RPC surface yet (leaflab/api/repository.go's
+// GetDeviceConfig, ListBoards, GetHealth, GetElevationStatus,
+// ListFleetHealth, GetHousehold and ListHouseholdMembers are reads with no
+// FR8/FR10.4 audit requirement of their own and are deliberately absent.
+// Unlike ResolveToHousehold, ListFleetHealth's own doc comment (api.proto)
+// and this task's spec (FR79) name no per-query audit requirement -- it is
+// an operational fleet-health view, not a person-identifying resolution.
+// RetireBoard has no RPC surface yet (leaflab/api/repository.go's
 // RetireBoard is called directly by tests only, per #1337's scaffold) --
 // it will be added here in the task that gives it one.
 //
@@ -52,18 +61,26 @@ var declaredWriteMethods = []string{
 	elevateFullMethod,
 	renewElevationFullMethod,
 	endElevationFullMethod,
+	createHouseholdFullMethod,
+	inviteMemberFullMethod,
+	removeMemberFullMethod,
+	renameHouseholdFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
 // action/entity_kind its audit.Entry must carry (matched against
 // audit.Entry.Action/EntityKind at the call site -- see server.go's
-// PushDeviceConfig and the admin handlers).
+// PushDeviceConfig, the admin handlers, and the households.go handlers).
 var auditRegistrations = map[string]audit.Registration{
 	pushDeviceConfigFullMethod:   {Action: "PushConfig", EntityKind: "device_config"},
 	resolveToHouseholdFullMethod: {Action: "ResolveToHousehold", EntityKind: "admin_resolution"},
 	elevateFullMethod:            {Action: audit.ActionElevate, EntityKind: "household"},
 	renewElevationFullMethod:     {Action: "RenewElevation", EntityKind: "household"},
 	endElevationFullMethod:       {Action: "EndElevation", EntityKind: "household"},
+	createHouseholdFullMethod:    {Action: "CreateHousehold", EntityKind: "household_membership"},
+	inviteMemberFullMethod:       {Action: "InviteMember", EntityKind: "household_membership"},
+	removeMemberFullMethod:       {Action: "RemoveMember", EntityKind: "household_membership"},
+	renameHouseholdFullMethod:    {Action: "RenameHousehold", EntityKind: "household"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry
