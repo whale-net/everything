@@ -8,10 +8,9 @@ import (
 	"strings"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -20,14 +19,17 @@ import (
 // Excludes MQTT wildcard characters (+, #) and path separators (/, .).
 var validDeviceID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-func validateDeviceID(id string) error {
+// validateDeviceID returns a persona-appropriate reason (FR59.2) if id is
+// invalid, or "" if it's valid. The proto field name is never embedded in
+// the reason text -- the caller attaches it separately as Failure.field.
+func validateDeviceID(id string) string {
 	if id == "" {
-		return fmt.Errorf("device_id is required")
+		return "A device ID is required."
 	}
 	if !validDeviceID.MatchString(id) {
-		return fmt.Errorf("device_id %q contains invalid characters: only a-z, A-Z, 0-9, - and _ are allowed", id)
+		return "This device ID contains invalid characters; only letters, numbers, hyphens and underscores are allowed."
 	}
-	return nil
+	return ""
 }
 
 const mqttExchange = "amq.topic"
@@ -48,13 +50,14 @@ func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slo
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
-	if err := validateDeviceID(req.DeviceId); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
 	}
 
 	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "board lookup: %v", err)
+		s.logger.Error("board lookup failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
 	}
 
 	// Build the proto with a placeholder version; we need configJSON for the
@@ -65,21 +68,24 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	}
 	configJSON, err := protojson.Marshal(cfgProto)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "protojson marshal: %v", err)
+		s.logger.Error("protojson marshal failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
 	}
 
 	// Atomically assign version and record the pending push before publishing.
 	// This ensures the DB row always exists before the device can ack.
 	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "record config push: %v", err)
+		s.logger.Error("record config push failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")
 	}
 
 	// Re-marshal with the real version for the wire payload.
 	cfgProto.Version = uint64(version)
 	wire, err := proto.Marshal(cfgProto)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "proto marshal: %v", err)
+		s.logger.Error("proto marshal failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
 	}
 
 	// MQTT '/' → AMQP '.'; device_id should not contain '/' but sanitize to be safe.
@@ -87,7 +93,8 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	if err := s.publisher.Publish(ctx, mqttExchange, routingKey, wire); err != nil {
 		// Row is in DB but publish failed — device never received the push.
 		// The row stays accepted=FALSE, which is correct: no ack will arrive.
-		return nil, status.Errorf(codes.Internal, "publish config: %v", err)
+		s.logger.Error("publish config failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Config was recorded but could not be delivered to the device. Please try pushing again.")
 	}
 
 	s.logger.Info("device config pushed",
@@ -99,13 +106,14 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 }
 
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
-	if err := validateDeviceID(req.DeviceId); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
 	}
 
 	cfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get config: %v", err)
+		s.logger.Error("get config failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not look up this device's config right now. Please try again.")
 	}
 	if cfg == nil {
 		return &pb.GetDeviceConfigResponse{Found: false}, nil
@@ -113,18 +121,46 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
 }
 
-func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
-	rows, err := s.repo.ListBoards(ctx)
+// ListBoards returns all known boards, keyset-paginated on (board_id) per
+// FR61: page_token is opaque and carries the last board_id of the previous
+// page, never an offset, so pagination stays correct while boards are
+// inserted mid-scan. page_size above contract.PageCap is clamped, not
+// rejected. Every board carries an absolute last_seen_at Instant alongside
+// the response envelope's server_now, so a caller renders elapsed time
+// without trusting its own clock (FR64).
+func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsRequest) (*pb.ListBoardsResponse, error) {
+	afterBoardID, hasAfter, err := contract.DecodeBoardCursor(req.GetPage().GetPageToken())
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "list boards: %v", err)
+		return nil, contract.InvalidArgument("list_boards_request", "page_token", "This page link is no longer valid. Start again from the first page.")
+	}
+
+	limit := contract.ClampPageSize(req.GetPage().GetPageSize())
+
+	// Fetch one extra row to detect whether a next page exists without a
+	// separate COUNT query.
+	rows, err := s.repo.ListBoards(ctx, afterBoardID, hasAfter, limit+1)
+	if err != nil {
+		s.logger.Error("list boards failed", "error", err)
+		return nil, contract.Internal("board", "", "Could not list boards right now. Please try again.")
+	}
+
+	var nextToken string
+	if int32(len(rows)) > limit {
+		rows = rows[:limit]
+		nextToken = contract.EncodeBoardCursor(rows[len(rows)-1].BoardID)
 	}
 
 	boards := make([]*pb.BoardInfo, 0, len(rows))
 	for _, r := range rows {
 		boards = append(boards, &pb.BoardInfo{
-			DeviceId: r.DeviceID,
-			BoardId:  r.BoardID,
+			DeviceId:   r.DeviceID,
+			BoardId:    r.BoardID,
+			LastSeenAt: contract.ToInstant(r.LastSeenAt),
 		})
 	}
-	return &pb.ListBoardsResponse{Boards: boards}, nil
+	return &pb.ListBoardsResponse{
+		Boards:    boards,
+		Page:      &pb.PageResponse{NextPageToken: nextToken},
+		ServerNow: contract.Now(),
+	}, nil
 }
