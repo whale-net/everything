@@ -20,6 +20,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/attribution",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/capture",
