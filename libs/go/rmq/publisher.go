@@ -16,10 +16,10 @@ import (
 // Publisher publishes messages to RabbitMQ exchanges
 // It automatically recovers from channel closures by recreating the channel
 type Publisher struct {
-	mu         sync.Mutex
-	channel    *amqp.Channel
-	conn       *Connection
-	exchange   string
+	mu       sync.Mutex
+	channel  *amqp.Channel
+	conn     *Connection
+	exchange string
 	// chanOpener is the factory used to recreate channels after failure.
 	// It defaults to openAndConfigureChannel and is overridable in tests.
 	chanOpener func(conn *Connection, exchange string) (*amqp.Channel, error)
@@ -49,13 +49,13 @@ func openAndConfigureChannel(conn *Connection, exchange string) (*amqp.Channel, 
 
 	// Declare topic exchange (default for ManMan)
 	if err := ch.ExchangeDeclare(
-		exchange,  // exchange name
-		"topic",   // exchange type
-		true,      // durable
-		false,     // auto-deleted
-		false,     // internal
-		false,     // no-wait
-		nil,       // arguments
+		exchange, // exchange name
+		"topic",  // exchange type
+		true,     // durable
+		false,    // auto-deleted
+		false,    // internal
+		false,    // no-wait
+		nil,      // arguments
 	); err != nil {
 		ch.Close()
 		return nil, fmt.Errorf("failed to declare exchange: %w", err)
@@ -174,6 +174,94 @@ func (p *Publisher) Publish(ctx context.Context, exchange, routingKey string, bo
 	}
 
 	// For other errors, return as-is (don't retry)
+	return err
+}
+
+// mqttRetainHeader is the AMQP message header RabbitMQ's MQTT plugin reads
+// to decide whether a message bridged from an AMQP exchange onto an MQTT
+// topic should be stored as that topic's retained message (RabbitMQ MQTT
+// plugin convention: a boolean "x-mqtt-retain" header, since AMQP has no
+// native retain flag of its own -- only a message published by an actual
+// MQTT client can set retain natively). Used by PublishRetained below.
+const mqttRetainHeader = "x-mqtt-retain"
+
+// PublishRetained is Publish with the MQTT retain flag set (via
+// mqttRetainHeader) on the outgoing message. Use this, not Publish, when
+// the payload must be delivered to a subscriber that connects *after* this
+// call (e.g. leaflab/api's DeviceConfig topic: a device that was offline at
+// publish time still receives the retained message on its next connect).
+// It automatically reconnects to RabbitMQ if the channel is closed, exactly
+// like Publish.
+func (p *Publisher) PublishRetained(ctx context.Context, exchange, routingKey string, body interface{}) error {
+	var bodyBytes []byte
+	var err error
+
+	switch v := body.(type) {
+	case []byte:
+		bodyBytes = v
+	case string:
+		bodyBytes = []byte(v)
+	default:
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("failed to marshal message: %w", err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	// Inject trace context into AMQP headers, same as Publish, plus the
+	// retain header.
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	headers := amqp.Table{}
+	for k, v := range carrier {
+		headers[k] = v
+	}
+	headers[mqttRetainHeader] = true
+
+	publishing := amqp.Publishing{
+		ContentType:  "application/json",
+		Body:         bodyBytes,
+		DeliveryMode: amqp.Persistent,
+		Timestamp:    time.Now(),
+		Headers:      headers,
+	}
+
+	p.mu.Lock()
+	ch := p.channel
+	p.mu.Unlock()
+
+	err = ch.PublishWithContext(ctx, exchange, routingKey, false, false, publishing)
+
+	if err == nil {
+		return nil
+	}
+
+	if isChannelClosed(err) {
+		p.mu.Lock()
+		if p.channel != ch {
+			ch = p.channel
+			p.mu.Unlock()
+		} else {
+			newCh, recreateErr := p.chanOpener(p.conn, exchange)
+			if recreateErr != nil {
+				p.mu.Unlock()
+				return fmt.Errorf("publish failed and channel recreation failed: %w (original error: %w)", recreateErr, err)
+			}
+			p.channel = newCh
+			ch = newCh
+			p.mu.Unlock()
+		}
+
+		retryErr := ch.PublishWithContext(ctx, exchange, routingKey, false, false, publishing)
+		if retryErr != nil {
+			return fmt.Errorf("publish failed after channel recreation: %w", retryErr)
+		}
+		return nil
+	}
+
 	return err
 }
 

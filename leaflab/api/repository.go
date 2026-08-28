@@ -243,6 +243,38 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 	return &cfg, nil
 }
 
+// GetBoardReportingHealth returns the fields reportingStateFor (server.go)
+// needs to compute FR42/FR79's shared A23 reporting state for a single
+// board -- last_seen_at, retired_at, and the board's latest *accepted*
+// config JSON (nil when none exists) -- reusing FleetBoardHealthRow's shape
+// rather than introducing a second one, since reportingStateFor only ever
+// reads these three fields off it regardless of which RPC built the row.
+// ok is false when deviceID names no board.
+func (r *Repository) GetBoardReportingHealth(ctx context.Context, deviceID string) (FleetBoardHealthRow, bool, error) {
+	var row FleetBoardHealthRow
+	var retiredAt *time.Time
+	err := r.db.QueryRow(ctx, `
+		SELECT
+			b.last_seen_at,
+			b.retired_at,
+			(SELECT dc.config_json
+			 FROM device_config dc
+			 WHERE dc.board_id = b.board_id AND dc.accepted = TRUE
+			 ORDER BY dc.version DESC
+			 LIMIT 1)
+		FROM board b
+		WHERE b.device_id = $1
+	`, deviceID).Scan(&row.LastSeenAt, &retiredAt, &row.AcceptedConfigJSON)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return FleetBoardHealthRow{}, false, nil
+		}
+		return FleetBoardHealthRow{}, false, fmt.Errorf("get board reporting health for %s: %w", deviceID, err)
+	}
+	row.Retired = retiredAt != nil
+	return row, true, nil
+}
+
 // DeviceConfigVersionRow is one device_config row's FR34/FR35 fields --
 // everything GetConfigStatus and GetConfigVersion need about a single
 // stored version, short of its per-entry provenance (see

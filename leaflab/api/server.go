@@ -99,6 +99,12 @@ type deviceRepository interface {
 	RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error
 	EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error
 	ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error)
+
+	// GetBoardReportingHealth backs FR42's GetResendAvailability/
+	// ResendDeviceConfig: the same reportingStateFor input ListFleetHealth's
+	// rows carry, fetched for one board by device_id -- see
+	// Repository.GetBoardReportingHealth's doc comment.
+	GetBoardReportingHealth(ctx context.Context, deviceID string) (FleetBoardHealthRow, bool, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -127,11 +133,32 @@ type authzResolver interface {
 // own yet (unlike migrate/processor/ui).
 const DefaultElevationDuration = 60 * time.Minute
 
+// configPublisher is the subset of *rmq.Publisher's methods
+// LeafLabAPIServer's RPCs depend on for publishing DeviceConfig payloads to
+// MQTT (PushDeviceConfig's live push, ResendDeviceConfig's FR42.1
+// retained re-publish). Narrowed to an interface -- like deviceRepository
+// and authzResolver above -- so a future test can substitute an in-memory
+// fake and assert exactly what was published (exchange, routing key, wire
+// bytes, retain flag) without a live RabbitMQ connection; see
+// push_device_config_scope_integration_test.go's doc comment for why no
+// such fake exists yet. *rmq.Publisher satisfies this with no changes on
+// the production path (NewLeafLabAPIServer is still called with
+// *rmq.Publisher in main.go); passing a literal nil (every existing test
+// call site) is valid for either the concrete type or this interface.
+type configPublisher interface {
+	Publish(ctx context.Context, exchange, routingKey string, body interface{}) error
+	// PublishRetained is Publish with the MQTT retain flag set -- FR42.1's
+	// "publish to the retained topic" (see libs/go/rmq's PublishRetained
+	// doc comment for why AMQP needs an explicit header for this, unlike a
+	// native MQTT publish).
+	PublishRetained(ctx context.Context, exchange, routingKey string, body interface{}) error
+}
+
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
 	repo      deviceRepository
 	authzSvc  authzResolver
-	publisher *rmq.Publisher
+	publisher configPublisher
 	// rmqConn is the underlying RabbitMQ/MQTT connection GetHealth probes
 	// (FR63.1). Held separately from publisher because rmq.Publisher does
 	// not expose its connection's liveness. May be nil in tests that don't
@@ -158,7 +185,7 @@ func WithElevationDuration(d time.Duration) ServerOption {
 	return func(s *LeafLabAPIServer) { s.elevationDuration = d }
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger, opts ...ServerOption) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher configPublisher, rmqConn *rmq.Connection, logger *slog.Logger, opts ...ServerOption) *LeafLabAPIServer {
 	s := &LeafLabAPIServer{
 		repo:              repo,
 		authzSvc:          authzSvc,
@@ -1020,6 +1047,199 @@ func (s *LeafLabAPIServer) GetConfigVersion(ctx context.Context, req *pb.GetConf
 		Entries:         entries,
 		ServerNow:       contract.Now(),
 	}, nil
+}
+
+// ── FR42 -- the one safe button ──────────────────────────────────────────────
+//
+// A re-send re-publishes the board's currently accepted config unchanged: it
+// cannot alter what the device runs, never opens an editor, and pressing it
+// twice is harmless (no new device_config row, no new version). Both RPCs
+// below share resendAvailability so GetResendAvailability's answer and
+// ResendDeviceConfig's own refusal, when unavailable, are computed by the
+// exact same logic -- never two independently-maintained copies of "can this
+// be attempted right now" that could drift out of agreement.
+
+// resendAvailability computes FR42.2's up-front answer for deviceID's
+// re-send: RESEND_AVAILABILITY_REASON_NOT_REPORTING when the board is stale
+// per the shared A23 threshold -- reportingStateFor, the exact function
+// FR79's ListFleetHealth uses (leaflab/api/health.Threshold and
+// leaflab/api/health.IsStale have exactly one call site in this package;
+// see TestReportingStateFor_IsTheOnlyA23CallSiteInLeafLabAPI); or
+// RESEND_AVAILABILITY_REASON_NOTHING_TO_RESEND when no configuration has
+// ever been accepted, or the most recent push was rejected (checked as two
+// independent conditions, per FR42.2's own wording: an older accepted
+// version can still exist even when the *latest* push was rejected, and
+// that case is still "nothing to resend" -- it is not "resend the stale
+// older version instead"). RESEND_AVAILABILITY_REASON_AVAILABLE otherwise,
+// with an empty sentence/alternative (GetResendAvailabilityResponse's own
+// doc comment: both are empty exactly when available is true).
+func (s *LeafLabAPIServer) resendAvailability(ctx context.Context, deviceID string) (pb.ResendAvailabilityReason, string, string, error) {
+	boardHealth, ok, err := s.repo.GetBoardReportingHealth(ctx, deviceID)
+	if err != nil {
+		s.logger.Error("get board reporting health failed", "device_id", deviceID, "error", err)
+		return pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_UNSPECIFIED, "", "", contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	if !ok {
+		// authorizeBoardAccess already refused a nonexistent/out-of-scope
+		// device_id before either RPC below calls this -- reaching here
+		// with ok == false would mean the board vanished between that
+		// check and this query, not a caller mistake.
+		return pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_UNSPECIFIED, "", "", boardNotFoundFailure()
+	}
+
+	if reportingStateFor(boardHealth, time.Now()) == pb.ReportingState_REPORTING_STATE_NOT_REPORTING {
+		return pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_NOT_REPORTING,
+			"This board isn't currently reporting.",
+			"Check that the board is online, then try again.",
+			nil
+	}
+
+	acceptedCfg, err := s.repo.GetLatestAcceptedConfig(ctx, deviceID)
+	if err != nil {
+		s.logger.Error("get latest accepted config for resend availability failed", "device_id", deviceID, "error", err)
+		return pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_UNSPECIFIED, "", "", contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	if acceptedCfg == nil {
+		return pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_NOTHING_TO_RESEND,
+			"No configuration has ever been accepted for this board.",
+			"Push a configuration.",
+			nil
+	}
+
+	latest, err := s.repo.ListConfigHistory(ctx, deviceID, 0, false, 1)
+	if err != nil {
+		s.logger.Error("list config history for resend availability failed", "device_id", deviceID, "error", err)
+		return pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_UNSPECIFIED, "", "", contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	if len(latest) > 0 && config.DeriveState(latest[0].Accepted, latest[0].AckedAt, latest[0].RejectionReason) == config.StateRejected {
+		return pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_NOTHING_TO_RESEND,
+			"The most recent push to this board was rejected; there is nothing newly accepted to re-send.",
+			"Push a configuration.",
+			nil
+	}
+
+	return pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_AVAILABLE, "", "", nil
+}
+
+// GetResendAvailability answers FR42.2's "stated up front" question: whether
+// ResendDeviceConfig can be attempted right now, and if not, why -- so a
+// caller renders the button disabled with the reason inline (FR59.3) rather
+// than enabling it and letting the press fail. Household-scoped like
+// GetDeviceConfig/GetConfigStatus (NFR2: a non-member gets the same
+// boardNotFoundFailure as a nonexistent device_id).
+func (s *LeafLabAPIServer) GetResendAvailability(ctx context.Context, req *pb.GetResendAvailabilityRequest) (*pb.GetResendAvailabilityResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	}
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
+	availReason, sentence, alternative, err := s.resendAvailability(ctx, req.DeviceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetResendAvailabilityResponse{
+		Available:   availReason == pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_AVAILABLE,
+		Reason:      availReason,
+		Sentence:    sentence,
+		Alternative: alternative,
+		ServerNow:   contract.Now(),
+	}, nil
+}
+
+// ResendDeviceConfig re-publishes deviceID's currently accepted config,
+// byte-identical, to the retained MQTT topic (FR42.1). It never alters what
+// the device runs, never assigns a new version, and never inserts a
+// device_config row -- pressing it twice republishes the identical payload
+// twice and changes nothing server-side, so the device applying the same
+// payload twice is a no-op by construction. Refused (FR59.3, via
+// resendAvailability's same reasons) when resendAvailability answers
+// anything other than AVAILABLE. Household-scoped and audited (FR8.2) even
+// though it writes no device_config row -- FR8.2 names this exact case.
+func (s *LeafLabAPIServer) ResendDeviceConfig(ctx context.Context, req *pb.ResendDeviceConfigRequest) (*pb.ResendDeviceConfigResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	}
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
+	availReason, sentence, alternative, err := s.resendAvailability(ctx, req.DeviceId)
+	if err != nil {
+		return nil, err
+	}
+	if availReason != pb.ResendAvailabilityReason_RESEND_AVAILABILITY_REASON_AVAILABLE {
+		return nil, contract.Refuse("device_config", "device_id", sentence, alternative)
+	}
+
+	// resendAvailability's AVAILABLE answer already proved a non-nil
+	// accepted config exists (it returns NOTHING_TO_RESEND otherwise) --
+	// fetched again here rather than threaded through, since
+	// resendAvailability's return shape is shared with GetResendAvailability
+	// and carries no payload.
+	cfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("get latest accepted config for resend failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	if cfg == nil {
+		// Can't happen after an AVAILABLE answer above; guarded rather than
+		// dereferenced blindly so a future refactor that reorders these
+		// calls fails loudly instead of publishing a version-0 payload.
+		s.logger.Error("resend found no accepted config despite AVAILABLE answer", "device_id", req.DeviceId)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	wire, err := proto.Marshal(cfg)
+	if err != nil {
+		s.logger.Error("proto marshal failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	// Same exchange/routing-key convention as PushDeviceConfig's live push
+	// (see mqttExchange's doc comment there) -- PublishRetained, not
+	// Publish, is what makes this FR42.1's "retained topic" re-send rather
+	// than a second live push (see libs/go/rmq's PublishRetained doc
+	// comment for why AMQP needs an explicit retain header).
+	routingKey := fmt.Sprintf("leaflab.%s.config", strings.ReplaceAll(req.DeviceId, "/", "."))
+	if err := s.publisher.PublishRetained(ctx, mqttExchange, routingKey, wire); err != nil {
+		s.logger.Error("resend publish failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not re-send this configuration right now. Please try again.")
+	}
+
+	// FR8.2: audited despite writing no device_config row -- EntityID stays
+	// nil (no new entity was created; see
+	// TestAuditor_RecordsReSendWithNoDeviceConfigRow's doc comment).
+	// TargetHouseholdID mirrors PushDeviceConfig's own resolution: nil for
+	// an unclaimed board (FR1.1), the resolved household id otherwise.
+	_, boardRes, err := s.authzSvc.ResolveBoardByDeviceID(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("resolve board for resend audit failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	var targetHouseholdID *int64
+	if !boardRes.Unclaimed {
+		targetHouseholdID = &boardRes.HouseholdID
+	}
+	reg := auditRegistrations[resendDeviceConfigFullMethod]
+	entry := audit.Entry{
+		ActorSubject:      actingSubject(ctx),
+		ActorKind:         audit.ActorKindHuman,
+		TargetHouseholdID: targetHouseholdID,
+		Action:            reg.Action,
+		EntityKind:        reg.EntityKind,
+		CorrelationID:     CorrelationIDFromContext(ctx),
+	}
+	if err := s.repo.RecordAuditEntry(ctx, entry); err != nil {
+		s.logger.Error("record resend audit failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	s.logger.Info("device config re-sent", "device_id", req.DeviceId, "version", cfg.Version)
+
+	return &pb.ResendDeviceConfigResponse{Version: cfg.Version}, nil
 }
 
 // ── Admin (FR10, FR12 activation) ────────────────────────────────────────────

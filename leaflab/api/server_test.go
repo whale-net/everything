@@ -31,6 +31,12 @@ import (
 type fakeRepo struct {
 	pingErr error
 
+	// getBoardReportingHealthRow/-Ok/-Err back GetBoardReportingHealth
+	// (FR42) -- see that method's doc comment below.
+	getBoardReportingHealthRow FleetBoardHealthRow
+	getBoardReportingHealthOk  bool
+	getBoardReportingHealthErr error
+
 	// getLatestAcceptedConfigCalls counts calls to GetLatestAcceptedConfig
 	// -- the NFR2 tests below use this to prove an authorization refusal
 	// short-circuits *before* this repository call is ever reached, not
@@ -395,6 +401,17 @@ func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, tar
 		return time.Time{}, ErrNoActiveElevation
 	}
 	return f.activeElevationExpiresAt, nil
+}
+
+// getBoardReportingHealthRow/-Ok/-Err configure GetBoardReportingHealth's
+// return -- see its call sites in server.go's resendAvailability (FR42).
+// Unconfigured (zero-value ok, false) means "no such board", matching
+// Repository.GetBoardReportingHealth's own not-found behavior.
+func (f *fakeRepo) GetBoardReportingHealth(ctx context.Context, deviceID string) (FleetBoardHealthRow, bool, error) {
+	if f.getBoardReportingHealthErr != nil {
+		return FleetBoardHealthRow{}, false, f.getBoardReportingHealthErr
+	}
+	return f.getBoardReportingHealthRow, f.getBoardReportingHealthOk, nil
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call

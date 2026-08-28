@@ -11,6 +11,12 @@ import (
 // healthFullMethod.
 const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 
+// resendDeviceConfigFullMethod is ResendDeviceConfig's full gRPC method
+// name (FR42.1). Audited despite writing no device_config row -- FR8.2
+// names this exact case; see server.go's ResendDeviceConfig and
+// TestAuditor_RecordsReSendWithNoDeviceConfigRow.
+const resendDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/ResendDeviceConfig"
+
 // Admin RPC full method names (FR10, FR12 activation). resolveToHousehold
 // is a read RPC (it writes no board/household/config row), but FR10.4
 // requires it to write an audit row on every call regardless -- one row
@@ -48,6 +54,7 @@ const (
 // independent, though worth a look for consolidation once #1351 lands.
 var declaredWriteMethods = []string{
 	pushDeviceConfigFullMethod,
+	resendDeviceConfigFullMethod,
 	resolveToHouseholdFullMethod,
 	elevateFullMethod,
 	renewElevationFullMethod,
@@ -59,7 +66,13 @@ var declaredWriteMethods = []string{
 // audit.Entry.Action/EntityKind at the call site -- see server.go's
 // PushDeviceConfig and the admin handlers).
 var auditRegistrations = map[string]audit.Registration{
-	pushDeviceConfigFullMethod:   {Action: "PushConfig", EntityKind: "device_config"},
+	pushDeviceConfigFullMethod: {Action: "PushConfig", EntityKind: "device_config"},
+	// "ReSendConfig" matches the literal action name
+	// TestAuditor_RecordsReSendWithNoDeviceConfigRow already asserts against
+	// (audit_write_path_integration_test.go), written before this RPC
+	// existed as FR8.2's named-case stub -- kept identical here rather than
+	// introduced as a fresh string.
+	resendDeviceConfigFullMethod: {Action: "ReSendConfig", EntityKind: "device_config"},
 	resolveToHouseholdFullMethod: {Action: "ResolveToHousehold", EntityKind: "admin_resolution"},
 	elevateFullMethod:            {Action: audit.ActionElevate, EntityKind: "household"},
 	renewElevationFullMethod:     {Action: "RenewElevation", EntityKind: "household"},

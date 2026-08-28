@@ -15,12 +15,18 @@ import (
 // /StreamServerInfo.FullMethod format, e.g. "/leaflab.api.v1.LeafLabAPI/
 // GetHealth") to the named ratelimit.Bucket enforced for it, in addition to
 // ratelimit.BucketReadDefault (every RPC always gets the default check --
-// see NewRateLimitUnaryInterceptor). Empty in Phase 1: registering a bucket
-// (ratelimit.Buckets) is deliberately separate from wiring it to a method,
-// so later tasks (FR42's resend, FR47's ack_wait_concurrent, FR76's
-// claim_open/claim_round, FR80's support_reference_resolve) add an entry
-// here as those RPCs are built, without touching this interceptor.
-var rateLimitBucketByMethod = map[string]ratelimit.Bucket{}
+// see NewRateLimitUnaryInterceptor). FR42's ResendDeviceConfig is the first
+// entry (NFR10: "rate-limited despite writing no config row" -- the resend
+// bucket, not a new one); FR47's ack_wait_concurrent, FR76's
+// claim_open/claim_round and FR80's support_reference_resolve add their own
+// entries as those RPCs are built, without touching this interceptor.
+// GetResendAvailability deliberately has no entry: it is a plain read,
+// covered by BucketReadDefault like every other read RPC -- the resend
+// bucket protects the write (the actual re-send), not the availability
+// check that precedes it.
+var rateLimitBucketByMethod = map[string]ratelimit.Bucket{
+	resendDeviceConfigFullMethod: ratelimit.BucketResend,
+}
 
 // principalKey derives NFR10's rate-limit Key for ctx's caller. An
 // authenticated principal is keyed on its verified subject -- not the raw

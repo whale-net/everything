@@ -9,8 +9,10 @@ Per-principal and per-session request limits, enforced by `leaflab/api/ratelimit
 `InMemoryLimiter` and applied by `leaflab/api`'s rate-limit interceptor (see
 `leaflab/api/ratelimit_interceptor.go`). Six named buckets exist
 (`read_default`, `resend`, `ack_wait_concurrent`, `claim_open`, `claim_round`,
-`support_reference_resolve`); Phase 1 wires only `read_default` into the interceptor chain
-against every RPC. Each bucket takes a pair of variables — a call-count limit and a window
+`support_reference_resolve`); Phase 1 wired `read_default` into the interceptor chain against
+every RPC, and Phase 4's FR42 task wired `resend` onto `ResendDeviceConfig`
+(`rateLimitBucketByMethod` in `ratelimit_interceptor.go`). The rest still await their own
+task's RPC. Each bucket takes a pair of variables — a call-count limit and a window
 length in whole seconds — both optional; an unset variable falls back to the bucket's default
 in `leaflab/api/ratelimit/env.go`'s `DefaultConfigs`. A limit of `0` or less disables
 enforcement for that bucket entirely.
@@ -19,7 +21,7 @@ enforcement for that bucket entirely.
 |----------|---------|--------------|
 | `LEAFLAB_API_RATELIMIT_READ_DEFAULT_LIMIT` | `120` | Max calls per principal (or per peer address for the one anonymous RPC, `GetHealth`) within the window below. Applied to every RPC. |
 | `LEAFLAB_API_RATELIMIT_READ_DEFAULT_WINDOW_SECONDS` | `60` | Window length, in seconds, for `read_default`. |
-| `LEAFLAB_API_RATELIMIT_RESEND_LIMIT` | `3` | FR42's re-send limit. Not yet wired to an RPC in Phase 1. |
+| `LEAFLAB_API_RATELIMIT_RESEND_LIMIT` | `3` | FR42's re-send limit, wired onto `ResendDeviceConfig` (not `GetResendAvailability`, a plain read covered by `read_default`). |
 | `LEAFLAB_API_RATELIMIT_RESEND_WINDOW_SECONDS` | `300` | Window length, in seconds, for `resend`. |
 | `LEAFLAB_API_RATELIMIT_ACK_WAIT_CONCURRENT_LIMIT` | `5` | FR47's concurrent open-wait limit. Not yet wired to an RPC in Phase 1. |
 | `LEAFLAB_API_RATELIMIT_ACK_WAIT_CONCURRENT_WINDOW_SECONDS` | `60` | Window length, in seconds, for `ack_wait_concurrent`. |

@@ -108,6 +108,17 @@ On rejection: ack published with `accepted=false` and a reason string; NVS uncha
 
 Config persists across reboots. On boot the device loads stored config before connecting to MQTT.
 
+### Re-send (FR42)
+
+`ResendDeviceConfig` re-publishes the board's currently *accepted* `DeviceConfig`,
+byte-identical, to `leaflab/<device_id>/config` with the MQTT **retain** flag set
+(via the `x-mqtt-retain` AMQP header RabbitMQ's MQTT plugin reads -- see
+`libs/go/rmq`'s `PublishRetained`), unlike a normal push's live-only publish.
+It assigns no new version and inserts no `device_config` row: pressing it twice
+publishes the same payload twice and changes nothing. Retained delivery means a
+board that reconnects after this call still receives it, not just one that was
+already connected at publish time.
+
 ## LWT (Last Will and Testament)
 
 Set at connect time: if the device disconnects unexpectedly the broker
