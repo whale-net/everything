@@ -1,6 +1,6 @@
 """Bounded read path -- the one place join/enrichment/attribution logic for GetReadingSeries, GetCurrentValues, GetPeriodSummary and CompareSeries lives (FR25.1). See readings.go's package doc comment."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "readings",
@@ -13,6 +13,53 @@ go_library(
         "//leaflab/api/contract",
         "//leaflab/api/tiers",
         "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# FR72 source-analysis coverage: no build tag, needs no database, so it
+# runs in every plain `bazel test //leaflab/...`. Hand-written (not
+# gazelle-generated) so it sits alongside this package's hand-written
+# integration go_test target below without gazelle fighting over which
+# owns readings.go's srcs attribute.
+go_test(
+    # keep
+    name = "readings_test",
+    size = "small",
+    srcs = ["source_analysis_test.go"],
+    embed = [":readings"],
+    embedsrcs = ["readings.go"],
+)
+
+# Real-Postgres integration coverage for this task's Testing section
+# (#1362, FR25/FR27/FR28/NFR3.2) -- see reader_integration_test.go's doc
+# comment. Same tag set and hand-written rationale as leaflab/api's other
+# integration go_test targets (gazelle skips a `//go:build integration`
+# gated file when scanning for go_test srcs).
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api/readings:reader_integration_test --test_output=all
+go_test(
+    # keep
+    name = "reader_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["reader_integration_test.go"],
+    embed = [":readings"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/tiers",
+        "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )

@@ -171,6 +171,46 @@ go_test(
     ],
 )
 
+# Real-Postgres integration coverage for this task's Testing section
+# (#1362): a non-member gets NFR2's not-found for another household's
+# sensor, exercised through GetReadingSeries's authorizeEntity gate -- see
+# readings_authz_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as this package's other integration go_test
+# targets.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:readings_authz_integration_test --test_output=all
+go_test(
+    # keep
+    name = "readings_authz_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "readings_authz_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/readings",
+        "//leaflab/api/tiers",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 # Real-Postgres integration coverage for FR4/FR5/NFR2's per-entity
 # household authorization -- see authz_scope_integration_test.go's doc
 # comment. Same tag set and hand-written rationale as the other integration
