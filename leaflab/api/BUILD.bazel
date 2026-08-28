@@ -80,6 +80,7 @@ go_test(
         "auth_test.go",
         "main_test.go",
         "server_diff_config_versions_test.go",
+        "server_push_device_config_multiboard_test.go",
         "server_push_device_config_scope_test.go",
         "server_push_device_config_test.go",
         "server_push_validation_test.go",

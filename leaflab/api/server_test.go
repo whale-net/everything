@@ -47,6 +47,14 @@ type fakeRepo struct {
 	getOrCreateBoardID    int64
 	getOrCreateBoardErr   error
 	getOrCreateBoardCalls int
+	// getOrCreateBoardIDs configures GetOrCreateBoard's return per deviceID
+	// -- FR48's multi-board tests
+	// (server_push_device_config_multiboard_test.go) need distinct board
+	// ids per device_id in the same call (e.g. two boards in different
+	// households) that getOrCreateBoardID's single value can't express. A
+	// deviceID with no entry here falls back to getOrCreateBoardID, so
+	// every pre-existing single-board test keeps working unmodified.
+	getOrCreateBoardIDs map[string]int64
 
 	insertDeviceConfigNextVersionVersion int64
 	insertDeviceConfigNextVersionErr     error
@@ -114,6 +122,9 @@ type fakeRepo struct {
 // file's own tests (which never exercise PushDeviceConfig's write path).
 func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
 	f.getOrCreateBoardCalls++
+	if id, ok := f.getOrCreateBoardIDs[deviceID]; ok {
+		return id, f.getOrCreateBoardErr
+	}
 	return f.getOrCreateBoardID, f.getOrCreateBoardErr
 }
 
