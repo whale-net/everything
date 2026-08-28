@@ -8,12 +8,13 @@
 // which named Scenario they run -- neither gate re-derives its own fixture
 // shape or its own percentile arithmetic.
 //
-// Scaffold state (this task, #1350): Scenario and HouseholdLanding below
-// are complete -- the fixture shape and its cardinality arithmetic do not
-// depend on anything not yet built. Scenario.Run is nil until
-// Implementation wires GetHouseholdLanding into leaflab/api/server.go: the
-// harness has no endpoint to call yet. p95_test.go's TestHouseholdLandingP95
-// skips with an explanatory message until Run is supplied.
+// Scenario and HouseholdLanding below are complete: the fixture shape and
+// its cardinality arithmetic. Scenario.Run stays permanently nil in this
+// package's own test binary -- see p95_test.go's doc comment for why
+// (leaflab/api, home of GetHouseholdLanding, is a `package main`, which Go
+// refuses to let any other package import). NFR3.3's actual gate is
+// enforced in leaflab/api/landing_p95_integration_test.go, which imports
+// HouseholdLanding and Percentile from here.
 package loadtest
 
 import (

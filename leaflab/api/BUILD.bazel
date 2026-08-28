@@ -85,6 +85,7 @@ go_test(
     srcs = [
         "audit_registry_test.go",
         "auth_test.go",
+        "landing_glue_test.go",
         "main_test.go",
         "ratelimit_interceptor_test.go",
         "server_admin_test.go",
@@ -106,6 +107,7 @@ go_test(
         "//leaflab/api/authz",
         "//leaflab/api/claim",
         "//leaflab/api/contract",
+        "//leaflab/api/landing",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/api/ratelimit",
         "//libs/go/grpcauth",
@@ -359,6 +361,94 @@ go_test(
         "//leaflab/api/authz",
         "//leaflab/api/claim",
         "//leaflab/api/ratelimit",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for FR62/NFR3.1's household landing
+# classification -- see landing_integration_test.go's doc comment. Same tag
+# set and hand-written rationale as the other integration go_test targets
+# above. Deliberately does not share srcs with dbtest_helpers_integration_test.go
+# or any other integration file's schema: this file carries its own
+# self-contained household/board/device_config/sensor schema (with
+# sensor.last_seen_at, which no other integration schema in this package
+# needs).
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:landing_integration_test --test_output=all
+go_test(
+    # keep
+    name = "landing_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "landing_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/claim",
+        "//leaflab/api/landing",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# NFR3.3's household landing p95 gate -- see
+# landing_p95_integration_test.go's doc comment for why this (not
+# leaflab/loadtest's own scaffolded test) is the enforced gate. Heavier than
+# the other integration targets above (seeds millions of sensor_reading
+# rows) -- same tag set, but its own target so a normal
+# `bazel test //leaflab/api:...` sweep of "manual"-tagged integration tests
+# doesn't have to pay this fixture's seed time just to exercise the
+# correctness tests in landing_integration_test.go.
+#
+# Run it explicitly (requires a working Docker daemon; can take several
+# minutes to seed):
+#   bazel test //leaflab/api:landing_p95_integration_test --test_output=all
+go_test(
+    # keep
+    name = "landing_p95_integration_test",
+    size = "enormous",
+    timeout = "eternal",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "landing_p95_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/claim",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
+        "//leaflab/loadtest",
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",

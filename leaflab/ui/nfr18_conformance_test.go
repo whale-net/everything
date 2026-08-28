@@ -98,3 +98,56 @@ func TestNFR18_1Placeholder_NoRoundingCoarseningSuppressionOrLabelSelectionHelpe
 		t.Fatalf("only scanned %d source files under %s -- check the data dependency in BUILD.bazel", found, dir)
 	}
 }
+// nfr62LandingImportPath is leaflab/api/landing's import path (FR62's
+// server-side five-condition classifier, #1350). This task's Testing
+// section: "The classifier is called from the service, never from
+// leaflab/ui/" -- leaflab/ui has not yet built the household landing
+// screen (see leaflab/api/landing.go's doc comment); this guard fails the
+// moment a future change imports the classifier directly into the BFF
+// instead of rendering whatever leaflab-api's GetHouseholdLanding RPC
+// already decided (NFR18.1).
+const nfr62LandingImportPath = `"github.com/whale-net/everything/leaflab/api/landing"`
+
+// TestClassifierNeverImportedFromUI is a source-analysis guard, same
+// grep-over-checked-in-source shape as
+// TestNFR18_1Placeholder_NoRoundingCoarseningSuppressionOrLabelSelectionHelper
+// above: leaflab/ui's own Go/templ source never imports
+// leaflab/api/landing.
+func TestClassifierNeverImportedFromUI(t *testing.T) {
+	dir := leaflabUIDir(t)
+
+	found := 0
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "design" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			// This file's own constant above would otherwise trip itself.
+			return nil
+		}
+		b, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		found++
+		if strings.Contains(string(b), nfr62LandingImportPath) {
+			t.Errorf("%s imports leaflab/api/landing -- FR62/NFR18.1: the classifier is called from the service, never from leaflab/ui/", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", dir, err)
+	}
+	if found < 3 {
+		t.Fatalf("only scanned %d source files under %s -- check the data dependency in BUILD.bazel", found, dir)
+	}
+}

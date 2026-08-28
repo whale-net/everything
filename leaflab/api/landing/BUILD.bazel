@@ -1,10 +1,17 @@
 """FR62/NFR3.1 household landing classification -- the five-condition classifier."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "landing",
     srcs = ["classify.go"],
     importpath = "github.com/whale-net/everything/leaflab/api/landing",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "landing_test",
+    size = "small",
+    srcs = ["classify_test.go"],
+    embed = [":landing"],
 )

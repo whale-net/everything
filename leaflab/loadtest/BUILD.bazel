@@ -4,9 +4,19 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "loadtest",
-    srcs = ["scenario.go"],
+    srcs = [
+        "percentile.go",
+        "scenario.go",
+    ],
     importpath = "github.com/whale-net/everything/leaflab/loadtest",
     visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "loadtest_test",
+    size = "small",
+    srcs = ["percentile_test.go"],
+    embed = [":loadtest"],
 )
 
 # NFR3.3's household landing p95 gate. Hand-written (not gazelle-generated):
