@@ -1094,6 +1094,10 @@ func (s *LeafLabAPIServer) TransferClosure(ctx context.Context, req *pb.Transfer
 		switch {
 		case errors.Is(err, ErrBoardNotFound):
 			return nil, boardIDNotFoundFailure()
+		case errors.Is(err, ErrClosureNoEvidence):
+			return nil, contract.Refuse("board", "",
+				"This transfer needs evidence that the losing household consented.",
+				"Ask a member of the current household to release the board (FR77), or have an admin present a discharged possession challenge.")
 		case errors.Is(err, ErrClosureNotRealHousehold):
 			return nil, contract.Refuse("board", "board_id",
 				"This board has no losing household to transfer from.",
