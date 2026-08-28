@@ -531,6 +531,42 @@ func (r *Repository) ActiveElevation(ctx context.Context, adminSubject string, t
 	return expiresAt, nil
 }
 
+// AnyActiveElevation returns the expiry of adminSubject's most-recently-
+// expiring currently-open elevation against *any* household, or
+// ErrNoActiveElevation if they hold none. This is FR55's global
+// plant_type write gate (leaflab/api/plant_types.go): a global row has no
+// household to target, so the ordinary ActiveElevation predicate ("an
+// unexpired elevation against this exact household") does not apply --
+// admin_elevation.target_household_id is NOT NULL (migration 029), so
+// there is no "elevation against no household" row to look for either.
+// What FR10's elevation-for-a-global-write actually requires is weaker:
+// merely that the admin currently holds standing cross-household reach
+// *somewhere*, not against a specific target -- so this checks for any
+// unexpired, unended row at all, regardless of which household it names.
+// Unlike ActiveElevation, this does not back an authz.Scope construction
+// (there is no "global scope" type to build) -- callers use it purely as
+// a boolean-shaped gate before a global plant_type write, never to permit
+// broader entity access.
+func (r *Repository) AnyActiveElevation(ctx context.Context, adminSubject string) (time.Time, error) {
+	var expiresAt time.Time
+	err := r.db.QueryRow(ctx, `
+		SELECT expires_at
+		FROM admin_elevation
+		WHERE admin_subject = $1
+		  AND ended_at IS NULL
+		  AND expires_at > NOW()
+		ORDER BY expires_at DESC
+		LIMIT 1
+	`, adminSubject).Scan(&expiresAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, ErrNoActiveElevation
+		}
+		return time.Time{}, fmt.Errorf("any active elevation for %q: %w", adminSubject, err)
+	}
+	return expiresAt, nil
+}
+
 // ── Ownership (FR1.1, FR70.1, NFR6.1) ────────────────────────────────────────
 //
 // household_id is carried directly on board and plant, and on the region
