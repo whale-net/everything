@@ -119,6 +119,29 @@ service LeafLabAPI {
   // populated by FR74's sibling task, always false until then). Works for
   // a retired plant too (FR22.3).
   rpc GetPlantPlacementTimeline(GetPlantPlacementTimelineRequest) returns (GetPlantPlacementTimelineResponse);
+
+  // --- Plant monitoring status (FR56) -------------------------------------
+  //
+  // "Monitored" means attributable (FR23), not merely "a sensor exists
+  // somewhere beneath this plant's region" (SB-1.11). This RPC set (#1381)
+  // is this requirement's scaffolded wire surface; leaflab/api/attribution
+  // is the one FR23 implementation these RPCs report on -- see
+  // leaflab/api/plant_monitoring.go's doc comment for the current state.
+
+  // GetPlantMonitoringStatus reports whether plant_id is currently
+  // monitored (FR56): monitored iff at least one reading would attribute
+  // to it under FR23, never merely because a sensor exists in a descendant
+  // region. When unmonitored because a descendant region's active plant
+  // intercepts every candidate reading, names that region and plant.
+  // Always carries a since-when (PlantMonitoringStatus.unmonitored_since)
+  // when unmonitored.
+  rpc GetPlantMonitoringStatus(GetPlantMonitoringStatusRequest) returns (GetPlantMonitoringStatusResponse);
+
+  // ListPlantMonitoringStatus lists a household's plants' monitoring
+  // status, keyset paginated (FR61) -- the grower-surface bulk read this
+  // requirement names, so a household view need not call
+  // GetPlantMonitoringStatus once per plant.
+  rpc ListPlantMonitoringStatus(ListPlantMonitoringStatusRequest) returns (ListPlantMonitoringStatusResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -429,6 +452,86 @@ message GetPlantPlacementTimelineResponse {
   bool found = 1;
   // Ordered oldest-to-newest (ORDER BY valid_from).
   repeated PlacementInterval intervals = 2;
+  // Server's current time (FR64) -- see ListBoardsResponse.server_now.
+  Instant server_now = 3;
+}
+
+// --- Plant monitoring status (FR56) ---------------------------------------
+//
+// Reports FR23's attribution outcome from the plant's point of view: a
+// plant is monitored iff at least one reading would currently attribute to
+// it, never merely because a sensor exists somewhere in its region's
+// subtree (SB-1.11). leaflab/api/attribution.Resolver is the one FR23
+// implementation these messages' Go-side producer reports on -- see
+// leaflab/api/plant_monitoring.go.
+
+// PlantMonitoringUnmonitoredReason classifies why an unmonitored plant is
+// unmonitored (FR56). Meaningful only when PlantMonitoringStatus.monitored
+// is false -- unset (UNSPECIFIED) on a monitored plant.
+enum PlantMonitoringUnmonitoredReason {
+  PLANT_MONITORING_UNMONITORED_REASON_UNSPECIFIED = 0;
+  // A descendant region holds an active plant that intercepts every
+  // candidate reading before it reaches this plant's own region (FR23's
+  // nearest-ancestor rule) -- see InterceptingPlant for who/where.
+  PLANT_MONITORING_UNMONITORED_REASON_INTERCEPTED = 1;
+  // No sensor's reading attributes to this plant's region for a reason
+  // other than interception -- covers both "never had a sensor in the
+  // subtree" and "had one, since removed/moved away". The two are not
+  // distinguished on the wire; PlantMonitoringStatus.unmonitored_since
+  // carries the meaningful distinction (see that field's comment).
+  PLANT_MONITORING_UNMONITORED_REASON_NO_ATTRIBUTABLE_SENSOR = 2;
+}
+
+// InterceptingPlant names the descendant region and the active plant now
+// taking the readings that would otherwise have attributed to the plant
+// this detail is attached to (FR56). Set only when unmonitored_reason ==
+// PLANT_MONITORING_UNMONITORED_REASON_INTERCEPTED.
+message InterceptingPlant {
+  int64 region_id = 1;
+  string region_name = 2;
+  int64 plant_id = 3;
+  string plant_name = 4;
+}
+
+// PlantMonitoringStatus is one plant's FR56 status, as returned by both
+// GetPlantMonitoringStatus and ListPlantMonitoringStatus.
+message PlantMonitoringStatus {
+  int64 plant_id = 1;
+  // True iff at least one reading currently attributes to this plant under
+  // FR23. When false, unmonitored_reason, unmonitored_since and (for the
+  // intercepted case) intercepting are populated.
+  bool monitored = 2;
+  PlantMonitoringUnmonitoredReason unmonitored_reason = 3;
+  InterceptingPlant intercepting = 4;
+  // Set only when monitored is false: the instant from which this plant's
+  // region and its descendants have had no reading attributable to it
+  // (FR56's "since when"). Never an empty/zero Instant on an unmonitored
+  // plant -- see leaflab/api/plant_monitoring.go for the derivation.
+  Instant unmonitored_since = 5;
+}
+
+message GetPlantMonitoringStatusRequest {
+  int64 plant_id = 1;
+}
+
+message GetPlantMonitoringStatusResponse {
+  // True if plant_id names a real plant. A false response carries no other
+  // populated field, same shape as GetRegionPathResponse.found.
+  bool found = 1;
+  PlantMonitoringStatus status = 2;
+  // Server's current time (FR64) -- see ListBoardsResponse.server_now.
+  Instant server_now = 3;
+}
+
+message ListPlantMonitoringStatusRequest {
+  // Keyset page request (FR61). Unset/empty requests the first page.
+  PageRequest page = 1;
+}
+
+message ListPlantMonitoringStatusResponse {
+  repeated PlantMonitoringStatus statuses = 1;
+  // Keyset page response (FR61).
+  PageResponse page = 2;
   // Server's current time (FR64) -- see ListBoardsResponse.server_now.
   Instant server_now = 3;
 }

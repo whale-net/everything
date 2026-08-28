@@ -174,6 +174,19 @@ func (stubAPIServer) GetPlantPlacementTimeline(ctx context.Context, req *pb.GetP
 	return &pb.GetPlantPlacementTimelineResponse{}, nil
 }
 
+// Canned-success stubs for #1381's two plant monitoring status RPCs
+// (GetPlantMonitoringStatus, ListPlantMonitoringStatus). See the region
+// stubs' doc comment above for why value-receiver overrides are required
+// here.
+
+func (stubAPIServer) GetPlantMonitoringStatus(ctx context.Context, req *pb.GetPlantMonitoringStatusRequest) (*pb.GetPlantMonitoringStatusResponse, error) {
+	return &pb.GetPlantMonitoringStatusResponse{}, nil
+}
+
+func (stubAPIServer) ListPlantMonitoringStatus(ctx context.Context, req *pb.ListPlantMonitoringStatusRequest) (*pb.ListPlantMonitoringStatusResponse, error) {
+	return &pb.ListPlantMonitoringStatusResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of
