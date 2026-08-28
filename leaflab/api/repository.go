@@ -94,6 +94,111 @@ func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int
 	return id, nil
 }
 
+// PeekNextConfigVersion returns the version InsertDeviceConfigNextVersion
+// would assign next for boardID, without inserting anything -- FR38's dry
+// run needs "the version it would assign" without writing a device_config
+// row. Best-effort only (no locking): a concurrent real push for the same
+// board can still claim this exact number before (or instead of) a caller
+// that later turns this dry run into a real push -- the same race
+// InsertDeviceConfigNextVersion's own ON CONFLICT retry loop already
+// tolerates, just not resolved here since nothing is being written.
+func (r *Repository) PeekNextConfigVersion(ctx context.Context, boardID int64) (int64, error) {
+	var next int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COALESCE(MAX(version), 0) + 1
+		FROM device_config
+		WHERE board_id = $1
+	`, boardID).Scan(&next)
+	if err != nil {
+		return 0, fmt.Errorf("peek next config version for board %d: %w", boardID, err)
+	}
+	return next, nil
+}
+
+// CreatePushGroup inserts an FR48.1 push_group row (migration 034):
+// reason/actor_subject/pushed_at bookkeeping for one PushDeviceConfig call,
+// shared by every device_config row that call produces (their
+// push_group_id links back here). Append-only, like device_config itself
+// -- never updated once created, and never written under dry_run
+// (PushDeviceConfig's handler only calls this lazily, right before the
+// first board's write actually happens -- see server.go's pushGroupState).
+func (r *Repository) CreatePushGroup(ctx context.Context, reason, actorSubject string) (int64, error) {
+	var id int64
+	err := r.db.QueryRow(ctx, `
+		INSERT INTO push_group (reason, actor_subject)
+		VALUES ($1, $2)
+		RETURNING push_group_id
+	`, reason, actorSubject).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("create push group: %w", err)
+	}
+	return id, nil
+}
+
+// PushGroupRow is one push_group row's own FR48.2 bookkeeping, read back by
+// GetPushGroupStatus.
+type PushGroupRow struct {
+	Reason       string
+	ActorSubject string
+	PushedAt     time.Time
+}
+
+// GetPushGroup returns pushGroupID's own reason/actor_subject/pushed_at, or
+// found=false if no such push_group exists.
+func (r *Repository) GetPushGroup(ctx context.Context, pushGroupID int64) (row PushGroupRow, found bool, err error) {
+	err = r.db.QueryRow(ctx, `
+		SELECT reason, actor_subject, pushed_at
+		FROM push_group
+		WHERE push_group_id = $1
+	`, pushGroupID).Scan(&row.Reason, &row.ActorSubject, &row.PushedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PushGroupRow{}, false, nil
+		}
+		return PushGroupRow{}, false, fmt.Errorf("get push group %d: %w", pushGroupID, err)
+	}
+	return row, true, nil
+}
+
+// PushGroupBoardRow is one board's ack bookkeeping within a push_group --
+// GetPushGroupStatus's per-board AckState is derived from Accepted/AckedAt
+// exactly as device_config's own "current active config" convention does
+// (migration 007's doc comment): AckedAt == nil is SILENT (no ack has
+// arrived yet); otherwise Accepted decides ACKED vs REJECTED.
+type PushGroupBoardRow struct {
+	DeviceID string
+	Accepted bool
+	AckedAt  *time.Time
+}
+
+// GetPushGroupBoards returns one row per device_config this push_group
+// produced (migration 034's idx_device_config_push_group_id) -- FR48.1's
+// "the resulting group's ack state is readable as a group afterwards".
+// Ordered by device_id for a stable response.
+func (r *Repository) GetPushGroupBoards(ctx context.Context, pushGroupID int64) ([]PushGroupBoardRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT b.device_id, dc.accepted, dc.acked_at
+		FROM device_config dc
+		JOIN board b ON b.board_id = dc.board_id
+		WHERE dc.push_group_id = $1
+		ORDER BY b.device_id
+	`, pushGroupID)
+	if err != nil {
+		return nil, fmt.Errorf("get push group boards for %d: %w", pushGroupID, err)
+	}
+	defer rows.Close()
+
+	var out []PushGroupBoardRow
+	for rows.Next() {
+		var row PushGroupBoardRow
+		if err := rows.Scan(&row.DeviceID, &row.Accepted, &row.AckedAt); err != nil {
+			return nil, fmt.Errorf("scan push group board row for %d: %w", pushGroupID, err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // InsertDeviceConfigNextVersion assigns the next version for the board and
 // inserts the pending config row. ON CONFLICT DO NOTHING retries when two
 // concurrent writers compute the same MAX(version)+1; the unique constraint on
@@ -130,7 +235,15 @@ func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int
 // (including every retry outcome other than success) leaves neither row,
 // and neither do the device_config_entry/device_config_removal rows below
 // (same tx).
-func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry) (int64, error) {
+// pushGroupID is FR48.1's device_config-to-push_group link (migration
+// 034): nil for a push that never created a push_group (PushDeviceConfig's
+// handler only ever creates one lazily, right before the first board's
+// write actually happens -- see server.go's pushGroupState), non-nil
+// otherwise. Every device_config row a single PushDeviceConfig call
+// produces links to the same push_group_id, which is how
+// GetPushGroupStatus later reads that call's per-board ack state back as a
+// group.
+func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry, pushGroupID *int64) (int64, error) {
 	var version int64
 	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
 		var configID int64
@@ -141,11 +254,11 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 					FROM device_config
 					WHERE board_id = $1
 				)
-				INSERT INTO device_config (board_id, version, config_json)
-				SELECT $1, next.v, $2 FROM next
+				INSERT INTO device_config (board_id, version, config_json, push_group_id)
+				SELECT $1, next.v, $2, $3 FROM next
 				ON CONFLICT (board_id, version) DO NOTHING
 				RETURNING config_id, version
-			`, boardID, configJSON).Scan(&configID, &version)
+			`, boardID, configJSON, pushGroupID).Scan(&configID, &version)
 			if err == nil {
 				break
 			}

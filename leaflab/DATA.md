@@ -334,13 +334,18 @@ identity resolution's job (`leaflab/api/identity.go`), not validation's.
 
 ---
 
-## Dry Run and Multi-Board Push (FR38, FR48) -- scaffold
+## Dry Run and Multi-Board Push (FR38, FR48)
 
 `PushDeviceConfigRequest` gained three fields on top of FR82's shape:
 `device_ids` (a board set -- FR48), `dry_run` (FR38), and `reason` (FR48.2,
 required once `device_ids` names more than one board). `device_id`
 (singular) still works unchanged for a caller naming exactly one board --
-it is the target set whenever `device_ids` is empty.
+it is the target set whenever `device_ids` is empty, and its per-board
+failure/refusal surfaces as this RPC's own error exactly as it always has
+(the legacy single-board behavior every pre-FR48 test asserts on is
+unchanged). A `device_ids` board set instead captures each board's own
+failure into its own `BoardPushResult.failure` and keeps going -- FR48.1's
+"never one aggregate success".
 
 `PushDeviceConfigResponse` no longer carries a single `version`/`removed`
 pair. It carries `repeated BoardPushResult results` (FR48.1: one entry per
@@ -350,25 +355,35 @@ carries its own `success`, `version`, `removed`, `failure`,
 `effective_config` and `diff` -- so a `dry_run` push and a real push return
 the identically-shaped per-board result, the only difference being that a
 `dry_run` push writes no `device_config` row and publishes nothing.
+`removed` is populated under both scopes now: EDIT's explicit `removes`
+list (chip keys already expanded into individual entries, FR82.4) and,
+new for FR38, COMPLETE's diff-derived "these N entries would stop being
+polled" against the board's prior accepted config.
 
-`push_group` (migration 034) is the append-only record one multi-board
-`PushDeviceConfig` call creates: `reason`, `actor_subject` and `pushed_at`,
-shared by every `device_config` row the call produces via that row's
-nullable `push_group_id`. `GetPushGroupStatus(push_group_id)` reads back
-FR48.1's "the resulting group's ack state is readable as a group
-afterwards" -- per targeted board, `ACKED` / `REJECTED` / `SILENT`, derived
-from that board's `device_config.accepted`/`acked_at`/`rejection_reason` at
-the moment of the call, not fixed at push time.
+`push_group` (migration 034) is the append-only record one real (non-
+dry-run) `PushDeviceConfig` call creates: `reason`, `actor_subject` and
+`pushed_at`, shared by every `device_config` row the call produces via
+that row's nullable `push_group_id`. Created lazily -- only once some
+board's write actually reaches storage (`leaflab/api/server.go`'s
+`pushGroupState`) -- so a call where every board fails validation creates
+no orphaned push_group row, and a dry run never creates one at all.
+`GetPushGroupStatus(push_group_id)` reads back FR48.1's "the resulting
+group's ack state is readable as a group afterwards" -- per targeted
+board, `ACKED` / `REJECTED` / `SILENT`, derived from that board's
+`device_config.accepted`/`acked_at` at the moment of the call (via
+migration 034's `idx_device_config_push_group_id`), not fixed at push
+time. A board that never reached storage in the first place (e.g. a
+per-board failure within a board-set push) is absent from this list, not
+reported as `SILENT`.
 
-This is scaffold shape only (proto + migration + RPC surface, #1371):
-`leaflab/api/server.go`'s `PushDeviceConfig` handler still only ever
-pushes the one board named by `device_id`, wrapped as a single-element
-`results` list, and `GetPushGroupStatus` has no handler yet (falls through
-to `Unimplemented`). Running every named board through FR82
-materialisation and FR39 validation independently, honouring `dry_run` by
-routing through a repository handle that cannot write, computing FR38's
-named removal set against each board's effective payload, and requiring/
-auditing `reason` for a multi-board push, is Implementation-phase work.
+FR38's "the dry-run path cannot reach the writer" is structural, not a
+per-call-site boolean: `PushDeviceConfig` selects one of two `configWriter`
+implementations up front -- `*liveConfigWriter` (holds the real
+`*rmq.Publisher` and calls `Repository.InsertDeviceConfigNextVersion`) or
+`*noopConfigWriter` (holds neither; it has no field to reach a publisher
+through, and calls the read-only `Repository.PeekNextConfigVersion`
+instead) -- and `pushOneBoard`'s validation/materialisation logic runs
+identically either way, calling only through that interface.
 
 ---
 

@@ -175,8 +175,15 @@ func TestPushDeviceConfig_IdenticalPayload_ScopeAloneChangesBehavior(t *testing.
 		Sensors:  sensors,
 	})
 	assertReachedStorage(t, err)
-	if completeRepo.getLatestAcceptedConfigCalls != 0 {
-		t.Errorf("COMPLETE push consulted GetLatestAcceptedConfig %d times, want 0 -- COMPLETE has no base to materialise against", completeRepo.getLatestAcceptedConfigCalls)
+	// FR38: PushDeviceConfig now loads the prior accepted config under
+	// scope=COMPLETE too -- not to materialise the base entries (COMPLETE
+	// still stores exactly what was submitted, as the rest of this test
+	// proves), but to compute the FR37/FR38 diff and the FR38 named
+	// removal set against it. See
+	// TestPushDeviceConfig_Complete_AllEntriesAuthored_NoBaseConsulted for
+	// the still-true "never materialises against it" half of this.
+	if completeRepo.getLatestAcceptedConfigCalls != 1 {
+		t.Errorf("COMPLETE push consulted GetLatestAcceptedConfig %d times, want 1 -- FR38's diff/removed-set is computed against it even though COMPLETE never materialises against it", completeRepo.getLatestAcceptedConfigCalls)
 	}
 
 	editRepo := &fakeRepo{
@@ -197,10 +204,15 @@ func TestPushDeviceConfig_IdenticalPayload_ScopeAloneChangesBehavior(t *testing.
 
 // -- FR82.2: COMPLETE ------------------------------------------------------
 
-// TestPushDeviceConfig_Complete_AllEntriesAuthored_NoBaseConsulted proves
-// a COMPLETE push stores every entry as authored and never even looks up
-// an accepted base -- FR82.2's "the payload is the board's entire desired
-// sensor set".
+// TestPushDeviceConfig_Complete_AllEntriesAuthored_NoBaseConsulted proves a
+// COMPLETE push stores every entry as authored, exactly as submitted --
+// FR82.2's "the payload is the board's entire desired sensor set". Since
+// FR38 landed, PushDeviceConfig does look up the prior accepted config
+// even under COMPLETE (for the FR37/FR38 diff/removed-set), but never
+// materialises the stored entries against it -- this test's assertions are
+// on the stored entries/provenance, not on whether that lookup happened
+// (see TestPushDeviceConfig_IdenticalPayload_ScopeAloneChangesBehavior for
+// that call-count assertion).
 func TestPushDeviceConfig_Complete_AllEntriesAuthored_NoBaseConsulted(t *testing.T) {
 	repo := &fakeRepo{
 		resolveSensorTypeIDResponses:     map[string]int64{"illuminance": 1, "temperature": 2},

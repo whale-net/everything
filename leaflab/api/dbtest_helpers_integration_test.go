@@ -49,6 +49,12 @@ func authedCtx() context.Context {
 // InsertDeviceConfigNextVersion -- both of which now write an audit_log
 // row in the same transaction as their write -- have somewhere to write
 // it.
+//
+// push_group/device_config.push_group_id mirror migration 034_push_group's
+// column set (FR48.1) so InsertDeviceConfigNextVersion's pushGroupID
+// argument has somewhere to write; this package's tests pass nil for it
+// today (they don't yet exercise CreatePushGroup/GetPushGroupStatus), so
+// the FK is never exercised, only satisfied for schema validity.
 const testSchema = `
 	CREATE TABLE board (
 		board_id      BIGSERIAL PRIMARY KEY,
@@ -59,6 +65,13 @@ const testSchema = `
 	);
 	CREATE INDEX idx_board_active ON board(board_id) WHERE retired_at IS NULL;
 
+	CREATE TABLE push_group (
+		push_group_id  BIGSERIAL PRIMARY KEY,
+		reason         TEXT NOT NULL,
+		actor_subject  TEXT NOT NULL,
+		pushed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+
 	CREATE TABLE device_config (
 		config_id        BIGSERIAL   PRIMARY KEY,
 		board_id         BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
@@ -68,6 +81,7 @@ const testSchema = `
 		pushed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		acked_at         TIMESTAMPTZ,
 		rejection_reason TEXT,
+		push_group_id    BIGINT REFERENCES push_group(push_group_id),
 		UNIQUE (board_id, version)
 	);
 

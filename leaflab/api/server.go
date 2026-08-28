@@ -53,7 +53,10 @@ type deviceRepository interface {
 	// bookkeeping into device_config_removal, in the same transaction as
 	// the device_config row -- see Repository.InsertDeviceConfigNextVersion's
 	// doc comment.
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry) (int64, error)
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry, pushGroupID *int64) (int64, error)
+	// PeekNextConfigVersion is FR38 dry run's read-only "what version would
+	// this assign" -- see Repository.PeekNextConfigVersion.
+	PeekNextConfigVersion(ctx context.Context, boardID int64) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
 	// GetConfigVersion is FR37's DiffConfigVersions RPC's exact-version
 	// lookup -- see Repository.GetConfigVersion.
@@ -77,6 +80,11 @@ type deviceRepository interface {
 	resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error)
 	LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error)
 	RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error
+	// FR48.1 push_group bookkeeping -- see Repository.CreatePushGroup,
+	// Repository.GetPushGroup and Repository.GetPushGroupBoards.
+	CreatePushGroup(ctx context.Context, reason, actorSubject string) (int64, error)
+	GetPushGroup(ctx context.Context, pushGroupID int64) (PushGroupRow, bool, error)
+	GetPushGroupBoards(ctx context.Context, pushGroupID int64) ([]PushGroupBoardRow, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -210,15 +218,27 @@ func (s *LeafLabAPIServer) authorizeBoardAccess(ctx context.Context, deviceID st
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
-	if reason := validateDeviceID(req.DeviceId); reason != "" {
-		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	// FR48: device_ids (a board set) supersedes the legacy singular
+	// device_id whenever it's non-empty -- api.proto's own doc comment on
+	// both fields. isBoardSet distinguishes "caller used the new field"
+	// (which may still name exactly one board) from "caller used only the
+	// legacy field" -- the household-spanning check below only makes sense
+	// once a caller has explicitly named a set.
+	isBoardSet := len(req.DeviceIds) > 0
+	targetIDs := req.DeviceIds
+	if !isBoardSet {
+		targetIDs = []string{req.DeviceId}
+	}
+	for _, id := range targetIDs {
+		if reason := validateDeviceID(id); reason != "" {
+			return nil, contract.InvalidArgument("device_config", "device_id", reason)
+		}
 	}
 
 	// FR82.1: scope is required, with no default and never inferred from
 	// payload shape/size/caller/endpoint. Checked before any board
 	// bookkeeping or write -- an omitted scope leaves nothing stored,
-	// nothing published, and no version assigned (GetOrCreateBoard's
-	// self-registration upsert hasn't even run yet at this point).
+	// nothing published, and no version assigned for any board in the set.
 	if req.Scope == pb.PushScope_PUSH_SCOPE_UNSPECIFIED {
 		return nil, contract.InvalidArgument(
 			"device_config",
@@ -234,42 +254,325 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		)
 	}
 
-	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
-	if err != nil {
-		s.logger.Error("board lookup failed", "device_id", req.DeviceId, "error", err)
-		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	// FR48.2: a multi-board push (more than one board named in device_ids)
+	// requires a stated, non-empty reason -- refused before any board is
+	// touched, naming none of them.
+	isMultiBoard := len(targetIDs) > 1
+	reason := strings.TrimSpace(req.Reason)
+	if isMultiBoard && reason == "" {
+		return nil, contract.InvalidArgument(
+			"device_config",
+			"reason",
+			"A multi-board push requires a stated reason.",
+		)
 	}
 
-	// FR1.2/FR1.3: resolve the pushing board's own household once, before
-	// anything is stored or published -- used both to validate every
-	// region_id named in the payload (validatePushRegions, below) and to
-	// populate this push's audit entry's TargetHouseholdID (previously
-	// left nil pending #1339's household scoping, which has since landed).
-	boardRes, err := s.authzSvc.Resolve(ctx, authz.EntityRef{Kind: authz.EntityBoard, ID: boardID})
-	if err != nil {
-		s.logger.Error("resolve board household failed", "device_id", req.DeviceId, "board_id", boardID, "error", err)
-		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	// Resolve board identity and household once per target (self-
+	// registering a never-seen board, exactly as the pre-FR48 single-board
+	// path always has) -- reused both by the household-spanning check below
+	// and by each board's own push, so a board set is never resolved
+	// twice.
+	targets := make([]boardTarget, len(targetIDs))
+	for i, id := range targetIDs {
+		boardID, err := s.repo.GetOrCreateBoard(ctx, id)
+		if err != nil {
+			s.logger.Error("board lookup failed", "device_id", id, "error", err)
+			return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
+		}
+		boardRes, err := s.authzSvc.Resolve(ctx, authz.EntityRef{Kind: authz.EntityBoard, ID: boardID})
+		if err != nil {
+			s.logger.Error("resolve board household failed", "device_id", id, "board_id", boardID, "error", err)
+			return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+		}
+		targets[i] = boardTarget{deviceID: id, boardID: boardID, household: boardRes}
 	}
-	writerHousehold := boardRes.HouseholdID
+
+	// FR48/FR5/FR1.2: a board set spanning more than one household is
+	// refused unless the caller's scope reaches every one of them -- never
+	// silently narrowed to "just the boards you can reach". An unclaimed
+	// board (FR1.1) never counts toward "spanning" on its own: it belongs
+	// to no household yet, so it can never be the second household in a
+	// span.
+	if isBoardSet {
+		if err := s.checkBoardSetHouseholdReach(ctx, targets); err != nil {
+			return nil, err
+		}
+	}
+
+	// FR38: dry_run selects a writer that cannot reach storage or the
+	// publisher at all (noopConfigWriter has no *rmq.Publisher field to
+	// call, and never calls InsertDeviceConfigNextVersion) -- structural,
+	// not a boolean re-checked at each call site below. A real push shares
+	// one pushGroupState across every board in the set, so the push_group
+	// row (if any board's write actually reaches it) is created at most
+	// once and lazily -- never for a dry run, and never for a push where
+	// every board fails before reaching storage.
+	var writer configWriter
+	if req.DryRun {
+		writer = &noopConfigWriter{repo: s.repo}
+	} else {
+		group := &pushGroupState{repo: s.repo, reason: reason, actorSubject: actingSubject(ctx)}
+		writer = &liveConfigWriter{repo: s.repo, publisher: s.publisher, logger: s.logger, group: group, isMultiBoard: isMultiBoard, correlationID: CorrelationIDFromContext(ctx)}
+	}
+
+	// FR48.1: one result per targeted board, never collapsed to an
+	// aggregate -- a board-set push (isBoardSet) captures each board's own
+	// failure/refusal into its own BoardPushResult and continues with the
+	// rest; the legacy single-board path instead returns that failure as
+	// this call's own error, preserving its pre-FR48 behavior exactly.
+	results := make([]*pb.BoardPushResult, len(targets))
+	for i, t := range targets {
+		result, err := s.pushOneBoard(ctx, t, req, writer)
+		if err != nil {
+			if !isBoardSet {
+				return nil, err
+			}
+			failure, ok := contract.FromError(err)
+			if !ok {
+				s.logger.Error("push board failed with no Failure detail", "device_id", t.deviceID, "error", err)
+				failure = &pb.Failure{Class: string(contract.FailureInternal), Reason: "Could not process this request right now. Please try again."}
+			}
+			result = &pb.BoardPushResult{DeviceId: t.deviceID, Success: false, Failure: failure}
+		}
+		results[i] = result
+	}
+
+	resp := &pb.PushDeviceConfigResponse{
+		Results:      results,
+		Reason:       reason,
+		PushedAt:     contract.Now(),
+		ActorSubject: actingSubject(ctx),
+	}
+	if live, ok := writer.(*liveConfigWriter); ok && live.group.created {
+		resp.PushGroupId = live.group.id
+	}
+	return resp, nil
+}
+
+// boardTarget is one board a PushDeviceConfig call named, already resolved
+// to its board_id and household (self-registering a never-seen board via
+// GetOrCreateBoard, exactly as the pre-FR48 single-board path always has)
+// -- built once per call, before any board's own validation/materialisation
+// runs, so a board set is never resolved twice (once for the FR48
+// household-spanning check, once for the push itself).
+type boardTarget struct {
+	deviceID  string
+	boardID   int64
+	household authz.Resolution
+}
+
+// checkBoardSetHouseholdReach is FR48/FR5/FR1.2's board-set guard: refused
+// (before any board in targets is validated or written) when targets span
+// more than one claimed household and the caller's own Scope does not
+// reach every one of them. A board set that resolves to a single household
+// (or to no claimed household at all -- every board unclaimed, FR1.1) never
+// triggers this: "spanning" requires at least two distinct claimed
+// households in the same request.
+func (s *LeafLabAPIServer) checkBoardSetHouseholdReach(ctx context.Context, targets []boardTarget) error {
+	households := make(map[int64]bool, len(targets))
+	for _, t := range targets {
+		if !t.household.Unclaimed {
+			households[t.household.HouseholdID] = true
+		}
+	}
+	if len(households) <= 1 {
+		return nil
+	}
+
+	scope, err := s.scopeForCaller(ctx)
+	if err != nil {
+		s.logger.Error("resolve caller scope failed", "error", err)
+		return contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	for _, t := range targets {
+		if t.household.Unclaimed {
+			continue
+		}
+		ref := authz.EntityRef{Kind: authz.EntityBoard, ID: t.boardID}
+		if !scope.Permits(ref, t.household) {
+			return contract.PermissionDenied(
+				"device_config",
+				"device_ids",
+				"This board set spans households you don't have access to; a multi-board push must reach every household it targets.",
+			)
+		}
+	}
+	return nil
+}
+
+// configWriter is PushDeviceConfig's persistence/publish step, separated
+// from pushOneBoard's validation/materialisation logic so FR38's "the
+// dry-run path cannot reach the writer" is structural: PushDeviceConfig
+// selects a *noopConfigWriter under dry_run and a *liveConfigWriter
+// otherwise, and pushOneBoard itself never branches on dry_run when it
+// comes time to write or publish -- only which configWriter it was handed
+// differs. write returns the version this board's push assigned (real) or
+// would assign (dry run, FR38), and populates cfgProto.Version with that
+// same value so BoardPushResult.effective_config always carries it.
+type configWriter interface {
+	write(ctx context.Context, t boardTarget, cfgProto *configpb.DeviceConfig, entries []config.Entry, removedEntries []config.RemovedEntry) (version uint64, err error)
+}
+
+// liveConfigWriter is configWriter's real implementation: it stores the
+// device_config row (and FR82.4/FR82.6's per-entry provenance/removal
+// bookkeeping, via Repository.InsertDeviceConfigNextVersion) and publishes
+// the resulting config over MQTT. group is shared across every board a
+// single PushDeviceConfig call targets, so at most one push_group row is
+// created per call (lazily, on this writer's first successful reach of
+// storage) rather than one per board.
+type liveConfigWriter struct {
+	repo          deviceRepository
+	publisher     *rmq.Publisher
+	logger        *slog.Logger
+	group         *pushGroupState
+	isMultiBoard  bool
+	correlationID string
+}
+
+func (w *liveConfigWriter) write(ctx context.Context, t boardTarget, cfgProto *configpb.DeviceConfig, entries []config.Entry, removedEntries []config.RemovedEntry) (uint64, error) {
+	configJSON, err := protojson.Marshal(cfgProto)
+	if err != nil {
+		w.logger.Error("protojson marshal failed", "device_id", t.deviceID, "error", err)
+		return 0, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	pushGroupID, err := w.group.ensure(ctx)
+	if err != nil {
+		w.logger.Error("create push group failed", "device_id", t.deviceID, "error", err)
+		return 0, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
 	var targetHouseholdID *int64
-	if boardRes.Unclaimed {
+	if !t.household.Unclaimed {
+		hh := t.household.HouseholdID
+		targetHouseholdID = &hh
+	}
+
+	// FR8.2/FR48.2: a multi-board push's audit entry states its reason and
+	// names the FR48 action explicitly, rather than reusing this method's
+	// generic per-RPC registration (auditRegistrations) -- a single-board
+	// push (whether via the legacy device_id field or a one-board
+	// device_ids set) keeps that generic "PushConfig" action unchanged.
+	var entry audit.Entry
+	if w.isMultiBoard {
+		entry = audit.NewMultiBoardPushEntry(actingSubject(ctx), audit.ActorKindHuman, targetHouseholdID, nil, w.group.reason, w.correlationID)
+	} else {
+		reg := auditRegistrations[pushDeviceConfigFullMethod]
+		entry = audit.Entry{
+			ActorSubject:      actingSubject(ctx),
+			ActorKind:         audit.ActorKindHuman,
+			TargetHouseholdID: targetHouseholdID,
+			Action:            reg.Action,
+			EntityKind:        reg.EntityKind,
+			CorrelationID:     w.correlationID,
+		}
+	}
+
+	version, err := w.repo.InsertDeviceConfigNextVersion(ctx, t.boardID, configJSON, entries, removedEntries, entry, &pushGroupID)
+	if err != nil {
+		w.logger.Error("record config push failed", "device_id", t.deviceID, "error", err)
+		return 0, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")
+	}
+
+	cfgProto.Version = uint64(version)
+	wire, err := proto.Marshal(cfgProto)
+	if err != nil {
+		w.logger.Error("proto marshal failed", "device_id", t.deviceID, "error", err)
+		return 0, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	// MQTT '/' → AMQP '.'; device_id should not contain '/' but sanitize to be safe.
+	routingKey := fmt.Sprintf("leaflab.%s.config", strings.ReplaceAll(t.deviceID, "/", "."))
+	if err := w.publisher.Publish(ctx, mqttExchange, routingKey, wire); err != nil {
+		// Row is in DB but publish failed — device never received the push.
+		// The row stays accepted=FALSE, which is correct: no ack will arrive.
+		w.logger.Error("publish config failed", "device_id", t.deviceID, "error", err)
+		return 0, contract.Internal("device_config", "", "Config was recorded but could not be delivered to the device. Please try pushing again.")
+	}
+
+	w.logger.Info("device config pushed",
+		"device_id", t.deviceID,
+		"version", version,
+		"sensors", len(cfgProto.Sensors))
+	return uint64(version), nil
+}
+
+// pushGroupState lazily creates at most one FR48.1 push_group row, shared
+// by every board a single PushDeviceConfig call targets -- created on
+// first use (the first board whose push actually reaches storage), not up
+// front, so a push where every board fails validation creates no orphaned
+// push_group row, matching "a refused push writes nothing" for the group
+// bookkeeping too.
+type pushGroupState struct {
+	repo         deviceRepository
+	reason       string
+	actorSubject string
+	created      bool
+	id           int64
+}
+
+func (g *pushGroupState) ensure(ctx context.Context) (int64, error) {
+	if g.created {
+		return g.id, nil
+	}
+	id, err := g.repo.CreatePushGroup(ctx, g.reason, g.actorSubject)
+	if err != nil {
+		return 0, err
+	}
+	g.id = id
+	g.created = true
+	return id, nil
+}
+
+// noopConfigWriter is configWriter's FR38 dry-run implementation. It holds
+// no *rmq.Publisher and never calls InsertDeviceConfigNextVersion --
+// structurally, not merely by choosing not to -- so a dry run cannot store
+// a device_config row or publish anything no matter how pushOneBoard's
+// logic evolves around it. It returns the version a real push would assign
+// next (Repository.PeekNextConfigVersion, best-effort/non-atomic since
+// nothing is being reserved) and stamps it onto cfgProto so
+// BoardPushResult.effective_config carries it exactly as a real push's
+// would.
+type noopConfigWriter struct {
+	repo deviceRepository
+}
+
+func (w *noopConfigWriter) write(ctx context.Context, t boardTarget, cfgProto *configpb.DeviceConfig, entries []config.Entry, removedEntries []config.RemovedEntry) (uint64, error) {
+	next, err := w.repo.PeekNextConfigVersion(ctx, t.boardID)
+	if err != nil {
+		return 0, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	cfgProto.Version = uint64(next)
+	return uint64(next), nil
+}
+
+// pushOneBoard runs t's board through the full FR82 materialisation and
+// FR39 validation PushDeviceConfig has always run for a single board, then
+// hands off to writer for persistence/publish (or, under FR38 dry_run,
+// writer's no-op equivalent) -- identical logic either way, so a dry run
+// covers exactly the same blast radius a real push would (FR38's own
+// stated goal). Returns a non-nil error, never a BoardPushResult, on any
+// failure or refusal -- PushDeviceConfig's caller decides whether that
+// becomes this call's own RPC error (the legacy single-board path) or one
+// board's own captured failure within a board-set push (FR48.1).
+func (s *LeafLabAPIServer) pushOneBoard(ctx context.Context, t boardTarget, req *pb.PushDeviceConfigRequest, writer configWriter) (*pb.BoardPushResult, error) {
+	deviceID := t.deviceID
+	boardID := t.boardID
+
+	writerHousehold := t.household.HouseholdID
+	if t.household.Unclaimed {
 		// FR1.1: this board has no household yet -- no region_id in the
 		// payload can ever satisfy AssertSameHousehold against it (see
-		// validatePushRegions), and the audit entry below records no
-		// single target household (TargetHouseholdID stays nil).
+		// validatePushRegions).
 		writerHousehold = 0
-	} else {
-		targetHouseholdID = &boardRes.HouseholdID
 	}
 
-	// FR1.3: reject the whole push -- no device_config row stored, nothing
-	// published -- naming the offending entry and field, before either of
-	// those writes below. GetOrCreateBoard's self-registration upsert
-	// above is unaffected either way: it is pre-existing, idempotent
-	// board-identity bookkeeping this validation itself depends on to
-	// know which household to check against (it must run first to
-	// produce boardID), not a config write -- "nothing stored" is about
-	// device_config, the thing FR1.3 actually governs.
+	// FR1.3: reject this board's push -- no device_config row stored,
+	// nothing published, naming the offending entry and field -- before
+	// either of those writes. GetOrCreateBoard's self-registration upsert
+	// (already run, building t) is unaffected either way: it is
+	// pre-existing, idempotent board-identity bookkeeping this validation
+	// itself depends on, not a config write.
 	if err := s.validatePushRegions(ctx, writerHousehold, req.Sensors); err != nil {
 		return nil, err
 	}
@@ -277,8 +580,9 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	// FR17 pre-write identity check: refuses before anything is written or
 	// published if any entry would establish a new sensor identity rather
 	// than continue an existing one (or would require an unresolved swap,
-	// FR16.4). This is the real push path, not a dry run -- see
-	// checkPushConfigIdentity's doc comment.
+	// FR16.4). Run identically under dry_run: FR38's preview must cover
+	// the same blast radius the real push would, including a refusal this
+	// check would produce.
 	if err := s.checkPushConfigIdentity(ctx, boardID, req.Sensors); err != nil {
 		return nil, err
 	}
@@ -301,8 +605,29 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	// push path.
 	catalog, err := s.repo.LoadCatalog(ctx)
 	if err != nil {
-		s.logger.Error("load catalog failed", "device_id", req.DeviceId, "error", err)
+		s.logger.Error("load catalog failed", "device_id", deviceID, "error", err)
 		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	// FR37/FR38: base is this board's prior accepted config, resolved once
+	// and shared by every scope branch below -- the EDIT branch's own
+	// materialisation base, the COMPLETE branch's FR38 removed-set diff
+	// source, and the general diff every successful push returns
+	// (BoardPushResult.diff). base stays nil (not an empty, non-nil slice)
+	// when no accepted config exists at all -- config.Materialise's
+	// documented signal for FR82.3's "no accepted config to edit from",
+	// distinct from a genuinely-empty accepted config.
+	baseCfg, err := s.repo.GetLatestAcceptedConfig(ctx, deviceID)
+	if err != nil {
+		s.logger.Error("get latest accepted config failed", "device_id", deviceID, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	var base []config.Entry
+	if baseCfg != nil {
+		base, err = s.resolveConfigEntries(ctx, baseCfg.Sensors)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var entries []config.Entry
@@ -330,27 +655,6 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		}
 
 	case pb.PushScope_PUSH_SCOPE_EDIT:
-		baseCfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
-		if err != nil {
-			s.logger.Error("get latest accepted config for edit failed", "device_id", req.DeviceId, "error", err)
-			return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
-		}
-		// base stays nil (not an empty, non-nil slice) when baseCfg == nil
-		// -- config.Materialise's documented signal for "no accepted config
-		// exists for this board at all" (FR82.3), distinct from a
-		// genuinely-empty accepted config (baseCfg != nil, zero sensors).
-		// FR39 validation is deliberately skipped in this case too: with no
-		// base at all, a remove key's "matches nothing" failure would be
-		// misleading noise ahead of FR82.3's own, more specific refusal
-		// below (via config.Materialise's ErrNoAcceptedConfig).
-		var base []config.Entry
-		if baseCfg != nil {
-			base, err = s.resolveConfigEntries(ctx, baseCfg.Sensors)
-			if err != nil {
-				return nil, err
-			}
-		}
-
 		removeKeys, err := s.resolveRemoveKeys(ctx, req.Removes)
 		if err != nil {
 			return nil, err
@@ -360,7 +664,11 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		// resolved -- catches every add-side check (I2C range, catalog,
 		// poll_interval_ms, within-payload collision) plus FR82.4's two
 		// removal-validation cases (a remove matching nothing in base; a
-		// remove naming an unaddressable entry), all together.
+		// remove naming an unaddressable entry), all together. Deliberately
+		// skipped when baseCfg == nil: with no base at all, a remove key's
+		// "matches nothing" failure would be misleading noise ahead of
+		// FR82.3's own, more specific refusal below (via
+		// config.Materialise's ErrNoAcceptedConfig).
 		if baseCfg != nil {
 			if validation := config.Validate(adds, removeKeys, base, catalog, s.pollIntervalBounds); !validation.OK() {
 				return nil, validationFailureError(validation)
@@ -390,7 +698,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 					"Push scope=COMPLETE with this entry omitted from the sensors list.",
 				)
 			default:
-				s.logger.Error("materialise edit push failed", "device_id", req.DeviceId, "error", err)
+				s.logger.Error("materialise edit push failed", "device_id", deviceID, "error", err)
 				return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
 			}
 		}
@@ -415,83 +723,66 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 			}
 		}
 		s.logger.Info("edit push materialised",
-			"device_id", req.DeviceId,
+			"device_id", deviceID,
 			"authored", len(adds),
 			"removed", len(result.Removed),
 			"total", len(entries))
 	}
 
-	// Build the proto with a placeholder version; we need configJSON for the
-	// atomic insert that returns the real version, so marshal without version first.
+	// FR37/FR38: the diff between this board's prior accepted config and
+	// the effective resulting payload, computed the same way
+	// DiffConfigVersions computes one -- populated for every successful
+	// push, dry_run or real. DiffRemoved is reachable here from either
+	// scope: an EDIT push's materialised result (an entry dropped by
+	// `removes`) or a COMPLETE push that simply omitted it (config.Diff's
+	// own doc comment) -- which is exactly FR38's "a COMPLETE push that
+	// drops an entry by accident shows the drop before it lands".
+	diffs := config.Diff(base, entries)
+	pbDiffs := make([]*pb.EntryDiff, len(diffs))
+	for i, d := range diffs {
+		pbDiffs[i] = entryDiffToProto(d)
+	}
+
+	// FR38: under scope=COMPLETE (which has no `removes` list of its own),
+	// the named removal set is exactly the diff's DiffRemoved entries --
+	// "these N entries would stop being polled", computed against the
+	// effective resulting payload. Each is a distinct entry from omission,
+	// not a chip-key group, so it is stated back as a full key.
+	if req.Scope == pb.PushScope_PUSH_SCOPE_COMPLETE {
+		for _, d := range diffs {
+			if d.Kind == config.DiffRemoved {
+				removedForResponse = append(removedForResponse, &pb.RemovedEntry{
+					MuxPath:    d.Base.GetMuxPath(),
+					I2CAddress: d.Base.GetI2CAddress(),
+					SensorType: d.Base.GetSensorType(),
+					Form:       pb.RemoveForm_REMOVE_FORM_FULL_KEY,
+				})
+			}
+		}
+	}
+
+	// FR38: the effective resulting config this push produces -- the
+	// board's complete new desired sensor set, not the partial payload the
+	// request submitted (meaningful under scope=EDIT). writer.write below
+	// stamps the assigned (real) or would-be (dry run) version onto this
+	// same message.
 	cfgProto := &configpb.DeviceConfig{
-		DeviceId: req.DeviceId,
+		DeviceId: deviceID,
 		Sensors:  sensorsForStorage,
 	}
-	configJSON, err := protojson.Marshal(cfgProto)
+
+	version, err := writer.write(ctx, t, cfgProto, entries, removedEntries)
 	if err != nil {
-		s.logger.Error("protojson marshal failed", "device_id", req.DeviceId, "error", err)
-		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+		return nil, err
 	}
 
-	// Atomically assign version and record the pending push before publishing.
-	// This ensures the DB row always exists before the device can ack.
-	//
-	// Action/EntityKind come from auditRegistrations (audit_registry.go)
-	// rather than being repeated as literals here, so the two can't drift
-	// out of agreement.
-	reg := auditRegistrations[pushDeviceConfigFullMethod]
-	entry := audit.Entry{
-		ActorSubject:      actingSubject(ctx),
-		ActorKind:         audit.ActorKindHuman,
-		TargetHouseholdID: targetHouseholdID,
-		Action:            reg.Action,
-		EntityKind:        reg.EntityKind,
-		CorrelationID:     CorrelationIDFromContext(ctx),
-	}
-	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, removedEntries, entry)
-	if err != nil {
-		s.logger.Error("record config push failed", "device_id", req.DeviceId, "error", err)
-		return nil, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")
-	}
-
-	// Re-marshal with the real version for the wire payload.
-	cfgProto.Version = uint64(version)
-	wire, err := proto.Marshal(cfgProto)
-	if err != nil {
-		s.logger.Error("proto marshal failed", "device_id", req.DeviceId, "error", err)
-		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
-	}
-
-	// MQTT '/' → AMQP '.'; device_id should not contain '/' but sanitize to be safe.
-	routingKey := fmt.Sprintf("leaflab.%s.config", strings.ReplaceAll(req.DeviceId, "/", "."))
-	if err := s.publisher.Publish(ctx, mqttExchange, routingKey, wire); err != nil {
-		// Row is in DB but publish failed — device never received the push.
-		// The row stays accepted=FALSE, which is correct: no ack will arrive.
-		s.logger.Error("publish config failed", "device_id", req.DeviceId, "error", err)
-		return nil, contract.Internal("device_config", "", "Config was recorded but could not be delivered to the device. Please try pushing again.")
-	}
-
-	s.logger.Info("device config pushed",
-		"device_id", req.DeviceId,
-		"version", version,
-		"sensors", len(req.Sensors))
-
-	// Scaffold shape only (#1371): every push today targets exactly the
-	// one board named by req.DeviceId, so this wraps that single outcome
-	// as PushDeviceConfigResponse's new one-result-per-board shape
-	// (FR48.1). Actually iterating req.DeviceIds, running each board
-	// through its own validation/materialisation, honouring dry_run
-	// (FR38) and requiring/auditing reason for a multi-board push
-	// (FR48.2) is Implementation-phase work.
-	return &pb.PushDeviceConfigResponse{
-		Results: []*pb.BoardPushResult{
-			{
-				DeviceId: req.DeviceId,
-				Success:  true,
-				Version:  uint64(version),
-				Removed:  removedForResponse,
-			},
-		},
+	return &pb.BoardPushResult{
+		DeviceId:        deviceID,
+		Success:         true,
+		Version:         version,
+		Removed:         removedForResponse,
+		EffectiveConfig: cfgProto,
+		Diff:            pbDiffs,
 	}, nil
 }
 
@@ -811,6 +1102,68 @@ func diffKindToProto(k config.DiffKind) pb.DiffKind {
 	default:
 		return pb.DiffKind_DIFF_KIND_UNSPECIFIED
 	}
+}
+
+// GetPushGroupStatus reads back FR48.1's "the resulting group's ack state
+// is readable as a group afterwards": one AckState per board a
+// PushDeviceConfig call actually pushed under pushGroupID (migration 034's
+// idx_device_config_push_group_id -- a board that never reached storage,
+// e.g. a per-board failure within a board-set push, was never linked to
+// this group and so is absent here, not reported as SILENT). Read-only;
+// never mutates anything. Not household-scoped today -- the push_group_id
+// itself is only ever learned from this same caller's own prior
+// PushDeviceConfig response, not guessable/enumerable, so this does not
+// yet need FR4/NFR2's per-entity authorization; broader access-control
+// hardening for this RPC is tracked separately if that assumption changes.
+func (s *LeafLabAPIServer) GetPushGroupStatus(ctx context.Context, req *pb.GetPushGroupStatusRequest) (*pb.GetPushGroupStatusResponse, error) {
+	if req.PushGroupId == 0 {
+		return nil, contract.InvalidArgument("push_group", "push_group_id", "A push_group_id is required.")
+	}
+
+	group, found, err := s.repo.GetPushGroup(ctx, req.PushGroupId)
+	if err != nil {
+		s.logger.Error("get push group failed", "push_group_id", req.PushGroupId, "error", err)
+		return nil, contract.Internal("push_group", "", "Could not process this request right now. Please try again.")
+	}
+	if !found {
+		return nil, contract.NotFound("push_group", "push_group_id", "No push group matches this id.")
+	}
+
+	boardRows, err := s.repo.GetPushGroupBoards(ctx, req.PushGroupId)
+	if err != nil {
+		s.logger.Error("get push group boards failed", "push_group_id", req.PushGroupId, "error", err)
+		return nil, contract.Internal("push_group", "", "Could not process this request right now. Please try again.")
+	}
+
+	boards := make([]*pb.BoardAckStatus, len(boardRows))
+	for i, row := range boardRows {
+		boards[i] = &pb.BoardAckStatus{
+			DeviceId: row.DeviceID,
+			State:    ackStateFromRow(row),
+		}
+	}
+
+	return &pb.GetPushGroupStatusResponse{
+		Boards:       boards,
+		Reason:       group.Reason,
+		PushedAt:     contract.ToInstant(group.PushedAt),
+		ActorSubject: group.ActorSubject,
+	}, nil
+}
+
+// ackStateFromRow classifies one PushGroupBoardRow's AckState (FR48.1), as
+// of the moment GetPushGroupStatus is called -- not a value fixed at push
+// time: AckedAt == nil means no ack has arrived yet (SILENT); once it has,
+// Accepted decides ACKED vs REJECTED. Mirrors device_config's own
+// current-config convention (migration 007's doc comment).
+func ackStateFromRow(row PushGroupBoardRow) pb.AckState {
+	if row.AckedAt == nil {
+		return pb.AckState_ACK_STATE_SILENT
+	}
+	if row.Accepted {
+		return pb.AckState_ACK_STATE_ACKED
+	}
+	return pb.AckState_ACK_STATE_REJECTED
 }
 
 // RewireSensor is the explicit API rewire path (FR16): it declares that

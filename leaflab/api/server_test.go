@@ -84,6 +84,27 @@ type fakeRepo struct {
 	// this file's tests -- none of which set ChipType on a sensor -- never
 	// need to configure it.
 	loadCatalogResponse *pushconfig.Catalog
+
+	// peekNextConfigVersionResponse/-Err configure PeekNextConfigVersion's
+	// return -- FR38 dry run's read-only "version it would assign" preview.
+	peekNextConfigVersionResponse int64
+	peekNextConfigVersionErr      error
+
+	// createPushGroupID/-Err configure CreatePushGroup's return;
+	// createPushGroupCalls records every invocation -- see
+	// fakeRepo.CreatePushGroup's doc comment.
+	createPushGroupID    int64
+	createPushGroupErr   error
+	createPushGroupCalls []createPushGroupCall
+
+	// getPushGroupResponse/-Found/-Err configure GetPushGroup's return, and
+	// getPushGroupBoardsResponse/-Err configure GetPushGroupBoards' --
+	// GetPushGroupStatus's own tests.
+	getPushGroupResponse       PushGroupRow
+	getPushGroupFound          bool
+	getPushGroupErr            error
+	getPushGroupBoardsResponse []PushGroupBoardRow
+	getPushGroupBoardsErr      error
 }
 
 // getOrCreateBoardID/getOrCreateBoardErr configure GetOrCreateBoard's
@@ -103,13 +124,14 @@ func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64
 // empty, not just that PushDeviceConfig returned an error.
 // insertDeviceConfigNextVersionVersion/-Err configure what each call
 // returns.
-func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []pushconfig.Entry, removed []pushconfig.RemovedEntry, entry audit.Entry) (int64, error) {
+func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []pushconfig.Entry, removed []pushconfig.RemovedEntry, entry audit.Entry, pushGroupID *int64) (int64, error) {
 	f.insertDeviceConfigNextVersionCalls = append(f.insertDeviceConfigNextVersionCalls, insertDeviceConfigNextVersionCall{
-		boardID:    boardID,
-		configJSON: configJSON,
-		entries:    entries,
-		removed:    removed,
-		entry:      entry,
+		boardID:     boardID,
+		configJSON:  configJSON,
+		entries:     entries,
+		removed:     removed,
+		entry:       entry,
+		pushGroupID: pushGroupID,
 	})
 	return f.insertDeviceConfigNextVersionVersion, f.insertDeviceConfigNextVersionErr
 }
@@ -117,11 +139,44 @@ func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID in
 // insertDeviceConfigNextVersionCall is one recorded
 // InsertDeviceConfigNextVersion invocation -- see fakeRepo's doc comment.
 type insertDeviceConfigNextVersionCall struct {
-	boardID    int64
-	configJSON []byte
-	entries    []pushconfig.Entry
-	removed    []pushconfig.RemovedEntry
-	entry      audit.Entry
+	boardID     int64
+	configJSON  []byte
+	entries     []pushconfig.Entry
+	removed     []pushconfig.RemovedEntry
+	entry       audit.Entry
+	pushGroupID *int64
+}
+
+// peekNextConfigVersionResponse configures PeekNextConfigVersion's return
+// -- FR38 dry run's "version it would assign" preview.
+func (f *fakeRepo) PeekNextConfigVersion(ctx context.Context, boardID int64) (int64, error) {
+	return f.peekNextConfigVersionResponse, f.peekNextConfigVersionErr
+}
+
+// createPushGroupCalls records every CreatePushGroup invocation --
+// server_push_device_config_multiboard_test.go uses this to prove a
+// push_group is created lazily (at most once per PushDeviceConfig call,
+// only once some board's write actually reaches storage), not eagerly and
+// not once per board.
+func (f *fakeRepo) CreatePushGroup(ctx context.Context, reason, actorSubject string) (int64, error) {
+	f.createPushGroupCalls = append(f.createPushGroupCalls, createPushGroupCall{reason: reason, actorSubject: actorSubject})
+	if f.createPushGroupErr != nil {
+		return 0, f.createPushGroupErr
+	}
+	return f.createPushGroupID, nil
+}
+
+type createPushGroupCall struct {
+	reason       string
+	actorSubject string
+}
+
+func (f *fakeRepo) GetPushGroup(ctx context.Context, pushGroupID int64) (PushGroupRow, bool, error) {
+	return f.getPushGroupResponse, f.getPushGroupFound, f.getPushGroupErr
+}
+
+func (f *fakeRepo) GetPushGroupBoards(ctx context.Context, pushGroupID int64) ([]PushGroupBoardRow, error) {
+	return f.getPushGroupBoardsResponse, f.getPushGroupBoardsErr
 }
 
 func (f *fakeRepo) GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error) {

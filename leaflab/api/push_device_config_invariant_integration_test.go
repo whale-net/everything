@@ -83,6 +83,7 @@ const pushInvariantTestSchema = `
 		pushed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 		acked_at         TIMESTAMPTZ,
 		rejection_reason TEXT,
+		push_group_id    BIGINT,
 		UNIQUE (board_id, version)
 	);
 `
