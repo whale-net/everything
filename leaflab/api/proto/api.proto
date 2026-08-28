@@ -69,6 +69,23 @@ service LeafLabAPI {
   // region too (FR22.5's "remains readable by explicit id").
   rpc GetRegionPath(GetRegionPathRequest) returns (GetRegionPathResponse);
 
+  // RelocateSubtree relocates a region subtree under a new parent in one
+  // atomic operation (FR74): mirrors the subtree beneath
+  // new_parent_region_id, moves every current sensor placement (FR51) and
+  // every current plant placement (FR54) into the mirrored regions, then
+  // retires the original regions in place (FR22.2) with successor_region_id
+  // naming their replacements. Commits or nothing does -- no intermediate
+  // state is ever observable (FR1.2 never violated, FR56 never reports a
+  // plant unmonitored mid-relocation). Mirroring is refused whole, before
+  // anything is written (FR59.3), if it would violate FR50's structural
+  // rules (a 13th child, a Shelf under a Pot) -- this is SetRegionParent's
+  // named alternative (FR50.5) for a refused re-parent. Every moved
+  // placement interval is marked relocation_induced = TRUE (FR24), FR20
+  // captures are recorded for every moved boundary, FR73 invalidations are
+  // published for every affected sensor, and one audit record covers the
+  // whole operation, carrying reason (FR8). Member-or-grantee (FR7).
+  rpc RelocateSubtree(RelocateSubtreeRequest) returns (RelocateSubtreeResponse);
+
   // --- Plants (FR54, FR24, FR22.3, FR22.1) --------------------------------
   //
   // A plant occupies exactly one region at a time; its placement history is
@@ -435,6 +452,27 @@ message GetRegionPathResponse {
   repeated string path_names = 3;
   // Human-readable ' / '-delimited string, mirroring v_region_path.path_name.
   string path_name = 4;
+}
+
+// RelocateSubtreeRequest names the subtree to relocate (root_region_id),
+// its destination (new_parent_region_id) and a reason -- FR74's atomic
+// composition carries one audit record for the whole operation (FR8),
+// and that record requires a reason (see audit.NewRelocationEntry, mirroring
+// NewTransferEntry/NewElevationEntry/NewMultiBoardPushEntry).
+message RelocateSubtreeRequest {
+  int64 root_region_id = 1;
+  int64 new_parent_region_id = 2;
+  string reason = 3;
+}
+
+message RelocateSubtreeResponse {
+  // The mirrored subtree's root region -- root_region_id's replacement
+  // beneath new_parent_region_id. root_region_id itself is retired in
+  // place (FR22.2) with successor_region_id set to new_root.region_id, so
+  // a region-keyed series follows the relocation instead of discontinuing.
+  RegionInfo new_root = 1;
+  // Server's current time (FR64) -- see ListBoardsResponse.server_now.
+  Instant server_now = 2;
 }
 
 // --- Plants (FR54, FR24, FR22.3, FR22.1) -----------------------------------

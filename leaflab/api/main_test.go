@@ -141,6 +141,12 @@ func (stubAPIServer) GetRegionPath(ctx context.Context, req *pb.GetRegionPathReq
 	return &pb.GetRegionPathResponse{}, nil
 }
 
+// Canned-success stub for #1380's RelocateSubtree RPC -- same
+// value-receiver rationale as the region RPCs above.
+func (stubAPIServer) RelocateSubtree(ctx context.Context, req *pb.RelocateSubtreeRequest) (*pb.RelocateSubtreeResponse, error) {
+	return &pb.RelocateSubtreeResponse{}, nil
+}
+
 // Canned-success stubs for #1377's seven plant RPCs (CreatePlant,
 // CorrectPlant, MovePlant, RetirePlant, GetPlant, ListPlants,
 // GetPlantPlacementTimeline). See the region stubs' doc comment above for

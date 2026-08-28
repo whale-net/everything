@@ -11,6 +11,12 @@ const (
 	ActionElevate        = "Elevate"
 	ActionMultiBoardPush = "MultiBoardPush"
 	ActionTransfer       = "Transfer"
+	// ActionRelocateSubtree names FR74's atomic subtree relocation --
+	// added alongside the other three FR8-named reason-required actions
+	// even though RelocateSubtree lands a whole phase later, so the same
+	// "cannot compile without a reason" guarantee applies to it from the
+	// moment its constructor exists (see NewRelocationEntry below).
+	ActionRelocateSubtree = "RelocateSubtree"
 )
 
 // ActionApplyConfigRegionSkip and EntityKindSensor name the FR8 audit
@@ -69,6 +75,26 @@ func NewTransferEntry(actorSubject string, actorKind ActorKind, targetHouseholdI
 		TargetHouseholdID: targetHouseholdID,
 		Action:            ActionTransfer,
 		EntityKind:        "board",
+		EntityID:          entityID,
+		Reason:            &reason,
+		CorrelationID:     correlationID,
+	}
+}
+
+// NewRelocationEntry builds the audit Entry for an FR74 subtree relocation.
+// reason is a plain string, not *string: a relocation cannot be audited
+// without one -- RelocateSubtreeRequest.reason (api.proto) is this
+// constructor's source. entityID names the relocated subtree's original
+// root region_id (the row RelocateSubtree retires in place, mirroring
+// NewTransferEntry's entityID naming the board being transferred) -- one
+// audit record for the whole operation (FR8), not one per moved entity.
+func NewRelocationEntry(actorSubject string, actorKind ActorKind, targetHouseholdID *int64, entityID *string, reason string, correlationID string) Entry {
+	return Entry{
+		ActorSubject:      actorSubject,
+		ActorKind:         actorKind,
+		TargetHouseholdID: targetHouseholdID,
+		Action:            ActionRelocateSubtree,
+		EntityKind:        "region",
 		EntityID:          entityID,
 		Reason:            &reason,
 		CorrelationID:     correlationID,

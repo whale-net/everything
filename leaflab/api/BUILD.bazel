@@ -13,6 +13,7 @@ go_library(
         "main.go",
         "plants.go",
         "regions.go",
+        "relocate.go",
         "repository.go",
         "sensor_region.go",
         "server.go",
