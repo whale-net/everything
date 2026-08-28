@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
@@ -84,6 +85,15 @@ type fakeRepo struct {
 	// this file's tests -- none of which set ChipType on a sensor -- never
 	// need to configure it.
 	loadCatalogResponse *pushconfig.Catalog
+
+	// getReportedInventoryFound/-Entries/-At/-Err configure
+	// GetReportedInventory's return -- FR49's reported-inventory read path
+	// (reported_inventory.go). Found defaults to false (zero value), the
+	// "no manifest received yet" case.
+	getReportedInventoryFound   bool
+	getReportedInventoryEntries []ReportedInventoryRow
+	getReportedInventoryAt      time.Time
+	getReportedInventoryErr     error
 }
 
 // getOrCreateBoardID/getOrCreateBoardErr configure GetOrCreateBoard's
@@ -181,6 +191,10 @@ func (f *fakeRepo) RewireSensorHW(ctx context.Context, sensorID int64, hw *Hardw
 
 func (f *fakeRepo) Ping(ctx context.Context) error {
 	return f.pingErr
+}
+
+func (f *fakeRepo) GetReportedInventory(ctx context.Context, deviceID string) (bool, []ReportedInventoryRow, time.Time, error) {
+	return f.getReportedInventoryFound, f.getReportedInventoryEntries, f.getReportedInventoryAt, f.getReportedInventoryErr
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call

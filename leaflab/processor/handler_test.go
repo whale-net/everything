@@ -30,10 +30,19 @@ type stubRepo struct {
 	boardSensorIdentities []BoardSensorIdentity
 
 	// Recorded call arguments.
-	upsertSensorCalls          []upsertSensorCall
-	upsertSensorHWHistoryCalls []upsertSensorHWHistoryCall
-	applyConfigRegionsCalls    []applyConfigRegionsCall
-	rewireAndRenameSensorCalls []rewireAndRenameSensorCall
+	upsertSensorCalls              []upsertSensorCall
+	upsertSensorHWHistoryCalls     []upsertSensorHWHistoryCall
+	applyConfigRegionsCalls        []applyConfigRegionsCall
+	rewireAndRenameSensorCalls     []rewireAndRenameSensorCall
+	upsertBoardManifestReportCalls []upsertBoardManifestReportCall
+}
+
+// upsertBoardManifestReportCall is one recorded UpsertBoardManifestReport
+// invocation (FR49) -- see stubRepo's doc comment.
+type upsertBoardManifestReportCall struct {
+	boardID    int64
+	entries    []ManifestReportEntry
+	reportedAt time.Time
 }
 
 type rewireAndRenameSensorCall struct {
@@ -132,6 +141,15 @@ func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error {
 
 func (s *stubRepo) IsKnownChipAddress(_ context.Context, _ string, _ uint32) (bool, error) {
 	return true, nil
+}
+
+func (s *stubRepo) UpsertBoardManifestReport(_ context.Context, boardID int64, entries []ManifestReportEntry, reportedAt time.Time) error {
+	s.upsertBoardManifestReportCalls = append(s.upsertBoardManifestReportCalls, upsertBoardManifestReportCall{
+		boardID:    boardID,
+		entries:    entries,
+		reportedAt: reportedAt,
+	})
+	return nil
 }
 
 // marshalManifest encodes a DeviceManifest to wire bytes.

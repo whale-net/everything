@@ -12,6 +12,7 @@ go_library(
         "identity.go",
         "logging_interceptor.go",
         "main.go",
+        "reported_inventory.go",
         "repository.go",
         "server.go",
     ],

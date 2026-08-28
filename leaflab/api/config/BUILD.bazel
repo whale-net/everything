@@ -2,6 +2,18 @@
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+# Exposes this package's own production source files as data for
+# leaflab/conformance's FR49 structural guard (manifest_never_source_test.go),
+# which reads and parses them directly to prove leaflab/api/config never
+# imports or references the manifest-report tables/types -- see that
+# test's doc comment. Mirrors tools/app_registry/ui's own
+# "conformance_srcs" filegroup pattern.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go"]),
+    visibility = ["//leaflab/conformance:__pkg__"],
+)
+
 go_library(
     name = "config",
     srcs = [

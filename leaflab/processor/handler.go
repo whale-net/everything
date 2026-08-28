@@ -49,6 +49,11 @@ type SensorRepository interface {
 	CloseRemovedSensorHWHistory(ctx context.Context, boardID int64, version int64) error
 	SetSensorChipID(ctx context.Context, sensorID int64, chipModel string) error
 	IsKnownChipAddress(ctx context.Context, chipModel string, i2cAddress uint32) (bool, error)
+	// UpsertBoardManifestReport is FR49's write path: replace boardID's
+	// board_manifest_report/board_manifest_report_entry rows (migration
+	// 035) with this manifest's entries, stamping reportedAt. Best-effort
+	// from handleManifest's perspective -- see its own call site.
+	UpsertBoardManifestReport(ctx context.Context, boardID int64, entries []ManifestReportEntry, reportedAt time.Time) error
 }
 
 // MessageHandler decodes leaflab MQTT messages and persists them.
@@ -150,6 +155,32 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 	}
 
 	eliminated := resolveManifestIdentities(existing, sensorTypeIDs, hws, names)
+
+	// FR49: capture this manifest's reported inventory as its own fact
+	// (board_manifest_report/board_manifest_report_entry, migration 035),
+	// independent of the per-entry sensor bookkeeping below -- an entry
+	// this loop later fails to upsert as a sensor row is still something
+	// the board reported. Only entries whose sensor_type never resolved
+	// (typeUpsertErr[i] != nil) are excluded, matching
+	// board_manifest_report_entry's NOT NULL sensor_type_id. Logged, not
+	// fatal: no other write on this path depends on this table (FR49's own
+	// "a report, never a source" -- see leaflab/api/config's doc comment).
+	reportEntries := make([]ManifestReportEntry, 0, len(manifest.Sensors))
+	for i, sd := range manifest.Sensors {
+		if typeUpsertErr[i] != nil {
+			continue
+		}
+		reportEntries = append(reportEntries, ManifestReportEntry{
+			HW:           hws[i],
+			SensorTypeID: sensorTypeIDs[i],
+			Name:         sd.Name,
+			Unit:         sd.Unit,
+			ChipModel:    sd.ChipModel,
+		})
+	}
+	if err := h.repo.UpsertBoardManifestReport(ctx, boardID, reportEntries, time.Now()); err != nil {
+		h.logger.Warn("failed to upsert board manifest report", "device_id", deviceID, "err", err)
+	}
 
 	var firstErr error
 	for i, sd := range manifest.Sensors {

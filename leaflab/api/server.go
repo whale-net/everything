@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
@@ -70,6 +71,10 @@ type deviceRepository interface {
 	// (Scope.Filter) is applied inside the query itself, never as a
 	// post-filter -- see Repository.ListBoards.
 	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error)
+	// GetReportedInventory is FR49's read path: a board's most recently
+	// reported manifest, plus the instant it was received -- see
+	// Repository.GetReportedInventory.
+	GetReportedInventory(ctx context.Context, deviceID string) (bool, []ReportedInventoryRow, time.Time, error)
 	Ping(ctx context.Context) error
 	// FR16/FR16.3/FR16.4/FR17 sensor identity resolution -- see identity.go
 	// and Repository's implementations.

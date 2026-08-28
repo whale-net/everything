@@ -730,6 +730,103 @@ func (r *Repository) resolveSensorTypeID(ctx context.Context, typeName string) (
 	return sensorTypeID, true, nil
 }
 
+// --- FR49 reported inventory / drift ------------------------------------
+
+// ReportedInventoryRow is one entry of a board's most recently reported
+// DeviceManifest (FR49), read back from board_manifest_report_entry
+// (migration 035) -- see GetReportedInventory. SensorTypeName is the
+// sensor_type catalog name (e.g. "temperature"), carried alongside Key
+// because the wire ReportedInventoryEntry/DriftEntry messages need the
+// firmware.SensorType enum back (sensorTypeFromDBName), not the resolved
+// SensorTypeID Key.SensorTypeID already carries.
+type ReportedInventoryRow struct {
+	Key            hwkey.Key
+	SensorTypeName string
+	Name           string
+	Unit           string
+	ChipModel      string
+}
+
+// GetReportedInventory returns deviceID's board's most recently reported
+// manifest (FR49) -- found is false when the board has never sent a
+// manifest at all (distinct from "sent one with zero sensors", which is
+// found=true with a nil/empty entries slice). This is a pure read against
+// board_manifest_report/board_manifest_report_entry (migration 035),
+// written only by leaflab/processor's handleManifest -- never by anything
+// on this binary's own write path (FR49's "a report, never a source").
+func (r *Repository) GetReportedInventory(ctx context.Context, deviceID string) (bool, []ReportedInventoryRow, time.Time, error) {
+	var reportedAt time.Time
+	err := r.db.QueryRow(ctx, `
+		SELECT bmr.reported_at
+		FROM board_manifest_report bmr
+		JOIN board b ON b.board_id = bmr.board_id
+		WHERE b.device_id = $1
+	`, deviceID).Scan(&reportedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil, time.Time{}, nil
+	}
+	if err != nil {
+		return false, nil, time.Time{}, fmt.Errorf("get board_manifest_report for %s: %w", deviceID, err)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT bmre.i2c_address, bmre.mux_path::text, bmre.sensor_type_id, st.name, bmre.name, bmre.unit, bmre.chip_model
+		FROM board_manifest_report_entry bmre
+		JOIN board b ON b.board_id = bmre.board_id
+		JOIN sensor_type st ON st.sensor_type_id = bmre.sensor_type_id
+		WHERE b.device_id = $1
+	`, deviceID)
+	if err != nil {
+		return false, nil, time.Time{}, fmt.Errorf("get board_manifest_report_entry for %s: %w", deviceID, err)
+	}
+	defer rows.Close()
+
+	var entries []ReportedInventoryRow
+	for rows.Next() {
+		var i2cAddr *int32
+		var muxText string
+		var sensorTypeID int64
+		var typeName, name, unit, chipModel string
+		if err := rows.Scan(&i2cAddr, &muxText, &sensorTypeID, &typeName, &name, &unit, &chipModel); err != nil {
+			return false, nil, time.Time{}, fmt.Errorf("scan board_manifest_report_entry for %s: %w", deviceID, err)
+		}
+		var muxPath hwkey.MuxPath
+		if err := json.Unmarshal([]byte(muxText), &muxPath); err != nil {
+			return false, nil, time.Time{}, fmt.Errorf("unmarshal mux_path for %s: %w", deviceID, err)
+		}
+		addr := hwkey.Absent
+		if i2cAddr != nil {
+			addr = hwkey.Address(uint16(*i2cAddr))
+		}
+		entries = append(entries, ReportedInventoryRow{
+			Key:            hwkey.Key{I2CAddress: addr, MuxPath: muxPath, SensorTypeID: hwkey.SensorTypeID(sensorTypeID)},
+			SensorTypeName: typeName,
+			Name:           name,
+			Unit:           unit,
+			ChipModel:      chipModel,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return false, nil, time.Time{}, fmt.Errorf("iterate board_manifest_report_entry for %s: %w", deviceID, err)
+	}
+	return true, entries, reportedAt, nil
+}
+
+// sensorTypeFromDBName converts a sensor_type.name catalog value back into
+// the wire firmware.SensorType enum -- the inverse of
+// sensorTypeNameFromConfig, needed because board_manifest_report_entry
+// (like device_config_entry) stores a resolved sensor_type_id/name, never
+// the wire enum itself. Returns SENSOR_TYPE_UNKNOWN for a name with no
+// matching enum value; sensor_type names are seeded from this same enum
+// (catalog.Seeder), so this should not occur in practice.
+func sensorTypeFromDBName(name string) firmwarepb.SensorType {
+	v, ok := firmwarepb.SensorType_value["SENSOR_TYPE_"+strings.ToUpper(name)]
+	if !ok {
+		return firmwarepb.SensorType_SENSOR_TYPE_UNKNOWN
+	}
+	return firmwarepb.SensorType(v)
+}
+
 // BoardSensorIdentity is one existing sensor's identity snapshot on the API
 // side -- mirrors leaflab/processor/repository.go's type of the same
 // name/shape (see this file's package doc comment on why it isn't shared
