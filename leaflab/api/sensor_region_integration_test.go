@@ -104,11 +104,12 @@ const sensorRegionTestSchema = `
 	);
 
 	CREATE TABLE sensor_region_history (
-		history_id BIGSERIAL PRIMARY KEY,
-		sensor_id  BIGINT NOT NULL REFERENCES sensor(sensor_id),
-		region_id  BIGINT NOT NULL REFERENCES region(region_id),
-		valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		valid_to   TIMESTAMPTZ
+		history_id         BIGSERIAL PRIMARY KEY,
+		sensor_id          BIGINT NOT NULL REFERENCES sensor(sensor_id),
+		region_id          BIGINT NOT NULL REFERENCES region(region_id),
+		valid_from          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		valid_to            TIMESTAMPTZ,
+		relocation_induced  BOOLEAN NOT NULL DEFAULT FALSE
 	);
 	CREATE INDEX idx_sra_srh_current ON sensor_region_history(sensor_id) WHERE valid_to IS NULL;
 
