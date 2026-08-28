@@ -174,6 +174,27 @@ func (stubAPIServer) GetPlantPlacementTimeline(ctx context.Context, req *pb.GetP
 	return &pb.GetPlantPlacementTimelineResponse{}, nil
 }
 
+// Canned-success stubs for #1378's four plant-type RPCs (ListPlantTypes,
+// CreatePlantType, RenamePlantType, RetirePlantType). See the region
+// stubs' doc comment above for why value-receiver overrides are required
+// here.
+
+func (stubAPIServer) ListPlantTypes(ctx context.Context, req *pb.ListPlantTypesRequest) (*pb.ListPlantTypesResponse, error) {
+	return &pb.ListPlantTypesResponse{}, nil
+}
+
+func (stubAPIServer) CreatePlantType(ctx context.Context, req *pb.CreatePlantTypeRequest) (*pb.CreatePlantTypeResponse, error) {
+	return &pb.CreatePlantTypeResponse{}, nil
+}
+
+func (stubAPIServer) RenamePlantType(ctx context.Context, req *pb.RenamePlantTypeRequest) (*pb.RenamePlantTypeResponse, error) {
+	return &pb.RenamePlantTypeResponse{}, nil
+}
+
+func (stubAPIServer) RetirePlantType(ctx context.Context, req *pb.RetirePlantTypeRequest) (*pb.RetirePlantTypeResponse, error) {
+	return &pb.RetirePlantTypeResponse{}, nil
+}
+
 // The five admin RPCs below (FR10, FR12 activation) have no business logic
 // yet -- Scaffold only adds them to the proto (see api.proto's "Admin"
 // section) -- so these canned stubs exist purely so stubAPIServer, a
