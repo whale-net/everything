@@ -108,6 +108,11 @@ const (
 	CaptureCompletionWindow = captureCompletionWindow
 	RawRetention            = rawRetention
 	FiveMinuteRetention     = fiveMinuteRetention
+	// RawCapWindow re-exports rawCapWindow (above) for leaflab/api/readings'
+	// FR30 config-lag check, which reuses NFR3.2's bounding to find a
+	// board's most recent readings without scanning the hypertable
+	// unbounded, rather than duplicating the 48-hour constant.
+	RawCapWindow = rawCapWindow
 )
 
 // ErrUnknownTier is returned by Select when requested is not one of

@@ -51,6 +51,15 @@ service LeafLabAPI {
   // Two or more entities compared over one shared window and one
   // measurement (FR25.3).
   rpc CompareSeries(CompareSeriesRequest) returns (CompareSeriesResponse);
+
+  // Per board (household-scoped by default, FR5 -- any caller runs this
+  // for their own boards; the admin form is the same call under a wider
+  // Scope, resolved server-side from the caller's principal, never a
+  // separate RPC or a request field): the board's active accepted config
+  // version, the version its most recent readings were recorded under,
+  // and how long the two have diverged (FR30 -- "applied is
+  // distinguishable from accepted").
+  rpc ListConfigLag(ListConfigLagRequest) returns (ListConfigLagResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -230,6 +239,13 @@ message ReadingPoint {
   // bucket straddled by a plant-attribution boundary, rather than an
   // ordinary tier bucket.
   bool boundary_partial = 7;
+  // The config version this reading was recorded under (FR30) -- stamped
+  // by leaflab/processor's handler from its configVersions cache at write
+  // time (sensor_reading.config_version, migration 009). Populated for a
+  // raw-tier point; zero for an aggregated-tier point, since the
+  // sensor_reading_5m/sensor_reading_1h continuous aggregates (migration
+  // 022) do not carry this column.
+  int64 config_version = 8;
 }
 
 message GetReadingSeriesRequest {
@@ -276,6 +292,10 @@ message CurrentValue {
   Instant recorded_at = 4;
   // Populated starting Phase 5 (FR58). Unset until then.
   Band band = 5;
+  // The config version this reading was recorded under (FR30). Always
+  // populated -- GetCurrentValues is always served from raw (FR27), and
+  // raw always carries sensor_reading.config_version.
+  int64 config_version = 6;
 }
 
 // CurrentPlantValue is one plant's current value set -- every sensor
@@ -352,4 +372,55 @@ message CompareSeriesResponse {
   bool coarsened = 3;
   PageResponse page = 4;
   Instant server_now = 5;
+}
+
+// --- Config lag (FR30) ---------------------------------------------------
+//
+// The read path stamps every raw reading with the config version it was
+// recorded under (sensor_reading.config_version, migration 009 --
+// leaflab/processor/cache.go's configVersions cache, written by the
+// processor, never by this API). ListConfigLag exposes that column and
+// derives the lag against device_config's active accepted version
+// (idx_device_config_board_active) -- no new status or version column is
+// added; this reads what already exists.
+
+// ConfigLagEntry is one board's config-version lag status.
+message ConfigLagEntry {
+  int64 board_id = 1;
+  string device_id = 2;
+  // False when this board has never had an accepted config version --
+  // reported as such, not an error (this task's Testing section).
+  bool has_accepted_config = 3;
+  // The board's active accepted config version (device_config, highest
+  // version where accepted = TRUE). Meaningless when has_accepted_config
+  // is false.
+  int64 accepted_version = 4;
+  // False when no reading for this board falls inside the bounded recent
+  // window this RPC checks (NFR3.2's bounding is reused here -- this RPC
+  // does not scan the hypertable unbounded).
+  bool has_recent_readings = 5;
+  // The config version stamped on this board's most recent readings.
+  // Meaningless when has_recent_readings is false.
+  int64 observed_version = 6;
+  // True when observed_version is older than accepted_version -- the
+  // board's recent readings lag its active accepted config.
+  bool lagging = 7;
+  // The instant the divergence began (FR64) -- an absolute instant, never
+  // a pre-computed duration string; render elapsed time against the
+  // response envelope's server_now, same as every other Instant in this
+  // API. Unset when lagging is false.
+  Instant lagging_since = 8;
+}
+
+message ListConfigLagRequest {
+  // Keyset page request (FR61). Household-scoped by default (FR5): the
+  // caller's own boards, resolved server-side from their principal --
+  // there is no household- or admin-selecting field on this request.
+  PageRequest page = 1;
+}
+
+message ListConfigLagResponse {
+  repeated ConfigLagEntry entries = 1;
+  PageResponse page = 2;
+  Instant server_now = 3;
 }

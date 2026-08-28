@@ -88,6 +88,11 @@ var ErrTooFewEntities = errors.New("readings: compare requires at least two enti
 // unlike Series/PeriodSummary where zero means unfiltered.
 var ErrMeasurementRequired = errors.New("readings: compare requires exactly one measurement type")
 
+// ErrConfigLagNotImplemented is returned by ConfigLag until this task's
+// Implementation phase (#1364, FR30) fills in the join against
+// device_config's active accepted version.
+var ErrConfigLagNotImplemented = errors.New("readings: ConfigLag not implemented (Implementation phase, FR30)")
+
 // validateWindow enforces NFR3.2's "no unbounded scan" at the one place
 // every read-path method calls through before touching the database.
 func validateWindow(w Window) error {
@@ -125,6 +130,13 @@ type Point struct {
 	// boundary_partial row for a bucket straddled by a plant-attribution
 	// boundary, rather than an ordinary tier bucket.
 	BoundaryPartial bool
+	// ConfigVersion is the config version this point was recorded under
+	// (FR30, sensor_reading.config_version) -- populated for a raw-tier
+	// point; zero for an aggregated-tier point, since the tier tables do
+	// not carry this column. Scaffold only (this task, #1364): the field
+	// exists on this type now; wiring rawPoints/scanAggregatedPoints to
+	// populate it is this task's Implementation phase.
+	ConfigVersion int64
 
 	// readingID is the raw tier's tie-break for FR61's (recorded_at DESC,
 	// reading_id) keyset order -- zero and unused for an aggregated-tier
@@ -168,6 +180,12 @@ type CurrentValue struct {
 	// see this task's Implementation section and api.proto's Band
 	// message.
 	Band string
+	// ConfigVersion is the config version this reading was recorded under
+	// (FR30) -- always populated once wired, since GetCurrentValues is
+	// always served from raw (FR27). Scaffold only (this task, #1364):
+	// the field exists on this type now; wiring latestRawValues to
+	// populate it is this task's Implementation phase.
+	ConfigVersion int64
 }
 
 // CurrentPlantValue is one plant's current value set: every sensor value
@@ -1178,4 +1196,70 @@ func (r *Reader) Compare(ctx context.Context, entities []authz.EntityRef, window
 	}
 
 	return CompareResult{Series: series, Tier: selection, NextPageToken: nextToken}, nil
+}
+
+// --- Config lag (FR30) ---------------------------------------------------
+//
+// "Applied is distinguishable from accepted": every raw reading is stamped
+// with the config version it was recorded under (sensor_reading.
+// config_version, migration 009 -- leaflab/processor's handler writes it
+// from cache.go's configVersions, never this package). ConfigLag exposes
+// that column and derives, per board, whether the board's most recent
+// readings lag its active accepted config version (device_config,
+// idx_device_config_board_active) -- no new status or version column; this
+// reads what already exists.
+//
+// This check's exactness is coupled to CurrentValues/FR27 above: FR27
+// serves "current value" from raw, never a pre-aggregated tier (which does
+// not carry config_version), and that same raw-tier freshness is what
+// makes ConfigLag's "most recent readings" comparison exact inside the
+// window that matters. If a future phase changed what "current" reads
+// from, this check would need to move with it.
+
+// ConfigLagEntry is one board's config-version lag status (api.proto's
+// ConfigLagEntry, the wire twin this type maps to).
+type ConfigLagEntry struct {
+	BoardID  int64
+	DeviceID string
+	// HasAcceptedConfig is false when the board has never had an accepted
+	// config version -- reported as such, not an error (this task's
+	// Testing section), rather than omitted or erroring.
+	HasAcceptedConfig bool
+	AcceptedVersion   int64
+	// HasRecentReadings is false when no reading for this board falls
+	// inside the bounded recent window this check applies (reusing
+	// NFR3.2's bounding rather than scanning the hypertable unbounded --
+	// see leaflab/api/tiers.RawCapWindow).
+	HasRecentReadings bool
+	ObservedVersion   int64
+	// Lagging is true when ObservedVersion is older than
+	// AcceptedVersion -- both must be populated (HasAcceptedConfig and
+	// HasRecentReadings both true) for this to be meaningful.
+	Lagging bool
+	// LaggingSince is the instant the divergence began -- an FR64 instant,
+	// never a pre-computed duration string (render elapsed time against
+	// the response envelope's server_now, same as every other Instant in
+	// this API). Zero when Lagging is false.
+	LaggingSince time.Time
+}
+
+// ConfigLagResult is ListConfigLag's domain-side result.
+type ConfigLagResult struct {
+	Entries       []ConfigLagEntry
+	NextPageToken string
+}
+
+// ConfigLag answers ListConfigLag (FR30): per board within scope, the
+// board's active accepted config version against the version stamped on
+// its most recent readings. Household-scoped by default (FR5) -- scope is
+// resolved server-side from the caller's principal by the RPC handler
+// (mirroring ListBoards' Scope.Filter-applied-inside-the-query shape, not
+// a post-filter); the admin form is the same call under a wider Scope, not
+// a separate RPC or method.
+//
+// Scaffold only (this task's Scaffold phase, #1364): returns
+// ErrConfigLagNotImplemented until the Implementation phase fills in the
+// device_config join and the bounded recent-readings lookup.
+func (r *Reader) ConfigLag(ctx context.Context, scope authz.Scope, page Page) (ConfigLagResult, error) {
+	return ConfigLagResult{}, ErrConfigLagNotImplemented
 }
