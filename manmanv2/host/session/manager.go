@@ -92,6 +92,7 @@ type VolumeMount struct {
 	HostSubpath   string
 	VolumeType    string
 	Options       map[string]string
+	IsEnabled     bool
 }
 
 func (sm *SessionManager) getContainerName(serverID, sgcID int64) string {
