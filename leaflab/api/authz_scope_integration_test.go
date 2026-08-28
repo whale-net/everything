@@ -46,7 +46,13 @@ import (
 // AGENTS.md's valid_from/valid_to convention) plus the board/device_config
 // tables leaflab/api/repository.go touches. It is intentionally narrower
 // than the real migration -- only what authz.PGResolver and
-// Repository.ListBoards actually read.
+// Repository.ListBoards actually read. admin_elevation (migration
+// 029_admin_elevation) is included too: authorizeBoardAccess's
+// elevatedBoardScope (FR10.3) queries it unconditionally on every
+// out-of-scope board read, admin caller or not, so this schema needs the
+// table even though no test in this file exercises elevation itself --
+// see admin_elevation_integration_test.go's TestGetDeviceConfig_ElevatedAdmin_FR10_3
+// for that coverage, against a schema built for it.
 const authzTestSchema = `
 	CREATE TABLE household (
 		household_id BIGSERIAL PRIMARY KEY
@@ -82,6 +88,16 @@ const authzTestSchema = `
 		acked_at         TIMESTAMPTZ,
 		rejection_reason TEXT,
 		UNIQUE (board_id, version)
+	);
+
+	CREATE TABLE admin_elevation (
+		elevation_id        BIGSERIAL PRIMARY KEY,
+		admin_subject        TEXT NOT NULL,
+		target_household_id  BIGINT NOT NULL REFERENCES household(household_id) ON DELETE RESTRICT,
+		reason                TEXT NOT NULL,
+		started_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		expires_at            TIMESTAMPTZ NOT NULL,
+		ended_at              TIMESTAMPTZ NULL
 	);
 `
 

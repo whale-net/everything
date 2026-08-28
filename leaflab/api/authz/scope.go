@@ -176,3 +176,81 @@ func HouseholdIDs(s Scope) []int64 {
 		return nil
 	}
 }
+
+// AdminScope is the standing (non-elevated) admin Scope (FR10.2). It is a
+// Scope like any other -- constructing it for an eligible admin, rather
+// than reaching for HouseholdScope or a bare UnionScope, is what lets the
+// standing lane's "whole lane is resolution, nothing else" rule stay
+// enforced structurally: AdminScope permits no entity at all and its
+// Filter matches no row, the same shape UnionScope already has for a
+// principal in no household. FR10.2's ResolveToHousehold RPC does not
+// route through Scope.Permits/Filter in the first place -- it returns
+// FR79's own minimal AdminBoardHealth projection directly -- so this type
+// exists to make "an admin without elevation is refused on every other
+// read and every write" the *only* thing a Scope constructed for a
+// standing admin can do, rather than something each handler has to
+// remember to special-case.
+type AdminScope struct{}
+
+// NewAdminScope builds an AdminScope. Handlers construct one for a
+// principal whose Claims carry the leaflab-admin realm role (FR12,
+// auth.go's isAdminEligible) and who has not (or not yet, for this
+// request's target household) elevated -- never as a substitute for
+// checking elevation before granting reach past the standing lane.
+func NewAdminScope() AdminScope {
+	return AdminScope{}
+}
+
+// Permits always reports false: the standing lane confers no entity
+// access (FR10.2 -- "that is the whole lane").
+func (AdminScope) Permits(ref EntityRef, res Resolution) bool {
+	return false
+}
+
+// Filter always returns the always-false fragment and no args, mirroring
+// UnionScope's zero-component behavior (see UnionScope.Filter's doc
+// comment).
+func (AdminScope) Filter(argStart int) (string, []any) {
+	return "FALSE", nil
+}
+
+// ElevatedScope is the Scope an admin holds against exactly one household
+// while elevated (FR10.1, FR10.3). Constructing one is not itself proof of
+// elevation -- it carries no expiry, reason or admin subject of its own,
+// and performs no I/O (Scope's contract). A handler must independently
+// verify an unexpired admin_elevation row exists for the caller against
+// targetHouseholdID (migration 029_admin_elevation; the query and
+// audit-stamping wiring are Implementation-phase work) before constructing
+// one, exactly as scopeForCaller (leaflab/api/auth.go) resolves a
+// HouseholdScope from household_membership before a member ever reaches a
+// handler's business logic.
+//
+// Once constructed, ElevatedScope behaves exactly like HouseholdScope:
+// reach is exactly targetHouseholdID and nothing else. An elevation
+// against household A does not open household B (FR10.3) -- that
+// guarantee lives entirely in the per-target-household gate a handler
+// performs before construction, not in this type, which (like
+// HouseholdScope) has no notion of "any household" to begin with.
+type ElevatedScope struct {
+	householdID int64
+}
+
+// NewElevatedScope builds an ElevatedScope for targetHouseholdID. See the
+// type's doc comment for the elevation check that must precede this call.
+func NewElevatedScope(targetHouseholdID int64) ElevatedScope {
+	return ElevatedScope{householdID: targetHouseholdID}
+}
+
+// Permits reports whether res resolves to this scope's target household.
+// Identical predicate to HouseholdScope.Permits, including the Unclaimed
+// exception -- see that method's doc comment.
+func (s ElevatedScope) Permits(ref EntityRef, res Resolution) bool {
+	return !res.Unclaimed && res.HouseholdID == s.householdID
+}
+
+// Filter returns "household_id = $<argStart>" against this scope's target
+// household id. See HouseholdScope.Filter's doc comment for the column
+// convention this assumes.
+func (s ElevatedScope) Filter(argStart int) (string, []any) {
+	return "household_id = $" + strconv.Itoa(argStart), []any{s.householdID}
+}
