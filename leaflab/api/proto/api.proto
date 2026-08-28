@@ -59,6 +59,22 @@ service LeafLabAPI {
   // provenance.
   rpc GetConfigVersion(GetConfigVersionRequest) returns (GetConfigVersionResponse);
 
+  // GetResendAvailability answers FR42.2's "stated up front" question for
+  // ResendDeviceConfig below: whether a re-send can be attempted right now,
+  // and if not, why -- so a caller renders the button disabled with the
+  // reason inline rather than enabling it and letting the press fail
+  // (FR59.3). Unavailable is never discovered only by pressing.
+  rpc GetResendAvailability(GetResendAvailabilityRequest) returns (GetResendAvailabilityResponse);
+
+  // ResendDeviceConfig re-publishes the board's currently accepted config,
+  // byte-identical, to the retained MQTT topic (FR42.1) -- it cannot alter
+  // what the device runs, never opens an editor, and pressing it twice is
+  // harmless: no new device_config row is inserted and no new version is
+  // assigned. Refused (FR59.3, via GetResendAvailability's same reasons)
+  // when there is nothing accepted to re-send or the board is not
+  // reporting.
+  rpc ResendDeviceConfig(ResendDeviceConfigRequest) returns (ResendDeviceConfigResponse);
+
   // --- Admin (FR10, FR12 activation) -----------------------------------
   //
   // leaflab-admin (auth.go's RoleAdmin) is eligibility only -- these RPCs
@@ -217,6 +233,64 @@ message GetConfigVersionResponse {
   // FR82.4: this version's per-entry provenance.
   repeated ConfigVersionEntry entries = 6;
   Instant server_now = 7;
+}
+
+// --- Re-send availability and re-send (FR42, A23) -----------------------
+//
+// GetResendAvailability/ResendDeviceConfig back FR42's "one safe button":
+// a re-send re-publishes the board's currently accepted config unchanged,
+// never opens an editor, and is harmless to press twice (FR42.1) -- no new
+// device_config row is inserted and no new version is assigned by a
+// re-send. Availability is computed up front (FR42.2, FR59.3) so a caller
+// renders the button disabled with the reason inline rather than enabling
+// it and letting the press fail.
+
+// ResendAvailabilityReason states why GetResendAvailability answered as it
+// did. AVAILABLE is the only value that means the button may be pressed;
+// every other value pairs with `sentence` (FR59.2) and `alternative`
+// (FR59.3) on GetResendAvailabilityResponse, naming what the caller can do
+// instead. RESEND_AVAILABILITY_REASON_UNSPECIFIED exists only as proto3's
+// required zero value and is never returned for a request that resolves to
+// a real board.
+enum ResendAvailabilityReason {
+  RESEND_AVAILABILITY_REASON_UNSPECIFIED = 0;
+  // Nothing blocks a re-send right now.
+  RESEND_AVAILABILITY_REASON_AVAILABLE = 1;
+  // The board is stale per A23's threshold (leaflab/api/health.Threshold) --
+  // not currently reporting. Named alternative: check that the board is
+  // online.
+  RESEND_AVAILABILITY_REASON_NOT_REPORTING = 2;
+  // No configuration has ever been accepted for this board, or the most
+  // recent push was rejected -- there is nothing accepted to re-send.
+  // Named alternative: push a configuration.
+  RESEND_AVAILABILITY_REASON_NOTHING_TO_RESEND = 3;
+}
+
+message GetResendAvailabilityRequest {
+  string device_id = 1;
+}
+
+message GetResendAvailabilityResponse {
+  // True only when reason is RESEND_AVAILABILITY_REASON_AVAILABLE.
+  bool available = 1;
+  ResendAvailabilityReason reason = 2;
+  // FR59.2 persona-appropriate sentence for `reason`. Empty when available
+  // is true.
+  string sentence = 3;
+  // FR59.3: what the caller can do instead of a re-send right now. Empty
+  // when available is true.
+  string alternative = 4;
+  Instant server_now = 5;
+}
+
+message ResendDeviceConfigRequest {
+  string device_id = 1;
+}
+
+message ResendDeviceConfigResponse {
+  // The version re-sent (FR42.1) -- the board's already-current accepted
+  // version, echoed back unchanged. A re-send never assigns a new version.
+  uint64 version = 1;
 }
 
 // PushScope states what a PushDeviceConfigRequest's payload means as a

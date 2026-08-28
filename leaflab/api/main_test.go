@@ -134,6 +134,18 @@ func (stubAPIServer) GetConfigVersion(ctx context.Context, req *pb.GetConfigVers
 	return &pb.GetConfigVersionResponse{}, nil
 }
 
+// GetResendAvailability/ResendDeviceConfig (FR42, Phase 4) are stubbed
+// here for the same reason as GetConfigStatus/ListConfigHistory/
+// GetConfigVersion above -- Scaffold only adds them to the proto; real
+// behavior lands in the Implementation-phase task.
+func (stubAPIServer) GetResendAvailability(ctx context.Context, req *pb.GetResendAvailabilityRequest) (*pb.GetResendAvailabilityResponse, error) {
+	return &pb.GetResendAvailabilityResponse{}, nil
+}
+
+func (stubAPIServer) ResendDeviceConfig(ctx context.Context, req *pb.ResendDeviceConfigRequest) (*pb.ResendDeviceConfigResponse, error) {
+	return &pb.ResendDeviceConfigResponse{}, nil
+}
+
 // The six admin/fleet-health RPCs below (FR10, FR12 activation, FR79) have
 // no business logic yet -- Scaffold only adds them to the proto (see
 // api.proto's "Admin" and "Fleet health listing" sections) -- so these
