@@ -5,13 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/hwkey"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -31,10 +35,29 @@ var ErrBoardAlreadyRetired = errors.New("board already retired")
 
 type Repository struct {
 	db *pgxpool.Pool
+	// invalidationPub broadcasts FR73 invalidation events after a write
+	// that changes what a cached view (a sensor's region, its name)
+	// resolves to -- see sensor_region.go's AssignSensorRegion/RenameSensor,
+	// the two writers that currently use it. Left nil by NewRepository; set
+	// via SetInvalidationPublisher once main.go (or a test) has one to
+	// give it. A nil invalidationPub means "don't publish" rather than a
+	// panic -- every publish call site checks for nil first, the same
+	// nil-safety server.go's own invalidationPub field already has
+	// (RewireSensor's publish call).
+	invalidationPub *invalidation.Publisher
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
+}
+
+// SetInvalidationPublisher wires pub into this Repository so writes that
+// change a cached view (FR73) can publish after they commit. Separate from
+// NewRepository so every existing call site -- production (main.go) and
+// the many test fixtures that never exercise a publish path -- keeps
+// working unchanged; only main.go calls this today.
+func (r *Repository) SetInvalidationPublisher(pub *invalidation.Publisher) {
+	r.invalidationPub = pub
 }
 
 // Ping reports whether the database is reachable, for FR63's health probe.
@@ -158,6 +181,61 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 		return nil, fmt.Errorf("unmarshal stored config for %s: %w", deviceID, err)
 	}
 	return &cfg, nil
+}
+
+// RegionApplySkipRow is one audit_log row leaflab/processor's
+// ApplyConfigRegions wrote for a config entry it skipped instead of
+// applying (FR1.3) -- see GetRegionApplySkips.
+type RegionApplySkipRow struct {
+	SensorID   int64
+	Reason     string
+	OccurredAt time.Time
+}
+
+// GetRegionApplySkips returns the audit_log rows leaflab/processor's
+// ApplyConfigRegions wrote for deviceID's board (audit.ActionApplyConfigRegionSkip),
+// most recent first -- FR1.3's caller-visible skip surface, read back
+// through GetDeviceConfig (server.go). Joins entity_id (the skipped
+// sensor's id, stored as text) to sensor.board_id rather than matching on
+// audit_log.actor_subject's "board:<id>" text, so this stays correct even
+// if that formatting ever changes; entity_kind is narrowed to "sensor" so
+// a numeric entity_id from an unrelated action can never collide with a
+// sensor_id by coincidence.
+//
+// Provenance (FR82.4) is Phase 4 -- until it lands this returns every skip
+// recorded for the board, not only ones the calling principal authored
+// (see ApplyConfigRegions' doc comment in leaflab/processor/repository.go).
+func (r *Repository) GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT al.entity_id, al.reason, al.occurred_at
+		FROM audit_log al
+		JOIN sensor s ON s.sensor_id = al.entity_id::bigint
+		JOIN board b ON b.board_id = s.board_id
+		WHERE al.action = $1
+		  AND al.entity_kind = $2
+		  AND b.device_id = $3
+		ORDER BY al.occurred_at DESC
+	`, audit.ActionApplyConfigRegionSkip, audit.EntityKindSensor, deviceID)
+	if err != nil {
+		return nil, fmt.Errorf("get region apply skips for %s: %w", deviceID, err)
+	}
+	defer rows.Close()
+
+	var skips []RegionApplySkipRow
+	for rows.Next() {
+		var entityID string
+		var skip RegionApplySkipRow
+		if err := rows.Scan(&entityID, &skip.Reason, &skip.OccurredAt); err != nil {
+			return nil, fmt.Errorf("scan region apply skip row for %s: %w", deviceID, err)
+		}
+		sensorID, err := strconv.ParseInt(entityID, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse sensor_id %q from audit_log for %s: %w", entityID, deviceID, err)
+		}
+		skip.SensorID = sensorID
+		skips = append(skips, skip)
+	}
+	return skips, rows.Err()
 }
 
 // ListBoards returns up to limit boards ordered by board_id, keyset-paginated
@@ -396,4 +474,247 @@ func (r *Repository) CurrentHouseholdForPlant(ctx context.Context, plantID int64
 		return 0, ErrNoHousehold
 	}
 	return *householdID, nil
+}
+
+// --- FR16/FR17 sensor identity resolution -----------------------------
+//
+// leaflab/api and leaflab/processor are separate Go binaries with no shared
+// library layer between them beyond leaflab/hwkey (canonical key
+// comparison, FR18) -- so HardwareAddress and the sensor_type name helper
+// below intentionally mirror leaflab/processor/repository.go's types of
+// the same name/shape rather than importing them.
+//
+// These are the API's read-only half of FR16's three-case resolution
+// order (see leaflab/processor/repository.go's UpsertSensor doc comment
+// for the full three cases): case 1 (FindSensorIDByHWKey) and case 2
+// (FindSensorIDByName). Both are pure reads -- nothing is written -- so
+// server.go can use them to decide, before anything is written, whether an
+// incoming PushDeviceConfig or RewireSensor entry continues an existing
+// sensor's identity (cases 1/2) or would establish a new one (case 3,
+// FR17's refusal trigger). The actual case-3 refusal decision, FR16.4's
+// swap detection, and RewireSensor's write path are Implementation-phase
+// business logic, not scaffolded here.
+
+// HardwareAddress identifies a sensor by its physical wiring: hwkey's
+// canonical (FR18) address and mux-path types. MuxPath is empty when the
+// sensor is directly on the root I2C bus.
+type HardwareAddress struct {
+	I2CAddress hwkey.AddressOpt
+	MuxPath    hwkey.MuxPath
+}
+
+// hasKnownAddress reports whether hw carries a real, addressable I2C
+// address -- neither absent nor the legacy "unknown address" sentinel (an
+// explicit 0, see hwkey.AddressOpt).
+func (h *HardwareAddress) hasKnownAddress() bool {
+	return h != nil && !h.I2CAddress.IsAbsent() && !h.I2CAddress.IsUnknownSentinel()
+}
+
+// HardwareAddressFromSensorConfig builds a HardwareAddress from a
+// firmware.SensorConfig entry (PushDeviceConfig/RewireSensor's wire
+// shape), using hwkey for every field so this package never re-derives
+// FR18's address/mux canonicalisation rules. i2c_address == 0 is treated
+// as "no address" (config.proto's implicit sentinel, matching
+// leaflab/processor's manifest handling).
+func HardwareAddressFromSensorConfig(muxPath []*configpb.MuxHop, i2cAddress uint32) *HardwareAddress {
+	addr := hwkey.Address(uint16(i2cAddress))
+	if addr.IsUnknownSentinel() {
+		return nil
+	}
+	hops := make(hwkey.MuxPath, len(muxPath))
+	for i, hop := range muxPath {
+		hops[i] = hwkey.MuxHop{MuxAddress: hop.GetMuxAddress(), MuxChannel: hop.GetMuxChannel()}
+	}
+	return &HardwareAddress{I2CAddress: addr, MuxPath: hops}
+}
+
+// sensorTypeNameFromConfig converts a proto SensorType to the
+// sensor_type.name used in the DB. Mirrors
+// leaflab/processor/repository.go's function of the same name exactly.
+// Returns "" for UNKNOWN (single-virtual chips like BH1750).
+func sensorTypeNameFromConfig(t firmwarepb.SensorType) string {
+	raw := t.String()
+	name, ok := strings.CutPrefix(raw, "SENSOR_TYPE_")
+	if !ok || name == "UNKNOWN" {
+		return ""
+	}
+	return strings.ToLower(name)
+}
+
+// FindSensorIDByHWKey resolves an existing sensor on boardID whose current
+// (sensor_type, i2c_address, mux_path) equals hw -- FR16 case 1,
+// read-only. typeName is resolved to a sensor_type_id first, also
+// read-only: an unknown type name means no sensor of that type can exist
+// yet, so this returns (0, false, nil) rather than upserting one into
+// existence the way leaflab/processor's UpsertSensorType would.
+func (r *Repository) FindSensorIDByHWKey(ctx context.Context, boardID int64, typeName string, hw *HardwareAddress) (int64, bool, error) {
+	if !hw.hasKnownAddress() {
+		return 0, false, nil
+	}
+
+	sensorTypeID, ok, err := r.resolveSensorTypeID(ctx, typeName)
+	if err != nil {
+		return 0, false, err
+	}
+	if !ok {
+		return 0, false, nil
+	}
+
+	key := hwkey.Key{I2CAddress: hw.I2CAddress, MuxPath: hw.MuxPath, SensorTypeID: hwkey.SensorTypeID(sensorTypeID)}
+	pred, predArgs := key.SQLPredicate(1)
+	args := append([]any{boardID}, predArgs...)
+
+	var sensorID int64
+	query := fmt.Sprintf(`SELECT sensor_id FROM sensor WHERE board_id = $1 AND %s`, pred)
+	err = r.db.QueryRow(ctx, query, args...).Scan(&sensorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("find sensor by hw key on board %d: %w", boardID, err)
+	}
+	return sensorID, true, nil
+}
+
+// FindSensorIDByName resolves an existing sensor on boardID by its current
+// name -- FR16 case 2, read-only.
+func (r *Repository) FindSensorIDByName(ctx context.Context, boardID int64, name string) (int64, bool, error) {
+	var sensorID int64
+	err := r.db.QueryRow(ctx, `SELECT sensor_id FROM sensor WHERE board_id = $1 AND name = $2`, boardID, name).Scan(&sensorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("find sensor by name %q on board %d: %w", name, boardID, err)
+	}
+	return sensorID, true, nil
+}
+
+// resolveSensorTypeID looks up sensor_type_id for typeName, read-only.
+// Returns (0, false, nil) when no sensor_type with that name exists yet --
+// shared by FindSensorIDByHWKey and checkPushConfigIdentity's FR16.4/FR17
+// resolution, both of which need this exact "unknown type name means no
+// sensor of that type can exist yet" behaviour.
+func (r *Repository) resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error) {
+	var sensorTypeID int64
+	err := r.db.QueryRow(ctx, `SELECT sensor_type_id FROM sensor_type WHERE name = $1`, typeName).Scan(&sensorTypeID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("find sensor_type_id for %q: %w", typeName, err)
+	}
+	return sensorTypeID, true, nil
+}
+
+// BoardSensorIdentity is one existing sensor's identity snapshot on the API
+// side -- mirrors leaflab/processor/repository.go's type of the same
+// name/shape (see this file's package doc comment on why it isn't shared
+// as a single type across the two binaries). Used by
+// checkPushConfigIdentity's FR16.4 swap detection and FR17 case-3 refusal
+// decision, which need every existing identity on the board at once, not
+// one entry's candidate match in isolation the way
+// FindSensorIDByHWKey/FindSensorIDByName do.
+type BoardSensorIdentity struct {
+	SensorID     int64
+	Name         string
+	SensorTypeID int64
+	HW           *HardwareAddress // nil when the row has no known address
+}
+
+// LoadBoardSensorIdentities returns the current identity snapshot for every
+// sensor on a board, read-only. See BoardSensorIdentity.
+func (r *Repository) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT sensor_id, name, sensor_type_id, i2c_address, mux_path::text
+		FROM sensor
+		WHERE board_id = $1
+		ORDER BY sensor_id
+	`, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("load board sensor identities for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var out []BoardSensorIdentity
+	for rows.Next() {
+		var bsi BoardSensorIdentity
+		var i2cAddr *int32
+		var muxText string
+		if err := rows.Scan(&bsi.SensorID, &bsi.Name, &bsi.SensorTypeID, &i2cAddr, &muxText); err != nil {
+			return nil, fmt.Errorf("scan board sensor identity for board %d: %w", boardID, err)
+		}
+		if i2cAddr != nil {
+			var muxPath hwkey.MuxPath
+			// muxText is mux_path::text in hwkey's own canonical encoding
+			// (SQLText's doc comment) -- MuxPath.UnmarshalJSON is its exact
+			// inverse, so this round-trips without this package re-deriving
+			// mux_path parsing rules of its own.
+			if err := muxPath.UnmarshalJSON([]byte(muxText)); err != nil {
+				return nil, fmt.Errorf("parse mux_path for sensor %d: %w", bsi.SensorID, err)
+			}
+			bsi.HW = &HardwareAddress{I2CAddress: hwkey.Address(uint16(*i2cAddr)), MuxPath: muxPath}
+		}
+		out = append(out, bsi)
+	}
+	return out, rows.Err()
+}
+
+// RewireSensorHW updates sensorID's hardware key in place and records a
+// sensor_hw_history interval, atomically -- FR16's rewire path, applied
+// through the explicit RewireSensor RPC. Unlike
+// leaflab/processor/repository.go's RewireAndRenameSensor +
+// UpsertSensorHWHistory pair (called sequentially, not transactionally,
+// since the device manifest path already tolerates a partial write being
+// corrected by the device's next manifest), this wraps both writes in one
+// transaction: RewireSensor is a one-shot operator action with no retry
+// signal of its own, so the sensor_hw_history interval must never be
+// written without the sensor row's own hardware key changing to match, or
+// vice versa. Callers are expected to have already resolved sensorID via
+// FindSensorIDByName (FR16 case 2 -- name is RewireSensor's stable
+// anchor); this method does not re-resolve identity.
+func (r *Repository) RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin rewire tx for sensor %d: %w", sensorID, err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	var i2cAddr *int32
+	muxJSON := []byte(`[]`)
+	muxText := hwkey.MuxPath(nil).SQLText()
+	if hw.hasKnownAddress() {
+		v, _ := hw.I2CAddress.Value()
+		addr := int32(v)
+		i2cAddr = &addr
+		muxJSON = []byte(hw.MuxPath.SQLText())
+		muxText = hw.MuxPath.SQLText()
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE sensor SET i2c_address = $2, mux_path = $3::jsonb WHERE sensor_id = $1
+	`, sensorID, i2cAddr, muxJSON)
+	if err != nil {
+		return fmt.Errorf("rewire sensor %d: %w", sensorID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("rewire sensor %d: no matching row", sensorID)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor_hw_history SET valid_to = NOW()
+		WHERE sensor_id = $1 AND valid_to IS NULL
+	`, sensorID); err != nil {
+		return fmt.Errorf("close hw history for sensor %d: %w", sensorID, err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO sensor_hw_history (sensor_id, mux_path, i2c_address) VALUES ($1, $2::jsonb, $3)
+	`, sensorID, muxText, i2cAddr); err != nil {
+		return fmt.Errorf("insert hw history for sensor %d: %w", sensorID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit rewire tx for sensor %d: %w", sensorID, err)
+	}
+	return nil
 }

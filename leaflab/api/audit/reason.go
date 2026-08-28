@@ -13,6 +13,21 @@ const (
 	ActionTransfer       = "Transfer"
 )
 
+// ActionApplyConfigRegionSkip and EntityKindSensor name the FR8 audit
+// action leaflab/processor's ApplyConfigRegions (repository.go) records
+// each time it skips a config entry instead of applying it (FR1.3):
+// household drift or a stale push, re-validated immediately before the
+// write. Exported here -- rather than as a local constant in
+// leaflab/processor, which writes these rows -- because leaflab/api's
+// GetDeviceConfig (server.go) also reads them back by this same action
+// name (FR1.3's caller-visible skip surface); a shared constant keeps the
+// writer and reader from drifting out of agreement even though they are
+// two separate binaries with no other shared code path for this.
+const (
+	ActionApplyConfigRegionSkip = "ApplyConfigRegionSkip"
+	EntityKindSensor            = "sensor"
+)
+
 // NewElevationEntry builds the audit Entry for an FR10 admin elevation.
 // reason is a plain string, not *string: elevation cannot be audited
 // without one.

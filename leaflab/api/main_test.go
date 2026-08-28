@@ -174,6 +174,22 @@ func (stubAPIServer) GetPlantPlacementTimeline(ctx context.Context, req *pb.GetP
 	return &pb.GetPlantPlacementTimelineResponse{}, nil
 }
 
+// Canned-success stub for #1356's RewireSensor RPC -- same value-receiver
+// rationale as the region RPCs above.
+func (stubAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSensorRequest) (*pb.RewireSensorResponse, error) {
+	return &pb.RewireSensorResponse{}, nil
+}
+
+// Canned-success stubs for #1379's AssignSensorRegion/RenameSensor RPCs --
+// same value-receiver rationale as the region RPCs above.
+func (stubAPIServer) AssignSensorRegion(ctx context.Context, req *pb.AssignSensorRegionRequest) (*pb.AssignSensorRegionResponse, error) {
+	return &pb.AssignSensorRegionResponse{}, nil
+}
+
+func (stubAPIServer) RenameSensor(ctx context.Context, req *pb.RenameSensorRequest) (*pb.RenameSensorResponse, error) {
+	return &pb.RenameSensorResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

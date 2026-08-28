@@ -8,23 +8,28 @@ go_library(
     srcs = [
         "audit_registry.go",
         "auth.go",
+        "identity.go",
         "logging_interceptor.go",
         "main.go",
         "plants.go",
         "regions.go",
         "repository.go",
+        "sensor_region.go",
         "server.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api",
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/capture",
         "//leaflab/api/contract",
         "//leaflab/api/placement",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/hwkey",
+        "//leaflab/invalidation",
         "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/logging",
@@ -78,6 +83,7 @@ go_test(
         "audit_registry_test.go",
         "auth_test.go",
         "main_test.go",
+        "server_push_device_config_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
@@ -327,5 +333,153 @@ go_test(
         "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@rules_go//go/runfiles",
+    ],
+)
+
+# Real-Postgres integration coverage for FR1.2/FR1.3's push-time
+# live-reference invariant, against the actual SQL authz.PGResolver runs --
+# see push_device_config_invariant_integration_test.go's doc comment. Same
+# tag set and hand-written rationale as the other integration go_test
+# targets above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:push_device_config_invariant_integration_test --test_output=all
+go_test(
+    # keep
+    name = "push_device_config_invariant_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "push_device_config_invariant_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for FR16/FR16.3/FR16.4/FR17 sensor
+# identity resolution -- see identity_integration_test.go's doc comment and
+# //libs/go/dbtest/README.md. Hand-written (not gazelle-generated): the test
+# file is gated behind `//go:build integration`, which gazelle skips when
+# scanning for go_test srcs. EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` markers tell
+# a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:identity_integration_test --test_output=all
+go_test(
+    # keep
+    name = "identity_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["identity_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for FR1.3's caller-visible skip
+# surface (the read side -- see leaflab/processor's
+# apply_config_regions_integration_test.go for the write side) -- see
+# get_device_config_skips_integration_test.go's doc comment. Same tag set
+# and hand-written rationale as the other integration go_test targets
+# above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:get_device_config_skips_integration_test --test_output=all
+go_test(
+    # keep
+    name = "get_device_config_skips_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "get_device_config_skips_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres (TimescaleDB) integration coverage for #1379's FR51/FR52 --
+# see sensor_region_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as the other integration go_test targets above;
+# uses the timescale/timescaledb image (via dbtest.Options.Image) because
+# AssignSensorRegion's FR20 capture.Recorder call needs a real time_bucket(),
+# same as leaflab/api/capture:boundary_capture_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:sensor_region_integration_test --test_output=all
+go_test(
+    # keep
+    name = "sensor_region_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["sensor_region_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
