@@ -126,6 +126,10 @@ func (stubAPIServer) GetPushGroupStatus(ctx context.Context, req *pb.GetPushGrou
 	return &pb.GetPushGroupStatusResponse{}, nil
 }
 
+func (stubAPIServer) RollbackDeviceConfig(ctx context.Context, req *pb.RollbackDeviceConfigRequest) (*pb.RollbackDeviceConfigResponse, error) {
+	return &pb.RollbackDeviceConfigResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

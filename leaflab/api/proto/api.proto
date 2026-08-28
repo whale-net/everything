@@ -60,6 +60,15 @@ service LeafLabAPI {
   // echoes the group's own FR48.2 bookkeeping (reason, push timestamp,
   // acting principal). Read-only; never mutates anything.
   rpc GetPushGroupStatus(GetPushGroupStatusRequest) returns (GetPushGroupStatusResponse);
+
+  // RollbackDeviceConfig re-pushes a prior stored version's complete
+  // payload as a new higher version that records what it was derived from
+  // (FR40). The config log stays append-only -- this never mutates the
+  // version rolled back to, or any other existing device_config row; it
+  // only ever inserts a new one. Accepts the same FR48 board set shape as
+  // PushDeviceConfig, with a reason always required, and returns per-board
+  // results the same way PushDeviceConfig does. Composes with dry_run.
+  rpc RollbackDeviceConfig(RollbackDeviceConfigRequest) returns (RollbackDeviceConfigResponse);
 }
 
 // PushScope states what a PushDeviceConfigRequest's payload means as a
@@ -346,6 +355,86 @@ message GetPushGroupStatusResponse {
   // The group's own FR48.2 bookkeeping, echoed back for convenience.
   string reason = 2;
   Instant pushed_at = 3;
+  string actor_subject = 4;
+}
+
+// --- Rollback (FR40) -----------------------------------------------------
+
+message RollbackDeviceConfigRequest {
+  // FR48 board set this rollback targets. Unlike
+  // PushDeviceConfigRequest there is no legacy singular device_id field --
+  // RollbackDeviceConfig always takes an explicit set, which may still
+  // name exactly one board.
+  repeated string device_ids = 1;
+  // The version to roll back to. Fetchable regardless of whether it was
+  // ever accepted by the device (FR35.2 makes any version fetchable) --
+  // rolling back to a rejected or still-pending version is permitted; see
+  // BoardRollbackResult.source_never_accepted.
+  uint64 to_version = 2;
+  // Required for every rollback, regardless of board-set size -- refused
+  // (with none of the named boards rolled back) if empty. Unlike
+  // PushDeviceConfigRequest.reason (required only once device_ids names
+  // more than one board), a rollback always states why.
+  string reason = 3;
+  // FR38-style preview: validate and diff what this rollback would do for
+  // every named board without writing a device_config row or publishing
+  // anything to any of them. Composes with a multi-board device_ids set --
+  // the preview covers the same blast radius the real rollback would.
+  bool dry_run = 4;
+}
+
+// BoardRollbackResult is FR40's per-board rollback outcome, mirroring
+// BoardPushResult (FR48.1): one board's failure or refusal never prevents
+// another named board in the same request from succeeding, and
+// RollbackDeviceConfigResponse never collapses this list to one aggregate
+// success.
+message BoardRollbackResult {
+  string device_id = 1;
+  // True if this board's rollback succeeded, or -- under dry_run --
+  // validated cleanly and would have succeeded.
+  bool success = 2;
+  // The new higher version this rollback assigned to this board, or --
+  // under dry_run -- the version it would assign. Meaningless when
+  // success is false.
+  uint64 version = 3;
+  // Echoes the request's to_version: the version this new version was
+  // derived from (device_config.derived_from_version).
+  uint64 derived_from_version = 4;
+  // True when to_version was never accepted by this board (rejected, or
+  // still pending with no ack -- FR35.2 makes either fetchable). Stated
+  // back explicitly so a caller rolling back to such a version is not
+  // surprised that the "restored" state was never actually live on the
+  // device.
+  bool source_never_accepted = 5;
+  // FR82.4-shaped removals this rollback produces for this board relative
+  // to its current accepted config, mirroring BoardPushResult.removed.
+  // Under dry_run this is computed against effective_config without
+  // writing anything, exactly as BoardPushResult.removed is under a
+  // PushDeviceConfig dry run.
+  repeated RemovedEntry removed = 6;
+  // Set (with success false) when this board's rollback failed or was
+  // refused.
+  Failure failure = 7;
+  // The effective resulting config this rollback produces for this board.
+  // FR40's restore guarantee (resting on FR82's stored-payload
+  // completeness): this is byte-identical to to_version's stored payload.
+  // Populated whenever success is true, whether or not dry_run was set.
+  firmware.DeviceConfig effective_config = 8;
+  // The diff between this board's prior accepted config and
+  // effective_config, computed the same way DiffConfigVersions computes
+  // one. Populated whenever success is true.
+  repeated EntryDiff diff = 9;
+}
+
+message RollbackDeviceConfigResponse {
+  // FR48.1-style: one result per board named in device_ids, never one
+  // aggregate success -- see BoardRollbackResult.
+  repeated BoardRollbackResult results = 1;
+  // This rollback's stated reason, the instant it was performed, and the
+  // acting principal (FR8.2) -- returned back to the caller and written
+  // to the audit log alongside the source and new version (FR8, FR40).
+  string reason = 2;
+  Instant rolled_back_at = 3;
   string actor_subject = 4;
 }
 

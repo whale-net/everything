@@ -72,6 +72,7 @@ erDiagram
         timestamptz pushed_at
         timestamptz acked_at
         bigint      push_group_id FK
+        bigint      derived_from_version FK "FR40 rollback"
     }
 
     push_group {
@@ -384,6 +385,40 @@ implementations up front -- `*liveConfigWriter` (holds the real
 through, and calls the read-only `Repository.PeekNextConfigVersion`
 instead) -- and `pushOneBoard`'s validation/materialisation logic runs
 identically either way, calling only through that interface.
+
+---
+
+## Rollback (FR40) -- scaffold
+
+`RollbackDeviceConfig(device_ids, to_version, reason, dry_run)` is FR40's
+"rollback writes forward" RPC: it re-pushes `to_version`'s complete stored
+payload as a new higher version rather than mutating the row at
+`to_version`, and always requires `reason` (unlike `PushDeviceConfigRequest`,
+where `reason` is only required once `device_ids` names more than one
+board). It accepts the same FR48 board set shape `PushDeviceConfigRequest`
+does -- no legacy singular `device_id` field, since this RPC did not exist
+before FR48 -- and returns `repeated BoardRollbackResult results`, one per
+targeted board, mirroring `BoardPushResult` field-for-field
+(`success`/`version`/`removed`/`failure`/`effective_config`/`diff`) plus two
+rollback-specific fields: `derived_from_version` (echoes the request's
+`to_version`) and `source_never_accepted` (true when `to_version` was
+rejected or still pending -- FR35.2 makes either fetchable -- stated back so
+a caller is not surprised the version they restored to was never actually
+live on the device).
+
+`device_config.derived_from_version` (migration 035, `BIGINT NULL`) is the
+storage side of the same fact: NULL for every version an ordinary
+`PushDeviceConfig` call produces, set to `to_version` for the new version a
+`RollbackDeviceConfig` call inserts. Modeled as a composite self-FK against
+`device_config`'s own `(board_id, version)` unique key, not a bare
+`config_id` reference, so the column can never point at a version on a
+different board.
+
+Scaffold only: the RPC shape and the column exist; actually loading
+`to_version`'s stored payload, assigning it a new higher version, enforcing
+append-only via a `BEFORE UPDATE` trigger scoped to exclude the device-ack
+columns (`accepted`, `acked_at`, `rejection_reason`), and composing with
+`dry_run`/board-set iteration are Implementation-phase work.
 
 ---
 
