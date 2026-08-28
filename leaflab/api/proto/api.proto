@@ -51,6 +51,37 @@ service LeafLabAPI {
   // same way PushDeviceConfig would materialise it if it were actually
   // pushed, but is never stored or published.
   rpc DiffConfigVersions(DiffConfigVersionsRequest) returns (DiffConfigVersionsResponse);
+
+  // GetReportedInventory returns a board's most recently reported hardware
+  // inventory (FR49) -- the entries of the last DeviceManifest the board
+  // sent, plus the instant it was reported. This is **not** an independent
+  // survey of the board's I2C bus: it is what the board's
+  // ConfigApplier::ApplyFactory() (firmware/config/config_applier.cc)
+  // successfully instantiated from its last applied config, after silently
+  // dropping any entry with an unknown chip type, an invalid address, no
+  // resolvable bus endpoint, or an exhausted pool. It is therefore always a
+  // subset of the desired state last pushed to this board (see
+  // GetDeviceConfig), never a superset, and it is used only to report
+  // divergence (see GetConfigDrift) -- never as a source of entries for
+  // materialising a new config version (FR82.3's EDIT scope): an entry the
+  // board failed to instantiate would otherwise be silently deleted from
+  // the stored desired state the next time it's carried forward.
+  rpc GetReportedInventory(GetReportedInventoryRequest) returns (GetReportedInventoryResponse);
+
+  // GetConfigDrift compares a board's stored desired state (its latest
+  // accepted device_config) against its reported inventory
+  // (GetReportedInventory) and classifies every entry seen on either side
+  // by canonical hardware key (FR18). This is the drift check FR49
+  // describes: the reported inventory is a lossy echo of what was pushed,
+  // so an entry present in the desired state but absent from the reported
+  // inventory (IN_DESIRED_NOT_REPORTED) means the board did not
+  // successfully instantiate it -- this is the interesting case, and
+  // exactly what the lossy echo is for. An entry reported but not present
+  // in the desired state (REPORTED_NOT_IN_DESIRED) should be impossible
+  // under replace semantics (FR82) and is reported loudly, not swallowed,
+  // because it means something is out of sync. Admin-scope access to
+  // another household's board requires elevation (FR10.3).
+  rpc GetConfigDrift(GetConfigDriftRequest) returns (GetConfigDriftResponse);
 }
 
 // PushScope states what a PushDeviceConfigRequest's payload means as a
@@ -227,6 +258,83 @@ message DiffConfigVersionsResponse {
   firmware.DeviceConfig from = 2;
   firmware.DeviceConfig to = 3;
 }
+
+// --- Reported inventory and drift (FR49) --------------------------------
+
+message GetReportedInventoryRequest {
+  string device_id = 1;
+}
+
+// ReportedInventoryEntry is one entry of a board's last reported
+// DeviceManifest (FR49) -- what the board's ConfigApplier successfully
+// instantiated from its last applied config, never an independent survey
+// of its I2C bus. Fields are carried verbatim from the wire
+// firmware.SensorDescriptor; sensor_type is resolved server-side against
+// the sensor_type catalog the same way a pushed config entry is (see
+// PushDeviceConfigRequest).
+message ReportedInventoryEntry {
+  repeated firmware.MuxHop mux_path = 1;  // empty = directly on root bus
+  uint32 i2c_address = 2;
+  firmware.SensorType sensor_type = 3;
+  string name = 4;
+  string unit = 5;
+  string chip_model = 6;
+}
+
+message GetReportedInventoryResponse {
+  // True if this board has ever sent a manifest. False means "no report
+  // exists yet", not "empty inventory" -- entries is always empty in
+  // both cases, so a caller must check this field to tell them apart.
+  bool found = 1;
+  repeated ReportedInventoryEntry entries = 2;
+  // The instant the manifest that produced entries above was received
+  // (FR49) -- render as elapsed time against the response envelope's
+  // server_now (FR64), never as a raw timestamp. Unset when found is
+  // false.
+  Instant reported_at = 3;
+}
+
+message GetConfigDriftRequest {
+  string device_id = 1;
+}
+
+// DriftClassification states, for one canonical hardware key (FR18), how
+// a board's stored desired state (device_config) and its reported
+// inventory (GetReportedInventory) relate (FR49's drift check).
+enum DriftClassification {
+  DRIFT_CLASSIFICATION_UNSPECIFIED = 0;
+  // Present in the desired state, absent from the reported inventory --
+  // the board did not successfully instantiate this entry (unknown chip
+  // type, invalid address, no resolvable bus endpoint, exhausted pool).
+  // This is the interesting case the lossy echo reveals.
+  DRIFT_CLASSIFICATION_IN_DESIRED_NOT_REPORTED = 1;
+  // Present in the reported inventory, absent from the desired state.
+  // Should be impossible under FR82's replace semantics -- reported
+  // loudly, never swallowed, because it means something is out of sync.
+  DRIFT_CLASSIFICATION_REPORTED_NOT_IN_DESIRED = 2;
+  // Present, and matching, on both sides.
+  DRIFT_CLASSIFICATION_MATCHED = 3;
+}
+
+// DriftEntry is one canonical hardware key's classification (FR49),
+// identified the same way EntryDiff (FR37) identifies one.
+message DriftEntry {
+  DriftClassification classification = 1;
+  repeated firmware.MuxHop mux_path = 2;
+  uint32 i2c_address = 3;
+  firmware.SensorType sensor_type = 4;
+}
+
+message GetConfigDriftResponse {
+  repeated DriftEntry entries = 1;
+  // The instant the reported inventory this drift check compared against
+  // was received (FR49) -- unset if the board has never sent a manifest,
+  // in which case every desired-state entry classifies as
+  // DRIFT_CLASSIFICATION_IN_DESIRED_NOT_REPORTED.
+  Instant reported_at = 2;
+}
+
+// --------------------------------------------------------------------
 
 message GetDeviceConfigRequest {
   string device_id = 1;

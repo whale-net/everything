@@ -1,0 +1,14 @@
+"""FR49 structural conformance -- the reported manifest inventory is a report, never a source (#1375)."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+# Scaffold only: doc.go states the guard this package will assert
+# structurally. The actual source-analysis test (leaflab/api/config's
+# checked-in source has no import of or reference to the manifest-report
+# tables/types) is Implementation-phase work -- see doc.go.
+go_library(
+    name = "conformance",
+    srcs = ["doc.go"],
+    importpath = "github.com/whale-net/everything/leaflab/conformance",
+    visibility = ["//visibility:private"],
+)
