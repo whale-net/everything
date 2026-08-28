@@ -1,0 +1,10 @@
+"""FR26.3's enumerable suspect-check registry -- stable Check identifiers and the Marker/Counts shapes every readings response carries. See suspect.go's package doc comment."""
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "suspect",
+    srcs = ["suspect.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/suspect",
+    visibility = ["//visibility:public"],
+)

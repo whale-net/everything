@@ -230,6 +230,11 @@ message ReadingPoint {
   // bucket straddled by a plant-attribution boundary, rather than an
   // ordinary tier bucket.
   bool boundary_partial = 7;
+  // FR26.3: the stable identifiers (leaflab/api/suspect.Check) of every
+  // named, enumerable check that marked this point suspect. Empty when
+  // this point is not suspect -- never a marker with no named check
+  // behind it.
+  repeated string suspect_checks = 8;
 }
 
 message GetReadingSeriesRequest {
@@ -243,6 +248,11 @@ message GetReadingSeriesRequest {
   // Keyset page request (FR61), ordered on (recorded_at DESC, reading_id)
   // at the raw tier.
   PageRequest page = 5;
+  // FR26.1's Super Admin invalid-only filter: when true, the response is
+  // narrowed to readings CheckPersistedInvalidFlag marks (Implementation
+  // phase enforces the FR10.3 elevation this requires; a non-elevated
+  // caller is refused, never silently ignored).
+  bool invalid_only = 6;
 }
 
 message GetReadingSeriesResponse {
@@ -255,6 +265,14 @@ message GetReadingSeriesResponse {
   bool coarsened = 3;
   PageResponse page = 4;
   Instant server_now = 5;
+  // FR26.3: how many of the returned points carry at least one
+  // suspect_checks entry -- present even when zero are marked and even
+  // when marked_count == returned_count (a marker covering everything is
+  // visible as such, never silently universal).
+  int64 marked_count = 6;
+  // FR26.3: how many points this response returns -- the denominator
+  // marked_count is measured against.
+  int64 returned_count = 7;
 }
 
 message GetCurrentValuesRequest {
@@ -276,6 +294,9 @@ message CurrentValue {
   Instant recorded_at = 4;
   // Populated starting Phase 5 (FR58). Unset until then.
   Band band = 5;
+  // FR26.3: see ReadingPoint.suspect_checks -- same contract, applied to
+  // this single latest-raw-reading value.
+  repeated string suspect_checks = 6;
 }
 
 // CurrentPlantValue is one plant's current value set -- every sensor
@@ -292,6 +313,11 @@ message GetCurrentValuesResponse {
   // Populated when the request named a plant (FR23 attribution).
   repeated CurrentPlantValue plant_values = 2;
   Instant server_now = 3;
+  // FR26.3: see GetReadingSeriesResponse.marked_count -- counted across
+  // every CurrentValue in values and in every plant_values entry.
+  int64 marked_count = 4;
+  // FR26.3: see GetReadingSeriesResponse.returned_count.
+  int64 returned_count = 5;
 }
 
 // PeriodSummary is one measurement type's min/max/average over a period,
@@ -304,6 +330,10 @@ message PeriodSummary {
   double avg = 4;
   Instant min_at = 5;
   Instant max_at = 6;
+  // FR26.3: the stable check identifiers (leaflab/api/suspect.Check) of
+  // every named check that marked at least one hourly-tier bucket
+  // contributing to this summary suspect. Empty when none did.
+  repeated string suspect_checks = 7;
 }
 
 message GetPeriodSummaryRequest {
@@ -329,6 +359,11 @@ message GetPeriodSummaryResponse {
   // read-path RPC.
   Granularity tier = 5;
   Instant server_now = 6;
+  // FR26.3: see GetReadingSeriesResponse.marked_count -- counted across
+  // summaries, overnight_low and daytime_high.
+  int64 marked_count = 7;
+  // FR26.3: see GetReadingSeriesResponse.returned_count.
+  int64 returned_count = 8;
 }
 
 message CompareSeriesRequest {
@@ -352,4 +387,9 @@ message CompareSeriesResponse {
   bool coarsened = 3;
   PageResponse page = 4;
   Instant server_now = 5;
+  // FR26.3: see GetReadingSeriesResponse.marked_count -- counted across
+  // every entity's series.
+  int64 marked_count = 6;
+  // FR26.3: see GetReadingSeriesResponse.returned_count.
+  int64 returned_count = 7;
 }

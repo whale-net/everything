@@ -62,6 +62,7 @@ import (
 	"github.com/whale-net/everything/leaflab/api/attribution"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
+	"github.com/whale-net/everything/leaflab/api/suspect"
 	"github.com/whale-net/everything/leaflab/api/tiers"
 )
 
@@ -126,6 +127,14 @@ type Point struct {
 	// boundary, rather than an ordinary tier bucket.
 	BoundaryPartial bool
 
+	// SuspectChecks is FR26.3's per-point marker: every named,
+	// enumerable suspect.Check that applies to this point. Nil when the
+	// point is not suspect (suspect.Marker's own nil-vs-empty
+	// convention). Left unpopulated by this task's Scaffold phase --
+	// Implementation wires each query path to fill it in alongside the
+	// row it is derived from.
+	SuspectChecks []suspect.Check
+
 	// readingID is the raw tier's tie-break for FR61's (recorded_at DESC,
 	// reading_id) keyset order -- zero and unused for an aggregated-tier
 	// point, since (sensor set, bucket) is already unique there after the
@@ -155,6 +164,14 @@ type SeriesResult struct {
 	Points        []Point
 	Tier          Selection
 	NextPageToken string
+
+	// MarkedCount/ReturnedCount are FR26.3's top-level tally --
+	// suspect.CountMarkers over Points' SuspectChecks. Left zero-valued
+	// by this task's Scaffold phase; Implementation phase populates
+	// them from the same query path that fills in each Point's
+	// SuspectChecks.
+	MarkedCount   int64
+	ReturnedCount int64
 }
 
 // CurrentValue is one sensor's latest raw reading (FR27: "served from the
@@ -168,6 +185,8 @@ type CurrentValue struct {
 	// see this task's Implementation section and api.proto's Band
 	// message.
 	Band string
+	// SuspectChecks is FR26.3's per-value marker -- see Point.SuspectChecks.
+	SuspectChecks []suspect.Check
 }
 
 // CurrentPlantValue is one plant's current value set: every sensor value
@@ -183,6 +202,11 @@ type CurrentPlantValue struct {
 type CurrentValuesResult struct {
 	Values      []CurrentValue
 	PlantValues []CurrentPlantValue
+
+	// MarkedCount/ReturnedCount are FR26.3's top-level tally -- see
+	// SeriesResult's fields of the same name.
+	MarkedCount   int64
+	ReturnedCount int64
 }
 
 // SummaryStat is one measurement type's min/max/average over a period
@@ -194,6 +218,10 @@ type SummaryStat struct {
 	Avg               float64
 	MinAt             time.Time
 	MaxAt             time.Time
+	// SuspectChecks is FR26.3's marker for this summary -- every named
+	// check that applies to at least one hourly-tier bucket contributing
+	// to it. See Point.SuspectChecks.
+	SuspectChecks []suspect.Check
 }
 
 // PeriodSummaryResult is GetPeriodSummary's domain-side result.
@@ -208,6 +236,11 @@ type PeriodSummaryResult struct {
 	// Timezone is the IANA name the day boundary was computed against.
 	Timezone string
 	Tier     Selection
+
+	// MarkedCount/ReturnedCount are FR26.3's top-level tally -- see
+	// SeriesResult's fields of the same name.
+	MarkedCount   int64
+	ReturnedCount int64
 }
 
 // EntitySeries pairs one CompareSeries entity with its aligned series.
@@ -222,6 +255,11 @@ type CompareResult struct {
 	Series        []EntitySeries
 	Tier          Selection
 	NextPageToken string
+
+	// MarkedCount/ReturnedCount are FR26.3's top-level tally -- see
+	// SeriesResult's fields of the same name.
+	MarkedCount   int64
+	ReturnedCount int64
 }
 
 // Reader is the single implementation of the bounded read path's join,
