@@ -24,6 +24,7 @@ go_library(
         "//leaflab/api/authz",
         "//leaflab/api/config",
         "//leaflab/api/contract",
+        "//leaflab/api/health",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/hwkey",
         "//libs/go/db",
@@ -79,10 +80,20 @@ go_test(
         "audit_registry_test.go",
         "auth_test.go",
         "main_test.go",
+        "server_admin_test.go",
         "server_config_lifecycle_test.go",
+        "server_fleet_health_test.go",
         "server_push_device_config_scope_test.go",
         "server_push_device_config_test.go",
         "server_test.go",
+    ],
+    # server_fleet_health_test.go's source-analysis test
+    # (TestReportingStateFor_IsTheOnlyA23CallSiteInLeafLabAPI) greps this
+    # package's own checked-in .go sources at test time, mirroring
+    # leaflab/ui's nfr18_conformance_test.go/BUILD.bazel data convention --
+    # BUILD.bazel itself doubles as that test's marker file.
+    data = glob(["*.go"]) + [
+        "BUILD.bazel",
     ],
     embed = [":api_lib"],
     deps = [
@@ -100,6 +111,7 @@ go_test(
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",
         "@org_golang_google_protobuf//reflect/protoreflect",
     ],
@@ -449,6 +461,45 @@ go_test(
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for FR10/FR12 activation's admin
+# standing lane and elevation lifecycle -- see
+# admin_elevation_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as the other integration go_test targets above.
+# Does not embed dbtest_helpers_integration_test.go: this file's schema
+# (household, admin_elevation, sensor, etc.) is self-contained and
+# deliberately not shared with the other integration files' schemas, same
+# rationale as authz_scope_integration_test.go's own schema.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:admin_elevation_integration_test --test_output=all
+go_test(
+    # keep
+    name = "admin_elevation_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "admin_elevation_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )

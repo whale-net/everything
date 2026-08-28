@@ -1,0 +1,21 @@
+"""LeafLab API health -- A23's "not reporting" staleness rule (FR79, FR62, FR42)."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "health",
+    srcs = ["staleness.go"],
+    importpath = "github.com/whale-net/everything/leaflab/api/health",
+    visibility = ["//visibility:public"],
+)
+
+# A23 threshold coverage: the floor-vs-multiplier fixtures this task's
+# Testing section calls out by name (1-minute configured interval -> stale
+# at the 15-minute floor, not 3 minutes; 10-minute configured interval ->
+# stale at 30 minutes, not the flat 15-minute floor).
+go_test(
+    name = "health_test",
+    size = "small",
+    srcs = ["staleness_test.go"],
+    embed = [":health"],
+)

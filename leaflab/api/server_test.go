@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
@@ -95,6 +96,90 @@ type fakeRepo struct {
 	listConfigHistoryResponse []DeviceConfigHistoryRow
 	listConfigHistoryErr      error
 	listConfigHistoryCalls    []listConfigHistoryCall
+	// -- Admin (FR10, FR12 activation) fakes -- server_admin_test.go's
+	// tests configure these directly and read the *Calls slices back to
+	// assert delegation shape (e.g. "the exact target household requested,
+	// not a widened one") without a live Postgres connection.
+	adminByPersonArg   string
+	adminByPersonRows  []AdminBoardHealthRow
+	adminByPersonErr   error
+	adminByPersonCalls int
+
+	adminByPartialArg   string
+	adminByPartialRows  []AdminBoardHealthRow
+	adminByPartialErr   error
+	adminByPartialCalls int
+
+	// listFleetHealthCalls records each ListFleetHealth call's arguments,
+	// in order, so a test can assert the handler's keyset-stepping loop
+	// (server.go's doc comment on ListFleetHealth) requested the filters
+	// unmodified across repository round-trips. listFleetHealthPages lets
+	// a test script a sequence of responses -- one per call -- to exercise
+	// that loop's multi-step behavior; once exhausted, the last page
+	// repeats.
+	listFleetHealthCalls []listFleetHealthCall
+	listFleetHealthPages [][]FleetBoardHealthRow
+	listFleetHealthErr   error
+
+	auditEntries   []audit.Entry
+	recordAuditErr error
+
+	householdExistsArg int64
+	householdExists    bool
+	householdExistsErr error
+
+	openElevationCalls []openElevationCall
+	openElevationErr   error
+
+	renewElevationCalls []renewElevationCall
+	renewElevationErr   error
+
+	endElevationCalls []endElevationCall
+	endElevationErr   error
+
+	activeElevationSubject   string
+	activeElevationHousehold int64
+	activeElevationExpiresAt time.Time
+	activeElevationErr       error
+	activeElevationCalls     int
+}
+
+// openElevationCall/renewElevationCall/endElevationCall capture the exact
+// arguments a fakeRepo admin elevation method was called with, so a test
+// can assert the handler passed through the caller's subject and the
+// request's target household unmodified (FR10.3's "an elevation against
+// household A does not open household B" starts with this: the handler
+// must never substitute a different household than the one requested).
+type openElevationCall struct {
+	adminSubject      string
+	targetHouseholdID int64
+	reason            string
+	expiresAt         time.Time
+	entry             audit.Entry
+}
+
+type renewElevationCall struct {
+	adminSubject      string
+	targetHouseholdID int64
+	reason            string
+	newExpiresAt      time.Time
+	entry             audit.Entry
+}
+
+type endElevationCall struct {
+	adminSubject      string
+	targetHouseholdID int64
+	entry             audit.Entry
+}
+
+// listFleetHealthCall captures one Repository.ListFleetHealth call's
+// arguments -- see fakeRepo.listFleetHealthCalls.
+type listFleetHealthCall struct {
+	afterBoardID int64
+	devicePrefix string
+	householdID  int64
+	regionID     int64
+	limit        int32
 }
 
 // listConfigHistoryCall is one recorded ListConfigHistory invocation -- see
@@ -220,6 +305,96 @@ func (f *fakeRepo) ListConfigHistory(ctx context.Context, deviceID string, befor
 		limit:         limit,
 	})
 	return f.listConfigHistoryResponse, f.listConfigHistoryErr
+}
+
+// The eight admin (FR10, FR12 activation) repository methods below back
+// server_admin_test.go's coverage of the five admin RPCs -- each records
+// its call args (and, where a test needs to assert "called exactly N
+// times regardless of match count", a counter) so a test proves delegation
+// shape without a live Postgres connection. See admin_elevation_integration_test.go
+// for the real-SQL half of this coverage (e.g. RenewElevation only
+// extending an *already open* row).
+func (f *fakeRepo) AdminBoardHealthByPerson(ctx context.Context, personIdentifier string) ([]AdminBoardHealthRow, error) {
+	f.adminByPersonCalls++
+	f.adminByPersonArg = personIdentifier
+	return f.adminByPersonRows, f.adminByPersonErr
+}
+
+func (f *fakeRepo) AdminBoardHealthByPartialDeviceID(ctx context.Context, partial string) ([]AdminBoardHealthRow, error) {
+	f.adminByPartialCalls++
+	f.adminByPartialArg = partial
+	return f.adminByPartialRows, f.adminByPartialErr
+}
+
+// ListFleetHealth returns the page at listFleetHealthPages[len(calls)-1]
+// (clamped to the last configured page once exhausted), so a test can
+// script a multi-step scan (e.g. an all-filtered-out first batch followed
+// by a matching second batch) across ListFleetHealth's keyset-stepping
+// loop (server.go).
+func (f *fakeRepo) ListFleetHealth(ctx context.Context, afterBoardID int64, devicePrefix string, householdID int64, regionID int64, limit int32) ([]FleetBoardHealthRow, error) {
+	f.listFleetHealthCalls = append(f.listFleetHealthCalls, listFleetHealthCall{
+		afterBoardID: afterBoardID,
+		devicePrefix: devicePrefix,
+		householdID:  householdID,
+		regionID:     regionID,
+		limit:        limit,
+	})
+	if f.listFleetHealthErr != nil {
+		return nil, f.listFleetHealthErr
+	}
+	if len(f.listFleetHealthPages) == 0 {
+		return nil, nil
+	}
+	idx := len(f.listFleetHealthCalls) - 1
+	if idx >= len(f.listFleetHealthPages) {
+		idx = len(f.listFleetHealthPages) - 1
+	}
+	return f.listFleetHealthPages[idx], nil
+}
+
+func (f *fakeRepo) RecordAuditEntry(ctx context.Context, entry audit.Entry) error {
+	f.auditEntries = append(f.auditEntries, entry)
+	return f.recordAuditErr
+}
+
+func (f *fakeRepo) HouseholdExists(ctx context.Context, householdID int64) (bool, error) {
+	f.householdExistsArg = householdID
+	return f.householdExists, f.householdExistsErr
+}
+
+func (f *fakeRepo) OpenElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, expiresAt time.Time, entry audit.Entry) error {
+	f.openElevationCalls = append(f.openElevationCalls, openElevationCall{adminSubject, targetHouseholdID, reason, expiresAt, entry})
+	return f.openElevationErr
+}
+
+func (f *fakeRepo) RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error {
+	f.renewElevationCalls = append(f.renewElevationCalls, renewElevationCall{adminSubject, targetHouseholdID, reason, newExpiresAt, entry})
+	return f.renewElevationErr
+}
+
+func (f *fakeRepo) EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error {
+	f.endElevationCalls = append(f.endElevationCalls, endElevationCall{adminSubject, targetHouseholdID, entry})
+	return f.endElevationErr
+}
+
+// ActiveElevation's zero-value default (no activeElevationErr, no
+// activeElevationExpiresAt configured) is ErrNoActiveElevation, not a
+// silently-granted elevation -- mirroring every other fakeRepo/fakeAuthz
+// zero value in this file, which fails closed (e.g. allPermittingScope
+// above is opt-in, never the default). A test that wants ActiveElevation
+// to report an active elevation must set activeElevationExpiresAt to a
+// non-zero time explicitly.
+func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error) {
+	f.activeElevationCalls++
+	f.activeElevationSubject = adminSubject
+	f.activeElevationHousehold = targetHouseholdID
+	if f.activeElevationErr != nil {
+		return time.Time{}, f.activeElevationErr
+	}
+	if f.activeElevationExpiresAt.IsZero() {
+		return time.Time{}, ErrNoActiveElevation
+	}
+	return f.activeElevationExpiresAt, nil
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call

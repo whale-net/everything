@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/whale-net/everything/leaflab/api/authz"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -89,9 +90,22 @@ func run() error {
 	}
 	defer publisher.Close() //nolint:errcheck
 
+	// FR10.1: "60 minutes, configurable" -- LEAFLAB_ADMIN_ELEVATION_MINUTES
+	// overrides DefaultElevationDuration when set. leaflab/api has no
+	// ENV.md of its own yet (see DefaultElevationDuration's doc comment in
+	// server.go), so this is documented here and there instead.
+	elevationDuration := DefaultElevationDuration
+	if raw := getEnv("LEAFLAB_ADMIN_ELEVATION_MINUTES", ""); raw != "" {
+		minutes, err := strconv.Atoi(raw)
+		if err != nil || minutes <= 0 {
+			return fmt.Errorf("LEAFLAB_ADMIN_ELEVATION_MINUTES: must be a positive integer, got %q", raw)
+		}
+		elevationDuration = time.Duration(minutes) * time.Minute
+	}
+
 	repo := NewRepository(pool)
 	authzSvc := authz.NewPGResolver(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"))
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"), WithElevationDuration(elevationDuration))
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the
