@@ -388,7 +388,7 @@ identically either way, calling only through that interface.
 
 ---
 
-## Rollback (FR40) -- scaffold
+## Rollback (FR40)
 
 `RollbackDeviceConfig(device_ids, to_version, reason, dry_run)` is FR40's
 "rollback writes forward" RPC: it re-pushes `to_version`'s complete stored
@@ -414,11 +414,37 @@ storage side of the same fact: NULL for every version an ordinary
 `config_id` reference, so the column can never point at a version on a
 different board.
 
-Scaffold only: the RPC shape and the column exist; actually loading
-`to_version`'s stored payload, assigning it a new higher version, enforcing
-append-only via a `BEFORE UPDATE` trigger scoped to exclude the device-ack
-columns (`accepted`, `acked_at`, `rejection_reason`), and composing with
-`dry_run`/board-set iteration are Implementation-phase work.
+`rollbackOneBoard` (server.go) loads `to_version`'s row via
+`Repository.GetConfigVersionRow`, which returns the stored `config_json`
+bytes **verbatim** -- never round-tripped through `protojson.Marshal` of a
+decoded copy -- and stores those same bytes again under the new version
+(`liveRollbackWriter.write`). This is what makes FR40's restore guarantee
+exact: the new version's stored payload is byte-identical to `to_version`'s,
+not merely semantically equivalent. `entries` for `device_config_entry`
+provenance are still resolved from the decoded payload and tagged
+`ProvenanceAuthored`, matching an ordinary `scope=COMPLETE` push -- rollback
+never re-validates (FR39) or re-runs sensor-identity/region checks against
+the payload, since it was already validated and accepted as a stored
+payload the moment it was originally pushed (FR82's completeness
+guarantee covers this).
+
+Append-only (NFR6.2) is enforced by `trg_device_config_append_only`
+(migration 035): a `BEFORE UPDATE OR DELETE` trigger that raises on any
+`DELETE`, and on an `UPDATE` that touches any column other than
+`accepted`/`acked_at`/`rejection_reason` -- so the device-ack write path
+(`leaflab/processor`'s `AckDeviceConfig`) keeps working while every other
+column, once written, can never be mutated; a rollback is always a new
+row, never a correction of an old one. Mirrors `016_audit_log`'s trigger
+pattern, scoped differently because `device_config` (unlike `audit_log`)
+has columns that must remain legitimately updatable.
+
+The audit record (FR8) is built by `audit.NewRollbackEntry`: the new
+version is recorded in `EntityID` (filled in by
+`InsertDeviceConfigNextVersion`, the same convention `PushConfig`'s own
+audit entry uses), and the source version (`to_version`) is recorded in
+`Reason` itself, prefixed ahead of the caller's own stated reason -- `Entry`
+has only one free-text/entity slot each, so this is the audit row's only
+home for both facts at once.
 
 ---
 

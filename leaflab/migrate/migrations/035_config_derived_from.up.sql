@@ -21,14 +21,13 @@
 -- silently reference a version on some *other* board, which is never a
 -- meaningful rollback target.
 --
--- Scaffold only: this migration adds the column (and its lookup index).
--- NFR6.2's append-only enforcement -- a BEFORE UPDATE trigger over the
--- columns that define a version's payload, matching 016_audit_log's
--- pattern, scoped so the device-ack columns (accepted, acked_at,
--- rejection_reason) remain updatable -- is Implementation-phase work,
--- added to this same migration file (035_config_derived_from.up.sql) per
--- 016_audit_log's own scaffold-then-feat precedent, rather than as a
--- separate migration number.
+-- Scaffold added the column and its lookup index (below). NFR6.2's
+-- append-only enforcement -- a BEFORE UPDATE trigger over the columns that
+-- define a version's payload, matching 016_audit_log's pattern, scoped so
+-- the device-ack columns (accepted, acked_at, rejection_reason) remain
+-- updatable -- is the Implementation-phase addition to this same migration
+-- file, per 016_audit_log's own scaffold-then-feat precedent, rather than
+-- as a separate migration number; see its own comment further down.
 
 ALTER TABLE device_config
     ADD COLUMN derived_from_version BIGINT NULL,
@@ -41,3 +40,42 @@ ALTER TABLE device_config
 CREATE INDEX idx_device_config_derived_from_version
     ON device_config (board_id, derived_from_version)
     WHERE derived_from_version IS NOT NULL;
+
+-- ── Append-only enforcement (NFR6.2) ─────────────────────────────────────
+-- Implementation-phase half of this migration, per the scaffold's own note
+-- above and 016_audit_log's scaffold-then-feat precedent.
+--
+-- Unlike 016_audit_log's trigger (which forbids UPDATE unconditionally),
+-- this one must let the device-ack path keep working: leaflab/processor's
+-- AckDeviceConfig (leaflab/processor/repository.go) legitimately updates
+-- accepted/acked_at/rejection_reason on an existing row after the device
+-- responds. Every other column defines this version's payload/identity
+-- (board_id, version, config_json, pushed_at, push_group_id,
+-- derived_from_version) and must never be mutated once written -- FR40's
+-- "rollback writes forward" exists specifically so a correction is a new
+-- row, never an UPDATE of an old one. DELETE is forbidden unconditionally;
+-- nothing in this codebase ever deletes a device_config row.
+CREATE FUNCTION enforce_device_config_append_only() RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'device_config is append-only (NFR6.2): DELETE is not permitted (config_id %)', OLD.config_id;
+    END IF;
+
+    IF NEW.board_id IS DISTINCT FROM OLD.board_id
+        OR NEW.version IS DISTINCT FROM OLD.version
+        OR NEW.config_json IS DISTINCT FROM OLD.config_json
+        OR NEW.pushed_at IS DISTINCT FROM OLD.pushed_at
+        OR NEW.push_group_id IS DISTINCT FROM OLD.push_group_id
+        OR NEW.derived_from_version IS DISTINCT FROM OLD.derived_from_version
+    THEN
+        RAISE EXCEPTION 'device_config is append-only (NFR6.2): only accepted/acked_at/rejection_reason may be updated (config_id %)', OLD.config_id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_device_config_append_only
+    BEFORE UPDATE OR DELETE ON device_config
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_device_config_append_only();

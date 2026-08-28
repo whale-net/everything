@@ -75,15 +75,16 @@ const pushInvariantTestSchema = `
 	);
 
 	CREATE TABLE device_config (
-		config_id        BIGSERIAL   PRIMARY KEY,
-		board_id         BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		version          BIGINT      NOT NULL,
-		config_json      JSONB       NOT NULL,
-		accepted         BOOLEAN     NOT NULL DEFAULT FALSE,
-		pushed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		acked_at         TIMESTAMPTZ,
-		rejection_reason TEXT,
-		push_group_id    BIGINT,
+		config_id            BIGSERIAL   PRIMARY KEY,
+		board_id             BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
+		version              BIGINT      NOT NULL,
+		config_json          JSONB       NOT NULL,
+		accepted             BOOLEAN     NOT NULL DEFAULT FALSE,
+		pushed_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		acked_at             TIMESTAMPTZ,
+		rejection_reason     TEXT,
+		push_group_id        BIGINT,
+		derived_from_version BIGINT,
 		UNIQUE (board_id, version)
 	);
 `

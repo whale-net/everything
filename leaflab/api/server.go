@@ -53,7 +53,7 @@ type deviceRepository interface {
 	// bookkeeping into device_config_removal, in the same transaction as
 	// the device_config row -- see Repository.InsertDeviceConfigNextVersion's
 	// doc comment.
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry, pushGroupID *int64) (int64, error)
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry, pushGroupID *int64, derivedFromVersion *int64) (int64, error)
 	// PeekNextConfigVersion is FR38 dry run's read-only "what version would
 	// this assign" -- see Repository.PeekNextConfigVersion.
 	PeekNextConfigVersion(ctx context.Context, boardID int64) (int64, error)
@@ -61,6 +61,9 @@ type deviceRepository interface {
 	// GetConfigVersion is FR37's DiffConfigVersions RPC's exact-version
 	// lookup -- see Repository.GetConfigVersion.
 	GetConfigVersion(ctx context.Context, deviceID string, version uint64) (*configpb.DeviceConfig, error)
+	// GetConfigVersionRow is FR40 RollbackDeviceConfig's source-version
+	// load -- see Repository.GetConfigVersionRow.
+	GetConfigVersionRow(ctx context.Context, deviceID string, version uint64) (ConfigVersionRow, bool, error)
 	// LoadCatalog is FR39's chip/measurement-type catalog snapshot -- see
 	// Repository.LoadCatalog.
 	LoadCatalog(ctx context.Context) (*config.Catalog, error)
@@ -468,7 +471,7 @@ func (w *liveConfigWriter) write(ctx context.Context, t boardTarget, cfgProto *c
 		}
 	}
 
-	version, err := w.repo.InsertDeviceConfigNextVersion(ctx, t.boardID, configJSON, entries, removedEntries, entry, &pushGroupID)
+	version, err := w.repo.InsertDeviceConfigNextVersion(ctx, t.boardID, configJSON, entries, removedEntries, entry, &pushGroupID, nil)
 	if err != nil {
 		w.logger.Error("record config push failed", "device_id", t.deviceID, "error", err)
 		return 0, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")
@@ -1164,6 +1167,291 @@ func ackStateFromRow(row PushGroupBoardRow) pb.AckState {
 		return pb.AckState_ACK_STATE_ACKED
 	}
 	return pb.AckState_ACK_STATE_REJECTED
+}
+
+// RollbackDeviceConfig is FR40's "rollback writes forward" RPC: it never
+// mutates the device_config row at to_version or any other existing row --
+// it only ever loads that version's complete stored payload (FR82
+// guarantees completeness regardless of which scope produced it) and
+// inserts it again as a new, higher version, recording
+// device_config.derived_from_version. Unlike PushDeviceConfigRequest there
+// is no legacy singular device_id field (api.proto's own doc comment) --
+// every named board's outcome is always captured into its own
+// BoardRollbackResult, never surfaced as this call's own RPC error, the
+// same way PushDeviceConfig's board-set path (FR48.1) does.
+func (s *LeafLabAPIServer) RollbackDeviceConfig(ctx context.Context, req *pb.RollbackDeviceConfigRequest) (*pb.RollbackDeviceConfigResponse, error) {
+	if len(req.DeviceIds) == 0 {
+		return nil, contract.InvalidArgument("device_config", "device_ids", "At least one device is required.")
+	}
+	for _, id := range req.DeviceIds {
+		if reason := validateDeviceID(id); reason != "" {
+			return nil, contract.InvalidArgument("device_config", "device_id", reason)
+		}
+	}
+
+	// A rollback always states why -- unlike PushDeviceConfigRequest.reason
+	// (required only once device_ids names more than one board), this is
+	// required regardless of board-set size (api.proto's own doc comment
+	// on RollbackDeviceConfigRequest.reason).
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return nil, contract.InvalidArgument("device_config", "reason", "A rollback requires a stated reason.")
+	}
+
+	// Resolve board identity and household once per target, exactly as
+	// PushDeviceConfig does -- reused both by the FR48/FR5 household-spanning
+	// check below and by each board's own rollback.
+	targets := make([]boardTarget, len(req.DeviceIds))
+	for i, id := range req.DeviceIds {
+		boardID, err := s.repo.GetOrCreateBoard(ctx, id)
+		if err != nil {
+			s.logger.Error("board lookup failed", "device_id", id, "error", err)
+			return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
+		}
+		boardRes, err := s.authzSvc.Resolve(ctx, authz.EntityRef{Kind: authz.EntityBoard, ID: boardID})
+		if err != nil {
+			s.logger.Error("resolve board household failed", "device_id", id, "board_id", boardID, "error", err)
+			return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+		}
+		targets[i] = boardTarget{deviceID: id, boardID: boardID, household: boardRes}
+	}
+
+	// FR48/FR5/FR1.2: a board set spanning more than one household is
+	// refused unless the caller's scope reaches every one of them -- same
+	// guard PushDeviceConfig's own board set applies, since
+	// RollbackDeviceConfig "accepts the same board set as an FR48
+	// multi-board push" (this task's own requirement text).
+	if len(targets) > 1 {
+		if err := s.checkBoardSetHouseholdReach(ctx, targets); err != nil {
+			return nil, err
+		}
+	}
+
+	// FR38-style dry_run: a noopRollbackWriter cannot reach storage or the
+	// publisher at all -- structural, not a boolean re-checked at each call
+	// site below -- so a preview covers exactly the same blast radius a
+	// real rollback would without writing or publishing anything.
+	var writer rollbackWriter
+	if req.DryRun {
+		writer = &noopRollbackWriter{repo: s.repo}
+	} else {
+		writer = &liveRollbackWriter{repo: s.repo, publisher: s.publisher, logger: s.logger, reason: reason, correlationID: CorrelationIDFromContext(ctx)}
+	}
+
+	// One result per targeted board, never collapsed to an aggregate --
+	// mirrors PushDeviceConfig's own FR48.1 board-set path exactly, except
+	// there is no legacy single-board fallback to preserve here (this RPC
+	// never had one).
+	results := make([]*pb.BoardRollbackResult, len(targets))
+	for i, t := range targets {
+		result, err := s.rollbackOneBoard(ctx, t, req.ToVersion, writer)
+		if err != nil {
+			failure, ok := contract.FromError(err)
+			if !ok {
+				s.logger.Error("rollback board failed with no Failure detail", "device_id", t.deviceID, "error", err)
+				failure = &pb.Failure{Class: string(contract.FailureInternal), Reason: "Could not process this request right now. Please try again."}
+			}
+			result = &pb.BoardRollbackResult{DeviceId: t.deviceID, Success: false, Failure: failure}
+		}
+		results[i] = result
+	}
+
+	return &pb.RollbackDeviceConfigResponse{
+		Results:      results,
+		Reason:       reason,
+		RolledBackAt: contract.Now(),
+		ActorSubject: actingSubject(ctx),
+	}, nil
+}
+
+// rollbackWriter is RollbackDeviceConfig's persistence/publish step,
+// separated from rollbackOneBoard's load/diff logic exactly the way
+// configWriter is separated from pushOneBoard -- so dry_run's "cannot
+// reach the writer" is structural. write returns the version this board's
+// rollback assigned (real) or would assign (dry run), and stamps it onto
+// cfgProto.Version so BoardRollbackResult.effective_config always carries
+// it.
+type rollbackWriter interface {
+	write(ctx context.Context, t boardTarget, configJSON []byte, cfgProto *configpb.DeviceConfig, entries []config.Entry, toVersion uint64) (version uint64, err error)
+}
+
+// liveRollbackWriter is rollbackWriter's real implementation: it stores
+// the device_config row (with derived_from_version set to toVersion) and
+// publishes the resulting config over MQTT, exactly as liveConfigWriter
+// does for an ordinary push -- but passing configJSON through verbatim
+// (see ConfigVersionRow.ConfigJSON's doc comment) rather than
+// re-marshaling cfgProto, so the stored payload is byte-identical to
+// toVersion's own (FR40's restore guarantee).
+type liveRollbackWriter struct {
+	repo          deviceRepository
+	publisher     *rmq.Publisher
+	logger        *slog.Logger
+	reason        string
+	correlationID string
+}
+
+func (w *liveRollbackWriter) write(ctx context.Context, t boardTarget, configJSON []byte, cfgProto *configpb.DeviceConfig, entries []config.Entry, toVersion uint64) (uint64, error) {
+	var targetHouseholdID *int64
+	if !t.household.Unclaimed {
+		hh := t.household.HouseholdID
+		targetHouseholdID = &hh
+	}
+
+	// FR8/FR40: the reason, the source version and the new version --
+	// entry.EntityID is filled in with the new version by
+	// InsertDeviceConfigNextVersion itself (matching PushConfig's own
+	// convention); NewRollbackEntry records toVersion in Reason, the only
+	// other free-text slot Entry carries.
+	entry := audit.NewRollbackEntry(actingSubject(ctx), audit.ActorKindHuman, targetHouseholdID, toVersion, w.reason, w.correlationID)
+
+	derivedFrom := int64(toVersion)
+	version, err := w.repo.InsertDeviceConfigNextVersion(ctx, t.boardID, configJSON, entries, nil, entry, nil, &derivedFrom)
+	if err != nil {
+		w.logger.Error("record rollback failed", "device_id", t.deviceID, "to_version", toVersion, "error", err)
+		return 0, contract.Internal("device_config", "", "Could not record this rollback right now. Please try again.")
+	}
+
+	cfgProto.Version = uint64(version)
+	wire, err := proto.Marshal(cfgProto)
+	if err != nil {
+		w.logger.Error("proto marshal failed", "device_id", t.deviceID, "error", err)
+		return 0, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	routingKey := fmt.Sprintf("leaflab.%s.config", strings.ReplaceAll(t.deviceID, "/", "."))
+	if err := w.publisher.Publish(ctx, mqttExchange, routingKey, wire); err != nil {
+		// Row is in DB but publish failed -- device never received the
+		// rollback. The row stays accepted=FALSE, which is correct: no ack
+		// will arrive.
+		w.logger.Error("publish rollback config failed", "device_id", t.deviceID, "error", err)
+		return 0, contract.Internal("device_config", "", "Rollback was recorded but could not be delivered to the device. Please try again.")
+	}
+
+	w.logger.Info("device config rolled back",
+		"device_id", t.deviceID,
+		"to_version", toVersion,
+		"version", version,
+		"sensors", len(cfgProto.Sensors))
+	return uint64(version), nil
+}
+
+// noopRollbackWriter is rollbackWriter's dry-run implementation, mirroring
+// noopConfigWriter: it holds no *rmq.Publisher and never calls
+// InsertDeviceConfigNextVersion -- structurally, not merely by choosing not
+// to -- so a dry run cannot store a device_config row or publish anything.
+type noopRollbackWriter struct {
+	repo deviceRepository
+}
+
+func (w *noopRollbackWriter) write(ctx context.Context, t boardTarget, configJSON []byte, cfgProto *configpb.DeviceConfig, entries []config.Entry, toVersion uint64) (uint64, error) {
+	next, err := w.repo.PeekNextConfigVersion(ctx, t.boardID)
+	if err != nil {
+		return 0, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	cfgProto.Version = uint64(next)
+	return uint64(next), nil
+}
+
+// rollbackOneBoard runs t's board through FR40's rollback logic: load
+// to_version's complete stored payload verbatim (never re-validated or
+// re-materialised -- it was already validated and accepted as a stored
+// payload the moment it was originally pushed, per FR82's completeness
+// guarantee), diff it against the board's current accepted config for the
+// response (the same way pushOneBoard computes BoardPushResult.diff), then
+// hand off to writer for persistence/publish (or, under dry_run, its
+// no-op equivalent).
+func (s *LeafLabAPIServer) rollbackOneBoard(ctx context.Context, t boardTarget, toVersion uint64, writer rollbackWriter) (*pb.BoardRollbackResult, error) {
+	deviceID := t.deviceID
+
+	row, found, err := s.repo.GetConfigVersionRow(ctx, deviceID, toVersion)
+	if err != nil {
+		s.logger.Error("get config version row failed", "device_id", deviceID, "to_version", toVersion, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	if !found {
+		return nil, contract.NotFound(
+			"device_config",
+			"to_version",
+			fmt.Sprintf("Version %d does not exist for this device.", toVersion),
+		)
+	}
+
+	var sourceCfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(row.ConfigJSON, &sourceCfg); err != nil {
+		s.logger.Error("unmarshal source config version failed", "device_id", deviceID, "to_version", toVersion, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	// FR40 re-pushes to_version's payload as scope=COMPLETE: every entry is
+	// authored, exactly as an ordinary scope=COMPLETE push's own entries
+	// are (see pushOneBoard's COMPLETE branch) -- there is no base to
+	// materialise against, and no removes list.
+	entries, err := s.resolveConfigEntries(ctx, sourceCfg.Sensors)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		entries[i].Provenance = config.ProvenanceAuthored
+	}
+
+	// FR37/FR38-style diff: this board's prior accepted config vs. the
+	// effective resulting payload, computed the same way pushOneBoard
+	// computes BoardPushResult.diff/removed.
+	baseCfg, err := s.repo.GetLatestAcceptedConfig(ctx, deviceID)
+	if err != nil {
+		s.logger.Error("get latest accepted config failed", "device_id", deviceID, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	var base []config.Entry
+	if baseCfg != nil {
+		base, err = s.resolveConfigEntries(ctx, baseCfg.Sensors)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	diffs := config.Diff(base, entries)
+	pbDiffs := make([]*pb.EntryDiff, len(diffs))
+	for i, d := range diffs {
+		pbDiffs[i] = entryDiffToProto(d)
+	}
+
+	var removedForResponse []*pb.RemovedEntry
+	for _, d := range diffs {
+		if d.Kind == config.DiffRemoved {
+			removedForResponse = append(removedForResponse, &pb.RemovedEntry{
+				MuxPath:    d.Base.GetMuxPath(),
+				I2CAddress: d.Base.GetI2CAddress(),
+				SensorType: d.Base.GetSensorType(),
+				Form:       pb.RemoveForm_REMOVE_FORM_FULL_KEY,
+			})
+		}
+	}
+
+	// FR40's restore guarantee: cfgProto.Sensors is to_version's own
+	// sensors list, unchanged -- writer.write below stores row.ConfigJSON
+	// verbatim (not a re-marshal of this message), so the stored payload
+	// and this response field describe the identical result.
+	cfgProto := &configpb.DeviceConfig{
+		DeviceId: deviceID,
+		Sensors:  sourceCfg.Sensors,
+	}
+
+	version, err := writer.write(ctx, t, row.ConfigJSON, cfgProto, entries, toVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.BoardRollbackResult{
+		DeviceId:            deviceID,
+		Success:             true,
+		Version:             version,
+		DerivedFromVersion:  toVersion,
+		SourceNeverAccepted: !row.Accepted,
+		Removed:             removedForResponse,
+		EffectiveConfig:     cfgProto,
+		Diff:                pbDiffs,
+	}, nil
 }
 
 // RewireSensor is the explicit API rewire path (FR16): it declares that

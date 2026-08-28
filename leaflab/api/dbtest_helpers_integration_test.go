@@ -55,6 +55,14 @@ func authedCtx() context.Context {
 // argument has somewhere to write; this package's tests pass nil for it
 // today (they don't yet exercise CreatePushGroup/GetPushGroupStatus), so
 // the FK is never exercised, only satisfied for schema validity.
+//
+// device_config.derived_from_version mirrors migration 035's column
+// (FR40) the same way: InsertDeviceConfigNextVersion's derivedFromVersion
+// argument always has somewhere to write, including the tests in this
+// package that pass nil for it. The append-only trigger 035 also adds is
+// deliberately not reproduced here -- same "migration-fidelity concern for
+// a test that runs the real migration file" as audit_log's own trigger,
+// per this comment's audit_log paragraph above.
 const testSchema = `
 	CREATE TABLE board (
 		board_id      BIGSERIAL PRIMARY KEY,
@@ -73,16 +81,18 @@ const testSchema = `
 	);
 
 	CREATE TABLE device_config (
-		config_id        BIGSERIAL   PRIMARY KEY,
-		board_id         BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		version          BIGINT      NOT NULL,
-		config_json      JSONB       NOT NULL,
-		accepted         BOOLEAN     NOT NULL DEFAULT FALSE,
-		pushed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		acked_at         TIMESTAMPTZ,
-		rejection_reason TEXT,
-		push_group_id    BIGINT REFERENCES push_group(push_group_id),
-		UNIQUE (board_id, version)
+		config_id            BIGSERIAL   PRIMARY KEY,
+		board_id             BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
+		version              BIGINT      NOT NULL,
+		config_json          JSONB       NOT NULL,
+		accepted             BOOLEAN     NOT NULL DEFAULT FALSE,
+		pushed_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		acked_at             TIMESTAMPTZ,
+		rejection_reason     TEXT,
+		push_group_id        BIGINT REFERENCES push_group(push_group_id),
+		derived_from_version BIGINT,
+		UNIQUE (board_id, version),
+		FOREIGN KEY (board_id, derived_from_version) REFERENCES device_config (board_id, version)
 	);
 
 	CREATE TABLE audit_log (

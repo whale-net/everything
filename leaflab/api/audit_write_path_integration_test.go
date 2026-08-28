@@ -45,7 +45,7 @@ func TestInsertDeviceConfigNextVersion_CommitsWriteAndAuditRowTogether(t *testin
 		CorrelationID: "corr-push-1",
 	}
 
-	version, err := repo.InsertDeviceConfigNextVersion(ctx, boardID, []byte(`{}`), nil, nil, entry, nil)
+	version, err := repo.InsertDeviceConfigNextVersion(ctx, boardID, []byte(`{}`), nil, nil, entry, nil, nil)
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestInsertDeviceConfigNextVersion_FailedWriteLeavesNoAuditRow(t *testing.T)
 
 	const neverInsertedBoardID = int64(999999)
 
-	_, err := repo.InsertDeviceConfigNextVersion(ctx, neverInsertedBoardID, []byte(`{}`), nil, nil, testAuditEntry(), nil)
+	_, err := repo.InsertDeviceConfigNextVersion(ctx, neverInsertedBoardID, []byte(`{}`), nil, nil, testAuditEntry(), nil, nil)
 	if err == nil {
 		t.Fatal("InsertDeviceConfigNextVersion against a nonexistent board_id succeeded, want a foreign-key failure")
 	}

@@ -1,16 +1,20 @@
 package audit
 
-// Actions naming the three FR8-named operations whose audit record must
-// carry a reason (FR10 elevation, FR48 multi-board push, FR77 transfer).
-// None of these RPCs exist yet -- each lands in a later Phase 2/4 task --
-// but the constructors below exist now so that when they do, building
-// their audit Entry goes through a function that cannot compile without a
+import "fmt"
+
+// Actions naming the FR8-named operations whose audit record must carry a
+// reason (FR10 elevation, FR48 multi-board push, FR77 transfer, FR40
+// rollback). The constructors below exist so that building one of these
+// Entry values goes through a function that cannot compile without a
 // reason, rather than through the general-purpose Entry literal where
 // Reason is an easily-forgotten *string.
 const (
 	ActionElevate        = "Elevate"
 	ActionMultiBoardPush = "MultiBoardPush"
 	ActionTransfer       = "Transfer"
+	// ActionRollback is FR40's "rollback writes forward" audit action --
+	// see NewRollbackEntry.
+	ActionRollback = "Rollback"
 )
 
 // ActionApplyConfigRegionSkip and EntityKindSensor name the FR8 audit
@@ -71,6 +75,31 @@ func NewTransferEntry(actorSubject string, actorKind ActorKind, targetHouseholdI
 		EntityKind:        "board",
 		EntityID:          entityID,
 		Reason:            &reason,
+		CorrelationID:     correlationID,
+	}
+}
+
+// NewRollbackEntry builds the audit Entry for an FR40 rollback. reason is a
+// plain string, not *string: a rollback cannot be audited without one --
+// unlike FR48 multi-board push, this is required regardless of how many
+// boards the rollback targets.
+//
+// FR40/FR8 require the audit record to carry the reason, the source
+// version and the new version. The new version is recorded the same way
+// PushConfig's own audit entry is: the repository write path
+// (InsertDeviceConfigNextVersion) fills in EntityID with the version it
+// just assigned. Entry has only that one EntityID slot, so the source
+// version (toVersion) is recorded here, in Reason itself -- the only other
+// place this Entry carries free text -- rather than dropped.
+func NewRollbackEntry(actorSubject string, actorKind ActorKind, targetHouseholdID *int64, toVersion uint64, reason string, correlationID string) Entry {
+	fullReason := fmt.Sprintf("Rollback to version %d: %s", toVersion, reason)
+	return Entry{
+		ActorSubject:      actorSubject,
+		ActorKind:         actorKind,
+		TargetHouseholdID: targetHouseholdID,
+		Action:            ActionRollback,
+		EntityKind:        "device_config",
+		Reason:            &fullReason,
 		CorrelationID:     correlationID,
 	}
 }

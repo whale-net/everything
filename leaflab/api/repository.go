@@ -243,7 +243,13 @@ func (r *Repository) GetPushGroupBoards(ctx context.Context, pushGroupID int64) 
 // produces links to the same push_group_id, which is how
 // GetPushGroupStatus later reads that call's per-board ack state back as a
 // group.
-func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry, pushGroupID *int64) (int64, error) {
+//
+// derivedFromVersion is FR40 rollback's own device_config-to-device_config
+// link (migration 035): nil for every version an ordinary PushDeviceConfig
+// call produces (there is nothing to derive from), non-nil -- set to the
+// to_version RollbackDeviceConfig named -- for the new version a rollback
+// call inserts. See server.go's RollbackDeviceConfig/rollbackOneBoard.
+func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry, pushGroupID *int64, derivedFromVersion *int64) (int64, error) {
 	var version int64
 	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
 		var configID int64
@@ -254,11 +260,11 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 					FROM device_config
 					WHERE board_id = $1
 				)
-				INSERT INTO device_config (board_id, version, config_json, push_group_id)
-				SELECT $1, next.v, $2, $3 FROM next
+				INSERT INTO device_config (board_id, version, config_json, push_group_id, derived_from_version)
+				SELECT $1, next.v, $2, $3, $4 FROM next
 				ON CONFLICT (board_id, version) DO NOTHING
 				RETURNING config_id, version
-			`, boardID, configJSON, pushGroupID).Scan(&configID, &version)
+			`, boardID, configJSON, pushGroupID, derivedFromVersion).Scan(&configID, &version)
 			if err == nil {
 				break
 			}
@@ -386,6 +392,52 @@ func (r *Repository) GetConfigVersion(ctx context.Context, deviceID string, vers
 		return nil, fmt.Errorf("unmarshal stored config version %d for %s: %w", version, deviceID, err)
 	}
 	return &cfg, nil
+}
+
+// ConfigVersionRow is one device_config row's rollback-relevant fields --
+// see GetConfigVersionRow.
+type ConfigVersionRow struct {
+	// ConfigJSON is the stored payload's raw bytes, exactly as persisted --
+	// never round-tripped through protojson.Unmarshal/Marshal. FR40's
+	// restore guarantee (resting on FR82's stored-payload completeness)
+	// requires a rollback's new version be byte-identical to the version
+	// it rolled back to; re-marshaling a decoded proto is not guaranteed to
+	// reproduce identical bytes (field order, float formatting), so
+	// RollbackDeviceConfig stores this value verbatim rather than
+	// protojson.Marshal-ing a decoded copy of it.
+	ConfigJSON []byte
+	// Accepted is this version's own accepted flag -- FALSE covers both
+	// "still pending, no ack yet" and "rejected" (see 007_device_config's
+	// column comment). FR40's BoardRollbackResult.source_never_accepted is
+	// exactly !Accepted: FR35.2 makes any version fetchable, and rolling
+	// back to one that was rejected or never acked is permitted, but the
+	// caller must be told so rather than assume the "restored" state was
+	// ever actually live on the device.
+	Accepted bool
+}
+
+// GetConfigVersionRow returns deviceID's exact version's raw config_json
+// bytes and accepted status -- FR40 RollbackDeviceConfig's source-version
+// load. Unlike GetConfigVersion (which decodes into a *configpb.DeviceConfig
+// for FR37's DiffConfigVersions), this returns the payload untouched; see
+// ConfigVersionRow.ConfigJSON. found=false when no such row exists for this
+// board (an unknown to_version), matching GetConfigVersion's own "unknown
+// version" contract.
+func (r *Repository) GetConfigVersionRow(ctx context.Context, deviceID string, version uint64) (row ConfigVersionRow, found bool, err error) {
+	err = r.db.QueryRow(ctx, `
+		SELECT dc.config_json, dc.accepted
+		FROM device_config dc
+		JOIN board b ON b.board_id = dc.board_id
+		WHERE b.device_id = $1
+		  AND dc.version = $2
+	`, deviceID, int64(version)).Scan(&row.ConfigJSON, &row.Accepted)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ConfigVersionRow{}, false, nil
+		}
+		return ConfigVersionRow{}, false, fmt.Errorf("get config version row %d for %s: %w", version, deviceID, err)
+	}
+	return row, true, nil
 }
 
 // LoadCatalog resolves FR39's Catalog snapshot -- every (chip, sensor_type)

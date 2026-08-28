@@ -74,16 +74,18 @@ const scopeSchema = `
 	);
 
 	CREATE TABLE device_config (
-		config_id        BIGSERIAL   PRIMARY KEY,
-		board_id         BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		version          BIGINT      NOT NULL,
-		config_json      JSONB       NOT NULL,
-		accepted         BOOLEAN     NOT NULL DEFAULT FALSE,
-		pushed_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		acked_at         TIMESTAMPTZ,
-		rejection_reason TEXT,
-		push_group_id    BIGINT REFERENCES push_group(push_group_id),
-		UNIQUE (board_id, version)
+		config_id            BIGSERIAL   PRIMARY KEY,
+		board_id             BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
+		version              BIGINT      NOT NULL,
+		config_json          JSONB       NOT NULL,
+		accepted             BOOLEAN     NOT NULL DEFAULT FALSE,
+		pushed_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		acked_at             TIMESTAMPTZ,
+		rejection_reason     TEXT,
+		push_group_id        BIGINT REFERENCES push_group(push_group_id),
+		derived_from_version BIGINT,
+		UNIQUE (board_id, version),
+		FOREIGN KEY (board_id, derived_from_version) REFERENCES device_config (board_id, version)
 	);
 
 	-- Mirrors migration 028_config_entry_provenance.up.sql exactly.
@@ -244,7 +246,7 @@ func TestInsertDeviceConfigNextVersion_RecordsProvenancePerEntry(t *testing.T) {
 		t.Fatalf("marshal config: %v", err)
 	}
 
-	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry(), nil)
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry(), nil, nil)
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion: %v", err)
 	}
@@ -298,7 +300,7 @@ func TestInsertDeviceConfigNextVersion_UnresolvedSensorType_SkipsRowStillStoresJ
 		t.Fatalf("marshal config: %v", err)
 	}
 
-	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry(), nil)
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry(), nil, nil)
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion with an unresolved sensor_type returned an error, want success: %v", err)
 	}
@@ -367,7 +369,7 @@ func TestInsertDeviceConfigNextVersion_RecordsRemovalPerEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, result.Entries, result.Removed, testAuditEntry(), nil)
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, result.Entries, result.Removed, testAuditEntry(), nil, nil)
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion: %v", err)
 	}
@@ -447,7 +449,7 @@ func TestInsertDeviceConfigNextVersion_RemovalUnresolvedSensorType_SkipsRowStill
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, nil, removed, testAuditEntry(), nil)
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, nil, removed, testAuditEntry(), nil, nil)
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion with an unresolved removal sensor_type returned an error, want success: %v", err)
 	}
@@ -481,14 +483,14 @@ func TestGetLatestAcceptedConfig_OnlyAcceptedRows(t *testing.T) {
 	}
 
 	v1JSON, _ := protojson.Marshal(&configpb.DeviceConfig{DeviceId: "device-a", Sensors: []*configpb.SensorConfig{{Name: "v1"}}})
-	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, v1JSON, nil, nil, testAuditEntry(), nil)
+	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, v1JSON, nil, nil, testAuditEntry(), nil, nil)
 	if err != nil {
 		t.Fatalf("insert v1: %v", err)
 	}
 	markAccepted(t, pool, boardID, v1)
 
 	v2JSON, _ := protojson.Marshal(&configpb.DeviceConfig{DeviceId: "device-a", Sensors: []*configpb.SensorConfig{{Name: "v2-pending"}}})
-	if _, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, v2JSON, nil, nil, testAuditEntry(), nil); err != nil {
+	if _, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, v2JSON, nil, nil, testAuditEntry(), nil, nil); err != nil {
 		t.Fatalf("insert v2: %v", err)
 	}
 	// v2 deliberately left un-acked (accepted=FALSE, the column default).
@@ -549,7 +551,7 @@ func TestEditMaterialisationBase_NeverTheReportedManifest_RealDB(t *testing.T) {
 		DeviceId: "device-a",
 		Sensors:  []*configpb.SensorConfig{{Name: "accepted-light", I2CAddress: 0x23}},
 	})
-	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, acceptedJSON, nil, nil, testAuditEntry(), nil)
+	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, acceptedJSON, nil, nil, testAuditEntry(), nil, nil)
 	if err != nil {
 		t.Fatalf("insert accepted config: %v", err)
 	}
@@ -643,7 +645,7 @@ func TestScenarioFile_RoundTrip_RealDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal config: %v", err)
 	}
-	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry(), nil)
+	version, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, nil, testAuditEntry(), nil, nil)
 	if err != nil {
 		t.Fatalf("InsertDeviceConfigNextVersion: %v", err)
 	}
@@ -703,7 +705,7 @@ func TestDroppedSensor_RowAndReadingsUntouched_RealDB(t *testing.T) {
 		DeviceId: "device-a",
 		Sensors:  []*configpb.SensorConfig{{Name: "light", I2CAddress: 0x23}},
 	})
-	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, acceptedJSON, nil, nil, testAuditEntry(), nil)
+	v1, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, acceptedJSON, nil, nil, testAuditEntry(), nil, nil)
 	if err != nil {
 		t.Fatalf("insert accepted config: %v", err)
 	}
@@ -733,7 +735,7 @@ func TestDroppedSensor_RowAndReadingsUntouched_RealDB(t *testing.T) {
 	}
 
 	editJSON, _ := protojson.Marshal(&configpb.DeviceConfig{DeviceId: "device-a", Sensors: nil})
-	if _, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, editJSON, result.Entries, result.Removed, testAuditEntry(), nil); err != nil {
+	if _, err := server.repo.InsertDeviceConfigNextVersion(ctx, boardID, editJSON, result.Entries, result.Removed, testAuditEntry(), nil, nil); err != nil {
 		t.Fatalf("insert edit config: %v", err)
 	}
 

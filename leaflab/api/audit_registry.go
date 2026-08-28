@@ -11,6 +11,10 @@ import (
 // healthFullMethod.
 const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 
+// rollbackDeviceConfigFullMethod is RollbackDeviceConfig's full gRPC
+// method name (FR40).
+const rollbackDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/RollbackDeviceConfig"
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
 // registry for this service: every RPC that performs a write. A method
 // listed here with no corresponding entry in auditRegistrations fails
@@ -30,6 +34,7 @@ const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
 // independent, though worth a look for consolidation once #1351 lands.
 var declaredWriteMethods = []string{
 	pushDeviceConfigFullMethod,
+	rollbackDeviceConfigFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
@@ -37,7 +42,8 @@ var declaredWriteMethods = []string{
 // audit.Entry.Action/EntityKind at the call site -- see server.go's
 // PushDeviceConfig).
 var auditRegistrations = map[string]audit.Registration{
-	pushDeviceConfigFullMethod: {Action: "PushConfig", EntityKind: "device_config"},
+	pushDeviceConfigFullMethod:     {Action: "PushConfig", EntityKind: "device_config"},
+	rollbackDeviceConfigFullMethod: {Action: audit.ActionRollback, EntityKind: "device_config"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry

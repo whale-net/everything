@@ -86,6 +86,14 @@ type fakeRepo struct {
 	// own "unknown version" contract.
 	getConfigVersionResponses map[uint64]*configpb.DeviceConfig
 
+	// getConfigVersionRowResponses/getConfigVersionRowErr configure
+	// GetConfigVersionRow's return per version -- FR40 RollbackDeviceConfig's
+	// source-version load. A version with no entry here returns
+	// found=false, matching Repository.GetConfigVersionRow's own "unknown
+	// version" contract.
+	getConfigVersionRowResponses map[uint64]ConfigVersionRow
+	getConfigVersionRowErr       error
+
 	// loadCatalogResponse configures LoadCatalog's return -- FR39's
 	// chip/measurement-type catalog snapshot. nil (the zero value) is a
 	// usable, empty Catalog (config.Catalog's own nil-safe Produces), so
@@ -135,14 +143,15 @@ func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64
 // empty, not just that PushDeviceConfig returned an error.
 // insertDeviceConfigNextVersionVersion/-Err configure what each call
 // returns.
-func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []pushconfig.Entry, removed []pushconfig.RemovedEntry, entry audit.Entry, pushGroupID *int64) (int64, error) {
+func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []pushconfig.Entry, removed []pushconfig.RemovedEntry, entry audit.Entry, pushGroupID *int64, derivedFromVersion *int64) (int64, error) {
 	f.insertDeviceConfigNextVersionCalls = append(f.insertDeviceConfigNextVersionCalls, insertDeviceConfigNextVersionCall{
-		boardID:     boardID,
-		configJSON:  configJSON,
-		entries:     entries,
-		removed:     removed,
-		entry:       entry,
-		pushGroupID: pushGroupID,
+		boardID:            boardID,
+		configJSON:         configJSON,
+		entries:            entries,
+		removed:            removed,
+		entry:              entry,
+		pushGroupID:        pushGroupID,
+		derivedFromVersion: derivedFromVersion,
 	})
 	return f.insertDeviceConfigNextVersionVersion, f.insertDeviceConfigNextVersionErr
 }
@@ -150,12 +159,13 @@ func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID in
 // insertDeviceConfigNextVersionCall is one recorded
 // InsertDeviceConfigNextVersion invocation -- see fakeRepo's doc comment.
 type insertDeviceConfigNextVersionCall struct {
-	boardID     int64
-	configJSON  []byte
-	entries     []pushconfig.Entry
-	removed     []pushconfig.RemovedEntry
-	entry       audit.Entry
-	pushGroupID *int64
+	boardID            int64
+	configJSON         []byte
+	entries            []pushconfig.Entry
+	removed            []pushconfig.RemovedEntry
+	entry              audit.Entry
+	pushGroupID        *int64
+	derivedFromVersion *int64
 }
 
 // peekNextConfigVersionResponse configures PeekNextConfigVersion's return
@@ -201,6 +211,19 @@ func (f *fakeRepo) GetRegionApplySkips(ctx context.Context, deviceID string) ([]
 
 func (f *fakeRepo) GetConfigVersion(ctx context.Context, deviceID string, version uint64) (*configpb.DeviceConfig, error) {
 	return f.getConfigVersionResponses[version], nil
+}
+
+// getConfigVersionRowResponses/-Found configure GetConfigVersionRow's
+// return per version -- FR40 RollbackDeviceConfig's source-version load. A
+// version with no entry here (and not found via getConfigVersionRowFound)
+// returns found=false, matching Repository.GetConfigVersionRow's own
+// "unknown version" contract.
+func (f *fakeRepo) GetConfigVersionRow(ctx context.Context, deviceID string, version uint64) (ConfigVersionRow, bool, error) {
+	row, ok := f.getConfigVersionRowResponses[version]
+	if !ok {
+		return ConfigVersionRow{}, false, f.getConfigVersionRowErr
+	}
+	return row, true, f.getConfigVersionRowErr
 }
 
 func (f *fakeRepo) LoadCatalog(ctx context.Context) (*pushconfig.Catalog, error) {
