@@ -1,5 +1,12 @@
 load("//tools/bazel:release.bzl", "release_helm_chart")
 
+# DATA.md is a data dependency for doc-coverage conformance tests
+# (leaflab/api/suspect:doc_coverage_test, leaflab/migrate:doc_coverage_test)
+# that assert the schema and the suspect-check registry never drift out of
+# sync with this file's documentation (NFR17 Phase-3 set, #1367's Testing
+# section).
+exports_files(["DATA.md"])
+
 release_helm_chart(
     name = "leaflab_chart",
     chart_name = "leaflab",

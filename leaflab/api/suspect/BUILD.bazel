@@ -18,3 +18,17 @@ go_test(
     srcs = ["suspect_test.go"],
     embed = [":suspect"],
 )
+
+# NFR17 Phase-3 doc-coverage conformance check (#1367's Testing section):
+# every Check All() returns has a matching entry in leaflab/DATA.md's
+# "Suspect Checks" table. See doc_coverage_test.go's doc comment for why
+# this lives here rather than in the (not-yet-merged) leaflab/conformance/
+# package. No database, no build tag -- runs in every plain
+# `bazel test //leaflab/...`.
+go_test(
+    name = "doc_coverage_test",
+    size = "small",
+    srcs = ["doc_coverage_test.go"],
+    data = ["//leaflab:DATA.md"],
+    embed = [":suspect"],
+)

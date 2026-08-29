@@ -21,6 +21,21 @@ release_app(
     app_type = "job",
 )
 
+# NFR17 Phase-3 doc-coverage conformance check (#1367's Testing section):
+# every table/continuous-aggregate created by the Phase-3 migrations named
+# in phase3Entities (doc_coverage_test.go) is documented in leaflab/DATA.md
+# and classified SCD2/not-SCD2 consistently with its own migration-declared
+# shape. See doc_coverage_test.go's doc comment for why this lives here
+# rather than in the (not-yet-merged) leaflab/conformance/ package. No
+# database, no build tag -- runs in every plain `bazel test //leaflab/...`.
+go_test(
+    name = "doc_coverage_test",
+    size = "small",
+    srcs = ["doc_coverage_test.go"],
+    data = ["//leaflab:DATA.md"],
+    embedsrcs = glob(["migrations/*.sql"]),
+)
+
 # Real-Postgres integration coverage for migration 015_ownership's backfill
 # DML (FR70.1, FR1.1, NFR8, A9, NFR6.1, NFR6.3) -- see
 # ownership_migration_integration_test.go's doc comment and
