@@ -44,7 +44,7 @@ Example: `/project-manager:design "device firmware rollback" --stakeholder-meeti
 
    **With `--milestone`:** title the discussion `Intake: M<n> — <outcome sentence>` and open it with the milestone's roadmap entry quoted, so the scope contract is visible in the discussion itself. Then post `gh issue comment <product-issue> --body "Ledger: M<n> → in design (<discussion-url>)"` before interviewing — never edit the tracking issue's body. Interview only about this milestone's outcome — vision, personas, and non-goals are already settled in the brief, and re-opening them turns a milestone spec back into a product spec.
 
-3. **Draft the specification.** Dispatch the `project-manager:producer` subagent with the intake transcript and discussion URL, instructing it to run Mode 1: post the draft specification (user stories, FRs, NFRs, personas, out-of-scope) as a comment on the Discussion.
+3. **Draft the specification.** Dispatch the `project-manager:producer` subagent with the intake transcript and discussion URL, instructing it to run Mode 1: write the draft specification (user stories, FRs, NFRs, personas, out-of-scope) to the working-draft gist and post a short summary comment on the Discussion (CONVENTIONS.md § Working draft).
 
    **With `--milestone`:** also pass the product issue number and milestone id, and instruct it to follow § Drafting under a product brief — first line `Product: #<n> — Milestone M<k>: <outcome>`, every FR citing a capability from the milestone's `Delivers` list, and out-of-scope entries naming the milestone each deferral went to.
 
@@ -53,7 +53,7 @@ Example: `/project-manager:design "device firmware rollback" --stakeholder-meeti
    **With `--milestone`:** architect picks up the product issue from the draft's first line and runs its **Load-bearing check** (architect.md § Process) — the pass that blocks a draft foreclosing a `Later` capability the milestone was supposed to protect. This is the step that makes small milestones safe rather than merely small, so do not skip architect on a milestone that looks trivially scoped.
 
 5. **Loop in Discussion until architect sign-off:**
-   - If architect raised open questions: dispatch `project-manager:producer` with the discussion URL to run Mode 2 (answer questions, update draft in discussion comments), then dispatch `project-manager:architect` again.
+   - If architect raised open questions: dispatch `project-manager:producer` with the discussion URL to run Mode 2 (answer questions in a bounded comment, update draft in the working-draft gist), then dispatch `project-manager:architect` again.
    - Repeat until architect posts `Architect sign-off: approved`, or cap at 5 rounds and summarize for the user if stuck.
 
 6. **Stakeholder meeting (only with `--stakeholder-meeting`).** Once architect has signed off, invoke `/project-manager:stakeholder-meeting <discussion-url>` — passing `--personas` through if given — and follow that skill's steps: it dispatches one `project-manager:stakeholder` subagent per persona named in the spec, then posts consolidated minutes ending in `Stakeholder meeting: cleared` or `Stakeholder meeting: blocked (<k> blockers)`.

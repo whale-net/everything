@@ -114,7 +114,7 @@ Readers (`design --milestone`'s idempotency check, `/project-manager:status`, ar
 
    Push back on scope here, not later. When the requester describes the end state, the useful follow-up is "what would you cut to have this working next week?" — the answer is usually M1.
 
-4. **Draft the brief.** Dispatch `project-manager:producer` (Mode P1) with the intake transcript and discussion URL: post the draft brief — vision, personas, capability map, non-goals — as a discussion comment. No current state, no load-bearing decisions, no roadmap yet; those need architect first.
+4. **Draft the brief.** Dispatch `project-manager:producer` (Mode P1) with the intake transcript and discussion URL: write the draft brief — vision, personas, capability map, non-goals — to the working-draft gist and post a short summary comment on the Discussion (CONVENTIONS.md § Working draft). No current state, no load-bearing decisions, no roadmap yet; those need architect first.
 
 5. **Architect current-state pass and load-bearing decisions.** Dispatch `project-manager:architect` with the discussion URL, instructing it to run its **Product mode**: survey what already exists in the affected domains, post the **Current state** section, then derive **Load-bearing decisions** from the capability map's `Next`/`Later` buckets, plus open questions and nitpicks on the draft.
 
