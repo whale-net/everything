@@ -818,6 +818,15 @@ func TestAssertApps_ThenRecordArtifact_NoReconcileNeeded_Postgres(t *testing.T) 
 		t.Fatalf("record build: %v", err)
 	}
 
+	if _, err := artSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "acme-unmerged-branch-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/acme/unmerged-branch-app",
+		IdempotencyKey: "unmerged-artifact-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	artResp, err := artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "acme-unmerged-branch-app", Version: "v1.0.0", Digest: "sha256:unmerged1",

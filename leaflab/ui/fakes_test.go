@@ -22,13 +22,23 @@ import (
 // --- fakes --------------------------------------------------------------
 
 // fakeLeafLabClient is a minimal stand-in for pb.LeafLabAPIClient covering
-// only GetHealth, which is all handleHome calls (Phase 1 / FR13 scope).
+// GetHealth (handleHome's own probe) and ListBoards (handleHome delegates
+// to handleBoards once healthy -- #1330 makes the boards screen the Phase
+// 1 post-login landing route, so any test that drives an authenticated
+// request through "/" now reaches ListBoards too).
 type fakeLeafLabClient struct {
 	pb.LeafLabAPIClient
 
 	healthResp  *pb.GetHealthResponse
 	healthErr   error
 	healthCalls int
+
+	// boardsResp defaults to an empty page (no boards, no error) when nil
+	// and boardsErr is unset, so tests that only care about the health
+	// gate don't have to stub ListBoards themselves.
+	boardsResp  *pb.ListBoardsResponse
+	boardsErr   error
+	boardsCalls int
 }
 
 func (f *fakeLeafLabClient) GetHealth(ctx context.Context, in *pb.GetHealthRequest, opts ...grpc.CallOption) (*pb.GetHealthResponse, error) {
@@ -37,6 +47,17 @@ func (f *fakeLeafLabClient) GetHealth(ctx context.Context, in *pb.GetHealthReque
 		return nil, f.healthErr
 	}
 	return f.healthResp, nil
+}
+
+func (f *fakeLeafLabClient) ListBoards(ctx context.Context, in *pb.ListBoardsRequest, opts ...grpc.CallOption) (*pb.ListBoardsResponse, error) {
+	f.boardsCalls++
+	if f.boardsErr != nil {
+		return nil, f.boardsErr
+	}
+	if f.boardsResp != nil {
+		return f.boardsResp, nil
+	}
+	return &pb.ListBoardsResponse{}, nil
 }
 
 // devAuth returns an AuthModeNone authenticator: RequireAuth injects a

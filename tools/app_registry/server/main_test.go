@@ -45,7 +45,7 @@ func startTestServer(t *testing.T) *grpc.ClientConn {
 		grpc.ChainUnaryInterceptor(unaryInt),
 		grpc.ChainStreamInterceptor(streamInt),
 	)
-	registerServices(grpcServer, fake.New(), nil, "", "", "", "", "")
+	registerServices(grpcServer, fake.New(), nil, nil, "", "", "", "", "")
 
 	go func() {
 		// Serve returns a non-nil error on Stop()/GracefulStop() too; the
@@ -141,15 +141,13 @@ func TestRegisterServices_AllFourServicesReachable(t *testing.T) {
 		}
 	})
 
-	// AllocateVersion is real as of AR-5a (see PLAN.md's AR-5 status), but
-	// still unreachable in production: every domain defaults to adoption
-	// stage "observe" (no domain_adoption row), so an empty request reaches
-	// the real handler and fails validation ("kind is required") rather
-	// than codes.Unimplemented's "unknown service"/"not implemented" —
-	// still enough to prove pb.RegisterArtifactRegistryServer wasn't
-	// dropped, which is this whole test's job. See handlers/artifact_test.go
-	// for AllocateVersion's actual business-logic coverage (gate, retry,
-	// idempotency replay).
+	// AllocateVersion serves every domain unconditionally. An empty
+	// request reaches the real handler and fails
+	// validation ("kind is required") rather than codes.Unimplemented's
+	// "unknown service"/"not implemented" — enough to prove
+	// pb.RegisterArtifactRegistryServer wasn't dropped, which is this whole
+	// test's job. See handlers/artifact_test.go for AllocateVersion's actual
+	// business-logic coverage (retry, idempotency replay).
 	t.Run("ArtifactRegistry_AllocateVersion_ReachesRealHandler", func(t *testing.T) {
 		client := pb.NewArtifactRegistryClient(conn)
 		_, err := client.AllocateVersion(ctx, &pb.AllocateVersionRequest{})

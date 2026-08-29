@@ -246,9 +246,20 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
 	mux.HandleFunc("/auth/logout", app.auth.HandleLogout)
 
-	// Protected routes. Only "/" is scaffolded here (Phase 1, FR13) — the
-	// device/region/reading screens are later tasks on this plan.
+	// Protected routes. "/" is the Phase 1 (FR13) landing route: it
+	// health-gates (NFR14) and then delegates straight to handleBoards, the
+	// Phase 1 read-only boards screen (NFR18.2, NFR19, FR64 -- #1330).
+	// "/boards" reaches that same screen directly (a bookmark, or FR61's
+	// "load more" continuation base path); "/boards/rows" is the htmx
+	// partial route components.BoardsRows's own "Load more" button hits for
+	// each subsequent keyset page. All three share the same
+	// RequireAuthFunc + WithAccessToken wrapping, so every gRPC call this
+	// screen makes carries the signed-in user's own forwarded token
+	// (NFR18.1). The device/region/reading detail screens are later tasks
+	// on this plan.
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
+	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoards)))
+	mux.HandleFunc("/boards/rows", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoardsRows)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

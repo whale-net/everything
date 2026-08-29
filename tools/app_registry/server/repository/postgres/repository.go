@@ -51,9 +51,6 @@ func (r *Registry) Environments() repository.EnvironmentRepository {
 }
 func (r *Registry) Promotions() repository.PromotionRepository { return &promotionRepo{ex: r.ex} }
 func (r *Registry) Writeback() repository.WritebackRepository  { return &writebackRepo{ex: r.ex} }
-func (r *Registry) DomainAdoption() repository.DomainAdoptionRepository {
-	return &domainAdoptionRepo{ex: r.ex}
-}
 func (r *Registry) ReleaseRuns() repository.ReleaseRunRepository { return &releaseRunRepo{ex: r.ex} }
 func (r *Registry) AppBuildLogs() repository.AppBuildLogRepository {
 	return &appBuildLogRepo{ex: r.ex}

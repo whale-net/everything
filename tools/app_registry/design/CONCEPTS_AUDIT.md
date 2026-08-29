@@ -104,12 +104,13 @@ CI workflows, not a registry-stored value. No RPC could expose "is opt-in
 on" without this UI also integrating with the GitHub Actions API — a
 materially different capability than anything else here.
 
-### 7. `domain_adoption.stage` visibility ("is this domain actually in use")
+### 7. `domain_adoption.stage` visibility ("is this domain actually in use") — RESOLVED, moot
 
-Also not present in any screen, and OPERATIONS.md is explicit about why:
-"no admin RPC/CLI exists yet — this is a direct `SELECT` against Postgres."
-Surfacing "is domain X at `observe`/`promote`/`allocate`" anywhere in this
-UI would need a new RPC that doesn't exist yet, not just a new screen.
+Also not present in any screen. This was flagged because surfacing "is
+domain X at `observe`/`promote`/`allocate`" anywhere in this UI would have
+needed a new RPC that didn't exist. The question is now moot: `domain_adoption`
+is dropped, and every domain is unconditionally allocated — there is no
+per-domain stage left to surface, so this gap cannot recur.
 
 ## UI-imposed policy, not a server-side constraint
 

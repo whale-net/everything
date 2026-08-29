@@ -67,6 +67,15 @@ func TestResolveBinaryURL_KnownBinaryAndVersion(t *testing.T) {
 	artifactSrv, build := setupResolveBinaryURL(t)
 	ctx := authedCtx()
 
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY,
+		OwnerFullName: "tools-release_helper_go", Version: "v1.2.3",
+		Repository:     "github.com/whale-net/everything",
+		IdempotencyKey: "record-resolve-binary-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_BINARY,
 		OwnerFullName: "tools-release_helper_go", Digest: "sha256:resolvebinary", Version: "v1.2.3",
