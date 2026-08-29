@@ -67,12 +67,15 @@ go_test(
 )
 
 # Real-Postgres integration coverage for migration 015_ownership's backfill
-# DML (FR70.1, FR1.1, NFR8, A9, NFR6.1, NFR6.3) and migration 016_audit_log's
-# append-only enforcement (FR8, NFR6.2, NFR6.3) -- see
-# ownership_migration_integration_test.go's and
-# audit_log_migration_integration_test.go's doc comments and
-# //libs/go/dbtest/README.md. Both files share this one target because
-# audit_log_migration_integration_test.go reuses ownership's
+# DML (FR70.1, FR1.1, NFR8, A9, NFR6.1, NFR6.3), migration 016_audit_log's
+# append-only enforcement (FR8, NFR6.2, NFR6.3), and migration
+# 035_config_derived_from's own append-only enforcement (FR40, NFR6.2) -- see
+# ownership_migration_integration_test.go's,
+# audit_log_migration_integration_test.go's, and
+# config_derived_from_migration_integration_test.go's doc comments and
+# //libs/go/dbtest/README.md. All three files share this one target because
+# audit_log_migration_integration_test.go and
+# config_derived_from_migration_integration_test.go reuse ownership's
 # migrations/timescaleImage package-level fixtures rather than redeclaring
 # them. Hand-written (not gazelle-generated), same rationale and EXACT tag
 # set as leaflab/api's *_integration_test targets. `# keep` tells a later
@@ -89,6 +92,7 @@ go_test(
     timeout = "long",
     srcs = [
         "audit_log_migration_integration_test.go",
+        "config_derived_from_migration_integration_test.go",
         "ownership_migration_integration_test.go",
     ],
     embedsrcs = glob(["migrations/*.sql"]),
