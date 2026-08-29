@@ -1,7 +1,8 @@
 # leaflab/api — Environment Variables
 
 Runtime configuration for the `leaflab-api` gRPC service. This file is filled in across
-Phase 1 tasks (root plan #1166); each task documents only the variables it introduces.
+Phase 1 and Phase 2 tasks (root plan #1166); each task documents only the variables it
+introduces.
 
 ## Rate limiting (NFR10)
 
@@ -9,7 +10,7 @@ Per-principal and per-session request limits, enforced by `leaflab/api/ratelimit
 `InMemoryLimiter` and applied by `leaflab/api`'s rate-limit interceptor (see
 `leaflab/api/ratelimit_interceptor.go`). Six named buckets exist
 (`read_default`, `resend`, `ack_wait_concurrent`, `claim_open`, `claim_round`,
-`support_reference_resolve`); Phase 1 wires only `read_default` into the interceptor chain
+`support_reference_resolve`); Phase 1 wired only `read_default` into the interceptor chain
 against every RPC. Each bucket takes a pair of variables — a call-count limit and a window
 length in whole seconds — both optional; an unset variable falls back to the bucket's default
 in `leaflab/api/ratelimit/env.go`'s `DefaultConfigs`. A limit of `0` or less disables
@@ -19,15 +20,15 @@ enforcement for that bucket entirely.
 |----------|---------|--------------|
 | `LEAFLAB_API_RATELIMIT_READ_DEFAULT_LIMIT` | `120` | Max calls per principal (or per peer address for the one anonymous RPC, `GetHealth`) within the window below. Applied to every RPC. |
 | `LEAFLAB_API_RATELIMIT_READ_DEFAULT_WINDOW_SECONDS` | `60` | Window length, in seconds, for `read_default`. |
-| `LEAFLAB_API_RATELIMIT_RESEND_LIMIT` | `3` | FR42's re-send limit. Not yet wired to an RPC in Phase 1. |
+| `LEAFLAB_API_RATELIMIT_RESEND_LIMIT` | `3` | FR42's re-send limit. Not yet wired to an RPC (Phase 4). |
 | `LEAFLAB_API_RATELIMIT_RESEND_WINDOW_SECONDS` | `300` | Window length, in seconds, for `resend`. |
-| `LEAFLAB_API_RATELIMIT_ACK_WAIT_CONCURRENT_LIMIT` | `5` | FR47's concurrent open-wait limit. Not yet wired to an RPC in Phase 1. |
+| `LEAFLAB_API_RATELIMIT_ACK_WAIT_CONCURRENT_LIMIT` | `5` | FR47's concurrent open-wait limit. Not yet wired to an RPC (Phase 4). |
 | `LEAFLAB_API_RATELIMIT_ACK_WAIT_CONCURRENT_WINDOW_SECONDS` | `60` | Window length, in seconds, for `ack_wait_concurrent`. |
-| `LEAFLAB_API_RATELIMIT_CLAIM_OPEN_LIMIT` | `5` | FR76's claim-initiation limit, keyed on the submitted `device_id` **and** the calling principal — never per-board (a per-board cap is itself an existence oracle). Not yet wired to an RPC in Phase 1. |
+| `LEAFLAB_API_RATELIMIT_CLAIM_OPEN_LIMIT` | `5` | FR76's claim-initiation limit, keyed on the submitted `device_id` **and** the calling principal — never per-board (a per-board cap is itself an existence oracle). Wired directly by `OpenClaimChallenge` (Phase 2, task #1342) — see "Board claim" below. |
 | `LEAFLAB_API_RATELIMIT_CLAIM_OPEN_WINDOW_SECONDS` | `3600` | Window length, in seconds, for `claim_open`. |
-| `LEAFLAB_API_RATELIMIT_CLAIM_ROUND_LIMIT` | `10` | FR76.2's claim-round limit. Not yet wired to an RPC in Phase 1. |
+| `LEAFLAB_API_RATELIMIT_CLAIM_ROUND_LIMIT` | `10` | FR76.2's claim-round limit. Wired directly by `MarkClaimRound` (Phase 2, task #1342) — see "Board claim" below. |
 | `LEAFLAB_API_RATELIMIT_CLAIM_ROUND_WINDOW_SECONDS` | `3600` | Window length, in seconds, for `claim_round`. |
-| `LEAFLAB_API_RATELIMIT_SUPPORT_REFERENCE_RESOLVE_LIMIT` | `10` | FR80's support-reference resolution limit. Not yet wired to an RPC in Phase 1. |
+| `LEAFLAB_API_RATELIMIT_SUPPORT_REFERENCE_RESOLVE_LIMIT` | `10` | FR80's support-reference resolution limit, per admin principal. Wired into the generic per-method interceptor chain (Phase 2, task #1346) against `ResolveToHousehold` — applied to that RPC's whole method (all three query kinds: person identifier, support reference, partial device id), not only the support-reference branch. |
 | `LEAFLAB_API_RATELIMIT_SUPPORT_REFERENCE_RESOLVE_WINDOW_SECONDS` | `60` | Window length, in seconds, for `support_reference_resolve`. |
 
 A malformed value (not a valid integer) fails the boot the same way a malformed
@@ -85,3 +86,32 @@ challenge against a device with zero readings ever can still discharge, but only
 Distinguishing retained-vs-live would require the processor to speak native MQTT instead of
 AMQP, or RabbitMQ to expose the flag some other way (e.g. a header) — out of this task's scope;
 flagged for a follow-up rather than smoothed over.
+
+## Admin elevation (FR10.1, FR12 activation)
+
+The standing admin lane (`ResolveToHousehold`, FR10.2) requires no configuration beyond
+`leaflab-admin` realm-role eligibility (FR12 — see `leaflab/api/auth.go`'s `RoleAdmin`). Only
+the elevated lane's time-box duration is configurable.
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `LEAFLAB_ADMIN_ELEVATION_MINUTES` | `60` | FR10.1's "60 minutes, configurable" elevation window, applied by `Elevate`/`RenewElevation` (`admin_elevation.expires_at = started_at + this duration`). Overrides `DefaultElevationDuration` (`leaflab/api/server.go`) when set. Must be a positive integer number of minutes; a malformed value fails the boot the same way a malformed rate-limit variable does. |
+
+**Schema:** `leaflab/migrate/migrations/029_admin_elevation.up.sql` — `admin_elevation`. Short-
+lived with an explicit expiry, explicitly **not** SCD2 (NFR6.3): a single bounded episode with
+a hard end (expiry or explicit `EndElevation`), not a current-value history.
+
+## Owner-initiated support reference (FR80)
+
+A household member produces a short-lived, opaque, revocable code that an admin resolves, in
+the standing lane (FR10.2), to that household — without disclosing any household data or
+requiring a problem description at creation time.
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `LEAFLAB_SUPPORT_REFERENCE_TTL_MINUTES` | `15` | FR80's "short lifetime (configurable)" for a support reference, applied by `CreateSupportReference` (`support_reference.expires_at = created_at + this duration`). Overrides `DefaultSupportReferenceTTL` (`leaflab/api/server.go`) when set. Must be a positive integer number of minutes; a malformed value fails the boot the same way a malformed rate-limit variable does. |
+
+**Schema:** `leaflab/migrate/migrations/032_support_reference.up.sql` — `support_reference`.
+Short-lived with an explicit expiry, explicitly **not** SCD2 (NFR6.3) — same reasoning as
+`admin_elevation` above. `code_hash` stores a hash of the opaque code, never the code itself —
+the plaintext is not recoverable from the database.

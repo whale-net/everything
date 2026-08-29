@@ -146,6 +146,11 @@ device_config             — pushed DeviceConfig blobs as JSONB, with accepted 
 sensor_chip               — known chip models (BH1750, SHT3x, ...)
 sensor_chip_address       — known valid I2C addresses per chip (for manifest validation)
 sensor_chip_type          — many-to-many: which measurement types each chip produces
+
+household                 — Phase 2 ownership root; see "Ownership & Authorization" below
+  and its supporting tables (household_membership, board_ownership, household_grant,
+  admin_elevation, claim_challenge*, support_reference, departure_record, audit_log) —
+  full column-level detail lives in DATA.md, not duplicated here.
 ```
 
 All three `*_history` tables are SCD-2 using the uniform `valid_from` / `valid_to` column convention. `valid_to IS NULL` is the current open row; a partial index makes that lookup O(1).
@@ -165,6 +170,91 @@ All three `*_history` tables are SCD-2 using the uniform `valid_from` / `valid_t
 - **`sensor_reading.valid` is always `true` today** but reserved for future anomaly marking (e.g. I2C failure rows, out-of-range flags). Rows are always inserted so gaps in the time series are explicit rather than invisible.
 
 - **`device_config` is the board-state history.** Each accepted config version represents a "validity window" for the board's running configuration. The view `v_board_state_history` flattens this into a SCD-2-shaped representation (`valid_from` / `valid_to`) using a window function.
+
+---
+
+## Ownership & Authorization (Phase 2)
+
+Full column-level schema for every table named below lives in
+[DATA.md](DATA.md#ownership-model) ("Ownership Model" and "A23 Staleness Threshold"). This
+section covers the request-time *behavior* the ownership schema exists to support.
+
+### The ownership boundary
+
+Every RPC handler that touches a board, region, plant, sensor, or reading resolves the
+entity first (`leaflab/api/authz.Resolver`) and checks the resolution against the caller's
+`Scope` (`leaflab/api/authz.Scope`) — **never** a bare household-id comparison. `Scope` is
+deliberately not defined as "a household id": the one production implementation
+(`HouseholdScope`) happens to hold one household today, but nothing in the interface
+constrains a scope to be one household, or its holder to be a household member — a
+narrower-than-household scope (e.g. "this one board", held by a non-member) is
+representable without changing the interface. This is what lets `household_grant` (below)
+and the admin lanes reuse the same authorization plumbing instead of forking a second
+code path.
+
+An entity that does not exist and an entity that exists but falls outside the caller's scope
+are **indistinguishable on the wire** (NFR2) — both collapse to the same not-found failure.
+The distinction is preserved only in server-side logs, for operators.
+
+### Admin standing lane vs. elevation
+
+Holding the `leaflab-admin` realm role (FR12) is **eligibility only** — `requireAdminEligible`
+is the gate every admin RPC applies first, and it confers nothing past that gate by itself:
+
+- **Standing lane (FR10.2, `ResolveToHousehold`)** is resolution-only and reachable with
+  eligibility alone: given a person, a support reference, or a partial device identifier, it
+  resolves to the owning household(s) and FR79's health fields — and nothing else. It does
+  not route through `authz.Scope` at all (there is no wider entity to check against, only
+  this one dedicated projection), and it is audited once per call regardless of how many
+  boards match.
+- **Elevation (FR10.1)** is a deliberately entered, time-boxed episode against one target
+  household — never standing, always carrying a stated reason, recorded in `admin_elevation`
+  with `started_at`/`expires_at`/`ended_at`. Default duration is 60 minutes
+  (`DefaultElevationDuration`, configurable — see [api/ENV.md](api/ENV.md)). Only an
+  elevation (via `ElevatedScope`, which otherwise behaves exactly like `HouseholdScope`)
+  grants reach into a specific household's boards/regions/plants/sensors/readings; eligibility
+  alone never does. Elevation does **not** confer FR75's membership-change capability — no
+  admin RPC writes `household_membership`.
+
+`isAdminEligible`/eligibility checks are called only from the admin RPC section
+(`leaflab/api/server.go`) and never re-derived by an entity-access handler deciding whether to
+widen a `Scope` — the elevated-access path (`elevatedBoardScope`) checks the `admin_elevation`
+row directly instead.
+
+### The grant model and its three exclusions (FR7)
+
+A household member can grant a named principal (`household_grant`: `grantee_subject`,
+`granted_by_subject`, `expires_at`, `revoked_at`) time-boxed write access to their household,
+without making them a member. `MemberOrGrantee` (`leaflab/api/authz/capability.go`) is the
+one place this is resolved: it builds the same household-scoped `Scope` for a grantee as for
+a member, **except** for three named exclusions a grantee may never exercise regardless of
+an otherwise-active grant:
+
+1. Grant further access (`CapabilityGrantAccess`) — a grantee cannot re-grant.
+2. Change membership (`CapabilityChangeMembership`, FR75) — a grantee cannot add/remove
+   household members.
+3. Claim, transfer, or release a board (`CapabilityBoardOwnership`, FR76/FR77) — board
+   ownership moves are member-only.
+
+Every other "member capability" call site passes `CapabilityOrdinary` and a grantee's write
+capability is identical to a member's. Declaring the three exclusions in exactly one place
+(`grantExcludedCapabilities`) is what keeps a future requirement from having to re-decide
+which operations a grantee is allowed to reach. A grant disappears from the active list on
+expiry (evaluated against `NOW()` at request time, no background sweep) or on explicit
+one-action revocation (`revoked_at`).
+
+### Where authorization is decided (NFR18.1)
+
+Every authorization and presentation-shaping decision — Scope construction, the three grant
+exclusions, admin eligibility/elevation, rounding, coarsening, suppression, and label
+selection — is made in `leaflab/api` (the service), never in `leaflab/ui` (the HTMX BFF).
+The UI layer holds no service-account credentials or re-mintable tokens of its own and applies
+none of those four shaping operations; it forwards the caller's own credentials and renders
+exactly what the service returns. `leaflab/ui/nfr18_conformance_test.go` is a same-package
+grep-based placeholder that fails the moment shaping logic (`math.Round`, `coarsen`,
+`suppress(`, label-selection helpers) appears in `leaflab/ui`'s own checked-in source — a full
+cross-package conformance suite (mirroring `tools/app_registry/conformance`) is tracked as a
+later NFR1.a task.
 
 ---
 
