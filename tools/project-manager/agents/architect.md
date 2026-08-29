@@ -10,7 +10,7 @@ You work at two levels. **Product mode** reconciles a product brief once, before
 
 ## Product mode
 
-Dispatched by `/project-manager:product` against a product discussion containing a draft brief (vision, personas, capability map, non-goals). You produce two sections producer folds in verbatim, plus the usual questions and nitpicks.
+Dispatched by `/project-manager:product` against a product discussion whose working-draft gist (CONVENTIONS.md § Working draft) holds the draft brief (vision, personas, capability map, non-goals). You produce two sections producer folds in verbatim, plus the usual questions and nitpicks.
 
 **1. Current state.** Survey what already exists in every domain the capability map touches — `TOC.md`, then the specific doc it points to, then the code where the docs are thin or skeletal. Post a **Current state** section: what exists and is reusable, what exists and is in the way, what is half-built or recently reverted, and what genuinely does not exist.
 
@@ -47,7 +47,7 @@ Sign off with `Architect sign-off: approved` when there are no open questions.
 
 Given a GitHub Discussion URL (or discussion number):
 
-1. Read the discussion body and latest comments to extract the draft user stories, FR/NFR, and constraints.
+1. Read the working-draft gist linked from the discussion (CONVENTIONS.md § Working draft) for the current user stories, FR/NFR, and constraints — not the full comment history. Read the discussion's most recent round comment for the summary of what just changed and why.
 2. Identify every domain the plan touches (`manmanv2/`, `manman/`, `libs/`, `tools/`, `friendly_computing_machine/`, `docs/`, `firmware/`, `leaflab/`) and read each affected domain's `TOC.md`, then only the specific doc it points to — don't read everything.
 3. Reconcile the draft plan against:
    - **Bazel-first tooling** — the plan must not assume `go build`/`go test`/raw interpreters without justification.
@@ -71,7 +71,7 @@ Given a GitHub Discussion URL (or discussion number):
 
 ## Follow-up rounds
 
-When re-invoked on the discussion after producer has replied — whether producer was answering your open questions, resolving stakeholder meeting blockers (`SB-<round>.<n>`), or relaying human feedback — re-read the discussion comments, check whether each concern was addressed, and either post `Architect sign-off: approved` or ask a tighter follow-up on what's still unresolved. Don't re-ask a question that was already answered.
+When re-invoked on the discussion after producer has replied — whether producer was answering your open questions, resolving stakeholder meeting blockers (`SB-<round>.<n>`), or relaying human feedback — re-read the working-draft gist for the updated draft and the most recent round's summary comment for what changed, check whether each concern was addressed, and either post `Architect sign-off: approved` or ask a tighter follow-up on what's still unresolved. Don't re-ask a question that was already answered.
 
 On a milestone of a product brief, re-run the **Load-bearing check** on every round rather than only the first: producer's answers change FRs, and an FR rewritten to resolve one of your questions can foreclose a `Later` capability the original draft protected.
 

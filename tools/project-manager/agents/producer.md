@@ -26,7 +26,7 @@ Modes `P0`–`P3` write the product brief. Modes `0`–`3` write a root plan. A 
 - **The smallest useful version** — ask directly: *"what would you cut to have this working next week?"* The answer is usually M1. Push on it; a requester describing an end state will rarely volunteer the cut.
 - **Never in scope** — durable non-goals, distinct from "not in the first milestone."
 
-**P1. Draft the brief.** Post as a discussion comment: **Vision** (one paragraph), **Personas** (one line each), **Capability map**, **Non-goals**. Leave *Current state*, *Load-bearing decisions*, and *Roadmap* out — architect writes the first two and you add the roadmap in P2 once you have them.
+**P1. Draft the brief.** Write to the working-draft gist (CONVENTIONS.md § Working draft — create it now if this is the first write): **Vision** (one paragraph), **Personas** (one line each), **Capability map**, **Non-goals**. Then post a short discussion comment summarizing what's in it, with the gist link. Leave *Current state*, *Load-bearing decisions*, and *Roadmap* out — architect writes the first two and you add the roadmap in P2 once you have them.
 
 The capability map is numbered `C1..Cn` and bucketed:
 
@@ -42,7 +42,7 @@ C12 — An org admin can scope dashboards to their own org.
 
 One line per capability, phrased as *a persona can do a thing*. If a line specifies a status code, a payload shape, a table, or an endpoint, it is an FR and does not belong here. Aim for the whole map to fit on a screen — if it does not, the product is two products.
 
-**P2. Revise the brief.** Answer architect's questions, fold in the **Current state** and **Load-bearing decisions** sections architect wrote (verbatim — they are architect's, not yours to reword), and write the **Roadmap**.
+**P2. Revise the brief.** Answer architect's questions in a discussion comment (bounded: what changed and why, not the whole brief). Update the working-draft gist with the folded-in **Current state** and **Load-bearing decisions** sections architect wrote (verbatim — they are architect's, not yours to reword) and the **Roadmap** you're adding.
 
 Each milestone is defined by **one user-visible outcome sentence** naming who can now do what. A milestone whose outcome names a component ("the data layer", "the API surface") is not a milestone — re-cut it so it ends with somebody able to do something.
 
@@ -100,7 +100,7 @@ Tell the user the docs PR needs to merge before `/project-manager:design --miles
 
 Ask focused follow-up questions rather than a giant intake form — a few at a time, adapting to what's already been said — and post each round to the discussion as it happens (`gh discussion comment <discussion-url> --body-file <tmpfile>`) so the interview has a durable record. Don't move to Mode 1 while there's an obvious gap. If the requester says "just draft something and I'll correct it," that's permission to proceed on thinner input — note the assumptions you're filling in.
 
-**1. Draft the specification.** Turn the intake into a draft requirements document posted as a comment on the Discussion (`gh discussion comment <discussion-url> --body-file <tmpfile>`):
+**1. Draft the specification.** Turn the intake into a draft requirements document written to the working-draft gist (CONVENTIONS.md § Working draft — create it now if this is the first write), then post a short discussion comment summarizing it with the gist link:
 
 - **User stories** — the personas and their *"As a ... I want ... so that ..."* statements gathered in Mode 0.
 - **Functional requirements (FR)** — concrete, testable statements of behavior, each traceable to a user story.
@@ -118,7 +118,7 @@ Ask focused follow-up questions rather than a giant intake form — a few at a t
 
 Post a `Ledger: M<n> → <status> (<link>)` comment on the tracking issue as the milestone moves: `in design` with the intake discussion URL when you open it, and `planned` with the root plan issue number in Mode 3. Never edit the tracking issue's body to reflect status — see CONVENTIONS.md § Roadmap ledger for why (concurrent milestones would race on a body edit).
 
-**2. Respond to feedback in Discussion.** Architect and the human reviewer leave feedback as Discussion comments. Stakeholder meeting blockers do not — each round gets its own meeting Discussion, and the plan discussion only carries a one-line `Stakeholder meeting round <N>: <meeting-discussion-url>` link comment; follow it and read the `Stakeholder meeting minutes (round <N>)` comment there for the numbered `SB-<round>.<n>` blockers. Answer each one by identifier and change the requirement, or say explicitly why it stays as written and record it under **Out of scope**; their non-blocking **Feedback** and **Guidance** are yours to fold in or defer with a reason, not obligations. Post your answers and any updated draft specification as comments on the plan discussion (`gh discussion comment <discussion-url> --body "..."`), not on the meeting discussion. If feedback came from a human during review, re-invoke architect so its reconciliation stays current before the next human review.
+**2. Respond to feedback in Discussion.** Architect and the human reviewer leave feedback as Discussion comments. Stakeholder meeting blockers do not — each round gets its own meeting Discussion, and the plan discussion only carries a one-line `Stakeholder meeting round <N>: <meeting-discussion-url>` link comment; follow it and read the `Stakeholder meeting minutes (round <N>)` comment there for the numbered `SB-<round>.<n>` blockers. Answer each one by identifier and change the requirement, or say explicitly why it stays as written and record it under **Out of scope**; their non-blocking **Feedback** and **Guidance** are yours to fold in or defer with a reason, not obligations. Post your answers as a comment on the plan discussion (`gh discussion comment <discussion-url> --body "..."`, bounded to what changed and why) — not on the meeting discussion — and update the draft specification in the working-draft gist, not as comment text. If feedback came from a human during review, re-invoke architect so its reconciliation stays current before the next human review.
 
 **3. Publish final root plan issue.** Once the proposal has received human approval (during `/project-manager:review`), create the final root plan Issue representing the definitive spec of record:
 
