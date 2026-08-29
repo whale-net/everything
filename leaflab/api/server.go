@@ -6,10 +6,13 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
+	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/hwkey"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -194,36 +197,219 @@ func (s *LeafLabAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSenso
 // GetSensorTimelinesResponse doc comment: the three are never merged
 // server-side into one combined list.
 //
-// TODO(Implementation phase, FR53):
-//   - Query sensor_name_history, sensor_hw_history, sensor_region_history
-//     independently (three separate SELECTs, three separate keyset
-//     cursors mirroring contract.EncodeReadingCursor's pattern) -- never
-//     join them into one merged timeline.
-//   - Render each sensor_hw_history row's i2c_address as absent (not 0)
-//     when NULL (pre-migration-013 closed interval, FR16.2/FR18.2); use
-//     //leaflab/hwkey's AddressOpt so the absent/present-including-0
-//     distinction is canonical, not reinvented here.
-//   - Carry the sensor's sensor_type (from the sensor row, FR16.1) on
-//     every HardwareInterval.
-//   - Apply window_start/window_end as an overlap filter, not an exact
-//     match, when either is set.
-//   - Household-scope the sensor lookup (FR5); require elevation for
-//     cross-household admin access (FR10.3); a non-member (including a
-//     nonexistent sensor_id) gets NFR2's not-found, indistinguishable
-//     from a not-found for a household member's own missing sensor.
-//   - Return an empty (not error) timeline for a sensor with no rows in
-//     one or more of the three tables (e.g. never placed in a region).
-//   - A sensor dropped from a board's desired state (FR82.3, Phase 4)
-//     must still return all three timelines unchanged -- this RPC has no
-//     "desired state" concept to filter on, so this should already hold;
-//     Testing adds a stubbed-"dropped" assertion now so Phase 4 inherits
-//     a passing test.
+// FR5/FR10.3/NFR2 household scoping: this branch lineage has no
+// household/authz model reachable at all (see the plan's Phase 2 work,
+// landed on a divergent v2 branch lineage not included here -- filed as a
+// scope note, mirroring #1421's same gap on a sibling task). The only
+// check available here is sensor existence, which is also NFR2's
+// non-existence oracle in the household-scoped world: a nonexistent
+// sensor_id and a real sensor a caller has no membership to must render
+// identically, and existence-not-found already satisfies that today.
+// When household scoping lands on this lineage, this becomes a household
+// membership check (authz.Resolver) whose failure renders through this
+// exact same NotFound call, plus an elevation check for cross-household
+// admin access.
+//
+// A sensor dropped from a board's desired state (FR82.3, Phase 4) still
+// returns all three timelines unchanged: this RPC has no "desired state"
+// concept to filter on, by construction, so nothing here needs to change
+// when Phase 4 lands.
 func (s *LeafLabAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSensorTimelinesRequest) (*pb.GetSensorTimelinesResponse, error) {
 	if req.SensorId <= 0 {
 		return nil, contract.InvalidArgument("sensor_timelines", "sensor_id", "A sensor ID is required.")
 	}
 
-	return nil, contract.Internal("sensor_timelines", "", "Not yet implemented.")
+	sensorTypeName, found, err := s.repo.SensorSensorTypeName(ctx, req.SensorId)
+	if err != nil {
+		s.logger.Error("sensor timelines lookup failed", "sensor_id", req.SensorId, "error", err)
+		return nil, contract.Internal("sensor_timelines", "", "Could not process this request right now. Please try again.")
+	}
+	if !found {
+		// NFR2: indistinguishable from a not-found for a sensor that
+		// exists but this caller has no membership to render.
+		return nil, contract.NotFound("sensor", "sensor_id", "No sensor was found for this request.")
+	}
+	sensorType := sensorTypeFromName(sensorTypeName)
+
+	windowStart := instantPtrToTimePtr(req.WindowStart)
+	windowEnd := instantPtrToTimePtr(req.WindowEnd)
+
+	// Each list* helper is already responsible for classifying its own
+	// errors (contract.InvalidArgument for a bad page token,
+	// contract.Internal for a repo failure -- mirroring ListBoards' split
+	// below) -- propagated as-is, never re-wrapped, so an invalid
+	// name_page token surfaces as InvalidArgument and not a misleading
+	// Internal failure.
+	nameIntervals, namePage, err := s.listNameIntervals(ctx, req.SensorId, windowStart, windowEnd, req.GetNamePage())
+	if err != nil {
+		return nil, err
+	}
+
+	hwIntervals, hwPage, err := s.listHWIntervals(ctx, req.SensorId, windowStart, windowEnd, sensorType, req.GetHardwarePage())
+	if err != nil {
+		return nil, err
+	}
+
+	regionIntervals, regionPage, err := s.listRegionIntervals(ctx, req.SensorId, windowStart, windowEnd, req.GetRegionPage())
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.GetSensorTimelinesResponse{
+		NameIntervals:     nameIntervals,
+		NamePage:          namePage,
+		HardwareIntervals: hwIntervals,
+		HardwarePage:      hwPage,
+		RegionIntervals:   regionIntervals,
+		RegionPage:        regionPage,
+		ServerNow:         contract.Now(),
+	}, nil
+}
+
+// instantPtrToTimePtr converts an optional pb.Instant request bound into an
+// optional time.Time: nil (unset) stays nil, meaning unbounded on that
+// side of GetSensorTimelinesRequest's [window_start, window_end) overlap
+// filter. A set Instant of unix_millis==0 is a real, present bound (epoch),
+// distinct from unset -- so this checks the pointer, never
+// contract.FromInstant's zero-value return.
+func instantPtrToTimePtr(i *pb.Instant) *time.Time {
+	if i == nil {
+		return nil
+	}
+	t := contract.FromInstant(i)
+	return &t
+}
+
+// listNameIntervals decodes page, queries sensor_name_history for sensorID
+// via s.repo, and re-encodes the next page token -- GetSensorTimelines'
+// name-timeline half of FR53/FR61's independent pagination.
+func (s *LeafLabAPIServer) listNameIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, page *pb.PageRequest) ([]*pb.NameInterval, *pb.PageResponse, error) {
+	afterValidFrom, afterID, hasAfter, err := contract.DecodeIntervalCursor(page.GetPageToken())
+	if err != nil {
+		return nil, nil, contract.InvalidArgument("sensor_timelines", "name_page", "This page link is no longer valid. Start again from the first page.")
+	}
+	limit := contract.ClampPageSize(page.GetPageSize())
+
+	rows, err := s.repo.ListSensorNameIntervals(ctx, sensorID, windowStart, windowEnd, afterValidFrom, afterID, hasAfter, limit+1)
+	if err != nil {
+		s.logger.Error("list name intervals failed", "sensor_id", sensorID, "error", err)
+		return nil, nil, contract.Internal("sensor_timelines", "", "Could not list this sensor's name history right now. Please try again.")
+	}
+
+	var nextToken string
+	if int32(len(rows)) > limit {
+		rows = rows[:limit]
+		nextToken = contract.EncodeIntervalCursor(rows[len(rows)-1].ValidFrom, rows[len(rows)-1].ID)
+	}
+
+	intervals := make([]*pb.NameInterval, 0, len(rows))
+	for _, row := range rows {
+		intervals = append(intervals, &pb.NameInterval{
+			Interval: toIntervalProto(row.ValidFrom, row.ValidTo),
+			Name:     row.Name,
+		})
+	}
+	return intervals, &pb.PageResponse{NextPageToken: nextToken}, nil
+}
+
+// listHWIntervals decodes page, queries sensor_hw_history for sensorID via
+// s.repo, and re-encodes the next page token -- GetSensorTimelines'
+// hardware-timeline half of FR53/FR61's independent pagination.
+// sensorType is carried by the sensor row (FR16.1), not by any interval,
+// so it is resolved once by the caller and stamped onto every
+// HardwareInterval here.
+func (s *LeafLabAPIServer) listHWIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, sensorType firmwarepb.SensorType, page *pb.PageRequest) ([]*pb.HardwareInterval, *pb.PageResponse, error) {
+	afterValidFrom, afterID, hasAfter, err := contract.DecodeIntervalCursor(page.GetPageToken())
+	if err != nil {
+		return nil, nil, contract.InvalidArgument("sensor_timelines", "hardware_page", "This page link is no longer valid. Start again from the first page.")
+	}
+	limit := contract.ClampPageSize(page.GetPageSize())
+
+	rows, err := s.repo.ListSensorHWIntervals(ctx, sensorID, windowStart, windowEnd, afterValidFrom, afterID, hasAfter, limit+1)
+	if err != nil {
+		s.logger.Error("list hw intervals failed", "sensor_id", sensorID, "error", err)
+		return nil, nil, contract.Internal("sensor_timelines", "", "Could not list this sensor's hardware history right now. Please try again.")
+	}
+
+	var nextToken string
+	if int32(len(rows)) > limit {
+		rows = rows[:limit]
+		nextToken = contract.EncodeIntervalCursor(rows[len(rows)-1].ValidFrom, rows[len(rows)-1].ID)
+	}
+
+	intervals := make([]*pb.HardwareInterval, 0, len(rows))
+	for _, row := range rows {
+		var muxPath hwkey.MuxPath
+		if err := muxPath.UnmarshalJSON([]byte(row.MuxPathText)); err != nil {
+			s.logger.Error("parse mux_path failed", "sensor_id", sensorID, "hw_interval_id", row.ID, "error", err)
+			return nil, nil, contract.Internal("sensor_timelines", "", "Could not process this sensor's hardware history right now. Please try again.")
+		}
+		hops := make([]*configpb.MuxHop, len(muxPath))
+		for i, hop := range muxPath {
+			hops[i] = &configpb.MuxHop{MuxAddress: hop.MuxAddress, MuxChannel: hop.MuxChannel}
+		}
+
+		// Absent (never 0, FR16.2/FR18.2) for a closed, pre-migration-013
+		// interval whose address was never recorded -- hwkey.AddressOpt is
+		// the one canonical encoding, per FR18.
+		addr := hwkey.Absent
+		if row.I2CAddress != nil {
+			addr = hwkey.Address(uint16(*row.I2CAddress))
+		}
+
+		intervals = append(intervals, &pb.HardwareInterval{
+			Interval:   toIntervalProto(row.ValidFrom, row.ValidTo),
+			I2CAddress: addr.Ptr(),
+			MuxPath:    hops,
+			SensorType: sensorType,
+		})
+	}
+	return intervals, &pb.PageResponse{NextPageToken: nextToken}, nil
+}
+
+// listRegionIntervals decodes page, queries sensor_region_history for
+// sensorID via s.repo, and re-encodes the next page token --
+// GetSensorTimelines' region-timeline half of FR53/FR61's independent
+// pagination. A sensor with no region history returns an empty slice, not
+// an error.
+func (s *LeafLabAPIServer) listRegionIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, page *pb.PageRequest) ([]*pb.RegionInterval, *pb.PageResponse, error) {
+	afterValidFrom, afterID, hasAfter, err := contract.DecodeIntervalCursor(page.GetPageToken())
+	if err != nil {
+		return nil, nil, contract.InvalidArgument("sensor_timelines", "region_page", "This page link is no longer valid. Start again from the first page.")
+	}
+	limit := contract.ClampPageSize(page.GetPageSize())
+
+	rows, err := s.repo.ListSensorRegionIntervals(ctx, sensorID, windowStart, windowEnd, afterValidFrom, afterID, hasAfter, limit+1)
+	if err != nil {
+		s.logger.Error("list region intervals failed", "sensor_id", sensorID, "error", err)
+		return nil, nil, contract.Internal("sensor_timelines", "", "Could not list this sensor's region history right now. Please try again.")
+	}
+
+	var nextToken string
+	if int32(len(rows)) > limit {
+		rows = rows[:limit]
+		nextToken = contract.EncodeIntervalCursor(rows[len(rows)-1].ValidFrom, rows[len(rows)-1].ID)
+	}
+
+	intervals := make([]*pb.RegionInterval, 0, len(rows))
+	for _, row := range rows {
+		intervals = append(intervals, &pb.RegionInterval{
+			Interval: toIntervalProto(row.ValidFrom, row.ValidTo),
+			RegionId: row.RegionID,
+		})
+	}
+	return intervals, &pb.PageResponse{NextPageToken: nextToken}, nil
+}
+
+// toIntervalProto renders a valid_from/valid_to pair as the shared
+// pb.Interval shape (FR53, FR64): validTo == nil means still-open, per
+// every SCD2 table in this schema.
+func toIntervalProto(validFrom time.Time, validTo *time.Time) *pb.Interval {
+	interval := &pb.Interval{ValidFrom: contract.ToInstant(validFrom)}
+	if validTo != nil {
+		interval.ValidTo = contract.ToInstant(*validTo)
+	}
+	return interval
 }
 
 // ListBoards returns all known boards, keyset-paginated on (board_id) per

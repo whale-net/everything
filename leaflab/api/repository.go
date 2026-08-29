@@ -206,6 +206,20 @@ func sensorTypeNameFromConfig(t firmwarepb.SensorType) string {
 	return strings.ToLower(name)
 }
 
+// sensorTypeFromName is sensorTypeNameFromConfig's inverse: converts a
+// sensor_type.name row (e.g. "temperature") back to the firmware.SensorType
+// enum value for rendering on a HardwareInterval (FR16.1, FR53). Falls back
+// to SENSOR_TYPE_UNKNOWN for a name with no matching enum value -- this
+// should not happen for any row actually written by this schema, but
+// rendering "unknown" is safer than panicking on a lookup failure.
+func sensorTypeFromName(name string) firmwarepb.SensorType {
+	key := "SENSOR_TYPE_" + strings.ToUpper(name)
+	if v, ok := firmwarepb.SensorType_value[key]; ok {
+		return firmwarepb.SensorType(v)
+	}
+	return firmwarepb.SensorType_SENSOR_TYPE_UNKNOWN
+}
+
 // FindSensorIDByHWKey resolves an existing sensor on boardID whose current
 // (sensor_type, i2c_address, mux_path) equals hw -- FR16 case 1,
 // read-only. typeName is resolved to a sensor_type_id first, also
@@ -321,6 +335,187 @@ func (r *Repository) LoadBoardSensorIdentities(ctx context.Context, boardID int6
 			bsi.HW = &HardwareAddress{I2CAddress: hwkey.Address(uint16(*i2cAddr)), MuxPath: muxPath}
 		}
 		out = append(out, bsi)
+	}
+	return out, rows.Err()
+}
+
+// --- FR53 sensor timelines -----------------------------------------------
+//
+// GetSensorTimelines reads sensor_name_history, sensor_hw_history and
+// sensor_region_history independently -- three separate SELECTs, three
+// separate keyset cursors (contract.EncodeIntervalCursor/DecodeIntervalCursor)
+// -- never joined into one merged timeline (see api.proto's
+// GetSensorTimelinesResponse doc comment). Each row type below mirrors one
+// table's interval shape 1:1; conversion to the shared pb.Interval
+// representation happens in server.go, not here.
+
+// NameIntervalRow is one row of sensor_name_history.
+type NameIntervalRow struct {
+	ID        int64
+	Name      string
+	ValidFrom time.Time
+	ValidTo   *time.Time
+}
+
+// HWIntervalRow is one row of sensor_hw_history. I2CAddress is nil for a
+// closed, pre-migration-013 interval whose address was never recorded
+// (FR16.2) -- never 0, which is a real, present address. MuxPathText is
+// mux_path in Postgres's own jsonb::text form, ready for
+// hwkey.MuxPath.UnmarshalJSON (mirrors LoadBoardSensorIdentities).
+type HWIntervalRow struct {
+	ID          int64
+	I2CAddress  *int32
+	MuxPathText string
+	ValidFrom   time.Time
+	ValidTo     *time.Time
+}
+
+// RegionIntervalRow is one row of sensor_region_history.
+type RegionIntervalRow struct {
+	ID        int64
+	RegionID  int64
+	ValidFrom time.Time
+	ValidTo   *time.Time
+}
+
+// SensorSensorTypeName returns sensorID's sensor_type.name -- the sensor's
+// stable type, carried by the sensor row itself (FR16.1), not by any
+// interval -- and whether sensorID exists at all. A caller uses the second
+// return value as the sensor's existence check: GetSensorTimelines has no
+// other read that would 404 on a bad sensor_id before this one runs.
+func (r *Repository) SensorSensorTypeName(ctx context.Context, sensorID int64) (string, bool, error) {
+	var name string
+	err := r.db.QueryRow(ctx, `
+		SELECT st.name
+		FROM sensor s
+		JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
+		WHERE s.sensor_id = $1
+	`, sensorID).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("lookup sensor_type for sensor %d: %w", sensorID, err)
+	}
+	return name, true, nil
+}
+
+// intervalWhereClause builds the shared WHERE clause and positional
+// arguments for GetSensorTimelines' three independent interval reads:
+// sensor scoping, an optional [windowStart, windowEnd) overlap filter (nil
+// means unbounded on that side), and an optional keyset cursor predicate
+// ordered to match `ORDER BY valid_from, <idColumn>`. idColumn is the
+// table-specific primary key column name (sensor_name_history_id vs.
+// history_id) -- interpolated directly since it is always one of this
+// package's own fixed literals, never caller/request-controlled input.
+func intervalWhereClause(idColumn string, sensorID int64, windowStart, windowEnd *time.Time, afterValidFrom time.Time, afterID int64, hasAfter bool) (string, []any) {
+	clauses := []string{"sensor_id = $1"}
+	args := []any{sensorID}
+	if windowEnd != nil {
+		args = append(args, *windowEnd)
+		clauses = append(clauses, fmt.Sprintf("valid_from < $%d", len(args)))
+	}
+	if windowStart != nil {
+		args = append(args, *windowStart)
+		clauses = append(clauses, fmt.Sprintf("(valid_to IS NULL OR valid_to > $%d)", len(args)))
+	}
+	if hasAfter {
+		args = append(args, afterValidFrom, afterID)
+		clauses = append(clauses, fmt.Sprintf("(valid_from, %s) > ($%d, $%d)", idColumn, len(args)-1, len(args)))
+	}
+	return strings.Join(clauses, " AND "), args
+}
+
+// ListSensorNameIntervals returns up to limit sensor_name_history rows for
+// sensorID, ordered oldest-first (ORDER BY valid_from, sensor_name_history_id)
+// and keyset-paginated independently of the hardware/region timelines
+// (FR53, FR61).
+func (r *Repository) ListSensorNameIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, afterValidFrom time.Time, afterID int64, hasAfter bool, limit int32) ([]NameIntervalRow, error) {
+	where, args := intervalWhereClause("sensor_name_history_id", sensorID, windowStart, windowEnd, afterValidFrom, afterID, hasAfter)
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+		SELECT sensor_name_history_id, name, valid_from, valid_to
+		FROM sensor_name_history
+		WHERE %s
+		ORDER BY valid_from, sensor_name_history_id
+		LIMIT $%d
+	`, where, len(args))
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list name intervals for sensor %d: %w", sensorID, err)
+	}
+	defer rows.Close()
+
+	var out []NameIntervalRow
+	for rows.Next() {
+		var row NameIntervalRow
+		if err := rows.Scan(&row.ID, &row.Name, &row.ValidFrom, &row.ValidTo); err != nil {
+			return nil, fmt.Errorf("scan name interval for sensor %d: %w", sensorID, err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// ListSensorHWIntervals returns up to limit sensor_hw_history rows for
+// sensorID, ordered oldest-first (ORDER BY valid_from, history_id) and
+// keyset-paginated independently of the name/region timelines (FR53,
+// FR61).
+func (r *Repository) ListSensorHWIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, afterValidFrom time.Time, afterID int64, hasAfter bool, limit int32) ([]HWIntervalRow, error) {
+	where, args := intervalWhereClause("history_id", sensorID, windowStart, windowEnd, afterValidFrom, afterID, hasAfter)
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+		SELECT history_id, i2c_address, mux_path::text, valid_from, valid_to
+		FROM sensor_hw_history
+		WHERE %s
+		ORDER BY valid_from, history_id
+		LIMIT $%d
+	`, where, len(args))
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list hw intervals for sensor %d: %w", sensorID, err)
+	}
+	defer rows.Close()
+
+	var out []HWIntervalRow
+	for rows.Next() {
+		var row HWIntervalRow
+		if err := rows.Scan(&row.ID, &row.I2CAddress, &row.MuxPathText, &row.ValidFrom, &row.ValidTo); err != nil {
+			return nil, fmt.Errorf("scan hw interval for sensor %d: %w", sensorID, err)
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// ListSensorRegionIntervals returns up to limit sensor_region_history rows
+// for sensorID, ordered oldest-first (ORDER BY valid_from, history_id) and
+// keyset-paginated independently of the name/hardware timelines (FR53,
+// FR61). A sensor with no region history returns an empty slice, not an
+// error.
+func (r *Repository) ListSensorRegionIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, afterValidFrom time.Time, afterID int64, hasAfter bool, limit int32) ([]RegionIntervalRow, error) {
+	where, args := intervalWhereClause("history_id", sensorID, windowStart, windowEnd, afterValidFrom, afterID, hasAfter)
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+		SELECT history_id, region_id, valid_from, valid_to
+		FROM sensor_region_history
+		WHERE %s
+		ORDER BY valid_from, history_id
+		LIMIT $%d
+	`, where, len(args))
+	rows, err := r.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list region intervals for sensor %d: %w", sensorID, err)
+	}
+	defer rows.Close()
+
+	var out []RegionIntervalRow
+	for rows.Next() {
+		var row RegionIntervalRow
+		if err := rows.Scan(&row.ID, &row.RegionID, &row.ValidFrom, &row.ValidTo); err != nil {
+			return nil, fmt.Errorf("scan region interval for sensor %d: %w", sensorID, err)
+		}
+		out = append(out, row)
 	}
 	return out, rows.Err()
 }
