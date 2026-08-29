@@ -30,10 +30,17 @@
 //     attributed to a plant living in it."
 //   - plant: FR23 attribution. A plant's own plant_region_history
 //     (migration 017) intervals are walked one at a time; for each, the
-//     region's attributed sensor set is resolved via
-//     attribution.Resolver.AttributedSensors, and FR20's boundary_partial
-//     rows are substituted for any bucket a placement boundary split
-//     during that interval (see seriesForPlant/aggregatedPointsForPlantInterval).
+//     region's attributed region subtree is resolved via
+//     attribution.Resolver.AttributedRegions -- a region twin of
+//     AttributedSensors, keyed off sensor_reading/the tier tables' own
+//     denormalized region_id column rather than a sensor's currently
+//     cached region, since a historical series must key off each reading's
+//     own stamp (see "region" above), never a sensor's current placement
+//     (NFR1.c: agrees with v_sensor_reading_with_plant's
+//     attribute_region_plants walk even for a plant-less descendant
+//     region). FR20's boundary_partial rows are substituted for any bucket
+//     a placement boundary split during that interval (see
+//     seriesForPlant/aggregatedPointsForPlantInterval).
 //     This evaluates attribution once per plant-owned interval (at that
 //     interval's own boundaries), not per bucket or per instant inside
 //     it -- a documented limitation: a *different* plant entering or
@@ -619,8 +626,30 @@ func (r *Reader) plantRegionIntervals(ctx context.Context, plantID int64, window
 	return intervals, nil
 }
 
+// attributedRegionIDsForInterval resolves the region subtree attributed to
+// iv's region for the plant-owned interval iv describes, via
+// attribution.Resolver.AttributedRegions -- FR23's nearest-ancestor walk,
+// keyed off sensor_reading/the tier tables' own denormalized region_id
+// column (this package's documented "region" entity-kind semantics),
+// exactly like v_sensor_reading_with_plant's attribute_region_plants LATERAL
+// join does (NFR1.c), so a reading recorded in a plant-less descendant
+// region reaches this non-leaf-ancestor plant's series the same way it
+// reaches the view. Per AttributedRegions' documented one-instant-per-walk
+// scope, attribution is evaluated once, at iv.from -- this interval's own
+// (already window-clipped) start -- not once per bucket or per reading
+// inside it (the same documented limitation seriesForPlant's own doc
+// comment already states for the plant's own moves).
+func (r *Reader) attributedRegionIDsForInterval(ctx context.Context, iv regionInterval) ([]int64, error) {
+	regionIDs, err := r.attribution.AttributedRegions(ctx, iv.regionID, iv.from)
+	if err != nil {
+		return nil, fmt.Errorf("readings: resolve attributed regions for region %d: %w", iv.regionID, err)
+	}
+	return regionIDs, nil
+}
+
 // seriesForPlant walks plantID's placement intervals (plantRegionIntervals)
-// and, for each, queries that era's attributing region -- raw readings
+// and, for each, resolves that era's attributed region subtree
+// (attributedRegionIDsForInterval, FR23) and queries it -- raw readings
 // directly, or the aggregated tier with FR20 boundary_partial substitution
 // (aggregatedPointsForPlantInterval) -- then merges every interval's points
 // into one DESC-ordered series and applies cursor/rowCap across the
@@ -636,18 +665,25 @@ func (r *Reader) seriesForPlant(ctx context.Context, plantID int64, tier tiers.T
 
 	var all []Point
 	for _, iv := range intervals {
+		regionIDs, err := r.attributedRegionIDsForInterval(ctx, iv)
+		if err != nil {
+			return nil, err
+		}
+		if len(regionIDs) == 0 {
+			continue
+		}
+
 		var pts []Point
-		var err error
 		if tier == tiers.TierRaw {
-			where := "region_id = $1"
-			args := []any{iv.regionID}
+			where := "region_id = ANY($1)"
+			args := []any{regionIDs}
 			if measurementTypeID != 0 {
 				where += " AND sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $2)"
 				args = append(args, measurementTypeID)
 			}
 			pts, err = r.rawPoints(ctx, where, args, Window{Start: iv.from, End: iv.to}, seriesIntervalRowCap, seriesCursor{})
 		} else {
-			pts, err = r.aggregatedPointsForPlantInterval(ctx, tier, iv.regionID, iv.from, iv.to, measurementTypeID)
+			pts, err = r.aggregatedPointsForPlantInterval(ctx, tier, regionIDs, iv.from, iv.to, measurementTypeID)
 		}
 		if err != nil {
 			return nil, err
@@ -680,17 +716,18 @@ func (r *Reader) seriesForPlant(ctx context.Context, plantID int64, tier tiers.T
 }
 
 // aggregatedPointsForPlantInterval serves one plant-placement interval
-// [from, to) in regionID from an aggregated tier: whole tier buckets that
-// no FR20 boundary capture has split (mirroring leaflab/api/capture's own
-// full-bucket exclusion, aggregate.go's fiveMinuteFullBucketsAggregate,
-// generalized from one sensor to this region's whole sensor set) plus
-// every boundary_partial row wholly inside [from, to) for a sensor
-// currently in regionID, substituted for the whole bucket it split
-// (FR20's read-path requirement).
-func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tiers.Tier, regionID int64, from, to time.Time, measurementTypeID int64) ([]Point, error) {
+// [from, to) over regionIDs (attributedRegionIDsForInterval's resolved
+// attributed region subtree, FR23) from an aggregated tier: whole tier
+// buckets that no FR20 boundary capture has split (mirroring
+// leaflab/api/capture's own full-bucket exclusion, aggregate.go's
+// fiveMinuteFullBucketsAggregate, generalized from one sensor to this
+// subtree's whole sensor set) plus every boundary_partial row wholly inside
+// [from, to) for a sensor currently in one of regionIDs, substituted for
+// the whole bucket it split (FR20's read-path requirement).
+func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tiers.Tier, regionIDs []int64, from, to time.Time, measurementTypeID int64) ([]Point, error) {
 	table, timeCol := tierTable(tier)
 
-	whereWhole := fmt.Sprintf(`region_id = $1 AND %s >= $2 AND %s < $3
+	whereWhole := fmt.Sprintf(`region_id = ANY($1) AND %s >= $2 AND %s < $3
 		AND NOT EXISTS (
 			SELECT 1 FROM boundary_partial bp
 			JOIN boundary_capture bc ON bc.capture_id = bp.capture_id
@@ -699,7 +736,7 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 			  AND bp.tier = $4
 			  AND bp.bucket_start = %s.%s
 		)`, timeCol, timeCol, table, table, timeCol)
-	argsWhole := []any{regionID, from, to, string(tier)}
+	argsWhole := []any{regionIDs, from, to, string(tier)}
 	next := 5
 	if measurementTypeID != 0 {
 		whereWhole += fmt.Sprintf(" AND sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $%d)", next)
@@ -725,8 +762,8 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 		return nil, err
 	}
 
-	wherePartial := "s2.region_id = $1 AND bp.tier = $2 AND bp.partial_from >= $3 AND bp.partial_to <= $4"
-	argsPartial := []any{regionID, string(tier), from, to}
+	wherePartial := "s2.region_id = ANY($1) AND bp.tier = $2 AND bp.partial_from >= $3 AND bp.partial_to <= $4"
+	argsPartial := []any{regionIDs, string(tier), from, to}
 	if measurementTypeID != 0 {
 		wherePartial += " AND bc.sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $5)"
 		argsPartial = append(argsPartial, measurementTypeID)
@@ -741,7 +778,7 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 
 	rows, err := r.db.Query(ctx, queryPartial, argsPartial...)
 	if err != nil {
-		return nil, fmt.Errorf("readings: query boundary partials for region %d: %w", regionID, err)
+		return nil, fmt.Errorf("readings: query boundary partials for region set: %w", err)
 	}
 	defer rows.Close()
 
@@ -751,7 +788,7 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 		var count int64
 		var sum, min, max float64
 		if err := rows.Scan(&partialFrom, &count, &sum, &min, &max); err != nil {
-			return nil, fmt.Errorf("readings: scan boundary partial for region %d: %w", regionID, err)
+			return nil, fmt.Errorf("readings: scan boundary partial for region set: %w", err)
 		}
 		var avg float64
 		if count > 0 {
@@ -768,7 +805,7 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("readings: iterate boundary partials for region %d: %w", regionID, err)
+		return nil, fmt.Errorf("readings: iterate boundary partials for region set: %w", err)
 	}
 
 	return append(wholePts, partialPts...), nil

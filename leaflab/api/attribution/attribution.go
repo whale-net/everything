@@ -203,3 +203,52 @@ func (r *Resolver) AttributedSensors(ctx context.Context, regionID int64, at tim
 	}
 	return sensors, nil
 }
+
+// AttributedRegions is AttributedSensors' region-space twin: it returns
+// every region -- including regionID itself -- in regionID's subtree
+// (v_region_path.path_ids contains regionID) whose reading, at at,
+// attributes to regionID under FR23's nearest-ancestor rule
+// (attribute_region_plants, migration 019/021).
+//
+// AttributedSensors' candidate set is "any sensor whose *currently cached*
+// region (sensor.region_id) is in the subtree" -- correct for
+// GetCurrentValues, which only cares where a sensor is now. A bounded
+// historical series, by contrast, must key off each reading's own
+// denormalized region_id column (sensor_reading/its tier tables, stamped at
+// write time -- see leaflab/api/readings' package doc comment's "region"
+// entity-kind semantics) so that a sensor's later move never retroactively
+// changes which of its past readings a plant's series includes. This
+// function's candidate set is therefore "any region in the subtree," not
+// "any sensor" -- leaflab/api/readings.Reader.seriesForPlant queries
+// sensor_reading/the tier tables directly by this result's region_id set,
+// the same way it already does for a plain region entity ref, rather than
+// joining through sensor at all.
+func (r *Resolver) AttributedRegions(ctx context.Context, regionID int64, at time.Time) ([]int64, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT rp.region_id
+		FROM v_region_path rp
+		WHERE $1 = ANY(rp.path_ids)
+		  AND EXISTS (
+		      SELECT 1 FROM attribute_region_plants(rp.region_id, $2) arp
+		      WHERE arp.attributed_region_id = $1
+		  )
+		ORDER BY rp.region_id
+	`, regionID, at)
+	if err != nil {
+		return nil, fmt.Errorf("attribution: load regions attributed to region %d at %s: %w", regionID, at, err)
+	}
+	defer rows.Close()
+
+	var regionIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("attribution: scan attributed region for region %d: %w", regionID, err)
+		}
+		regionIDs = append(regionIDs, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("attribution: iterate attributed regions for region %d: %w", regionID, err)
+	}
+	return regionIDs, nil
+}
