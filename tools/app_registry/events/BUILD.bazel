@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "events",
+    srcs = [
+        "events.go",
+        "publisher.go",
+    ],
+    importpath = "github.com/whale-net/everything/tools/app_registry/events",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//libs/go/rmq",
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
+    ],
+)
+
+go_test(
+    name = "events_test",
+    srcs = ["events_test.go"],
+    embed = [":events"],
+    deps = [
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
+    ],
+)
+
+go_test(
+    name = "publisher_test",
+    srcs = ["publisher_test.go"],
+    embed = [":events"],
+    deps = [
+        "//libs/go/rmq",
+    ],
+)

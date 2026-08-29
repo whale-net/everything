@@ -688,24 +688,22 @@ func TestPlanReleaseWorkflowDispatch_AllocateDomainUsesRegistry(t *testing.T) {
 	}
 }
 
-// TestPlanReleaseWorkflowDispatch_NotAllocatedFallsBackToTags proves domains
-// not yet cut over to adoption stage "allocate" are unaffected: a
-// FailedPrecondition from AllocateVersion falls back to the pre-#829
-// tag-based bump, unchanged.
-func TestPlanReleaseWorkflowDispatch_NotAllocatedFallsBackToTags(t *testing.T) {
+// TestPlanReleaseWorkflowDispatch_FailedPreconditionIsFatal proves a
+// FailedPrecondition from AllocateVersion is fatal exactly like any other
+// registry error, not a signal to silently revert to tags.
+func TestPlanReleaseWorkflowDispatch_FailedPreconditionIsFatal(t *testing.T) {
 	_, fs, bazel := makeTestApps()
 	git := newFakeGit(
 		fakeGitCall{argsContain: []string{"tag", "--sort"}, output: "manmanv2-control-api.v1.2.3"},
 	)
 	artClient := NewFakeArtifactRegistryClient()
 	artClient.AllocateVersionFn = func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
-		return nil, status.Error(codes.FailedPrecondition, `domain "manmanv2" is at adoption stage "observe"`)
+		return nil, status.Error(codes.FailedPrecondition, `domain "manmanv2" allocation failed`)
 	}
 
-	var result *PlanResult
 	var err error
 	withEnv(map[string]string{"APP_REGISTRY_CICD_OPT_IN": "true"}, func() {
-		result, err = planRelease(planParams{
+		_, err = planRelease(planParams{
 			eventType:              "workflow_dispatch",
 			requestedApps:          "manmanv2-control-api",
 			incrementMajor:         true,
@@ -716,18 +714,14 @@ func TestPlanReleaseWorkflowDispatch_NotAllocatedFallsBackToTags(t *testing.T) {
 			artifactRegistryClient: artClient,
 		})
 	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Versions["manmanv2-control-api"] != "v2.0.0" {
-		t.Errorf("expected tag-based fallback version v2.0.0, got %s", result.Versions["manmanv2-control-api"])
+	if err == nil {
+		t.Fatal("expected a fatal error, got nil")
 	}
 }
 
 // TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal proves the safety
-// property issue #829 actually asks for: once a domain is opted in and
-// AllocateVersion fails for any reason other than "not at stage allocate",
-// the release must fail loudly rather than silently reverting to
+// property issue #829 actually asks for: once opted in, any AllocateVersion
+// error must fail the release loudly rather than silently reverting to
 // tag-scanning -- the exact bug this issue reports.
 func TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal(t *testing.T) {
 	_, fs, bazel := makeTestApps()
@@ -753,7 +747,7 @@ func TestPlanReleaseWorkflowDispatch_RegistryErrorIsFatal(t *testing.T) {
 		})
 	})
 	if err == nil {
-		t.Fatal("expected planRelease to fail when AllocateVersion errors for a reason other than adoption stage")
+		t.Fatal("expected planRelease to fail when AllocateVersion errors")
 	}
 }
 

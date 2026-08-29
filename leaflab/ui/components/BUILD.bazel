@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "components",
+    srcs = glob(["*.templ"]),
+    go_srcs = [
+        # Plain-Go FR64 rendering helpers (elapsed text + absolute-instant
+        # hover title) private to boards.templ -- not generated from a
+        # .templ file, so listed explicitly rather than picked up by the
+        # *.templ glob above.
+        "elapsed.go",
+    ],
+    visibility = ["//leaflab/ui:__subpackages__"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxui",
+    ],
+)
+
+# FR64 rendering tests (#1330): formatElapsed/absoluteInstantTitle (elapsed.go,
+# white-box, same package) plus BoardsRows's real templ output -- elapsed text
+# as the primary cell content, the absolute RFC3339 instant only ever inside a
+# title="" hover attribute, never as visible text.
+go_test(
+    name = "elapsed_test",
+    size = "small",
+    srcs = ["elapsed_test.go"],
+    embed = [":components"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+    ],
+)
+
+# Source exposed to //leaflab/ui:ui_test's NFR18.1 grep-style placeholder
+# conformance check (#1329) and //leaflab/conformance's NFR1.a/NFR18.1
+# checks (#1334). Scoped, not public -- mirrors
+# tools/app_registry/ui/components:conformance_srcs. Includes elapsed.go
+# alongside the *.templ files so the NFR18.1 scan covers every checked-in
+# source under this package, not just the generated-from-.templ ones.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.templ"]) + ["elapsed.go"],
+    visibility = [
+        "//leaflab/conformance:__pkg__",
+        "//leaflab/ui:__subpackages__",
+    ],
+)

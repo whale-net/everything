@@ -25,6 +25,7 @@ go_test(
         "connection_test.go",
         "consumer_internal_test.go",
         "consumer_test.go",
+        "publisher_constructor_test.go",
         "publisher_internal_test.go",
         "publisher_test.go",
     ],
