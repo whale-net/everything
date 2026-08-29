@@ -454,3 +454,4 @@ Any persona noticing scope outside its issue files a scope note issue added to t
 | stakeholder | `sonnet` | Bounded single-persona critique of an existing draft; runs once per persona in parallel, so cost multiplies |
 | worker, validator | `haiku` | Fast, cost-efficient execution of scoped swimlane tasks |
 | system-validator | `opus` (effort: max) | Comprehensive whole-system validation in running environment |
+| help | `sonnet` | Bounded single-turn triage against a known decision table; no GitHub writes |
