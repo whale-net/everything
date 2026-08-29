@@ -243,41 +243,27 @@ func (r *Repository) LoadConfigVersionCache(ctx context.Context) (map[string]int
 	return out, rows.Err()
 }
 
-// UpsertSensorHWHistory records the current (i2c_address, mux_path) for a
-// sensor -- the ChipKey half of the FR18 canonical hardware key, the
-// sensor_type component being carried by the sensor row this interval
-// belongs to (FR16.1) -- using hwkey.MuxPath's canonical text form (FR18.1)
-// so the stored value matches what idx_sensor_hw_address's
-// (mux_path::text) expression -- and any later hwkey.Key.SQLPredicate
-// lookup -- expects.
-// Closes the previous open row when either the address or the path has
-// changed; before this, the address wasn't recorded here at all, so an
-// address-only change (mux_path unchanged) was silently dropped.
+// UpsertSensorHWHistory records the current mux_path for a sensor, using
+// hwkey.MuxPath's canonical text form (FR18.1) so the stored value matches
+// what idx_sensor_hw_address's (mux_path::text) expression -- and any later
+// hwkey.Key.SQLPredicate lookup -- expects.
+// Closes the previous open row when the path has changed.
 func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
 	var muxText string
-	var i2cAddr *int32
 	if hw != nil {
 		muxText = hw.MuxPath.SQLText()
-		if v, ok := hw.I2CAddress.Value(); ok {
-			addr := int32(v)
-			i2cAddr = &addr
-		}
 	} else {
 		muxText = hwkey.MuxPath(nil).SQLText()
 	}
 
-	// If an open row with this exact address+path already exists, nothing
-	// to do. i2c_address is compared with IS NOT DISTINCT FROM since NULL
-	// (absent) must compare equal to NULL, not "unknown"/no-match the way
-	// plain `=` would.
+	// If an open row with this exact path already exists, nothing to do.
 	var unchanged bool
 	err := r.db.QueryRow(ctx, `
 		SELECT EXISTS(
 			SELECT 1 FROM sensor_hw_history
 			WHERE sensor_id = $1 AND valid_to IS NULL AND mux_path::text = $2
-			  AND i2c_address IS NOT DISTINCT FROM $3
 		)
-	`, sensorID, muxText, i2cAddr).Scan(&unchanged)
+	`, sensorID, muxText).Scan(&unchanged)
 	if err != nil {
 		return fmt.Errorf("check hw history for sensor %d: %w", sensorID, err)
 	}
@@ -294,8 +280,8 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 	}
 
 	if _, err := r.db.Exec(ctx, `
-		INSERT INTO sensor_hw_history (sensor_id, mux_path, i2c_address) VALUES ($1, $2::jsonb, $3)
-	`, sensorID, muxText, i2cAddr); err != nil {
+		INSERT INTO sensor_hw_history (sensor_id, mux_path) VALUES ($1, $2::jsonb)
+	`, sensorID, muxText); err != nil {
 		return fmt.Errorf("insert hw history for sensor %d: %w", sensorID, err)
 	}
 	return nil
