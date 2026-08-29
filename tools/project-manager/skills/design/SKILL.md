@@ -25,6 +25,7 @@ Orchestrates the project-manager design pipeline inside a GitHub Discussion from
 | `--stakeholder-rounds <n>` | `2` | Maximum stakeholder meeting rounds before stopping and summarizing standing blockers for the user. Implies `--stakeholder-meeting`. |
 | `--personas "<a,b>"` | spec personas | Passed through to the stakeholder meeting — meet with only these personas instead of every persona named in the spec. Implies `--stakeholder-meeting`. |
 | `--agent-sync` | off | Run steps 3-5's draft/reconcile loop as one long-lived producer+architect session pair over `agentsync-mcp` instead of a fresh subagent dispatch every round. See CONVENTIONS.md § Agent-sync mode. |
+| `--resume-agents` | off | Resume the same producer/architect subagent for a follow-up round (steps 4-5, and step 6's blocker loop) instead of spawning a fresh one — avoids re-grounding on the whole Discussion each round. Composes with `--agent-sync`: applies to rounds after its dispatch returns. See CONVENTIONS.md § Resume mode. |
 
 Example: `/project-manager:design "device firmware rollback" --stakeholder-meeting`
 
@@ -45,7 +46,7 @@ Example: `/project-manager:design "device firmware rollback" --stakeholder-meeti
 
    **With `--milestone`:** title the discussion `Intake: M<n> — <outcome sentence>` and open it with the milestone's roadmap entry quoted, so the scope contract is visible in the discussion itself. Then post `gh issue comment <product-issue> --body "Ledger: M<n> → in design (<discussion-url>)"` before interviewing — never edit the tracking issue's body. Interview only about this milestone's outcome — vision, personas, and non-goals are already settled in the brief, and re-opening them turns a milestone spec back into a product spec.
 
-3. **Draft the specification.**
+3. **Draft the specification.** In every case, dispatch with an explicit `name: "producer-<discussion-number>"` (and, where architect is dispatched too, `name: "architect-<discussion-number>"`) so a later round has a stable target to resume under `--resume-agents`.
    - **Default:** Dispatch the `project-manager:producer` subagent with the intake transcript and discussion URL, instructing it to run Mode 1: post the draft specification (user stories, FRs, NFRs, personas, out-of-scope) as a comment on the Discussion.
    - **With `--agent-sync`:** call `mcp__agentsync-mcp__start_session("design-<discussion-number>")`, then dispatch `project-manager:producer` **and** `project-manager:architect` together in one message (two parallel `Agent` calls) — producer with the intake transcript and discussion URL, architect with the discussion URL — each told the session id and to run in agent-sync mode (producer.md / architect.md § Agent-sync mode; CONVENTIONS.md § Agent-sync mode) for steps 3-5. Skip straight to step 6 once both return: they run the draft/reconcile loop themselves and only report back once architect has signed off or the round cap is hit.
 
@@ -58,10 +59,11 @@ Example: `/project-manager:design "device firmware rollback" --stakeholder-meeti
 5. **Loop in Discussion until architect sign-off.** *(Default only — `--agent-sync` runs this loop inside the two dispatches from step 3.)*
    - If architect raised open questions: dispatch `project-manager:producer` with the discussion URL to run Mode 2 (answer questions, update draft in discussion comments), then dispatch `project-manager:architect` again.
    - Repeat until architect posts `Architect sign-off: approved`, or cap at 5 rounds and summarize for the user if stuck.
+   - **With `--resume-agents`:** each of these redispatches targets the same `producer-<discussion-number>` / `architect-<discussion-number>` names from step 3-4 via `SendMessage` instead of a fresh `Agent` call — see CONVENTIONS.md § Resume mode.
 
 6. **Stakeholder meeting (only with `--stakeholder-meeting`).** Once architect has signed off, invoke `/project-manager:stakeholder-meeting <discussion-url>` — passing `--personas` through if given — and follow that skill's steps: it dispatches one `project-manager:stakeholder` subagent per persona named in the spec, then posts consolidated minutes ending in `Stakeholder meeting: cleared` or `Stakeholder meeting: blocked (<k> blockers)`.
    - **Cleared** — continue to step 7.
-   - **Blocked** — the plan is not ready for review. Dispatch `project-manager:producer` (Mode 2) with the consolidated blockers to answer each one and update the draft, dispatch `project-manager:architect` for a fresh reconciliation round, then hold the next meeting round. Cap at `--stakeholder-rounds` (default 2); if blockers still stand, stop and summarize them for the user instead of looping.
+   - **Blocked** — the plan is not ready for review. Dispatch `project-manager:producer` (Mode 2) with the consolidated blockers to answer each one and update the draft, dispatch `project-manager:architect` for a fresh reconciliation round, then hold the next meeting round. Cap at `--stakeholder-rounds` (default 2); if blockers still stand, stop and summarize them for the user instead of looping. **With `--resume-agents`:** target the same `producer-<discussion-number>` / `architect-<discussion-number>` names via `SendMessage` — this is still the same skill invocation that dispatched them, even if `--agent-sync` already returned control once (CONVENTIONS.md § Resume mode).
    - Non-blocking guidance and feedback never block the hand-off — surface it to the user with the minutes so they can decide what producer folds in.
 
    Without the flag, skip this step entirely. The meeting can still be held later against the approved root plan issue: `/project-manager:stakeholder-meeting <root-issue-number>`.

@@ -146,6 +146,10 @@ Loop (entered once you've either posted your first-turn draft and synced, or wok
 
 Track your own round count; stop, post a summary comment, and `leave_session` at 5 rounds without sign-off, same cap the default loop uses. If `sync()` returns `peer_left` or `session_ended` before sign-off, treat it the same way — summarize where things stood and stop, don't keep looping alone.
 
+## Resumed dispatch
+
+If a message arrives from `SendMessage` rather than a fresh dispatch (`/project-manager:design --resume-agents` or `/project-manager:product --resume-agents` — CONVENTIONS.md § Resume mode), you're being continued, not started over: you already have the discussion, the domain docs, and everything you posted in earlier rounds in context. Treat the message as this round's delta — architect's latest comment plus what to do about it — and act on it directly; don't re-read the whole Discussion thread or re-derive things you already worked out.
+
 ## What you do not do
 
 - You do not design the implementation, pick libraries, or reference specific files/functions — that's architect's and planner's job.

@@ -90,6 +90,10 @@ Loop (entered once you've either posted your first-turn pass and synced, or woke
 
 Repeat from step 1 on waking, up to the same 5-round cap the default loop uses — if you hit it without sign-off, post a summary comment, `leave_session`, and `end_session` (you always hold that tool; call it once producer has also left or the session is otherwise going nowhere). If `sync()` wakes you with `peer_left` (producer hit the cap or dropped out first) or `session_ended`, post your own summary comment, `leave_session`, `end_session` if not already ended, and stop — don't wait out further timeouts alone.
 
+## Resumed dispatch
+
+If a message arrives from `SendMessage` rather than a fresh dispatch (`/project-manager:design --resume-agents` or `/project-manager:product --resume-agents` — CONVENTIONS.md § Resume mode), you're being continued, not started over: you already have the discussion, the domain docs, and everything you posted in earlier rounds in context. Treat the message as this round's delta — producer's latest comment plus what to check now — and act on it directly; don't re-read the whole Discussion thread or redo reconciliation work you already did.
+
 ## What you do not do
 
 - You do not write the workplan or create task issues — that's planner's job, and only starts after a human approves the plan.

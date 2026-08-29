@@ -200,6 +200,21 @@ Off by default. `/project-manager:design --agent-sync` and `/project-manager:pro
 
 **Scope.** Only the producer/architect draft-reconcile loop uses this (`design` steps 3-5, `product` steps 5-6 — step 4's first producer draft has no peer to sync with yet, so it's always a single dispatch). The stakeholder meeting, human review gate, and planner/worker/validator phases are unaffected — they don't have this round-trip shape.
 
+## Resume mode (opt-in)
+
+Off by default. `/project-manager:design --resume-agents` and `/project-manager:product --resume-agents` address the same regrounding cost as agent-sync mode from the other side: instead of changing how producer and architect hand off to *each other*, they change how the **orchestrator** redispatches the same persona for another round. Every default-mode round after the first re-reads the whole Discussion — and often the domain docs — from a cold start, because a fresh `Agent()` call has no memory of the round before it. Resuming the same subagent instance instead means it only needs the delta.
+
+**Mechanics.**
+
+1. Every dispatch of `project-manager:producer` or `project-manager:architect` passes an explicit `name` to the `Agent` call — `producer-<discussion-number>`, `architect-<discussion-number>` — whether or not `--resume-agents` is set, so a later round has something stable to target.
+2. The *first* dispatch of a given persona within a skill invocation is always a normal `Agent(...)` call — there's nothing to resume yet.
+3. Every subsequent dispatch of that same persona, for a follow-up round on the same discussion within the same skill invocation, uses `SendMessage({to: "<persona>-<discussion-number>", message: "<this round's prompt>"})` instead of a fresh `Agent(...)` call. The message only needs to say what changed since its last turn (the new comment(s)) and what to do now — the resumed agent already has the discussion, the domain docs, and its own prior reasoning in context.
+4. If `SendMessage` errors because that name isn't a live agent — most commonly because this is a separate skill invocation (a later `/project-manager:review` or `/project-manager:stakeholder-meeting` run, or a fresh session) rather than a follow-up round within the same one — fall back to a normal `Agent(...)` dispatch. That's the expected path outside the loops listed below, not a failure to report to the user.
+
+**Scope.** Applies only to redispatching the same persona for another round on the same discussion, *within the skill invocation that first dispatched it*: `design` steps 4-5 and step 6's stakeholder-meeting blocker loop (still the same invocation), `product` step 6 and step 7's "Changes" branch. It does not reach across separate skill invocations — `/project-manager:review`, a later `/project-manager:stakeholder-meeting`, or `/project-manager:product`'s amendment step 8 always dispatch fresh, since the producer/architect instances from the original design/product run aren't addressable from a different invocation.
+
+**Combining with `--agent-sync`.** The two modes solve adjacent halves of the same problem and compose cleanly: agent-sync's single dispatch never needs a resume inside its own loop, since the two subagents don't return control until sign-off or the round cap. `--resume-agents` still applies to whatever comes *after* that dispatch returns within the same invocation — most commonly a stakeholder-meeting blocker round in `design` step 6 — where it resumes the exact `producer-<n>` / `architect-<n>` agents that the agent-sync dispatch used, rather than spawning fresh ones for that round.
+
 ## Stakeholder meeting
 
 An optional round in which **every persona named in the plan's spec** reviews the draft from its own seat and reports back, before the plan is handed to the human review gate. Run by `/project-manager:stakeholder-meeting`, either automatically from `/project-manager:design --stakeholder-meeting` (target: the intake Discussion, after architect sign-off) or on demand against an approved root plan Issue.
