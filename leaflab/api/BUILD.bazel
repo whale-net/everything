@@ -119,3 +119,40 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
+
+# Real-Postgres integration coverage for FR53's three independent, aligned
+# sensor timelines (GetSensorTimelines) -- see
+# timelines_integration_test.go's doc comment and //libs/go/dbtest/README.md.
+# Hand-written (not gazelle-generated): the test file is gated behind
+# `//go:build integration`, which gazelle skips when scanning for go_test
+# srcs. EXACTLY the tag set from //libs/go/dbtest:postgres_constraints_test
+# (see that package's BUILD.bazel/README.md for why each tag is required).
+# `# keep` markers tell a later `bazel run //:gazelle` not to touch or
+# remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:timelines_integration_test --test_output=all
+go_test(
+    # keep
+    name = "timelines_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["timelines_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:firmwarepb",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
