@@ -57,18 +57,23 @@ FR budget: 12
 
 Order milestones so each is independently useful and each `Deliberately deferred` line names where the deferred thing went. Do **not** add a ledger table here — the roadmap in the spec file holds milestone definitions only, every one `not started` until work begins. Live status is tracked as comments on the tracking issue (see P3 and CONVENTIONS.md § Roadmap ledger); the spec file itself is never touched just to flip a status.
 
-**P3. Publish the brief.** Two artifacts, in order — the file first, then the issue that points at it:
+**P3. Publish the brief.** `<domain>/PRODUCT.md` is an index, not a monolith (CONVENTIONS.md § Layout) — write it and its split files together, then the issue that points at the index:
 
 ```sh
 git checkout -b pm-product/<slug> origin/main
-mkdir -p <domain>
-# write the full spec — vision, personas, current state, capability map,
-# load-bearing decisions, non-goals, roadmap (milestone definitions only) — to <domain>/PRODUCT.md
-git add <domain>/PRODUCT.md
+mkdir -p <domain>/product
+# <domain>/PRODUCT.md        — Vision, Personas, Load-bearing decisions, Non-goals, inline,
+#                               plus a jump table to the three files below
+# <domain>/product/01-current-state.md   — "# Current state", architect's section verbatim
+# <domain>/product/02-capability-map.md  — "# Capability map", C1..Cn bucketed
+# <domain>/product/03-roadmap.md         — "# Roadmap", milestone definitions only
+git add <domain>/PRODUCT.md <domain>/product/
 git commit -m "docs: <domain> product brief (<name>)"
 git push -u origin pm-product/<slug>
 gh pr create --title "docs: <domain> product brief" --body "Product discussion: <discussion-url>"
 ```
+
+If the domain already has a `TOC.md`, add one line to it pointing at `PRODUCT.md` in the same commit — not at the split files individually, since `PRODUCT.md`'s own jump table is the next hop (`AGENTS.md` § Size Limits & Splitting, "one canonical entry point"). Skip this for a brand-new domain; its `TOC.md` doesn't exist yet.
 
 ```sh
 gh label create "product:approved" --color 1D76DB \
@@ -78,9 +83,9 @@ gh issue create --title "Product: <name>" --label "product:approved" --body-file
 
 The issue body is short and never grows beyond a pointer: first line `Product brief: <domain>/PRODUCT.md (#<pr-number>)`, second line `Product discussion: <discussion-url>`. Then `gh discussion comment <discussion-url> --body "Approved product brief: <issue-url>"`.
 
-Tell the user the docs PR needs to merge before `/project-manager:design --milestone` can read the spec — `design` checks for the file on `main` and stops with a pointer back to the PR if it isn't there yet.
+Tell the user the docs PR needs to merge before `/project-manager:design --milestone` can read the spec — `design` checks for the index on `main` and stops with a pointer back to the PR if it isn't there yet.
 
-**Amendments.** The spec is living, but never edited silently: draft the change as a comment on the tracking issue, get the user's approval via the `product` skill's gate, then repeat the P3 commit/PR flow against the existing `<domain>/PRODUCT.md` (a fresh branch, an edit instead of a new file) — never `gh issue edit` the tracking issue's body. Once the PR merges, comment `Amended: <summary> (#<pr-number>)` on the tracking issue. Never rewrite a shipped milestone's history — ship what shipped, change what is ahead; the file's git history is the audit trail.
+**Amendments.** The spec is living, but never edited silently: draft the change as a comment on the tracking issue, get the user's approval via the `product` skill's gate, then repeat the P3 commit/PR flow — but touch only the file(s) the amendment actually changes (`PRODUCT.md` for a load-bearing or non-goal change, `product/02-capability-map.md` for a new capability, `product/03-roadmap.md` for a re-cut milestone) — never `gh issue edit` the tracking issue's body. Once the PR merges, comment `Amended: <summary> (#<pr-number>)` on the tracking issue. Never rewrite a shipped milestone's history — ship what shipped, change what is ahead; the files' git history is the audit trail. If `product/03-roadmap.md` alone has grown past the size where it reads in one pass, split it the way `AGENTS.md` prescribes for a `PLAN.md`: shipped milestones move to `product/03-roadmap-HISTORY.md`, the live file keeps only what's still moving.
 
 ## Modes
 
@@ -91,7 +96,7 @@ Tell the user the docs PR needs to merge before `/project-manager:design --miles
 - **Constraints** — performance, reliability, security, operability expectations; anything explicitly out of bounds.
 - **Boundaries** — what's deliberately not in scope, and why, so architect and planner don't have to guess.
 
-**Milestone-scoped intake.** When the dispatch names a product brief issue and a milestone (`/project-manager:design <product-issue> --milestone M2`), read `<domain>/PRODUCT.md` from `main` first and treat its milestone entry as the scope contract. Interview only about *that* milestone's outcome — the vision, personas, and non-goals are already settled and re-litigating them is how a milestone spec turns back into a product spec. Your questions are about the behavior needed to make the outcome sentence true: what the persona sees, what happens on failure, what state persists. Post `Ledger: M<n> → in design (<discussion-url>)` on the product tracking issue before you start (see Mode 1).
+**Milestone-scoped intake.** When the dispatch names a product brief issue and a milestone (`/project-manager:design <product-issue> --milestone M2`), read `<domain>/PRODUCT.md` from `main` for context and follow its jump table to `<domain>/product/03-roadmap.md` for the milestone's actual entry, and treat that as the scope contract. Interview only about *that* milestone's outcome — the vision, personas, and non-goals are already settled and re-litigating them is how a milestone spec turns back into a product spec. Your questions are about the behavior needed to make the outcome sentence true: what the persona sees, what happens on failure, what state persists. Post `Ledger: M<n> → in design (<discussion-url>)` on the product tracking issue before you start (see Mode 1).
 
 Ask focused follow-up questions rather than a giant intake form — a few at a time, adapting to what's already been said — and post each round to the discussion as it happens (`gh discussion comment <discussion-url> --body-file <tmpfile>`) so the interview has a durable record. Don't move to Mode 1 while there's an obvious gap. If the requester says "just draft something and I'll correct it," that's permission to proceed on thinner input — note the assumptions you're filling in.
 
@@ -109,7 +114,7 @@ Ask focused follow-up questions rather than a giant intake form — a few at a t
 - **Every FR cites the capability it serves** — `FR4 (C3) — The plant detail page renders the most recent reading and its timestamp.` An FR that cannot cite a capability in this milestone's `Delivers` list does not belong in this milestone. This traceability rule is the actual scope control; the milestone's `FR budget` is only a backstop that tells you when to re-read the rule.
 - **Out of scope names where deferred work went** — `Multi-plant list: deferred to M3 (C7)` rather than a bare bullet, so nothing quietly falls out of the roadmap.
 
-**Cutting over-budget scope.** When the milestone genuinely needs behavior that no `Delivers` capability covers, do not widen the FRs to smuggle it in and do not silently drop it. Either it is a new capability — then open a small PR adding it to `<domain>/PRODUCT.md`'s `Later` bucket with the next free `Cn` (same commit/PR mechanics as P3), and comment on the tracking issue `Deferred from M<n>: <capability line>` once it merges — or it belongs to a later milestone already, and it goes under **Out of scope** citing that milestone. Scope notes are Project-board items and do not exist yet at design time; the tracking issue's comments are the ledger for this.
+**Cutting over-budget scope.** When the milestone genuinely needs behavior that no `Delivers` capability covers, do not widen the FRs to smuggle it in and do not silently drop it. Either it is a new capability — then open a small PR adding it to `<domain>/product/02-capability-map.md`'s `Later` bucket with the next free `Cn` (same commit/PR mechanics as P3), and comment on the tracking issue `Deferred from M<n>: <capability line>` once it merges — or it belongs to a later milestone already, and it goes under **Out of scope** citing that milestone. Scope notes are Project-board items and do not exist yet at design time; the tracking issue's comments are the ledger for this.
 
 Post a `Ledger: M<n> → <status> (<link>)` comment on the tracking issue as the milestone moves: `in design` with the intake discussion URL when you open it, and `planned` with the root plan issue number in Mode 3. Never edit the tracking issue's body to reflect status — see CONVENTIONS.md § Roadmap ledger for why (concurrent milestones would race on a body edit).
 

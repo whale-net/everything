@@ -35,18 +35,21 @@ A single feature added to an existing system goes straight to `/project-manager:
 
 Two artifacts, deliberately split:
 
-- **The spec** — `<domain>/PRODUCT.md`, committed to `main` via a small doc-only PR. A product maps 1:1 to a top-level domain (`AGENTS.md` § Domains); publishing creates the domain directory if it's new. This is the document a future agent reads to understand why the system is shaped the way it is — same reason `ARCHITECTURE.md` lives in the domain instead of in an issue.
+- **The spec** — `<domain>/PRODUCT.md` plus `<domain>/product/*.md`, committed to `main` via a small doc-only PR. A product maps 1:1 to a top-level domain (`AGENTS.md` § Domains); publishing creates the domain directory if it's new. This is the document a future agent reads to understand why the system is shaped the way it is — same reason `ARCHITECTURE.md` lives in the domain instead of in an issue.
 - **The tracking issue** — titled `Product: <name>`, labeled `product:approved`. Body is just a pointer: `Product brief: <domain>/PRODUCT.md (#<pr-number>)` and `Product discussion: <discussion-url>`. Its comments are the live roadmap ledger (see § Roadmap below) — the body itself is never rewritten after creation except by an amendment PR reference.
 
-The spec's body has exactly these sections:
+`PRODUCT.md` is an **index**, not a monolith — this is the large-document split guidance in `AGENTS.md` § Size Limits & Splitting applied from day one rather than after the fact, because the two sections most likely to grow unbounded (the capability map, which only ever adds to `Later`; the roadmap, which keeps every milestone forever, shipped ones included) are exactly the sections this whole skill exists to keep small for everyone else:
 
-1. **Vision** — one paragraph. What this is and who it is for.
-2. **Personas** — every actor, human or system. One line each.
-3. **Current state** — what exists today that this builds on, replaces, or must not break. Written by architect (may be "nothing").
-4. **Capability map** — the end-state capability list, one line per capability, numbered `C1..Cn`, bucketed `Now` / `Next` / `Later`. This is the section that would otherwise have become 80 FRs.
-5. **Load-bearing decisions** — numbered `LB1..LBn`. The whole point of the document.
-6. **Non-goals** — what this product will not do, ever or for the foreseeable future.
-7. **Roadmap** — milestone definitions only (no ledger — that lives on the tracking issue).
+```
+<domain>/PRODUCT.md                    — index: Vision, Personas, Load-bearing
+                                          decisions, Non-goals inline + a jump table
+<domain>/product/01-current-state.md   — "# Current state"
+<domain>/product/02-capability-map.md  — "# Capability map"
+<domain>/product/03-roadmap.md         — "# Roadmap" (milestone definitions only —
+                                          no ledger, that lives on the tracking issue)
+```
+
+The four sections that stay inline in the index are short and either stable (Vision, Personas, Non-goals) or cross-referenced by number from everywhere (`LB1..LBn`, cited by every milestone's `Must not foreclose` and by architect's Load-bearing check) — exactly the carve-out `AGENTS.md`'s splitting rule allows instead of forcing a one-line file. The three that split out have no natural ceiling. See `tools/project-manager/CONVENTIONS.md` § Layout for the full rationale, including when `product/03-roadmap.md` itself eventually needs the current/history split `AGENTS.md` prescribes for a `PLAN.md`.
 
 ### Hard rule: the brief contains zero numbered FRs or NFRs
 
@@ -123,7 +126,7 @@ Readers (`design --milestone`'s idempotency check, `/project-manager:status`, ar
 
 7. **Human gate and publish.** Present the signed-off brief to the user: the vision, the capability map bucketed, the load-bearing decisions, and the milestone list with what M1 does and does not include. Ask for approval, changes, or a re-cut of the milestone boundaries.
    - **Changes** — dispatch producer (Mode P2) and architect for another round in the discussion, then return here.
-   - **Approved** — dispatch `project-manager:producer` (Mode P3) to publish. It writes `<domain>/PRODUCT.md`, commits it to a branch, and opens a doc-only PR (`gh pr create`), then creates the tracking issue whose body just points at that PR and the discussion:
+   - **Approved** — dispatch `project-manager:producer` (Mode P3) to publish. It writes the index (`<domain>/PRODUCT.md`) and its three split files (`<domain>/product/01-current-state.md`, `02-capability-map.md`, `03-roadmap.md` — § The artifact above), commits them together to a branch, and opens a doc-only PR (`gh pr create`), then creates the tracking issue whose body just points at the index and the discussion:
      ```sh
      gh issue create --title "Product: <name>" --label "product:approved" --body-file <tmpfile>
      ```
@@ -132,10 +135,10 @@ Readers (`design --milestone`'s idempotency check, `/project-manager:status`, ar
      This skill runs its own gate rather than routing through `/project-manager:review`, which is specifically the gate for a milestone's root plan issue.
 
 8. **Amendment (existing brief).** Reality changes roadmaps — a shipped milestone teaches you something, or a milestone's design surfaces a capability nobody had thought of. The spec is a living document, but never edited silently:
-   - Dispatch producer (Mode P2) to draft the amendment as a comment on the **tracking issue** — not the original product discussion, which is closed once the brief is published — and architect to reconcile it there if it touches load-bearing decisions or milestone ordering, baselining against the committed `<domain>/PRODUCT.md` on `main`.
+   - Dispatch producer (Mode P2) to draft the amendment as a comment on the **tracking issue** — not the original product discussion, which is closed once the brief is published — and architect to reconcile it there if it touches load-bearing decisions or milestone ordering, baselining against the committed `<domain>/product/01-current-state.md` on `main`.
    - Present the diff to the user for approval.
-   - On approval, producer repeats the publish mechanics against the existing file — a fresh branch, an edit instead of a new file, a PR — never `gh issue edit` on the tracking issue's body. Once the PR merges, it comments `Amended: <summary> (#<pr-number>)` on the tracking issue.
-   - An amendment never rewrites the history of a shipped milestone. Ship what shipped; change what is ahead — the file's git history is the audit trail.
+   - On approval, producer repeats the publish mechanics but touches only the file(s) the amendment actually changes (`PRODUCT.md` for a load-bearing/non-goal change, `product/02-capability-map.md` for a new capability, `product/03-roadmap.md` for a re-cut milestone) — a fresh branch, an edit, a PR — never `gh issue edit` on the tracking issue's body. Once the PR merges, it comments `Amended: <summary> (#<pr-number>)` on the tracking issue.
+   - An amendment never rewrites the history of a shipped milestone. Ship what shipped; change what is ahead — the files' git history is the audit trail. If `product/03-roadmap.md` alone has grown past a one-pass read, this is also the moment to split it into `product/03-roadmap-HISTORY.md` (shipped milestones) and a live file holding only what's still moving (CONVENTIONS.md § Layout).
 
 9. **Hand off.** Tell the user the brief is published (and its docs PR merged) and that `/project-manager:design <product-issue> --milestone M1` is the next step, and name what M1 contains.
 
@@ -149,4 +152,4 @@ Each milestone runs the existing pipeline, with only two conditional additions (
   → repeat for M2, M3, ...
 ```
 
-`<domain>/PRODUCT.md` is read fresh from `main` at the start of every milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without re-reading milestone N's spec.
+`<domain>/PRODUCT.md` and its `product/*.md` files are read fresh from `main` at the start of every milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without re-reading milestone N's spec.

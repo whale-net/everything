@@ -41,10 +41,30 @@ The brief is deliberately split across two places:
 
 | Artifact | Holds | Lives in | Changes via |
 |---|---|---|---|
-| Product spec | Vision, personas, current state, capability map, load-bearing decisions, non-goals, milestone definitions | `<domain>/PRODUCT.md`, committed to `main` | A small doc-only PR, same as any other doc change |
-| Product tracking issue | A pointer to the spec file and discussion, plus the live roadmap ledger | GitHub Issue, labeled `product:approved` | `gh issue comment` only (see § Roadmap ledger) — the body is never rewritten after creation |
+| Product spec | Vision, personas, current state, capability map, load-bearing decisions, non-goals, milestone definitions | `<domain>/PRODUCT.md` + `<domain>/product/*.md`, committed to `main` | A small doc-only PR, same as any other doc change |
+| Product tracking issue | A pointer to the spec and discussion, plus the live roadmap ledger | GitHub Issue, labeled `product:approved` | `gh issue comment` only (see § Roadmap ledger) — the body is never rewritten after creation |
 
 The spec is committed like any other doc because it's written for the same reader `ARCHITECTURE.md` is: a future agent trying to understand why the system is shaped the way it is, per `AGENTS.md` § Documentation Conventions. The tracking issue exists because Issues, not files, are what `gh` cross-links from Discussions, PRs, and other issues — it's the address, not the content.
+
+### Layout: PRODUCT.md is an index, not a monolith
+
+The two sections most likely to outgrow a single-file read are the same two sections this document exists to control on everyone else's behalf: the capability map only grows (deferrals add to `Later`), and the roadmap accumulates one entry per milestone forever, shipped ones included, per `AGENTS.md` § Size Limits & Splitting rule 1 (pick the boundary before it's needed, not at the moment a line-count trips). `<domain>/PRODUCT.md` follows that guidance from the start rather than waiting to cross the threshold:
+
+```
+<domain>/PRODUCT.md                    — index: Vision, Personas, Load-bearing decisions,
+                                          Non-goals inline, plus a jump table to the rest
+<domain>/product/01-current-state.md   — # Current state
+<domain>/product/02-capability-map.md  — # Capability map
+<domain>/product/03-roadmap.md         — # Roadmap
+```
+
+**What stays inline in the index** — Vision, Personas, Non-goals, and Load-bearing decisions — is exactly the carve-out `AGENTS.md`'s splitting rule 1 describes: short and either stable (Vision, Personas, Non-goals rarely change after publish) or cross-referenced by number from everywhere (`LB1..LBn` is cited from every milestone's `Must not foreclose` list and from architect's Load-bearing check) rather than something a reader opens on its own. Forcing either into a one-line file would just relocate the grep-cold problem `AGENTS.md` warns against.
+
+**What splits out** — Current state, Capability map, Roadmap — are the sections with no natural ceiling: current state can run long for a retrofit-heavy survey, the capability map only ever grows, and the roadmap is never pruned (a shipped milestone's entry stays forever — see § Amendments). Each split file's `# ` title is the section's exact heading text, so a citation like "PRODUCT.md § Roadmap" still greps straight to `product/03-roadmap.md` even before anyone updates it to the new path (`AGENTS.md` rule on grep-discoverability).
+
+**Discovery.** `<domain>/PRODUCT.md` is the one canonical entry point — anyone reading a product for the first time starts there and follows its jump table, never guesses a `product/*.md` path directly. If the domain has a `TOC.md`, publish adds one line pointing at `PRODUCT.md` (not at each split file individually — `PRODUCT.md`'s own jump table is the second hop, per `AGENTS.md` rule 3's "one canonical entry point").
+
+**Re-checking the split's own size** (`AGENTS.md` rule 6). `product/03-roadmap.md` is a planning-doc shape — a live edge of upcoming milestones plus a permanent record of shipped ones — so once it alone crosses the size threshold, split it the same way `AGENTS.md` prescribes for `PLAN.md`: move shipped milestones' entries to a `product/03-roadmap-HISTORY.md` sibling, keep only `not started`/`in design`/`planned`/`in progress` milestones in the live file, and link the history sibling from the top of `03-roadmap.md`. Don't do this preemptively on a fresh product — there's nothing to split until milestones actually ship.
 
 ### The two document levels
 
@@ -57,7 +77,7 @@ The spec's hard rule is that it contains **zero numbered FRs or NFRs**. `C7 — 
 
 ### Brief sections
 
-**Vision** (one paragraph) · **Personas** · **Current state** (architect) · **Capability map** (`C1..Cn`, bucketed `Now`/`Next`/`Later`) · **Load-bearing decisions** (`LB1..LBn`, architect) · **Non-goals** · **Roadmap** (milestone definitions only — the live status ledger is tracked separately, see § Roadmap ledger).
+In the `PRODUCT.md` index: **Vision** (one paragraph) · **Personas** · **Load-bearing decisions** (`LB1..LBn`, architect) · **Non-goals**. Split out to `product/*.md` (§ Layout above): **Current state** (architect) · **Capability map** (`C1..Cn`, bucketed `Now`/`Next`/`Later`) · **Roadmap** (milestone definitions only — the live status ledger is tracked separately, see § Roadmap ledger).
 
 **Load-bearing decisions** are why the document exists. Each is a structural commitment an early milestone must get approximately right because a later capability depends on it, with three clauses: the capability *at risk*, what to *decide now*, and what *stays cheap* to change later. The third clause keeps the list honest — if nothing is expensive to reverse, it is not load-bearing. Bias toward data shape, identity, and wire contracts (schemas, keys, tenancy, auth subject, event payloads); handlers, templates, and internal package boundaries are cheap to redo and do not belong. Aim for 3-8 entries.
 
@@ -70,7 +90,7 @@ Two mechanisms, in order of importance:
 1. **Traceability.** Every FR cites the capability it serves — `FR4 (C3) — ...`. An FR that cannot cite one from the milestone's `Delivers` list does not belong in this milestone. This is the actual control; a bare FR cap just gets gamed by writing wider FRs.
 2. **The FR budget** is a backstop that tells producer when to re-read rule 1. A draft over budget whose FRs all trace correctly is a signal to re-examine the outcome sentence, not an automatic blocker.
 
-Over-budget scope has one destination and never a silent drop. Scope notes are Project-board items and no board exists yet at design time, so the **product spec is the ledger**: a genuinely new capability is added to the spec's `Later` bucket in `<domain>/PRODUCT.md` (a small doc PR, same mechanics as producer.md Mode P3) with the next free `Cn`, and recorded with a `Deferred from M<n>: <capability line>` comment on the tracking issue; anything already belonging to a later milestone goes under the plan's **Out of scope** citing that milestone.
+Over-budget scope has one destination and never a silent drop. Scope notes are Project-board items and no board exists yet at design time, so the **product spec is the ledger**: a genuinely new capability is added to the `Later` bucket in `<domain>/product/02-capability-map.md` (a small doc PR, same mechanics as producer.md Mode P3) with the next free `Cn`, and recorded with a `Deferred from M<n>: <capability line>` comment on the tracking issue; anything already belonging to a later milestone goes under the plan's **Out of scope** citing that milestone.
 
 Architect's **Load-bearing check** (architect.md § Process) is the pass that makes small milestones safe rather than merely small: a draft that forecloses a protected `Later` capability gets a numbered blocking question. The bar is *forecloses* — requiring a migration, a breaking wire change, or unpicking a decision threaded through the milestone — not merely *does not yet implement*.
 
@@ -93,7 +113,7 @@ Each writer checks the root plan issue's first line for `Product: #<p> — Miles
 
 ### Amendments
 
-The spec is a living document but is never edited silently. `/project-manager:product <issue-number>` drafts the amendment as a comment on the tracking issue; architect reconciles it there if it touches load-bearing decisions or milestone ordering; once the user approves, producer opens a small PR editing `<domain>/PRODUCT.md` (same mechanics as publishing — producer.md Mode P3) and, once it merges, comments `Amended: <summary> (#<pr-number>)` on the tracking issue. A shipped milestone's history is never rewritten — ship what shipped, change what is ahead; git history on the file is the audit trail, so the issue comment only needs to summarize, not narrate, the diff.
+The spec is a living document but is never edited silently. `/project-manager:product <issue-number>` drafts the amendment as a comment on the tracking issue; architect reconciles it there if it touches load-bearing decisions or milestone ordering; once the user approves, producer opens a small PR editing whichever files the amendment actually touches — `PRODUCT.md` itself for a load-bearing or non-goal change, `product/02-capability-map.md` for a new capability, `product/03-roadmap.md` for a re-cut milestone (same mechanics as publishing — producer.md Mode P3) — and, once it merges, comments `Amended: <summary> (#<pr-number>)` on the tracking issue. A shipped milestone's history is never rewritten — ship what shipped, change what is ahead; git history on the files is the audit trail, so the issue comment only needs to summarize, not narrate, the diff.
 
 ### When a milestone re-balloons
 
