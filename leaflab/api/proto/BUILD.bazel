@@ -10,13 +10,3 @@ go_grpc_library(
     go_deps = ["//firmware/proto:configpb"],
     visibility = ["//visibility:public"],
 )
-
-# Source exposed to //leaflab/conformance's NFR1.a RPC-coverage check
-# (#1334): it parses this file for every `rpc` in LeafLabAPI and asserts
-# each is either the sole anonymous-allowlist entry (GetHealth) or reached
-# through the authenticating interceptor.
-filegroup(
-    name = "proto_file",
-    srcs = ["api.proto"],
-    visibility = ["//leaflab/conformance:__pkg__"],
-)

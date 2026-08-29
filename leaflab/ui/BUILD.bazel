@@ -124,15 +124,3 @@ go_test(
         "@com_github_stretchr_testify//require",
     ],
 )
-
-# Source exposed to //leaflab/conformance's NFR1.a BFF-route-coverage and
-# NFR18.1 checks (#1334): main.go's setupRoutes registration (which routes
-# sit behind app.auth.RequireAuthFunc vs. the enumerated public set) and
-# every other checked-in source file, scanned for
-# rounding/coarsening/suppression/label-selection helpers. Scoped, not
-# public -- mirrors tools/app_registry/ui:conformance_srcs.
-filegroup(
-    name = "conformance_srcs",
-    srcs = glob(["*.go"]),
-    visibility = ["//leaflab/conformance:__pkg__"],
-)

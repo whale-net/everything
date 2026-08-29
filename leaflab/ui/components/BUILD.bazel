@@ -34,16 +34,12 @@ go_test(
 )
 
 # Source exposed to //leaflab/ui:ui_test's NFR18.1 grep-style placeholder
-# conformance check (#1329) and //leaflab/conformance's NFR1.a/NFR18.1
-# checks (#1334). Scoped, not public -- mirrors
+# conformance check (#1329). Scoped, not public -- mirrors
 # tools/app_registry/ui/components:conformance_srcs. Includes elapsed.go
 # alongside the *.templ files so the NFR18.1 scan covers every checked-in
 # source under this package, not just the generated-from-.templ ones.
 filegroup(
     name = "conformance_srcs",
     srcs = glob(["*.templ"]) + ["elapsed.go"],
-    visibility = [
-        "//leaflab/conformance:__pkg__",
-        "//leaflab/ui:__subpackages__",
-    ],
+    visibility = ["//leaflab/ui:__subpackages__"],
 )

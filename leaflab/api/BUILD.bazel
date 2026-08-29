@@ -128,14 +128,3 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
-
-# Source exposed to //leaflab/conformance's NFR1.a RPC-coverage check
-# (#1334): auth.go's anonymousMethods allowlist and enforcement
-# interceptors, plus server.go's RPC handlers. Scoped, not public --
-# mirrors tools/app_registry/conformance's per-package conformance_srcs
-# filegroups.
-filegroup(
-    name = "conformance_srcs",
-    srcs = glob(["*.go"]),
-    visibility = ["//leaflab/conformance:__pkg__"],
-)
