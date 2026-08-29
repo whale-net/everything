@@ -41,6 +41,7 @@ erDiagram
     sensor_hw_history {
         bigserial   history_id PK
         bigint      sensor_id FK
+        smallint    i2c_address
         jsonb       mux_path
         timestamptz valid_from
         timestamptz valid_to
@@ -184,6 +185,15 @@ flowchart LR
 `sensor.mux_path` and `sensor_hw_history.mux_path` store the full I2C mux
 chain ordered outer → inner.  Empty array means the sensor is directly on
 the root I2C bus.
+
+`sensor_hw_history.i2c_address` (added in migration 013) is the interval's
+half of the FR18 canonical hardware key `(i2c_address, mux_path,
+sensor_type)` — the sensor_type component is carried by the `sensor` row
+the interval belongs to (`sensor_id`), not duplicated here. It is `NULL`
+for intervals closed before migration 013 ("not recorded, pre-migration");
+never `0` unless the sensor's address was genuinely `0x00` on an open
+interval — `0` is a real, present I2C address (see `//leaflab/hwkey`'s
+`AddressOpt`), distinct from absent.
 
 ```jsonc
 // direct on root bus

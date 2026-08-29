@@ -28,6 +28,51 @@ it requires `PG_DATABASE_URL`.
 | `DB_NAME` | migration | `postgres` | Used only when `PG_DATABASE_URL` is unset |
 | `DB_SSL_MODE` | migration | `disable` | Used only when `PG_DATABASE_URL` is unset |
 
+## RabbitMQ Message Queue
+
+> **FR0.1 & FR0.2:** Added in Phase 0 (#1113/#1125) for htmxsse event streaming.
+> All three app-registry binaries (UI, worker, server) can publish events to
+> the shared `app-registry.htmxsse` exchange; absent or unreachable RabbitMQ is
+> non-fatal (NFR7). See `tools/app_registry/events` for exchange config and
+> `tools/app_registry/ARCHITECTURE.md` for the event flow.
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|--------------|
+| `RABBITMQ_URL` | server, worker, ui | *(unset)* | RabbitMQ connection URL (amqp or amqps scheme), e.g. `amqp://user:pass@host:5672/vhost`. Required format: `amqp[s]://username:password@host:port/vhost`. When unset, event publishing is skipped (NFR7: graceful degradation). |
+| `RABBITMQ_SSL_VERIFY` | server, worker, ui | `true` | For amqps URLs: set to `false` to skip certificate verification (dev/test only). |
+| `RABBITMQ_CA_CERT_PATH` | server, worker, ui | *(unset)* | For amqps URLs: path to custom CA certificate file for server verification. |
+| `RABBITMQ_TLS_SERVER_NAME` | server, worker, ui | *(unset)* | For amqps URLs: server name for certificate verification (useful when connecting via k8s service but cert is for external domain). |
+
+### Deployment example (Helm + secrets)
+
+A real deployment supplies `RABBITMQ_URL` via Kubernetes secret:
+
+\`\`\`yaml
+apps:
+  app-registry-server:
+    secretEnv:
+      - name: RABBITMQ_URL
+        secretName: app-registry-broker-config
+        key: rabbitmq-url
+  app-registry-worker:
+    secretEnv:
+      - name: RABBITMQ_URL
+        secretName: app-registry-broker-config
+        key: rabbitmq-url
+  app-registry-ui:
+    secretEnv:
+      - name: RABBITMQ_URL
+        secretName: app-registry-broker-config
+        key: rabbitmq-url
+\`\`\`
+
+The secret must be provisioned separately with scoped RabbitMQ credentials:
+- Exchange: `app-registry.htmxsse` (dedicated for app-registry)
+- Vhost: the vhost name from the URL (usually `app-registry-dev` for dev, `app-registry` for prod)
+- Permissions: configure/write/read on that exchange and associated queues only; no configure/write on other exchanges
+
+Local dev (Tilt) auto-provisions the vhost with `setup_rabbitmq` helper and grants blanket `.*` permissions (safe for dev, not production).
+
 ## Server (`app-registry-api`)
 
 | Variable | Default | Description |
