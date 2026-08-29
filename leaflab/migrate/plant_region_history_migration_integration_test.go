@@ -182,7 +182,7 @@ func TestPlantRegionHistoryMigration_BackfillCompleteness(t *testing.T) {
 	runner, db, f := newPreRegionHistoryDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
 
@@ -236,7 +236,7 @@ func TestPlantRegionHistoryMigration_BackfillSnapsToHourBoundaries(t *testing.T)
 	runner, db, f := newPreRegionHistoryDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
 
@@ -305,7 +305,7 @@ func TestPlantRegionHistoryMigration_DisclosedCostSharedBucket(t *testing.T) {
 	runner, db, f := newPreRegionHistoryDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
 
@@ -339,7 +339,7 @@ func TestPlantRegionHistoryMigration_StraddleFreePostCondition(t *testing.T) {
 	runner, db, _ := newPreRegionHistoryDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
 
@@ -433,7 +433,7 @@ func TestPlantRegionHistoryMigration_AttributionNeutral(t *testing.T) {
 	}
 	sortRows(oldRows)
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
 
@@ -463,7 +463,7 @@ func TestPlantRegionHistoryMigration_NoBackdatingDatabaseGuard(t *testing.T) {
 	runner, db, f := newPreRegionHistoryDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
 
@@ -496,7 +496,7 @@ func TestPlantRegionHistoryMigration_NFR61IndexesExist(t *testing.T) {
 	runner, db, _ := newPreRegionHistoryDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
 
@@ -530,7 +530,7 @@ func TestPlantRegionHistoryMigration_PlantRegionIDCacheUntouched(t *testing.T) {
 		t.Fatalf("read plant.region_id before migration: %v", err)
 	}
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
 
@@ -550,10 +550,10 @@ func TestPlantRegionHistoryMigration_DownReversesCleanly(t *testing.T) {
 	runner, db, _ := newPreRegionHistoryDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("apply migration 017: %v", err)
 	}
-	if err := runner.Steps(-1); err != nil {
+	if err := runner.Migrate(16); err != nil {
 		t.Fatalf("reverse migration 017: %v", err)
 	}
 
@@ -596,13 +596,13 @@ func TestPlantRegionHistoryMigration_UpDownUpIsIdempotentSafe(t *testing.T) {
 	runner, db, f := newPreRegionHistoryDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("first apply of migration 017: %v", err)
 	}
-	if err := runner.Steps(-1); err != nil {
+	if err := runner.Migrate(16); err != nil {
 		t.Fatalf("reverse migration 017: %v", err)
 	}
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(17); err != nil {
 		t.Fatalf("second apply of migration 017: %v", err)
 	}
 

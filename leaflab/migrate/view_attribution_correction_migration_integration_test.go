@@ -91,7 +91,7 @@ type viewFixture struct {
 
 // newViewFixtureAt19 migrates a fresh database up through version 19 (the
 // last migration before 021) and seeds viewFixture. Callers that want the
-// post-021 (fixed) state must call runner.Steps(1) themselves -- left to
+// post-021 (fixed) state must call runner.Migrate(26) themselves -- left to
 // the caller so tests needing the pre-021 (defective) state can query it
 // first.
 func newViewFixtureAt19(t *testing.T) (*migrate.Runner, *dbtest.Postgres, viewFixture) {
@@ -285,7 +285,7 @@ func TestViewAttributionCorrection_MovedPlantFixture(t *testing.T) {
 		}
 	})
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(26); err != nil {
 		t.Fatalf("apply migration 021: %v", err)
 	}
 
@@ -360,7 +360,7 @@ func TestViewAttributionCorrection_ColumnContract(t *testing.T) {
 		t.Fatal("test setup: v_sensor_reading_with_plant has no columns before migration 021")
 	}
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(26); err != nil {
 		t.Fatalf("apply migration 021: %v", err)
 	}
 	after := readViewColumns(t, db)
@@ -392,7 +392,7 @@ func TestViewAttributionCorrection_ColumnContract(t *testing.T) {
 // out of scope for this file) is correct.
 func TestViewAttributionCorrection_NearestAncestorAndSiblingsMatchFunction(t *testing.T) {
 	runner, db, f := newViewFixtureAt19(t)
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(26); err != nil {
 		t.Fatalf("apply migration 021: %v", err)
 	}
 	ctx := context.Background()
@@ -492,7 +492,7 @@ func TestViewAttributionCorrection_NearestAncestorAndSiblingsMatchFunction(t *te
 // sibling of it) exists.
 func TestViewAttributionCorrection_NoParallelView(t *testing.T) {
 	runner, db, _ := newViewFixtureAt19(t)
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(26); err != nil {
 		t.Fatalf("apply migration 021: %v", err)
 	}
 	ctx := context.Background()
@@ -525,7 +525,7 @@ func TestViewAttributionCorrection_NoParallelView(t *testing.T) {
 // the reading's own region or the plant's household.
 func TestViewAttributionCorrection_HouseholdIDResolvesThroughRoot(t *testing.T) {
 	runner, db, f := newViewFixtureAt19(t)
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(26); err != nil {
 		t.Fatalf("apply migration 021: %v", err)
 	}
 	ctx := context.Background()
@@ -566,10 +566,10 @@ func TestViewAttributionCorrection_DownReversesCleanly(t *testing.T) {
 	runner, db, _ := newViewFixtureAt19(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(26); err != nil {
 		t.Fatalf("apply migration 021: %v", err)
 	}
-	if err := runner.Steps(-1); err != nil {
+	if err := runner.Migrate(25); err != nil {
 		t.Fatalf("reverse migration 021: %v", err)
 	}
 
@@ -599,13 +599,13 @@ func TestViewAttributionCorrection_UpDownUpIsIdempotentSafe(t *testing.T) {
 	runner, db, f := newViewFixtureAt19(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(26); err != nil {
 		t.Fatalf("first apply of migration 021: %v", err)
 	}
-	if err := runner.Steps(-1); err != nil {
+	if err := runner.Migrate(25); err != nil {
 		t.Fatalf("reverse migration 021: %v", err)
 	}
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(26); err != nil {
 		t.Fatalf("second apply of migration 021: %v", err)
 	}
 
