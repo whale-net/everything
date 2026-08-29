@@ -41,6 +41,7 @@ erDiagram
     sensor_hw_history {
         bigserial   history_id PK
         bigint      sensor_id FK
+        int         i2c_address "nullable -- NULL on rows closed before FR16.1; a real address on every open row, never fabricated to 0 (FR16.2)"
         jsonb       mux_path
         timestamptz valid_from
         timestamptz valid_to
@@ -60,6 +61,75 @@ erDiagram
         bigint      region_id FK
         timestamptz valid_from
         timestamptz valid_to
+    }
+
+    plant_type {
+        bigserial plant_type_id PK
+        varchar   common_name
+        varchar   species
+    }
+
+    plant {
+        bigserial   plant_id PK
+        bigint      region_id FK "current-placement cache; kept in sync by placement.Writer.Move"
+        bigint      plant_type_id FK
+        varchar     name
+        timestamptz created_at
+        timestamptz removed_at "NULL = still present"
+    }
+
+    plant_region_history {
+        bigserial   plant_region_history_id PK
+        bigint      plant_id FK
+        bigint      region_id FK
+        timestamptz valid_from
+        timestamptz valid_to
+        boolean     relocation_induced "FR24 -- TRUE only when Phase 5's FR74 relocation wrote this row"
+    }
+
+    boundary_capture {
+        bigserial   capture_id PK
+        bigint      sensor_id FK
+        timestamptz boundary_at
+        text        tier "five_minute | hourly"
+        timestamptz bucket_start
+        text        state "pending | completed"
+        timestamptz completed_at
+    }
+
+    boundary_partial {
+        bigserial   partial_id PK
+        bigint      capture_id FK
+        text        tier
+        timestamptz bucket_start
+        timestamptz partial_from
+        timestamptz partial_to
+        bigint      reading_count
+        double      value_sum
+        double      value_min
+        double      value_max
+    }
+
+    sensor_reading_5m {
+        timestamptz bucket "continuous aggregate, NOT a base table -- no FK enforcement"
+        bigint      sensor_id
+        bigint      region_id
+        bigint      reading_count
+        double      value_sum
+        double      value_avg
+        double      value_min
+        double      value_max
+    }
+
+    sensor_reading_1h {
+        timestamptz bucket "continuous aggregate, composed hierarchically FROM sensor_reading_5m"
+        bigint      sensor_id
+        bigint      region_id
+        bigint      reading_count
+        double      value_sum
+        double      value_avg
+        double      value_min
+        double      value_max
     }
 
     device_config {
@@ -115,7 +185,22 @@ erDiagram
     sensor_chip      ||--o{ sensor_chip_address  : "known addresses"
     sensor_chip      ||--o{ sensor_chip_type     : "produces"
     sensor_type      ||--o{ sensor_chip_type     : "produced by"
+    plant_type       ||--o{ plant                : "classifies"
+    region           |o--o{ plant                : "current placement (cache)"
+    plant            ||--o{ plant_region_history : "location history"
+    region           ||--o{ plant_region_history : "hosts"
+    sensor           ||--o{ boundary_capture      : "affected by a placement boundary"
+    boundary_capture ||--o{ boundary_partial      : "splits into (N boundaries -> N+1 partials, FR20.3)"
+    sensor_reading   ||--o{ sensor_reading_5m     : "aggregates into (continuous aggregate)"
+    sensor_reading_5m||--o{ sensor_reading_1h     : "composes into (continuous aggregate, hierarchical)"
 ```
+
+> `sensor_reading_5m` and `sensor_reading_1h` are TimescaleDB continuous aggregates (migration
+> 022), not base tables — the diagram shows their derivation, not an enforced foreign key.
+> `boundary_capture` / `boundary_partial` (migration 033) are plain append-mostly tables, not
+> SCD2 — see "SCD2 Convention" below for why. `plant`, `plant_type` and `plant_region_history`
+> have existed since migrations 001/017; they are included here for the first time because this
+> section previously omitted the plant side of the schema entirely.
 
 ---
 
@@ -246,11 +331,31 @@ SCD2 tables in this schema:
 
 `device_config` is NOT SCD2 — it is an append-only event log keyed by `(board_id, version)`. The view `v_board_state_history` derives a SCD2-shaped representation from it using a window function.
 
+**`boundary_capture` and `boundary_partial` (migration 033) are NOT SCD2.** They do not carry
+`valid_from`/`valid_to` and are not a history of one entity's changing current value — they are
+FR20's two-phase capture record: `boundary_capture` is a one-row-per-(sensor, tier, straddled
+bucket) work item (`state`: `pending` → `completed`), and `boundary_partial` is the exact,
+independently-computed sub-bucket aggregate each capture resolves to once its bucket closes.
+Neither table is ever updated in place to represent "the current value as of now" the way an SCD2
+table is — a capture's `state` transition is a one-way completion, not a superseded-by-a-newer-row
+pattern, and a partial row is never revised once written.
+
+**FR21's accepted cost, restated plainly:** a removed plant and its successor share an hour. The
+migration 017 backfill (and `CheckMigrationSnapWindow`, below) both snap to the containing hour
+bucket rather than the exact instant, so a plant removed at (for example) 14:20 and whatever plant
+next occupies that region from 14:00 both attribute to the same 14:00–15:00 bucket — a disclosed,
+permanent property of the snapped-to-hour backfill, not a defect to fix later.
+
 ---
 
 ## Analytical Views
 
 Seven plain views (prefixed `v_`) expose the schema to downstream consumers (Grafana panels, ad-hoc SQL). All join logic is in the views — consumers should not replicate it.
+
+**NFR16, views half.** These seven views are in-contract for their **names and columns** — a
+consumer's query against them does not break across this phase. They are **not** in-contract for
+`v_sensor_reading_with_plant`'s pre-migration-021 **attribution behaviour** — that behaviour was a
+defect (below), corrected in place rather than preserved and versioned alongside a fix.
 
 | View | Cardinality | Purpose |
 |---|---|---|
@@ -338,3 +443,140 @@ WHERE bsc.version IS DISTINCT FROM (
     WHERE board_id = b.board_id AND accepted = TRUE
 );
 ```
+
+---
+
+## Granularity Tiers and Retention (FR71, NFR5)
+
+Three tiers answer a bounded read-path query — raw `sensor_reading`, and the two continuous
+aggregates from migration 022, `sensor_reading_5m` and `sensor_reading_1h` (hierarchical: the
+hourly tier is composed FROM the 5-minute tier, not from raw). `leaflab/api/tiers.Select`
+(FR71) picks the finest tier that can actually serve a requested window and always reports which
+tier answered — coarsening is disclosed, never silent. **No tier coarser than hourly exists in
+V1.** See `leaflab/ARCHITECTURE.md`'s "Read Path" section for how the read path composes tier
+selection, FR23 attribution, and FR20's boundary-partial substitution — this section covers only
+the tiers' own storage shape and retention.
+
+### Three-tier retention table
+
+| Tier | Relation | Retention | Notes |
+|---|---|---|---|
+| Raw | `sensor_reading` | ≥ 13 months (A12) | Also bounded to the most recent 48 hours for any *served* query by NFR3.2's raw cap — retention and the serving cap are two different limits that happen to both bind on raw. |
+| 5-minute | `sensor_reading_5m` | 90 days | Continuous aggregate; `WITH NO DATA` + `materialized_only = true` (migration 022) — no implicit real-time union with raw. |
+| Hourly | `sensor_reading_1h` | Indefinite | No `add_retention_policy` exists for this tier (migration 022) — this *is* the indefinite retention, not an oversight. The tier a `boundary_partial` row inherits retention from regardless of which tier it originally split (FR20.2). |
+
+### Refresh/retention ordering constraint, derived from one constant (NFR5)
+
+Every window in migration 022's refresh and retention policies is a literal multiple of one base
+interval, `capture_completion_window = 1 hour` (FR20's boundary capture is "a deferred second
+write at bucket close," and this is the outside bound on how late that write may land), so the
+ordering cannot be broken by editing one policy in isolation:
+
+| Quantity | Value | Derivation |
+|---|---|---|
+| `capture_completion_window` | 1 hour | The base constant — the ceiling on how late a deferred boundary-capture write may land after the bucket it captures closes. |
+| `five_minute_refresh_lag` | 1 hour | `= capture_completion_window` — the 5-minute aggregate must not refresh a bucket until any deferred capture write landing in it is durable. |
+| `hourly_refresh_lag` | 2 hours | `= 2 × capture_completion_window` — the hourly tier is composed FROM the 5-minute tier, so it waits for both the 5-minute tier's own refresh lag *and* its own capture-durability window. |
+| `raw_retention_min` (floor) | 4 hours | `= five_minute_refresh_lag + hourly_refresh_lag + capture_completion_window = 4 × capture_completion_window` — the floor raw retention must clear so no refresh window ever reaches into dropped raw data. |
+
+Raw retention is actually 13 months (A12's business requirement) — vastly larger than the 4-hour
+floor, so the ordering holds by construction today. It still needs a live assertion, not just this
+table, because the floor tracks `capture_completion_window`: widening that constant enough, or
+narrowing raw retention enough, to close the gap would break the ordering silently otherwise (the
+Testing phase's ordering test reads the live policy configuration from
+`timescaledb_information.jobs` / `.continuous_aggregates` and asserts the relationship
+programmatically).
+
+### Pre-aggregated is not de-identified
+
+A tier row is keyed by `sensor_id` and `region_id` — the same identifiers as the raw reading it
+was built from. **A min/max over one sensor's 5-minute bucket is two raw readings wearing a hat:**
+it names the same sensor, the same region, and (via `sensor_id`) the same household as the raw
+rows it summarizes, just fewer of them. Pre-aggregation is a granularity optimization (NFR5), not
+a privacy control — nothing about querying `sensor_reading_5m` or `sensor_reading_1h` instead of
+`sensor_reading` reduces what a query can attribute a value to. If a future requirement needs
+k-anonymity or any other suppression over *contributors* (e.g. "do not reveal a value observed by
+fewer than K sensors/households"), that suppression must be implemented **above** the tier, over
+the set of contributing sensors/households at query time — it can never be inherited from the
+tier's own storage, because the tier carries no such guarantee to inherit.
+
+---
+
+## Suspect Checks (FR26.3)
+
+Every readings response (`ReadingPoint`, `CurrentValue`, `PeriodSummary` in
+`leaflab/api/proto/api.proto`) carries `suspect_checks`: zero or more identifiers from
+`leaflab/api/suspect`'s fixed, enumerable `Check` registry, plus a top-level
+`marked_count`/`returned_count` pair so a marker that covers everything is visible as such rather
+than silently universal (FR26.3). A response with no checks marks nothing — an absent check list
+is a real, present, non-suspect value, distinct on the wire from a gap in the data (FR26.1: "invalid,
+missing and zero" must be three distinguishable outcomes). The full enumerable set, so a consumer
+can look one up without a database:
+
+| Check identifier | Meaning | Computed from |
+|---|---|---|
+| `out_of_range` | The reading's (or bucket's min/max) value falls outside the valid range for its measurement type. | `sensor_type`'s configured range, compared against the point's own value or (for a bucket) its exact composed min/max. |
+| `persisted_invalid_flag` | `sensor_reading.valid = FALSE` was already recorded at write time. | `idx_sensor_reading_invalid` (migration 001) — a partial index, cheap because invalid readings are rare. |
+| `stale_attribution` | The reading's stamped `region_id` disagrees with `sensor_region_history` at the reading's own `recorded_at` — the pre-FR73 stale-attribution window (see below). | `sensor_region_history`, compared against the stamped `region_id` at that instant. |
+| `migration_snap_window` | The bucket falls inside the hour a removed plant shares with its successor (FR21's disclosed cost, above). | `plant_region_history`'s own (few) intervals per region — never a `sensor_reading` scan. |
+
+No function outside `leaflab/api/suspect` may write back to `sensor_reading` to "fix" a marked
+row (FR26.2) — a `Check` only ever annotates a response; retroactive re-stamping is permanently
+out of scope, not deferred.
+
+## Stale-Attribution Window (the pre-FR73 defect)
+
+Before FR73's cross-process cache invalidation landed (`leaflab/ARCHITECTURE.md`'s "Cross-Process
+Cache Invalidation" section), a region assignment committed by one process could continue to be
+stamped onto new readings by another process's stale `SensorCache` entry until that process's
+board rebooted and republished its manifest. Every reading written during that window carries a
+`region_id` that disagrees with `sensor_region_history` as of its own `recorded_at` — a real,
+per-reading identifiable defect, not a probabilistic or bucket-level approximation.
+
+- **Identifiable per reading**, not just per bucket: `CheckStaleAttribution` (`leaflab/api/suspect`)
+  compares the stamped `region_id` against `sensor_region_history` at the reading's own
+  `recorded_at`, so any reading affected by the pre-FR73 cache-staleness window is marked, however
+  few or many there are.
+- **Marked, never re-stamped.** `sensor_reading.region_id` is never rewritten by this check or by
+  anything downstream of it — FR26.2's compensating control (a suspect marker) is the only
+  remediation. A stale-attributed reading remains stale-attributed at rest, forever; only the
+  response annotation changes.
+- **Permanently out of scope**, not a TODO: retroactively correcting historical `region_id` values
+  written during the pre-FR73 window would require reconstructing which process's cache was
+  stale when, for every affected reading — information that was never captured and cannot be
+  recovered after the fact. The stale-attribution window is closed going forward by FR73 (no new
+  reading can enter it once the signalling path is live); the finitely many readings already
+  written during it stay marked, not corrected.
+
+---
+
+## Canonical Hardware Key (FR18)
+
+The canonical hardware key is **`(i2c_address, mux_path, sensor_type)`** — the same triple
+`idx_sensor_hw_address ON sensor(board_id, i2c_address, sensor_type_id, (mux_path::text))`
+enforces uniqueness on, and the key `sensor_hw_history` intervals (i2c_address + mux_path; sensor
+type is carried by the `sensor` row the interval belongs to) and FR82's config-removal path
+(Phase 4) both key by. `leaflab/hwkey` is the **one** place all three components are canonicalized,
+so two semantically equal keys never compare unequal at any layer, in any surface, at rest or in
+flight:
+
+1. **`mux_path`** — see "mux_path JSONB Format" above. An absent key and an explicit `0` resolve
+   to one canonical form; integer-valued fields are never emitted with a fractional part (`112`,
+   never `112.0`). Postgres `jsonb` already normalizes key order and numeric formatting at the
+   database layer — the ambiguity `leaflab/hwkey` closes is at the API/proto/JSON boundary, before
+   a value ever reaches the database.
+2. **`i2c_address`** (`leaflab/hwkey.AddressOpt`) — one canonical representation and comparison
+   rule, so `0x1A`, `0x1a` and `26` are the same key. **Absent and `0` are not interchangeable**:
+   `0` is a real I2C address in some contexts and the legacy manifests' "unknown address" sentinel
+   in others — `0` is also what makes a config entry unaddressable under FR82.4. `AddressOpt` is a
+   three-state type (absent / `0` / a real address) specifically because that ambiguity has to be
+   resolved once, in one place, rather than re-derived at every call site.
+3. **`sensor_type`** — the catalog's stable type identifier (`sensor_type.sensor_type_id`), never
+   a display string or a locale-dependent label. No function in `leaflab/hwkey` accepts a
+   sensor-type display string as an input.
+
+`leaflab/hwkey.Key.SQLPredicate()` matches `idx_sensor_hw_address` exactly, so a caller building a
+query against that index never hand-rolls the equivalent predicate. `leaflab/api` and
+`leaflab/processor` depend on `leaflab/hwkey` rather than reimplementing address or mux
+comparison locally.
+

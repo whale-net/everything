@@ -168,6 +168,111 @@ All three `*_history` tables are SCD-2 using the uniform `valid_from` / `valid_t
 
 ---
 
+## Cross-Process Cache Invalidation — FR73 / NFR15
+
+Every process that keeps an in-memory view of a sensor (today: `leaflab/processor`'s
+`SensorCache`; from Phase 4, the API's own bounded-wait observability, NFR15) must learn about a
+region, identity or name change **within 5 s of the write committing** (FR73) — and **every
+replica** must learn it, not just one of a competing-consumer set (NFR15's broadcast constraint:
+a caller's bounded wait can be pinned to any one API replica, so a work queue that delivers to
+only one replica does not satisfy it). FR73's 5 s bound and NFR15's every-replica broadcast
+constraint are one observability requirement satisfied by a single signalling path — Phase 4 does
+not introduce a second.
+
+**Chosen mechanism: a RabbitMQ fanout exchange** (`leaflab.invalidation`, package
+`leaflab/invalidation`) — deliberately not the `amq.topic` exchange the device-facing MQTT traffic
+uses, and not a competing-consumer work queue. Every writer (the API's direct region/identity/name
+assignments and the processor's own `ApplyConfigRegions`) publishes a small typed `Event`
+(`{Kind: region|identity|name, DeviceID, SensorID, SensorName, ObservedAt}`) **after its write
+commits, never before**. Every subscribing process (`invalidation.Subscriber`) binds its own
+exclusive, auto-delete queue to the exchange, so a fanout delivers one copy of every event to
+every currently connected replica — satisfying NFR15's every-replica constraint by construction,
+and guaranteeing a bounded-wait caller's own replica never misses an event another replica
+received instead. **This is why Phase 4 reuses this exact package** for the API's NFR15
+observability rather than introducing a second signalling path.
+
+- **Publish-after-commit + idempotent, re-reading handlers.** A subscriber's handler never trusts
+  the event payload for the new value; it evicts the stale cache entry (or, for the API's bounded
+  wait, wakes a waiter), and the next reader re-reads the database. A duplicate, reordered, or
+  replayed event converges to the same result.
+- **Rename orphan.** `SensorCache` is keyed `device_id → sensor_name`; a rename's `Event` carries
+  the prior sensor name so the subscriber evicts the *old* key explicitly — the new key alone
+  never touches it.
+- **Bounded staleness backstop.** A periodic full reload (`SensorCache`'s replace, not an
+  additive merge, so it also clears a rename's orphaned prior-name entry) self-heals a *dropped*
+  event within a bound. **The backstop does not satisfy FR73's 5 s bound; the signal does.** The
+  backstop only bounds how long a dropped event can leave the cache wrong.
+- **No device-facing change.** The invalidation path is entirely server-side (API ↔ processor); it
+  does not touch the MQTT topics, payloads or QoS documented in `MQTT.md`.
+
+---
+
+## Read Path — Bounded Queries Over Tiers (FR25.1, FR71, FR23, FR20)
+
+The bounded read-path RPCs (`GetReadingSeries`, `GetCurrentValues`, `GetPeriodSummary`,
+`CompareSeries`; `leaflab/api/proto/api.proto`) are served entirely by `leaflab/api/readings`,
+composing three packages that already exist rather than reimplementing any of them — this is the
+**one** place FR25.1's join, enrichment and attribution logic lives, so no RPC handler
+reimplements it:
+
+- **`leaflab/api/tiers.Select`** picks which granularity tier (`raw`, `sensor_reading_5m` or
+  `sensor_reading_1h`) answers a bounded window, coarsening away from the caller's requested tier
+  when its retention or NFR3.2's 48-hour raw cap cannot serve it, and always reporting which tier
+  answered (FR71 — coarsening is disclosed, never silent).
+- **`leaflab/api/attribution.Resolver`** applies FR23's nearest-ancestor plant attribution *above*
+  the aggregate, at read time — **the read path deliberately never queries
+  `v_sensor_reading_with_plant`**; that view's LATERAL walk (see "Query Layer — Analytical Views"
+  below) exists for Grafana's direct-database-read path only, not for the API. Entity-kind
+  semantics differ by what is being asked about:
+  - **sensor / board** — the physical sensor or board's sensor set (`sensor.board_id`); never
+    attribution.
+  - **region** — the tier tables' own `region_id` column, i.e. the *physical* region a reading's
+    sensor was in at write time (denormalized on `sensor_reading`, migrations 001/022) — "readings
+    recorded in this region," not "readings attributed to a plant living in it."
+  - **plant** — FR23 attribution proper. Each of the plant's own `plant_region_history` intervals
+    is walked separately; for each, `attribution.Resolver.AttributedSensors` resolves the
+    interval's attributed sensor set, and FR20's `boundary_partial` rows are substituted for any
+    bucket a placement boundary split during that interval. Attribution is evaluated once per
+    plant-owned interval, at that interval's own boundaries — a documented limitation: a
+    *different* plant entering or leaving elsewhere on the sensor's ancestor path strictly inside
+    one of this plant's own intervals is not separately detected.
+- **`leaflab/api/authz`** (`EntityRef`/`Scope`) gates every entity before `readings.Reader` is
+  called — `Reader` itself performs no authorization (NFR2's one-resolve-one-check shape).
+
+FR26.3's suspect checks (`leaflab/api/suspect`, see `DATA.md`'s "Suspect Checks" section) are
+computed on top of the same query result inside `leaflab/api/readings`, never as a second pass
+over `sensor_reading`.
+
+---
+
+## Two-Phase Boundary Capture (FR20, A14, A17)
+
+A bucket a plant moved through must resolve exactly for the life of the tier that holds it,
+including after raw rows have aged out (FR20.2), permanently and with no horizon (A14).
+`leaflab/api/capture` (`boundary_capture` / `boundary_partial`, migration 033) implements this in
+two phases:
+
+- **Phase one — `Recorder`**, run at the instant a placement boundary is recorded (from
+  `leaflab/api/placement`'s writer, and Phase 5's FR51/FR74), inserts one `boundary_capture` row
+  per affected sensor and tier, **in the same transaction as the placement write**.
+- **Phase two — `Completer`**, run at bucket close: for each pending capture whose bucket has
+  closed, computes that bucket's partials from raw, **both sides, independently — never by
+  subtraction from the full bucket** (A17: min and max are not invertible). Results are written
+  as `boundary_partial` rows before the capture is marked `completed`.
+
+Both tables are keyed by `sensor_id` and instant, **never by `plant_id`** (FR20.2) — attribution
+is resolved above the aggregate at read time (the "Read Path" section above), never baked into the
+capture itself. `Completer` runs inside `leaflab/processor` (a single-replica worker,
+`app_type = "worker"`) on its own ticker rather than as a separate scheduled job, since the
+processor already holds the long-lived pool this package needs and is always up — keeping
+migration 022's refresh/retention ordering easy to reason about without a second scheduling
+interval. Differential retention on `boundary_partial` follows the coarsest tier a partial splits:
+`five_minute`-tier partials are dropped once their bucket ages past 90 days (mirroring
+`sensor_reading_5m`'s own retention), `hourly`-tier partials are never dropped — see `DATA.md`'s
+retention table for the full tier picture.
+
+---
+
 ## Query Layer — Analytical Views
 
 Seven `v_` views (defined in migration 012) are the contract between the processor's write path and downstream consumers (Grafana panels, ad-hoc SQL). **All join logic lives in these views; consumers should not replicate it.**

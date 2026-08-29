@@ -9,8 +9,8 @@ Plant and environment monitoring firmware and data pipeline.
 ## Start Here
 
 - [README.md](README.md) — What LeafLab is, quick start commands, relationship to `//firmware`
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Link-seam board config pattern, dynamic sensor factory, pipeline overview
-- [DATA.md](DATA.md) — ER diagram, sensor identity model, SCD2 convention, config push flow, reading write path, mux_path format, analytical views reference
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Link-seam board config pattern, dynamic sensor factory, pipeline overview, cross-process cache invalidation (FR73/NFR15), the bounded read path over tiers, two-phase boundary capture (FR20)
+- [DATA.md](DATA.md) — ER diagram (incl. plant/plant_region_history/boundary_capture/boundary_partial/tier continuous aggregates), sensor identity model, SCD2 convention, config push flow, reading write path, mux_path format, analytical views reference and FR72 attribution correction, granularity-tier retention and the pre-aggregated-is-not-de-identified note, FR26.3 suspect checks and the stale-attribution window, canonical hardware key (FR18)
 
 ## Projects
 
