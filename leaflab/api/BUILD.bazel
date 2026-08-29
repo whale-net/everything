@@ -6,7 +6,9 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "api_lib",
     srcs = [
+        "audit_registry.go",
         "auth.go",
+        "authz_registry.go",
         "logging_interceptor.go",
         "main.go",
         "repository.go",
@@ -16,6 +18,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
@@ -56,10 +59,13 @@ release_app(
 # FR11/FR12/FR63 auth-and-health test suite: auth.go's enforcement
 # interceptor and allowlist in isolation (auth_test.go), GetHealth's
 # DEGRADED/UP probe logic against an in-memory fake repository
-# (server_test.go), and the full production interceptor chain -- built via
+# (server_test.go), the full production interceptor chain -- built via
 # buildServer, the exact function run() calls -- behind a bufconn listener
-# with a stub RPC handler standing in for Postgres/RabbitMQ (main_test.go).
-# No Docker/network required; safe to run in `bazel test //leaflab/...`.
+# with a stub RPC handler standing in for Postgres/RabbitMQ (main_test.go),
+# and FR8's startup audit-registration check against both the real
+# production registry and a deliberately unregistered write method
+# (audit_registry_test.go). No Docker/network required; safe to run in
+# `bazel test //leaflab/...`.
 # Hand-written (not gazelle-generated) per this package's gazelle gotcha --
 # see the response_contract_integration_test.go rule below. `# keep` tells a
 # later `bazel run //:gazelle` not to touch or remove this rule.
@@ -68,13 +74,16 @@ go_test(
     name = "api_lib_test",
     size = "small",
     srcs = [
+        "audit_registry_test.go",
         "auth_test.go",
         "main_test.go",
+        "server_push_device_config_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
     deps = [
         "//firmware/proto:configpb",
+        "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
@@ -126,6 +135,7 @@ go_test(
         "requires-network",
     ],
     deps = [
+        "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
@@ -211,6 +221,40 @@ go_test(
     ],
 )
 
+# Real-Postgres integration coverage for this task's transactional
+# write-path audit recording (FR8, NFR6.2) -- see
+# audit_write_path_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as the other *_integration_test targets above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:audit_write_path_integration_test --test_output=all
+go_test(
+    # keep
+    name = "audit_write_path_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "audit_write_path_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 # Real-Postgres integration coverage for FR4/FR5/NFR2's per-entity
 # household authorization -- see authz_scope_integration_test.go's doc
 # comment. Same tag set and hand-written rationale as the other integration
@@ -248,4 +292,91 @@ go_test(
         "@org_golang_google_grpc//status",
         "@org_golang_google_protobuf//proto",
     ],
+)
+
+# Real-Postgres integration coverage for FR1.2/FR1.3's push-time
+# live-reference invariant, against the actual SQL authz.PGResolver runs --
+# see push_device_config_invariant_integration_test.go's doc comment. Same
+# tag set and hand-written rationale as the other integration go_test
+# targets above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:push_device_config_invariant_integration_test --test_output=all
+go_test(
+    # keep
+    name = "push_device_config_invariant_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "push_device_config_invariant_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for FR1.3's caller-visible skip
+# surface (the read side -- see leaflab/processor's
+# apply_config_regions_integration_test.go for the write side) -- see
+# get_device_config_skips_integration_test.go's doc comment. Same tag set
+# and hand-written rationale as the other integration go_test targets
+# above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:get_device_config_skips_integration_test --test_output=all
+go_test(
+    # keep
+    name = "get_device_config_skips_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "get_device_config_skips_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Source exposed to //leaflab/conformance's NFR1.a RPC-coverage check
+# (#1334): auth.go's anonymousMethods allowlist and enforcement
+# interceptors, plus server.go's RPC handlers. Scoped, not public --
+# mirrors tools/app_registry/conformance's per-package conformance_srcs
+# filegroups.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go"]),
+    visibility = ["//leaflab/conformance:__pkg__"],
 )

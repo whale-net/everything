@@ -73,6 +73,25 @@ message GetDeviceConfigResponse {
   firmware.DeviceConfig config = 1;
   // True if a config has been accepted by the board.
   bool found = 2;
+  // FR1.3's caller-visible skip surface: config entries the processor's
+  // ApplyConfigRegions (leaflab/processor/repository.go) re-validated
+  // immediately before writing and skipped rather than applied --
+  // household drift or a stale push, never a partial write. Provenance
+  // (FR82.4) is Phase 4; until it lands this lists every skip recorded
+  // for this board, not only ones the calling principal authored (see
+  // AssertSameHousehold's callers and ApplyConfigRegions' doc comment).
+  repeated RegionApplySkip skips = 3;
+}
+
+// RegionApplySkip mirrors leaflab/processor.RegionApplySkip on the wire:
+// one config entry that ApplyConfigRegions skipped instead of applying,
+// with the persona-appropriate reason it recorded (FR59.2) and when. It
+// never names the region or household involved (FR1.2 never discloses
+// which household a foreign reference actually belongs to).
+message RegionApplySkip {
+  int64 sensor_id = 1;
+  string reason = 2;
+  Instant occurred_at = 3;
 }
 
 message BoardInfo {

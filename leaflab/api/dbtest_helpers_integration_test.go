@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/readings"
 	"github.com/whale-net/everything/libs/go/dbtest"
@@ -40,6 +41,15 @@ func authedCtx() context.Context {
 // FR22.4, FR22.5) so RetireBoard/GetBoardByID/ListBoards can be exercised
 // against real SQL without pulling in the full ownership schema those RPCs
 // don't touch.
+//
+// audit_log mirrors migration 016_audit_log's column set (schema only --
+// no household table exists here, so target_household_id carries no FK,
+// and the append-only trigger/REVOKE aren't reproduced; those are a
+// migration-fidelity concern for a test that runs the real migration file,
+// not this hermetic schema). It exists here so RetireBoard and
+// InsertDeviceConfigNextVersion -- both of which now write an audit_log
+// row in the same transaction as their write -- have somewhere to write
+// it.
 const testSchema = `
 	CREATE TABLE board (
 		board_id      BIGSERIAL PRIMARY KEY,
@@ -61,7 +71,34 @@ const testSchema = `
 		rejection_reason TEXT,
 		UNIQUE (board_id, version)
 	);
+
+	CREATE TABLE audit_log (
+		audit_id             BIGSERIAL PRIMARY KEY,
+		actor_subject        TEXT NOT NULL,
+		actor_kind           TEXT NOT NULL,
+		target_household_id  BIGINT NULL,
+		action                TEXT NOT NULL,
+		entity_kind           TEXT NOT NULL,
+		entity_id             TEXT NULL,
+		reason                TEXT NULL,
+		occurred_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		correlation_id        TEXT NULL
+	);
 `
+
+// testAuditEntry returns a minimal valid audit.Entry for tests exercising a
+// write path that now requires one (RetireBoard,
+// InsertDeviceConfigNextVersion) but aren't themselves testing audit
+// content -- action/entity_kind are arbitrary but non-empty (both columns
+// are NOT NULL).
+func testAuditEntry() audit.Entry {
+	return audit.Entry{
+		ActorSubject: "test-actor",
+		ActorKind:    audit.ActorKindHuman,
+		Action:       "TestAction",
+		EntityKind:   "test-entity",
+	}
+}
 
 // discardLogger is a *slog.Logger that throws away everything it's given --
 // these tests assert on returned errors and DB state, not log output.
@@ -95,8 +132,13 @@ func (stubAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (a
 	panic("not used by this package's integration tests")
 }
 
-// Resolve implements authzResolver's generic entity resolution -- unused by
-// this file's own tests (see ResolveBoardByDeviceID's doc comment above).
+// Resolve satisfies authz.Resolver, which authzResolver now embeds for
+// PushDeviceConfig's FR1.2/FR1.3 push-time invariant check. See
+// ResolveBoardByDeviceID's doc comment above -- none of this package's
+// integration tests exercise PushDeviceConfig past its device_id
+// validation refusal (response_contract_integration_test.go's
+// TestPushDeviceConfig_RefusalWritesNothing), so this panics if that ever
+// changes without wiring a real fixture here.
 func (stubAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
 	panic("not used by this package's integration tests")
 }

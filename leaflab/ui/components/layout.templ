@@ -2,8 +2,9 @@
 // thin LeafLab-specific wrapper around libs/go/htmxui's shared Shell, the
 // same convergence point tools/app_registry/ui and manmanv2/ui build on
 // (see those packages' components/layout.templ). Screen-specific markup
-// belongs in a future pages package, not here — Phase 1 (this issue) only
-// scaffolds the shared chrome and a placeholder home page (handlers_auth.go).
+// belongs in a future pages package, not here — Phase 1 scaffolds the
+// shared chrome, the degraded page (handlers_auth.go), and the boards
+// screen (handlers_boards.go), the Phase 1 post-login landing screen.
 package components
 
 import (

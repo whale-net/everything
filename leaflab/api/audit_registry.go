@@ -1,0 +1,53 @@
+package main
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/leaflab/api/audit"
+)
+
+// pushDeviceConfigFullMethod is PushDeviceConfig's full gRPC method name,
+// matching the format grpc.UnaryServerInfo.FullMethod uses -- see auth.go's
+// healthFullMethod.
+const pushDeviceConfigFullMethod = "/leaflab.api.v1.LeafLabAPI/PushDeviceConfig"
+
+// declaredWriteMethods is FR8's "every write produces an audit record"
+// registry for this service: every RPC that performs a write. A method
+// listed here with no corresponding entry in auditRegistrations fails
+// MustValidateAuditRegistrations at startup -- adding a write RPC without
+// wiring its audit registration is structurally hard to ship, rather than
+// a silently missing audit row discovered later in production.
+//
+// GetDeviceConfig, ListBoards and GetHealth are reads and are deliberately
+// absent. RetireBoard has no RPC surface yet (leaflab/api/repository.go's
+// RetireBoard is called directly by tests only, per #1337's scaffold) --
+// it will be added here in the task that gives it one.
+//
+// This registry is scoped to audit coverage only. authz_registry.go's
+// rpcAuthzRegistrations is #1351 (NFR1.b)'s separate read/write-kind
+// registry for authorization-conformance purposes over the same RPC set;
+// the two check different things (audit-record presence vs.
+// household-scope enforcement) and are independent, though worth a look
+// for consolidation once #1351's Testing phase lands.
+var declaredWriteMethods = []string{
+	pushDeviceConfigFullMethod,
+}
+
+// auditRegistrations maps each declaredWriteMethods entry to the
+// action/entity_kind its audit.Entry must carry (matched against
+// audit.Entry.Action/EntityKind at the call site -- see server.go's
+// PushDeviceConfig).
+var auditRegistrations = map[string]audit.Registration{
+	pushDeviceConfigFullMethod: {Action: "PushConfig", EntityKind: "device_config"},
+}
+
+// MustValidateAuditRegistrations panics if any declaredWriteMethods entry
+// has no corresponding auditRegistrations entry. Called once from run()
+// at startup, alongside interceptor chain construction -- the runtime half
+// of NFR1.b's build-failing conformance check (#1351 is the build-failing
+// half).
+func MustValidateAuditRegistrations() {
+	if err := audit.ValidateRegistrations(declaredWriteMethods, auditRegistrations); err != nil {
+		panic(fmt.Sprintf("leaflab-api: %v", err))
+	}
+}

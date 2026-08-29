@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -48,8 +49,13 @@ const mqttExchange = "amq.topic"
 // called with *Repository in main.go).
 type deviceRepository interface {
 	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
+	// GetRegionApplySkips is FR1.3's caller-visible skip surface: the
+	// audit.Entry rows leaflab/processor's ApplyConfigRegions wrote for
+	// this board's skipped config entries (household drift or a stale
+	// push), most recent first. See Repository.GetRegionApplySkips.
+	GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error)
 	// ListBoards is household-scoped (FR5.1): scope's SQL fragment
 	// (Scope.Filter) is applied inside the query itself, never as a
 	// post-filter -- see Repository.ListBoards.
@@ -64,7 +70,13 @@ type deviceRepository interface {
 // them) and resolving the caller's own Scope from their current
 // household_membership rows. Narrowed to an interface, like
 // deviceRepository above, so tests substitute a fake.
+//
+// It now also embeds authz.Resolver directly (Resolve), which
+// PushDeviceConfig's FR1.2/FR1.3 push-time invariant check needs: resolving
+// the pushing board's own household, and each region_id named in the
+// payload, through authz.AssertSameHousehold (invariant.go).
 type authzResolver interface {
+	authz.Resolver
 	ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error)
 	ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error)
 	// Resolve is the generic entity resolution the bounded-read-path RPCs
@@ -503,6 +515,40 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
 	}
 
+	// FR1.2/FR1.3: resolve the pushing board's own household once, before
+	// anything is stored or published -- used both to validate every
+	// region_id named in the payload (validatePushRegions, below) and to
+	// populate this push's audit entry's TargetHouseholdID (previously
+	// left nil pending #1339's household scoping, which has since landed).
+	boardRes, err := s.authzSvc.Resolve(ctx, authz.EntityRef{Kind: authz.EntityBoard, ID: boardID})
+	if err != nil {
+		s.logger.Error("resolve board household failed", "device_id", req.DeviceId, "board_id", boardID, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	writerHousehold := boardRes.HouseholdID
+	var targetHouseholdID *int64
+	if boardRes.Unclaimed {
+		// FR1.1: this board has no household yet -- no region_id in the
+		// payload can ever satisfy AssertSameHousehold against it (see
+		// validatePushRegions), and the audit entry below records no
+		// single target household (TargetHouseholdID stays nil).
+		writerHousehold = 0
+	} else {
+		targetHouseholdID = &boardRes.HouseholdID
+	}
+
+	// FR1.3: reject the whole push -- no device_config row stored, nothing
+	// published -- naming the offending entry and field, before either of
+	// those writes below. GetOrCreateBoard's self-registration upsert
+	// above is unaffected either way: it is pre-existing, idempotent
+	// board-identity bookkeeping this validation itself depends on to
+	// know which household to check against (it must run first to
+	// produce boardID), not a config write -- "nothing stored" is about
+	// device_config, the thing FR1.3 actually governs.
+	if err := s.validatePushRegions(ctx, writerHousehold, req.Sensors); err != nil {
+		return nil, err
+	}
+
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
@@ -517,7 +563,20 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 
 	// Atomically assign version and record the pending push before publishing.
 	// This ensures the DB row always exists before the device can ack.
-	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON)
+	//
+	// Action/EntityKind come from auditRegistrations (audit_registry.go)
+	// rather than being repeated as literals here, so the two can't drift
+	// out of agreement.
+	reg := auditRegistrations[pushDeviceConfigFullMethod]
+	entry := audit.Entry{
+		ActorSubject:      actingSubject(ctx),
+		ActorKind:         audit.ActorKindHuman,
+		TargetHouseholdID: targetHouseholdID,
+		Action:            reg.Action,
+		EntityKind:        reg.EntityKind,
+		CorrelationID:     CorrelationIDFromContext(ctx),
+	}
+	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entry)
 	if err != nil {
 		s.logger.Error("record config push failed", "device_id", req.DeviceId, "error", err)
 		return nil, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")
@@ -548,6 +607,58 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	return &pb.PushDeviceConfigResponse{Version: uint64(version)}, nil
 }
 
+// validatePushRegions is FR1.2/FR1.3's push-time layer: every region_id
+// named in sensors must resolve to writerHousehold, the pushing board's
+// own household -- checked here, before PushDeviceConfig stores or
+// publishes anything (FR1.3's "no partial application": one bad entry
+// refuses the whole payload, not just that entry).
+//
+// This closes the defect this task fixes: previously ApplyConfigRegions
+// (leaflab/processor/repository.go) wrote sensor.region_id with no
+// ownership check at all, letting an authenticated owner point their own
+// sensor at another household's region.
+//
+// writerHousehold is a sentinel no real household id can ever equal
+// (household ids are BIGSERIAL, so real values are >= 1) when the pushing
+// board itself has no household yet (FR1.1's Unclaimed exception) -- every
+// region_id then fails AssertSameHousehold without a special case here.
+//
+// Delegates to authz.AssertSameHousehold (FR1.2's write invariant,
+// invariant.go) rather than reimplementing per-reference resolution --
+// this is the "every write RPC that would leave a live reference in
+// place ... calls this once per reference it is about to write" call site
+// AssertSameHousehold's own doc comment names.
+func (s *LeafLabAPIServer) validatePushRegions(ctx context.Context, writerHousehold int64, sensors []*configpb.SensorConfig) error {
+	var refs []authz.LiveRef
+	for i, sc := range sensors {
+		if sc.RegionId == 0 {
+			continue
+		}
+		refs = append(refs, authz.LiveRef{
+			EntityRef: authz.EntityRef{Kind: authz.EntityRegion, ID: int64(sc.RegionId)},
+			Field:     fmt.Sprintf("sensors[%d].region_id", i),
+		})
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+
+	err := authz.AssertSameHousehold(ctx, s.authzSvc, writerHousehold, refs...)
+	if err == nil {
+		return nil
+	}
+	if _, ok := contract.FromError(err); ok {
+		// AssertSameHousehold's own FailureInvalidArgument, already naming
+		// the offending entry and field (FR1.3) -- pass through verbatim.
+		return err
+	}
+	if errors.Is(err, authz.ErrNotFound) {
+		return contract.InvalidArgument("device_config", "", "This references something that doesn't exist.")
+	}
+	s.logger.Error("region household validation failed", "error", err)
+	return contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+}
+
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
 	if reason := validateDeviceID(req.DeviceId); reason != "" {
 		return nil, contract.InvalidArgument("device_config", "device_id", reason)
@@ -565,10 +676,28 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		s.logger.Error("get config failed", "device_id", req.DeviceId, "error", err)
 		return nil, contract.Internal("device_config", "", "Could not look up this device's config right now. Please try again.")
 	}
-	if cfg == nil {
-		return &pb.GetDeviceConfigResponse{Found: false}, nil
+
+	// FR1.3's caller-visible skip surface, independent of whether an
+	// accepted config exists yet -- a board can have skipped apply-time
+	// entries recorded against it regardless of Found below.
+	skipRows, err := s.repo.GetRegionApplySkips(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("get region apply skips failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not look up this device's config right now. Please try again.")
 	}
-	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
+	skips := make([]*pb.RegionApplySkip, 0, len(skipRows))
+	for _, row := range skipRows {
+		skips = append(skips, &pb.RegionApplySkip{
+			SensorId:   row.SensorID,
+			Reason:     row.Reason,
+			OccurredAt: contract.ToInstant(row.OccurredAt),
+		})
+	}
+
+	if cfg == nil {
+		return &pb.GetDeviceConfigResponse{Found: false, Skips: skips}, nil
+	}
+	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true, Skips: skips}, nil
 }
 
 // ListBoards returns all known boards, keyset-paginated on (board_id) per

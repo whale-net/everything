@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# NFR1.a authentication conformance: fails the build when a route or RPC
+# serving household data ships without an authenticated principal, and its
+# coverage names the BFF's browser-reachable routes, not only the
+# service's RPCs. Also carries NFR18.1 ("the BFF holds no rounding,
+# coarsening, suppression or label-selection rule"), which reuses the same
+# leaflab/ui source data these checks already read. Source-analysis tests
+# that fail the build, mirroring tools/app_registry/conformance/ -- see
+# paths_test.go's package doc comment.
+#
+# Phase 2 (NFR1.b, fail-closed household scope) and Phase 3 (NFR1.c,
+# attribution agreement) extend this same conformance_test target rather
+# than adding a new one -- append srcs/data here, don't fork the package.
+go_test(
+    name = "conformance_test",
+    srcs = [
+        "auth_coverage_test.go",
+        "bff_policy_test.go",
+        "negative_fixtures_test.go",
+        "nfr1b_negative_fixtures_test.go",
+        "nfr1b_test.go",
+        "paths_test.go",
+    ],
+    data = [
+        "//leaflab:build_file",
+        "//leaflab/api:conformance_srcs",
+        "//leaflab/api/contract:conformance_srcs",
+        "//leaflab/api/proto:proto_file",
+        "//leaflab/ui:conformance_srcs",
+        "//leaflab/ui/components:conformance_srcs",
+    ],
+)
