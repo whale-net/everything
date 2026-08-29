@@ -17,27 +17,20 @@ import (
 // wait, not block indefinitely.
 const healthCheckTimeout = 3 * time.Second
 
-// handleHome is the Phase 1 (FR13) protected landing route ("/"): it
-// proves the login -> DB-backed-session -> protected-route path renders
-// real content, never a blank body, before delegating anywhere else.
-// Wrapped by app.auth.RequireAuthFunc (redirects an unauthenticated/
-// expired-session request to the login flow) and app.auth.WithAccessToken
-// (injects the user's own token for gRPC calls; NFR18.1) in main.go's
-// setupRoutes.
+// handleHome is the Phase 1 (FR13) protected landing page: it proves the
+// login -> DB-backed-session -> protected-route path renders real content,
+// never a blank body. Wrapped by app.auth.RequireAuthFunc (redirects an
+// unauthenticated/expired-session request to the login flow) and
+// app.auth.WithAccessToken (injects the user's own token for gRPC calls;
+// NFR18.1) in main.go's setupRoutes.
 //
-// It probes leaflab-api's anonymous GetHealth RPC (FR63) so a dial
-// failure or a HEALTH_DEGRADED response resolves to the honest "our
-// problem" page (NFR14) instead of a stack trace, a JSON body, or a real
-// screen simply failing further down once it calls an authenticated RPC.
-// Once the API reports healthy, "/" renders no placeholder content of its
-// own -- it delegates straight to handleBoards, the Phase 1 read-only
-// boards screen (NFR18.2, NFR19, FR64 -- #1330), making that screen the
-// post-login landing route. handleBoards is reachable directly at
-// "/boards" too (e.g. a bookmark, or FR61's "load more" continuation base
-// path); it does not repeat this health probe -- a healthy "/" already
-// proved reachability for this request, and a mid-request dependency
-// failure past that point degrades to handleBoards' own
-// StatusBadGateway response rather than this page's styled NFR14 screen.
+// Before rendering the placeholder dashboard content, it probes
+// leaflab-api's anonymous GetHealth RPC (FR63) so a dial failure or a
+// HEALTH_DEGRADED response resolves to the honest "our problem" page
+// (NFR14) instead of a stack trace, a JSON body, or this handler simply
+// failing further down once real screens call authenticated RPCs. The
+// device/region/reading dashboard content itself is later scaffolding on
+// this plan, not this issue's scope.
 func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 
@@ -59,5 +52,8 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	app.handleBoards(w, r)
+	if err := RenderTempl(w, r, "LeafLab", components.HomePage(user)); err != nil {
+		log.Printf("ERROR: failed to render home page: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}
 }

@@ -114,14 +114,12 @@ func TestHandleHome_Unauthenticated_FullRedirectChainReachesLoginFormHTML(t *tes
 	}
 }
 
-// --- authenticated -> renders boards page (#1330's landing-route swap) ----
+// --- authenticated -> renders home page -----------------------------------
 
-// TestHandleHome_Authenticated_HealthUp_DelegatesToBoardsPage proves the
+// TestHandleHome_Authenticated_HealthUp_RendersHomePage proves the
 // login -> session -> protected-route path renders real content (never a
-// blank body) once leaflab-api reports itself healthy -- and that content
-// is the boards screen (NFR18.2, NFR19, FR64 -- #1330), the Phase 1
-// post-login landing route, not a separate placeholder.
-func TestHandleHome_Authenticated_HealthUp_DelegatesToBoardsPage(t *testing.T) {
+// blank body) once leaflab-api reports itself healthy.
+func TestHandleHome_Authenticated_HealthUp_RendersHomePage(t *testing.T) {
 	fake := &fakeLeafLabClient{healthResp: &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}}
 	app := &App{auth: devAuth(t), api: &APIClient{LeafLab: fake}}
 
@@ -133,17 +131,11 @@ func TestHandleHome_Authenticated_HealthUp_DelegatesToBoardsPage(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s", w.Code, http.StatusOK, w.Body.String())
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "Boards") {
-		t.Errorf("expected the boards page content, body: %s", body)
-	}
-	if !strings.Contains(body, "No boards yet.") {
-		t.Errorf("expected the empty-boards state (fakeLeafLabClient's default ListBoards response), body: %s", body)
+	if !strings.Contains(body, "Welcome to LeafLab") {
+		t.Errorf("expected the home page content, body: %s", body)
 	}
 	if fake.healthCalls != 1 {
 		t.Errorf("GetHealth calls = %d, want 1", fake.healthCalls)
-	}
-	if fake.boardsCalls != 1 {
-		t.Errorf("ListBoards calls = %d, want 1", fake.boardsCalls)
 	}
 }
 

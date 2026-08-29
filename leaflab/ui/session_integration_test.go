@@ -121,10 +121,9 @@ func TestSessionSurvivesStoreReopen_ProcessRestart(t *testing.T) {
 	assert.Equal(t, "restart-user", got2.PreferredUsername)
 
 	// End-to-end: route an actual request through the app's real handler
-	// chain (setupRoutes -> RequireAuthFunc -> handleHome -> handleBoards)
-	// using the post-restart store, proving "authenticated request reaches
-	// the landing page" survives the restart, not just the raw session
-	// lookup.
+	// chain (setupRoutes -> RequireAuthFunc -> handleHome) using the
+	// post-restart store, proving "authenticated request reaches the home
+	// page" survives the restart, not just the raw session lookup.
 	oidcSrv := newFakeOIDCServer(t)
 	auth2, err := htmxauth.NewAuthenticatorWithDB(ctx, oidcTestConfig(oidcSrv), store2)
 	require.NoError(t, err)
@@ -140,7 +139,7 @@ func TestSessionSurvivesStoreReopen_ProcessRestart(t *testing.T) {
 	mux.ServeHTTP(w, homeReq)
 
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "No boards yet.", "fakeLeafLabClient defaults ListBoards to an empty page")
+	assert.Contains(t, w.Body.String(), "Welcome to LeafLab")
 	assert.Contains(t, w.Body.String(), "restart-user")
 }
 
@@ -248,7 +247,7 @@ func TestSignOut_DeletesSessionRow_SubsequentRequestUnauthenticated(t *testing.T
 	require.NoError(t, err)
 	preResp.Body.Close()
 	require.Equal(t, http.StatusOK, preResp.StatusCode, "body: %s", preBody)
-	assert.Contains(t, string(preBody), "No boards yet.", "fakeLeafLabClient defaults ListBoards to an empty page")
+	assert.Contains(t, string(preBody), "Welcome to LeafLab")
 
 	// Sign out.
 	logoutResp, err := client.Get(ts.URL + "/auth/logout")
