@@ -16,7 +16,7 @@ itself, for the topic you need.
 | Design principles (below, this file) | The five rules everything else in this doc follows |
 | [`architecture/02-shared-manifest-schema.md`](architecture/02-shared-manifest-schema.md) | Why `AppManifest`/`ChartManifest` live in `appmeta`, not here |
 | [`architecture/03-data-model.md`](architecture/03-data-model.md) | The schema, table by table; SCD2 read/write pattern on `promotion` |
-| [`architecture/04-version-model-ar-5a.md`](architecture/04-version-model-ar-5a.md) | How `AllocateVersion` orders/reserves versions — not yet wired to any release |
+| [`architecture/04-version-model.md`](architecture/04-version-model.md) | How `AllocateVersion` orders, reserves, and hands out versions for every release |
 | [`architecture/05-reconcile-watermark-issue-545.md`](architecture/05-reconcile-watermark-issue-545.md) | Why `Reconcile` can safely skip a stale/out-of-order call |
 | [`architecture/06-list-reconcile-runs-issue-607.md`](architecture/06-list-reconcile-runs-issue-607.md) | Real (LIMIT + keyset cursor) pagination over `reconcile_run`, and why it's unindexed |
 | [`architecture/07-release-reconcile-gap-issue-547.md`](architecture/07-release-reconcile-gap-issue-547.md) | Superseded by AR-7c — kept for historical/rollback context only |
@@ -33,6 +33,7 @@ itself, for the topic you need.
 | [`architecture/18-future-approval-gate.md`](architecture/18-future-approval-gate.md) | Not built — `PENDING_APPROVAL` exists in the schema only |
 | [`architecture/19-resolved-questions.md`](architecture/19-resolved-questions.md) | Numbered Q&A cited by number elsewhere in this doc and in PLAN.md |
 | [`architecture/20-open-questions.md`](architecture/20-open-questions.md) | What's still genuinely undecided |
+| [`architecture/21-promotion-sse.md`](architecture/21-promotion-sse.md) | SSE integration on `/promotions/{id}` — publish points, token lifecycle, session state, terminal/transient discrimination, and the non-redirecting auth shim |
 
 `architecture/08-release-lifecycle/` is itself split — the parent topic alone
 was too large for one file:
@@ -46,9 +47,7 @@ was too large for one file:
 | [`04-run-log.md`](architecture/08-release-lifecycle/04-run-log.md) | Temporal orchestrates (UI-triggered releases, #889), CI still pushes, the registry records; `BeginPublishBatch`, `GetReleaseRun` |
 | [`05-list-builds-issue-608.md`](architecture/08-release-lifecycle/05-list-builds-issue-608.md) | Real pagination over `build` |
 | [`06-pagination-issue-603.md`](architecture/08-release-lifecycle/06-pagination-issue-603.md) | Real pagination for `ListPromotionEvents`/`ListArtifacts`/`ListPromotions` |
-| [`07-availability-per-stage.md`](architecture/08-release-lifecycle/07-availability-per-stage.md) | Availability, restated per `domain_adoption.stage` |
 | [`08-adoption-disaster-recovery.md`](architecture/08-release-lifecycle/08-adoption-disaster-recovery.md) | `AdoptArtifact` and the disaster-recovery path |
-| [`09-relationship-to-ar5.md`](architecture/08-release-lifecycle/09-relationship-to-ar5.md) | How AR-7 affects what remains of AR-5 (allocation cutover) |
 | [`10-compose-time-hermeticity.md`](architecture/08-release-lifecycle/10-compose-time-hermeticity.md) | `CheckChartHermeticity`, AR-7f |
 | [`11-rejected-alternatives.md`](architecture/08-release-lifecycle/11-rejected-alternatives.md) | Designs considered and why they lost, scoped to issue #558 |
 

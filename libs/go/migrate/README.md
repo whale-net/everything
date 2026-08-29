@@ -69,6 +69,44 @@ one sets `MIGRATE_AUTO_DOWN` or `MIGRATE_BYPASS_VERSION` in their app's Helm
 values `env` map (the job template already passes an arbitrary per-app env
 map through to the container).
 
+## Dropping tables: wait-3-then-drop
+
+Never `DROP TABLE` in a single migration. A hard drop is a physical delete —
+if a rollback lands after it (an older image redeployed via
+`-auto-down`/`MIGRATE_AUTO_DOWN`, see "Rollback detection" above, or a manual
+`-down`/`-steps`), there is no data left for the down migration to restore.
+Split any table removal into two migrations, at least **3 releases apart**:
+
+1. **Soft-drop migration** (`NNN_drop_<table>.up.sql`): quarantine the table
+   without losing its data.
+   - Drop every foreign key that references the table, and every foreign key
+     the table itself declares.
+   - Drop every other constraint (`CHECK`, `UNIQUE`, `PRIMARY KEY` included)
+     and every index on the table.
+   - `ALTER TABLE <table> RENAME TO __<table>;` — the `__` prefix marks it as
+     quarantined and pending a hard drop. It's grep-able across the repo
+     (`grep -rn "RENAME TO __" **/migrations`) to find every table currently
+     in its wait window.
+   - The paired `.down.sql` reverses this exactly: rename `__<table>` back to
+     `<table>`, then recreate the dropped constraints and indexes. This is
+     what `-auto-down` replays if a rollback happens during the wait window —
+     the data is untouched, so it's a full, safe restore.
+   - Record the earliest hard-drop release/date in a comment at the top of
+     the migration (there's no automated release counter) so the follow-up
+     migration isn't written too early.
+
+2. **Hard-drop migration** (`NNN_drop_<table>_final.up.sql`), added no sooner
+   than 3 releases after the soft-drop shipped and has been live in
+   production for that long with no rollback: `DROP TABLE __<table>;`. From
+   this point on there is no way back — say so in a comment, and make the
+   `.down.sql` a no-op that documents the data is gone rather than pretending
+   to restore it.
+
+The 3-release wait gives operators a window to notice something still
+depends on the table (or that the drop was a mistake) and roll back to the
+soft-drop's `.down.sql` while the data still exists, before it's actually
+discarded.
+
 ## See also
 
 - [`MIGRATION_HISTORY.md`](MIGRATION_HISTORY.md) — history-tracking design and recovery scenarios in depth

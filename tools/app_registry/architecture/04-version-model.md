@@ -1,11 +1,19 @@
-# Version model (AR-5a)
+# Version model
 
-Full rationale lives in PLAN.md's AR-5 "Addendum — semver semantics
-(decided)" — this section is the as-built summary. **AR-5a ships this
-schema and RPC fully working but wired to nothing**: no domain is at
-adoption stage `allocate`, and `tools/release_helper_go/cmd/plan.go`'s
-git-tag path (`autoIncrementVersion`) is untouched. See "AR-5" in PLAN.md
-for what remains before any domain can be cut over for real.
+`AllocateVersion` is live and wired into every real release call site, for
+every domain, unconditionally — there is no per-domain gate, and no domain
+concept it could be gated on. `resolveVersion`
+(`tools/release_helper_go/cmd/registry_version.go`) is the shared decision
+every real version-resolution call site goes through: `plan.go`'s
+`assignVersions`/`assignChartVersions`, `release_charts.go`'s
+`releaseCharts` (the real production chart call site — `release.yml`'s
+`release-helm-charts` job invokes it directly, not `plan`'s `chart-matrix`
+output), and `build_helm.go`'s `build-helm-chart`. Once the registry
+integration is opted in (`APP_REGISTRY_CICD_OPT_IN=true`), `resolveVersion`
+always calls `AllocateVersion`; any error from it is fatal to the release.
+The only fallback to git-tag scanning left is the opt-in itself being off
+(no registry client dialed at all) — that is a global switch, not a
+per-domain one.
 
 **Parsing is shared, not duplicated.** `libs/go/semver` is the one semver
 parser/incrementer/comparator this repo's release tooling uses —
@@ -26,22 +34,33 @@ migration 004's comments) backfills to the `0/0/0` sentinel, which sorts
 before every real release rather than blocking the migration or winning a
 "latest" query it shouldn't.
 
-**`AllocateVersion` writes to `version_allocation`, not `artifact`.**
+**`AllocateVersion` writes directly to `artifact`, in state `allocated`.**
 `AllocateVersionRequest` carries no digest or build id (allocation happens
-*before* a build exists — see `protos/api_messages_artifact.proto`), and
-`artifact` requires both `NOT NULL`. `version_allocation` is a lightweight
-table with the same `(owner_id, kind, version)` unique-index shape, so a
-transactional `INSERT` against it is what makes concurrent `AllocateVersion`
-calls for the same owner structurally unable to collide — the unique
-constraint does the work, not application-level locking. "Next version" is
-computed as the max across **both** `artifact` (already-published) and
-`version_allocation` (reserved but not yet recorded), so a version reserved
-a moment ago by a concurrent caller is never handed out twice even though
-`RecordArtifact` hasn't run for it yet. A unique-violation aborts the whole
-transaction (see "Idempotency" and the transaction-abort hazard noted
-throughout this doc); the caller (`handlers.ArtifactServer.AllocateVersion`)
-retries in a **fresh** transaction, recomputing "next" against the
-now-committed state.
+*before* a build exists — see `protos/api_messages_artifact.proto`), which
+is why `artifact.digest`/`build_id` are nullable (migration 007) rather than
+requiring a separate reservation table. "Next version" is one query —
+`SELECT ... FROM artifact WHERE owner_id = $1 AND kind = $2 ORDER BY
+version_major DESC, version_minor DESC, version_patch DESC LIMIT 1` — that
+covers both already-published versions and reserved-but-not-yet-published
+ones in the same table, so a version reserved a moment ago by a concurrent
+caller is never handed out twice. `UNIQUE (owner_id, kind, version)` is what
+makes concurrent `AllocateVersion` calls for the same owner structurally
+unable to collide — the constraint does the work, not application-level
+locking. A unique-violation aborts the whole transaction (see "Idempotency"
+and the transaction-abort hazard noted throughout this doc); the caller
+(`handlers.ArtifactServer.AllocateVersion`) retries in a **fresh**
+transaction, recomputing "next" against the now-committed state. (An
+earlier design used a separate `version_allocation` reservation table; AR-7b
+folded it into `artifact` and dropped it — see "Artifact lifecycle" in
+"Release lifecycle (issue #558)".)
+
+**Major bumps are first-class.** `incrementVersion` (backed by
+`libs/go/semver`) handles `major`/`minor`/`patch` uniformly, and `plan.go`
+exposes `--increment-major` alongside `--increment-minor`/`--increment-patch`
+— matching chart bumping (`build_helm.go`), which accepts all three.
+`AllocateVersionRequest.increment` accepts the same three values. This is a
+strict superset of what git-tag scanning could ever produce, since the tag
+path could not express a major bump at all.
 
 **Prereleases and build metadata are rejected, not mis-sorted.**
 `AllocateVersion` calls `semver.ParseRelease`, which rejects a
@@ -74,11 +93,11 @@ stale-row reaper (`ExpireStale`) sweeps it to `failed`, just bounded by the
 reaper's timeout instead of being immediate. `explicitVersion` bypasses this
 entirely — an explicit request always gets exactly what it asked for.
 
-**Per-domain cutover gate.** `AllocateVersion` rejects any domain not at
-`domain_adoption.stage = 'allocate'` (see "Resolved questions" #3) with
-`FailedPrecondition`. `domain_adoption` ships from AR-1's migration with a
-row-per-domain-on-cutover shape (no row = implicit `observe`); AR-5a adds no
-mechanism to move a domain to `allocate` — that is deliberately still a
-direct `UPDATE domain_adoption` (or a future admin RPC/CLI command, not yet
-built), so the first real cutover is a reviewable, explicit action.
-
+**As built.** `AllocateVersion` (`server/handlers/artifact.go`) is fully
+implemented and tested (unit tests against the fake, real-Postgres
+integration tests covering concurrent allocation, numeric ordering, and
+idempotency-key replay — see `server/repository/postgres/postgres_integration_artifact_test.go`).
+Full delivery history — including the two phases it originally shipped in
+(AR-5a implemented it; AR-5b wired it into every call site) and the
+now-removed per-domain adoption gate an earlier design used — is in
+PLAN-HISTORY.md's "AR-5" section.

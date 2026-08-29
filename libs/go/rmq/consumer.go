@@ -341,10 +341,16 @@ func (c *Consumer) startConsuming() (<-chan amqp.Delivery, error) {
 	}
 
 	arguments := buildQueueArguments(declaredName, durable, autoDelete, messageTTL, maxMessages)
-	if _, err := ch.QueueDeclare(c.queue, durable, autoDelete, false, false, arguments); err != nil {
+	queue, err := ch.QueueDeclare(declaredName, durable, autoDelete, false, false, arguments)
+	if err != nil {
 		ch.Close()
 		return nil, fmt.Errorf("failed to declare queue: %w", err)
 	}
+	// Update c.queue with the newly broker-assigned name (for non-durable queues,
+	// this is essential for subsequent reconnects to use the fresh name, not the stale one)
+	c.mu.Lock()
+	c.queue = queue.Name
+	c.mu.Unlock()
 
 	for _, b := range bindings {
 		for _, key := range b.routingKeys {
