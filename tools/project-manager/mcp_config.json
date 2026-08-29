@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "agentsync-mcp": {
+      "command": "bazel",
+      "args": ["run", "--noshow_progress", "//tools/agentsync-mcp:agentsync-mcp-server"]
+    }
+  }
+}

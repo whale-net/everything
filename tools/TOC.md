@@ -18,6 +18,7 @@ Build, release, and development tooling.
 - [tilt-mcp/README.md](tilt-mcp/README.md) — Tilt MCP integration for AI-assisted development
 - [tilt-mcp/CURSOR_INSTALL.md](tilt-mcp/CURSOR_INSTALL.md) — Cursor IDE integration setup
 - [serial-mcp/README.md](serial-mcp/README.md) — ESP32 serial monitor MCP server (serial_tail, serial_grep, serial_status)
+- [agentsync-mcp/README.md](agentsync-mcp/README.md) — cross-agent-session rendezvous MCP server: one session starts/joins a session with another and blocks on `sync()` until the peer replies
 - [project-manager/README.md](project-manager/README.md) — AGY & Claude Code plugin: multi-persona GitHub-tracked planning pipeline (producer/architect/stakeholder/planner/worker/validator/system-validator), scoping products into milestones before designing each one
 - [project-manager/CONVENTIONS.md](project-manager/CONVENTIONS.md) — the plugin's GitHub label/workflow contract (product brief & milestones, issue kinds, lifecycle, worker unblock procedure) — every persona file follows this exactly
 - [app_registry/TOC.md](app_registry/TOC.md) — includes the `app-registry` AGY/Claude Code plugin: three crystaldba `postgres-mcp` servers (`app-registry-pg-{tilt,dev,prod}`)
