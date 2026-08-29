@@ -291,6 +291,15 @@ func TestListBuilds_GetReleaseRunAndBuildsStatusUnaffected(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-getrun-unaffected")
 
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/image-app",
+		IdempotencyKey: "record-getrun-unaffected-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:getrun-unaffected", Version: "v1.0.0",

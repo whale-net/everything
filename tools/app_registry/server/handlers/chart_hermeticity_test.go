@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
-	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
 // publishImage takes demo-image-app (created by setupAllocate) all the way
@@ -32,52 +31,11 @@ func publishImage(t *testing.T, artifactSrv *ArtifactServer, version, idemPrefix
 	}
 }
 
-// TestCheckChartHermeticity_NotEnforcedAtObserve proves the per-domain gate:
-// at the default stage ("observe", where every domain sits today per
-// ARCHITECTURE.md), the RPC reports enforced=false and never inspects
-// artifact state -- an unpublished pin must not surface as a violation.
-func TestCheckChartHermeticity_NotEnforcedAtObserve(t *testing.T) {
-	_, artifactSrv := setupAllocate(t)
-	resp, err := artifactSrv.CheckChartHermeticity(authedCtx(), &pb.CheckChartHermeticityRequest{
-		ChartDomain: "demo",
-		Pins:        []*pb.ChartPin{{AppFullName: "demo-image-app", Version: "v9.9.9"}},
-	})
-	if err != nil {
-		t.Fatalf("CheckChartHermeticity: %v", err)
-	}
-	if resp.Enforced {
-		t.Fatalf("expected enforced=false at adoption stage observe, got true")
-	}
-	if len(resp.Violations) != 0 {
-		t.Fatalf("expected no violations when not enforced, got %v", resp.Violations)
-	}
-}
-
-// TestCheckChartHermeticity_NotEnforcedAtPromote is the same proof at
-// "promote", the other stage recording is mandatory at but compose-time
-// enforcement is not (ARCHITECTURE.md "Availability, restated per adoption
-// stage").
-func TestCheckChartHermeticity_NotEnforcedAtPromote(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStagePromote)
-	resp, err := artifactSrv.CheckChartHermeticity(authedCtx(), &pb.CheckChartHermeticityRequest{
-		ChartDomain: "demo",
-		Pins:        []*pb.ChartPin{{AppFullName: "demo-image-app", Version: "v9.9.9"}},
-	})
-	if err != nil {
-		t.Fatalf("CheckChartHermeticity: %v", err)
-	}
-	if resp.Enforced {
-		t.Fatalf("expected enforced=false at adoption stage promote, got true")
-	}
-}
-
-// TestCheckChartHermeticity_AllocateRejectsUnpublishedPin is AR-7f's core
-// exit criterion: an allocate-stage domain whose member app was never
+// TestCheckChartHermeticity_RejectsUnpublishedPin is AR-7f's core exit
+// criterion, unconditional for every domain: a member app that was never
 // published fails the check, naming the app.
-func TestCheckChartHermeticity_AllocateRejectsUnpublishedPin(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
+func TestCheckChartHermeticity_RejectsUnpublishedPin(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
 
 	resp, err := artifactSrv.CheckChartHermeticity(authedCtx(), &pb.CheckChartHermeticityRequest{
 		ChartDomain: "demo",
@@ -87,7 +45,7 @@ func TestCheckChartHermeticity_AllocateRejectsUnpublishedPin(t *testing.T) {
 		t.Fatalf("CheckChartHermeticity: %v", err)
 	}
 	if !resp.Enforced {
-		t.Fatalf("expected enforced=true at adoption stage allocate, got false")
+		t.Fatalf("expected enforced=true, got false")
 	}
 	if len(resp.Violations) != 1 {
 		t.Fatalf("expected exactly 1 violation, got %v", resp.Violations)
@@ -98,13 +56,12 @@ func TestCheckChartHermeticity_AllocateRejectsUnpublishedPin(t *testing.T) {
 	}
 }
 
-// TestCheckChartHermeticity_AllocateAcceptsPublishedPin proves the
-// mirror-image case: once the pinned version is actually published, the
-// same allocate-stage domain reports no violations.
-func TestCheckChartHermeticity_AllocateAcceptsPublishedPin(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+// TestCheckChartHermeticity_AcceptsPublishedPin proves the mirror-image
+// case: once the pinned version is actually published, the check reports no
+// violations.
+func TestCheckChartHermeticity_AcceptsPublishedPin(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
 	publishImage(t, artifactSrv, "v1.0.0", "accept")
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	resp, err := artifactSrv.CheckChartHermeticity(authedCtx(), &pb.CheckChartHermeticityRequest{
 		ChartDomain: "demo",
@@ -114,20 +71,20 @@ func TestCheckChartHermeticity_AllocateAcceptsPublishedPin(t *testing.T) {
 		t.Fatalf("CheckChartHermeticity: %v", err)
 	}
 	if !resp.Enforced {
-		t.Fatalf("expected enforced=true at adoption stage allocate, got false")
+		t.Fatalf("expected enforced=true, got false")
 	}
 	if len(resp.Violations) != 0 {
 		t.Fatalf("expected no violations for a published pin, got %v", resp.Violations)
 	}
 }
 
-// TestCheckChartHermeticity_AllocateRejectsPublishingNotYetPublished proves
-// a pin sitting in "publishing" (BeginPublish called, RecordArtifact not
-// yet) is still a violation -- only ARTIFACT_STATE_PUBLISHED satisfies the
-// check, matching ArtifactState's doc comment on what published actually
+// TestCheckChartHermeticity_RejectsPublishingNotYetPublished proves a pin
+// sitting in "publishing" (BeginPublish called, RecordArtifact not yet) is
+// still a violation -- only ARTIFACT_STATE_PUBLISHED satisfies the check,
+// matching ArtifactState's doc comment on what published actually
 // guarantees.
-func TestCheckChartHermeticity_AllocateRejectsPublishingNotYetPublished(t *testing.T) {
-	repo, artifactSrv := setupAllocate(t)
+func TestCheckChartHermeticity_RejectsPublishingNotYetPublished(t *testing.T) {
+	_, artifactSrv := setupAllocate(t)
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "inflight-run")
 	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
@@ -136,7 +93,6 @@ func TestCheckChartHermeticity_AllocateRejectsPublishingNotYetPublished(t *testi
 	}); err != nil {
 		t.Fatalf("BeginPublish: %v", err)
 	}
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	resp, err := artifactSrv.CheckChartHermeticity(ctx, &pb.CheckChartHermeticityRequest{
 		ChartDomain: "demo",

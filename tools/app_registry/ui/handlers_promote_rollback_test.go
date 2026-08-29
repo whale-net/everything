@@ -237,13 +237,30 @@ func getPromote(t *testing.T, app *App, owner, kind, env string) (int, string) {
 	return w.Code, w.Body.String()
 }
 
-func postPromote(t *testing.T, app *App, form url.Values) (int, string) {
+func postPromoteRecorder(t *testing.T, app *App, form url.Values) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/promote", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	app.handlePromoteSubmit(w, req)
+	return w
+}
+
+func postPromote(t *testing.T, app *App, form url.Values) (int, string) {
+	t.Helper()
+	w := postPromoteRecorder(t, app, form)
 	return w.Code, w.Body.String()
+}
+
+// assertPromoteRedirectedTo checks that a genuine (non-already_promoted)
+// commit sent the operator to its own promotion page (#1266) instead of
+// re-rendering /promote inline.
+func assertPromoteRedirectedTo(t *testing.T, w *httptest.ResponseRecorder, promotionID string) {
+	t.Helper()
+	want := "/promotions/" + promotionID
+	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != want {
+		t.Fatalf("expected a %d redirect to %q, got status %d location %q body %s", http.StatusSeeOther, want, w.Code, w.Header().Get("Location"), w.Body.String())
+	}
 }
 
 func baseCommitForm(idemKey, intentFP, dryRunFP string) url.Values {
@@ -332,10 +349,8 @@ func TestPromote_KeyStableAcrossRetryAfterTransportFailure(t *testing.T) {
 	promo.promoteErr = nil
 	form2 := baseCommitForm(key1, fp1, "")
 	form2.Set("env", "dev")
-	_, body2 := postPromote(t, app, form2)
-	if !strings.Contains(body2, "Promotion recorded.") {
-		t.Fatalf("expected the retry to succeed, body: %s", body2)
-	}
+	w2 := postPromoteRecorder(t, app, form2)
+	assertPromoteRedirectedTo(t, w2, "promo-1")
 	if promo.promoteCalls[1].GetIdempotencyKey() != key1 {
 		t.Errorf("retry sent a different idempotency key: got %q, want %q", promo.promoteCalls[1].GetIdempotencyKey(), key1)
 	}
@@ -417,10 +432,8 @@ func TestPromote_KeyRotatesAfterCommittedWrite(t *testing.T) {
 
 	form := baseCommitForm("", "", "")
 	form.Set("env", "dev")
-	_, body1 := postPromote(t, app, form)
-	if !strings.Contains(body1, "Promotion recorded.") {
-		t.Fatalf("expected a successful commit, body: %s", body1)
-	}
+	w1 := postPromoteRecorder(t, app, form)
+	assertPromoteRedirectedTo(t, w1, "promo-1")
 	usedKey := promo.promoteCalls[0].GetIdempotencyKey()
 
 	// A fresh GET (the next intent -- e.g. the user navigates back to
@@ -518,10 +531,8 @@ func TestPromote_DryRunDoesNotRotateKeyAcrossRepeatedDryRuns(t *testing.T) {
 	// same key too -- proving the dry run(s) never consumed it.
 	commitForm := baseCommitForm(key1, fp1, dryRunFP1)
 	promo.promoteResp = &pb.PromoteResponse{Promotion: &pb.Promotion{PromotionId: "promo-1", Version: "v1.0.0"}}
-	_, body3 := postPromote(t, app, commitForm)
-	if !strings.Contains(body3, "Promotion recorded.") {
-		t.Fatalf("expected the commit to succeed, body: %s", body3)
-	}
+	w3 := postPromoteRecorder(t, app, commitForm)
+	assertPromoteRedirectedTo(t, w3, "promo-1")
 	if promo.promoteCalls[len(promo.promoteCalls)-1].GetIdempotencyKey() != key1 {
 		t.Errorf("commit after dry run(s) used a different key than the one minted at render time")
 	}
@@ -559,7 +570,8 @@ func TestPromote_ConfirmationRendersResponseIdentityNotForm(t *testing.T) {
 	// The response's identity deliberately differs from the submitted
 	// form (different artifact_id was chosen server-side, different
 	// version/digest/environment_key rendered back) -- FR-52 requires the
-	// confirmation to render THIS, not an echo of the submitted form.
+	// post-write destination to be driven by the response's own identity
+	// (#1266's redirect target), never an echo of the submitted form.
 	promo := &fakePromotionClient{
 		promoteResp: &pb.PromoteResponse{
 			Promotion: &pb.Promotion{
@@ -584,16 +596,11 @@ func TestPromote_ConfirmationRendersResponseIdentityNotForm(t *testing.T) {
 	form.Set("env", "dev")
 	form.Set("artifact_id", "art-1")
 	form.Set("reason", "the reason I typed")
-	_, body := postPromote(t, app, form)
+	w := postPromoteRecorder(t, app, form)
 
-	for _, want := range []string{"promo-xyz", "prod-eu", "v9.9.9", "server-derived-actor", "server-derived-reason"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("confirmation body missing response-derived value %q, body: %s", want, body)
-		}
-	}
-	if strings.Contains(body, "the reason I typed") {
-		t.Errorf("confirmation must never echo the submitted form's reason; response's own event.reason is what renders")
-	}
+	// The redirect target is the response's own promotion id ("promo-xyz"),
+	// never anything derived from the submitted form (e.g. "art-1").
+	assertPromoteRedirectedTo(t, w, "promo-xyz")
 }
 
 func TestPromote_AlreadyPromotedRendersAsNoChangeNotSuccess(t *testing.T) {
@@ -672,10 +679,8 @@ func TestPromote_NoTimestampComparisonAffectsRendering(t *testing.T) {
 	app := newPromoteTestApp(env, defaultArtifactClient(), promo)
 	form := baseCommitForm("", "", "")
 	form.Set("env", "dev")
-	_, bodyFuture := postPromote(t, app, form)
-	if !strings.Contains(bodyFuture, "Promotion recorded.") {
-		t.Errorf("a future-skewed valid_from must not change the success classification, body: %s", bodyFuture)
-	}
+	wFuture := postPromoteRecorder(t, app, form)
+	assertPromoteRedirectedTo(t, wFuture, "promo-1")
 
 	farPast := int64(0)
 	promo2 := &fakePromotionClient{
@@ -685,10 +690,8 @@ func TestPromote_NoTimestampComparisonAffectsRendering(t *testing.T) {
 		},
 	}
 	app2 := newPromoteTestApp(env, defaultArtifactClient(), promo2)
-	_, bodyPast := postPromote(t, app2, form)
-	if !strings.Contains(bodyPast, "Promotion recorded.") {
-		t.Errorf("a zero/epoch valid_from must not change the success classification, body: %s", bodyPast)
-	}
+	wPast := postPromoteRecorder(t, app2, form)
+	assertPromoteRedirectedTo(t, wPast, "promo-2")
 }
 
 // --- Rollback: mirrors the Promote cases above (both screens covered) ----

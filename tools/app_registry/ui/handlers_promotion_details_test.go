@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,11 +11,17 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/whale-net/everything/libs/go/htmxsse"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 )
 
 func newPromotionDetailsTestApp(promo *fakePromotionClient) *App {
-	return &App{registry: &RegistryClient{Promotion: promo}}
+	// Create a Hub with a no-op attach function (tests don't need real connections)
+	attachFunc := func(ctx context.Context) (htmxsse.Transport, error) {
+		return nil, fmt.Errorf("test stub: no transport")
+	}
+	hub := htmxsse.NewHub(attachFunc, htmxsse.DefaultConfig())
+	return &App{registry: &RegistryClient{Promotion: promo}, sseHub: hub}
 }
 
 // --- handlePromotionDetails: malformed/missing id --------------------------

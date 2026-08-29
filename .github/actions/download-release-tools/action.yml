@@ -7,7 +7,9 @@ description: >-
   ArtifactRegistry/ResolveBinaryURL RPC and downloads it directly (unauthenticated) in <3s
   with automatic SHA256 checksum verification against the published checksums.txt manifest.
   If prebuilt acquisition fails, fails and prompts the user to re-run with build tools per
-  pipeline (or builds from source if fallback_to_source is true).
+  pipeline. Callers that want a source-build fallback must invoke this action a second
+  time with source: 'source' after their own Setup Build Environment step -- see
+  release-v2.yml's "fallback safety valve" steps for the pattern.
   In 'source' mode, builds tools directly from source via Bazel.
   Exports RELEASE_HELPER and APP_REGISTRY_CLI env vars and outputs.
 
@@ -44,10 +46,6 @@ inputs:
     description: 'GitHub token for the workflow-artifact fallback (defaults to github.token)'
     required: false
     default: ''
-  fallback_to_source:
-    description: 'Whether to fall back to Bazel source compilation if prebuilt binary download fails (default false; pipelines should fail and request source build)'
-    required: false
-    default: 'false'
   name:
     description: 'Artifact name to download when source="artifact"'
     required: false
@@ -86,7 +84,6 @@ runs:
         AR_VERSION_OVERRIDE: ${{ inputs.app_registry_version }}
         GITHUB_TOKEN: ${{ inputs.github_token || github.token }}
         GH_TOKEN: ${{ inputs.github_token || github.token }}
-        FALLBACK_TO_SOURCE: ${{ inputs.fallback_to_source }}
         DEST_DIR: ${{ runner.temp }}/release-tools
       run: |
         set -euo pipefail
@@ -420,32 +417,19 @@ runs:
           # from the version currently promoted to target_env in App Registry.
           if [[ -z "$RH_VER" || -z "$AR_VER" ]]; then
             if [[ -z "$TARGET_ENV_INPUT" ]]; then
-              if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                echo "Notice: No target_env or version override specified. Falling back to source build."
-                SOURCE_MODE="source"
-              else
-                echo "::error title=target_env missing::No target_env or version overrides provided. Please specify target_env or re-run with build tools (e.g. 'use_source_tools: true' or 'source: source')."
-                exit 1
-              fi
+              echo "::error title=target_env missing::No target_env or version overrides provided. Please specify target_env or re-run with build tools (e.g. 'use_source_tools: true' or 'source: source')."
+              exit 1
             else
               echo "Attempting App Registry resolution for target_env='$TARGET_ENV_INPUT'..."
 
               if ! ensure_app_registry_client; then
-                if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                  echo "Notice: Could not set up the App Registry gRPC client. Falling back to source build."
-                  SOURCE_MODE="source"
-                else
-                  echo "::error title=App Registry client setup failed::Could not set up the App Registry gRPC client (grpcurl install or APP_REGISTRY_ADDRESS) to resolve release tool versions. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source')."
-                  exit 1
-                fi
+                echo "::error title=App Registry client setup failed::Could not set up the App Registry gRPC client (grpcurl install or APP_REGISTRY_ADDRESS) to resolve release tool versions. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source')."
+                exit 1
               else
                 if [[ -z "$RH_VER" ]]; then
                   if v="$(resolve_registry_version "tools-release_helper_go")"; then
                     RH_VER="$v"
                     echo "Resolved release_helper_go version from App Registry (env=$TARGET_ENV_INPUT): $RH_VER"
-                  elif [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                    echo "Notice: Could not resolve promoted version for release_helper_go. Falling back to source build."
-                    SOURCE_MODE="source"
                   else
                     echo "::error title=App Registry resolution failed::Could not resolve promoted version for 'release_helper_go' in environment '$TARGET_ENV_INPUT'. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') or ensure the tool is promoted in App Registry."
                     exit 1
@@ -455,9 +439,6 @@ runs:
                   if v="$(resolve_registry_version "tools-app-registry")" || v="$(resolve_registry_version "tools-app_registry_cli")"; then
                     AR_VER="$v"
                     echo "Resolved app_registry_cli version from App Registry (env=$TARGET_ENV_INPUT): $AR_VER"
-                  elif [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                    echo "Notice: Could not resolve promoted version for app_registry_cli. Falling back to source build."
-                    SOURCE_MODE="source"
                   else
                     echo "::error title=App Registry resolution failed::Could not resolve promoted version for 'app_registry_cli' in environment '$TARGET_ENV_INPUT'. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') or ensure the tool is promoted in App Registry."
                     exit 1
@@ -567,13 +548,8 @@ runs:
               fi
 
               if [[ -z "$SOURCE_USED" ]]; then
-                if [[ "$FALLBACK_TO_SOURCE" == "true" ]]; then
-                  echo "::warning title=Prebuilt release tools download failed::Could not download prebuilt release tools or workflow artifact. Falling back to source build via Bazel."
-                  SOURCE_MODE="source"
-                else
-                  echo "::error title=Prebuilt release tools download failed::Failed to acquire prebuilt release tools. Fallback to inline source compilation is disabled. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') to build release tools from source."
-                  exit 1
-                fi
+                echo "::error title=Prebuilt release tools download failed::Failed to acquire prebuilt release tools. Please re-run the pipeline with build tools (e.g. 'use_source_tools: true' or 'source: source') to build release tools from source."
+                exit 1
               fi
             fi
           fi

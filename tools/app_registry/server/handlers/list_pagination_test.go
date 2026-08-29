@@ -233,7 +233,7 @@ func seedPromotions(repo *fake.Registry, n int) []repository.Promotion {
 
 func TestListPromotions_Pagination_NoOverlapNoGap(t *testing.T) {
 	repo := fake.New()
-	srv := NewPromotionServer(repo, nil)
+	srv := NewPromotionServer(repo, nil, nil)
 	ctx := authedCtx()
 	seedPromotions(repo, 7)
 
@@ -286,7 +286,7 @@ func TestListPromotions_Pagination_NoOverlapNoGap(t *testing.T) {
 
 func TestListPromotions_InvalidPageToken(t *testing.T) {
 	repo := fake.New()
-	srv := NewPromotionServer(repo, nil)
+	srv := NewPromotionServer(repo, nil, nil)
 	ctx := authedCtx()
 	seedPromotions(repo, 3)
 
@@ -322,7 +322,7 @@ func seedPromotionEvents(repo *fake.Registry, n int) []repository.PromotionEvent
 
 func TestListPromotionEvents_Pagination_NoOverlapNoGap(t *testing.T) {
 	repo := fake.New()
-	srv := NewPromotionServer(repo, nil)
+	srv := NewPromotionServer(repo, nil, nil)
 	ctx := authedCtx()
 	seedPromotionEvents(repo, 7)
 
@@ -374,7 +374,7 @@ func TestListPromotionEvents_Pagination_NoOverlapNoGap(t *testing.T) {
 
 func TestListPromotionEvents_InvalidPageToken(t *testing.T) {
 	repo := fake.New()
-	srv := NewPromotionServer(repo, nil)
+	srv := NewPromotionServer(repo, nil, nil)
 	ctx := authedCtx()
 	seedPromotionEvents(repo, 3)
 
