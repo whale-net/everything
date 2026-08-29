@@ -18,12 +18,6 @@ service LeafLabAPI {
 
   // List all known boards (boards that have sent at least one manifest).
   rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
-
-  // Service health signal. The only anonymous RPC in this service (FR63) --
-  // callable without a household session and without an authenticated
-  // principal, so "this is our problem, not yours" is answerable even when
-  // the rest of the API is unreachable. Returns no household data.
-  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -131,23 +125,4 @@ message PageResponse {
   // Opaque keyset token for the next page. Empty when this is the last
   // page.
   string next_page_token = 1;
-}
-
-// --- Health (FR63) ------------------------------------------------------
-
-message GetHealthRequest {}
-
-// HealthStatus is intentionally coarse (FR63.2): a caller learns "this is
-// our problem, not yours" and nothing else. No version string, no
-// dependency names, no per-dependency status detail belong here or in
-// GetHealthResponse.
-enum HealthStatus {
-  HEALTH_UNSPECIFIED = 0;
-  HEALTH_UP = 1;
-  HEALTH_DEGRADED = 2;
-}
-
-message GetHealthResponse {
-  // The only populated field in this response (FR63.2).
-  HealthStatus status = 1;
 }

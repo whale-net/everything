@@ -34,38 +34,17 @@ func validateDeviceID(id string) string {
 
 const mqttExchange = "amq.topic"
 
-// deviceRepository is the subset of *Repository's methods LeafLabAPIServer's
-// RPCs depend on. Extracted as an interface -- rather than referencing
-// *Repository directly -- so tests can substitute an in-memory fake and
-// exercise real handler logic (e.g. GetHealth's DEGRADED branch) without a
-// live Postgres connection; see server_test.go. *Repository satisfies this
-// with no changes on the production path (NewLeafLabAPIServer is still
-// called with *Repository in main.go).
-type deviceRepository interface {
-	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
-	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
-	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32) ([]BoardRow, error)
-	Ping(ctx context.Context) error
-}
-
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
-	repo      deviceRepository
+	repo      *Repository
 	publisher *rmq.Publisher
-	// rmqConn is the underlying RabbitMQ/MQTT connection GetHealth probes
-	// (FR63.1). Held separately from publisher because rmq.Publisher does
-	// not expose its connection's liveness. May be nil in tests that don't
-	// exercise GetHealth -- see GetHealth's nil handling.
-	rmqConn *rmq.Connection
-	logger  *slog.Logger
+	logger    *slog.Logger
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
 		repo:      repo,
 		publisher: publisher,
-		rmqConn:   rmqConn,
 		logger:    logger,
 	}
 }
@@ -184,27 +163,4 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 		Page:      &pb.PageResponse{NextPageToken: nextToken},
 		ServerNow: contract.Now(),
 	}, nil
-}
-
-// GetHealth is the only anonymous RPC in this service (FR63). It reports
-// exactly one field -- up or degraded -- and nothing else: no version, no
-// dependency names, no per-dependency detail (FR63.2). It probes the pgx
-// pool and the RabbitMQ/MQTT connection (FR63.1) but never says which one
-// failed, on the response or in an error -- only in the server-side log
-// line, for operator debugging.
-func (s *LeafLabAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*pb.GetHealthResponse, error) {
-	dbErr := s.repo.Ping(ctx)
-	if dbErr != nil {
-		s.logger.Warn("health check: database unreachable", "error", dbErr)
-	}
-
-	mqUp := s.rmqConn != nil && s.rmqConn.GetConnection() != nil && !s.rmqConn.GetConnection().IsClosed()
-	if !mqUp {
-		s.logger.Warn("health check: rabbitmq/mqtt connection unavailable")
-	}
-
-	if dbErr != nil || !mqUp {
-		return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_DEGRADED}, nil
-	}
-	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
