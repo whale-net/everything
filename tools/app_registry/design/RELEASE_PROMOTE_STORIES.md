@@ -79,9 +79,8 @@ existing example of one app being deployed outside its chart's normal path.
     keyed on `(owner, environment)`, not on the image — two charts pinning
     the same image digest promote and roll back completely independently.
     Not yet exercised by a real domain with two charts sharing one image;
-    the AR-2 soak/AR-5 cutover work should pick a case like this to validate
-    against before treating it as proven under real CI load, not just by
-    schema inspection.
+    a future validation pass should pick a case like this to check against
+    real CI load, not just schema inspection.
 
 29. As a domain owner, I want to see every chart that currently pins a given
     image, so when I'm about to change or deprecate that image I know the
@@ -121,17 +120,15 @@ release.
     being released — to be recognized and logged as a redundant/no-op build
     rather than either silently publishing a duplicate-content new version or
     hard-failing the release, so CI output makes it obvious nothing actually
-    changed. — **Gap.** `PLAN.md`'s AR-5 section names exactly this
-    condition: "a same-digest/different-version request now hard-fails on
-    `artifact_digest_idx`'s real uniqueness constraint... harmless at
-    `observe`... will hard-fail routine releases the moment a domain reaches
-    `promote`." Today this same-content-different-version case is a hard
-    failure once a domain is at `promote`/`allocate`, not a recognized,
-    logged "redundant build" outcome. `PLAN.md` explicitly defers the design
-    ("treating a digest collision against an older version of the same owner
-    as an idempotent success rather than a conflict") to AR-5's cutover
-    design — this story is that deferred design item, stated as a user
-    story rather than left as a parenthetical.
+    changed. — **Shipped, upstream of App Registry.** PR
+    [#630](https://github.com/whale-net/everything/pull/630) fixed this in
+    `release.yml` itself: tag-creation steps check the just-built digest
+    against the most recent existing tag's digest before minting a new
+    version tag, and skip tag creation (and the App Registry record call)
+    on a match — so a no-op rebuild never reaches App Registry as a "new"
+    artifact, and the `artifact_digest_idx` hard-fail this story describes
+    no longer happens in practice. See `PLAN.md`'s "Version allocation
+    (AR-5)" for the full account.
 
 33. As a domain owner, I want a redundant build to still be visible in the
     release run's output (e.g. `app-registry builds status`), labeled as

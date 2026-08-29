@@ -76,7 +76,6 @@ func TestActivities_ResolvePlan_WorkspaceRootUnset_UsesScratchDir(t *testing.T) 
 		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
 	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"demo-hello-go":"v1.2.4"}}`)
 	a := &Activities{Registry: repo, PlanBinaryPath: bin}
@@ -104,7 +103,6 @@ func TestActivities_ResolvePlan_ChartTarget_LooksUpChartMetadata(t *testing.T) {
 		{Domain: "manmanv2", Name: "control-services"},
 	}, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
-	repo.SetDomainAdoptionStage("manmanv2", repository.DomainAdoptionStageAllocate)
 
 	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"manmanv2-control-services":"v2.0.1"}}`)
 	a := &Activities{Registry: repo, PlanBinaryPath: bin}
@@ -138,8 +136,8 @@ func TestActivities_ResolvePlan_UnknownOwner_ReturnsClearError(t *testing.T) {
 
 // TestActivities_ResolvePlan_ForcesRegistryOptIn is the regression test for
 // the bug where every Temporal-driven release batch silently resolved every
-// target to v0.0.1 regardless of the target domain's adoption stage or its
-// actual App Registry version history: release_helper_go's registryOptedIn()
+// target to v0.0.1 regardless of its actual App Registry version history:
+// release_helper_go's registryOptedIn()
 // (cmd/plan.go) gates the whole AllocateVersion path on
 // APP_REGISTRY_CICD_OPT_IN=true, which this worker's own process env never
 // carried (it's documented purely as a GitHub Actions repository variable) --
@@ -152,7 +150,6 @@ func TestActivities_ResolvePlan_ForcesRegistryOptIn(t *testing.T) {
 		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
 	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "fake-release-helper-go")
@@ -211,7 +208,6 @@ func TestActivities_ResolvePlan_IdempotencyKeyUsesRunID_NotWorkflowID(t *testing
 		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
 	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"demo-hello-go":"v1.2.4"}}`)
 	a := &Activities{Registry: repo, PlanBinaryPath: bin}
@@ -249,77 +245,6 @@ func TestActivities_ResolvePlan_WorkspaceRootSet_UsedAsIs(t *testing.T) {
 	require.Equal(t, "v1.0.0", plan.Versions["image:demo-hello-go"])
 }
 
-// TestActivities_ResolvePlan_NoWorkspaceRoot_DomainNotAllocated_FailsFast is
-// the direct regression test for a real prod failure: release run
-// 9a1d783c-3cac-44fe-87d0-0d38793c43f8 (domain manmanv2, adoption stage
-// "observe" -- the implicit default, since manmanv2 has never been cut over)
-// had all 7 of its targets fail with "workspace root not found from
-// /tmp/release-plan-...", a leaf-level error from release_helper_go's git
-// tag listing that gives an operator no indication of what actually went
-// wrong or how to fix it.
-//
-// With no a.WorkspaceRoot and a domain not yet at adoption stage "allocate",
-// resolveVersion's AllocateVersion call is guaranteed to return
-// FailedPrecondition (server/handlers/artifact.go), which sends every
-// target with no explicit version through the git-tag autoIncrementVersion
-// fallback -- and that fallback is guaranteed to fail, because this
-// activity's scratch dir (see this file's package doc comment) has no .git
-// for it to read tags from. ResolvePlan must catch this deterministically
-// broken combination itself and fail with a specific, actionable message
-// instead of invoking the subprocess and surfacing its confusing "workspace
-// root not found from <tmp path>" leaf error.
-func TestActivities_ResolvePlan_NoWorkspaceRoot_DomainNotAllocated_FailsFast(t *testing.T) {
-	repo := newTestRegistry(t)
-	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
-		{Domain: "manmanv2", Name: "control-api", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
-	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
-	require.NoError(t, err)
-	// manmanv2 is left at its implicit default stage (observe) -- no
-	// repo.SetDomainAdoptionStage call, matching prod's real state.
-
-	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"manmanv2-control-api":"v0.0.1"}}`)
-	a := &Activities{Registry: repo, PlanBinaryPath: bin}
-
-	_, err = runResolvePlan(t, a, []ReleaseTarget{
-		{OwnerFullName: "manmanv2-control-api", Kind: repository.ArtifactKindImage},
-	})
-	require.Error(t, err)
-	require.ErrorContains(t, err, "manmanv2")
-	require.ErrorContains(t, err, `adoption stage "allocate"`)
-	require.NotContains(t, err.Error(), "workspace root not found", "must fail with its own clear diagnosis, not release_helper_go's leaf-level git error")
-
-	// The subprocess must never even run -- readFakeArgs would otherwise
-	// prove the opposite (a written args file).
-	_, statErr := os.Stat(argsFile)
-	require.True(t, os.IsNotExist(statErr), "release_helper_go must not be invoked once the pre-check has already determined it would fail")
-}
-
-// TestActivities_ResolvePlan_NoWorkspaceRoot_ExplicitVersion_SkipsGate
-// proves the new pre-check (see the test above) does not block a domain
-// that isn't at adoption stage "allocate" when every target already carries
-// an explicit VersionSelection -- an explicit version never reaches
-// resolveVersion's AllocateVersion/git-tag-fallback path at all (plan.go's
-// assignVersions), so there is nothing for the scratch dir's missing .git
-// to break.
-func TestActivities_ResolvePlan_NoWorkspaceRoot_ExplicitVersion_SkipsGate(t *testing.T) {
-	repo := newTestRegistry(t)
-	_, err := repo.Reconcile(context.Background(), []*appmetapb.AppManifest{
-		{Domain: "manmanv2", Name: "control-api", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
-	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
-	require.NoError(t, err)
-	// manmanv2 stays at its implicit default stage (observe), same as the
-	// failing case above -- the only difference is the explicit version.
-
-	bin, _ := writeFakePlanBinary(t, `{"versions":{"manmanv2-control-api":"v3.4.5"}}`)
-	a := &Activities{Registry: repo, PlanBinaryPath: bin}
-
-	plan, err := runResolvePlan(t, a, []ReleaseTarget{
-		{OwnerFullName: "manmanv2-control-api", Kind: repository.ArtifactKindImage, VersionSelection: "v3.4.5"},
-	})
-	require.NoError(t, err)
-	require.Equal(t, "v3.4.5", plan.Versions["image:manmanv2-control-api"])
-}
-
 // TestActivities_ResolvePlan_NoVersionSelections_PassesIncrementPatch proves
 // the pre-existing default is unchanged for callers that never set
 // ReleaseTarget.VersionSelection (e.g. anything still on the old free-form-
@@ -331,7 +256,6 @@ func TestActivities_ResolvePlan_NoVersionSelections_PassesIncrementPatch(t *test
 		{Domain: "demo", Name: "hello-go", AppType: "external-api", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
 	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"demo-hello-go":"v1.2.5"}}`)
 	a := &Activities{Registry: repo, PlanBinaryPath: bin}
@@ -361,7 +285,6 @@ func TestActivities_ResolvePlan_MixedVersionSelections_BuildsPerTargetJSON(t *te
 		{Domain: "demo", Name: "job", AppType: "job", DeployUnit: appmetapb.DeployUnit_DEPLOY_UNIT_IMAGE},
 	}, nil, repository.ReconcileSource{DiscoveredAt: 1}, false)
 	require.NoError(t, err)
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	bin, argsFile := writeFakePlanBinary(t, `{"versions":{"demo-hello-go":"v9.9.9","demo-worker":"v1.1.0","demo-job":"v0.0.2"}}`)
 	a := &Activities{Registry: repo, PlanBinaryPath: bin}

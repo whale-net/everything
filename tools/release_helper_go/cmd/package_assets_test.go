@@ -16,6 +16,12 @@ type fakeArtifactRecorder struct {
 	err      error
 }
 
+func (f *fakeArtifactRecorder) BeginPublish(_ context.Context, req *pb.BeginPublishRequest) (*pb.BeginPublishResponse, error) {
+	return &pb.BeginPublishResponse{
+		Artifact: &pb.Artifact{Kind: req.Kind, Version: req.Version, State: pb.ArtifactState_ARTIFACT_STATE_PUBLISHING},
+	}, nil
+}
+
 func (f *fakeArtifactRecorder) RecordArtifact(_ context.Context, req *pb.RecordArtifactRequest) (*pb.RecordArtifactResponse, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -29,6 +35,10 @@ func (f *fakeArtifactRecorder) RecordArtifact(_ context.Context, req *pb.RecordA
 			Digest:     req.Digest,
 		},
 	}, nil
+}
+
+func (f *fakeArtifactRecorder) FailPublish(_ context.Context, req *pb.FailPublishRequest) (*pb.FailPublishResponse, error) {
+	return &pb.FailPublishResponse{}, nil
 }
 
 func TestPackageAppAssets_CLI(t *testing.T) {

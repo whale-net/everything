@@ -936,11 +936,12 @@ func assignVersions(ctx context.Context, p planParams, apps []AppMetadata, versi
 }
 
 // autoIncrementVersion computes the next version for an app based on git
-// tags. This is the live, git-tag-based path AR-5's AllocateVersion is
-// meant to eventually replace (per domain, once a domain is cut over to
-// adoption stage "allocate") — see tools/app_registry/PLAN.md's AR-5. It is
-// deliberately untouched by AR-5a beyond gaining "major" alongside the
-// pre-existing "minor"/"patch": no call site here talks to the registry.
+// tags. resolveVersion (registry_version.go) calls this only as the
+// fallback when the registry integration is opted out entirely (no
+// AllocateVersion call is ever attempted) -- every domain that has a
+// registry client allocates unconditionally through AllocateVersion
+// instead, and any error from it is fatal rather than falling back here.
+// No call site in this function talks to the registry.
 func autoIncrementVersion(domain, name, incrementType string, git GitRunner) (string, error) {
 	prefix := fmt.Sprintf("%s-%s.", domain, name)
 	tagsOut, err := git.Run("tag", "--sort=-version:refname", "--list", prefix+"v*")
@@ -954,9 +955,9 @@ func autoIncrementVersion(domain, name, incrementType string, git GitRunner) (st
 		// every app on every call in a tag-less directory regardless of
 		// what was actually already published -- observed for manmanv2
 		// (six apps all "resolved" to v0.0.1 despite higher published
-		// versions existing) whenever AllocateVersion's FailedPrecondition
-		// fallback (resolveVersion, registry_version.go) is hit for a
-		// domain not yet at App Registry's "allocate" adoption stage.
+		// versions existing) back when this fallback was reachable even
+		// with the registry opted in (issue #829). Today it only runs when
+		// the registry integration is opted out entirely.
 		return "", fmt.Errorf("list git tags for %s: %w", prefix, err)
 	}
 	if strings.TrimSpace(tagsOut) == "" {
