@@ -13,6 +13,7 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/app_registry/worker/writeback",
     visibility = ["//visibility:public"],
     deps = [
+        "//tools/app_registry/events",
         "//libs/go/argocd",
         "//tools/app_registry/protos:appregistrypb",
         "//tools/app_registry/server/repository",

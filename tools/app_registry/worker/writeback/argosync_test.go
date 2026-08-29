@@ -288,3 +288,98 @@ func TestSelectArgoSyncActivities_InvalidConfigReturnsError(t *testing.T) {
 	_, err := SelectArgoSyncActivities("https://argocd.example.com", "", fake.New())
 	require.Error(t, err)
 }
+
+// FakePublisher for testing records all publishes.
+type FakePublisher struct {
+	events []PublishedEvent
+}
+
+type PublishedEvent struct {
+	PromotionID string
+	EventKind   string
+	EventStatus string
+}
+
+func NewFakePublisher() *FakePublisher {
+	return &FakePublisher{events: []PublishedEvent{}}
+}
+
+func (f *FakePublisher) Publish(promotionID, eventKind, eventStatus string) {
+	f.events = append(f.events, PublishedEvent{
+		PromotionID: promotionID,
+		EventKind:   eventKind,
+		EventStatus: eventStatus,
+	})
+}
+
+// TestArgoSyncActivities_RecordSyncEvent_PublishesAfterWrite verifies that
+// recordSyncEvent publishes an event after the database write commits (FR7a/FR7b).
+func TestArgoSyncActivities_RecordSyncEvent_PublishesAfterWrite(t *testing.T) {
+	a, _, promotionID := newTestArgoSyncActivities(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	})
+	pub := NewFakePublisher()
+	a.Publisher = pub
+
+	_, err := a.recordSyncEvent(t.Context(), promotionID, repository.PromotionSyncEventSourceRefreshTriggered, "", "")
+	require.NoError(t, err)
+
+	// Verify event was published with correct payload
+	require.Len(t, pub.events, 1, "expected exactly one published event")
+	event := pub.events[0]
+	require.Equal(t, promotionID, event.PromotionID)
+	require.Equal(t, repository.PromotionSyncEventSourceRefreshTriggered, event.EventKind)
+	require.Equal(t, "pending", event.EventStatus)
+}
+
+// TestArgoSyncActivities_RecordSyncEvent_NoPublisherConfigured verifies that
+// when publisher is nil, no publish is attempted (graceful degradation).
+func TestArgoSyncActivities_RecordSyncEvent_NoPublisherConfigured(t *testing.T) {
+	a, reg, promotionID := newTestArgoSyncActivities(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	})
+	a.Publisher = nil // Explicitly nil
+
+	_, err := a.recordSyncEvent(t.Context(), promotionID, repository.PromotionSyncEventSourcePollObserved, "Synced", "Healthy")
+	require.NoError(t, err)
+
+	// Verify the event was still recorded in the database
+	events, err := reg.Promotions().ListSyncEvents(t.Context(), promotionID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+}
+
+// TestArgoSyncActivities_RecordSyncEvent_PublishesCorrectEventKind verifies that
+// different sync event sources publish with the correct event kind.
+func TestArgoSyncActivities_RecordSyncEvent_PublishesCorrectEventKind(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		wantKind  string
+	}{
+		{"RefreshTriggered", repository.PromotionSyncEventSourceRefreshTriggered, repository.PromotionSyncEventSourceRefreshTriggered},
+		{"PollObserved", repository.PromotionSyncEventSourcePollObserved, repository.PromotionSyncEventSourcePollObserved},
+		{"RetryTriggered", repository.PromotionSyncEventSourceRetryTriggered, repository.PromotionSyncEventSourceRetryTriggered},
+		{"RetryObserved", repository.PromotionSyncEventSourceRetryObserved, repository.PromotionSyncEventSourceRetryObserved},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, _, promotionID := newTestArgoSyncActivities(t, func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{}`))
+			})
+			pub := NewFakePublisher()
+			a.Publisher = pub
+
+			_, err := a.recordSyncEvent(t.Context(), promotionID, tt.source, "Synced", "Healthy")
+			require.NoError(t, err)
+
+			require.Len(t, pub.events, 1)
+			require.Equal(t, tt.wantKind, pub.events[0].EventKind)
+		})
+	}
+}
+

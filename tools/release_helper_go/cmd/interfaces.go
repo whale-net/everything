@@ -33,17 +33,24 @@ type FileSystem interface {
 }
 
 // ArtifactRecorder records published artifacts in App Registry.
+// RecordArtifact always requires a prior BeginPublish (there is no
+// direct-create fallback), so this interface covers the same BeginPublish
+// -> RecordArtifact/FailPublish sequence releaser.go uses for apps/charts.
 type ArtifactRecorder interface {
+	BeginPublish(ctx context.Context, req *pb.BeginPublishRequest) (*pb.BeginPublishResponse, error)
 	RecordArtifact(ctx context.Context, req *pb.RecordArtifactRequest) (*pb.RecordArtifactResponse, error)
+	FailPublish(ctx context.Context, req *pb.FailPublishRequest) (*pb.FailPublishResponse, error)
 }
 
-// grpcArtifactRecorder dials App Registry and calls RecordArtifact.
+// grpcArtifactRecorder dials App Registry fresh per call, matching the
+// "one dial per invocation" posture of this package's other App Registry
+// call sites (see registry_version.go's dialVersioningClient).
 type grpcArtifactRecorder struct{}
 
-func (grpcArtifactRecorder) RecordArtifact(ctx context.Context, req *pb.RecordArtifactRequest) (*pb.RecordArtifactResponse, error) {
+func (grpcArtifactRecorder) dial(ctx context.Context) (pb.ArtifactRegistryClient, func() error, error) {
 	address := defaultEnv("APP_REGISTRY_ADDRESS")
 	if address == "" {
-		return nil, fmt.Errorf("APP_REGISTRY_ADDRESS is not set")
+		return nil, nil, fmt.Errorf("APP_REGISTRY_ADDRESS is not set")
 	}
 
 	authOpt, err := grpcauth.NewServiceAccountDialOption(grpcauth.ClientConfig{
@@ -53,17 +60,41 @@ func (grpcArtifactRecorder) RecordArtifact(ctx context.Context, req *pb.RecordAr
 		ClientSecret: defaultEnv("GRPC_AUTH_CLIENT_SECRET"),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("app registry auth: %w", err)
+		return nil, nil, fmt.Errorf("app registry auth: %w", err)
 	}
 
 	conn, err := grpcclient.NewClient(ctx, address, authOpt)
 	if err != nil {
-		return nil, fmt.Errorf("dial app-registry-api at %s: %w", address, err)
+		return nil, nil, fmt.Errorf("dial app-registry-api at %s: %w", address, err)
 	}
-	defer conn.Close() //nolint:errcheck
+	return pb.NewArtifactRegistryClient(conn.GetConnection()), conn.Close, nil
+}
 
-	client := pb.NewArtifactRegistryClient(conn.GetConnection())
+func (r grpcArtifactRecorder) BeginPublish(ctx context.Context, req *pb.BeginPublishRequest) (*pb.BeginPublishResponse, error) {
+	client, closeFn, err := r.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer closeFn() //nolint:errcheck
+	return client.BeginPublish(ctx, req)
+}
+
+func (r grpcArtifactRecorder) RecordArtifact(ctx context.Context, req *pb.RecordArtifactRequest) (*pb.RecordArtifactResponse, error) {
+	client, closeFn, err := r.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer closeFn() //nolint:errcheck
 	return client.RecordArtifact(ctx, req)
+}
+
+func (r grpcArtifactRecorder) FailPublish(ctx context.Context, req *pb.FailPublishRequest) (*pb.FailPublishResponse, error) {
+	client, closeFn, err := r.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer closeFn() //nolint:errcheck
+	return client.FailPublish(ctx, req)
 }
 
 // EnvLookup reads environment variables. Replaced in tests with a fake.

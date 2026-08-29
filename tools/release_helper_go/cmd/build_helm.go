@@ -232,18 +232,14 @@ func autoIncrementHelmVersion(chartName, bumpType string, git GitRunner) (string
 //
 // For any app NOT present in resolvedPlanVersions (not part of this
 // release batch), the existing independent-resolution behavior applies
-// unchanged: for domains at adoption stage "allocate", versions are
-// resolved exclusively from the App Registry (GetArtifact with
-// latest_published=true) -- falling back to git tags for an allocate-stage
-// domain is the exact bug that caused issue #876, so any registry failure
-// hard-errors rather than silently reverting to tag scanning. When client
-// is nil or the domain is not yet at "allocate" stage, git tags are used as
-// they always were.
+// unchanged: when a registry client is opted in, versions are resolved
+// exclusively from the App Registry (GetArtifact with latest_published=
+// true) -- falling back to git tags in that case is the exact bug that
+// caused issue #876, so any registry failure hard-errors rather than
+// silently reverting to tag scanning. When client is nil (not opted in),
+// git tags are used as they always were.
 func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allApps []AppMetadata, git GitRunner, client pb.ArtifactRegistryClient, resolvedPlanVersions map[string]string) (map[string]string, error) {
-	allocate, err := isDomainAtAllocateStage(ctx, client, chart.Domain)
-	if err != nil {
-		return nil, fmt.Errorf("resolve chart app versions: check adoption stage for domain %q: %w", chart.Domain, err)
-	}
+	allocate := client != nil
 
 	versions := map[string]string{}
 	for _, appName := range chart.Apps {
@@ -262,10 +258,10 @@ func resolveChartAppVersions(ctx context.Context, chart HelmChartMetadata, allAp
 				LatestPublished: true,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("resolve version for app %q (domain %q at allocate stage): App Registry GetArtifact failed: %w", matched.Name, chart.Domain, err)
+				return nil, fmt.Errorf("resolve version for app %q (domain %q): App Registry GetArtifact failed: %w", matched.Name, chart.Domain, err)
 			}
 			if resp.Artifact == nil || resp.Artifact.Version == "" {
-				return nil, fmt.Errorf("resolve version for app %q (domain %q at allocate stage): App Registry returned no published artifact", matched.Name, chart.Domain)
+				return nil, fmt.Errorf("resolve version for app %q (domain %q): App Registry returned no published artifact", matched.Name, chart.Domain)
 			}
 			versions[matched.FullName()] = resp.Artifact.Version
 		} else {
@@ -379,10 +375,20 @@ func packageChartWithVersion(chartDir, chartName, version, outDir string, appVer
 		if !ok {
 			return "", fmt.Errorf("values.yaml has no \"apps\" map to set imageTag on")
 		}
-		for appKey, ver := range appVersions {
-			appEntry, ok := apps[appKey].(map[string]interface{})
+		// Iterate the chart's own apps map, not appVersions: appVersions may
+		// be a whole release batch's version map shared across multiple
+		// charts (see finalize-chart), so it can legitimately contain keys
+		// for apps this chart doesn't compose. Only entries actually present
+		// in this chart's values.yaml "apps" map need a resolved version;
+		// anything else in appVersions is out of scope and ignored.
+		for appKey, entry := range apps {
+			ver, ok := appVersions[appKey]
 			if !ok {
-				return "", fmt.Errorf("values.yaml \"apps\" has no entry %q to set imageTag on (chart's apps map may use a different key convention than the resolved app versions)", appKey)
+				return "", fmt.Errorf("resolved app versions has no entry %q for values.yaml \"apps\" key (chart's apps map may use a different key convention than the resolved app versions)", appKey)
+			}
+			appEntry, ok := entry.(map[string]interface{})
+			if !ok {
+				return "", fmt.Errorf("values.yaml \"apps\" entry %q is not a map", appKey)
 			}
 			appEntry["imageTag"] = ver
 			fmt.Printf("Updated %s imageTag to %s\n", appKey, ver)
