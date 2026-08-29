@@ -58,6 +58,23 @@ const getDeviceConfigSkipsTestSchema = `
 	CREATE INDEX idx_gdcs_household_membership_current
 		ON household_membership(principal_subject) WHERE valid_to IS NULL;
 
+	-- FR7: mirrors migration 018_household_grant's shape. Not SCD2
+	-- (NFR6.3) -- no valid_to column; revocation sets revoked_at. Needed
+	-- here (even though this file's own tests don't exercise grants)
+	-- because authz.PGResolver.ScopeForPrincipal UNIONs household_grant
+	-- unconditionally, and this file's GetDeviceConfig calls go through
+	-- scopeForCaller.
+	CREATE TABLE household_grant (
+		grant_id           BIGSERIAL PRIMARY KEY,
+		household_id       BIGINT NOT NULL REFERENCES household(household_id),
+		grantee_subject    TEXT NOT NULL,
+		granted_by_subject TEXT NOT NULL,
+		granted_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		expires_at         TIMESTAMPTZ NOT NULL,
+		revoked_at         TIMESTAMPTZ NULL,
+		reason             TEXT NULL
+	);
+
 	CREATE TABLE board (
 		board_id      BIGSERIAL PRIMARY KEY,
 		device_id     VARCHAR(64) NOT NULL UNIQUE,

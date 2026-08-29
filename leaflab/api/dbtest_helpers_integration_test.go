@@ -144,6 +144,19 @@ func (stubAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolu
 	panic("not used by this package's integration tests")
 }
 
+// RoleForPrincipalInHousehold and ResolveGrantRole back FR7's grant RPCs
+// (GrantHouseholdAccess/RevokeHouseholdAccess/ListHouseholdGrants), which
+// none of this file's tests exercise (they predate FR7 and cover FR59/
+// FR61/FR64/FR22 instead) -- panic, like ResolveBoardByDeviceID above, if
+// that ever changes without updating this fixture.
+func (stubAuthz) RoleForPrincipalInHousehold(ctx context.Context, principalSubject string, householdID int64) (authz.PrincipalRole, error) {
+	panic("not used by this package's integration tests")
+}
+
+func (stubAuthz) ResolveGrantRole(ctx context.Context, grantID int64, principalSubject string) (authz.GrantResolution, error) {
+	panic("not used by this package's integration tests")
+}
+
 // newTestServer starts a real Postgres container, applies testSchema, and
 // returns a LeafLabAPIServer backed by a real Repository plus the raw pool
 // for fixture setup / assertions. publisher is nil: every RPC exercised by

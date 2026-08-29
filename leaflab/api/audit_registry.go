@@ -49,6 +49,17 @@ const (
 	endElevationFullMethod       = "/leaflab.api.v1.LeafLabAPI/EndElevation"
 )
 
+// grantHouseholdAccessFullMethod and revokeHouseholdAccessFullMethod are
+// FR7's two grant-management writes' full gRPC method names.
+// ListHouseholdGrants is a read (like GetDeviceConfig/ListBoards/
+// GetHealth below) and is deliberately absent from this registry --
+// FR8.1's conditional read-audit for grantee callers is wired directly at
+// its call site in server.go, not through this write-only mechanism.
+const (
+	grantHouseholdAccessFullMethod  = "/leaflab.api.v1.LeafLabAPI/GrantHouseholdAccess"
+	revokeHouseholdAccessFullMethod = "/leaflab.api.v1.LeafLabAPI/RevokeHouseholdAccess"
+)
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
 // registry for this service: every RPC that performs a write, plus
 // ResolveToHousehold (see its doc comment above). A method listed here
@@ -57,9 +68,12 @@ const (
 // wiring its audit registration is structurally hard to ship, rather than
 // a silently missing audit row discovered later in production.
 //
-// GetDeviceConfig, ListBoards, GetHealth, GetHousehold, ListHouseholdMembers
-// and GetElevationStatus are reads with no FR8/FR10.4 audit requirement of
-// their own and are deliberately absent. RetireBoard has no RPC surface yet
+// GetDeviceConfig, ListBoards, GetHealth, GetHousehold, ListHouseholdMembers,
+// GetElevationStatus and ListHouseholdGrants are reads with no FR8/FR10.4
+// audit requirement of their own and are deliberately absent -- see
+// grantHouseholdAccessFullMethod's doc comment above for ListHouseholdGrants
+// specifically, whose FR8.1 audit coverage is conditional on caller role and
+// wired separately. RetireBoard has no RPC surface yet
 // (leaflab/api/repository.go's RetireBoard is called directly by tests only,
 // per #1337's scaffold) -- it will be added here in the task that gives it
 // one.
@@ -82,6 +96,8 @@ var declaredWriteMethods = []string{
 	elevateFullMethod,
 	renewElevationFullMethod,
 	endElevationFullMethod,
+	grantHouseholdAccessFullMethod,
+	revokeHouseholdAccessFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
@@ -89,18 +105,20 @@ var declaredWriteMethods = []string{
 // audit.Entry.Action/EntityKind at the call site -- see server.go's
 // PushDeviceConfig and the households.go/admin handlers).
 var auditRegistrations = map[string]audit.Registration{
-	pushDeviceConfigFullMethod:   {Action: "PushConfig", EntityKind: "device_config"},
-	createHouseholdFullMethod:    {Action: "CreateHousehold", EntityKind: "household_membership"},
-	inviteMemberFullMethod:       {Action: "InviteMember", EntityKind: "household_membership"},
-	removeMemberFullMethod:       {Action: "RemoveMember", EntityKind: "household_membership"},
-	renameHouseholdFullMethod:    {Action: "RenameHousehold", EntityKind: "household"},
-	completeClaimFullMethod:      {Action: "ClaimBoard", EntityKind: "board"},
-	releaseBoardFullMethod:       {Action: "ReleaseBoard", EntityKind: "board"},
-	transferClosureFullMethod:    {Action: audit.ActionTransfer, EntityKind: "board"},
-	resolveToHouseholdFullMethod: {Action: "ResolveToHousehold", EntityKind: "admin_resolution"},
-	elevateFullMethod:            {Action: audit.ActionElevate, EntityKind: "household"},
-	renewElevationFullMethod:     {Action: "RenewElevation", EntityKind: "household"},
-	endElevationFullMethod:       {Action: "EndElevation", EntityKind: "household"},
+	pushDeviceConfigFullMethod:      {Action: "PushConfig", EntityKind: "device_config"},
+	createHouseholdFullMethod:       {Action: "CreateHousehold", EntityKind: "household_membership"},
+	inviteMemberFullMethod:          {Action: "InviteMember", EntityKind: "household_membership"},
+	removeMemberFullMethod:          {Action: "RemoveMember", EntityKind: "household_membership"},
+	renameHouseholdFullMethod:       {Action: "RenameHousehold", EntityKind: "household"},
+	completeClaimFullMethod:         {Action: "ClaimBoard", EntityKind: "board"},
+	releaseBoardFullMethod:          {Action: "ReleaseBoard", EntityKind: "board"},
+	transferClosureFullMethod:       {Action: audit.ActionTransfer, EntityKind: "board"},
+	resolveToHouseholdFullMethod:    {Action: "ResolveToHousehold", EntityKind: "admin_resolution"},
+	elevateFullMethod:               {Action: audit.ActionElevate, EntityKind: "household"},
+	renewElevationFullMethod:        {Action: "RenewElevation", EntityKind: "household"},
+	endElevationFullMethod:          {Action: "EndElevation", EntityKind: "household"},
+	grantHouseholdAccessFullMethod:  {Action: "GrantHouseholdAccess", EntityKind: "household_grant"},
+	revokeHouseholdAccessFullMethod: {Action: "RevokeHouseholdAccess", EntityKind: "household_grant"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry

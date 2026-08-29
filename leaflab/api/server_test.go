@@ -301,6 +301,27 @@ func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, tar
 	return f.activeElevationExpiresAt, nil
 }
 
+// FR7's household-grant repository methods are not exercised by this
+// file's tests (Testing phase adds FR7 coverage) -- panic like
+// GetOrCreateBoard/InsertDeviceConfigNextVersion above if unexpectedly
+// called.
+
+func (f *fakeRepo) InsertHouseholdGrant(ctx context.Context, householdID int64, granteeSubject string, grantedBySubject string, expiresAt time.Time, reason *string, entry audit.Entry) (int64, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) RevokeHouseholdGrant(ctx context.Context, grantID int64, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ListActiveHouseholdGrants(ctx context.Context, householdID int64, afterGrantID int64, hasAfter bool, limit int32) ([]HouseholdGrantRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) RecordRead(ctx context.Context, entry audit.Entry) error {
+	panic("not used by this file's tests")
+}
+
 // fakeAuthz implements authzResolver entirely in memory, with call
 // counters so tests can assert on NFR2's "one query" structural shape
 // (resolve the entity and the scope in the same number of round trips
@@ -355,6 +376,19 @@ func (f *fakeAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Res
 		return res, nil
 	}
 	panic(fmt.Sprintf("fakeAuthz.Resolve: no configured response for %+v -- configure resolveResponses/resolveResponseErrs for every ref this scenario resolves", ref))
+}
+
+// FR7's grant-role resolution methods are not exercised by this file's
+// tests (Testing phase adds FR7 coverage) -- panic like
+// ResolveBoardByDeviceID would if this fake didn't stub it, for the same
+// "unexpectedly called" signal.
+
+func (f *fakeAuthz) RoleForPrincipalInHousehold(ctx context.Context, principalSubject string, householdID int64) (authz.PrincipalRole, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeAuthz) ResolveGrantRole(ctx context.Context, grantID int64, principalSubject string) (authz.GrantResolution, error) {
+	panic("not used by this file's tests")
 }
 
 // allPermittingScope is a test-only Scope that permits everything -- used

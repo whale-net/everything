@@ -20,12 +20,17 @@ const (
 	EntitySensor  EntityKind = "sensor"
 	EntityReading EntityKind = "reading"
 	// EntityHousehold identifies a household itself as the entity being
-	// checked against a Scope (leaflab/api/households.go's GetHousehold /
-	// ListHouseholdMembers read-path authorization). Unlike the entity
-	// kinds above, a household is never resolved via Resolver.Resolve --
-	// there is no separate table lookup needed to map a household_id to
-	// its own Resolution.HouseholdID, so this kind exists only as a
-	// Scope.Permits/EntityRef label, not a Resolver.Resolve case.
+	// checked against a Scope -- used by leaflab/api/households.go's
+	// GetHousehold/ListHouseholdMembers read-path authorization, and by
+	// FR7's grant RPCs (GrantHouseholdAccess, RevokeHouseholdAccess,
+	// ListHouseholdGrants), which act on the household directly rather
+	// than on a board/region/plant/sensor/reading resolving into one.
+	// Unlike the entity kinds above, a household is never resolved via
+	// Resolver.Resolve -- the caller already has the household id in hand
+	// (from the request, or from the household_grant row being revoked),
+	// so this kind exists only as a Scope.Permits/EntityRef label,
+	// alongside a Resolution{HouseholdID: <id>} built directly rather than
+	// resolved.
 	EntityHousehold EntityKind = "household"
 )
 

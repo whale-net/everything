@@ -75,6 +75,22 @@ const householdsTestSchema = `
 	CREATE INDEX idx_household_membership_principal_subject_current
 		ON household_membership(principal_subject) WHERE valid_to IS NULL;
 
+	-- FR7: mirrors migration 018_household_grant's shape. Not SCD2
+	-- (NFR6.3) -- no valid_to column; revocation sets revoked_at. Needed
+	-- here (even though this file's own tests don't exercise grants)
+	-- because authz.PGResolver.ScopeForPrincipal UNIONs household_grant
+	-- unconditionally, and this file calls ScopeForPrincipal directly.
+	CREATE TABLE household_grant (
+		grant_id           BIGSERIAL PRIMARY KEY,
+		household_id       BIGINT NOT NULL REFERENCES household(household_id),
+		grantee_subject    TEXT NOT NULL,
+		granted_by_subject TEXT NOT NULL,
+		granted_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		expires_at         TIMESTAMPTZ NOT NULL,
+		revoked_at         TIMESTAMPTZ NULL,
+		reason             TEXT NULL
+	);
+
 	CREATE TABLE audit_log (
 		audit_id             BIGSERIAL PRIMARY KEY,
 		actor_subject        TEXT NOT NULL,
@@ -137,6 +153,18 @@ func (g grantOrElevationStubAuthz) ScopeForPrincipal(ctx context.Context, princi
 }
 
 func (g grantOrElevationStubAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error) {
+	panic("not used by this file's tests")
+}
+
+func (g grantOrElevationStubAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
+	panic("not used by this file's tests")
+}
+
+func (g grantOrElevationStubAuthz) RoleForPrincipalInHousehold(ctx context.Context, principalSubject string, householdID int64) (authz.PrincipalRole, error) {
+	panic("not used by this file's tests")
+}
+
+func (g grantOrElevationStubAuthz) ResolveGrantRole(ctx context.Context, grantID int64, principalSubject string) (authz.GrantResolution, error) {
 	panic("not used by this file's tests")
 }
 

@@ -19,6 +19,14 @@
 // //libs/go/dbtest/README.md for how to run integration tests like this
 // one; same tag set as this package's other integration go_test targets.
 //
+// household_grant/audit_log (FR7) were added to authzTestSchema below
+// alongside household/household_membership/board -- household_grant_
+// integration_test.go (this package) reuses newAuthzTestServer/
+// authzTestSchema/insertHousehold/insertMembership/authzCtxFor from this
+// file rather than duplicating them, per this package's established
+// "list the shared file in both go_test targets" convention (see
+// dbtest_helpers_integration_test.go's doc comment).
+//
 // Run it explicitly (requires a working Docker daemon):
 //
 //	bazel test //leaflab/api:authz_scope_integration_test --test_output=all
@@ -101,6 +109,39 @@ const authzTestSchema = `
 		expires_at            TIMESTAMPTZ NOT NULL,
 		ended_at              TIMESTAMPTZ NULL
 	);
+
+	-- FR7: mirrors migration 018_household_grant's shape. Not SCD2
+	-- (NFR6.3) -- no valid_to column; revocation sets revoked_at.
+	CREATE TABLE household_grant (
+		grant_id           BIGSERIAL PRIMARY KEY,
+		household_id       BIGINT NOT NULL REFERENCES household(household_id),
+		grantee_subject    TEXT NOT NULL,
+		granted_by_subject TEXT NOT NULL,
+		granted_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		expires_at         TIMESTAMPTZ NOT NULL,
+		revoked_at         TIMESTAMPTZ NULL,
+		reason             TEXT NULL
+	);
+	CREATE INDEX idx_household_grant_grantee_subject_active
+		ON household_grant(grantee_subject) WHERE revoked_at IS NULL;
+	CREATE INDEX idx_household_grant_household_id_active
+		ON household_grant(household_id) WHERE revoked_at IS NULL;
+
+	-- FR8: mirrors migration 016_audit_log's column set (schema only --
+	-- the append-only trigger/REVOKE aren't reproduced here, same
+	-- rationale as dbtest_helpers_integration_test.go's testSchema).
+	CREATE TABLE audit_log (
+		audit_id             BIGSERIAL PRIMARY KEY,
+		actor_subject        TEXT NOT NULL,
+		actor_kind           TEXT NOT NULL,
+		target_household_id  BIGINT NULL REFERENCES household(household_id),
+		action                TEXT NOT NULL,
+		entity_kind           TEXT NOT NULL,
+		entity_id             TEXT NULL,
+		reason                TEXT NULL,
+		occurred_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		correlation_id        TEXT NULL
+	);
 `
 
 // newAuthzTestServer starts a real Postgres container with authzTestSchema
@@ -150,6 +191,34 @@ func insertScopedBoard(t *testing.T, pool *pgxpool.Pool, deviceID string, househ
 		t.Fatalf("insert board %s: %v", deviceID, err)
 	}
 	return id
+}
+
+// insertGrant inserts a household_grant row directly, bypassing
+// GrantHouseholdAccess -- these tests exercise ScopeForPrincipal's grant
+// union at the resolver boundary, not the RPC (household_grant_
+// integration_test.go covers the RPC surface). expiresAt is passed
+// explicitly so a test can insert an already-expired grant directly,
+// rather than needing a real wall-clock sleep or a fake clock, to prove
+// FR7's "a grant past expires_at stops working with no revocation and no
+// background job" -- expiry is evaluated against the database's real NOW()
+// at query time either way.
+func insertGrant(t *testing.T, pool *pgxpool.Pool, householdID int64, granteeSubject string, grantedBySubject string, expiresAt time.Time) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO household_grant (household_id, grantee_subject, granted_by_subject, expires_at) VALUES ($1, $2, $3, $4) RETURNING grant_id`,
+		householdID, granteeSubject, grantedBySubject, expiresAt).Scan(&id); err != nil {
+		t.Fatalf("insert household_grant for %q: %v", granteeSubject, err)
+	}
+	return id
+}
+
+func revokeGrantDirectly(t *testing.T, pool *pgxpool.Pool, grantID int64) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE household_grant SET revoked_at = NOW() WHERE grant_id = $1`, grantID); err != nil {
+		t.Fatalf("revoke household_grant %d: %v", grantID, err)
+	}
 }
 
 func boardDeviceIDs(resp *pb.ListBoardsResponse) map[string]bool {
@@ -405,5 +474,121 @@ func TestGetDeviceConfig_NFR2_TimingIndistinguishable(t *testing.T) {
 	if ratio := float64(diff) / float64(larger); ratio > toleranceRatio {
 		t.Errorf("mean latency for nonexistent (%v) vs out-of-scope (%v) differs by %.0f%% of the larger mean over N=%d, want <= %.0f%% -- this is the timing side channel NFR2 forbids",
 			meanNonexistent, meanOutOfScope, ratio*100, n, toleranceRatio*100)
+	}
+}
+
+// -- FR7: household_grant's effect on ScopeForPrincipal, over real SQL -------
+//
+// These exercise authz.PGResolver.ScopeForPrincipal's actual UNION query
+// (household_membership UNION household_grant) rather than the fake-
+// Queryer-backed unit tests in leaflab/api/authz/resolver_test.go, which
+// can't distinguish a membership-derived row from a grant-derived one --
+// the fake just returns whatever rows the test hands it either way. Only
+// real SQL proves the grant half of the UNION, and its expires_at > NOW()
+// / revoked_at IS NULL predicates, actually work.
+
+// TestScopeForPrincipal_GrantWithoutMembership_ConfersHouseholdReach is
+// FR7's core claim at the mechanism every write handler actually checks:
+// a principal holding an active household_grant, and no household_
+// membership row at all, gets a Scope that permits their granted
+// household -- "a grant confers write capability equal to a member's"
+// starts here, not at any one RPC.
+func TestScopeForPrincipal_GrantWithoutMembership_ConfersHouseholdReach(t *testing.T) {
+	_, pool := newAuthzTestServer(t)
+	resolver := authz.NewPGResolver(pool)
+
+	household := insertHousehold(t, pool)
+	insertGrant(t, pool, household, "helper", "alice", time.Now().Add(time.Hour))
+	// "helper" deliberately has no household_membership row.
+
+	scope, err := resolver.ScopeForPrincipal(context.Background(), "helper")
+	if err != nil {
+		t.Fatalf("ScopeForPrincipal: %v", err)
+	}
+	if !scope.Permits(authz.EntityRef{Kind: authz.EntityHousehold, ID: household}, authz.Resolution{HouseholdID: household}) {
+		t.Error("a grantee's Scope does not permit their granted household, want it to (FR7: a grant confers write capability without membership)")
+	}
+}
+
+// TestScopeForPrincipal_ExpiredGrant_NoLongerConfersReach is FR7's "a grant
+// past expires_at stops working with no revocation and no background job":
+// a grant whose expires_at is already in the past (inserted directly, no
+// wall-clock sleep needed -- expiry is evaluated against the database's
+// real NOW() in the query itself) confers no reach, even though the row
+// still exists and was never revoked.
+func TestScopeForPrincipal_ExpiredGrant_NoLongerConfersReach(t *testing.T) {
+	_, pool := newAuthzTestServer(t)
+	resolver := authz.NewPGResolver(pool)
+
+	household := insertHousehold(t, pool)
+	insertGrant(t, pool, household, "helper", "alice", time.Now().Add(-time.Hour))
+
+	scope, err := resolver.ScopeForPrincipal(context.Background(), "helper")
+	if err != nil {
+		t.Fatalf("ScopeForPrincipal: %v", err)
+	}
+	if scope.Permits(authz.EntityRef{Kind: authz.EntityHousehold, ID: household}, authz.Resolution{HouseholdID: household}) {
+		t.Error("an expired grant still confers household reach, want it to stop working past expires_at with no revocation and no background job (FR7)")
+	}
+}
+
+// TestScopeForPrincipal_RevokedGrant_NoLongerConfersReach is FR7's
+// "revocable in one action, takes effect on the next request": a grant
+// revoked directly (revoked_at set) confers no reach on the very next
+// ScopeForPrincipal call, even though expires_at is still in the future.
+func TestScopeForPrincipal_RevokedGrant_NoLongerConfersReach(t *testing.T) {
+	_, pool := newAuthzTestServer(t)
+	resolver := authz.NewPGResolver(pool)
+
+	household := insertHousehold(t, pool)
+	grantID := insertGrant(t, pool, household, "helper", "alice", time.Now().Add(time.Hour))
+
+	before, err := resolver.ScopeForPrincipal(context.Background(), "helper")
+	if err != nil {
+		t.Fatalf("ScopeForPrincipal (before revoke): %v", err)
+	}
+	if !before.Permits(authz.EntityRef{Kind: authz.EntityHousehold, ID: household}, authz.Resolution{HouseholdID: household}) {
+		t.Fatal("test setup: active grant does not confer reach before revocation")
+	}
+
+	revokeGrantDirectly(t, pool, grantID)
+
+	after, err := resolver.ScopeForPrincipal(context.Background(), "helper")
+	if err != nil {
+		t.Fatalf("ScopeForPrincipal (after revoke): %v", err)
+	}
+	if after.Permits(authz.EntityRef{Kind: authz.EntityHousehold, ID: household}, authz.Resolution{HouseholdID: household}) {
+		t.Error("a revoked grant still confers household reach on the next request, want revocation to take effect immediately (FR7)")
+	}
+}
+
+// TestScopeForPrincipal_MembershipAndGrant_BothConferReach_Union proves
+// ScopeForPrincipal's UNION treats membership-derived and grant-derived
+// reach identically: a principal who is a member of one household and a
+// grantee of a different one sees both, over real SQL (the Go-level
+// UnionScope multi-membership case is covered in leaflab/api/authz/
+// resolver_test.go; this is its real-SQL, mixed-source counterpart).
+func TestScopeForPrincipal_MembershipAndGrant_BothConferReach_Union(t *testing.T) {
+	_, pool := newAuthzTestServer(t)
+	resolver := authz.NewPGResolver(pool)
+
+	memberHousehold := insertHousehold(t, pool)
+	grantHousehold := insertHousehold(t, pool)
+	otherHousehold := insertHousehold(t, pool)
+	insertMembership(t, pool, memberHousehold, "bob")
+	insertGrant(t, pool, grantHousehold, "bob", "alice", time.Now().Add(time.Hour))
+
+	scope, err := resolver.ScopeForPrincipal(context.Background(), "bob")
+	if err != nil {
+		t.Fatalf("ScopeForPrincipal: %v", err)
+	}
+	if !scope.Permits(authz.EntityRef{Kind: authz.EntityHousehold, ID: memberHousehold}, authz.Resolution{HouseholdID: memberHousehold}) {
+		t.Error("Scope does not permit bob's membership household, want it to")
+	}
+	if !scope.Permits(authz.EntityRef{Kind: authz.EntityHousehold, ID: grantHousehold}, authz.Resolution{HouseholdID: grantHousehold}) {
+		t.Error("Scope does not permit bob's granted household, want it to")
+	}
+	if scope.Permits(authz.EntityRef{Kind: authz.EntityHousehold, ID: otherHousehold}, authz.Resolution{HouseholdID: otherHousehold}) {
+		t.Error("Scope permits a household bob has neither membership nor a grant for, want false")
 	}
 }

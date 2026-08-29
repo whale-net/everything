@@ -515,3 +515,50 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
+
+# Real-Postgres integration coverage for FR7's three grant RPCs
+# (GrantHouseholdAccess/RevokeHouseholdAccess/ListHouseholdGrants) and
+# FR8.1's granted-read audit requirement -- see
+# household_grant_integration_test.go's doc comment. Reuses
+# authz_scope_integration_test.go's newAuthzTestServer/authzTestSchema/
+# insertHousehold/insertMembership/authzCtxFor/insertGrant/
+# revokeGrantDirectly fixtures rather than duplicating them (both files are
+# listed in this target's srcs, alongside dbtest_helpers_integration_test.go
+# for discardLogger/countRows), so authzTestSchema (household_grant/
+# audit_log included) and its helpers stay defined in exactly one place.
+# Same tag set and hand-written rationale as the other *_integration_test
+# targets above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:household_grant_integration_test --test_output=all
+go_test(
+    # keep
+    name = "household_grant_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "authz_scope_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+        "household_grant_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//proto",
+    ],
+)

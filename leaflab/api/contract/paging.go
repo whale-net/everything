@@ -139,6 +139,34 @@ func DecodeHouseholdMemberCursor(token string) (householdMembershipID int64, ok 
 	return id, true, nil
 }
 
+// EncodeGrantCursor seals the (grant_id) keyset used by
+// ListHouseholdGrants's page_token (FR61, FR7), ordered to match ORDER BY
+// grant_id -- same shape as EncodeBoardCursor, over household_grant's own
+// BIGSERIAL id instead of board_id.
+func EncodeGrantCursor(grantID int64) string {
+	return EncodeCursor(strconv.FormatInt(grantID, 10))
+}
+
+// DecodeGrantCursor is EncodeGrantCursor's inverse. An empty token decodes
+// to (0, false, nil), meaning "first page".
+func DecodeGrantCursor(token string) (grantID int64, ok bool, err error) {
+	values, err := DecodeCursor(token)
+	if err != nil {
+		return 0, false, err
+	}
+	if values == nil {
+		return 0, false, nil
+	}
+	if len(values) != 1 {
+		return 0, false, fmt.Errorf("%w: grant cursor expects 1 field, got %d", ErrInvalidPageToken, len(values))
+	}
+	id, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: grant cursor id is not an integer", ErrInvalidPageToken)
+	}
+	return id, true, nil
+}
+
 // EncodeReadingCursor seals the (recorded_at DESC, reading_id) keyset that
 // matches idx_sensor_reading_sensor_id, for the sensor-reading listing RPC
 // added in a later phase. Defined here, alongside the boards keyset, so

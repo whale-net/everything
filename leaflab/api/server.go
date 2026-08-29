@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,6 +108,14 @@ type deviceRepository interface {
 	RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error
 	EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error
 	ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error)
+
+	// InsertHouseholdGrant, RevokeHouseholdGrant, ListActiveHouseholdGrants
+	// and RecordRead back the three FR7 RPCs below -- see
+	// Repository's household grants section for each method's contract.
+	InsertHouseholdGrant(ctx context.Context, householdID int64, granteeSubject string, grantedBySubject string, expiresAt time.Time, reason *string, entry audit.Entry) (int64, error)
+	RevokeHouseholdGrant(ctx context.Context, grantID int64, entry audit.Entry) error
+	ListActiveHouseholdGrants(ctx context.Context, householdID int64, afterGrantID int64, hasAfter bool, limit int32) ([]HouseholdGrantRow, error)
+	RecordRead(ctx context.Context, entry audit.Entry) error
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -125,6 +134,10 @@ type authzResolver interface {
 	authz.Resolver
 	ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error)
 	ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error)
+	// RoleForPrincipalInHousehold and ResolveGrantRole back FR7's three
+	// grant RPCs -- see authz.PGResolver's doc comments on each.
+	RoleForPrincipalInHousehold(ctx context.Context, principalSubject string, householdID int64) (authz.PrincipalRole, error)
+	ResolveGrantRole(ctx context.Context, grantID int64, principalSubject string) (authz.GrantResolution, error)
 }
 
 // DefaultElevationDuration is FR10.1's 60-minute elevation window, used
@@ -607,6 +620,243 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, req *pb.ListBoardsReq
 	}, nil
 }
 
+// ── Household grants (FR7) ───────────────────────────────────────────────
+
+// householdNotFoundFailure is the one contract.NotFound value returned for
+// a household_id that doesn't exist and for one that exists but the caller
+// has no reach over at all (neither a current member nor an active
+// grantee) -- the same NFR2 collapse boardNotFoundFailure performs for
+// boards, applied to household_id, which is just as caller-suppliable and
+// enumerable (BIGSERIAL) as device_id.
+func householdNotFoundFailure() error {
+	return contract.NotFound("household", "household_id", "No household matches this id.")
+}
+
+// grantNotFoundFailure is householdNotFoundFailure's counterpart for
+// grant_id (RevokeHouseholdAccess): returned both when grant_id names no
+// row and when it names a real row belonging to a household the caller has
+// no reach over (authz.ErrGrantNotFound / authz.PrincipalRole == RoleNone
+// via ResolveGrantRole -- see its doc comment for why both collapse to one
+// query and one response here).
+func grantNotFoundFailure() error {
+	return contract.NotFound("household_grant", "grant_id", "No grant matches this id.")
+}
+
+// grantExcludedFailure is FR7's refuse-and-name-the-alternative response
+// (FR59.3) for the one exclusion these RPCs enforce today
+// (CapabilityGrantAccess -- see authz.MemberOrGrantee): a grantee's
+// household reach is real and acknowledged, but this specific action is
+// refused with the alternative FR7 gives them -- ask a member -- rather
+// than the caller-has-no-reach-at-all NotFound above.
+func grantExcludedFailure() error {
+	return contract.Refuse("household_grant", "", "A granted helper cannot grant further access to a household.", "Ask a household member to grant access instead.")
+}
+
+// GrantHouseholdAccess grants grantee_subject time-boxed write access to
+// household_id (FR7). CapabilityGrantAccess is one of FR7's three
+// exclusions -- a grantee may not call this -- enforced here via
+// authz.MemberOrGrantee, the one place any of the three exclusions is
+// checked (capability.go's grantExcludedCapabilities). The caller is
+// always a member by the time this succeeds, so the audit entry's
+// actor_kind is always audit.ActorKindMember (FR7's "actor_kind
+// distinguishing grantee from member").
+func (s *LeafLabAPIServer) GrantHouseholdAccess(ctx context.Context, req *pb.GrantHouseholdAccessRequest) (*pb.GrantHouseholdAccessResponse, error) {
+	if req.GranteeSubject == "" {
+		return nil, contract.InvalidArgument("household_grant", "grantee_subject", "A grantee is required.")
+	}
+	expiresAt := contract.FromInstant(req.ExpiresAt)
+	if !expiresAt.After(time.Now()) {
+		return nil, contract.InvalidArgument("household_grant", "expires_at", "The expiry must be a future time.")
+	}
+
+	subject := actingSubject(ctx)
+	role, err := s.authzSvc.RoleForPrincipalInHousehold(ctx, subject, req.HouseholdId)
+	if err != nil {
+		s.logger.Error("resolve caller role failed", "household_id", req.HouseholdId, "error", err)
+		return nil, contract.Internal("household_grant", "", "Could not process this request right now. Please try again.")
+	}
+	if role == authz.RoleNone {
+		return nil, householdNotFoundFailure()
+	}
+
+	scope := authz.MemberOrGrantee(authz.NewHouseholdScope(req.HouseholdId), role == authz.RoleGrantee, authz.CapabilityGrantAccess)
+	ref := authz.EntityRef{Kind: authz.EntityHousehold, ID: req.HouseholdId}
+	res := authz.Resolution{HouseholdID: req.HouseholdId}
+	if !scope.Permits(ref, res) {
+		return nil, grantExcludedFailure()
+	}
+
+	var reason *string
+	if req.Reason != "" {
+		reason = &req.Reason
+	}
+
+	reg := auditRegistrations[grantHouseholdAccessFullMethod]
+	entry := audit.Entry{
+		ActorSubject:      subject,
+		ActorKind:         audit.ActorKindMember,
+		TargetHouseholdID: &req.HouseholdId,
+		Action:            reg.Action,
+		EntityKind:        reg.EntityKind,
+		Reason:            reason,
+		CorrelationID:     CorrelationIDFromContext(ctx),
+	}
+	grantID, err := s.repo.InsertHouseholdGrant(ctx, req.HouseholdId, req.GranteeSubject, subject, expiresAt, reason, entry)
+	if err != nil {
+		s.logger.Error("insert household grant failed", "household_id", req.HouseholdId, "error", err)
+		return nil, contract.Internal("household_grant", "", "Could not record this grant right now. Please try again.")
+	}
+
+	return &pb.GrantHouseholdAccessResponse{GrantId: grantID}, nil
+}
+
+// RevokeHouseholdAccess revokes a household grant in one action (FR7).
+// Unlike GrantHouseholdAccess, RevokeHouseholdAccess is not one of FR7's
+// three named exclusions -- both a member and a grantee may call it
+// (authz.CapabilityOrdinary), so the audit entry's actor_kind reflects
+// whichever role the caller actually resolved to.
+func (s *LeafLabAPIServer) RevokeHouseholdAccess(ctx context.Context, req *pb.RevokeHouseholdAccessRequest) (*pb.RevokeHouseholdAccessResponse, error) {
+	subject := actingSubject(ctx)
+	grantRes, err := s.authzSvc.ResolveGrantRole(ctx, req.GrantId, subject)
+	if err != nil {
+		if errors.Is(err, authz.ErrGrantNotFound) {
+			return nil, grantNotFoundFailure()
+		}
+		s.logger.Error("resolve grant failed", "grant_id", req.GrantId, "error", err)
+		return nil, contract.Internal("household_grant", "", "Could not process this request right now. Please try again.")
+	}
+	if grantRes.Role == authz.RoleNone {
+		return nil, grantNotFoundFailure()
+	}
+
+	scope := authz.MemberOrGrantee(authz.NewHouseholdScope(grantRes.HouseholdID), grantRes.Role == authz.RoleGrantee, authz.CapabilityOrdinary)
+	ref := authz.EntityRef{Kind: authz.EntityHousehold, ID: grantRes.HouseholdID}
+	res := authz.Resolution{HouseholdID: grantRes.HouseholdID}
+	if !scope.Permits(ref, res) {
+		// CapabilityOrdinary is never one of grantExcludedCapabilities, so
+		// this branch is unreachable today -- kept for the same reason
+		// authorizeBoardAccess's analogous check is kept: a Scope must
+		// always be consulted, never assumed, even where the answer is
+		// currently always "permitted".
+		return nil, grantExcludedFailure()
+	}
+
+	actorKind := audit.ActorKindMember
+	if grantRes.Role == authz.RoleGrantee {
+		actorKind = audit.ActorKindGrantee
+	}
+	reg := auditRegistrations[revokeHouseholdAccessFullMethod]
+	grantIDStr := strconv.FormatInt(req.GrantId, 10)
+	entry := audit.Entry{
+		ActorSubject:      subject,
+		ActorKind:         actorKind,
+		TargetHouseholdID: &grantRes.HouseholdID,
+		Action:            reg.Action,
+		EntityKind:        reg.EntityKind,
+		EntityID:          &grantIDStr,
+		CorrelationID:     CorrelationIDFromContext(ctx),
+	}
+	if err := s.repo.RevokeHouseholdGrant(ctx, req.GrantId, entry); err != nil {
+		if errors.Is(err, authz.ErrGrantNotFound) {
+			return nil, grantNotFoundFailure()
+		}
+		if errors.Is(err, ErrGrantAlreadyRevoked) {
+			return nil, contract.InvalidArgument("household_grant", "grant_id", "This grant has already been revoked.")
+		}
+		s.logger.Error("revoke household grant failed", "grant_id", req.GrantId, "error", err)
+		return nil, contract.Internal("household_grant", "", "Could not revoke this grant right now. Please try again.")
+	}
+
+	return &pb.RevokeHouseholdAccessResponse{}, nil
+}
+
+// ListHouseholdGrants lists household_id's currently active grants (FR7):
+// a member (or grantee, via authz.MemberOrGrantee's CapabilityOrdinary --
+// not one of the three exclusions) sees grantee identity and expiry for
+// every active grant without an admin. Revoked and expired grants are
+// never returned --
+// expiry is evaluated against NOW() in the repository query, at request
+// time, with no background job (FR7).
+//
+// FR8.1: a read performed under a granted (non-member) identity produces
+// an audit record; a member's read does not. This is the one read path in
+// this service that is sometimes audited -- the audit write happens
+// outside any transaction (Repository.RecordRead) since this RPC performs
+// no accompanying DB write of its own.
+func (s *LeafLabAPIServer) ListHouseholdGrants(ctx context.Context, req *pb.ListHouseholdGrantsRequest) (*pb.ListHouseholdGrantsResponse, error) {
+	subject := actingSubject(ctx)
+	role, err := s.authzSvc.RoleForPrincipalInHousehold(ctx, subject, req.HouseholdId)
+	if err != nil {
+		s.logger.Error("resolve caller role failed", "household_id", req.HouseholdId, "error", err)
+		return nil, contract.Internal("household_grant", "", "Could not process this request right now. Please try again.")
+	}
+	if role == authz.RoleNone {
+		return nil, householdNotFoundFailure()
+	}
+
+	// CapabilityOrdinary: listing grants is not one of the three
+	// exclusions, so both a member and a grantee may call this. Routed
+	// through MemberOrGrantee like every other "member capability" call
+	// site, even though CapabilityOrdinary always permits -- so a grep for
+	// MemberOrGrantee finds this call site too, and so this handler never
+	// falls back to a bare membership check if a future FR8.1-adjacent
+	// requirement narrows what a grantee may list.
+	scope := authz.MemberOrGrantee(authz.NewHouseholdScope(req.HouseholdId), role == authz.RoleGrantee, authz.CapabilityOrdinary)
+	ref := authz.EntityRef{Kind: authz.EntityHousehold, ID: req.HouseholdId}
+	res := authz.Resolution{HouseholdID: req.HouseholdId}
+	if !scope.Permits(ref, res) {
+		return nil, grantExcludedFailure()
+	}
+
+	afterGrantID, hasAfter, err := contract.DecodeGrantCursor(req.GetPage().GetPageToken())
+	if err != nil {
+		return nil, contract.InvalidArgument("list_household_grants_request", "page_token", "This page link is no longer valid. Start again from the first page.")
+	}
+	limit := contract.ClampPageSize(req.GetPage().GetPageSize())
+
+	rows, err := s.repo.ListActiveHouseholdGrants(ctx, req.HouseholdId, afterGrantID, hasAfter, limit+1)
+	if err != nil {
+		s.logger.Error("list household grants failed", "household_id", req.HouseholdId, "error", err)
+		return nil, contract.Internal("household_grant", "", "Could not list grants right now. Please try again.")
+	}
+
+	var nextToken string
+	if int32(len(rows)) > limit {
+		rows = rows[:limit]
+		nextToken = contract.EncodeGrantCursor(rows[len(rows)-1].GrantID)
+	}
+
+	if role == authz.RoleGrantee {
+		if err := s.repo.RecordRead(ctx, audit.Entry{
+			ActorSubject:      subject,
+			ActorKind:         audit.ActorKindGrantee,
+			TargetHouseholdID: &req.HouseholdId,
+			Action:            "ListHouseholdGrants",
+			EntityKind:        "household_grant",
+			CorrelationID:     CorrelationIDFromContext(ctx),
+		}); err != nil {
+			s.logger.Error("record granted-read audit entry failed", "household_id", req.HouseholdId, "error", err)
+			return nil, contract.Internal("household_grant", "", "Could not process this request right now. Please try again.")
+		}
+	}
+
+	grants := make([]*pb.HouseholdGrantInfo, 0, len(rows))
+	for _, r := range rows {
+		grants = append(grants, &pb.HouseholdGrantInfo{
+			GrantId:          r.GrantID,
+			GranteeSubject:   r.GranteeSubject,
+			GrantedBySubject: r.GrantedBySubject,
+			GrantedAt:        contract.ToInstant(r.GrantedAt),
+			ExpiresAt:        contract.ToInstant(r.ExpiresAt),
+		})
+	}
+	return &pb.ListHouseholdGrantsResponse{
+		Grants:    grants,
+		Page:      &pb.PageResponse{NextPageToken: nextToken},
+		ServerNow: contract.Now(),
+	}, nil
+}
+
 // GetHealth is the only anonymous RPC in this service (FR63). It reports
 // exactly one field -- up or degraded -- and nothing else: no version, no
 // dependency names, no per-dependency detail (FR63.2). It probes the pgx
@@ -631,16 +881,6 @@ func (s *LeafLabAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthReque
 }
 
 // --- Households and membership (FR75, FR7) --------------------------------
-
-// householdNotFoundFailure is the one contract.NotFound value returned for
-// a household that doesn't exist and for a household that exists but falls
-// outside the caller's Scope -- same NFR2-style masking as
-// boardNotFoundFailure above, applied to households: a stranger asking
-// about a real household_id they don't belong to gets an identical
-// response to a made-up id.
-func householdNotFoundFailure() error {
-	return contract.NotFound("household", "household_id", "No household matches this id.")
-}
 
 // authorizeHouseholdAccess checks the caller's Scope permits householdID,
 // for the two read RPCs (GetHousehold, ListHouseholdMembers). Unlike

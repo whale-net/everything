@@ -238,21 +238,44 @@ func (r *PGResolver) ResolveBoardByDeviceID(ctx context.Context, deviceID string
 }
 
 // ScopeForPrincipal resolves principalSubject's Scope from their current
-// household_membership rows (household_membership WHERE valid_to IS
-// NULL) -- this is the "every RPC handler obtains a Scope from the
-// authenticated principal's current memberships" step the Implementation
-// section requires. FR75 permits multi-household membership, so this
-// returns the union of every current membership (UnionScope) rather than
-// assuming exactly one. A principal with no current membership gets a
-// Scope that permits nothing, never an error and never a widened/global
-// one -- callers (e.g. ListBoards) must render that as an empty result,
-// per FR5.1.
+// household_membership rows (household_membership WHERE valid_to IS NULL)
+// **and** their active household_grant rows (revoked_at IS NULL AND
+// expires_at > NOW()) -- this is the "every RPC handler obtains a Scope
+// from the authenticated principal's current memberships ... and applies
+// it" step the Implementation section requires, extended by FR7's "a
+// grant confers write capability equal to a member's": scope resolution
+// does not distinguish membership-derived reach from grant-derived reach,
+// so a grant's household reach is indistinguishable from a member's to
+// every call site downstream of this function (ListBoards, GetDeviceConfig
+// authorization, and any future entity-scoped handler) without each
+// re-deciding FR7's semantics itself. Handlers that need to know *which*
+// (e.g. to enforce FR7's three exclusions, or FR8.1's granted-read audit
+// requirement) call RoleForPrincipalInHousehold instead, scoped to one
+// household.
+//
+// Expiry is evaluated at request time against NOW() in the query itself --
+// no background job marks a grant expired (FR7, migration 018's header).
+//
+// FR75 permits multi-household membership, so this returns the union of
+// every current membership and active grant (UnionScope) rather than
+// assuming exactly one. A principal with no current membership and no
+// active grant gets a Scope that permits nothing, never an error and never
+// a widened/global one -- callers (e.g. ListBoards) must render that as an
+// empty result, per FR5.1.
 func (r *PGResolver) ScopeForPrincipal(ctx context.Context, principalSubject string) (Scope, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT household_id
 		FROM household_membership
 		WHERE principal_subject = $1
 		  AND valid_to IS NULL
+
+		UNION
+
+		SELECT household_id
+		FROM household_grant
+		WHERE grantee_subject = $1
+		  AND revoked_at IS NULL
+		  AND expires_at > NOW()
 	`, principalSubject)
 	if err != nil {
 		return nil, fmt.Errorf("authz: resolve scope for principal %q: %w", principalSubject, err)
@@ -263,14 +286,144 @@ func (r *PGResolver) ScopeForPrincipal(ctx context.Context, principalSubject str
 	for rows.Next() {
 		var householdID int64
 		if err := rows.Scan(&householdID); err != nil {
-			return nil, fmt.Errorf("authz: scan membership for principal %q: %w", principalSubject, err)
+			return nil, fmt.Errorf("authz: scan membership/grant for principal %q: %w", principalSubject, err)
 		}
 		scopes = append(scopes, NewHouseholdScope(householdID))
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("authz: iterate membership for principal %q: %w", principalSubject, err)
+		return nil, fmt.Errorf("authz: iterate membership/grant for principal %q: %w", principalSubject, err)
 	}
 	return NewUnionScope(scopes...), nil
+}
+
+// PrincipalRole is how a principal reaches a specific household, as
+// returned by RoleForPrincipalInHousehold: not at all, as a current
+// member, or as an active grantee. FR7's "member-or-grantee" call sites
+// use this to build the household-specific Scope MemberOrGrantee requires
+// (household reach plus whether that reach is a grant, for the three
+// exclusions) and to decide FR8.1's "reads performed under a granted
+// (non-member) identity produce an audit record" -- a read is audited only
+// when this is RoleGrantee, never when it is RoleMember.
+type PrincipalRole int
+
+const (
+	// RoleNone: principalSubject is neither a current member nor an
+	// active grantee of the household in question.
+	RoleNone PrincipalRole = iota
+	// RoleMember: principalSubject holds a current household_membership
+	// row for the household.
+	RoleMember
+	// RoleGrantee: principalSubject holds no current membership row, but
+	// does hold an active (unrevoked, unexpired) household_grant row for
+	// the household.
+	RoleGrantee
+)
+
+// RoleForPrincipalInHousehold reports how principalSubject reaches
+// householdID -- member, grantee, or neither -- in the single query NFR2's
+// "resolve and check in one round trip" shape uses elsewhere in this
+// package: membership and grant reach are both read here, so a caller
+// never issues a second query to tell "not a member" apart from "not a
+// grantee either". Membership takes precedence over a grant when
+// (improbably) both are true for the same principal/household pair -- FR7
+// never contemplates a member also holding a grant on their own household,
+// but if it occurred, "member" is the more permissive and correct answer.
+func (r *PGResolver) RoleForPrincipalInHousehold(ctx context.Context, principalSubject string, householdID int64) (PrincipalRole, error) {
+	var isMember, isGrantee bool
+	err := r.db.QueryRow(ctx, `
+		SELECT
+			EXISTS(
+				SELECT 1 FROM household_membership
+				WHERE principal_subject = $1 AND household_id = $2 AND valid_to IS NULL
+			),
+			EXISTS(
+				SELECT 1 FROM household_grant
+				WHERE grantee_subject = $1 AND household_id = $2
+				  AND revoked_at IS NULL AND expires_at > NOW()
+			)
+	`, principalSubject, householdID).Scan(&isMember, &isGrantee)
+	if err != nil {
+		return RoleNone, fmt.Errorf("authz: resolve role for principal %q in household %d: %w", principalSubject, householdID, err)
+	}
+	switch {
+	case isMember:
+		return RoleMember, nil
+	case isGrantee:
+		return RoleGrantee, nil
+	default:
+		return RoleNone, nil
+	}
+}
+
+// ErrGrantNotFound is returned by ResolveGrantRole when grantID names no
+// household_grant row. Handlers must map this to the same failure as a
+// principal with RoleNone reach over a real grant's household (NFR2) --
+// see server.go's grantNotFoundFailure.
+var ErrGrantNotFound = errors.New("authz: household grant not found")
+
+// GrantResolution is a household_grant row's authorization-relevant state,
+// as returned by ResolveGrantRole: which household it belongs to, whether
+// it is already revoked, and how principalSubject (the caller attempting
+// to revoke it) reaches that household.
+type GrantResolution struct {
+	HouseholdID int64
+	// Revoked is true when the grant's revoked_at is already set --
+	// RevokeHouseholdAccess is not idempotent-by-design (mirrors
+	// RetireBoard's convention in leaflab/api/repository.go), so a handler
+	// distinguishes this from ErrGrantNotFound to report the accurate
+	// failure.
+	Revoked bool
+	// Role is principalSubject's reach over HouseholdID -- RoleNone,
+	// RoleMember or RoleGrantee. RevokeHouseholdAccess is an "ordinary"
+	// member capability (FR7 does not name it among the three exclusions),
+	// so both RoleMember and RoleGrantee are permitted to call it; RoleNone
+	// means the caller has no reach over this grant's household at all.
+	Role PrincipalRole
+}
+
+// ResolveGrantRole resolves grantID to its household and revocation state,
+// and principalSubject's Role over that household, in the single query
+// NFR2 requires: grant_id is a caller-supplied, enumerable (BIGSERIAL)
+// identifier, so "no such grant" and "a real grant belonging to a
+// household the caller cannot reach" must be indistinguishable in status,
+// body and timing -- exactly ResolveInScope's board-resolution shape,
+// specialized for household_grant since a grant does not fit the
+// EntityRef/Resolver pattern (it has no owning household to inherit
+// through; it *names* one directly).
+func (r *PGResolver) ResolveGrantRole(ctx context.Context, grantID int64, principalSubject string) (GrantResolution, error) {
+	var res GrantResolution
+	var isMember, isGrantee bool
+	err := r.db.QueryRow(ctx, `
+		SELECT
+			hg.household_id,
+			hg.revoked_at IS NOT NULL,
+			EXISTS(
+				SELECT 1 FROM household_membership hm
+				WHERE hm.principal_subject = $2 AND hm.household_id = hg.household_id AND hm.valid_to IS NULL
+			),
+			EXISTS(
+				SELECT 1 FROM household_grant g2
+				WHERE g2.grantee_subject = $2 AND g2.household_id = hg.household_id
+				  AND g2.revoked_at IS NULL AND g2.expires_at > NOW()
+			)
+		FROM household_grant hg
+		WHERE hg.grant_id = $1
+	`, grantID, principalSubject).Scan(&res.HouseholdID, &res.Revoked, &isMember, &isGrantee)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GrantResolution{}, ErrGrantNotFound
+		}
+		return GrantResolution{}, fmt.Errorf("authz: resolve grant %d for principal %q: %w", grantID, principalSubject, err)
+	}
+	switch {
+	case isMember:
+		res.Role = RoleMember
+	case isGrantee:
+		res.Role = RoleGrantee
+	default:
+		res.Role = RoleNone
+	}
+	return res, nil
 }
 
 // ResolveInScope resolves ref and checks it against scope in one motion,

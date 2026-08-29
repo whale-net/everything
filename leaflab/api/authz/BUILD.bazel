@@ -5,6 +5,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "authz",
     srcs = [
+        "capability.go",
         "invariant.go",
         "resolver.go",
         "scope.go",
@@ -19,17 +20,20 @@ go_library(
 )
 
 # Pure Go-level unit tests: Scope/UnionScope/HouseholdScope predicate and
-# SQL-fragment logic (scope_test.go, including the FR4.3 type test), and
+# SQL-fragment logic (scope_test.go, including the FR4.3 type test),
 # PGResolver against a fake Queryer/Row/Rows rather than a live Postgres
-# connection (resolver_test.go). No Docker required -- runs in
+# connection (resolver_test.go, including FR7's RoleForPrincipalInHousehold/
+# ResolveGrantRole), and MemberOrGrantee's FR7 exclusion enforcement
+# (capability_test.go). No Docker required -- runs in
 # `bazel test //leaflab/...`. Real-SQL coverage (the recursive region CTE,
-# the household_membership join) is exercised indirectly through
-# leaflab/api's own integration tests, which construct a real PGResolver
-# against dbtest's Postgres container.
+# the household_membership join, the household_grant union) is exercised
+# indirectly through leaflab/api's own integration tests, which construct a
+# real PGResolver against dbtest's Postgres container.
 go_test(
     name = "authz_test",
     size = "small",
     srcs = [
+        "capability_test.go",
         "resolver_test.go",
         "scope_test.go",
     ],

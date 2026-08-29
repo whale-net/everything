@@ -206,6 +206,26 @@ func (stubAPIServer) GetElevationStatus(ctx context.Context, req *pb.GetElevatio
 	return &pb.GetElevationStatusResponse{}, nil
 }
 
+// GrantHouseholdAccess/RevokeHouseholdAccess/ListHouseholdGrants (FR7) are
+// stubbed here, like every other RPC above, purely so stubAPIServer's
+// value type satisfies pb.LeafLabAPIServer -- generated
+// UnimplementedLeafLabAPIServer methods have pointer receivers, so an
+// unoverridden RPC is not promoted onto the value type these tests embed
+// it as. Business logic for these three lands on LeafLabAPIServer in the
+// Implementation phase, not here.
+
+func (stubAPIServer) GrantHouseholdAccess(ctx context.Context, req *pb.GrantHouseholdAccessRequest) (*pb.GrantHouseholdAccessResponse, error) {
+	return &pb.GrantHouseholdAccessResponse{}, nil
+}
+
+func (stubAPIServer) RevokeHouseholdAccess(ctx context.Context, req *pb.RevokeHouseholdAccessRequest) (*pb.RevokeHouseholdAccessResponse, error) {
+	return &pb.RevokeHouseholdAccessResponse{}, nil
+}
+
+func (stubAPIServer) ListHouseholdGrants(ctx context.Context, req *pb.ListHouseholdGrantsRequest) (*pb.ListHouseholdGrantsResponse, error) {
+	return &pb.ListHouseholdGrantsResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

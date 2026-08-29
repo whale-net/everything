@@ -360,6 +360,162 @@ func TestResolveInScope_ResolveError_PropagatesUnchanged(t *testing.T) {
 	}
 }
 
+// -- RoleForPrincipalInHousehold ---------------------------------------------
+
+// TestPGResolver_RoleForPrincipalInHousehold_Member proves a current member
+// resolves to RoleMember.
+func TestPGResolver_RoleForPrincipalInHousehold_Member(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{values: []any{true, false}}}
+	r := &PGResolver{db: q}
+
+	role, err := r.RoleForPrincipalInHousehold(context.Background(), "alice", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if role != RoleMember {
+		t.Errorf("role = %v, want RoleMember", role)
+	}
+	if q.queryRowCalls != 1 {
+		t.Errorf("RoleForPrincipalInHousehold issued %d queries, want exactly 1 (NFR2: resolve membership+grant reach in one round trip)", q.queryRowCalls)
+	}
+}
+
+// TestPGResolver_RoleForPrincipalInHousehold_Grantee proves a principal
+// with no current membership but an active grant resolves to RoleGrantee.
+func TestPGResolver_RoleForPrincipalInHousehold_Grantee(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{values: []any{false, true}}}
+	r := &PGResolver{db: q}
+
+	role, err := r.RoleForPrincipalInHousehold(context.Background(), "helper", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if role != RoleGrantee {
+		t.Errorf("role = %v, want RoleGrantee", role)
+	}
+}
+
+// TestPGResolver_RoleForPrincipalInHousehold_None proves a principal with
+// neither a current membership nor an active grant resolves to RoleNone.
+func TestPGResolver_RoleForPrincipalInHousehold_None(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{values: []any{false, false}}}
+	r := &PGResolver{db: q}
+
+	role, err := r.RoleForPrincipalInHousehold(context.Background(), "stranger", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if role != RoleNone {
+		t.Errorf("role = %v, want RoleNone", role)
+	}
+}
+
+// TestPGResolver_RoleForPrincipalInHousehold_MemberPrecedenceOverGrant
+// proves the documented (improbable) tie-break: a principal who is
+// somehow both a current member and an active grantee of the same
+// household resolves to the more permissive RoleMember, not RoleGrantee.
+func TestPGResolver_RoleForPrincipalInHousehold_MemberPrecedenceOverGrant(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{values: []any{true, true}}}
+	r := &PGResolver{db: q}
+
+	role, err := r.RoleForPrincipalInHousehold(context.Background(), "both", 1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if role != RoleMember {
+		t.Errorf("role = %v, want RoleMember (membership takes precedence over a grant)", role)
+	}
+}
+
+// -- ResolveGrantRole ---------------------------------------------------------
+
+// TestPGResolver_ResolveGrantRole_Member proves a grant's revoke/list
+// caller who is a current member of the grant's household resolves with
+// Role == RoleMember and the grant's household id/revoked state.
+func TestPGResolver_ResolveGrantRole_Member(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{values: []any{int64(7), false, true, false}}}
+	r := &PGResolver{db: q}
+
+	res, err := r.ResolveGrantRole(context.Background(), 42, "alice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.HouseholdID != 7 {
+		t.Errorf("HouseholdID = %d, want 7", res.HouseholdID)
+	}
+	if res.Revoked {
+		t.Error("Revoked = true, want false")
+	}
+	if res.Role != RoleMember {
+		t.Errorf("Role = %v, want RoleMember", res.Role)
+	}
+}
+
+// TestPGResolver_ResolveGrantRole_Grantee proves the caller-is-a-grantee
+// case: a caller with no membership but an active grant on the same
+// household resolves with Role == RoleGrantee.
+func TestPGResolver_ResolveGrantRole_Grantee(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{values: []any{int64(7), false, false, true}}}
+	r := &PGResolver{db: q}
+
+	res, err := r.ResolveGrantRole(context.Background(), 42, "helper")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Role != RoleGrantee {
+		t.Errorf("Role = %v, want RoleGrantee", res.Role)
+	}
+}
+
+// TestPGResolver_ResolveGrantRole_RoleNone proves a caller with no reach
+// at all over the grant's household resolves with Role == RoleNone --
+// server.go maps this to the same grantNotFoundFailure a nonexistent
+// grant_id gets (NFR2).
+func TestPGResolver_ResolveGrantRole_RoleNone(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{values: []any{int64(7), false, false, false}}}
+	r := &PGResolver{db: q}
+
+	res, err := r.ResolveGrantRole(context.Background(), 42, "stranger")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Role != RoleNone {
+		t.Errorf("Role = %v, want RoleNone", res.Role)
+	}
+}
+
+// TestPGResolver_ResolveGrantRole_Revoked proves an already-revoked grant's
+// Revoked field is surfaced, distinct from ErrGrantNotFound -- the grant
+// row exists, it is just no longer active.
+func TestPGResolver_ResolveGrantRole_Revoked(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{values: []any{int64(7), true, true, false}}}
+	r := &PGResolver{db: q}
+
+	res, err := r.ResolveGrantRole(context.Background(), 42, "alice")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.Revoked {
+		t.Error("Revoked = false, want true")
+	}
+}
+
+// TestPGResolver_ResolveGrantRole_NotFound proves grant_id naming no row
+// returns ErrGrantNotFound, in the same single query as every other
+// outcome (NFR2).
+func TestPGResolver_ResolveGrantRole_NotFound(t *testing.T) {
+	q := &fakeQueryer{queryRowResult: fakeRow{err: pgx.ErrNoRows}}
+	r := &PGResolver{db: q}
+
+	_, err := r.ResolveGrantRole(context.Background(), 999, "alice")
+	if !errors.Is(err, ErrGrantNotFound) {
+		t.Fatalf("err = %v, want ErrGrantNotFound", err)
+	}
+	if q.queryRowCalls != 1 {
+		t.Errorf("ResolveGrantRole (not found) issued %d queries, want exactly 1", q.queryRowCalls)
+	}
+}
+
 // stubResolver is a minimal Resolver for ResolveInScope's unit tests --
 // narrower than fakeQueryer-backed PGResolver, since ResolveInScope itself
 // only depends on the Resolver interface.
