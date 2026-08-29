@@ -30,7 +30,7 @@ func TestGetConfigStatus_ReflectsCurrentState_Pending(t *testing.T) {
 	repo := &fakeRepo{getDeviceConfigVersionResponse: &DeviceConfigVersionRow{
 		ConfigID: 1, Version: 3, Accepted: false, PushedAt: fixedPushedAt, AckedAt: nil,
 	}}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.GetConfigStatus(authedTestCtx("alice"), &pb.GetConfigStatusRequest{DeviceId: "board-a", Version: 3})
 	if err != nil {
@@ -54,7 +54,7 @@ func TestGetConfigStatus_ReflectsCurrentState_Accepted(t *testing.T) {
 	repo := &fakeRepo{getDeviceConfigVersionResponse: &DeviceConfigVersionRow{
 		ConfigID: 1, Version: 3, Accepted: true, PushedAt: fixedPushedAt, AckedAt: &fixedAckedAtTest,
 	}}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.GetConfigStatus(authedTestCtx("alice"), &pb.GetConfigStatusRequest{DeviceId: "board-a", Version: 3})
 	if err != nil {
@@ -76,7 +76,7 @@ func TestGetConfigStatus_ReflectsCurrentState_Rejected(t *testing.T) {
 	repo := &fakeRepo{getDeviceConfigVersionResponse: &DeviceConfigVersionRow{
 		ConfigID: 1, Version: 3, Accepted: false, PushedAt: fixedPushedAt, AckedAt: &fixedAckedAtTest, RejectionReason: reason,
 	}}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.GetConfigStatus(authedTestCtx("alice"), &pb.GetConfigStatusRequest{DeviceId: "board-a", Version: 3})
 	if err != nil {
@@ -100,7 +100,7 @@ func TestGetConfigStatus_ReflectsCurrentState_Rejected(t *testing.T) {
 // from no push at all").
 func TestGetConfigStatus_NoSuchVersion_NotFound(t *testing.T) {
 	repo := &fakeRepo{getDeviceConfigVersionResponse: nil}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	_, err := server.GetConfigStatus(authedTestCtx("alice"), &pb.GetConfigStatusRequest{DeviceId: "board-a", Version: 999})
 	if err == nil {
@@ -127,7 +127,7 @@ func TestListConfigHistory_MarksPendingAndRejectedEntries(t *testing.T) {
 		{Version: 2, Accepted: false, PushedAt: fixedPushedAt, AckedAt: &fixedAckedAtTest, RejectionReason: "bad crc"}, // rejected
 		{Version: 1, Accepted: true, PushedAt: fixedPushedAt, AckedAt: &fixedAckedAtTest},                              // accepted
 	}}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.ListConfigHistory(authedTestCtx("alice"), &pb.ListConfigHistoryRequest{DeviceId: "board-a"})
 	if err != nil {
@@ -159,7 +159,7 @@ func TestListConfigHistory_CapDetection_NextPageTokenOnlyWhenExtraRowReturned(t 
 	exact := &fakeRepo{listConfigHistoryResponse: []DeviceConfigHistoryRow{
 		{Version: 2, PushedAt: fixedPushedAt}, {Version: 1, PushedAt: fixedPushedAt},
 	}}
-	exactServer := NewLeafLabAPIServer(exact, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	exactServer := NewLeafLabAPIServer(exact, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	resp, err := exactServer.ListConfigHistory(authedTestCtx("alice"), &pb.ListConfigHistoryRequest{
 		DeviceId: "board-a", Page: &pb.PageRequest{PageSize: 2},
 	})
@@ -176,7 +176,7 @@ func TestListConfigHistory_CapDetection_NextPageTokenOnlyWhenExtraRowReturned(t 
 	extra := &fakeRepo{listConfigHistoryResponse: []DeviceConfigHistoryRow{
 		{Version: 3, PushedAt: fixedPushedAt}, {Version: 2, PushedAt: fixedPushedAt}, {Version: 1, PushedAt: fixedPushedAt},
 	}}
-	extraServer := NewLeafLabAPIServer(extra, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	extraServer := NewLeafLabAPIServer(extra, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	resp, err = extraServer.ListConfigHistory(authedTestCtx("alice"), &pb.ListConfigHistoryRequest{
 		DeviceId: "board-a", Page: &pb.PageRequest{PageSize: 2},
 	})
@@ -196,7 +196,7 @@ func TestListConfigHistory_CapDetection_NextPageTokenOnlyWhenExtraRowReturned(t 
 // as the first page.
 func TestListConfigHistory_InvalidPageToken_Refused(t *testing.T) {
 	repo := &fakeRepo{}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	_, err := server.ListConfigHistory(authedTestCtx("alice"), &pb.ListConfigHistoryRequest{
 		DeviceId: "board-a", Page: &pb.PageRequest{PageToken: "not-a-valid-token"},
@@ -225,7 +225,7 @@ func TestGetConfigVersion_ReturnsEntriesWithProvenance(t *testing.T) {
 			{I2CAddress: nil, MuxPath: []byte(`[]`), SensorTypeName: "humidity", Provenance: "materialised"},
 		},
 	}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.GetConfigVersion(authedTestCtx("alice"), &pb.GetConfigVersionRequest{DeviceId: "board-a", Version: 3})
 	if err != nil {
@@ -280,7 +280,7 @@ func nonMemberAuthz(boardID int64) *fakeAuthz {
 // any repository read.
 func TestGetConfigStatus_NonMember_Refused(t *testing.T) {
 	repo := &fakeRepo{getDeviceConfigVersionResponse: &DeviceConfigVersionRow{Version: 1, PushedAt: fixedPushedAt}}
-	server := NewLeafLabAPIServer(repo, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	_, err := server.GetConfigStatus(authedTestCtx("mallory"), &pb.GetConfigStatusRequest{DeviceId: "board-a", Version: 1})
 	if err == nil {
@@ -295,7 +295,7 @@ func TestGetConfigStatus_NonMember_Refused(t *testing.T) {
 // ListConfigHistory.
 func TestListConfigHistory_NonMember_Refused(t *testing.T) {
 	repo := &fakeRepo{listConfigHistoryResponse: []DeviceConfigHistoryRow{{Version: 1, PushedAt: fixedPushedAt}}}
-	server := NewLeafLabAPIServer(repo, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	_, err := server.ListConfigHistory(authedTestCtx("mallory"), &pb.ListConfigHistoryRequest{DeviceId: "board-a"})
 	if err == nil {
@@ -313,7 +313,7 @@ func TestGetConfigVersion_NonMember_Refused(t *testing.T) {
 		getDeviceConfigVersionResponse:  &DeviceConfigVersionRow{Version: 1, ConfigJSON: []byte(`{}`), PushedAt: fixedPushedAt},
 		getConfigVersionEntriesResponse: []ConfigVersionEntryRow{{SensorTypeName: "temperature", Provenance: "authored"}},
 	}
-	server := NewLeafLabAPIServer(repo, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	_, err := server.GetConfigVersion(authedTestCtx("mallory"), &pb.GetConfigVersionRequest{DeviceId: "board-a", Version: 1})
 	if err == nil {
@@ -333,10 +333,10 @@ func TestGetConfigVersion_NonMember_Refused(t *testing.T) {
 // an out-of-scope device_id must produce the same failure for each.
 func TestNonMemberRefusals_ByteIdenticalToNonexistentBoard(t *testing.T) {
 	nonexistentAuthz := &fakeAuthz{scope: authz.NewHouseholdScope(1), resolveErr: authz.ErrNotFound}
-	nonexistentServer := NewLeafLabAPIServer(&fakeRepo{}, nonexistentAuthz, nil, nil, nil, nil, discardLogger())
+	nonexistentServer := NewLeafLabAPIServer(&fakeRepo{}, nonexistentAuthz, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	_, nonexistentErr := nonexistentServer.GetConfigStatus(authedTestCtx("alice"), &pb.GetConfigStatusRequest{DeviceId: "does-not-exist", Version: 1})
 
-	outOfScopeServer := NewLeafLabAPIServer(&fakeRepo{}, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger())
+	outOfScopeServer := NewLeafLabAPIServer(&fakeRepo{}, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	_, outOfScopeErr := outOfScopeServer.GetConfigStatus(authedTestCtx("alice"), &pb.GetConfigStatusRequest{DeviceId: "device-belongs-to-household-2", Version: 1})
 
 	if nonexistentErr == nil || outOfScopeErr == nil {

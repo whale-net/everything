@@ -303,6 +303,18 @@ func (stubAPIServer) AwaitConfigAck(ctx context.Context, req *pb.AwaitConfigAckR
 	return &pb.AwaitConfigAckResponse{}, nil
 }
 
+func (stubAPIServer) DiffConfigVersions(ctx context.Context, req *pb.DiffConfigVersionsRequest) (*pb.DiffConfigVersionsResponse, error) {
+	return &pb.DiffConfigVersionsResponse{}, nil
+}
+
+func (stubAPIServer) GetReportedInventory(ctx context.Context, req *pb.GetReportedInventoryRequest) (*pb.GetReportedInventoryResponse, error) {
+	return &pb.GetReportedInventoryResponse{}, nil
+}
+
+func (stubAPIServer) GetConfigDrift(ctx context.Context, req *pb.GetConfigDriftRequest) (*pb.GetConfigDriftResponse, error) {
+	return &pb.GetConfigDriftResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

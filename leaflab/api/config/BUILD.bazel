@@ -2,39 +2,59 @@
 
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+# Exposes this package's own production source files as data for
+# leaflab/conformance's FR49 structural guard (manifest_never_source_test.go),
+# which reads and parses them directly to prove leaflab/api/config never
+# imports or references the manifest-report tables/types -- see that
+# test's doc comment. Mirrors tools/app_registry/ui's own
+# "conformance_srcs" filegroup pattern.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go"]),
+    visibility = ["//leaflab/conformance:__pkg__"],
+)
+
 go_library(
     name = "config",
     srcs = [
         "canonical.go",
+        "diff.go",
         "doc.go",
         "entry.go",
         "materialise.go",
         "removekey.go",
         "state.go",
+        "validate.go",
     ],
     importpath = "github.com/whale-net/everything/leaflab/api/config",
     visibility = ["//visibility:public"],
     deps = [
         "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/hwkey",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 
 # FR82 pure-logic unit tests: canonicalisation (canonical_test.go),
 # EDIT-scope materialisation (materialise_test.go), removal-key resolution
-# (removekey_test.go), and FR34's three-state derivation and sentence
-# rendering (state_test.go). This package has no database dependency (see
-# doc.go), so these need no Docker/network fixture and run under plain
+# (removekey_test.go), FR34's three-state derivation and sentence
+# rendering (state_test.go), FR39/FR37 pure-logic unit tests: server-side
+# push validation (validate_test.go) and server-computed diff
+# (diff_test.go). This package has no database dependency (see doc.go), so
+# these need no Docker/network fixture and run under plain
 # `bazel test //leaflab/...`.
 go_test(
     name = "config_test",
     size = "small",
     srcs = [
         "canonical_test.go",
+        "diff_test.go",
         "materialise_test.go",
         "removekey_test.go",
         "state_test.go",
+        "validate_test.go",
     ],
     embed = [":config"],
     deps = [

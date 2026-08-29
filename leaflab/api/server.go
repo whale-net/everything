@@ -62,6 +62,12 @@ type deviceRepository interface {
 	// doc comment.
 	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
+	// GetConfigVersion is FR37's DiffConfigVersions RPC's exact-version
+	// lookup -- see Repository.GetConfigVersion.
+	GetConfigVersion(ctx context.Context, deviceID string, version uint64) (*configpb.DeviceConfig, error)
+	// LoadCatalog is FR39's chip/measurement-type catalog snapshot -- see
+	// Repository.LoadCatalog.
+	LoadCatalog(ctx context.Context) (*config.Catalog, error)
 	// GetRegionApplySkips is FR1.3's caller-visible skip surface: the
 	// audit.Entry rows leaflab/processor's ApplyConfigRegions wrote for
 	// this board's skipped config entries (household drift or a stale
@@ -78,6 +84,10 @@ type deviceRepository interface {
 	GetDeviceConfigVersion(ctx context.Context, deviceID string, version int64) (*DeviceConfigVersionRow, error)
 	GetConfigVersionEntries(ctx context.Context, configID int64) ([]ConfigVersionEntryRow, error)
 	ListConfigHistory(ctx context.Context, deviceID string, beforeVersion int64, hasBefore bool, limit int32) ([]DeviceConfigHistoryRow, error)
+	// GetReportedInventory is FR49's read path: a board's most recently
+	// reported manifest, plus the instant it was received -- see
+	// Repository.GetReportedInventory.
+	GetReportedInventory(ctx context.Context, deviceID string) (bool, []ReportedInventoryRow, time.Time, error)
 	Ping(ctx context.Context) error
 
 	// -- Admin (FR10, FR12 activation) -- see leaflab/api/repository.go's
@@ -181,6 +191,12 @@ type LeafLabAPIServer struct {
 	// exercise AwaitConfigAck.
 	ackWait *ackwait.Registry
 	logger  *slog.Logger
+	// pollIntervalBounds is FR39's stated poll_interval_ms min/max, resolved
+	// once at boot from configuration (leaflab/api/ENV.md) -- never the
+	// zero value in production (main.go refuses to boot without it set),
+	// matching config.PollIntervalBounds' own "never silently disabled"
+	// doc comment.
+	pollIntervalBounds config.PollIntervalBounds
 }
 
 // ServerOption configures optional LeafLabAPIServer behavior beyond
@@ -197,16 +213,31 @@ func WithElevationDuration(d time.Duration) ServerOption {
 	return func(s *LeafLabAPIServer) { s.elevationDuration = d }
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, readingsSvc readingsReader, publisher *rmq.Publisher, rmqConn *rmq.Connection, invalidationPub *invalidation.Publisher, logger *slog.Logger, opts ...ServerOption) *LeafLabAPIServer {
+// DefaultPollIntervalMsMin/DefaultPollIntervalMsMax are FR39's fallback
+// poll_interval_ms bounds, used by main.go when
+// LEAFLAB_API_POLL_INTERVAL_MS_MIN/_MAX are unset (see leaflab/api/ENV.md)
+// and directly by tests that construct NewLeafLabAPIServer without
+// exercising this specific check.
+const (
+	DefaultPollIntervalMsMin uint32 = 1000
+	DefaultPollIntervalMsMax uint32 = 3_600_000
+)
+
+// defaultPollIntervalBounds is DefaultPollIntervalMsMin/Max bundled as the
+// config.PollIntervalBounds NewLeafLabAPIServer takes directly.
+var defaultPollIntervalBounds = config.PollIntervalBounds{MinMs: DefaultPollIntervalMsMin, MaxMs: DefaultPollIntervalMsMax}
+
+func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, readingsSvc readingsReader, publisher *rmq.Publisher, rmqConn *rmq.Connection, invalidationPub *invalidation.Publisher, logger *slog.Logger, pollIntervalBounds config.PollIntervalBounds, opts ...ServerOption) *LeafLabAPIServer {
 	s := &LeafLabAPIServer{
-		repo:              repo,
-		authzSvc:          authzSvc,
-		readings:          readingsSvc,
-		publisher:         publisher,
-		rmqConn:           rmqConn,
-		invalidationPub:   invalidationPub,
-		logger:            logger,
-		elevationDuration: DefaultElevationDuration,
+		repo:               repo,
+		authzSvc:           authzSvc,
+		readings:           readingsSvc,
+		publisher:          publisher,
+		rmqConn:            rmqConn,
+		invalidationPub:    invalidationPub,
+		logger:             logger,
+		elevationDuration:  DefaultElevationDuration,
+		pollIntervalBounds: pollIntervalBounds,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -764,6 +795,16 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, err
 	}
 
+	// FR39: resolve the catalog snapshot once, shared by both scope
+	// branches below -- Validate never talks to the DB itself (config
+	// package doc comment), so this is the one place that loads it for the
+	// push path.
+	catalog, err := s.repo.LoadCatalog(ctx)
+	if err != nil {
+		s.logger.Error("load catalog failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
 	var entries []config.Entry
 	sensorsForStorage := req.Sensors
 	var removedForResponse []*pb.RemovedEntry
@@ -771,6 +812,15 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 
 	switch req.Scope {
 	case pb.PushScope_PUSH_SCOPE_COMPLETE:
+		// FR39: validate before any write -- every failure found together,
+		// each naming its entry index and field. removes/base are always
+		// empty/nil under scope=COMPLETE (there is no base to check a
+		// remove against, and removes itself was already refused above if
+		// non-empty).
+		if validation := config.Validate(adds, nil, nil, catalog, s.pollIntervalBounds); !validation.OK() {
+			return nil, validationFailureError(validation)
+		}
+
 		// FR82.2: the payload is the board's entire desired sensor set,
 		// stored as submitted -- every entry is authored, and there is no
 		// base to materialise against.
@@ -789,6 +839,10 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		// -- config.Materialise's documented signal for "no accepted config
 		// exists for this board at all" (FR82.3), distinct from a
 		// genuinely-empty accepted config (baseCfg != nil, zero sensors).
+		// FR39 validation is deliberately skipped in this case too: with no
+		// base at all, a remove key's "matches nothing" failure would be
+		// misleading noise ahead of FR82.3's own, more specific refusal
+		// below (via config.Materialise's ErrNoAcceptedConfig).
 		var base []config.Entry
 		if baseCfg != nil {
 			base, err = s.resolveConfigEntries(ctx, baseCfg.Sensors)
@@ -800,6 +854,17 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		removeKeys, err := s.resolveRemoveKeys(ctx, req.Removes)
 		if err != nil {
 			return nil, err
+		}
+
+		// FR39: validate before any write, once base and removes are both
+		// resolved -- catches every add-side check (I2C range, catalog,
+		// poll_interval_ms, within-payload collision) plus FR82.4's two
+		// removal-validation cases (a remove matching nothing in base; a
+		// remove naming an unaddressable entry), all together.
+		if baseCfg != nil {
+			if validation := config.Validate(adds, removeKeys, base, catalog, s.pollIntervalBounds); !validation.OK() {
+				return nil, validationFailureError(validation)
+			}
 		}
 
 		result, err := config.Materialise(base, adds, removeKeys)
@@ -1019,6 +1084,217 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		return &pb.GetDeviceConfigResponse{Found: false, Skips: skips}, nil
 	}
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true, Skips: skips}, nil
+}
+
+// DiffConfigVersions computes FR37's server-side, per-entry diff between
+// any two sides of a board's config history -- two stored versions, or a
+// stored version against an unpushed draft (api.proto's ConfigSide doc
+// comment). Never mutates anything: a draft side is materialised in
+// memory (materialiseDraft, FR82's own scope semantics) purely to diff
+// it, but is never stored or published -- the same "resolve, don't write"
+// posture GetDeviceConfig takes.
+func (s *LeafLabAPIServer) DiffConfigVersions(ctx context.Context, req *pb.DiffConfigVersionsRequest) (*pb.DiffConfigVersionsResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	}
+
+	// FR4.1: same board-reach check GetDeviceConfig uses -- "doesn't exist"
+	// and "exists, out of scope" collapse to the same refusal (NFR2).
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
+	// FR37/FR82.1: no default side, never inferred -- an unset oneof is
+	// refused before either side is resolved, the same "no default, never
+	// inferred" posture PushScope takes.
+	if req.GetFrom().GetSide() == nil {
+		return nil, contract.InvalidArgument("diff_config_versions", "from", "A from side (version or draft) is required; there is no default.")
+	}
+	if req.GetTo().GetSide() == nil {
+		return nil, contract.InvalidArgument("diff_config_versions", "to", "A to side (version or draft) is required; there is no default.")
+	}
+
+	fromCfg, err := s.resolveConfigSide(ctx, req.DeviceId, "from", req.From)
+	if err != nil {
+		return nil, err
+	}
+	toCfg, err := s.resolveConfigSide(ctx, req.DeviceId, "to", req.To)
+	if err != nil {
+		return nil, err
+	}
+
+	// FR37: Diff runs over two complete payloads, never a partial EDIT
+	// payload -- both fromCfg/toCfg are already complete here, whether
+	// resolved from a stored version (every stored payload is complete,
+	// FR82) or materialised from a draft (materialiseDraft applies the
+	// same FR82 scope semantics a real push would).
+	fromEntries, err := s.resolveConfigEntries(ctx, fromCfg.GetSensors())
+	if err != nil {
+		return nil, err
+	}
+	toEntries, err := s.resolveConfigEntries(ctx, toCfg.GetSensors())
+	if err != nil {
+		return nil, err
+	}
+
+	diffs := config.Diff(fromEntries, toEntries)
+	pbDiffs := make([]*pb.EntryDiff, len(diffs))
+	for i, d := range diffs {
+		pbDiffs[i] = entryDiffToProto(d)
+	}
+
+	return &pb.DiffConfigVersionsResponse{
+		Entries: pbDiffs,
+		// Both raw complete payloads the diff was computed from (FR37) --
+		// a draft side is included here already materialised, exactly as
+		// it was diffed, not as originally submitted.
+		From: fromCfg,
+		To:   toCfg,
+	}, nil
+}
+
+// resolveConfigSide resolves one side of a DiffConfigVersionsRequest
+// (field names the side for error messages, "from" or "to"): a stored
+// version is fetched as-is (contract.NotFound if the version doesn't
+// exist); a draft is materialised in memory via materialiseDraft. Callers
+// must already have refused a nil side (req.GetFrom/To().GetSide() ==
+// nil) before calling this -- the default branch below is defensive only.
+func (s *LeafLabAPIServer) resolveConfigSide(ctx context.Context, deviceID, field string, side *pb.ConfigSide) (*configpb.DeviceConfig, error) {
+	switch v := side.GetSide().(type) {
+	case *pb.ConfigSide_Version:
+		cfg, err := s.repo.GetConfigVersion(ctx, deviceID, v.Version)
+		if err != nil {
+			s.logger.Error("get config version failed", "device_id", deviceID, "version", v.Version, "error", err)
+			return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+		}
+		if cfg == nil {
+			return nil, contract.NotFound("device_config", field, fmt.Sprintf("Version %d does not exist for this device.", v.Version))
+		}
+		return cfg, nil
+	case *pb.ConfigSide_Draft:
+		return s.materialiseDraft(ctx, deviceID, v.Draft)
+	default:
+		return nil, contract.InvalidArgument("diff_config_versions", field, "A "+field+" side (version or draft) is required; there is no default.")
+	}
+}
+
+// materialiseDraft resolves an unpushed ConfigDraft into a complete
+// *configpb.DeviceConfig, applying the same FR82 scope semantics
+// PushDeviceConfig itself uses -- COMPLETE: the draft's sensors list, as
+// submitted; EDIT: materialised against the board's current accepted
+// config, exactly as an EDIT push would be -- but this never stores or
+// publishes anything (DiffConfigVersions' own doc comment). FR39
+// validation is deliberately not run here: this is a hypothetical "what
+// would this look like", not a write to gate.
+func (s *LeafLabAPIServer) materialiseDraft(ctx context.Context, deviceID string, draft *pb.ConfigDraft) (*configpb.DeviceConfig, error) {
+	if draft.GetScope() == pb.PushScope_PUSH_SCOPE_UNSPECIFIED {
+		return nil, contract.InvalidArgument(
+			"diff_config_versions",
+			"draft.scope",
+			"A draft must state scope=COMPLETE or scope=EDIT; there is no default.",
+		)
+	}
+	if draft.GetScope() == pb.PushScope_PUSH_SCOPE_COMPLETE && len(draft.GetRemoves()) > 0 {
+		return nil, contract.InvalidArgument(
+			"diff_config_versions",
+			"draft.removes",
+			"removes is only used with scope=EDIT; a scope=COMPLETE draft removes an entry by omitting it from sensors instead.",
+		)
+	}
+
+	adds, err := s.resolveConfigEntries(ctx, draft.GetSensors())
+	if err != nil {
+		return nil, err
+	}
+
+	sensors := draft.GetSensors()
+
+	if draft.GetScope() == pb.PushScope_PUSH_SCOPE_EDIT {
+		baseCfg, err := s.repo.GetLatestAcceptedConfig(ctx, deviceID)
+		if err != nil {
+			s.logger.Error("get latest accepted config for draft failed", "device_id", deviceID, "error", err)
+			return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+		}
+		// base stays nil (not an empty, non-nil slice) when baseCfg == nil
+		// -- see PushDeviceConfig's identical EDIT handling.
+		var base []config.Entry
+		if baseCfg != nil {
+			base, err = s.resolveConfigEntries(ctx, baseCfg.Sensors)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		removeKeys, err := s.resolveRemoveKeys(ctx, draft.GetRemoves())
+		if err != nil {
+			return nil, err
+		}
+
+		result, err := config.Materialise(base, adds, removeKeys)
+		if err != nil {
+			switch {
+			case errors.Is(err, config.ErrNoAcceptedConfig):
+				return nil, contract.Refuse(
+					"device_config",
+					"draft.scope",
+					"This board has no accepted config to complete your edit from; send a complete push.",
+					"Push scope=COMPLETE with this device's entire desired sensor set.",
+				)
+			case errors.Is(err, config.ErrUnaddressableRemove):
+				return nil, contract.Refuse(
+					"device_config",
+					"draft.removes",
+					"This entry has no I2C address on record and cannot be removed by an edit push.",
+					"Push scope=COMPLETE with this entry omitted from the sensors list.",
+				)
+			default:
+				s.logger.Error("materialise draft failed", "device_id", deviceID, "error", err)
+				return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+			}
+		}
+
+		sensors = make([]*configpb.SensorConfig, len(result.Entries))
+		for i, e := range result.Entries {
+			sensors[i] = e.Sensor
+		}
+	}
+
+	return &configpb.DeviceConfig{DeviceId: deviceID, Sensors: sensors}, nil
+}
+
+// entryDiffToProto translates one config.EntryDiff onto the wire. Rather
+// than reconstruct mux_path/i2c_address/sensor_type from the canonical
+// hwkey.Key (which carries a resolved SensorTypeID, not the wire
+// firmware.SensorType enum), this reads them straight off whichever raw
+// *configpb.SensorConfig is present -- Target for everything but
+// DiffRemoved, Base for DiffRemoved (EntryDiff's own doc comment: Target
+// is nil exactly when Kind is DiffRemoved).
+func entryDiffToProto(d config.EntryDiff) *pb.EntryDiff {
+	sensor := d.Target
+	if sensor == nil {
+		sensor = d.Base
+	}
+	return &pb.EntryDiff{
+		Kind:       diffKindToProto(d.Kind),
+		MuxPath:    sensor.GetMuxPath(),
+		I2CAddress: sensor.GetI2CAddress(),
+		SensorType: sensor.GetSensorType(),
+	}
+}
+
+func diffKindToProto(k config.DiffKind) pb.DiffKind {
+	switch k {
+	case config.DiffAdded:
+		return pb.DiffKind_DIFF_KIND_ADDED
+	case config.DiffRemoved:
+		return pb.DiffKind_DIFF_KIND_REMOVED
+	case config.DiffChanged:
+		return pb.DiffKind_DIFF_KIND_CHANGED
+	case config.DiffUnchanged:
+		return pb.DiffKind_DIFF_KIND_UNCHANGED
+	default:
+		return pb.DiffKind_DIFF_KIND_UNSPECIFIED
+	}
 }
 
 // RewireSensor is the explicit API rewire path (FR16): it declares that

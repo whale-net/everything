@@ -292,6 +292,80 @@ package's results into `device_config`/`device_config_entry` rows and
 
 ---
 
+## Push Validation and Diff (FR39, FR37)
+
+`//leaflab/api/config`'s `Validate` (`validate.go`) runs FR39's
+server-side checks against a push payload -- everything the firmware
+would reject anyway, so a caller finds out before publishing rather than
+from a rejected `DeviceConfigAck`: I2C address range, a chip/measurement-
+type pair the catalog (`sensor_chip`/`sensor_chip_type`/`sensor_type`,
+migrations 008/010) does not produce, `poll_interval_ms` bounds
+(`leaflab/api/ENV.md`), within-payload hardware-key collisions, a remove
+key matching nothing in the base (never a silent no-op), and a remove
+naming an entry with no I2C address (FR82.4's named failure class). Every
+failure is collected into one `Validation`, each naming its entry index
+and field -- never just the first. Like the rest of this package, `Validate`
+has no database dependency: the caller resolves a `Catalog` snapshot and
+`PollIntervalBounds` once and passes them in.
+
+`Diff` (`diff.go`) computes FR37's server-side, per-entry diff between two
+complete entry sets (`ADDED`/`REMOVED`/`CHANGED`/`UNCHANGED`), by
+canonical hardware key rather than payload order. Because every stored
+payload is complete (FR82), `REMOVED` is reachable whether the prior
+version was superseded by a `COMPLETE` push that omitted the entry or an
+`EDIT` push whose `removes` dropped it. The `DiffConfigVersions` RPC
+(api.proto) diffs two versions, or a version against an unpushed draft --
+a draft is materialised through the same FR82 scope semantics as an
+actual push, but never stored or published.
+
+Boundary with FR16.4: `Validate`'s within-payload collision check does
+not, and cannot, catch a swap (two entries trading addresses) -- a swap
+produces two distinct canonical keys, not a collision. Swap handling is
+identity resolution's job (`leaflab/api/identity.go`), not validation's.
+
+---
+
+## Reported Inventory and Drift (FR49)
+
+`board_manifest_report` / `board_manifest_report_entry` (migration 035)
+store the single most recent `DeviceManifest` a board sent, plus the
+instant it was received. This is deliberately **not** derived from
+`sensor`/`sensor_hw_history`: those tables accumulate across every
+manifest a board has ever sent (an entry omitted from a later manifest is
+never retired there), so they cannot answer "what did the *last* manifest
+say" on their own. `board.last_seen_at` (migration 001) is no substitute
+either -- it updates on every message a board sends, not specifically on
+a manifest.
+
+**The report is a lossy echo of desired state, never a source.** A
+manifest only ever contains what the board's `ConfigApplier::ApplyFactory()`
+(`firmware/config/config_applier.cc`) successfully instantiated from its
+last applied config -- an entry with an unknown chip type, an invalid
+address, no resolvable bus endpoint, or an exhausted pool is silently
+dropped before it ever reaches a manifest. Because of that, the reported
+inventory is always a subset of the desired state last pushed, never a
+superset, and it is used only to report divergence (`GetConfigDrift`,
+api.proto) -- never to materialise a new config version. `leaflab/api/config`
+(FR82's EDIT-scope materialisation) must never import or query these
+tables: an entry that failed to instantiate would otherwise be silently
+deleted from the stored desired state the next time it's carried forward.
+`leaflab/conformance` asserts this structurally, not just in this prose.
+
+The write path replaces this board's entries wholesale on every manifest
+(delete then reinsert, then stamp `reported_at`) -- not SCD2 (there is no
+current/superseded distinction to preserve, only "the latest one", the
+same "last value" shape `board.last_seen_at` itself has). Column shape
+mirrors `device_config_entry`'s canonical hardware key (FR18) exactly.
+
+`GetConfigDrift` classifies every canonical hardware key seen on either
+side of (stored desired state, reported inventory):
+`IN_DESIRED_NOT_REPORTED` (the interesting case: the board did not
+instantiate this entry), `REPORTED_NOT_IN_DESIRED` (should be impossible
+under FR82 replace semantics -- reported loudly, never swallowed), or
+`MATCHED`.
+
+---
+
 ## SCD2 Convention
 
 All SCD2 (Slowly Changing Dimension Type 2) history tables follow a uniform column convention:

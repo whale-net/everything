@@ -975,3 +975,77 @@ func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID
 	}
 	return nil
 }
+
+// ManifestReportEntry is one entry of a board's most recently reported
+// DeviceManifest (FR49), captured for board_manifest_report_entry
+// (migration 035) by UpsertBoardManifestReport. HW is nil exactly when
+// handleManifest's own HardwareAddress resolution left the entry with no
+// usable hardware address (absent, or the legacy "unknown address"
+// sentinel address 0) -- mirroring UpsertSensorHWHistory's own nil
+// handling, so an entry's i2c_address lands NULL in the same case it would
+// for sensor_hw_history. See leaflab/DATA.md "Reported Inventory and Drift
+// (FR49)".
+type ManifestReportEntry struct {
+	HW           *HardwareAddress
+	SensorTypeID int64
+	Name         string
+	Unit         string
+	ChipModel    string
+}
+
+// UpsertBoardManifestReport replaces boardID's board_manifest_report /
+// board_manifest_report_entry rows (migration 035) with entries, the
+// DeviceManifest just received, stamping reportedAt (FR49). This is a
+// replace-on-write snapshot of the single most recent manifest -- not
+// SCD2, not an append -- mirroring board.last_seen_at's own "the latest
+// one" shape (035's own doc comment): every existing entry row for this
+// board is deleted and entries reinserted, inside one transaction with the
+// parent board_manifest_report row's upsert, so a reader never observes a
+// torn mix of an old and a new manifest's entries.
+//
+// entries is expected to already exclude anything handleManifest couldn't
+// resolve a sensor_type for -- board_manifest_report_entry.sensor_type_id
+// is NOT NULL, the same constraint device_config_entry has, and for the
+// same reason (see leaflab/api/repository.go's
+// InsertDeviceConfigNextVersion doc comment).
+func (r *Repository) UpsertBoardManifestReport(ctx context.Context, boardID int64, entries []ManifestReportEntry, reportedAt time.Time) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx for board_manifest_report board=%d: %w", boardID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck -- no-op once committed; only matters on the early-return paths below
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO board_manifest_report (board_id, reported_at)
+		VALUES ($1, $2)
+		ON CONFLICT (board_id) DO UPDATE SET reported_at = EXCLUDED.reported_at
+	`, boardID, reportedAt); err != nil {
+		return fmt.Errorf("upsert board_manifest_report board=%d: %w", boardID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM board_manifest_report_entry WHERE board_id = $1
+	`, boardID); err != nil {
+		return fmt.Errorf("clear board_manifest_report_entry board=%d: %w", boardID, err)
+	}
+
+	for _, e := range entries {
+		muxText := hwkey.MuxPath(nil).SQLText()
+		var i2cAddr *int32
+		if e.HW != nil {
+			muxText = e.HW.MuxPath.SQLText()
+			if v, ok := e.HW.I2CAddress.Value(); ok {
+				addr := int32(v)
+				i2cAddr = &addr
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO board_manifest_report_entry (board_id, i2c_address, mux_path, sensor_type_id, name, unit, chip_model)
+			VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7)
+		`, boardID, i2cAddr, muxText, e.SensorTypeID, e.Name, e.Unit, e.ChipModel); err != nil {
+			return fmt.Errorf("insert board_manifest_report_entry board=%d: %w", boardID, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}

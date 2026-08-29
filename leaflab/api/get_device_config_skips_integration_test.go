@@ -101,7 +101,7 @@ func newGetDeviceConfigSkipsTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpoo
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: getDeviceConfigSkipsTestSchema})
 	repo := NewRepository(db.Pool)
 	resolver := authz.NewPGResolver(db.Pool)
-	return NewLeafLabAPIServer(repo, resolver, nil, nil, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, resolver, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds), db.Pool
 }
 
 func gdcsCtxFor(subject string) context.Context {

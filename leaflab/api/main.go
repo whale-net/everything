@@ -16,6 +16,7 @@ import (
 
 	"github.com/whale-net/everything/leaflab/api/ackwait"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/leaflab/api/readings"
@@ -63,6 +64,18 @@ func run() error {
 	}
 	oidcIssuer := getEnv("LEAFLAB_API_OIDC_ISSUER", "")
 	oidcClientID := getEnv("LEAFLAB_API_OIDC_CLIENT_ID", "")
+
+	// FR39: poll_interval_ms's stated min/max (leaflab/api/ENV.md) --
+	// resolved once at boot, never inferred or left at the zero value (a
+	// zero PollIntervalBounds would fail every nonzero poll_interval_ms;
+	// see config.PollIntervalBounds' own doc comment).
+	pollIntervalBounds, err := parsePollIntervalBounds(
+		getEnv("LEAFLAB_API_POLL_INTERVAL_MS_MIN", strconv.FormatUint(uint64(DefaultPollIntervalMsMin), 10)),
+		getEnv("LEAFLAB_API_POLL_INTERVAL_MS_MAX", strconv.FormatUint(uint64(DefaultPollIntervalMsMax), 10)),
+	)
+	if err != nil {
+		return err
+	}
 
 	// FR11: AuthModeNone injects fake dev Claims with no token required --
 	// refuse to boot with it outside explicit dev mode rather than silently
@@ -132,7 +145,7 @@ func run() error {
 	// leaflab/api/ackwait's doc comment for why this satisfies NFR15's
 	// every-replica broadcast constraint without a shared store.
 	ackWaitRegistry := ackwait.NewRegistry()
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, readingsSvc, publisher, rmqConn, invalidationPub, logging.Get("api"), WithElevationDuration(elevationDuration)).
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, readingsSvc, publisher, rmqConn, invalidationPub, logging.Get("api"), pollIntervalBounds, WithElevationDuration(elevationDuration)).
 		WithAckWaitRegistry(ackWaitRegistry)
 
 	// NFR15: observes every KindAck event published by leaflab/processor's
@@ -286,6 +299,26 @@ func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamSe
 	}
 
 	return grpcServer
+}
+
+// parsePollIntervalBounds parses LEAFLAB_API_POLL_INTERVAL_MS_MIN/_MAX
+// (leaflab/api/ENV.md) into FR39's config.PollIntervalBounds. Extracted
+// from run() so boot-time validation is unit-testable without dialing
+// Postgres/RabbitMQ, matching validateAuthBootConfig's own pattern above.
+func parsePollIntervalBounds(minStr, maxStr string) (config.PollIntervalBounds, error) {
+	minMs, err := strconv.ParseUint(minStr, 10, 32)
+	if err != nil {
+		return config.PollIntervalBounds{}, fmt.Errorf("LEAFLAB_API_POLL_INTERVAL_MS_MIN: %w", err)
+	}
+	maxMs, err := strconv.ParseUint(maxStr, 10, 32)
+	if err != nil {
+		return config.PollIntervalBounds{}, fmt.Errorf("LEAFLAB_API_POLL_INTERVAL_MS_MAX: %w", err)
+	}
+	if minMs == 0 || maxMs == 0 || minMs > maxMs {
+		return config.PollIntervalBounds{}, fmt.Errorf(
+			"LEAFLAB_API_POLL_INTERVAL_MS_MIN/_MAX: min=%d max=%d is not a valid nonzero, min<=max range", minMs, maxMs)
+	}
+	return config.PollIntervalBounds{MinMs: uint32(minMs), MaxMs: uint32(maxMs)}, nil
 }
 
 func getEnv(key, def string) string {

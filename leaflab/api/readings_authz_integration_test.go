@@ -104,7 +104,7 @@ func newReadingsAuthzTestServer(t *testing.T, readingsSvc readingsReader) (*Leaf
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: readingsAuthzTestSchema})
 	repo := NewRepository(db.Pool)
 	resolver := authz.NewPGResolver(db.Pool)
-	return NewLeafLabAPIServer(repo, resolver, readingsSvc, nil, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, resolver, readingsSvc, nil, nil, nil, discardLogger(), defaultPollIntervalBounds), db.Pool
 }
 
 func insertReadingsHousehold(t *testing.T, pool *pgxpool.Pool) int64 {

@@ -12,6 +12,7 @@ import (
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/protoadapt"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -169,18 +170,104 @@ func build(class FailureClass, entity, field, reason, alternative string) error 
 
 // FromError extracts the pb.Failure detail from err, if present. A caller
 // uses this -- never message-string parsing -- to branch on class, entity
-// and field (FR59.1).
+// and field (FR59.1). When err carries more than one Failure detail (see
+// Many/AllFailures below), FromError returns only the first -- a caller
+// that must see every failure (FR39's "all failures returned together")
+// needs AllFailures instead.
 func FromError(err error) (*pb.Failure, bool) {
+	failures, ok := AllFailures(err)
+	if !ok {
+		return nil, false
+	}
+	return failures[0], true
+}
+
+// AllFailures extracts every pb.Failure detail carried by err, in the
+// order they were attached. Unlike FromError (which only ever returns the
+// first), this is the one accessor a caller must use to see every failure
+// on an error built by Many -- FR39's "all failures returned together,
+// never just the first" applies to the reading side too: a caller that
+// only calls FromError on a Many-built error silently drops every failure
+// but the first.
+func AllFailures(err error) ([]*pb.Failure, bool) {
 	st, ok := status.FromError(err)
 	if !ok {
 		return nil, false
 	}
+	var failures []*pb.Failure
 	for _, d := range st.Details() {
 		if f, ok := d.(*pb.Failure); ok {
-			return f, true
+			failures = append(failures, f)
 		}
 	}
-	return nil, false
+	if len(failures) == 0 {
+		return nil, false
+	}
+	return failures, true
+}
+
+// FailureDetail is one failure to attach to a multi-failure error built by
+// Many (FR39's "every failure found is collected together, never just the
+// first -- a single failure must not mask the rest"). Unlike New's flat
+// class/entity/field/reason, each FailureDetail carries its own Class and
+// (optionally) Alternative, so a caller branches per-detail exactly as it
+// would on a single-failure error's Failure.Class via AllFailures --
+// entity is shared by every detail in one Many call, matching New's own
+// "one entity per error" shape at the single-failure level.
+type FailureDetail struct {
+	Class  FailureClass
+	Field  string
+	Reason string
+	// Alternative is set only when Class is FailureRefusedWithAlternative
+	// (FR59.3), same as New/Refuse's own split.
+	Alternative string
+}
+
+// Many builds a gRPC error carrying every one of details as a separate
+// pb.Failure status detail -- FR39's validation surface, where a payload
+// can fail several independent checks at once and every one of them must
+// reach the caller, not just whichever was found first. entity is shared
+// by every detail. gRPC allows exactly one status code per error, so the
+// outer code is taken from details[0].Class alone; that code is a
+// transport-level envelope only; it is never what a caller branches on
+// (see New's doc comment) -- AllFailures(err) is what recovers every
+// detail's own Class. Many panics if details is empty: a caller with
+// nothing to report should not call this at all.
+func Many(entity string, details []FailureDetail) error {
+	if len(details) == 0 {
+		panic("contract.Many called with no failure details")
+	}
+	code, ok := grpcCode[details[0].Class]
+	if !ok {
+		code = codes.Unknown
+	}
+	st := status.New(code, details[0].Reason)
+	pbDetails := make([]*pb.Failure, len(details))
+	for i, d := range details {
+		pbDetails[i] = &pb.Failure{
+			Class:       string(d.Class),
+			Entity:      entity,
+			Field:       d.Field,
+			Reason:      d.Reason,
+			Alternative: d.Alternative,
+		}
+	}
+	withDetails, err := st.WithDetails(protoMessages(pbDetails)...)
+	if err != nil {
+		// WithDetails only errors on a malformed proto, which pb.Failure
+		// never is here -- fall back to the un-detailed status rather than
+		// panic or silently drop every failure.
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+func protoMessages(details []*pb.Failure) []protoadapt.MessageV1 {
+	out := make([]protoadapt.MessageV1, len(details))
+	for i, d := range details {
+		out[i] = d
+	}
+	return out
 }
 
 // RetryAfterFromError extracts the retry-after duration from err's

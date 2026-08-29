@@ -144,7 +144,7 @@ func newScopeIntegrationServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) 
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: scopeSchema})
 	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds), db.Pool
 }
 
 func insertScopeSensorType(t *testing.T, pool *pgxpool.Pool, name, unit string) int64 {

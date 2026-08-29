@@ -37,7 +37,7 @@ func TestAwaitConfigAck_AlreadyAccepted_ReturnsImmediately_NoRegistryNeeded(t *t
 	repo := &fakeRepo{getDeviceConfigVersionResponse: &DeviceConfigVersionRow{
 		ConfigID: 1, Version: 3, Accepted: true, PushedAt: fixedPushedAt, AckedAt: &fixedAckedAtTest,
 	}}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	// No WithAckWaitRegistry call: nil ackWait must never be reached for an
 	// already-resolved version.
 
@@ -58,7 +58,7 @@ func TestAwaitConfigAck_AlreadyRejected_ReturnsVerbatimReason_Immediately(t *tes
 	repo := &fakeRepo{getDeviceConfigVersionResponse: &DeviceConfigVersionRow{
 		ConfigID: 1, Version: 3, Accepted: false, PushedAt: fixedPushedAt, AckedAt: &fixedAckedAtTest, RejectionReason: reason,
 	}}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.AwaitConfigAck(authedTestCtx("alice"), &pb.AwaitConfigAckRequest{DeviceId: "board-a", Version: 3, RequestedWaitSeconds: 30})
 	if err != nil {
@@ -77,7 +77,7 @@ func TestAwaitConfigAck_AlreadyRejected_ReturnsVerbatimReason_Immediately(t *tes
 // indistinguishable from no push at all" extends to this RPC).
 func TestAwaitConfigAck_NoSuchVersion_NotFound(t *testing.T) {
 	repo := &fakeRepo{getDeviceConfigVersionResponse: nil}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	_, err := server.AwaitConfigAck(authedTestCtx("alice"), &pb.AwaitConfigAckRequest{DeviceId: "board-a", Version: 999})
 	if err == nil {
@@ -96,7 +96,7 @@ func TestAwaitConfigAck_NoSuchVersion_NotFound(t *testing.T) {
 // short-circuits before any repository read, same as FR34/FR35's RPCs.
 func TestAwaitConfigAck_NonMember_Refused(t *testing.T) {
 	repo := &fakeRepo{getDeviceConfigVersionResponse: &DeviceConfigVersionRow{Version: 1, PushedAt: fixedPushedAt}}
-	server := NewLeafLabAPIServer(repo, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, nonMemberAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	_, err := server.AwaitConfigAck(authedTestCtx("mallory"), &pb.AwaitConfigAckRequest{DeviceId: "board-a", Version: 1})
 	if err == nil {
@@ -119,7 +119,7 @@ func TestAwaitConfigAck_PendingThenNotifyAccept_ResolvesAccepted(t *testing.T) {
 		ConfigID: 1, Version: 3, Accepted: false, PushedAt: fixedPushedAt, AckedAt: nil,
 	}}
 	registry := ackwait.NewRegistry()
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger()).WithAckWaitRegistry(registry)
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds).WithAckWaitRegistry(registry)
 
 	respCh := make(chan *pb.AwaitConfigAckResponse, 1)
 	errCh := make(chan error, 1)
@@ -157,7 +157,7 @@ func TestAwaitConfigAck_PendingThenNotifyReject_ReturnsVerbatimReason(t *testing
 		ConfigID: 1, Version: 3, Accepted: false, PushedAt: fixedPushedAt, AckedAt: nil,
 	}}
 	registry := ackwait.NewRegistry()
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger()).WithAckWaitRegistry(registry)
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds).WithAckWaitRegistry(registry)
 
 	respCh := make(chan *pb.AwaitConfigAckResponse, 1)
 	go func() {
@@ -198,7 +198,7 @@ func TestAwaitConfigAck_DeadlineElapses_ReturnsStillPendingAtDeadline_NeverError
 		ConfigID: 1, Version: 3, Accepted: false, PushedAt: fixedPushedAt, AckedAt: nil,
 	}}
 	registry := ackwait.NewRegistry()
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger()).WithAckWaitRegistry(registry)
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds).WithAckWaitRegistry(registry)
 
 	// requested_wait_seconds is whole seconds on the wire (proto uint32) --
 	// the smallest nonzero value is 1s, still fast enough for a unit test.
@@ -220,7 +220,7 @@ func TestAwaitConfigAck_NoRegistryWired_InternalFailure(t *testing.T) {
 	repo := &fakeRepo{getDeviceConfigVersionResponse: &DeviceConfigVersionRow{
 		ConfigID: 1, Version: 3, Accepted: false, PushedAt: fixedPushedAt, AckedAt: nil,
 	}}
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	// Deliberately no WithAckWaitRegistry call.
 
 	_, err := server.AwaitConfigAck(authedTestCtx("alice"), &pb.AwaitConfigAckRequest{DeviceId: "board-a", Version: 3, RequestedWaitSeconds: 5})
@@ -245,7 +245,7 @@ func TestAwaitConfigAck_CtxCancelled_ResolvesStillPendingAtDeadline_NotError(t *
 		ConfigID: 1, Version: 3, Accepted: false, PushedAt: fixedPushedAt, AckedAt: nil,
 	}}
 	registry := ackwait.NewRegistry()
-	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger()).WithAckWaitRegistry(registry)
+	server := NewLeafLabAPIServer(repo, boardScopedAuthz(7), nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds).WithAckWaitRegistry(registry)
 
 	ctx, cancel := context.WithCancel(authedTestCtx("alice"))
 	respCh := make(chan *pb.AwaitConfigAckResponse, 1)

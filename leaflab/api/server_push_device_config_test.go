@@ -29,7 +29,7 @@ const foreignRegionID = 42
 const sameHouseholdRegionID = 43
 
 func newPushValidationServer(repo *fakeRepo, authzSvc *fakeAuthz) *LeafLabAPIServer {
-	return NewLeafLabAPIServer(repo, authzSvc, nil, nil, nil, nil, discardLogger())
+	return NewLeafLabAPIServer(repo, authzSvc, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 }
 
 // TestPushDeviceConfig_ForeignHouseholdRegion_Refused_WritesNothing is this

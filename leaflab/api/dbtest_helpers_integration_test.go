@@ -165,7 +165,7 @@ func newTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	// tiers, plant_region_history, ...), so nothing in this file's tests
 	// exercises the four bounded-read-path RPCs -- but a later test added
 	// to this same fixture can, without a second helper.
-	return NewLeafLabAPIServer(repo, stubAuthz{}, readings.NewReader(db.Pool), nil, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, stubAuthz{}, readings.NewReader(db.Pool), nil, nil, nil, discardLogger(), defaultPollIntervalBounds), db.Pool
 }
 
 // newTestRepository starts a real Postgres container, applies testSchema,

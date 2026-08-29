@@ -1,0 +1,24 @@
+"""FR49 structural conformance -- the reported manifest inventory is a report, never a source (#1375)."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "conformance",
+    srcs = ["doc.go"],
+    importpath = "github.com/whale-net/everything/leaflab/conformance",
+    visibility = ["//visibility:private"],
+)
+
+# Source-analysis test asserting leaflab/api/config's checked-in source has
+# no import of, or reference to, the manifest-report tables/types (FR49) --
+# see manifest_never_source_test.go's doc comment. Reads
+# leaflab/api/config's *.go files as data (staged via that package's own
+# "conformance_srcs" filegroup) rather than importing the package: the
+# whole point is to check the source text/imports themselves, not compile
+# against them.
+go_test(
+    name = "conformance_test",
+    srcs = ["manifest_never_source_test.go"],
+    data = ["//leaflab/api/config:conformance_srcs"],
+    embed = [":conformance"],
+)

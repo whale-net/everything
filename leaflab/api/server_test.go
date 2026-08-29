@@ -132,6 +132,28 @@ type fakeRepo struct {
 	listConfigHistoryResponse []DeviceConfigHistoryRow
 	listConfigHistoryErr      error
 	listConfigHistoryCalls    []listConfigHistoryCall
+
+	// getConfigVersionResponses configures GetConfigVersion's return per
+	// version -- FR37's DiffConfigVersions RPC lookup. A version with no
+	// entry here returns (nil, nil), matching Repository.GetConfigVersion's
+	// own "unknown version" contract.
+	getConfigVersionResponses map[uint64]*configpb.DeviceConfig
+
+	// loadCatalogResponse configures LoadCatalog's return -- FR39's
+	// chip/measurement-type catalog snapshot. nil (the zero value) is a
+	// usable, empty Catalog (config.Catalog's own nil-safe Produces), so
+	// this file's tests -- none of which set ChipType on a sensor -- never
+	// need to configure it.
+	loadCatalogResponse *pushconfig.Catalog
+
+	// getReportedInventoryFound/-Entries/-At/-Err configure
+	// GetReportedInventory's return -- FR49's reported-inventory read path
+	// (reported_inventory.go). Found defaults to false (zero value), the
+	// "no manifest received yet" case.
+	getReportedInventoryFound   bool
+	getReportedInventoryEntries []ReportedInventoryRow
+	getReportedInventoryAt      time.Time
+	getReportedInventoryErr     error
 }
 
 // listConfigHistoryCall is one recorded ListConfigHistory invocation -- see
@@ -223,6 +245,14 @@ func (f *fakeRepo) GetLatestAcceptedConfig(ctx context.Context, deviceID string)
 
 func (f *fakeRepo) GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error) {
 	return nil, nil
+}
+
+func (f *fakeRepo) GetConfigVersion(ctx context.Context, deviceID string, version uint64) (*configpb.DeviceConfig, error) {
+	return f.getConfigVersionResponses[version], nil
+}
+
+func (f *fakeRepo) LoadCatalog(ctx context.Context) (*pushconfig.Catalog, error) {
+	return f.loadCatalogResponse, nil
 }
 
 func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error) {
@@ -367,6 +397,10 @@ func (f *fakeRepo) ListConfigHistory(ctx context.Context, deviceID string, befor
 	return f.listConfigHistoryResponse, f.listConfigHistoryErr
 }
 
+func (f *fakeRepo) GetReportedInventory(ctx context.Context, deviceID string) (bool, []ReportedInventoryRow, time.Time, error) {
+	return f.getReportedInventoryFound, f.getReportedInventoryEntries, f.getReportedInventoryAt, f.getReportedInventoryErr
+}
+
 // fakeAuthz implements authzResolver entirely in memory, with call
 // counters so tests can assert on NFR2's "one query" structural shape
 // (resolve the entity and the scope in the same number of round trips
@@ -464,7 +498,7 @@ func countPopulatedFields(msg protoreflect.Message) int {
 // for the same assertion exercised through the full RPC/interceptor chain,
 // including the allowlist itself.
 func TestGetHealth_NoCredential_Succeeds(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -479,7 +513,7 @@ func TestGetHealth_NoCredential_Succeeds(t *testing.T) {
 // to HEALTH_DEGRADED and nothing more specific -- no error, no detail about
 // which dependency failed (FR63.2).
 func TestGetHealth_DatabaseUnreachable_Degraded(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("connection refused")}, nil, nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("connection refused")}, nil, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -497,7 +531,7 @@ func TestGetHealth_DatabaseUnreachable_Degraded(t *testing.T) {
 // RabbitMQ-MQTT connection also maps to HEALTH_DEGRADED, independent of DB
 // health (FR63.1's "pgx pool or the RabbitMQ/MQTT connection").
 func TestGetHealth_MQConnectionNil_Degraded(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{}, nil, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -517,7 +551,7 @@ func TestGetHealth_MQConnectionNil_Degraded(t *testing.T) {
 // not yours" must still answer as a successful RPC), so this test simply
 // pins that invariant.
 func TestGetHealth_ErrorNeverCarriesDependencyDetail(t *testing.T) {
-	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("dial tcp 10.0.0.5:5432: connect: connection refused")}, nil, nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{pingErr: errors.New("dial tcp 10.0.0.5:5432: connect: connection refused")}, nil, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	_, err := server.GetHealth(context.Background(), &pb.GetHealthRequest{})
 	if err != nil {
@@ -555,7 +589,7 @@ func TestGetDeviceConfig_NonexistentAndOutOfScope_ByteIdenticalFailure(t *testin
 		resolveErr: authz.ErrNotFound,
 	}
 	nonexistentRepo := &fakeRepo{}
-	nonexistentServer := NewLeafLabAPIServer(nonexistentRepo, nonexistentAuthz, nil, nil, nil, nil, discardLogger())
+	nonexistentServer := NewLeafLabAPIServer(nonexistentRepo, nonexistentAuthz, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	_, nonexistentErr := nonexistentServer.GetDeviceConfig(authedTestCtx("alice"), &pb.GetDeviceConfigRequest{DeviceId: "does-not-exist"})
 	if nonexistentErr == nil {
 		t.Fatal("GetDeviceConfig for a nonexistent device_id returned nil error, want a refusal")
@@ -570,7 +604,7 @@ func TestGetDeviceConfig_NonexistentAndOutOfScope_ByteIdenticalFailure(t *testin
 		resolveRes: authz.Resolution{HouseholdID: 2}, // a different household than callerScope's 1
 	}
 	outOfScopeRepo := &fakeRepo{}
-	outOfScopeServer := NewLeafLabAPIServer(outOfScopeRepo, outOfScopeAuthz, nil, nil, nil, nil, discardLogger())
+	outOfScopeServer := NewLeafLabAPIServer(outOfScopeRepo, outOfScopeAuthz, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	_, outOfScopeErr := outOfScopeServer.GetDeviceConfig(authedTestCtx("alice"), &pb.GetDeviceConfigRequest{DeviceId: "device-belongs-to-household-2"})
 	if outOfScopeErr == nil {
 		t.Fatal("GetDeviceConfig for an out-of-scope device returned nil error, want a refusal")
@@ -611,7 +645,7 @@ func TestGetDeviceConfig_NonexistentAndOutOfScope_SameQueryShape(t *testing.T) {
 	callerScope := authz.NewHouseholdScope(1)
 
 	nonexistentAuthz := &fakeAuthz{scope: callerScope, resolveErr: authz.ErrNotFound}
-	nonexistentServer := NewLeafLabAPIServer(&fakeRepo{}, nonexistentAuthz, nil, nil, nil, nil, discardLogger())
+	nonexistentServer := NewLeafLabAPIServer(&fakeRepo{}, nonexistentAuthz, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	if _, err := nonexistentServer.GetDeviceConfig(authedTestCtx("alice"), &pb.GetDeviceConfigRequest{DeviceId: "does-not-exist"}); err == nil {
 		t.Fatal("want a refusal")
 	}
@@ -621,7 +655,7 @@ func TestGetDeviceConfig_NonexistentAndOutOfScope_SameQueryShape(t *testing.T) {
 		resolveRef: authz.EntityRef{Kind: authz.EntityBoard, ID: 7},
 		resolveRes: authz.Resolution{HouseholdID: 2},
 	}
-	outOfScopeServer := NewLeafLabAPIServer(&fakeRepo{}, outOfScopeAuthz, nil, nil, nil, nil, discardLogger())
+	outOfScopeServer := NewLeafLabAPIServer(&fakeRepo{}, outOfScopeAuthz, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 	if _, err := outOfScopeServer.GetDeviceConfig(authedTestCtx("alice"), &pb.GetDeviceConfigRequest{DeviceId: "device-b"}); err == nil {
 		t.Fatal("want a refusal")
 	}
@@ -646,7 +680,7 @@ func TestGetDeviceConfig_NonexistentAndOutOfScope_SameQueryShape(t *testing.T) {
 func TestListBoards_ScopeThreadedToRepository_MultiHousehold(t *testing.T) {
 	callerScope := authz.NewUnionScope(authz.NewHouseholdScope(10), authz.NewHouseholdScope(20))
 	repo := &fakeRepo{}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{scope: callerScope}, nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{scope: callerScope}, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	if _, err := server.ListBoards(authedTestCtx("bob"), &pb.ListBoardsRequest{}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -676,7 +710,7 @@ func TestListBoards_ScopeThreadedToRepository_MultiHousehold(t *testing.T) {
 // itself still succeeds with an empty list rather than an error (FR5.1).
 func TestListBoards_EmptyScope_NotWidened(t *testing.T) {
 	repo := &fakeRepo{listBoardsRows: nil}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{scope: authz.NewUnionScope()}, nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{scope: authz.NewUnionScope()}, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	resp, err := server.ListBoards(authedTestCtx("nobody"), &pb.ListBoardsRequest{})
 	if err != nil {
@@ -703,7 +737,7 @@ func TestListBoards_EmptyScope_NotWidened(t *testing.T) {
 // never even call it.
 func TestScopeForCaller_NoClaims_FailsClosed(t *testing.T) {
 	authzSvc := &fakeAuthz{scope: allPermittingScope{}}
-	server := NewLeafLabAPIServer(&fakeRepo{}, authzSvc, nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{}, authzSvc, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	scope, err := server.scopeForCaller(context.Background())
 	if err != nil {
@@ -722,7 +756,7 @@ func TestScopeForCaller_NoClaims_FailsClosed(t *testing.T) {
 // authenticated subject), rather than failing closed unconditionally.
 func TestScopeForCaller_WithClaims_DelegatesToAuthzSvc(t *testing.T) {
 	authzSvc := &fakeAuthz{scope: authz.NewHouseholdScope(5)}
-	server := NewLeafLabAPIServer(&fakeRepo{}, authzSvc, nil, nil, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(&fakeRepo{}, authzSvc, nil, nil, nil, nil, discardLogger(), defaultPollIntervalBounds)
 
 	scope, err := server.scopeForCaller(authedTestCtx("alice"))
 	if err != nil {
