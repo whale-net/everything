@@ -17,7 +17,7 @@ Shared conventions all `project-manager` personas follow. Everything lives in Gi
 
 Discussions are where ideas are figured out and reconciled between producer, architect, and requester. Issues are where the final, approved requirements doc lives. Projects (and issues moving through swimlanes) are where implementation orchestration lives.
 
-## Intake discussion & plan reconciliation
+## Intake discussion & design reconciliation
 
 The entire intake interview, specification drafting, and architect reconciliation happen inside a GitHub Discussion in category `Ideas`. This keeps iterative back-and-forth noise off the issue tracker, ensuring the root plan issue remains a clean, durable spec of record.
 
@@ -43,7 +43,7 @@ stateDiagram-v2
     meeting --> humanReview: meeting cleared
     humanReview --> draft: changes requested (re-loop)
     humanReview --> rootIssue: human approves
-    rootIssue --> projectBoard: planner builds Project
+    rootIssue --> projectBoard: planner builds Project (plan skill)
     projectBoard --> [*]
 ```
 
@@ -69,7 +69,7 @@ stateDiagram-v2
    - **Nitpicks** — non-blocking suggestions.
    Producer answers open questions in discussion comments and updates the draft. The loop repeats until architect posts an explicit sign-off comment (e.g. `Architect sign-off: approved`).
 
-4. **Stakeholder meeting (optional).** Off by default; requested with `/project-manager:plan ... --stakeholder-meeting`, or held later against the approved root issue. Every persona named in the spec gets one round of feedback before the human review gate — see § Stakeholder meeting below. Blockers return the draft to the producer/architect loop; guidance and non-blocking feedback do not gate the plan.
+4. **Stakeholder meeting (optional).** Off by default; requested with `/project-manager:design ... --stakeholder-meeting`, or held later against the approved root issue. Every persona named in the spec gets one round of feedback before the human review gate — see § Stakeholder meeting below. Blockers return the draft to the producer/architect loop; guidance and non-blocking feedback do not gate the plan.
 
 5. **Human review & issue creation (Mode 3).** Once architect has signed off — and the stakeholder meeting is cleared, if one was held — the draft is presented to the human reviewer via `/project-manager:review <discussion-url>`.
    - If changes requested: human leaves feedback, producer and architect re-loop in the discussion.
@@ -84,7 +84,7 @@ stateDiagram-v2
 
 ## Stakeholder meeting
 
-An optional round in which **every persona named in the plan's spec** reviews the draft from its own seat and reports back, before the plan is handed to the human review gate. Run by `/project-manager:stakeholder-meeting`, either automatically from `/project-manager:plan --stakeholder-meeting` (target: the intake Discussion, after architect sign-off) or on demand against an approved root plan Issue.
+An optional round in which **every persona named in the plan's spec** reviews the draft from its own seat and reports back, before the plan is handed to the human review gate. Run by `/project-manager:stakeholder-meeting`, either automatically from `/project-manager:design --stakeholder-meeting` (target: the intake Discussion, after architect sign-off) or on demand against an approved root plan Issue.
 
 It exists because architect reconciles the plan against the *codebase*; nobody otherwise reconciles it against the *people it is for*. A persona that cannot finish its job under the plan as written is a defect in the requirements, and it is cheaper to find before implementation.
 
@@ -110,13 +110,13 @@ Stakeholder meeting: cleared
 Stakeholder meeting: blocked (<k> blockers)
 ```
 
-**Routing.** `cleared` → hand off to `/project-manager:review`. `blocked` → producer (Mode 2) reads the consolidated blockers from the meeting discussion's minutes comment, answers each `SB-<round>.<n>` and updates the draft in the target discussion, architect re-reconciles and re-signs off there, then the next meeting round runs (a fresh meeting Discussion). Cap at 2 rounds from `/project-manager:plan` (`--stakeholder-rounds`), 3 when the skill is invoked directly; past the cap, the standing disagreement goes to the human rather than looping. If the target is an already-approved root Issue, the spec of record is never edited silently — producer amends the issue body only after the user confirms, and posts `Amended after stakeholder meeting round <N>: <summary>` as a comment on the root issue.
+**Routing.** `cleared` → hand off to `/project-manager:review`. `blocked` → producer (Mode 2) reads the consolidated blockers from the meeting discussion's minutes comment, answers each `SB-<round>.<n>` and updates the draft in the target discussion, architect re-reconciles and re-signs off there, then the next meeting round runs (a fresh meeting Discussion). Cap at 2 rounds from `/project-manager:design` (`--stakeholder-rounds`), 3 when the skill is invoked directly; past the cap, the standing disagreement goes to the human rather than looping. If the target is an already-approved root Issue, the spec of record is never edited silently — producer amends the issue body only after the user confirms, and posts `Amended after stakeholder meeting round <N>: <summary>` as a comment on the root issue.
 
 **Boundaries.** Stakeholders represent one persona each and never speak for another; they do not propose implementations, edit requirements, create task issues, or gate the plan — only the human review gate approves. Blockers change the plan; they never become task issues.
 
 ## Project setup
 
-Once the root issue is created and labeled `plan:approved`, planner creates the plan's Project board:
+Once the root issue is created and labeled `plan:approved`, `/project-manager:plan` dispatches planner to create the plan's Project board:
 
 1. **Idempotency check first.** `gh issue view <root-issue-number> --comments` — if a prior comment contains `Project board: <url>`, reuse that project number.
 2. Create it: `gh project create --owner whale-net --title "Plan: <feature title> (#<n>)" --format json` — capture `.number`.

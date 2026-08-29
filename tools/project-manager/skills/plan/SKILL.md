@@ -1,55 +1,27 @@
 ---
 name: plan
-description: Start a new project-manager plan — interviews you for requirements/user stories in a GitHub Discussion, drafts the specification, then loops producer/architect in the Discussion until architect signs off and hands off to review. Optionally holds a stakeholder meeting with every persona in the spec before hand-off.
+description: Task breakdown — converts an approved project-manager root plan Issue (plan:approved) into a GitHub Project board with swimlanes and cohesive task issues, by dispatching the planner persona. Idempotent: if the Project board already exists, reports it instead of recreating it. Run after /project-manager:review approves the spec, before /project-manager:implement. Also the right target for requests like "just set up the board" / "create the tasks but don't start work" / "plan only".
 ---
 
 # plan
 
-Orchestrates the project-manager planning pipeline inside a GitHub Discussion from a feature idea up to architect sign-off, optionally including a stakeholder meeting round. See `tools/project-manager/CONVENTIONS.md` for the full lifecycle.
+Turns a `plan:approved` root plan Issue into executable, dependency-tracked task issues on a Project board, by dispatching `project-manager:planner`. This is pure task breakdown — no code is written and no branches are touched; see `tools/project-manager/CONVENTIONS.md` § Project setup and § Task issues & swimlane progression for the mechanics `planner` follows.
 
 ## Usage
 
 ```
-/project-manager:plan "short feature description"
-/project-manager:plan <discussion-url>        # resume an existing intake discussion
-/project-manager:plan                         # no args — ask what the feature is
+/project-manager:plan 123
+/project-manager:plan 123 --planner-model sonnet
 ```
 
-### Parameters
-
-| Parameter | Default | Effect |
-|---|---|---|
-| `--stakeholder-meeting` | off | After architect sign-off, run `/project-manager:stakeholder-meeting` on the discussion: every persona in the spec gives a round of feedback, and any blocker it raises goes back through the producer/architect loop before hand-off to review. |
-| `--stakeholder-rounds <n>` | `2` | Maximum stakeholder meeting rounds before stopping and summarizing standing blockers for the user. Implies `--stakeholder-meeting`. |
-| `--personas "<a,b>"` | spec personas | Passed through to the stakeholder meeting — meet with only these personas instead of every persona named in the spec. Implies `--stakeholder-meeting`. |
-
-Example: `/project-manager:plan "device firmware rollback" --stakeholder-meeting`
+- `--planner-model <model>` — model override passed to the `Agent` call that dispatches `planner`. **Defaults to `opus`.** Task breakdown (swimlaning, dependency wiring, issue scoping) is the highest-leverage reasoning step in this pipeline and worth the strongest available model; running it as a subagent also keeps the board/issue-creation tool traffic out of this skill's own context.
 
 ## Steps
 
-1. **Resolve the discussion.**
-   - If given a discussion URL/number, inspect its latest comments. If architect has already signed off, skip to step 6 when a stakeholder meeting was requested and none has been held yet; otherwise stop and point the user to `/project-manager:review <discussion-url>`.
-   - If given a description (or nothing — ask for one), proceed to intake.
+1. `gh issue view <n>` — confirm the root issue is labeled `plan:approved`. If not, point the user to `/project-manager:design` or `/project-manager:review`.
 
-2. **Intake (new plans only).** Open the intake discussion first:
-   ```sh
-   gh discussion create --title "Intake: <feature>" --category "Ideas" --body-file <tmpfile>
-   ```
-   Conduct the interview conversationally directly in this session — do not delegate to a subagent since it needs live back-and-forth. Follow `tools/project-manager/agents/producer.md` Mode 0: ask who is affected, gather *"As a <persona>, I want <capability>, so that <benefit>"* user stories, constraints, and out-of-scope boundaries. Post each Q&A round as a discussion comment.
+2. **Idempotency check.** `gh issue view <n> --comments` — if a `Project board: <url>` comment already exists, the task breakdown has already run: report the existing project number and its task issues (grouped by swimlane, per `/project-manager:status`) and stop here rather than re-dispatching planner.
 
-3. **Draft the specification.** Dispatch the `project-manager:producer` subagent with the intake transcript and discussion URL, instructing it to run Mode 1: post the draft specification (user stories, FRs, NFRs, personas, out-of-scope) as a comment on the Discussion.
+3. **Task breakdown.** Otherwise, dispatch `project-manager:planner` — via `Agent` with `model` set to `--planner-model` (default `opus`) — with the root issue number, to create the Project board with swimlanes, create cohesive task issues, and post the summary comment.
 
-4. **Reconcile in Discussion.** Dispatch the `project-manager:architect` subagent with the discussion URL, instructing it to run its Process: reconcile against repo conventions (Bazel, cross-compilation, SCD2, shared libs, domain architectures), post open questions / nitpicks as discussion comments, or post `Architect sign-off: approved` if clean.
-
-5. **Loop in Discussion until architect sign-off:**
-   - If architect raised open questions: dispatch `project-manager:producer` with the discussion URL to run Mode 2 (answer questions, update draft in discussion comments), then dispatch `project-manager:architect` again.
-   - Repeat until architect posts `Architect sign-off: approved`, or cap at 5 rounds and summarize for the user if stuck.
-
-6. **Stakeholder meeting (only with `--stakeholder-meeting`).** Once architect has signed off, invoke `/project-manager:stakeholder-meeting <discussion-url>` — passing `--personas` through if given — and follow that skill's steps: it dispatches one `project-manager:stakeholder` subagent per persona named in the spec, then posts consolidated minutes ending in `Stakeholder meeting: cleared` or `Stakeholder meeting: blocked (<k> blockers)`.
-   - **Cleared** — continue to step 7.
-   - **Blocked** — the plan is not ready for review. Dispatch `project-manager:producer` (Mode 2) with the consolidated blockers to answer each one and update the draft, dispatch `project-manager:architect` for a fresh reconciliation round, then hold the next meeting round. Cap at `--stakeholder-rounds` (default 2); if blockers still stand, stop and summarize them for the user instead of looping.
-   - Non-blocking guidance and feedback never block the hand-off — surface it to the user with the minutes so they can decide what producer folds in.
-
-   Without the flag, skip this step entirely. The meeting can still be held later against the approved root plan issue: `/project-manager:stakeholder-meeting <root-issue-number>`.
-
-7. **Hand off.** Once architect signs off — and the stakeholder meeting is cleared, if one was requested — tell the user the draft is ready and that `/project-manager:review <discussion-url>` is the next step.
+4. **Report.** Summarize the Project board URL and the created task issues, grouped by starting swimlane, to the user. Tell them `/project-manager:implement <n>` is the next step.
