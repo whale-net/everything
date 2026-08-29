@@ -26,6 +26,7 @@ Comes before `/project-manager:design`. See `tools/project-manager/CONVENTIONS.m
 |---|---|---|
 | `--milestones <n>` | `3` | Target number of milestones in the roadmap. A guide for the producer, not a hard cap — but a roadmap over ~6 milestones usually means the capability map is really two products. |
 | `--fr-budget <n>` | `12` | Default per-milestone FR backstop written into each milestone. Enforced later by architect during `/project-manager:design --milestone`. |
+| `--agent-sync` | off | Run steps 5-6's architect pass and roadmap loop as one long-lived producer+architect session pair over `agentsync-mcp` instead of a fresh subagent dispatch every round. See CONVENTIONS.md § Agent-sync mode. |
 
 ## When *not* to use it
 
@@ -116,11 +117,13 @@ Readers (`design --milestone`'s idempotency check, `/project-manager:status`, ar
 
 4. **Draft the brief.** Dispatch `project-manager:producer` (Mode P1) with the intake transcript and discussion URL: post the draft brief — vision, personas, capability map, non-goals — as a discussion comment. No current state, no load-bearing decisions, no roadmap yet; those need architect first.
 
-5. **Architect current-state pass and load-bearing decisions.** Dispatch `project-manager:architect` with the discussion URL, instructing it to run its **Product mode**: survey what already exists in the affected domains, post the **Current state** section, then derive **Load-bearing decisions** from the capability map's `Next`/`Later` buckets, plus open questions and nitpicks on the draft.
+5. **Architect current-state pass and load-bearing decisions.** *(Default only — see the `--agent-sync` variant below, which folds this and step 6 into one dispatch.)* Dispatch `project-manager:architect` with the discussion URL, instructing it to run its **Product mode**: survey what already exists in the affected domains, post the **Current state** section, then derive **Load-bearing decisions** from the capability map's `Next`/`Later` buckets, plus open questions and nitpicks on the draft.
 
    Do not skip this even when the answer is "nothing exists yet" — in this repo "nothing" frequently means "a half-built or recently reverted thing", and a milestone specced from an imaginary zero is a milestone that gets re-specced.
 
-6. **Roadmap and loop.** Dispatch `project-manager:producer` (Mode P2) to answer architect's questions, fold in the current-state and load-bearing sections, and add the **Roadmap** — milestones ordered so each one is independently useful, each with its outcome, capabilities, `Must not foreclose` refs, deferrals, and FR budget. Then re-dispatch `project-manager:architect` to reconcile. Repeat until architect posts `Architect sign-off: approved`, capping at 5 rounds and summarizing for the user if stuck.
+6. **Roadmap and loop.**
+   - **Default:** Dispatch `project-manager:producer` (Mode P2) to answer architect's questions, fold in the current-state and load-bearing sections, and add the **Roadmap** — milestones ordered so each one is independently useful, each with its outcome, capabilities, `Must not foreclose` refs, deferrals, and FR budget. Then re-dispatch `project-manager:architect` to reconcile. Repeat until architect posts `Architect sign-off: approved`, capping at 5 rounds and summarizing for the user if stuck.
+   - **With `--agent-sync`:** call `mcp__agentsync-mcp__start_session("product-<discussion-number>")`, then dispatch `project-manager:producer` **and** `project-manager:architect` together in one message (two parallel `Agent` calls) — architect with the discussion URL and told to start with its Product mode current-state/load-bearing pass, producer with the discussion URL and told it will receive that pass via `sync()` before running Mode P2 — both told the session id and to run in agent-sync mode (producer.md / architect.md § Agent-sync mode; CONVENTIONS.md § Agent-sync mode) through sign-off. Skip straight to step 7 once both return.
 
    Architect specifically checks: does M1 deliver something a person can use? Does any milestone's outcome sentence name a component rather than a user? Does every `Later` capability have either an `LB` entry protecting it or an explicit note that it is cheap to add?
 

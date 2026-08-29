@@ -24,6 +24,7 @@ Orchestrates the project-manager design pipeline inside a GitHub Discussion from
 | `--stakeholder-meeting` | off | After architect sign-off, run `/project-manager:stakeholder-meeting` on the discussion: every persona in the spec gives a round of feedback, and any blocker it raises goes back through the producer/architect loop before hand-off to review. |
 | `--stakeholder-rounds <n>` | `2` | Maximum stakeholder meeting rounds before stopping and summarizing standing blockers for the user. Implies `--stakeholder-meeting`. |
 | `--personas "<a,b>"` | spec personas | Passed through to the stakeholder meeting — meet with only these personas instead of every persona named in the spec. Implies `--stakeholder-meeting`. |
+| `--agent-sync` | off | Run steps 3-5's draft/reconcile loop as one long-lived producer+architect session pair over `agentsync-mcp` instead of a fresh subagent dispatch every round. See CONVENTIONS.md § Agent-sync mode. |
 
 Example: `/project-manager:design "device firmware rollback" --stakeholder-meeting`
 
@@ -44,15 +45,17 @@ Example: `/project-manager:design "device firmware rollback" --stakeholder-meeti
 
    **With `--milestone`:** title the discussion `Intake: M<n> — <outcome sentence>` and open it with the milestone's roadmap entry quoted, so the scope contract is visible in the discussion itself. Then post `gh issue comment <product-issue> --body "Ledger: M<n> → in design (<discussion-url>)"` before interviewing — never edit the tracking issue's body. Interview only about this milestone's outcome — vision, personas, and non-goals are already settled in the brief, and re-opening them turns a milestone spec back into a product spec.
 
-3. **Draft the specification.** Dispatch the `project-manager:producer` subagent with the intake transcript and discussion URL, instructing it to run Mode 1: post the draft specification (user stories, FRs, NFRs, personas, out-of-scope) as a comment on the Discussion.
+3. **Draft the specification.**
+   - **Default:** Dispatch the `project-manager:producer` subagent with the intake transcript and discussion URL, instructing it to run Mode 1: post the draft specification (user stories, FRs, NFRs, personas, out-of-scope) as a comment on the Discussion.
+   - **With `--agent-sync`:** call `mcp__agentsync-mcp__start_session("design-<discussion-number>")`, then dispatch `project-manager:producer` **and** `project-manager:architect` together in one message (two parallel `Agent` calls) — producer with the intake transcript and discussion URL, architect with the discussion URL — each told the session id and to run in agent-sync mode (producer.md / architect.md § Agent-sync mode; CONVENTIONS.md § Agent-sync mode) for steps 3-5. Skip straight to step 6 once both return: they run the draft/reconcile loop themselves and only report back once architect has signed off or the round cap is hit.
 
-   **With `--milestone`:** also pass the product issue number and milestone id, and instruct it to follow § Drafting under a product brief — first line `Product: #<n> — Milestone M<k>: <outcome>`, every FR citing a capability from the milestone's `Delivers` list, and out-of-scope entries naming the milestone each deferral went to.
+   **With `--milestone`:** also pass the product issue number and milestone id, and instruct producer to follow § Drafting under a product brief — first line `Product: #<n> — Milestone M<k>: <outcome>`, every FR citing a capability from the milestone's `Delivers` list, and out-of-scope entries naming the milestone each deferral went to. In agent-sync mode, pass the same to both dispatches so architect knows to run its Load-bearing check.
 
-4. **Reconcile in Discussion.** Dispatch the `project-manager:architect` subagent with the discussion URL, instructing it to run its Process: reconcile against repo conventions (Bazel, cross-compilation, SCD2, shared libs, domain architectures), post open questions / nitpicks as discussion comments, or post `Architect sign-off: approved` if clean.
+4. **Reconcile in Discussion.** *(Default only — `--agent-sync` folds this into step 3's dispatch.)* Dispatch the `project-manager:architect` subagent with the discussion URL, instructing it to run its Process: reconcile against repo conventions (Bazel, cross-compilation, SCD2, shared libs, domain architectures), post open questions / nitpicks as discussion comments, or post `Architect sign-off: approved` if clean.
 
    **With `--milestone`:** architect picks up the product issue from the draft's first line and runs its **Load-bearing check** (architect.md § Process) — the pass that blocks a draft foreclosing a `Later` capability the milestone was supposed to protect. This is the step that makes small milestones safe rather than merely small, so do not skip architect on a milestone that looks trivially scoped.
 
-5. **Loop in Discussion until architect sign-off:**
+5. **Loop in Discussion until architect sign-off.** *(Default only — `--agent-sync` runs this loop inside the two dispatches from step 3.)*
    - If architect raised open questions: dispatch `project-manager:producer` with the discussion URL to run Mode 2 (answer questions, update draft in discussion comments), then dispatch `project-manager:architect` again.
    - Repeat until architect posts `Architect sign-off: approved`, or cap at 5 rounds and summarize for the user if stuck.
 

@@ -184,6 +184,22 @@ stateDiagram-v2
      gh discussion comment <discussion-url> --body "Approved root plan issue: <issue-url>"
      ```
 
+## Agent-sync mode (opt-in)
+
+Off by default. `/project-manager:design --agent-sync` and `/project-manager:product --agent-sync` replace the producer/architect draft-reconcile loop's normal shape — a fresh subagent dispatch every round, each one re-reading the whole Discussion from scratch — with two long-lived subagent sessions that hand off directly to each other over `agentsync-mcp` (`tools/agentsync-mcp/`), using the Discussion as the durable record rather than as the channel the next round is bootstrapped from.
+
+**Why opt in, not default.** Per-round redispatch is slower and re-reads context every time, but it's the simpler failure mode: a round that goes wrong is contained to one subagent invocation, and the Discussion is authoritative because nothing else exists. Agent-sync trades that for speed on a plan that needs several rounds, at the cost of two subagents staying alive concurrently and depending on a local MCP server that only works on one machine (`tools/agentsync-mcp/README.md` § Limitations). Use it for a plan you expect to go back and forth on; leave it off for one you expect to land in one or two rounds, where standing up a session costs more than it saves.
+
+**Mechanics.**
+
+1. Before dispatching, the orchestrating skill calls `mcp__agentsync-mcp__start_session("<skill>-<discussion-number>")` — e.g. `design-482`, `product-91` — then dispatches `project-manager:producer` and `project-manager:architect` **together, in one message** (two parallel `Agent` calls), each passed the session id and told to run in agent-sync mode for the remainder of the loop, and told which of them speaks first. Whoever speaks first is named explicitly in the dispatch — `design` names producer (it drafts the spec before there's anything to reconcile); `product` steps 5-6 name architect (it runs its current-state/load-bearing pass before producer's Mode P2 has anything to fold in). Whichever persona goes second joins and immediately calls `sync()` to block, so the two naturally serialize even though both start at once.
+2. Each round, a persona still posts its normal comment to the Discussion (draft, reconciliation, sign-off) — agent-sync changes *how the next round gets triggered*, not what gets recorded. After posting, it calls `sync(session_id, my_id, "<one-line pointer: what I posted and where>")` and blocks for the peer's reply instead of returning control to the orchestrator.
+3. Producer and architect each track their own round count and stop at the same cap the default loop uses (5). If the cap is hit without sign-off, whichever persona notices posts a summary comment to the Discussion, calls `leave_session`, and returns to the orchestrator so it can surface the stall to the user exactly as the default loop's cap does.
+4. On sign-off (or a hand-off to a stakeholder meeting or human review), both personas call `leave_session(session_id, my_id)`. Architect is always the one to also call `end_session(session_id)` once it sees (via `leave_session`'s reply or `session_status`) that producer has already left — sign-off is always architect's act, so architect is always the last to speak in a round, in both `design` (producer first) and `product` (architect first). This is why only architect's frontmatter carries the `end_session` tool.
+5. **Fallback.** If `start_session` errors (server not installed) or a persona's first `sync()` call never gets a reply because its peer failed to start, fall back to the default per-round dispatch for the rest of that plan and tell the user agent-sync wasn't available — don't retry silently on every round.
+
+**Scope.** Only the producer/architect draft-reconcile loop uses this (`design` steps 3-5, `product` steps 5-6 — step 4's first producer draft has no peer to sync with yet, so it's always a single dispatch). The stakeholder meeting, human review gate, and planner/worker/validator phases are unaffected — they don't have this round-trip shape.
+
 ## Stakeholder meeting
 
 An optional round in which **every persona named in the plan's spec** reviews the draft from its own seat and reports back, before the plan is handed to the human review gate. Run by `/project-manager:stakeholder-meeting`, either automatically from `/project-manager:design --stakeholder-meeting` (target: the intake Discussion, after architect sign-off) or on demand against an approved root plan Issue.
