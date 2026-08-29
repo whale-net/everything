@@ -49,23 +49,24 @@
 //     implementations key off sensor_reading.region_id as written, not a
 //     second, independent resolution of "where is this sensor really".
 //
-// Scaffold only (this task's Scaffold phase): TestNFR1c_FixtureBuilds is a
-// smoke test proving the fixture and both implementations are reachable
-// end to end (one case, one window). TestNFR1c_ViewAndAPIAgreeOnAttribution
-// enumerates every case above as a skipped subtest -- this task's
-// Implementation phase fills each one in with the actual "compute
-// attribution twice, assert identical" comparison (see this task's
-// Implementation section: aggregate the view's raw rows the same way the
-// API would for a window it must coarsen, and assert the API discloses the
-// tier rather than silently differing where the two can't answer exactly).
-// This task's Testing phase adds the negative fixture: deliberately
-// perturbing one implementation and asserting the comparison fails,
-// naming the reading and both attributions.
+// TestNFR1c_FixtureBuilds is a Scaffold-phase smoke test proving the
+// fixture and both implementations are reachable end to end (one case, one
+// window). TestNFR1c_ViewAndAPIAgreeOnAttribution (Implementation phase)
+// enumerates every case above and runs assertViewAndAPIAgree against each
+// of that case's readings: both implementations are probed at
+// tiers.TierRaw, the tier both can always answer exactly for one reading's
+// instant, so there is no aggregate-vs-raw coarsening to reconcile for any
+// case here -- see assertViewAndAPIAgree's and apiAttributedPlantIDs' doc
+// comments for the comparison itself. This task's Testing phase adds the
+// negative fixture: deliberately perturbing one implementation and
+// asserting the comparison fails, naming the reading and both
+// attributions.
 package conformance
 
 import (
 	"context"
 	"database/sql"
+	"sort"
 	"testing"
 	"time"
 
@@ -388,29 +389,142 @@ func TestNFR1c_FixtureBuilds(t *testing.T) {
 	}
 }
 
+// apiAttributedPlantIDs reports which of candidatePlantIDs the API read
+// path (FR71's Reader.Series, tiers.TierRaw) attributes readingID to: for
+// each candidate, it asks Series for that plant's own entity ref over a
+// window drawn tightly around recordedAt, and treats the candidate as
+// attributing the reading if the returned raw series contains a point at
+// exactly recordedAt. This mirrors how a real caller learns "does this
+// plant's series include this reading" -- Series has no direct
+// "attribute this one reading" call -- and is the correct API-side twin of
+// viewAttributedPlantIDs' single query: both must name the same plant set
+// for the same reading (NFR1.c). The returned slice is sorted ascending,
+// matching viewAttributedPlantIDs' ORDER BY plant_id.
+func apiAttributedPlantIDs(t *testing.T, db *dbtest.Postgres, recordedAt time.Time, candidatePlantIDs []int64) []int64 {
+	t.Helper()
+	ctx := context.Background()
+	reader := readings.NewReader(db.Pool)
+	// A one-second bracket around recordedAt is enough to isolate this one
+	// reading without depending on any other fixture reading's spacing --
+	// every fixture reading in this file is seconds-precision (newNFR1CFixture
+	// truncates `now` to the second) and at least tens of minutes apart from
+	// its neighbors.
+	window := readings.Window{Start: recordedAt.Add(-time.Second), End: recordedAt.Add(time.Second)}
+
+	var attributed []int64
+	for _, plantID := range candidatePlantIDs {
+		result, err := reader.Series(ctx, authz.EntityRef{Kind: authz.EntityPlant, ID: plantID}, window, 0, tiers.TierRaw, readings.Page{})
+		if err != nil {
+			t.Fatalf("Series(plant %d) for reading at %s: %v", plantID, recordedAt, err)
+		}
+		for _, p := range result.Points {
+			if p.RecordedAt.Equal(recordedAt) {
+				attributed = append(attributed, plantID)
+				break
+			}
+		}
+	}
+	sort.Slice(attributed, func(i, j int) bool { return attributed[i] < attributed[j] })
+	return attributed
+}
+
+// int64SlicesEqual reports whether a and b name the same plant IDs in the
+// same order -- both viewAttributedPlantIDs and apiAttributedPlantIDs
+// return their result sorted ascending by plant_id, so an element-wise
+// comparison is exact set equality, not just same-length coincidence.
+func int64SlicesEqual(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// assertViewAndAPIAgree is NFR1.c's core comparison: it computes plant
+// attribution for readingID (recorded at recordedAt) twice -- once via
+// FR72's v_sensor_reading_with_plant (viewAttributedPlantIDs), once via
+// FR71's API read path (apiAttributedPlantIDs, probed against every plant
+// in candidatePlantIDs) -- and fails, naming the disagreeing reading, both
+// attributions and caseName, if the two plant sets differ (NFR1.c: "two
+// implementations of one rule are permitted; disagreeing is not").
+// candidatePlantIDs must be a superset of every plant either
+// implementation could name for this reading; every fixture-case call
+// below passes exactly the plants relevant to its own scenario, per this
+// file's package doc comment.
+func assertViewAndAPIAgree(t *testing.T, db *dbtest.Postgres, caseName string, readingID int64, recordedAt time.Time, candidatePlantIDs []int64) {
+	t.Helper()
+	viewPlants := viewAttributedPlantIDs(t, db, readingID)
+	apiPlants := apiAttributedPlantIDs(t, db, recordedAt, candidatePlantIDs)
+
+	if !int64SlicesEqual(viewPlants, apiPlants) {
+		t.Fatalf(
+			"NFR1.c view-vs-API attribution disagreement in case %q: reading %d (recorded_at %s) -- "+
+				"v_sensor_reading_with_plant attributes %v, API read path (Reader.Series) attributes %v "+
+				"(two implementations of one rule are permitted; disagreeing is not)",
+			caseName, readingID, recordedAt, viewPlants, apiPlants)
+	}
+}
+
 // TestNFR1c_ViewAndAPIAgreeOnAttribution enumerates every fixture case this
-// task's Scaffold section lists. Each is a skipped placeholder until this
-// task's Implementation phase fills in the "compute attribution twice,
-// assert identical" comparison this task's Implementation section
-// describes -- t.Skip rather than silence so the roadmap for the next
-// phase is visible directly in `bazel test` output, not only in this
-// file's comments.
+// task's Scaffold section lists and, for each, runs assertViewAndAPIAgree
+// against every reading that case's comment (newNFR1CFixture's package doc)
+// describes -- the Implementation-phase "compute attribution twice, assert
+// identical" comparison this task's Implementation section calls for.
 func TestNFR1c_ViewAndAPIAgreeOnAttribution(t *testing.T) {
 	db, f := newNFR1CFixture(t)
-	_ = db
-	_ = f
 
-	for _, name := range []string{
-		"neverMoved: a plant that never moved",
-		"midBucket: a plant that moved mid-bucket",
-		"multiMove: a plant that moved through three regions",
-		"sibling: two plants in one region, fan-out with no double-counting",
-		"nonLeaf: a non-leaf-depth plant, with a nearer-ancestor plant appearing later",
-		"sharedHour: a removed plant inside FR21's shared migration hour",
-		"stale: a reading in the pre-FR73 stale-attribution window",
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Skip("Implementation phase: wire up the view-vs-API attribution comparison for this case (NFR1.c)")
-		})
-	}
+	t.Run("neverMoved: a plant that never moved", func(t *testing.T) {
+		assertViewAndAPIAgree(t, db, "neverMoved", f.neverMovedReadingID, f.neverMovedReadingAt,
+			[]int64{f.neverMovedPlant})
+	})
+
+	t.Run("midBucket: a plant that moved mid-bucket", func(t *testing.T) {
+		assertViewAndAPIAgree(t, db, "midBucket (before move)", f.midBucketReadingBeforeID, f.midBucketReadingBeforeAt,
+			[]int64{f.midBucketPlant})
+		assertViewAndAPIAgree(t, db, "midBucket (after move)", f.midBucketReadingAfterID, f.midBucketReadingAfterAt,
+			[]int64{f.midBucketPlant})
+	})
+
+	t.Run("multiMove: a plant that moved through three regions", func(t *testing.T) {
+		assertViewAndAPIAgree(t, db, "multiMove (region 1)", f.multiMoveReading1ID, f.multiMove1At.Add(-30*time.Minute),
+			[]int64{f.multiMovePlant})
+		assertViewAndAPIAgree(t, db, "multiMove (region 2)", f.multiMoveReading2ID, f.multiMove1At.Add(30*time.Minute),
+			[]int64{f.multiMovePlant})
+		assertViewAndAPIAgree(t, db, "multiMove (region 3)", f.multiMoveReading3ID, f.multiMove2At.Add(30*time.Minute),
+			[]int64{f.multiMovePlant})
+	})
+
+	t.Run("sibling: two plants in one region, fan-out with no double-counting", func(t *testing.T) {
+		assertViewAndAPIAgree(t, db, "sibling", f.siblingReadingID, f.siblingReadingAt,
+			[]int64{f.siblingPlantA, f.siblingPlantB})
+	})
+
+	t.Run("nonLeaf: a non-leaf-depth plant, with a nearer-ancestor plant appearing later", func(t *testing.T) {
+		assertViewAndAPIAgree(t, db, "nonLeaf (before child plant opens)", f.nonLeafReadingBeforeChildPlantID, f.nonLeafChildPlantOpensAt.Add(-30*time.Minute),
+			[]int64{f.nonLeafRootPlant, f.nonLeafChildPlant})
+		assertViewAndAPIAgree(t, db, "nonLeaf (after child plant opens)", f.nonLeafReadingAfterChildPlantID, f.nonLeafChildPlantOpensAt.Add(30*time.Minute),
+			[]int64{f.nonLeafRootPlant, f.nonLeafChildPlant})
+	})
+
+	t.Run("sharedHour: a removed plant inside FR21's shared migration hour", func(t *testing.T) {
+		// hourStart is not stored on the fixture directly -- it is recoverable
+		// from sharedHourSnappedValidTo, which newNFR1CFixture derives as
+		// hourStart.Add(1*time.Hour); see this file's package doc comment.
+		hourStart := f.sharedHourSnappedValidTo.Add(-time.Hour)
+		assertViewAndAPIAgree(t, db, "sharedHour (before true removal)", f.sharedHourReadingBeforeRemovalID, hourStart.Add(10*time.Minute),
+			[]int64{f.sharedHourPlantOld, f.sharedHourPlantNew})
+		assertViewAndAPIAgree(t, db, "sharedHour (inside shared hour, after true removal but before the snapped valid_to)", f.sharedHourReadingInSharedHourID, hourStart.Add(45*time.Minute),
+			[]int64{f.sharedHourPlantOld, f.sharedHourPlantNew})
+		assertViewAndAPIAgree(t, db, "sharedHour (after snap)", f.sharedHourReadingAfterSnapID, hourStart.Add(65*time.Minute),
+			[]int64{f.sharedHourPlantOld, f.sharedHourPlantNew})
+	})
+
+	t.Run("stale: a reading in the pre-FR73 stale-attribution window", func(t *testing.T) {
+		assertViewAndAPIAgree(t, db, "stale", f.staleReadingID, f.staleReadingAt,
+			[]int64{f.stalePlantOld, f.stalePlantNew})
+	})
 }
