@@ -153,6 +153,30 @@ service LeafLabAPI {
   // class (global or household-owned); nothing is hard-deleted.
   rpc RetirePlantType(RetirePlantTypeRequest) returns (RetirePlantTypeResponse);
 
+  // --- Plant-type bands (FR58, FR27's band criterion) -------------------
+  //
+  // A plant type's expected-range bands (migration 035's plant_type_band
+  // table) are stored and rendered, never evaluated (this task's issue
+  // text: "V1 stores and renders bands only -- no evaluation, no
+  // notification"). Bands hang off the plant type (FR55), so a
+  // household-owned type and a global type carry bands identically, and
+  // work the same authorization split as CreatePlantType/RenamePlantType/
+  // RetirePlantType above: member-or-grantee (FR7) for the caller's own
+  // household-owned type, FR10 elevation for a global type.
+
+  // SetPlantTypeBands replaces the full band set for one (plant_type_id,
+  // sensor_type_id) pair. Refused with FR59's refused_with_alternative
+  // shape if the given bands overlap (Implementation phase states and
+  // enforces the exact overlap rule) -- naming the offending bands.
+  rpc SetPlantTypeBands(SetPlantTypeBandsRequest) returns (SetPlantTypeBandsResponse);
+
+  // GetPlantTypeBands reads back a plant type's configured bands. Narrowed
+  // to one measurement type when sensor_type_id is set; unfiltered (every
+  // measurement type this plant type has bands for) when it is zero. A
+  // plant type with no bands configured returns an empty list, not an
+  // error.
+  rpc GetPlantTypeBands(GetPlantTypeBandsRequest) returns (GetPlantTypeBandsResponse);
+
   // --- Admin (FR10, FR12 activation) -----------------------------------
   //
   // leaflab-admin (auth.go's RoleAdmin) is eligibility only -- these RPCs
@@ -614,6 +638,69 @@ message RetirePlantTypeRequest {
 
 message RetirePlantTypeResponse {
   PlantTypeInfo plant_type = 1;
+}
+
+// --- Plant-type bands (FR58, FR27's band criterion) ------------------------
+//
+// V1 stores and renders bands only -- no evaluation, no notification (this
+// task's issue text). Nothing in this section, or in any handler backing
+// it, is permitted to write an alert/notification row or fire anything;
+// see leaflab/api/plant_type_bands.go's Implementation-phase doc comment
+// for the enforcement of that boundary.
+
+// PlantTypeBandSpec is one band -- e.g. "low", "ideal", "high" -- within one
+// (plant_type_id, sensor_type_id) pair's band set. min_value/max_value unset
+// means unbounded on that side (migration 035's NULL columns); sort_order is
+// the band-walk order Implementation-phase resolution uses, not necessarily
+// numeric range order (though V1's only defined rule -- bands must not
+// overlap -- means the two coincide in practice).
+message PlantTypeBandSpec {
+  string band_label = 1;
+  optional double min_value = 2;
+  optional double max_value = 3;
+  int32 sort_order = 4;
+}
+
+// SetPlantTypeBandsRequest replaces the full band set for
+// (plant_type_id, sensor_type_id) -- not a delta/patch. sensor_type_id
+// names the measurement type these bands apply to (the same column
+// GetReadingSeriesRequest/CurrentValue call measurement_type_id on the
+// wire elsewhere on this surface; this RPC set names it after the
+// plant_type_band.sensor_type_id column it writes directly, per this
+// task's issue text).
+message SetPlantTypeBandsRequest {
+  int64 plant_type_id = 1;
+  int64 sensor_type_id = 2;
+  repeated PlantTypeBandSpec bands = 3;
+}
+
+message SetPlantTypeBandsResponse {
+  // The band set as stored, ordered by sort_order -- echoes back what
+  // SetPlantTypeBandsRequest.bands just replaced.
+  repeated PlantTypeBandSpec bands = 1;
+}
+
+message GetPlantTypeBandsRequest {
+  int64 plant_type_id = 1;
+  // Zero means unfiltered -- every measurement type this plant type has
+  // bands configured for.
+  int64 sensor_type_id = 2;
+}
+
+// PlantTypeMeasurementBands is one measurement type's band set within a
+// GetPlantTypeBandsResponse -- one entry per sensor_type_id the plant type
+// has any bands configured for.
+message PlantTypeMeasurementBands {
+  int64 sensor_type_id = 1;
+  // Ordered by sort_order.
+  repeated PlantTypeBandSpec bands = 2;
+}
+
+message GetPlantTypeBandsResponse {
+  // Empty when the plant type has no bands configured for the requested
+  // scope -- not an error (this task's Testing criterion: "A plant type
+  // with no bands returns values with no band field, not an error").
+  repeated PlantTypeMeasurementBands measurement_bands = 1;
 }
 
 // --- Admin (FR10, FR12 activation) --------------------------------------
