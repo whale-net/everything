@@ -82,11 +82,12 @@ const testSchema = `
 	CREATE INDEX idx_sensor_region_id ON sensor(region_id);
 
 	CREATE TABLE sensor_reading (
-		reading_id  BIGSERIAL PRIMARY KEY,
-		sensor_id   BIGINT NOT NULL REFERENCES sensor(sensor_id),
-		region_id   BIGINT REFERENCES region(region_id),
-		value       DOUBLE PRECISION NOT NULL,
-		recorded_at TIMESTAMPTZ NOT NULL
+		reading_id     BIGSERIAL PRIMARY KEY,
+		sensor_id      BIGINT NOT NULL REFERENCES sensor(sensor_id),
+		region_id      BIGINT REFERENCES region(region_id),
+		value          DOUBLE PRECISION NOT NULL,
+		recorded_at    TIMESTAMPTZ NOT NULL,
+		config_version BIGINT
 	);
 	CREATE INDEX idx_sensor_reading_sensor_id ON sensor_reading(sensor_id, recorded_at DESC);
 	CREATE INDEX idx_sensor_reading_region_id ON sensor_reading(region_id, recorded_at DESC);
@@ -282,6 +283,21 @@ func (f *fixture) insertReading(t *testing.T, sensorID, regionID int64, value fl
 		INSERT INTO sensor_reading (sensor_id, region_id, value, recorded_at) VALUES ($1, $2, $3, $4)
 	`, sensorID, regionID, value, at); err != nil {
 		t.Fatalf("insert reading: %v", err)
+	}
+}
+
+// insertReadingWithConfigVersion is insertReading plus an explicit
+// config_version stamp (FR30, migration 009 -- leaflab/processor's
+// handler is what actually writes this column in production; this
+// fixture stamps it directly, the same way this package's other
+// fixtures substitute for an upstream writer that already has its own
+// tests).
+func (f *fixture) insertReadingWithConfigVersion(t *testing.T, sensorID, regionID int64, value float64, at time.Time, configVersion int64) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `
+		INSERT INTO sensor_reading (sensor_id, region_id, value, recorded_at, config_version) VALUES ($1, $2, $3, $4, $5)
+	`, sensorID, regionID, value, at, configVersion); err != nil {
+		t.Fatalf("insert reading with config_version: %v", err)
 	}
 }
 
@@ -483,6 +499,59 @@ func TestCurrentValues_FromRaw_BeforeAnyTierRefresh(t *testing.T) {
 	}
 	if !result.Values[0].RecordedAt.Equal(now) {
 		t.Errorf("CurrentValues RecordedAt = %s, want %s", result.Values[0].RecordedAt, now)
+	}
+}
+
+// ── FR30: raw readings carry the config version they were recorded under ──
+
+// TestSeries_RawPoint_CarriesConfigVersion proves FR30's "readings
+// responses carry the config version each reading was recorded under" on
+// the Series raw path: a raw reading stamped with a config_version comes
+// back with that exact value on its Point, not zero-valued or dropped.
+func TestSeries_RawPoint_CarriesConfigVersion(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	f.insertReadingWithConfigVersion(t, sensorID, regionID, 21.5, now.Add(-10*time.Minute), 3)
+
+	window := Window{Start: now.Add(-time.Hour), End: now}
+	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{})
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if len(result.Points) != 1 {
+		t.Fatalf("len(Points) = %d, want 1", len(result.Points))
+	}
+	if result.Points[0].ConfigVersion != 3 {
+		t.Errorf("Points[0].ConfigVersion = %d, want 3 (the version this reading was recorded under)", result.Points[0].ConfigVersion)
+	}
+}
+
+// TestCurrentValues_CarriesConfigVersion proves the same FR30 promise on
+// GetCurrentValues' path (always raw, FR27): the latest reading's stamped
+// config_version comes back on CurrentValue, not zero-valued or dropped.
+func TestCurrentValues_CarriesConfigVersion(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	f.insertReadingWithConfigVersion(t, sensorID, regionID, 19.0, now.Add(-time.Hour), 1)
+	f.insertReadingWithConfigVersion(t, sensorID, regionID, 23.5, now, 5)
+
+	result, err := f.reader.CurrentValues(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID})
+	if err != nil {
+		t.Fatalf("CurrentValues: %v", err)
+	}
+	if len(result.Values) != 1 {
+		t.Fatalf("len(Values) = %d, want 1", len(result.Values))
+	}
+	if result.Values[0].ConfigVersion != 5 {
+		t.Errorf("Values[0].ConfigVersion = %d, want 5 (the latest reading's stamped version, not the older one's)", result.Values[0].ConfigVersion)
 	}
 }
 

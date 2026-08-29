@@ -32,8 +32,9 @@ go_test(
 )
 
 # Real-Postgres integration coverage for this task's Testing section
-# (#1362, FR25/FR27/FR28/NFR3.2) -- see reader_integration_test.go's doc
-# comment. Same tag set and hand-written rationale as leaflab/api's other
+# (#1362, FR25/FR27/FR28/NFR3.2) plus #1364's FR30 config-lag coverage
+# (config_lag_integration_test.go) -- see each file's own doc comment.
+# Same tag set and hand-written rationale as leaflab/api's other
 # integration go_test targets (gazelle skips a `//go:build integration`
 # gated file when scanning for go_test srcs).
 #
@@ -44,7 +45,10 @@ go_test(
     name = "reader_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["reader_integration_test.go"],
+    srcs = [
+        "config_lag_integration_test.go",
+        "reader_integration_test.go",
+    ],
     embed = [":readings"],
     gotags = ["integration"],
     tags = [
