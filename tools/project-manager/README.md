@@ -18,6 +18,7 @@ AGY and Claude Code plugin providing a multi-persona project-management pipeline
 | `worker` | Executes tasks in `Scaffold`, `Implementation`, and `Testing` swimlanes inside a dedicated worktree, commits to the task's own `gh stack` branch, and advances tasks to the next swimlane | haiku |
 | `validator` | Checks a task's acceptance criteria in the `Validation` swimlane against merged work (read-only), moves to `Done`, and closes the issue | haiku |
 | `system-validator` | Runs the whole system end-to-end in Tilt against the root plan's criteria once all tasks are `Done`; files follow-up findings if needed | opus (max effort) |
+| `help` | Triage: reads a free-form question and recommends the exact next skill/command, grounded in `CONVENTIONS.md` and (when named) a plan's live GitHub state. Never writes anything | sonnet |
 
 ## Pipeline
 
@@ -74,7 +75,7 @@ gh project item-list <project-number> --owner whale-net --query "status:Implemen
 
 ## Skills
 
-Eight skills orchestrate the pipeline:
+Nine skills orchestrate the pipeline:
 
 | Skill | Drives | Dispatches |
 |---|---|---|
@@ -86,6 +87,7 @@ Eight skills orchestrate the pipeline:
 | `/project-manager:implement <issue-number> [--max-subagents N]` | Orchestrates worker/validator subagents in parallel batches — up to `--max-subagents` (default 4) at a time — over `gh stack`-managed per-task branches until all tasks are `Done`. Requires a Project board to already exist | `worker`, `validator` |
 | `/project-manager:validate <issue-number>` | Whole-system validation in Tilt (against a local integration branch merging every task's stack) once all tasks are `Done`; ensures every task branch has an open PR or routes findings to planner | `system-validator`, `planner` |
 | `/project-manager:status <issue-number>` | Read-only: current lifecycle state and Project board breakdown by swimlane | *(none — pure `gh` reads)* |
+| `/project-manager:help "<question>"` | Not sure which skill applies? Describe the situation in plain language and get back the exact next skill/command and why | `help` |
 
 Typical flow for one feature: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again.
 
