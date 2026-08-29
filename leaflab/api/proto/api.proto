@@ -69,6 +69,23 @@ service LeafLabAPI {
   // region too (FR22.5's "remains readable by explicit id").
   rpc GetRegionPath(GetRegionPathRequest) returns (GetRegionPathResponse);
 
+  // RelocateSubtree relocates a region subtree under a new parent in one
+  // atomic operation (FR74): mirrors the subtree beneath
+  // new_parent_region_id, moves every current sensor placement (FR51) and
+  // every current plant placement (FR54) into the mirrored regions, then
+  // retires the original regions in place (FR22.2) with successor_region_id
+  // naming their replacements. Commits or nothing does -- no intermediate
+  // state is ever observable (FR1.2 never violated, FR56 never reports a
+  // plant unmonitored mid-relocation). Mirroring is refused whole, before
+  // anything is written (FR59.3), if it would violate FR50's structural
+  // rules (a 13th child, a Shelf under a Pot) -- this is SetRegionParent's
+  // named alternative (FR50.5) for a refused re-parent. Every moved
+  // placement interval is marked relocation_induced = TRUE (FR24), FR20
+  // captures are recorded for every moved boundary, FR73 invalidations are
+  // published for every affected sensor, and one audit record covers the
+  // whole operation, carrying reason (FR8). Member-or-grantee (FR7).
+  rpc RelocateSubtree(RelocateSubtreeRequest) returns (RelocateSubtreeResponse);
+
   // --- Plants (FR54, FR24, FR22.3, FR22.1) --------------------------------
   //
   // A plant occupies exactly one region at a time; its placement history is
@@ -239,6 +256,46 @@ service LeafLabAPI {
   // Two or more entities compared over one shared window and one
   // measurement (FR25.3).
   rpc CompareSeries(CompareSeriesRequest) returns (CompareSeriesResponse);
+  // RewireSensor is the explicit API rewire path (FR16): it declares that
+  // the sensor currently known by `name` on this device has moved to a new
+  // hardware location (I2C address / mux path), and updates that sensor in
+  // place -- closing/opening a sensor_hw_history interval -- rather than
+  // minting a new sensor identity. `name` is the stable anchor (FR16 case
+  // 2: match on name, update hardware key), mirroring
+  // leaflab/processor/repository.go's UpsertSensor resolution order on the
+  // device manifest path. Refused (FR17) if no sensor named `name`
+  // currently exists for this device: applying it would create a new
+  // identity, not continue an existing one, and its reading history would
+  // not follow.
+  rpc RewireSensor(RewireSensorRequest) returns (RewireSensorResponse);
+
+  // --- Sensor region assignment and rename (FR51, FR52) -------------------
+  //
+  // #1379's two RPCs. Scaffolded here (request/response shapes and the
+  // service wire surface); the write-path business logic named on each RPC
+  // below -- immediate commit, FR73 invalidation, FR20 boundary capture,
+  // FR1.2 same-household enforcement, FR8 audit recording -- is
+  // Implementation-phase work. See leaflab/api/sensor_region.go's doc
+  // comment for the current state, matching CreateRegion/RenameRegion's own
+  // scaffold/feat split (#1376).
+
+  // AssignSensorRegion is FR51's server-side-fact region write: it commits
+  // immediately -- closing/opening a sensor_region_history interval and
+  // updating sensor.region_id, all in one transaction -- with no device
+  // round trip, no config version bump and no board availability
+  // requirement. The target region must belong to the sensor's board's
+  // household (FR1.2); a foreign-household region_id is refused, naming
+  // the offending field, not silently ignored. Member-or-grantee (FR7);
+  // NFR2's not-found collapse applies to both sensor_id and region_id.
+  rpc AssignSensorRegion(AssignSensorRegionRequest) returns (AssignSensorRegionResponse);
+
+  // RenameSensor is FR52's rename-without-a-round-trip path: it writes
+  // only sensor_name_history (and the sensor.name cache) -- no config
+  // version bump, no publish to the device. The response states whether a
+  // config push is still needed: never true for the rename itself, only
+  // when the caller also has pending device-behaviour changes queued
+  // separately. Member-or-grantee (FR7).
+  rpc RenameSensor(RenameSensorRequest) returns (RenameSensorResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -253,6 +310,60 @@ message PushDeviceConfigResponse {
   uint64 version = 1;
 }
 
+message RewireSensorRequest {
+  string device_id = 1;
+  // The sensor's current logical name on this device -- the stable anchor
+  // identifying which existing sensor this rewire applies to. Not the new
+  // name: RewireSensor changes hardware location, not identity or label
+  // (see FR16.3 for the case where a manifest changes both at once).
+  string name = 2;
+  // The sensor's new hardware location. Empty mux_path means directly on
+  // the root I2C bus.
+  repeated firmware.MuxHop mux_path = 3;
+  uint32 i2c_address = 4;
+}
+
+message RewireSensorResponse {
+  // sensor_id of the rewired sensor -- unchanged from before the rewire,
+  // proving identity survived (FR16).
+  int64 sensor_id = 1;
+}
+
+// --- Sensor region assignment and rename (FR51, FR52) -----------------
+
+message AssignSensorRegionRequest {
+  int64 sensor_id = 1;
+  int64 region_id = 2;
+}
+
+message AssignSensorRegionResponse {
+  int64 sensor_id = 1;
+  // The region just assigned -- unchanged from the request, echoed back so
+  // a caller can confirm the commit without a second read.
+  int64 region_id = 2;
+  // When the new sensor_region_history interval opened (FR64) -- push-time
+  // for FR1.3's staleness comparison, not ack-time; there is no ack on
+  // this path. Alongside server_now.
+  Instant assigned_at = 3;
+  Instant server_now = 4;
+}
+
+message RenameSensorRequest {
+  int64 sensor_id = 1;
+  string name = 2;
+}
+
+message RenameSensorResponse {
+  int64 sensor_id = 1;
+  string name = 2;
+  // FR52: true only if the caller also has pending device-behaviour
+  // changes (poll interval, sensor set, addressing) queued separately --
+  // never true for the rename alone, which never touches config version or
+  // publishes to the device.
+  bool config_push_needed = 3;
+  Instant server_now = 4;
+}
+
 message GetDeviceConfigRequest {
   string device_id = 1;
 }
@@ -261,6 +372,25 @@ message GetDeviceConfigResponse {
   firmware.DeviceConfig config = 1;
   // True if a config has been accepted by the board.
   bool found = 2;
+  // FR1.3's caller-visible skip surface: config entries the processor's
+  // ApplyConfigRegions (leaflab/processor/repository.go) re-validated
+  // immediately before writing and skipped rather than applied --
+  // household drift or a stale push, never a partial write. Provenance
+  // (FR82.4) is Phase 4; until it lands this lists every skip recorded
+  // for this board, not only ones the calling principal authored (see
+  // AssertSameHousehold's callers and ApplyConfigRegions' doc comment).
+  repeated RegionApplySkip skips = 3;
+}
+
+// RegionApplySkip mirrors leaflab/processor.RegionApplySkip on the wire:
+// one config entry that ApplyConfigRegions skipped instead of applying,
+// with the persona-appropriate reason it recorded (FR59.2) and when. It
+// never names the region or household involved (FR1.2 never discloses
+// which household a foreign reference actually belongs to).
+message RegionApplySkip {
+  int64 sensor_id = 1;
+  string reason = 2;
+  Instant occurred_at = 3;
 }
 
 message BoardInfo {
@@ -442,6 +572,27 @@ message GetRegionPathResponse {
   repeated string path_names = 3;
   // Human-readable ' / '-delimited string, mirroring v_region_path.path_name.
   string path_name = 4;
+}
+
+// RelocateSubtreeRequest names the subtree to relocate (root_region_id),
+// its destination (new_parent_region_id) and a reason -- FR74's atomic
+// composition carries one audit record for the whole operation (FR8),
+// and that record requires a reason (see audit.NewRelocationEntry, mirroring
+// NewTransferEntry/NewElevationEntry/NewMultiBoardPushEntry).
+message RelocateSubtreeRequest {
+  int64 root_region_id = 1;
+  int64 new_parent_region_id = 2;
+  string reason = 3;
+}
+
+message RelocateSubtreeResponse {
+  // The mirrored subtree's root region -- root_region_id's replacement
+  // beneath new_parent_region_id. root_region_id itself is retired in
+  // place (FR22.2) with successor_region_id set to new_root.region_id, so
+  // a region-keyed series follows the relocation instead of discontinuing.
+  RegionInfo new_root = 1;
+  // Server's current time (FR64) -- see ListBoardsResponse.server_now.
+  Instant server_now = 2;
 }
 
 // --- Plants (FR54, FR24, FR22.3, FR22.1) -----------------------------------

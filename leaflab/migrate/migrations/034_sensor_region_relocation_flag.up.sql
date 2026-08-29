@@ -1,0 +1,24 @@
+-- Migration 034: sensor_region_history.relocation_induced (FR24, FR74)
+--
+-- 034 is the next free number after 033 (boundary_capture) -- checked every
+-- disk worktree under .pm-worktrees/ for the true highest claimed migration
+-- number at scaffold time (033 was the highest live claim across every v2
+-- worktree present), mirroring 033's own numbering note.
+--
+-- plant_region_history already carries relocation_induced (migration 017),
+-- written from Phase 5 (FR74) to distinguish "this plant moved" from "the
+-- region this plant was in moved" (FR24). sensor_region_history has no
+-- equivalent column yet -- this migration adds one, same name, same
+-- default, same API-set-not-schema-derived disposition as
+-- plant_region_history.relocation_induced (migration 017's doc comment):
+-- nothing here enforces "set only alongside a relocation-flavoured write",
+-- that pairing is leaflab/api's RelocateSubtree's own invariant (FR74).
+--
+-- Needed because FR74's atomic subtree relocation moves every current
+-- sensor placement (FR51) into the mirrored regions, not just plant
+-- placements -- both placement kinds must be marked relocation-induced so
+-- a sensor's own placement timeline (mirroring GetPlantPlacementTimeline)
+-- can eventually draw the same "I moved this sensor" vs. "the region this
+-- sensor was in moved" distinction FR24 draws for plants.
+ALTER TABLE sensor_region_history
+    ADD COLUMN relocation_induced BOOLEAN NOT NULL DEFAULT FALSE;

@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/whale-net/everything/leaflab/api/capture"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -84,11 +85,47 @@ func run() error {
 		logger.Info("config version cache pre-loaded", "devices", len(versions))
 	}
 
-	handler := NewMessageHandler(logger, repo, cache)
+	// FR73: broadcasts an invalidation event after this process's own
+	// ApplyConfigRegions commits a region change (handler.go's
+	// handleConfigAck), so every process's cache -- including this one, via
+	// the Subscriber below -- observes it regardless of which process wrote
+	// the assignment. See leaflab/invalidation's doc comment.
+	invalidationPub, err := invalidation.NewPublisher(rmqConn)
+	if err != nil {
+		return fmt.Errorf("failed to create invalidation publisher: %w", err)
+	}
+	defer invalidationPub.Close() //nolint:errcheck
+
+	handler := NewMessageHandler(logger, repo, cache, invalidationPub)
 	consumer.RegisterHandler("leaflab.#", handler.Handle)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
 	defer appCancel()
+
+	// FR73: receives every invalidation event this process or the API
+	// publishes -- including events this process publishes to itself, e.g.
+	// its own ApplyConfigRegions -- and evicts the corresponding SensorCache
+	// entry so the next handleReading re-reads the current value from the
+	// database instead of serving what's cached. A rename evicts the
+	// *prior* name (see SensorCache.Invalidate's doc comment).
+	invalidationSub, err := invalidation.NewSubscriber(rmqConn, logger)
+	if err != nil {
+		return fmt.Errorf("failed to create invalidation subscriber: %w", err)
+	}
+	defer invalidationSub.Close() //nolint:errcheck
+	if err := invalidationSub.Start(appCtx, func(_ context.Context, ev invalidation.Event) {
+		ApplyInvalidation(cache, ev)
+	}); err != nil {
+		return fmt.Errorf("failed to start invalidation subscriber: %w", err)
+	}
+
+	// FR73 bounded staleness backstop: self-heals a dropped invalidation
+	// event (e.g. one lost during a RabbitMQ reconnect window) within
+	// cfg.CacheBackstopInterval, so a missed signal cannot leave the cache
+	// wrong indefinitely. The 5s bound itself is met by invalidationSub
+	// above, not by this loop — see backstop.go and leaflab/ARCHITECTURE.md.
+	go RunCacheBackstop(appCtx, cfg.CacheBackstopInterval, repo, cache, logger)
+	logger.Info("cache backstop started", "interval", cfg.CacheBackstopInterval)
 
 	// FR20 phase two: the boundary-capture completer runs on its own ticker
 	// inside this already-always-up, single-replica worker rather than as a

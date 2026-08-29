@@ -17,6 +17,7 @@ import (
 	"github.com/whale-net/everything/leaflab/api/authz"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/readings"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
@@ -104,10 +105,26 @@ func run() error {
 		elevationDuration = time.Duration(minutes) * time.Minute
 	}
 
+	// FR73: broadcasts an invalidation event after every sensor-affecting
+	// write this server commits, so leaflab/processor's SensorCache never
+	// keeps serving a stale cached view. See leaflab/invalidation's doc
+	// comment.
+	invalidationPub, err := invalidation.NewPublisher(rmqConn)
+	if err != nil {
+		return fmt.Errorf("invalidation publisher: %w", err)
+	}
+	defer invalidationPub.Close() //nolint:errcheck
+
 	repo := NewRepository(pool)
+	// FR73: AssignSensorRegion/RenameSensor (sensor_region.go) publish
+	// through this Repository directly, not via a handler-layer call like
+	// RewireSensor's -- see Repository.SetInvalidationPublisher's doc
+	// comment for why. Same underlying *invalidation.Publisher instance
+	// LeafLabAPIServer is given below; one connection, two writers.
+	repo.SetInvalidationPublisher(invalidationPub)
 	authzSvc := authz.NewPGResolver(pool)
 	readingsSvc := readings.NewReader(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, readingsSvc, publisher, rmqConn, logging.Get("api"), WithElevationDuration(elevationDuration))
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, readingsSvc, publisher, rmqConn, invalidationPub, logging.Get("api"), WithElevationDuration(elevationDuration))
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the

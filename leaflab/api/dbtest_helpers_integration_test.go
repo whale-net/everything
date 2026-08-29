@@ -132,8 +132,13 @@ func (stubAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (a
 	panic("not used by this package's integration tests")
 }
 
-// Resolve implements authzResolver's generic entity resolution -- unused by
-// this file's own tests (see ResolveBoardByDeviceID's doc comment above).
+// Resolve satisfies authz.Resolver, which authzResolver now embeds for
+// PushDeviceConfig's FR1.2/FR1.3 push-time invariant check. See
+// ResolveBoardByDeviceID's doc comment above -- none of this package's
+// integration tests exercise PushDeviceConfig past its device_id
+// validation refusal (response_contract_integration_test.go's
+// TestPushDeviceConfig_RefusalWritesNothing), so this panics if that ever
+// changes without wiring a real fixture here.
 func (stubAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
 	panic("not used by this package's integration tests")
 }
@@ -155,12 +160,16 @@ func newTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: testSchema})
 	repo := NewRepository(db.Pool)
+<<<<<<< HEAD
 	// readings.NewReader(db.Pool) is a real Reader, not a fake: testSchema
 	// (above) carries none of the tables it queries (sensor_reading, its
 	// tiers, plant_region_history, ...), so nothing in this file's tests
 	// exercises the four bounded-read-path RPCs -- but a later test added
 	// to this same fixture can, without a second helper.
 	return NewLeafLabAPIServer(repo, stubAuthz{}, readings.NewReader(db.Pool), nil, nil, discardLogger()), db.Pool
+=======
+	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, nil, discardLogger()), db.Pool
+>>>>>>> plan/1166-v2-1380
 }
 
 // newTestRepository starts a real Postgres container, applies testSchema,

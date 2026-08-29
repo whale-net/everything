@@ -141,6 +141,12 @@ func (stubAPIServer) GetRegionPath(ctx context.Context, req *pb.GetRegionPathReq
 	return &pb.GetRegionPathResponse{}, nil
 }
 
+// Canned-success stub for #1380's RelocateSubtree RPC -- same
+// value-receiver rationale as the region RPCs above.
+func (stubAPIServer) RelocateSubtree(ctx context.Context, req *pb.RelocateSubtreeRequest) (*pb.RelocateSubtreeResponse, error) {
+	return &pb.RelocateSubtreeResponse{}, nil
+}
+
 // Canned-success stubs for #1377's seven plant RPCs (CreatePlant,
 // CorrectPlant, MovePlant, RetirePlant, GetPlant, ListPlants,
 // GetPlantPlacementTimeline). See the region stubs' doc comment above for
@@ -220,6 +226,22 @@ func (stubAPIServer) EndElevation(ctx context.Context, req *pb.EndElevationReque
 
 func (stubAPIServer) GetElevationStatus(ctx context.Context, req *pb.GetElevationStatusRequest) (*pb.GetElevationStatusResponse, error) {
 	return &pb.GetElevationStatusResponse{}, nil
+}
+
+// Canned-success stub for #1356's RewireSensor RPC -- same value-receiver
+// rationale as the region RPCs above.
+func (stubAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSensorRequest) (*pb.RewireSensorResponse, error) {
+	return &pb.RewireSensorResponse{}, nil
+}
+
+// Canned-success stubs for #1379's AssignSensorRegion/RenameSensor RPCs --
+// same value-receiver rationale as the region RPCs above.
+func (stubAPIServer) AssignSensorRegion(ctx context.Context, req *pb.AssignSensorRegionRequest) (*pb.AssignSensorRegionResponse, error) {
+	return &pb.AssignSensorRegionResponse{}, nil
+}
+
+func (stubAPIServer) RenameSensor(ctx context.Context, req *pb.RenameSensorRequest) (*pb.RenameSensorResponse, error) {
+	return &pb.RenameSensorResponse{}, nil
 }
 
 // startTestServer builds the exact production interceptor chain

@@ -16,6 +16,7 @@ import (
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/readings"
 	"github.com/whale-net/everything/leaflab/api/tiers"
+	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -52,6 +53,11 @@ type deviceRepository interface {
 	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
 	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
+	// GetRegionApplySkips is FR1.3's caller-visible skip surface: the
+	// audit.Entry rows leaflab/processor's ApplyConfigRegions wrote for
+	// this board's skipped config entries (household drift or a stale
+	// push), most recent first. See Repository.GetRegionApplySkips.
+	GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error)
 	// ListBoards is household-scoped (FR5.1): scope's SQL fragment
 	// (Scope.Filter) is applied inside the query itself, never as a
 	// post-filter -- see Repository.ListBoards.
@@ -68,6 +74,14 @@ type deviceRepository interface {
 	RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error
 	EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error
 	ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error)
+
+	// FindSensorIDByName, resolveSensorTypeID, LoadBoardSensorIdentities and
+	// RewireSensorHW back RewireSensor (FR16, FR17) -- see identity.go and
+	// RewireSensorHW's doc comment in repository.go.
+	FindSensorIDByName(ctx context.Context, boardID int64, name string) (int64, bool, error)
+	resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error)
+	LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error)
+	RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -77,7 +91,13 @@ type deviceRepository interface {
 // them) and resolving the caller's own Scope from their current
 // household_membership rows. Narrowed to an interface, like
 // deviceRepository above, so tests substitute a fake.
+//
+// It now also embeds authz.Resolver directly (Resolve), which
+// PushDeviceConfig's FR1.2/FR1.3 push-time invariant check needs: resolving
+// the pushing board's own household, and each region_id named in the
+// payload, through authz.AssertSameHousehold (invariant.go).
 type authzResolver interface {
+	authz.Resolver
 	ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error)
 	ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error)
 	// Resolve is the generic entity resolution the bounded-read-path RPCs
@@ -119,7 +139,13 @@ type LeafLabAPIServer struct {
 	// not expose its connection's liveness. May be nil in tests that don't
 	// exercise GetHealth -- see GetHealth's nil handling.
 	rmqConn *rmq.Connection
-	logger  *slog.Logger
+	// invalidationPub broadcasts FR73 invalidation events after every
+	// sensor-affecting write this server commits, so leaflab/processor's
+	// SensorCache (and, from Phase 4, the API's own bounded-wait
+	// observability) never keeps serving a stale cached view. See
+	// leaflab/invalidation's doc comment.
+	invalidationPub *invalidation.Publisher
+	logger          *slog.Logger
 	// elevationDuration is FR10.1's elevation window, applied by Elevate
 	// and RenewElevation. Defaults to DefaultElevationDuration; see
 	// WithElevationDuration.
@@ -140,13 +166,14 @@ func WithElevationDuration(d time.Duration) ServerOption {
 	return func(s *LeafLabAPIServer) { s.elevationDuration = d }
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, readingsSvc readingsReader, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger, opts ...ServerOption) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, readingsSvc readingsReader, publisher *rmq.Publisher, rmqConn *rmq.Connection, invalidationPub *invalidation.Publisher, logger *slog.Logger, opts ...ServerOption) *LeafLabAPIServer {
 	s := &LeafLabAPIServer{
 		repo:              repo,
 		authzSvc:          authzSvc,
 		readings:          readingsSvc,
 		publisher:         publisher,
 		rmqConn:           rmqConn,
+		invalidationPub:   invalidationPub,
 		logger:            logger,
 		elevationDuration: DefaultElevationDuration,
 	}
@@ -611,6 +638,49 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
 	}
 
+	// FR1.2/FR1.3: resolve the pushing board's own household once, before
+	// anything is stored or published -- used both to validate every
+	// region_id named in the payload (validatePushRegions, below) and to
+	// populate this push's audit entry's TargetHouseholdID (previously
+	// left nil pending #1339's household scoping, which has since landed).
+	boardRes, err := s.authzSvc.Resolve(ctx, authz.EntityRef{Kind: authz.EntityBoard, ID: boardID})
+	if err != nil {
+		s.logger.Error("resolve board household failed", "device_id", req.DeviceId, "board_id", boardID, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+	writerHousehold := boardRes.HouseholdID
+	var targetHouseholdID *int64
+	if boardRes.Unclaimed {
+		// FR1.1: this board has no household yet -- no region_id in the
+		// payload can ever satisfy AssertSameHousehold against it (see
+		// validatePushRegions), and the audit entry below records no
+		// single target household (TargetHouseholdID stays nil).
+		writerHousehold = 0
+	} else {
+		targetHouseholdID = &boardRes.HouseholdID
+	}
+
+	// FR17 pre-write identity check: refuses before anything is written or
+	// published if any entry would establish a new sensor identity rather
+	// than continue an existing one (or would require an unresolved swap,
+	// FR16.4). This is the real push path, not a dry run -- see
+	// checkPushConfigIdentity's doc comment.
+	if err := s.checkPushConfigIdentity(ctx, boardID, req.Sensors); err != nil {
+		return nil, err
+	}
+
+	// FR1.3: reject the whole push -- no device_config row stored, nothing
+	// published -- naming the offending entry and field, before either of
+	// those writes below. GetOrCreateBoard's self-registration upsert
+	// above is unaffected either way: it is pre-existing, idempotent
+	// board-identity bookkeeping this validation itself depends on to
+	// know which household to check against (it must run first to
+	// produce boardID), not a config write -- "nothing stored" is about
+	// device_config, the thing FR1.3 actually governs.
+	if err := s.validatePushRegions(ctx, writerHousehold, req.Sensors); err != nil {
+		return nil, err
+	}
+
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
@@ -626,20 +696,17 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	// Atomically assign version and record the pending push before publishing.
 	// This ensures the DB row always exists before the device can ack.
 	//
-	// TargetHouseholdID is left nil: PushDeviceConfig doesn't yet resolve a
-	// board to its owning household (that's FR1.1/NFR2 scoping, #1339's
-	// job) -- wiring a value in ahead of that scoping risks a wrong
-	// household silently shipping, which is worse than the field staying
-	// nil until the real resolution lands. Action/EntityKind come from
-	// auditRegistrations (audit_registry.go) rather than being repeated as
-	// literals here, so the two can't drift out of agreement.
+	// Action/EntityKind come from auditRegistrations (audit_registry.go)
+	// rather than being repeated as literals here, so the two can't drift
+	// out of agreement.
 	reg := auditRegistrations[pushDeviceConfigFullMethod]
 	entry := audit.Entry{
-		ActorSubject:  actingSubject(ctx),
-		ActorKind:     audit.ActorKindHuman,
-		Action:        reg.Action,
-		EntityKind:    reg.EntityKind,
-		CorrelationID: CorrelationIDFromContext(ctx),
+		ActorSubject:      actingSubject(ctx),
+		ActorKind:         audit.ActorKindHuman,
+		TargetHouseholdID: targetHouseholdID,
+		Action:            reg.Action,
+		EntityKind:        reg.EntityKind,
+		CorrelationID:     CorrelationIDFromContext(ctx),
 	}
 	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entry)
 	if err != nil {
@@ -672,6 +739,58 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	return &pb.PushDeviceConfigResponse{Version: uint64(version)}, nil
 }
 
+// validatePushRegions is FR1.2/FR1.3's push-time layer: every region_id
+// named in sensors must resolve to writerHousehold, the pushing board's
+// own household -- checked here, before PushDeviceConfig stores or
+// publishes anything (FR1.3's "no partial application": one bad entry
+// refuses the whole payload, not just that entry).
+//
+// This closes the defect this task fixes: previously ApplyConfigRegions
+// (leaflab/processor/repository.go) wrote sensor.region_id with no
+// ownership check at all, letting an authenticated owner point their own
+// sensor at another household's region.
+//
+// writerHousehold is a sentinel no real household id can ever equal
+// (household ids are BIGSERIAL, so real values are >= 1) when the pushing
+// board itself has no household yet (FR1.1's Unclaimed exception) -- every
+// region_id then fails AssertSameHousehold without a special case here.
+//
+// Delegates to authz.AssertSameHousehold (FR1.2's write invariant,
+// invariant.go) rather than reimplementing per-reference resolution --
+// this is the "every write RPC that would leave a live reference in
+// place ... calls this once per reference it is about to write" call site
+// AssertSameHousehold's own doc comment names.
+func (s *LeafLabAPIServer) validatePushRegions(ctx context.Context, writerHousehold int64, sensors []*configpb.SensorConfig) error {
+	var refs []authz.LiveRef
+	for i, sc := range sensors {
+		if sc.RegionId == 0 {
+			continue
+		}
+		refs = append(refs, authz.LiveRef{
+			EntityRef: authz.EntityRef{Kind: authz.EntityRegion, ID: int64(sc.RegionId)},
+			Field:     fmt.Sprintf("sensors[%d].region_id", i),
+		})
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+
+	err := authz.AssertSameHousehold(ctx, s.authzSvc, writerHousehold, refs...)
+	if err == nil {
+		return nil
+	}
+	if _, ok := contract.FromError(err); ok {
+		// AssertSameHousehold's own FailureInvalidArgument, already naming
+		// the offending entry and field (FR1.3) -- pass through verbatim.
+		return err
+	}
+	if errors.Is(err, authz.ErrNotFound) {
+		return contract.InvalidArgument("device_config", "", "This references something that doesn't exist.")
+	}
+	s.logger.Error("region household validation failed", "error", err)
+	return contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+}
+
 func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDeviceConfigRequest) (*pb.GetDeviceConfigResponse, error) {
 	if reason := validateDeviceID(req.DeviceId); reason != "" {
 		return nil, contract.InvalidArgument("device_config", "device_id", reason)
@@ -689,10 +808,102 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		s.logger.Error("get config failed", "device_id", req.DeviceId, "error", err)
 		return nil, contract.Internal("device_config", "", "Could not look up this device's config right now. Please try again.")
 	}
-	if cfg == nil {
-		return &pb.GetDeviceConfigResponse{Found: false}, nil
+
+	// FR1.3's caller-visible skip surface, independent of whether an
+	// accepted config exists yet -- a board can have skipped apply-time
+	// entries recorded against it regardless of Found below.
+	skipRows, err := s.repo.GetRegionApplySkips(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("get region apply skips failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not look up this device's config right now. Please try again.")
 	}
-	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
+	skips := make([]*pb.RegionApplySkip, 0, len(skipRows))
+	for _, row := range skipRows {
+		skips = append(skips, &pb.RegionApplySkip{
+			SensorId:   row.SensorID,
+			Reason:     row.Reason,
+			OccurredAt: contract.ToInstant(row.OccurredAt),
+		})
+	}
+
+	if cfg == nil {
+		return &pb.GetDeviceConfigResponse{Found: false, Skips: skips}, nil
+	}
+	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true, Skips: skips}, nil
+}
+
+// RewireSensor is the explicit API rewire path (FR16): it declares that
+// the sensor currently named req.Name on req.DeviceId has moved to a new
+// hardware location, updating it in place rather than establishing a new
+// sensor identity. See leaflab/api/proto/api.proto's RewireSensor doc
+// comment and Repository.FindSensorIDByName/FindSensorIDByHWKey.
+//
+// FR16 case 2 / FR17: the existing sensor is resolved by (board_id,
+// req.Name) -- req.Name is the stable anchor, per the proto doc comment.
+// If none exists, this is refused (FR17) before writing anything rather
+// than silently creating a new sensor identity: there is no rewire
+// alternative to name here (this RPC *is* the rewire path), so the
+// refusal instead explains there is nothing existing to rewire.
+// Otherwise the resolved sensor's hardware key is updated in place and a
+// sensor_hw_history interval closed/opened, atomically
+// (Repository.RewireSensorHW) -- sensor_id, and everything keyed on it
+// (readings, name history, region history), is unchanged by construction.
+func (s *LeafLabAPIServer) RewireSensor(ctx context.Context, req *pb.RewireSensorRequest) (*pb.RewireSensorResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("rewire_sensor", "device_id", reason)
+	}
+	if req.Name == "" {
+		return nil, contract.InvalidArgument("rewire_sensor", "name", "A sensor name is required.")
+	}
+
+	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
+	if err != nil {
+		s.logger.Error("board lookup failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("board", "", "Could not process this request right now. Please try again.")
+	}
+
+	sensorID, found, err := s.repo.FindSensorIDByName(ctx, boardID, req.Name)
+	if err != nil {
+		s.logger.Error("find sensor by name failed", "device_id", req.DeviceId, "name", req.Name, "error", err)
+		return nil, contract.Internal("rewire_sensor", "", "Could not process this request right now. Please try again.")
+	}
+	if !found {
+		// FR17: applying this would establish a new sensor identity, not
+		// continue one, and its reading history would not follow. Refuse
+		// before writing anything.
+		return nil, contract.Refuse(
+			"rewire_sensor",
+			"name",
+			fmt.Sprintf("No sensor named %q exists on this device; rewiring it would create a new sensor identity, and its reading history would not follow.", req.Name),
+			"Wait for the device to report this sensor in a manifest, which registers it as a new sensor; there is no existing sensor here to rewire.",
+		)
+	}
+
+	hw := HardwareAddressFromSensorConfig(req.MuxPath, req.I2CAddress)
+	if err := s.repo.RewireSensorHW(ctx, sensorID, hw); err != nil {
+		s.logger.Error("rewire sensor failed", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID, "error", err)
+		return nil, contract.Internal("rewire_sensor", "", "Could not rewire this sensor right now. Please try again.")
+	}
+
+	// FR73: publish only after RewireSensorHW's write has committed (see
+	// invalidation.Publisher.Publish's doc comment) -- never before. A
+	// publish failure here does not fail the RPC: the write already
+	// committed, and the bounded staleness backstop (leaflab/processor's
+	// periodic re-load) self-heals a dropped event.
+	if s.invalidationPub != nil {
+		if err := s.invalidationPub.Publish(ctx, invalidation.Event{
+			Kind:       invalidation.KindIdentity,
+			DeviceID:   req.DeviceId,
+			SensorID:   sensorID,
+			SensorName: req.Name,
+			ObservedAt: time.Now(),
+		}); err != nil {
+			s.logger.Warn("failed to publish invalidation event for rewire", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID, "error", err)
+		}
+	}
+
+	s.logger.Info("sensor rewired", "device_id", req.DeviceId, "name", req.Name, "sensor_id", sensorID)
+	return &pb.RewireSensorResponse{SensorId: sensorID}, nil
 }
 
 // ListBoards returns all known boards, keyset-paginated on (board_id) per

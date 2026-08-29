@@ -113,7 +113,7 @@ func newAuthzTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: authzTestSchema})
 	repo := NewRepository(db.Pool)
 	resolver := authz.NewPGResolver(db.Pool)
-	return NewLeafLabAPIServer(repo, resolver, nil, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, resolver, nil, nil, nil, nil, discardLogger()), db.Pool
 }
 
 func authzCtxFor(subject string) context.Context {

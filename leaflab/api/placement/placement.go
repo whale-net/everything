@@ -101,6 +101,29 @@ func (w *Writer) Move(ctx context.Context, plantID, regionID int64, requestedAt 
 // always the database's own NOW() at INSERT time, plant.region_id synced
 // in the same transaction) is identical to Move -- see Move's doc comment.
 func MoveTx(ctx context.Context, tx pgx.Tx, plantID, regionID int64, requestedAt time.Time) (time.Time, error) {
+	return moveTx(ctx, tx, plantID, regionID, requestedAt, false)
+}
+
+// MoveRelocatedTx is MoveTx's relocation-marked twin (FR74's "move every
+// current plant placement into the mirrored regions" clause, FR24): the
+// identical close-and-open write, except the opened interval is marked
+// relocation_induced = TRUE, so a plant's timeline distinguishes "this
+// plant moved" (MoveTx, FALSE) from "the region this plant was in moved"
+// (MoveRelocatedTx, TRUE). This is FR74's reuse of this package's writer --
+// not a third placement path -- see leaflab/api/relocate.go, which is this
+// function's only caller. requestedAt still goes through
+// RefuseIfBackdated (relocate.go always passes the relocation
+// transaction's own instant, which is never in the past), and valid_from
+// is still always the database's own NOW() at INSERT time, exactly like
+// MoveTx -- see MoveTx's doc comment for both.
+func MoveRelocatedTx(ctx context.Context, tx pgx.Tx, plantID, regionID int64, requestedAt time.Time) (time.Time, error) {
+	return moveTx(ctx, tx, plantID, regionID, requestedAt, true)
+}
+
+// moveTx is MoveTx/MoveRelocatedTx's shared implementation -- identical in
+// every respect except the relocation_induced value written to the opened
+// interval (FR24's relocation-induced half, migration 017's column).
+func moveTx(ctx context.Context, tx pgx.Tx, plantID, regionID int64, requestedAt time.Time, relocationInduced bool) (time.Time, error) {
 	if err := RefuseIfBackdated(requestedAt); err != nil {
 		return time.Time{}, err
 	}
@@ -122,10 +145,10 @@ func MoveTx(ctx context.Context, tx pgx.Tx, plantID, regionID int64, requestedAt
 
 	var validFrom time.Time
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO plant_region_history (plant_id, region_id)
-		VALUES ($1, $2)
+		INSERT INTO plant_region_history (plant_id, region_id, relocation_induced)
+		VALUES ($1, $2, $3)
 		RETURNING valid_from
-	`, plantID, regionID).Scan(&validFrom); err != nil {
+	`, plantID, regionID, relocationInduced).Scan(&validFrom); err != nil {
 		return time.Time{}, fmt.Errorf("placement: open new interval for plant %d in region %d: %w", plantID, regionID, err)
 	}
 

@@ -13,6 +13,27 @@ const (
 	ActionElevate        = "Elevate"
 	ActionMultiBoardPush = "MultiBoardPush"
 	ActionTransfer       = "Transfer"
+	// ActionRelocateSubtree names FR74's atomic subtree relocation --
+	// added alongside the other three FR8-named reason-required actions
+	// even though RelocateSubtree lands a whole phase later, so the same
+	// "cannot compile without a reason" guarantee applies to it from the
+	// moment its constructor exists (see NewRelocationEntry below).
+	ActionRelocateSubtree = "RelocateSubtree"
+)
+
+// ActionApplyConfigRegionSkip and EntityKindSensor name the FR8 audit
+// action leaflab/processor's ApplyConfigRegions (repository.go) records
+// each time it skips a config entry instead of applying it (FR1.3):
+// household drift or a stale push, re-validated immediately before the
+// write. Exported here -- rather than as a local constant in
+// leaflab/processor, which writes these rows -- because leaflab/api's
+// GetDeviceConfig (server.go) also reads them back by this same action
+// name (FR1.3's caller-visible skip surface); a shared constant keeps the
+// writer and reader from drifting out of agreement even though they are
+// two separate binaries with no other shared code path for this.
+const (
+	ActionApplyConfigRegionSkip = "ApplyConfigRegionSkip"
+	EntityKindSensor            = "sensor"
 )
 
 // NewElevationEntry builds the audit Entry for an FR10 admin elevation.
@@ -56,6 +77,26 @@ func NewTransferEntry(actorSubject string, actorKind ActorKind, targetHouseholdI
 		TargetHouseholdID: targetHouseholdID,
 		Action:            ActionTransfer,
 		EntityKind:        "board",
+		EntityID:          entityID,
+		Reason:            &reason,
+		CorrelationID:     correlationID,
+	}
+}
+
+// NewRelocationEntry builds the audit Entry for an FR74 subtree relocation.
+// reason is a plain string, not *string: a relocation cannot be audited
+// without one -- RelocateSubtreeRequest.reason (api.proto) is this
+// constructor's source. entityID names the relocated subtree's original
+// root region_id (the row RelocateSubtree retires in place, mirroring
+// NewTransferEntry's entityID naming the board being transferred) -- one
+// audit record for the whole operation (FR8), not one per moved entity.
+func NewRelocationEntry(actorSubject string, actorKind ActorKind, targetHouseholdID *int64, entityID *string, reason string, correlationID string) Entry {
+	return Entry{
+		ActorSubject:      actorSubject,
+		ActorKind:         actorKind,
+		TargetHouseholdID: targetHouseholdID,
+		Action:            ActionRelocateSubtree,
+		EntityKind:        "region",
 		EntityID:          entityID,
 		Reason:            &reason,
 		CorrelationID:     correlationID,
