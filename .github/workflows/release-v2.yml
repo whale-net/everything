@@ -158,7 +158,6 @@ jobs:
         with:
           source: published
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          fallback_to_source: 'false'
         env:
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
@@ -281,23 +280,51 @@ jobs:
       # against a checked-out repository -- but a plain shallow one (no
       # fetch-depth:0, no fetch-tags: those are only needed by the
       # `release-helper plan` re-derivation in the fallback path below), and
-      # no Bazel toolchain setup (setup-build-env): download-release-tools
-      # in its default 'published' source mode only downloads a prebuilt
-      # binary (see release-summary job below for the same shallow-checkout
-      # + download-release-tools pattern with no bazel setup). The
-      # RELEASE_TOOLS_FALLBACK_TO_SOURCE safety valve below is the one thing
-      # that needs Bazel here despite that -- see the step ahead of the
-      # download for why.
+      # no Bazel toolchain setup up front (setup-build-env): the download
+      # step below in its default 'published' source mode only downloads a
+      # prebuilt binary (see release-summary job below for the same
+      # shallow-checkout + download-release-tools pattern with no bazel
+      # setup). Bazel is only set up afterwards, and only if that download
+      # actually fails -- see the safety-valve steps below.
       - name: Checkout code (resolved plan)
         if: github.event.inputs.resolved_plan != ''
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 
-      # Only runs when the safety valve (below) is armed -- see its comment.
-      # Skipped by default so this fast path stays fast.
+      - name: Download release tools (resolved plan)
+        id: download-tools-resolved
+        if: github.event.inputs.resolved_plan != ''
+        continue-on-error: true
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      # Safety valve (issue surfaced by run 32615125644): repo variable
+      # RELEASE_TOOLS_FALLBACK_TO_SOURCE, unset/false by default, preserves
+      # today's behavior exactly -- a failed prebuilt/artifact acquisition
+      # fails the job via the "Verify release tools acquired" check below.
+      # Set it to 'true' (`gh variable set RELEASE_TOOLS_FALLBACK_TO_SOURCE
+      # --body true`) to build release tools from source via Bazel instead,
+      # when neither the S3 download nor the release-tools workflow
+      # artifact are available. These two steps only run once the download
+      # above has actually failed, so the fast path pays nothing for the
+      # valve being armed. Meant as a temporary operator escape hatch (e.g.
+      # while an App Registry/S3 publish-path issue like #1036 is being
+      # fixed) -- flip it back to false/unset once the underlying
+      # acquisition path is healthy again, since source builds are slower
+      # and skip the checksum-verified prebuilt-binary supply chain.
       - name: Setup Build Environment (fallback safety valve)
-        if: github.event.inputs.resolved_plan != '' && vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
+        if: |
+          github.event.inputs.resolved_plan != '' &&
+          steps.download-tools-resolved.outcome == 'failure' &&
+          vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
         uses: ./.github/actions/setup-build-env
         with:
           cache-suffix: 'release-tools'
@@ -306,31 +333,22 @@ jobs:
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
-      - name: Download release tools (resolved plan)
-        if: github.event.inputs.resolved_plan != ''
+      - name: Build release tools from source (fallback safety valve)
+        if: |
+          github.event.inputs.resolved_plan != '' &&
+          steps.download-tools-resolved.outcome == 'failure' &&
+          vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
-          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          # Safety valve (issue surfaced by run 32615125644): repo variable
-          # RELEASE_TOOLS_FALLBACK_TO_SOURCE, unset/false by default,
-          # preserves today's behavior exactly -- a failed prebuilt/artifact
-          # acquisition fails the job with the existing clear error message.
-          # Set it to 'true' (`gh variable set RELEASE_TOOLS_FALLBACK_TO_SOURCE
-          # --body true`) to make download-release-tools build release tools
-          # from source via Bazel instead of failing, when neither the S3
-          # download nor the release-tools workflow artifact are available.
-          # Meant as a temporary operator escape hatch (e.g. while an App
-          # Registry/S3 publish-path issue like #1036 is being fixed) --
-          # flip it back to false/unset once the underlying acquisition path
-          # is healthy again, since source builds are slower and skip the
-          # checksum-verified prebuilt-binary supply chain.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
-        env:
-          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+          source: 'source'
+
+      - name: Verify release tools acquired (resolved plan)
+        if: github.event.inputs.resolved_plan != ''
+        run: |
+          if [[ -z "${RELEASE_HELPER:-}" || -z "${APP_REGISTRY_CLI:-}" ]]; then
+            echo "::error::Failed to acquire release tools (resolved plan): neither the prebuilt download nor the source-build fallback succeeded. Re-run with RELEASE_TOOLS_FALLBACK_TO_SOURCE=true to build from source, or fix the App Registry/S3 acquisition path."
+            exit 1
+          fi
 
       - name: Parse resolved plan
         id: resolved-plan
@@ -364,20 +382,39 @@ jobs:
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Download release tools
+        id: download-tools-fallback
         if: github.event.inputs.resolved_plan == ''
+        continue-on-error: true
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          # Safety valve -- see the "Download release tools (resolved plan)"
-          # step above for the full explanation. Bazel is already set up
-          # unconditionally in this path, so no extra wiring is needed here.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
         env:
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
           GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      # Safety valve -- see the "Download release tools (resolved plan)"
+      # step above for the full explanation. Bazel is already set up
+      # unconditionally in this path, so this only needs to re-invoke the
+      # download action in source mode once the published attempt fails.
+      - name: Build release tools from source (fallback safety valve)
+        if: |
+          github.event.inputs.resolved_plan == '' &&
+          steps.download-tools-fallback.outcome == 'failure' &&
+          vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: 'source'
+
+      - name: Verify release tools acquired
+        if: github.event.inputs.resolved_plan == ''
+        run: |
+          if [[ -z "${RELEASE_HELPER:-}" || -z "${APP_REGISTRY_CLI:-}" ]]; then
+            echo "::error::Failed to acquire release tools: neither the prebuilt download nor the source-build fallback succeeded. Re-run with RELEASE_TOOLS_FALLBACK_TO_SOURCE=true to build from source, or fix the App Registry/S3 acquisition path."
+            exit 1
+          fi
 
       - name: Plan release
         id: plan
@@ -488,19 +525,34 @@ jobs:
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
       - name: Download release tools
+        id: download-tools-artifacts
+        continue-on-error: true
         uses: ./.github/actions/download-release-tools
         with:
           source: ${{ needs.build-release-tools.outputs.source || 'published' }}
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          # Safety valve -- see "Download release tools (resolved plan)" in
-          # plan-release above for the full explanation. Bazel is already
-          # set up unconditionally in this job, so no extra wiring is needed.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
         env:
           APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
           GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
           GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
           GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      # Safety valve -- see "Download release tools (resolved plan)" in
+      # plan-release above for the full explanation. Bazel is already set
+      # up unconditionally in this job, so this only needs to re-invoke the
+      # download action in source mode once the published attempt fails.
+      - name: Build release tools from source (fallback safety valve)
+        if: steps.download-tools-artifacts.outcome == 'failure' && vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: 'source'
+
+      - name: Verify release tools acquired
+        run: |
+          if [[ -z "${RELEASE_HELPER:-}" || -z "${APP_REGISTRY_CLI:-}" ]]; then
+            echo "::error::Failed to acquire release tools: neither the prebuilt download nor the source-build fallback succeeded. Re-run with RELEASE_TOOLS_FALLBACK_TO_SOURCE=true to build from source, or fix the App Registry/S3 acquisition path."
+            exit 1
+          fi
 
       - name: Install Helm
         if: ${{ github.event.inputs.helm_charts != '' }}
@@ -593,12 +645,28 @@ jobs:
         with:
           ref: ${{ github.event.inputs.build_ref || github.sha }}
 
-      # Only runs when the safety valve (below) is armed -- see the
-      # "Download release tools (resolved plan)" step in plan-release above
-      # for the full explanation. Skipped by default so this job's normal
-      # shallow-checkout, no-bazel path stays fast.
+      - name: Download release tools
+        id: download-tools
+        continue-on-error: true
+        uses: ./.github/actions/download-release-tools
+        with:
+          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
+          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+        env:
+          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
+          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
+          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
+          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+
+      # These two only run when the download above has actually failed AND
+      # the safety valve is armed -- see "Download release tools (resolved
+      # plan)" in plan-release above for the full explanation. Skipped by
+      # default so this job's normal shallow-checkout, no-bazel path stays
+      # fast. This job is best-effort (needs: ... && always()), so a
+      # failed source build here (continue-on-error) just means "Generate
+      # summary" below is skipped rather than failing the job.
       - name: Setup Build Environment (fallback safety valve)
-        if: vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
+        if: steps.download-tools.outcome == 'failure' && vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
         uses: ./.github/actions/setup-build-env
         with:
           cache-suffix: 'release-tools'
@@ -607,24 +675,16 @@ jobs:
           bazel-remote-cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
           bazel-remote-downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
 
-      - name: Download release tools
-        id: download-tools
+      - name: Build release tools from source (fallback safety valve)
+        id: build-tools-source
+        if: steps.download-tools.outcome == 'failure' && vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE == 'true'
         continue-on-error: true
         uses: ./.github/actions/download-release-tools
         with:
-          source: ${{ needs.build-release-tools.outputs.source || 'published' }}
-          target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          # Safety valve -- see "Download release tools (resolved plan)" in
-          # plan-release above for the full explanation.
-          fallback_to_source: ${{ vars.RELEASE_TOOLS_FALLBACK_TO_SOURCE || 'false' }}
-        env:
-          APP_REGISTRY_ADDRESS: ${{ vars.APP_REGISTRY_ADDRESS }}
-          GRPC_AUTH_TOKEN_URL: ${{ vars.APP_REGISTRY_AUTH_TOKEN_URL }}
-          GRPC_AUTH_CLIENT_ID: app-registry-builder-${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          GRPC_AUTH_CLIENT_SECRET: ${{ secrets.APP_REGISTRY_BUILDER_CLIENT_SECRET }}
+          source: 'source'
 
       - name: Generate summary
-        if: steps.download-tools.outcome == 'success'
+        if: steps.download-tools.outcome == 'success' || steps.build-tools-source.outcome == 'success'
         run: |
           ARGS=(summary --matrix '${{ needs.plan-release.outputs.release-matrix }}' --version "${{ needs.plan-release.outputs.version }}" --event-type workflow_dispatch --repository-owner "${{ github.repository_owner }}")
           [[ "${{ github.event.inputs.dry_run }}" == "true" ]] && ARGS+=(--dry-run)

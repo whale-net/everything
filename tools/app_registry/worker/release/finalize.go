@@ -965,10 +965,6 @@ func (a *Activities) recordCLIBinaryArtifact(ctx context.Context, fullName, vers
 		return fmt.Errorf("begin publish: %w", err)
 	}
 
-	domainStage, err := a.Registry.DomainAdoption().GetStage(ctx, app.Domain)
-	if err != nil {
-		return fmt.Errorf("check App Registry adoption stage for domain %q: %w", app.Domain, err)
-	}
 	if _, _, err := a.Registry.Artifacts().RecordArtifact(ctx, repository.Artifact{
 		Kind:        repository.ArtifactKindBinary,
 		AppID:       app.AppID,
@@ -977,7 +973,7 @@ func (a *Activities) recordCLIBinaryArtifact(ctx context.Context, fullName, vers
 		Digest:      digest,
 		BuildID:     buildID,
 		PublishedAt: time.Now(),
-	}, nil, domainStage); err != nil {
+	}, nil); err != nil {
 		return fmt.Errorf("record artifact: %w", err)
 	}
 	return nil

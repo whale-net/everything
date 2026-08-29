@@ -73,7 +73,8 @@ func (app *App) renderPromotionDetails(w http.ResponseWriter, r *http.Request, u
 	resp, err := app.registry.Promotion.GetPromotionDetails(r.Context(), &pb.GetPromotionDetailsRequest{PromotionId: promotionID})
 	if err != nil {
 		log.Printf("GetPromotionDetails(%q) failed: %v", promotionID, err)
-		s := pages.PromotionDetailsViewState{PromotionID: promotionID, LoadErr: grpcErrorMessage(err)}
+		heartbeatMs := int(app.sseHub.Config().HeartbeatInterval.Milliseconds())
+		s := pages.PromotionDetailsViewState{PromotionID: promotionID, LoadErr: grpcErrorMessage(err), HeartbeatIntervalMs: heartbeatMs}
 		if renderErr := RenderTempl(w, r, "Promotion Details", pages.PromotionDetails(user, s)); renderErr != nil {
 			log.Printf("Failed to render promotion details page: %v", renderErr)
 			http.Error(w, "Failed to render page", http.StatusInternalServerError)
@@ -81,7 +82,8 @@ func (app *App) renderPromotionDetails(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 
-	s := pages.PromotionDetailsViewState{PromotionID: promotionID, Details: resp, RetryErr: retryErr}
+	heartbeatMs := int(app.sseHub.Config().HeartbeatInterval.Milliseconds())
+	s := pages.PromotionDetailsViewState{PromotionID: promotionID, Details: resp, RetryErr: retryErr, HeartbeatIntervalMs: heartbeatMs}
 	if renderErr := RenderTempl(w, r, "Promotion Details", pages.PromotionDetails(user, s)); renderErr != nil {
 		log.Printf("Failed to render promotion details page: %v", renderErr)
 		http.Error(w, "Failed to render page", http.StatusInternalServerError)
