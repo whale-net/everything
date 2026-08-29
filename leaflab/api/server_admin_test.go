@@ -60,7 +60,7 @@ func TestRequireAdminEligible_RefusesNonAdmin_AllFiveRPCs(t *testing.T) {
 
 	t.Run("ResolveToHousehold", func(t *testing.T) {
 		repo := &fakeRepo{}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 		_, err := server.ResolveToHousehold(ctx, &pb.ResolveToHouseholdRequest{Query: &pb.ResolveToHouseholdRequest_PersonIdentifier{PersonIdentifier: "alice"}})
 		wantPermissionDenied(t, err)
 		if repo.adminByPersonCalls != 0 || len(repo.auditEntries) != 0 {
@@ -70,7 +70,7 @@ func TestRequireAdminEligible_RefusesNonAdmin_AllFiveRPCs(t *testing.T) {
 
 	t.Run("Elevate", func(t *testing.T) {
 		repo := &fakeRepo{}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 		_, err := server.Elevate(ctx, &pb.ElevateRequest{TargetHouseholdId: 1, Reason: "investigating"})
 		wantPermissionDenied(t, err)
 		if len(repo.openElevationCalls) != 0 {
@@ -80,7 +80,7 @@ func TestRequireAdminEligible_RefusesNonAdmin_AllFiveRPCs(t *testing.T) {
 
 	t.Run("RenewElevation", func(t *testing.T) {
 		repo := &fakeRepo{}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 		_, err := server.RenewElevation(ctx, &pb.RenewElevationRequest{TargetHouseholdId: 1, Reason: "still investigating"})
 		wantPermissionDenied(t, err)
 		if len(repo.renewElevationCalls) != 0 {
@@ -90,7 +90,7 @@ func TestRequireAdminEligible_RefusesNonAdmin_AllFiveRPCs(t *testing.T) {
 
 	t.Run("EndElevation", func(t *testing.T) {
 		repo := &fakeRepo{}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 		_, err := server.EndElevation(ctx, &pb.EndElevationRequest{TargetHouseholdId: 1})
 		wantPermissionDenied(t, err)
 		if len(repo.endElevationCalls) != 0 {
@@ -100,7 +100,7 @@ func TestRequireAdminEligible_RefusesNonAdmin_AllFiveRPCs(t *testing.T) {
 
 	t.Run("GetElevationStatus", func(t *testing.T) {
 		repo := &fakeRepo{}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 		_, err := server.GetElevationStatus(ctx, &pb.GetElevationStatusRequest{TargetHouseholdId: 1})
 		wantPermissionDenied(t, err)
 		if repo.activeElevationCalls != 0 {
@@ -194,7 +194,7 @@ func TestResolveToHousehold_QueryGranularityAudit_OneRowPerCallRegardlessOfMatch
 			{DeviceID: "device-3", HouseholdID: 1},
 		},
 	}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 
 	resp, err := server.ResolveToHousehold(adminCtx("root"), &pb.ResolveToHouseholdRequest{Query: &pb.ResolveToHouseholdRequest_PersonIdentifier{PersonIdentifier: "alice@example.com"}})
 	if err != nil {
@@ -223,7 +223,7 @@ func TestResolveToHousehold_QueryGranularityAudit_OneRowPerCallRegardlessOfMatch
 func TestResolveToHousehold_ResolvesByAllThreeQueryKinds(t *testing.T) {
 	t.Run("person_identifier", func(t *testing.T) {
 		repo := &fakeRepo{adminByPersonRows: []AdminBoardHealthRow{{DeviceID: "d1"}}}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 		resp, err := server.ResolveToHousehold(adminCtx("root"), &pb.ResolveToHouseholdRequest{Query: &pb.ResolveToHouseholdRequest_PersonIdentifier{PersonIdentifier: "alice"}})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -241,7 +241,7 @@ func TestResolveToHousehold_ResolvesByAllThreeQueryKinds(t *testing.T) {
 
 	t.Run("support_reference_stub", func(t *testing.T) {
 		repo := &fakeRepo{}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 		resp, err := server.ResolveToHousehold(adminCtx("root"), &pb.ResolveToHouseholdRequest{Query: &pb.ResolveToHouseholdRequest_SupportReference{SupportReference: "SR-123"}})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -259,7 +259,7 @@ func TestResolveToHousehold_ResolvesByAllThreeQueryKinds(t *testing.T) {
 
 	t.Run("partial_device_id", func(t *testing.T) {
 		repo := &fakeRepo{adminByPartialRows: []AdminBoardHealthRow{{DeviceID: "device-abc123"}}}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 		resp, err := server.ResolveToHousehold(adminCtx("root"), &pb.ResolveToHouseholdRequest{Query: &pb.ResolveToHouseholdRequest_PartialDeviceId{PartialDeviceId: "abc"}})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -279,7 +279,7 @@ func TestResolveToHousehold_ResolvesByAllThreeQueryKinds(t *testing.T) {
 // repository is ever reached.
 func TestElevate_RequiresReason(t *testing.T) {
 	repo := &fakeRepo{}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 	_, err := server.Elevate(adminCtx("root"), &pb.ElevateRequest{TargetHouseholdId: 1, Reason: ""})
 	if err == nil {
 		t.Fatal("want a refusal for an empty reason")
@@ -300,7 +300,7 @@ func TestElevate_RequiresReason(t *testing.T) {
 // (FR10.1).
 func TestElevate_OpensDefaultSixtyMinuteElevation_AndAudits(t *testing.T) {
 	repo := &fakeRepo{householdExists: true}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 
 	before := time.Now()
 	resp, err := server.Elevate(adminCtx("root"), &pb.ElevateRequest{TargetHouseholdId: 42, Reason: "board reported stuck offline"})
@@ -361,7 +361,7 @@ func TestElevate_OpensDefaultSixtyMinuteElevation_AndAudits(t *testing.T) {
 func TestElevate_ConfigurableDuration(t *testing.T) {
 	repo := &fakeRepo{householdExists: true}
 	const customDuration = 15 * time.Minute
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger(), WithElevationDuration(customDuration))
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger(), WithElevationDuration(customDuration))
 
 	before := time.Now()
 	if _, err := server.Elevate(adminCtx("root"), &pb.ElevateRequest{TargetHouseholdId: 1, Reason: "test"}); err != nil {
@@ -381,7 +381,7 @@ func TestElevate_ConfigurableDuration(t *testing.T) {
 // household that does not exist, without ever calling OpenElevation.
 func TestElevate_UnknownHousehold_Refused(t *testing.T) {
 	repo := &fakeRepo{householdExists: false}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 	_, err := server.Elevate(adminCtx("root"), &pb.ElevateRequest{TargetHouseholdId: 999, Reason: "test"})
 	if err == nil {
 		t.Fatal("want a refusal for an unknown household")
@@ -402,7 +402,7 @@ func TestElevate_UnknownHousehold_Refused(t *testing.T) {
 // cannot skip stating a reason.
 func TestRenewElevation_RequiresRestatedReason(t *testing.T) {
 	repo := &fakeRepo{}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 	_, err := server.RenewElevation(adminCtx("root"), &pb.RenewElevationRequest{TargetHouseholdId: 1, Reason: ""})
 	if err == nil {
 		t.Fatal("want a refusal for an empty reason")
@@ -425,7 +425,7 @@ func TestRenewElevation_RequiresRestatedReason(t *testing.T) {
 // paper over the repository's refusal by calling OpenElevation instead).
 func TestRenewElevation_RefusesWhenNoneOpen(t *testing.T) {
 	repo := &fakeRepo{renewElevationErr: ErrNoActiveElevation}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 	_, err := server.RenewElevation(adminCtx("root"), &pb.RenewElevationRequest{TargetHouseholdId: 7, Reason: "restated reason"})
 	if err == nil {
 		t.Fatal("want a refusal when no elevation is currently open")
@@ -445,7 +445,7 @@ func TestRenewElevation_RefusesWhenNoneOpen(t *testing.T) {
 // household (FR10.1, FR10.3).
 func TestRenewElevation_Success_AuditsWithSubjectAndHousehold(t *testing.T) {
 	repo := &fakeRepo{}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 
 	resp, err := server.RenewElevation(adminCtx("root"), &pb.RenewElevationRequest{TargetHouseholdId: 7, Reason: "still investigating"})
 	if err != nil {
@@ -477,7 +477,7 @@ func TestRenewElevation_Success_AuditsWithSubjectAndHousehold(t *testing.T) {
 // the requested target household, and audits with both stamped.
 func TestEndElevation_ClosesOpenElevation(t *testing.T) {
 	repo := &fakeRepo{}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 
 	if _, err := server.EndElevation(adminCtx("root"), &pb.EndElevationRequest{TargetHouseholdId: 9}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -499,7 +499,7 @@ func TestEndElevation_ClosesOpenElevation(t *testing.T) {
 // isn't open surfaces a not-found refusal, distinct from success.
 func TestEndElevation_RefusesWhenNoneOpen(t *testing.T) {
 	repo := &fakeRepo{endElevationErr: ErrNoActiveElevation}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 	_, err := server.EndElevation(adminCtx("root"), &pb.EndElevationRequest{TargetHouseholdId: 9})
 	if err == nil {
 		t.Fatal("want a refusal when no elevation is currently open")
@@ -520,7 +520,7 @@ func TestGetElevationStatus_ReflectsCurrentStateAndExpiry(t *testing.T) {
 	t.Run("elevated", func(t *testing.T) {
 		expiresAt := time.Now().Add(37 * time.Minute)
 		repo := &fakeRepo{activeElevationExpiresAt: expiresAt}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 
 		resp, err := server.GetElevationStatus(adminCtx("root"), &pb.GetElevationStatusRequest{TargetHouseholdId: 3})
 		if err != nil {
@@ -544,7 +544,7 @@ func TestGetElevationStatus_ReflectsCurrentStateAndExpiry(t *testing.T) {
 
 	t.Run("not_elevated", func(t *testing.T) {
 		repo := &fakeRepo{activeElevationErr: ErrNoActiveElevation}
-		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+		server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 
 		resp, err := server.GetElevationStatus(adminCtx("root"), &pb.GetElevationStatusRequest{TargetHouseholdId: 3})
 		if err != nil {
@@ -567,7 +567,7 @@ func TestGetElevationStatus_ReflectsCurrentStateAndExpiry(t *testing.T) {
 // elevated or a not-elevated outcome.
 func TestGetElevationStatus_PerHouseholdIsolation(t *testing.T) {
 	repo := &fakeRepo{activeElevationErr: ErrNoActiveElevation}
-	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, &fakeAuthz{}, nil, nil, nil, discardLogger())
 
 	if _, err := server.GetElevationStatus(adminCtx("root"), &pb.GetElevationStatusRequest{TargetHouseholdId: 55}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -630,7 +630,7 @@ func adminOutOfScopeFixture(targetHousehold int64) (*fakeAuthz, *fakeRepo) {
 // does.
 func TestGetDeviceConfig_AdminNoElevation_RefusedSameAsNonexistent(t *testing.T) {
 	az, repo := adminOutOfScopeFixture(9)
-	server := NewLeafLabAPIServer(repo, az, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, az, nil, nil, nil, discardLogger())
 
 	_, err := server.GetDeviceConfig(adminCtx("root"), &pb.GetDeviceConfigRequest{DeviceId: "device-9"})
 	if err == nil {
@@ -672,7 +672,7 @@ func TestGetDeviceConfig_AdminNoElevation_RefusedSameAsNonexistent(t *testing.T)
 func TestGetDeviceConfig_AdminElevated_TargetHousehold_Succeeds(t *testing.T) {
 	az, repo := adminOutOfScopeFixture(9)
 	repo.activeElevationExpiresAt = time.Now().Add(30 * time.Minute)
-	server := NewLeafLabAPIServer(repo, az, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, az, nil, nil, nil, discardLogger())
 
 	if _, err := server.GetDeviceConfig(adminCtx("root"), &pb.GetDeviceConfigRequest{DeviceId: "device-9"}); err != nil {
 		t.Fatalf("GetDeviceConfig for an elevated admin returned an error, want success: %v", err)
@@ -693,7 +693,7 @@ func TestGetDeviceConfig_AdminElevated_TargetHousehold_Succeeds(t *testing.T) {
 // of any kind is granted access.
 func TestGetDeviceConfig_NonAdminWithoutMembership_StillRefused(t *testing.T) {
 	az, repo := adminOutOfScopeFixture(9)
-	server := NewLeafLabAPIServer(repo, az, nil, nil, discardLogger())
+	server := NewLeafLabAPIServer(repo, az, nil, nil, nil, discardLogger())
 
 	if _, err := server.GetDeviceConfig(nonAdminCtx("mallory"), &pb.GetDeviceConfigRequest{DeviceId: "device-9"}); err == nil {
 		t.Fatal("GetDeviceConfig for a non-admin, non-member caller returned nil error, want a refusal")

@@ -398,7 +398,7 @@ func newAdminElevationTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: adminElevationTestSchema})
 	repo := NewRepository(db.Pool)
 	resolver := authz.NewPGResolver(db.Pool)
-	return NewLeafLabAPIServer(repo, resolver, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, resolver, nil, nil, nil, discardLogger()), db.Pool
 }
 
 // adminElevationTestCtx returns a context carrying grpcauth.Claims for
