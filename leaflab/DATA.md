@@ -269,15 +269,50 @@ Seven plain views (prefixed `v_`) expose the schema to downstream consumers (Gra
 | `v_board_state_history` | 1 row / accepted config | SCD2-shaped board config history (valid_from / valid_to) |
 | `v_board_state_current` | 1 row / board | Current accepted device config per board |
 | `v_sensor_reading_enriched` | 1 row / reading | **Workhorse**: reading + sensor + region path + config metadata |
-| `v_sensor_reading_with_plant` | 1 row / (reading × active plant) | Plant and plant_type slices; readings without plants appear with NULL plant fields |
+| `v_sensor_reading_with_plant` | 1 row / (reading × active plant) | Plant and plant_type slices, plus `household_id`; readings without plants appear with NULL plant fields |
 | `v_sensor_reading_with_config_debug` | 1 row / reading | `v_sensor_reading_enriched` + full `device_config.config_json` (debug) |
+
+> **Attribution correction (migration 021, FR72) — Grafana-affecting.** Before migration 021,
+> `v_sensor_reading_with_plant` attributed a reading to whichever plant currently held
+> `plant.region_id = <reading's region>` — a live, mutable pointer — so moving a plant
+> retroactively rewrote every historical reading it had ever produced. Migration 021 repoints the
+> join to nearest-ancestor resolution against `plant_region_history` at `recorded_at` (the same
+> rule as `leaflab/api/attribution`, NFR1.c), so readings recorded before a plant's move now stay
+> attributed to the plant/region that was actually there at the time. **The view's name and every
+> existing column are unchanged** (only `household_id` was added); only the numbers a panel
+> computes from `plant_name` / `plant_type_id` / `plant_common_name` / `plant_species` can change
+> for historical rows — from wrong to right. No parallel `_v2` view was created; there is nothing
+> to repoint a dashboard *to*, only numbers to expect to change under an unchanged query. Audited
+> every other migration-012 view for the same defect (current-value join instead of an
+> interval/SCD2 lookup) and found none affected: `v_sensor_reading_enriched` already keys off
+> `sensor_reading.region_id`, a snapshot stamped at insert; `v_sensor_current` /
+> `v_board_state_history` / `v_board_state_current` are explicitly current-state views by
+> contract; `v_sensor_reading_with_config_debug` keys off `sensor_reading.config_version`, also
+> stamped at insert.
+>
+> **Panels using `v_sensor_reading_with_plant` should expect their historical numbers to change**
+> the first time they run after this migration, for any plant that has ever been moved between
+> regions. This repo does not check in Grafana dashboard JSON — Grafana queries the database
+> directly (`ARCHITECTURE.md` "Query Layer — Analytical Views") — so the affected panel named here is
+> the one whose reference query this file documents: the **"Avg Temperature by Plant Type"** panel
+> (the `plant_common_name` aggregate below). Any other panel built against this view's `plant_id`,
+> `plant_name`, `plant_type_id`, `plant_common_name` or `plant_species` columns is affected the
+> same way and should be checked by its operator.
+>
+> **Cost profile changed materially.** The join is now a per-row `LATERAL` call that walks
+> `v_region_path` and queries `plant_region_history` per reading, not a single flat equality join
+> — on a view already one row per reading with four joins. The API read path deliberately does
+> **not** query this view (series and summaries are served from the granularity tiers instead), so
+> `NFR3.3`/`NFR5`'s performance gates do not cover it and it should not be assumed to still be the
+> cheap path for a new Grafana panel.
 
 ### Temporal accuracy
 
 - **Region** is historically accurate: `sensor_reading.region_id` is snapshotted at insert, so the views join the snapshot — not the sensor's current region.
 - **Config version** is historically accurate: `sensor_reading.config_version` is stamped at insert from the in-memory cache.
 - **Sensor name** is the *current* name from `sensor_name_history WHERE valid_to IS NULL`. For dashboards showing live or recent data this is almost always correct; for strict point-in-time name lookups query `sensor_name_history` directly.
-- **Plant** is resolved at query time: plants active in the reading's snapshot region at `recorded_at`.
+- **Plant** is historically accurate as of migration 021 (FR72): attribution resolves nearest-ancestor against `plant_region_history` at `recorded_at` — the region (including the reading's own) closest to it on the path with an active plant at that instant, mirroring `leaflab/api/attribution`'s Go resolver exactly (NFR1.c). A plant moved after a reading was recorded does not change that reading's attribution.
+- **`household_id`** resolves through the region tree root (`region_path_ids[1]`), since `region.household_id` is populated on tree roots only and descendants inherit it.
 
 ### Example queries
 
