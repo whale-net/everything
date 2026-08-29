@@ -63,8 +63,9 @@ Each domain follows a standard file set. Use these as your primary reference bef
 | `ARCHITECTURE.md` | System design, component relationships, data flow | Before making structural or cross-cutting changes |
 | `ENV.md` | All environment variables for the domain or component | Configuring, deploying, or debugging runtime behavior |
 | `TOC.md` | Index of concepts pointing to deeper docs | Finding domain-specific docs on a topic |
+| `PRODUCT.md` | Vision, capability map, load-bearing decisions, and milestone roadmap for the domain | Before scoping or designing anything in a domain built via `/project-manager:product` — see `tools/project-manager/CONVENTIONS.md` § Product brief & milestones |
 
-Not every domain has all four files — `ENV.md` is only present where runtime configuration applies, `ARCHITECTURE.md` may be omitted for simple utilities.
+Not every domain has all five files — `ENV.md` is only present where runtime configuration applies, `ARCHITECTURE.md` may be omitted for simple utilities, and `PRODUCT.md` only exists for a domain scoped through `/project-manager:product`.
 
 ### Navigation Protocol
 
@@ -89,10 +90,11 @@ Update documentation as part of the same task that changes the code — not as a
 | `ARCHITECTURE.md` | A component is added/removed, a data flow or integration changes, a key design decision is made |
 | `ENV.md` | An environment variable is added, removed, renamed, or its behaviour changes |
 | `TOC.md` | A new doc file is created, a file is moved or deleted, or a new concept emerges that an agent would need to find |
+| `PRODUCT.md` | A milestone ships or is amended, a load-bearing decision is revisited, or the roadmap is re-cut — via `/project-manager:product`, never a hand edit |
 
 **Scope:** Only update what your change actually affects. Do not rewrite a doc because it could be better — only correct what is now wrong or missing.
 
-**New files:** If you create a doc that isn't one of the four standard files (e.g. a component-specific guide or style doc), add an entry to the domain's `TOC.md` so it is discoverable.
+**New files:** If you create a doc that isn't one of the five standard files (e.g. a component-specific guide or style doc), add an entry to the domain's `TOC.md` so it is discoverable.
 
 ### Size Limits & Splitting
 
@@ -153,7 +155,7 @@ WHERE <entity_id> = $1
 
 ## GitHub Labels
 
-Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plugin's lifecycle labels (`plan:*`, `phase:*`, `status:*`), apply these when filing or triaging issues:
+Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plugin's lifecycle labels (`product:*`, `plan:*`, `phase:*`, `status:*`), apply these when filing or triaging issues:
 
 - `idea` — not yet a concrete task
 - `high-effort` / `low-effort` — sizing, for human token-budget triage

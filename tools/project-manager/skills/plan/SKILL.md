@@ -24,4 +24,6 @@ Turns a `plan:approved` root plan Issue into executable, dependency-tracked task
 
 3. **Task breakdown.** Otherwise, dispatch `project-manager:planner` — via `Agent` with `model` set to `--planner-model` (default `opus`) — with the root issue number, to create the Project board with swimlanes, create cohesive task issues, and post the summary comment.
 
+   **If the root issue's first line names a product brief** (`Product: #<p> — Milestone M<k>`), post `gh issue comment <p> --body "Ledger: M<k> → in progress (Project board)"` on the product tracking issue once the board exists — never a body edit (CONVENTIONS.md § Roadmap ledger). Ordinary single-feature plans skip this; it's the only product-aware step this skill has.
+
 4. **Report.** Summarize the Project board URL and the created task issues, grouped by starting swimlane, to the user. Tell them `/project-manager:implement <n>` is the next step.

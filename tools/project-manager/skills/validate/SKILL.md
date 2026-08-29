@@ -39,6 +39,7 @@ Drives `tools/project-manager/CONVENTIONS.md` § System validation. Only meaning
    - For each task branch (found via `git branch --list 'pm*-<n>/<task>-*'`), make sure it has an open PR: `git checkout <branch> && gh stack submit --auto`. If this is the first time it creates the PR, set title/body per CONVENTIONS.md § Git hygiene, "PR content".
    - Collect every task's PR URL (`gh stack view --json` per branch, or the URLs already gathered during `/project-manager:implement`).
    - Post `gh issue comment <n> --body "PRs: <url>, <url>, ..."` on the root issue.
+   - **If the root issue's first line names a product brief** (`Product: #<p> — Milestone M<k>`), post `gh issue comment <p> --body "Ledger: M<k> → shipped"` on the product tracking issue — never a body edit (CONVENTIONS.md § Roadmap ledger). Ordinary single-feature plans skip this; it's the only product-aware step this skill has.
    - Report that the plan is fully validated, with the full list of PR URLs — the deliverable is this stack of small, individually reviewable PRs, not one PR for the whole plan.
 
 5. **If there are findings:** Dispatch `project-manager:planner` with the finding issue numbers to run its "Handling system-validator findings" process — converting blocking findings into properly sequenced follow-up task issues starting in `Scaffold` or `Implementation` on the same Project. Report the new task issue numbers to the user, and point them to `/project-manager:implement <n>`.
