@@ -328,8 +328,17 @@ Each host will:
 - Manage separate sets of sessions
 - Publish independent status updates
 
+## Self-Updating Containerized Deployment
+
+For a production host, rather than manually pulling and restarting
+`host-manager` every time a new version is promoted, a resolver sidecar can
+watch App Registry and redeploy `host-manager` automatically. See
+[RESOLVER.md](RESOLVER.md) and the example stack in
+[compose/](compose/).
+
 ## Related Documentation
 
 - [ManManV2 Architecture](../ARCHITECTURE.md)
 - [Event Processor](../processor/README.md)
 - [Integration Tests](../processor/integration_test.go)
+- [Self-Updating Deployment (Resolver)](RESOLVER.md)

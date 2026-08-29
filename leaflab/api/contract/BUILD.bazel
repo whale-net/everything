@@ -13,8 +13,10 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//leaflab/api/proto:leaflabapipb",
+        "@org_golang_google_genproto_googleapis_rpc//errdetails",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/durationpb",
     ],
 )
 
@@ -29,4 +31,13 @@ go_test(
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],
+)
+
+# Source exposed to //leaflab/conformance (#1334, NFR1.a's extensibility
+# for Phase 2's NFR1.b and Phase 3's NFR1.c, both of which build on the
+# FailureClass vocabulary defined here). Scoped, not public.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go"]),
+    visibility = ["//leaflab/conformance:__pkg__"],
 )

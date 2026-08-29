@@ -288,6 +288,324 @@ a new one needs no CI change. Run it locally before pushing anyway: it is the
 only automated check that exercises the pgx layer, and because it is
 `manual`-tagged, `bazel test //...` will not tell you it is broken.
 
+## Live environment testing (NFR17)
+
+These tests cannot be produced broker-free and verify properties of the
+deployed system (multi-replica fan-out and real browser paths) that integration
+tests cannot observe. They require a Tilt cluster with multi-replica deployments,
+kubectl access, and (for NFR17b) a real browser session.
+
+### NFR17(a) — Per-replica fan-out against a live broker
+
+**Objective:** Verify that an event published by one UI replica reaches SSE
+subscribers attached to **every** replica (not one at random). This tests the
+broker's server-named, non-durable, auto-delete queue behavior (FR1/NFR1).
+
+**Prerequisites:**
+- Tilt environment running (`tilt up`)
+- kubectl configured for `docker-desktop` context
+- Two or more pod replicas of `app-registry-ui`
+- Real RabbitMQ instance (provided by Tilt's `setup_rabbitmq`)
+- AUTH_MODE=none (already set in Tiltfile)
+
+**Procedure:**
+
+1. **Scale the UI deployment to 2+ replicas:**
+   ```bash
+   kubectl scale deployment/app-registry-ui -n app-registry-local-dev --replicas=2
+   kubectl wait --for=condition=Ready pod -l app=app-registry-ui \
+     -n app-registry-local-dev --timeout=60s
+   ```
+   Verify both pods are running:
+   ```bash
+   kubectl get pods -n app-registry-local-dev -l app=app-registry-ui
+   # Should show 2 pods in Ready state
+   ```
+
+2. **Set up per-pod port-forwards (one SSE subscriber per pod):**
+   
+   Open three terminal windows. In the first, forward pod 1 to a local port:
+   ```bash
+   # Terminal 1: Get the first pod name
+   POD1=$(kubectl get pods -n app-registry-local-dev -l app=app-registry-ui \
+     -o jsonpath='{.items[0].metadata.name}')
+   echo "Pod 1: $POD1"
+   
+   # Forward pod 1 to localhost:8000
+   kubectl port-forward -n app-registry-local-dev $POD1 8000:8000
+   ```
+   
+   In a second terminal, forward pod 2 to a different local port:
+   ```bash
+   # Terminal 2: Get the second pod name
+   POD2=$(kubectl get pods -n app-registry-local-dev -l app=app-registry-ui \
+     -o jsonpath='{.items[1].metadata.name}')
+   echo "Pod 2: $POD2"
+   
+   # Forward pod 2 to localhost:8001
+   kubectl port-forward -n app-registry-local-dev $POD2 8001:8000
+   ```
+   
+   Verify both forwards are active:
+   ```bash
+   # Terminal 3: Test connectivity
+   curl -I http://localhost:8000/
+   curl -I http://localhost:8001/
+   # Both should return 200 OK
+   ```
+
+3. **Prepare test data (if needed):**
+   
+   If no promotions exist, create one via the gRPC API:
+   ```bash
+   # Using the forwarded API port (default 50061)
+   grpcurl -plaintext -d '{
+     "environment_key": "dev",
+     "owner_full_name": "test-app",
+     "kind": "ARTIFACT_KIND_IMAGE",
+     "version": "v1.0.0",
+     "idempotency_key": "nfr17a-test-1"
+   }' localhost:50061 appregistry.v1.PromotionRegistry/Promote
+   ```
+   
+   Record the `promotion_id` from the response for the next step.
+
+4. **Subscribe to SSE on both pods (Terminal 3):**
+   
+   Open two concurrent SSE connections, one to each pod's port-forward:
+   ```bash
+   # Terminal 3A: Subscribe to pod 1
+   curl -N -H "Accept: text/event-stream" \
+     http://localhost:8000/promotions/<promotion-id>/status/sse
+   
+   # Terminal 3B (new session): Subscribe to pod 2
+   curl -N -H "Accept: text/event-stream" \
+     http://localhost:8001/promotions/<promotion-id>/status/sse
+   ```
+   
+   Both connections should receive heartbeats immediately (`:` lines every few seconds).
+
+5. **Publish an event via the broker (Terminal 3, new session):**
+   
+   Publish a promotion status update to trigger a broadcast:
+   ```bash
+   grpcurl -plaintext -d '{
+     "environment_key": "dev",
+     "owner_full_name": "test-app",
+     "kind": "ARTIFACT_KIND_IMAGE",
+     "version": "v1.0.1",
+     "idempotency_key": "nfr17a-publish-1"
+   }' localhost:50061 appregistry.v1.PromotionRegistry/Promote
+   ```
+   
+   Or publish directly to RabbitMQ (if gRPC is unavailable):
+   ```bash
+   kubectl exec -n app-registry-local-dev rabbitmq-dev-0 -- \
+     rabbitmqadmin publish exchange=app-registry.promotions.v1 \
+     routing_key=promotion.status \
+     payload='{"promotion_id":"<id>","status":"published"}'
+   ```
+
+6. **Verify both subscribers receive the event:**
+   
+   In both SSE terminals (3A and 3B), observe that both receive a data message
+   within a few seconds. The message should contain the promotion details fragment
+   (HTML) or an error indicator. The key is that **both** subscribers receive it.
+   
+   **Pass criterion:** Both terminals log a non-heartbeat message (lines NOT starting
+   with `:`). If only one terminal receives the message, the broker's queue
+   fan-out has failed.
+
+7. **Record results (placeholder for manual execution):**
+   
+   After running the procedure:
+   ```
+   - Date/time of execution: [PLACEHOLDER — fill in after running]
+   - Environment: [docker-desktop, Tilt version X.Y.Z]
+   - Pod 1 name: [PLACEHOLDER]
+   - Pod 2 name: [PLACEHOLDER]
+   - Promotion ID published: [PLACEHOLDER]
+   - Pod 1 received event: [PLACEHOLDER — yes/no]
+   - Pod 2 received event: [PLACEHOLDER — yes/no]
+   - Notes: [PLACEHOLDER — any issues, timing observations, etc.]
+   ```
+
+**Cleanup:**
+
+```bash
+# Kill port-forwards (Ctrl+C in those terminals)
+# Scale back to 1 replica
+kubectl scale deployment/app-registry-ui -n app-registry-local-dev --replicas=1
+```
+
+---
+
+### NFR17(b) — Real browser path through ingress and Service
+
+**Objective:** Verify that a real browser, reaching the page through a real
+ingress and Kubernetes Service (not port-forward), receives pushed SSE updates.
+Additionally verify that the `Last-Event-ID` request header survives round-trip
+through the ingress intact, which guards against proxy header truncation.
+
+**Prerequisites:**
+- Tilt environment running with a real ingress (requires `setup_ingress` or
+  similar helper in Tiltfile — **currently requires manual ingress setup**)
+- kubectl configured for `docker-desktop` context
+- A real browser (Chrome, Firefox, Safari) on your development machine
+- UI deployment running (no multi-replica requirement for this test)
+
+**Note on ingress setup:** The current Tiltfile does not include an ingress
+resource. To run this test, you must either:
+1. Add an ingress resource manually via `kubectl apply`, or
+2. Extend the Tiltfile to call `setup_ingress` (if implemented in `common.tilt`)
+
+Example ingress manifest (apply manually if not in Tiltfile):
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-registry-ui-ingress
+  namespace: app-registry-local-dev
+spec:
+  ingressClassName: nginx  # or docker-desktop's default
+  rules:
+  - host: app-registry-ui.localhost
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: app-registry-ui
+            port:
+              number: 8000
+```
+
+**Procedure:**
+
+1. **Ensure the ingress is running:**
+   ```bash
+   kubectl get ingress -n app-registry-local-dev app-registry-ui-ingress
+   # Should show app-registry-ui.localhost with the UI's Service backend
+   ```
+
+2. **Create a promotion with known ID (if needed):**
+   ```bash
+   grpcurl -plaintext -d '{
+     "environment_key": "dev",
+     "owner_full_name": "test-app-browser",
+     "kind": "ARTIFACT_KIND_IMAGE",
+     "version": "v1.0.0",
+     "idempotency_key": "nfr17b-test-1"
+   }' localhost:50061 appregistry.v1.PromotionRegistry/Promote
+   ```
+   
+   Record the promotion ID.
+
+3. **Open a real browser and navigate to the page:**
+   
+   In Chrome, Firefox, or Safari, open:
+   ```
+   http://app-registry-ui.localhost/promotions/<promotion-id>
+   ```
+   
+   (Note: localhost hostname resolution for `app-registry-ui.localhost` may
+   require adding an entry to `/etc/hosts` on non-Docker-Desktop systems.)
+
+4. **Observe the live indicator and SSE connection:**
+   
+   The page should:
+   - Display the promotion details (name, version, status, etc.)
+   - Show a "live" indicator (if FR23 is implemented) in the top-right or
+     as a status badge
+   - Establish an SSE connection in the browser's Network tab
+     (DevTools → Network, filter by `sse` or look for `/promotions/<id>/status/sse`)
+
+5. **Publish an update event:**
+   
+   In a terminal, promote a new version or manually publish to RabbitMQ:
+   ```bash
+   grpcurl -plaintext -d '{
+     "environment_key": "dev",
+     "owner_full_name": "test-app-browser",
+     "kind": "ARTIFACT_KIND_IMAGE",
+     "version": "v1.0.1",
+     "idempotency_key": "nfr17b-publish-1"
+   }' localhost:50061 appregistry.v1.PromotionRegistry/Promote
+   ```
+
+6. **Verify the browser receives the update:**
+   
+   Within a few seconds of publishing:
+   - The page should update (details change, new version appears, or status updates)
+   - The "live" indicator should remain green/active (not flip to "not-live")
+   - In DevTools Network tab, the SSE connection should show incoming messages
+   - **No page reload or manual refresh should be required.**
+
+7. **Verify Last-Event-ID header round-trip:**
+   
+   This is an advanced check to confirm the ingress does not truncate headers:
+   
+   a. Open DevTools → Network, filter by XHR/Fetch to see SSE requests
+   b. Click on the SSE connection request and inspect the **Request Headers** section
+   c. Look for the `Last-Event-ID` header — it should be present after reconnect
+   d. Compare the header value against what the browser's last received event ID was
+   e. They should match exactly (same format, no truncation)
+   
+   Alternatively, check the browser console logs if FR27's error handling logs
+   the header value.
+
+8. **Verify connection stability (heartbeat interval):**
+   
+   Continue observing for at least one heartbeat interval (default ~30s):
+   - The SSE connection should remain open
+   - Heartbeat lines (`:` comments) should arrive regularly
+   - The live indicator should not flip to "not-live" unless you manually stop
+     the server
+   - No unintended page reloads or connection resets should occur
+
+9. **Record results (placeholder for manual execution):**
+   
+   After running the procedure:
+   ```
+   - Date/time of execution: [PLACEHOLDER — fill in after running]
+   - Browser: [Chrome/Firefox/Safari version]
+   - Environment: [docker-desktop, ingress type]
+   - Ingress hostname: [app-registry-ui.localhost or custom]
+   - Promotion ID accessed: [PLACEHOLDER]
+   - Page loaded successfully: [PLACEHOLDER — yes/no]
+   - SSE connection established: [PLACEHOLDER — yes/no]
+   - Event received in browser: [PLACEHOLDER — yes/no]
+   - Live indicator behavior: [PLACEHOLDER — stayed green/reacted correctly]
+   - Last-Event-ID header present: [PLACEHOLDER — yes/no]
+   - Last-Event-ID value: [PLACEHOLDER — actual value]
+   - Connection stable for ≥1 heartbeat: [PLACEHOLDER — yes/no]
+   - Notes: [PLACEHOLDER — proxy errors, header truncation, timing issues, etc.]
+   ```
+
+**Cleanup:**
+
+```bash
+# Delete the ingress (if manually applied)
+kubectl delete ingress -n app-registry-local-dev app-registry-ui-ingress
+
+# Port-forwards terminate on exit
+```
+
+---
+
+**Why these checks matter:**
+
+- **NFR17(a)** verifies the core SSE fan-out design: a shared RabbitMQ exchange
+  with per-pod server-named queues ensures every connected subscriber gets every
+  event, not a random subset. This is the property that makes SSE viable for a
+  multi-replica UI deployment.
+
+- **NFR17(b)** verifies the operator's actual deployment path: a real browser
+  through a real ingress is the only configuration they will ever use. SSE is
+  subject to proxy buffering and idle timeouts that don't show up in direct
+  connections; this test catches those failure modes before production.
+
 ## Verified
 
 Full chain confirmed on Docker Desktop Kubernetes at AR-1: images build →

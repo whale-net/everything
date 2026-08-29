@@ -7,9 +7,8 @@
 lifecycle against the deployed `dev` registry for real. That verification
 also surfaced a defect, since fixed — issue
 [#585](https://github.com/whale-net/everything/issues/585) — in
-`RecordArtifact`'s digest-replay path; see "Artifact lifecycle" below and
-PLAN.md's "AR-5" for the design work the fix still leaves open before any
-domain can move past `observe`. Delivery
+`RecordArtifact`'s digest-replay path; see "Artifact lifecycle" below for
+how it was fixed. Delivery
 is PLAN-HISTORY.md's AR-7. Six slices of this section describe real code: AR-7a's —
 ordering 4, partial-apply reconcile, domain-qualified chart app references,
 and the `continue-on-error` drop on `ci.yml`'s sweep job — AR-7b's — the
