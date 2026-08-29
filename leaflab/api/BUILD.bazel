@@ -26,6 +26,8 @@ go_library(
         "//leaflab/api/contract",
         "//leaflab/api/placement",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/readings",
+        "//leaflab/api/tiers",
         "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/logging",
@@ -141,6 +143,7 @@ go_test(
         "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/readings",
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -175,6 +178,47 @@ go_test(
     ],
     deps = [
         "//leaflab/api/authz",
+        "//leaflab/api/readings",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real-Postgres integration coverage for this task's Testing section
+# (#1362): a non-member gets NFR2's not-found for another household's
+# sensor, exercised through GetReadingSeries's authorizeEntity gate -- see
+# readings_authz_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as this package's other integration go_test
+# targets.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:readings_authz_integration_test --test_output=all
+go_test(
+    # keep
+    name = "readings_authz_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "readings_authz_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/readings",
+        "//leaflab/api/tiers",
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
@@ -245,6 +289,7 @@ go_test(
         "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/readings",
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",

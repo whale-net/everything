@@ -16,6 +16,7 @@ import (
 
 	"github.com/whale-net/everything/leaflab/api/authz"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/readings"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
@@ -105,7 +106,8 @@ func run() error {
 
 	repo := NewRepository(pool)
 	authzSvc := authz.NewPGResolver(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, publisher, rmqConn, logging.Get("api"), WithElevationDuration(elevationDuration))
+	readingsSvc := readings.NewReader(pool)
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, readingsSvc, publisher, rmqConn, logging.Get("api"), WithElevationDuration(elevationDuration))
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the

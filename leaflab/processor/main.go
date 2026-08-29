@@ -97,6 +97,13 @@ func run() error {
 	completer := capture.NewCompleter(dbPool)
 	go runCaptureCompleter(appCtx, logger, completer)
 
+	// FR20.2 / migration 033: boundary_partial's differential retention
+	// (five_minute-tier partials dropped after tiers.FiveMinuteRetention,
+	// hourly-tier partials never dropped) runs on its own, much longer
+	// ticker inside this same worker -- see capture.go's
+	// runCapturePartialRetention doc comment for why.
+	go runCapturePartialRetention(appCtx, logger, completer)
+
 	if err := consumer.Start(appCtx); err != nil {
 		return fmt.Errorf("failed to start consumer: %w", err)
 	}

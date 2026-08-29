@@ -18,6 +18,7 @@ import (
 
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/readings"
 	"github.com/whale-net/everything/libs/go/dbtest"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 )
@@ -131,6 +132,12 @@ func (stubAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (a
 	panic("not used by this package's integration tests")
 }
 
+// Resolve implements authzResolver's generic entity resolution -- unused by
+// this file's own tests (see ResolveBoardByDeviceID's doc comment above).
+func (stubAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
+	panic("not used by this package's integration tests")
+}
+
 // newTestServer starts a real Postgres container, applies testSchema, and
 // returns a LeafLabAPIServer backed by a real Repository plus the raw pool
 // for fixture setup / assertions. publisher is nil: every RPC exercised by
@@ -148,7 +155,12 @@ func newTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: testSchema})
 	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, discardLogger()), db.Pool
+	// readings.NewReader(db.Pool) is a real Reader, not a fake: testSchema
+	// (above) carries none of the tables it queries (sensor_reading, its
+	// tiers, plant_region_history, ...), so nothing in this file's tests
+	// exercises the four bounded-read-path RPCs -- but a later test added
+	// to this same fixture can, without a second helper.
+	return NewLeafLabAPIServer(repo, stubAuthz{}, readings.NewReader(db.Pool), nil, nil, discardLogger()), db.Pool
 }
 
 // newTestRepository starts a real Postgres container, applies testSchema,

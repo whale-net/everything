@@ -779,3 +779,72 @@ func TestBoundaryExactlyAtBucketStartCompletesWithoutZeroWidthPartial(t *testing
 			merged.Count, merged.Sum, merged.Min, merged.Max, wantCount, wantSum, wantMin, wantMax)
 	}
 }
+
+// ── boundary_partial differential retention (FR20.2, migration 033) ────
+
+// seedCompletedPartial inserts one already-completed boundary_capture row
+// and its single boundary_partial row directly (bypassing Recorder/
+// Completer, which always use the real clock) so retention tests can plant
+// a partial at an arbitrary bucket_start, however old, without waiting on
+// wall time. Returns the new capture_id.
+func seedCompletedPartial(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sensorID int64, tier string, bucketStart time.Time) int64 {
+	t.Helper()
+	var captureID int64
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO boundary_capture (sensor_id, boundary_at, tier, bucket_start, state, completed_at)
+		VALUES ($1, $2, $3, $4, 'completed', $2)
+		RETURNING capture_id
+	`, sensorID, bucketStart, tier, bucketStart).Scan(&captureID); err != nil {
+		t.Fatalf("seed completed boundary_capture (%s, %s): %v", tier, bucketStart, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO boundary_partial (capture_id, tier, bucket_start, partial_from, partial_to, reading_count, value_sum, value_min, value_max)
+		VALUES ($1, $2, $3, $3, $4, 1, 1, 1, 1)
+	`, captureID, tier, bucketStart, bucketStart.Add(time.Minute)); err != nil {
+		t.Fatalf("seed boundary_partial (%s, %s): %v", tier, bucketStart, err)
+	}
+	return captureID
+}
+
+// countPartials returns how many boundary_partial rows exist for captureID.
+func countPartials(t *testing.T, ctx context.Context, pool *pgxpool.Pool, captureID int64) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM boundary_partial WHERE capture_id = $1`, captureID).Scan(&n); err != nil {
+		t.Fatalf("count boundary_partial for capture %d: %v", captureID, err)
+	}
+	return n
+}
+
+// TestPruneExpiredPartials_HourlySurvives14MonthRetentionPass proves
+// migration 033's differential retention promise (FR20.2: "retention on
+// boundary_partial follows the coarsest tier the partial splits -- hourly
+// partials are never dropped"): a 14-month-old simulated retention pass
+// (well past tiers.FiveMinuteRetention's 90 days) drops the five_minute
+// partial but leaves the hourly partial -- at the exact same age --
+// untouched. A recent five_minute partial, still inside the retention
+// window, is also left untouched, so the query is proven to gate on age,
+// not merely tier.
+func TestPruneExpiredPartials_HourlySurvives14MonthRetentionPass(t *testing.T) {
+	pool, sensorID := newCaptureFixture(t)
+	ctx := context.Background()
+
+	fourteenMonthsAgo := time.Now().Add(-14 * 30 * 24 * time.Hour)
+	oldFiveMinuteCapture := seedCompletedPartial(t, ctx, pool, sensorID, "five_minute", fourteenMonthsAgo)
+	oldHourlyCapture := seedCompletedPartial(t, ctx, pool, sensorID, "hourly", fourteenMonthsAgo)
+	recentFiveMinuteCapture := seedCompletedPartial(t, ctx, pool, sensorID, "five_minute", time.Now().Add(-24*time.Hour))
+
+	if err := NewCompleter(pool).PruneExpiredPartials(ctx); err != nil {
+		t.Fatalf("PruneExpiredPartials: %v", err)
+	}
+
+	if n := countPartials(t, ctx, pool, oldFiveMinuteCapture); n != 0 {
+		t.Errorf("14-month-old five_minute partial survived retention: %d rows remain, want 0", n)
+	}
+	if n := countPartials(t, ctx, pool, oldHourlyCapture); n != 1 {
+		t.Errorf("14-month-old hourly partial was dropped: %d rows remain, want 1 (hourly must never be dropped)", n)
+	}
+	if n := countPartials(t, ctx, pool, recentFiveMinuteCapture); n != 1 {
+		t.Errorf("recent (within-retention) five_minute partial was dropped: %d rows remain, want 1", n)
+	}
+}

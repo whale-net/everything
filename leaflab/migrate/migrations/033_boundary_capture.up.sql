@@ -130,5 +130,8 @@ CREATE INDEX idx_boundary_partial_bucket
 -- row-scoped scheduled DELETE (`WHERE tier = 'five_minute' AND
 -- bucket_start < NOW() - INTERVAL '90 days'`, mirroring migration 022's
 -- sensor_reading_5m retention window, and never touching tier = 'hourly'
--- rows) -- this task's Implementation phase wires the job; no retention
--- policy or scheduled job is created by this migration.
+-- rows) -- wired as leaflab/api/capture.Completer.PruneExpiredPartials,
+-- ticked from leaflab/processor (leaflab/processor/capture.go's
+-- runCapturePartialRetention) on its own daily interval, independent of
+-- the phase-two completion ticker. No retention policy or scheduled job
+-- is created by this migration itself.

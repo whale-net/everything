@@ -230,7 +230,7 @@ func startTestServer(t *testing.T, logger *slog.Logger) *grpc.ClientConn {
 	t.Helper()
 
 	lis := bufconn.Listen(bufSize)
-	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, stubAPIServer{}, false)
+	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, &stubAPIServer{}, false)
 
 	go func() {
 		// Serve returns a non-nil error on Stop() too; cleanup already
@@ -421,12 +421,12 @@ func noopStream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerIn
 // "server reflection is disabled outside development" directly on the
 // production wiring, without dialing Postgres/RabbitMQ.
 func TestBuildServer_ReflectionRegisteredOnlyInDevMode(t *testing.T) {
-	prod := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, false)
+	prod := buildServer(noopUnary, noopStream, discardTestLogger(), &stubAPIServer{}, false)
 	if hasReflectionService(prod) {
 		t.Errorf("reflection registered with devMode=false, want not registered (FR11): %v", prod.GetServiceInfo())
 	}
 
-	dev := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, true)
+	dev := buildServer(noopUnary, noopStream, discardTestLogger(), &stubAPIServer{}, true)
 	if !hasReflectionService(dev) {
 		t.Errorf("reflection not registered with devMode=true, want registered: %v", dev.GetServiceInfo())
 	}

@@ -325,3 +325,40 @@ func (c *Completer) checkPendingNearRetention(ctx context.Context, now time.Time
 	}
 	return nil
 }
+
+// PruneExpiredPartials implements boundary_partial's differential retention
+// (migration 033's "Retention" comment, FR20.2: "retention on
+// boundary_partial follows the coarsest tier the partial splits -- hourly
+// partials are never dropped"). boundary_partial is not a hypertable (see
+// the migration comment for why), so this cannot be expressed as a single
+// add_retention_policy the way migration 022's raw/5-minute tiers are --
+// it is instead a row-scoped DELETE, restricted to tier = 'five_minute'
+// rows whose bucket_start is older than tiers.FiveMinuteRetention
+// (mirroring sensor_reading_5m's own retention window). tier = 'hourly'
+// rows are never matched by this query and so are never dropped,
+// regardless of age -- hourly is the coarsest tier in V1 and the tier every
+// boundary_partial inherits retention from once its originating tier's
+// window has passed (FR20.3).
+//
+// This is independent of RunPending/completeTier: a five-minute partial can
+// be pruned only once its own bucket_start has aged past
+// tiers.FiveMinuteRetention, which is always long after the bucket has
+// closed and been completed (tiers.CaptureCompletionWindow), so pruning
+// never races a pending completion for the same bucket.
+func (c *Completer) PruneExpiredPartials(ctx context.Context) error {
+	return c.pruneExpiredPartialsAt(ctx, time.Now())
+}
+
+// pruneExpiredPartialsAt is PruneExpiredPartials with an explicit "now",
+// letting tests simulate retention passes (e.g. a 14-month-later run)
+// without waiting on the clock.
+func (c *Completer) pruneExpiredPartialsAt(ctx context.Context, now time.Time) error {
+	cutoff := now.Add(-tiers.FiveMinuteRetention)
+	if _, err := c.db.Exec(ctx, `
+		DELETE FROM boundary_partial
+		WHERE tier = $1 AND bucket_start < $2
+	`, string(tiers.TierFiveMinute), cutoff); err != nil {
+		return fmt.Errorf("capture: prune expired five_minute boundary_partial rows: %w", err)
+	}
+	return nil
+}
