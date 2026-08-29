@@ -98,6 +98,10 @@ func (s stubReadingsReader) Compare(ctx context.Context, entities []authz.Entity
 	panic("stubReadingsReader.Compare called -- not exercised by this file's tests")
 }
 
+func (s stubReadingsReader) ConfigLag(ctx context.Context, scope authz.Scope, page readings.Page) (readings.ConfigLagResult, error) {
+	panic("stubReadingsReader.ConfigLag called -- not exercised by this file's tests")
+}
+
 func newReadingsAuthzTestServer(t *testing.T, readingsSvc readingsReader) (*LeafLabAPIServer, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
