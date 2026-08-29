@@ -25,9 +25,14 @@ type Publisher struct {
 	chanOpener func(conn *Connection, exchange string) (*amqp.Channel, error)
 }
 
-// NewPublisher creates a new publisher
+// NewPublisher creates a new publisher that publishes to the default "manman" exchange
 func NewPublisher(conn *Connection) (*Publisher, error) {
-	ch, err := openAndConfigureChannel(conn, "manman")
+	return NewPublisherWithExchange(conn, "manman")
+}
+
+// NewPublisherWithExchange creates a new publisher for a custom exchange
+func NewPublisherWithExchange(conn *Connection, exchange string) (*Publisher, error) {
+	ch, err := openAndConfigureChannel(conn, exchange)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +40,7 @@ func NewPublisher(conn *Connection) (*Publisher, error) {
 	return &Publisher{
 		channel:    ch,
 		conn:       conn,
-		exchange:   "manman",
+		exchange:   exchange,
 		chanOpener: openAndConfigureChannel,
 	}, nil
 }

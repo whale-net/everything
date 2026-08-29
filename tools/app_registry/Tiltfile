@@ -10,7 +10,7 @@ load('ext://namespace', 'namespace_create')
 load('ext://dotenv', 'dotenv')
 load('../tilt/common.tilt',
      'build_images_from_apps', 'detect_platform', 'get_bazel_platform', 'get_watch_paths',
-     'setup_dev_util', 'setup_postgres', 'setup_otelcollector', 'setup_temporal',
+     'setup_dev_util', 'setup_postgres', 'setup_otelcollector', 'setup_temporal', 'setup_rabbitmq',
      'get_env_bool', 'get_custom_or_default',
      'print_startup_banner', 'print_footer_info')
 
@@ -56,10 +56,65 @@ else:
     temporal_info = None
     temporal_host = ''
 
+
+# RabbitMQ Message Queue
+rmq_info = setup_rabbitmq(namespace)
+rabbitmq_host = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_HOST', rmq_info['host'])
+rabbitmq_port = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PORT', rmq_info['port'])
+rabbitmq_user = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_USER', rmq_info['user'])
+rabbitmq_password = get_custom_or_default('BUILD_RABBITMQ_ENV', 'RABBITMQ_PASSWORD', rmq_info['password'])
+
+# Construct RabbitMQ URL with vhost for app-registry (app-registry-dev)
+rabbitmq_url = 'amqp://{}:{}@{}:{}/app-registry-dev'.format(
+    rabbitmq_user,
+    rabbitmq_password,
+    rabbitmq_host,
+    rabbitmq_port
+)
+
 print("📊 Infrastructure configured:")
 print("  Postgres:  {}".format("custom" if os.environ.get('BUILD_POSTGRES_ENV') == 'custom' else "local"))
+print("  RabbitMQ:  {}".format("custom" if os.environ.get('BUILD_RABBITMQ_ENV') == 'custom' else "local"))
 print("  OTEL:      {}".format(otel_endpoint))
 print("  Temporal:  {}".format(temporal_host if temporal_info else "disabled"))
+
+# Setup RabbitMQ vhost for app-registry
+if get_env_bool('ENABLE_APP_REGISTRY_RABBITMQ', default='true'):
+    local_resource(
+        'rabbitmq-vhost-setup',
+        cmd='''
+set -e
+
+echo "Waiting for RabbitMQ pod to be ready..."
+kubectl wait --for=condition=ready pod -l app=rabbitmq-dev -n {namespace} --timeout=60s
+
+echo "Waiting for RabbitMQ app to be fully started..."
+for i in $(seq 1 30); do
+    if kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl status >/dev/null 2>&1; then
+        echo "✓ RabbitMQ app is running"
+        break
+    fi
+    echo "  Attempt $i/30: RabbitMQ app not ready yet, waiting..."
+    sleep 1
+done
+
+# Create app-registry vhost
+kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl add_vhost app-registry-dev 2>/dev/null || {{
+    if ! kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl list_vhosts | grep -q "^app-registry-dev$"; then
+        echo "✗ Failed to create vhost app-registry-dev"
+        exit 1
+    fi
+}}
+
+# Set permissions for the rabbit user (configure/read/write on all)
+kubectl exec -n {namespace} rabbitmq-dev-0 -- rabbitmqctl set_permissions -p app-registry-dev rabbit ".*" ".*" ".*"
+
+echo "✓ RabbitMQ vhost 'app-registry-dev' configured successfully"
+'''.format(namespace=namespace),
+        resource_deps=['rabbitmq-dev'],
+        labels=['app-registry-infrastructure'],
+    )
+    print("🔌 RabbitMQ vhost configured")
 
 # ===========================
 # Application Configuration
@@ -123,7 +178,9 @@ spec:
         env:
         - name: PG_DATABASE_URL
           value: "{pg_database_url}"
-""".format(namespace=namespace, pg_database_url=pg_database_url)))
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
+""".format(namespace=namespace, pg_database_url=pg_database_url, rabbitmq_url=rabbitmq_url)))
 
     k8s_resource(
         'app-registry-migration',
@@ -180,11 +237,14 @@ spec:
           value: "{temporal_host}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
         temporal_host=temporal_host,
         otel_endpoint=otel_endpoint,
+        rabbitmq_url=rabbitmq_url,
     )))
 
     api_deps = []
@@ -242,11 +302,14 @@ spec:
           value: "/tmp/app-registry-writeback"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
         temporal_host=temporal_host,
         otel_endpoint=otel_endpoint,
+        rabbitmq_url=rabbitmq_url,
     )))
 
     worker_deps = []
@@ -326,10 +389,13 @@ spec:
           value: "{pg_database_url}"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: "{otel_endpoint}"
+        - name: RABBITMQ_URL
+          value: "{rabbitmq_url}"
 """.format(
         namespace=namespace,
         pg_database_url=pg_database_url,
         otel_endpoint=otel_endpoint,
+        rabbitmq_url=rabbitmq_url,
     )))
 
     ui_deps = []

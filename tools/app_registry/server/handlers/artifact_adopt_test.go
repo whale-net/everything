@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
-	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
 	"google.golang.org/grpc/codes"
@@ -52,6 +51,15 @@ func TestAdoptArtifact_UnblocksChartPinningPreRegistryImage(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-adopt-unblock")
+
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "demo-achart", Version: "v1.0.0",
+		Repository:     "https://charts.example.com/demo-achart",
+		IdempotencyKey: "chart-preadopt-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
 
 	// Fails first: "demo-chart-app"'s v0.9.0 was never recorded -- as if it
 	// were published before the registry existed.
@@ -106,6 +114,15 @@ func TestAdoptArtifact_NeverDowngradesObservedProvenance(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-adopt-no-downgrade")
 
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/image-app",
+		IdempotencyKey: "record-observed-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	recorded, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-image-app", Digest: "sha256:observed-not-downgraded", Version: "v1.0.0",
@@ -140,6 +157,15 @@ func TestAdoptArtifact_DifferentDigestConflict(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-adopt-conflict")
+
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/image-app",
+		IdempotencyKey: "record-conflict-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
 
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -176,7 +202,6 @@ func TestAdoptArtifact_RejectsAllocatedRow(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	repo.SetDomainAdoptionStage("demo", repository.DomainAdoptionStageAllocate)
 
 	alloc, err := artifactSrv.AllocateVersion(ctx, &pb.AllocateVersionRequest{
 		OwnerFullName: "demo-allocsvc", Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
@@ -283,6 +308,15 @@ func TestAdoptArtifact_ChartWithContains(t *testing.T) {
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-adopt-chart-contains")
 
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-chart-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/chart-app",
+		IdempotencyKey: "chart-contains-image-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	imgResp, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
 		OwnerFullName: "demo-chart-app", Digest: "sha256:chart-contains-image", Version: "v1.0.0",
@@ -314,6 +348,15 @@ func TestListArtifacts_ProvenanceFilter(t *testing.T) {
 	_, artifactSrv, _ := setup(t)
 	ctx := authedCtx()
 	build := recordBuild(t, artifactSrv, "run-adopt-provenance")
+
+	if _, err := artifactSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+		OwnerFullName: "demo-image-app", Version: "v1.0.0",
+		Repository:     "ghcr.io/demo/image-app",
+		IdempotencyKey: "prov-observed-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
 
 	if _, err := artifactSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_IMAGE,

@@ -26,6 +26,9 @@ import (
 	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/htmxbase"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/htmxsse"
+	"github.com/whale-net/everything/libs/go/rmq"
+	"github.com/whale-net/everything/tools/app_registry/events"
 )
 
 //go:embed favicon.ico
@@ -122,6 +125,8 @@ type App struct {
 	auth        *htmxauth.Authenticator
 	registry    *RegistryClient
 	userAuthOpt grpc.DialOption
+	sessionMgr  *htmxauth.DBSessionManager // Retained for FR27 session re-check on failure path
+	sseHub      *htmxsse.Hub               // Hub for SSE connections
 }
 
 // NewApp creates a new application instance.
@@ -182,13 +187,59 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize registry gRPC client: %w", err)
 	}
+	sseHub := initializeSSEHub(ctx)
 
 	return &App{
 		config:      config,
 		auth:        auth,
 		registry:    registry,
 		userAuthOpt: userAuthOpt,
+		sessionMgr:  store, // Retain for FR27 failure discrimination
+		sseHub:      sseHub,
 	}, nil
+}
+
+// initializeSSEHub creates and initializes the SSE Hub with message broker
+// attachment. If attachment fails, returns a Hub that will attempt to attach
+// asynchronously. Startup failure does not fail the overall application boot
+// (FR1b, NFR7).
+func initializeSSEHub(ctx context.Context) *htmxsse.Hub {
+	// Get RabbitMQ connection string from environment
+	brokerURL := os.Getenv("RABBITMQ_URL")
+	if brokerURL == "" {
+		brokerURL = "amqp://guest:guest@localhost:5672/"
+	}
+
+	// Create the attach function using the events package's exchange config
+	attachFunc := func(ctx context.Context) (htmxsse.Transport, error) {
+		conn, err := rmq.NewConnectionFromURL(brokerURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
+		}
+
+		// Declare the exchange using app-registry events package config
+		ch, err := conn.Channel()
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to get channel: %w", err)
+		}
+
+		kind, durable, autoDelete, internal, noWait, args := events.DeclareArgs()
+		err = ch.ExchangeDeclare(events.ExchangeName, kind, durable, autoDelete, internal, noWait, args)
+		ch.Close()
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("failed to declare exchange %q: %w", events.ExchangeName, err)
+		}
+
+		// Create ephemeral consumer for this process instance
+		return rmq.NewConsumerWithOpts(conn, "", false, true, 0, 0)
+	}
+
+	config := htmxsse.DefaultConfig()
+	config.ExchangeName = events.ExchangeName
+	hub := htmxsse.NewHub(attachFunc, config)
+	return hub
 }
 
 // Close cleans up application resources.
@@ -279,6 +330,17 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// RetryArgoSync's own auth.Require check, not by this route's
 	// (identical-to-every-other-route) session-login requirement.
 	mux.HandleFunc("/promotions/{id}/retry", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRetryArgoSync)))
+	// SSE route for promotion status updates (FR6, FR27, FR28, NFR4, NFR13).
+	// Wrapped with noRedirectWriter to prevent redirects mid-stream.
+	// Does NOT use WithAccessToken (which redirects), instead re-acquires token per read.
+	mux.HandleFunc("/promotions/{id}/status/sse", func(w http.ResponseWriter, r *http.Request) {
+		// Wrap with noRedirectWriter before RequireAuthFunc processes the request
+		// This ensures auth failures return 401 with no redirect headers/body
+		w = newNoRedirectWriter(w)
+		app.auth.RequireAuthFunc(func(w http.ResponseWriter, r *http.Request) {
+			app.handlePromoStatusSSE(w, r)
+		})(w, r)
+	})
 	mux.HandleFunc("/apps", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppsCatalog)))
 	mux.HandleFunc("/apps/{id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAppDetail)))
 

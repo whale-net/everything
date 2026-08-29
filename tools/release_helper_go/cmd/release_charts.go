@@ -550,7 +550,7 @@ func ExecuteReleaseCharts(p ReleaseChartsParams) (*ReleaseChartsResult, error) {
 				for _, v := range violations {
 					names = append(names, fmt.Sprintf("%s@%s (%s)", v.AppFullName, v.Version, v.Reason))
 				}
-				return nil, fmt.Errorf("chart pins %d unpublished app(s), domain %q is at adoption stage 'allocate': %s",
+				return nil, fmt.Errorf("chart pins %d unpublished app(s) in domain %q: %s",
 					len(violations), chart.Domain, strings.Join(names, ", "))
 			}
 		}

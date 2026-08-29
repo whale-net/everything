@@ -303,10 +303,9 @@ func scanArtifact(row pgx.Row) (repository.Artifact, error) {
 }
 
 // RecordArtifact implements repository.ArtifactRepository.RecordArtifact —
-// the publishing -> published transition, plus (at adoption stage
-// "observe" only) the backward-compatible direct-create path. See the
-// interface doc comment for the full state-machine contract.
-func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput, domainStage repository.DomainAdoptionStage) (*repository.Artifact, bool, error) {
+// the publishing -> published transition. See the interface doc comment for
+// the full state-machine contract.
+func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact, contains []repository.ContainedImageInput) (*repository.Artifact, bool, error) {
 	// 1. Idempotent replay: an existing row with this EXACT digest AND the
 	// SAME (owner, kind, version) identity as the request. Only a
 	// "published" row can ever match here (digest is NULL on every other
@@ -343,17 +342,10 @@ func (r *artifactRepo) RecordArtifact(ctx context.Context, a repository.Artifact
 	existing, everr := r.findByOwnerKindVersion(ctx, a.Kind, ownerIDOf(a), a.Version)
 	switch {
 	case errors.Is(everr, pgx.ErrNoRows):
-		// No row at all for this (owner, kind, version). Creating directly
-		// as "published" is the pre-AR-7b behaviour, kept only for domains
-		// still at adoption stage "observe" -- see ARCHITECTURE.md
-		// "Backward compatibility during rollout" and the interface doc
-		// comment. At any later stage BeginPublish must have run first.
-		if domainStage != repository.DomainAdoptionStageObserve {
-			return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact once a domain has left adoption stage \"observe\"",
-				repository.ErrFailedPrecondition, r.ownerFullName(ctx, a), a.Version)
-		}
-		out, _, err := r.insertArtifact(ctx, a, contains, repository.ArtifactStatePublished, repository.VersionSourceTag, repository.ArtifactProvenanceObserved)
-		return out, false, err
+		// No row at all for this (owner, kind, version): BeginPublish must
+		// always have run first, for every domain unconditionally.
+		return nil, false, fmt.Errorf("%w: no publishing artifact found for %s %s -- BeginPublish must run before RecordArtifact",
+			repository.ErrFailedPrecondition, r.ownerFullName(ctx, a), a.Version)
 	case everr != nil:
 		return nil, false, everr
 	}
@@ -855,9 +847,9 @@ func (r *artifactRepo) BeginPublish(ctx context.Context, kind repository.Artifac
 	existing, everr := r.findByOwnerKindVersion(ctx, kind, ownerID, version)
 	switch {
 	case errors.Is(everr, pgx.ErrNoRows):
-		// ∅ -> publishing: the pre-cutover path (no prior AllocateVersion
-		// call for this version) -- see ARCHITECTURE.md "Backward
-		// compatibility during rollout".
+		// ∅ -> publishing: no prior AllocateVersion call for this version
+		// (a kind that never allocates, or an explicit version) -- see
+		// ARCHITECTURE.md "Artifact lifecycle".
 		if repositoryHint == "" {
 			return nil, fmt.Errorf("%w: repository is required to begin publishing %s %s with no prior allocation", repository.ErrInvalidArgument, string(kind), version)
 		}
