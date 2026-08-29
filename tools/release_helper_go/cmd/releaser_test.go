@@ -106,8 +106,12 @@ func TestExecuteRelease_StrategySuccess(t *testing.T) {
 	}
 }
 
+// TestExecuteRelease_NoOpRebuild exercises the tag-based no-op path used
+// when no ArtifactClient is supplied (registry not opted in) -- see
+// TestExecuteRelease_RegistryPath_NoOpRebuild for the App-Registry-
+// authoritative equivalent, which is what every call with a client
+// unconditionally uses.
 func TestExecuteRelease_NoOpRebuild(t *testing.T) {
-	fakeClient := NewFakeArtifactRegistryClient()
 	git := newFakeGit(
 		fakeGitCall{argsContain: []string{"rev-parse", "HEAD"}, output: "gitsha12345"},
 		fakeGitCall{argsContain: []string{"tag", "--list"}, output: "test-app.v1.0.0"},
@@ -129,7 +133,6 @@ func TestExecuteRelease_NoOpRebuild(t *testing.T) {
 		IdempotencyKeyPrefix: "run-1",
 		Releaser:             releaser,
 		Git:                  git,
-		ArtifactClient:       fakeClient,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -146,12 +149,6 @@ func TestExecuteRelease_NoOpRebuild(t *testing.T) {
 	}
 	if releaser.publishCalls != 0 {
 		t.Errorf("expected 0 publish calls on no-op, got %d", releaser.publishCalls)
-	}
-	if len(fakeClient.FailPublishCalls) != 1 {
-		t.Fatalf("expected 1 FailPublish call on no-op, got %d", len(fakeClient.FailPublishCalls))
-	}
-	if !strings.Contains(fakeClient.FailPublishCalls[0].Reason, "no-op rebuild") {
-		t.Errorf("expected no-op reason in FailPublish, got %q", fakeClient.FailPublishCalls[0].Reason)
 	}
 }
 
@@ -264,6 +261,11 @@ func TestExecuteRelease_PublishFailure_CleansUpPublishing(t *testing.T) {
 	}
 }
 
+// TestExecuteRelease_RecordArtifactFailure_CleansUpPublishing proves a
+// RecordArtifact failure both cleans up the publishing row (FailPublish)
+// AND is fatal: every domain with a registry client is unconditionally
+// authoritative, so a broken registry must fail the release rather than
+// mask itself as a soft warning.
 func TestExecuteRelease_RecordArtifactFailure_CleansUpPublishing(t *testing.T) {
 	fakeClient := NewFakeArtifactRegistryClient()
 	fakeClient.RecordArtifactFn = func(ctx context.Context, in *pb.RecordArtifactRequest, opts ...grpc.CallOption) (*pb.RecordArtifactResponse, error) {
@@ -279,7 +281,7 @@ func TestExecuteRelease_RecordArtifactFailure_CleansUpPublishing(t *testing.T) {
 		buildDigest: "sha256:binary123",
 	}
 
-	res, err := ExecuteRelease(ReleaseParams{
+	_, err := ExecuteRelease(ReleaseParams{
 		Domain:               "testdomain",
 		OwnerFullName:        "test-cli",
 		Version:              "v0.1.0",
@@ -289,11 +291,11 @@ func TestExecuteRelease_RecordArtifactFailure_CleansUpPublishing(t *testing.T) {
 		Git:                  git,
 		ArtifactClient:       fakeClient,
 	})
-	if err != nil {
-		t.Fatalf("expected non-fatal return on record failure when not allocate, got: %v", err)
+	if err == nil {
+		t.Fatal("expected a fatal error on RecordArtifact failure, got nil")
 	}
-	if !res.Published {
-		t.Errorf("expected Published=true because packaging succeeded")
+	if !strings.Contains(err.Error(), "RecordArtifact failed") {
+		t.Errorf("expected error to mention RecordArtifact failed, got %v", err)
 	}
 
 	if len(fakeClient.FailPublishCalls) != 1 {
@@ -352,7 +354,7 @@ func TestExecuteRelease_ChartContainedImagesPassedToRecord(t *testing.T) {
 	}
 }
 
-func TestExecuteRelease_AllocateStage_NoOpRebuild(t *testing.T) {
+func TestExecuteRelease_RegistryPath_NoOpRebuild(t *testing.T) {
 	fakeClient := NewFakeArtifactRegistryClient()
 	fakeClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
 		if in.ChartDomain == "tools" {
@@ -417,7 +419,7 @@ func TestExecuteRelease_AllocateStage_NoOpRebuild(t *testing.T) {
 	}
 }
 
-func TestExecuteRelease_AllocateStage_ProceedDifferentDigest(t *testing.T) {
+func TestExecuteRelease_RegistryPath_ProceedDifferentDigest(t *testing.T) {
 	fakeClient := NewFakeArtifactRegistryClient()
 	fakeClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
 		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
@@ -469,7 +471,7 @@ func TestExecuteRelease_AllocateStage_ProceedDifferentDigest(t *testing.T) {
 	}
 }
 
-func TestExecuteRelease_AllocateStage_FirstReleaseNotFound(t *testing.T) {
+func TestExecuteRelease_RegistryPath_FirstReleaseNotFound(t *testing.T) {
 	fakeClient := NewFakeArtifactRegistryClient()
 	fakeClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
 		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
@@ -509,7 +511,7 @@ func TestExecuteRelease_AllocateStage_FirstReleaseNotFound(t *testing.T) {
 	}
 }
 
-func TestExecuteRelease_AllocateStage_RegistryErrorFailsLoudly(t *testing.T) {
+func TestExecuteRelease_RegistryPath_RegistryErrorFailsLoudly(t *testing.T) {
 	fakeClient := NewFakeArtifactRegistryClient()
 	fakeClient.CheckChartHermeticityFn = func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
 		return &pb.CheckChartHermeticityResponse{Enforced: true}, nil

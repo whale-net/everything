@@ -118,6 +118,15 @@ func TestAdoptArtifact_UnblocksChartPin_Postgres(t *testing.T) {
 		t.Fatalf("record build: %v", err)
 	}
 
+	if _, err := artSrv.BeginPublish(ctx, &pb.BeginPublishRequest{
+		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,
+		OwnerFullName: "acme-adopt-unblock-chart", Version: "v1.0.0",
+		Repository:     "https://charts.example.com/acme-adopt-unblock-chart",
+		IdempotencyKey: "adopt-unblock-chart-1-begin",
+	}); err != nil {
+		t.Fatalf("BeginPublish: %v", err)
+	}
+
 	// Fails first: the pinned image was never recorded.
 	_, err = artSrv.RecordArtifact(ctx, &pb.RecordArtifactRequest{
 		BuildId: build.Build.BuildId, Kind: pb.ArtifactKind_ARTIFACT_KIND_CHART,

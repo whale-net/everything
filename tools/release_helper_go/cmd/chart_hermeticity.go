@@ -31,10 +31,11 @@ type ChartPinViolation struct {
 // interface so tests can substitute a fake instead of dialing a real
 // registry -- see chart_hermeticity_test.go.
 type ChartHermeticityChecker interface {
-	// Check returns enforced=false when chartDomain's adoption stage is not
-	// "allocate" (the per-domain gate; see ARCHITECTURE.md "Rejected
-	// alternatives (issue #558)") -- callers must not fail the build in that
-	// case, even if violations happens to be non-empty.
+	// Check always returns enforced=true when it returns without error --
+	// there is no per-domain gate (see ARCHITECTURE.md "Rejected
+	// alternatives (issue #558)" for the now-historical rationale for why
+	// this was ever per-domain). enforced is kept on the interface for API
+	// stability, not because callers still need to branch on it.
 	Check(ctx context.Context, chartDomain string, pins []ChartPin) (enforced bool, violations []ChartPinViolation, err error)
 }
 
@@ -94,14 +95,11 @@ func envOrDefault(key, fallback string) string {
 // immediately without touching the network.
 //
 // A registry error (dial failure, auth failure, timeout) is deliberately
-// NOT fatal: it is reported as a warning and the build proceeds. Only an
-// actual CheckChartHermeticity response naming violations fails the build.
-// This mirrors the "best-effort" posture every App Registry step in
-// release.yml has at adoption stage observe/promote (continue-on-error) --
-// AR-7f does not change that posture for the chart-compose step itself, it
-// only adds a new failure mode (real violations at stage allocate) on top
-// of it. No domain is at "allocate" today, so in practice this function
-// currently never fails a build -- see PLAN.md's AR-7f "ships inert" note.
+// NOT fatal: it is reported as a warning and the build proceeds, the same
+// best-effort posture every other App Registry step in release.yml has
+// (continue-on-error). Only an actual CheckChartHermeticity response naming
+// real violations fails the build -- and it does so unconditionally, for
+// every domain.
 func checkChartHermeticity(ctx context.Context, warn func(string), chartDomain string, appVersions map[string]string) error {
 	if defaultEnv("APP_REGISTRY_CICD_OPT_IN") != "true" {
 		return nil
@@ -126,6 +124,6 @@ func checkChartHermeticity(ctx context.Context, warn func(string), chartDomain s
 	for _, v := range violations {
 		names = append(names, fmt.Sprintf("%s@%s (%s)", v.AppFullName, v.Version, v.Reason))
 	}
-	return fmt.Errorf("chart pins %d unpublished app(s), domain %q is at adoption stage 'allocate': %s",
+	return fmt.Errorf("chart pins %d unpublished app(s) in domain %q: %s",
 		len(violations), chartDomain, strings.Join(names, ", "))
 }

@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "compose-resolver_lib",
+    srcs = [
+        "envfile.go",
+        "main.go",
+        "resolve.go",
+        "swap.go",
+    ],
+    importpath = "github.com/whale-net/everything/tools/compose-resolver",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//libs/go/docker",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/logging",
+        "//tools/app_registry/protos:appregistrypb",
+        "@com_github_docker_docker//api/types",
+        "@com_github_docker_docker//api/types/network",
+        "@com_github_docker_docker//client",
+    ],
+)
+
+go_binary(
+    name = "compose-resolver",
+    embed = [":compose-resolver_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "compose-resolver_test",
+    size = "small",
+    srcs = [
+        "envfile_test.go",
+        "resolve_test.go",
+        "swap_test.go",
+    ],
+    embed = [":compose-resolver_lib"],
+    deps = [
+        "//tools/app_registry/protos:appregistrypb",
+    ],
+)
+
+# Release metadata. Not tied to any one domain: it's a standalone sidecar an
+# operator points at whichever single-host docker-compose deployment they
+# want kept in sync with App Registry -- see README.md and
+# manmanv2/host/RESOLVER.md for a worked example (host-manager).
+release_app(
+    name = "compose-resolver",
+    binary_name = ":compose-resolver",
+    language = "go",
+    domain = "tools",
+    description = "Resolver sidecar: polls App Registry and self-mutates a docker-compose service to the promoted version",
+    app_type = "worker",
+    replicas = 1,
+    deploy_unit = "image",
+)
