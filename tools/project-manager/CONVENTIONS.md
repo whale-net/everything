@@ -58,7 +58,7 @@ Two mechanisms, in order of importance:
 
 Over-budget scope has one destination and never a silent drop. Scope notes are Project-board items and no board exists yet at design time, so the **product issue is the ledger**: a genuinely new capability is added to the brief's `Later` bucket with the next free `Cn` and recorded with a `Deferred from M<n>: <capability line>` comment on the product issue; anything already belonging to a later milestone goes under the plan's **Out of scope** citing that milestone.
 
-Architect's **load-bearing check** (architect.md § Process step 4) is the pass that makes small milestones safe rather than merely small: a draft that forecloses a protected `Later` capability gets a numbered blocking question. The bar is *forecloses* — requiring a migration, a breaking wire change, or unpicking a decision threaded through the milestone — not merely *does not yet implement*.
+Architect's **Load-bearing check** (architect.md § Process) is the pass that makes small milestones safe rather than merely small: a draft that forecloses a protected `Later` capability gets a numbered blocking question. The bar is *forecloses* — requiring a migration, a breaking wire change, or unpicking a decision threaded through the milestone — not merely *does not yet implement*.
 
 ### Roadmap ledger
 

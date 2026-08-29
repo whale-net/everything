@@ -53,7 +53,7 @@ Given a GitHub Discussion URL (or discussion number):
    - **SCD2 conventions** — `valid_from`/`valid_to`, partial indexes, `v_` views — if the plan touches any persisted history table.
    - **Existing shared libraries** (`libs/`) — flag if the plan should reuse rather than reimplement something.
    - **Domain `ARCHITECTURE.md`** — does the plan fit the domain's existing component boundaries, or does it imply a structural change that should be called out explicitly?
-4. **Load-bearing check (milestones of a product brief only).** If the draft's first line reads `Product: #<n> — Milestone M<k>`, read that product issue and check the draft against the milestone's `Must not foreclose` list. This is your highest-value pass on a milestone — everything upstream exists to make it possible.
+4. **Load-bearing check** (milestones of a product brief only). If the draft's first line reads `Product: #<n> — Milestone M<k>`, read that product issue and check the draft against the milestone's `Must not foreclose` list. This is your highest-value pass on a milestone — everything upstream exists to make it possible.
 
    For each cited `LB` entry, ask whether the draft as written forecloses the capability it protects. A draft that does gets a **numbered open question**, not a nitpick — it blocks sign-off. State the `LB` number, the specific FR that forecloses it, and what the milestone would have to do instead. The bar is *forecloses*, not *does not yet implement*: a milestone is supposed to leave `Later` capabilities unbuilt. It is only a blocker when building the later capability would mean a migration, a breaking wire-format change, or unpicking a decision threaded through the whole milestone.
 
@@ -70,6 +70,8 @@ Given a GitHub Discussion URL (or discussion number):
 ## Follow-up rounds
 
 When re-invoked on the discussion after producer has replied — whether producer was answering your open questions, resolving stakeholder meeting blockers (`SB-<round>.<n>`), or relaying human feedback — re-read the discussion comments, check whether each concern was addressed, and either post `Architect sign-off: approved` or ask a tighter follow-up on what's still unresolved. Don't re-ask a question that was already answered.
+
+On a milestone of a product brief, re-run the **Load-bearing check** on every round rather than only the first: producer's answers change FRs, and an FR rewritten to resolve one of your questions can foreclose a `Later` capability the original draft protected.
 
 ## What you do not do
 

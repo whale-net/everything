@@ -109,6 +109,7 @@ gh issue create --title "Plan: <feature>" --label "plan:approved" --body-file <t
 ```
 
 - First line of the issue body: `Intake discussion: <discussion-url>`.
+- **If this plan is a milestone of a product brief**, one line precedes it: `Product: #<product-issue> — Milestone M<n>: <outcome sentence>`. This line is what tells architect to run its load-bearing check on every later round, and what `status` follows to find the brief — a milestone root plan published without it is silently severed from its product. When the dispatch doesn't name the product issue, recover it from the intake discussion: its title is `Intake: M<n> — <outcome>` and its opening body quotes the milestone's roadmap entry. Then update that milestone's ledger row on the product issue to `planned` with this issue's number (`gh issue edit <product-issue> --body-file <tmpfile>`).
 - Contains the final, cleaned-up User stories, FRs, NFRs, Personas, and Out of scope.
 - Close the loop on the discussion: `gh discussion comment <discussion-url> --body "Approved root plan: <issue-url>"`.
 

@@ -131,7 +131,7 @@ Status is one of `not started`, `in design`, `planned`, `in progress`, `shipped`
      This skill runs its own gate rather than routing through `/project-manager:review`, which is specifically the gate for a milestone's root plan issue.
 
 8. **Amendment (existing brief).** Reality changes roadmaps — a shipped milestone teaches you something, or a milestone's design surfaces a capability nobody had thought of. The brief is a living document, but never edited silently:
-   - Dispatch producer (Mode P2) to draft the amendment, and architect to reconcile it if it touches load-bearing decisions or milestone ordering.
+   - Dispatch producer (Mode P2) to draft the amendment as a comment on the **product issue** — not the original product discussion, which is closed once the brief is published — and architect to reconcile it there if it touches load-bearing decisions or milestone ordering.
    - Present the diff to the user for approval.
    - On approval, producer edits the issue body (`gh issue edit <n> --body-file <tmpfile>`) and posts a comment recording what changed and why: `Amended: <summary>`.
    - An amendment never rewrites the history of a shipped milestone. Ship what shipped; change what is ahead.
