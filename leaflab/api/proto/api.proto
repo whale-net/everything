@@ -5,6 +5,7 @@ package leaflab.api.v1;
 option go_package = "github.com/whale-net/everything/leaflab/api/proto;leaflabapipb";
 
 import "firmware/proto/config.proto";
+import "firmware/proto/firmware.proto";
 
 // LeafLabAPI is the control-plane API for managing leaflab sensor boards.
 service LeafLabAPI {
@@ -296,6 +297,12 @@ service LeafLabAPI {
   // when the caller also has pending device-behaviour changes queued
   // separately. Member-or-grantee (FR7).
   rpc RenameSensor(RenameSensorRequest) returns (RenameSensorResponse);
+  // GetSensorTimelines returns a sensor's three independent history
+  // timelines -- name, hardware, region (FR53) -- each paginated on its
+  // own (FR61) and sharing the Interval shape so a caller can lay them
+  // side by side on one time axis. They are never merged server-side into
+  // one combined timeline: see GetSensorTimelinesResponse's doc comment.
+  rpc GetSensorTimelines(GetSensorTimelinesRequest) returns (GetSensorTimelinesResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -1139,4 +1146,87 @@ message CompareSeriesResponse {
   bool coarsened = 3;
   PageResponse page = 4;
   Instant server_now = 5;
+}
+
+// --- Sensor timelines (FR53) -------------------------------------------
+//
+// A sensor's three history timelines -- name (sensor_name_history),
+// hardware (sensor_hw_history), region (sensor_region_history) -- are
+// each independently queryable and independently paginated (FR61). They
+// share one Interval shape and one time axis so a caller can lay them
+// side by side, but GetSensorTimelines never joins or merges them into a
+// single combined list server-side: "aligned" describes a shared
+// representation, not a server-side merge (see GetSensorTimelinesResponse
+// below). A sensor dropped from a board's desired state (FR82.3, Phase 4)
+// keeps all three timelines -- this RPC has no notion of "desired state"
+// to filter on.
+
+// Interval is the valid_from/valid_to shape shared by all three sensor
+// timelines (FR53), so they align structurally even though each is
+// queried, paginated, and returned independently. valid_to unset means
+// this interval is still open (current), per every other SCD2 table in
+// this schema.
+message Interval {
+  Instant valid_from = 1;
+  Instant valid_to = 2;
+}
+
+// NameInterval is one interval in a sensor's name timeline
+// (sensor_name_history).
+message NameInterval {
+  Interval interval = 1;
+  string name = 2;
+}
+
+// HardwareInterval is one interval in a sensor's hardware timeline
+// (sensor_hw_history). It carries the full canonical hardware key (FR18):
+// i2c_address and mux_path from this interval, plus the sensor's
+// sensor_type -- carried by the sensor row itself, per FR16.1, not by
+// this interval.
+message HardwareInterval {
+  Interval interval = 1;
+  // Absent means this interval's address was never recorded -- a closed,
+  // pre-migration-013 interval (FR16.2). Never rendered as 0: 0 is a
+  // real, present I2C address (see //leaflab/hwkey's AddressOpt, FR18.2).
+  optional uint32 i2c_address = 2;
+  repeated firmware.MuxHop mux_path = 3;
+  firmware.SensorType sensor_type = 4;
+}
+
+// RegionInterval is one interval in a sensor's region timeline
+// (sensor_region_history).
+message RegionInterval {
+  Interval interval = 1;
+  int64 region_id = 2;
+}
+
+// GetSensorTimelinesRequest requests a sensor's three timelines.
+// window_start / window_end optionally restrict returned intervals to
+// those overlapping [window_start, window_end); either or both may be
+// left unset, meaning unbounded on that side. Each timeline pages
+// independently (FR61) via its own PageRequest.
+message GetSensorTimelinesRequest {
+  int64 sensor_id = 1;
+  Instant window_start = 2;
+  Instant window_end = 3;
+  PageRequest name_page = 4;
+  PageRequest hardware_page = 5;
+  PageRequest region_page = 6;
+}
+
+// GetSensorTimelinesResponse returns the three timelines independently:
+// three separate paginated lists, never merged into one (FR53's
+// "aligned" means a shared Interval shape and time axis, not a
+// server-side merge -- a consumer that wants a combined view lays these
+// three lists side by side itself).
+message GetSensorTimelinesResponse {
+  repeated NameInterval name_intervals = 1;
+  PageResponse name_page = 2;
+  repeated HardwareInterval hardware_intervals = 3;
+  PageResponse hardware_page = 4;
+  repeated RegionInterval region_intervals = 5;
+  PageResponse region_page = 6;
+  // Server's current time (FR64), shared by all three timelines in this
+  // response.
+  Instant server_now = 7;
 }

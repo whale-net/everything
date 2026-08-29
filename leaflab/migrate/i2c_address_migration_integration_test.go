@@ -199,8 +199,13 @@ func TestMigration013_I2CAddressBackfill(t *testing.T) {
 
 	f := seedFixture(ctx, t, db)
 
-	if err := runner.Up(); err != nil {
-		t.Fatalf("Up (apply 013): %v", err)
+	// Target version 13 specifically, not Up() -- this test is about
+	// migration 013's backfill behavior, not "whatever the latest
+	// migration is". Using Up() here would silently start asserting on
+	// later migrations' schema too, and break every time a new migration
+	// (e.g. 014) is added on top.
+	if err := runner.Migrate(13); err != nil {
+		t.Fatalf("Migrate(13) (apply 013): %v", err)
 	}
 
 	version, dirty, err := runner.Version()
@@ -208,10 +213,10 @@ func TestMigration013_I2CAddressBackfill(t *testing.T) {
 		t.Fatalf("Version: %v", err)
 	}
 	if dirty {
-		t.Fatal("expected clean state after Up, got dirty")
+		t.Fatal("expected clean state after Migrate(13), got dirty")
 	}
 	if version != 13 {
-		t.Fatalf("expected version 13 after Up, got %d", version)
+		t.Fatalf("expected version 13 after Migrate(13), got %d", version)
 	}
 
 	getAddr := func(historyID int64) *int16 {

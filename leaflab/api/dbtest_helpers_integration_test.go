@@ -160,16 +160,12 @@ func newTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: testSchema})
 	repo := NewRepository(db.Pool)
-<<<<<<< HEAD
 	// readings.NewReader(db.Pool) is a real Reader, not a fake: testSchema
 	// (above) carries none of the tables it queries (sensor_reading, its
 	// tiers, plant_region_history, ...), so nothing in this file's tests
 	// exercises the four bounded-read-path RPCs -- but a later test added
 	// to this same fixture can, without a second helper.
-	return NewLeafLabAPIServer(repo, stubAuthz{}, readings.NewReader(db.Pool), nil, nil, discardLogger()), db.Pool
-=======
-	return NewLeafLabAPIServer(repo, stubAuthz{}, nil, nil, nil, discardLogger()), db.Pool
->>>>>>> plan/1166-v2-1380
+	return NewLeafLabAPIServer(repo, stubAuthz{}, readings.NewReader(db.Pool), nil, nil, nil, discardLogger()), db.Pool
 }
 
 // newTestRepository starts a real Postgres container, applies testSchema,

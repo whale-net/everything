@@ -195,3 +195,37 @@ func DecodeReadingCursor(token string) (recordedAt time.Time, readingID int64, o
 	}
 	return time.Unix(0, nanos), id, true, nil
 }
+
+// EncodeIntervalCursor seals the (valid_from, row id) keyset shared by all
+// three of GetSensorTimelines' independently paginated interval lists
+// (FR53, FR61): sensor_name_history, sensor_hw_history and
+// sensor_region_history are each queried `ORDER BY valid_from, <id column>`
+// on their own, so one cursor shape serves all three even though the id
+// column name (sensor_name_history_id vs. history_id) differs per table.
+func EncodeIntervalCursor(validFrom time.Time, id int64) string {
+	return EncodeCursor(strconv.FormatInt(validFrom.UnixNano(), 10), strconv.FormatInt(id, 10))
+}
+
+// DecodeIntervalCursor is EncodeIntervalCursor's inverse. An empty token
+// decodes to (zero time, 0, false, nil), meaning "first page".
+func DecodeIntervalCursor(token string) (validFrom time.Time, id int64, ok bool, err error) {
+	values, err := DecodeCursor(token)
+	if err != nil {
+		return time.Time{}, 0, false, err
+	}
+	if values == nil {
+		return time.Time{}, 0, false, nil
+	}
+	if len(values) != 2 {
+		return time.Time{}, 0, false, fmt.Errorf("%w: interval cursor expects 2 fields, got %d", ErrInvalidPageToken, len(values))
+	}
+	nanos, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return time.Time{}, 0, false, fmt.Errorf("%w: interval cursor timestamp is not an integer", ErrInvalidPageToken)
+	}
+	rowID, err := strconv.ParseInt(values[1], 10, 64)
+	if err != nil {
+		return time.Time{}, 0, false, fmt.Errorf("%w: interval cursor id is not an integer", ErrInvalidPageToken)
+	}
+	return time.Unix(0, nanos), rowID, true, nil
+}

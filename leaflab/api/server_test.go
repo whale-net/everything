@@ -257,6 +257,22 @@ func (f *fakeRepo) RewireSensorHW(ctx context.Context, sensorID int64, hw *Hardw
 	panic("not used by this file's tests")
 }
 
+func (f *fakeRepo) SensorSensorTypeName(ctx context.Context, sensorID int64) (string, bool, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ListSensorNameIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, afterValidFrom time.Time, afterID int64, hasAfter bool, limit int32) ([]NameIntervalRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ListSensorHWIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, afterValidFrom time.Time, afterID int64, hasAfter bool, limit int32) ([]HWIntervalRow, error) {
+	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) ListSensorRegionIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, afterValidFrom time.Time, afterID int64, hasAfter bool, limit int32) ([]RegionIntervalRow, error) {
+	panic("not used by this file's tests")
+}
+
 // fakeAuthz implements authzResolver entirely in memory, with call
 // counters so tests can assert on NFR2's "one query" structural shape
 // (resolve the entity and the scope in the same number of round trips
