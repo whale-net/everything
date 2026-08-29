@@ -18,7 +18,7 @@ Drives the human review gate for a planned feature. Reviews the architect-approv
 1. Inspect the Discussion (`gh discussion view <discussion-url>` or comment listing). Confirm that `Architect sign-off: approved` is present in the comment thread. If not, report that the draft is not yet architect-approved and point the user to `/project-manager:design <discussion-url>`.
 
 2. Summarize for the user:
-   - User stories, FRs, and NFRs from the latest draft
+   - User stories, FRs, and NFRs from the working-draft gist linked from the discussion (CONVENTIONS.md § Working draft) — not any comment
    - Key points from architect's reconciliation comments
 
 3. Ask the user how to proceed:

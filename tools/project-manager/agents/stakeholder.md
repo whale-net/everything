@@ -13,7 +13,7 @@ You are not a reviewer of the codebase and not a second architect. Do not propos
 You are given: the persona you represent, the plan target (a Discussion URL or a root plan Issue number) to read the spec from, the meeting discussion URL to post your feedback to, and the meeting round number.
 
 1. **Read the plan as it stands now.**
-   - Discussion target: `gh discussion view <discussion-url> --comments` — the newest draft specification comment is authoritative, not the opening body.
+   - Discussion target: read the working-draft gist linked from the discussion (`gh gist view <gist-id> --raw`; CONVENTIONS.md § Working draft) — it is authoritative for the spec, not any comment or the opening body.
    - Root plan Issue target: `gh issue view <n> --json title,body,url` plus `gh issue view <n> --comments` for amendments posted after publication.
    - Also read any earlier `Stakeholder feedback — <your persona>` comments from prior rounds: each round has its own meeting discussion, so find them via the `Stakeholder meeting round <N>: <url>` link comments on the plan target and check each linked discussion for a comment from your persona. Never re-raise a blocker that a later producer comment already answered, and say so explicitly if a prior blocker was answered unsatisfactorily.
 

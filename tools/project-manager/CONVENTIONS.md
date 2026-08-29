@@ -10,7 +10,8 @@ Shared conventions all `project-manager` personas follow. Everything lives in Gi
 |---|---|---|
 | Product spec: vision, capability map, load-bearing decisions, milestone definitions | `<domain>/PRODUCT.md`, committed to `main` (drafted in a Discussion, category `Ideas`, first) | producer & architect |
 | Product tracking issue: pointer to the file + discussion, plus the roadmap ledger | GitHub Issue, labeled `product:approved` | producer |
-| Intake, drafting & architect reconciliation | GitHub Discussion, category `Ideas` | producer & architect |
+| Intake Q&A and round-by-round summaries, architect reconciliation | GitHub Discussion, category `Ideas` | producer & architect |
+| Working draft (the actual spec text while it's still moving) | Secret Gist, linked once from the Discussion (§ Working draft) | producer |
 | Stakeholder meeting agenda, per-persona feedback & minutes | Own GitHub Discussion per round, category `Ideas` — linked back with one comment on the intake Discussion (or root Issue) | `stakeholder` personas & the `stakeholder-meeting` skill |
 | Final root plan (requirements doc / spec of record) | GitHub Issue, labeled `plan:approved` | producer (after human review) |
 | Task tracking & orchestration | GitHub Project (v2), one per approved plan | planner |
@@ -123,6 +124,25 @@ Occasionally a single milestone's own design pass turns out to be product-sized 
 
 The entire intake interview, specification drafting, and architect reconciliation happen inside a GitHub Discussion in category `Ideas`. This keeps iterative back-and-forth noise off the issue tracker, ensuring the root plan issue remains a clean, durable spec of record.
 
+### Working draft (gist, not discussion text)
+
+A draft reposted in full on every reconciliation round makes every later read — the next round's producer or architect, a human, `/project-manager:status` — replay the *entire* comment history to reconstruct current state, so cost grows with round count instead of staying flat. This is the same shape as the prompt-cache-cost-vs-turn-count problem `AGENTS.md` § Effective Subagent Usage flags for a single session's transcript, just at the Discussion layer.
+
+The fix: the draft text (product brief in Mode P1/P2, root-plan draft in Mode 1/2) lives in exactly one place that gets *overwritten* each round, not appended to.
+
+- **First write** creates a secret gist and links it once:
+  ```sh
+  gh gist create --desc "Draft: <feature>" <local-draft-file>
+  gh discussion comment <discussion-url> --body "Working draft: <gist-url>"
+  ```
+- **Every later revision** — answering architect's open questions, folding in stakeholder feedback, responding to human review — overwrites the same gist file instead of posting the new draft text as a comment:
+  ```sh
+  gh gist edit <gist-id> --filename <draft-filename> <local-draft-file>
+  ```
+- **The Discussion comment for that round is a bounded summary of the delta** — what changed and why, a few sentences to a short list — plus the gist link, never the draft's full text. Architect's reconciliation comments (open questions, nitpicks, sign-off) are already this shape and don't change.
+- **Anyone reading current state fetches the gist**, not the discussion thread: `gh gist view <gist-id> --raw` — one bounded read regardless of how many rounds have happened.
+- **The gist is scratch, never the spec of record.** Mode 3 / P3 still commits the final text to `<domain>/PRODUCT.md` or the root plan Issue exactly as today, and that commit/Issue is what durable audit trail means from that point on — deleting the gist afterward is fine but not required. Gist revision history is not meant to double as a decision log: if the *why* behind a round's change matters later, it belongs in that round's discussion summary comment, not left implicit in a gist diff nobody will open.
+
 ```mermaid
 stateDiagram-v2
     discussion: GitHub Discussion (Ideas)
@@ -159,17 +179,17 @@ stateDiagram-v2
    - **Constraints** — performance, reliability, security, operability expectations.
    - **Boundaries** — what is explicitly out of scope.
 
-2. **Draft the plan (Mode 1).** Producer writes up the draft specification as a comment in the discussion:
+2. **Draft the plan (Mode 1).** Producer writes the draft specification to the working-draft gist (§ Working draft above), then posts a short summary comment on the discussion with the gist link:
    - User stories
    - Functional requirements (FR)
    - Non-functional requirements (NFR)
    - Personas
    - Out of scope
 
-3. **Architect reconciliation & QA (Mode 2).** Architect reads the draft in the discussion, reconciles against repo conventions (Bazel-first, cross-compilation in `docs/DOCKER.md`, SCD2 rules, existing libraries in `libs/`, domain `ARCHITECTURE.md`), and posts comments on the discussion containing:
+3. **Architect reconciliation & QA (Mode 2).** Architect reads the draft from the working-draft gist (not the comment history), reconciles against repo conventions (Bazel-first, cross-compilation in `docs/DOCKER.md`, SCD2 rules, existing libraries in `libs/`, domain `ARCHITECTURE.md`), and posts comments on the discussion containing:
    - **Open questions** — numbered blocking questions.
    - **Nitpicks** — non-blocking suggestions.
-   Producer answers open questions in discussion comments and updates the draft. The loop repeats until architect posts an explicit sign-off comment (e.g. `Architect sign-off: approved`).
+   Producer answers open questions in a discussion comment and updates the draft in the working-draft gist (not a fresh comment). The loop repeats until architect posts an explicit sign-off comment (e.g. `Architect sign-off: approved`).
 
 4. **Stakeholder meeting (optional).** Off by default; requested with `/project-manager:design ... --stakeholder-meeting`, or held later against the approved root issue. Every persona named in the spec gets one round of feedback before the human review gate — see § Stakeholder meeting below. Blockers return the draft to the producer/architect loop; guidance and non-blocking feedback do not gate the plan.
 
@@ -212,7 +232,7 @@ Stakeholder meeting: cleared
 Stakeholder meeting: blocked (<k> blockers)
 ```
 
-**Routing.** `cleared` → hand off to `/project-manager:review`. `blocked` → producer (Mode 2) reads the consolidated blockers from the meeting discussion's minutes comment, answers each `SB-<round>.<n>` and updates the draft in the target discussion, architect re-reconciles and re-signs off there, then the next meeting round runs (a fresh meeting Discussion). Cap at 2 rounds from `/project-manager:design` (`--stakeholder-rounds`), 3 when the skill is invoked directly; past the cap, the standing disagreement goes to the human rather than looping. If the target is an already-approved root Issue, the spec of record is never edited silently — producer amends the issue body only after the user confirms, and posts `Amended after stakeholder meeting round <N>: <summary>` as a comment on the root issue.
+**Routing.** `cleared` → hand off to `/project-manager:review`. `blocked` → producer (Mode 2) reads the consolidated blockers from the meeting discussion's minutes comment, answers each `SB-<round>.<n>` in a bounded comment on the target discussion and updates the draft in the working-draft gist, architect re-reconciles and re-signs off there, then the next meeting round runs (a fresh meeting Discussion). Cap at 2 rounds from `/project-manager:design` (`--stakeholder-rounds`), 3 when the skill is invoked directly; past the cap, the standing disagreement goes to the human rather than looping. If the target is an already-approved root Issue, the spec of record is never edited silently — producer amends the issue body only after the user confirms, and posts `Amended after stakeholder meeting round <N>: <summary>` as a comment on the root issue.
 
 **Boundaries.** Stakeholders represent one persona each and never speak for another; they do not propose implementations, edit requirements, create task issues, or gate the plan — only the human review gate approves. Blockers change the plan; they never become task issues.
 
