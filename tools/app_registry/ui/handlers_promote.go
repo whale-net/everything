@@ -390,15 +390,24 @@ func (app *App) runPromoteCommit(w http.ResponseWriter, r *http.Request, user *h
 	// response under it (see idempotency.go), so it must never be reused
 	// for a different future intent (issue #575). A later render starts
 	// fresh via handlePromoteShow.
+	if !resp.GetAlreadyPromoted() {
+		// A genuine write landed a new promotion -- send the operator to
+		// its own page (which live-updates via #1113's SSE work) instead
+		// of re-rendering /promote inline (#1266). already_promoted stays
+		// on /promote: it made no new promotion to redirect to, and the
+		// inline "no change written" + earlier-event attribution below is
+		// the more useful signal for that case.
+		http.Redirect(w, r, "/promotions/"+resp.GetPromotion().GetPromotionId(), http.StatusSeeOther)
+		return
+	}
+
 	outcome := &pages.CommitOutcome{
 		Promotion:       resp.GetPromotion(),
 		Superseded:      resp.GetSuperseded(),
 		Event:           resp.GetEvent(),
-		AlreadyPromoted: resp.GetAlreadyPromoted(),
+		AlreadyPromoted: true,
 	}
-	if resp.GetAlreadyPromoted() {
-		app.attachEarlierEvent(r.Context(), outcome)
-	}
+	app.attachEarlierEvent(r.Context(), outcome)
 	s.Committed = outcome
 
 	if renderErr := RenderTempl(w, r, "Promote", pages.Promote(user, s)); renderErr != nil {

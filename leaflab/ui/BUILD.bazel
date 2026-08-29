@@ -4,8 +4,10 @@ load("//tools/bazel:release.bzl", "release_app")
 go_library(
     name = "ui_lib",
     srcs = [
+        "boards_data.go",
         "grpc_client.go",
         "handlers_auth.go",
+        "handlers_boards.go",
         "main.go",
         "templ_render.go",
     ],
@@ -52,17 +54,23 @@ release_app(
     port = 8000,
 )
 
-# Fast, Docker-free handler tests (#1329's Testing section): unauthenticated
-# redirect, authenticated render, the degraded page (NFR14), and the NFR18.1
-# grep-style placeholder conformance check. data exposes this package's own
-# checked-in source (nfr18_conformance_test.go greps it) and BUILD.bazel
-# (used as its own marker file).
+# Fast, Docker-free handler tests (#1329's Testing section, extended by
+# #1330): unauthenticated redirect, authenticated render, the degraded page
+# (NFR14), the NFR18.1 grep-style placeholder conformance check, plus
+# #1330's boards-screen coverage -- rendering from the gRPC response (not a
+# DB), FR61 pagination (two pages, no duplicates, cap respected), NFR18.2
+# screen-vs-plain-gRPC-client parity, and the NFR19 grep-style check (no
+# publishable/shareable/public_ strings under leaflab/ui/). data exposes
+# this package's own checked-in source (nfr18/nfr19_conformance_test.go
+# grep it) and BUILD.bazel (used as its own marker file).
 go_test(
     name = "ui_test",
     srcs = [
         "fakes_test.go",
         "handlers_auth_test.go",
+        "handlers_boards_test.go",
         "nfr18_conformance_test.go",
+        "nfr19_conformance_test.go",
     ],
     data = glob(["*.go"]) + [
         "BUILD.bazel",
@@ -72,6 +80,7 @@ go_test(
     deps = [
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/htmxauth",
+        "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
     ],
@@ -114,4 +123,16 @@ go_test(
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
+)
+
+# Source exposed to //leaflab/conformance's NFR1.a BFF-route-coverage and
+# NFR18.1 checks (#1334): main.go's setupRoutes registration (which routes
+# sit behind app.auth.RequireAuthFunc vs. the enumerated public set) and
+# every other checked-in source file, scanned for
+# rounding/coarsening/suppression/label-selection helpers. Scoped, not
+# public -- mirrors tools/app_registry/ui:conformance_srcs.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go"]),
+    visibility = ["//leaflab/conformance:__pkg__"],
 )

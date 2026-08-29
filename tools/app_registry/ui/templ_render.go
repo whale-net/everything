@@ -26,6 +26,9 @@ import (
 // to daisyUI's default palette with no error, so both the daisyUI <link>
 // and the themes.css <style> live in CustomHead (which renders last), in
 // that exact order. Never split them across CustomCSS/CustomHead.
+// The htmx SSE extension must also load after the htmx core script, which
+// htmxbase.LayoutData renders before CustomHead, so the SSE extension is
+// included in buildHead() (FR20a).
 func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component templ.Component) error {
 	// FR-59: log the misconfiguration at error level on every render, in
 	// addition to components.MisconfigBanner's on-page banner (rendered by
@@ -50,13 +53,16 @@ func RenderTempl(w http.ResponseWriter, r *http.Request, title string, component
 }
 
 // buildHead constructs the CustomHead markup: pinned Tailwind browser build
-// + daisyUI CDN <link>, then htmxui.ThemesCSS in that exact order (see the
-// "Trap" doc comment above). Split out from RenderTempl so
-// templ_render_test.go can assert the NFR5 load order directly against
-// production code instead of a duplicated literal.
+// + daisyUI CDN <link>, then the htmx SSE extension (pinned to 1.9.10, FR20a),
+// then htmxui.ThemesCSS in that order. The htmx core script is loaded by
+// htmxbase.LayoutData before this CustomHead is rendered, ensuring correct
+// extension load order. Split out from RenderTempl so templ_render_test.go can
+// assert the load order directly against production code instead of a
+// duplicated literal.
 func buildHead() string {
 	return fmt.Sprintf(`<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.js"></script>
 <style type="text/tailwindcss">@import "tailwindcss";</style>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.6.18/daisyui.css">
+<script src="https://cdn.jsdelivr.net/npm/htmx.org@1.9.10/dist/ext/sse.js"></script>
 <style>%s</style>`, htmxui.ThemesCSS)
 }

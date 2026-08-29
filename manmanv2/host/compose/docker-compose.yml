@@ -1,0 +1,57 @@
+services:
+  host-manager:
+    image: ${HOST_MANAGER_REPOSITORY:-ghcr.io/whale-net/manmanv2-host-manager}:${HOST_MANAGER_VERSION:?set an initial version before first bring-up}
+    container_name: ${HOST_MANAGER_CONTAINER_NAME:-manmanv2-host-manager}
+    restart: always
+    network_mode: host
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ${HOST_DATA_DIR}:/var/lib/manman/sessions
+    environment:
+      SERVER_NAME: ${SERVER_NAME}
+      RABBITMQ_URL: ${RABBITMQ_URL}
+      DOCKER_SOCKET: /var/run/docker.sock
+      API_ADDRESS: ${API_ADDRESS:-localhost:50051}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      HOST_DATA_DIR: ${HOST_DATA_DIR}
+      GRPC_AUTH_MODE: ${GRPC_AUTH_MODE}
+      GRPC_AUTH_TOKEN_URL: ${GRPC_AUTH_TOKEN_URL}
+      GRPC_AUTH_CLIENT_ID: ${GRPC_AUTH_CLIENT_ID}
+      GRPC_AUTH_CLIENT_SECRET: ${GRPC_AUTH_CLIENT_SECRET}
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+
+  # This is manmanv2's adoption of the app-agnostic //tools/compose-resolver
+  # sidecar -- see tools/compose-resolver/README.md for what it does and
+  # why it talks to the Docker Engine API rather than shelling out to
+  # `docker compose`, and ../RESOLVER.md for host-manager-specific notes
+  # (bootstrap order, auth gap).
+  #
+  # GetEnvironmentState is a public read path in App Registry (no auth
+  # required, by design -- see RESOLVER.md "Auth"), so GRPC_AUTH_MODE
+  # defaults to none here. If your App Registry deployment is reachable
+  # only over a private/trusted network that's sufficient. The
+  # APP_REGISTRY_GRPC_AUTH_* vars are separate from host-manager's own
+  # GRPC_AUTH_* above (a different service, a different Keycloak client)
+  # and only need setting if you choose to require auth anyway.
+  host-manager-resolver:
+    image: ${RESOLVER_REPOSITORY:-ghcr.io/whale-net/compose-resolver}:${RESOLVER_VERSION:-latest}
+    container_name: manmanv2-host-manager-resolver
+    restart: always
+    volumes:
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./.env:/workspace/.env
+    environment:
+      APP_REGISTRY_ADDRESS: ${APP_REGISTRY_ADDRESS}
+      APP_REGISTRY_ENVIRONMENT: ${APP_REGISTRY_ENVIRONMENT:-prod}
+      APP_REGISTRY_REPOSITORY: ${HOST_MANAGER_REPOSITORY:-ghcr.io/whale-net/manmanv2-host-manager}
+      CONTAINER_NAME: ${HOST_MANAGER_CONTAINER_NAME:-manmanv2-host-manager}
+      VERSION_ENV_VAR: HOST_MANAGER_VERSION
+      ENV_FILE_PATH: /workspace/.env
+      POLL_INTERVAL: ${RESOLVER_POLL_INTERVAL:-60s}
+      LOG_SERVICE_NAME: host-manager-resolver
+      LOG_DOMAIN: manmanv2
+      OTEL_SDK_DISABLED: ${OTEL_SDK_DISABLED:-true}
+      GRPC_AUTH_MODE: ${APP_REGISTRY_GRPC_AUTH_MODE:-none}
+      GRPC_AUTH_TOKEN_URL: ${APP_REGISTRY_GRPC_AUTH_TOKEN_URL}
+      GRPC_AUTH_CLIENT_ID: ${APP_REGISTRY_GRPC_AUTH_CLIENT_ID}
+      GRPC_AUTH_CLIENT_SECRET: ${APP_REGISTRY_GRPC_AUTH_CLIENT_SECRET}

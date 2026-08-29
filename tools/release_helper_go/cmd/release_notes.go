@@ -351,8 +351,8 @@ func buildCompareURL(owner, repo, prevRef, currRef string) string {
 }
 
 // resolvePreviousRef resolves the previous release version and commit/tag for an owner+kind.
-// For domains at adoption stage 'allocate', it authoritatively queries App Registry.
-// For other domains (or when App Registry is unavailable), it uses scoped git tag lookup.
+// When App Registry is opted in, it authoritatively queries App Registry.
+// Otherwise it uses scoped git tag lookup.
 func resolvePreviousRef(
 	ctx context.Context,
 	ownerFullName, domain string,
@@ -362,22 +362,19 @@ func resolvePreviousRef(
 	artifactClient pb.ArtifactRegistryClient,
 ) (prevVersion, prevSHA, prevTag string) {
 	if artifactClient != nil && defaultEnv("APP_REGISTRY_CICD_OPT_IN") == "true" {
-		isAllocate, err := isDomainAtAllocateStage(ctx, artifactClient, domain)
-		if err == nil && isAllocate {
-			getResp, getErr := artifactClient.GetArtifact(ctx, &pb.GetArtifactRequest{
-				OwnerFullName:   ownerFullName,
-				Kind:            kind,
-				LatestPublished: true,
-				BeforeVersion:   currentVersion,
-			})
-			if getErr == nil && getResp != nil && getResp.Artifact != nil {
-				prevVersion = getResp.Artifact.Version
-				if getResp.Build != nil {
-					prevSHA = getResp.Build.GitSha
-				}
-				prevTag = ownerFullName + "." + prevVersion
-				return prevVersion, prevSHA, prevTag
+		getResp, getErr := artifactClient.GetArtifact(ctx, &pb.GetArtifactRequest{
+			OwnerFullName:   ownerFullName,
+			Kind:            kind,
+			LatestPublished: true,
+			BeforeVersion:   currentVersion,
+		})
+		if getErr == nil && getResp != nil && getResp.Artifact != nil {
+			prevVersion = getResp.Artifact.Version
+			if getResp.Build != nil {
+				prevSHA = getResp.Build.GitSha
 			}
+			prevTag = ownerFullName + "." + prevVersion
+			return prevVersion, prevSHA, prevTag
 		}
 	}
 

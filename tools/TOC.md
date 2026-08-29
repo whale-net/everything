@@ -8,6 +8,7 @@ Build, release, and development tooling.
 - [helm/APP_TYPES.md](helm/APP_TYPES.md) — App type reference (`external-api`, `internal-api`, `worker`, `job`)
 - `//tools:release` — Release automation CLI; see [`docs/RELEASE.md`](../docs/RELEASE.md) for usage
 - [appmeta/README.md](appmeta/README.md) — Proto schema of record for `release_app` manifest JSON, shared by `release_helper_go`, the helm composer, and the app registry — consolidated in AR-M and in active use by all three
+- [compose-resolver/README.md](compose-resolver/README.md) — App-agnostic sidecar for single-host `docker-compose` deployments: polls App Registry and redeploys one compose service to the promoted version automatically; see `manmanv2/host/RESOLVER.md` for a worked example
 - [app_registry/TOC.md](app_registry/TOC.md) — App Registry: gRPC service indexing published artifacts and tracking per-environment promotion state. Recording is live in `release.yml` behind `APP_REGISTRY_CICD_OPT_IN` (off by default); version allocation is wired for domains at adoption stage `allocate` (issue #829/AR-5b — see `app_registry/PLAN.md`'s "AR-5" section); promotion and writeback are fully built but have never run for real — see [`app_registry/OPERATIONS.md`](app_registry/OPERATIONS.md) for the day-2 runbook
 
 ## Local Development

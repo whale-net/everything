@@ -28,21 +28,12 @@ func (s *ArtifactServer) CheckChartHermeticity(ctx context.Context, req *pb.Chec
 		return nil, status.Error(codes.InvalidArgument, "chart_domain is required")
 	}
 
-	stage, err := s.repo.DomainAdoption().GetStage(ctx, req.ChartDomain)
-	if err != nil {
-		return nil, mapRepoErr(err)
-	}
-
-	// The per-domain gate every other AR-7 tightening uses (see
-	// ARCHITECTURE.md "Rejected alternatives (issue #558)"): enforced only
-	// once the chart's own domain has cut over to "allocate". At every other
-	// stage this is a no-op response, not merely a response the caller is
-	// expected to ignore -- callers must not fail a build on an unenforced
-	// response, so violations is left nil rather than populated-but-ignored.
-	if stage != repository.DomainAdoptionStageAllocate {
-		return &pb.CheckChartHermeticityResponse{Enforced: false}, nil
-	}
-
+	// Enforced unconditionally for every domain — there is no per-domain
+	// gate (see ARCHITECTURE.md "Rejected alternatives (issue #558)" for
+	// the historical rationale for why this was ever per-domain). Enforced
+	// is kept on the response (always true) rather than removed, so
+	// callers don't need a lockstep
+	// proto change.
 	var violations []*pb.ChartPinViolation
 	for _, pin := range req.Pins {
 		artifact, err := s.repo.Artifacts().GetArtifact(ctx, repository.ArtifactLookup{

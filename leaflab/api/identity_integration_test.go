@@ -37,6 +37,7 @@ import (
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/dbtest"
@@ -144,19 +145,44 @@ const identitySchema = `
 	);
 `
 
+// unclaimedAuthz is a minimal authzResolver stub for this file's tests:
+// every board this file inserts is a bare row in identitySchema, which has
+// no household concept, so Resolve always reports Unclaimed -- matching
+// FR1.1's real "no household yet" case rather than fabricating a household
+// id no test here needs. ResolveBoardByDeviceID/ScopeForPrincipal are
+// unused by this file's tests (PushDeviceConfig only calls Resolve
+// directly, never through those two) and panic if that ever changes
+// without wiring a real fixture here.
+type unclaimedAuthz struct{}
+
+func (unclaimedAuthz) Resolve(ctx context.Context, ref authz.EntityRef) (authz.Resolution, error) {
+	return authz.Resolution{Unclaimed: true}, nil
+}
+
+func (unclaimedAuthz) ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error) {
+	panic("not used by this file's tests")
+}
+
+func (unclaimedAuthz) ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error) {
+	panic("not used by this file's tests")
+}
+
 // newIdentityTestServer starts a real Postgres container, applies
 // identitySchema, and returns a LeafLabAPIServer backed by a real
 // Repository plus the raw pool for fixture setup/assertions. publisher is
 // nil, same as newTestServer: every RPC this file exercises either never
 // reaches the publish step (refusals) or is exercised via the unexported
 // checkPushConfigIdentity directly (the non-refusal FR16 case-1/case-2
-// checks), never via a successful PushDeviceConfig end-to-end.
+// checks), never via a successful PushDeviceConfig end-to-end. authzSvc is
+// unclaimedAuthz{}, not nil: PushDeviceConfig now resolves the pushing
+// board's household via authzSvc.Resolve() before FR17's identity check
+// even runs (FR1.2/FR1.3), so a nil authzSvc panics.
 func newIdentityTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: identitySchema})
 	repo := NewRepository(db.Pool)
-	return NewLeafLabAPIServer(repo, nil, nil, nil, nil, discardLogger()), db.Pool
+	return NewLeafLabAPIServer(repo, unclaimedAuthz{}, nil, nil, nil, discardLogger()), db.Pool
 }
 
 func insertSensorType(t *testing.T, pool *pgxpool.Pool, name, unit string) int64 {

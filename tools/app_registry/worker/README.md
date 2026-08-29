@@ -137,7 +137,7 @@ with `fail_reason = 'stale'`. See `../ARCHITECTURE.md` "Artifact lifecycle:
 allocated -> publishing -> published" and "The reaper is not optional".
 
 This exists because AR-7b's release plan step writes an `allocated`
-artifact row *before anything is pushed*, at every adoption stage — the
+artifact row *before anything is pushed* — the
 `UNIQUE (owner_id, kind, version)` index that makes concurrent
 `AllocateVersion` calls collision-safe is the same index that would
 otherwise let a cancelled or crashed release run hold a version number

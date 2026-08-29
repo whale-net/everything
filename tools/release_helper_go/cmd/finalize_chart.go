@@ -237,7 +237,7 @@ func ExecuteFinalizeChart(p FinalizeChartParams) (*ReleaseResult, error) {
 			for _, v := range violations {
 				names = append(names, fmt.Sprintf("%s@%s (%s)", v.AppFullName, v.Version, v.Reason))
 			}
-			return nil, fmt.Errorf("chart pins %d unpublished app(s), domain %q is at adoption stage 'allocate': %s",
+			return nil, fmt.Errorf("chart pins %d unpublished app(s) in domain %q: %s",
 				len(violations), p.Domain, strings.Join(names, ", "))
 		}
 	}

@@ -207,7 +207,7 @@ func populateWithFreshDBRetry(t *testing.T, attempt func(ctx context.Context, db
 	ctx := context.Background()
 	for i := 1; i <= maxDBAttempts; i++ {
 		runner, db, f := newPreTiersDB(t)
-		if err := runner.Steps(1); err != nil {
+		if err := runner.Migrate(22); err != nil {
 			t.Fatalf("apply migration 022 (database attempt %d/%d): %v", i, maxDBAttempts, err)
 		}
 		if attempt(ctx, db, f) {
@@ -300,7 +300,7 @@ func TestTiersMigration_NoDimensionJoins(t *testing.T) {
 	runner, db, _ := newPreTiersDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(22); err != nil {
 		t.Fatalf("apply migration 022: %v", err)
 	}
 
@@ -338,7 +338,7 @@ func TestTiersMigration_RefreshPoliciesConfigured(t *testing.T) {
 	runner, db, _ := newPreTiersDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(22); err != nil {
 		t.Fatalf("apply migration 022: %v", err)
 	}
 
@@ -420,7 +420,7 @@ func TestTiersMigration_RefreshRetentionOrdering(t *testing.T) {
 	runner, db, _ := newPreTiersDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(22); err != nil {
 		t.Fatalf("apply migration 022: %v", err)
 	}
 
@@ -468,10 +468,10 @@ func TestTiersMigration_DownReversesCleanly(t *testing.T) {
 	runner, db, _ := newPreTiersDB(t)
 	ctx := context.Background()
 
-	if err := runner.Steps(1); err != nil {
+	if err := runner.Migrate(22); err != nil {
 		t.Fatalf("apply migration 022: %v", err)
 	}
-	if err := runner.Steps(-1); err != nil {
+	if err := runner.Migrate(20); err != nil {
 		t.Fatalf("reverse migration 022: %v", err)
 	}
 
@@ -515,13 +515,13 @@ func TestTiersMigration_UpDownUpIsIdempotentSafe(t *testing.T) {
 		runner, db, f := newPreTiersDB(t)
 		ctx := context.Background()
 
-		if err := runner.Steps(1); err != nil {
+		if err := runner.Migrate(22); err != nil {
 			t.Fatalf("first apply of migration 022 (database attempt %d/%d): %v", i, maxDBAttempts, err)
 		}
-		if err := runner.Steps(-1); err != nil {
+		if err := runner.Migrate(20); err != nil {
 			t.Fatalf("reverse migration 022 (database attempt %d/%d): %v", i, maxDBAttempts, err)
 		}
-		if err := runner.Steps(1); err != nil {
+		if err := runner.Migrate(22); err != nil {
 			t.Fatalf("second apply of migration 022 (database attempt %d/%d): %v", i, maxDBAttempts, err)
 		}
 

@@ -9,15 +9,40 @@ API synchronously**:
 - CI recording is best-effort: a registry outage warns, it does not fail a
   release.
 
-The registry can be down for hours without blocking a release or a deploy. The
-only thing lost is the ability to *make new promotions* during the outage.
+The registry can be down for hours without blocking a promotion consumer or a
+deploy — ArgoCD and the S3 snapshot both read from the gitops repo, never the
+API.
 
-> **Scoped to adoption stage `observe` by issue #558.** The claim above holds
-> exactly while a domain's recording is best-effort. At `promote` recording
-> becomes required, and at `allocate` the registry is in the version path and
-> an outage does block that domain's releases — see "Release lifecycle (issue
-> #558)" → "Availability, restated per adoption stage". Every domain is at
-> `observe` today, so nothing here is wrong yet.
+A release itself is different. Version allocation (`AllocateVersion`) runs
+before any build starts and is unconditionally required for every domain: a
+registry outage there blocks the release outright, once
+`APP_REGISTRY_CICD_OPT_IN` is on (see the kill switch below). Chart
+hermeticity (`CheckChartHermeticity`) is the same — unconditional, not
+best-effort. The later recording steps (`BeginPublish`/`RecordArtifact`)
+stay best-effort at the push level (`continue-on-error`, see "App Registry
+recording health" below) — a registry outage there reddens the job but does
+not block the image/chart from actually publishing.
+
+**What the registry is authoritative for, per RPC, once
+`APP_REGISTRY_CICD_OPT_IN=true`:**
+
+| RPC | Registry outage during a release |
+|---|---|
+| Recording (`RecordBuild`/`BeginPublish`/`BeginPublishBatch`/`RecordArtifact`) | Individual steps stay `continue-on-error` at the GitHub Actions layer (a transient outage warns, it does not hard-fail the push), but each job's own **App Registry recording health** step turns the job red afterward — see OPERATIONS.md "Recording (automatic, best-effort)". An unrecorded image also makes every later chart release pinning it reject at `RecordArtifact` time (and, via `CheckChartHermeticity`, at compose time too), so "skip it and carry on" is not actually safe in practice, even though the CI step itself does not hard-fail. |
+| `CheckChartHermeticity` | Not fatal to the chart build on a transport/auth error — logged as a warning, the build proceeds (see "Compose-time chart hermeticity" below). Only an actual `enforced = true` response naming violations fails the build. |
+| `AllocateVersion` | Release-critical for every domain: the registry hands out the version number, and any error is fatal to the release rather than falling back to tag-scanning. |
+
+The global rollback lever is `APP_REGISTRY_CICD_OPT_IN=false` — there is no
+per-domain rollback, because there is no per-domain concept.
+
+**The `main`-push sweep is not on this scale — it fails red on any error**
+(decided in review of PR #559, built in AR-7a). `ci.yml`'s
+`reconcile-app-registry` job has no `continue-on-error`: a rejected sweep is
+our manifests being wrong, an unreachable registry is worth knowing about
+immediately, and the job gates nothing downstream, so a red costs attention
+and nothing else. Once the opt-in is on, a registry outage turns `main` CI
+red, and `APP_REGISTRY_CICD_OPT_IN=false` is the same kill switch that stops
+everything else in this document, not a separate one.
 
 ## Version skew vs. outage (issue #570)
 
@@ -118,20 +143,14 @@ if: vars.APP_REGISTRY_CICD_OPT_IN == 'true'
   recording failure — but only after the real release work in that job has
   already completed. See "App Registry recording health" above.
 
-Two independent gates, easily confused — keep them distinct:
+`APP_REGISTRY_CICD_OPT_IN` is the only gate: it decides whether CI talks to
+the registry at all. When it's on, the registry is authoritative for
+recording, chart hermeticity, and version allocation for every domain,
+unconditionally — turning it off is the single-lever rollback for the entire
+CI integration.
 
-| Gate | Layer | Question it answers |
-|---|---|---|
-| `APP_REGISTRY_CICD_OPT_IN` | GitHub Actions | Does CI talk to the registry **at all**? |
-| `domain_adoption.stage` | Registry server | For a given domain, what is the registry **authoritative for**? |
-
-The first is a global bootstrap/kill switch owned by whoever administers the
-repo; the second is the per-domain rollout described under
-[Resolved questions](#resolved-questions). The opt-in must be `true` before any
-domain's stage matters, and turning it off is the single-lever rollback for the
-entire CI integration.
-
-Applies from AR-2c (the first phase to add CI steps) onward, including AR-5's
-`AllocateVersion` — version allocation must fall back to the tag-based path
-when the opt-in is off, or a registry outage becomes a release outage.
+Version allocation falls back to the git-tag path only when the opt-in
+itself is off (no registry client dialed at all) — that is the only
+fallback that exists; a registry outage while opted in fails the release
+rather than silently reverting to tags.
 

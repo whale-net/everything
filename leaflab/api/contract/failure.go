@@ -7,8 +7,12 @@
 package contract
 
 import (
+	"time"
+
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 )
@@ -93,6 +97,34 @@ func RateLimited(entity, field, reason string) error {
 	return New(FailureRateLimited, entity, field, reason)
 }
 
+// RateLimitedWithRetry builds a FailureRateLimited error carrying a
+// structured retry hint (NFR10): alongside the usual pb.Failure detail, the
+// status carries a google.rpc.RetryInfo detail with retryAfter as its
+// retry_delay -- the standard gRPC shape a client library already knows how
+// to read, so "the caller is being throttled" comes with a machine-readable
+// "try again in N" rather than a prose-only error (FR59's "no prose-only
+// error" applied to NFR10's retry hint specifically).
+func RateLimitedWithRetry(entity, field, reason string, retryAfter time.Duration) error {
+	base := build(FailureRateLimited, entity, field, reason, "")
+	st, ok := status.FromError(base)
+	if !ok {
+		// build always returns a status-backed error; unreachable in
+		// practice, but fall back to the un-detailed error rather than
+		// panic if that ever changes.
+		return base
+	}
+	withRetry, err := st.WithDetails(&errdetails.RetryInfo{
+		RetryDelay: durationpb.New(retryAfter),
+	})
+	if err != nil {
+		// WithDetails only errors on a malformed proto, which RetryInfo
+		// never is here -- fall back to the Failure-only status rather
+		// than panic or silently drop the failure.
+		return base
+	}
+	return withRetry.Err()
+}
+
 // Internal builds a FailureInternal error. reason must already be a
 // generic, persona-appropriate sentence (FR59.2) -- callers log the actual
 // underlying error server-side and pass only that generic sentence here,
@@ -149,4 +181,21 @@ func FromError(err error) (*pb.Failure, bool) {
 		}
 	}
 	return nil, false
+}
+
+// RetryAfterFromError extracts the retry-after duration from err's
+// google.rpc.RetryInfo detail, if present. See RateLimitedWithRetry -- this
+// is its inverse, letting a caller read the structured retry hint without
+// parsing the status message.
+func RetryAfterFromError(err error) (time.Duration, bool) {
+	st, ok := status.FromError(err)
+	if !ok {
+		return 0, false
+	}
+	for _, d := range st.Details() {
+		if ri, ok := d.(*errdetails.RetryInfo); ok {
+			return ri.GetRetryDelay().AsDuration(), true
+		}
+	}
+	return 0, false
 }

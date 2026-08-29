@@ -85,6 +85,31 @@ const pushInvariantTestSchema = `
 		rejection_reason TEXT,
 		UNIQUE (board_id, version)
 	);
+
+	-- FR16/FR17: PushDeviceConfig's checkPushConfigIdentity runs
+	-- unconditionally before validatePushRegions (this file's own concern),
+	-- and calls LoadBoardSensorIdentities against this table regardless of
+	-- whether any test here cares about sensor identity -- needed just so
+	-- that call succeeds (against an empty table) rather than erroring on a
+	-- missing relation. sensor_type is needed for sensor's foreign key.
+	CREATE TABLE sensor_type (
+		sensor_type_id BIGSERIAL PRIMARY KEY,
+		name           VARCHAR(64) NOT NULL,
+		default_unit   VARCHAR(16) NOT NULL
+	);
+
+	CREATE TABLE sensor (
+		sensor_id      BIGSERIAL PRIMARY KEY,
+		board_id       BIGINT NOT NULL REFERENCES board(board_id),
+		sensor_type_id BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
+		region_id      BIGINT,
+		name           VARCHAR(128) NOT NULL,
+		unit           VARCHAR(16) NOT NULL,
+		i2c_address    SMALLINT,
+		mux_path       JSONB NOT NULL DEFAULT '[]'::jsonb,
+		registered_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		UNIQUE (board_id, name)
+	);
 `
 
 func newPushInvariantTestServer(t *testing.T) (*LeafLabAPIServer, *pgxpool.Pool) {

@@ -10,7 +10,7 @@ intent to publish **before** the push, and completes the record after.
 
 | State | Written by | version | build_id | digest |
 |---|---|---|---|---|
-| `allocated` | `AllocateVersion` (AR-5) | ✓ | — | — |
+| `allocated` | `AllocateVersion` | ✓ | — | — |
 | `publishing` | release run, immediately **before** the GHCR/chart push | ✓ | ✓ | — |
 | `published` | release run, after the push, carrying the digest the push returned | ✓ | ✓ | ✓ |
 | `failed` | release run on error, or the reaper on timeout | ✓ | ✓ | — |
@@ -28,8 +28,8 @@ today's two-table arrangement: it is the allocation collision guard, and
 Legal transitions, enforced server-side; anything else is `FailedPrecondition`:
 
 - `∅ → allocated` (`AllocateVersion`), `∅ → publishing` (`BeginPublish`
-  without a prior allocation — the pre-cutover path, see below),
-  `allocated → publishing` (`BeginPublish`), `publishing → published`
+  without a prior allocation — a kind that never allocates, or an explicit
+  version), `allocated → publishing` (`BeginPublish`), `publishing → published`
   (`RecordArtifact`), `publishing → failed` (`FailPublish`, or the reaper),
   `failed → publishing` (a later run retrying the same version).
 - `published` is terminal. Re-recording the same digest is an idempotent
@@ -48,26 +48,23 @@ not accumulate ghosts. `app-registry-worker` sweeps `publishing` rows older
 than `WRITEBACK`-style configured staleness to `failed` with reason `stale`.
 Ships with AR-7b, not after it.
 
-**Backward compatibility during rollout.** `RecordArtifact` against no
-existing row keeps working, creating the row directly in `published` —
-allowed while a domain is at adoption stage `observe`, rejected at
-`allocate` (where allocation must have happened first). That is what lets CI
-adopt `BeginPublish` per domain instead of in one cutover.
+**`RecordArtifact` requires a prior `BeginPublish`.** `RecordArtifact`
+against no existing row is rejected: it unconditionally requires a prior
+successful `BeginPublish` for that exact `(kind, owner, version)`, or it
+fails with `FailedPrecondition` ("no publishing artifact found ...
+`BeginPublish` must run before `RecordArtifact`"). Every real caller goes
+through `BeginPublish` first (including firmware/binary/CLI artifacts,
+which never call `AllocateVersion` but do call `BeginPublish` — see the
+`∅ → publishing` transition above).
 
 **As built (AR-7b).** Everything above is real: migration `007` ships
 exactly this shape, plus an `artifact.fail_reason TEXT` column (not
 originally named in this design) so `FailPublish`'s caller-supplied reason
 and the reaper's hardcoded `"stale"` are both recorded, not just implied by
-the state transition. One decision this section left implicit and the
-implementation had to make explicit: the direct-create fallback is legal
-**only** at `observe`, not at `promote` too — `promote`'s own row in
-"Availability, restated per adoption stage" below already makes recording
-mandatory there, so a domain at `promote` with no prior `publishing` row
-means `BeginPublish` itself failed (or was skipped), and that must surface
-as a rejection, not a silent fallback to the old behavior. The reaper
-(`worker/reaper`) is a third loop in `app-registry-worker`, alongside the
-outbox drainer, configured via `ENV.md`'s `ARTIFACT_REAPER_TIMEOUT` /
-`ARTIFACT_REAPER_POLL_INTERVAL` — see `worker/README.md`.
+the state transition. The reaper (`worker/reaper`) is a third loop in
+`app-registry-worker`, alongside the outbox drainer, configured via
+`ENV.md`'s `ARTIFACT_REAPER_TIMEOUT` / `ARTIFACT_REAPER_POLL_INTERVAL` — see
+`worker/README.md`.
 
 **Where `artifact.repository` comes from on `∅ → publishing`.** That branch
 creates the row from nothing, so it needs a value for the `NOT NULL`
