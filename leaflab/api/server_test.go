@@ -33,9 +33,15 @@ type fakeRepo struct {
 
 	// getBoardReportingHealthRow/-Ok/-Err back GetBoardReportingHealth
 	// (FR42) -- see that method's doc comment below.
-	getBoardReportingHealthRow FleetBoardHealthRow
-	getBoardReportingHealthOk  bool
-	getBoardReportingHealthErr error
+	// getBoardReportingHealthCalls counts invocations -- the NFR2 tests in
+	// server_resend_device_config_test.go use this to prove an
+	// authorization refusal short-circuits before resendAvailability ever
+	// reaches this repository call, mirroring
+	// getLatestAcceptedConfigCalls' role for GetDeviceConfig above.
+	getBoardReportingHealthRow   FleetBoardHealthRow
+	getBoardReportingHealthOk    bool
+	getBoardReportingHealthErr   error
+	getBoardReportingHealthCalls int
 
 	// getLatestAcceptedConfigCalls counts calls to GetLatestAcceptedConfig
 	// -- the NFR2 tests below use this to prove an authorization refusal
@@ -408,6 +414,7 @@ func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, tar
 // Unconfigured (zero-value ok, false) means "no such board", matching
 // Repository.GetBoardReportingHealth's own not-found behavior.
 func (f *fakeRepo) GetBoardReportingHealth(ctx context.Context, deviceID string) (FleetBoardHealthRow, bool, error) {
+	f.getBoardReportingHealthCalls++
 	if f.getBoardReportingHealthErr != nil {
 		return FleetBoardHealthRow{}, false, f.getBoardReportingHealthErr
 	}

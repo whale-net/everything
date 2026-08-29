@@ -137,6 +137,40 @@ func TestCheckRateLimitBuckets_DistinctPrincipals_Independent(t *testing.T) {
 	}
 }
 
+// TestCheckRateLimitBuckets_ResendMethod_EnforcesNamedBucketOnTopOfDefault
+// covers FR42/NFR10's "rate-limited despite writing no config row": the
+// resend bucket rateLimitBucketByMethod maps to ResendDeviceConfig's full
+// method name is enforced in addition to BucketReadDefault, and a method
+// with no rateLimitBucketByMethod entry (e.g. GetDeviceConfig) never
+// consults the resend bucket at all -- exceeding it must not throttle an
+// unrelated RPC.
+func TestCheckRateLimitBuckets_ResendMethod_EnforcesNamedBucketOnTopOfDefault(t *testing.T) {
+	limiter := ratelimit.NewInMemoryLimiter(map[ratelimit.Bucket]ratelimit.WindowConfig{
+		ratelimit.BucketReadDefault: {Limit: 1000, Window: time.Minute},
+		ratelimit.BucketResend:      {Limit: 1, Window: time.Minute},
+	})
+	ctx := claimsContext("p1")
+
+	if err := checkRateLimitBuckets(ctx, limiter, resendDeviceConfigFullMethod); err != nil {
+		t.Fatalf("first resend call: unexpected error: %v", err)
+	}
+	err := checkRateLimitBuckets(ctx, limiter, resendDeviceConfigFullMethod)
+	if err == nil {
+		t.Fatal("second resend call within the same window: got nil error, want rate_limited (the resend bucket, not just read_default, must be enforced)")
+	}
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("code = %v, want %v", status.Code(err), codes.ResourceExhausted)
+	}
+
+	// A method with no rateLimitBucketByMethod entry never touches the
+	// exhausted resend bucket -- read_default alone (generously
+	// configured above) still permits it.
+	const unrelatedMethod = "/leaflab.api.v1.LeafLabAPI/GetDeviceConfig"
+	if err := checkRateLimitBuckets(ctx, limiter, unrelatedMethod); err != nil {
+		t.Errorf("unrelated method after exhausting the resend bucket: unexpected error: %v -- an unnamed method must never consult a named bucket it isn't mapped to", err)
+	}
+}
+
 // TestCheckRateLimitBuckets_OracleSafety_IdenticalAcrossKeys is the
 // interceptor-level oracle-safety proof (forward-binding for FR76): a key
 // that resolves to nothing and a key that resolves to a real entity must

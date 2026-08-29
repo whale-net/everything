@@ -92,6 +92,7 @@ go_test(
         "server_fleet_health_test.go",
         "server_push_device_config_scope_test.go",
         "server_push_device_config_test.go",
+        "server_resend_device_config_test.go",
         "server_test.go",
     ],
     # server_fleet_health_test.go's source-analysis test
