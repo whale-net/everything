@@ -15,7 +15,6 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
-        "//leaflab/hwkey",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
@@ -38,7 +37,6 @@ go_test(
     embed = [":processor_lib"],
     deps = [
         "//firmware/proto:firmwarepb",
-        "//leaflab/hwkey",
         "@org_golang_google_protobuf//proto",
     ],
 )
