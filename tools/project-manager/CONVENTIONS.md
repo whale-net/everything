@@ -8,7 +8,8 @@ Shared conventions all `project-manager` personas follow. Everything lives in Gi
 
 | What | Lives in | Created by |
 |---|---|---|
-| Product scoping, capability map & milestone roadmap | GitHub Discussion, category `Ideas` → Issue labeled `product:approved` | producer & architect |
+| Product spec: vision, capability map, load-bearing decisions, milestone definitions | `<domain>/PRODUCT.md`, committed to `main` (drafted in a Discussion, category `Ideas`, first) | producer & architect |
+| Product tracking issue: pointer to the file + discussion, plus the roadmap ledger | GitHub Issue, labeled `product:approved` | producer |
 | Intake, drafting & architect reconciliation | GitHub Discussion, category `Ideas` | producer & architect |
 | Stakeholder meeting agenda, per-persona feedback & minutes | Own GitHub Discussion per round, category `Ideas` — linked back with one comment on the intake Discussion (or root Issue) | `stakeholder` personas & the `stakeholder-meeting` skill |
 | Final root plan (requirements doc / spec of record) | GitHub Issue, labeled `plan:approved` | producer (after human review) |
@@ -22,28 +23,41 @@ Discussions are where ideas are figured out and reconciled between producer, arc
 
 A **product brief** sits one level above a plan and exists to make each plan small. Run `/project-manager:product` when the request is a whole product or subsystem rather than one feature; a single `design` pass over a product yields 60-80 FRs, which is both context-hostile and unsafe to implement in one shot. A feature added to an existing system skips this entirely and goes straight to `/project-manager:design`.
 
+A product maps 1:1 to a top-level domain (the `Domains` table in `AGENTS.md`) — `leaflab/PRODUCT.md`, `manmanv2/PRODUCT.md`. Publishing the brief creates the domain directory if it doesn't exist yet. Multiple products per domain, or one product spanning several domains, isn't supported today; see § When a milestone re-balloons below for what to do when a request doesn't fit that shape.
+
 ```
-/project-manager:product ──▶ Product brief Issue (product:approved)
+/project-manager:product ──▶ <domain>/PRODUCT.md (committed)  +  tracking Issue (product:approved)
                                     │  capability map C1..Cn, load-bearing decisions LB1..LBn,
-                                    │  roadmap M1..Mn + ledger
+                                    │  milestone definitions M1..Mn
                                     ▼
               per milestone:  design --milestone M1 ──▶ review ──▶ plan ──▶ implement ──▶ validate
                                     │                                                        │
-                                    └──────────── ledger updated, brief amended if needed ◀──┘
+                                    └──── ledger comment posted, brief amended if needed ◀────┘
 ```
+
+### The two artifacts
+
+The brief is deliberately split across two places:
+
+| Artifact | Holds | Lives in | Changes via |
+|---|---|---|---|
+| Product spec | Vision, personas, current state, capability map, load-bearing decisions, non-goals, milestone definitions | `<domain>/PRODUCT.md`, committed to `main` | A small doc-only PR, same as any other doc change |
+| Product tracking issue | A pointer to the spec file and discussion, plus the live roadmap ledger | GitHub Issue, labeled `product:approved` | `gh issue comment` only (see § Roadmap ledger) — the body is never rewritten after creation |
+
+The spec is committed like any other doc because it's written for the same reader `ARCHITECTURE.md` is: a future agent trying to understand why the system is shaped the way it is, per `AGENTS.md` § Documentation Conventions. The tracking issue exists because Issues, not files, are what `gh` cross-links from Discussions, PRs, and other issues — it's the address, not the content.
 
 ### The two document levels
 
 | Document | Granularity | Contains FRs? | Skill |
 |---|---|---|---|
-| Product brief (`Product: <name>`, `product:approved`) | capabilities, `C1..Cn`, one line each | **never** | `product` |
+| Product spec (`<domain>/PRODUCT.md`, tracked by Issue `Product: <name>`, `product:approved`) | capabilities, `C1..Cn`, one line each | **never** | `product` |
 | Root plan (`Plan: <feature>`, `plan:approved`) | testable behavior, `FR1..FRn`, one milestone's worth | yes | `design` → `review` |
 
-The brief's hard rule is that it contains **zero numbered FRs or NFRs**. `C7 — Operators can see per-device sensor health at a glance` is a capability; `FR7 — the health endpoint returns 200 with lastSeenAt` is not, and belongs in a milestone's spec. A brief that acquires FRs has moved the too-big-to-implement problem up a layer instead of solving it.
+The spec's hard rule is that it contains **zero numbered FRs or NFRs**. `C7 — Operators can see per-device sensor health at a glance` is a capability; `FR7 — the health endpoint returns 200 with lastSeenAt` is not, and belongs in a milestone's plan. A brief that acquires FRs has moved the too-big-to-implement problem up a layer instead of solving it.
 
 ### Brief sections
 
-**Vision** (one paragraph) · **Personas** · **Current state** (architect) · **Capability map** (`C1..Cn`, bucketed `Now`/`Next`/`Later`) · **Load-bearing decisions** (`LB1..LBn`, architect) · **Non-goals** · **Roadmap**.
+**Vision** (one paragraph) · **Personas** · **Current state** (architect) · **Capability map** (`C1..Cn`, bucketed `Now`/`Next`/`Later`) · **Load-bearing decisions** (`LB1..LBn`, architect) · **Non-goals** · **Roadmap** (milestone definitions only — the live status ledger is tracked separately, see § Roadmap ledger).
 
 **Load-bearing decisions** are why the document exists. Each is a structural commitment an early milestone must get approximately right because a later capability depends on it, with three clauses: the capability *at risk*, what to *decide now*, and what *stays cheap* to change later. The third clause keeps the list honest — if nothing is expensive to reverse, it is not load-bearing. Bias toward data shape, identity, and wire contracts (schemas, keys, tenancy, auth subject, event payloads); handlers, templates, and internal package boundaries are cheap to redo and do not belong. Aim for 3-8 entries.
 
@@ -56,27 +70,34 @@ Two mechanisms, in order of importance:
 1. **Traceability.** Every FR cites the capability it serves — `FR4 (C3) — ...`. An FR that cannot cite one from the milestone's `Delivers` list does not belong in this milestone. This is the actual control; a bare FR cap just gets gamed by writing wider FRs.
 2. **The FR budget** is a backstop that tells producer when to re-read rule 1. A draft over budget whose FRs all trace correctly is a signal to re-examine the outcome sentence, not an automatic blocker.
 
-Over-budget scope has one destination and never a silent drop. Scope notes are Project-board items and no board exists yet at design time, so the **product issue is the ledger**: a genuinely new capability is added to the brief's `Later` bucket with the next free `Cn` and recorded with a `Deferred from M<n>: <capability line>` comment on the product issue; anything already belonging to a later milestone goes under the plan's **Out of scope** citing that milestone.
+Over-budget scope has one destination and never a silent drop. Scope notes are Project-board items and no board exists yet at design time, so the **product spec is the ledger**: a genuinely new capability is added to the spec's `Later` bucket in `<domain>/PRODUCT.md` (a small doc PR, same mechanics as producer.md Mode P3) with the next free `Cn`, and recorded with a `Deferred from M<n>: <capability line>` comment on the tracking issue; anything already belonging to a later milestone goes under the plan's **Out of scope** citing that milestone.
 
 Architect's **Load-bearing check** (architect.md § Process) is the pass that makes small milestones safe rather than merely small: a draft that forecloses a protected `Later` capability gets a numbered blocking question. The bar is *forecloses* — requiring a migration, a breaking wire change, or unpicking a decision threaded through the milestone — not merely *does not yet implement*.
 
 ### Roadmap ledger
 
-The brief's roadmap ends with a ledger that makes `design --milestone` idempotent and gives `/project-manager:status` something to read:
+Status is tracked on the **product tracking issue**, never in the committed spec — it changes on every milestone transition, and a file edit would mean a PR for every status flip. It is also never a body edit: `implement` already runs multiple tasks in parallel, and nothing stops two milestones being designed or implemented at once, so a read-modify-write update to one shared body table would race. Instead every status change is a **new comment**, in this exact form:
 
 ```
-| Milestone | Status | Intake discussion | Root plan |
-|---|---|---|---|
-| M1 | shipped | <discussion-url> | #123 |
-| M2 | in design | <discussion-url> | — |
-| M3 | not started | — | — |
+Ledger: M<n> → <status> (<link-or-none>)
 ```
 
-Status is `not started` → `in design` → `planned` → `in progress` → `shipped`. Producer updates the row when it opens the milestone's intake discussion and again when it publishes the root plan issue.
+e.g. `Ledger: M2 → in design (<discussion-url>)`, `Ledger: M2 → planned (#123)`, `Ledger: M2 → in progress (Project board)`, `Ledger: M2 → shipped`. Comments are append-only and need no prior read, so two writers never race each other. Anyone reconstructing current state (`/project-manager:status`, `design --milestone`'s idempotency check, architect's product-mode reconciliation) takes, per milestone, the **last** `Ledger: M<n> →` comment on the issue; no such comment means `not started`.
+
+Status moves `not started → in design → planned → in progress → shipped`, one comment per transition, written by:
+- **producer** — `in design` when it opens the milestone's intake discussion; `planned` when it publishes the root plan issue (Mode 3).
+- **`plan` skill** — `in progress` when it creates the milestone's Project board (SKILL.md step 3).
+- **`validate` skill** — `shipped` once whole-system validation passes cleanly with no findings (SKILL.md step 4).
+
+Each writer checks the root plan issue's first line for `Product: #<p> — Milestone M<k>` before posting; a plan that isn't a milestone of a brief triggers none of this, so ordinary single-feature plans are unaffected.
 
 ### Amendments
 
-The brief is a living document but is never edited silently. `/project-manager:product <issue-number>` drafts the amendment, architect reconciles it if it touches load-bearing decisions or milestone ordering, the user approves, then producer edits the issue body and posts `Amended: <summary>`. A shipped milestone's history is never rewritten — ship what shipped, change what is ahead.
+The spec is a living document but is never edited silently. `/project-manager:product <issue-number>` drafts the amendment as a comment on the tracking issue; architect reconciles it there if it touches load-bearing decisions or milestone ordering; once the user approves, producer opens a small PR editing `<domain>/PRODUCT.md` (same mechanics as publishing — producer.md Mode P3) and, once it merges, comments `Amended: <summary> (#<pr-number>)` on the tracking issue. A shipped milestone's history is never rewritten — ship what shipped, change what is ahead; git history on the file is the audit trail, so the issue comment only needs to summarize, not narrate, the diff.
+
+### When a milestone re-balloons
+
+Occasionally a single milestone's own design pass turns out to be product-sized again — the outcome sentence was right but the behavior needed to reach it wasn't as small as it looked. `/project-manager:design` step 0 flags this the same way it flags a fresh request: past roughly 20 FRs, it recommends running `/project-manager:product` on the milestone's draft instead of pushing the design through oversized. Because a product maps 1:1 to a domain, that recommendation only cleanly applies when the milestone genuinely spans a new domain-sized subsystem; if it's still one domain, splitting into an additional milestone of the existing brief is usually the better fix rather than nesting a second product under it. Either way this is a recommendation, not a block — the user decides.
 
 ## Intake discussion & design reconciliation
 
@@ -138,7 +159,7 @@ stateDiagram-v2
      ```sh
      gh issue create --title "Plan: <feature>" --label "plan:approved" --body-file <tmpfile>
      ```
-     First line of the issue body is `Intake discussion: <discussion-url>` — preceded, for a milestone of a product brief, by `Product: #<product-issue> — Milestone M<n>: <outcome sentence>`, which is what tells architect to run its load-bearing check on later rounds. Producer also updates that milestone's ledger row to `planned` with this issue number. Producer then leaves a closing comment on the discussion:
+     First line of the issue body is `Intake discussion: <discussion-url>` — preceded, for a milestone of a product brief, by `Product: #<product-issue> — Milestone M<n>: <outcome sentence>`, which is what tells architect to run its load-bearing check on later rounds. Producer also posts `Ledger: M<n> → planned (#<this-issue>)` on the product tracking issue (§ Roadmap ledger). Producer then leaves a closing comment on the discussion:
      ```sh
      gh discussion comment <discussion-url> --body "Approved root plan issue: <issue-url>"
      ```

@@ -26,7 +26,7 @@ Drives the human review gate for a planned feature. Reviews the architect-approv
    - **Request changes** — provide feedback for producer/architect to address.
 
 4. **If approved:** Dispatch `project-manager:producer` with the discussion URL to run Mode 3:
-   - **If this is a milestone of a product brief** — the discussion is titled `Intake: M<n> — <outcome>` and its draft's first line names the product issue — pass the product issue number and milestone id in the dispatch, so producer carries the `Product: #<p> — Milestone M<n>: <outcome>` line onto the root plan issue and updates the brief's ledger row to `planned`. Without that line the milestone is severed from its brief and architect stops running its load-bearing check on later rounds.
+   - **If this is a milestone of a product brief** — the discussion is titled `Intake: M<n> — <outcome>` and its draft's first line names the product issue — pass the product issue number and milestone id in the dispatch, so producer carries the `Product: #<p> — Milestone M<n>: <outcome>` line onto the root plan issue and posts `Ledger: M<n> → planned (#<root-issue>)` as a comment on the tracking issue (never a body edit — CONVENTIONS.md § Roadmap ledger). Without the `Product:` line the milestone is severed from its brief and architect stops running its load-bearing check on later rounds.
    - Create root plan Issue: `gh issue create --title "Plan: <feature>" --label "plan:approved" --body-file <tmpfile>` with first line `Intake discussion: <discussion-url>`.
    - Post closing comment on the discussion: `gh discussion comment <discussion-url> --body "Approved root plan issue: <issue-url>"`.
    - Capture the created issue number `<root-issue-number>`.

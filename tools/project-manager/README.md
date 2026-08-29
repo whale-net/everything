@@ -1,7 +1,7 @@
 # project-manager
 
 AGY and Claude Code plugin providing a multi-persona project-management pipeline for the
-`everything` monorepo, tracked entirely in GitHub: optional product scoping into a **product brief Issue**; intake, design drafting, and architect reconciliation in a **Discussion**; the final approved root plan as an **Issue**; task breakdown and task execution progressing through **swimlanes** on a GitHub **Project (v2)** board. See [`CONVENTIONS.md`](CONVENTIONS.md) for the full contract.
+`everything` monorepo, tracked entirely in GitHub plus one committed doc: optional product scoping into a **`<domain>/PRODUCT.md` spec**, tracked by a thin **product Issue**; intake, design drafting, and architect reconciliation in a **Discussion**; the final approved root plan as an **Issue**; task breakdown and task execution progressing through **swimlanes** on a GitHub **Project (v2)** board. See [`CONVENTIONS.md`](CONVENTIONS.md) for the full contract.
 
 **Scoping first, for anything product-sized.** A single `design` pass over a whole product produces 60-80 FRs — too big to implement in one shot and too big to hold in context. `/project-manager:product` cuts that up front: a capability map instead of requirements, the **load-bearing decisions** later capabilities depend on, and a roadmap of milestones each defined by one user-visible outcome. The rest of the pipeline then runs once per milestone, small enough to be safe, with architect checking each milestone's spec against the load-bearing decisions so *small* doesn't mean *painted into a corner*. A feature added to an existing system skips this and goes straight to `design`.
 
@@ -29,8 +29,9 @@ AGY and Claude Code plugin providing a multi-persona project-management pipeline
                                                           (human) product gate
                                                                     │
                                                                     ▼
-                                            producer creates Product brief Issue (product:approved)
-                                            capability map C1..Cn · load-bearing LB1..LBn · milestones M1..Mn + ledger
+                              producer commits <domain>/PRODUCT.md (doc PR) + tracking Issue (product:approved)
+                                            capability map C1..Cn · load-bearing LB1..LBn · milestones M1..Mn
+                                            (roadmap ledger tracked as comments on the tracking Issue)
                                                                     │
                                             ┌───────────────────────┘  once per milestone: design --milestone M<n>
                                             ▼
@@ -77,7 +78,7 @@ Eight skills orchestrate the pipeline:
 
 | Skill | Drives | Dispatches |
 |---|---|---|
-| `/project-manager:product "<product>"` or `/project-manager:product <issue-number>` | Product scoping → capability map, load-bearing decisions, milestone roadmap → human gate → product brief Issue (`product:approved`). Re-run against the issue to amend the brief | `producer`, `architect` |
+| `/project-manager:product "<product>"` or `/project-manager:product <issue-number>` | Product scoping → capability map, load-bearing decisions, milestone roadmap → human gate → commits `<domain>/PRODUCT.md` and creates the tracking Issue (`product:approved`). Re-run against the issue to amend the spec | `producer`, `architect` |
 | `/project-manager:design "<feature>"` or `/project-manager:design <discussion-url>` | Intake discussion → draft spec → producer/architect loop in Discussion until architect sign-off; with `--stakeholder-meeting`, a stakeholder round before hand-off | `producer`, `architect`, *(optionally)* `stakeholder` |
 | `/project-manager:stakeholder-meeting <discussion-url\|issue-number>` | One meeting round: every persona in the spec posts guidance, non-blocking feedback, and blockers; blockers re-loop producer/architect, cleared hands off to review | `stakeholder` (one per persona), `producer`, `architect` |
 | `/project-manager:review <discussion-url>` | The human gate: review architect-approved draft in Discussion → create root Issue (`plan:approved`), or leave feedback | `producer`, `architect` |
@@ -88,7 +89,7 @@ Eight skills orchestrate the pipeline:
 
 Typical flow for one feature: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again.
 
-For a product: `product` once, then that same flow per milestone — `design <product-issue> --milestone M1` → `review` → `plan` → `implement` → `validate`, then `M2`, and so on. The brief is read fresh at the start of each milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without anyone re-reading milestone N's spec.
+For a product: `product` once, then that same flow per milestone — `design <product-issue> --milestone M1` → `review` → `plan` → `implement` → `validate`, then `M2`, and so on. `<domain>/PRODUCT.md` is read fresh from `main` at the start of each milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without anyone re-reading milestone N's spec. `plan` and `validate` each gain one conditional step for this: posting a `Ledger: M<n> → in progress` / `→ shipped` comment on the tracking issue when the root plan names a product brief; ordinary single-feature plans are unaffected.
 
 `stakeholder-meeting` is off the critical path: it runs inside `design --stakeholder-meeting` before the review gate, or on demand against an approved root plan issue.
 

@@ -1,6 +1,6 @@
 ---
 name: product
-description: Scope a product before any feature spec exists — interviews you for vision, personas, and a capability map in a GitHub Discussion, has the architect record current state and the load-bearing decisions that later capabilities depend on, then breaks the product into milestones and publishes a product brief Issue (product:approved). Run this first when a request is a whole product/app rather than one feature; each milestone is then specced with /project-manager:design <product-issue> --milestone M<n>. Also the right target for "scope this out", "what should v1 be", "break this into milestones", or when a design has ballooned past ~20 FRs.
+description: Scope a product before any feature spec exists — interviews you for vision, personas, and a capability map in a GitHub Discussion, has the architect record current state and the load-bearing decisions that later capabilities depend on, then breaks the product into milestones and publishes <domain>/PRODUCT.md plus a thin tracking Issue (product:approved). Run this first when a request is a whole product/app rather than one feature; each milestone is then specced with /project-manager:design <product-issue> --milestone M<n>. Also the right target for "scope this out", "what should v1 be", "break this into milestones", or when a design has ballooned past ~20 FRs.
 ---
 
 # product
@@ -29,11 +29,16 @@ Comes before `/project-manager:design`. See `tools/project-manager/CONVENTIONS.m
 
 ## When *not* to use it
 
-A single feature added to an existing system goes straight to `/project-manager:design`. Use this skill when the request is a product or subsystem that does not exist yet, when the answer to "what's in v1" is genuinely unsettled, or when a `design` pass has already ballooned past roughly 20 FRs — in that last case, the ballooned draft is good raw material: feed it in as the description.
+A single feature added to an existing system goes straight to `/project-manager:design`. Use this skill when the request is a product or subsystem that does not exist yet, when the answer to "what's in v1" is genuinely unsettled, or when a `design` pass has already ballooned past roughly 20 FRs — in that last case, the ballooned draft is good raw material: feed it in as the description. The same can happen to a single *milestone's* design (`design --milestone` step 0 flags it); since a product maps 1:1 to a domain, running this skill against a re-ballooned milestone only cleanly applies when it genuinely spans a new domain-sized subsystem — otherwise prefer splitting the existing roadmap into an extra milestone instead (CONVENTIONS.md § When a milestone re-balloons).
 
 ## The artifact
 
-One GitHub Issue titled `Product: <name>`, labeled `product:approved`. Its body has exactly these sections:
+Two artifacts, deliberately split:
+
+- **The spec** — `<domain>/PRODUCT.md`, committed to `main` via a small doc-only PR. A product maps 1:1 to a top-level domain (`AGENTS.md` § Domains); publishing creates the domain directory if it's new. This is the document a future agent reads to understand why the system is shaped the way it is — same reason `ARCHITECTURE.md` lives in the domain instead of in an issue.
+- **The tracking issue** — titled `Product: <name>`, labeled `product:approved`. Body is just a pointer: `Product brief: <domain>/PRODUCT.md (#<pr-number>)` and `Product discussion: <discussion-url>`. Its comments are the live roadmap ledger (see § Roadmap below) — the body itself is never rewritten after creation except by an amendment PR reference.
+
+The spec's body has exactly these sections:
 
 1. **Vision** — one paragraph. What this is and who it is for.
 2. **Personas** — every actor, human or system. One line each.
@@ -41,7 +46,7 @@ One GitHub Issue titled `Product: <name>`, labeled `product:approved`. Its body 
 4. **Capability map** — the end-state capability list, one line per capability, numbered `C1..Cn`, bucketed `Now` / `Next` / `Later`. This is the section that would otherwise have become 80 FRs.
 5. **Load-bearing decisions** — numbered `LB1..LBn`. The whole point of the document.
 6. **Non-goals** — what this product will not do, ever or for the foreseeable future.
-7. **Roadmap** — the milestone table and ledger.
+7. **Roadmap** — milestone definitions only (no ledger — that lives on the tracking issue).
 
 ### Hard rule: the brief contains zero numbered FRs or NFRs
 
@@ -81,17 +86,13 @@ FR budget: 12
 
 `Must not foreclose` is the list architect checks the milestone's draft spec against. `FR budget` is a backstop, not the control — the real constraint is that every FR must trace to a capability this milestone delivers.
 
-The roadmap ends with the ledger, which makes `design --milestone` idempotent and gives `/project-manager:status` something to read:
+**The ledger lives on the tracking issue, not the spec file.** Status changes on every milestone transition, and a file edit would mean a PR for every status flip — worse, two milestones can be in flight at once (`implement` already parallelizes task work), so a shared body table would race. Instead every transition is a standalone comment on the tracking issue:
 
 ```
-| Milestone | Status | Intake discussion | Root plan |
-|---|---|---|---|
-| M1 | shipped | <discussion-url> | #123 |
-| M2 | in design | <discussion-url> | — |
-| M3 | not started | — | — |
+Ledger: M<n> → <status> (<link-or-none>)
 ```
 
-Status is one of `not started`, `in design`, `planned`, `in progress`, `shipped`.
+Readers (`design --milestone`'s idempotency check, `/project-manager:status`, architect) reconstruct current status per milestone from the **last** such comment; no comment means `not started`. Status moves `not started → in design → planned → in progress → shipped` — see CONVENTIONS.md § Roadmap ledger for exactly who posts each transition.
 
 ## Steps
 
@@ -122,25 +123,25 @@ Status is one of `not started`, `in design`, `planned`, `in progress`, `shipped`
 
 7. **Human gate and publish.** Present the signed-off brief to the user: the vision, the capability map bucketed, the load-bearing decisions, and the milestone list with what M1 does and does not include. Ask for approval, changes, or a re-cut of the milestone boundaries.
    - **Changes** — dispatch producer (Mode P2) and architect for another round in the discussion, then return here.
-   - **Approved** — dispatch `project-manager:producer` (Mode P3) to publish:
+   - **Approved** — dispatch `project-manager:producer` (Mode P3) to publish. It writes `<domain>/PRODUCT.md`, commits it to a branch, and opens a doc-only PR (`gh pr create`), then creates the tracking issue whose body just points at that PR and the discussion:
      ```sh
      gh issue create --title "Product: <name>" --label "product:approved" --body-file <tmpfile>
      ```
-     First line of the body is `Product discussion: <discussion-url>`. Producer then comments `Approved product brief: <issue-url>` on the discussion.
+     Producer then comments `Approved product brief: <issue-url>` on the discussion. Tell the user the docs PR needs to merge before any milestone can be designed — `design --milestone` reads the spec from `main` and stops with a pointer to the PR if it isn't there yet.
 
      This skill runs its own gate rather than routing through `/project-manager:review`, which is specifically the gate for a milestone's root plan issue.
 
-8. **Amendment (existing brief).** Reality changes roadmaps — a shipped milestone teaches you something, or a milestone's design surfaces a capability nobody had thought of. The brief is a living document, but never edited silently:
-   - Dispatch producer (Mode P2) to draft the amendment as a comment on the **product issue** — not the original product discussion, which is closed once the brief is published — and architect to reconcile it there if it touches load-bearing decisions or milestone ordering.
+8. **Amendment (existing brief).** Reality changes roadmaps — a shipped milestone teaches you something, or a milestone's design surfaces a capability nobody had thought of. The spec is a living document, but never edited silently:
+   - Dispatch producer (Mode P2) to draft the amendment as a comment on the **tracking issue** — not the original product discussion, which is closed once the brief is published — and architect to reconcile it there if it touches load-bearing decisions or milestone ordering, baselining against the committed `<domain>/PRODUCT.md` on `main`.
    - Present the diff to the user for approval.
-   - On approval, producer edits the issue body (`gh issue edit <n> --body-file <tmpfile>`) and posts a comment recording what changed and why: `Amended: <summary>`.
-   - An amendment never rewrites the history of a shipped milestone. Ship what shipped; change what is ahead.
+   - On approval, producer repeats the publish mechanics against the existing file — a fresh branch, an edit instead of a new file, a PR — never `gh issue edit` on the tracking issue's body. Once the PR merges, it comments `Amended: <summary> (#<pr-number>)` on the tracking issue.
+   - An amendment never rewrites the history of a shipped milestone. Ship what shipped; change what is ahead — the file's git history is the audit trail.
 
-9. **Hand off.** Tell the user the brief is published and that `/project-manager:design <product-issue> --milestone M1` is the next step, and name what M1 contains.
+9. **Hand off.** Tell the user the brief is published (and its docs PR merged) and that `/project-manager:design <product-issue> --milestone M1` is the next step, and name what M1 contains.
 
 ## Downstream
 
-Each milestone runs the existing pipeline unchanged:
+Each milestone runs the existing pipeline, with only two conditional additions (`plan` and `validate` each post one ledger comment when the root plan names a product brief — CONVENTIONS.md § Roadmap ledger):
 
 ```
 /project-manager:design <product-issue> --milestone M1
@@ -148,4 +149,4 @@ Each milestone runs the existing pipeline unchanged:
   → repeat for M2, M3, ...
 ```
 
-The product brief is read fresh at the start of every milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without re-reading milestone N's spec.
+`<domain>/PRODUCT.md` is read fresh from `main` at the start of every milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without re-reading milestone N's spec.

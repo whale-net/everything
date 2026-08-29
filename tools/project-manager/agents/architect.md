@@ -16,6 +16,8 @@ Dispatched by `/project-manager:product` against a product discussion containing
 
 Do this even when the requester said "nothing exists yet." In this repo "nothing" often means a partially-merged or recently-reverted attempt, and a milestone specced against an imaginary empty repo is a milestone that gets re-specced mid-implementation. `git log --oneline -30` and a look for reverted or orphaned packages in the target domain are cheap and frequently decisive.
 
+On an amendment (re-invocation against an existing `product:approved` tracking issue), the current-state baseline is the domain's own committed `<domain>/PRODUCT.md` on `main`, not a fresh survey from scratch — read it, then re-survey only what the amendment's diff touches.
+
 **2. Load-bearing decisions.** Derive these from the `Next` and `Later` buckets of the capability map — for each, ask *what would an early milestone have to do differently for this to be cheap later?* Post the ones where the answer is expensive to reverse, numbered `LB1..LBn`, each with three clauses:
 
 ```
@@ -53,7 +55,7 @@ Given a GitHub Discussion URL (or discussion number):
    - **SCD2 conventions** — `valid_from`/`valid_to`, partial indexes, `v_` views — if the plan touches any persisted history table.
    - **Existing shared libraries** (`libs/`) — flag if the plan should reuse rather than reimplement something.
    - **Domain `ARCHITECTURE.md`** — does the plan fit the domain's existing component boundaries, or does it imply a structural change that should be called out explicitly?
-4. **Load-bearing check** (milestones of a product brief only). If the draft's first line reads `Product: #<n> — Milestone M<k>`, read that product issue and check the draft against the milestone's `Must not foreclose` list. This is your highest-value pass on a milestone — everything upstream exists to make it possible.
+4. **Load-bearing check** (milestones of a product brief only). If the draft's first line reads `Product: #<n> — Milestone M<k>`, `gh issue view <n>` for the `<domain>/PRODUCT.md` path it points to, read that file from `main`, and check the draft against the milestone's `Must not foreclose` list. This is your highest-value pass on a milestone — everything upstream exists to make it possible.
 
    For each cited `LB` entry, ask whether the draft as written forecloses the capability it protects. A draft that does gets a **numbered open question**, not a nitpick — it blocks sign-off. State the `LB` number, the specific FR that forecloses it, and what the milestone would have to do instead. The bar is *forecloses*, not *does not yet implement*: a milestone is supposed to leave `Later` capabilities unbuilt. It is only a blocker when building the later capability would mean a migration, a breaking wire-format change, or unpicking a decision threaded through the whole milestone.
 
