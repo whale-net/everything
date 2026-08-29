@@ -37,6 +37,7 @@ import (
 
 	"github.com/whale-net/everything/leaflab/api/authz"
 	"github.com/whale-net/everything/leaflab/api/contract"
+	"github.com/whale-net/everything/leaflab/api/suspect"
 	"github.com/whale-net/everything/leaflab/api/tiers"
 	"github.com/whale-net/everything/libs/go/dbtest"
 )
@@ -330,6 +331,57 @@ func (f *fixture) insertPlantRegionHistory(t *testing.T, plantID, regionID int64
 		INSERT INTO plant_region_history (plant_id, region_id, valid_from, valid_to) VALUES ($1, $2, $3, $4)
 	`, plantID, regionID, from, to); err != nil {
 		t.Fatalf("insert plant_region_history: %v", err)
+	}
+}
+
+// insertReadingValid is insertReading's twin with an explicit valid flag,
+// for FR26.1's CheckPersistedInvalidFlag coverage -- insertReading itself
+// always writes valid=TRUE (the schema's own default) since none of this
+// task's pre-existing tests needed an invalid row.
+func (f *fixture) insertReadingValid(t *testing.T, sensorID, regionID int64, value float64, at time.Time, valid bool) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `
+		INSERT INTO sensor_reading (sensor_id, region_id, value, valid, recorded_at) VALUES ($1, $2, $3, $4, $5)
+	`, sensorID, regionID, value, valid, at); err != nil {
+		t.Fatalf("insert reading (valid=%v): %v", valid, err)
+	}
+}
+
+// readingRegionID reads back sensor_reading.region_id directly -- used by
+// the stale-attribution test to prove FR26.2's "marked, never rewritten":
+// the stored value must be identical to what was written, never corrected
+// to sensor_region_history's disagreeing value.
+func (f *fixture) readingRegionID(t *testing.T, sensorID int64, at time.Time) int64 {
+	t.Helper()
+	var regionID int64
+	if err := f.pool.QueryRow(context.Background(), `
+		SELECT region_id FROM sensor_reading WHERE sensor_id = $1 AND recorded_at = $2
+	`, sensorID, at).Scan(&regionID); err != nil {
+		t.Fatalf("query stored region_id for sensor %d at %s: %v", sensorID, at, err)
+	}
+	return regionID
+}
+
+// insertFiveMinuteBucket is insertHourlyBucket's five-minute-tier twin.
+func (f *fixture) insertFiveMinuteBucket(t *testing.T, sensorID, regionID int64, bucket time.Time, count int64, sum, min, max float64) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `
+		INSERT INTO sensor_reading_5m (sensor_id, region_id, bucket, reading_count, value_sum, value_min, value_max)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, sensorID, regionID, bucket, count, sum, min, max); err != nil {
+		t.Fatalf("insert five-minute bucket: %v", err)
+	}
+}
+
+// insertSensorRegionHistory seeds sensor_region_history -- FR26.2's stale-
+// attribution comparand, independent of sensor_reading's own denormalized
+// region_id column (this file's testSchema comment on the table).
+func (f *fixture) insertSensorRegionHistory(t *testing.T, sensorID, regionID int64, from time.Time, to *time.Time) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `
+		INSERT INTO sensor_region_history (sensor_id, region_id, valid_from, valid_to) VALUES ($1, $2, $3, $4)
+	`, sensorID, regionID, from, to); err != nil {
+		t.Fatalf("insert sensor_region_history: %v", err)
 	}
 }
 
@@ -711,5 +763,500 @@ func TestSeries_ResultCapEnforced(t *testing.T) {
 	}
 	if result.NextPageToken == "" {
 		t.Error("NextPageToken is empty, want a token since more readings remain beyond the clamped page")
+	}
+}
+
+// ── FR26.1: invalid, missing and zero are three distinguishable outcomes ──
+
+// TestSeries_ZeroValueVsInvalidVsMissing_Distinguishable proves FR26.1: a
+// reading of exactly zero is presented as fact (not marked suspect, not
+// omitted), an invalid reading is marked suspect rather than presented as
+// fact, and a time slot with no reading at all is simply absent from the
+// series -- three distinguishable outcomes in one response, not
+// collapsible into each other.
+func TestSeries_ZeroValueVsInvalidVsMissing_Distinguishable(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	zeroAt := now.Add(-30 * time.Minute)
+	invalidAt := now.Add(-20 * time.Minute)
+	missingAt := now.Add(-10 * time.Minute) // deliberately never inserted
+
+	f.insertReadingValid(t, sensorID, regionID, 0.0, zeroAt, true)
+	f.insertReadingValid(t, sensorID, regionID, 999.0, invalidAt, false)
+
+	window := Window{Start: now.Add(-time.Hour), End: now}
+	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{}, false)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if len(result.Points) != 2 {
+		t.Fatalf("len(Points) = %d, want 2 (the zero reading and the invalid reading; the missing slot must never manifest as a third point)", len(result.Points))
+	}
+
+	var zeroPoint, invalidPoint *Point
+	for i := range result.Points {
+		p := &result.Points[i]
+		switch {
+		case p.RecordedAt.Equal(zeroAt):
+			zeroPoint = p
+		case p.RecordedAt.Equal(invalidAt):
+			invalidPoint = p
+		case p.RecordedAt.Equal(missingAt):
+			t.Fatalf("a point exists at the missing time slot %s -- a gap must never manifest as a point", missingAt)
+		}
+	}
+	if zeroPoint == nil {
+		t.Fatal("no point found at the zero-value reading's timestamp")
+	}
+	if zeroPoint.Value != 0.0 {
+		t.Errorf("zero-value point Value = %v, want 0.0 (a real, present, non-suspect value)", zeroPoint.Value)
+	}
+	if len(zeroPoint.SuspectChecks) != 0 {
+		t.Errorf("zero-value point SuspectChecks = %v, want none -- zero is a fact, not suspect", zeroPoint.SuspectChecks)
+	}
+	if invalidPoint == nil {
+		t.Fatal("no point found at the invalid reading's timestamp")
+	}
+	found := false
+	for _, c := range invalidPoint.SuspectChecks {
+		if c == suspect.CheckPersistedInvalidFlag {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("invalid point SuspectChecks = %v, want to contain %q -- an invalid reading must be presented as suspect, not as fact", invalidPoint.SuspectChecks, suspect.CheckPersistedInvalidFlag)
+	}
+}
+
+// ── FR26.1: a bucket with no readings is absent, never zero or interpolated ──
+
+// TestSeries_Gaps_AbsentAtAllThreeTiers proves "a bucket containing no
+// readings is absent from the response, never present with a zero or an
+// interpolated value" at all three tiers Series can answer from: raw
+// (missing raw readings never manifest as points), five-minute and hourly
+// (a tier bucket this task's aggregation job never wrote a row for must
+// never be synthesized as a zero-filled or interpolated point).
+func TestSeries_Gaps_AbsentAtAllThreeTiers(t *testing.T) {
+	f := newFixture(t)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	t.Run("raw", func(t *testing.T) {
+		now := time.Now().UTC().Truncate(time.Second)
+		presentA := now.Add(-25 * time.Minute)
+		presentB := now.Add(-5 * time.Minute)
+		gap := now.Add(-15 * time.Minute) // never inserted
+
+		f.insertReadingValid(t, sensorID, regionID, 10.0, presentA, true)
+		f.insertReadingValid(t, sensorID, regionID, 12.0, presentB, true)
+
+		result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, Window{Start: now.Add(-time.Hour), End: now}, 0, tiers.TierRaw, Page{}, false)
+		if err != nil {
+			t.Fatalf("Series: %v", err)
+		}
+		if len(result.Points) != 2 {
+			t.Fatalf("len(Points) = %d, want 2", len(result.Points))
+		}
+		for _, p := range result.Points {
+			if p.RecordedAt.Equal(gap) {
+				t.Fatalf("a point exists at the raw gap's timestamp %s", gap)
+			}
+		}
+	})
+
+	t.Run("five_minute", func(t *testing.T) {
+		now := time.Now().UTC()
+		base := now.Truncate(5 * time.Minute).Add(-30 * time.Minute)
+		bucketA := base
+		bucketGap := base.Add(5 * time.Minute) // never inserted
+		bucketB := base.Add(10 * time.Minute)
+
+		f.insertFiveMinuteBucket(t, sensorID, regionID, bucketA, 3, 30.0, 9.0, 11.0)
+		f.insertFiveMinuteBucket(t, sensorID, regionID, bucketB, 3, 36.0, 11.0, 13.0)
+
+		result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, Window{Start: base, End: base.Add(15 * time.Minute)}, 0, tiers.TierFiveMinute, Page{}, false)
+		if err != nil {
+			t.Fatalf("Series: %v", err)
+		}
+		if result.Tier.Tier != tiers.TierFiveMinute {
+			t.Fatalf("Tier = %q, want %q (test setup requires an uncoarsened five-minute request)", result.Tier.Tier, tiers.TierFiveMinute)
+		}
+		if len(result.Points) != 2 {
+			t.Fatalf("len(Points) = %d, want 2 (the gap bucket must be absent, not zero-filled)", len(result.Points))
+		}
+		for _, p := range result.Points {
+			if p.RecordedAt.Equal(bucketGap) {
+				t.Fatalf("a point exists at the missing five-minute bucket %s", bucketGap)
+			}
+			if p.Count == 0 || p.Value == 0 {
+				t.Errorf("point at %s has Count=%d Value=%v -- looks synthesized/interpolated rather than a real seeded bucket", p.RecordedAt, p.Count, p.Value)
+			}
+		}
+	})
+
+	t.Run("hourly", func(t *testing.T) {
+		now := time.Now().UTC()
+		base := now.Truncate(time.Hour).Add(-6 * time.Hour)
+		bucketA := base
+		bucketGap := base.Add(time.Hour) // never inserted
+		bucketB := base.Add(2 * time.Hour)
+
+		f.insertHourlyBucket(t, sensorID, regionID, bucketA, 4, 80.0, 18.0, 22.0)
+		f.insertHourlyBucket(t, sensorID, regionID, bucketB, 4, 84.0, 19.0, 23.0)
+
+		result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, Window{Start: base, End: base.Add(3 * time.Hour)}, 0, tiers.TierHourly, Page{}, false)
+		if err != nil {
+			t.Fatalf("Series: %v", err)
+		}
+		if len(result.Points) != 2 {
+			t.Fatalf("len(Points) = %d, want 2 (the gap bucket must be absent, not zero-filled)", len(result.Points))
+		}
+		for _, p := range result.Points {
+			if p.RecordedAt.Equal(bucketGap) {
+				t.Fatalf("a point exists at the missing hourly bucket %s", bucketGap)
+			}
+		}
+	})
+}
+
+// ── FR26.1: Super Admin invalid-only filter ─────────────────────────────
+
+// TestSeries_InvalidOnlyFilter_ReturnsExactSet proves invalidOnly=true
+// returns exactly the invalid readings, not a superset or subset, and
+// always answers from the raw tier (sensor_reading.valid has no
+// aggregated-tier analogue).
+func TestSeries_InvalidOnlyFilter_ReturnsExactSet(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	f.insertReadingValid(t, sensorID, regionID, 20.0, now.Add(-30*time.Minute), true)
+	f.insertReadingValid(t, sensorID, regionID, 999.0, now.Add(-20*time.Minute), false)
+	f.insertReadingValid(t, sensorID, regionID, 21.0, now.Add(-10*time.Minute), true)
+
+	window := Window{Start: now.Add(-time.Hour), End: now}
+	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierHourly, Page{}, true)
+	if err != nil {
+		t.Fatalf("Series (invalidOnly): %v", err)
+	}
+	if result.Tier.Tier != tiers.TierRaw {
+		t.Errorf("Tier = %q, want %q -- invalid-only is only meaningful at the raw tier", result.Tier.Tier, tiers.TierRaw)
+	}
+	if len(result.Points) != 1 {
+		t.Fatalf("len(Points) = %d, want 1 (exactly the invalid reading)", len(result.Points))
+	}
+	if result.Points[0].Value != 999.0 {
+		t.Errorf("Points[0].Value = %v, want 999.0 (the invalid reading)", result.Points[0].Value)
+	}
+}
+
+// ── FR26.2: stale attribution, per-reading, never re-stamped ────────────
+
+// TestSeries_StaleAttribution_Marked_RegionIDUnchanged proves FR26.2: a
+// reading whose stamped region_id disagrees with sensor_region_history at
+// its own recorded_at is marked CheckStaleAttribution, and its stored
+// region_id is never rewritten to the historically-correct value --
+// FR26.2's compensating control is the marker, not a silent correction.
+func TestSeries_StaleAttribution_Marked_RegionIDUnchanged(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	staleRegion := f.insertRegion(t, "stale-region", 0)
+	correctRegion := f.insertRegion(t, "correct-region", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, staleRegion, temperatureTypeID)
+
+	readingAt := now.Add(-30 * time.Minute)
+	// sensor_region_history says the sensor was actually in correctRegion
+	// at readingAt -- the reading's own stamped region_id (staleRegion,
+	// below) disagrees.
+	f.insertSensorRegionHistory(t, sensorID, correctRegion, now.Add(-time.Hour), nil)
+	f.insertReadingValid(t, sensorID, staleRegion, 20.0, readingAt, true)
+
+	window := Window{Start: now.Add(-time.Hour), End: now}
+	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{}, false)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if len(result.Points) != 1 {
+		t.Fatalf("len(Points) = %d, want 1", len(result.Points))
+	}
+	var marked bool
+	for _, c := range result.Points[0].SuspectChecks {
+		if c == suspect.CheckStaleAttribution {
+			marked = true
+		}
+	}
+	if !marked {
+		t.Errorf("SuspectChecks = %v, want to contain %q", result.Points[0].SuspectChecks, suspect.CheckStaleAttribution)
+	}
+
+	if gotRegion := f.readingRegionID(t, sensorID, readingAt); gotRegion != staleRegion {
+		t.Errorf("stored sensor_reading.region_id = %d, want unchanged %d (staleRegion) -- FR26.2 forbids retroactive re-stamping", gotRegion, staleRegion)
+	}
+}
+
+// ── FR21/FR26.2: migration-snap window ───────────────────────────────────
+
+// TestSeries_MigrationSnapWindow_Marked proves a reading recorded inside
+// the hour bucket that two distinct plants' plant_region_history intervals
+// overlap in the same region (FR21's disclosed migration-snap cost) is
+// marked CheckMigrationSnapWindow.
+func TestSeries_MigrationSnapWindow_Marked(t *testing.T) {
+	f := newFixture(t)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	hourStart := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
+	removedAt := hourStart.Add(20 * time.Minute)
+
+	plantA := f.insertPlant(t, regionID)
+	plantB := f.insertPlant(t, regionID)
+	// plantA is removed mid-hour (removedAt); the migration backfill snaps
+	// plantB's own valid_from back to the hour boundary, so both plants'
+	// intervals are concurrently open across [hourStart, removedAt) --
+	// FR21's disclosed shared-hour cost.
+	f.insertPlantRegionHistory(t, plantA, regionID, hourStart.Add(-time.Hour), &removedAt)
+	f.insertPlantRegionHistory(t, plantB, regionID, hourStart, nil)
+
+	readingAt := hourStart.Add(10 * time.Minute) // inside the shared hour
+	f.insertReadingValid(t, sensorID, regionID, 20.0, readingAt, true)
+
+	window := Window{Start: hourStart.Add(-time.Hour), End: hourStart.Add(time.Hour)}
+	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{}, false)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if len(result.Points) != 1 {
+		t.Fatalf("len(Points) = %d, want 1", len(result.Points))
+	}
+	var marked bool
+	for _, c := range result.Points[0].SuspectChecks {
+		if c == suspect.CheckMigrationSnapWindow {
+			marked = true
+		}
+	}
+	if !marked {
+		t.Errorf("SuspectChecks = %v, want to contain %q", result.Points[0].SuspectChecks, suspect.CheckMigrationSnapWindow)
+	}
+}
+
+// ── FR26.3: every marker names its own check, enumerable and stable ─────
+
+// suspectCheckIsEnumerable reports whether c is a member of suspect.All()
+// -- FR26.3's "every suspect marker is attributable to a named, enumerable
+// check."
+func suspectCheckIsEnumerable(c suspect.Check) bool {
+	for _, known := range suspect.All() {
+		if c == known {
+			return true
+		}
+	}
+	return false
+}
+
+// TestSeries_MultipleChecksOnOnePoint_EachNamedDistinctly proves FR26.3: a
+// single reading that trips every one of the four checks simultaneously
+// carries all four named identifiers (each drawn from suspect.All(), never
+// a free-form string), each exactly once -- and marked_count/returned_count
+// tally readings, not checks, so one reading with four checks contributes
+// 1 to marked_count, not 4.
+func TestSeries_MultipleChecksOnOnePoint_EachNamedDistinctly(t *testing.T) {
+	f := newFixture(t)
+	staleRegion := f.insertRegion(t, "stale-region", 0)
+	correctRegion := f.insertRegion(t, "correct-region", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, staleRegion, temperatureTypeID)
+
+	hourStart := time.Now().UTC().Truncate(time.Hour).Add(-2 * time.Hour)
+	removedAt := hourStart.Add(20 * time.Minute)
+	plantA := f.insertPlant(t, staleRegion)
+	plantB := f.insertPlant(t, staleRegion)
+	f.insertPlantRegionHistory(t, plantA, staleRegion, hourStart.Add(-time.Hour), &removedAt)
+	f.insertPlantRegionHistory(t, plantB, staleRegion, hourStart, nil)
+
+	readingAt := hourStart.Add(10 * time.Minute)
+	// out-of-range (999 exceeds temperature's [-40,60]), persisted-invalid
+	// (valid=false), stale-attribution (stamped staleRegion vs. history's
+	// correctRegion) and migration-snap (inside the shared hour above) --
+	// all four checks at once.
+	f.insertSensorRegionHistory(t, sensorID, correctRegion, hourStart.Add(-time.Hour), nil)
+	f.insertReadingValid(t, sensorID, staleRegion, 999.0, readingAt, false)
+
+	window := Window{Start: hourStart.Add(-time.Hour), End: hourStart.Add(time.Hour)}
+	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{}, false)
+	if err != nil {
+		t.Fatalf("Series: %v", err)
+	}
+	if len(result.Points) != 1 {
+		t.Fatalf("len(Points) = %d, want 1", len(result.Points))
+	}
+	got := result.Points[0].SuspectChecks
+	want := map[suspect.Check]bool{
+		suspect.CheckOutOfRange:           true,
+		suspect.CheckPersistedInvalidFlag: true,
+		suspect.CheckStaleAttribution:     true,
+		suspect.CheckMigrationSnapWindow:  true,
+	}
+	seen := make(map[suspect.Check]int)
+	for _, c := range got {
+		seen[c]++
+		if !suspectCheckIsEnumerable(c) {
+			t.Errorf("check %q is not a member of suspect.All()", c)
+		}
+	}
+	for c := range want {
+		if seen[c] != 1 {
+			t.Errorf("check %q appears %d times in SuspectChecks %v, want exactly once", c, seen[c], got)
+		}
+	}
+	if len(seen) != len(want) {
+		t.Errorf("SuspectChecks = %v, want exactly the four checks, no extras", got)
+	}
+	if result.MarkedCount != 1 {
+		t.Errorf("MarkedCount = %d, want 1 (one marked reading, regardless of how many checks it trips)", result.MarkedCount)
+	}
+	if result.ReturnedCount != 1 {
+		t.Errorf("ReturnedCount = %d, want 1", result.ReturnedCount)
+	}
+}
+
+// ── FR26.3: marked_count/returned_count present in every case ───────────
+
+// TestSeries_MarkedReturnedCounts_NoneMarkedAndAllMarked proves
+// marked_count/returned_count are present and correct both when nothing is
+// marked (a marker that covers nothing must be visible as such) and when
+// everything is marked (a marker that covers everything must be visible as
+// such, not silently universal).
+func TestSeries_MarkedReturnedCounts_NoneMarkedAndAllMarked(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+
+	t.Run("none marked", func(t *testing.T) {
+		sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+		f.insertReadingValid(t, sensorID, regionID, 20.0, now.Add(-20*time.Minute), true)
+		f.insertReadingValid(t, sensorID, regionID, 21.0, now.Add(-10*time.Minute), true)
+
+		result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, Window{Start: now.Add(-time.Hour), End: now}, 0, tiers.TierRaw, Page{}, false)
+		if err != nil {
+			t.Fatalf("Series: %v", err)
+		}
+		if result.ReturnedCount != 2 {
+			t.Errorf("ReturnedCount = %d, want 2", result.ReturnedCount)
+		}
+		if result.MarkedCount != 0 {
+			t.Errorf("MarkedCount = %d, want 0", result.MarkedCount)
+		}
+	})
+
+	t.Run("all marked", func(t *testing.T) {
+		sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+		f.insertReadingValid(t, sensorID, regionID, 20.0, now.Add(-20*time.Minute), false)
+		f.insertReadingValid(t, sensorID, regionID, 21.0, now.Add(-10*time.Minute), false)
+
+		result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, Window{Start: now.Add(-time.Hour), End: now}, 0, tiers.TierRaw, Page{}, false)
+		if err != nil {
+			t.Fatalf("Series: %v", err)
+		}
+		if result.ReturnedCount != 2 {
+			t.Errorf("ReturnedCount = %d, want 2", result.ReturnedCount)
+		}
+		if result.MarkedCount != 2 {
+			t.Errorf("MarkedCount = %d, want 2 (every returned reading is marked -- must be visibly universal, not silently so)", result.MarkedCount)
+		}
+	})
+}
+
+// TestCurrentValues_MarkedReturnedCounts proves GetCurrentValues also
+// carries FR26.3's marked_count/returned_count, correctly reflecting an
+// invalid reading among otherwise-valid ones.
+func TestCurrentValues_MarkedReturnedCounts(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorA := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+	sensorB := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	f.insertReadingValid(t, sensorA, regionID, 20.0, now, true)
+	f.insertReadingValid(t, sensorB, regionID, 999.0, now, false)
+
+	result, err := f.reader.CurrentValues(context.Background(), authz.EntityRef{Kind: authz.EntityRegion, ID: regionID})
+	if err != nil {
+		t.Fatalf("CurrentValues: %v", err)
+	}
+	if result.ReturnedCount != 2 {
+		t.Errorf("ReturnedCount = %d, want 2", result.ReturnedCount)
+	}
+	if result.MarkedCount != 1 {
+		t.Errorf("MarkedCount = %d, want 1 (exactly the invalid+out-of-range reading)", result.MarkedCount)
+	}
+}
+
+// TestPeriodSummary_MarkedReturnedCounts proves GetPeriodSummary also
+// carries FR26.3's marked_count/returned_count, reflecting a suspect
+// hourly bucket contributing to the summary.
+func TestPeriodSummary_MarkedReturnedCounts(t *testing.T) {
+	f := newFixture(t)
+	periodStart := time.Now().UTC().Truncate(time.Hour).Add(-24 * time.Hour)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	hourBucket := periodStart.Add(2 * time.Hour)
+	f.insertHourlyBucket(t, sensorID, regionID, hourBucket, 2, 40.0, 19.0, 21.0)
+	// An invalid raw reading inside the same hour, surfacing the bucket as
+	// suspect even though the hourly aggregate itself carries no invalid flag.
+	f.insertReadingValid(t, sensorID, regionID, 20.0, hourBucket.Add(10*time.Minute), false)
+
+	period := Window{Start: periodStart, End: periodStart.Add(24 * time.Hour)}
+	result, err := f.reader.PeriodSummary(context.Background(), regionID, period, temperatureTypeID)
+	if err != nil {
+		t.Fatalf("PeriodSummary: %v", err)
+	}
+	if result.ReturnedCount == 0 {
+		t.Fatal("ReturnedCount = 0, want at least the one summary computed")
+	}
+	if result.MarkedCount == 0 {
+		t.Error("MarkedCount = 0, want at least 1 -- the summary's contributing hour has an invalid raw reading")
+	}
+}
+
+// TestCompare_MarkedReturnedCounts_AggregateAcrossEntities proves
+// CompareSeries's marked_count/returned_count tally across every entity's
+// series, not just the first.
+func TestCompare_MarkedReturnedCounts_AggregateAcrossEntities(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorA := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+	sensorB := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	f.insertReadingValid(t, sensorA, regionID, 20.0, now.Add(-10*time.Minute), true)
+	f.insertReadingValid(t, sensorB, regionID, 999.0, now.Add(-10*time.Minute), false)
+
+	entities := []authz.EntityRef{
+		{Kind: authz.EntitySensor, ID: sensorA},
+		{Kind: authz.EntitySensor, ID: sensorB},
+	}
+	result, err := f.reader.Compare(context.Background(), entities, Window{Start: now.Add(-time.Hour), End: now}, temperatureTypeID, tiers.TierRaw, Page{})
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	if result.ReturnedCount != 2 {
+		t.Errorf("ReturnedCount = %d, want 2 (one point per entity)", result.ReturnedCount)
+	}
+	if result.MarkedCount != 1 {
+		t.Errorf("MarkedCount = %d, want 1 (sensorB's invalid+out-of-range reading)", result.MarkedCount)
 	}
 }

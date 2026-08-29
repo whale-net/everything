@@ -217,3 +217,66 @@ func TestGetReadingSeries_HouseholdMemberSucceeds_ControlCase(t *testing.T) {
 		t.Fatal("GetReadingSeries returned a nil response with a nil error")
 	}
 }
+
+// TestGetReadingSeries_InvalidOnly_NonElevated_Refused proves FR26.1's
+// Super Admin invalid-only filter is refused outright for a caller who is
+// a genuine household member but does not carry the leaflab-admin realm
+// role -- never silently served the unfiltered series instead.
+func TestGetReadingSeries_InvalidOnly_NonElevated_Refused(t *testing.T) {
+	server, pool := newReadingsAuthzTestServer(t, stubReadingsReader{})
+
+	householdA := insertReadingsHousehold(t, pool)
+	insertReadingsMembership(t, pool, householdA, "alice")
+	boardA := insertScopedBoardForReadings(t, pool, householdA)
+	sensorA := insertScopedSensor(t, pool, boardA)
+
+	ctx := grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{Subject: "alice"})
+
+	_, err := server.GetReadingSeries(ctx, &pb.GetReadingSeriesRequest{
+		Entity:      &pb.EntityRef{Entity: &pb.EntityRef_SensorId{SensorId: sensorA}},
+		Window:      &pb.TimeWindow{Start: contract.Now(), End: contract.Now()},
+		InvalidOnly: true,
+	})
+	if err == nil {
+		t.Fatal("GetReadingSeries with invalid_only=true from a non-elevated caller returned nil error, want a refusal")
+	}
+	detail, ok := contract.FromError(err)
+	if !ok {
+		t.Fatalf("error %v carries no Failure detail", err)
+	}
+	if detail.Class != string(contract.FailurePermissionDenied) {
+		t.Errorf("Class = %q, want %q", detail.Class, contract.FailurePermissionDenied)
+	}
+}
+
+// TestGetReadingSeries_InvalidOnly_Elevated_ReachesReadings is the control
+// case: a caller carrying the leaflab-admin realm role is not refused for
+// invalid_only=true -- the request reaches stubReadingsReader (which
+// returns a fixed result rather than panicking), proving the refusal above
+// is actually gated on elevation, not some unconditional failure in this
+// fixture's wiring.
+func TestGetReadingSeries_InvalidOnly_Elevated_ReachesReadings(t *testing.T) {
+	fixedTier := tiers.Selection{Tier: tiers.TierRaw}
+	server, pool := newReadingsAuthzTestServer(t, stubReadingsReader{
+		fixedSeries: readings.SeriesResult{Tier: fixedTier},
+	})
+
+	householdA := insertReadingsHousehold(t, pool)
+	insertReadingsMembership(t, pool, householdA, "alice")
+	boardA := insertScopedBoardForReadings(t, pool, householdA)
+	sensorA := insertScopedSensor(t, pool, boardA)
+
+	ctx := grpcauth.ContextWithClaims(context.Background(), &grpcauth.Claims{Subject: "alice", Roles: []string{RoleAdmin}})
+
+	resp, err := server.GetReadingSeries(ctx, &pb.GetReadingSeriesRequest{
+		Entity:      &pb.EntityRef{Entity: &pb.EntityRef_SensorId{SensorId: sensorA}},
+		Window:      &pb.TimeWindow{Start: contract.Now(), End: contract.Now()},
+		InvalidOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("GetReadingSeries with invalid_only=true from an elevated caller: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("GetReadingSeries returned a nil response with a nil error")
+	}
+}

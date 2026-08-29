@@ -1,10 +1,20 @@
 """FR26.3's enumerable suspect-check registry -- stable Check identifiers and the Marker/Counts shapes every readings response carries. See suspect.go's package doc comment."""
 
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "suspect",
     srcs = ["suspect.go"],
     importpath = "github.com/whale-net/everything/leaflab/api/suspect",
     visibility = ["//visibility:public"],
+)
+
+# FR26.3 coverage for the enumerable Check registry and the Marker/Counts
+# tally shapes -- no database, no build tag, so it runs in every plain
+# `bazel test //leaflab/...`.
+go_test(
+    name = "suspect_test",
+    size = "small",
+    srcs = ["suspect_test.go"],
+    embed = [":suspect"],
 )
