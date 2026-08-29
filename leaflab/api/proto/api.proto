@@ -18,12 +18,6 @@ service LeafLabAPI {
 
   // List all known boards (boards that have sent at least one manifest).
   rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
-
-  // Service health signal. The only anonymous RPC in this service (FR63) --
-  // callable without a household session and without an authenticated
-  // principal, so "this is our problem, not yours" is answerable even when
-  // the rest of the API is unreachable. Returns no household data.
-  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -51,103 +45,10 @@ message GetDeviceConfigResponse {
 message BoardInfo {
   string device_id = 1;
   int64  board_id  = 2;
-  // Absolute instant the board was last seen (FR64). Render this as
-  // elapsed time against the response envelope's server_now.
-  Instant last_seen_at = 3;
 }
 
-message ListBoardsRequest {
-  // Keyset page request (FR61). Unset/empty requests the first page.
-  PageRequest page = 1;
-}
+message ListBoardsRequest {}
 
 message ListBoardsResponse {
   repeated BoardInfo boards = 1;
-  // Keyset page response (FR61).
-  PageResponse page = 2;
-  // Server's current time, so a caller renders every Instant in this
-  // response as elapsed time without trusting its own clock (FR64).
-  Instant server_now = 3;
-}
-
-// --- Response contract (FR59, FR61, FR64) -----------------------------
-//
-// Shapes shared by every RPC in this service. Established here, on the
-// first three RPCs, because every later response inherits them -- cheaper
-// to define once than to retrofit across every requirement that adds an
-// RPC later. See leaflab/api/contract for the Go-side constructors and
-// helpers that produce/consume these.
-
-// Instant is an unambiguous absolute point in time (milliseconds since the
-// Unix epoch, UTC). Every response that carries a time returns it here
-// alongside the response envelope's server_now field, so a browser or CLI
-// renders elapsed time ("3 minutes ago") in the viewer's own timezone
-// without trusting its own clock (FR64). A raw UTC timestamp is never the
-// primary text on a non-technical surface -- this is the value that gets
-// converted, not displayed as-is.
-message Instant {
-  int64 unix_millis = 1;
-}
-
-// Failure is the gRPC status detail every LeafLab API error carries
-// (FR59.1) instead of an interpolated message string, so a script branches
-// on class/entity/field without parsing prose.
-message Failure {
-  // Machine-readable failure class. Mirrors
-  // leaflab/api/contract.FailureClass (e.g. "unauthenticated",
-  // "permission_denied", "not_found", "invalid_argument", "rate_limited",
-  // "refused_with_alternative"). A caller switches on this string, never
-  // on reason.
-  string class = 1;
-  // The entity type/name the failure concerns (e.g. "board",
-  // "device_config").
-  string entity = 2;
-  // The field within the entity/request the failure concerns. Empty when
-  // not field-specific.
-  string field = 3;
-  // A persona-appropriate sentence, safe to render as-is on a
-  // non-technical surface (FR59.2): no status code, proto field name,
-  // table name or stack trace.
-  string reason = 4;
-  // Set only when class is "refused_with_alternative" (FR59.3): the
-  // alternative path the caller should take instead of the refused
-  // operation.
-  string alternative = 5;
-}
-
-// PageRequest is embedded in every listing RPC's request (FR61).
-message PageRequest {
-  // Opaque keyset token from a prior PageResponse.next_page_token. Never
-  // an offset. Empty requests the first page.
-  string page_token = 1;
-  // Requested page size. The server enforces a page cap
-  // (leaflab/api/contract.PageCap): a request above the cap is clamped,
-  // not rejected.
-  int32 page_size = 2;
-}
-
-// PageResponse is embedded in every listing RPC's response (FR61).
-message PageResponse {
-  // Opaque keyset token for the next page. Empty when this is the last
-  // page.
-  string next_page_token = 1;
-}
-
-// --- Health (FR63) ------------------------------------------------------
-
-message GetHealthRequest {}
-
-// HealthStatus is intentionally coarse (FR63.2): a caller learns "this is
-// our problem, not yours" and nothing else. No version string, no
-// dependency names, no per-dependency status detail belong here or in
-// GetHealthResponse.
-enum HealthStatus {
-  HEALTH_UNSPECIFIED = 0;
-  HEALTH_UP = 1;
-  HEALTH_DEGRADED = 2;
-}
-
-message GetHealthResponse {
-  // The only populated field in this response (FR63.2).
-  HealthStatus status = 1;
 }

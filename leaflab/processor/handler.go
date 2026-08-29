@@ -7,9 +7,8 @@ import (
 	"strings"
 	"time"
 
-	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
-	"github.com/whale-net/everything/leaflab/hwkey"
+	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -93,16 +92,11 @@ func (h *MessageHandler) handleManifest(ctx context.Context, deviceID string, bo
 
 		// Build hardware address. Firmware currently sends single-hop mux via
 		// scalar fields; multi-hop will be added when the firmware proto is updated.
-		// sd.I2CAddress is always "present" on the wire (proto3 has no way to
-		// distinguish absent from 0 for a plain scalar) -- 0 is the legacy
-		// manifests' "unknown address" sentinel (FR18.2, hwkey.AddressOpt), so a
-		// sensor reporting it gets no HardwareAddress at all, same as before.
 		var hw *HardwareAddress
-		addr := hwkey.Address(uint16(sd.I2CAddress))
-		if !addr.IsUnknownSentinel() {
-			hw = &HardwareAddress{I2CAddress: addr}
+		if sd.I2CAddress > 0 {
+			hw = &HardwareAddress{I2CAddress: sd.I2CAddress}
 			if sd.MuxAddress > 0 {
-				hw.MuxPath = hwkey.MuxPath{{MuxAddress: sd.MuxAddress, MuxChannel: sd.MuxChannel}}
+				hw.MuxPath = []MuxHop{{MuxAddress: sd.MuxAddress, MuxChannel: sd.MuxChannel}}
 			}
 		}
 

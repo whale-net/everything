@@ -8,7 +8,6 @@ import (
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
-	"github.com/whale-net/everything/leaflab/hwkey"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -20,14 +19,8 @@ type stubRepo struct {
 	sensorID     int64
 
 	// Recorded call arguments.
-	upsertSensorCalls          []upsertSensorCall
-	upsertSensorHWHistoryCalls []upsertSensorHWHistoryCall
-	applyConfigRegionsCalls    []applyConfigRegionsCall
-}
-
-type upsertSensorHWHistoryCall struct {
-	sensorID int64
-	hw       *HardwareAddress
+	upsertSensorCalls       []upsertSensorCall
+	applyConfigRegionsCalls []applyConfigRegionsCall
 }
 
 type applyConfigRegionsCall struct {
@@ -64,8 +57,7 @@ func (s *stubRepo) UpsertSensor(_ context.Context, boardID, sensorTypeID int64, 
 
 func (s *stubRepo) UpsertSensorLabel(_ context.Context, _ int64, _ string) error { return nil }
 
-func (s *stubRepo) UpsertSensorHWHistory(_ context.Context, sensorID int64, hw *HardwareAddress) error {
-	s.upsertSensorHWHistoryCalls = append(s.upsertSensorHWHistoryCalls, upsertSensorHWHistoryCall{sensorID: sensorID, hw: hw})
+func (s *stubRepo) UpsertSensorHWHistory(_ context.Context, _ int64, _ *HardwareAddress) error {
 	return nil
 }
 
@@ -143,8 +135,8 @@ func TestHandleManifest_HWAddressPassedThrough(t *testing.T) {
 	if call.hw == nil {
 		t.Fatal("expected non-nil HardwareAddress, got nil")
 	}
-	if !call.hw.I2CAddress.Equal(hwkey.Address(0x23)) {
-		t.Errorf("I2CAddress: want 0x23, got %s", call.hw.I2CAddress)
+	if call.hw.I2CAddress != 0x23 {
+		t.Errorf("I2CAddress: want 0x23, got 0x%x", call.hw.I2CAddress)
 	}
 	if len(call.hw.MuxPath) != 1 {
 		t.Fatalf("MuxPath: want 1 hop, got %d", len(call.hw.MuxPath))
@@ -195,50 +187,6 @@ func TestHandleManifest_NoHWAddressUsesNameFallback(t *testing.T) {
 	}
 }
 
-// TestHandleManifest_HWHistoryReceivesAddress verifies that handleManifest
-// passes the same *HardwareAddress it builds for UpsertSensor through to
-// UpsertSensorHWHistory (FR16.1) -- including the sensor_id UpsertSensor
-// returned, not some other value.
-func TestHandleManifest_HWHistoryReceivesAddress(t *testing.T) {
-	repo := &stubRepo{boardID: 1, sensorTypeID: 2, sensorID: 77}
-	h := newTestHandler(repo)
-
-	manifest := &firmwarepb.DeviceManifest{
-		DeviceId: "leaflab-aabbccdd",
-		Sensors: []*firmwarepb.SensorDescriptor{
-			{
-				Name:       "light",
-				Type:       firmwarepb.SensorType_SENSOR_TYPE_ILLUMINANCE,
-				Unit:       "lx",
-				I2CAddress: 0x23,
-				MuxAddress: 0x70,
-				MuxChannel: 1,
-			},
-		},
-	}
-
-	if err := h.handleManifest(context.Background(), manifest.DeviceId, marshalManifest(t, manifest)); err != nil {
-		t.Fatalf("handleManifest: %v", err)
-	}
-
-	if len(repo.upsertSensorHWHistoryCalls) != 1 {
-		t.Fatalf("expected 1 UpsertSensorHWHistory call, got %d", len(repo.upsertSensorHWHistoryCalls))
-	}
-	call := repo.upsertSensorHWHistoryCalls[0]
-	if call.sensorID != 77 {
-		t.Errorf("UpsertSensorHWHistory sensorID: want 77, got %d", call.sensorID)
-	}
-	if call.hw == nil {
-		t.Fatal("expected non-nil HardwareAddress, got nil")
-	}
-	if !call.hw.I2CAddress.Equal(hwkey.Address(0x23)) {
-		t.Errorf("I2CAddress: want 0x23, got %s", call.hw.I2CAddress)
-	}
-	if len(call.hw.MuxPath) != 1 || call.hw.MuxPath[0].MuxAddress != 0x70 || call.hw.MuxPath[0].MuxChannel != 1 {
-		t.Errorf("MuxPath: want [{0x70 1}], got %+v", call.hw.MuxPath)
-	}
-}
-
 // TestHandleManifest_MultipleSensors verifies hw address extraction across a
 // mixed manifest (some sensors on mux, some not).
 func TestHandleManifest_MultipleSensors(t *testing.T) {
@@ -263,7 +211,7 @@ func TestHandleManifest_MultipleSensors(t *testing.T) {
 	}
 
 	lightCall := repo.upsertSensorCalls[0]
-	if lightCall.hw == nil || !lightCall.hw.I2CAddress.Equal(hwkey.Address(0x23)) {
+	if lightCall.hw == nil || lightCall.hw.I2CAddress != 0x23 {
 		t.Errorf("light sensor hw address wrong: %+v", lightCall.hw)
 	}
 	if len(lightCall.hw.MuxPath) != 1 || lightCall.hw.MuxPath[0].MuxAddress != 0x70 || lightCall.hw.MuxPath[0].MuxChannel != 1 {
@@ -271,7 +219,7 @@ func TestHandleManifest_MultipleSensors(t *testing.T) {
 	}
 
 	tempCall := repo.upsertSensorCalls[1]
-	if tempCall.hw == nil || !tempCall.hw.I2CAddress.Equal(hwkey.Address(0x44)) {
+	if tempCall.hw == nil || tempCall.hw.I2CAddress != 0x44 {
 		t.Errorf("temp sensor hw address wrong: %+v", tempCall.hw)
 	}
 	// MuxAddress 0x70, channel 0 is a valid mux position (SD0).
