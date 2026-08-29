@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Importable twin of leaflab/migrate/main.go's own //go:embed migrations/*.sql
+# -- see embed.go's doc comment for why this exists and why main.go and every
+# leaflab/migrate/*_test.go keep their own separate embed instead of importing
+# this. `# keep` (rule-level, matching leaflab/migrate/BUILD.bazel's own
+# hand-written go_test rules) tells a later `bazel run //:gazelle` to leave
+# this rule alone entirely, rather than trying to expand embedsrcs' glob()
+# into an explicit file list every time a migration is added.
+# keep
+go_library(
+    name = "migrations",
+    srcs = ["embed.go"],
+    embedsrcs = glob(["*.sql"]),
+    importpath = "github.com/whale-net/everything/leaflab/migrate/migrations",
+    visibility = ["//leaflab:__subpackages__"],
+)
+
+# This directory becoming its own Bazel package (this BUILD.bazel file)
+# splits leaflab/migrate/BUILD.bazel's own `glob(["migrations/*.sql"])`
+# embedsrcs calls -- a glob cannot cross a package boundary. Every one of
+# those hand-written ("# keep"), pre-existing targets now references this
+# filegroup by label instead; rules_go places embedsrcs files at their
+# repo-relative path in the sandbox, so main.go's/each integration test's
+# own `//go:embed migrations/*.sql` pattern (relative to leaflab/migrate,
+# one directory up from here) still resolves the same files it always has.
+filegroup(
+    name = "sql_files",
+    srcs = glob(["*.sql"]),
+    visibility = ["//leaflab/migrate:__pkg__"],
+)

@@ -12,14 +12,44 @@ load("@rules_go//go:def.bzl", "go_test")
 # Phase 2 (NFR1.b, fail-closed household scope) and Phase 3 (NFR1.c,
 # attribution agreement) extend this same conformance_test target rather
 # than adding a new one -- append srcs/data here, don't fork the package.
+#
+# NFR1.c's addition (nfr1c_test.go) is a real-Postgres test (libs/go/dbtest)
+# -- the first non-source-analysis test in this target. That makes the
+# *whole* conformance_test target depend on Docker, so it now carries the
+# same manual/integration/no-cache/no-sandbox/requires-network tag set (and
+# gotags) every other dbtest-backed target in this repo uses (see
+# //libs/go/dbtest's README's "Why this is a separate, manual target").
+# Deliberate, accepted tradeoff, per NFR1.c's own task instruction to keep
+# NFR1.a/b/c in one target rather than fork a third one: NFR1.a's and
+# NFR1.b's build-failing source-analysis checks, which used to run for free
+# under plain `bazel test //...`, now require the same explicit,
+# Docker-backed invocation as every other leaflab dbtest target --
+# consistent with this domain's existing convention that no dbtest-backed
+# leaflab test runs under the default wildcard (see
+# leaflab/migrate/BUILD.bazel's ownership_migration_integration_test and
+# leaflab/api/readings/BUILD.bazel's reader_integration_test). Restated in
+# the PR body per this task's Validation section.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/conformance:conformance_test --test_output=all
+# `# keep` below tells a later `bazel run //:gazelle` not to touch this
+# rule's srcs/deps/tags: nfr1c_test.go is `//go:build integration`-gated,
+# so gazelle does not see it when scanning this package and would
+# otherwise strip this manual addition back out on the next run (verified:
+# `bazel run //:gazelle -- -mode=diff leaflab/conformance` wants to remove
+# nfr1c_test.go and every dep below without this marker).
 go_test(
+    # keep
     name = "conformance_test",
+    size = "large",
+    timeout = "long",
     srcs = [
         "auth_coverage_test.go",
         "bff_policy_test.go",
         "negative_fixtures_test.go",
         "nfr1b_negative_fixtures_test.go",
         "nfr1b_test.go",
+        "nfr1c_test.go",  # keep
         "paths_test.go",
     ],
     data = [
@@ -29,5 +59,23 @@ go_test(
         "//leaflab/api/proto:proto_file",
         "//leaflab/ui:conformance_srcs",
         "//leaflab/ui/components:conformance_srcs",
+    ],
+    gotags = ["integration"],  # keep
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/authz",  # keep
+        "//leaflab/api/readings",  # keep
+        "//leaflab/api/tiers",  # keep
+        "//leaflab/migrate/migrations",  # keep
+        "//libs/go/dbtest",  # keep
+        "//libs/go/migrate",  # keep
+        "@com_github_jackc_pgx_v5//stdlib",  # keep
     ],
 )
