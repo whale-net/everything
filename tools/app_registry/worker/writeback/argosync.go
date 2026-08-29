@@ -23,6 +23,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/whale-net/everything/libs/go/argocd"
+	"github.com/whale-net/everything/tools/app_registry/events"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
 
@@ -104,6 +105,9 @@ type ArgoSyncActivities struct {
 	// worker/main.go never sets this, so production always gets the real
 	// 2-minute cadence (NFR3).
 	PollInterval time.Duration
+	// Publisher enqueues sync-state transition events for subscribers;
+	// see #1130 (FR7b). Nil in tests that do not verify publishing behavior.
+	Publisher events.PublisherInterface
 }
 
 // ArgoSync is the interface both *ArgoSyncActivities and
@@ -353,6 +357,12 @@ func (a *ArgoSyncActivities) recordSyncEvent(ctx context.Context, promotionID, s
 	})
 	if err != nil {
 		return nil, fmt.Errorf("record promotion sync event for promotion %s: %w", promotionID, err)
+	}
+	// FR7a/FR7b: publish after write commits, but only if publisher is configured.
+	// Publish errors are discarded and logged by the publisher; see #1130 for details.
+	if a.Publisher != nil {
+		eventKind := source // Use the source as the event kind (e.g., "refresh_triggered", "poll_observed")
+		a.Publisher.Publish(promotionID, eventKind, "pending")
 	}
 	return e, nil
 }

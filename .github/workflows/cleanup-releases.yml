@@ -49,7 +49,6 @@ jobs:
         with:
           source: ${{ (inputs.use_source_tools == true || inputs.use_source_tools == 'true') && 'source' || 'published' }}
           target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-          fallback_to_source: 'true'
       
       - name: Configure Git
         run: |

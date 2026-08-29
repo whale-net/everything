@@ -10,6 +10,7 @@ go_library(
         "auth.go",
         "logging_interceptor.go",
         "main.go",
+        "ratelimit_interceptor.go",
         "repository.go",
         "server.go",
     ],
@@ -21,6 +22,7 @@ go_library(
         "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
         "//libs/go/db",
         "//libs/go/grpcauth",
         "//libs/go/logging",
@@ -30,6 +32,7 @@ go_library(
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//peer",
         "@org_golang_google_grpc//reflection",
         "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",
@@ -53,16 +56,19 @@ release_app(
     replicas = 1,
 )
 
-# FR11/FR12/FR63 auth-and-health test suite: auth.go's enforcement
-# interceptor and allowlist in isolation (auth_test.go), GetHealth's
-# DEGRADED/UP probe logic against an in-memory fake repository
+# FR11/FR12/FR63/NFR10 auth-health-and-rate-limit test suite: auth.go's
+# enforcement interceptor and allowlist in isolation (auth_test.go),
+# GetHealth's DEGRADED/UP probe logic against an in-memory fake repository
 # (server_test.go), the full production interceptor chain -- built via
 # buildServer, the exact function run() calls -- behind a bufconn listener
 # with a stub RPC handler standing in for Postgres/RabbitMQ (main_test.go),
-# and FR8's startup audit-registration check against both the real
-# production registry and a deliberately unregistered write method
-# (audit_registry_test.go). No Docker/network required; safe to run in
-# `bazel test //leaflab/...`.
+# FR8's startup audit-registration check against both the real production
+# registry and a deliberately unregistered write method
+# (audit_registry_test.go), and NFR10's rate-limit interceptor:
+# principalKey derivation, oracle-safety, principal/session independence
+# and window-rollover recovery, both directly (checkRateLimitBuckets) and
+# over the wire (ratelimit_interceptor_test.go). No Docker/network
+# required; safe to run in `bazel test //leaflab/...`.
 # Hand-written (not gazelle-generated) per this package's gazelle gotcha --
 # see the response_contract_integration_test.go rule below. `# keep` tells a
 # later `bazel run //:gazelle` not to touch or remove this rule.
@@ -74,6 +80,7 @@ go_test(
         "audit_registry_test.go",
         "auth_test.go",
         "main_test.go",
+        "ratelimit_interceptor_test.go",
         "server_push_device_config_test.go",
         "server_test.go",
     ],
@@ -84,11 +91,13 @@ go_test(
         "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
         "//libs/go/grpcauth",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//peer",
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
         "@org_golang_google_protobuf//proto",
@@ -322,4 +331,15 @@ go_test(
         "//libs/go/grpcauth",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
+)
+
+# Source exposed to //leaflab/conformance's NFR1.a RPC-coverage check
+# (#1334): auth.go's anonymousMethods allowlist and enforcement
+# interceptors, plus server.go's RPC handlers. Scoped, not public --
+# mirrors tools/app_registry/conformance's per-package conformance_srcs
+# filegroups.
+filegroup(
+    name = "conformance_srcs",
+    srcs = glob(["*.go"]),
+    visibility = ["//leaflab/conformance:__pkg__"],
 )

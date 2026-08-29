@@ -60,7 +60,6 @@ jobs:
       with:
         source: published
         target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        fallback_to_source: 'true'
 
     - name: Reconcile apps/charts in App Registry
       if: ${{ vars.APP_REGISTRY_CICD_OPT_IN == 'true' }}
@@ -358,7 +357,6 @@ jobs:
       with:
         source: published
         target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        fallback_to_source: 'true'
 
     - name: Plan Docker builds using release tool
       id: plan
@@ -442,7 +440,6 @@ jobs:
       with:
         source: published
         target_env: ${{ vars.APP_REGISTRY_BUILDER_ENV || 'dev' }}
-        fallback_to_source: 'true'
 
     - name: Build Docker images
       env:

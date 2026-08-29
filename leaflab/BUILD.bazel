@@ -12,3 +12,12 @@ release_helm_chart(
         "//leaflab/processor:processor_metadata",
     ],
 )
+
+# Marker file for //leaflab/conformance's leaflabDir helper (NFR1.a, #1334):
+# located via os.Stat the same way //tools/app_registry/conformance's
+# appRegistryDir locates tools/app_registry/BUILD.bazel.
+filegroup(
+    name = "build_file",
+    srcs = ["BUILD.bazel"],
+    visibility = ["//leaflab/conformance:__pkg__"],
+)

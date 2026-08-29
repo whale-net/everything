@@ -59,30 +59,7 @@ func TestResolveVersion_SuccessUsesRegistryNotTags(t *testing.T) {
 	}
 }
 
-func TestResolveVersion_NotAllocatedFallsBackToTags(t *testing.T) {
-	fake := &FakeArtifactRegistryClient{
-		AllocateVersionFn: func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
-			return nil, status.Error(codes.FailedPrecondition, `domain "demo" is at adoption stage "observe"; AllocateVersion only serves domains at stage "allocate"`)
-		},
-	}
-	tagCalled := false
-	version, fromRegistry, err := resolveVersion(context.Background(), fake, pb.ArtifactKind_ARTIFACT_KIND_IMAGE, "demo-hello-go", "patch", "key-3",
-		func() (string, error) { tagCalled = true; return "v1.0.1", nil })
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !tagCalled {
-		t.Error("expected tagFallback to be called when domain is not at stage allocate")
-	}
-	if fromRegistry {
-		t.Error("expected fromRegistry=false on FailedPrecondition fallback")
-	}
-	if version != "v1.0.1" {
-		t.Errorf("got version %q, want v1.0.1", version)
-	}
-}
-
-func TestResolveVersion_OtherRegistryErrorIsFatal(t *testing.T) {
+func TestResolveVersion_RegistryErrorIsFatal(t *testing.T) {
 	fake := &FakeArtifactRegistryClient{
 		AllocateVersionFn: func(ctx context.Context, in *pb.AllocateVersionRequest, opts ...grpc.CallOption) (*pb.AllocateVersionResponse, error) {
 			return nil, status.Error(codes.Unavailable, "registry down")
@@ -95,7 +72,7 @@ func TestResolveVersion_OtherRegistryErrorIsFatal(t *testing.T) {
 		t.Fatal("expected a fatal error, got nil")
 	}
 	if tagCalled {
-		t.Error("tagFallback must NEVER be called on a non-FailedPrecondition registry error -- an allocate domain must fail loudly, not silently revert to tags (issue #829)")
+		t.Error("tagFallback must NEVER be called on a registry error once a client is opted in -- every domain allocates unconditionally, so it must fail loudly, not silently revert to tags (issue #829)")
 	}
 }
 
@@ -123,64 +100,6 @@ func TestDialVersioningClient_DialFailureIsFatal(t *testing.T) {
 	_, _, err := dialVersioningClient(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected dial failure to be returned as an error, not silently swallowed")
-	}
-}
-
-func TestIsDomainAtAllocateStage_NilClient(t *testing.T) {
-	isAlloc, err := isDomainAtAllocateStage(context.Background(), nil, "tools")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if isAlloc {
-		t.Error("expected isAlloc=false for nil client")
-	}
-}
-
-func TestIsDomainAtAllocateStage_EnforcedTrue(t *testing.T) {
-	fake := &FakeArtifactRegistryClient{
-		CheckChartHermeticityFn: func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
-			if in.ChartDomain != "tools" {
-				t.Errorf("expected chart_domain 'tools', got %q", in.ChartDomain)
-			}
-			return &pb.CheckChartHermeticityResponse{Enforced: true}, nil
-		},
-	}
-	isAlloc, err := isDomainAtAllocateStage(context.Background(), fake, "tools")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !isAlloc {
-		t.Error("expected isAlloc=true when CheckChartHermeticity returns Enforced=true")
-	}
-	if len(fake.CheckChartHermeticityCalls) != 1 {
-		t.Fatalf("expected 1 CheckChartHermeticity call, got %d", len(fake.CheckChartHermeticityCalls))
-	}
-}
-
-func TestIsDomainAtAllocateStage_EnforcedFalse(t *testing.T) {
-	fake := &FakeArtifactRegistryClient{
-		CheckChartHermeticityFn: func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
-			return &pb.CheckChartHermeticityResponse{Enforced: false}, nil
-		},
-	}
-	isAlloc, err := isDomainAtAllocateStage(context.Background(), fake, "demo")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if isAlloc {
-		t.Error("expected isAlloc=false when CheckChartHermeticity returns Enforced=false")
-	}
-}
-
-func TestIsDomainAtAllocateStage_RPCError(t *testing.T) {
-	fake := &FakeArtifactRegistryClient{
-		CheckChartHermeticityFn: func(ctx context.Context, in *pb.CheckChartHermeticityRequest, opts ...grpc.CallOption) (*pb.CheckChartHermeticityResponse, error) {
-			return nil, errors.New("registry unavailable")
-		},
-	}
-	_, err := isDomainAtAllocateStage(context.Background(), fake, "tools")
-	if err == nil {
-		t.Fatal("expected error on CheckChartHermeticity RPC failure, got nil")
 	}
 }
 

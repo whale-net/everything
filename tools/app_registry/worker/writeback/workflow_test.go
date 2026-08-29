@@ -9,6 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
+
+	"github.com/whale-net/everything/tools/app_registry/server/repository"
+	"github.com/whale-net/everything/tools/app_registry/server/repository/fake"
 )
 
 // registerActivityStubs registers a placeholder function under each
@@ -286,3 +289,75 @@ func TestWritebackWorkflow_PollArgoSyncStatusFailureDoesNotFailWorkflow(t *testi
 	require.NoError(t, env.GetWorkflowResult(&got))
 	require.Equal(t, want, got, "the workflow must still return Publish's own result")
 }
+
+// TestRecorder_RecordWritebackResult_PublishesAfterWrite verifies that
+// RecordWritebackResult publishes an event after the database write commits (FR7a/FR7c).
+func TestRecorder_RecordWritebackResult_PublishesAfterWrite(t *testing.T) {
+	reg := fake.New()
+	// Seed a promotion and create a writeback outbox row for it
+	prom := reg.SeedPromotion(repository.Promotion{EnvironmentID: "env-1"})
+	_, err := reg.Writeback().Enqueue(context.Background(), repository.WritebackOutbox{
+		PromotionID:    prom.PromotionID,
+		EnvironmentID:  "env-1",
+		EnvironmentKey: "dev",
+		Domain:         "test",
+		EventID:        "evt-123",
+		StateHash:      "hash-123",
+	})
+	require.NoError(t, err)
+	
+	pub := &FakeRecorderPublisher{events: []RecorderPublishedEvent{}}
+	recorder := &Recorder{Registry: reg, Publisher: pub}
+
+	err = recorder.RecordWritebackResult(context.Background(), prom.PromotionID, "/path/to/commit", "abc123def456")
+	require.NoError(t, err)
+
+	// Verify event was published with correct payload
+	require.Len(t, pub.events, 1, "expected exactly one published event")
+	event := pub.events[0]
+	require.Equal(t, prom.PromotionID, event.PromotionID)
+	require.Equal(t, "writeback_completed", event.EventKind)
+	require.Equal(t, "success", event.EventStatus)
+}
+
+// TestRecorder_RecordWritebackResult_NoPublisherConfigured verifies that
+// when publisher is nil, no publish is attempted (graceful degradation).
+func TestRecorder_RecordWritebackResult_NoPublisherConfigured(t *testing.T) {
+	reg := fake.New()
+	prom := reg.SeedPromotion(repository.Promotion{EnvironmentID: "env-1"})
+	_, err := reg.Writeback().Enqueue(context.Background(), repository.WritebackOutbox{
+		PromotionID:    prom.PromotionID,
+		EnvironmentID:  "env-1",
+		EnvironmentKey: "dev",
+		Domain:         "test",
+		EventID:        "evt-123",
+		StateHash:      "hash-123",
+	})
+	require.NoError(t, err)
+	
+	recorder := &Recorder{Registry: reg, Publisher: nil}
+
+	// RecordWritebackResult should complete without error even with nil publisher
+	err = recorder.RecordWritebackResult(context.Background(), prom.PromotionID, "/path", "abc123")
+	require.NoError(t, err)
+}
+
+// FakeRecorderPublisher for testing Recorder publishes.
+type FakeRecorderPublisher struct {
+	events []RecorderPublishedEvent
+}
+
+type RecorderPublishedEvent struct {
+	PromotionID string
+	EventKind   string
+	EventStatus string
+}
+
+func (f *FakeRecorderPublisher) Publish(promotionID, eventKind, eventStatus string) {
+	f.events = append(f.events, RecorderPublishedEvent{
+		PromotionID: promotionID,
+		EventKind:   eventKind,
+		EventStatus: eventStatus,
+	})
+}
+
