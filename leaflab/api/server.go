@@ -96,6 +96,17 @@ type deviceRepository interface {
 	PreviewClosure(ctx context.Context, boardID int64) (Closure, error)
 	ReleaseBoard(ctx context.Context, boardID int64, principalSubject, reason string, entry audit.Entry) (releaseToken string, err error)
 	TransferClosure(ctx context.Context, boardID, destinationHouseholdID int64, releaseToken, dischargedChallengeHandle, actorSubject, reason string, entry audit.Entry) (HouseholdRow, error)
+
+	// -- Admin (FR10, FR12 activation) -- see leaflab/api/repository.go's
+	// "Admin" section for each method's doc comment.
+	AdminBoardHealthByPerson(ctx context.Context, personIdentifier string) ([]AdminBoardHealthRow, error)
+	AdminBoardHealthByPartialDeviceID(ctx context.Context, partial string) ([]AdminBoardHealthRow, error)
+	RecordAuditEntry(ctx context.Context, entry audit.Entry) error
+	HouseholdExists(ctx context.Context, householdID int64) (bool, error)
+	OpenElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, expiresAt time.Time, entry audit.Entry) error
+	RenewElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, reason string, newExpiresAt time.Time, entry audit.Entry) error
+	EndElevation(ctx context.Context, adminSubject string, targetHouseholdID int64, entry audit.Entry) error
+	ActiveElevation(ctx context.Context, adminSubject string, targetHouseholdID int64) (time.Time, error)
 }
 
 // authzResolver is the subset of *authz.PGResolver LeafLabAPIServer's RPCs
@@ -115,6 +126,14 @@ type authzResolver interface {
 	ResolveBoardByDeviceID(ctx context.Context, deviceID string) (authz.EntityRef, authz.Resolution, error)
 	ScopeForPrincipal(ctx context.Context, principalSubject string) (authz.Scope, error)
 }
+
+// DefaultElevationDuration is FR10.1's 60-minute elevation window, used
+// unless a ServerOption overrides it (see WithElevationDuration). main.go
+// wires LEAFLAB_ADMIN_ELEVATION_MINUTES to that option, so the window is
+// configurable in the sense FR10.1 asks for -- documented here and at the
+// env var's read site in main.go, since leaflab/api has no ENV.md of its
+// own yet (unlike migrate/processor/ui).
+const DefaultElevationDuration = 60 * time.Minute
 
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
@@ -138,18 +157,41 @@ type LeafLabAPIServer struct {
 	// (ratelimit_interceptor.go), which only ever derives a principal-only
 	// key.
 	limiter ratelimit.Limiter
+	// elevationDuration is FR10.1's elevation window, applied by Elevate
+	// and RenewElevation. Defaults to DefaultElevationDuration; see
+	// WithElevationDuration.
+	elevationDuration time.Duration
 }
 
-func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger, claimConfig claim.Config, limiter ratelimit.Limiter) *LeafLabAPIServer {
-	return &LeafLabAPIServer{
-		repo:        repo,
-		authzSvc:    authzSvc,
-		publisher:   publisher,
-		rmqConn:     rmqConn,
-		logger:      logger,
-		claimConfig: claimConfig,
-		limiter:     limiter,
+// ServerOption configures optional LeafLabAPIServer behavior beyond
+// NewLeafLabAPIServer's required dependencies -- added as a variadic
+// trailing parameter specifically so every existing call site (main.go,
+// and every test file building a server directly) keeps compiling
+// unchanged when a new option is introduced.
+type ServerOption func(*LeafLabAPIServer)
+
+// WithElevationDuration overrides DefaultElevationDuration -- FR10.1's
+// "60 minutes, configurable". See main.go's LEAFLAB_ADMIN_ELEVATION_MINUTES
+// for the production wiring.
+func WithElevationDuration(d time.Duration) ServerOption {
+	return func(s *LeafLabAPIServer) { s.elevationDuration = d }
+}
+
+func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, publisher *rmq.Publisher, rmqConn *rmq.Connection, logger *slog.Logger, claimConfig claim.Config, limiter ratelimit.Limiter, opts ...ServerOption) *LeafLabAPIServer {
+	s := &LeafLabAPIServer{
+		repo:              repo,
+		authzSvc:          authzSvc,
+		publisher:         publisher,
+		rmqConn:           rmqConn,
+		logger:            logger,
+		claimConfig:       claimConfig,
+		limiter:           limiter,
+		elevationDuration: DefaultElevationDuration,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // scopeForCaller resolves the authenticated caller's Scope from their
@@ -190,6 +232,25 @@ func boardNotFoundFailure() error {
 // boardNotFoundFailure -- never a SELECT-then-branch, and never a
 // separate existence probe ahead of the resolve call.
 //
+// A caller's membership Scope not permitting the board is not the final
+// word (FR10.3): "config payloads" is the one non-standing admin read this
+// codebase has today, so before refusing, this function gives
+// elevatedBoardScope one more chance -- it performs the ActiveElevation
+// check ElevatedScope's own doc comment requires precede its construction,
+// scoped to this board's *resolved* household, never a request-supplied
+// one, so an elevation against household A still cannot open household B.
+// This deliberately does not gate on isAdminEligible first: an
+// admin_elevation row can only exist for a subject Elevate's own
+// requireAdminEligible gate already let through, so checking for the row
+// directly (exactly as scopeForCaller checks household_membership
+// directly, with no separate "is this person a member" flag) is enough --
+// it keeps every entity-access handler routing reach entirely through
+// Scope, with "is admin" never itself a branch outside leaflab/api/authz/
+// (see this package's Validation criterion). A non-elevated caller (admin
+// or not), or an elevation against a different household, still gets the
+// exact same boardNotFoundFailure as a nonexistent device_id (NFR2) -- the
+// extra check never introduces a new response shape.
+//
 // Wired into read paths only today (GetDeviceConfig; ListBoards uses
 // Scope.Filter directly, at the repository query, rather than this
 // resolve-one-entity path). PushDeviceConfig is deliberately not gated
@@ -214,10 +275,50 @@ func (s *LeafLabAPIServer) authorizeBoardAccess(ctx context.Context, deviceID st
 		s.logger.Error("resolve board failed", "device_id", deviceID, "error", err)
 		return contract.Internal("board", "", "Could not process this request right now. Please try again.")
 	}
-	if !scope.Permits(ref, res) {
-		return boardNotFoundFailure()
+	if scope.Permits(ref, res) {
+		return nil
 	}
-	return nil
+
+	if !res.Unclaimed {
+		elevatedScope, err := s.elevatedBoardScope(ctx, res.HouseholdID)
+		if err != nil {
+			s.logger.Error("check admin elevation failed", "device_id", deviceID, "error", err)
+			return contract.Internal("board", "", "Could not process this request right now. Please try again.")
+		}
+		if elevatedScope != nil && elevatedScope.Permits(ref, res) {
+			return nil
+		}
+	}
+
+	return boardNotFoundFailure()
+}
+
+// elevatedBoardScope returns an authz.ElevatedScope for targetHouseholdID
+// if ctx's caller holds an unexpired admin_elevation row against that
+// exact household (FR10.1, FR10.3), or (nil, nil) if they do not -- the
+// "no active elevation" case is a normal, expected outcome here (a caller
+// who never elevated, or elevated against a different household), not an
+// error, so callers must check for a nil Scope rather than treating nil as
+// a failure. A genuine repository error is still returned as an error.
+// Deliberately does not check isAdminEligible: an admin_elevation row can
+// only exist for a subject that already passed Elevate's own
+// requireAdminEligible gate, so re-checking the role here would be
+// redundant, and skipping it keeps entity-access call sites like
+// authorizeBoardAccess free of any "is admin" branch (see that function's
+// doc comment). This is the one call site (besides Elevate/RenewElevation/
+// EndElevation/GetElevationStatus's own direct repo.ActiveElevation calls)
+// that turns "an unexpired elevation exists for this specific household"
+// into the Scope ElevatedScope's doc comment requires be verified first.
+func (s *LeafLabAPIServer) elevatedBoardScope(ctx context.Context, targetHouseholdID int64) (authz.Scope, error) {
+	_, err := s.repo.ActiveElevation(ctx, actingSubject(ctx), targetHouseholdID)
+	if err != nil {
+		if errors.Is(err, ErrNoActiveElevation) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	scope := authz.NewElevatedScope(targetHouseholdID)
+	return scope, nil
 }
 
 // boardIDNotFoundFailure is boardNotFoundFailure's board_id-keyed sibling,
@@ -1132,4 +1233,248 @@ func (s *LeafLabAPIServer) TransferClosure(ctx context.Context, req *pb.Transfer
 	}
 
 	return &pb.TransferClosureResponse{Household: toHouseholdProto(household), ServerNow: contract.Now()}, nil
+}
+
+// ── Admin (FR10, FR12 activation) ────────────────────────────────────────────
+//
+// leaflab-admin (auth.go's RoleAdmin) is eligibility only -- requireAdminEligible
+// is the gate every RPC below applies before doing anything else. Eligibility
+// alone confers nothing past that gate: ResolveToHousehold's standing lane is
+// resolution-only (AdminScope permits no entity and is never consulted here --
+// see its doc comment), and every other admin reach requires an elevation row
+// this file writes/reads directly against admin_elevation, never a bare
+// isAdminEligible check standing in for it. Entity-access handlers outside
+// this section (GetDeviceConfig today; authorizeBoardAccess) reach that same
+// admin_elevation row through elevatedBoardScope, which checks for the row
+// directly rather than isAdminEligible first (see its doc comment) -- so
+// Validation's "no handler branches on 'is admin' outside
+// leaflab/api/authz/" still holds: isAdminEligible itself is called only
+// here, gating the five RPCs that *are* the admin surface, never by an
+// entity-access handler deciding whether to widen a Scope. Nor does an
+// elevation confer FR75's membership-change capability: no RPC here
+// writes household_membership, and ElevatedScope (authz/scope.go) behaves
+// exactly like HouseholdScope, which was never itself a path to changing
+// membership either.
+
+// requireAdminEligible refuses ctx's caller unless their Claims carry the
+// leaflab-admin realm role (FR12 activation). Every RPC in this section
+// gates on this first -- eligibility is a precondition for both the
+// standing lane and elevation, never proof of either by itself (see
+// auth.go's isAdminEligible/RoleAdmin doc comments).
+func (s *LeafLabAPIServer) requireAdminEligible(ctx context.Context) error {
+	if !isAdminEligible(ctx) {
+		return contract.PermissionDenied("admin", "", "This action requires the leaflab-admin role.")
+	}
+	return nil
+}
+
+// ResolveToHousehold is the standing (non-elevated) admin lane (FR10.2):
+// across all households, resolve a person, a support reference, or a
+// partial device identifier to the owning household(s) and FR79's health
+// fields for the boards found -- and nothing else. It does not route
+// through authz.Scope at all (see authz.AdminScope's doc comment) --
+// there is no wider entity to check against, only this dedicated
+// projection.
+//
+// Audited at query granularity (FR10.4): exactly one audit row per call,
+// carrying the query term, regardless of how many boards match -- never
+// one row per returned board.
+func (s *LeafLabAPIServer) ResolveToHousehold(ctx context.Context, req *pb.ResolveToHouseholdRequest) (*pb.ResolveToHouseholdResponse, error) {
+	if err := s.requireAdminEligible(ctx); err != nil {
+		return nil, err
+	}
+
+	var rows []AdminBoardHealthRow
+	var queryTerm string
+	var err error
+	switch q := req.GetQuery().(type) {
+	case *pb.ResolveToHouseholdRequest_PersonIdentifier:
+		if q.PersonIdentifier == "" {
+			return nil, contract.InvalidArgument("resolve_to_household_request", "person_identifier", "A person identifier is required.")
+		}
+		queryTerm = "person_identifier=" + q.PersonIdentifier
+		rows, err = s.repo.AdminBoardHealthByPerson(ctx, q.PersonIdentifier)
+	case *pb.ResolveToHouseholdRequest_SupportReference:
+		if q.SupportReference == "" {
+			return nil, contract.InvalidArgument("resolve_to_household_request", "support_reference", "A support reference is required.")
+		}
+		queryTerm = "support_reference=" + q.SupportReference
+		// FR80 (support references) has not landed yet -- resolves to no
+		// boards until it does, per the Scaffold's doc comment on this
+		// RPC. Still audited below, at the same query granularity as
+		// every other standing-lane query.
+	case *pb.ResolveToHouseholdRequest_PartialDeviceId:
+		if q.PartialDeviceId == "" {
+			return nil, contract.InvalidArgument("resolve_to_household_request", "partial_device_id", "A partial device id is required.")
+		}
+		queryTerm = "partial_device_id=" + q.PartialDeviceId
+		rows, err = s.repo.AdminBoardHealthByPartialDeviceID(ctx, q.PartialDeviceId)
+	default:
+		return nil, contract.InvalidArgument("resolve_to_household_request", "query", "Provide a person identifier, a support reference, or a partial device id.")
+	}
+	if err != nil {
+		s.logger.Error("resolve to household failed", "error", err)
+		return nil, contract.Internal("resolve_to_household_request", "", "Could not resolve this query right now. Please try again.")
+	}
+
+	reg := auditRegistrations[resolveToHouseholdFullMethod]
+	auditEntry := audit.Entry{
+		ActorSubject:  actingSubject(ctx),
+		ActorKind:     audit.ActorKindHuman,
+		Action:        reg.Action,
+		EntityKind:    reg.EntityKind,
+		EntityID:      &queryTerm,
+		CorrelationID: CorrelationIDFromContext(ctx),
+	}
+	if err := s.repo.RecordAuditEntry(ctx, auditEntry); err != nil {
+		s.logger.Error("resolve to household: audit record failed", "error", err)
+		return nil, contract.Internal("resolve_to_household_request", "", "Could not process this request right now. Please try again.")
+	}
+
+	boards := make([]*pb.AdminBoardHealth, 0, len(rows))
+	for _, r := range rows {
+		boards = append(boards, &pb.AdminBoardHealth{
+			DeviceId:         r.DeviceID,
+			BoardDisplayName: r.BoardDisplayName,
+			HouseholdId:      r.HouseholdID,
+			HouseholdName:    r.HouseholdName,
+			LastSeenAt:       contract.ToInstant(r.LastSeenAt),
+			ActiveVersion:    r.ActiveVersion,
+			OutstandingPush:  r.OutstandingPush,
+			SensorCount:      r.SensorCount,
+		})
+	}
+	return &pb.ResolveToHouseholdResponse{Boards: boards, ServerNow: contract.Now()}, nil
+}
+
+// Elevate opens a fresh, time-boxed elevation against target_household_id
+// (FR10.1). Requires a non-empty reason and a target household that
+// exists; writes the admin_elevation row and its audit record in one
+// transaction (repository.go's OpenElevation/auditedWrite).
+func (s *LeafLabAPIServer) Elevate(ctx context.Context, req *pb.ElevateRequest) (*pb.ElevateResponse, error) {
+	if err := s.requireAdminEligible(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetReason() == "" {
+		return nil, contract.InvalidArgument("elevate_request", "reason", "A reason is required to elevate.")
+	}
+	targetHouseholdID := req.GetTargetHouseholdId()
+	if targetHouseholdID <= 0 {
+		return nil, contract.InvalidArgument("elevate_request", "target_household_id", "A target household is required.")
+	}
+
+	exists, err := s.repo.HouseholdExists(ctx, targetHouseholdID)
+	if err != nil {
+		s.logger.Error("elevate: household existence check failed", "target_household_id", targetHouseholdID, "error", err)
+		return nil, contract.Internal("elevate_request", "", "Could not process this request right now. Please try again.")
+	}
+	if !exists {
+		return nil, contract.NotFound("household", "target_household_id", "No household matches this id.")
+	}
+
+	subject := actingSubject(ctx)
+	reason := req.GetReason()
+	expiresAt := time.Now().Add(s.elevationDuration)
+	entry := audit.NewElevationEntry(subject, audit.ActorKindHuman, &targetHouseholdID, reason, CorrelationIDFromContext(ctx))
+	if err := s.repo.OpenElevation(ctx, subject, targetHouseholdID, reason, expiresAt, entry); err != nil {
+		s.logger.Error("elevate failed", "target_household_id", targetHouseholdID, "error", err)
+		return nil, contract.Internal("elevate_request", "", "Could not open elevation right now. Please try again.")
+	}
+	return &pb.ElevateResponse{ExpiresAt: contract.ToInstant(expiresAt)}, nil
+}
+
+// RenewElevation extends the caller's currently-open elevation against
+// target_household_id (FR10.1's "renewable by re-stating a reason").
+// reason must be restated -- an empty reason, or no elevation currently
+// open for target_household_id, is refused; renewal never opens a new
+// elevation.
+func (s *LeafLabAPIServer) RenewElevation(ctx context.Context, req *pb.RenewElevationRequest) (*pb.RenewElevationResponse, error) {
+	if err := s.requireAdminEligible(ctx); err != nil {
+		return nil, err
+	}
+	if req.GetReason() == "" {
+		return nil, contract.InvalidArgument("renew_elevation_request", "reason", "A restated reason is required to renew.")
+	}
+	targetHouseholdID := req.GetTargetHouseholdId()
+	if targetHouseholdID <= 0 {
+		return nil, contract.InvalidArgument("renew_elevation_request", "target_household_id", "A target household is required.")
+	}
+
+	subject := actingSubject(ctx)
+	reason := req.GetReason()
+	expiresAt := time.Now().Add(s.elevationDuration)
+	reg := auditRegistrations[renewElevationFullMethod]
+	entry := audit.Entry{
+		ActorSubject:      subject,
+		ActorKind:         audit.ActorKindHuman,
+		TargetHouseholdID: &targetHouseholdID,
+		Action:            reg.Action,
+		EntityKind:        reg.EntityKind,
+		Reason:            &reason,
+		CorrelationID:     CorrelationIDFromContext(ctx),
+	}
+	if err := s.repo.RenewElevation(ctx, subject, targetHouseholdID, reason, expiresAt, entry); err != nil {
+		if errors.Is(err, ErrNoActiveElevation) {
+			return nil, contract.Refuse("admin_elevation", "target_household_id", "No elevation is currently open for this household.", "Call Elevate to open an elevation for this household first.")
+		}
+		s.logger.Error("renew elevation failed", "target_household_id", targetHouseholdID, "error", err)
+		return nil, contract.Internal("renew_elevation_request", "", "Could not renew elevation right now. Please try again.")
+	}
+	return &pb.RenewElevationResponse{ExpiresAt: contract.ToInstant(expiresAt)}, nil
+}
+
+// EndElevation ends every currently-open elevation the caller holds
+// against target_household_id before its natural expiry.
+func (s *LeafLabAPIServer) EndElevation(ctx context.Context, req *pb.EndElevationRequest) (*pb.EndElevationResponse, error) {
+	if err := s.requireAdminEligible(ctx); err != nil {
+		return nil, err
+	}
+	targetHouseholdID := req.GetTargetHouseholdId()
+	if targetHouseholdID <= 0 {
+		return nil, contract.InvalidArgument("end_elevation_request", "target_household_id", "A target household is required.")
+	}
+
+	subject := actingSubject(ctx)
+	reg := auditRegistrations[endElevationFullMethod]
+	entry := audit.Entry{
+		ActorSubject:      subject,
+		ActorKind:         audit.ActorKindHuman,
+		TargetHouseholdID: &targetHouseholdID,
+		Action:            reg.Action,
+		EntityKind:        reg.EntityKind,
+		CorrelationID:     CorrelationIDFromContext(ctx),
+	}
+	if err := s.repo.EndElevation(ctx, subject, targetHouseholdID, entry); err != nil {
+		if errors.Is(err, ErrNoActiveElevation) {
+			return nil, contract.NotFound("admin_elevation", "target_household_id", "No elevation is currently open for this household.")
+		}
+		s.logger.Error("end elevation failed", "target_household_id", targetHouseholdID, "error", err)
+		return nil, contract.Internal("end_elevation_request", "", "Could not end elevation right now. Please try again.")
+	}
+	return &pb.EndElevationResponse{}, nil
+}
+
+// GetElevationStatus reports whether the caller currently holds an
+// unexpired elevation against target_household_id, and its remaining time
+// (A22) -- readable throughout the elevation, not only at grant time. A
+// caller renders remaining time as expires_at - server_now, never against
+// its own clock alone (FR64).
+func (s *LeafLabAPIServer) GetElevationStatus(ctx context.Context, req *pb.GetElevationStatusRequest) (*pb.GetElevationStatusResponse, error) {
+	if err := s.requireAdminEligible(ctx); err != nil {
+		return nil, err
+	}
+	targetHouseholdID := req.GetTargetHouseholdId()
+	if targetHouseholdID <= 0 {
+		return nil, contract.InvalidArgument("get_elevation_status_request", "target_household_id", "A target household is required.")
+	}
+
+	expiresAt, err := s.repo.ActiveElevation(ctx, actingSubject(ctx), targetHouseholdID)
+	if err != nil {
+		if errors.Is(err, ErrNoActiveElevation) {
+			return &pb.GetElevationStatusResponse{Elevated: false, ServerNow: contract.Now()}, nil
+		}
+		s.logger.Error("get elevation status failed", "target_household_id", targetHouseholdID, "error", err)
+		return nil, contract.Internal("get_elevation_status_request", "", "Could not check elevation status right now. Please try again.")
+	}
+	return &pb.GetElevationStatusResponse{Elevated: true, ExpiresAt: contract.ToInstant(expiresAt), ServerNow: contract.Now()}, nil
 }

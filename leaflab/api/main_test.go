@@ -179,6 +179,33 @@ func (stubAPIServer) TransferClosure(ctx context.Context, req *pb.TransferClosur
 	return &pb.TransferClosureResponse{}, nil
 }
 
+// The five admin RPCs below (FR10, FR12 activation) have no business logic
+// yet -- Scaffold only adds them to the proto (see api.proto's "Admin"
+// section) -- so these canned stubs exist purely so stubAPIServer, a
+// value type embedding pb.UnimplementedLeafLabAPIServer (whose promoted
+// methods have pointer receivers), keeps satisfying pb.LeafLabAPIServer.
+// Real behavior lands in the Implementation-phase task that wires these
+// into server.go.
+func (stubAPIServer) ResolveToHousehold(ctx context.Context, req *pb.ResolveToHouseholdRequest) (*pb.ResolveToHouseholdResponse, error) {
+	return &pb.ResolveToHouseholdResponse{}, nil
+}
+
+func (stubAPIServer) Elevate(ctx context.Context, req *pb.ElevateRequest) (*pb.ElevateResponse, error) {
+	return &pb.ElevateResponse{}, nil
+}
+
+func (stubAPIServer) RenewElevation(ctx context.Context, req *pb.RenewElevationRequest) (*pb.RenewElevationResponse, error) {
+	return &pb.RenewElevationResponse{}, nil
+}
+
+func (stubAPIServer) EndElevation(ctx context.Context, req *pb.EndElevationRequest) (*pb.EndElevationResponse, error) {
+	return &pb.EndElevationResponse{}, nil
+}
+
+func (stubAPIServer) GetElevationStatus(ctx context.Context, req *pb.GetElevationStatusRequest) (*pb.GetElevationStatusResponse, error) {
+	return &pb.GetElevationStatusResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of

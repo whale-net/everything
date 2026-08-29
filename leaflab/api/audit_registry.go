@@ -37,18 +37,32 @@ const (
 	transferClosureFullMethod = "/leaflab.api.v1.LeafLabAPI/TransferClosure"
 )
 
+// Admin RPC full method names (FR10, FR12 activation). resolveToHousehold
+// is a read RPC (it writes no board/household/config row), but FR10.4
+// requires it to write an audit row on every call regardless -- one row
+// per call, at query granularity, not per returned board -- so it is
+// listed here too, alongside the genuine writes.
+const (
+	resolveToHouseholdFullMethod = "/leaflab.api.v1.LeafLabAPI/ResolveToHousehold"
+	elevateFullMethod            = "/leaflab.api.v1.LeafLabAPI/Elevate"
+	renewElevationFullMethod     = "/leaflab.api.v1.LeafLabAPI/RenewElevation"
+	endElevationFullMethod       = "/leaflab.api.v1.LeafLabAPI/EndElevation"
+)
+
 // declaredWriteMethods is FR8's "every write produces an audit record"
-// registry for this service: every RPC that performs a write. A method
-// listed here with no corresponding entry in auditRegistrations fails
+// registry for this service: every RPC that performs a write, plus
+// ResolveToHousehold (see its doc comment above). A method listed here
+// with no corresponding entry in auditRegistrations fails
 // MustValidateAuditRegistrations at startup -- adding a write RPC without
 // wiring its audit registration is structurally hard to ship, rather than
 // a silently missing audit row discovered later in production.
 //
-// GetDeviceConfig, ListBoards, GetHealth, GetHousehold and
-// ListHouseholdMembers are reads and are deliberately absent. RetireBoard
-// has no RPC surface yet (leaflab/api/repository.go's RetireBoard is called
-// directly by tests only, per #1337's scaffold) -- it will be added here in
-// the task that gives it one.
+// GetDeviceConfig, ListBoards, GetHealth, GetHousehold, ListHouseholdMembers
+// and GetElevationStatus are reads with no FR8/FR10.4 audit requirement of
+// their own and are deliberately absent. RetireBoard has no RPC surface yet
+// (leaflab/api/repository.go's RetireBoard is called directly by tests only,
+// per #1337's scaffold) -- it will be added here in the task that gives it
+// one.
 //
 // This registry is scoped to audit coverage only. #1351 (NFR1.b) adds a
 // separate read/write-kind registry for authorization-conformance
@@ -64,21 +78,29 @@ var declaredWriteMethods = []string{
 	completeClaimFullMethod,
 	releaseBoardFullMethod,
 	transferClosureFullMethod,
+	resolveToHouseholdFullMethod,
+	elevateFullMethod,
+	renewElevationFullMethod,
+	endElevationFullMethod,
 }
 
 // auditRegistrations maps each declaredWriteMethods entry to the
 // action/entity_kind its audit.Entry must carry (matched against
 // audit.Entry.Action/EntityKind at the call site -- see server.go's
-// PushDeviceConfig and the households.go handlers).
+// PushDeviceConfig and the households.go/admin handlers).
 var auditRegistrations = map[string]audit.Registration{
-	pushDeviceConfigFullMethod: {Action: "PushConfig", EntityKind: "device_config"},
-	createHouseholdFullMethod:  {Action: "CreateHousehold", EntityKind: "household_membership"},
-	inviteMemberFullMethod:     {Action: "InviteMember", EntityKind: "household_membership"},
-	removeMemberFullMethod:     {Action: "RemoveMember", EntityKind: "household_membership"},
-	renameHouseholdFullMethod:  {Action: "RenameHousehold", EntityKind: "household"},
-	completeClaimFullMethod:    {Action: "ClaimBoard", EntityKind: "board"},
-	releaseBoardFullMethod:     {Action: "ReleaseBoard", EntityKind: "board"},
-	transferClosureFullMethod:  {Action: audit.ActionTransfer, EntityKind: "board"},
+	pushDeviceConfigFullMethod:   {Action: "PushConfig", EntityKind: "device_config"},
+	createHouseholdFullMethod:    {Action: "CreateHousehold", EntityKind: "household_membership"},
+	inviteMemberFullMethod:       {Action: "InviteMember", EntityKind: "household_membership"},
+	removeMemberFullMethod:       {Action: "RemoveMember", EntityKind: "household_membership"},
+	renameHouseholdFullMethod:    {Action: "RenameHousehold", EntityKind: "household"},
+	completeClaimFullMethod:      {Action: "ClaimBoard", EntityKind: "board"},
+	releaseBoardFullMethod:       {Action: "ReleaseBoard", EntityKind: "board"},
+	transferClosureFullMethod:    {Action: audit.ActionTransfer, EntityKind: "board"},
+	resolveToHouseholdFullMethod: {Action: "ResolveToHousehold", EntityKind: "admin_resolution"},
+	elevateFullMethod:            {Action: audit.ActionElevate, EntityKind: "household"},
+	renewElevationFullMethod:     {Action: "RenewElevation", EntityKind: "household"},
+	endElevationFullMethod:       {Action: "EndElevation", EntityKind: "household"},
 }
 
 // MustValidateAuditRegistrations panics if any declaredWriteMethods entry

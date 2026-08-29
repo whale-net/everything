@@ -156,6 +156,42 @@ service LeafLabAPI {
   // through this RPC (Unadopted has no losing member and needs no
   // evidence beyond FR76's own challenge).
   rpc TransferClosure(TransferClosureRequest) returns (TransferClosureResponse);
+  // --- Admin (FR10, FR12 activation) -----------------------------------
+  //
+  // leaflab-admin (auth.go's RoleAdmin) is eligibility only -- these RPCs
+  // are what actually grant reach, and they grant it narrowly. There is no
+  // in-application mechanism to grant or revoke the realm role itself.
+
+  // ResolveToHousehold is the standing (non-elevated) admin lane (FR10.2):
+  // across all households, without elevation, resolve a person, a support
+  // reference (FR80, stubbed until it lands), or a partial device
+  // identifier to the owning household and FR79's health fields for the
+  // boards it returns -- device id, board display name, household
+  // identity, last-seen age, active version, outstanding push, sensor
+  // count. That is the whole lane: no readings, regions, plants, config or
+  // audit rows. Audited at query granularity (FR10.4) -- one audit row per
+  // call, not one per returned board.
+  rpc ResolveToHousehold(ResolveToHouseholdRequest) returns (ResolveToHouseholdResponse);
+
+  // Elevate opens a time-boxed, reasoned elevation against one target
+  // household (FR10.1). Requires a non-empty reason. Lasts 60 minutes
+  // (configurable, documented) from acceptance.
+  rpc Elevate(ElevateRequest) returns (ElevateResponse);
+
+  // RenewElevation extends an already-open elevation against the same
+  // target household. Requires a **restated** reason -- an empty reason,
+  // or renewing with no elevation currently open for that household, is
+  // refused.
+  rpc RenewElevation(RenewElevationRequest) returns (RenewElevationResponse);
+
+  // EndElevation ends an open elevation against a target household before
+  // its natural expiry.
+  rpc EndElevation(EndElevationRequest) returns (EndElevationResponse);
+
+  // GetElevationStatus reports whether the caller currently holds an
+  // unexpired elevation against a target household, and its remaining time
+  // (A22) -- readable throughout the elevation, not only at grant time.
+  rpc GetElevationStatus(GetElevationStatusRequest) returns (GetElevationStatusResponse);
 }
 
 message PushDeviceConfigRequest {
@@ -540,4 +576,117 @@ message TransferClosureResponse {
   Household household = 1;
   // Server's current time (FR64).
   Instant server_now = 2;
+}
+
+// --- Admin (FR10, FR12 activation) --------------------------------------
+//
+// leaflab-admin is eligibility only (auth.go's RoleAdmin) -- these messages
+// back the two admin lanes: ResolveToHousehold (FR10.2's standing,
+// resolution-only lane) and Elevate/RenewElevation/EndElevation/
+// GetElevationStatus (FR10.1's time-boxed, reasoned, per-household
+// elevation). No RPC outside this section, and no field on any message
+// above, is reachable by an admin acting under either lane -- every other
+// admin read and every admin write resolves its scope through
+// ElevatedScope (leaflab/api/authz), which refuses without an unexpired
+// elevation against the specific target household named in the request.
+
+// ResolveToHouseholdRequest names exactly one query term. A caller
+// supplies exactly one oneof field -- never a combination -- per FR10.2's
+// "a person, a support reference, or a partial device identifier".
+message ResolveToHouseholdRequest {
+  oneof query {
+    // A person identifier (e.g. an email or a principal subject) to
+    // resolve to their current household.
+    string person_identifier = 1;
+    // An FR80 support reference. Resolution is stubbed until FR80 lands.
+    string support_reference = 2;
+    // A partial device identifier to resolve to the household owning the
+    // matching board(s).
+    string partial_device_id = 3;
+  }
+}
+
+// AdminBoardHealth is FR79's health-field projection for the standing
+// lane: device id, board display name, household identity, last-seen age,
+// active version, outstanding push, sensor count -- and **nothing else**.
+// Readings, region/plant structure, config payloads and audit rows are
+// never reachable through this message; a wider message with those fields
+// left unset is deliberately not reused here (FR10.2).
+message AdminBoardHealth {
+  string device_id = 1;
+  // Board display name. Falls back to device_id until a display-name field
+  // exists elsewhere in the schema.
+  string board_display_name = 2;
+  int64 household_id = 3;
+  string household_name = 4;
+  // Absolute instant the board was last seen -- render as elapsed age
+  // against ResolveToHouseholdResponse.server_now (FR64), same convention
+  // as BoardInfo.last_seen_at.
+  Instant last_seen_at = 5;
+  // Highest config version currently accepted by this board.
+  uint64 active_version = 6;
+  // True when a pushed config version has not yet been accepted.
+  bool outstanding_push = 7;
+  int32 sensor_count = 8;
+}
+
+// ResolveToHouseholdResponse is its own message type, not a narrowed reuse
+// of a wider board/household response -- see AdminBoardHealth's doc
+// comment. A query that resolves to no household returns zero boards, not
+// an error (mirrors ListBoards's empty-list-not-error convention) --
+// distinguishing "no match" from "match, no reach" is exactly the
+// existence oracle NFR2 forbids elsewhere, and the standing lane must not
+// reintroduce it.
+message ResolveToHouseholdResponse {
+  repeated AdminBoardHealth boards = 1;
+  // Server's current time, so a caller renders last_seen_at as elapsed
+  // time without trusting its own clock (FR64).
+  Instant server_now = 2;
+}
+
+// ElevateRequest opens an elevation against target_household_id.
+// reason is required and non-empty (FR10.1).
+message ElevateRequest {
+  int64 target_household_id = 1;
+  string reason = 2;
+}
+
+message ElevateResponse {
+  // Absolute expiry instant (60 minutes out, configurable) -- render
+  // remaining time against the caller's own clock, or prefer
+  // GetElevationStatus's server_now-paired pair while elevated (A22).
+  Instant expires_at = 1;
+}
+
+// RenewElevationRequest extends an already-open elevation.
+// reason must be **restated** -- an empty reason, or no elevation
+// currently open for target_household_id, is refused.
+message RenewElevationRequest {
+  int64 target_household_id = 1;
+  string reason = 2;
+}
+
+message RenewElevationResponse {
+  Instant expires_at = 1;
+}
+
+message EndElevationRequest {
+  int64 target_household_id = 1;
+}
+
+message EndElevationResponse {}
+
+message GetElevationStatusRequest {
+  int64 target_household_id = 1;
+}
+
+// GetElevationStatusResponse reports whether an unexpired elevation is
+// currently open against target_household_id (A22 -- "its remaining time
+// is readable while elevated"). expires_at is meaningful only when
+// elevated is true; a caller computes remaining time as
+// expires_at - server_now, never against its own clock alone (FR64).
+message GetElevationStatusResponse {
+  bool elevated = 1;
+  Instant expires_at = 2;
+  Instant server_now = 3;
 }
