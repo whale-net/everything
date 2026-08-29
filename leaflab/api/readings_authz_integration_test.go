@@ -79,7 +79,7 @@ type stubReadingsReader struct {
 	fixedSeries readings.SeriesResult
 }
 
-func (s stubReadingsReader) Series(ctx context.Context, entity authz.EntityRef, window readings.Window, measurementTypeID int64, requested tiers.Tier, page readings.Page) (readings.SeriesResult, error) {
+func (s stubReadingsReader) Series(ctx context.Context, entity authz.EntityRef, window readings.Window, measurementTypeID int64, requested tiers.Tier, page readings.Page, invalidOnly bool) (readings.SeriesResult, error) {
 	if s.fixedSeries.Points == nil && s.fixedSeries.NextPageToken == "" && s.fixedSeries.Tier.Tier == "" {
 		panic("stubReadingsReader.Series called -- authorizeEntity should have refused this request first")
 	}

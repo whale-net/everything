@@ -4,7 +4,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "readings",
-    srcs = ["readings.go"],
+    srcs = [
+        "readings.go",
+        "suspect_detect.go",
+        "suspect_ranges.go",
+    ],
     importpath = "github.com/whale-net/everything/leaflab/api/readings",
     visibility = ["//visibility:public"],
     deps = [
@@ -30,6 +34,23 @@ go_test(
     srcs = ["source_analysis_test.go"],
     embed = [":readings"],
     embedsrcs = ["readings.go"],
+)
+
+# FR26.2 source-analysis coverage: no build tag, needs no database, same
+# rationale as readings_test above. Embeds every file this package's
+# suspect-detection logic lives in, not just readings.go, so a future
+# helper file is covered automatically.
+go_test(
+    # keep
+    name = "no_restamp_test",
+    size = "small",
+    srcs = ["no_restamp_test.go"],
+    embed = [":readings"],
+    embedsrcs = [
+        "readings.go",
+        "suspect_detect.go",
+        "suspect_ranges.go",
+    ],
 )
 
 # Real-Postgres integration coverage for this task's Testing section

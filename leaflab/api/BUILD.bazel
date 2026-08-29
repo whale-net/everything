@@ -20,6 +20,7 @@ go_library(
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//leaflab/api/readings",
+        "//leaflab/api/suspect",
         "//leaflab/api/tiers",
         "//libs/go/db",
         "//libs/go/grpcauth",

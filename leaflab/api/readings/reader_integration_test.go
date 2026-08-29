@@ -86,10 +86,28 @@ const testSchema = `
 		sensor_id   BIGINT NOT NULL REFERENCES sensor(sensor_id),
 		region_id   BIGINT REFERENCES region(region_id),
 		value       DOUBLE PRECISION NOT NULL,
+		valid       BOOLEAN NOT NULL DEFAULT TRUE,
 		recorded_at TIMESTAMPTZ NOT NULL
 	);
 	CREATE INDEX idx_sensor_reading_sensor_id ON sensor_reading(sensor_id, recorded_at DESC);
 	CREATE INDEX idx_sensor_reading_region_id ON sensor_reading(region_id, recorded_at DESC);
+	CREATE INDEX idx_sensor_reading_invalid   ON sensor_reading(sensor_id, recorded_at DESC) WHERE valid = FALSE;
+
+	-- FR26.2's stale-attribution comparand: sensor_region_history's own
+	-- (sensor_id) placement intervals, independent of sensor_reading's own
+	-- denormalized region_id column. Empty in this hermetic fixture unless
+	-- a test explicitly seeds it -- Reader's suspect-detection LEFT JOIN
+	-- LATERAL against this table tolerates no matching row (an unassigned
+	-- sensor, or a sensor placed before any tracked history existed) by
+	-- simply not evaluating CheckStaleAttribution for that reading.
+	CREATE TABLE sensor_region_history (
+		history_id  BIGSERIAL PRIMARY KEY,
+		sensor_id   BIGINT NOT NULL REFERENCES sensor(sensor_id),
+		region_id   BIGINT NOT NULL REFERENCES region(region_id),
+		valid_from  TIMESTAMPTZ NOT NULL,
+		valid_to    TIMESTAMPTZ
+	);
+	CREATE INDEX idx_sensor_region_history_sensor_id ON sensor_region_history(sensor_id, valid_from, valid_to);
 
 	CREATE TABLE sensor_reading_5m (
 		sensor_id     BIGINT NOT NULL REFERENCES sensor(sensor_id),
@@ -346,7 +364,7 @@ func TestSeries_EveryEntityKind_ReturnsPointsAndDisclosesTier(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := f.reader.Series(context.Background(), tc.entity, window, 0, tiers.TierRaw, Page{})
+			result, err := f.reader.Series(context.Background(), tc.entity, window, 0, tiers.TierRaw, Page{}, false)
 			if err != nil {
 				t.Fatalf("Series(%s): %v", tc.name, err)
 			}
@@ -380,7 +398,7 @@ func TestSeries_MeasurementTypeFilter_Narrows(t *testing.T) {
 	window := Window{Start: now.Add(-time.Hour), End: now}
 	boardRef := authz.EntityRef{Kind: authz.EntityBoard, ID: boardID}
 
-	unfiltered, err := f.reader.Series(context.Background(), boardRef, window, 0, tiers.TierRaw, Page{})
+	unfiltered, err := f.reader.Series(context.Background(), boardRef, window, 0, tiers.TierRaw, Page{}, false)
 	if err != nil {
 		t.Fatalf("Series (unfiltered): %v", err)
 	}
@@ -388,7 +406,7 @@ func TestSeries_MeasurementTypeFilter_Narrows(t *testing.T) {
 		t.Fatalf("unfiltered Series: len(Points) = %d, want 2", len(unfiltered.Points))
 	}
 
-	filtered, err := f.reader.Series(context.Background(), boardRef, window, temperatureTypeID, tiers.TierRaw, Page{})
+	filtered, err := f.reader.Series(context.Background(), boardRef, window, temperatureTypeID, tiers.TierRaw, Page{}, false)
 	if err != nil {
 		t.Fatalf("Series (filtered to temperature): %v", err)
 	}
@@ -621,7 +639,7 @@ func TestSeries_UnboundedWindow_Rejected(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := f.reader.Series(context.Background(), entity, tc.window, 0, tiers.TierRaw, Page{})
+			_, err := f.reader.Series(context.Background(), entity, tc.window, 0, tiers.TierRaw, Page{}, false)
 			if err != ErrUnboundedWindow {
 				t.Fatalf("Series(%s): err = %v, want ErrUnboundedWindow", tc.name, err)
 			}
@@ -653,7 +671,7 @@ func TestSeries_RawRequestBeyond48Hours_CoarsensAndDiscloses(t *testing.T) {
 	}
 
 	window := Window{Start: now.Add(-7 * 24 * time.Hour), End: now}
-	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{})
+	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{}, false)
 	if err != nil {
 		t.Fatalf("Series over a 7-day window with requested=raw: %v", err)
 	}
@@ -684,7 +702,7 @@ func TestSeries_ResultCapEnforced(t *testing.T) {
 	}
 
 	window := Window{Start: now.Add(-time.Hour), End: now.Add(time.Second)}
-	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{Size: contract.PageCap * 1000})
+	result, err := f.reader.Series(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID}, window, 0, tiers.TierRaw, Page{Size: contract.PageCap * 1000}, false)
 	if err != nil {
 		t.Fatalf("Series with an over-cap page size: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/readings"
+	"github.com/whale-net/everything/leaflab/api/suspect"
 	"github.com/whale-net/everything/leaflab/api/tiers"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -81,7 +82,7 @@ type authzResolver interface {
 // interface, like deviceRepository and authzResolver above, so tests
 // substitute a fake without a live Postgres connection.
 type readingsReader interface {
-	Series(ctx context.Context, entity authz.EntityRef, window readings.Window, measurementTypeID int64, requested tiers.Tier, page readings.Page) (readings.SeriesResult, error)
+	Series(ctx context.Context, entity authz.EntityRef, window readings.Window, measurementTypeID int64, requested tiers.Tier, page readings.Page, invalidOnly bool) (readings.SeriesResult, error)
 	CurrentValues(ctx context.Context, entity authz.EntityRef) (readings.CurrentValuesResult, error)
 	PeriodSummary(ctx context.Context, regionID int64, period readings.Window, measurementTypeID int64) (readings.PeriodSummaryResult, error)
 	Compare(ctx context.Context, entities []authz.EntityRef, window readings.Window, measurementTypeID int64, requested tiers.Tier, page readings.Page) (readings.CompareResult, error)
@@ -287,21 +288,34 @@ func (s *LeafLabAPIServer) GetReadingSeries(ctx context.Context, req *pb.GetRead
 		return nil, err
 	}
 
+	// FR26.1's Super Admin invalid-only filter is reachable only under
+	// FR10.3's elevation -- this service's one existing elevation signal
+	// is the leaflab-admin realm role (auth.go's isAdminEligible/RoleAdmin).
+	// A non-elevated caller asking for invalid_only is refused outright,
+	// never silently served the unfiltered series instead (that would be
+	// exactly the "silently ignored" outcome FR26.1's own scaffold comment
+	// on GetReadingSeriesRequest.invalid_only rules out).
+	if req.GetInvalidOnly() && !isAdminEligible(ctx) {
+		return nil, contract.PermissionDenied("reading", "invalid_only", "Only a Super Admin can filter to invalid readings.")
+	}
+
 	window := windowFromProto(req.GetWindow())
 	requested := contract.FromGranularity(req.GetRequestedGranularity())
 	page := readings.Page{Token: req.GetPage().GetPageToken(), Size: req.GetPage().GetPageSize()}
 
-	result, err := s.readings.Series(ctx, entity, window, req.GetMeasurementTypeId(), requested, page)
+	result, err := s.readings.Series(ctx, entity, window, req.GetMeasurementTypeId(), requested, page, req.GetInvalidOnly())
 	if err != nil {
 		return nil, readingsErrorToFailure(s.logger, err)
 	}
 
 	return &pb.GetReadingSeriesResponse{
-		Points:    toReadingPoints(result.Points),
-		Tier:      contract.ToGranularity(result.Tier.Tier),
-		Coarsened: result.Tier.Coarsened,
-		Page:      &pb.PageResponse{NextPageToken: result.NextPageToken},
-		ServerNow: contract.Now(),
+		Points:        toReadingPoints(result.Points),
+		Tier:          contract.ToGranularity(result.Tier.Tier),
+		Coarsened:     result.Tier.Coarsened,
+		Page:          &pb.PageResponse{NextPageToken: result.NextPageToken},
+		ServerNow:     contract.Now(),
+		MarkedCount:   result.MarkedCount,
+		ReturnedCount: result.ReturnedCount,
 	}, nil
 }
 
@@ -321,9 +335,19 @@ func toReadingPoints(points []readings.Point) []*pb.ReadingPoint {
 			ValueAvg:        p.Avg,
 			ReadingCount:    p.Count,
 			BoundaryPartial: p.BoundaryPartial,
+			SuspectChecks:   suspectChecksToStrings(p.SuspectChecks),
 		}
 	}
 	return out
+}
+
+// suspectChecksToStrings renders checks as their wire-form []string
+// (api.proto's suspect_checks field, present on ReadingPoint, CurrentValue
+// and PeriodSummary) -- mirrors suspect.Marker.Strings' nil-vs-empty
+// convention: nil (an absent repeated field on the wire), never an empty
+// non-nil slice, when checks is empty.
+func suspectChecksToStrings(checks []suspect.Check) []string {
+	return suspect.Marker{Checks: checks}.Strings()
 }
 
 // GetCurrentValues answers the current value per sensor and per plant, in
@@ -359,9 +383,11 @@ func (s *LeafLabAPIServer) GetCurrentValues(ctx context.Context, req *pb.GetCurr
 	}
 
 	return &pb.GetCurrentValuesResponse{
-		Values:      values,
-		PlantValues: plantValues,
-		ServerNow:   contract.Now(),
+		Values:        values,
+		PlantValues:   plantValues,
+		ServerNow:     contract.Now(),
+		MarkedCount:   result.MarkedCount,
+		ReturnedCount: result.ReturnedCount,
 	}, nil
 }
 
@@ -375,6 +401,7 @@ func toCurrentValue(v readings.CurrentValue) *pb.CurrentValue {
 		MeasurementTypeId: v.MeasurementTypeID,
 		Value:             v.Value,
 		RecordedAt:        contract.ToInstant(v.RecordedAt),
+		SuspectChecks:     suspectChecksToStrings(v.SuspectChecks),
 	}
 }
 
@@ -399,10 +426,12 @@ func (s *LeafLabAPIServer) GetPeriodSummary(ctx context.Context, req *pb.GetPeri
 	}
 
 	resp := &pb.GetPeriodSummaryResponse{
-		Summaries: summaries,
-		Timezone:  result.Timezone,
-		Tier:      contract.ToGranularity(result.Tier.Tier),
-		ServerNow: contract.Now(),
+		Summaries:     summaries,
+		Timezone:      result.Timezone,
+		Tier:          contract.ToGranularity(result.Tier.Tier),
+		ServerNow:     contract.Now(),
+		MarkedCount:   result.MarkedCount,
+		ReturnedCount: result.ReturnedCount,
 	}
 	if result.OvernightLow != nil {
 		resp.OvernightLow = toPeriodSummary(*result.OvernightLow)
@@ -421,6 +450,7 @@ func toPeriodSummary(s readings.SummaryStat) *pb.PeriodSummary {
 		Min:               s.Min,
 		Max:               s.Max,
 		Avg:               s.Avg,
+		SuspectChecks:     suspectChecksToStrings(s.SuspectChecks),
 	}
 	if !s.MinAt.IsZero() {
 		out.MinAt = contract.ToInstant(s.MinAt)
@@ -467,11 +497,13 @@ func (s *LeafLabAPIServer) CompareSeries(ctx context.Context, req *pb.CompareSer
 	}
 
 	return &pb.CompareSeriesResponse{
-		Series:    series,
-		Tier:      contract.ToGranularity(result.Tier.Tier),
-		Coarsened: result.Tier.Coarsened,
-		Page:      &pb.PageResponse{NextPageToken: result.NextPageToken},
-		ServerNow: contract.Now(),
+		Series:        series,
+		Tier:          contract.ToGranularity(result.Tier.Tier),
+		Coarsened:     result.Tier.Coarsened,
+		Page:          &pb.PageResponse{NextPageToken: result.NextPageToken},
+		ServerNow:     contract.Now(),
+		MarkedCount:   result.MarkedCount,
+		ReturnedCount: result.ReturnedCount,
 	}, nil
 }
 

@@ -317,11 +317,25 @@ type seriesCursor struct {
 // (leaflab/api/tiers), never through v_sensor_reading_with_plant -- see
 // this task's Implementation section. requested is a hint (FR71); the
 // returned Selection always states which tier actually answered.
-func (r *Reader) Series(ctx context.Context, entity authz.EntityRef, window Window, measurementTypeID int64, requested tiers.Tier, page Page) (SeriesResult, error) {
+func (r *Reader) Series(ctx context.Context, entity authz.EntityRef, window Window, measurementTypeID int64, requested tiers.Tier, page Page, invalidOnly bool) (SeriesResult, error) {
 	if err := validateWindow(window); err != nil {
 		return SeriesResult{}, err
 	}
 	selection, err := tiers.Select(requested, window.Start, window.End)
+	if err != nil {
+		return SeriesResult{}, err
+	}
+	if invalidOnly {
+		// FR26.1's Super Admin invalid-only filter is only meaningful at
+		// the raw tier: sensor_reading.valid is a per-reading flag with no
+		// aggregated-tier analogue (an aggregated bucket blends valid and
+		// invalid readings together), so a request for invalid-only
+		// readings is always served from raw, disclosed the same way any
+		// other coarsening decision is (Selection.Coarsened).
+		selection = tiers.Selection{Tier: tiers.TierRaw, Coarsened: requested != tiers.TierRaw}
+	}
+
+	ranges, err := r.measurementRanges(ctx)
 	if err != nil {
 		return SeriesResult{}, err
 	}
@@ -333,7 +347,7 @@ func (r *Reader) Series(ctx context.Context, entity authz.EntityRef, window Wind
 	}
 	cursor := seriesCursor{hasAfter: hasAfter, afterTime: afterTime, afterID: afterID}
 
-	points, err := r.pointsForEntity(ctx, entity, selection.Tier, window, measurementTypeID, limit+1, cursor)
+	points, err := r.pointsForEntity(ctx, entity, selection.Tier, window, measurementTypeID, limit+1, cursor, ranges, invalidOnly)
 	if err != nil {
 		return SeriesResult{}, err
 	}
@@ -345,7 +359,14 @@ func (r *Reader) Series(ctx context.Context, entity authz.EntityRef, window Wind
 		points = points[:limit]
 	}
 
-	return SeriesResult{Points: points, Tier: selection, NextPageToken: nextToken}, nil
+	counts := suspect.CountMarkers(pointMarkers(points))
+	return SeriesResult{
+		Points:        points,
+		Tier:          selection,
+		NextPageToken: nextToken,
+		MarkedCount:   counts.Marked,
+		ReturnedCount: counts.Returned,
+	}, nil
 }
 
 // pointsForEntity dispatches to the entity-kind-specific query strategy
@@ -353,7 +374,7 @@ func (r *Reader) Series(ctx context.Context, entity authz.EntityRef, window Wind
 // rows the caller wants back (already inflated by one over the page size,
 // by convention, so the caller can detect "more pages exist" without a
 // second query) -- every branch below honors it as a hard cap, not a hint.
-func (r *Reader) pointsForEntity(ctx context.Context, entity authz.EntityRef, tier tiers.Tier, window Window, measurementTypeID int64, rowCap int32, cursor seriesCursor) ([]Point, error) {
+func (r *Reader) pointsForEntity(ctx context.Context, entity authz.EntityRef, tier tiers.Tier, window Window, measurementTypeID int64, rowCap int32, cursor seriesCursor, ranges map[int64]measurementRange, invalidOnly bool) ([]Point, error) {
 	switch entity.Kind {
 	case authz.EntitySensor, authz.EntityBoard:
 		sensorIDs, err := r.resolveSensorIDs(ctx, entity.Kind, entity.ID, measurementTypeID)
@@ -363,11 +384,11 @@ func (r *Reader) pointsForEntity(ctx context.Context, entity authz.EntityRef, ti
 		if len(sensorIDs) == 0 {
 			return nil, nil
 		}
-		return r.seriesForSensorSet(ctx, sensorIDs, tier, window, rowCap, cursor)
+		return r.seriesForSensorSet(ctx, sensorIDs, tier, window, rowCap, cursor, ranges, measurementTypeID, invalidOnly)
 	case authz.EntityRegion:
-		return r.seriesForRegion(ctx, entity.ID, tier, window, measurementTypeID, rowCap, cursor)
+		return r.seriesForRegion(ctx, entity.ID, tier, window, measurementTypeID, rowCap, cursor, ranges, invalidOnly)
 	case authz.EntityPlant:
-		return r.seriesForPlant(ctx, entity.ID, tier, window, measurementTypeID, rowCap, cursor)
+		return r.seriesForPlant(ctx, entity.ID, tier, window, measurementTypeID, rowCap, cursor, ranges, invalidOnly)
 	default:
 		return nil, fmt.Errorf("%w: %q", ErrUnsupportedEntityKind, entity.Kind)
 	}
@@ -432,9 +453,13 @@ func (r *Reader) resolveSensorIDs(ctx context.Context, kind authz.EntityKind, en
 // not this, is where per-entity breakdown lives) or one point per raw
 // reading for the raw tier (never merged: raw is exact, and merging would
 // silently turn an exact reading into an implicit average).
-func (r *Reader) seriesForSensorSet(ctx context.Context, sensorIDs []int64, tier tiers.Tier, window Window, rowCap int32, cursor seriesCursor) ([]Point, error) {
+func (r *Reader) seriesForSensorSet(ctx context.Context, sensorIDs []int64, tier tiers.Tier, window Window, rowCap int32, cursor seriesCursor, ranges map[int64]measurementRange, measurementTypeID int64, invalidOnly bool) ([]Point, error) {
 	if tier == tiers.TierRaw {
-		return r.rawPoints(ctx, "sensor_id = ANY($1)", []any{sensorIDs}, window, rowCap, cursor)
+		where := "sr.sensor_id = ANY($1)"
+		if invalidOnly {
+			where += " AND sr.valid = FALSE"
+		}
+		return r.rawPoints(ctx, where, []any{sensorIDs}, window, rowCap, cursor, ranges)
 	}
 
 	table, timeCol := tierTable(tier)
@@ -460,7 +485,21 @@ func (r *Reader) seriesForSensorSet(ctx context.Context, sensorIDs []int64, tier
 	`, timeCol, table, where, timeCol, timeCol, next)
 	args = append(args, rowCap)
 
-	return r.scanAggregatedPoints(ctx, query, args)
+	points, err := r.scanAggregatedPoints(ctx, query, args)
+	if err != nil {
+		return nil, err
+	}
+	// fixedRegionID is 0 here: a sensor/board series is merged across every
+	// sensor in the set (this function's own doc comment) -- possibly
+	// spanning more than one region -- so CheckStaleAttribution and
+	// CheckMigrationSnapWindow, which both require one fixed region to
+	// compare against, are not evaluated for this entity kind's aggregated
+	// tiers (documented limitation; both checks are fully evaluated at the
+	// raw tier above, and for region/plant entity kinds at every tier).
+	if err := r.markAggregatedPoints(ctx, points, tier, "sensor_id = ANY($1)", []any{sensorIDs}, window, ranges, measurementTypeID, 0); err != nil {
+		return nil, err
+	}
+	return points, nil
 }
 
 // seriesForRegion serves a region entity ref directly from the tier
@@ -468,15 +507,30 @@ func (r *Reader) seriesForSensorSet(ctx context.Context, sensorIDs []int64, tier
 // was in at write time (see this package's doc comment) -- narrowed by
 // measurementTypeID (0 = unfiltered) via a join to sensor for its
 // sensor_type_id.
-func (r *Reader) seriesForRegion(ctx context.Context, regionID int64, tier tiers.Tier, window Window, measurementTypeID int64, rowCap int32, cursor seriesCursor) ([]Point, error) {
+func (r *Reader) seriesForRegion(ctx context.Context, regionID int64, tier tiers.Tier, window Window, measurementTypeID int64, rowCap int32, cursor seriesCursor, ranges map[int64]measurementRange, invalidOnly bool) ([]Point, error) {
+	// invalidWhere/invalidArgs is this region's plain (unaliased) filter
+	// against sensor_reading itself -- reused below both for the raw-tier
+	// query and, at an aggregated tier, for markAggregatedPoints'
+	// idx_sensor_reading_invalid lookup, so the two never drift apart on
+	// which sensors this region/type filter actually includes.
+	invalidWhere := "region_id = $1"
+	invalidArgs := []any{regionID}
+	if measurementTypeID != 0 {
+		invalidWhere += " AND sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $2)"
+		invalidArgs = append(invalidArgs, measurementTypeID)
+	}
+
 	if tier == tiers.TierRaw {
-		where := "region_id = $1"
-		args := []any{regionID}
+		rawWhere := "sr.region_id = $1"
+		rawArgs := []any{regionID}
 		if measurementTypeID != 0 {
-			where += " AND sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $2)"
-			args = append(args, measurementTypeID)
+			rawWhere += " AND sr.sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $2)"
+			rawArgs = append(rawArgs, measurementTypeID)
 		}
-		return r.rawPoints(ctx, where, args, window, rowCap, cursor)
+		if invalidOnly {
+			rawWhere += " AND sr.valid = FALSE"
+		}
+		return r.rawPoints(ctx, rawWhere, rawArgs, window, rowCap, cursor, ranges)
 	}
 
 	table, timeCol := tierTable(tier)
@@ -507,30 +561,59 @@ func (r *Reader) seriesForRegion(ctx context.Context, regionID int64, tier tiers
 	`, timeCol, table, where, timeCol, timeCol, next)
 	args = append(args, rowCap)
 
-	return r.scanAggregatedPoints(ctx, query, args)
+	points, err := r.scanAggregatedPoints(ctx, query, args)
+	if err != nil {
+		return nil, err
+	}
+	// regionID is fixed for this entity kind, so CheckStaleAttribution and
+	// CheckMigrationSnapWindow are fully evaluated here too (unlike
+	// seriesForSensorSet's aggregated branch above).
+	if err := r.markAggregatedPoints(ctx, points, tier, invalidWhere, invalidArgs, window, ranges, measurementTypeID, regionID); err != nil {
+		return nil, err
+	}
+	return points, nil
 }
 
 // rawPoints lists individual raw readings matching whereBase (already
-// containing its own positional placeholders starting at $1) within
+// containing its own positional placeholders starting at $1, qualified
+// against the sr alias -- e.g. "sr.sensor_id = ANY($1)") within
 // [window.Start, window.End), applying cursor's keyset predicate on
 // (recorded_at DESC, reading_id DESC) per FR61, and returning at most
-// rowCap rows.
-func (r *Reader) rawPoints(ctx context.Context, whereBase string, baseArgs []any, window Window, rowCap int32, cursor seriesCursor) ([]Point, error) {
+// rowCap rows. Every point carries its FR26.3 SuspectChecks, computed
+// against the row it came from -- ranges is FR26.1's out-of-range table
+// (Reader.measurementRanges, loaded once per top-level call and threaded
+// down), and the region a reading was actually attributed to at the time
+// (sensor_region_history, joined here per row via a LATERAL, never a
+// second round trip) feeds CheckStaleAttribution. CheckMigrationSnapWindow
+// is resolved after the main query returns, once the set of stamped
+// region_ids actually present is known (regionSnapWindows) -- see this
+// package's suspect_detect.go.
+func (r *Reader) rawPoints(ctx context.Context, whereBase string, baseArgs []any, window Window, rowCap int32, cursor seriesCursor, ranges map[int64]measurementRange) ([]Point, error) {
 	next := len(baseArgs) + 1
 	args := append([]any{}, baseArgs...)
-	where := fmt.Sprintf("%s AND recorded_at >= $%d AND recorded_at < $%d", whereBase, next, next+1)
+	where := fmt.Sprintf("%s AND sr.recorded_at >= $%d AND sr.recorded_at < $%d", whereBase, next, next+1)
 	args = append(args, window.Start, window.End)
 	next += 2
 	if cursor.hasAfter {
-		where += fmt.Sprintf(" AND (recorded_at, reading_id) < ($%d, $%d)", next, next+1)
+		where += fmt.Sprintf(" AND (sr.recorded_at, sr.reading_id) < ($%d, $%d)", next, next+1)
 		args = append(args, cursor.afterTime, cursor.afterID)
 		next += 2
 	}
 	query := fmt.Sprintf(`
-		SELECT recorded_at, reading_id, value
-		FROM sensor_reading
+		SELECT sr.recorded_at, sr.reading_id, sr.value, sr.sensor_id, sr.region_id, sr.valid,
+		       s.sensor_type_id, srh.region_id AS assigned_region_id
+		FROM sensor_reading sr
+		JOIN sensor s ON s.sensor_id = sr.sensor_id
+		LEFT JOIN LATERAL (
+			SELECT region_id
+			FROM sensor_region_history
+			WHERE sensor_id = sr.sensor_id
+			  AND valid_from <= sr.recorded_at
+			  AND (valid_to IS NULL OR valid_to > sr.recorded_at)
+			LIMIT 1
+		) srh ON true
 		WHERE %s
-		ORDER BY recorded_at DESC, reading_id DESC
+		ORDER BY sr.recorded_at DESC, sr.reading_id DESC
 		LIMIT $%d
 	`, where, next)
 	args = append(args, rowCap)
@@ -539,28 +622,72 @@ func (r *Reader) rawPoints(ctx context.Context, whereBase string, baseArgs []any
 	if err != nil {
 		return nil, fmt.Errorf("readings: query raw series: %w", err)
 	}
-	defer rows.Close()
 
-	var points []Point
+	type rawRow struct {
+		recordedAt       time.Time
+		readingID        int64
+		value            float64
+		sensorID         int64
+		regionID         *int64
+		valid            bool
+		sensorTypeID     int64
+		assignedRegionID *int64
+	}
+	var rawRows []rawRow
 	for rows.Next() {
-		var recordedAt time.Time
-		var readingID int64
-		var value float64
-		if err := rows.Scan(&recordedAt, &readingID, &value); err != nil {
+		var rr rawRow
+		if err := rows.Scan(&rr.recordedAt, &rr.readingID, &rr.value, &rr.sensorID, &rr.regionID, &rr.valid, &rr.sensorTypeID, &rr.assignedRegionID); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("readings: scan raw series row: %w", err)
 		}
-		points = append(points, Point{
-			RecordedAt: recordedAt,
-			Value:      value,
-			Min:        value,
-			Max:        value,
-			Avg:        value,
-			Count:      1,
-			readingID:  readingID,
-		})
+		rawRows = append(rawRows, rr)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("readings: iterate raw series: %w", err)
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return nil, fmt.Errorf("readings: iterate raw series: %w", rowsErr)
+	}
+
+	regionSet := make(map[int64]bool)
+	for _, rr := range rawRows {
+		if rr.regionID != nil {
+			regionSet[*rr.regionID] = true
+		}
+	}
+	regionIDs := make([]int64, 0, len(regionSet))
+	for id := range regionSet {
+		regionIDs = append(regionIDs, id)
+	}
+	snapWindows, err := r.regionSnapWindows(ctx, regionIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	points := make([]Point, 0, len(rawRows))
+	for _, rr := range rawRows {
+		var checks []suspect.Check
+		if outOfRange(ranges, rr.sensorTypeID, rr.value) {
+			checks = append(checks, suspect.CheckOutOfRange)
+		}
+		if !rr.valid {
+			checks = append(checks, suspect.CheckPersistedInvalidFlag)
+		}
+		if rr.regionID != nil && rr.assignedRegionID != nil && *rr.regionID != *rr.assignedRegionID {
+			checks = append(checks, suspect.CheckStaleAttribution)
+		}
+		if rr.regionID != nil && inSnapWindow(snapWindows, *rr.regionID, rr.recordedAt) {
+			checks = append(checks, suspect.CheckMigrationSnapWindow)
+		}
+		points = append(points, Point{
+			RecordedAt:    rr.recordedAt,
+			Value:         rr.value,
+			Min:           rr.value,
+			Max:           rr.value,
+			Avg:           rr.value,
+			Count:         1,
+			readingID:     rr.readingID,
+			SuspectChecks: checks,
+		})
 	}
 	return points, nil
 }
@@ -666,7 +793,7 @@ func (r *Reader) plantRegionIntervals(ctx context.Context, plantID int64, window
 // moves at most in practice), so merging in Go keeps the interval-walk and
 // partial-substitution logic in one place instead of a much larger dynamic
 // UNION ALL query.
-func (r *Reader) seriesForPlant(ctx context.Context, plantID int64, tier tiers.Tier, window Window, measurementTypeID int64, rowCap int32, cursor seriesCursor) ([]Point, error) {
+func (r *Reader) seriesForPlant(ctx context.Context, plantID int64, tier tiers.Tier, window Window, measurementTypeID int64, rowCap int32, cursor seriesCursor, ranges map[int64]measurementRange, invalidOnly bool) ([]Point, error) {
 	intervals, err := r.plantRegionIntervals(ctx, plantID, window)
 	if err != nil {
 		return nil, err
@@ -677,15 +804,18 @@ func (r *Reader) seriesForPlant(ctx context.Context, plantID int64, tier tiers.T
 		var pts []Point
 		var err error
 		if tier == tiers.TierRaw {
-			where := "region_id = $1"
+			where := "sr.region_id = $1"
 			args := []any{iv.regionID}
 			if measurementTypeID != 0 {
-				where += " AND sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $2)"
+				where += " AND sr.sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $2)"
 				args = append(args, measurementTypeID)
 			}
-			pts, err = r.rawPoints(ctx, where, args, Window{Start: iv.from, End: iv.to}, seriesIntervalRowCap, seriesCursor{})
+			if invalidOnly {
+				where += " AND sr.valid = FALSE"
+			}
+			pts, err = r.rawPoints(ctx, where, args, Window{Start: iv.from, End: iv.to}, seriesIntervalRowCap, seriesCursor{}, ranges)
 		} else {
-			pts, err = r.aggregatedPointsForPlantInterval(ctx, tier, iv.regionID, iv.from, iv.to, measurementTypeID)
+			pts, err = r.aggregatedPointsForPlantInterval(ctx, tier, iv.regionID, iv.from, iv.to, measurementTypeID, ranges)
 		}
 		if err != nil {
 			return nil, err
@@ -725,7 +855,7 @@ func (r *Reader) seriesForPlant(ctx context.Context, plantID int64, tier tiers.T
 // every boundary_partial row wholly inside [from, to) for a sensor
 // currently in regionID, substituted for the whole bucket it split
 // (FR20's read-path requirement).
-func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tiers.Tier, regionID int64, from, to time.Time, measurementTypeID int64) ([]Point, error) {
+func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tiers.Tier, regionID int64, from, to time.Time, measurementTypeID int64, ranges map[int64]measurementRange) ([]Point, error) {
 	table, timeCol := tierTable(tier)
 
 	whereWhole := fmt.Sprintf(`region_id = $1 AND %s >= $2 AND %s < $3
@@ -739,10 +869,14 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 		)`, timeCol, timeCol, table, table, timeCol)
 	argsWhole := []any{regionID, from, to, string(tier)}
 	next := 5
+	invalidWhere := "region_id = $1"
+	invalidArgs := []any{regionID}
 	if measurementTypeID != 0 {
 		whereWhole += fmt.Sprintf(" AND sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $%d)", next)
 		argsWhole = append(argsWhole, measurementTypeID)
 		next++
+		invalidWhere += " AND sensor_id IN (SELECT sensor_id FROM sensor WHERE sensor_type_id = $2)"
+		invalidArgs = append(invalidArgs, measurementTypeID)
 	}
 	queryWhole := fmt.Sprintf(`
 		SELECT %s,
@@ -760,6 +894,16 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 
 	wholePts, err := r.scanAggregatedPoints(ctx, queryWhole, argsWhole)
 	if err != nil {
+		return nil, err
+	}
+	// regionID is fixed for this plant-placement interval, so
+	// CheckStaleAttribution and CheckMigrationSnapWindow are fully
+	// evaluated here, same as seriesForRegion's aggregated branch. Marked
+	// on wholePts only -- boundary_partial rows (partialPts, below) carry
+	// their own distinct FR20 semantics and do not exist in production
+	// data yet (see this package's doc comment); marking them is left as a
+	// documented gap alongside that pre-existing one, not a new omission.
+	if err := r.markAggregatedPoints(ctx, wholePts, tier, invalidWhere, invalidArgs, Window{Start: from, End: to}, ranges, measurementTypeID, regionID); err != nil {
 		return nil, err
 	}
 
@@ -817,19 +961,25 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 // nearest-ancestor walk (FR23) over the sensors beneath the attributing
 // region.
 func (r *Reader) CurrentValues(ctx context.Context, entity authz.EntityRef) (CurrentValuesResult, error) {
+	ranges, err := r.measurementRanges(ctx)
+	if err != nil {
+		return CurrentValuesResult{}, err
+	}
+
 	switch entity.Kind {
 	case authz.EntitySensor, authz.EntityBoard, authz.EntityRegion:
 		sensorIDs, err := r.currentValueSensorIDs(ctx, entity)
 		if err != nil {
 			return CurrentValuesResult{}, err
 		}
-		values, err := r.latestRawValues(ctx, sensorIDs)
+		values, err := r.latestRawValues(ctx, sensorIDs, ranges)
 		if err != nil {
 			return CurrentValuesResult{}, err
 		}
-		return CurrentValuesResult{Values: values}, nil
+		counts := suspect.CountMarkers(currentValueMarkers(values))
+		return CurrentValuesResult{Values: values, MarkedCount: counts.Marked, ReturnedCount: counts.Returned}, nil
 	case authz.EntityPlant:
-		return r.currentPlantValues(ctx, entity.ID)
+		return r.currentPlantValues(ctx, entity.ID, ranges)
 	default:
 		return CurrentValuesResult{}, fmt.Errorf("%w: %q", ErrUnsupportedEntityKind, entity.Kind)
 	}
@@ -875,34 +1025,95 @@ func (r *Reader) currentValueSensorIDs(ctx context.Context, entity authz.EntityR
 // via one DISTINCT ON query against idx_sensor_reading_sensor_id
 // (sensor_id, recorded_at DESC) -- bounded by len(sensorIDs), never a scan
 // of sensor_reading itself.
-func (r *Reader) latestRawValues(ctx context.Context, sensorIDs []int64) ([]CurrentValue, error) {
+func (r *Reader) latestRawValues(ctx context.Context, sensorIDs []int64, ranges map[int64]measurementRange) ([]CurrentValue, error) {
 	if len(sensorIDs) == 0 {
 		return nil, nil
 	}
 	rows, err := r.db.Query(ctx, `
-		SELECT DISTINCT ON (sr.sensor_id) sr.sensor_id, s.sensor_type_id, sr.value, sr.recorded_at
+		SELECT DISTINCT ON (sr.sensor_id) sr.sensor_id, s.sensor_type_id, sr.value, sr.recorded_at,
+		       sr.region_id, sr.valid, srh.region_id AS assigned_region_id
 		FROM sensor_reading sr
 		JOIN sensor s ON s.sensor_id = sr.sensor_id
+		LEFT JOIN LATERAL (
+			SELECT region_id
+			FROM sensor_region_history
+			WHERE sensor_id = sr.sensor_id
+			  AND valid_from <= sr.recorded_at
+			  AND (valid_to IS NULL OR valid_to > sr.recorded_at)
+			LIMIT 1
+		) srh ON true
 		WHERE sr.sensor_id = ANY($1)
 		ORDER BY sr.sensor_id, sr.recorded_at DESC
 	`, sensorIDs)
 	if err != nil {
 		return nil, fmt.Errorf("readings: query latest raw values: %w", err)
 	}
-	defer rows.Close()
 
-	var values []CurrentValue
+	type rawValue struct {
+		v                CurrentValue
+		regionID         *int64
+		valid            bool
+		assignedRegionID *int64
+	}
+	var rawValues []rawValue
 	for rows.Next() {
-		var v CurrentValue
-		if err := rows.Scan(&v.SensorID, &v.MeasurementTypeID, &v.Value, &v.RecordedAt); err != nil {
+		var rv rawValue
+		if err := rows.Scan(&rv.v.SensorID, &rv.v.MeasurementTypeID, &rv.v.Value, &rv.v.RecordedAt, &rv.regionID, &rv.valid, &rv.assignedRegionID); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("readings: scan latest raw value: %w", err)
+		}
+		rawValues = append(rawValues, rv)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return nil, fmt.Errorf("readings: iterate latest raw values: %w", rowsErr)
+	}
+
+	regionSet := make(map[int64]bool)
+	for _, rv := range rawValues {
+		if rv.regionID != nil {
+			regionSet[*rv.regionID] = true
+		}
+	}
+	regionIDs := make([]int64, 0, len(regionSet))
+	for id := range regionSet {
+		regionIDs = append(regionIDs, id)
+	}
+	snapWindows, err := r.regionSnapWindows(ctx, regionIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	values := make([]CurrentValue, 0, len(rawValues))
+	for _, rv := range rawValues {
+		v := rv.v
+		if outOfRange(ranges, v.MeasurementTypeID, v.Value) {
+			v.SuspectChecks = append(v.SuspectChecks, suspect.CheckOutOfRange)
+		}
+		if !rv.valid {
+			v.SuspectChecks = append(v.SuspectChecks, suspect.CheckPersistedInvalidFlag)
+		}
+		if rv.regionID != nil && rv.assignedRegionID != nil && *rv.regionID != *rv.assignedRegionID {
+			v.SuspectChecks = append(v.SuspectChecks, suspect.CheckStaleAttribution)
+		}
+		if rv.regionID != nil && inSnapWindow(snapWindows, *rv.regionID, v.RecordedAt) {
+			v.SuspectChecks = append(v.SuspectChecks, suspect.CheckMigrationSnapWindow)
 		}
 		values = append(values, v)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("readings: iterate latest raw values: %w", err)
-	}
 	return values, nil
+}
+
+// currentValueMarkers projects values' SuspectChecks into suspect.Marker
+// values for suspect.CountMarkers, mirroring pointMarkers for
+// readings.Point.
+func currentValueMarkers(values []CurrentValue) []suspect.Marker {
+	out := make([]suspect.Marker, len(values))
+	for i, v := range values {
+		out[i] = suspect.Marker{Checks: v.SuspectChecks}
+	}
+	return out
 }
 
 // currentPlantValues answers GetCurrentValues for a plant ref: it resolves
@@ -912,7 +1123,7 @@ func (r *Reader) latestRawValues(ctx context.Context, sensorIDs []int64) ([]Curr
 // attribution.Resolver.AttributedSensors to find the sensors whose readings
 // land there -- then every sibling plant gets the identical current-value
 // set, since they are, by construction, attributed the same readings.
-func (r *Reader) currentPlantValues(ctx context.Context, plantID int64) (CurrentValuesResult, error) {
+func (r *Reader) currentPlantValues(ctx context.Context, plantID int64, ranges map[int64]measurementRange) (CurrentValuesResult, error) {
 	now := time.Now()
 
 	var regionID int64
@@ -947,7 +1158,7 @@ func (r *Reader) currentPlantValues(ctx context.Context, plantID int64) (Current
 		sensorIDs[i] = s.SensorID
 	}
 
-	values, err := r.latestRawValues(ctx, sensorIDs)
+	values, err := r.latestRawValues(ctx, sensorIDs, ranges)
 	if err != nil {
 		return CurrentValuesResult{}, err
 	}
@@ -956,7 +1167,18 @@ func (r *Reader) currentPlantValues(ctx context.Context, plantID int64) (Current
 	for i, sib := range siblings {
 		plantValues[i] = CurrentPlantValue{PlantID: sib.PlantID, Values: values}
 	}
-	return CurrentValuesResult{PlantValues: plantValues}, nil
+
+	// Every sibling plant carries an identical copy of values on the wire
+	// (this function's own doc comment): marked_count/returned_count count
+	// across every CurrentValue in every plant_values entry (api.proto's
+	// GetCurrentValuesResponse.marked_count comment), so each sibling's
+	// copy contributes its own tally, not just one shared count.
+	perSibling := suspect.CountMarkers(currentValueMarkers(values))
+	return CurrentValuesResult{
+		PlantValues:   plantValues,
+		MarkedCount:   perSibling.Marked * int64(len(siblings)),
+		ReturnedCount: perSibling.Returned * int64(len(siblings)),
+	}, nil
 }
 
 // PeriodSummary answers GetPeriodSummary for regionID over period,
@@ -971,7 +1193,12 @@ func (r *Reader) PeriodSummary(ctx context.Context, regionID int64, period Windo
 		return PeriodSummaryResult{}, err
 	}
 
-	summaries, err := r.hourlySummaries(ctx, regionID, period, measurementTypeID)
+	ranges, err := r.measurementRanges(ctx)
+	if err != nil {
+		return PeriodSummaryResult{}, err
+	}
+
+	summaries, err := r.hourlySummaries(ctx, regionID, period, measurementTypeID, ranges)
 	if err != nil {
 		return PeriodSummaryResult{}, err
 	}
@@ -997,22 +1224,36 @@ func (r *Reader) PeriodSummary(ctx context.Context, regionID int64, period Windo
 
 	var overnight, daytime *SummaryStat
 	if framingMeasurementTypeID != 0 {
-		overnight, err = r.framedSummary(ctx, regionID, period, framingMeasurementTypeID, overnightStartHour, overnightEndHour, false)
+		overnight, err = r.framedSummary(ctx, regionID, period, framingMeasurementTypeID, overnightStartHour, overnightEndHour, false, ranges)
 		if err != nil {
 			return PeriodSummaryResult{}, err
 		}
-		daytime, err = r.framedSummary(ctx, regionID, period, framingMeasurementTypeID, daytimeStartHour, daytimeEndHour, true)
+		daytime, err = r.framedSummary(ctx, regionID, period, framingMeasurementTypeID, daytimeStartHour, daytimeEndHour, true, ranges)
 		if err != nil {
 			return PeriodSummaryResult{}, err
 		}
 	}
 
+	var markers []suspect.Marker
+	for _, s := range summaries {
+		markers = append(markers, suspect.Marker{Checks: s.SuspectChecks})
+	}
+	if overnight != nil {
+		markers = append(markers, suspect.Marker{Checks: overnight.SuspectChecks})
+	}
+	if daytime != nil {
+		markers = append(markers, suspect.Marker{Checks: daytime.SuspectChecks})
+	}
+	counts := suspect.CountMarkers(markers)
+
 	return PeriodSummaryResult{
-		Summaries:    summaries,
-		OvernightLow: overnight,
-		DaytimeHigh:  daytime,
-		Timezone:     periodSummaryTimezone,
-		Tier:         tiers.Selection{Tier: tiers.TierHourly, Coarsened: false},
+		Summaries:     summaries,
+		OvernightLow:  overnight,
+		DaytimeHigh:   daytime,
+		Timezone:      periodSummaryTimezone,
+		Tier:          tiers.Selection{Tier: tiers.TierHourly, Coarsened: false},
+		MarkedCount:   counts.Marked,
+		ReturnedCount: counts.Returned,
 	}, nil
 }
 
@@ -1022,7 +1263,7 @@ func (r *Reader) PeriodSummary(ctx context.Context, regionID int64, period Windo
 // never averaged), and the bucket instant (min_at/max_at) each extreme
 // occurred at, via a ROW_NUMBER() ranking rather than a second aggregate
 // pass per extreme.
-func (r *Reader) hourlySummaries(ctx context.Context, regionID int64, period Window, measurementTypeID int64) ([]SummaryStat, error) {
+func (r *Reader) hourlySummaries(ctx context.Context, regionID int64, period Window, measurementTypeID int64, ranges map[int64]measurementRange) ([]SummaryStat, error) {
 	where := "h.region_id = $1 AND h.bucket >= $2 AND h.bucket < $3"
 	args := []any{regionID, period.Start, period.End}
 	if measurementTypeID != 0 {
@@ -1093,6 +1334,14 @@ func (r *Reader) hourlySummaries(ctx context.Context, regionID int64, period Win
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("readings: iterate period summary for region %d: %w", regionID, err)
 	}
+
+	for i := range summaries {
+		marker, err := r.regionTypeSuspectMarker(ctx, regionID, period, summaries[i].MeasurementTypeID, summaries[i].Min, summaries[i].Max, ranges)
+		if err != nil {
+			return nil, err
+		}
+		summaries[i].SuspectChecks = marker.Checks
+	}
 	return summaries, nil
 }
 
@@ -1118,7 +1367,7 @@ func (r *Reader) temperatureSensorTypeID(ctx context.Context) (int64, bool, erro
 // overnight framing). Returns (nil, nil) when no bucket falls in that
 // framing window (e.g. a period shorter than one full night/day), never an
 // error -- that is a legitimately empty framing, not a failure.
-func (r *Reader) framedSummary(ctx context.Context, regionID int64, period Window, measurementTypeID int64, startHour, endHour int, wantMax bool) (*SummaryStat, error) {
+func (r *Reader) framedSummary(ctx context.Context, regionID int64, period Window, measurementTypeID int64, startHour, endHour int, wantMax bool, ranges map[int64]measurementRange) (*SummaryStat, error) {
 	var hourClause string
 	if startHour < endHour {
 		hourClause = fmt.Sprintf(
@@ -1135,7 +1384,7 @@ func (r *Reader) framedSummary(ctx context.Context, regionID int64, period Windo
 		orderCol = "h.value_max DESC"
 	}
 	query := fmt.Sprintf(`
-		SELECT h.bucket, h.value_min, h.value_max
+		SELECT h.bucket, h.sensor_id, h.value_min, h.value_max
 		FROM sensor_reading_1h h
 		JOIN sensor s ON s.sensor_id = h.sensor_id
 		WHERE h.region_id = $1 AND h.bucket >= $2 AND h.bucket < $3 AND s.sensor_type_id = $4
@@ -1145,18 +1394,29 @@ func (r *Reader) framedSummary(ctx context.Context, regionID int64, period Windo
 	`, hourClause, orderCol)
 
 	var bucket time.Time
+	var sensorID int64
 	var min, max float64
-	err := r.db.QueryRow(ctx, query, regionID, period.Start, period.End, measurementTypeID).Scan(&bucket, &min, &max)
+	err := r.db.QueryRow(ctx, query, regionID, period.Start, period.End, measurementTypeID).Scan(&bucket, &sensorID, &min, &max)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("readings: query framed summary for region %d: %w", regionID, err)
 	}
+
+	value := min
 	if wantMax {
-		return &SummaryStat{MeasurementTypeID: measurementTypeID, Max: max, MaxAt: bucket}, nil
+		value = max
 	}
-	return &SummaryStat{MeasurementTypeID: measurementTypeID, Min: min, MinAt: bucket}, nil
+	marker, err := r.bucketSuspectMarker(ctx, regionID, sensorID, measurementTypeID, bucket, value, ranges)
+	if err != nil {
+		return nil, err
+	}
+
+	if wantMax {
+		return &SummaryStat{MeasurementTypeID: measurementTypeID, Max: max, MaxAt: bucket, SuspectChecks: marker.Checks}, nil
+	}
+	return &SummaryStat{MeasurementTypeID: measurementTypeID, Min: min, MinAt: bucket, SuspectChecks: marker.Checks}, nil
 }
 
 // Compare answers CompareSeries for entities (2+) aligned on one shared
@@ -1184,6 +1444,11 @@ func (r *Reader) Compare(ctx context.Context, entities []authz.EntityRef, window
 		return CompareResult{}, err
 	}
 
+	ranges, err := r.measurementRanges(ctx)
+	if err != nil {
+		return CompareResult{}, err
+	}
+
 	limit := contract.ClampPageSize(page.Size)
 	afterTime, afterID, hasAfter, err := contract.DecodeReadingCursor(page.Token)
 	if err != nil {
@@ -1194,8 +1459,9 @@ func (r *Reader) Compare(ctx context.Context, entities []authz.EntityRef, window
 	series := make([]EntitySeries, len(entities))
 	var cutoff time.Time
 	var hasMoreAny bool
+	var allMarkers []suspect.Marker
 	for i, e := range entities {
-		pts, err := r.pointsForEntity(ctx, e, selection.Tier, window, measurementTypeID, limit+1, cursor)
+		pts, err := r.pointsForEntity(ctx, e, selection.Tier, window, measurementTypeID, limit+1, cursor, ranges, false)
 		if err != nil {
 			return CompareResult{}, err
 		}
@@ -1208,6 +1474,7 @@ func (r *Reader) Compare(ctx context.Context, entities []authz.EntityRef, window
 			pts = pts[:limit]
 		}
 		series[i] = EntitySeries{Entity: e, Points: pts}
+		allMarkers = append(allMarkers, pointMarkers(pts)...)
 	}
 
 	var nextToken string
@@ -1215,5 +1482,12 @@ func (r *Reader) Compare(ctx context.Context, entities []authz.EntityRef, window
 		nextToken = contract.EncodeReadingCursor(cutoff, 0)
 	}
 
-	return CompareResult{Series: series, Tier: selection, NextPageToken: nextToken}, nil
+	counts := suspect.CountMarkers(allMarkers)
+	return CompareResult{
+		Series:        series,
+		Tier:          selection,
+		NextPageToken: nextToken,
+		MarkedCount:   counts.Marked,
+		ReturnedCount: counts.Returned,
+	}, nil
 }
