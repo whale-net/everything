@@ -84,7 +84,7 @@ When dispatched with a `session_id` and told to run in agent-sync mode (see CONV
 
 Loop (entered once you've either posted your first-turn pass and synced, or woken from your first blocking `sync()`):
 
-1. Read the comment the peer's sync message points at, then run your normal reconciliation for this round (Process steps 2-6, Product mode, or Follow-up rounds, as applicable) and post your comment to the Discussion.
+1. Read the working-draft gist (CONVENTIONS.md § Working draft) for the current draft, plus the comment the peer's sync message points at for what just changed, then run your normal reconciliation for this round (Process steps 2-6, Product mode, or Follow-up rounds, as applicable) and post your comment to the Discussion.
 2. Call `sync(session_id, "architect", "<one-line pointer: open questions, or sign-off>")` and block again — unless you just posted sign-off.
 3. On sign-off: `leave_session(session_id, "architect")`. If `session_status` shows producer already left, call `end_session(session_id)` too, so the session doesn't sit around for the ~24h GC to clear it. Stop; the orchestrating skill takes it from there.
 
