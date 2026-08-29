@@ -1,15 +1,17 @@
 # project-manager
 
 AGY and Claude Code plugin providing a multi-persona project-management pipeline for the
-`everything` monorepo, tracked entirely in GitHub: intake, design drafting, and architect reconciliation in a **Discussion**; the final approved root plan as an **Issue**; task breakdown and task execution progressing through **swimlanes** on a GitHub **Project (v2)** board. See [`CONVENTIONS.md`](CONVENTIONS.md) for the full contract.
+`everything` monorepo, tracked entirely in GitHub: optional product scoping into a **product brief Issue**; intake, design drafting, and architect reconciliation in a **Discussion**; the final approved root plan as an **Issue**; task breakdown and task execution progressing through **swimlanes** on a GitHub **Project (v2)** board. See [`CONVENTIONS.md`](CONVENTIONS.md) for the full contract.
+
+**Scoping first, for anything product-sized.** A single `design` pass over a whole product produces 60-80 FRs — too big to implement in one shot and too big to hold in context. `/project-manager:product` cuts that up front: a capability map instead of requirements, the **load-bearing decisions** later capabilities depend on, and a roadmap of milestones each defined by one user-visible outcome. The rest of the pipeline then runs once per milestone, small enough to be safe, with architect checking each milestone's spec against the load-bearing decisions so *small* doesn't mean *painted into a corner*. A feature added to an existing system skips this and goes straight to `design`.
 
 ## Personas
 
 | Persona | Role | Model |
 |---|---|---|
 | `project-manager` | Lightweight single-session planning; doesn't use the GitHub pipeline | sonnet |
-| `producer` | Runs intake in a GitHub Discussion, interviews requester, drafts requirements/user stories, reconciles with architect in the Discussion, and publishes the final approved root plan Issue | opus |
-| `architect` | Reconciles the plan against repo conventions inside the Discussion, asks questions via Discussion comments, and signs off when ready for human review | opus |
+| `producer` | Runs intake in a GitHub Discussion, interviews requester, drafts requirements/user stories, reconciles with architect in the Discussion, and publishes the final approved root plan Issue. Also writes the product brief (capability map, milestone roadmap) in its `P0`–`P3` modes | opus |
+| `architect` | Reconciles the plan against repo conventions inside the Discussion, asks questions via Discussion comments, and signs off when ready for human review. In product mode, writes the current-state survey and the load-bearing decisions; on each milestone, checks the draft doesn't foreclose them | opus |
 | `stakeholder` | Represents exactly one persona from the spec during a stakeholder meeting round; posts guidance, non-blocking feedback, and numbered blockers | sonnet |
 | *(human)* | Reviews the architect-approved draft in the Discussion, either approves it (triggering root plan Issue creation) or requests changes | — |
 | `planner` | Converts an approved root plan Issue into a GitHub Project with swimlanes and task issues | opus |
@@ -20,6 +22,18 @@ AGY and Claude Code plugin providing a multi-persona project-management pipeline
 ## Pipeline
 
 ```
+(product-sized request only)
+(human) ──▶ Product Discussion ──▶ producer ──vision/personas/capability map──▶ architect ──current state + load-bearing decisions──▶ producer ──roadmap──▶ architect
+                                                                    │   (loop until architect sign-off)
+                                                                    ▼
+                                                          (human) product gate
+                                                                    │
+                                                                    ▼
+                                            producer creates Product brief Issue (product:approved)
+                                            capability map C1..Cn · load-bearing LB1..LBn · milestones M1..Mn + ledger
+                                                                    │
+                                            ┌───────────────────────┘  once per milestone: design --milestone M<n>
+                                            ▼
 (human) ──intake──▶ Discussion ──▶ producer ──user stories/FR/NFR──▶ architect ──questions──▶ producer
                                                                            │   (loop in Discussion until architect sign-off)
                                                                            ▼
@@ -59,10 +73,11 @@ gh project item-list <project-number> --owner whale-net --query "status:Implemen
 
 ## Skills
 
-Seven skills orchestrate the pipeline:
+Eight skills orchestrate the pipeline:
 
 | Skill | Drives | Dispatches |
 |---|---|---|
+| `/project-manager:product "<product>"` or `/project-manager:product <issue-number>` | Product scoping → capability map, load-bearing decisions, milestone roadmap → human gate → product brief Issue (`product:approved`). Re-run against the issue to amend the brief | `producer`, `architect` |
 | `/project-manager:design "<feature>"` or `/project-manager:design <discussion-url>` | Intake discussion → draft spec → producer/architect loop in Discussion until architect sign-off; with `--stakeholder-meeting`, a stakeholder round before hand-off | `producer`, `architect`, *(optionally)* `stakeholder` |
 | `/project-manager:stakeholder-meeting <discussion-url\|issue-number>` | One meeting round: every persona in the spec posts guidance, non-blocking feedback, and blockers; blockers re-loop producer/architect, cleared hands off to review | `stakeholder` (one per persona), `producer`, `architect` |
 | `/project-manager:review <discussion-url>` | The human gate: review architect-approved draft in Discussion → create root Issue (`plan:approved`), or leave feedback | `producer`, `architect` |
@@ -71,7 +86,9 @@ Seven skills orchestrate the pipeline:
 | `/project-manager:validate <issue-number>` | Whole-system validation in Tilt (against a local integration branch merging every task's stack) once all tasks are `Done`; ensures every task branch has an open PR or routes findings to planner | `system-validator`, `planner` |
 | `/project-manager:status <issue-number>` | Read-only: current lifecycle state and Project board breakdown by swimlane | *(none — pure `gh` reads)* |
 
-Typical flow: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again.
+Typical flow for one feature: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again.
+
+For a product: `product` once, then that same flow per milestone — `design <product-issue> --milestone M1` → `review` → `plan` → `implement` → `validate`, then `M2`, and so on. The brief is read fresh at the start of each milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without anyone re-reading milestone N's spec.
 
 `stakeholder-meeting` is off the critical path: it runs inside `design --stakeholder-meeting` before the review gate, or on demand against an approved root plan issue.
 

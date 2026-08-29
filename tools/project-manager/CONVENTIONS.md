@@ -8,6 +8,7 @@ Shared conventions all `project-manager` personas follow. Everything lives in Gi
 
 | What | Lives in | Created by |
 |---|---|---|
+| Product scoping, capability map & milestone roadmap | GitHub Discussion, category `Ideas` → Issue labeled `product:approved` | producer & architect |
 | Intake, drafting & architect reconciliation | GitHub Discussion, category `Ideas` | producer & architect |
 | Stakeholder meeting agenda, per-persona feedback & minutes | Own GitHub Discussion per round, category `Ideas` — linked back with one comment on the intake Discussion (or root Issue) | `stakeholder` personas & the `stakeholder-meeting` skill |
 | Final root plan (requirements doc / spec of record) | GitHub Issue, labeled `plan:approved` | producer (after human review) |
@@ -16,6 +17,66 @@ Shared conventions all `project-manager` personas follow. Everything lives in Gi
 | Scope notes (deferred/cross-cutting decisions) | GitHub Issue, added as a Project item at `Status: Noted` | any persona; triaged by planner |
 
 Discussions are where ideas are figured out and reconciled between producer, architect, and requester. Issues are where the final, approved requirements doc lives. Projects (and issues moving through swimlanes) are where implementation orchestration lives.
+
+## Product brief & milestones
+
+A **product brief** sits one level above a plan and exists to make each plan small. Run `/project-manager:product` when the request is a whole product or subsystem rather than one feature; a single `design` pass over a product yields 60-80 FRs, which is both context-hostile and unsafe to implement in one shot. A feature added to an existing system skips this entirely and goes straight to `/project-manager:design`.
+
+```
+/project-manager:product ──▶ Product brief Issue (product:approved)
+                                    │  capability map C1..Cn, load-bearing decisions LB1..LBn,
+                                    │  roadmap M1..Mn + ledger
+                                    ▼
+              per milestone:  design --milestone M1 ──▶ review ──▶ plan ──▶ implement ──▶ validate
+                                    │                                                        │
+                                    └──────────── ledger updated, brief amended if needed ◀──┘
+```
+
+### The two document levels
+
+| Document | Granularity | Contains FRs? | Skill |
+|---|---|---|---|
+| Product brief (`Product: <name>`, `product:approved`) | capabilities, `C1..Cn`, one line each | **never** | `product` |
+| Root plan (`Plan: <feature>`, `plan:approved`) | testable behavior, `FR1..FRn`, one milestone's worth | yes | `design` → `review` |
+
+The brief's hard rule is that it contains **zero numbered FRs or NFRs**. `C7 — Operators can see per-device sensor health at a glance` is a capability; `FR7 — the health endpoint returns 200 with lastSeenAt` is not, and belongs in a milestone's spec. A brief that acquires FRs has moved the too-big-to-implement problem up a layer instead of solving it.
+
+### Brief sections
+
+**Vision** (one paragraph) · **Personas** · **Current state** (architect) · **Capability map** (`C1..Cn`, bucketed `Now`/`Next`/`Later`) · **Load-bearing decisions** (`LB1..LBn`, architect) · **Non-goals** · **Roadmap**.
+
+**Load-bearing decisions** are why the document exists. Each is a structural commitment an early milestone must get approximately right because a later capability depends on it, with three clauses: the capability *at risk*, what to *decide now*, and what *stays cheap* to change later. The third clause keeps the list honest — if nothing is expensive to reverse, it is not load-bearing. Bias toward data shape, identity, and wire contracts (schemas, keys, tenancy, auth subject, event payloads); handlers, templates, and internal package boundaries are cheap to redo and do not belong. Aim for 3-8 entries.
+
+**Milestones** are each defined by one user-visible outcome sentence naming who can now do what — "a logged-in grower can see one plant's live readings", never "the data layer". Each carries `Delivers` (capability ids), `Must not foreclose` (`LB` ids), `Deliberately deferred` (with destination), and an `FR budget` (default 12).
+
+### Scope control at milestone-design time
+
+Two mechanisms, in order of importance:
+
+1. **Traceability.** Every FR cites the capability it serves — `FR4 (C3) — ...`. An FR that cannot cite one from the milestone's `Delivers` list does not belong in this milestone. This is the actual control; a bare FR cap just gets gamed by writing wider FRs.
+2. **The FR budget** is a backstop that tells producer when to re-read rule 1. A draft over budget whose FRs all trace correctly is a signal to re-examine the outcome sentence, not an automatic blocker.
+
+Over-budget scope has one destination and never a silent drop. Scope notes are Project-board items and no board exists yet at design time, so the **product issue is the ledger**: a genuinely new capability is added to the brief's `Later` bucket with the next free `Cn` and recorded with a `Deferred from M<n>: <capability line>` comment on the product issue; anything already belonging to a later milestone goes under the plan's **Out of scope** citing that milestone.
+
+Architect's **load-bearing check** (architect.md § Process step 4) is the pass that makes small milestones safe rather than merely small: a draft that forecloses a protected `Later` capability gets a numbered blocking question. The bar is *forecloses* — requiring a migration, a breaking wire change, or unpicking a decision threaded through the milestone — not merely *does not yet implement*.
+
+### Roadmap ledger
+
+The brief's roadmap ends with a ledger that makes `design --milestone` idempotent and gives `/project-manager:status` something to read:
+
+```
+| Milestone | Status | Intake discussion | Root plan |
+|---|---|---|---|
+| M1 | shipped | <discussion-url> | #123 |
+| M2 | in design | <discussion-url> | — |
+| M3 | not started | — | — |
+```
+
+Status is `not started` → `in design` → `planned` → `in progress` → `shipped`. Producer updates the row when it opens the milestone's intake discussion and again when it publishes the root plan issue.
+
+### Amendments
+
+The brief is a living document but is never edited silently. `/project-manager:product <issue-number>` drafts the amendment, architect reconciles it if it touches load-bearing decisions or milestone ordering, the user approves, then producer edits the issue body and posts `Amended: <summary>`. A shipped milestone's history is never rewritten — ship what shipped, change what is ahead.
 
 ## Intake discussion & design reconciliation
 
@@ -77,7 +138,7 @@ stateDiagram-v2
      ```sh
      gh issue create --title "Plan: <feature>" --label "plan:approved" --body-file <tmpfile>
      ```
-     First line of the issue body is `Intake discussion: <discussion-url>`. Producer then leaves a closing comment on the discussion:
+     First line of the issue body is `Intake discussion: <discussion-url>` — preceded, for a milestone of a product brief, by `Product: #<product-issue> — Milestone M<n>: <outcome sentence>`, which is what tells architect to run its load-bearing check on later rounds. Producer also updates that milestone's ledger row to `planned` with this issue number. Producer then leaves a closing comment on the discussion:
      ```sh
      gh discussion comment <discussion-url> --body "Approved root plan issue: <issue-url>"
      ```

@@ -153,7 +153,7 @@ WHERE <entity_id> = $1
 
 ## GitHub Labels
 
-Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plugin's lifecycle labels (`plan:*`, `phase:*`, `status:*`), apply these when filing or triaging issues:
+Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plugin's lifecycle labels (`product:*`, `plan:*`, `phase:*`, `status:*`), apply these when filing or triaging issues:
 
 - `idea` — not yet a concrete task
 - `high-effort` / `low-effort` — sizing, for human token-budget triage
