@@ -1,11 +1,12 @@
 load("@rules_go//go:def.bzl", "go_test")
 
-# NFR17 Phase-2 documentation conformance for LeafLab (root plan #1166,
-# task #1352): the env-doc check (every Phase 2 rate-limit/claim/elevation
-# environment variable is documented in leaflab/api/ENV.md) and the
-# table-coverage check (every table a Phase 2 ownership migration creates
-# appears in leaflab/DATA.md's ER diagram or SCD2/not-SCD2 lists). See
-# env_doc_test.go's package doc comment for scope notes.
+# NFR17 documentation conformance for LeafLab (root plan #1166): the env-doc
+# checks (every environment variable leaflab-api/leaflab-ui read is
+# documented in that package's ENV.md -- see env_doc_test.go's package doc
+# comment for why this is two complementary checks for leaflab-api), the
+# TOC-links check (leaflab/TOC.md indexes both new ENV.md files), and the
+# Phase 2 table-coverage check (every table a Phase 2 ownership migration
+# creates appears in leaflab/DATA.md's ER diagram or SCD2/not-SCD2 lists).
 go_test(
     name = "conformance_test",
     srcs = [
@@ -15,8 +16,10 @@ go_test(
     data = [
         "//leaflab:build_file",
         "//leaflab:data_doc",
-        "//leaflab/api:env_doc",
+        "//leaflab:toc",
+        "//leaflab/api:conformance_srcs",
         "//leaflab/migrate:migration_srcs",
+        "//leaflab/ui:conformance_srcs",
     ],
     deps = [
         "//leaflab/api/claim",

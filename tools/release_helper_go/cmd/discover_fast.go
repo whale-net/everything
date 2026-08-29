@@ -210,24 +210,33 @@ func appManifestFromRule(pkg string, r *build.Rule) (AppMetadata, error) {
 		openapiSpecTarget = resolveLabel(pkg, name+"_openapi_spec")
 	}
 
+	// Unlike openapi_spec_target, never auto-derived -- only set when the
+	// release_app(...) call passes descriptor_set_target explicitly
+	// (FR81/NFR11, issue #1166/#1333).
+	var descriptorSetTarget string
+	if v := r.AttrString("descriptor_set_target"); v != "" {
+		descriptorSetTarget = resolveLabel(pkg, v)
+	}
+
 	manifest := &appmetapb.AppManifest{
-		Name:              effectiveName,
-		Domain:            domain,
-		Description:       r.AttrString("description"),
-		Language:          r.AttrString("language"),
-		Registry:          attrStringOr(r, "registry", "ghcr.io"),
-		Organization:      attrStringOr(r, "organization", "whale-net"),
-		RepoName:          domain + "-" + effectiveName,
-		Version:           attrStringOr(r, "version", "latest"),
-		BinaryTarget:      binaryTarget,
-		ImageTarget:       imageTarget,
-		OpenapiSpecTarget: openapiSpecTarget,
-		AppType:           appType,
-		Port:              attrInt32(r, "port"),
-		Replicas:          attrInt32(r, "replicas"),
-		Command:           r.AttrStrings("command"),
-		Args:              r.AttrStrings("args"),
-		DeployUnit:        deployUnit,
+		Name:                effectiveName,
+		Domain:              domain,
+		Description:         r.AttrString("description"),
+		Language:            r.AttrString("language"),
+		Registry:            attrStringOr(r, "registry", "ghcr.io"),
+		Organization:        attrStringOr(r, "organization", "whale-net"),
+		RepoName:            domain + "-" + effectiveName,
+		Version:             attrStringOr(r, "version", "latest"),
+		BinaryTarget:        binaryTarget,
+		ImageTarget:         imageTarget,
+		OpenapiSpecTarget:   openapiSpecTarget,
+		DescriptorSetTarget: descriptorSetTarget,
+		AppType:             appType,
+		Port:                attrInt32(r, "port"),
+		Replicas:            attrInt32(r, "replicas"),
+		Command:             r.AttrStrings("command"),
+		Args:                r.AttrStrings("args"),
+		DeployUnit:          deployUnit,
 	}
 
 	if attrBool(r, "health_check_enabled") {

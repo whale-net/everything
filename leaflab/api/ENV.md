@@ -1,8 +1,52 @@
 # leaflab/api — Environment Variables
 
 Runtime configuration for the `leaflab-api` gRPC service. This file is filled in across
-Phase 1 and Phase 2 tasks (root plan #1166); each task documents only the variables it
-introduces.
+Phase 1, Phase 2, and Phase 4 tasks (root plan #1166); each task documents only the variables
+it introduces.
+
+> Read this when configuring, deploying, or debugging `leaflab-api`.
+
+## Core
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|--------------|
+| `PORT` | `50051` | No | gRPC listen port. |
+| `RABBITMQ_URL` | `amqp://guest:guest@localhost:5672/` | No | AMQP URL used to publish `PushDeviceConfig` messages onto `amq.topic` (same broker the processor consumes from — see `../ARCHITECTURE.md`). |
+| `PG_DATABASE_URL` | — | Yes | PostgreSQL connection string, e.g. `postgres://user:pass@host:5432/leaflab?sslmode=disable`. Schema is provisioned by `leaflab-migrate` before the API starts. |
+
+## Auth (FR11, FR11.1, FR12)
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|--------------|
+| `LEAFLAB_API_AUTH_MODE` | `none` | No | `none` or `oidc`, per `libs/go/grpcauth`. `none` injects fake dev `Claims` (subject `dev-user`, role `leaflab-admin` — see `main.go`'s `DevRoles`) with no token required; `oidc` validates `Authorization: Bearer <token>` via local JWKS. |
+| `LEAFLAB_API_DEV_MODE` | `false` | No | Boot-time gate (FR11.1): `LEAFLAB_API_AUTH_MODE=none` is refused at startup unless this is explicitly `true` — auth mode is never inferred from an issuer URL, hostname, or `ENVIRONMENT`. Also controls whether gRPC server reflection is registered (see the A30 exposure gate note below): reflection is only ever on when `LEAFLAB_API_DEV_MODE=true`. A malformed (non-boolean) value fails boot loudly rather than silently defaulting. |
+| `LEAFLAB_API_OIDC_ISSUER` | — | Required when `LEAFLAB_API_AUTH_MODE=oidc` | OIDC issuer URL, e.g. `https://auth.example.com/realms/whale`. Must match the realm `leaflab-ui` and `push-config.sh`'s device-flow credential authenticate against — see `../README.md`'s "Pushing device config" section and `libs/go/grpcauth/KEYCLOAK.md`. |
+| `LEAFLAB_API_OIDC_CLIENT_ID` | — | Required when `LEAFLAB_API_AUTH_MODE=oidc` | Expected token audience. |
+
+`leaflab-admin` (FR12) is a realm role recorded as eligibility only in Phase 1 — no RPC
+branches on it yet beyond the acting-subject audit log (NFR12). See `auth.go`'s `RoleAdmin`
+doc comment.
+
+## Exposure gate (A30 — "Phase 1 must not reach production users")
+
+Phase 1 shipped authentication with no household ownership: every authenticated caller could
+see every board. Phase 2 added household scoping (FR5), closing that specific gap, but
+**non-exposure is still enforced structurally, not left to convention:**
+
+- `leaflab-api`'s `release_app` in `BUILD.bazel` declares `app_type = "internal-api"`. Per
+  `tools/helm/APP_TYPES.md`, `internal-api` apps get no public Ingress by default — reaching
+  this service from outside the cluster requires an operator to opt in
+  (`exposeIngress: true`), which is not done for `leaflab-api` today.
+- gRPC server reflection — which would let an unauthenticated caller discover the full RPC
+  surface — is gated behind `LEAFLAB_API_DEV_MODE=true` (see above) and off by default (FR11.1).
+  `push-config.sh` and other callers resolve the service contract from the published
+  descriptor set instead of reflection; see `../README.md`.
+
+No environment variable exists solely to gate production exposure — the gate is the absence
+of an Ingress plus `LEAFLAB_API_DEV_MODE`'s default. If `leaflab-api` is ever deployed behind a
+public Ingress, deployment must also confirm household scoping (FR5, Phase 2) and admin
+elevation (FR10, Phase 2 — see "Admin elevation" below) are both wired for every entity-access
+RPC before removing the gate; see root plan #1166's A30 note and task #1351 (NFR1.b).
 
 ## Rate limiting (NFR10)
 
@@ -10,19 +54,18 @@ Per-principal and per-session request limits, enforced by `leaflab/api/ratelimit
 `InMemoryLimiter` and applied by `leaflab/api`'s rate-limit interceptor (see
 `leaflab/api/ratelimit_interceptor.go`). Six named buckets exist
 (`read_default`, `resend`, `ack_wait_concurrent`, `claim_open`, `claim_round`,
-`support_reference_resolve`); Phase 1 wired only `read_default` into the interceptor chain
-against every RPC. Each bucket takes a pair of variables — a call-count limit and a window
-length in whole seconds — both optional; an unset variable falls back to the bucket's default
-in `leaflab/api/ratelimit/env.go`'s `DefaultConfigs`. A limit of `0` or less disables
+`support_reference_resolve`). Each bucket takes a pair of variables — a call-count limit and a
+window length in whole seconds — both optional; an unset variable falls back to the bucket's
+default in `leaflab/api/ratelimit/env.go`'s `DefaultConfigs`. A limit of `0` or less disables
 enforcement for that bucket entirely.
 
 | Variable | Default | Description |
 |----------|---------|--------------|
-| `LEAFLAB_API_RATELIMIT_READ_DEFAULT_LIMIT` | `120` | Max calls per principal (or per peer address for the one anonymous RPC, `GetHealth`) within the window below. Applied to every RPC. |
+| `LEAFLAB_API_RATELIMIT_READ_DEFAULT_LIMIT` | `120` | Max calls per principal (or per peer address for the one anonymous RPC, `GetHealth`) within the window below. Applied to every RPC via the generic per-method interceptor (Phase 1). |
 | `LEAFLAB_API_RATELIMIT_READ_DEFAULT_WINDOW_SECONDS` | `60` | Window length, in seconds, for `read_default`. |
-| `LEAFLAB_API_RATELIMIT_RESEND_LIMIT` | `3` | FR42's re-send limit. Not yet wired to an RPC (Phase 4). |
+| `LEAFLAB_API_RATELIMIT_RESEND_LIMIT` | `3` | FR42's re-send limit. Wired into the generic per-method interceptor chain via `rateLimitBucketByMethod` (Phase 4, task #1374) against `ResendDeviceConfig`. |
 | `LEAFLAB_API_RATELIMIT_RESEND_WINDOW_SECONDS` | `300` | Window length, in seconds, for `resend`. |
-| `LEAFLAB_API_RATELIMIT_ACK_WAIT_CONCURRENT_LIMIT` | `5` | FR47's concurrent open-wait limit. Not yet wired to an RPC (Phase 4). |
+| `LEAFLAB_API_RATELIMIT_ACK_WAIT_CONCURRENT_LIMIT` | `5` | FR47's concurrent open-wait limit. Wired into the generic per-method interceptor chain via `rateLimitBucketByMethod` (Phase 4, task #1373) against `AwaitConfigAck`. |
 | `LEAFLAB_API_RATELIMIT_ACK_WAIT_CONCURRENT_WINDOW_SECONDS` | `60` | Window length, in seconds, for `ack_wait_concurrent`. |
 | `LEAFLAB_API_RATELIMIT_CLAIM_OPEN_LIMIT` | `5` | FR76's claim-initiation limit, keyed on the submitted `device_id` **and** the calling principal — never per-board (a per-board cap is itself an existence oracle). Wired directly by `OpenClaimChallenge` (Phase 2, task #1342) — see "Board claim" below. |
 | `LEAFLAB_API_RATELIMIT_CLAIM_OPEN_WINDOW_SECONDS` | `3600` | Window length, in seconds, for `claim_open`. |
@@ -36,7 +79,7 @@ A malformed value (not a valid integer) fails the boot the same way a malformed
 falling back to the default.
 
 **Storage:** in-process (`leaflab/api/ratelimit.InMemoryLimiter`), not a shared store. Valid
-for Phase 1 only because `leaflab-api` runs at `replicas = 1` (see `leaflab/api/BUILD.bazel`'s
+only because `leaflab-api` runs at `replicas = 1` (see `leaflab/api/BUILD.bazel`'s
 `release_app`) — one process means in-process state is trivially identical across "replicas."
 If `leaflab-api` is ever scaled beyond one replica, this must move to a shared store (e.g.
 Redis) first, or per-replica windows silently multiply the effective limit.
@@ -115,3 +158,18 @@ requiring a problem description at creation time.
 Short-lived with an explicit expiry, explicitly **not** SCD2 (NFR6.3) — same reasoning as
 `admin_elevation` above. `code_hash` stores a hash of the opaque code, never the code itself —
 the plaintext is not recoverable from the database.
+
+## Local Development (Tilt)
+
+All values are injected from `../Tiltfile`. No `.env` file is needed. Every variable
+documented above that isn't set here (all of Phase 2/4's rate-limit, claim, admin-elevation,
+and support-reference variables) runs on its documented default in local dev — no override is
+required to exercise those features against `tilt up`.
+
+```bash
+PORT=50051
+RABBITMQ_URL=amqp://rabbit:password@rabbitmq-dev.leaflab-local-dev.svc.cluster.local:5672/
+PG_DATABASE_URL=postgres://postgres:password@postgres-dev.leaflab-local-dev.svc.cluster.local:5432/leaflab?sslmode=disable
+LEAFLAB_API_AUTH_MODE=none
+LEAFLAB_API_DEV_MODE=true
+```

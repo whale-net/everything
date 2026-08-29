@@ -880,10 +880,10 @@ func TestResolveApps(t *testing.T) {
 		wantCount int
 		wantErr   bool
 	}{
-		{[]string{"demo-hello-go"}, 1, false},      // full name
-		{[]string{"demo"}, 2, false},                // domain sweep
-		{[]string{"control-api"}, 0, true},          // bare short name -- no longer matched, must be full "manmanv2-control-api"
-		{[]string{"nonexistent"}, 0, true},          // invalid
+		{[]string{"demo-hello-go"}, 1, false}, // full name
+		{[]string{"demo"}, 2, false},          // domain sweep
+		{[]string{"control-api"}, 0, true},    // bare short name -- no longer matched, must be full "manmanv2-control-api"
+		{[]string{"nonexistent"}, 0, true},    // invalid
 		{[]string{"demo-hello-go", "manmanv2-control-api"}, 2, false},
 	}
 	for _, tt := range tests {
@@ -1093,6 +1093,61 @@ func TestPlanOpenAPISpecsPlanning(t *testing.T) {
 	}
 	if include[0]["app"] != "hello-py" || include[0]["openapi_target"] != "//demo/hello_py:spec" {
 		t.Errorf("unexpected openapi spec entry: %+v", include[0])
+	}
+}
+
+// ── Descriptor Set Planning (FR81/NFR11, issue #1166/#1333) ────────────────
+
+// TestPlanDescriptorSetsPlanning mirrors TestPlanOpenAPISpecsPlanning for
+// descriptor_set_target: only an app that sets it (leaflab-api's real
+// release_app call) should land in DescriptorSetMatrix, and an app that
+// doesn't (control-api here) must not.
+func TestPlanDescriptorSetsPlanning(t *testing.T) {
+	apps := []fakeApp{
+		{
+			pkg:          "leaflab/api",
+			targetSuffix: "leaflab-api_metadata",
+			name:         "leaflab-api",
+			domain:       "leaflab",
+			customJSON: []byte(
+				`{"name":"leaflab-api","domain":"leaflab","language":"go","registry":"ghcr.io","organization":"whale-net","repo_name":"leaflab-leaflab-api","image_target":"@@//leaflab/api:image","binary_target":"@@//leaflab/api:api","version":"latest","descriptor_set_target":"@@//leaflab/api:leaflab_api_descriptor_set"}`,
+			),
+		},
+		{
+			pkg:          "manmanv2/api",
+			targetSuffix: "control-api_metadata",
+			name:         "control-api",
+			domain:       "manmanv2",
+		},
+	}
+	fs, bazel := buildFakeInfra(apps)
+	git := newFakeGit()
+
+	result, err := planRelease(planParams{
+		eventType:     "workflow_dispatch",
+		requestedApps: "leaflab-leaflab-api,manmanv2-control-api",
+		version:       "v1.0.0",
+		bazel:         bazel,
+		git:           git,
+		fs:            fs,
+		workspaceRoot: fakeWorkspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.HasDescriptorSets {
+		t.Fatal("expected HasDescriptorSets to be true")
+	}
+	if result.DescriptorSetMatrix == nil {
+		t.Fatal("expected DescriptorSetMatrix to be non-nil")
+	}
+	include, ok := result.DescriptorSetMatrix["include"].([]map[string]string)
+	if !ok || len(include) != 1 {
+		t.Fatalf("expected 1 descriptor set in include, got %+v", result.DescriptorSetMatrix)
+	}
+	if include[0]["app"] != "leaflab-api" || include[0]["descriptor_set_target"] != "//leaflab/api:leaflab_api_descriptor_set" {
+		t.Errorf("unexpected descriptor set entry: %+v", include[0])
 	}
 }
 

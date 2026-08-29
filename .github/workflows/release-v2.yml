@@ -70,7 +70,7 @@ on:
         required: false
         default: ''
       resolved_plan:
-        description: 'JSON-encoded fully-expanded release plan (release_helper_go plan --format=json''s output shape: matrix, chart_matrix, openapi_matrix, has_specs, apps, charts, version, versions, build_id) computed once by App Registry''s Temporal ResolvePlan activity and forwarded verbatim by DispatchBuild (issue #927). When set, plan-release parses and passes it through as-is -- no checkout, no bazel setup, no `release-helper plan` re-invocation. Leave empty for a dispatcher that has not pre-computed a plan -- plan-release falls back to its own full `release-helper plan` derivation from the apps/helm_charts/version/increment_* inputs above.'
+        description: 'JSON-encoded fully-expanded release plan (release_helper_go plan --format=json''s output shape: matrix, chart_matrix, openapi_matrix, has_specs, descriptor_set_matrix, has_descriptor_sets, apps, charts, version, versions, build_id) computed once by App Registry''s Temporal ResolvePlan activity and forwarded verbatim by DispatchBuild (issue #927). When set, plan-release parses and passes it through as-is -- no checkout, no bazel setup, no `release-helper plan` re-invocation. Leave empty for a dispatcher that has not pre-computed a plan -- plan-release falls back to its own full `release-helper plan` derivation from the apps/helm_charts/version/increment_* inputs above.'
         required: false
         default: ''
       build_ref:
@@ -255,6 +255,10 @@ jobs:
       charts: ${{ steps.plan.outputs.charts || steps.resolved-plan.outputs.charts }}
       openapi-matrix: ${{ steps.plan.outputs.openapi_matrix || steps.resolved-plan.outputs.openapi_matrix }}
       has-specs: ${{ steps.plan.outputs.has_specs || steps.resolved-plan.outputs.has_specs }}
+      # FR81 contract half / NFR11 (issue #1166/#1333): descriptor-set
+      # analogue of openapi-matrix/has-specs above.
+      descriptor-set-matrix: ${{ steps.plan.outputs.descriptor_set_matrix || steps.resolved-plan.outputs.descriptor_set_matrix }}
+      has-descriptor-sets: ${{ steps.plan.outputs.has_descriptor_sets || steps.resolved-plan.outputs.has_descriptor_sets }}
       build-id: ${{ steps.plan.outputs.build_id || steps.resolved-plan.outputs.build_id }}
       versions: ${{ steps.plan.outputs.versions || steps.resolved-plan.outputs.versions }}
       # Issue #1024/#1055: the same PlanResult JSON as the individual
@@ -438,8 +442,8 @@ jobs:
   # GitHub Release creation, release notes, and the implicit git-tag side
   # effect it produced have been removed entirely from this workflow (see
   # issue #979) -- not relocated or deferred, just gone. This job's build
-  # outputs (image digests, chart source trees, OpenAPI specs, CLI
-  # binaries) are consumed solely by FinalizePublish via the
+  # outputs (image digests, chart source trees, OpenAPI specs, descriptor
+  # sets, CLI binaries) are consumed solely by FinalizePublish via the
   # `actions/upload-artifact` steps below.
   #
   # Issue #986 (FR21/FR22 of #979): reviewed step-by-step -- build-app
@@ -462,6 +466,7 @@ jobs:
         (needs.plan-release.outputs.release-matrix != '' && fromJson(needs.plan-release.outputs.release-matrix).include[0] != null) ||
         github.event.inputs.helm_charts != '' ||
         (needs.plan-release.outputs.has-specs == 'true' && github.event.inputs.dry_run == 'false') ||
+        (needs.plan-release.outputs.has-descriptor-sets == 'true' && github.event.inputs.dry_run == 'false') ||
         (github.event.inputs.dry_run == 'false' && needs.plan-release.outputs.release-matrix != '' &&
          (contains(needs.plan-release.outputs.release-matrix, '"app":"release_helper_go"') ||
           contains(needs.plan-release.outputs.release-matrix, '"app":"app-registry"')))
@@ -562,6 +567,19 @@ jobs:
         with:
           name: openapi-specs
           path: /tmp/openapi-specs/*.json
+          if-no-files-found: ignore
+
+      # FR81 (contract half) / NFR11 (issue #1166/#1333): publishes the
+      # gRPC descriptor set (e.g. leaflab-api's) through the release path,
+      # not only as a build output -- mirrors the OpenAPI spec upload step
+      # immediately above, via ExecuteBuildReleaseArtifacts' BuildDescriptorSets
+      # (tools/release_helper_go/cmd/build_release.go).
+      - name: Upload descriptor set artifact
+        if: ${{ needs.plan-release.outputs.has-descriptor-sets == 'true' && github.event.inputs.dry_run == 'false' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: descriptor-sets
+          path: /tmp/descriptor-sets/*.pb
           if-no-files-found: ignore
 
       - name: Upload CLI binaries artifact

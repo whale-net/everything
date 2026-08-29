@@ -278,6 +278,110 @@ See [DATA.md](DATA.md#analytical-views) for the full view reference and example 
 
 ---
 
+## Auth Boundary and the Second Deployable (A8, Phase 1)
+
+```
+Browser                gRPC client (grpcurl, push-config.sh)
+   │                            │
+   ▼                            ▼
+leaflab-ui (HTMX BFF)      leaflab-api (gRPC)  ◄── libs/go/grpcauth validates the
+   │  htmxauth: session,        ▲                   presented token (JWKS, OIDC)
+   │  login/callback/logout     │
+   └──────── forwards the ──────┘
+             logged-in user's own
+             access token (never a
+             service account)
+```
+
+**Two deployables, one auth realm.** `leaflab-api` (gRPC) is the programmatic surface;
+`leaflab-ui` is a separate Go HTMX BFF built on `libs/go/htmxauth` + `libs/go/htmxui` — the
+`tools/app_registry/ui` / `manmanv2/ui` pattern, the only wiring precedent in this repo (A8).
+**grpc-gateway and connect-go were rejected**: A8 records that an HTTP/JSON transport
+(grpc-gateway or connect-go) would be friendlier for a browser client, but adopting one would
+make this plan the first payer for a repo-wide transport dependency with no other consumer yet
+— an HTTP/JSON transport stays a documented follow-up (see root plan #1166 "Deferred" table),
+not Phase 1 scope.
+
+**Who validates tokens, where authorization is decided:**
+
+- **Token validation is per-service, not centralized.** `leaflab-api` validates every RPC's
+  bearer token itself via `libs/go/grpcauth`'s server interceptor (JWKS against
+  `LEAFLAB_API_OIDC_ISSUER`; see `api/ENV.md`). `leaflab-ui` validates the browser's session
+  token itself via `libs/go/htmxauth` (its own OIDC login/callback flow, DB-backed session
+  store; see `ui/ENV.md`). Neither service trusts a token the other has already validated —
+  each dials its own JWKS check.
+- **The BFF is transport, not policy (NFR18.1).** `leaflab-ui` forwards the logged-in user's
+  own access token to `leaflab-api` on every call (`grpcauth.NewUserTokenDialOption`). It holds
+  no service-account credentials of its own and mints no tokens — it cannot act as any
+  principal other than the browser session in front of it.
+- **Authorization (what a validated principal may do) is decided at `leaflab-api`, not at the
+  BFF.** `leaflab-api`'s enforcement interceptor (`api/auth.go`) rejects any RPC that reaches
+  it with no `Claims` in context except the one allowlisted anonymous method (`GetHealth`,
+  FR63.2). `leaflab-ui` performs no authorization decisions of its own beyond "is there a
+  session" — a caller hitting `leaflab-api` directly (grpcurl, `push-config.sh`) gets the same
+  authorization outcome as one going through the BFF, because the decision lives at
+  `leaflab-api` either way.
+- **Phase 1 has no household scoping (A30).** Every authenticated principal can see every
+  board today — see `api/ENV.md`'s "Exposure gate (A30)" section for how non-exposure to
+  production users is enforced structurally in the meantime (no public Ingress on
+  `leaflab-api`, `leaflab-ui` not yet wired into any Helm chart).
+
+**Ports:** `leaflab-api` listens on `50051` (gRPC); `leaflab-ui` listens on `8000` (HTTP). See
+[`README.md`](README.md) for `bazel run` commands for both.
+
+---
+
+## Single-Writer Constraint (NFR9)
+
+The device-facing contract is frozen for this plan: the MQTT/AMQP wire contract, the firmware
+image, and USB provisioning are unchanged, and devices do not gain an identity provider. **The
+processor is in scope for change** — its data-writing logic evolves across this plan's phases —
+but its deployment shape does not: `leaflab/processor/BUILD.bazel`'s `release_app` pins
+`replicas = 1`, and that pin is a **correctness constraint, not a tuning knob**.
+
+The processor is single-writer of the reading-stamping path by construction. Concurrently
+running replicas would race on:
+
+- **`UpsertSensor` (FR16)** — `repository.go`'s sensor upsert reads-then-writes the sensor
+  dimension row; two replicas processing overlapping manifests could each decide a sensor is
+  new and double-insert it.
+- **`UpsertSensorHWHistory` (FR16.1)** — closes the currently-open SCD-2 hardware-address row
+  and opens a new one; two replicas racing this close/open pair against the same sensor could
+  leave two open rows or lose an address change.
+- **`ApplyConfigRegions` (FR1.3)** — applies a config version's region assignments; interleaved
+  application from two replicas could apply an older config's regions after a newer one.
+- **`SensorCache` invalidation (FR73)** — `cache.go`'s `SensorCache` is an in-process,
+  in-memory cache (device→sensor lookups, config version watermarks) with no cross-process
+  invalidation. A second replica's cache would silently diverge from the first's as soon as
+  either processed a manifest or config ack the other didn't see.
+
+This enumeration is an inventory this plan maintains as sites are added, not a completeness
+claim — any future write path added to the processor inherits the same single-writer
+requirement until `SensorCache` gets cross-replica coordination (a shared store) and each site
+above is revisited for concurrent-write safety. Raising `replicas` without doing that work is a
+correctness bug, not a scaling change.
+
+**A device offline for the entire rollout returns and works unchanged** — the single-writer
+constraint governs the processor's internal write ordering, not the wire contract a device
+observes.
+
+---
+
+## NFR16 — Existing RPCs, Phase 1 vs. Phase 2
+
+The three RPCs `leaflab-api` already had before this plan — `PushDeviceConfig`,
+`GetDeviceConfig`, and `ListBoards` (see `api/proto/api.proto`; `GetHealth` is new in Phase 1,
+FR63, and is not one of the three) — keep their behaviour for existing callers other than
+becoming authenticated. **Phase 1's only change to their result set is
+authentication** — a caller that could reach them before now needs a valid token, but an
+authenticated caller sees exactly what an unauthenticated one saw before (no household
+scoping exists yet; see A30 above). **Household scoping is Phase 2's job**, once FR5 lands: at
+that point an authenticated caller's result set narrows to their own household. That
+transition is explicit and versioned when it happens — no existing caller silently gets a
+wider or narrower result set without a version change.
+
+---
+
 ## Relationship to `//firmware`
 
 LeafLab firmware is built on top of the board-agnostic libraries in [`firmware/`](../firmware/README.md):

@@ -86,6 +86,15 @@ release_app(
     domain = "leaflab",
     description = "LeafLab sensor data processor (RabbitMQ MQTT consumer, DB writer)",
     app_type = "worker",
+    # NFR9: replicas = 1 is a correctness constraint, not a tuning knob.
+    # The processor is single-writer of the reading-stamping path by
+    # construction — its known sites are UpsertSensor (FR16),
+    # UpsertSensorHWHistory (FR16.1), ApplyConfigRegions (FR1.3) and
+    # SensorCache invalidation (FR73); see ../ARCHITECTURE.md's "Single-writer
+    # constraint (NFR9)" section for why concurrent replicas would race on
+    # each of these. Do not raise this without first replacing the in-memory
+    # SensorCache (cache.go) and revisiting each known site for
+    # cross-replica coordination.
     replicas = 1,
 )
 

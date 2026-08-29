@@ -32,6 +32,19 @@ type openAPIMatrixWrapper struct {
 	Include []openAPISpecEntry `json:"include"`
 }
 
+// BuildDescriptorSetResult is one app's build-descriptor-set outcome (FR81
+// contract half, NFR11 -- issue #1166/#1333), the descriptor-set analogue
+// of BuildOpenAPISpecResult.
+type BuildDescriptorSetResult struct {
+	App          string `json:"app"`
+	Domain       string `json:"domain"`
+	ArtifactPath string `json:"artifact_path"`
+}
+
+type descriptorSetMatrixWrapper struct {
+	Include []descriptorSetEntry `json:"include"`
+}
+
 // BuildOpenAPISpecs builds every entry's Bazel OpenAPI-spec target and copies
 // the resulting JSON into outputDir, named "<domain>-<app>_openapi_spec.json".
 // This is a faithful Go port of the bash/jq/sed loop release-v2.yml's former
@@ -90,6 +103,73 @@ func BuildOpenAPISpecs(bazel BazelRunner, entries []openAPISpecEntry, outputDir 
 	return results, nil
 }
 
+// descriptorSetOutputStarlarkExpr resolves a built descriptor-set target's
+// output file path(s) via cquery, one per line -- the same
+// bazel cquery --output=starlark idiom metadata.go's appMetadataStarlarkExpr
+// uses. Needed (unlike BuildOpenAPISpecs' bazel-bin/<package-dir> guess)
+// because a descriptor_set_target can be a filegroup that re-exports a
+// proto_descriptor_set target declared in a *different* package (e.g.
+// //leaflab/api:leaflab_api_descriptor_set wraps
+// //leaflab/api/proto:leaflabapi_descriptor_set) -- its real .pb file does
+// not live under the release_app() call's own package directory. File.path
+// is execroot-relative, so the caller joins it with `bazel info
+// execution_root`.
+const descriptorSetOutputStarlarkExpr = `"\n".join([f.path for f in target.files.to_list()])`
+
+// BuildDescriptorSets builds every entry's published gRPC descriptor-set
+// target and copies the resulting FileDescriptorSet into outputDir, named
+// "<domain>-<app>_descriptor_set.pb" -- the descriptor-set analogue of
+// BuildOpenAPISpecs (FR81 contract half, NFR11: the descriptor set must be
+// "published through the release path", issue #1166/#1333).
+func BuildDescriptorSets(bazel BazelRunner, entries []descriptorSetEntry, outputDir string) ([]BuildDescriptorSetResult, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return nil, fmt.Errorf("create output dir %s: %w", outputDir, err)
+	}
+
+	execRootOut, err := bazel.Run("info", "execution_root", "--config=ci-images")
+	if err != nil {
+		return nil, fmt.Errorf("bazel info execution_root: %w", err)
+	}
+	execRoot := strings.TrimSpace(execRootOut)
+
+	results := make([]BuildDescriptorSetResult, 0, len(entries))
+	for _, entry := range entries {
+		fmt.Printf("Building descriptor set for %s-%s (target: %s)...\n", entry.Domain, entry.App, entry.DescriptorSetTarget)
+		if _, err := bazel.Run("build", "--config=ci-images", entry.DescriptorSetTarget); err != nil {
+			return nil, fmt.Errorf("bazel build %s: %w", entry.DescriptorSetTarget, err)
+		}
+
+		cqueryOut, err := bazel.Run("cquery", entry.DescriptorSetTarget, "--output=starlark",
+			"--starlark:expr="+descriptorSetOutputStarlarkExpr, "--config=ci-images")
+		if err != nil {
+			return nil, fmt.Errorf("bazel cquery %s: %w", entry.DescriptorSetTarget, err)
+		}
+		var srcFile string
+		for _, line := range strings.Split(cqueryOut, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				srcFile = filepath.Join(execRoot, line)
+				break
+			}
+		}
+		if srcFile == "" {
+			return nil, fmt.Errorf("descriptor set target %s produced no output files", entry.DescriptorSetTarget)
+		}
+
+		destFilename := fmt.Sprintf("%s-%s_descriptor_set.pb", entry.Domain, entry.App)
+		destFile := filepath.Join(outputDir, destFilename)
+		if err := copyFile(srcFile, destFile); err != nil {
+			return nil, fmt.Errorf("copy descriptor set %s -> %s: %w", srcFile, destFile, err)
+		}
+
+		results = append(results, BuildDescriptorSetResult{App: entry.App, Domain: entry.Domain, ArtifactPath: destFile})
+	}
+	return results, nil
+}
+
 // parseReleaseMatrixItems re-unmarshals a PlanResult.Matrix/ChartMatrix-shaped
 // generic map back into typed items -- matrixItem (App, Domain, Version) is
 // shared with summary.go's identical need to read this same "include" shape.
@@ -125,6 +205,24 @@ func parseOpenAPIMatrixItems(matrix map[string]interface{}) ([]openAPISpecEntry,
 	return wrapper.Include, nil
 }
 
+// parseDescriptorSetMatrixItems re-unmarshals a PlanResult.DescriptorSetMatrix
+// -shaped generic map back into typed descriptorSetEntry items (plan.go's
+// type) -- the descriptor-set analogue of parseOpenAPIMatrixItems.
+func parseDescriptorSetMatrixItems(matrix map[string]interface{}) ([]descriptorSetEntry, error) {
+	if matrix == nil {
+		return nil, nil
+	}
+	raw, err := json.Marshal(matrix)
+	if err != nil {
+		return nil, fmt.Errorf("marshal descriptor set matrix: %w", err)
+	}
+	var wrapper descriptorSetMatrixWrapper
+	if err := json.Unmarshal(raw, &wrapper); err != nil {
+		return nil, fmt.Errorf("unmarshal descriptor set matrix: %w", err)
+	}
+	return wrapper.Include, nil
+}
+
 func matrixHasApp(items []matrixItem, app string) bool {
 	for _, item := range items {
 		if item.App == app {
@@ -149,10 +247,11 @@ type BuildReleaseArtifactsParams struct {
 	// here rather than "fixed" as a silent behavior change.
 	DryRun bool
 
-	AppsOutputDir        string // default /tmp/build-manifest/apps
-	ChartsOutputDir      string // default /tmp/build-manifest/charts
-	OpenAPIOutputDir     string // default /tmp/openapi-specs
-	CLIBinariesOutputDir string // default /tmp/cli-binaries
+	AppsOutputDir          string // default /tmp/build-manifest/apps
+	ChartsOutputDir        string // default /tmp/build-manifest/charts
+	OpenAPIOutputDir       string // default /tmp/openapi-specs
+	DescriptorSetOutputDir string // default /tmp/descriptor-sets
+	CLIBinariesOutputDir   string // default /tmp/cli-binaries
 
 	Bazel         BazelRunner
 	Docker        DockerRunner
@@ -162,10 +261,11 @@ type BuildReleaseArtifactsParams struct {
 
 // BuildReleaseArtifactsResult summarizes everything ExecuteBuildReleaseArtifacts built.
 type BuildReleaseArtifactsResult struct {
-	Apps         []*BuildAppManifest
-	Charts       []BuildChartResult
-	OpenAPISpecs []BuildOpenAPISpecResult
-	CLIBinaries  map[string][]PackagedAsset
+	Apps           []*BuildAppManifest
+	Charts         []BuildChartResult
+	OpenAPISpecs   []BuildOpenAPISpecResult
+	DescriptorSets []BuildDescriptorSetResult
+	CLIBinaries    map[string][]PackagedAsset
 }
 
 // ExecuteBuildReleaseArtifacts builds every release artifact a resolved plan
@@ -210,6 +310,10 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 	openapiOutputDir := p.OpenAPIOutputDir
 	if openapiOutputDir == "" {
 		openapiOutputDir = "/tmp/openapi-specs"
+	}
+	descriptorSetOutputDir := p.DescriptorSetOutputDir
+	if descriptorSetOutputDir == "" {
+		descriptorSetOutputDir = "/tmp/descriptor-sets"
 	}
 	cliOutputDir := p.CLIBinariesOutputDir
 	if cliOutputDir == "" {
@@ -280,6 +384,20 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 		result.OpenAPISpecs = specResults
 	}
 
+	// Descriptor sets (FR81 contract half, NFR11 -- issue #1166/#1333):
+	// mirrors the OpenAPI specs gating immediately above.
+	if p.Plan.HasDescriptorSets && !p.DryRun {
+		descriptorSetEntries, err := parseDescriptorSetMatrixItems(p.Plan.DescriptorSetMatrix)
+		if err != nil {
+			return nil, fmt.Errorf("parse descriptor set matrix: %w", err)
+		}
+		descriptorSetResults, err := BuildDescriptorSets(bazel, descriptorSetEntries, descriptorSetOutputDir)
+		if err != nil {
+			return nil, fmt.Errorf("build descriptor sets: %w", err)
+		}
+		result.DescriptorSets = descriptorSetResults
+	}
+
 	// CLI binaries -- mirrors the former build-cli-binaries job's
 	// `if: dry_run == 'false' && release-matrix contains release_helper_go
 	// or app-registry`. Only package whichever of the two is actually
@@ -322,14 +440,15 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 
 func newBuildReleaseCmd() *cobra.Command {
 	var (
-		fromResolvedPlan     string
-		gitSHA               string
-		registry             string
-		dryRun               bool
-		appsOutputDir        string
-		chartsOutputDir      string
-		openapiOutputDir     string
-		cliBinariesOutputDir string
+		fromResolvedPlan       string
+		gitSHA                 string
+		registry               string
+		dryRun                 bool
+		appsOutputDir          string
+		chartsOutputDir        string
+		openapiOutputDir       string
+		descriptorSetOutputDir string
+		cliBinariesOutputDir   string
 	)
 
 	cmd := &cobra.Command{
@@ -363,26 +482,27 @@ func newBuildReleaseCmd() *cobra.Command {
 			}
 
 			result, err := ExecuteBuildReleaseArtifacts(BuildReleaseArtifactsParams{
-				Ctx:                  cmd.Context(),
-				Plan:                 plan,
-				GitSHA:               gitSHA,
-				Registry:             registry,
-				DryRun:               dryRun,
-				AppsOutputDir:        appsOutputDir,
-				ChartsOutputDir:      chartsOutputDir,
-				OpenAPIOutputDir:     openapiOutputDir,
-				CLIBinariesOutputDir: cliBinariesOutputDir,
-				Bazel:                defaultBazel,
-				Docker:               defaultDocker,
-				FS:                   defaultFS,
-				WorkspaceRoot:        workspaceRoot,
+				Ctx:                    cmd.Context(),
+				Plan:                   plan,
+				GitSHA:                 gitSHA,
+				Registry:               registry,
+				DryRun:                 dryRun,
+				AppsOutputDir:          appsOutputDir,
+				ChartsOutputDir:        chartsOutputDir,
+				OpenAPIOutputDir:       openapiOutputDir,
+				DescriptorSetOutputDir: descriptorSetOutputDir,
+				CLIBinariesOutputDir:   cliBinariesOutputDir,
+				Bazel:                  defaultBazel,
+				Docker:                 defaultDocker,
+				FS:                     defaultFS,
+				WorkspaceRoot:          workspaceRoot,
 			})
 			if err != nil {
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Built %d app image(s), %d chart(s), %d openapi spec(s), %d cli-binary app(s)\n",
-				len(result.Apps), len(result.Charts), len(result.OpenAPISpecs), len(result.CLIBinaries))
+			fmt.Fprintf(cmd.OutOrStdout(), "Built %d app image(s), %d chart(s), %d openapi spec(s), %d descriptor set(s), %d cli-binary app(s)\n",
+				len(result.Apps), len(result.Charts), len(result.OpenAPISpecs), len(result.DescriptorSets), len(result.CLIBinaries))
 			return nil
 		},
 	}
@@ -390,10 +510,11 @@ func newBuildReleaseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromResolvedPlan, "from-resolved-plan", "", "Resolved plan JSON (release-helper plan --format=json's own output shape)")
 	cmd.Flags().StringVar(&gitSHA, "git-sha", "", "Git commit SHA to tag app image builds with (default: $GITHUB_SHA)")
 	cmd.Flags().StringVar(&registry, "registry", "ghcr.io", "Container registry for app images")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Dry run -- skip app images, OpenAPI specs, and CLI binaries (chart source trees still build; see release-v2.yml's pre-existing per-type gating)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Dry run -- skip app images, OpenAPI specs, descriptor sets, and CLI binaries (chart source trees still build; see release-v2.yml's pre-existing per-type gating)")
 	cmd.Flags().StringVar(&appsOutputDir, "apps-output-dir", "/tmp/build-manifest/apps", "Directory to write per-app build manifests to")
 	cmd.Flags().StringVar(&chartsOutputDir, "charts-output-dir", "/tmp/build-manifest/charts", "Directory to copy chart source trees into")
 	cmd.Flags().StringVar(&openapiOutputDir, "openapi-output-dir", "/tmp/openapi-specs", "Directory to write built OpenAPI spec JSON files to")
+	cmd.Flags().StringVar(&descriptorSetOutputDir, "descriptor-set-output-dir", "/tmp/descriptor-sets", "Directory to write built gRPC descriptor set (.pb) files to")
 	cmd.Flags().StringVar(&cliBinariesOutputDir, "cli-binaries-output-dir", "/tmp/cli-binaries", "Directory to write packaged multi-platform CLI binaries to")
 
 	_ = cmd.MarkFlagRequired("from-resolved-plan")

@@ -1,5 +1,13 @@
 load("//tools/bazel:release.bzl", "release_helm_chart")
 
+# TOC.md as text data for //leaflab/conformance's TOC-links-both-ENV-docs
+# check (NFR17 Phase-1 docs).
+filegroup(
+    name = "toc",
+    srcs = ["TOC.md"],
+    visibility = ["//leaflab:__subpackages__"],
+)
+
 # This BUILD.bazel itself, staged as a data dependency so
 # //leaflab/conformance can use it as a marker file to locate the leaflab/
 # domain root at test runtime (mirrors tools/app_registry:build_file).

@@ -82,6 +82,67 @@ conn, err := grpc.NewClient(addr,
 )
 ```
 
+### Client — device authorization grant (human at a terminal)
+
+For a human running a CLI directly against the API, not through a browser session
+or a UI. Resolves to that human's own principal — same subject and realm roles
+they'd get from a browser login — never a service account (FR81; A25 rejects
+service accounts standing in for a person here). The first invocation is
+interactive (prints a verification URL and code, then polls until approved);
+the refresh token is cached under the user's config dir (mode `0600`) so later
+invocations refresh silently.
+
+Requires a Keycloak client with the device authorization flow enabled and
+**public** (no client secret) — see
+["Device authorization grant (FR81) — client prerequisites"](KEYCLOAK.md#device-authorization-grant-fr81--client-prerequisites)
+in KEYCLOAK.md.
+
+```go
+authOpt, err := grpcauth.NewDeviceFlowDialOption(ctx, grpcauth.DeviceFlowConfig{
+    IssuerURL: os.Getenv("GRPC_OIDC_ISSUER"),        // Keycloak realm URL; endpoints are discovered from it
+    ClientID:  os.Getenv("GRPC_DEVICE_FLOW_CLIENT_ID"),
+    Scopes:    []string{"profile"},                   // "openid" is always included implicitly
+    // TokenCachePath: "", // defaults to <user config dir>/grpcauth/device-flow-token.json
+})
+if err != nil {
+    log.Fatalf("grpcauth: %v", err)
+}
+
+conn, err := grpc.NewClient(addr,
+    grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{})), // device flow requires transport security
+    authOpt,
+)
+```
+
+There is deliberately no `ClientSecret` field: a public client has none, and a
+confidential-client secret would make this indistinguishable from the
+service-account credential above.
+
+#### `DeviceFlowAccessToken` — for non-Go callers (shell scripts, `grpcurl`)
+
+`NewDeviceFlowDialOption` returns an opaque `grpc.DialOption`, which is only
+usable from a Go `grpc.NewClient` call. A caller that needs the raw bearer
+token string instead — a shell script driving `grpcurl -H "authorization:
+Bearer <token>"`, for example — uses `DeviceFlowAccessToken` directly:
+
+```go
+token, err := grpcauth.DeviceFlowAccessToken(ctx, grpcauth.DeviceFlowConfig{
+    IssuerURL: os.Getenv("GRPC_OIDC_ISSUER"),
+    ClientID:  os.Getenv("GRPC_DEVICE_FLOW_CLIENT_ID"),
+}, interactive) // interactive: true launches the approval prompt if no
+                 // cached token exists; false only loads/refreshes a cached
+                 // token and returns an error naming the missing credential
+                 // instead of blocking on human approval.
+```
+
+This is the same credential and cache as `NewDeviceFlowDialOption` — same
+`DeviceFlowConfig`, same on-disk cache file — just returning the token string
+instead of wrapping it in a dial option. See
+`leaflab/scripts/authtoken/main.go` for a worked example: a tiny CLI with a
+`login` subcommand (`interactive = true`, for the one-time approval) and a
+default mode (`interactive = false`, used by `leaflab/scripts/push-config.sh`
+on every invocation).
+
 ### Client — per-request user token (UI → API / UI → Log-Processor)
 
 Reads the user's access token from context on each call.
@@ -125,6 +186,13 @@ resp, err := client.SomeRPC(ctx, req)
 |----------|---------|-------------|
 | `GRPC_AUTH_MODE` | `none` | `none` or `oidc` |
 
+### Client side (device authorization grant, human CLI callers)
+
+`NewDeviceFlowDialOption` takes a `DeviceFlowConfig` directly rather than
+reading environment variables itself; callers choose their own env var names
+(e.g. `GRPC_OIDC_ISSUER`, `GRPC_DEVICE_FLOW_CLIENT_ID`) and pass them in. See
+the usage example above.
+
 ## BUILD.bazel
 
 ```bazel
@@ -162,5 +230,12 @@ type ClientConfig struct {
     ClientID                 string
     ClientSecret             string
     RequireTransportSecurity bool
+}
+
+type DeviceFlowConfig struct {
+    IssuerURL      string   // Keycloak realm URL; endpoints discovered from it
+    ClientID       string   // public client (no ClientSecret field — see KEYCLOAK.md)
+    Scopes         []string // "openid" always implicitly included
+    TokenCachePath string   // defaults to <user config dir>/grpcauth/device-flow-token.json
 }
 ```
