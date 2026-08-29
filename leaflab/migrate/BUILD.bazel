@@ -1,6 +1,15 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
+# Migration SQL files as text data for //leaflab/conformance's Phase 2
+# table-coverage check (NFR17 Phase-2 set, task #1352): every CREATE TABLE
+# in a Phase 2 migration must appear in leaflab/DATA.md.
+filegroup(
+    name = "migration_srcs",
+    srcs = glob(["migrations/*.sql"]),
+    visibility = ["//leaflab:__subpackages__"],
+)
+
 go_binary(
     name = "migrate",
     srcs = ["main.go"],

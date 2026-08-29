@@ -1,5 +1,23 @@
 load("//tools/bazel:release.bzl", "release_helm_chart")
 
+# This BUILD.bazel itself, staged as a data dependency so
+# //leaflab/conformance can use it as a marker file to locate the leaflab/
+# domain root at test runtime (mirrors tools/app_registry:build_file).
+filegroup(
+    name = "build_file",
+    srcs = ["BUILD.bazel"],
+    visibility = ["//leaflab:__subpackages__"],
+)
+
+# DATA.md as text data for //leaflab/conformance's Phase 2 table-coverage
+# check (NFR17 Phase-2 set, task #1352): every table a Phase 2 migration
+# creates must appear in this file's ER diagram or SCD2/not-SCD2 lists.
+filegroup(
+    name = "data_doc",
+    srcs = ["DATA.md"],
+    visibility = ["//leaflab:__subpackages__"],
+)
+
 release_helm_chart(
     name = "leaflab_chart",
     chart_name = "leaflab",
