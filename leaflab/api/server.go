@@ -431,8 +431,8 @@ func toReadingPoints(points []readings.Point) []*pb.ReadingPoint {
 
 // GetCurrentValues answers the current value per sensor and per plant, in
 // one call, from the latest raw readings -- never from a pre-aggregated
-// tier (FR27). The response's band field is left unpopulated until Phase 5
-// (FR58).
+// tier (FR27). Each value carries FR58's band label alongside it
+// (toCurrentValue), resolved server-side by leaflab/api/readings.
 func (s *LeafLabAPIServer) GetCurrentValues(ctx context.Context, req *pb.GetCurrentValuesRequest) (*pb.GetCurrentValuesResponse, error) {
 	entity, err := entityRefFromProto(req.GetEntity())
 	if err != nil {
@@ -469,16 +469,21 @@ func (s *LeafLabAPIServer) GetCurrentValues(ctx context.Context, req *pb.GetCurr
 }
 
 // toCurrentValue converts a readings.CurrentValue domain value to its wire
-// pb.CurrentValue twin. Band is left as the zero-value pb.Band (an unset
-// field on the wire) until Phase 5 populates FR58 -- see api.proto's Band
-// comment.
+// pb.CurrentValue twin. Band is left nil -- an unset field on the wire,
+// never an empty-string label (this task's Testing criterion) -- when
+// v.Band is empty: no band configured, or the value fell in a gap between
+// bands (see readings.resolveBand's doc comment).
 func toCurrentValue(v readings.CurrentValue) *pb.CurrentValue {
-	return &pb.CurrentValue{
+	cv := &pb.CurrentValue{
 		SensorId:          v.SensorID,
 		MeasurementTypeId: v.MeasurementTypeID,
 		Value:             v.Value,
 		RecordedAt:        contract.ToInstant(v.RecordedAt),
 	}
+	if v.Band != "" {
+		cv.Band = &pb.Band{Label: v.Band}
+	}
+	return cv
 }
 
 // GetPeriodSummary answers a server-side min/max/average summary for one

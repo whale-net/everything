@@ -10,6 +10,7 @@ go_library(
         "auth.go",
         "logging_interceptor.go",
         "main.go",
+        "plant_type_bands.go",
         "plant_types.go",
         "plants.go",
         "regions.go",

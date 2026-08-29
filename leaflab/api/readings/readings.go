@@ -164,9 +164,16 @@ type CurrentValue struct {
 	MeasurementTypeID int64
 	Value             float64
 	RecordedAt        time.Time
-	// Band is FR58's band descriptor. Left zero-valued until Phase 5 --
-	// see this task's Implementation section and api.proto's Band
-	// message.
+	// Band is FR58's band descriptor -- the label of the plant-type band
+	// (leaflab/api's plant_type_band table) this value falls in, resolved
+	// by resolveBand/plantTypeBands/applyBands below. Empty when no band
+	// applies: a plant type with no bands configured, a measurement type
+	// with no bands configured for that plant type, a value landing in a
+	// gap between bands, or (bare sensor/board/region entity refs only)
+	// no single plant type to resolve against -- see enrichBareValues.
+	// V1 stores and renders bands only; nothing reads this field to
+	// decide whether to write, notify or fire anything (FR58's explicit
+	// scope boundary).
 	Band string
 }
 
@@ -777,7 +784,12 @@ func (r *Reader) aggregatedPointsForPlantInterval(ctx context.Context, tier tier
 // CurrentValues answers GetCurrentValues for entity, always from the
 // latest raw readings (FR27) -- for a plant ref, via attribution's
 // nearest-ancestor walk (FR23) over the sensors beneath the attributing
-// region.
+// region. Every value returned also carries FR58's band label
+// (enrichBareValues / currentPlantValues), resolved here -- in the
+// service, never in leaflab/ui (NFR18.1) -- from the plant_type_band
+// table this package queries directly, the same way it already queries
+// plant/plant_region_history/sensor without going through leaflab/api's
+// Repository.
 func (r *Reader) CurrentValues(ctx context.Context, entity authz.EntityRef) (CurrentValuesResult, error) {
 	switch entity.Kind {
 	case authz.EntitySensor, authz.EntityBoard, authz.EntityRegion:
@@ -789,12 +801,207 @@ func (r *Reader) CurrentValues(ctx context.Context, entity authz.EntityRef) (Cur
 		if err != nil {
 			return CurrentValuesResult{}, err
 		}
+		values, err = r.enrichBareValues(ctx, values)
+		if err != nil {
+			return CurrentValuesResult{}, err
+		}
 		return CurrentValuesResult{Values: values}, nil
 	case authz.EntityPlant:
 		return r.currentPlantValues(ctx, entity.ID)
 	default:
 		return CurrentValuesResult{}, fmt.Errorf("%w: %q", ErrUnsupportedEntityKind, entity.Kind)
 	}
+}
+
+// bandRange is one plant_type_band row's numeric range -- the part of the
+// row resolveBand needs, keyed externally by sensor_type_id (see
+// plantTypeBands) since a lookup is always scoped to one measurement type
+// at a time.
+type bandRange struct {
+	label string
+	min   *float64
+	max   *float64
+}
+
+// resolveBand finds the first band in bands whose half-open range
+// [min, max) contains value -- min unset means unbounded below, max unset
+// means unbounded above, mirroring migration 035's NULL columns.
+// SetPlantTypeBands (leaflab/api's plant_type_bands.go) refuses an
+// overlapping set at write time (findOverlappingBands), so at most one
+// band can ever match here for a validly-stored set; a value outside
+// every band, or in a gap between two bands, matches none -- this task's
+// stated behaviour ("a value in a gap returns no band rather than a wrong
+// one") falls out of returning false in that case rather than guessing at
+// the nearest band.
+func resolveBand(bands []bandRange, value float64) (string, bool) {
+	for _, b := range bands {
+		if b.min != nil && value < *b.min {
+			continue
+		}
+		if b.max != nil && value >= *b.max {
+			continue
+		}
+		return b.label, true
+	}
+	return "", false
+}
+
+// plantTypeBands loads every band plantTypeID has configured, keyed by
+// sensor_type_id (api.proto's SetPlantTypeBandsRequest names this column
+// after plant_type_band.sensor_type_id directly; this package calls the
+// same column MeasurementTypeID everywhere else on the read path -- both
+// names refer to the identical FK). One query per plant type, reused
+// across every sensor value that plant type's plant(s) carry (applyBands,
+// enrichBareValues), rather than one query per (plant type, measurement
+// type) pair. Returns an empty map, never an error, when the type has no
+// bands configured for any measurement type (mirrors
+// leaflab/api.GetPlantTypeBands' own "empty, not an error" contract).
+func (r *Reader) plantTypeBands(ctx context.Context, plantTypeID int64) (map[int64][]bandRange, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT sensor_type_id, band_label, min_value, max_value
+		FROM plant_type_band
+		WHERE plant_type_id = $1
+		ORDER BY sensor_type_id, sort_order
+	`, plantTypeID)
+	if err != nil {
+		return nil, fmt.Errorf("readings: query plant type bands for plant type %d: %w", plantTypeID, err)
+	}
+	defer rows.Close()
+
+	bands := make(map[int64][]bandRange)
+	for rows.Next() {
+		var sensorTypeID int64
+		var b bandRange
+		if err := rows.Scan(&sensorTypeID, &b.label, &b.min, &b.max); err != nil {
+			return nil, fmt.Errorf("readings: scan plant type band for plant type %d: %w", plantTypeID, err)
+		}
+		bands[sensorTypeID] = append(bands[sensorTypeID], b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("readings: iterate plant type bands for plant type %d: %w", plantTypeID, err)
+	}
+	return bands, nil
+}
+
+// plantTypeIDForPlant resolves plantID's plant_type_id -- FR58's "bands
+// hang off the plant type" means a plant's own band set is always its
+// current type's band set, resolved fresh per call (never cached across
+// plants) since two different plants -- even two siblings sharing one
+// attributing region -- can carry two different types.
+func (r *Reader) plantTypeIDForPlant(ctx context.Context, plantID int64) (int64, error) {
+	var id int64
+	if err := r.db.QueryRow(ctx, `SELECT plant_type_id FROM plant WHERE plant_id = $1`, plantID).Scan(&id); err != nil {
+		return 0, fmt.Errorf("readings: resolve plant type for plant %d: %w", plantID, err)
+	}
+	return id, nil
+}
+
+// applyBands returns a copy of values (never mutates the shared slice
+// currentPlantValues passes to every sibling plant) with each entry's
+// Band resolved against bandsByMeasurement -- keyed by MeasurementTypeID,
+// the shape plantTypeBands returns. A measurement type with no configured
+// bands, or a value landing in a gap, leaves Band at its zero value
+// ("" -- absent on the wire, never an empty-string field per this task's
+// Testing criterion).
+func applyBands(values []CurrentValue, bandsByMeasurement map[int64][]bandRange) []CurrentValue {
+	out := make([]CurrentValue, len(values))
+	for i, v := range values {
+		out[i] = v
+		if bands, ok := bandsByMeasurement[v.MeasurementTypeID]; ok {
+			if label, found := resolveBand(bands, v.Value); found {
+				out[i].Band = label
+			}
+		}
+	}
+	return out
+}
+
+// enrichBareValues stamps values -- from a sensor/board/region entity ref,
+// which names no plant directly -- with a Band when the underlying
+// sensor's reading attributes (FR23) to exactly one plant type: either
+// one attributed plant, or several sibling plants that all happen to
+// share one type. Zero attributed plants, or siblings spanning more than
+// one type, leave Band absent -- this task's Implementation text states
+// the zero-plants case explicitly ("for a bare sensor with no attributed
+// plant, there is no band and the field is absent"); the ambiguous
+// multi-type case follows the same "no band rather than a wrong one"
+// principle stated for a band-gap value, since FR58 bands hang off one
+// plant type and there is no single type to render against otherwise.
+func (r *Reader) enrichBareValues(ctx context.Context, values []CurrentValue) ([]CurrentValue, error) {
+	if len(values) == 0 {
+		return values, nil
+	}
+	now := time.Now()
+	bandsByPlantType := make(map[int64]map[int64][]bandRange)
+	out := make([]CurrentValue, len(values))
+	for i, v := range values {
+		out[i] = v
+		plantTypeID, ok, err := r.singlePlantTypeForSensor(ctx, v.SensorID, now)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		bands, cached := bandsByPlantType[plantTypeID]
+		if !cached {
+			bands, err = r.plantTypeBands(ctx, plantTypeID)
+			if err != nil {
+				return nil, err
+			}
+			bandsByPlantType[plantTypeID] = bands
+		}
+		if measurementBands, ok := bands[v.MeasurementTypeID]; ok {
+			if label, found := resolveBand(measurementBands, v.Value); found {
+				out[i].Band = label
+			}
+		}
+	}
+	return out, nil
+}
+
+// singlePlantTypeForSensor resolves the one plant type sensorID's reading
+// should render a band against, discovered via attribution rather than
+// given directly: sensorID's own physical region (sensor.region_id --
+// NULL for a not-yet-placed sensor) is walked through
+// attribution.Resolver.ResolvePlants, the identical FR23 nearest-ancestor
+// rule currentPlantValues applies starting from a named plant instead of
+// a sensor. ok is false -- render no band -- when the sensor has no
+// region, attributes to no plant, or attributes to sibling plants of more
+// than one distinct type (see enrichBareValues' doc comment).
+func (r *Reader) singlePlantTypeForSensor(ctx context.Context, sensorID int64, at time.Time) (int64, bool, error) {
+	var regionID sql.NullInt64
+	if err := r.db.QueryRow(ctx, `SELECT region_id FROM sensor WHERE sensor_id = $1`, sensorID).Scan(&regionID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("readings: resolve region for sensor %d: %w", sensorID, err)
+	}
+	if !regionID.Valid {
+		return 0, false, nil
+	}
+
+	siblings, _, err := r.attribution.ResolvePlants(ctx, regionID.Int64, at)
+	if err != nil {
+		return 0, false, fmt.Errorf("readings: resolve attributed plants for sensor %d: %w", sensorID, err)
+	}
+	if len(siblings) == 0 {
+		return 0, false, nil
+	}
+
+	var distinctTypeID int64
+	for i, sib := range siblings {
+		typeID, err := r.plantTypeIDForPlant(ctx, sib.PlantID)
+		if err != nil {
+			return 0, false, err
+		}
+		if i == 0 {
+			distinctTypeID = typeID
+		} else if typeID != distinctTypeID {
+			return 0, false, nil // ambiguous: siblings span more than one type
+		}
+	}
+	return distinctTypeID, true, nil
 }
 
 // currentValueSensorIDs resolves the sensor set a sensor/board/region
@@ -872,8 +1079,13 @@ func (r *Reader) latestRawValues(ctx context.Context, sensorIDs []int64) ([]Curr
 // attribution.Resolver.ResolvePlants to find every sibling plant sharing
 // that attributing region (FR23's sibling disclosure), and
 // attribution.Resolver.AttributedSensors to find the sensors whose readings
-// land there -- then every sibling plant gets the identical current-value
-// set, since they are, by construction, attributed the same readings.
+// land there -- then every sibling plant gets the identical underlying
+// readings, since they are, by construction, attributed the same values.
+// FR58's band is resolved per sibling, not shared, even though the
+// readings are identical: two siblings sharing one attributing region can
+// still carry two different plant types (households acquire and place
+// plants of whatever type they like into the same region), and a band
+// hangs off the type, not the reading (applyBands/plantTypeBands).
 func (r *Reader) currentPlantValues(ctx context.Context, plantID int64) (CurrentValuesResult, error) {
 	now := time.Now()
 
@@ -916,7 +1128,15 @@ func (r *Reader) currentPlantValues(ctx context.Context, plantID int64) (Current
 
 	plantValues := make([]CurrentPlantValue, len(siblings))
 	for i, sib := range siblings {
-		plantValues[i] = CurrentPlantValue{PlantID: sib.PlantID, Values: values}
+		plantTypeID, err := r.plantTypeIDForPlant(ctx, sib.PlantID)
+		if err != nil {
+			return CurrentValuesResult{}, err
+		}
+		bands, err := r.plantTypeBands(ctx, plantTypeID)
+		if err != nil {
+			return CurrentValuesResult{}, err
+		}
+		plantValues[i] = CurrentPlantValue{PlantID: sib.PlantID, Values: applyBands(values, bands)}
 	}
 	return CurrentValuesResult{PlantValues: plantValues}, nil
 }
