@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -112,6 +113,24 @@ func (stubAPIServer) GetHealth(ctx context.Context, req *pb.GetHealthRequest) (*
 	return &pb.GetHealthResponse{Status: pb.HealthStatus_HEALTH_UP}, nil
 }
 
+// Canned-success stubs for the four bounded-read-path RPCs (FR25, FR27,
+// FR28) -- same value-receiver rationale as the region RPCs below.
+func (stubAPIServer) GetReadingSeries(ctx context.Context, req *pb.GetReadingSeriesRequest) (*pb.GetReadingSeriesResponse, error) {
+	return &pb.GetReadingSeriesResponse{}, nil
+}
+
+func (stubAPIServer) GetCurrentValues(ctx context.Context, req *pb.GetCurrentValuesRequest) (*pb.GetCurrentValuesResponse, error) {
+	return &pb.GetCurrentValuesResponse{}, nil
+}
+
+func (stubAPIServer) GetPeriodSummary(ctx context.Context, req *pb.GetPeriodSummaryRequest) (*pb.GetPeriodSummaryResponse, error) {
+	return &pb.GetPeriodSummaryResponse{}, nil
+}
+
+func (stubAPIServer) CompareSeries(ctx context.Context, req *pb.CompareSeriesRequest) (*pb.CompareSeriesResponse, error) {
+	return &pb.CompareSeriesResponse{}, nil
+}
+
 // Canned-success stubs for #1376's five region RPCs (CreateRegion,
 // RenameRegion, RetireRegion, ListRegions, GetRegionPath). Needed as
 // value-receiver overrides -- not just pb.UnimplementedLeafLabAPIServer's
@@ -201,6 +220,16 @@ func (stubAPIServer) RetirePlantType(ctx context.Context, req *pb.RetirePlantTyp
 	return &pb.RetirePlantTypeResponse{}, nil
 }
 
+// Canned-success stubs for FR58's two plant-type band RPCs -- same
+// value-receiver rationale as the region RPCs above.
+func (stubAPIServer) SetPlantTypeBands(ctx context.Context, req *pb.SetPlantTypeBandsRequest) (*pb.SetPlantTypeBandsResponse, error) {
+	return &pb.SetPlantTypeBandsResponse{}, nil
+}
+
+func (stubAPIServer) GetPlantTypeBands(ctx context.Context, req *pb.GetPlantTypeBandsRequest) (*pb.GetPlantTypeBandsResponse, error) {
+	return &pb.GetPlantTypeBandsResponse{}, nil
+}
+
 // The five admin RPCs below (FR10, FR12 activation) have no business logic
 // yet -- Scaffold only adds them to the proto (see api.proto's "Admin"
 // section) -- so these canned stubs exist purely so stubAPIServer, a
@@ -244,15 +273,60 @@ func (stubAPIServer) RenameSensor(ctx context.Context, req *pb.RenameSensorReque
 	return &pb.RenameSensorResponse{}, nil
 }
 
+// Canned-success stub for FR53's GetSensorTimelines RPC -- same
+// value-receiver rationale as the region RPCs above.
+func (stubAPIServer) GetSensorTimelines(ctx context.Context, req *pb.GetSensorTimelinesRequest) (*pb.GetSensorTimelinesResponse, error) {
+	return &pb.GetSensorTimelinesResponse{}, nil
+}
+
+// GetConfigStatus/ListConfigHistory/GetConfigVersion (FR34/FR35, #1369)
+// are explicitly stubbed here, like every other RPC above, rather than
+// left to the embedded pb.UnimplementedLeafLabAPIServer's promoted
+// methods: those have a pointer receiver (*UnimplementedLeafLabAPIServer),
+// which this value-typed stubAPIServer{} cannot satisfy through promotion
+// alone.
+func (stubAPIServer) GetConfigStatus(ctx context.Context, req *pb.GetConfigStatusRequest) (*pb.GetConfigStatusResponse, error) {
+	return &pb.GetConfigStatusResponse{}, nil
+}
+
+func (stubAPIServer) ListConfigHistory(ctx context.Context, req *pb.ListConfigHistoryRequest) (*pb.ListConfigHistoryResponse, error) {
+	return &pb.ListConfigHistoryResponse{}, nil
+}
+
+func (stubAPIServer) GetConfigVersion(ctx context.Context, req *pb.GetConfigVersionRequest) (*pb.GetConfigVersionResponse, error) {
+	return &pb.GetConfigVersionResponse{}, nil
+}
+
+// AwaitConfigAck (FR45/FR47/NFR15, #1373) is stubbed here for the same
+// reason as GetConfigStatus/ListConfigHistory/GetConfigVersion above.
+func (stubAPIServer) AwaitConfigAck(ctx context.Context, req *pb.AwaitConfigAckRequest) (*pb.AwaitConfigAckResponse, error) {
+	return &pb.AwaitConfigAckResponse{}, nil
+}
+
 // startTestServer builds the exact production interceptor chain
 // (buildServer, shared with run()) behind a bufconn listener, backed by
 // stubAPIServer and fakeBearerAuthUnary/Stream in place of
 // Postgres/RabbitMQ and a real OIDC verifier respectively.
+//
+// nil configs: ratelimit.InMemoryLimiter.Allow never throttles a bucket
+// with no configured limit (see NewInMemoryLimiter's doc comment) -- this
+// suite covers auth/logging middleware, not rate limiting itself (see
+// ratelimit_interceptor_test.go for that, via startTestServerWithLimiter).
 func startTestServer(t *testing.T, logger *slog.Logger) *grpc.ClientConn {
+	t.Helper()
+	return startTestServerWithLimiter(t, logger, ratelimit.NewInMemoryLimiter(nil))
+}
+
+// startTestServerWithLimiter is startTestServer with the rate limiter
+// injectable, so ratelimit_interceptor_test.go can prove NFR10's enforcement
+// over the exact same production wiring (buildServer) with a
+// tightly-configured limiter, instead of duplicating the bufconn/dial
+// plumbing.
+func startTestServerWithLimiter(t *testing.T, logger *slog.Logger, limiter ratelimit.Limiter) *grpc.ClientConn {
 	t.Helper()
 
 	lis := bufconn.Listen(bufSize)
-	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, &stubAPIServer{}, false)
+	grpcServer := buildServer(fakeBearerAuthUnary(), fakeBearerAuthStream(), logger, stubAPIServer{}, false, limiter)
 
 	go func() {
 		// Serve returns a non-nil error on Stop() too; cleanup already
@@ -443,12 +517,12 @@ func noopStream(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerIn
 // "server reflection is disabled outside development" directly on the
 // production wiring, without dialing Postgres/RabbitMQ.
 func TestBuildServer_ReflectionRegisteredOnlyInDevMode(t *testing.T) {
-	prod := buildServer(noopUnary, noopStream, discardTestLogger(), &stubAPIServer{}, false)
+	prod := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, false, ratelimit.NewInMemoryLimiter(nil))
 	if hasReflectionService(prod) {
 		t.Errorf("reflection registered with devMode=false, want not registered (FR11): %v", prod.GetServiceInfo())
 	}
 
-	dev := buildServer(noopUnary, noopStream, discardTestLogger(), &stubAPIServer{}, true)
+	dev := buildServer(noopUnary, noopStream, discardTestLogger(), stubAPIServer{}, true, ratelimit.NewInMemoryLimiter(nil))
 	if !hasReflectionService(dev) {
 		t.Errorf("reflection not registered with devMode=true, want registered: %v", dev.GetServiceInfo())
 	}

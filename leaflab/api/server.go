@@ -11,8 +11,10 @@ import (
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/api/ackwait"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/config"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/leaflab/api/readings"
@@ -53,7 +55,12 @@ const mqttExchange = "amq.topic"
 // called with *Repository in main.go).
 type deviceRepository interface {
 	GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error)
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error)
+	// InsertDeviceConfigNextVersion also records entries' FR82.4 per-entry
+	// provenance into device_config_entry, and FR82.6's dropped-entry
+	// bookkeeping into device_config_removal, in the same transaction as
+	// the device_config row -- see Repository.InsertDeviceConfigNextVersion's
+	// doc comment.
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
 	// GetRegionApplySkips is FR1.3's caller-visible skip surface: the
 	// audit.Entry rows leaflab/processor's ApplyConfigRegions wrote for
@@ -64,6 +71,13 @@ type deviceRepository interface {
 	// (Scope.Filter) is applied inside the query itself, never as a
 	// post-filter -- see Repository.ListBoards.
 	ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error)
+	// GetDeviceConfigVersion/GetConfigVersionEntries/ListConfigHistory back
+	// FR34's GetConfigStatus/GetConfigVersion and FR35's
+	// ListConfigHistory/GetConfigVersion respectively -- see
+	// Repository's methods of the same names.
+	GetDeviceConfigVersion(ctx context.Context, deviceID string, version int64) (*DeviceConfigVersionRow, error)
+	GetConfigVersionEntries(ctx context.Context, configID int64) ([]ConfigVersionEntryRow, error)
+	ListConfigHistory(ctx context.Context, deviceID string, beforeVersion int64, hasBefore bool, limit int32) ([]DeviceConfigHistoryRow, error)
 	Ping(ctx context.Context) error
 
 	// -- Admin (FR10, FR12 activation) -- see leaflab/api/repository.go's
@@ -154,11 +168,19 @@ type LeafLabAPIServer struct {
 	// observability) never keeps serving a stale cached view. See
 	// leaflab/invalidation's doc comment.
 	invalidationPub *invalidation.Publisher
-	logger          *slog.Logger
 	// elevationDuration is FR10.1's elevation window, applied by Elevate
 	// and RenewElevation. Defaults to DefaultElevationDuration; see
 	// WithElevationDuration.
 	elevationDuration time.Duration
+	// ackWait is FR47's bounded-wait registry (leaflab/api/ackwait): this
+	// replica's own leaflab/invalidation Subscriber (wired in main.go)
+	// resolves an AwaitConfigAck waiter registered here the moment it
+	// observes a KindAck event for that waiter's (device_id, version). Set
+	// via WithAckWaitRegistry rather than a NewLeafLabAPIServer parameter --
+	// see that method's doc comment. nil in every test that doesn't
+	// exercise AwaitConfigAck.
+	ackWait *ackwait.Registry
+	logger  *slog.Logger
 }
 
 // ServerOption configures optional LeafLabAPIServer behavior beyond
@@ -189,6 +211,17 @@ func NewLeafLabAPIServer(repo deviceRepository, authzSvc authzResolver, readings
 	for _, opt := range opts {
 		opt(s)
 	}
+	return s
+}
+
+// WithAckWaitRegistry attaches FR47's ackwait.Registry to s and returns s,
+// so main.go can wire it in after construction rather than widening
+// NewLeafLabAPIServer's signature (already six parameters, with dozens of
+// existing test call sites) for a dependency only AwaitConfigAck needs. A
+// server with no registry attached (the zero value) fails AwaitConfigAck
+// with an Internal failure rather than panicking -- see AwaitConfigAck.
+func (s *LeafLabAPIServer) WithAckWaitRegistry(r *ackwait.Registry) *LeafLabAPIServer {
+	s.ackWait = r
 	return s
 }
 
@@ -641,6 +674,26 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, contract.InvalidArgument("device_config", "device_id", reason)
 	}
 
+	// FR82.1: scope is required, with no default and never inferred from
+	// payload shape/size/caller/endpoint. Checked before any board
+	// bookkeeping or write -- an omitted scope leaves nothing stored,
+	// nothing published, and no version assigned (GetOrCreateBoard's
+	// self-registration upsert hasn't even run yet at this point).
+	if req.Scope == pb.PushScope_PUSH_SCOPE_UNSPECIFIED {
+		return nil, contract.InvalidArgument(
+			"device_config",
+			"scope",
+			"A config push must state scope=COMPLETE or scope=EDIT; there is no default.",
+		)
+	}
+	if req.Scope == pb.PushScope_PUSH_SCOPE_COMPLETE && len(req.Removes) > 0 {
+		return nil, contract.InvalidArgument(
+			"device_config",
+			"removes",
+			"removes is only used with scope=EDIT; a scope=COMPLETE push removes an entry by omitting it from sensors instead.",
+		)
+	}
+
 	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
 	if err != nil {
 		s.logger.Error("board lookup failed", "device_id", req.DeviceId, "error", err)
@@ -690,11 +743,124 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, err
 	}
 
+	// FR17 pre-write identity check: refuses before anything is written or
+	// published if any entry would establish a new sensor identity rather
+	// than continue an existing one (or would require an unresolved swap,
+	// FR16.4). This is the real push path, not a dry run -- see
+	// checkPushConfigIdentity's doc comment.
+	if err := s.checkPushConfigIdentity(ctx, boardID, req.Sensors); err != nil {
+		return nil, err
+	}
+
+	// FR82: resolve this push's complete entry set and per-entry provenance,
+	// branching on scope. req.Sensors is always the caller's own
+	// add/change list (COMPLETE: the whole desired set; EDIT: only what's
+	// named) -- validatePushRegions/checkPushConfigIdentity above
+	// deliberately only ever see this authored list, never a materialised
+	// carry-forward entry (those were already checked when they were
+	// themselves accepted).
+	adds, err := s.resolveConfigEntries(ctx, req.Sensors)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []config.Entry
+	sensorsForStorage := req.Sensors
+	var removedForResponse []*pb.RemovedEntry
+	var removedEntries []config.RemovedEntry
+
+	switch req.Scope {
+	case pb.PushScope_PUSH_SCOPE_COMPLETE:
+		// FR82.2: the payload is the board's entire desired sensor set,
+		// stored as submitted -- every entry is authored, and there is no
+		// base to materialise against.
+		entries = adds
+		for i := range entries {
+			entries[i].Provenance = config.ProvenanceAuthored
+		}
+
+	case pb.PushScope_PUSH_SCOPE_EDIT:
+		baseCfg, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
+		if err != nil {
+			s.logger.Error("get latest accepted config for edit failed", "device_id", req.DeviceId, "error", err)
+			return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+		}
+		// base stays nil (not an empty, non-nil slice) when baseCfg == nil
+		// -- config.Materialise's documented signal for "no accepted config
+		// exists for this board at all" (FR82.3), distinct from a
+		// genuinely-empty accepted config (baseCfg != nil, zero sensors).
+		var base []config.Entry
+		if baseCfg != nil {
+			base, err = s.resolveConfigEntries(ctx, baseCfg.Sensors)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		removeKeys, err := s.resolveRemoveKeys(ctx, req.Removes)
+		if err != nil {
+			return nil, err
+		}
+
+		result, err := config.Materialise(base, adds, removeKeys)
+		if err != nil {
+			switch {
+			case errors.Is(err, config.ErrNoAcceptedConfig):
+				// FR82.3's exact stated refusal -- never a generic
+				// validation failure.
+				return nil, contract.Refuse(
+					"device_config",
+					"scope",
+					"This board has no accepted config to complete your edit from; send a complete push.",
+					"Push scope=COMPLETE with this device's entire desired sensor set.",
+				)
+			case errors.Is(err, config.ErrUnaddressableRemove):
+				// FR82.4/FR39: a remove named an entry with no I2C address
+				// on record (the legacy "unknown address" sentinel) --
+				// stated reason and remedy, not a silent no-op.
+				return nil, contract.Refuse(
+					"device_config",
+					"removes",
+					"This entry has no I2C address on record and cannot be removed by an edit push.",
+					"Push scope=COMPLETE with this entry omitted from the sensors list.",
+				)
+			default:
+				s.logger.Error("materialise edit push failed", "device_id", req.DeviceId, "error", err)
+				return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+			}
+		}
+
+		entries = result.Entries
+		removedEntries = result.Removed
+		sensorsForStorage = make([]*configpb.SensorConfig, len(entries))
+		for i, e := range entries {
+			sensorsForStorage[i] = e.Sensor
+		}
+		// FR82.4: state back to the caller which removal form named each
+		// dropped entry -- config.Materialise already computed this
+		// (RemovedEntry.Form); this is the one place that translates it
+		// onto the wire.
+		removedForResponse = make([]*pb.RemovedEntry, len(result.Removed))
+		for i, re := range result.Removed {
+			removedForResponse[i] = &pb.RemovedEntry{
+				MuxPath:    re.Entry.Sensor.GetMuxPath(),
+				I2CAddress: re.Entry.Sensor.GetI2CAddress(),
+				SensorType: re.Entry.Sensor.GetSensorType(),
+				Form:       removeFormToProto(re.Form),
+			}
+		}
+		s.logger.Info("edit push materialised",
+			"device_id", req.DeviceId,
+			"authored", len(adds),
+			"removed", len(result.Removed),
+			"total", len(entries))
+	}
+
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
 		DeviceId: req.DeviceId,
-		Sensors:  req.Sensors,
+		Sensors:  sensorsForStorage,
 	}
 	configJSON, err := protojson.Marshal(cfgProto)
 	if err != nil {
@@ -717,7 +883,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		EntityKind:        reg.EntityKind,
 		CorrelationID:     CorrelationIDFromContext(ctx),
 	}
-	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entry)
+	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, entries, removedEntries, entry)
 	if err != nil {
 		s.logger.Error("record config push failed", "device_id", req.DeviceId, "error", err)
 		return nil, contract.Internal("device_config", "", "Could not record this config push right now. Please try again.")
@@ -745,7 +911,21 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		"version", version,
 		"sensors", len(req.Sensors))
 
-	return &pb.PushDeviceConfigResponse{Version: uint64(version)}, nil
+	return &pb.PushDeviceConfigResponse{Version: uint64(version), Removed: removedForResponse}, nil
+}
+
+// removeFormToProto translates config.RemoveForm (leaflab/api/config's
+// pure-logic value) onto the wire pb.RemoveForm FR82.4's response states
+// back to the caller.
+func removeFormToProto(f config.RemoveForm) pb.RemoveForm {
+	switch f {
+	case config.RemoveFormFullKey:
+		return pb.RemoveForm_REMOVE_FORM_FULL_KEY
+	case config.RemoveFormChipKey:
+		return pb.RemoveForm_REMOVE_FORM_CHIP_KEY
+	default:
+		return pb.RemoveForm_REMOVE_FORM_UNSPECIFIED
+	}
 }
 
 // validatePushRegions is FR1.2/FR1.3's push-time layer: every region_id
@@ -1458,4 +1638,316 @@ func (s *LeafLabAPIServer) GetElevationStatus(ctx context.Context, req *pb.GetEl
 		return nil, contract.Internal("get_elevation_status_request", "", "Could not check elevation status right now. Please try again.")
 	}
 	return &pb.GetElevationStatusResponse{Elevated: true, ExpiresAt: contract.ToInstant(expiresAt), ServerNow: contract.Now()}, nil
+}
+
+// configVersionNotFoundFailure is the one contract.NotFound value returned
+// for a (device_id, version) pair that names no stored config version --
+// whether because the version was never pushed or because the board
+// itself doesn't exist. Board existence/scope is always checked first via
+// authorizeBoardAccess (NFR2 -- a caller outside the board's household
+// reach gets boardNotFoundFailure instead, never this one), so reaching
+// this failure means the board is real and in scope but this exact
+// version isn't -- FR34.1's "a rejected push is never indistinguishable
+// from no push at all" is about state within an existing version, not
+// about this case: a version that was never pushed at all is reported
+// distinctly, as not_found, not as any of the three ConfigState values.
+func configVersionNotFoundFailure() error {
+	return contract.NotFound("device_config", "version", "No config version matches this device and version.")
+}
+
+// stateToProto translates config.State (leaflab/api/config.DeriveState's
+// return value -- the one place these three states are computed) onto the
+// wire pb.ConfigState enum used by GetConfigStatus, ListConfigHistory and
+// GetConfigVersion.
+func stateToProto(s config.State) pb.ConfigState {
+	switch s {
+	case config.StateAccepted:
+		return pb.ConfigState_CONFIG_STATE_ACCEPTED
+	case config.StatePending:
+		return pb.ConfigState_CONFIG_STATE_PENDING
+	case config.StateRejected:
+		return pb.ConfigState_CONFIG_STATE_REJECTED
+	default:
+		return pb.ConfigState_CONFIG_STATE_UNSPECIFIED
+	}
+}
+
+// provenanceToProto translates config.Provenance (leaflab/api/config's
+// FR82.4 per-entry provenance, as stored in device_config_entry) onto the
+// wire pb.EntryProvenance enum GetConfigVersion returns per entry.
+func provenanceToProto(p string) pb.EntryProvenance {
+	switch config.Provenance(p) {
+	case config.ProvenanceAuthored:
+		return pb.EntryProvenance_ENTRY_PROVENANCE_AUTHORED
+	case config.ProvenanceMaterialised:
+		return pb.EntryProvenance_ENTRY_PROVENANCE_MATERIALISED
+	default:
+		return pb.EntryProvenance_ENTRY_PROVENANCE_UNSPECIFIED
+	}
+}
+
+// configEntryMuxPath decodes a device_config_entry.mux_path jsonb column
+// (hwkey.MuxPath's canonical encoding, migration 028) into the wire
+// []*pb.MuxHop shape GetConfigVersion's ConfigVersionEntry.mux_path
+// returns. A decode failure is treated as an empty path (root bus) rather
+// than failing the whole RPC -- mux_path is always this package's own
+// canonical encoding on write (InsertDeviceConfigNextVersion), so this
+// should never actually occur outside a hand-edited row.
+func configEntryMuxPath(raw []byte) []*configpb.MuxHop {
+	var path hwkey.MuxPath
+	if err := path.UnmarshalJSON(raw); err != nil {
+		return nil
+	}
+	hops := make([]*configpb.MuxHop, len(path))
+	for i, h := range path {
+		hops[i] = &configpb.MuxHop{MuxAddress: h.MuxAddress, MuxChannel: h.MuxChannel}
+	}
+	return hops
+}
+
+// GetConfigStatus reports one pushed config version's FR34.1 derived state
+// -- accepted/pending/rejected, always exactly these three -- plus
+// pushed-at, acked-at and the firmware's verbatim rejection reason
+// (FR34.1) and FR34.2/FR59.2's persona-appropriate sentence. Household-
+// scoped like GetDeviceConfig: a caller outside the board's household
+// reach gets the identical NFR2 not-found boardNotFoundFailure a
+// nonexistent device_id would, via authorizeBoardAccess.
+func (s *LeafLabAPIServer) GetConfigStatus(ctx context.Context, req *pb.GetConfigStatusRequest) (*pb.GetConfigStatusResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	}
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
+	row, err := s.repo.GetDeviceConfigVersion(ctx, req.DeviceId, int64(req.Version))
+	if err != nil {
+		s.logger.Error("get config version failed", "device_id", req.DeviceId, "version", req.Version, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not look up this config version right now. Please try again.")
+	}
+	if row == nil {
+		return nil, configVersionNotFoundFailure()
+	}
+
+	state := config.DeriveState(row.Accepted, row.AckedAt, row.RejectionReason)
+	return &pb.GetConfigStatusResponse{
+		State:           stateToProto(state),
+		PushedAt:        contract.ToInstant(row.PushedAt),
+		AckedAt:         contract.ToInstant(timeOrZero(row.AckedAt)),
+		RejectionReason: row.RejectionReason,
+		Sentence:        state.Sentence(),
+		ServerNow:       contract.Now(),
+	}, nil
+}
+
+// timeOrZero returns *t, or the zero time.Time if t is nil --
+// contract.ToInstant renders a zero time.Time as an unset/zero-valued
+// Instant, matching the proto doc comment's "unset while state is
+// CONFIG_STATE_PENDING" for acked_at.
+func timeOrZero(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
+}
+
+// ListConfigHistory lists a board's full config push history, newest
+// first, keyset paginated (FR61) -- including pending and rejected
+// versions, each visibly marked with its ConfigState (FR35.1). Household-
+// scoped like GetDeviceConfig/GetConfigStatus.
+func (s *LeafLabAPIServer) ListConfigHistory(ctx context.Context, req *pb.ListConfigHistoryRequest) (*pb.ListConfigHistoryResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	}
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
+	beforeVersion, hasBefore, err := contract.DecodeConfigHistoryCursor(req.GetPage().GetPageToken())
+	if err != nil {
+		return nil, contract.InvalidArgument("list_config_history_request", "page_token", "This page link is no longer valid. Start again from the first page.")
+	}
+
+	limit := contract.ClampPageSize(req.GetPage().GetPageSize())
+
+	// Fetch one extra row to detect whether a next page exists without a
+	// separate COUNT query, matching ListBoards' own convention.
+	rows, err := s.repo.ListConfigHistory(ctx, req.DeviceId, beforeVersion, hasBefore, limit+1)
+	if err != nil {
+		s.logger.Error("list config history failed", "device_id", req.DeviceId, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not list this device's config history right now. Please try again.")
+	}
+
+	var nextToken string
+	if int32(len(rows)) > limit {
+		rows = rows[:limit]
+		nextToken = contract.EncodeConfigHistoryCursor(rows[len(rows)-1].Version)
+	}
+
+	entries := make([]*pb.ConfigHistoryEntry, 0, len(rows))
+	for _, r := range rows {
+		state := config.DeriveState(r.Accepted, r.AckedAt, r.RejectionReason)
+		entries = append(entries, &pb.ConfigHistoryEntry{
+			Version:         uint64(r.Version),
+			State:           stateToProto(state),
+			PushedAt:        contract.ToInstant(r.PushedAt),
+			AckedAt:         contract.ToInstant(timeOrZero(r.AckedAt)),
+			RejectionReason: r.RejectionReason,
+			Sentence:        state.Sentence(),
+		})
+	}
+	return &pb.ListConfigHistoryResponse{
+		Entries:   entries,
+		Page:      &pb.PageResponse{NextPageToken: nextToken},
+		ServerNow: contract.Now(),
+	}, nil
+}
+
+// GetConfigVersion fetches any single stored config version by
+// (device_id, version), regardless of whether it was ever accepted
+// (FR35.2), returning its stored payload plus each entry's FR82.4
+// provenance. Household-scoped like GetDeviceConfig/GetConfigStatus.
+func (s *LeafLabAPIServer) GetConfigVersion(ctx context.Context, req *pb.GetConfigVersionRequest) (*pb.GetConfigVersionResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	}
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
+	row, err := s.repo.GetDeviceConfigVersion(ctx, req.DeviceId, int64(req.Version))
+	if err != nil {
+		s.logger.Error("get config version failed", "device_id", req.DeviceId, "version", req.Version, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not look up this config version right now. Please try again.")
+	}
+	if row == nil {
+		return nil, configVersionNotFoundFailure()
+	}
+
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(row.ConfigJSON, &cfg); err != nil {
+		s.logger.Error("unmarshal stored config version failed", "device_id", req.DeviceId, "version", req.Version, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not read this config version right now. Please try again.")
+	}
+	// Version isn't stored in config_json (it's assigned atomically by
+	// InsertDeviceConfigNextVersion after marshaling -- see PushDeviceConfig)
+	// -- filled in here from the row this query resolved by, so a caller
+	// never has to trust an unset/zero field on the returned payload.
+	cfg.Version = uint64(row.Version)
+
+	entryRows, err := s.repo.GetConfigVersionEntries(ctx, row.ConfigID)
+	if err != nil {
+		s.logger.Error("get config version entries failed", "device_id", req.DeviceId, "version", req.Version, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not read this config version's entries right now. Please try again.")
+	}
+	entries := make([]*pb.ConfigVersionEntry, 0, len(entryRows))
+	for _, e := range entryRows {
+		var i2cAddr uint32
+		if e.I2CAddress != nil {
+			i2cAddr = uint32(*e.I2CAddress)
+		}
+		entries = append(entries, &pb.ConfigVersionEntry{
+			MuxPath:    configEntryMuxPath(e.MuxPath),
+			I2CAddress: i2cAddr,
+			SensorType: sensorTypeFromName(e.SensorTypeName),
+			Provenance: provenanceToProto(e.Provenance),
+		})
+	}
+
+	state := config.DeriveState(row.Accepted, row.AckedAt, row.RejectionReason)
+	return &pb.GetConfigVersionResponse{
+		Config:          &cfg,
+		State:           stateToProto(state),
+		PushedAt:        contract.ToInstant(row.PushedAt),
+		AckedAt:         contract.ToInstant(timeOrZero(row.AckedAt)),
+		RejectionReason: row.RejectionReason,
+		Entries:         entries,
+		ServerNow:       contract.Now(),
+	}, nil
+}
+
+// AwaitConfigAck is FR47's bounded wait: it blocks until (device_id,
+// version)'s ack resolves, or the (clamped) requested wait elapses,
+// whichever comes first, and never returns still-pending-at-deadline as an
+// error. Household-scoped like GetConfigStatus/GetConfigVersion.
+//
+// Per leaflab/api/ackwait's doc comment, this handler -- not
+// ackwait.Registry -- is responsible for checking device_config's current
+// state before registering a waiter: an ack that committed moments before
+// this call started would never be observed by a bare Wait, since
+// Registry.Notify only resolves waiters already registered at the moment it
+// runs. So an already-resolved version returns immediately from the read
+// below; only a still-pending version reaches s.ackWait.Wait.
+func (s *LeafLabAPIServer) AwaitConfigAck(ctx context.Context, req *pb.AwaitConfigAckRequest) (*pb.AwaitConfigAckResponse, error) {
+	if reason := validateDeviceID(req.DeviceId); reason != "" {
+		return nil, contract.InvalidArgument("device_config", "device_id", reason)
+	}
+	if err := s.authorizeBoardAccess(ctx, req.DeviceId); err != nil {
+		return nil, err
+	}
+
+	row, err := s.repo.GetDeviceConfigVersion(ctx, req.DeviceId, int64(req.Version))
+	if err != nil {
+		s.logger.Error("await config ack: get config version failed", "device_id", req.DeviceId, "version", req.Version, "error", err)
+		return nil, contract.Internal("device_config", "", "Could not look up this config version right now. Please try again.")
+	}
+	if row == nil {
+		return nil, configVersionNotFoundFailure()
+	}
+
+	if state := config.DeriveState(row.Accepted, row.AckedAt, row.RejectionReason); state != config.StatePending {
+		return &pb.AwaitConfigAckResponse{
+			Result:          ackWaitResultFromConfigState(state),
+			RejectionReason: row.RejectionReason,
+			ServerNow:       contract.Now(),
+		}, nil
+	}
+
+	if s.ackWait == nil {
+		s.logger.Error("AwaitConfigAck called with no ackwait.Registry wired", "device_id", req.DeviceId, "version", req.Version)
+		return nil, contract.Internal("device_config", "", "Could not process this request right now. Please try again.")
+	}
+
+	// req.RequestedWaitSeconds is clamped to ackwait.MaxWait inside Wait
+	// itself (see Clamp's doc comment) -- a zero/unset request is not
+	// treated as "return immediately", and a request over 30s is not
+	// rejected as invalid_argument (FR47).
+	requested := time.Duration(req.RequestedWaitSeconds) * time.Second
+	result, reason := s.ackWait.Wait(ctx, req.DeviceId, int64(req.Version), requested)
+
+	return &pb.AwaitConfigAckResponse{
+		Result:          ackWaitResultFromRegistryResult(result),
+		RejectionReason: reason,
+		ServerNow:       contract.Now(),
+	}, nil
+}
+
+// ackWaitResultFromConfigState maps config.State (from a device_config row
+// already read back) onto AwaitConfigAck's wire AckWaitResult for an
+// already-resolved version. Never called with config.StatePending -- see
+// AwaitConfigAck's caller.
+func ackWaitResultFromConfigState(s config.State) pb.AckWaitResult {
+	switch s {
+	case config.StateAccepted:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_ACCEPTED
+	case config.StateRejected:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_REJECTED
+	default:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_STILL_PENDING_AT_DEADLINE
+	}
+}
+
+// ackWaitResultFromRegistryResult mirrors ackWaitResultFromConfigState for
+// ackwait.Registry.Wait's outcome -- the two are kept as separate functions
+// (rather than one shared conversion) because they translate from two
+// distinct source types with no shared representation.
+func ackWaitResultFromRegistryResult(r ackwait.Result) pb.AckWaitResult {
+	switch r {
+	case ackwait.ResultAccepted:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_ACCEPTED
+	case ackwait.ResultRejected:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_REJECTED
+	default:
+		return pb.AckWaitResult_ACK_WAIT_RESULT_STILL_PENDING_AT_DEADLINE
+	}
 }

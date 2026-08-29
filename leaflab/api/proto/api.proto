@@ -10,8 +10,12 @@ import "firmware/proto/firmware.proto";
 // LeafLabAPI is the control-plane API for managing leaflab sensor boards.
 service LeafLabAPI {
   // Push a new DeviceConfig to a board over MQTT.
-  // The server assigns a monotonically increasing version; the caller supplies
-  // only the sensor overrides (names, enabled state, poll interval).
+  // The server assigns a monotonically increasing version. FR82: this is
+  // replace semantics, not an overlay of overrides -- what the payload
+  // (plus, under scope=EDIT, the board's current accepted config) means as
+  // a whole is the board's new entire desired sensor set. See `scope` and
+  // `removes` on PushDeviceConfigRequest for the two ways a caller states
+  // that desired set.
   rpc PushDeviceConfig(PushDeviceConfigRequest) returns (PushDeviceConfigResponse);
 
   // Get the latest config that was accepted by a board.
@@ -303,18 +307,277 @@ service LeafLabAPI {
   // side by side on one time axis. They are never merged server-side into
   // one combined timeline: see GetSensorTimelinesResponse's doc comment.
   rpc GetSensorTimelines(GetSensorTimelinesRequest) returns (GetSensorTimelinesResponse);
+
+  // GetConfigStatus reports one pushed config version's FR34.1 derived
+  // state (accepted/pending/rejected) plus pushed-at, acked-at and the
+  // firmware's verbatim rejection reason. See ConfigState's doc comment.
+  rpc GetConfigStatus(GetConfigStatusRequest) returns (GetConfigStatusResponse);
+
+  // ListConfigHistory lists a board's full config push history, newest
+  // first, keyset paginated (FR61) -- including pending and rejected
+  // versions, each visibly marked with its ConfigState (FR35.1).
+  rpc ListConfigHistory(ListConfigHistoryRequest) returns (ListConfigHistoryResponse);
+
+  // GetConfigVersion fetches any single stored config version by
+  // (device_id, version), regardless of whether it was ever accepted
+  // (FR35.2), returning its stored payload plus each entry's FR82.4
+  // provenance.
+  rpc GetConfigVersion(GetConfigVersionRequest) returns (GetConfigVersionResponse);
+
+  // AwaitConfigAck is FR47's bounded wait: it blocks until the board's ack
+  // for (device_id, version) resolves -- accepted or rejected -- or a
+  // deadline elapses, whichever comes first, and returns
+  // still-pending-at-deadline (never an error) if the deadline wins. A
+  // caller must not satisfy this requirement by polling GetConfigStatus's
+  // version integer in a loop instead (FR47); GetConfigStatus remains the
+  // purpose-built RPC that *is* acceptable to poll. Resolution is
+  // delivered by leaflab/invalidation's fanout exchange (NFR15's
+  // every-replica constraint) -- the same mechanism FR73 uses, not a
+  // second transport.
+  rpc AwaitConfigAck(AwaitConfigAckRequest) returns (AwaitConfigAckResponse);
+}
+
+// ConfigState is FR34.1's three distinct states a pushed config version can
+// be in -- derived from device_config's existing accepted/acked_at/
+// rejection_reason columns (leaflab/api/config.DeriveState is the one place
+// that computes it); there is no separate stored status column. Pending is
+// never rendered as rejected, and a rejected push is never indistinguishable
+// from "no push at all" -- CONFIG_STATE_UNSPECIFIED exists only as proto3's
+// required zero value and is never a state this API reports for a config
+// version that actually exists.
+enum ConfigState {
+  CONFIG_STATE_UNSPECIFIED = 0;
+  // acked_at is set and device_config.accepted is true.
+  CONFIG_STATE_ACCEPTED = 1;
+  // acked_at IS NULL -- the board has not answered yet.
+  CONFIG_STATE_PENDING = 2;
+  // acked_at is set and device_config.accepted is false. rejection_reason
+  // on the enclosing response carries the firmware's verbatim reason.
+  CONFIG_STATE_REJECTED = 3;
+}
+
+// EntryProvenance is FR82.4's per-entry provenance value, on the wire --
+// mirrors leaflab/api/config.Provenance exactly (see that type's doc
+// comment). Returned per entry by GetConfigVersion.
+enum EntryProvenance {
+  ENTRY_PROVENANCE_UNSPECIFIED = 0;
+  // Named by the caller in the request that stored this entry (an
+  // add/change, or -- for a RemovedEntry -- a removal).
+  ENTRY_PROVENANCE_AUTHORED = 1;
+  // Carried forward unchanged from an EDIT push's materialisation base,
+  // without the caller naming it in that push at all.
+  ENTRY_PROVENANCE_MATERIALISED = 2;
+}
+
+message GetConfigStatusRequest {
+  string device_id = 1;
+  uint64 version = 2;
+}
+
+message GetConfigStatusResponse {
+  ConfigState state = 1;
+  Instant pushed_at = 2;
+  // Unset while state is CONFIG_STATE_PENDING.
+  Instant acked_at = 3;
+  // The firmware's verbatim rejection reason (FR34.1) -- set only when
+  // state is CONFIG_STATE_REJECTED; never paraphrased or normalised.
+  string rejection_reason = 4;
+  // FR34.2/FR59.2: one of three persona-appropriate, complete sentences --
+  // "it worked / it hasn't answered yet / it didn't work" -- with no
+  // version number and no status code, rendered server-side (NFR18.1) so a
+  // BFF picks by `state` rather than composing its own text.
+  string sentence = 5;
+  Instant server_now = 6;
+}
+
+message ListConfigHistoryRequest {
+  string device_id = 1;
+  // Keyset page request (FR61). Unset/empty requests the first (newest)
+  // page.
+  PageRequest page = 2;
+}
+
+// ConfigHistoryEntry is one version in a board's config push history
+// (FR35.1) -- always visibly marked with its ConfigState, including
+// pending and rejected versions, which are never omitted from this list.
+message ConfigHistoryEntry {
+  uint64 version = 1;
+  ConfigState state = 2;
+  Instant pushed_at = 3;
+  Instant acked_at = 4;
+  string rejection_reason = 5;
+  string sentence = 6;
+}
+
+message ListConfigHistoryResponse {
+  // Newest first (FR35.1).
+  repeated ConfigHistoryEntry entries = 1;
+  PageResponse page = 2;
+  Instant server_now = 3;
+}
+
+message GetConfigVersionRequest {
+  string device_id = 1;
+  uint64 version = 2;
+}
+
+// ConfigVersionEntry names one entry in a fetched config version's stored
+// payload and its FR82.4 provenance -- the canonical hardware key shape
+// (mirroring RemovedEntry, above) rather than an index into `sensors`, so
+// a caller can match an entry to its provenance without assuming array
+// order.
+message ConfigVersionEntry {
+  repeated firmware.MuxHop mux_path = 1;
+  uint32 i2c_address = 2;
+  firmware.SensorType sensor_type = 3;
+  EntryProvenance provenance = 4;
+}
+
+message GetConfigVersionResponse {
+  // The stored complete payload for this version, regardless of whether it
+  // was ever accepted (FR35.2).
+  firmware.DeviceConfig config = 1;
+  ConfigState state = 2;
+  Instant pushed_at = 3;
+  Instant acked_at = 4;
+  string rejection_reason = 5;
+  // FR82.4: this version's per-entry provenance.
+  repeated ConfigVersionEntry entries = 6;
+  Instant server_now = 7;
+}
+
+// AckWaitResult is AwaitConfigAck's FR47 outcome. There is no default:
+// ACK_WAIT_RESULT_UNSPECIFIED exists only as proto3's required zero value
+// and is never a value this RPC actually returns.
+enum AckWaitResult {
+  ACK_WAIT_RESULT_UNSPECIFIED = 0;
+  // The board's ack for this version accepted it. Mirrors ConfigState's
+  // CONFIG_STATE_ACCEPTED (FR45: only ever written from the device's own
+  // ack path -- see AckWaitResult's callers, never any API request
+  // handler).
+  ACK_WAIT_RESULT_ACCEPTED = 1;
+  // The board's ack for this version rejected it. rejection_reason on the
+  // response carries the firmware's verbatim reason.
+  ACK_WAIT_RESULT_REJECTED = 2;
+  // Neither an accepting nor a rejecting ack was observed before the
+  // (possibly clamped) deadline elapsed -- never returned as an error
+  // (FR47). The version may still resolve later; a caller re-issues
+  // AwaitConfigAck or polls GetConfigStatus (never a raw version integer)
+  // to learn the eventual outcome.
+  ACK_WAIT_RESULT_STILL_PENDING_AT_DEADLINE = 3;
+}
+
+message AwaitConfigAckRequest {
+  string device_id = 1;
+  uint64 version = 2;
+  // Requested wait, in whole seconds. The server honours a maximum of 30s
+  // (FR47): a larger value here is silently clamped down to 30, never
+  // rejected as invalid_argument. Zero/unset is also clamped up to the
+  // server's own default wait, not treated as "return immediately" --
+  // see leaflab/api/ackwait.Clamp, the one place this clamping happens.
+  uint32 requested_wait_seconds = 3;
+}
+
+message AwaitConfigAckResponse {
+  AckWaitResult result = 1;
+  // The firmware's verbatim rejection reason (FR45, FR47) -- set only
+  // when result is ACK_WAIT_RESULT_REJECTED; never paraphrased.
+  string rejection_reason = 2;
+  Instant server_now = 3;
+}
+
+// PushScope states what a PushDeviceConfigRequest's payload means as a
+// whole (FR82.1). There is no default: PUSH_SCOPE_UNSPECIFIED exists only
+// so an omitted scope is detectable and rejected -- it is never treated as
+// either real value, and scope is never inferred from payload shape, entry
+// count, request size, caller identity, or which endpoint was called
+// (A27).
+enum PushScope {
+  PUSH_SCOPE_UNSPECIFIED = 0;
+  // The payload is the board's entire desired sensor set (FR82.2). An
+  // entry absent from it is removed from the desired state. This is what
+  // a leaflab/scripts/scenarios/*.json file has always meant.
+  PUSH_SCOPE_COMPLETE = 1;
+  // The payload names only the entries being added or changed, plus
+  // `removes` (FR82.3/FR82.4). An entry named in neither is unchanged and
+  // is materialised server-side from the board's current accepted config
+  // version alone -- never from the reported manifest.
+  PUSH_SCOPE_EDIT = 2;
+}
+
+// RemoveKey names one FR82.4 removal. Two forms, distinguished by whether
+// sensor_type is set:
+//   - full canonical key (sensor_type set): drops exactly the one config
+//     entry at (i2c_address, mux_path, sensor_type) -- the same three-part
+//     key FR18 canonicalises and idx_sensor_hw_address enforces uniqueness
+//     on.
+//   - chip key (sensor_type unset): drops every entry at (i2c_address,
+//     mux_path), regardless of sensor_type -- the form that matches the
+//     physical action of unsoldering a part (e.g. one CCS811 is eCO2 and
+//     TVOC at a single address; a chip-key remove drops both).
+// An i2c_address of 0 (the legacy manifests' "unknown address" sentinel,
+// FR18.2) never resolves to a removable entry: such an entry has no
+// removal path via EDIT at all (FR82.4's stated limitation) -- only via a
+// COMPLETE push that omits it.
+message RemoveKey {
+  repeated firmware.MuxHop mux_path = 1;  // empty = directly on root bus
+  uint32 i2c_address = 2;
+  optional firmware.SensorType sensor_type = 3;
+}
+
+// RemoveForm states which of FR82.4's two removal forms named a given
+// RemovedEntry -- full canonical key (sensor_type was set on the wire) or
+// chip key (sensor_type was absent), mirroring RemoveKey's own two forms.
+enum RemoveForm {
+  REMOVE_FORM_UNSPECIFIED = 0;
+  // sensor_type was set on the matching RemoveKey -- this was the one
+  // entry it named.
+  REMOVE_FORM_FULL_KEY = 1;
+  // sensor_type was absent on the matching RemoveKey -- this entry was
+  // one of possibly several dropped alongside it at the same
+  // (i2c_address, mux_path).
+  REMOVE_FORM_CHIP_KEY = 2;
+}
+
+// RemovedEntry states one config entry an EDIT-scope push dropped and
+// which RemoveForm named it (FR82.4: "which form was used is stated back
+// to the caller"). Always empty under scope=COMPLETE, where there is no
+// remove list.
+message RemovedEntry {
+  repeated firmware.MuxHop mux_path = 1;  // empty = directly on root bus
+  uint32 i2c_address = 2;
+  firmware.SensorType sensor_type = 3;
+  RemoveForm form = 4;
 }
 
 message PushDeviceConfigRequest {
   string device_id = 1;
-  // Sensor overrides — each entry is matched to a hardware sensor by
-  // (mux_path, i2c_address). Sensors with no matching entry are unchanged.
+  // The desired-state payload (FR82, NFR17) -- replace semantics, not a
+  // set of overrides layered onto whatever the board already has.
+  // Required; meaning depends on `scope`:
+  //   - scope=COMPLETE: this is the board's entire desired sensor set
+  //     (FR82.2). An entry absent from it is removed.
+  //   - scope=EDIT: this lists only entries being added or changed
+  //     (FR82.3). Everything else carries forward from the board's
+  //     current accepted config version, and `removes` (not omission)
+  //     is how an EDIT push drops an entry.
   repeated firmware.SensorConfig sensors = 2;
+  // Required; no default (FR82.1). A request that omits this (leaves it
+  // PUSH_SCOPE_UNSPECIFIED) is rejected before anything is stored or
+  // published, naming this field.
+  PushScope scope = 3;
+  // EDIT-scope removal list (FR82.4). Unused (must be empty) under
+  // scope=COMPLETE, where an entry is removed by omitting it from
+  // `sensors` instead.
+  repeated RemoveKey removes = 4;
 }
 
 message PushDeviceConfigResponse {
   // Version assigned to this push.
   uint64 version = 1;
+  // FR82.4: entries this push's EDIT-scope removal dropped, each stating
+  // which removal form named it. Always empty under scope=COMPLETE.
+  repeated RemovedEntry removed = 2;
 }
 
 message RewireSensorRequest {

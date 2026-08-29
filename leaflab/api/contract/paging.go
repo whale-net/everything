@@ -229,3 +229,32 @@ func DecodeIntervalCursor(token string) (validFrom time.Time, id int64, ok bool,
 	}
 	return time.Unix(0, nanos), rowID, true, nil
 }
+
+// EncodeConfigHistoryCursor seals the (version) keyset used by
+// ListConfigHistory's page_token (FR35.1/FR61). ListConfigHistory orders
+// newest first (ORDER BY version DESC), so the cursor carries the last
+// (lowest) version on the page just returned, and the next page's query
+// resumes with `version < cursor`.
+func EncodeConfigHistoryCursor(version int64) string {
+	return EncodeCursor(strconv.FormatInt(version, 10))
+}
+
+// DecodeConfigHistoryCursor is EncodeConfigHistoryCursor's inverse. An
+// empty token decodes to (0, false, nil), meaning "first (newest) page".
+func DecodeConfigHistoryCursor(token string) (version int64, ok bool, err error) {
+	values, err := DecodeCursor(token)
+	if err != nil {
+		return 0, false, err
+	}
+	if values == nil {
+		return 0, false, nil
+	}
+	if len(values) != 1 {
+		return 0, false, fmt.Errorf("%w: config history cursor expects 1 field, got %d", ErrInvalidPageToken, len(values))
+	}
+	v, err := strconv.ParseInt(values[0], 10, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: config history cursor version is not an integer", ErrInvalidPageToken)
+	}
+	return v, true, nil
+}

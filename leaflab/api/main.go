@@ -14,8 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/whale-net/everything/leaflab/api/ackwait"
 	"github.com/whale-net/everything/leaflab/api/authz"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/api/ratelimit"
 	"github.com/whale-net/everything/leaflab/api/readings"
 	"github.com/whale-net/everything/leaflab/invalidation"
 	"github.com/whale-net/everything/libs/go/db"
@@ -124,7 +126,35 @@ func run() error {
 	repo.SetInvalidationPublisher(invalidationPub)
 	authzSvc := authz.NewPGResolver(pool)
 	readingsSvc := readings.NewReader(pool)
-	apiServer := NewLeafLabAPIServer(repo, authzSvc, readingsSvc, publisher, rmqConn, invalidationPub, logging.Get("api"), WithElevationDuration(elevationDuration))
+
+	// FR47/NFR15: this replica's in-memory registry of open AwaitConfigAck
+	// waiters. One Registry per process is sufficient -- see
+	// leaflab/api/ackwait's doc comment for why this satisfies NFR15's
+	// every-replica broadcast constraint without a shared store.
+	ackWaitRegistry := ackwait.NewRegistry()
+	apiServer := NewLeafLabAPIServer(repo, authzSvc, readingsSvc, publisher, rmqConn, invalidationPub, logging.Get("api"), WithElevationDuration(elevationDuration)).
+		WithAckWaitRegistry(ackWaitRegistry)
+
+	// NFR15: observes every KindAck event published by leaflab/processor's
+	// ack write path (handleConfigAck), on the same fanout exchange FR73
+	// already uses -- not a second transport -- and resolves this replica's
+	// own ackWaitRegistry waiters. Every API replica runs its own Subscriber
+	// bound to the same exchange, so a bounded wait pinned to any one
+	// replica resolves the same way regardless of which replica received
+	// the AwaitConfigAck call. See leaflab/invalidation's doc comment.
+	ackInvalidationSub, err := invalidation.NewSubscriber(rmqConn, logging.Get("ackwait"))
+	if err != nil {
+		return fmt.Errorf("ack invalidation subscriber: %w", err)
+	}
+	defer ackInvalidationSub.Close() //nolint:errcheck
+	if err := ackInvalidationSub.Start(ctx, func(_ context.Context, ev invalidation.Event) {
+		if ev.Kind != invalidation.KindAck {
+			return
+		}
+		ackWaitRegistry.Notify(ev.DeviceID, ev.Version, ev.Accepted, ev.RejectionReason)
+	}); err != nil {
+		return fmt.Errorf("start ack invalidation subscriber: %w", err)
+	}
 
 	// FR11: every RPC goes through grpcauth. AuthModeNone injects fake dev
 	// Claims and is intended for local development only -- see the
@@ -145,7 +175,18 @@ func run() error {
 
 	rpcLogger := logging.Get("rpc")
 
-	grpcServer := buildServer(authUnary, authStream, rpcLogger, apiServer, devMode)
+	// NFR10: per-principal and per-session rate limiting, configurable per
+	// environment via leaflab/api/ENV.md's LEAFLAB_API_RATELIMIT_* variables
+	// (see ratelimit.EnvVarNames). Loaded before the server is built so a
+	// malformed variable fails boot immediately, same as the auth config
+	// validated above.
+	rateLimitConfigs, err := ratelimit.LoadConfigFromEnv(os.Getenv)
+	if err != nil {
+		return fmt.Errorf("rate limit config: %w", err)
+	}
+	limiter := ratelimit.NewInMemoryLimiter(rateLimitConfigs)
+
+	grpcServer := buildServer(authUnary, authStream, rpcLogger, apiServer, devMode, limiter)
 
 	listener, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
@@ -200,15 +241,17 @@ func validateAuthBootConfig(mode grpcauth.AuthMode, devMode bool) error {
 // startTestServer in main_test.go) or assert on reflection registration,
 // without a TCP listener or a dialed DB/RabbitMQ connection.
 //
-// Chain order (NFR12): correlation-id -> auth -> acting-subject logging ->
-// handler. "auth" is two interceptors: authUnary/authStream (verifies a
-// presented token, injects Claims -- grpcauth's own in production; see
-// run()) followed immediately by auth.go's enforcement interceptor
-// (rejects any non-allowlisted method that reaches it with no Claims -- see
-// its doc comment for why grpcauth alone doesn't enforce this).
-// Correlation-id runs first so even an auth rejection is logged against the
-// same id; subject-logging runs after auth so Claims are already in
-// context.
+// Chain order (NFR12): correlation-id -> auth -> rate limit -> acting-
+// subject logging -> handler. "auth" is two interceptors: authUnary/
+// authStream (verifies a presented token, injects Claims -- grpcauth's own
+// in production; see run()) followed immediately by auth.go's enforcement
+// interceptor (rejects any non-allowlisted method that reaches it with no
+// Claims -- see its doc comment for why grpcauth alone doesn't enforce
+// this). Correlation-id runs first so even an auth/rate-limit rejection is
+// logged against the same id. Rate limiting (NFR10, ratelimit_interceptor.go)
+// runs immediately after auth, before subject-logging, for two reasons:
+// key derivation needs Claims already in context, and a request auth has
+// already rejected must never consume rate-limit budget.
 //
 // Server reflection is a discovery/debugging aid; disabled outside
 // explicit dev mode so a deployed environment never exposes it (FR11).
@@ -217,7 +260,7 @@ func validateAuthBootConfig(mode grpcauth.AuthMode, devMode bool) error {
 // check, audit_registry.go): a write RPC registered with no audit
 // registration panics here, at startup, rather than shipping a silently
 // unaudited write RPC to production.
-func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamServerInterceptor, rpcLogger *slog.Logger, apiServer pb.LeafLabAPIServer, devMode bool) *grpc.Server {
+func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamServerInterceptor, rpcLogger *slog.Logger, apiServer pb.LeafLabAPIServer, devMode bool, limiter ratelimit.Limiter) *grpc.Server {
 	MustValidateAuditRegistrations()
 
 	grpcServer := grpc.NewServer(
@@ -225,12 +268,14 @@ func buildServer(authUnary grpc.UnaryServerInterceptor, authStream grpc.StreamSe
 			NewCorrelationUnaryInterceptor(),
 			authUnary,
 			NewAuthEnforcementUnaryInterceptor(),
+			NewRateLimitUnaryInterceptor(limiter),
 			NewSubjectLoggingUnaryInterceptor(rpcLogger),
 		),
 		grpc.ChainStreamInterceptor(
 			NewCorrelationStreamInterceptor(),
 			authStream,
 			NewAuthEnforcementStreamInterceptor(),
+			NewRateLimitStreamInterceptor(limiter),
 			NewSubjectLoggingStreamInterceptor(rpcLogger),
 		),
 	)

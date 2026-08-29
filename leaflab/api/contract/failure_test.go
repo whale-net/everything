@@ -2,6 +2,7 @@ package contract
 
 import (
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -123,6 +124,57 @@ func TestRefuse_CarriesReasonAndAlternative_DistinctFromInvalidArgument(t *testi
 	}
 	if stRefuse.Code() != codes.FailedPrecondition {
 		t.Errorf("Refuse gRPC code = %v, want %v", stRefuse.Code(), codes.FailedPrecondition)
+	}
+}
+
+// TestRateLimitedWithRetry_RetryInfoRoundTrips covers NFR10's retry hint:
+// RateLimitedWithRetry's structured google.rpc.RetryInfo detail must survive
+// the gRPC status wire encoding intact -- RetryAfterFromError (its declared
+// inverse) recovers the exact retryAfter duration passed in, without either
+// side ever touching the status message string. Also proves the retry hint
+// coexists with the ordinary pb.Failure detail (FR59.1) on the same error,
+// and that the class/code are exactly FailureRateLimited/ResourceExhausted.
+func TestRateLimitedWithRetry_RetryInfoRoundTrips(t *testing.T) {
+	const retryAfter = 17 * time.Second
+	err := RateLimitedWithRetry("request", "", "Too many requests. Try again shortly.", retryAfter)
+
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("code = %v, want %v", status.Code(err), codes.ResourceExhausted)
+	}
+
+	detail, ok := FromError(err)
+	if !ok {
+		t.Fatal("FromError missing Failure detail on a RateLimitedWithRetry error")
+	}
+	if detail.Class != string(FailureRateLimited) {
+		t.Errorf("Class = %q, want %q", detail.Class, FailureRateLimited)
+	}
+
+	gotRetryAfter, ok := RetryAfterFromError(err)
+	if !ok {
+		t.Fatal("RetryAfterFromError missing RetryInfo detail on a RateLimitedWithRetry error")
+	}
+	if gotRetryAfter != retryAfter {
+		t.Errorf("RetryAfterFromError = %v, want %v (round trip)", gotRetryAfter, retryAfter)
+	}
+}
+
+// TestRetryAfterFromError_NoDetail_ReturnsFalse proves RetryAfterFromError
+// degrades gracefully for an error that never carried a RetryInfo detail --
+// including an ordinary RateLimited error built without a retry hint, and a
+// wholly unrelated status.
+func TestRetryAfterFromError_NoDetail_ReturnsFalse(t *testing.T) {
+	plainRateLimited := RateLimited("request", "", "Too many requests.")
+	if _, ok := RetryAfterFromError(plainRateLimited); ok {
+		t.Error("RetryAfterFromError on a RateLimited error with no retry hint returned ok=true")
+	}
+
+	unrelated := status.New(codes.Internal, "boom").Err()
+	if _, ok := RetryAfterFromError(unrelated); ok {
+		t.Error("RetryAfterFromError on an unrelated status returned ok=true")
+	}
+	if _, ok := RetryAfterFromError(nil); ok {
+		t.Error("RetryAfterFromError(nil) returned ok=true")
 	}
 }
 

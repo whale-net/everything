@@ -170,6 +170,7 @@ func TestPushDeviceConfig_ForeignHouseholdRegion_RefusedInvalidArgument_WritesNo
 
 	_, err := server.PushDeviceConfig(ctx, &pb.PushDeviceConfigRequest{
 		DeviceId: "device-a",
+		Scope:    pb.PushScope_PUSH_SCOPE_COMPLETE,
 		Sensors: []*configpb.SensorConfig{
 			{Name: "sensor-1", RegionId: uint32(regionB)},
 		},

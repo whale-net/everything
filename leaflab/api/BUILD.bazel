@@ -8,12 +8,14 @@ go_library(
     srcs = [
         "audit_registry.go",
         "auth.go",
+        "config_push.go",
         "identity.go",
         "logging_interceptor.go",
         "main.go",
         "plant_type_bands.go",
         "plant_types.go",
         "plants.go",
+        "ratelimit_interceptor.go",
         "regions.go",
         "relocate.go",
         "repository.go",
@@ -25,12 +27,15 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/api/ackwait",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
         "//leaflab/api/capture",
+        "//leaflab/api/config",
         "//leaflab/api/contract",
         "//leaflab/api/placement",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
         "//leaflab/api/readings",
         "//leaflab/api/tiers",
         "//leaflab/hwkey",
@@ -44,6 +49,7 @@ go_library(
         "@com_github_jackc_pgx_v5//pgxpool",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//peer",
         "@org_golang_google_grpc//reflection",
         "@org_golang_google_protobuf//encoding/protojson",
         "@org_golang_google_protobuf//proto",
@@ -67,16 +73,22 @@ release_app(
     replicas = 1,
 )
 
-# FR11/FR12/FR63 auth-and-health test suite: auth.go's enforcement
-# interceptor and allowlist in isolation (auth_test.go), GetHealth's
-# DEGRADED/UP probe logic against an in-memory fake repository
-# (server_test.go), the full production interceptor chain -- built via
-# buildServer, the exact function run() calls -- behind a bufconn listener
-# with a stub RPC handler standing in for Postgres/RabbitMQ (main_test.go),
-# and FR8's startup audit-registration check against both the real
-# production registry and a deliberately unregistered write method
-# (audit_registry_test.go). No Docker/network required; safe to run in
-# `bazel test //leaflab/...`.
+# FR11/FR12/FR63/NFR10 auth-health-rate-limit-and-config test suite:
+# auth.go's enforcement interceptor and allowlist in isolation
+# (auth_test.go), GetHealth's DEGRADED/UP probe logic against an in-memory
+# fake repository (server_test.go), the full production interceptor chain
+# -- built via buildServer, the exact function run() calls -- behind a
+# bufconn listener with a stub RPC handler standing in for
+# Postgres/RabbitMQ (main_test.go), FR8's startup audit-registration check
+# against both the real production registry and a deliberately
+# unregistered write method (audit_registry_test.go), NFR10's rate-limit
+# interceptor: principalKey derivation, oracle-safety, principal/session
+# independence and window-rollover recovery, both directly
+# (checkRateLimitBuckets) and over the wire (ratelimit_interceptor_test.go),
+# and config lifecycle / PushDeviceConfig scope semantics
+# (server_config_lifecycle_test.go, server_push_device_config_scope_test.go,
+# server_push_device_config_test.go). No Docker/network required; safe to
+# run in `bazel test //leaflab/...`.
 # Hand-written (not gazelle-generated) per this package's gazelle gotcha --
 # see the response_contract_integration_test.go rule below. `# keep` tells a
 # later `bazel run //:gazelle` not to touch or remove this rule.
@@ -89,7 +101,12 @@ go_test(
         "auth_test.go",
         "main_test.go",
         "plant_type_bands_scope_test.go",
+        "ratelimit_interceptor_test.go",
+        "repository_ack_surface_test.go",
         "server_admin_test.go",
+        "server_awaitconfigack_test.go",
+        "server_config_lifecycle_test.go",
+        "server_push_device_config_scope_test.go",
         "server_push_device_config_test.go",
         "server_test.go",
     ],
@@ -97,15 +114,20 @@ go_test(
     embedsrcs = ["plant_type_bands.go"],
     deps = [
         "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
+        "//leaflab/api/ackwait",
         "//leaflab/api/audit",
         "//leaflab/api/authz",
+        "//leaflab/api/config",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/api/ratelimit",
         "//libs/go/grpcauth",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//peer",
         "@org_golang_google_grpc//status",
         "@org_golang_google_grpc//test/bufconn",
         "@org_golang_google_protobuf//proto",
@@ -550,6 +572,88 @@ go_test(
 #
 # Run it explicitly (requires a working Docker daemon):
 #   bazel test //leaflab/api:identity_integration_test --test_output=all
+# Real-Postgres integration coverage for FR82's config push scope
+# semantics -- per-entry provenance persistence, EDIT materialisation
+# against a real accepted base (never the reported manifest), and the
+# stored-payload <-> scenario-file round trip -- see
+# push_device_config_scope_integration_test.go's doc comment. Same tag set
+# and hand-written rationale as the other integration go_test targets
+# above. `data` carries the real scenario fixture the round-trip test
+# loads via the Bazel runfiles manifest (see leaflab/BUILD.bazel's
+# exports_files), mirroring hwkey_test's own data-attribute pattern
+# (leaflab/hwkey/BUILD.bazel).
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:push_device_config_scope_integration_test --test_output=all
+go_test(
+    # keep
+    name = "push_device_config_scope_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "dbtest_helpers_integration_test.go",
+        "push_device_config_scope_integration_test.go",
+    ],
+    data = ["//leaflab:scripts/scenarios/light-temp-humi-mux.json"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//firmware/proto:configpb",
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/config",
+        "//leaflab/hwkey",
+        "//libs/go/dbtest",
+        "//libs/go/grpcauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_google_protobuf//encoding/protojson",
+        "@org_golang_google_protobuf//proto",
+        "@rules_go//go/runfiles",
+    ],
+)
+
+# Real-Postgres integration coverage for FR34/FR35's repository reads --
+# see config_lifecycle_integration_test.go's doc comment. Same tag set and
+# hand-written rationale as the other integration go_test targets above.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:config_lifecycle_integration_test --test_output=all
+go_test(
+    # keep
+    name = "config_lifecycle_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "config_lifecycle_integration_test.go",
+        "dbtest_helpers_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/config",
+        "//leaflab/api/contract",
+        "//leaflab/hwkey",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
 go_test(
     # keep
     name = "identity_integration_test",
@@ -569,6 +673,7 @@ go_test(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/api/authz",
         "//leaflab/api/contract",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/dbtest",
@@ -613,6 +718,50 @@ go_test(
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
+
+# Real-RabbitMQ integration coverage for NFR15's falsifiable every-replica
+# claim, and the competing-consumer variant that proves it has teeth -- see
+# nfr15_ack_broadcast_integration_test.go's doc comment. Same tag set as
+# leaflab/processor:invalidation_integration_test (see that target's
+# comment for what each tag does). `# keep` marker tells a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:nfr15_ack_broadcast_integration_test --test_output=all
+#
+# Also runs in CI: the `test-leaflab-broadcast` job in
+# .github/workflows/ci.yml invokes this target by name (it is `manual` so
+# the wildcard Test job's `bazel coverage //...` skips it, and it depends
+# on real RabbitMQ via testcontainers-go rather than //libs/go/dbtest, so
+# the Test Database Integration job's rdeps query doesn't pick it up
+# either) -- see issue #1373's Validation: "the two-replica test is in
+# CI, not manual."
+go_test(
+    # keep
+    name = "nfr15_ack_broadcast_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["nfr15_ack_broadcast_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/ackwait",
+        "//leaflab/invalidation",
+        "//libs/go/rmq",
+        "@com_github_rabbitmq_amqp091_go//:amqp091-go",
+        "@com_github_testcontainers_testcontainers_go//:testcontainers-go",
+        "@com_github_testcontainers_testcontainers_go//wait",
+    ],
+)
+
 
 # Real-Postgres (TimescaleDB) integration coverage for #1379's FR51/FR52 --
 # see sensor_region_integration_test.go's doc comment. Same tag set and

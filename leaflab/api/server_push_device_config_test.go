@@ -56,6 +56,7 @@ func TestPushDeviceConfig_ForeignHouseholdRegion_Refused_WritesNothing(t *testin
 
 	_, err := server.PushDeviceConfig(authedTestCtx("alice"), &pb.PushDeviceConfigRequest{
 		DeviceId: "device-a",
+		Scope:    pb.PushScope_PUSH_SCOPE_COMPLETE,
 		Sensors: []*configpb.SensorConfig{
 			{RegionId: foreignRegionID},
 		},
@@ -108,6 +109,7 @@ func TestPushDeviceConfig_NoPartialApplication_OneBadEntryRefusesWholeBatch(t *t
 
 	_, err := server.PushDeviceConfig(authedTestCtx("alice"), &pb.PushDeviceConfigRequest{
 		DeviceId: "device-a",
+		Scope:    pb.PushScope_PUSH_SCOPE_COMPLETE,
 		Sensors: []*configpb.SensorConfig{
 			{Name: "good-sensor", RegionId: sameHouseholdRegionID},
 			{Name: "bad-sensor", RegionId: foreignRegionID},
@@ -157,6 +159,7 @@ func TestPushDeviceConfig_SameHouseholdRegion_PassesValidation_ReachesStorage(t 
 
 	_, err := server.PushDeviceConfig(authedTestCtx("alice"), &pb.PushDeviceConfigRequest{
 		DeviceId: "device-a",
+		Scope:    pb.PushScope_PUSH_SCOPE_COMPLETE,
 		Sensors: []*configpb.SensorConfig{
 			{Name: "sensor-1", RegionId: sameHouseholdRegionID},
 		},

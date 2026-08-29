@@ -73,6 +73,14 @@ erDiagram
         timestamptz acked_at
     }
 
+    device_config_entry {
+        bigserial config_id FK
+        smallint  i2c_address
+        jsonb     mux_path
+        bigint    sensor_type_id FK
+        text      provenance
+    }
+
     sensor_reading {
         bigserial   reading_id PK
         bigint      sensor_id FK
@@ -113,6 +121,8 @@ erDiagram
     region           ||--o{ sensor_region_history: "hosts"
     sensor           ||--o{ sensor_reading       : "produces"
     board            ||--o{ device_config        : "configured by"
+    device_config    ||--o{ device_config_entry  : "per-entry provenance"
+    sensor_type      ||--o{ device_config_entry  : "classifies"
     sensor_chip      ||--o{ sensor_chip_address  : "known addresses"
     sensor_chip      ||--o{ sensor_chip_type     : "produces"
     sensor_type      ||--o{ sensor_chip_type     : "produced by"
@@ -231,6 +241,54 @@ SELECT config_version, MAX(recorded_at)
 FROM sensor_reading WHERE sensor_id = $1
 GROUP BY config_version ORDER BY 2 DESC;
 ```
+
+---
+
+## Config Push Scope Semantics (FR82)
+
+`PushDeviceConfigRequest.scope` states what a push's `sensors` payload
+means as a whole -- there is no default, and it is never inferred from
+payload shape:
+
+- **`COMPLETE`** -- the payload is the board's entire desired sensor set.
+  An entry absent from it is removed from the desired state. This is what
+  a `leaflab/scripts/scenarios/*.json` file has always meant, and matches
+  `ConfigApplier::ApplyFactory()` (`firmware/config/config_applier.cc`),
+  the shipping board's applier (wired in via
+  `leaflab/sensorboard/elegoo_dynamic_config.cc`): it resets every sensor,
+  device and mux-bus pool before rebuilding from `cfg.sensors` on every
+  push.
+- **`EDIT`** -- the payload names only entries being added or changed,
+  plus `removes`. Everything else is materialised server-side from the
+  board's **current accepted config version alone** -- never the reported
+  device manifest (FR49). Refused, before anything is written, against a
+  board with no accepted config yet.
+
+`removes` entries are removal keys (`RemoveKey`, api.proto): a full
+canonical key (`sensor_type` set) drops exactly the one entry at that
+`(i2c_address, mux_path, sensor_type)`; a chip key (`sensor_type` unset)
+drops every entry sharing `(i2c_address, mux_path)` regardless of
+`sensor_type` -- the form matching the physical action of unsoldering a
+part (e.g. one CCS811 chip key drops both its eCO2 and TVOC entries). An
+entry whose `i2c_address` is the legacy "unknown address" sentinel (`0`,
+see `mux_path JSONB Format` above) has no removal path via `EDIT` at all
+-- only a `COMPLETE` push that omits it can drop it.
+
+`device_config_entry` (migration 028) stores one row per entry in a
+stored `device_config` version, keyed on that same canonical hardware key,
+carrying `provenance`: `authored` (named by the caller in the request that
+stored it, including in `removes`) or `materialised` (carried forward
+unchanged from an `EDIT` push's base). This is what FR1.3's skip-visibility
+surface and FR35.2/FR37's per-entry reporting key off of.
+
+`//leaflab/api/config` implements this package-pure: `CanonicalKey`
+(entry -> `hwkey.Key`), `RemoveKey.Match` (removal-key resolution against
+a base entry set) and `Materialise` (EDIT-scope base + adds + removes ->
+the new version's complete, provenance-tagged entry set). It has no
+database dependency -- `leaflab/api/server.go`'s `PushDeviceConfig`
+handler loads the base config and sensor_type IDs and translates this
+package's results into `device_config`/`device_config_entry` rows and
+`sensor_hw_history` interval closes.
 
 ---
 

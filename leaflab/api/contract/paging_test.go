@@ -123,6 +123,29 @@ func TestEncodeDecodeReadingCursor_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestEncodeDecodeConfigHistoryCursor_RoundTrip covers ListConfigHistory's
+// (version) keyset helper (FR35.1/FR61) -- a well-formed token round-trips
+// to the same version, and an empty token decodes to "first (newest) page"
+// rather than an error.
+func TestEncodeDecodeConfigHistoryCursor_RoundTrip(t *testing.T) {
+	token := EncodeConfigHistoryCursor(42)
+	version, ok, err := DecodeConfigHistoryCursor(token)
+	if err != nil {
+		t.Fatalf("DecodeConfigHistoryCursor error = %v", err)
+	}
+	if !ok {
+		t.Fatal("DecodeConfigHistoryCursor ok = false, want true")
+	}
+	if version != 42 {
+		t.Errorf("version = %d, want 42", version)
+	}
+
+	version, ok, err = DecodeConfigHistoryCursor("")
+	if err != nil || ok || version != 0 {
+		t.Errorf("DecodeConfigHistoryCursor(\"\") = (%d, %v, %v), want (0, false, nil)", version, ok, err)
+	}
+}
+
 // TestClampPageSize_AboveCap_ClampsRatherThanErrors covers FR61: a
 // page_size above PageCap is silently clamped to the cap. ClampPageSize
 // returns a plain int32 (no error return at all), so "not rejected" holds

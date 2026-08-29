@@ -130,12 +130,22 @@ func (c *SensorCache) ReplaceAll(entries map[string]map[string]SensorInfo) {
 //     name was never a key to begin with; evicting the prior one is what
 //     prevents the orphaned entry SensorCache.Invalidate's doc comment
 //     describes.
+//   - invalidation.KindAck (Phase 4, FR47/NFR15) is a no-op here: it
+//     carries no sensor_name (ev.SensorName is unset for this Kind -- see
+//     invalidation.Event's doc comment), so falling through to the default
+//     branch below would evict SensorCache's empty-string key instead of
+//     doing nothing. This process's SensorCache has no notion of a config
+//     ack; only the API's own leaflab/api/ackwait.Registry, observing this
+//     same event through its own Subscriber, cares about it.
 //
 // This is a package-level function, not a method on MessageHandler or
 // SensorCache, precisely so both main.go's Subscriber.Start handler and a
 // test can call the exact same decision logic without needing a real
 // broker, a MessageHandler, or any of MessageHandler's other dependencies.
 func ApplyInvalidation(cache *SensorCache, ev invalidation.Event) {
+	if ev.Kind == invalidation.KindAck {
+		return
+	}
 	if ev.Kind == invalidation.KindName {
 		cache.Invalidate(ev.DeviceID, ev.PriorSensorName)
 		return

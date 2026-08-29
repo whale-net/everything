@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	"github.com/whale-net/everything/leaflab/api/config"
 	"github.com/whale-net/everything/leaflab/hwkey"
 	"github.com/whale-net/everything/leaflab/invalidation"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -117,14 +119,41 @@ func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int
 // concurrent writers compute the same MAX(version)+1; the unique constraint on
 // (board_id, version) guarantees only one wins per version number.
 //
+// entries is FR82.4's per-entry provenance (leaflab/api/config.Entry:
+// canonical hardware key + Provenance) for this exact push, written to
+// device_config_entry in the same transaction as the device_config row --
+// migration 028's own doc comment states these rows are written once, when
+// a device_config row is stored. An entry whose SensorTypeID is the
+// unresolved-catalog-type sentinel (hwkey.SensorTypeID(0); see
+// resolveConfigEntries, config_push.go) is skipped here rather than
+// violate device_config_entry's sensor_type_id NOT NULL FK -- the entry
+// itself is unaffected, since it was already written into configJSON by
+// the caller regardless of whether this loop can record its provenance.
+//
+// removed is FR82.4/FR82.6's dropped-entry bookkeeping (an EDIT push's
+// config.Materialise Result.Removed; always nil/empty for a COMPLETE
+// push, which has no remove list) -- written to device_config_removal in
+// the same transaction as device_config and device_config_entry
+// (migration 031). This is the only thing that later lets the device's
+// ack (leaflab/processor's AckDeviceConfig) know which
+// sensor_hw_history interval(s) to close at this version's accepted-at
+// time. Like device_config_entry, a removed entry whose SensorTypeID is
+// the unresolved-catalog-type sentinel is skipped here (its
+// device_config_entry row, if it ever had one from an earlier push, is
+// left as-is by this method; only this table's own FK would be
+// violated).
+//
 // entry is the audit record for this push (FR8.2 names config pushes as a
 // write whose acting principal must be recorded); auditedWrite inserts it
 // in the same transaction as the device_config row, with entry.EntityID
 // filled in with the assigned version once it's known. A write that fails
-// (including every retry outcome other than success) leaves neither row.
-func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error) {
+// (including every retry outcome other than success) leaves neither row,
+// and neither do the device_config_entry/device_config_removal rows below
+// (same tx).
+func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []config.Entry, removed []config.RemovedEntry, entry audit.Entry) (int64, error) {
 	var version int64
 	err := r.auditedWrite(ctx, func(tx pgx.Tx) (audit.Entry, error) {
+		var configID int64
 		for {
 			err := tx.QueryRow(ctx, `
 				WITH next AS (
@@ -135,8 +164,8 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 				INSERT INTO device_config (board_id, version, config_json)
 				SELECT $1, next.v, $2 FROM next
 				ON CONFLICT (board_id, version) DO NOTHING
-				RETURNING version
-			`, boardID, configJSON).Scan(&version)
+				RETURNING config_id, version
+			`, boardID, configJSON).Scan(&configID, &version)
 			if err == nil {
 				break
 			}
@@ -146,6 +175,56 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 			}
 			return audit.Entry{}, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
 		}
+
+		for _, e := range entries {
+			if e.Key.SensorTypeID <= 0 {
+				continue
+			}
+			var i2cAddr any
+			if addr, ok := e.Key.I2CAddress.Value(); ok {
+				i2cAddr = int32(addr)
+			}
+			muxJSON, err := json.Marshal(e.Key.MuxPath)
+			if err != nil {
+				return audit.Entry{}, fmt.Errorf("marshal mux_path for config_id %d: %w", configID, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO device_config_entry (config_id, i2c_address, mux_path, sensor_type_id, provenance)
+				VALUES ($1, $2, $3::jsonb, $4, $5)
+			`, configID, i2cAddr, muxJSON, int64(e.Key.SensorTypeID), string(e.Provenance)); err != nil {
+				return audit.Entry{}, fmt.Errorf("insert device_config_entry for config_id %d: %w", configID, err)
+			}
+		}
+
+		// FR82.6: record which entries this version dropped, so the
+		// device's ack can later close each one's sensor_hw_history
+		// interval (migration 031's doc comment). RemoveKey.Match already
+		// refuses a remove naming the unaddressable i2c_address=0
+		// sentinel (ErrUnaddressableRemove), so every RemovedEntry here
+		// always has a real i2c_address -- but a resolvable-but-unknown
+		// sensor_type still yields SensorTypeID 0 (resolveConfigEntries'
+		// sentinel), which would violate this table's sensor_type_id FK
+		// just like device_config_entry's; skip those the same way.
+		for _, re := range removed {
+			if re.Entry.Key.SensorTypeID <= 0 {
+				continue
+			}
+			addr, ok := re.Entry.Key.I2CAddress.Value()
+			if !ok {
+				continue
+			}
+			muxJSON, err := json.Marshal(re.Entry.Key.MuxPath)
+			if err != nil {
+				return audit.Entry{}, fmt.Errorf("marshal mux_path for removal on config_id %d: %w", configID, err)
+			}
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO device_config_removal (config_id, i2c_address, mux_path, sensor_type_id, form)
+				VALUES ($1, $2, $3::jsonb, $4, $5)
+			`, configID, int32(addr), muxJSON, int64(re.Entry.Key.SensorTypeID), re.Form.String()); err != nil {
+				return audit.Entry{}, fmt.Errorf("insert device_config_removal for config_id %d: %w", configID, err)
+			}
+		}
+
 		versionStr := strconv.FormatInt(version, 10)
 		entry.EntityID = &versionStr
 		return entry, nil
@@ -181,6 +260,155 @@ func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID strin
 		return nil, fmt.Errorf("unmarshal stored config for %s: %w", deviceID, err)
 	}
 	return &cfg, nil
+}
+
+// DeviceConfigVersionRow is one device_config row's FR34/FR35 fields --
+// everything GetConfigStatus and GetConfigVersion need about a single
+// stored version, short of its per-entry provenance (see
+// ConfigVersionEntryRow/GetConfigVersionEntries for that). Shared by both
+// RPCs' repository reads (GetDeviceConfigVersion) rather than two
+// near-identical queries, since GetConfigStatus's fields are a strict
+// subset of GetConfigVersion's.
+type DeviceConfigVersionRow struct {
+	ConfigID        int64
+	Version         int64
+	ConfigJSON      []byte
+	Accepted        bool
+	PushedAt        time.Time
+	AckedAt         *time.Time
+	RejectionReason string
+}
+
+// GetDeviceConfigVersion fetches one stored config version by
+// (device_id, version), regardless of whether it was ever accepted
+// (FR35.2) -- nil, nil when no such version exists for a board resolving
+// to deviceID (either the board or the version don't exist; the caller
+// distinguishes "board not found" via authorizeBoardAccess before this is
+// ever called, so a nil result here always means "no such version").
+func (r *Repository) GetDeviceConfigVersion(ctx context.Context, deviceID string, version int64) (*DeviceConfigVersionRow, error) {
+	var row DeviceConfigVersionRow
+	var rejectionReason *string
+	err := r.db.QueryRow(ctx, `
+		SELECT dc.config_id, dc.version, dc.config_json, dc.accepted, dc.pushed_at, dc.acked_at, dc.rejection_reason
+		FROM device_config dc
+		JOIN board b ON b.board_id = dc.board_id
+		WHERE b.device_id = $1
+		  AND dc.version = $2
+	`, deviceID, version).Scan(&row.ConfigID, &row.Version, &row.ConfigJSON, &row.Accepted, &row.PushedAt, &row.AckedAt, &rejectionReason)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get device config version %s/%d: %w", deviceID, version, err)
+	}
+	if rejectionReason != nil {
+		row.RejectionReason = *rejectionReason
+	}
+	return &row, nil
+}
+
+// ConfigVersionEntryRow is one device_config_entry row for a fetched
+// config version, with its sensor_type resolved back to the catalog name
+// (GetConfigVersionEntries joins sensor_type) -- server.go's
+// sensorTypeFromName translates that name back onto the wire
+// firmware.SensorType enum, the inverse of sensorTypeNameFromConfig.
+type ConfigVersionEntryRow struct {
+	I2CAddress     *int32 // nil means no address recorded at all (hwkey.AddressOpt Absent)
+	MuxPath        []byte // jsonb, hwkey.MuxPath's canonical encoding (migration 028)
+	SensorTypeName string
+	Provenance     string
+}
+
+// GetConfigVersionEntries returns configID's FR82.4 per-entry provenance
+// rows (device_config_entry, migration 028), for GetConfigVersion.
+func (r *Repository) GetConfigVersionEntries(ctx context.Context, configID int64) ([]ConfigVersionEntryRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT dce.i2c_address, dce.mux_path, st.name, dce.provenance
+		FROM device_config_entry dce
+		JOIN sensor_type st ON st.sensor_type_id = dce.sensor_type_id
+		WHERE dce.config_id = $1
+		ORDER BY dce.device_config_entry_id
+	`, configID)
+	if err != nil {
+		return nil, fmt.Errorf("get config version entries for config_id %d: %w", configID, err)
+	}
+	defer rows.Close()
+
+	var out []ConfigVersionEntryRow
+	for rows.Next() {
+		var e ConfigVersionEntryRow
+		if err := rows.Scan(&e.I2CAddress, &e.MuxPath, &e.SensorTypeName, &e.Provenance); err != nil {
+			return nil, fmt.Errorf("scan config version entry for config_id %d: %w", configID, err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// DeviceConfigHistoryRow is one version in ListConfigHistory's result --
+// the FR35.1 fields, without config_json (never returned by the listing;
+// GetConfigVersion is the fetch-one-version path that returns the payload).
+type DeviceConfigHistoryRow struct {
+	Version         int64
+	Accepted        bool
+	PushedAt        time.Time
+	AckedAt         *time.Time
+	RejectionReason string
+}
+
+// ListConfigHistory returns up to limit versions for deviceID's board,
+// newest first (ORDER BY version DESC) -- FR35.1: every version is
+// included, pending and rejected alike, never filtered by state. Keyset
+// paginated on (version) per FR61: beforeVersion/hasBefore is the last
+// (lowest) version of the previous page (contract.DecodeConfigHistoryCursor),
+// not an offset, so pagination stays correct while new versions are
+// pushed mid-scan. Callers typically request limit+1 rows so a next page
+// can be detected without a separate COUNT query.
+func (r *Repository) ListConfigHistory(ctx context.Context, deviceID string, beforeVersion int64, hasBefore bool, limit int32) ([]DeviceConfigHistoryRow, error) {
+	var sqlQuery string
+	var args []any
+	if hasBefore {
+		sqlQuery = `
+			SELECT dc.version, dc.accepted, dc.pushed_at, dc.acked_at, dc.rejection_reason
+			FROM device_config dc
+			JOIN board b ON b.board_id = dc.board_id
+			WHERE b.device_id = $1
+			  AND dc.version < $2
+			ORDER BY dc.version DESC
+			LIMIT $3
+		`
+		args = []any{deviceID, beforeVersion, limit}
+	} else {
+		sqlQuery = `
+			SELECT dc.version, dc.accepted, dc.pushed_at, dc.acked_at, dc.rejection_reason
+			FROM device_config dc
+			JOIN board b ON b.board_id = dc.board_id
+			WHERE b.device_id = $1
+			ORDER BY dc.version DESC
+			LIMIT $2
+		`
+		args = []any{deviceID, limit}
+	}
+
+	rows, err := r.db.Query(ctx, sqlQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list config history for %s: %w", deviceID, err)
+	}
+	defer rows.Close()
+
+	var out []DeviceConfigHistoryRow
+	for rows.Next() {
+		var h DeviceConfigHistoryRow
+		var rejectionReason *string
+		if err := rows.Scan(&h.Version, &h.Accepted, &h.PushedAt, &h.AckedAt, &rejectionReason); err != nil {
+			return nil, fmt.Errorf("scan config history row for %s: %w", deviceID, err)
+		}
+		if rejectionReason != nil {
+			h.RejectionReason = *rejectionReason
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // RegionApplySkipRow is one audit_log row leaflab/processor's

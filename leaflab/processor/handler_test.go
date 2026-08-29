@@ -144,13 +144,17 @@ func (s *stubRepo) UpsertDeviceConfig(_ context.Context, _ int64, _ int64, _ []b
 	return nil
 }
 
-func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, _ string) error {
-	return nil
+func (s *stubRepo) AckDeviceConfig(_ context.Context, _ int64, _ int64, _ bool, _ string) (time.Time, time.Time, error) {
+	return time.Time{}, time.Time{}, nil
 }
 
 func (s *stubRepo) ApplyConfigRegions(_ context.Context, boardID, version int64) ([]RegionApplySkip, []RegionChange, error) {
 	s.applyConfigRegionsCalls = append(s.applyConfigRegionsCalls, applyConfigRegionsCall{boardID: boardID, version: version})
 	return s.applyConfigRegionsSkips, s.applyConfigRegionsResult, nil
+}
+
+func (s *stubRepo) CloseRemovedSensorHWHistory(_ context.Context, _ int64, _ int64) error {
+	return nil
 }
 
 func (s *stubRepo) SetSensorChipID(_ context.Context, _ int64, _ string) error { return nil }

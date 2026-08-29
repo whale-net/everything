@@ -479,20 +479,6 @@ func (r *Repository) UpsertSensorHWHistory(ctx context.Context, sensorID int64, 
 	return nil
 }
 
-// RegionChange describes one sensor whose region_id ApplyConfigRegions
-// changed, for FR73's cross-process cache invalidation: the caller
-// (handler.go's handleConfigAck) publishes one invalidation event per
-// entry after this method's per-sensor writes have committed (see
-// leaflab/invalidation.Publisher.Publish's doc comment on publishing only
-// after commit), so leaflab/processor's own SensorCache -- and every other
-// process's -- is told about the change regardless of which process
-// applied it.
-type RegionChange struct {
-	SensorID   int64
-	SensorName string
-	RegionID   int64
-}
-
 // RegionApplySkip records one config entry ApplyConfigRegions skipped
 // instead of applying, because it no longer validated at apply time
 // (FR1.3): the sensor's board resolves to a different household than the
@@ -508,6 +494,20 @@ type RegionApplySkip struct {
 	// otherwise-successful apply (FR1.3), not a contract.Failure refusal --
 	// ApplyConfigRegions itself never fails because one entry was skipped.
 	Reason string
+}
+
+// RegionChange describes one sensor whose region_id ApplyConfigRegions
+// changed, for FR73's cross-process cache invalidation: the caller
+// (handler.go's handleConfigAck) publishes one invalidation event per
+// entry after this method's per-sensor writes have committed (see
+// leaflab/invalidation.Publisher.Publish's doc comment on publishing only
+// after commit), so leaflab/processor's own SensorCache -- and every other
+// process's -- is told about the change regardless of which process
+// applied it.
+type RegionChange struct {
+	SensorID   int64
+	SensorName string
+	RegionID   int64
 }
 
 // reasonForeignHousehold and reasonStalePush are FR59.2-style
@@ -784,18 +784,131 @@ func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version in
 	return nil
 }
 
-// AckDeviceConfig records the device's ack for a config push.
-func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64, accepted bool, reason string) error {
-	tag, err := r.db.Exec(ctx, `
+// AckDeviceConfig records the device's ack for a config push -- FR45's
+// only writer of device_config.accepted/acked_at/rejection_reason.
+// Migration 032_ack_write_guard's BEFORE UPDATE trigger rejects any write
+// to those three columns unless the current transaction has set the
+// leaflab.ack_write marker; this method sets it, inside the same
+// transaction as the UPDATE, so no other caller (no leaflab/api repository
+// method, and no ad-hoc UPDATE run under any DB role -- FR45's "in any
+// role") can carry that exemption. SET LOCAL's scope is exactly this
+// transaction and never survives past COMMIT/ROLLBACK.
+//
+// Returns the row's pushed_at and the acked_at NOW() just wrote, so the
+// caller (handler.go's handleConfigAck) can record NFR15's push-to-ack
+// duration without a second round trip to re-read what this UPDATE just
+// wrote.
+func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64, accepted bool, reason string) (pushedAt, ackedAt time.Time, err error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("begin ack tx board=%d version=%d: %w", boardID, version, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, `SET LOCAL leaflab.ack_write = 'on'`); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("set ack_write marker board=%d version=%d: %w", boardID, version, err)
+	}
+
+	err = tx.QueryRow(ctx, `
 		UPDATE device_config
 		SET accepted = $3, acked_at = NOW(), rejection_reason = $4
 		WHERE board_id = $1 AND version = $2
-	`, boardID, version, accepted, reason)
+		RETURNING pushed_at, acked_at
+	`, boardID, version, accepted, reason).Scan(&pushedAt, &ackedAt)
 	if err != nil {
-		return fmt.Errorf("ack device_config board=%d version=%d: %w", boardID, version, err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, time.Time{}, fmt.Errorf("ack device_config board=%d version=%d: no matching row", boardID, version)
+		}
+		return time.Time{}, time.Time{}, fmt.Errorf("ack device_config board=%d version=%d: %w", boardID, version, err)
 	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("ack device_config board=%d version=%d: no matching row", boardID, version)
+
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("commit ack tx board=%d version=%d: %w", boardID, version, err)
+	}
+	return pushedAt, ackedAt, nil
+}
+
+// CloseRemovedSensorHWHistory is FR82.6's ack-time close: for every entry
+// this accepted version's EDIT-scope push dropped (device_config_removal,
+// migration 031 -- leaflab/api's InsertDeviceConfigNextVersion wrote these
+// rows at push time from config.Materialise's Result.Removed), close that
+// entry's currently-open sensor_hw_history interval "at the version's
+// accepted-at time" -- i.e. now, since this runs from handleConfigAck the
+// moment AckDeviceConfig records acceptance. Always a no-op for a
+// COMPLETE-scope push or an EDIT push with no removes: device_config_removal
+// has no rows for either.
+//
+// A removed entry resolves to a concrete sensor_id the same way
+// ApplyConfigRegions does -- board_id + the FR18 canonical hardware key
+// (i2c_address, sensor_type_id, mux_path), the same key
+// idx_sensor_hw_address enforces uniqueness on -- rather than trusting any
+// sensor_id recorded elsewhere, since device_config_removal (like
+// device_config_entry) only ever recorded the canonical key, never a
+// sensor_id. A removal naming a sensor this board has no row for (should
+// not happen in practice: the entry had to exist in the accepted base
+// Materialise removed it from) is tolerated as a no-op rather than
+// failing the whole ack -- there is nothing to close.
+//
+// This intentionally only closes the interval; it does not touch the
+// sensor row, its readings, or any of its other timelines (FR82.6:
+// "removal is removal from the desired state, not deletion" -- the row,
+// readings and other timelines are FR22.3/FR53's job, untouched here).
+func (r *Repository) CloseRemovedSensorHWHistory(ctx context.Context, boardID, version int64) error {
+	var configID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT config_id FROM device_config WHERE board_id = $1 AND version = $2
+	`, boardID, version).Scan(&configID)
+	if err != nil {
+		return fmt.Errorf("get config_id for hw history close board=%d v=%d: %w", boardID, version, err)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT i2c_address, mux_path::text, sensor_type_id
+		FROM device_config_removal
+		WHERE config_id = $1
+	`, configID)
+	if err != nil {
+		return fmt.Errorf("query device_config_removal for config_id %d: %w", configID, err)
+	}
+
+	type removal struct {
+		i2cAddress   int32
+		muxPathText  string
+		sensorTypeID int64
+	}
+	var removals []removal
+	for rows.Next() {
+		var rm removal
+		if err := rows.Scan(&rm.i2cAddress, &rm.muxPathText, &rm.sensorTypeID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan device_config_removal row for config_id %d: %w", configID, err)
+		}
+		removals = append(removals, rm)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		return fmt.Errorf("iterate device_config_removal for config_id %d: %w", configID, rowsErr)
+	}
+
+	for _, rm := range removals {
+		var sensorID int64
+		lookupErr := r.db.QueryRow(ctx, `
+			SELECT sensor_id FROM sensor
+			WHERE board_id = $1 AND i2c_address = $2 AND sensor_type_id = $3 AND mux_path::text = $4
+		`, boardID, rm.i2cAddress, rm.sensorTypeID, rm.muxPathText).Scan(&sensorID)
+		if errors.Is(lookupErr, pgx.ErrNoRows) {
+			continue // no matching sensor row on this board -- nothing to close
+		}
+		if lookupErr != nil {
+			return fmt.Errorf("find sensor for hw history close i2c=0x%02x board=%d: %w", rm.i2cAddress, boardID, lookupErr)
+		}
+		if _, err := r.db.Exec(ctx, `
+			UPDATE sensor_hw_history SET valid_to = NOW()
+			WHERE sensor_id = $1 AND valid_to IS NULL
+		`, sensorID); err != nil {
+			return fmt.Errorf("close hw history for removed sensor %d: %w", sensorID, err)
+		}
 	}
 	return nil
 }

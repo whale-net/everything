@@ -12,6 +12,7 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/api/audit"
 	"github.com/whale-net/everything/leaflab/api/authz"
+	pushconfig "github.com/whale-net/everything/leaflab/api/config"
 	"github.com/whale-net/everything/leaflab/api/contract"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/grpcauth"
@@ -87,6 +88,66 @@ type fakeRepo struct {
 	insertDeviceConfigNextVersionVersion int64
 	insertDeviceConfigNextVersionErr     error
 	insertDeviceConfigNextVersionCalls   []insertDeviceConfigNextVersionCall
+
+	// resolveSensorTypeIDResponses configures resolveSensorTypeID's return
+	// per typeName; a name with no entry here resolves to "not found" (see
+	// resolveSensorTypeID's doc comment).
+	resolveSensorTypeIDResponses map[string]int64
+
+	// getLatestAcceptedConfigResponse configures GetLatestAcceptedConfig's
+	// return -- nil (the zero value) means "no accepted config exists for
+	// this board", FR82.3's EDIT-with-no-base refusal condition; a
+	// non-nil *configpb.DeviceConfig is the EDIT materialisation base
+	// server_push_device_config_scope_test.go's FR82 tests configure.
+	getLatestAcceptedConfigResponse *configpb.DeviceConfig
+
+	// loadBoardSensorIdentitiesResponse configures LoadBoardSensorIdentities'
+	// return -- used by server_push_device_config_scope_test.go's
+	// TestPushDeviceConfig_Edit_MaterialisationBase_NeverTheStaleManifest
+	// to simulate a device-reported manifest that disagrees with the
+	// accepted config, proving FR82.3's materialisation base never leaks
+	// from here.
+	loadBoardSensorIdentitiesResponse []BoardSensorIdentity
+
+	// getDeviceConfigVersionResponse/-Err configure GetDeviceConfigVersion's
+	// return for FR34/FR35's three RPCs -- nil, nil (the zero value) means
+	// "no such version", the not-found condition GetConfigStatus/
+	// GetConfigVersion map to configVersionNotFoundFailure.
+	getDeviceConfigVersionResponse *DeviceConfigVersionRow
+	getDeviceConfigVersionErr      error
+	getDeviceConfigVersionCalls    []getDeviceConfigVersionCall
+
+	// getConfigVersionEntriesResponse/-Err configure GetConfigVersionEntries'
+	// return -- GetConfigVersion's per-entry FR82.4 provenance read.
+	getConfigVersionEntriesResponse []ConfigVersionEntryRow
+	getConfigVersionEntriesErr      error
+	getConfigVersionEntriesCalls    int
+
+	// listConfigHistoryResponse/-Err configure ListConfigHistory's return.
+	// listConfigHistoryCalls records every (beforeVersion, hasBefore, limit)
+	// this method was invoked with, so a test can assert
+	// ListConfigHistory's handler threads the decoded cursor and clamped
+	// limit+1 through unmodified, and that an NFR2 refusal short-circuits
+	// before this is ever reached.
+	listConfigHistoryResponse []DeviceConfigHistoryRow
+	listConfigHistoryErr      error
+	listConfigHistoryCalls    []listConfigHistoryCall
+}
+
+// listConfigHistoryCall is one recorded ListConfigHistory invocation -- see
+// fakeRepo's doc comment.
+type listConfigHistoryCall struct {
+	deviceID      string
+	beforeVersion int64
+	hasBefore     bool
+	limit         int32
+}
+
+// getDeviceConfigVersionCall is one recorded GetDeviceConfigVersion
+// invocation -- see fakeRepo's doc comment.
+type getDeviceConfigVersionCall struct {
+	deviceID string
+	version  int64
 }
 
 // openElevationCall/renewElevationCall/endElevationCall capture the exact
@@ -134,10 +195,12 @@ func (f *fakeRepo) GetOrCreateBoard(ctx context.Context, deviceID string) (int64
 // empty, not just that PushDeviceConfig returned an error.
 // insertDeviceConfigNextVersionVersion/-Err configure what each call
 // returns.
-func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entry audit.Entry) (int64, error) {
+func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, entries []pushconfig.Entry, removed []pushconfig.RemovedEntry, entry audit.Entry) (int64, error) {
 	f.insertDeviceConfigNextVersionCalls = append(f.insertDeviceConfigNextVersionCalls, insertDeviceConfigNextVersionCall{
 		boardID:    boardID,
 		configJSON: configJSON,
+		entries:    entries,
+		removed:    removed,
 		entry:      entry,
 	})
 	return f.insertDeviceConfigNextVersionVersion, f.insertDeviceConfigNextVersionErr
@@ -148,12 +211,14 @@ func (f *fakeRepo) InsertDeviceConfigNextVersion(ctx context.Context, boardID in
 type insertDeviceConfigNextVersionCall struct {
 	boardID    int64
 	configJSON []byte
+	entries    []pushconfig.Entry
+	removed    []pushconfig.RemovedEntry
 	entry      audit.Entry
 }
 
 func (f *fakeRepo) GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error) {
 	f.getLatestAcceptedConfigCalls++
-	return nil, nil
+	return f.getLatestAcceptedConfigResponse, nil
 }
 
 func (f *fakeRepo) GetRegionApplySkips(ctx context.Context, deviceID string) ([]RegionApplySkipRow, error) {
@@ -163,6 +228,39 @@ func (f *fakeRepo) GetRegionApplySkips(ctx context.Context, deviceID string) ([]
 func (f *fakeRepo) ListBoards(ctx context.Context, afterBoardID int64, hasAfter bool, limit int32, scope authz.Scope) ([]BoardRow, error) {
 	f.listBoardsScope = scope
 	return f.listBoardsRows, f.listBoardsErr
+}
+
+func (f *fakeRepo) FindSensorIDByName(ctx context.Context, boardID int64, name string) (int64, bool, error) {
+	panic("not used by this file's tests")
+}
+
+// resolveSensorTypeID returns "not found" by default (never panics): this
+// file's PushDeviceConfig-adjacent tests (server_push_device_config_test.go)
+// reach FR82's resolveConfigEntries, which tolerates an unresolved
+// sensor_type entirely (see its own doc comment in config_push.go) rather
+// than treat it as an error -- so a fixed "not found" default keeps every
+// pre-existing test in this file/package passing without asserting
+// anything about a specific catalog id none of them care about. A test
+// that does care configures resolveSensorTypeIDResponses.
+func (f *fakeRepo) resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error) {
+	if id, ok := f.resolveSensorTypeIDResponses[typeName]; ok {
+		return id, true, nil
+	}
+	return 0, false, nil
+}
+
+func (f *fakeRepo) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
+	// nil (the zero value) short-circuits checkPushConfigIdentity
+	// (identity.go) to a no-op, matching most of this file's tests --
+	// which don't exercise FR16/FR17 sensor identity resolution.
+	// loadBoardSensorIdentitiesResponse lets a test (see
+	// server_push_device_config_scope_test.go's "never the stale
+	// manifest" case) configure a non-nil response instead.
+	return f.loadBoardSensorIdentitiesResponse, nil
+}
+
+func (f *fakeRepo) RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
+	panic("not used by this file's tests")
 }
 
 func (f *fakeRepo) Ping(ctx context.Context) error {
@@ -233,30 +331,6 @@ func (f *fakeRepo) ActiveElevation(ctx context.Context, adminSubject string, tar
 	return f.activeElevationExpiresAt, nil
 }
 
-func (f *fakeRepo) FindSensorIDByName(ctx context.Context, boardID int64, name string) (int64, bool, error) {
-	panic("not used by this file's tests")
-}
-
-func (f *fakeRepo) resolveSensorTypeID(ctx context.Context, typeName string) (int64, bool, error) {
-	panic("not used by this file's tests")
-}
-
-// LoadBoardSensorIdentities returns nil (nothing manifested yet), not a
-// panic: checkPushConfigIdentity (identity.go) calls this unconditionally
-// on every non-empty PushDeviceConfig, including from
-// server_push_device_config_test.go's FR1.2/FR1.3 tests, which exercise a
-// different pre-write check and don't set up sensor identity fixtures. An
-// empty result correctly short-circuits checkPushConfigIdentity's "nothing
-// to protect" early return rather than exercising FR16/17 behavior no test
-// in this file configures.
-func (f *fakeRepo) LoadBoardSensorIdentities(ctx context.Context, boardID int64) ([]BoardSensorIdentity, error) {
-	return nil, nil
-}
-
-func (f *fakeRepo) RewireSensorHW(ctx context.Context, sensorID int64, hw *HardwareAddress) error {
-	panic("not used by this file's tests")
-}
-
 func (f *fakeRepo) SensorSensorTypeName(ctx context.Context, sensorID int64) (string, bool, error) {
 	panic("not used by this file's tests")
 }
@@ -271,6 +345,26 @@ func (f *fakeRepo) ListSensorHWIntervals(ctx context.Context, sensorID int64, wi
 
 func (f *fakeRepo) ListSensorRegionIntervals(ctx context.Context, sensorID int64, windowStart, windowEnd *time.Time, afterValidFrom time.Time, afterID int64, hasAfter bool, limit int32) ([]RegionIntervalRow, error) {
 	panic("not used by this file's tests")
+}
+
+func (f *fakeRepo) GetDeviceConfigVersion(ctx context.Context, deviceID string, version int64) (*DeviceConfigVersionRow, error) {
+	f.getDeviceConfigVersionCalls = append(f.getDeviceConfigVersionCalls, getDeviceConfigVersionCall{deviceID: deviceID, version: version})
+	return f.getDeviceConfigVersionResponse, f.getDeviceConfigVersionErr
+}
+
+func (f *fakeRepo) GetConfigVersionEntries(ctx context.Context, configID int64) ([]ConfigVersionEntryRow, error) {
+	f.getConfigVersionEntriesCalls++
+	return f.getConfigVersionEntriesResponse, f.getConfigVersionEntriesErr
+}
+
+func (f *fakeRepo) ListConfigHistory(ctx context.Context, deviceID string, beforeVersion int64, hasBefore bool, limit int32) ([]DeviceConfigHistoryRow, error) {
+	f.listConfigHistoryCalls = append(f.listConfigHistoryCalls, listConfigHistoryCall{
+		deviceID:      deviceID,
+		beforeVersion: beforeVersion,
+		hasBefore:     hasBefore,
+		limit:         limit,
+	})
+	return f.listConfigHistoryResponse, f.listConfigHistoryErr
 }
 
 // fakeAuthz implements authzResolver entirely in memory, with call

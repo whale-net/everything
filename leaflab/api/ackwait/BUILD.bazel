@@ -1,0 +1,20 @@
+"""FR47 bounded-wait registry for AwaitConfigAck -- see doc.go."""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ackwait",
+    srcs = [
+        "doc.go",
+        "registry.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/api/ackwait",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ackwait_test",
+    size = "small",
+    srcs = ["registry_test.go"],
+    embed = [":ackwait"],
+)
