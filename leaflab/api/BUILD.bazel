@@ -82,10 +82,12 @@ go_test(
         "audit_registry_test.go",
         "auth_test.go",
         "main_test.go",
+        "plant_type_bands_scope_test.go",
         "server_admin_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
+    embedsrcs = ["plant_type_bands.go"],
     deps = [
         "//firmware/proto:configpb",
         "//leaflab/api/audit",
@@ -453,5 +455,41 @@ go_test(
         "//libs/go/dbtest",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@rules_go//go/runfiles",
+    ],
+)
+
+# Real-Postgres integration coverage for #1382's FR58/FR27 band criterion
+# -- see plant_type_bands_integration_test.go's doc comment. Same tag set
+# as the other integration go_test targets above; plain postgres (not
+# TimescaleDB) since neither CreatePlantType nor
+# SetPlantTypeBands/GetPlantTypeBands calls capture.Recorder.Record.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:plant_type_bands_integration_test --test_output=all
+go_test(
+    # keep
+    name = "plant_type_bands_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "plant_type_bands_integration_test.go",
+    ],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/audit",
+        "//leaflab/api/authz",
+        "//leaflab/api/contract",
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )

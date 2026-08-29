@@ -11,6 +11,7 @@ package readings
 
 import (
 	_ "embed"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -54,6 +55,50 @@ func TestReadPathNeverQueriesCorrectedPlantView(t *testing.T) {
 		for _, marker := range sqlUsageMarkers {
 			if strings.Contains(line, marker) {
 				t.Errorf("readings.go contains a live SQL reference to %s: %q", forbiddenView, trimmed)
+			}
+		}
+	}
+}
+
+// forbiddenEvaluatorPatterns match actual code constructs an
+// evaluator/scheduler/notifier would need to exist at all -- not the bare
+// words "evaluator"/"notification"/"alert", which readings.go's own doc
+// comments legitimately use in prose to describe what this task
+// deliberately does not add (FR58: "V1 stores and renders bands only --
+// no evaluation, no notification"). Comment lines are excluded before
+// these patterns run, so this test cannot be defeated (or falsely
+// tripped) by prose alone.
+// Mirrors leaflab/api's own plant_type_bands_scope_test.go check over
+// plant_type_bands.go -- the two files this task (#1382) touches.
+var forbiddenEvaluatorPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)INSERT\s+INTO\s+alert\b`),
+	regexp.MustCompile(`(?i)INSERT\s+INTO\s+notification\b`),
+	regexp.MustCompile(`(?i)\bfunc\s+\w*[Ee]valuat\w*\(`),
+	regexp.MustCompile(`(?i)\bfunc\s+\w*[Ss]chedul\w*\(`),
+	regexp.MustCompile(`(?i)\bfunc\s+\w*[Nn]otify\w*\(`),
+	regexp.MustCompile(`(?i)\bfunc\s+\w*[Ff]ire\w*\(`),
+	regexp.MustCompile(`\btime\.NewTicker\b`),
+	regexp.MustCompile(`(?i)\bcron\.`),
+}
+
+// TestReadingsFile_NoEvaluatorSchedulerOrNotificationCode proves FR58's
+// "stores and renders bands only" scope boundary at the source level for
+// readings.go's band-resolution code (resolveBand/applyBands/
+// enrichBareValues and friends): rendering a value against a stored band
+// introduces no evaluator, scheduler, alert table write or notification
+// dispatch anywhere in this file.
+func TestReadingsFile_NoEvaluatorSchedulerOrNotificationCode(t *testing.T) {
+	if readingsSource == "" {
+		t.Fatal("test setup: embedded readings.go source is empty")
+	}
+	for _, line := range strings.Split(readingsSource, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		for _, re := range forbiddenEvaluatorPatterns {
+			if re.MatchString(line) {
+				t.Errorf("readings.go: line matches forbidden evaluator/scheduler/notification pattern %s: %q", re.String(), trimmed)
 			}
 		}
 	}

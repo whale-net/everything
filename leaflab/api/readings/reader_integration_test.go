@@ -148,6 +148,20 @@ const testSchema = `
 	);
 	INSERT INTO plant_type (common_name) VALUES ('Fiddle Leaf Fig');
 
+	-- Migration 035's plant_type_band table, verbatim -- FR58's band store
+	-- this package's Reader resolves current values against
+	-- (plantTypeBands/resolveBand/applyBands in readings.go).
+	CREATE TABLE plant_type_band (
+		plant_type_band_id BIGSERIAL PRIMARY KEY,
+		plant_type_id  BIGINT NOT NULL REFERENCES plant_type(plant_type_id),
+		sensor_type_id BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
+		band_label TEXT NOT NULL,
+		min_value DOUBLE PRECISION NULL,
+		max_value DOUBLE PRECISION NULL,
+		sort_order INT NOT NULL,
+		UNIQUE (plant_type_id, sensor_type_id, band_label)
+	);
+
 	CREATE TABLE plant (
 		plant_id      BIGSERIAL PRIMARY KEY,
 		region_id     BIGINT NOT NULL REFERENCES region(region_id),
@@ -297,13 +311,49 @@ func (f *fixture) insertHourlyBucket(t *testing.T, sensorID, regionID int64, buc
 
 func (f *fixture) insertPlant(t *testing.T, regionID int64) int64 {
 	t.Helper()
+	return f.insertPlantOfType(t, regionID, 1)
+}
+
+// insertPlantType inserts an additional plant_type row (testSchema already
+// seeds plant_type_id 1, 'Fiddle Leaf Fig') -- used by FR58 band-resolution
+// tests below that need a plant type of their own to hang bands off of, or
+// two sibling plants carrying two different types.
+func (f *fixture) insertPlantType(t *testing.T, commonName string) int64 {
+	t.Helper()
+	var id int64
+	if err := f.pool.QueryRow(context.Background(),
+		`INSERT INTO plant_type (common_name) VALUES ($1) RETURNING plant_type_id`, commonName).Scan(&id); err != nil {
+		t.Fatalf("insert plant type %s: %v", commonName, err)
+	}
+	return id
+}
+
+// insertPlantOfType is insertPlant generalized to a caller-supplied
+// plant_type_id, so a band-resolution test can control which plant type
+// (and therefore which band set) a plant carries.
+func (f *fixture) insertPlantOfType(t *testing.T, regionID, plantTypeID int64) int64 {
+	t.Helper()
 	var id int64
 	if err := f.pool.QueryRow(context.Background(), `
-		INSERT INTO plant (region_id, plant_type_id, name) VALUES ($1, 1, 'test-plant') RETURNING plant_id
-	`, regionID).Scan(&id); err != nil {
+		INSERT INTO plant (region_id, plant_type_id, name) VALUES ($1, $2, 'test-plant') RETURNING plant_id
+	`, regionID, plantTypeID).Scan(&id); err != nil {
 		t.Fatalf("insert plant: %v", err)
 	}
 	return id
+}
+
+// insertPlantTypeBand inserts a plant_type_band row directly -- FR58's
+// band store this package's Reader resolves current values against
+// (plantTypeBands/resolveBand/applyBands in readings.go). min/max nil
+// means unbounded, mirroring migration 035's NULL columns.
+func (f *fixture) insertPlantTypeBand(t *testing.T, plantTypeID, sensorTypeID int64, label string, min, max *float64, sortOrder int) {
+	t.Helper()
+	if _, err := f.pool.Exec(context.Background(), `
+		INSERT INTO plant_type_band (plant_type_id, sensor_type_id, band_label, min_value, max_value, sort_order)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, plantTypeID, sensorTypeID, label, min, max, sortOrder); err != nil {
+		t.Fatalf("insert plant type band %s: %v", label, err)
+	}
 }
 
 func (f *fixture) insertPlantRegionHistory(t *testing.T, plantID, regionID int64, from time.Time, to *time.Time) {
@@ -693,5 +743,203 @@ func TestSeries_ResultCapEnforced(t *testing.T) {
 	}
 	if result.NextPageToken == "" {
 		t.Error("NextPageToken is empty, want a token since more readings remain beyond the clamped page")
+	}
+}
+
+// ── FR58/FR27: band resolution alongside current values ────────────────
+
+// f64 is a tiny helper for a *float64 literal, used throughout the band
+// tests below (min_value/max_value are NULL = unbounded, so tests need
+// pointer literals for bounded ends).
+func f64(v float64) *float64 { return &v }
+
+// TestCurrentValues_Plant_BandResolves_LowestMiddleHighest_AndGap proves
+// this task's core band-resolution rule for a plant ref: a value in the
+// lowest, middle and highest configured band each resolves to that band's
+// label, and a value landing in the gap between two bands resolves to no
+// band at all -- "a value in a gap returns no band rather than a wrong
+// one" (this task's Testing criterion), never the nearest band.
+func TestCurrentValues_Plant_BandResolves_LowestMiddleHighest_AndGap(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+	plantTypeID := f.insertPlantType(t, "Banded Fern")
+	plantID := f.insertPlantOfType(t, regionID, plantTypeID)
+	f.insertPlantRegionHistory(t, plantID, regionID, now.Add(-time.Hour), nil)
+
+	// low: (-inf, 18); gap: [18, 20); ideal: [20, 25); high: [25, +inf).
+	f.insertPlantTypeBand(t, plantTypeID, temperatureTypeID, "low", nil, f64(18), 1)
+	f.insertPlantTypeBand(t, plantTypeID, temperatureTypeID, "ideal", f64(20), f64(25), 2)
+	f.insertPlantTypeBand(t, plantTypeID, temperatureTypeID, "high", f64(25), nil, 3)
+
+	cases := []struct {
+		name  string
+		value float64
+		want  string
+	}{
+		{"lowest band", 15.0, "low"},
+		{"middle band", 22.0, "ideal"},
+		{"highest band", 30.0, "high"},
+		{"gap between bands", 19.0, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Each subtest inserts its own, strictly-later reading so
+			// CurrentValues (latest raw) resolves exactly the value under
+			// test, regardless of earlier subtests' readings.
+			now = now.Add(time.Minute)
+			f.insertReading(t, sensorID, regionID, tc.value, now)
+
+			result, err := f.reader.CurrentValues(context.Background(), authz.EntityRef{Kind: authz.EntityPlant, ID: plantID})
+			if err != nil {
+				t.Fatalf("CurrentValues: %v", err)
+			}
+			if len(result.PlantValues) != 1 || len(result.PlantValues[0].Values) != 1 {
+				t.Fatalf("CurrentValues shape = %+v, want exactly one plant with one value", result)
+			}
+			if got := result.PlantValues[0].Values[0].Band; got != tc.want {
+				t.Errorf("value %v: Band = %q, want %q", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCurrentValues_Plant_NoBandsConfigured_NoBandField proves this task's
+// Testing criterion: "A plant type with no bands returns values with no
+// band field, not an error" -- at the read layer, a plant whose type
+// carries no plant_type_band rows at all gets Band == "" (absent on the
+// wire, per server.go's toCurrentValue), never an error.
+func TestCurrentValues_Plant_NoBandsConfigured_NoBandField(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+	plantID := f.insertPlant(t, regionID) // plant_type_id 1, seeded with no bands anywhere in this fixture
+	f.insertPlantRegionHistory(t, plantID, regionID, now.Add(-time.Hour), nil)
+	f.insertReading(t, sensorID, regionID, 21.5, now)
+
+	result, err := f.reader.CurrentValues(context.Background(), authz.EntityRef{Kind: authz.EntityPlant, ID: plantID})
+	if err != nil {
+		t.Fatalf("CurrentValues: %v", err)
+	}
+	if len(result.PlantValues) != 1 || len(result.PlantValues[0].Values) != 1 {
+		t.Fatalf("CurrentValues shape = %+v, want exactly one plant with one value", result)
+	}
+	if got := result.PlantValues[0].Values[0].Band; got != "" {
+		t.Errorf("Band = %q, want empty for a plant type with no bands configured", got)
+	}
+}
+
+// TestCurrentValues_Plant_SiblingsWithDifferentTypes_ResolveDifferentBands
+// proves readings.go's currentPlantValues doc comment ("FR58's band is
+// resolved per sibling, not shared"): two sibling plants sharing one
+// attributing region, but carrying two different plant types, each
+// resolve the identical underlying reading against their own type's band
+// set -- one sibling's value can be "in band" while the other's identical
+// reading is not.
+func TestCurrentValues_Plant_SiblingsWithDifferentTypes_ResolveDifferentBands(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	fernType := f.insertPlantType(t, "Fern")
+	cactusType := f.insertPlantType(t, "Cactus")
+	fern := f.insertPlantOfType(t, regionID, fernType)
+	cactus := f.insertPlantOfType(t, regionID, cactusType)
+	f.insertPlantRegionHistory(t, fern, regionID, now.Add(-time.Hour), nil)
+	f.insertPlantRegionHistory(t, cactus, regionID, now.Add(-time.Hour), nil)
+
+	f.insertPlantTypeBand(t, fernType, temperatureTypeID, "fern-ideal", f64(15), f64(25), 1)
+	f.insertPlantTypeBand(t, cactusType, temperatureTypeID, "cactus-ideal", f64(25), f64(40), 1)
+
+	f.insertReading(t, sensorID, regionID, 20.0, now) // inside fern-ideal, outside cactus-ideal
+
+	result, err := f.reader.CurrentValues(context.Background(), authz.EntityRef{Kind: authz.EntityPlant, ID: fern})
+	if err != nil {
+		t.Fatalf("CurrentValues(fern): %v", err)
+	}
+	if len(result.PlantValues) != 2 {
+		t.Fatalf("len(PlantValues) = %d, want 2 (fern + cactus siblings)", len(result.PlantValues))
+	}
+	byPlant := map[int64]string{}
+	for _, pv := range result.PlantValues {
+		if len(pv.Values) != 1 {
+			t.Fatalf("plant %d: len(Values) = %d, want 1", pv.PlantID, len(pv.Values))
+		}
+		byPlant[pv.PlantID] = pv.Values[0].Band
+	}
+	if byPlant[fern] != "fern-ideal" {
+		t.Errorf("fern band = %q, want %q", byPlant[fern], "fern-ideal")
+	}
+	if byPlant[cactus] != "" {
+		t.Errorf("cactus band = %q, want empty -- identical reading, different type, out of cactus's band", byPlant[cactus])
+	}
+}
+
+// TestCurrentValues_BareSensor_BandResolves_ViaAttribution proves FR27's
+// "per sensor" half of this task's Testing criterion: a bare sensor
+// entity ref (no plant named directly) still carries a band, resolved via
+// FR23 attribution when exactly one plant type is in play.
+func TestCurrentValues_BareSensor_BandResolves_ViaAttribution(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	plantTypeID := f.insertPlantType(t, "Banded Fern")
+	plantID := f.insertPlantOfType(t, regionID, plantTypeID)
+	f.insertPlantRegionHistory(t, plantID, regionID, now.Add(-time.Hour), nil)
+	f.insertPlantTypeBand(t, plantTypeID, temperatureTypeID, "ideal", f64(18), f64(25), 1)
+	f.insertReading(t, sensorID, regionID, 20.0, now)
+
+	result, err := f.reader.CurrentValues(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID})
+	if err != nil {
+		t.Fatalf("CurrentValues(sensor): %v", err)
+	}
+	if len(result.Values) != 1 {
+		t.Fatalf("len(Values) = %d, want 1", len(result.Values))
+	}
+	if got := result.Values[0].Band; got != "ideal" {
+		t.Errorf("Band = %q, want %q -- a bare sensor should resolve a band via FR23 attribution when exactly one plant type is in play", got, "ideal")
+	}
+}
+
+// TestCurrentValues_BareSensor_AmbiguousSiblingTypes_NoBand proves the
+// other half of enrichBareValues' doc comment: a bare sensor whose
+// attributed siblings span more than one plant type gets no band --
+// "no band rather than a wrong one" (this task's stated gap-value
+// principle applied to the ambiguous-type case too), never a guess.
+func TestCurrentValues_BareSensor_AmbiguousSiblingTypes_NoBand(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	regionID := f.insertRegion(t, "greenhouse", 0)
+	boardID := f.insertBoard(t)
+	sensorID := f.insertSensor(t, boardID, regionID, temperatureTypeID)
+
+	fernType := f.insertPlantType(t, "Fern")
+	cactusType := f.insertPlantType(t, "Cactus")
+	fern := f.insertPlantOfType(t, regionID, fernType)
+	cactus := f.insertPlantOfType(t, regionID, cactusType)
+	f.insertPlantRegionHistory(t, fern, regionID, now.Add(-time.Hour), nil)
+	f.insertPlantRegionHistory(t, cactus, regionID, now.Add(-time.Hour), nil)
+	f.insertPlantTypeBand(t, fernType, temperatureTypeID, "fern-ideal", f64(15), f64(25), 1)
+
+	f.insertReading(t, sensorID, regionID, 20.0, now)
+
+	result, err := f.reader.CurrentValues(context.Background(), authz.EntityRef{Kind: authz.EntitySensor, ID: sensorID})
+	if err != nil {
+		t.Fatalf("CurrentValues(sensor): %v", err)
+	}
+	if len(result.Values) != 1 {
+		t.Fatalf("len(Values) = %d, want 1", len(result.Values))
+	}
+	if got := result.Values[0].Band; got != "" {
+		t.Errorf("Band = %q, want empty -- attributed siblings span more than one plant type, no single type to render against", got)
 	}
 }
