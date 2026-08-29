@@ -75,6 +75,15 @@ Typical flow: `design` → `review` → `plan` → `implement` → `validate` �
 
 `stakeholder-meeting` is off the critical path: it runs inside `design --stakeholder-meeting` before the review gate, or on demand against an approved root plan issue.
 
+## MCP Servers
+
+`mcp_config.json` at the plugin root (exposed for AGY via `.agents/plugins/project-manager`
+and symlinked to `.mcp.json` for Claude Code — see `.claude-plugin/marketplace.json`) wires up:
+
+| Server | Purpose |
+|---|---|
+| `agentsync-mcp` | Cross-agent-session rendezvous (`start_session`/`join_session`/`sync`/`leave_session`/`end_session`) — lets a parent orchestrator (e.g. `/project-manager:implement`) start a session and hand its id to worker/validator subagents so they can coordinate directly instead of only relaying through the parent. See `tools/agentsync-mcp/README.md`. |
+
 ## Setup & Usage
 
 ### Antigravity (AGY)
