@@ -7,7 +7,7 @@ description: Runs a stakeholder meeting round on a plan — dispatches one stake
 
 Convenes every persona named in a plan's specification for one round of feedback, and reports whether the plan is cleared or blocked. See `tools/project-manager/CONVENTIONS.md` § Stakeholder meeting.
 
-Callable directly, or automatically by `/project-manager:plan --stakeholder-meeting`.
+Callable directly, or automatically by `/project-manager:design --stakeholder-meeting`.
 
 ## Usage
 
@@ -39,7 +39,7 @@ Callable directly, or automatically by `/project-manager:plan --stakeholder-meet
    - **Outcome** — exactly one of `Stakeholder meeting: blocked (<k> blockers)` or `Stakeholder meeting: cleared`, as the final line, so later rounds and `/project-manager:status` can grep it.
 
 7. **Route the outcome.**
-   - **Cleared** — report to the user, including the meeting discussion URL. If invoked from `/project-manager:plan`, control returns there for the hand-off to `/project-manager:review`. Non-blocking feedback still stands: tell the user which items producer should fold in versus record as out of scope.
+   - **Cleared** — report to the user, including the meeting discussion URL. If invoked from `/project-manager:design`, control returns there for the hand-off to `/project-manager:review`. Non-blocking feedback still stands: tell the user which items producer should fold in versus record as out of scope.
    - **Blocked, discussion target** — dispatch `project-manager:producer` (Mode 2) with the target discussion URL and the consolidated blocker list (read from the meeting discussion's minutes comment), instructing it to answer each `SB-<N>.<n>` in the target discussion and post an updated draft, then dispatch `project-manager:architect` for a fresh reconciliation round. Once architect re-signs off, re-run this skill for round `N+1` (a fresh meeting discussion). Cap at 3 meeting rounds; if blockers persist, stop and summarize the standing disagreement for the user rather than looping.
    - **Blocked, approved root issue target** — the spec of record is already published, so do not silently edit it. Report the blockers to the user (read from the meeting discussion's minutes) and confirm before proceeding; on confirmation, run the same producer/architect loop in the plan's intake discussion (its URL is the first line of the root issue body), then have producer amend the root plan issue body and post `Amended after stakeholder meeting round <N>: <summary>` as an issue comment.
 

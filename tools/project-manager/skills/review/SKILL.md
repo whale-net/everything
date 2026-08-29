@@ -15,7 +15,7 @@ Drives the human review gate for a planned feature. Reviews the architect-approv
 
 ## Steps
 
-1. Inspect the Discussion (`gh discussion view <discussion-url>` or comment listing). Confirm that `Architect sign-off: approved` is present in the comment thread. If not, report that the draft is not yet architect-approved and point the user to `/project-manager:plan <discussion-url>`.
+1. Inspect the Discussion (`gh discussion view <discussion-url>` or comment listing). Confirm that `Architect sign-off: approved` is present in the comment thread. If not, report that the draft is not yet architect-approved and point the user to `/project-manager:design <discussion-url>`.
 
 2. Summarize for the user:
    - User stories, FRs, and NFRs from the latest draft
@@ -29,7 +29,7 @@ Drives the human review gate for a planned feature. Reviews the architect-approv
    - Create root plan Issue: `gh issue create --title "Plan: <feature>" --label "plan:approved" --body-file <tmpfile>` with first line `Intake discussion: <discussion-url>`.
    - Post closing comment on the discussion: `gh discussion comment <discussion-url> --body "Approved root plan issue: <issue-url>"`.
    - Capture the created issue number `<root-issue-number>`.
-   - Tell the user the plan is approved and that `/project-manager:implement <root-issue-number>` is the next step. If no stakeholder meeting was held during planning (no `Stakeholder meeting round <N>: <url>` link comment on the discussion), mention that `/project-manager:stakeholder-meeting <root-issue-number>` can still convene the spec's personas against the approved plan before implementation starts.
+   - Tell the user the plan is approved and that `/project-manager:plan <root-issue-number>` is the next step (task breakdown into a Project board). If no stakeholder meeting was held during design (no `Stakeholder meeting round <N>: <url>` link comment on the discussion), mention that `/project-manager:stakeholder-meeting <root-issue-number>` can still convene the spec's personas against the approved plan before implementation starts.
 
 5. **If changes requested:**
    - Ask user for feedback text.

@@ -1,7 +1,7 @@
 # project-manager
 
 AGY and Claude Code plugin providing a multi-persona project-management pipeline for the
-`everything` monorepo, tracked entirely in GitHub: intake, plan drafting, and architect reconciliation in a **Discussion**; the final approved root plan as an **Issue**; and task execution progressing through **swimlanes** on a GitHub **Project (v2)** board. See [`CONVENTIONS.md`](CONVENTIONS.md) for the full contract.
+`everything` monorepo, tracked entirely in GitHub: intake, design drafting, and architect reconciliation in a **Discussion**; the final approved root plan as an **Issue**; task breakdown and task execution progressing through **swimlanes** on a GitHub **Project (v2)** board. See [`CONVENTIONS.md`](CONVENTIONS.md) for the full contract.
 
 ## Personas
 
@@ -35,7 +35,7 @@ AGY and Claude Code plugin providing a multi-persona project-management pipeline
                                                        producer creates root Issue (plan:approved)
                                                                     │
                                                                     ▼
-                                                                 planner  ──creates──▶  Project board with Swimlanes:
+                                                        /project-manager:plan ──dispatches──▶  planner  ──creates──▶  Project board with Swimlanes:
                                                                                         [Scaffold] ──▶ [Implementation] ──▶ [Testing] ──▶ [Validation] ──▶ [Done]
                                                                                         (Depends on: #n drives readiness; task moves across swimlanes)
                                                                                         │
@@ -59,20 +59,21 @@ gh project item-list <project-number> --owner whale-net --query "status:Implemen
 
 ## Skills
 
-Six skills orchestrate the pipeline:
+Seven skills orchestrate the pipeline:
 
 | Skill | Drives | Dispatches |
 |---|---|---|
-| `/project-manager:plan "<feature>"` or `/project-manager:plan <discussion-url>` | Intake discussion → draft spec → producer/architect loop in Discussion until architect sign-off; with `--stakeholder-meeting`, a stakeholder round before hand-off | `producer`, `architect`, *(optionally)* `stakeholder` |
+| `/project-manager:design "<feature>"` or `/project-manager:design <discussion-url>` | Intake discussion → draft spec → producer/architect loop in Discussion until architect sign-off; with `--stakeholder-meeting`, a stakeholder round before hand-off | `producer`, `architect`, *(optionally)* `stakeholder` |
 | `/project-manager:stakeholder-meeting <discussion-url\|issue-number>` | One meeting round: every persona in the spec posts guidance, non-blocking feedback, and blockers; blockers re-loop producer/architect, cleared hands off to review | `stakeholder` (one per persona), `producer`, `architect` |
 | `/project-manager:review <discussion-url>` | The human gate: review architect-approved draft in Discussion → create root Issue (`plan:approved`), or leave feedback | `producer`, `architect` |
-| `/project-manager:implement <issue-number> [--max-subagents N] [--create-plan-only]` | Project board setup + task issues, then (unless `--create-plan-only`) orchestrates worker/validator subagents in parallel batches — up to `--max-subagents` (default 4) at a time — over `gh stack`-managed per-task branches until all tasks are `Done` | `planner`, `worker`, `validator` |
+| `/project-manager:plan <issue-number> [--planner-model model]` | Task breakdown: converts the approved root Issue into a Project board with swimlanes and cohesive task issues (idempotent — reports the existing board instead of recreating it) | `planner` |
+| `/project-manager:implement <issue-number> [--max-subagents N]` | Orchestrates worker/validator subagents in parallel batches — up to `--max-subagents` (default 4) at a time — over `gh stack`-managed per-task branches until all tasks are `Done`. Requires a Project board to already exist | `worker`, `validator` |
 | `/project-manager:validate <issue-number>` | Whole-system validation in Tilt (against a local integration branch merging every task's stack) once all tasks are `Done`; ensures every task branch has an open PR or routes findings to planner | `system-validator`, `planner` |
 | `/project-manager:status <issue-number>` | Read-only: current lifecycle state and Project board breakdown by swimlane | *(none — pure `gh` reads)* |
 
-Typical flow: `plan` → `review` → `implement` → `validate` → (if findings) `implement` again.
+Typical flow: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again.
 
-`stakeholder-meeting` is off the critical path: it runs inside `plan --stakeholder-meeting` before the review gate, or on demand against an approved root plan issue.
+`stakeholder-meeting` is off the critical path: it runs inside `design --stakeholder-meeting` before the review gate, or on demand against an approved root plan issue.
 
 ## Setup & Usage
 
