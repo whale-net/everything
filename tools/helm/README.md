@@ -176,6 +176,8 @@ my-chart/
 Generated charts include sync-wave annotations for proper ordering:
 
 ```
+Wave -5: ServiceAccounts (pre-install,pre-upgrade hook)
+  ↓ (must exist before any hook Job can run as them)
 Wave -1: Jobs (migrations)
   ↓ (jobs must complete)
 Wave 0:  Deployments, Services, Ingress
