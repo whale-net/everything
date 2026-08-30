@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // validDeviceID allows alphanumeric, hyphens, and underscores.
@@ -31,6 +33,14 @@ func validateDeviceID(id string) error {
 }
 
 const mqttExchange = "amq.topic"
+
+// reportingThreshold is the fixed recency threshold behind ReportingState
+// (FR5): a board is REPORTING if its most recent sensor_reading.recorded_at
+// is within this window, STALE if it has readings older than this, and
+// NEVER_REPORTED if it has none at all. Shared with the board-detail path
+// (per-sensor state); not configurable per board/sensor and not exposed on
+// the request or response.
+const reportingThreshold = 10 * time.Minute
 
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
@@ -127,4 +137,48 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsReque
 		})
 	}
 	return &pb.ListBoardsResponse{Boards: boards}, nil
+}
+
+// ListBoardsWithState returns every board (FR4 — no owner filtering) with a
+// reporting state derived purely from sensor_reading recency (FR5).
+func (s *LeafLabAPIServer) ListBoardsWithState(ctx context.Context, _ *pb.ListBoardsWithStateRequest) (*pb.ListBoardsWithStateResponse, error) {
+	rows, err := s.repo.ListBoardsWithState(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list boards with state: %v", err)
+	}
+
+	now := time.Now()
+	boards := make([]*pb.BoardWithState, 0, len(rows))
+	for _, r := range rows {
+		bw := &pb.BoardWithState{
+			BoardId:        r.BoardID,
+			DeviceId:       r.DeviceID,
+			ReportingState: reportingState(r.LastReadingAt, now),
+		}
+		if r.LastReadingAt != nil {
+			bw.LastReadingAt = timestamppb.New(*r.LastReadingAt)
+		}
+		boards = append(boards, bw)
+	}
+
+	s.logger.Info("boards with state listed", "count", len(boards))
+	return &pb.ListBoardsWithStateResponse{Boards: boards}, nil
+}
+
+// reportingState derives a ReportingState purely from a board's most recent
+// reading timestamp (nil if it has none) and the current time. Kept as a
+// pure function, independent of the repository/DB, so the threshold boundary
+// is unit-testable without a database.
+//
+// The boundary is inclusive of "reporting": a reading recorded exactly
+// reportingThreshold ago is still within "the last 10 minutes" per the
+// ReportingState proto doc, not yet stale.
+func reportingState(lastReadingAt *time.Time, now time.Time) pb.ReportingState {
+	if lastReadingAt == nil {
+		return pb.ReportingState_REPORTING_STATE_NEVER_REPORTED
+	}
+	if now.Sub(*lastReadingAt) <= reportingThreshold {
+		return pb.ReportingState_REPORTING_STATE_REPORTING
+	}
+	return pb.ReportingState_REPORTING_STATE_STALE
 }
