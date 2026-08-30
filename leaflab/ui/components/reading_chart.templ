@@ -1,0 +1,476 @@
+package components
+
+import (
+	"fmt"
+	"time"
+)
+
+// ReadingPointData is one raw reading (#1504: FR9 -- ReadingChart plots
+// points exactly as returned, with no client-side aggregation,
+// downsampling, or smoothing, so this is deliberately just a
+// (timestamp, value) pair, never a bucket/min/max/aggregate shape).
+type ReadingPointData struct {
+	RecordedAtUnix int64   `json:"recorded_at"`
+	Value          float64 `json:"value"`
+}
+
+// ReadingChartData is ReadingChart's full render state, and also this
+// package's JSON wire shape for the small range-data endpoint
+// handlers_sensors.go's handleSensorHistoryData serves (json tags below):
+// the same struct is templ.JSONString-embedded for the initial
+// server-rendered load and json.Marshal-ed verbatim for every subsequent
+// preset/drag-select fetch, so there is exactly one definition of "what a
+// range response looks like" for both the initial paint and every later
+// update. SensorID/Unit are deliberately excluded from the wire shape
+// (json:"-") -- the JS reads those once from data-sensor-id/data-unit,
+// not from every fetch response.
+//
+// FromUnix/ToUnix is the range that was actually requested (a preset's
+// computed absolute bounds, or a drag-select's exact endpoints); Capped,
+// CoveredFromUnix/CoveredToUnix, PointCap, and ExcludedInvalidCount mirror
+// GetSensorReadingHistoryResponse's capped/covered_from/covered_to/
+// point_cap/excluded_invalid_count exactly (FR9, FR10) -- callers convert
+// from the protobuf response, this package carries no
+// leaflab/api/proto dependency of its own.
+type ReadingChartData struct {
+	SensorID int64  `json:"-"`
+	Unit     string `json:"-"`
+
+	FromUnix int64 `json:"from"`
+	ToUnix   int64 `json:"to"`
+
+	// Raw, unaggregated points ordered oldest-to-newest (FR9).
+	Points []ReadingPointData `json:"points"`
+
+	// Capped/CoveredFromUnix/CoveredToUnix/PointCap mirror
+	// GetSensorReadingHistoryResponse's capped/covered_from/covered_to/
+	// point_cap exactly. CoveredFromUnix/CoveredToUnix are only meaningful
+	// when Capped is true, matching the proto field's own doc comment.
+	Capped          bool   `json:"capped"`
+	CoveredFromUnix int64  `json:"covered_from"`
+	CoveredToUnix   int64  `json:"covered_to"`
+	PointCap        uint32 `json:"point_cap"`
+
+	// ExcludedInvalidCount mirrors excluded_invalid_count exactly.
+	// Independent of Capped -- both can be set at once and must render at
+	// once (see coverageNoticeText/excludedNoticeText below: two distinct
+	// notices, never merged into one string).
+	ExcludedInvalidCount uint32 `json:"excluded_invalid_count"`
+}
+
+// displayDomain is the time range ReadingChart plots its x-axis against:
+// the actually-covered range when Capped (points only span that -- an
+// x-axis stretched to the full requested range would bunch every point
+// into a sliver at one edge), otherwise the full requested range. Mirrored
+// by the inline script's own domain selection on every fetch response
+// (search the <script> below for "displayDomain").
+func displayDomain(data ReadingChartData) (from, to int64) {
+	if data.Capped && data.CoveredToUnix > data.CoveredFromUnix {
+		return data.CoveredFromUnix, data.CoveredToUnix
+	}
+	return data.FromUnix, data.ToUnix
+}
+
+// readingWord pluralizes "reading" for excludedNoticeText's count.
+func readingWord(n uint32) string {
+	if n == 1 {
+		return "reading"
+	}
+	return "readings"
+}
+
+// formatSpan renders a duration at whatever unit reads naturally at that
+// scale ("42 minutes", "3 hours", "10 days") -- coarse and human-scale,
+// same spirit as pages/helpers.go's roughDuration, kept local to this
+// package rather than exported cross-package for these two callers.
+func formatSpan(d time.Duration) string {
+	if d < 0 {
+		d = -d
+	}
+	switch {
+	case d < time.Minute:
+		return "less than a minute"
+	case d < time.Hour:
+		return pluralizeSpan(int(d.Minutes()), "minute")
+	case d < 24*time.Hour:
+		return pluralizeSpan(int(d.Hours()), "hour")
+	default:
+		return pluralizeSpan(int(d.Hours()/24), "day")
+	}
+}
+
+func pluralizeSpan(n int, unit string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", unit)
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// coverageNoticeText phrases FR9's capped notice as coverage, in the
+// user's terms, off the actually-covered range vs. the range requested --
+// e.g. "Showing the most recent 10 days of the 30 days you selected
+// (capped at 15,000 points)." -- never as an error. A 30-day view on an
+// actively-reporting board is expected to hit this; it must read as an
+// explanation, not a failure. The point count comes from data.PointCap
+// (GetSensorReadingHistoryResponse's point_cap), never a hardcoded
+// literal -- so a server-side cap change shows up here automatically.
+func coverageNoticeText(data ReadingChartData) string {
+	covered := time.Duration(data.CoveredToUnix-data.CoveredFromUnix) * time.Second
+	requested := time.Duration(data.ToUnix-data.FromUnix) * time.Second
+	return fmt.Sprintf("Showing the most recent %s of the %s you selected (capped at %d points).", formatSpan(covered), formatSpan(requested), data.PointCap)
+}
+
+// excludedNoticeText phrases FR10's excluded-invalid-count note. When no
+// points survived at all, the wording leads with "All" so the count reads
+// as the explanation for the empty chart (FR10's "zero points, non-zero
+// excluded" case), not an unrelated aside; otherwise it reads as a plain
+// exclusion count alongside the plotted points.
+func excludedNoticeText(data ReadingChartData) string {
+	word := readingWord(data.ExcludedInvalidCount)
+	if len(data.Points) == 0 {
+		return fmt.Sprintf("All %d %s in this range were marked invalid.", data.ExcludedInvalidCount, word)
+	}
+	return fmt.Sprintf("%d %s in this range were excluded for being marked invalid.", data.ExcludedInvalidCount, word)
+}
+
+// ReadingChart is the sensor reading-history chart (#1504: FR8, FR9, FR10,
+// NFR1) -- a hand-rolled <canvas> line chart with preset buttons and
+// drag-select, following manmanv2/ui/components/log_histogram.templ's
+// pattern (no new JS dependency or toolchain).
+//
+// The Capped/ExcludedInvalidCount notices below render independently and
+// simultaneously off `data` exactly as GetSensorReadingHistoryResponse
+// reported them for the request that produced `data` -- do not add a
+// branch that suppresses one when the other is set. A zero-points range
+// renders the empty notice instead of an error (FR10); the page, preset
+// buttons, and chart chrome all still render around it.
+//
+// NFR1: nothing here polls. Every range change (a preset click or a
+// drag-select) is a single user-initiated fetch to
+// "/sensors/{sensor_id}/history/data" -- there is no hx-trigger interval,
+// no sse-connect, and no WebSocket anywhere in this component.
+templ ReadingChart(data ReadingChartData) {
+	<div class="card bg-base-100 border border-base-300 shadow-sm">
+		<div class="card-body">
+			<div class="flex flex-wrap items-center gap-2 mb-3">
+				<span class="text-sm font-medium text-base-content/70">Range:</span>
+				<button type="button" class="btn btn-sm reading-chart-preset-btn" data-preset="1h">1h</button>
+				<button type="button" class="btn btn-sm reading-chart-preset-btn" data-preset="24h">24h</button>
+				<button type="button" class="btn btn-sm reading-chart-preset-btn" data-preset="7d">7d</button>
+				<button type="button" class="btn btn-sm reading-chart-preset-btn" data-preset="30d">30d</button>
+			</div>
+			<div class="flex flex-col gap-2 mb-2 reading-chart-notices">
+				if data.Capped {
+					<div role="status" class="alert alert-info py-2 reading-chart-coverage-notice">
+						<span>{ coverageNoticeText(data) }</span>
+					</div>
+				}
+				if data.ExcludedInvalidCount > 0 {
+					<div role="status" class="alert alert-warning py-2 reading-chart-excluded-notice">
+						<span>{ excludedNoticeText(data) }</span>
+					</div>
+				}
+				if len(data.Points) == 0 {
+					<div role="status" class="text-base-content/60 text-sm py-2 reading-chart-empty-notice">
+						No readings in this range.
+					</div>
+				}
+			</div>
+			<div style="position: relative;">
+				<canvas id="reading-chart-canvas" style="width: 100%; height: 260px; cursor: crosshair;"></canvas>
+				<div class="reading-chart-tooltip" style="position: absolute; display: none; background: rgba(0,0,0,0.85); color: white; padding: 6px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000; white-space: nowrap;"></div>
+			</div>
+		</div>
+	</div>
+	<div
+		id="reading-chart-config"
+		data-sensor-id={ fmt.Sprintf("%d", data.SensorID) }
+		data-unit={ data.Unit }
+		data-initial={ templ.JSONString(data) }
+	></div>
+	<script type="text/javascript">
+		(function() {
+			const config = document.getElementById('reading-chart-config');
+			if (!config) return;
+			const sensorId = config.dataset.sensorId;
+			const unit = config.dataset.unit || '';
+			const canvas = document.getElementById('reading-chart-canvas');
+			if (!canvas) return;
+			const ctx = canvas.getContext('2d');
+			const tooltip = document.querySelector('.reading-chart-tooltip');
+			const noticesContainer = document.querySelector('.reading-chart-notices');
+			const presetButtons = document.querySelectorAll('.reading-chart-preset-btn');
+
+			let currentResult = null;
+			try {
+				currentResult = JSON.parse(config.dataset.initial || 'null');
+			} catch (e) {
+				currentResult = null;
+			}
+
+			// displayDomain mirrors the Go helper of the same name: the
+			// actually-covered range when capped, otherwise the full
+			// requested range. This is what the x-axis and drag-select
+			// math are computed against.
+			function displayDomain(result) {
+				if (!result) return [0, 1];
+				if (result.capped && result.covered_to > result.covered_from) {
+					return [result.covered_from, result.covered_to];
+				}
+				return [result.from, result.to];
+			}
+
+			let domain = displayDomain(currentResult);
+
+			const padding = { top: 16, right: 16, bottom: 28, left: 56 };
+			const canvasHeight = 260;
+
+			function logicalWidth() { return canvas.parentElement.getBoundingClientRect().width; }
+			function chartWidth() { return Math.max(1, logicalWidth() - padding.left - padding.right); }
+			function chartHeight() { return canvasHeight - padding.top - padding.bottom; }
+
+			function timeToX(t) {
+				const [from, to] = domain;
+				if (to === from) return padding.left;
+				return padding.left + ((t - from) / (to - from)) * chartWidth();
+			}
+			function xToTime(x) {
+				const [from, to] = domain;
+				return from + ((x - padding.left) / chartWidth()) * (to - from);
+			}
+
+			function resizeCanvas() {
+				const dpr = window.devicePixelRatio || 1;
+				const rect = canvas.parentElement.getBoundingClientRect();
+				canvas.width = rect.width * dpr;
+				canvas.height = canvasHeight * dpr;
+				canvas.style.height = canvasHeight + 'px';
+				ctx.setTransform(1, 0, 0, 1, 0, 0);
+				ctx.scale(dpr, dpr);
+				render();
+			}
+			new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
+
+			let selection = null; // {startX, endX} in CSS pixels, while dragging
+			let isSelecting = false;
+
+			function render() {
+				const w = logicalWidth();
+				ctx.clearRect(0, 0, w, canvasHeight);
+				if (!currentResult || !currentResult.points || currentResult.points.length === 0) return;
+
+				const points = currentResult.points;
+				const values = points.map(p => p.value);
+				let minV = Math.min.apply(null, values);
+				let maxV = Math.max.apply(null, values);
+				if (minV === maxV) { minV -= 1; maxV += 1; }
+
+				function valueToY(v) {
+					return padding.top + chartHeight() - ((v - minV) / (maxV - minV)) * chartHeight();
+				}
+
+				// Axes.
+				ctx.strokeStyle = '#9ca3af';
+				ctx.lineWidth = 1;
+				ctx.beginPath();
+				ctx.moveTo(padding.left, padding.top);
+				ctx.lineTo(padding.left, padding.top + chartHeight());
+				ctx.lineTo(padding.left + chartWidth(), padding.top + chartHeight());
+				ctx.stroke();
+
+				// Y-axis value labels (min/mid/max), unit-suffixed.
+				ctx.fillStyle = '#6b7280';
+				ctx.font = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+				ctx.textAlign = 'right';
+				[0, 0.5, 1].forEach(function(frac) {
+					const v = minV + frac * (maxV - minV);
+					const y = valueToY(v);
+					ctx.fillText(v.toFixed(1) + (unit ? (' ' + unit) : ''), padding.left - 6, y + 3);
+				});
+
+				// Raw line + points, plotted exactly as returned (FR9: no
+				// aggregation, downsampling, or smoothing here).
+				ctx.strokeStyle = '#3b82f6';
+				ctx.lineWidth = 1.5;
+				ctx.beginPath();
+				points.forEach(function(p, i) {
+					const x = timeToX(p.recorded_at);
+					const y = valueToY(p.value);
+					if (i === 0) { ctx.moveTo(x, y); } else { ctx.lineTo(x, y); }
+				});
+				ctx.stroke();
+
+				ctx.fillStyle = '#3b82f6';
+				points.forEach(function(p) {
+					const x = timeToX(p.recorded_at);
+					const y = valueToY(p.value);
+					ctx.beginPath();
+					ctx.arc(x, y, 2, 0, Math.PI * 2);
+					ctx.fill();
+				});
+
+				if (selection) {
+					const sx = Math.min(selection.startX, selection.endX);
+					const ex = Math.max(selection.startX, selection.endX);
+					ctx.fillStyle = 'rgba(59, 130, 246, 0.15)';
+					ctx.fillRect(sx, padding.top, ex - sx, chartHeight());
+					ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+					ctx.strokeRect(sx, padding.top, ex - sx, chartHeight());
+				}
+			}
+
+			function readingWord(n) { return n === 1 ? 'reading' : 'readings'; }
+
+			function formatSpan(seconds) {
+				seconds = Math.abs(seconds);
+				if (seconds < 60) return 'less than a minute';
+				if (seconds < 3600) { const m = Math.floor(seconds / 60); return m + (m === 1 ? ' minute' : ' minutes'); }
+				if (seconds < 86400) { const h = Math.floor(seconds / 3600); return h + (h === 1 ? ' hour' : ' hours'); }
+				const d = Math.floor(seconds / 86400); return d + (d === 1 ? ' day' : ' days');
+			}
+
+			// renderNotices mirrors coverageNoticeText/excludedNoticeText's
+			// phrasing for every fetch after the initial server-rendered
+			// load -- both notices are independent and can render
+			// simultaneously (FR9/FR10); neither is merged into the other's
+			// text.
+			function renderNotices(result) {
+				noticesContainer.innerHTML = '';
+				if (result.capped) {
+					const covered = formatSpan(result.covered_to - result.covered_from);
+					const requested = formatSpan(result.to - result.from);
+					const div = document.createElement('div');
+					div.setAttribute('role', 'status');
+					div.className = 'alert alert-info py-2 reading-chart-coverage-notice';
+					const span = document.createElement('span');
+					span.textContent = 'Showing the most recent ' + covered + ' of the ' + requested + ' you selected (capped at ' + result.point_cap + ' points).';
+					div.appendChild(span);
+					noticesContainer.appendChild(div);
+				}
+				if (result.excluded_invalid_count > 0) {
+					const div = document.createElement('div');
+					div.setAttribute('role', 'status');
+					div.className = 'alert alert-warning py-2 reading-chart-excluded-notice';
+					const word = readingWord(result.excluded_invalid_count);
+					const span = document.createElement('span');
+					span.textContent = (result.points.length === 0)
+						? ('All ' + result.excluded_invalid_count + ' ' + word + ' in this range were marked invalid.')
+						: (result.excluded_invalid_count + ' ' + word + ' in this range were excluded for being marked invalid.');
+					div.appendChild(span);
+					noticesContainer.appendChild(div);
+				}
+				if (result.points.length === 0) {
+					const div = document.createElement('div');
+					div.setAttribute('role', 'status');
+					div.className = 'text-base-content/60 text-sm py-2 reading-chart-empty-notice';
+					div.textContent = 'No readings in this range.';
+					noticesContainer.appendChild(div);
+				}
+			}
+
+			// fetchRange is the one path every range change takes (FR8):
+			// a preset click sends "?preset=<name>" so the absolute bounds
+			// are computed server-side (handlers_sensors.go's presetRange,
+			// unit-tested there); a drag-select sends the exact
+			// "?from=&to=" endpoints it computed from the already-rendered
+			// domain, which can only be a subset of the current view.
+			// Never on a timer (NFR1) -- only these two call sites invoke
+			// this function.
+			async function fetchRange(params) {
+				let url = '/sensors/' + sensorId + '/history/data?' + params;
+				noticesContainer.innerHTML = '';
+				let resp;
+				try {
+					resp = await fetch(url);
+				} catch (e) {
+					noticesContainer.innerHTML = '<div role="alert" class="reading-chart-fetch-failed alert alert-warning py-2"><span>Failed to load reading history.</span></div>';
+					return;
+				}
+				if (!resp.ok) {
+					noticesContainer.innerHTML = '<div role="alert" class="reading-chart-fetch-failed alert alert-warning py-2"><span>Failed to load reading history.</span></div>';
+					return;
+				}
+				const result = await resp.json();
+				currentResult = result;
+				domain = displayDomain(result);
+				selection = null;
+				renderNotices(result);
+				render();
+			}
+
+			presetButtons.forEach(function(btn) {
+				btn.addEventListener('click', function() {
+					presetButtons.forEach(function(b) { b.classList.remove('btn-active'); });
+					btn.classList.add('btn-active');
+					fetchRange('preset=' + encodeURIComponent(btn.dataset.preset));
+				});
+			});
+
+			canvas.addEventListener('mousedown', function(e) {
+				const rect = canvas.getBoundingClientRect();
+				const x = e.clientX - rect.left;
+				isSelecting = true;
+				selection = { startX: x, endX: x };
+			});
+
+			canvas.addEventListener('mousemove', function(e) {
+				const rect = canvas.getBoundingClientRect();
+				const x = e.clientX - rect.left;
+
+				if (isSelecting) {
+					selection.endX = x;
+					render();
+					return;
+				}
+
+				if (currentResult && currentResult.points && currentResult.points.length > 0) {
+					const t = xToTime(x);
+					let nearest = null;
+					let nearestDist = Infinity;
+					currentResult.points.forEach(function(p) {
+						const d = Math.abs(p.recorded_at - t);
+						if (d < nearestDist) { nearestDist = d; nearest = p; }
+					});
+					if (nearest) {
+						const date = new Date(nearest.recorded_at * 1000);
+						tooltip.innerHTML = '<div>' + date.toLocaleString() + '</div><div>' + nearest.value + (unit ? (' ' + unit) : '') + '</div>';
+						tooltip.style.display = 'block';
+						tooltip.style.left = (x + 10) + 'px';
+						tooltip.style.top = (e.clientY - rect.top + 10) + 'px';
+					}
+				}
+			});
+
+			canvas.addEventListener('mouseleave', function() {
+				tooltip.style.display = 'none';
+				if (isSelecting) {
+					isSelecting = false;
+					selection = null;
+					render();
+				}
+			});
+
+			// mouseup: a drag-select narrows the view to the dragged span
+			// (FR8) -- xToTime maps only within the domain already
+			// rendered, so newFrom/newTo can never reach outside the
+			// current view or exceed 30 days.
+			canvas.addEventListener('mouseup', function() {
+				if (!isSelecting) return;
+				isSelecting = false;
+				if (!selection || Math.abs(selection.endX - selection.startX) < 4) {
+					selection = null;
+					render();
+					return;
+				}
+				const x1 = Math.min(selection.startX, selection.endX);
+				const x2 = Math.max(selection.startX, selection.endX);
+				const newFrom = Math.round(xToTime(x1));
+				const newTo = Math.round(xToTime(x2));
+				presetButtons.forEach(function(b) { b.classList.remove('btn-active'); });
+				fetchRange('from=' + newFrom + '&to=' + newTo);
+			});
+
+			resizeCanvas();
+		})();
+	</script>
+}

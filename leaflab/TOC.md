@@ -17,6 +17,8 @@ Plant and environment monitoring firmware and data pipeline.
 
 - [sensorboard/README.md](sensorboard/README.md) — Build, flash, extend the sensorboard firmware; how to add sensors and board configs
 - [sensorboard/CLAUDE.md](sensorboard/CLAUDE.md) — Agent instructions: flash/validate workflow, I2C hardware notes, config push, DB validation
+- [ui/README.md](ui/README.md) — `leaflab-ui`: HTMX/templ web app, OIDC sign-in, DB-backed sessions, `leaflab_user` resolution, gRPC-only data access
+- [ui/ENV.md](ui/ENV.md) — `leaflab-ui` environment variables (auth, session, OIDC client, `leaflab-api` address)
 
 ## Related Docs
 

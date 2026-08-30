@@ -1,0 +1,90 @@
+package pages
+
+import (
+	"fmt"
+
+	leaflabapipb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/ui/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// Boards is the boards list screen (#1502: FR4, FR5, NFR1) -- every board
+// leaflab-api returns from ListBoardsWithState, with no client-side
+// filtering by owner or ownership status (FR4; all boards are unowned in
+// M1, so there is deliberately no owner column, no "unowned" warning, and
+// no empty-state wording that implies something is wrong when boards are
+// unowned). boards and loadErr are mutually exclusive: handlers_boards.go
+// passes a nil boards slice on a load failure and a nil loadErr on
+// success, mirroring tools/app_registry/ui/pages/environments.templ's
+// Environments(..., loadErr error) shape.
+//
+// NFR1: this page has no hx-trigger polling interval, no sse-connect, and
+// no WebSocket -- data reflects the last page load or navigation only. Do
+// not add any of those here; see the task issue's NFR1 section and the
+// render test guarding it.
+templ Boards(data components.LayoutData, boards []*leaflabapipb.BoardWithState, loadErr error) {
+	@components.Layout(data) {
+		<h1 class="text-2xl font-bold mb-4">Boards</h1>
+		if loadErr != nil {
+			<div role="alert" class="alert alert-error shadow-md">
+				<span>Failed to load boards from leaflab-api: { loadErr.Error() }</span>
+			</div>
+		} else if len(boards) == 0 {
+			<div class="card bg-base-100 border border-base-300 shadow-sm">
+				<div class="card-body items-center text-center py-12">
+					<p class="text-base-content/60">No boards yet.</p>
+				</div>
+			</div>
+		} else {
+			@htmxui.Card(nil, boardsTable(boards), nil, nil)
+		}
+	}
+}
+
+// boardsTable renders one row per board (FR4: every board the API
+// returned, unfiltered). device_id is shown in full -- never truncated or
+// abbreviated -- monospaced so it can be matched against the eFuse-derived
+// identifier printed on the hardware; there is no board name field to
+// display and none is invented (out of scope until M2). Each row links to
+// the board's detail page (#1503).
+templ boardsTable(boards []*leaflabapipb.BoardWithState) {
+	<div class="overflow-x-auto">
+		<table class="table">
+			<thead>
+				<tr>
+					<th>Device ID</th>
+					<th>Status</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, board := range boards {
+					<tr class="hover">
+						<td class="font-mono text-sm">{ board.GetDeviceId() }</td>
+						<td>@boardStateCell(board)</td>
+						<td class="text-right">
+							<a href={ templ.URL(fmt.Sprintf("/boards/%d", board.GetBoardId())) } class="btn btn-primary btn-sm">View</a>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// boardStateCell renders exactly one of FR5's three states (reporting,
+// stale, never reported) as an htmxui.Badge, sourced entirely from the
+// ReportingState the API returned -- no timestamp is read here to decide
+// which case this is. The stale case additionally shows the relative age
+// of the most recent reading, straight off last_reading_at; the other two
+// cases show no timestamp at all (a "never reported" board has none to
+// show, and a "reporting" board's exact recency isn't the point of this
+// screen).
+templ boardStateCell(board *leaflabapipb.BoardWithState) {
+	<div class="flex flex-col gap-1">
+		@htmxui.Badge(boardStateLabel(board.GetReportingState()), boardStateVariant(board.GetReportingState()), htmxui.BadgeSizeSM, true, nil)
+		if board.GetReportingState() == leaflabapipb.ReportingState_REPORTING_STATE_STALE && board.GetLastReadingAt() != nil {
+			<span class="text-xs text-base-content/60">{ lastReadingAge(board.GetLastReadingAt().AsTime()) }</span>
+		}
+	</div>
+}
