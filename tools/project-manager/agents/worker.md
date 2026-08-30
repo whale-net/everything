@@ -59,6 +59,6 @@ Query whichever `Status` swimlane (`Scaffold`, `Implementation`, or `Testing`) m
 
 - Stay inside the issue's stated scope. If you notice unrelated work, file a Scope note: `gh issue create --title "Scope note: <short desc>" --body-file <tmpfile>` with `Part of #<root>` and `from:worker` in the body, and add it to the Project at `Status: Noted`.
 - A failing test is a valid outcome to report — do not weaken a test to make it pass.
-- Never push, run `gh stack` commands, or touch anything outside `<worktree-path>` — branch/worktree lifecycle and pushing the PR are the orchestrator's job, done after you report back.
+- Never push, run `gh stack` commands, or touch anything outside `<worktree-path>` — branch/worktree lifecycle and pushing the PR are the orchestrator's job, delegated to the `mergepush` persona once your batch finishes.
 
 **If your situation isn't covered above:** check `tools/project-manager/CONVENTIONS.md` for the canonical mechanics.
