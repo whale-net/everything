@@ -13,6 +13,7 @@ import (
 
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/db"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/grpc"
@@ -42,6 +43,9 @@ func run() error {
 	port := getEnv("PORT", "50051")
 	rabbitmqURL := getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/")
 	databaseURL := getEnv("PG_DATABASE_URL", "")
+	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
+	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
+	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
 
 	pool, err := db.NewPool(ctx, databaseURL)
 	if err != nil {
@@ -66,7 +70,22 @@ func run() error {
 	repo := NewRepository(pool)
 	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"))
 
-	grpcServer := grpc.NewServer()
+	// grpcauth's interceptor pair applies globally, so it is wrapped here to
+	// authenticate only authenticatedMethods (leaflab/api/auth.go) --
+	// PushDeviceConfig, GetDeviceConfig, and ListBoards stay open per NFR2.
+	unaryAuth, streamAuth, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
+		Mode:      grpcauth.AuthMode(grpcAuthMode),
+		IssuerURL: grpcOIDCIssuer,
+		ClientID:  grpcOIDCClientID,
+	})
+	if err != nil {
+		return fmt.Errorf("grpcauth: %w", err)
+	}
+
+	grpcServer := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(selectiveUnaryInterceptor(unaryAuth)),
+		grpc.ChainStreamInterceptor(selectiveStreamInterceptor(streamAuth)),
+	)
 	pb.RegisterLeafLabAPIServer(grpcServer, apiServer)
 	reflection.Register(grpcServer)
 
