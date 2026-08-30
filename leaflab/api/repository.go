@@ -161,3 +161,100 @@ type BoardWithReadingRow struct {
 	DeviceID      string
 	LastReadingAt *time.Time
 }
+
+// GetBoardIdentity returns a board's device_id, or pgx.ErrNoRows (unwrapped,
+// so callers can errors.Is against it directly) when board_id is unknown.
+func (r *Repository) GetBoardIdentity(ctx context.Context, boardID int64) (string, error) {
+	var deviceID string
+	err := r.db.QueryRow(ctx, `SELECT device_id FROM board WHERE board_id = $1`, boardID).Scan(&deviceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+		return "", fmt.Errorf("get board identity for %d: %w", boardID, err)
+	}
+	return deviceID, nil
+}
+
+// ListSensorDetailsForBoard returns every sensor recorded for a board (FR6 —
+// no filtering by recency, region, or config membership; a sensor that
+// stopped reporting years ago still appears), each with its most recent
+// reading when it has one.
+//
+// Sensor identity comes from v_sensor_current (leaflab/migrate/migrations/
+// 012_views.up.sql), which already resolves the sensor_name_history SCD2
+// join to the current open row and joins sensor_type — re-deriving that by
+// hand here would duplicate logic that already exists. Readings come
+// directly from sensor_reading, not the heavier v_sensor_reading_enriched,
+// whose device_config/region joins are dead weight here (no region or
+// location is shown in M1).
+//
+// This is one query for the board's sensors plus a LATERAL "most recent
+// reading" join per sensor row — not one query per sensor — since boards
+// carry on the order of tens of sensors and sensor_reading is a
+// TimescaleDB hypertable.
+//
+// LatestValue/LatestRecordedAt/LatestValid are nil together, only when the
+// sensor has never reported a reading. Deliberately does not filter or
+// branch on `valid`: the latest reading's valid flag is carried straight
+// through as a display property (FR7), not used to hide the reading or to
+// derive reporting state (that's reportingState, applied by the caller to
+// LatestRecordedAt).
+func (r *Repository) ListSensorDetailsForBoard(ctx context.Context, boardID int64) ([]SensorDetailRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT
+			sc.sensor_id,
+			COALESCE(sc.sensor_name, ''),
+			sc.sensor_unit,
+			sc.sensor_type_name,
+			lr.value,
+			lr.recorded_at,
+			lr.valid
+		FROM v_sensor_current sc
+		LEFT JOIN LATERAL (
+			SELECT sr.value, sr.recorded_at, sr.valid
+			FROM sensor_reading sr
+			WHERE sr.sensor_id = sc.sensor_id
+			ORDER BY sr.recorded_at DESC
+			LIMIT 1
+		) lr ON TRUE
+		WHERE sc.board_id = $1
+		ORDER BY sc.sensor_id
+	`, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("list sensor details for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var sensors []SensorDetailRow
+	for rows.Next() {
+		var s SensorDetailRow
+		if err := rows.Scan(
+			&s.SensorID,
+			&s.SensorName,
+			&s.Unit,
+			&s.SensorTypeName,
+			&s.LatestValue,
+			&s.LatestRecordedAt,
+			&s.LatestValid,
+		); err != nil {
+			return nil, fmt.Errorf("scan sensor detail: %w", err)
+		}
+		sensors = append(sensors, s)
+	}
+	return sensors, rows.Err()
+}
+
+// SensorDetailRow is one sensor plus its most recent reading, if it has
+// ever reported one. LatestValue/LatestRecordedAt/LatestValid are nil
+// together exactly when the sensor has no readings at all.
+type SensorDetailRow struct {
+	SensorID       int64
+	SensorName     string
+	Unit           string
+	SensorTypeName string
+
+	LatestValue      *float64
+	LatestRecordedAt *time.Time
+	LatestValid      *bool
+}
