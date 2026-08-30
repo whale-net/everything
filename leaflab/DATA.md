@@ -52,6 +52,7 @@ erDiagram
         varchar     name
         text        description
         timestamptz created_at
+        bigint      owner_leaflab_user_id FK
     }
 
     sensor_region_history {
@@ -102,6 +103,24 @@ erDiagram
         bigint sensor_type_id FK
     }
 
+    leaflab_user {
+        bigserial   leaflab_user_id PK
+        text        oidc_sub UK
+        text        preferred_username
+        text        email
+        text        display_name
+        timestamptz created_at
+        timestamptz last_seen_at
+    }
+
+    board_owner_history {
+        bigserial   board_owner_history_id PK
+        bigint      board_id FK
+        bigint      leaflab_user_id FK
+        timestamptz valid_from
+        timestamptz valid_to
+    }
+
     board            ||--o{ sensor               : "hosts"
     sensor_type      ||--o{ sensor               : "classifies"
     region           |o--o{ sensor               : "current placement"
@@ -115,7 +134,17 @@ erDiagram
     sensor_chip      ||--o{ sensor_chip_address  : "known addresses"
     sensor_chip      ||--o{ sensor_chip_type     : "produces"
     sensor_type      ||--o{ sensor_chip_type     : "produced by"
+    board            ||--o{ board_owner_history  : "ownership history"
+    leaflab_user     ||--o{ board_owner_history  : "owns"
+    leaflab_user     |o--o{ region               : "current owner"
 ```
+
+Ownership (`leaflab_user`, `board_owner_history`, and the `owner_leaflab_user_id`
+references on `region` and `plant`) is created in M1 but written by nothing
+but interactive sign-in — no row exists in any of these until FR2/C25 land.
+`plant` is omitted from the diagram above along with `plant_type` (existing
+gap, reconciled in M4 per `leaflab/product/03-roadmap.md`), but it gains the
+same nullable `owner_leaflab_user_id FK` as `region`.
 
 ---
 
