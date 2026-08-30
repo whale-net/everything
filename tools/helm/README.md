@@ -64,10 +64,12 @@ Choose the right type for your application:
 
 | Type | Gets | Use For |
 |------|------|---------|
-| **external-api** | Deployment + Service + Ingress | Public APIs, web services accessible from outside cluster |
-| **internal-api** | Deployment + Service (+ optional Ingress*) | Internal services, cluster-only APIs |
-| **worker** | Deployment | Background workers, queue processors |
-| **job** | Job (with hooks) | Migrations, batch tasks, one-time operations |
+| **external-api** | ServiceAccount + Deployment + Service + Ingress | Public APIs, web services accessible from outside cluster |
+| **internal-api** | ServiceAccount + Deployment + Service (+ optional Ingress*) | Internal services, cluster-only APIs |
+| **worker** | ServiceAccount + Deployment | Background workers, queue processors |
+| **job** | ServiceAccount + Job (with hooks) | Migrations, batch tasks, one-time operations |
+
+Every app gets its own dedicated ServiceAccount (named after the app key), regardless of type — this gives per-app pod identity for things like OpenBao kubernetes-auth bindings, instead of every pod sharing the namespace's implicit `default` ServiceAccount.
 
 *Internal APIs can optionally expose Ingress by setting `exposeIngress: true` for debugging.
 
@@ -159,6 +161,7 @@ my-chart/
 ├── Chart.yaml          # Chart metadata
 ├── values.yaml        # Configuration (customizable at deploy time)
 └── templates/
+    ├── serviceaccount.yaml # One per app, all types
     ├── deployment.yaml    # For external-api, internal-api, worker
     ├── service.yaml       # For external-api, internal-api
     ├── ingress.yaml       # For external-api (1:1 per app)
@@ -437,10 +440,10 @@ bazel build //path:chart --verbose_failures
 ### Wrong App Type Resources
 
 Check your `app_type` in `release_app`:
-- `external-api` → Deployment + Service + Ingress
-- `internal-api` → Deployment + Service (no Ingress)
-- `worker` → Deployment only
-- `job` → Job only
+- `external-api` → ServiceAccount + Deployment + Service + Ingress
+- `internal-api` → ServiceAccount + Deployment + Service (no Ingress)
+- `worker` → ServiceAccount + Deployment only
+- `job` → ServiceAccount + Job only
 
 ### Lint Warnings About Underscores
 

@@ -154,22 +154,22 @@ func TestAppType_TemplateArtifacts(t *testing.T) {
 		{
 			"ExternalAPI has all artifacts",
 			ExternalAPI,
-			[]string{"deployment.yaml", "service.yaml", "ingress.yaml", "pdb.yaml"},
+			[]string{"serviceaccount.yaml", "deployment.yaml", "service.yaml", "ingress.yaml", "pdb.yaml"},
 		},
 		{
 			"InternalAPI has service but no ingress",
 			InternalAPI,
-			[]string{"deployment.yaml", "service.yaml", "pdb.yaml"},
+			[]string{"serviceaccount.yaml", "deployment.yaml", "service.yaml", "pdb.yaml"},
 		},
 		{
 			"Worker has only deployment and PDB",
 			Worker,
-			[]string{"deployment.yaml", "pdb.yaml"},
+			[]string{"serviceaccount.yaml", "deployment.yaml", "pdb.yaml"},
 		},
 		{
 			"Job has only job template",
 			Job,
-			[]string{"job.yaml"},
+			[]string{"serviceaccount.yaml", "job.yaml"},
 		},
 	}
 
