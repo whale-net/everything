@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -225,6 +226,47 @@ func TestHandleSensorHistoryData_ExplicitFromTo_ReturnsJSON(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"from":1000`) || !strings.Contains(rec.Body.String(), `"to":2000`) {
 		t.Errorf("expected the requested from/to echoed back in the JSON body, got %q", rec.Body.String())
+	}
+}
+
+// TestHandleSensorHistoryData_CappedAndExcluded_JSONCarriesBothSignals
+// covers the wire half of FR9's independence rule: reading_chart.templ's
+// script re-renders the coverage and excluded notices from this JSON on
+// every preset/drag-select fetch (see the exact-open-tag comment in
+// sensor_history_test.go), so both signals -- capped, the actual
+// point_cap, covered_from/covered_to, and excluded_invalid_count -- must
+// all be present in the same response, not just at the initial SSR load
+// toChartData also feeds.
+func TestHandleSensorHistoryData_CappedAndExcluded_JSONCarriesBothSignals(t *testing.T) {
+	coveredFrom := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
+	coveredTo := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+	fake := &fakeLeafLabAPIClient{historyResp: &leaflabapipb.GetSensorReadingHistoryResponse{
+		Points:               []*leaflabapipb.ReadingPoint{{RecordedAt: timestamppb.New(coveredTo), Value: 3.25}},
+		Capped:               true,
+		CoveredFrom:          timestamppb.New(coveredFrom),
+		CoveredTo:            timestamppb.New(coveredTo),
+		PointCap:             5000,
+		ExcludedInvalidCount: 12,
+	}}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleSensorHistoryData(rec, newSensorHistoryDataRequest("7", "preset=30d"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"capped":true`,
+		fmt.Sprintf(`"covered_from":%d`, coveredFrom.Unix()),
+		fmt.Sprintf(`"covered_to":%d`, coveredTo.Unix()),
+		`"point_cap":5000`,
+		`"excluded_invalid_count":12`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("expected %q in the JSON body (both signals must ride the same response), got %q", want, body)
+		}
 	}
 }
 
