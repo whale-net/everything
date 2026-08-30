@@ -301,6 +301,34 @@ func (a *Authenticator) GetAccessToken(r *http.Request) (string, error) {
 	return a.sessions.GetAccessToken(r)
 }
 
+// CurrentUser reads the UserInfo for a request's own session directly from
+// the session store, without requiring RequireAuth/RequireAuthFunc to have
+// run first (which is what populates the context GetUser reads from).
+//
+// This exists for wrapper handlers that need identity immediately after a
+// side effect the session store just performed — for example, a post-login
+// hook wrapped around HandleCallback, which has no such hook of its own.
+// Such a wrapper can capture HandleCallback's response, notice the session
+// cookie it just set, attach that cookie to a throwaway *http.Request, and
+// call CurrentUser on it to read back the session HandleCallback just wrote
+// — see leaflab-ui's handleAuthCallback (#1501, FR2) for a worked example.
+//
+// In AuthModeNone it mirrors RequireAuth's dev user rather than erroring,
+// consistent with GetAccessToken's no-auth-mode behavior.
+func (a *Authenticator) CurrentUser(r *http.Request) (*UserInfo, error) {
+	if a.config.Mode == AuthModeNone {
+		return &UserInfo{
+			Sub:               "dev-user",
+			PreferredUsername: "developer",
+			Name:              "Development User",
+			Email:             "dev@localhost",
+			Roles:             AllRoles,
+			RawClaims:         map[string]interface{}{},
+		}, nil
+	}
+	return a.sessions.GetUserInfo(r)
+}
+
 // WithAccessToken wraps a protected handler to inject the user's access
 // token into the request context (via grpcauth.WithUserToken) for gRPC
 // forwarding. If the token is unavailable or expired, the caller is

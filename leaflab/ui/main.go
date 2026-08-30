@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"google.golang.org/grpc"
 
@@ -96,6 +97,10 @@ type App struct {
 	api         *LeafLabClient
 	userAuthOpt grpc.DialOption
 	sessionMgr  *htmxauth.DBSessionManager
+	// pool backs the FR2 leaflab_user upsert in handlers_auth.go — the only
+	// other direct database use besides htmxauth's own session storage
+	// (NFR2: this UI never queries board/sensor/sensor_reading/v_* itself).
+	pool *pgxpool.Pool
 }
 
 // NewApp creates a new application instance.
@@ -164,11 +169,15 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		api:         api,
 		userAuthOpt: userAuthOpt,
 		sessionMgr:  store,
+		pool:        pool,
 	}, nil
 }
 
 // Close cleans up application resources.
 func (app *App) Close() error {
+	if app.pool != nil {
+		app.pool.Close()
+	}
 	if app.api != nil {
 		return app.api.Close()
 	}
@@ -236,7 +245,9 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// page itself would redirect to sign-in.
 	mux.HandleFunc("/health", app.handleHealth)
 	mux.HandleFunc("/auth/login", app.auth.HandleLogin)
-	mux.HandleFunc("/auth/callback", app.auth.HandleCallback)
+	// handleAuthCallback wraps htmxauth's HandleCallback with the FR2
+	// leaflab_user upsert-on-sign-in — see handlers_auth.go.
+	mux.HandleFunc("/auth/callback", app.handleAuthCallback)
 	mux.HandleFunc("/auth/logout", app.auth.HandleLogout)
 
 	// Protected routes. Being authenticated is the only requirement for M1
