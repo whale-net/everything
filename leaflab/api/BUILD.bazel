@@ -67,7 +67,8 @@ release_app(
     replicas = 1,
 )
 
-# Real-Postgres integration coverage for ListBoardsWithState (#1497) -- see
+# Real-Postgres integration coverage for ListBoardsWithState (#1497) and
+# ListSensorDetailsForBoard/GetBoardIdentity (#1498) -- see
 # repository_integration_test.go's doc comment and //libs/go/dbtest's README
 # for how to run it.
 #

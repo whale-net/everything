@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -163,6 +165,55 @@ func (s *LeafLabAPIServer) ListBoardsWithState(ctx context.Context, _ *pb.ListBo
 
 	s.logger.Info("boards with state listed", "count", len(boards))
 	return &pb.ListBoardsWithStateResponse{Boards: boards}, nil
+}
+
+// GetBoardDetail returns a board's identity plus every sensor recorded for
+// it, each with its own reporting state and (when present) most recent
+// reading (FR6, FR7). Unknown board_id returns codes.NotFound.
+//
+// Non-blocking by design: a stale or never-reported sensor is a normal row
+// in the response, not an error, and a board with zero sensors returns an
+// OK response with an empty sensor list.
+func (s *LeafLabAPIServer) GetBoardDetail(ctx context.Context, req *pb.GetBoardDetailRequest) (*pb.GetBoardDetailResponse, error) {
+	deviceID, err := s.repo.GetBoardIdentity(ctx, req.BoardId)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "board %d not found", req.BoardId)
+		}
+		return nil, status.Errorf(codes.Internal, "get board identity: %v", err)
+	}
+
+	rows, err := s.repo.ListSensorDetailsForBoard(ctx, req.BoardId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list sensor details: %v", err)
+	}
+
+	now := time.Now()
+	sensors := make([]*pb.SensorDetail, 0, len(rows))
+	for _, r := range rows {
+		sd := &pb.SensorDetail{
+			SensorId:       r.SensorID,
+			SensorName:     r.SensorName,
+			Unit:           r.Unit,
+			SensorTypeName: r.SensorTypeName,
+			ReportingState: reportingState(r.LatestRecordedAt, now),
+		}
+		if r.LatestRecordedAt != nil {
+			sd.LatestReading = &pb.LatestReading{
+				Value:      *r.LatestValue,
+				RecordedAt: timestamppb.New(*r.LatestRecordedAt),
+				Valid:      *r.LatestValid,
+			}
+		}
+		sensors = append(sensors, sd)
+	}
+
+	s.logger.Info("board detail listed", "board_id", req.BoardId, "sensor_count", len(sensors))
+	return &pb.GetBoardDetailResponse{
+		BoardId:  req.BoardId,
+		DeviceId: deviceID,
+		Sensors:  sensors,
+	}, nil
 }
 
 // reportingState derives a ReportingState purely from a board's most recent
