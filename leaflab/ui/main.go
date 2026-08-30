@@ -255,6 +255,14 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// gates any route here; authorization lands in M2.
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
 	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoards)))
+	// handleBoardDetail (#1503: FR6, FR7) -- every sensor on one board.
+	mux.HandleFunc("/boards/{board_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoardDetail)))
+	// handleSensorHistory (#1504: FR8, FR9, FR10) -- one sensor's reading
+	// history chart. handleSensorHistoryData is the small JSON endpoint
+	// its chart fetches range data from on every preset click or
+	// drag-select (never on a timer, NFR1).
+	mux.HandleFunc("/sensors/{sensor_id}/history", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSensorHistory)))
+	mux.HandleFunc("/sensors/{sensor_id}/history/data", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSensorHistoryData)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

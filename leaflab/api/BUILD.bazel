@@ -42,6 +42,7 @@ go_test(
     name = "api_test",
     srcs = [
         "auth_test.go",
+        "history_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
@@ -49,10 +50,51 @@ go_test(
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/grpcauth",
         "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+# FR9/FR10 tests that need a real Postgres (SQL-applied point cap, invalid-
+# reading accounting). Gated behind `//go:build integration`, gazelle skips
+# it when scanning for go_test srcs; this go_test is hand-written with
+# EXACTLY the tag set from //libs/go/dbtest:postgres_constraints_test (see
+# that package's BUILD.bazel/README.md for why each tag is required).
+# `# keep` tells a later `bazel run //:gazelle` not to touch or remove this
+# rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/api:history_integration_test --test_output=all
+go_test(
+    # keep
+    name = "history_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["history_integration_test.go"],
+    embed = [":api_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
 
@@ -67,7 +109,8 @@ release_app(
     replicas = 1,
 )
 
-# Real-Postgres integration coverage for ListBoardsWithState (#1497) -- see
+# Real-Postgres integration coverage for ListBoardsWithState (#1497) and
+# ListSensorDetailsForBoard/GetBoardIdentity (#1498) -- see
 # repository_integration_test.go's doc comment and //libs/go/dbtest's README
 # for how to run it.
 #

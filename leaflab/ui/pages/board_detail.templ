@@ -1,0 +1,131 @@
+package pages
+
+import (
+	"fmt"
+	"net/url"
+
+	leaflabapipb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/ui/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// BoardDetail is the board detail screen (#1503: FR6, FR7, NFR1) -- every
+// sensor on one board, each with its own reporting state and, when
+// present, its most recent reading. sensors and loadErr are mutually
+// exclusive, mirroring boards.templ's Boards(..., loadErr error) shape:
+// handlers_boards.go passes a nil sensors slice on a load failure and a
+// nil loadErr on success. Unlike Boards, a codes.NotFound board_id never
+// reaches this template at all -- handleBoardDetail short-circuits to a
+// real HTTP 404 before rendering, so loadErr here is only ever a
+// transport/server failure, distinct from "board has no sensors" (an
+// empty sensors slice with loadErr == nil, handled below).
+//
+// deviceID is shown verbatim, monospaced, never truncated -- the same
+// rule boards.templ's device_id column follows -- with no board name
+// (out of scope until M2, C9).
+//
+// NFR1: this page has no hx-trigger polling interval, no sse-connect, and
+// no WebSocket -- data reflects the last page load or navigation only. Do
+// not add any of those here; see the task issue's NFR1 section and the
+// render test guarding it.
+templ BoardDetail(data components.LayoutData, boardID int64, deviceID string, sensors []*leaflabapipb.SensorDetail, loadErr error) {
+	@components.Layout(data) {
+		<h1 class="text-2xl font-bold mb-1">Board</h1>
+		<p class="font-mono text-sm text-base-content/70 mb-4">{ deviceID }</p>
+		if loadErr != nil {
+			<div role="alert" class="alert alert-error shadow-md">
+				<span>Failed to load board detail from leaflab-api: { loadErr.Error() }</span>
+			</div>
+		} else if len(sensors) == 0 {
+			<div class="card bg-base-100 border border-base-300 shadow-sm">
+				<div class="card-body items-center text-center py-12">
+					<p class="text-base-content/60">This board has no sensors yet.</p>
+				</div>
+			</div>
+		} else {
+			@htmxui.Card(nil, sensorsTable(boardID, deviceID, sensors), nil, nil)
+		}
+	}
+}
+
+// sensorsTable renders one row per sensor (FR6: every sensor the API
+// returned, unfiltered -- no hide/retire/disable affordance exists here or
+// anywhere else on this page). Each row links to the sensor's
+// reading-history chart (#1504), carrying board_id/device_id/sensor_name/
+// unit as query parameters -- the reading-history page's route
+// ("/sensors/{sensor_id}/history") has no board_id path segment, and no
+// RPC maps a sensor_id back to its board or name (see #1504's
+// sensor_history.templ doc comment), so this link is that page's only
+// source for its board/name/unit chrome.
+templ sensorsTable(boardID int64, deviceID string, sensors []*leaflabapipb.SensorDetail) {
+	<div class="overflow-x-auto">
+		<table class="table">
+			<thead>
+				<tr>
+					<th>Sensor</th>
+					<th>Type</th>
+					<th>State</th>
+					<th>Latest Reading</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, sensor := range sensors {
+					<tr class="hover">
+						<td>{ sensor.GetSensorName() }</td>
+						<td>{ sensor.GetSensorTypeName() }</td>
+						<td>@htmxui.Badge(boardStateLabel(sensor.GetReportingState()), boardStateVariant(sensor.GetReportingState()), htmxui.BadgeSizeSM, true, nil)</td>
+						<td>@sensorReadingCell(sensor)</td>
+						<td class="text-right">
+							<a href={ templ.URL(sensorHistoryHref(boardID, deviceID, sensor)) } class="btn btn-ghost btn-sm">History</a>
+						</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// sensorHistoryHref builds the reading-history link's target URL,
+// including the board/name/unit context query parameters sensorsTable's
+// doc comment describes.
+func sensorHistoryHref(boardID int64, deviceID string, sensor *leaflabapipb.SensorDetail) string {
+	q := url.Values{}
+	q.Set("board_id", fmt.Sprintf("%d", boardID))
+	q.Set("device_id", deviceID)
+	q.Set("sensor_name", sensor.GetSensorName())
+	q.Set("unit", sensor.GetUnit())
+	return fmt.Sprintf("/sensors/%d/history?%s", sensor.GetSensorId(), q.Encode())
+}
+
+// sensorReadingCell renders FR6's "most recent value with unit, and the
+// timestamp of that reading" plus FR7's invalid-reading treatment.
+//
+// A nil LatestReading (REPORTING_STATE_NEVER_REPORTED) renders no value
+// and no timestamp -- there is nothing to show, and that absence is itself
+// the "never reported" signal, not an error. A present LatestReading with
+// valid == false is still shown -- FR7 forbids blanking it or falling back
+// to the previous valid reading -- with an added "Invalid" badge; this is
+// orthogonal to reporting_state, so a one-minute-old invalid reading still
+// shows the "Reporting" badge in the State column next to it.
+templ sensorReadingCell(sensor *leaflabapipb.SensorDetail) {
+	if sensor.GetLatestReading() == nil {
+		<span class="text-base-content/40">—</span>
+	} else {
+		<div class="flex flex-col gap-1">
+			<div class="flex items-center gap-2">
+				<span
+					if !sensor.GetLatestReading().GetValid() {
+						class="text-error"
+					}
+				>
+					{ fmt.Sprintf("%g", sensor.GetLatestReading().GetValue()) } { sensor.GetUnit() }
+				</span>
+				if !sensor.GetLatestReading().GetValid() {
+					@htmxui.Badge("Invalid", htmxui.BadgeError, htmxui.BadgeSizeSM, true, nil)
+				}
+			</div>
+			<span class="text-xs text-base-content/60">{ formatReadingTime(sensor.GetLatestReading().GetRecordedAt().AsTime()) }</span>
+		</div>
+	}
+}
