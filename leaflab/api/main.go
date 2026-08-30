@@ -83,8 +83,8 @@ func run() error {
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.ChainUnaryInterceptor(selectiveUnaryInterceptor(unaryAuth)),
-		grpc.ChainStreamInterceptor(selectiveStreamInterceptor(streamAuth)),
+		grpc.ChainUnaryInterceptor(logging.NewUnaryServerLoggingInterceptor("grpc"), selectiveUnaryInterceptor(unaryAuth)),
+		grpc.ChainStreamInterceptor(logging.NewStreamServerLoggingInterceptor("grpc"), selectiveStreamInterceptor(streamAuth)),
 	)
 	pb.RegisterLeafLabAPIServer(grpcServer, apiServer)
 	reflection.Register(grpcServer)

@@ -108,8 +108,8 @@ func run() error {
 		grpc.MaxRecvMsgSize(10*1024*1024), // 10 MB
 		grpc.MaxSendMsgSize(10*1024*1024), // 10 MB
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.ChainUnaryInterceptor(unaryInt),
-		grpc.ChainStreamInterceptor(streamInt),
+		grpc.ChainUnaryInterceptor(logging.NewUnaryServerLoggingInterceptor("grpc"), unaryInt),
+		grpc.ChainStreamInterceptor(logging.NewStreamServerLoggingInterceptor("grpc"), streamInt),
 	)
 
 	publisher := initializePublisher(ctx)

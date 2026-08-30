@@ -173,8 +173,8 @@ func main() {
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.ChainUnaryInterceptor(unaryInt),
-		grpc.ChainStreamInterceptor(streamInt),
+		grpc.ChainUnaryInterceptor(logging.NewUnaryServerLoggingInterceptor("grpc"), unaryInt),
+		grpc.ChainStreamInterceptor(logging.NewStreamServerLoggingInterceptor("grpc"), streamInt),
 	)
 	logProcessorServer := server.NewServer(consumerManager)
 	manmanpb.RegisterLogProcessorServer(grpcServer, logProcessorServer)
