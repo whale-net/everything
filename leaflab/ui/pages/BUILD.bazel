@@ -1,0 +1,11 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "pages",
+    srcs = glob(["*.templ"]),
+    visibility = ["//leaflab/ui:__pkg__"],
+    deps = [
+        "//leaflab/ui/components",
+        "//libs/go/htmxauth",
+    ],
+)

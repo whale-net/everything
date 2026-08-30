@@ -1,0 +1,24 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/leaflab/ui/components"
+)
+
+// Home is the minimal authenticated landing page (Scaffold's "Home page"
+// requirement): it shows the signed-in user and links to the boards list
+// (#1497's screen task), enough to prove sign-in end to end.
+templ Home(data components.LayoutData) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Welcome to LeafLab</h1>
+				if data.User != nil {
+					<p>Signed in as { data.User.PreferredUsername }.</p>
+				}
+				<div class="card-actions justify-end">
+					<a href="/boards" class="btn btn-primary">View Boards</a>
+				</div>
+			</div>
+		</div>
+	}
+}

@@ -1,0 +1,69 @@
+package components
+
+import (
+	"github.com/whale-net/everything/libs/go/htmxauth"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// LayoutData carries every page's shared chrome data. Kept deliberately
+// small for M1 — no Servers/Breadcrumbs/Active nav-highlighting fields like
+// manmanv2/ui's LayoutData, since M1 has no role/grant/ownership gating to
+// reflect in chrome (FR1) and only the single top-level route this task
+// adds.
+type LayoutData struct {
+	Title string
+	User  *htmxauth.UserInfo
+}
+
+// themes is the theme list leaflab-ui offers through the shared
+// htmxui.ThemeSwitcher (mounted by Layout, below).
+var themes = []htmxui.Theme{
+	{Value: "light", Label: "☀️ Light"},
+	{Value: "night", Label: "🌙 Night"},
+}
+
+// nav is leaflab-ui's app-owned nav item list (FR1a — htmxui.Shell
+// hardcodes no nav of its own, see htmxui.ShellData's doc comment).
+// "Boards" links to #1497's screen task; it is not implemented by this
+// task.
+templ nav() {
+	<ul class="menu menu-horizontal px-1">
+		<li><a href="/">Home</a></li>
+		<li><a href="/boards">Boards</a></li>
+	</ul>
+}
+
+// identityLabel picks the best available display label for UserMenu:
+// PreferredUsername when present, falling back to Name. Both empty (e.g. a
+// UserInfo the caller never populated) yields "", which is UserMenu's
+// documented "render nothing" signal.
+func identityLabel(user *htmxauth.UserInfo) string {
+	if user == nil {
+		return ""
+	}
+	if user.PreferredUsername != "" {
+		return user.PreferredUsername
+	}
+	return user.Name
+}
+
+// Layout is leaflab-ui's thin wrapper around libs/go/htmxui's shared Shell
+// and UserMenu — this app is the first adopter of both (no migration
+// baggage to carry forward, unlike manmanv2/ui's and
+// tools/app_registry/ui's still-in-progress adoptions). children are
+// rendered inside Shell's main content region.
+templ Layout(data LayoutData) {
+	@htmxui.Shell(htmxui.ShellData{
+		Title:      data.Title,
+		BrandLabel: "LeafLab",
+		BrandHref:  "/",
+		Nav:        nav(),
+		HeaderRight: htmxui.UserMenu(htmxui.UserMenuData{
+			IdentityLabel: identityLabel(data.User),
+			LogoutHref:    "/auth/logout",
+		}),
+		Themes: themes,
+	}) {
+		{ children... }
+	}
+}
