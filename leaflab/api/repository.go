@@ -4,12 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+// historyPointCap is the maximum number of plottable points GetSensorReadingHistory
+// will return in a single response (FR9). Sent back on every response via
+// point_cap so the UI never hardcodes this value.
+const historyPointCap = 15000
 
 type Repository struct {
 	db *pgxpool.Pool
@@ -112,4 +118,116 @@ func (r *Repository) ListBoards(ctx context.Context) ([]BoardRow, error) {
 type BoardRow struct {
 	BoardID  int64
 	DeviceID string
+}
+
+// SensorExists reports whether a sensor with the given ID has ever been registered.
+func (r *Repository) SensorExists(ctx context.Context, sensorID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM sensor WHERE sensor_id = $1)
+	`, sensorID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check sensor %d exists: %w", sensorID, err)
+	}
+	return exists, nil
+}
+
+// ReadingPoint is a single (recorded_at, value) point from sensor_reading.
+type ReadingPoint struct {
+	RecordedAt time.Time
+	Value      float64
+}
+
+// SensorReadingHistory is the result of a bounded, filtered range query
+// against sensor_reading for one sensor (FR9, FR10).
+type SensorReadingHistory struct {
+	// Points, oldest-to-newest, with invalid readings already excluded and
+	// the point cap already applied.
+	Points []ReadingPoint
+	// True when the range held more than historyPointCap plottable points.
+	Capped bool
+	// The range Points actually spans. Only meaningful when Capped is true.
+	CoveredFrom time.Time
+	CoveredTo   time.Time
+	// Count of invalid (valid = FALSE) readings within [from, to), the full
+	// selected range -- not narrowed to the covered (post-cap) range. This is
+	// the definition the UI's copy must match: "N invalid readings in the
+	// range you selected" rather than "...in the range shown".
+	ExcludedInvalidCount uint32
+}
+
+// GetSensorReadingHistory queries sensor_reading directly (not the enriched
+// view -- its per-row dimension joins are pure overhead on a 15,000-row
+// result) for one sensor's raw readings in [from, to).
+//
+// The invalid-reading filter is applied first (in SQL, via `valid = TRUE`),
+// then the most-recent-N cap is applied on top of the already-filtered rows,
+// per FR9: the cap counts plottable points, not raw rows. Ordering by
+// recorded_at DESC and capping at historyPointCap+1 lets a single query both
+// fetch the most recent points and detect whether the range held more than
+// the cap, without a second round trip; the extra row (if present) is
+// dropped before reversing to ascending order for the response.
+func (r *Repository) GetSensorReadingHistory(ctx context.Context, sensorID int64, from, to time.Time) (*SensorReadingHistory, error) {
+	var invalidCount int64
+	err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM sensor_reading
+		WHERE sensor_id = $1
+		  AND recorded_at >= $2
+		  AND recorded_at < $3
+		  AND valid = FALSE
+	`, sensorID, from, to).Scan(&invalidCount)
+	if err != nil {
+		return nil, fmt.Errorf("count invalid readings for sensor %d: %w", sensorID, err)
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT recorded_at, value
+		FROM sensor_reading
+		WHERE sensor_id = $1
+		  AND recorded_at >= $2
+		  AND recorded_at < $3
+		  AND valid = TRUE
+		ORDER BY recorded_at DESC
+		LIMIT $4
+	`, sensorID, from, to, historyPointCap+1)
+	if err != nil {
+		return nil, fmt.Errorf("query readings for sensor %d: %w", sensorID, err)
+	}
+	defer rows.Close()
+
+	// Newest-first; reversed to ascending below once we know whether the
+	// cap was hit.
+	var desc []ReadingPoint
+	for rows.Next() {
+		var p ReadingPoint
+		if err := rows.Scan(&p.RecordedAt, &p.Value); err != nil {
+			return nil, fmt.Errorf("scan reading for sensor %d: %w", sensorID, err)
+		}
+		desc = append(desc, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate readings for sensor %d: %w", sensorID, err)
+	}
+
+	capped := len(desc) > historyPointCap
+	if capped {
+		desc = desc[:historyPointCap]
+	}
+
+	points := make([]ReadingPoint, len(desc))
+	for i, p := range desc {
+		points[len(desc)-1-i] = p
+	}
+
+	result := &SensorReadingHistory{
+		Points:               points,
+		Capped:               capped,
+		ExcludedInvalidCount: uint32(invalidCount),
+	}
+	if capped {
+		result.CoveredFrom = points[0].RecordedAt
+		result.CoveredTo = points[len(points)-1].RecordedAt
+	}
+	return result, nil
 }
