@@ -188,6 +188,28 @@ See [DATA.md](DATA.md#analytical-views) for the full view reference and example 
 
 ---
 
+## API Authentication (M1, NFR2)
+
+`leaflab-api` is deliberately **half-authenticated** for one milestone. A
+leaflab-local wrapper interceptor (`leaflab/api/auth.go`) gates only the
+three read RPCs M1 adds — `ListBoardsWithState`, `GetBoardDetail`,
+`GetSensorReadingHistory` — behind `libs/go/grpcauth`, an explicit allowlist
+keyed by full method name. `PushDeviceConfig`, `GetDeviceConfig`, and
+`ListBoards` predate M1 and stay unauthenticated so the operator's existing
+`grpcurl` config-push path (`leaflab/scripts/push-config.sh`) and
+`leaflab/Tiltfile` (which sets no OIDC config) keep working unchanged.
+
+This is safe because M1 adds no write path: authenticating a write RPC
+without also authorizing it (deciding *who* may push what) would not change
+who can push a config today, so there is no exposure gap to leave open by
+deferring it. M2 is expected to bring the remaining three RPCs inside the
+fence, at which point authorization (not just authentication) becomes the
+open question. See `leaflab/api/ENV.md` for the auth environment variables
+and the two-OIDC-client requirement, and `libs/go/grpcauth` for why the
+per-method policy lives in `leaflab/api/` rather than in the shared library.
+
+---
+
 ## Relationship to `//firmware`
 
 LeafLab firmware is built on top of the board-agnostic libraries in [`firmware/`](../firmware/README.md):
