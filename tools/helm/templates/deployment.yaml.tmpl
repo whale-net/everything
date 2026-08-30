@@ -24,6 +24,7 @@ spec:
         app: {{ $appName }}-{{ $.Values.global.environment }}
         component: {{ $app.type }}
     spec:
+      serviceAccountName: {{ $appName }}
       containers:
         - name: {{ $appName }}
           image: "{{ $app.image }}:{{ $app.imageTag }}"

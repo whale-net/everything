@@ -112,6 +112,11 @@ func ParseAppType(s string) (AppType, error) {
 func (t AppType) TemplateArtifacts() []string {
 	var artifacts []string
 
+	// Every app type gets its own ServiceAccount, so OpenBao's kubernetes-auth
+	// roles can bind to a specific app's identity rather than the namespace's
+	// implicit default ServiceAccount.
+	artifacts = append(artifacts, "serviceaccount.yaml")
+
 	if t.RequiresDeployment() {
 		artifacts = append(artifacts, "deployment.yaml")
 	}

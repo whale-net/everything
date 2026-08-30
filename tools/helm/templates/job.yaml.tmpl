@@ -29,6 +29,7 @@ spec:
         component: job
     spec:
       restartPolicy: {{ $app.jobRestartPolicy | default "OnFailure" }}
+      serviceAccountName: {{ $appName }}
       containers:
         - name: {{ $appName }}
           image: "{{ $app.image }}:{{ $app.imageTag }}"

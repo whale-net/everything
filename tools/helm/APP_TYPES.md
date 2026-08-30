@@ -6,14 +6,14 @@ This document provides a complete reference for all supported application types 
 
 The helm chart system supports 4 app types, each generating different Kubernetes resources:
 
-| App Type | Deployment | Service | Ingress | PDB | Job | Use Case |
-|----------|-----------|---------|---------|-----|-----|----------|
-| `external-api` | ✅ | ✅ | ✅ | ✅ | ❌ | Public HTTP APIs (REST, GraphQL) |
-| `internal-api` | ✅ | ✅ | ⚙️ Optional* | ✅ | ❌ | Internal HTTP services |
-| `worker` | ✅ | ❌ | ❌ | ✅ | ❌ | Background processors (queues, streams) |
-| `job` | ❌ | ❌ | ❌ | ❌ | ✅ | One-time or scheduled batch tasks |
+| App Type | ServiceAccount | Deployment | Service | Ingress | PDB | Job | Use Case |
+|----------|-----------------|-----------|---------|---------|-----|-----|----------|
+| `external-api` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | Public HTTP APIs (REST, GraphQL) |
+| `internal-api` | ✅ | ✅ | ✅ | ⚙️ Optional* | ✅ | ❌ | Internal HTTP services |
+| `worker` | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | Background processors (queues, streams) |
+| `job` | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | One-time or scheduled batch tasks |
 
-**Note**: All app types generate ConfigMap resources automatically. PDB (PodDisruptionBudget) generation is controlled by the `pdb.enabled` flag.
+**Note**: All app types generate ConfigMap and dedicated ServiceAccount resources automatically. PDB (PodDisruptionBudget) generation is controlled by the `pdb.enabled` flag.
 
 *For `internal-api`: Ingress is optional and can be enabled by setting `exposeIngress: true` in values.yaml (useful for debugging/testing)
 
@@ -23,6 +23,7 @@ Public-facing HTTP APIs that need external ingress routing.
 
 ### What Gets Generated
 
+- **ServiceAccount**: Dedicated per-app identity for pod auth
 - **Deployment**: Application pods with configurable replicas
 - **Service**: ClusterIP service exposing the API
 - **Ingress**: External ingress routing (1:1 per app)
@@ -183,6 +184,7 @@ Internal HTTP services for cluster-internal communication only.
 
 ### What Gets Generated
 
+- **ServiceAccount**: Dedicated per-app identity for pod auth
 - **Deployment**: Application pods with configurable replicas
 - **Service**: ClusterIP service for internal routing
 - **Ingress**: Optional - can be exposed externally via `exposeIngress: true` (useful for debugging)
@@ -329,6 +331,7 @@ Background processors that consume from queues or streams.
 
 ### What Gets Generated
 
+- **ServiceAccount**: Dedicated per-app identity for pod auth
 - **Deployment**: Worker pods with configurable replicas
 - **PDB**: Pod disruption budget (if `pdb.enabled: true`)
 - **ConfigMap**: Environment variables
@@ -466,6 +469,7 @@ One-time or scheduled batch tasks that run to completion.
 
 ### What Gets Generated
 
+- **ServiceAccount**: Dedicated per-app identity for pod auth
 - **Job**: Kubernetes Job with Helm hooks
 - **ConfigMap**: Environment variables
 
