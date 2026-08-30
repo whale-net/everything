@@ -30,6 +30,28 @@ logger.Info("handling request", "request_id", "abc-123", "user_id", "u-42")
 slog.Default().InfoContext(ctx, "inside span", "key", "val")
 ```
 
+### gRPC Request Logging
+
+`grpc.StatsHandler(otelgrpc.NewServerHandler())` gives you spans for free, but
+emits no log lines of its own — a bare gRPC server wired only with the stats
+handler produces traces with no corresponding logs. Add the logging
+interceptors to actually log each RPC (method, status code, duration, peer):
+
+```go
+grpcServer := grpc.NewServer(
+    grpc.StatsHandler(otelgrpc.NewServerHandler()),
+    grpc.ChainUnaryInterceptor(logging.NewUnaryServerLoggingInterceptor("grpc"), authUnaryInt),
+    grpc.ChainStreamInterceptor(logging.NewStreamServerLoggingInterceptor("grpc"), authStreamInt),
+)
+```
+
+Put the logging interceptor first in the chain so it also covers requests
+rejected by later interceptors (e.g. auth). Log lines carry `trace_id`/
+`span_id` automatically, since the stats handler binds the span to `ctx`
+before the interceptor chain runs. Successful RPCs log at `INFO`, most
+non-OK codes at `WARN`, and `Unknown`/`Internal`/`DataLoss`/`Unavailable` at
+`ERROR`.
+
 ### Tracing
 
 ```go
