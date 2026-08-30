@@ -20,7 +20,9 @@ import (
 // fakePromotionClient pattern: embed the real interface as a nil zero
 // value and override only the method(s) a given handler test exercises).
 // handleBoards only ever calls ListBoardsWithState; handleBoardDetail
-// (#1503) only ever calls GetBoardDetail.
+// (#1503) only ever calls GetBoardDetail; handleSensorHistory/
+// handleSensorHistoryData (#1504, handlers_sensors_test.go) only ever call
+// GetSensorReadingHistory.
 type fakeLeafLabAPIClient struct {
 	leaflabapipb.LeafLabAPIClient
 
@@ -29,6 +31,9 @@ type fakeLeafLabAPIClient struct {
 
 	boardDetailResp *leaflabapipb.GetBoardDetailResponse
 	boardDetailErr  error
+
+	historyResp *leaflabapipb.GetSensorReadingHistoryResponse
+	historyErr  error
 }
 
 func (f *fakeLeafLabAPIClient) ListBoardsWithState(ctx context.Context, in *leaflabapipb.ListBoardsWithStateRequest, opts ...grpc.CallOption) (*leaflabapipb.ListBoardsWithStateResponse, error) {
@@ -43,6 +48,13 @@ func (f *fakeLeafLabAPIClient) GetBoardDetail(ctx context.Context, in *leaflabap
 		return nil, f.boardDetailErr
 	}
 	return f.boardDetailResp, nil
+}
+
+func (f *fakeLeafLabAPIClient) GetSensorReadingHistory(ctx context.Context, in *leaflabapipb.GetSensorReadingHistoryRequest, opts ...grpc.CallOption) (*leaflabapipb.GetSensorReadingHistoryResponse, error) {
+	if f.historyErr != nil {
+		return nil, f.historyErr
+	}
+	return f.historyResp, nil
 }
 
 // TestHandleBoards_RendersBoardsFromAPI covers the happy path: handleBoards

@@ -8,6 +8,7 @@ go_library(
         "handlers_auth.go",
         "handlers_boards.go",
         "handlers_home.go",
+        "handlers_sensors.go",
         "main.go",
         "templ_render.go",
     ],
@@ -30,6 +31,7 @@ go_library(
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
 
@@ -45,6 +47,7 @@ go_test(
     srcs = [
         "handlers_auth_test.go",
         "handlers_boards_test.go",
+        "handlers_sensors_test.go",
         "main_test.go",
     ],
     embed = [":ui_lib"],
@@ -54,6 +57,7 @@ go_test(
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
 
