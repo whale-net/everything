@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	appmetapb "github.com/whale-net/everything/tools/appmeta/proto"
+	"github.com/whale-net/everything/tools/helm"
 )
 
 // FinalizeChartParams configures ExecuteFinalizeChart.
@@ -219,6 +222,25 @@ func ExecuteFinalizeChart(p FinalizeChartParams) (*ReleaseResult, error) {
 		defer closeFn() //nolint:errcheck
 	}
 
+	// Chart-only release safety net (issue #1538): p.AppVersions only
+	// covers apps that were part of this release batch (built by
+	// worker/release/finalize.go's apps loop) -- an app the chart composes
+	// but that wasn't rebuilt this run has no entry, and a batch that
+	// rebuilds *no* apps at all (the common chart-only case: bumping just
+	// the chart version) leaves it completely empty. Without this,
+	// packageChartWithVersion has nothing to validate against and silently
+	// ships whatever imageTag composer.go baked into values.yaml at Bazel
+	// build time, which is always the literal string "latest" (see
+	// tools/helm/composer.go's GetImageTag) -- never a real, deterministic
+	// version. Resolve every missing entry from the App Registry's last
+	// published artifact for that app instead, using the chart's
+	// compose-time lockfile to know which apps it actually composes.
+	appVersions, err := resolveMissingChartAppVersions(ctx, p.ChartDir, p.AppVersions, artifactClient)
+	if err != nil {
+		return nil, err
+	}
+	p.AppVersions = appVersions
+
 	// Same chart-pin hermeticity gate release-charts applies before
 	// packaging (AR-7f) -- reused unchanged so an allocate-mode domain
 	// cannot finalize a chart pinning an unpublished app any more than it
@@ -280,4 +302,60 @@ func ExecuteFinalizeChart(p FinalizeChartParams) (*ReleaseResult, error) {
 		Releaser:             releaser,
 		ArtifactClient:       artifactClient,
 	})
+}
+
+// resolveMissingChartAppVersions fills in any app the chart composes that
+// is missing from appVersions -- an app that wasn't part of this release
+// batch (issue #1538's chart-only case). It reads the chart's compose-time
+// lockfile (image-lockfile.json, written by tools/helm/composer.go at
+// Bazel build time -- see chartOutputPaths/read-chart-lockfile) to discover
+// every app the chart actually pins, and resolves each missing one from
+// the App Registry's last published artifact, mirroring
+// resolveChartAppVersions' identical independent-resolution behavior for
+// release-charts (build_helm.go).
+//
+// client == nil (App Registry not opted in, dial failed, or
+// --skip-registry) means there is nowhere to resolve a missing entry from
+// -- this hard-errors rather than falling back to the chart's baked-in
+// placeholder tag, which is always the literal string "latest" (see
+// GetImageTag). A missing entry with no way to resolve it is exactly the
+// bug this function exists to close off, not something to paper over.
+func resolveMissingChartAppVersions(ctx context.Context, chartDir string, appVersions map[string]string, client pb.ArtifactRegistryClient) (map[string]string, error) {
+	lockfilePath := filepath.Join(chartDir, helm.LockfileFileName)
+	data, err := os.ReadFile(lockfilePath)
+	if err != nil {
+		// No lockfile to cross-check against (e.g. chart predates AR-2b) --
+		// leave appVersions exactly as passed in.
+		return appVersions, nil
+	}
+	var lockfile helm.ChartLockfile
+	if err := json.Unmarshal(data, &lockfile); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", lockfilePath, err)
+	}
+
+	resolved := make(map[string]string, len(appVersions)+len(lockfile.Images))
+	for k, v := range appVersions {
+		resolved[k] = v
+	}
+	for _, img := range lockfile.Images {
+		if v, ok := resolved[img.AppFullName]; ok && v != "" {
+			continue
+		}
+		if client == nil {
+			return nil, fmt.Errorf("resolve version for app %q composed by chart: not part of this release batch and no App Registry client available", img.AppFullName)
+		}
+		resp, err := client.GetArtifact(ctx, &pb.GetArtifactRequest{
+			OwnerFullName:   img.AppFullName,
+			Kind:            pb.ArtifactKind_ARTIFACT_KIND_IMAGE,
+			LatestPublished: true,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("resolve version for app %q composed by chart: App Registry GetArtifact failed: %w", img.AppFullName, err)
+		}
+		if resp.Artifact == nil || resp.Artifact.Version == "" {
+			return nil, fmt.Errorf("resolve version for app %q composed by chart: App Registry returned no published artifact", img.AppFullName)
+		}
+		resolved[img.AppFullName] = resp.Artifact.Version
+	}
+	return resolved, nil
 }

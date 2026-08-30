@@ -359,22 +359,38 @@ func packageChartWithVersion(chartDir, chartName, version, outDir string, appVer
 	// Update values.yaml imageTag for resolved app versions. A resolved
 	// version that fails to land in values.yaml is worse than useless — it
 	// silently ships whatever imageTag was baked in at `bazel build` time
-	// (typically "latest"), so every step here fails hard rather than
-	// swallowing the error, unlike the historical version of this code.
+	// (always the literal string "latest" -- see tools/helm/composer.go's
+	// GetImageTag), so every step here fails hard rather than swallowing
+	// the error, unlike the historical version of this code.
+	//
+	// This always reads/parses values.yaml and validates against its own
+	// "apps" map -- it must NOT be gated on len(appVersions) > 0. An empty
+	// appVersions (issue #1538: a release batch that rebuilds none of the
+	// chart's composed apps, e.g. a chart-only release) used to skip this
+	// whole block, silently shipping the "latest" placeholder with no
+	// error at all. A chart with no composed apps still round-trips
+	// correctly here: its "apps" map is absent/empty, so the loop below is
+	// simply a no-op.
 	valuesYaml := filepath.Join(tmpChartDir, "values.yaml")
-	if len(appVersions) > 0 {
-		data, err := os.ReadFile(valuesYaml)
-		if err != nil {
-			return "", fmt.Errorf("read values.yaml: %w", err)
-		}
-		var values map[string]interface{}
-		if err := yaml.Unmarshal(data, &values); err != nil {
-			return "", fmt.Errorf("parse values.yaml: %w", err)
-		}
-		apps, ok := values["apps"].(map[string]interface{})
-		if !ok {
+	data, err := os.ReadFile(valuesYaml)
+	if err != nil {
+		return "", fmt.Errorf("read values.yaml: %w", err)
+	}
+	var values map[string]interface{}
+	if err := yaml.Unmarshal(data, &values); err != nil {
+		return "", fmt.Errorf("parse values.yaml: %w", err)
+	}
+	apps, hasApps := values["apps"].(map[string]interface{})
+	if !hasApps {
+		// A chart with no "apps" map at all and no resolved versions to
+		// place anywhere is a legitimate no-op (a chart that composes no
+		// apps). A chart with resolved versions to place but nowhere to put
+		// them is a real misconfiguration, not a no-op -- keep failing hard
+		// on that combination as this already did before issue #1538's fix.
+		if len(appVersions) > 0 {
 			return "", fmt.Errorf("values.yaml has no \"apps\" map to set imageTag on")
 		}
+	} else if len(apps) > 0 {
 		// Iterate the chart's own apps map, not appVersions: appVersions may
 		// be a whole release batch's version map shared across multiple
 		// charts (see finalize-chart), so it can legitimately contain keys
