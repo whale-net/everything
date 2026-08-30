@@ -38,6 +38,20 @@ go_binary(
     visibility = ["//visibility:public"],
 )
 
+go_test(
+    name = "api_test",
+    srcs = ["auth_test.go"],
+    embed = [":api_lib"],
+    deps = [
+        "//libs/go/grpcauth",
+        "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//metadata",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
 release_app(
     name = "leaflab-api",
     binary_name = ":api",
