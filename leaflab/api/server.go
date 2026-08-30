@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/rmq"
@@ -14,7 +17,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// maxHistoryRangeDays is the longest range GetSensorReadingHistory will serve
+// (FR8); enforcing it server-side is what makes the UI's own cap honest.
+const maxHistoryRangeDays = 30
 
 // validDeviceID allows alphanumeric, hyphens, and underscores.
 // Excludes MQTT wildcard characters (+, #) and path separators (/, .).
@@ -31,6 +39,14 @@ func validateDeviceID(id string) error {
 }
 
 const mqttExchange = "amq.topic"
+
+// reportingThreshold is the fixed recency threshold behind ReportingState
+// (FR5): a board is REPORTING if its most recent sensor_reading.recorded_at
+// is within this window, STALE if it has readings older than this, and
+// NEVER_REPORTED if it has none at all. Shared with the board-detail path
+// (per-sensor state); not configurable per board/sensor and not exposed on
+// the request or response.
+const reportingThreshold = 10 * time.Minute
 
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
@@ -127,4 +143,146 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsReque
 		})
 	}
 	return &pb.ListBoardsResponse{Boards: boards}, nil
+}
+
+// ListBoardsWithState returns every board (FR4 — no owner filtering) with a
+// reporting state derived purely from sensor_reading recency (FR5).
+func (s *LeafLabAPIServer) ListBoardsWithState(ctx context.Context, _ *pb.ListBoardsWithStateRequest) (*pb.ListBoardsWithStateResponse, error) {
+	rows, err := s.repo.ListBoardsWithState(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list boards with state: %v", err)
+	}
+
+	now := time.Now()
+	boards := make([]*pb.BoardWithState, 0, len(rows))
+	for _, r := range rows {
+		bw := &pb.BoardWithState{
+			BoardId:        r.BoardID,
+			DeviceId:       r.DeviceID,
+			ReportingState: reportingState(r.LastReadingAt, now),
+		}
+		if r.LastReadingAt != nil {
+			bw.LastReadingAt = timestamppb.New(*r.LastReadingAt)
+		}
+		boards = append(boards, bw)
+	}
+
+	s.logger.Info("boards with state listed", "count", len(boards))
+	return &pb.ListBoardsWithStateResponse{Boards: boards}, nil
+}
+
+// GetBoardDetail returns a board's identity plus every sensor recorded for
+// it, each with its own reporting state and (when present) most recent
+// reading (FR6, FR7). Unknown board_id returns codes.NotFound.
+//
+// Non-blocking by design: a stale or never-reported sensor is a normal row
+// in the response, not an error, and a board with zero sensors returns an
+// OK response with an empty sensor list.
+func (s *LeafLabAPIServer) GetBoardDetail(ctx context.Context, req *pb.GetBoardDetailRequest) (*pb.GetBoardDetailResponse, error) {
+	deviceID, err := s.repo.GetBoardIdentity(ctx, req.BoardId)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "board %d not found", req.BoardId)
+		}
+		return nil, status.Errorf(codes.Internal, "get board identity: %v", err)
+	}
+
+	rows, err := s.repo.ListSensorDetailsForBoard(ctx, req.BoardId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list sensor details: %v", err)
+	}
+
+	now := time.Now()
+	sensors := make([]*pb.SensorDetail, 0, len(rows))
+	for _, r := range rows {
+		sd := &pb.SensorDetail{
+			SensorId:       r.SensorID,
+			SensorName:     r.SensorName,
+			Unit:           r.Unit,
+			SensorTypeName: r.SensorTypeName,
+			ReportingState: reportingState(r.LatestRecordedAt, now),
+		}
+		if r.LatestRecordedAt != nil {
+			sd.LatestReading = &pb.LatestReading{
+				Value:      *r.LatestValue,
+				RecordedAt: timestamppb.New(*r.LatestRecordedAt),
+				Valid:      *r.LatestValid,
+			}
+		}
+		sensors = append(sensors, sd)
+	}
+
+	s.logger.Info("board detail listed", "board_id", req.BoardId, "sensor_count", len(sensors))
+	return &pb.GetBoardDetailResponse{
+		BoardId:  req.BoardId,
+		DeviceId: deviceID,
+		Sensors:  sensors,
+	}, nil
+}
+
+// reportingState derives a ReportingState purely from a board's most recent
+// reading timestamp (nil if it has none) and the current time. Kept as a
+// pure function, independent of the repository/DB, so the threshold boundary
+// is unit-testable without a database.
+//
+// The boundary is inclusive of "reporting": a reading recorded exactly
+// reportingThreshold ago is still within "the last 10 minutes" per the
+// ReportingState proto doc, not yet stale.
+func reportingState(lastReadingAt *time.Time, now time.Time) pb.ReportingState {
+	if lastReadingAt == nil {
+		return pb.ReportingState_REPORTING_STATE_NEVER_REPORTED
+	}
+	if now.Sub(*lastReadingAt) <= reportingThreshold {
+		return pb.ReportingState_REPORTING_STATE_REPORTING
+	}
+	return pb.ReportingState_REPORTING_STATE_STALE
+}
+
+// GetSensorReadingHistory returns one sensor's raw reading history over an
+// absolute time range, subject to the point cap and invalid-reading
+// accounting (FR9); an empty range is not an error (FR10).
+func (s *LeafLabAPIServer) GetSensorReadingHistory(ctx context.Context, req *pb.GetSensorReadingHistoryRequest) (*pb.GetSensorReadingHistoryResponse, error) {
+	if req.From == nil || req.To == nil {
+		return nil, status.Error(codes.InvalidArgument, "from and to are required")
+	}
+	from := req.From.AsTime()
+	to := req.To.AsTime()
+
+	if !to.After(from) {
+		return nil, status.Error(codes.InvalidArgument, "to must be after from")
+	}
+	if to.Sub(from) > maxHistoryRangeDays*24*time.Hour {
+		return nil, status.Errorf(codes.InvalidArgument, "range must not exceed %d days", maxHistoryRangeDays)
+	}
+
+	exists, err := s.repo.SensorExists(ctx, req.SensorId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "check sensor: %v", err)
+	}
+	if !exists {
+		return nil, status.Errorf(codes.NotFound, "sensor %d not found", req.SensorId)
+	}
+
+	history, err := s.repo.GetSensorReadingHistory(ctx, req.SensorId, from, to)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get sensor reading history: %v", err)
+	}
+
+	resp := &pb.GetSensorReadingHistoryResponse{
+		Points:               make([]*pb.ReadingPoint, 0, len(history.Points)),
+		Capped:               history.Capped,
+		PointCap:             historyPointCap,
+		ExcludedInvalidCount: history.ExcludedInvalidCount,
+	}
+	for _, p := range history.Points {
+		resp.Points = append(resp.Points, &pb.ReadingPoint{
+			RecordedAt: timestamppb.New(p.RecordedAt),
+			Value:      p.Value,
+		})
+	}
+	if history.Capped {
+		resp.CoveredFrom = timestamppb.New(history.CoveredFrom)
+		resp.CoveredTo = timestamppb.New(history.CoveredTo)
+	}
+	return resp, nil
 }

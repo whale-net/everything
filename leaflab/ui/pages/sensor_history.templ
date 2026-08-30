@@ -1,0 +1,54 @@
+package pages
+
+import (
+	"fmt"
+
+	"github.com/whale-net/everything/leaflab/ui/components"
+)
+
+// SensorHistory is the sensor reading-history chart page (#1504: FR8,
+// FR9, FR10, NFR1), routed at "/sensors/{sensor_id}/history". chartData
+// and loadErr are mutually exclusive, mirroring board_detail.templ's
+// sensors/loadErr shape: handlers_sensors.go passes a zero-value chartData
+// on a load failure and a nil loadErr on success.
+//
+// boardID/deviceID/sensorName come from the board detail page's link
+// query string (board_detail.templ), not from a dedicated RPC -- no RPC
+// in api.proto maps a sensor_id back to its board or name (see
+// GetSensorReadingHistoryResponse's fields: it carries neither). A direct
+// navigation to this URL with none of them set still renders in full
+// (FR10-style non-blocking chrome): the board link falls back to the
+// boards list and the heading falls back to the bare sensor id, never an
+// error.
+//
+// NFR1: this page has no hx-trigger polling interval, no sse-connect, and
+// no WebSocket -- see reading_chart.templ's ReadingChart doc comment for
+// the chart's own guarantee. Do not add any of those here.
+templ SensorHistory(data components.LayoutData, boardID int64, deviceID string, sensorID int64, sensorName string, chartData components.ReadingChartData, loadErr error) {
+	@components.Layout(data) {
+		<div class="mb-4">
+			if boardID > 0 {
+				<a href={ templ.URL(fmt.Sprintf("/boards/%d", boardID)) } class="link link-hover text-sm text-base-content/70">&larr; Back to board</a>
+			} else {
+				<a href="/boards" class="link link-hover text-sm text-base-content/70">&larr; Back to boards</a>
+			}
+		</div>
+		<h1 class="text-2xl font-bold mb-1">
+			if sensorName != "" {
+				{ sensorName }
+			} else {
+				{ fmt.Sprintf("Sensor %d", sensorID) }
+			}
+		</h1>
+		if deviceID != "" {
+			<p class="font-mono text-sm text-base-content/70 mb-4">{ deviceID }</p>
+		}
+		if loadErr != nil {
+			<div role="alert" class="alert alert-error shadow-md">
+				<span>Failed to load reading history from leaflab-api: { loadErr.Error() }</span>
+			</div>
+		} else {
+			@components.ReadingChart(chartData)
+		}
+	}
+}
