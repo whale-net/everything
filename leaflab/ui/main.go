@@ -255,6 +255,8 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// gates any route here; authorization lands in M2.
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
 	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoards)))
+	// handleBoardDetail (#1503: FR6, FR7) -- every sensor on one board.
+	mux.HandleFunc("/boards/{board_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoardDetail)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

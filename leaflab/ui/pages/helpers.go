@@ -38,6 +38,16 @@ func boardStateVariant(state leaflabapipb.ReportingState) htmxui.BadgeVariant {
 	}
 }
 
+// formatReadingTime renders a sensor's latest reading timestamp (FR6) as an
+// absolute UTC RFC3339 string -- unlike lastReadingAge's relative "N ago"
+// caption for the boards list, the board detail screen shows the exact
+// timestamp of the reading itself. Mirrors
+// tools/app_registry/ui/pages/dashboard.templ's
+// `time.Unix(...).UTC().Format(time.RFC3339)` convention.
+func formatReadingTime(ts time.Time) string {
+	return ts.UTC().Format(time.RFC3339)
+}
+
 // lastReadingAge renders FR5's "last reading 42 minutes ago" caption for a
 // stale board, computed straight off the API's last_reading_at timestamp --
 // no independently-derived threshold or state here, per FR5's "the UI does

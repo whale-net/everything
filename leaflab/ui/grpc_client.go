@@ -53,3 +53,18 @@ func (c *LeafLabClient) ListBoardsWithState(ctx context.Context) (*leaflabapipb.
 	}
 	return resp, nil
 }
+
+// GetBoardDetail fetches one board's identity plus every sensor recorded
+// for it, each with its own reporting state and (when present) most
+// recent reading (FR6/FR7 of #1503's board-detail screen,
+// handlers_boards.go). The error is returned wrapped with %w so a caller's
+// status.FromError(err) still sees the underlying gRPC status (e.g.
+// codes.NotFound for an unknown board_id, codes.Unauthenticated for a
+// rejected token) -- status.FromError unwraps via errors.As.
+func (c *LeafLabClient) GetBoardDetail(ctx context.Context, boardID int64) (*leaflabapipb.GetBoardDetailResponse, error) {
+	resp, err := c.api.GetBoardDetail(ctx, &leaflabapipb.GetBoardDetailRequest{BoardId: boardID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get board detail for board %d: %w", boardID, err)
+	}
+	return resp, nil
+}
