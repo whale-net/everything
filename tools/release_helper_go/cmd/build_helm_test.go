@@ -280,6 +280,26 @@ func TestPackageChartWithVersionErrorsOnMissingAppsMap(t *testing.T) {
 	}
 }
 
+// TestPackageChartWithVersionErrorsOnEmptyAppVersionsWithComposedApps is the
+// direct regression test for issue #1538: a chart-only release batch (one
+// that rebuilds none of the chart's composed apps) used to pass a
+// completely empty appVersions map, which the old `if len(appVersions) > 0`
+// guard treated as "nothing to validate" and skipped entirely -- silently
+// shipping whatever imageTag composer.go baked into values.yaml at Bazel
+// build time (always the literal string "latest", see GetImageTag). A
+// values.yaml with a non-empty "apps" map and zero resolved versions must
+// now error instead of silently packaging "latest".
+func TestPackageChartWithVersionErrorsOnEmptyAppVersionsWithComposedApps(t *testing.T) {
+	chartDir := t.TempDir()
+	writeFile(t, filepath.Join(chartDir, "Chart.yaml"), "name: hello-fastapi\nversion: 0.0.0-dev\n")
+	writeFile(t, filepath.Join(chartDir, "values.yaml"), "apps:\n  demo-hello-fastapi:\n    imageTag: latest\n")
+
+	_, err := packageChartWithVersion(chartDir, "helm-demo-hello-fastapi", "v1.0.0", t.TempDir(), map[string]string{})
+	if err == nil {
+		t.Fatal("expected error when appVersions is empty but values.yaml has composed apps to resolve, got nil (would silently ship the baked-in \"latest\" imageTag)")
+	}
+}
+
 // Regression test for issue #1259: finalize-chart passes the whole release
 // batch's appVersions map (shared across every chart in the batch) to
 // packageChartWithVersion. A chart must ignore batch entries for apps it
