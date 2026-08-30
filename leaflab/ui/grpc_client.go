@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/whale-net/everything/libs/go/grpcclient"
 
 	leaflabapipb "github.com/whale-net/everything/leaflab/api/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // LeafLabClient wraps the leaflab-api gRPC client. Every call made through
@@ -65,6 +67,25 @@ func (c *LeafLabClient) GetBoardDetail(ctx context.Context, boardID int64) (*lea
 	resp, err := c.api.GetBoardDetail(ctx, &leaflabapipb.GetBoardDetailRequest{BoardId: boardID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get board detail for board %d: %w", boardID, err)
+	}
+	return resp, nil
+}
+
+// GetSensorReadingHistory fetches one sensor's raw readings over an
+// absolute [from, to) range (#1504: FR8, FR9, FR10 of the sensor
+// reading-history chart, handlers_sensors.go). The error is returned
+// wrapped with %w so a caller's status.FromError(err) still sees the
+// underlying gRPC status (e.g. codes.NotFound for an unknown sensor_id,
+// codes.InvalidArgument for a range over 30 days, codes.Unauthenticated
+// for a rejected token).
+func (c *LeafLabClient) GetSensorReadingHistory(ctx context.Context, sensorID int64, from, to time.Time) (*leaflabapipb.GetSensorReadingHistoryResponse, error) {
+	resp, err := c.api.GetSensorReadingHistory(ctx, &leaflabapipb.GetSensorReadingHistoryRequest{
+		SensorId: sensorID,
+		From:     timestamppb.New(from),
+		To:       timestamppb.New(to),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get sensor reading history for sensor %d: %w", sensorID, err)
 	}
 	return resp, nil
 }

@@ -153,8 +153,15 @@ func TestBoardDetail_NeverReported_NoValueNoTimestamp(t *testing.T) {
 	}
 	body := renderPage(t, BoardDetail(layoutData(), 1, "leaflab-aaaaaaaaaaaa", sensors, nil))
 
-	if strings.Contains(body, "lux") {
-		t.Errorf("expected no unit/value rendered for a never-reported sensor, got %q", body)
+	// The reading cell itself must render the "—" placeholder, not a
+	// value or timestamp. "lux" can legitimately still appear elsewhere on
+	// the row -- the row's History link (#1504) carries the sensor's unit
+	// in its query string regardless of reporting state, since the
+	// reading-history page needs it for its value axis whether or not the
+	// sensor has ever reported -- so this no longer asserts "lux" is
+	// absent from the whole page body.
+	if !strings.Contains(body, `<span class="text-base-content/40">—</span>`) {
+		t.Errorf("expected the '—' placeholder for a never-reported sensor's reading cell, got %q", body)
 	}
 	if !strings.Contains(body, "Never reported") {
 		t.Errorf("expected the neutral 'Never reported' label, got %q", body)

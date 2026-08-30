@@ -29,6 +29,7 @@ go_test(
         "board_detail_test.go",
         "boards_test.go",
         "helpers_test.go",
+        "sensor_history_test.go",
     ],
     embed = [":pages"],
     deps = [
