@@ -44,10 +44,17 @@ go_test(
     size = "small",
     srcs = [
         "handlers_auth_test.go",
+        "handlers_boards_test.go",
         "main_test.go",
     ],
     embed = [":ui_lib"],
-    deps = ["//libs/go/htmxauth"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/htmxauth",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
 )
 
 # FR2 leaflab_user upsert tests that need a real Postgres (idempotency,

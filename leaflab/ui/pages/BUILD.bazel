@@ -1,3 +1,4 @@
+load("@rules_go//go:def.bzl", "go_test")
 load("//tools:templ.bzl", "templ_library")
 
 templ_library(
@@ -13,7 +14,25 @@ templ_library(
     ],
 )
 
-# Render tests for the boards list screen (#1502: FR4, FR5, NFR1) land here
-# as a go_test in the Testing phase — see
+# Render tests for the boards list screen (#1502: FR4, FR5, NFR1) -- see
 # manmanv2/ui/pages/daisyui_migration_test.go for the pattern (render the
 # templ component against a fixture response, assert on the HTML string).
+# helpers_test.go covers boardStateLabel/boardStateVariant/lastReadingAge/
+# roughDuration as plain unit tests; boards_test.go covers Boards' rendered
+# output.
+go_test(
+    name = "pages_test",
+    size = "small",
+    srcs = [
+        "boards_test.go",
+        "helpers_test.go",
+    ],
+    embed = [":pages"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/ui/components",
+        "//libs/go/htmxui",
+        "@com_github_a_h_templ//:templ",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
