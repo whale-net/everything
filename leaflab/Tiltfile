@@ -90,6 +90,10 @@ APPS = {
         'bazel_target': '//leaflab/api:leaflab-api_image_load',
         'image_name': 'leaflab-leaflab-api',
     },
+    'ui': {
+        'bazel_target': '//leaflab/ui:leaflab-ui_image_load',
+        'image_name': 'leaflab-leaflab-ui',
+    },
 }
 
 build_images_from_apps(APPS, watch_paths, platform)
@@ -214,6 +218,68 @@ k8s_resource(
     port_forwards=['50051:50051'],
 )
 
+# UI — HTMX/templ web app (leaflab/ui). AUTH_MODE=none and GRPC_AUTH_MODE=none
+# for local dev: no OIDC config is set here, matching leaflab-api's own
+# unauthenticated local-dev default above.
+k8s_yaml(blob("""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leaflab-ui
+  namespace: {namespace}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: leaflab-ui
+  template:
+    metadata:
+      labels:
+        app: leaflab-ui
+    spec:
+      containers:
+      - name: ui
+        image: leaflab-leaflab-ui
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "8000"
+        - name: AUTH_MODE
+          value: "none"
+        - name: GRPC_AUTH_MODE
+          value: "none"
+        - name: SECRET_KEY
+          value: "dev-secret-key"
+        - name: PG_DATABASE_URL
+          value: "{pg_url}"
+        - name: LEAFLAB_API_URL
+          value: "leaflab-api.{namespace}.svc.cluster.local:50051"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: leaflab-ui
+  namespace: {namespace}
+spec:
+  selector:
+    app: leaflab-ui
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+""".format(namespace=namespace, pg_url=pg_url)))
+
+k8s_resource(
+    'leaflab-ui',
+    resource_deps=['leaflab-api', 'leaflab-migrate'],
+    labels=['leaflab'],
+    port_forwards=['8080:8000'],
+)
+
 # ===========================
 # Access Information
 # ===========================
@@ -226,6 +292,7 @@ print("  RabbitMQ MQTT:   localhost:1883")
 print("  RabbitMQ Mgmt:   http://localhost:15672")
 print("  PostgreSQL:      localhost:5432 (user: postgres, pass: password, db: leaflab)")
 print("  LeafLab gRPC:   localhost:50051 (grpcurl -plaintext)")
+print("  LeafLab UI:      http://localhost:8080")
 print("="*60)
 print("")
 print("Push a device config:")

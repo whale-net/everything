@@ -5,6 +5,7 @@ package leaflab.api.v1;
 option go_package = "github.com/whale-net/everything/leaflab/api/proto;leaflabapipb";
 
 import "firmware/proto/config.proto";
+import "google/protobuf/timestamp.proto";
 
 // LeafLabAPI is the control-plane API for managing leaflab sensor boards.
 service LeafLabAPI {
@@ -18,6 +19,36 @@ service LeafLabAPI {
 
   // List all known boards (boards that have sent at least one manifest).
   rpc ListBoards(ListBoardsRequest) returns (ListBoardsResponse);
+
+  // List all known boards along with each board's reporting state and most
+  // recent reading timestamp. M1 read-side dashboard entry point; unlike
+  // ListBoards this has no filtering or paging (FR4, FR5).
+  rpc ListBoardsWithState(ListBoardsWithStateRequest) returns (ListBoardsWithStateResponse);
+
+  // Get a single board's identity plus per-sensor detail: name, unit, type,
+  // reporting state, and (when present) the most recent reading (FR6, FR7).
+  rpc GetBoardDetail(GetBoardDetailRequest) returns (GetBoardDetailResponse);
+
+  // Get raw, unaggregated sensor readings within an absolute time range,
+  // subject to a server-side point cap (FR8, FR9, FR10). See NFR4 comments
+  // on GetSensorReadingHistoryRequest/Response before changing this RPC's
+  // shape.
+  rpc GetSensorReadingHistory(GetSensorReadingHistoryRequest) returns (GetSensorReadingHistoryResponse);
+}
+
+// ReportingState classifies a board or sensor by recency of its most recent
+// reading. Shared by ListBoardsWithState (per board) and GetBoardDetail (per
+// sensor). Exactly these three concrete states plus UNSPECIFIED — the
+// 10-minute reporting/stale threshold is a fixed M1 server-side constant and
+// is deliberately not exposed as a request or response field.
+enum ReportingState {
+  REPORTING_STATE_UNSPECIFIED = 0;
+  // A reading was recorded within the last 10 minutes.
+  REPORTING_STATE_REPORTING = 1;
+  // Has at least one reading, but the most recent one is older than 10 minutes.
+  REPORTING_STATE_STALE = 2;
+  // No readings at all.
+  REPORTING_STATE_NEVER_REPORTED = 3;
 }
 
 message PushDeviceConfigRequest {
@@ -51,4 +82,111 @@ message ListBoardsRequest {}
 
 message ListBoardsResponse {
   repeated BoardInfo boards = 1;
+}
+
+message ListBoardsWithStateRequest {}
+
+message ListBoardsWithStateResponse {
+  repeated BoardWithState boards = 1;
+}
+
+// BoardWithState is a board's identity plus its reporting state. Boards have
+// no name field in M1 — a board is identified on screen by device_id alone;
+// a name column is out of scope until M2.
+message BoardWithState {
+  int64 board_id = 1;
+  string device_id = 2;
+  ReportingState reporting_state = 3;
+  // Timestamp of the most recent reading across all of this board's sensors.
+  // Unset when reporting_state is REPORTING_STATE_NEVER_REPORTED.
+  google.protobuf.Timestamp last_reading_at = 4;
+}
+
+message GetBoardDetailRequest {
+  int64 board_id = 1;
+}
+
+message GetBoardDetailResponse {
+  int64 board_id = 1;
+  string device_id = 2;
+  repeated SensorDetail sensors = 3;
+}
+
+// SensorDetail describes one sensor on a board, including its most recent
+// reading if it has ever reported one.
+message SensorDetail {
+  int64 sensor_id = 1;
+  string sensor_name = 2;
+  string unit = 3;
+  string sensor_type_name = 4;
+  ReportingState reporting_state = 5;
+  // Present only when this sensor has at least one reading. Its absence
+  // (unset) is what makes REPORTING_STATE_NEVER_REPORTED unambiguous, rather
+  // than relying on a zero-valued LatestReading.
+  LatestReading latest_reading = 6;
+}
+
+// LatestReading is a sensor's most recent reading. `valid` is carried through
+// rather than filtered out: an invalid latest reading must still be
+// displayed (marked invalid), not hidden (FR7).
+message LatestReading {
+  double value = 1;
+  google.protobuf.Timestamp recorded_at = 2;
+  bool valid = 3;
+}
+
+// GetSensorReadingHistoryRequest/Response are the NFR4-sensitive contract:
+// server-side aggregation arrives in a later milestone as a strictly
+// additive change against this same RPC. When that lands:
+//   - Aggregation parameters arrive as a *new* request field (e.g. a bucket
+//     interval); `from`/`to` are unchanged.
+//   - Aggregated values arrive as *additional* response fields (e.g. a
+//     bucket min/max alongside a representative value) -- averaging raw
+//     points would flatten spikes that the aggregated view must still be
+//     able to show.
+//   - No field defined here is ever removed, renamed, or repurposed.
+//   - A UI written against this M1 response must still render an M1-shaped
+//     response unchanged after aggregation is added.
+//   - Aggregation must not require a second RPC.
+// Reserve nothing for this ahead of time: no field numbers here are
+// reserved, and none need to be -- any unused field number is already
+// available headroom for the additive fields described above.
+message GetSensorReadingHistoryRequest {
+  int64 sensor_id = 1;
+  // Absolute range bounds, not a preset enum: the UI's drag-select (FR8)
+  // produces exact endpoints, and carrying them as absolute timestamps here
+  // is what keeps a later date-picker or pan control pure UI work against an
+  // unchanged contract.
+  google.protobuf.Timestamp from = 2;
+  google.protobuf.Timestamp to = 3;
+}
+
+message ReadingPoint {
+  google.protobuf.Timestamp recorded_at = 1;
+  double value = 2;
+}
+
+message GetSensorReadingHistoryResponse {
+  // Raw, unaggregated points ordered oldest-to-newest.
+  repeated ReadingPoint points = 1;
+  // True when the server-side point cap (point_cap) was hit and the result
+  // was truncated. Independent of excluded_invalid_count -- both can be
+  // true at once on a real 30-day view (FR9); do not fold these into one
+  // status enum or message string.
+  bool capped = 2;
+  // The range actually covered by `points`. Only meaningful when `capped`
+  // is true; that is what lets the UI say e.g. "showing the most recent 10
+  // days of the 30 days you selected".
+  google.protobuf.Timestamp covered_from = 3;
+  google.protobuf.Timestamp covered_to = 4;
+  // The cap that was applied (15000 in M1). Sent so the UI never hardcodes
+  // this value.
+  uint32 point_cap = 5;
+  // Count of readings in the requested [from, to) range that were dropped
+  // for being marked invalid. Independent of `capped` (see above).
+  //
+  // FR10's empty-range case needs no dedicated field: zero `points` with
+  // excluded_invalid_count > 0 is the all-invalid case; zero `points` with
+  // excluded_invalid_count == 0 is the no-readings-at-all case.
+  uint32 excluded_invalid_count = 6;
 }

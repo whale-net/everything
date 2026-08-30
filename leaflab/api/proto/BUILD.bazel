@@ -6,7 +6,13 @@ go_grpc_library(
     name = "leaflabapipb",
     srcs = ["api.proto"],
     importpath = "github.com/whale-net/everything/leaflab/api/proto",
-    proto_deps = ["//firmware/proto:config_proto"],
-    go_deps = ["//firmware/proto:configpb"],
+    proto_deps = [
+        "//firmware/proto:config_proto",
+        "@protobuf//:timestamp_proto",
+    ],
+    go_deps = [
+        "//firmware/proto:configpb",
+        "@rules_go//proto/wkt:timestamp_go_proto",
+    ],
     visibility = ["//visibility:public"],
 )

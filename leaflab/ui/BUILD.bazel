@@ -1,0 +1,113 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "grpc_client.go",
+        "handlers_auth.go",
+        "handlers_boards.go",
+        "handlers_home.go",
+        "handlers_sensors.go",
+        "main.go",
+        "templ_render.go",
+    ],
+    importpath = "github.com/whale-net/everything/leaflab/ui",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//leaflab/ui/components",
+        "//leaflab/ui/pages",
+        "//libs/go/db",
+        "//libs/go/grpcauth",
+        "//libs/go/grpcclient",
+        "//libs/go/htmxauth",
+        "//libs/go/htmxbase",
+        "//libs/go/htmxui",
+        "//libs/go/logging",
+        "@com_github_a_h_templ//:templ",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+go_binary(
+    name = "leaflab-ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ui_test",
+    size = "small",
+    srcs = [
+        "handlers_auth_test.go",
+        "handlers_boards_test.go",
+        "handlers_sensors_test.go",
+        "main_test.go",
+    ],
+    embed = [":ui_lib"],
+    deps = [
+        "//leaflab/api/proto:leaflabapipb",
+        "//libs/go/htmxauth",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+# FR2 leaflab_user upsert tests that need a real Postgres (idempotency,
+# concurrent-sign-in race safety, the "signing in claims nothing"
+# ownership-table assertion). Gated behind `//go:build integration`, gazelle
+# skips it when scanning for go_test srcs; this go_test is hand-written with
+# EXACTLY the tag set from //libs/go/dbtest:postgres_constraints_test (see
+# that package's BUILD.bazel/README.md for why each tag is required). A
+# `# keep` marker tells a later `bazel run //:gazelle` not to touch or
+# remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //leaflab/ui:ui_integration_test --test_output=all
+go_test(
+    # keep
+    name = "ui_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["handlers_auth_integration_test.go"],
+    embed = [":ui_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "//libs/go/htmxauth",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Release metadata. domain "leaflab" + name "leaflab-ui" produces the
+# "leaflab-ui" image/app identity, matching api/BUILD.bazel's
+# "leaflab-api" and migrate/BUILD.bazel's "migrate" naming.
+release_app(
+    name = "leaflab-ui",
+    app_type = "external-api",
+    binary_name = ":leaflab-ui",
+    description = "HTMX-based web UI for LeafLab: OIDC sign-in, session-backed identity, and read-only board/sensor views over gRPC",
+    domain = "leaflab",
+    ingress_host = "leaflab.whalenet.dev",
+    ingress_tls_secret = "leaflab-ui-tls",
+    language = "go",
+    port = 8000,
+)
