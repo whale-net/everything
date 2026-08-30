@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "grpc_client.go",
         "handlers_auth.go",
+        "handlers_boards.go",
         "handlers_home.go",
         "main.go",
         "templ_render.go",
@@ -27,6 +28,8 @@ go_library(
         "@com_github_jackc_pgx_v5//pgxpool",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
     ],
 )
 

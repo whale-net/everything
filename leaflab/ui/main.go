@@ -254,6 +254,7 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// (FR1) — no role check, no leaflab_user_role lookup, no owner filter
 	// gates any route here; authorization lands in M2.
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
+	mux.HandleFunc("/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoards)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

@@ -45,9 +45,7 @@ func (c *LeafLabClient) Close() error {
 }
 
 // ListBoardsWithState lists every known board with its reporting state
-// (FR4/FR5 of #1497's boards-list screen). Scaffolded here since it is the
-// first RPC the boards list screen will call; the boards screen itself is
-// out of scope for this task.
+// (FR4/FR5 of #1502's boards-list screen, handlers_boards.go).
 func (c *LeafLabClient) ListBoardsWithState(ctx context.Context) (*leaflabapipb.ListBoardsWithStateResponse, error) {
 	resp, err := c.api.ListBoardsWithState(ctx, &leaflabapipb.ListBoardsWithStateRequest{})
 	if err != nil {

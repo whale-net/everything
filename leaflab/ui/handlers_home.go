@@ -12,7 +12,7 @@ import (
 // handleHome is the minimal authenticated landing page (Scaffold's "Home
 // page" requirement): it proves sign-in end to end by showing the
 // signed-in user and linking to the boards list. The boards list itself is
-// #1497's screen task.
+// #1502's screen (handlers_boards.go).
 func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 
