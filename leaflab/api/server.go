@@ -20,6 +20,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// maxHistoryRangeDays is the longest range GetSensorReadingHistory will serve
+// (FR8); enforcing it server-side is what makes the UI's own cap honest.
+const maxHistoryRangeDays = 30
+
 // validDeviceID allows alphanumeric, hyphens, and underscores.
 // Excludes MQTT wildcard characters (+, #) and path separators (/, .).
 var validDeviceID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
@@ -232,4 +236,53 @@ func reportingState(lastReadingAt *time.Time, now time.Time) pb.ReportingState {
 		return pb.ReportingState_REPORTING_STATE_REPORTING
 	}
 	return pb.ReportingState_REPORTING_STATE_STALE
+}
+
+// GetSensorReadingHistory returns one sensor's raw reading history over an
+// absolute time range, subject to the point cap and invalid-reading
+// accounting (FR9); an empty range is not an error (FR10).
+func (s *LeafLabAPIServer) GetSensorReadingHistory(ctx context.Context, req *pb.GetSensorReadingHistoryRequest) (*pb.GetSensorReadingHistoryResponse, error) {
+	if req.From == nil || req.To == nil {
+		return nil, status.Error(codes.InvalidArgument, "from and to are required")
+	}
+	from := req.From.AsTime()
+	to := req.To.AsTime()
+
+	if !to.After(from) {
+		return nil, status.Error(codes.InvalidArgument, "to must be after from")
+	}
+	if to.Sub(from) > maxHistoryRangeDays*24*time.Hour {
+		return nil, status.Errorf(codes.InvalidArgument, "range must not exceed %d days", maxHistoryRangeDays)
+	}
+
+	exists, err := s.repo.SensorExists(ctx, req.SensorId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "check sensor: %v", err)
+	}
+	if !exists {
+		return nil, status.Errorf(codes.NotFound, "sensor %d not found", req.SensorId)
+	}
+
+	history, err := s.repo.GetSensorReadingHistory(ctx, req.SensorId, from, to)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get sensor reading history: %v", err)
+	}
+
+	resp := &pb.GetSensorReadingHistoryResponse{
+		Points:               make([]*pb.ReadingPoint, 0, len(history.Points)),
+		Capped:               history.Capped,
+		PointCap:             historyPointCap,
+		ExcludedInvalidCount: history.ExcludedInvalidCount,
+	}
+	for _, p := range history.Points {
+		resp.Points = append(resp.Points, &pb.ReadingPoint{
+			RecordedAt: timestamppb.New(p.RecordedAt),
+			Value:      p.Value,
+		})
+	}
+	if history.Capped {
+		resp.CoveredFrom = timestamppb.New(history.CoveredFrom)
+		resp.CoveredTo = timestamppb.New(history.CoveredTo)
+	}
+	return resp, nil
 }
