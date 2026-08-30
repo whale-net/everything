@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -112,4 +113,51 @@ func (r *Repository) ListBoards(ctx context.Context) ([]BoardRow, error) {
 type BoardRow struct {
 	BoardID  int64
 	DeviceID string
+}
+
+// ListBoardsWithState returns every board (FR4 — no owner filtering, no
+// ownership table read at all) along with the most recent recorded_at across
+// all of its sensors' readings. LastReadingAt is nil when the board has no
+// readings at all — including boards with zero sensors.
+//
+// This is a single aggregate query over board/sensor/sensor_reading rather
+// than one query per board: sensor_reading is a TimescaleDB hypertable
+// partitioned on recorded_at, so per-board MAX() lookups in a loop would be
+// both slow and non-atomic across boards.
+//
+// Deliberately does not read board.last_seen_at or sensor.last_seen_at (see
+// #1497): neither is bumped by readings, so neither is a liveness signal.
+// Deliberately does not filter on sensor_reading.valid: this answers "is data
+// arriving", not "is the data good".
+func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadingRow, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT b.board_id, b.device_id, MAX(sr.recorded_at) AS last_reading_at
+		FROM board b
+		LEFT JOIN sensor s ON s.board_id = b.board_id
+		LEFT JOIN sensor_reading sr ON sr.sensor_id = s.sensor_id
+		GROUP BY b.board_id, b.device_id
+		ORDER BY b.board_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list boards with state: %w", err)
+	}
+	defer rows.Close()
+
+	var boards []BoardWithReadingRow
+	for rows.Next() {
+		var b BoardWithReadingRow
+		if err := rows.Scan(&b.BoardID, &b.DeviceID, &b.LastReadingAt); err != nil {
+			return nil, fmt.Errorf("scan board with state: %w", err)
+		}
+		boards = append(boards, b)
+	}
+	return boards, rows.Err()
+}
+
+// BoardWithReadingRow is one board plus the max recorded_at across all of its
+// sensors' readings. LastReadingAt is nil when the board has no readings.
+type BoardWithReadingRow struct {
+	BoardID       int64
+	DeviceID      string
+	LastReadingAt *time.Time
 }
