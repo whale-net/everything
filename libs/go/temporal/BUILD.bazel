@@ -13,8 +13,10 @@ go_library(
     deps = [
         "//libs/go/logging",
         "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//interceptor",
         "@io_temporal_go_sdk//log",
         "@io_temporal_go_sdk//worker",
+        "@io_temporal_go_sdk_contrib_opentelemetry//:opentelemetry",
     ],
 )
 

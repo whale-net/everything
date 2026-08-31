@@ -39,6 +39,14 @@ if err := w.Run(worker.InterruptCh()); err != nil {
 Temporal frontend was unreachable (or misconfigured), not just that options
 were invalid.
 
+## Tracing
+
+`NewClient` installs [`go.temporal.io/sdk/contrib/opentelemetry`](https://pkg.go.dev/go.temporal.io/sdk/contrib/opentelemetry)'s
+tracing interceptor, so workflow and activity execution emit spans against
+the global OTel tracer provider. This is a no-op until the process
+configures tracing — e.g. via `libs/go/logging`'s
+`logging.Configure(logging.Config{EnableTracing: true, ...})`.
+
 ## Environment Variables
 
 | Variable | Default | Description |

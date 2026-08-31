@@ -344,6 +344,20 @@ go_deps.gazelle_override(
     ],
     path = "github.com/riverqueue/river/riverdriver/riverpgxv5",
 )
+
+# go.temporal.io/sdk/contrib/opentelemetry is a separate Go module (own
+# go.mod) that imports go.temporal.io/sdk's internal/common/metrics
+# package. Go's internal-package rule allows this because both share the
+# go.temporal.io/sdk/... import path prefix, but gazelle treats each Go
+# module as its own Bazel repo and doesn't generate cross-repo visibility
+# for internal packages. Override with public visibility, same fix as the
+# OTel SDK entry above.
+go_deps.gazelle_override(
+    directives = [
+        "gazelle:default_visibility //visibility:public",
+    ],
+    path = "go.temporal.io/sdk",
+)
 use_repo(
     go_deps,
     "com_github_a_h_templ",
@@ -396,6 +410,7 @@ use_repo(
     "io_opentelemetry_go_otel_trace",
     "io_temporal_go_api",
     "io_temporal_go_sdk",
+    "io_temporal_go_sdk_contrib_opentelemetry",
     "org_golang_google_genproto_googleapis_rpc",
     "org_golang_google_grpc",
     "org_golang_google_protobuf",
