@@ -10,11 +10,16 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // NewPool creates a pgxpool from the given URL, or from PG_DATABASE_URL when url is empty.
 // The pool is health-checked before returning.
+//
+// Every query is traced via otelpgx against the global OTel tracer provider,
+// so it's a no-op unless the process has configured tracing (e.g. via
+// libs/go/logging's logging.Configure with EnableTracing: true).
 func NewPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	if url == "" {
 		url = os.Getenv("PG_DATABASE_URL")
@@ -23,7 +28,13 @@ func NewPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("no database URL: set PG_DATABASE_URL or pass a URL explicitly")
 	}
 
-	pool, err := pgxpool.New(ctx, url)
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse database URL: %w", err)
+	}
+	config.ConnConfig.Tracer = otelpgx.NewTracer()
+
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}
