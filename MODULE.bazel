@@ -396,6 +396,7 @@ use_repo(
     "com_github_testcontainers_testcontainers_go",
     "com_github_testcontainers_testcontainers_go_modules_postgres",
     "in_gopkg_yaml_v3",
+    "io_opentelemetry_go_contrib_instrumentation_github_com_aws_aws_sdk_go_v2_otelaws",
     "io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc",
     "io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp",
     "io_opentelemetry_go_otel",

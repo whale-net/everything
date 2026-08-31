@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 )
 
 // Client wraps the AWS S3 client for ManMan operations
@@ -63,6 +64,7 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	otelaws.AppendMiddlewares(&awsCfg.APIOptions)
 
 	// Configure S3 client options
 	s3Opts := []func(*s3.Options){}
