@@ -119,6 +119,22 @@ func getEnvBool(key string, defaultValue bool) bool {
 	return parsed
 }
 
+// getEnvDuration parses key via time.ParseDuration (e.g. "5s", "1m"). An
+// unset or unparseable value falls back to defaultValue rather than failing
+// boot — mirrors worker/main.go's own getEnvDuration.
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		log.Printf("invalid %s=%q (expected a duration like \"5s\"); using default %v", key, value, defaultValue)
+		return defaultValue
+	}
+	return parsed
+}
+
 // App holds the application state.
 type App struct {
 	config      *Config
@@ -238,6 +254,38 @@ func initializeSSEHub(ctx context.Context) *htmxsse.Hub {
 
 	config := htmxsse.DefaultConfig()
 	config.ExchangeName = events.ExchangeName
+	// Broker-pushed updates land immediately regardless of this value; the
+	// heartbeat is only the worst-case fallback a client falls back to when
+	// no broker event arrives for a state change it's waiting on (e.g. a
+	// dropped/never-published event, or RABBITMQ_URL unset entirely -- see
+	// ENV.md's "graceful degradation" note). The library default (30s,
+	// htmxsse.DefaultConfig) reads as a stuck page for that fallback path
+	// (issue #1537); five seconds keeps the same never-block guarantees at
+	// a much smaller worst case, still overridable per-deployment.
+	config.HeartbeatInterval = getEnvDuration("APP_REGISTRY_SSE_HEARTBEAT_INTERVAL", 5*time.Second)
+	if config.HeartbeatInterval <= 0 {
+		// time.NewTicker (htmxsse.Handler's heartbeat ticker) panics for
+		// d<=0, and Validate() below only checks the retry/heartbeat ratio
+		// when both fields are >0 -- so an operator-set "0s"/"-1s" would
+		// otherwise sail through Validate() and panic on the first SSE
+		// connection instead of falling back here.
+		log.Printf("invalid APP_REGISTRY_SSE_HEARTBEAT_INTERVAL=%q (must be positive); using default %v", os.Getenv("APP_REGISTRY_SSE_HEARTBEAT_INTERVAL"), htmxsse.DefaultConfig().HeartbeatInterval)
+		config.HeartbeatInterval = htmxsse.DefaultConfig().HeartbeatInterval
+	}
+	// Validate() requires AdvertisedRetryInterval < 2*HeartbeatInterval.
+	// DefaultConfig()'s AdvertisedRetryInterval (5s) alone would fail that
+	// check for any override below ~2.5s, reverting the whole config back
+	// to the library's 30s heartbeat default -- silently reintroducing the
+	// exact staleness issue #1537 was filed over. Scale it down with the
+	// override instead of leaving it fixed.
+	if config.AdvertisedRetryInterval >= 2*config.HeartbeatInterval {
+		config.AdvertisedRetryInterval = config.HeartbeatInterval / 2
+	}
+	if err := config.Validate(); err != nil {
+		log.Printf("invalid SSE hub config (%v); falling back to library defaults", err)
+		config = htmxsse.DefaultConfig()
+		config.ExchangeName = events.ExchangeName
+	}
 	hub := htmxsse.NewHub(attachFunc, config)
 	return hub
 }
