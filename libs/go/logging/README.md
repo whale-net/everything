@@ -65,6 +65,18 @@ ctx, child := tracer.Start(ctx, "validate-payload")
 child.End()
 ```
 
+Outbound HTTP calls made through an explicitly constructed `*http.Client`
+should wrap their own `Transport` with `otelhttp.NewTransport` (see
+`manmanv2/api/steam.NewSteamWorkshopClient` for the pattern). For code that
+issues requests via `http.DefaultClient` (`http.Get`/`http.Post`, or any
+`*http.Client` left with a nil `Transport`), call
+`logging.WrapDefaultHTTPTransport()` once at startup, after `Configure`:
+
+```go
+logging.Configure(logging.Config{EnableTracing: true, ...})
+logging.WrapDefaultHTTPTransport()
+```
+
 ### Metrics
 
 ```go
