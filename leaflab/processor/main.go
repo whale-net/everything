@@ -26,10 +26,11 @@ func run() error {
 	}
 
 	logging.Configure(logging.Config{
-		ServiceName: "leaflab-processor",
-		Domain:      "leaflab",
-		JSONFormat:  true,
-		EnableOTLP:  true,
+		ServiceName:   "leaflab-processor",
+		Domain:        "leaflab",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
 	})
 	defer logging.Shutdown(context.Background()) //nolint:errcheck
 
