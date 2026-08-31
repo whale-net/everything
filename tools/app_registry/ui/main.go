@@ -263,6 +263,24 @@ func initializeSSEHub(ctx context.Context) *htmxsse.Hub {
 	// (issue #1537); five seconds keeps the same never-block guarantees at
 	// a much smaller worst case, still overridable per-deployment.
 	config.HeartbeatInterval = getEnvDuration("APP_REGISTRY_SSE_HEARTBEAT_INTERVAL", 5*time.Second)
+	if config.HeartbeatInterval <= 0 {
+		// time.NewTicker (htmxsse.Handler's heartbeat ticker) panics for
+		// d<=0, and Validate() below only checks the retry/heartbeat ratio
+		// when both fields are >0 -- so an operator-set "0s"/"-1s" would
+		// otherwise sail through Validate() and panic on the first SSE
+		// connection instead of falling back here.
+		log.Printf("invalid APP_REGISTRY_SSE_HEARTBEAT_INTERVAL=%q (must be positive); using default %v", os.Getenv("APP_REGISTRY_SSE_HEARTBEAT_INTERVAL"), htmxsse.DefaultConfig().HeartbeatInterval)
+		config.HeartbeatInterval = htmxsse.DefaultConfig().HeartbeatInterval
+	}
+	// Validate() requires AdvertisedRetryInterval < 2*HeartbeatInterval.
+	// DefaultConfig()'s AdvertisedRetryInterval (5s) alone would fail that
+	// check for any override below ~2.5s, reverting the whole config back
+	// to the library's 30s heartbeat default -- silently reintroducing the
+	// exact staleness issue #1537 was filed over. Scale it down with the
+	// override instead of leaving it fixed.
+	if config.AdvertisedRetryInterval >= 2*config.HeartbeatInterval {
+		config.AdvertisedRetryInterval = config.HeartbeatInterval / 2
+	}
 	if err := config.Validate(); err != nil {
 		log.Printf("invalid SSE hub config (%v); falling back to library defaults", err)
 		config = htmxsse.DefaultConfig()
