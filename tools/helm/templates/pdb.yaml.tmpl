@@ -8,7 +8,9 @@ metadata:
   namespace: {{ $.Values.global.namespace }}
   labels:
     app: {{ $appName }}-{{ $.Values.global.environment }}
+    {{- if $app.type }}
     component: {{ $app.type }}
+    {{- end }}
   annotations:
     # PDB deploys with deployments
     "argocd.argoproj.io/sync-wave": "0"
