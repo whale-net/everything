@@ -43,6 +43,7 @@ func run() error {
 		EnableTracing: true,
 	})
 	defer logging.Shutdown(ctx)
+	logging.WrapDefaultHTTPTransport()
 
 	logger := logging.Get("main")
 

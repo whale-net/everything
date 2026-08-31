@@ -52,6 +52,7 @@ func run() error {
 		EnableTracing: true,
 	})
 	defer logging.Shutdown(ctx) //nolint:errcheck
+	logging.WrapDefaultHTTPTransport()
 	logger := logging.Get("app-registry-worker")
 
 	// Direct Postgres connection for draining the outbox -- see

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // SteamWorkshopClient interacts with Steam Workshop API
@@ -34,11 +36,17 @@ type CollectionItem struct {
 }
 
 // NewSteamWorkshopClient creates a new Steam Workshop API client
+//
+// Requests are traced via otelhttp against the global tracer provider (a
+// no-op unless the process has configured tracing), and carry outbound
+// trace-context propagation headers so a Steam API span nests under
+// whatever request triggered it.
 func NewSteamWorkshopClient(apiKey string, timeout time.Duration) *SteamWorkshopClient {
 	return &SteamWorkshopClient{
 		apiKey: apiKey,
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		},
 	}
 }

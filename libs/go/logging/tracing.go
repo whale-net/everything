@@ -3,8 +3,10 @@ package logging
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -59,6 +61,20 @@ func setupTracing(cfg Config) error {
 
 	tracerProvider = tp
 	return nil
+}
+
+// WrapDefaultHTTPTransport wraps http.DefaultTransport with otelhttp so any
+// code that issues requests via http.DefaultClient (http.Get/http.Post, or a
+// *http.Client left with a nil Transport) gets tracing spans and outbound
+// W3C trace-context propagation without needing its own otelhttp-wrapped
+// client. It's a no-op span-wise unless the process has configured tracing.
+//
+// Call this once at startup, after Configure, in services whose outbound
+// HTTP calls go through http.DefaultClient rather than an explicitly
+// constructed *http.Client (which should wrap its own Transport instead --
+// see manmanv2/api/steam.NewSteamWorkshopClient for that pattern).
+func WrapDefaultHTTPTransport() {
+	http.DefaultTransport = otelhttp.NewTransport(http.DefaultTransport)
 }
 
 // shutdownTracing flushes pending spans and shuts down the TracerProvider.
