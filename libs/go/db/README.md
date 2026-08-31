@@ -11,6 +11,15 @@ pool, err := db.NewPool(ctx, url)       // uses the provided URL directly
 
 `NewPool` pings the database before returning. It returns an error if the connection fails.
 
+## Tracing
+
+Every query, batch, and copy issued through the returned pool is traced via
+[`otelpgx`](https://github.com/exaring/otelpgx) against the global OTel
+tracer provider. This is a no-op until the process configures tracing —
+e.g. via `libs/go/logging`'s `logging.Configure(logging.Config{EnableTracing: true, ...})`.
+Once configured, query spans appear alongside the app's other spans, and are
+linked into any request span already present in `ctx`.
+
 ## Environment Variable
 
 | Variable | Description |
