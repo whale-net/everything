@@ -16,6 +16,7 @@ import (
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/rmq"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -31,10 +32,11 @@ func run() error {
 	defer cancel()
 
 	logging.Configure(logging.Config{
-		ServiceName: "leaflab-api",
-		Domain:      "leaflab",
-		JSONFormat:  true,
-		EnableOTLP:  true,
+		ServiceName:   "leaflab-api",
+		Domain:        "leaflab",
+		JSONFormat:    true,
+		EnableOTLP:    true,
+		EnableTracing: true,
 	})
 	defer logging.Shutdown(ctx) //nolint:errcheck
 
@@ -83,6 +85,7 @@ func run() error {
 	}
 
 	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(logging.NewUnaryServerLoggingInterceptor("grpc"), selectiveUnaryInterceptor(unaryAuth)),
 		grpc.ChainStreamInterceptor(logging.NewStreamServerLoggingInterceptor("grpc"), selectiveStreamInterceptor(streamAuth)),
 	)
