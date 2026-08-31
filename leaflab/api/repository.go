@@ -125,10 +125,13 @@ type BoardRow struct {
 // all of its sensors' readings. LastReadingAt is nil when the board has no
 // readings at all — including boards with zero sensors.
 //
-// This is a single aggregate query over board/sensor/sensor_reading rather
-// than one query per board: sensor_reading is a TimescaleDB hypertable
-// partitioned on recorded_at, so per-board MAX() lookups in a loop would be
-// both slow and non-atomic across boards.
+// Reads from v_board_last_reading rather than joining board/sensor/
+// sensor_reading directly: sensor_reading is a TimescaleDB hypertable with no
+// upper bound on size, and a plain MAX(sr.recorded_at) GROUP BY join scans
+// every reading ever recorded on every call. The view resolves each sensor's
+// latest reading via a LATERAL ORDER BY ... LIMIT 1, which
+// idx_sensor_reading_sensor_id(sensor_id, recorded_at DESC) answers in O(1)
+// per sensor instead of O(total readings).
 //
 // Deliberately does not read board.last_seen_at or sensor.last_seen_at (see
 // #1497): neither is bumped by readings, so neither is a liveness signal.
@@ -136,12 +139,9 @@ type BoardRow struct {
 // arriving", not "is the data good".
 func (r *Repository) ListBoardsWithState(ctx context.Context) ([]BoardWithReadingRow, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT b.board_id, b.device_id, MAX(sr.recorded_at) AS last_reading_at
-		FROM board b
-		LEFT JOIN sensor s ON s.board_id = b.board_id
-		LEFT JOIN sensor_reading sr ON sr.sensor_id = s.sensor_id
-		GROUP BY b.board_id, b.device_id
-		ORDER BY b.board_id
+		SELECT board_id, device_id, last_reading_at
+		FROM v_board_last_reading
+		ORDER BY board_id
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("list boards with state: %w", err)

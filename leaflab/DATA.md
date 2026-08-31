@@ -278,7 +278,7 @@ SCD2 tables in this schema:
 
 ## Analytical Views
 
-Seven plain views (prefixed `v_`) expose the schema to downstream consumers (Grafana panels, ad-hoc SQL). All join logic is in the views — consumers should not replicate it.
+Nine plain views (prefixed `v_`) expose the schema to downstream consumers (Grafana panels, ad-hoc SQL). All join logic is in the views — consumers should not replicate it.
 
 | View | Cardinality | Purpose |
 |---|---|---|
@@ -289,6 +289,8 @@ Seven plain views (prefixed `v_`) expose the schema to downstream consumers (Gra
 | `v_sensor_reading_enriched` | 1 row / reading | **Workhorse**: reading + sensor + region path + config metadata |
 | `v_sensor_reading_with_plant` | 1 row / (reading × active plant) | Plant and plant_type slices; readings without plants appear with NULL plant fields |
 | `v_sensor_reading_with_config_debug` | 1 row / reading | `v_sensor_reading_enriched` + full `device_config.config_json` (debug) |
+| `v_sensor_last_reading` | 1 row / sensor | Each sensor's latest `recorded_at`, via a `LATERAL ... ORDER BY recorded_at DESC LIMIT 1` that uses `idx_sensor_reading_sensor_id` — O(1) per sensor instead of scanning the hypertable |
+| `v_board_last_reading` | 1 row / board | `v_sensor_last_reading` rolled up to `MAX(last_reading_at)` per board. Backs `GET /boards`' `ListBoardsWithState` — do not replace with a raw `board`/`sensor`/`sensor_reading` join, which scans every reading ever recorded |
 
 ### Temporal accuracy
 
