@@ -58,8 +58,11 @@ go_test(
     ],
     embed = [":ui_lib"],
     deps = [
+        "//libs/go/htmxauth",
         "//libs/go/htmxui",
         "//manmanv2/protos:manmanpb",
+        "//manmanv2/ui/components",
+        "//manmanv2/ui/pages",
         "@org_golang_google_grpc//:grpc",
     ],
 )
