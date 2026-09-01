@@ -5,10 +5,9 @@ load("@rules_go//go:def.bzl", "go_library")
 # channel_invite). CanApprove/CanInvite/CanReconnect/CanRead/CanWrite
 # (authz.go) are the only sanctioned M1 authorization entry points (NFR5).
 #
-# Scaffold only (issue #1568) -- every store method is a stub. Full
-# implementation and a Postgres-backed go_test (via //libs/go/dbtest,
-# applying //audience_score_system/migrate/schema's real migrations) land
-# in later phases.
+# A Postgres-backed go_test (via //libs/go/dbtest, applying
+# //audience_score_system/migrate/schema's real migrations) lands in the
+# Testing phase (issue #1568).
 go_library(
     name = "store",
     srcs = [
@@ -24,6 +23,8 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )

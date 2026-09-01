@@ -18,10 +18,6 @@
 // package may reconstruct a role check from raw SQL (NFR5): there is no
 // channel.owner_id column, and nothing here assumes a Channel has exactly
 // one Creator.
-//
-// Scaffold only (issue #1568): every method on the per-entity store types
-// is a stub returning errors.New("not implemented"). Full implementation
-// lands in the Implementation phase.
 package store
 
 import "github.com/jackc/pgx/v5/pgxpool"
