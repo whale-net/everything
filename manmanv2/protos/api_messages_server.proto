@@ -42,6 +42,7 @@ message UpdateServerRequest {
   string status = 3;
   bool is_default = 4;
   repeated string update_paths = 5;  // Field paths to update (empty = update all)
+  string host_public_address = 6;
 }
 
 message UpdateServerResponse {
