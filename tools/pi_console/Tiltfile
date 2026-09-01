@@ -1,0 +1,50 @@
+# pi_console Tiltfile — local dev only.
+#
+# Unlike the domain Tiltfiles elsewhere in this repo (manman, manmanv2,
+# app_registry, ...), pi_console is not a production service with its own
+# release pipeline, database, or message queue — it's an internal dev tool:
+# two small Go binaries with no state beyond in-memory session buffers. So
+# instead of building Docker images and deploying a Helm chart to the local
+# Kubernetes cluster, this just runs `bridge` and `ui` as local processes
+# via local_resource(serve_cmd=...), which is faster to iterate on and
+# doesn't require a cluster at all.
+#
+# Requires the `pi` CLI on PATH (npm install -g @earendil-works/pi-coding-agent,
+# see https://pi.dev) for the bridge to actually spawn agents.
+
+load('ext://dotenv', 'dotenv')
+dotenv()
+
+bridge_port = os.environ.get('PI_CONSOLE_BRIDGE_PORT', '8787')
+ui_port = os.environ.get('PI_CONSOLE_UI_PORT', '8080')
+bridge_token = os.environ.get('PI_CONSOLE_BRIDGE_TOKEN', 'dev-local-token')
+
+local_resource(
+    'pi-console-bridge',
+    serve_cmd='bazel run //tools/pi_console/bridge',
+    serve_env={
+        'PORT': bridge_port,
+        'PI_CONSOLE_BRIDGE_TOKEN': bridge_token,
+        'PI_CONSOLE_PI_BIN': os.environ.get('PI_CONSOLE_PI_BIN', 'pi'),
+        'PI_CONSOLE_PI_ARGS': os.environ.get('PI_CONSOLE_PI_ARGS', ''),
+    },
+    deps=['bridge'],
+    labels=['pi-console'],
+)
+
+local_resource(
+    'pi-console-ui',
+    serve_cmd='bazel run //tools/pi_console/ui',
+    serve_env={
+        'PORT': ui_port,
+        'PI_CONSOLE_HOSTS': os.environ.get('PI_CONSOLE_HOSTS', 'local=http://localhost:{}'.format(bridge_port)),
+        'PI_CONSOLE_BRIDGE_TOKEN': bridge_token,
+    },
+    deps=['ui'],
+    resource_deps=['pi-console-bridge'],
+    links=[link('http://localhost:{}'.format(ui_port), 'pi console')],
+    labels=['pi-console'],
+)
+
+print("pi console: http://localhost:{}  (bridge on :{})".format(ui_port, bridge_port))
+print("Add more hosts with PI_CONSOLE_HOSTS=\"name=http://host:port,...\" before `tilt up`.")

@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "ui_lib",
+    srcs = [
+        "handlers.go",
+        "main.go",
+        "render.go",
+        "templates.go",
+    ],
+    embedsrcs = [
+        "templates/chat.html",
+        "templates/index.html",
+    ],
+    importpath = "github.com/whale-net/everything/tools/pi_console/ui",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "ui",
+    embed = [":ui_lib"],
+    visibility = ["//visibility:public"],
+)

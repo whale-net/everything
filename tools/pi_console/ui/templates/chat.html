@@ -1,0 +1,48 @@
+{{define "chat.html"}}
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>pi console — {{.Host}}</title>
+<script src="https://unpkg.com/htmx.org@1.9.10"></script>
+<script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 44rem; margin: 1.5rem auto; color: #1a1a1a; }
+  header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+  header a { color: #666; text-decoration: none; }
+  #status { margin-left: auto; font-size: 0.85rem; color: #888; }
+  #transcript { display: flex; flex-direction: column; gap: 0.5rem; min-height: 20rem; border: 1px solid #ddd; border-radius: 8px; padding: 1rem; overflow-y: auto; }
+  .bubble { padding: 0.5rem 0.75rem; border-radius: 8px; white-space: pre-wrap; word-break: break-word; }
+  .bubble.user { background: #e8f0fe; align-self: flex-end; }
+  .bubble.assistant { background: #f2f2f2; align-self: flex-start; }
+  .bubble.tool { background: #fff8e1; align-self: flex-start; font-size: 0.85rem; color: #7a5b00; }
+  .bubble.tool.error { background: #fdecea; color: #b3261e; }
+  .bubble.system.error { background: #fdecea; color: #b3261e; align-self: stretch; }
+  form.composer { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+  textarea { flex: 1; font: inherit; padding: 0.5rem; border-radius: 6px; border: 1px solid #ccc; resize: vertical; min-height: 2.5rem; }
+  button { font: inherit; padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #ccc; background: #f5f5f5; cursor: pointer; }
+  button:hover { background: #ebebeb; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/">&larr; hosts</a>
+  <strong>{{.Host}}</strong>
+  <span id="status">idle</span>
+</header>
+
+<div hx-ext="sse" sse-connect="/hosts/{{.Host}}/sessions/{{.ID}}/events" sse-swap="chat" hx-swap="none">
+  <div id="transcript"></div>
+</div>
+
+<form class="composer"
+      hx-post="/hosts/{{.Host}}/sessions/{{.ID}}/prompt"
+      hx-target="#transcript"
+      hx-swap="beforeend"
+      hx-on::after-request="this.reset()">
+  <textarea id="message" name="message" placeholder="Message the agent…" required></textarea>
+  <button type="submit">Send</button>
+</form>
+</body>
+</html>
+{{end}}
