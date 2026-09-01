@@ -132,6 +132,54 @@ caller or session violates LB4 even if it "only" affects performance.
 All four share the `audience-score-system` `release_app` domain, so images
 are `audience-score-system-migration`, `-web`, `-mcp`, `-worker`.
 
+## OAuth grants
+
+ASS uses TWO deliberately separate Google OAuth2 grants, never one combined
+scope request:
+
+| Grant | Scopes | Establishes | Stored in | Package |
+|---|---|---|---|---|
+| **C1: Google sign-in/sign-up** | `openid email profile` | A Person's identity (keyed on the Google `sub` claim, #1570) | `web_session` (migration 003) | `web/auth` |
+| **C2: YouTube Channel-connect** | `yt-analytics.readonly` + `youtube.readonly` (see `ENV.md` "OAuth scopes", NFR1/LB1) | A Channel's authorization for this app to call the YouTube Data/Analytics APIs on its behalf (#1571) | `channel_credential` (migration 004) | `web/channel` + `tokens` |
+
+**Why two grants, not one:** C1 answers "who is this human" and needs
+nothing beyond identity claims -- requesting YouTube scopes at sign-in
+would force every Person (including a pure Analyst who never connects a
+Channel) through YouTube's consent screen for permissions they may never
+use. C2 answers "may this app act on this specific YouTube Channel's
+behalf" and is requested only when a Creator actually connects a Channel
+(FR3) or reconnects one (FR4). Keeping them separate also means a scope
+change to one grant (e.g. LB1's forward-looking Analytics scope) never
+forces re-consent of the other.
+
+**Reconnect authorization (FR4, NFR5):** only a Person holding a live
+`role=creator` `channel_person` row on a Channel may (re)connect it --
+checked via `store.CanReconnect`, the same sanctioned authz entry point
+every other M1 permission check uses (see "Data model" below). This is
+enforced by `web/channel.Handler.HandleReconnect`, never inferred from
+who initiated the original connect.
+
+**Token storage split:** C1's refresh token lives in `web_session`
+(managed by `web/auth.SessionManager`, one row per signed-in session); C2's
+access/refresh token lives in `channel_credential` (managed by
+`tokens.Store`, SCD2 per `AGENTS.md` -- one open row per Channel, a
+reconnect closes the old row and opens a new one so token history is
+auditable). Both encrypt at rest with AES-256-GCM under the same
+`ASS_TOKEN_ENCRYPTION_KEY`-derived key, but are otherwise independent
+stores -- a Person's session surviving does not imply their Channel's
+YouTube credential is still valid, and vice versa.
+
+**Needs-reauth lifecycle (FR4):** a Channel is `connected` or
+`needs_reauth` (`channel.connection_state`). `tokens.Store.TokenSource`'s
+refresh path distinguishes a revoked grant (`invalid_grant` from Google) --
+which calls `tokens.Store.MarkNeedsReauth`, flipping `connection_state` to
+`needs_reauth` -- from a transient network/5xx failure, which must NOT
+trip needs-reauth. A `needs_reauth` Channel retains every previously
+synced row (`synced_video`/`video_metrics`/`schedule_entry` are never
+deleted) and the worker (#1574) skips its sync cycle for that Channel
+without erroring the workflow, until a Creator reconnects (FR4) and
+`connection_state` returns to `connected` with no other manual step.
+
 ## NFR3 interface allocation
 
 The web UI is **limited to exactly four surfaces** — everything else is
@@ -175,6 +223,17 @@ no `owner_id` column -- ownership and every other role live only in
 `CanApprove`/`CanInvite`/`CanReconnect`/`CanRead`/`CanWrite` (NFR5), the
 only sanctioned authorization entry points.
 
-Everything else is not yet designed — later schema tasks land research
-notes, verdicts per LB3's FK chain, schedule drafts/committed entries,
-synced schedule/metrics, and pending matches.
+Migration 002 (`002_research_schedule_outcome.up.sql`, issue #1569) lands
+the LB3 record chain: idea, research notes, viability verdicts (append-only
+version log, not SCD2 -- see `AGENTS.md`'s SCD2 event-log exclusion),
+pacing policy, schedule entries, synced videos/metrics, and pending
+matches, plus the `mcp_idempotency` ledger (NFR2/LB4).
+
+Migration 003 (`003_web_session.up.sql`, issue #1570) lands `web_session`
+-- C1's Google sign-in session store (see "OAuth grants" above).
+
+Migration 004 (`004_channel_credentials.up.sql`, issue #1571) lands
+`channel_credential` -- C2's per-Channel YouTube OAuth token store (see
+"OAuth grants" above), SCD2 per `AGENTS.md`: exactly one live row per
+Channel (`UNIQUE ... WHERE valid_to IS NULL`), a reconnect closes the old
+row and opens a new one.

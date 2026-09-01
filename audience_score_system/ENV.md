@@ -2,8 +2,6 @@
 
 > All environment variables read by `audience-score-system-migration`,
 > `-web`, `-mcp`, and `-worker` — one `ENV.md` per domain per `AGENTS.md`.
-> Channel-connect (C2, YouTube Data/Analytics scopes) variables are added
-> by the task that introduces them (#1571).
 
 ## Database
 
@@ -57,7 +55,35 @@ doc comment for why these are Google-only and deliberately separate from
 | `ASS_GOOGLE_CLIENT_SECRET` | web | *(required)* | Google OAuth2 client secret paired with `ASS_GOOGLE_CLIENT_ID`. |
 | `ASS_OAUTH_REDIRECT_BASE_URL` | web | *(required)* | This app's own externally-reachable origin, e.g. `https://audience-score.whalenet.dev` — `web/auth` appends `/oauth/google/callback` to build the redirect URL Google calls back to. |
 | `ASS_SESSION_SECRET` | web | *(required)* | Secret used to sign/protect the short-lived OAuth2 state cookie (CSRF) during the login round trip. |
-| `ASS_TOKEN_ENCRYPTION_KEY` | web | *(required)* | Secret hashed (SHA-256) into a 32-byte AES-256-GCM key used to encrypt any stored Google refresh token at rest — mirrors `libs/go/htmxauth.DBSessionManager`'s `encKey` derivation. |
+| `ASS_TOKEN_ENCRYPTION_KEY` | web | *(required)* | Secret hashed (SHA-256) into a 32-byte AES-256-GCM key used to encrypt any stored Google refresh token at rest — mirrors `libs/go/htmxauth.DBSessionManager`'s `encKey` derivation. This same key also encrypts `channel_credential`'s YouTube token ciphertext (see "OAuth scopes" below) — one key, two independent token stores. |
+
+## OAuth scopes (C2: YouTube Channel-connect)
+
+Read by `web`'s `main.go` and `web/channel` (issue #1571). This is a
+SEPARATE OAuth grant from "Web (C1: Google OAuth sign-in/sign-up)" above —
+see `../ARCHITECTURE.md` "OAuth grants" for why. It reuses C1's
+`ASS_GOOGLE_CLIENT_ID`/`ASS_GOOGLE_CLIENT_SECRET`/
+`ASS_OAUTH_REDIRECT_BASE_URL` (same Google OAuth2 client, a different
+redirect path — `web/channel` appends `/oauth/youtube/callback`) and
+`ASS_TOKEN_ENCRYPTION_KEY` (same derivation, a different table:
+`channel_credential`, migration 004, vs. `web_session`, migration 003). No
+net-new environment variable is introduced by this grant.
+
+**Scope set requested at first Channel-connect consent** (NFR1/LB1 —
+`audience_score_system/web/channel.Scopes`):
+
+| Scope | Why |
+|-------|-----|
+| `https://www.googleapis.com/auth/yt-analytics.readonly` | Owner-level YouTube Analytics access. Requested up front even though M1 only surfaces views/retention/CTR/impressions, so a later milestone (C16) never forces a re-consent of every connected Creator (LB1). |
+| `https://www.googleapis.com/auth/youtube.readonly` | YouTube Data API access sufficient to list a Channel's own scheduled/private draft uploads (C6) via the authenticated owner's uploads playlist or `search.list?forMine=true` — verified against `developers.google.com/identity/protocols/oauth2/scopes`, which documents this scope (not the broader `youtube` manage scope) as sufficient for those owner-only reads. |
+
+**`yt-analytics-monetary.readonly`: explicitly NOT requested.** M1's
+`store.VideoMetrics` has no monetary field, and there is no near-term plan
+to add one. Adding this scope later is exactly the re-consent cost LB1
+exists to avoid paying twice, so it is deferred until a monetary-adjacent
+field is genuinely wanted — at which point that is its own
+scope-and-re-consent decision, not something to have silently pre-granted
+here.
 
 ## MCP (C4-C7, C9, C10: MCP server foundation)
 
@@ -69,9 +95,3 @@ stores only a SHA-256 hash, not a reversible secret.
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
 | `ASS_MCP_ADDR` | mcp | `:8081` | HTTP listen address for the `mcp` binary (streamable HTTP transport). |
-
-## Not yet added
-
-YouTube Data/Analytics API scope/credentials for Channel connect (C2, LB1)
-will be documented here by the task that introduces them (#1571) — do not
-assume a var name from this file in advance of that task.

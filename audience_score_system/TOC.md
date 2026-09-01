@@ -15,9 +15,8 @@ YouTube creator research/schedule/outcome tracking system, exposed over MCP.
   interface allocation (what's web UI vs. MCP-only).
 - [`ENV.md`](ENV.md) — All environment variables: `PG_DATABASE_URL`,
   `TEMPORAL_HOST`/`TEMPORAL_NAMESPACE`/`TEMPORAL_TASK_QUEUE`, log level,
-  and `web`'s Google OAuth sign-in vars (`ASS_GOOGLE_CLIENT_ID` etc., C1).
-  YouTube vars are added by the task that introduces Channel connect
-  (C2, #1571).
+  `web`'s Google OAuth sign-in vars (`ASS_GOOGLE_CLIENT_ID` etc., C1), and
+  the C2 YouTube Channel-connect scope set ("OAuth scopes" section, #1571).
 
 ## Product Docs
 

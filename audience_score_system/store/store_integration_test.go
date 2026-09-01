@@ -684,7 +684,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(5), version, "highest migration in schema.Migrations is 005_mcp_credential (004 not yet landed)")
+	assert.Equal(t, uint(5), version, "highest migration in schema.Migrations is 005_mcp_credential")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -692,6 +692,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"pacing_policy", "schedule_entry", "synced_video", "video_metrics",
 		"video_schedule_match", "mcp_idempotency",
 		"web_session",
+		"channel_credential",
 		"mcp_credential",
 	} {
 		var exists bool
