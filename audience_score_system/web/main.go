@@ -19,7 +19,9 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/tokens"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
+	"github.com/whale-net/everything/audience_score_system/web/channel"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/invite"
 	"github.com/whale-net/everything/audience_score_system/web/pages"
@@ -71,9 +73,10 @@ func getEnv(key, defaultValue string) string {
 
 // app holds the wired-up application state.
 type app struct {
-	store  *store.Store
-	auth   *auth.Authenticator
-	invite *invite.Handlers
+	store    *store.Store
+	auth     *auth.Authenticator
+	invite   *invite.Handlers
+	channels *channel.Handler
 }
 
 func main() {
@@ -140,7 +143,18 @@ func run() error {
 
 	inviteHandlers := invite.New(st, sessions)
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers}
+	// tokenStore is the Channel-connect grant's (C2, #1571) credential
+	// store -- a SEPARATE token store from `sessions` above (C1's Google
+	// sign-in session), sharing only the ASS_TOKEN_ENCRYPTION_KEY-derived
+	// encKey. See ../ARCHITECTURE.md "OAuth grants".
+	tokenStore := tokens.NewStore(pool, st.Channels(), encKey)
+	channelHandler := channel.NewHandler(channel.Config{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleClientSecret,
+		RedirectURL:  cfg.OAuthRedirectBase + "/oauth/youtube/callback",
+	}, st.Channels(), st.Roles(), tokenStore, sessions)
+
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -200,6 +214,13 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /invites/{code}/resume", a.auth.RequireSignedIn(a.invite.HandleResume))
 	mux.HandleFunc("POST /invites/{code}/accept", a.auth.RequireSignedIn(a.invite.HandleAccept))
 	mux.HandleFunc("POST /invites/{code}/decline", a.auth.RequireSignedIn(a.invite.HandleDecline))
+
+	// Protected: Channel-connect OAuth grant (C2, #1571) -- a SEPARATE
+	// consent from /login's Google sign-in above. All three sit behind
+	// RequireSignedIn per that issue's Implementation section.
+	mux.HandleFunc("GET /channels/connect", a.auth.RequireSignedIn(a.channels.HandleConnect))
+	mux.HandleFunc("GET /oauth/youtube/callback", a.auth.RequireSignedIn(a.channels.HandleCallback))
+	mux.HandleFunc("POST /channels/{id}/reconnect", a.auth.RequireSignedIn(a.channels.HandleReconnect))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

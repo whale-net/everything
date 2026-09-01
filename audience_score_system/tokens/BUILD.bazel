@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Per-Channel OAuth credential storage and refresh (C2, `channel_credential`
+# migration 004) -- see store.go's package doc comment.
+#
+# Scaffold only (issue #1571) -- every Store method is a stub. Real token
+# persistence, AES-256-GCM encryption at rest, SELECT ... FOR UPDATE
+# single-flight refresh, and the invalid_grant -> needs-reauth mapping land
+# in the Implementation phase.
+go_library(
+    name = "tokens",
+    srcs = ["store.go"],
+    importpath = "github.com/whale-net/everything/audience_score_system/tokens",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
