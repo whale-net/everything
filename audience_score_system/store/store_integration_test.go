@@ -307,8 +307,15 @@ func TestInviteStore_Consume_GrantsAnalystRole_SecondConsumeFailsAndAddsNoRow(t 
 	assert.Equal(t, 1, roleRowCount, "a failed second consume must not add a duplicate role row")
 }
 
-// ── Migration 001 reversibility ────────────────────────────────────────────
+// ── Migration reversibility (001 + 003) ────────────────────────────────────
 
+// TestMigration001_UpDownUp_LeavesNoOrphanObjects exercises schema.Migrations'
+// full up/down/up cycle -- not just migration 001 in isolation. It was
+// written against migration 001 alone (#1568); migration 003 (web_session,
+// #1570) landed afterward in the same embedded schema.Migrations FS, so
+// runner.Up() now advances to version 3, not 1 -- the version assertion and
+// table list below were updated accordingly rather than left asserting a
+// version number schema.Migrations can no longer produce.
 func TestMigration001_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -325,9 +332,9 @@ func TestMigration001_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(1), version)
+	assert.Equal(t, uint(3), version, "highest migration in schema.Migrations is 003_web_session")
 
-	for _, tbl := range []string{"person", "channel", "channel_person", "channel_invite"} {
+	for _, tbl := range []string{"person", "channel", "channel_person", "channel_invite", "web_session"} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`, tbl,
@@ -340,4 +347,48 @@ func TestMigration001_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	// down/up cycle intact rather than silently not being recreated.
 	_, err = db.Pool.Exec(ctx, `INSERT INTO person (google_subject) VALUES ($1)`, "up-down-up-check")
 	require.NoError(t, err, "insert after up/down/up must succeed against a fully-recreated schema")
+}
+
+// TestMigration003_WebSessionTable_ConstraintsSurviveDownUp proves migration
+// 003's own constraints -- session_id PRIMARY KEY and the person_id FOREIGN
+// KEY -- are actually created and survive a down/up cycle (not just that the
+// table exists, which the test above already covers).
+func TestMigration003_WebSessionTable_ConstraintsSurviveDownUp(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up(), "first up")
+	require.NoError(t, runner.Down(), "down")
+	require.NoError(t, runner.Up(), "second up")
+
+	// FOREIGN KEY: a web_session row referencing a person_id that does not
+	// exist must be rejected.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO web_session (session_id, person_id, expires_at)
+		VALUES ('sess-orphan', $1, NOW() + interval '1 hour')
+	`, uuid.New())
+	assert.Error(t, err, "web_session.person_id FOREIGN KEY must reject a nonexistent person")
+
+	// PRIMARY KEY: a second row with the same session_id must be rejected.
+	var personID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO person (google_subject) VALUES ($1) RETURNING id
+	`, "sub-web-session-pk-check").Scan(&personID))
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO web_session (session_id, person_id, expires_at)
+		VALUES ('sess-dup', $1, NOW() + interval '1 hour')
+	`, personID)
+	require.NoError(t, err, "first insert with a fresh session_id must succeed")
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO web_session (session_id, person_id, expires_at)
+		VALUES ('sess-dup', $1, NOW() + interval '1 hour')
+	`, personID)
+	assert.Error(t, err, "web_session.session_id PRIMARY KEY must reject a duplicate session_id")
 }
