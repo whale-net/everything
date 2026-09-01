@@ -1,13 +1,16 @@
 // Package store is the pgx-based repository for Audience Score System's
 // identity core: person, channel, the Persona<->Channel join table (LB2),
-// and channel_invite codes -- migration 001, see
-// audience_score_system/migrate/schema/migrations/001_identity.up.sql.
+// and channel_invite codes (migration 001, see
+// audience_score_system/migrate/schema/migrations/001_identity.up.sql) --
+// plus the LB3 research/verdict/schedule/outcome record chain, its read
+// models, and the mcp_idempotency ledger (migration 002, see
+// .../002_research_schedule_outcome.up.sql and issue #1569).
 //
 // Store is the single entry point, built over //libs/go/db's
-// *pgxpool.Pool. Its Persons/Channels/Roles/Invites accessors hand back
-// the per-entity Store implementations (PersonStore/ChannelStore/
-// RoleStore/InviteStore) -- kept as separate concrete types, not all
-// methods on Store itself, because PersonStore.GetByID and
+// *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
+// Verdicts/Pacing/Schedules/Sync/Matches/Idempotency accessors hand back
+// the per-entity Store implementations -- kept as separate concrete types,
+// not all methods on Store itself, because e.g. PersonStore.GetByID and
 // ChannelStore.GetByID share a method name but return different types; a
 // single receiver type cannot implement both.
 //
@@ -23,7 +26,10 @@ package store
 import "github.com/jackc/pgx/v5/pgxpool"
 
 // Store is the pgx-backed repository over person/channel/channel_person/
-// channel_invite (migration 001).
+// channel_invite (migration 001) plus idea/research_note/
+// viability_verdict/verdict_citation/pacing_policy/schedule_entry/
+// synced_video/video_metrics/video_schedule_match/mcp_idempotency
+// (migration 002).
 type Store struct {
 	pool *pgxpool.Pool
 }
@@ -44,3 +50,28 @@ func (s *Store) Roles() RoleStore { return roleStore{pool: s.pool} }
 
 // Invites returns the InviteStore implementation.
 func (s *Store) Invites() InviteStore { return inviteStore{pool: s.pool} }
+
+// Ideas returns the IdeaStore implementation (migration 002).
+func (s *Store) Ideas() IdeaStore { return ideaStore{pool: s.pool} }
+
+// Research returns the ResearchStore implementation (migration 002).
+func (s *Store) Research() ResearchStore { return researchStore{pool: s.pool} }
+
+// Verdicts returns the VerdictStore implementation (migration 002).
+func (s *Store) Verdicts() VerdictStore { return verdictStore{pool: s.pool} }
+
+// Pacing returns the PacingStore implementation (migration 002).
+func (s *Store) Pacing() PacingStore { return pacingStore{pool: s.pool} }
+
+// Schedules returns the ScheduleStore implementation (migration 002).
+func (s *Store) Schedules() ScheduleStore { return scheduleStore{pool: s.pool} }
+
+// Sync returns the SyncStore implementation (migration 002).
+func (s *Store) Sync() SyncStore { return syncStore{pool: s.pool} }
+
+// Matches returns the MatchStore implementation (migration 002).
+func (s *Store) Matches() MatchStore { return matchStore{pool: s.pool} }
+
+// Idempotency returns the Idempotency implementation (migration 002,
+// NFR2/LB4).
+func (s *Store) Idempotency() Idempotency { return idempotencyStore{pool: s.pool} }

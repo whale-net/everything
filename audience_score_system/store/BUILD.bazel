@@ -2,18 +2,32 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # pgx-based repository over //libs/go/db for Audience Score System's
 # identity core (migration 001: person, channel, channel_person (LB2),
-# channel_invite). CanApprove/CanInvite/CanReconnect/CanRead/CanWrite
+# channel_invite) plus the LB3 research/verdict/schedule/outcome record
+# chain, its read models, and the mcp_idempotency ledger (migration 002,
+# issue #1569). CanApprove/CanInvite/CanReconnect/CanRead/CanWrite
 # (authz.go) are the only sanctioned M1 authorization entry points (NFR5).
+#
+# idea.go/research.go/verdict.go/pacing.go/schedule.go/sync.go/match.go/
+# idempotency.go are scaffold only (issue #1569) -- every method is a stub.
+# Full implementation lands in a later phase.
 go_library(
     name = "store",
     srcs = [
         "authz.go",
         "channel.go",
+        "idea.go",
+        "idempotency.go",
         "invite.go",
+        "match.go",
         "models.go",
+        "pacing.go",
         "person.go",
+        "research.go",
         "role.go",
+        "schedule.go",
         "store.go",
+        "sync.go",
+        "verdict.go",
     ],
     importpath = "github.com/whale-net/everything/audience_score_system/store",
     visibility = ["//visibility:public"],
