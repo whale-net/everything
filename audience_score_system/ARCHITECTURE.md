@@ -98,9 +98,14 @@ duplication is worth generalizing into `//libs/go/temporal`.
 
 ## Data model
 
-Not yet designed — schema tasks land the actual tables (Persona, Channel,
-Persona↔Channel join per LB2, research notes, verdicts per LB3's FK chain,
-schedule drafts/committed entries, synced schedule/metrics, pending
-matches). This scaffold task deliberately commits no migration SQL; see
-`migrate/schema/schema.go` for the embed-FS mechanics that let the
-migration binary build with zero migrations present.
+Migration 001 (`migrate/schema/migrations/001_identity.up.sql`, issue
+#1568) lands the identity core: `person`, `channel`, the `channel_person`
+join table (LB2, SCD2 per AGENTS.md), and `channel_invite`. `channel` has
+no `owner_id` column -- ownership and every other role live only in
+`channel_person`, read through `//audience_score_system/store`'s
+`CanApprove`/`CanInvite`/`CanReconnect`/`CanRead`/`CanWrite` (NFR5), the
+only sanctioned authorization entry points.
+
+Everything else is not yet designed — later schema tasks land research
+notes, verdicts per LB3's FK chain, schedule drafts/committed entries,
+synced schedule/metrics, and pending matches.
