@@ -18,6 +18,38 @@ blocker. The tradeoff: one shared language/toolchain across all four
 binaries and reuse of the hardened Go Postgres/Temporal libraries, at the
 cost of writing the MCP protocol layer without a same-language precedent.
 
+## MCP server
+
+`mcp` is built on the official `github.com/modelcontextprotocol/go-sdk`
+(`mcp` package), currently vendored at `v1.7.0`. This is the first Go MCP
+server in the repo, so there is no in-repo Go precedent to follow or
+diverge from — the choice is purely against the field of Go MCP SDKs
+available upstream, and the official SDK (maintained jointly by Anthropic
+and Google under the `modelcontextprotocol` GitHub org, the same org that
+publishes the MCP spec itself) is the safest default: spec-tracking is
+its whole job, whereas third-party Go SDKs risk drifting or going
+unmaintained.
+
+The Python/FastMCP precedent used elsewhere in this repo (`serial-mcp`,
+`agentsync-mcp`, `tilt-mcp`) is **explicitly not applicable** here — see
+"Language: Go throughout" above. FastMCP is a Python framework; ASS's
+`mcp` binary is Go, sharing `//libs/go/temporal` and `//libs/go/db` with
+`web` and `worker`, so a Python MCP framework was never a candidate.
+Reusing the Python precedent would have meant either forking `mcp` into a
+different language than its siblings (breaking the shared-toolchain
+rationale) or hand-rolling the MCP protocol layer from scratch instead of
+using an existing, spec-authoritative SDK — the official Go SDK is
+strictly better than both.
+
+`google.golang.org/api` (vendored at `v0.296.0`) supplies the two YouTube
+API clients `mcp` and `worker` need: `youtube/v3` (YouTube Data API v3 —
+schedule/video metadata) and `youtubeanalytics/v2` (YouTube Analytics API
+v2 — published-video metrics, C9). Both reuse the already-vendored
+`golang.org/x/oauth2` (`v0.36.0`, unchanged by this task) for the
+Channel-level OAuth token flow (C2). See
+`//audience_score_system/deps` for the compile-only smoke target proving
+all three packages resolve under Bazel.
+
 ## Component map
 
 | Component | Binary | `release_app` identity | Responsibility |
