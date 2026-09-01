@@ -73,6 +73,7 @@ message Server {
   int64 last_seen = 4;  // Unix timestamp (seconds since epoch), 0 if never seen
   string environment = 5;  // Optional: deployment environment (dev, staging, prod, etc.)
   bool is_default = 6;  // True if this is the default server
+  string host_public_address = 7;  // Optional: publicly reachable host address; empty when unset
 }
 
 // Game represents a game definition (e.g., Minecraft, Valheim)

@@ -15,11 +15,12 @@ import (
 
 // mockServerRepository is a mock implementation of ServerRepository for testing
 type mockServerRepository struct {
-	servers       map[string]*manman.Server
-	nextID        int64
-	getByNameErr  error
-	createErr     error
-	updateErr     error
+	servers      map[string]*manman.Server
+	nextID       int64
+	getByNameErr error
+	getErr       error
+	createErr    error
+	updateErr    error
 }
 
 func newMockServerRepository() *mockServerRepository {
@@ -60,13 +61,29 @@ func (m *mockServerRepository) Update(ctx context.Context, server *manman.Server
 	if m.updateErr != nil {
 		return m.updateErr
 	}
+	// Remove any stale entry keyed under a previous name for this server_id,
+	// since the map is keyed by name but callers may rename via Update.
+	for name, existing := range m.servers {
+		if existing.ServerID == server.ServerID && name != server.Name {
+			delete(m.servers, name)
+		}
+	}
 	m.servers[server.Name] = server
 	return nil
 }
 
-// Unused methods to satisfy interface
 func (m *mockServerRepository) Get(ctx context.Context, serverID int64) (*manman.Server, error) {
-	return nil, nil
+	if m.getErr != nil {
+		return nil, m.getErr
+	}
+	for _, server := range m.servers {
+		if server.ServerID == serverID {
+			// Return a copy to avoid mutation issues
+			serverCopy := *server
+			return &serverCopy, nil
+		}
+	}
+	return nil, pgx.ErrNoRows
 }
 
 func (m *mockServerRepository) List(ctx context.Context, limit, offset int) ([]*manman.Server, error) {
