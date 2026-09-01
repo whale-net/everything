@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Compile-only smoke target for the three net-new external Go deps M1
+# needs (Go MCP SDK, YouTube Data API v3, YouTube Analytics API v2) --
+# see ARCHITECTURE.md § MCP server. No product behavior; later M1 tasks
+# (mcp, worker binaries) depend on these packages directly.
+go_library(
+    name = "deps",
+    srcs = ["deps_smoke.go"],
+    importpath = "github.com/whale-net/everything/audience_score_system/deps",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@org_golang_google_api//youtube/v3:youtube",
+        "@org_golang_google_api//youtubeanalytics/v2:youtubeanalytics",
+    ],
+)
