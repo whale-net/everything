@@ -1,0 +1,17 @@
+load("//tools:templ.bzl", "templ_library")
+
+# Analyst invite generate/accept/decline (C3: FR5-FR8) -- handlers
+# (invite.go) and templ views (views.templ) in one package, see invite.go's
+# package doc comment for why they are not split across a components/pages
+# sibling pair like web/pages.
+templ_library(
+    name = "invite",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["invite.go"],
+    visibility = ["//audience_score_system/web:__pkg__"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+    ],
+)

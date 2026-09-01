@@ -17,6 +17,7 @@ go_library(
         "//audience_score_system/store",
         "//audience_score_system/web/auth",
         "//audience_score_system/web/components",
+        "//audience_score_system/web/invite",
         "//audience_score_system/web/pages",
         "//libs/go/db",
         "//libs/go/htmxbase",

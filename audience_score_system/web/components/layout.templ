@@ -29,10 +29,10 @@ var themes = []htmxui.Theme{
 }
 
 // nav is `web`'s app-owned nav item list (FR1a -- htmxui.Shell hardcodes
-// no nav of its own, see htmxui.ShellData's doc comment). Scaffold only:
-// Home is the only route that exists yet; the Channel-connect, invite, and
-// schedule-approval links land with the tasks that build those screens
-// (C2/C3/C8).
+// no nav of its own, see htmxui.ShellData's doc comment). Home remains the
+// only nav entry: the analyst invite routes (C3, #1572) have no Channel
+// detail page to be linked from yet -- that lands with Channel connect
+// (C2, #1571) -- and schedule-draft approval (C8) is still unbuilt.
 templ nav() {
 	<ul class="menu menu-horizontal px-1">
 		<li><a href="/">Home</a></li>
