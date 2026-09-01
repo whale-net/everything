@@ -31,6 +31,12 @@ type SGCDetailPageData struct {
 	PendingCount      int
 	BackupConfigs     []*BackupConfigsForVolume // backup configs for trigger buttons
 	RecentBackups     []*manmanpb.Backup        // recent backup history
+	// DeploymentStatus, ConnectAddresses, and ConnectAddressUnavailable are
+	// the gamer-facing "Status & connect" section's inputs -- see
+	// pages.SGCDetailPageData for the field-level docs; kept in sync here.
+	DeploymentStatus          components.DeploymentStatus
+	ConnectAddresses          []components.ConnectAddress
+	ConnectAddressUnavailable bool
 }
 
 // SGCLibraryAttachment holds computed library attachment data for display
@@ -117,6 +123,17 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 	} else {
 		sessions = sessionsResp
 	}
+
+	// Compute the gamer-facing status/connect-address block from the
+	// sessions and server already fetched above (NFR1: same source of
+	// truth as the session-detail page, no second RPC). server is nil
+	// when GetServer above failed; GetHostPublicAddress() on a nil
+	// *manmanpb.Server returns "" and ComputeConnectAddresses correctly
+	// treats that as FR7's "unavailable" case rather than erroring.
+	latestSession := components.LatestSession(sessions)
+	deploymentStatus := components.ComputeDeploymentStatus(latestSession)
+	connectAddresses := components.ComputeConnectAddresses(server.GetHostPublicAddress(), sgc.PortBindings)
+	connectAddressUnavailable := len(connectAddresses) == 0
 
 	// Fetch library attachments with computed paths
 	libraryAttachments, err := app.computeLibraryAttachments(ctx, sgcID, sgc.GameConfigId)
@@ -215,16 +232,19 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pageData := pages.SGCDetailPageData{
-		Layout:             layoutData,
-		SGC:                sgc,
-		Server:             server,
-		GameConfig:         gameConfig,
-		Game:               game,
-		LibraryAttachments: templLibAttachments,
-		Sessions:           sessions,
-		PendingCount:       pendingCount,
-		BackupConfigs:      templBackupConfigs,
-		RecentBackups:      recentBackups,
+		Layout:                    layoutData,
+		SGC:                       sgc,
+		Server:                    server,
+		GameConfig:                gameConfig,
+		Game:                      game,
+		LibraryAttachments:        templLibAttachments,
+		Sessions:                  sessions,
+		PendingCount:              pendingCount,
+		BackupConfigs:             templBackupConfigs,
+		RecentBackups:             recentBackups,
+		DeploymentStatus:          deploymentStatus,
+		ConnectAddresses:          connectAddresses,
+		ConnectAddressUnavailable: connectAddressUnavailable,
 	}
 
 	RenderTempl(w, r, fmt.Sprintf("SGC %d", sgcID), pages.SGCDetail(pageData))
