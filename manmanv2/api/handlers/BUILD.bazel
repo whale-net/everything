@@ -45,6 +45,7 @@ go_test(
     srcs = [
         "converters_test.go",
         "registration_test.go",
+        "server_test.go",
         "session_test.go",
     ],
     embed = [":handlers"],

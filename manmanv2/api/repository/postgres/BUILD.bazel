@@ -69,9 +69,16 @@ go_test(
 )
 
 go_test(
+    name = "server_test",
+    srcs = ["server_test.go"],
+    embed = [":postgres"],
+)
+
+go_test(
     name = "postgres_test",
     srcs = [
         "server_port_test.go",
+        "server_test.go",
         "workshop_addon_property_test.go",
         "workshop_installation_property_test.go",
         "workshop_library_property_test.go",
