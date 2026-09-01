@@ -15,7 +15,7 @@ server precedent used elsewhere in the repo.
 
 | Binary | `release_app` name | app_type | Status |
 |--------|---------------------|----------|--------|
-| `migrate/` | `migration` | `job` | Scaffolded (#1566) — no migrations yet |
+| `migrate/` | `migration` | `job` | Migration 001 (identity core, #1568) applied |
 | `web/` | `web` | `external-api` | Not yet built |
 | `mcp/` | `mcp` | `external-api` | Not yet built |
 | `worker/` | `worker` | `worker` | Not yet built |

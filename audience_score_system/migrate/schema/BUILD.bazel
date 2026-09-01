@@ -1,10 +1,10 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # Embeds the real golang-migrate SQL so both the migration binary
-# (//audience_score_system/migrate) and any future Postgres integration
-# tests apply the exact same schema instead of maintaining separate copies.
-# See schema.go for why the embed directive uses "all:migrations" instead
-# of a "*.sql" glob while no migrations exist yet.
+# (//audience_score_system/migrate) and Postgres integration tests (e.g.
+# //audience_score_system/store) apply the exact same schema instead of
+# maintaining separate copies. See schema.go for why the embed directive
+# uses "all:migrations" instead of a "*.sql" glob.
 go_library(
     name = "schema",
     srcs = ["schema.go"],

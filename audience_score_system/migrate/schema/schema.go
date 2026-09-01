@@ -5,20 +5,18 @@
 // exist — apply the exact same SQL rather than each maintaining its own
 // copy. Modelled on tools/app_registry/migrate/schema/schema.go.
 //
-// No migrations exist yet (added by later M1 schema tasks); Migrations
-// currently embeds an empty migrations/ directory (holding only a
-// .gitkeep placeholder). The directive below uses the "all:" embed prefix
-// rather than a "*.sql" glob specifically so the package still compiles
-// with zero .sql files present — go:embed errors at compile time on a glob
-// that matches nothing. golang-migrate's iofs source (see
-// libs/go/migrate.Runner) ignores non-migration filenames like .gitkeep,
-// so this is safe once real *.sql files are added too.
+// Migration 001 (identity: person, channel, channel_person, channel_invite
+// — see #1568) is the first real migration; more land as later M1 schema
+// tasks add tables. The directive below uses the "all:" embed prefix
+// rather than a "*.sql" glob because it was originally written when the
+// migrations/ directory was empty and go:embed errors at compile time on a
+// glob matching nothing; kept as-is now that real files exist since it's
+// still correct and avoids narrowing the embed to *.sql only.
 package schema
 
 import "embed"
 
-// Migrations is the embedded set of golang-migrate SQL files (plus a
-// .gitkeep placeholder until the first migration lands).
+// Migrations is the embedded set of golang-migrate SQL files.
 //
 //go:embed all:migrations
 var Migrations embed.FS
