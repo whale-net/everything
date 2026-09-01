@@ -10,11 +10,16 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # idea.go/research.go/verdict.go/pacing.go/schedule.go/sync.go/match.go/
 # idempotency.go are real SQL-backed implementations against migration
 # 002's tables (issue #1569's Implementation phase).
+#
+# credential.go (migration 005, mcp_credential) is scaffold only -- every
+# CredentialStore method is a stub returning "not implemented", filled in
+# during issue #1575's Implementation phase.
 go_library(
     name = "store",
     srcs = [
         "authz.go",
         "channel.go",
+        "credential.go",
         "idea.go",
         "idempotency.go",
         "invite.go",

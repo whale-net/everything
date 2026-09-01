@@ -59,6 +59,17 @@ doc comment for why these are Google-only and deliberately separate from
 | `ASS_SESSION_SECRET` | web | *(required)* | Secret used to sign/protect the short-lived OAuth2 state cookie (CSRF) during the login round trip. |
 | `ASS_TOKEN_ENCRYPTION_KEY` | web | *(required)* | Secret hashed (SHA-256) into a 32-byte AES-256-GCM key used to encrypt any stored Google refresh token at rest — mirrors `libs/go/htmxauth.DBSessionManager`'s `encKey` derivation. |
 
+## MCP (C4-C7, C9, C10: MCP server foundation)
+
+Read by `mcp`'s `main.go`. See `ARCHITECTURE.md`'s "MCP server: caller
+authentication" for how a caller authenticates — there is no MCP-specific
+client-secret variable here, because `mcp_credential` (migration 005)
+stores only a SHA-256 hash, not a reversible secret.
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|--------------|
+| `ASS_MCP_ADDR` | mcp | `:8081` | HTTP listen address for the `mcp` binary (streamable HTTP transport). |
+
 ## Not yet added
 
 YouTube Data/Analytics API scope/credentials for Channel connect (C2, LB1)

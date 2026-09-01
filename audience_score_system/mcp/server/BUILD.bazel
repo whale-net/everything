@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# `mcp`'s server bootstrap, caller-auth middleware (auth.go/context.go),
+# Channel-scoping/idempotency middleware skeletons (channelscope.go/
+# idempotency.go, Scaffold-only per issue #1575), streamable HTTP transport
+# (transport.go), and tool registry (registry.go). See
+# ../../ARCHITECTURE.md "MCP server".
+go_library(
+    name = "server",
+    srcs = [
+        "auth.go",
+        "channelscope.go",
+        "context.go",
+        "idempotency.go",
+        "registry.go",
+        "server.go",
+        "transport.go",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/mcp/server",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
