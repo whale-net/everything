@@ -106,6 +106,12 @@ func (h *ServerHandler) UpdateServer(ctx context.Context, req *pb.UpdateServerRe
 		if req.IsDefault {
 			server.IsDefault = req.IsDefault
 		}
+		// host_public_address is intentionally NOT updated here, even when
+		// req.HostPublicAddress != "". Proto3 gives no presence signal for a
+		// scalar string, so the only unambiguous way to clear the address is
+		// an explicit "host_public_address" entry in update_paths (see below).
+		// Mirroring the name/status convention here would make it impossible
+		// to ever clear the field, so the asymmetry is deliberate.
 	} else {
 		// Update only specified fields
 		for _, path := range req.UpdatePaths {
@@ -116,6 +122,16 @@ func (h *ServerHandler) UpdateServer(ctx context.Context, req *pb.UpdateServerRe
 				server.Status = req.Status
 			case "is_default":
 				server.IsDefault = req.IsDefault
+			case "host_public_address":
+				// Non-empty sets the address; empty string clears it back to NULL.
+				// This is the only way to unset it, since the field mask entry
+				// itself is the presence signal (proto3 scalars have none).
+				if req.HostPublicAddress == "" {
+					server.HostPublicAddress = nil
+				} else {
+					addr := req.HostPublicAddress
+					server.HostPublicAddress = &addr
+				}
 			}
 		}
 	}
@@ -151,6 +167,10 @@ func serverToProto(s *manman.Server) *pb.Server {
 
 	if s.Environment != nil {
 		pbServer.Environment = *s.Environment
+	}
+
+	if s.HostPublicAddress != nil {
+		pbServer.HostPublicAddress = *s.HostPublicAddress
 	}
 
 	return pbServer
