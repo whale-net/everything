@@ -15,21 +15,25 @@
 // store.PersonStore.UpsertByGoogleSubject directly -- Person identity is
 // keyed on the Google `sub` claim, never on email, so a changed email never
 // forks a Person (FR1/FR2).
-//
-// Scaffold only (issue #1570): every method below is a stub returning "not
-// implemented" (or, for RequireSignedIn, unconditionally redirecting to
-// /login) except the plain field-assignment in NewAuthenticator. Real
-// Google OIDC discovery, the CSRF state exchange, the ID-token verify +
-// UpsertByGoogleSubject call, and session establishment are filled in
-// during this issue's Implementation phase.
 package auth
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/whale-net/everything/audience_score_system/store"
 )
+
+// googleIssuer is Google's fixed OIDC discovery issuer. Unlike htmxauth's
+// Config.OIDCIssuer (configurable, since it targets any Keycloak realm),
+// this package only ever talks to Google, so the issuer is a constant
+// rather than a Config field.
+const googleIssuer = "https://accounts.google.com"
 
 // Config holds Google OAuth2 + session configuration for the web binary,
 // read from ASS_GOOGLE_CLIENT_ID/ASS_GOOGLE_CLIENT_SECRET/
@@ -65,6 +69,23 @@ type contextKey string
 
 const personContextKey contextKey = "audience_score_system/web/auth.person"
 
+// oauth2Exchanger is the subset of *oauth2.Config's behavior HandleLogin/
+// HandleCallback depend on. *oauth2.Config satisfies this implicitly;
+// tests (this task's Testing phase) can substitute a stub exchanger so no
+// handler test makes a live call to Google, per this task's Testing
+// section.
+type oauth2Exchanger interface {
+	AuthCodeURL(state string, opts ...oauth2.AuthCodeOption) string
+	Exchange(ctx context.Context, code string, opts ...oauth2.AuthCodeOption) (*oauth2.Token, error)
+}
+
+// idTokenVerifier is the subset of *oidc.IDTokenVerifier's behavior
+// HandleCallback depends on, factored out for the same stub-in-tests reason
+// as oauth2Exchanger above.
+type idTokenVerifier interface {
+	Verify(ctx context.Context, rawIDToken string) (*oidc.IDToken, error)
+}
+
 // Authenticator drives Google sign-in/sign-up (C1, FR1/FR2): the
 // /login -> Google consent -> /oauth/google/callback flow, resolving the
 // signed-in identity through persons (store.PersonStore.
@@ -74,61 +95,174 @@ type Authenticator struct {
 	config   Config
 	persons  store.PersonStore
 	sessions *SessionManager
+
+	oauth2Config oauth2Exchanger
+	verifier     idTokenVerifier
 }
 
 // NewAuthenticator wires config, the Person store, and the session manager
-// into an Authenticator.
-//
-// Scaffold only: this constructor does plain field assignment and does not
-// yet perform Google OIDC discovery (the oauth2.Config/oidc.IDTokenVerifier
-// construction htmxauth.Authenticator.initOIDC does for Keycloak) -- that
-// lands in the Implementation phase alongside HandleLogin/HandleCallback.
-func NewAuthenticator(config Config, persons store.PersonStore, sessions *SessionManager) *Authenticator {
+// into an Authenticator, performing Google's OIDC discovery (fetching
+// https://accounts.google.com/.well-known/openid-configuration) so
+// HandleLogin/HandleCallback have a working oauth2.Config and ID-token
+// verifier before the server starts accepting traffic -- mirrors
+// htmxauth.Authenticator.initOIDC's boot-time-not-first-request discovery.
+func NewAuthenticator(ctx context.Context, config Config, persons store.PersonStore, sessions *SessionManager) (*Authenticator, error) {
 	if len(config.Scopes) == 0 {
 		config.Scopes = []string{"openid", "email", "profile"}
 	}
-	return &Authenticator{config: config, persons: persons, sessions: sessions}
+
+	provider, err := oidc.NewProvider(ctx, googleIssuer)
+	if err != nil {
+		return nil, fmt.Errorf("google OIDC discovery failed: %w", err)
+	}
+
+	oauth2Config := &oauth2.Config{
+		ClientID:     config.ClientID,
+		ClientSecret: config.ClientSecret,
+		RedirectURL:  config.RedirectURL,
+		Endpoint:     provider.Endpoint(),
+		Scopes:       config.Scopes,
+	}
+	verifier := provider.Verifier(&oidc.Config{ClientID: config.ClientID})
+
+	return &Authenticator{
+		config:       config,
+		persons:      persons,
+		sessions:     sessions,
+		oauth2Config: oauth2Config,
+		verifier:     verifier,
+	}, nil
 }
 
 // HandleLogin redirects to Google's OAuth2 consent screen with scopes
 // `openid email profile`, a CSRF state nonce persisted via
 // SessionManager.SetOAuthState, and prompt=select_account (FR1/FR2).
-//
-// Stub only -- filled in during the Implementation phase.
 func (a *Authenticator) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	state, err := generateState()
+	if err != nil {
+		http.Error(w, "failed to generate state", http.StatusInternalServerError)
+		return
+	}
+
+	nextURL := r.URL.Query().Get("next")
+	if nextURL == "" {
+		nextURL = "/"
+	}
+	if err := a.sessions.SetOAuthState(w, r, state, nextURL); err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
+	}
+
+	authURL := a.oauth2Config.AuthCodeURL(state, oauth2.SetAuthURLParam("prompt", "select_account"))
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// googleIDTokenClaims is the minimal subset of Google's ID token claims
+// this flow needs. `sub` is the identity key (FR1/FR2); email/name are
+// display-only and are re-synced on every sign-in via UpsertByGoogleSubject
+// so a changed Google profile updates the Person without forking it.
+type googleIDTokenClaims struct {
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
 }
 
 // HandleCallback verifies the OAuth2 state (CSRF), exchanges the
 // authorization code, verifies the ID token, extracts the Google `sub`
 // claim, and calls store.PersonStore.UpsertByGoogleSubject to resolve the
 // signed-in Person -- a first-time sub creates one (FR1), a returning sub
-// reuses it (FR2) -- then establishes a session and redirects to `/`.
-//
-// Stub only -- filled in during the Implementation phase.
+// reuses it (FR2) -- then establishes a session and redirects to the
+// post-login target.
 func (a *Authenticator) HandleCallback(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	ctx := r.Context()
+
+	state := r.URL.Query().Get("state")
+	valid, err := a.sessions.VerifyOAuthState(r, state)
+	if err != nil || !valid {
+		http.Error(w, "invalid state parameter", http.StatusBadRequest)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	oauth2Token, err := a.oauth2Config.Exchange(ctx, code)
+	if err != nil {
+		http.Error(w, "failed to exchange token", http.StatusInternalServerError)
+		return
+	}
+
+	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
+	if !ok {
+		http.Error(w, "no id_token in token response", http.StatusInternalServerError)
+		return
+	}
+
+	idToken, err := a.verifier.Verify(ctx, rawIDToken)
+	if err != nil {
+		http.Error(w, "failed to verify id token", http.StatusInternalServerError)
+		return
+	}
+
+	var claims googleIDTokenClaims
+	if err := idToken.Claims(&claims); err != nil {
+		http.Error(w, "failed to parse id token claims", http.StatusInternalServerError)
+		return
+	}
+	if claims.Sub == "" {
+		http.Error(w, "id token missing sub claim", http.StatusInternalServerError)
+		return
+	}
+
+	person, _, err := a.persons.UpsertByGoogleSubject(ctx, claims.Sub, claims.Email, claims.Name)
+	if err != nil {
+		http.Error(w, "failed to resolve person", http.StatusInternalServerError)
+		return
+	}
+
+	if err := a.sessions.Establish(ctx, w, person.ID.String(), oauth2Token.RefreshToken); err != nil {
+		http.Error(w, "failed to establish session", http.StatusInternalServerError)
+		return
+	}
+
+	nextURL := a.sessions.GetNextURL(w, r)
+	http.Redirect(w, r, nextURL, http.StatusSeeOther)
 }
 
 // HandleLogout clears the caller's session (SessionManager.ClearSession)
 // and redirects to `/`.
-//
-// Stub only -- filled in during the Implementation phase.
 func (a *Authenticator) HandleLogout(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "not implemented", http.StatusNotImplemented)
+	// Best-effort: even if ClearSession fails (e.g. the DB row was already
+	// gone), the cookie-clearing side effect still runs, and there is
+	// nothing more useful to do than redirect home either way.
+	_ = a.sessions.ClearSession(w, r)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // RequireSignedIn is middleware that resolves the caller's session cookie
 // to a store.Person and places it on the request context (readable via
-// PersonFromContext), redirecting to /login when no valid session exists.
-//
-// Stub only: unconditionally redirects to /login -- filled in during the
-// Implementation phase (see this task's Testing section: "RequireSignedIn
-// returns 302->/login with no session, 200 with a valid one, and rejects a
-// tampered/expired session cookie").
+// PersonFromContext), redirecting to /login when no valid session exists
+// (no cookie, an unrecognized/tampered session ID, or an expired session).
 func (a *Authenticator) RequireSignedIn(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/login", http.StatusFound)
+		personIDStr, err := a.sessions.PersonID(r)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+
+		personID, err := uuid.Parse(personIDStr)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+
+		person, err := a.persons.GetByID(r.Context(), personID)
+		if err != nil {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), personContextKey, &person)
+		next(w, r.WithContext(ctx))
 	}
 }
 

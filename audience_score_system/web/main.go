@@ -125,13 +125,16 @@ func run() error {
 	// uses for its own encKey.
 	encKey := sha256.Sum256([]byte(cfg.TokenEncryptionKey))
 
-	sessions := auth.NewSessionManager(pool, sessionName, encKey)
-	authenticator := auth.NewAuthenticator(auth.Config{
+	sessions := auth.NewSessionManager(pool, sessionName, cfg.SessionSecret, encKey)
+	authenticator, err := auth.NewAuthenticator(ctx, auth.Config{
 		ClientID:     cfg.GoogleClientID,
 		ClientSecret: cfg.GoogleClientSecret,
 		RedirectURL:  cfg.OAuthRedirectBase + "/oauth/google/callback",
 		SessionName:  sessionName,
 	}, st.Persons(), sessions)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Google OAuth2 authenticator: %w", err)
+	}
 
 	application := &app{store: st, auth: authenticator}
 
@@ -177,9 +180,7 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /logout", a.auth.HandleLogout)
 
 	// Protected: the signed-in landing page listing the Channels the
-	// Person has a live channel_person row for (via store.RoleStore) --
-	// the RoleStore wiring lands in the Implementation phase alongside
-	// RequireSignedIn's real session resolution.
+	// Person has a live channel_person row for (via store.RoleStore).
 	mux.HandleFunc("/", a.auth.RequireSignedIn(a.handleHome))
 }
 
@@ -190,11 +191,23 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) handleHome(w http.ResponseWriter, r *http.Request) {
+	person := auth.PersonFromContext(r.Context())
 	data := components.LayoutData{
 		Title: "Home",
-		User:  auth.PersonFromContext(r.Context()),
+		User:  person,
 	}
-	if err := renderTempl(w, r, "Home", pages.Home(data)); err != nil {
+
+	var channels []store.Channel
+	if person != nil {
+		var err error
+		channels, err = a.store.Roles().ChannelsForPerson(r.Context(), person.ID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	if err := renderTempl(w, r, "Home", pages.Home(data, channels)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

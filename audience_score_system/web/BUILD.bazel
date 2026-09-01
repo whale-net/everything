@@ -5,11 +5,6 @@ load("//tools/bazel:release.bzl", "release_app")
 # sign-in/sign-up (C1, this task's scope), Channel connect (C2, #1571),
 # analyst invite/accept (C3), and schedule-draft approval (C8). See
 # ../ARCHITECTURE.md.
-#
-# Scaffold only (issue #1570) -- web/auth's Authenticator/SessionManager are
-# stubs, so /login, /oauth/google/callback, /logout, and RequireSignedIn
-# all currently either 501 or unconditionally redirect. Real Google OIDC
-# sign-in/sign-up lands in the Implementation phase.
 go_library(
     name = "web_lib",
     srcs = [

@@ -5,6 +5,7 @@ templ_library(
     srcs = glob(["*.templ"]),
     visibility = ["//audience_score_system/web:__pkg__"],
     deps = [
+        "//audience_score_system/store",
         "//audience_score_system/web/components",
     ],
 )

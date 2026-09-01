@@ -3,12 +3,6 @@ load("@rules_go//go:def.bzl", "go_library")
 # Google OAuth2 sign-in/sign-up (C1: FR1, FR2) -- see auth.go's package doc
 # comment for why this copies libs/go/htmxauth's mechanics instead of
 # depending on it.
-#
-# Scaffold only (issue #1570) -- every Authenticator/SessionManager method
-# is a stub. Real Google OIDC discovery, the CSRF state exchange, the
-# ID-token verify + store.PersonStore.UpsertByGoogleSubject call, and
-# session persistence (migration 003_web_session) land in the
-# Implementation phase.
 go_library(
     name = "auth",
     srcs = [
@@ -19,6 +13,11 @@ go_library(
     visibility = ["//audience_score_system/web:__subpackages__"],
     deps = [
         "//audience_score_system/store",
+        "@com_github_coreos_go_oidc_v3//oidc",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_gorilla_sessions//:sessions",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_x_oauth2//:oauth2",
     ],
 )
