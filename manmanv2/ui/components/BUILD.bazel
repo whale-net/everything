@@ -23,6 +23,7 @@ go_test(
     name = "components_test",
     size = "small",
     srcs = [
+        "dashboard_test.go",
         "deployment_status_test.go",
         "layout_test.go",
     ],

@@ -144,6 +144,7 @@ func (app *App) handleDashboardSessions(w http.ResponseWriter, r *http.Request) 
 	for _, s := range sessions {
 		info := ActiveSessionInfo{
 			SessionID: s.SessionId,
+			SGCID:     s.ServerGameConfigId,
 			Status:    s.Status,
 			Uptime:    computeUptime(s.StartedAt),
 		}

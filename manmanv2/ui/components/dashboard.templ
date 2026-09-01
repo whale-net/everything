@@ -50,6 +50,7 @@ type PortInfo struct {
 // ActiveSessionInfo holds enriched session data
 type ActiveSessionInfo struct {
 	SessionID  int64
+	SGCID      int64
 	Status     string
 	Uptime     string
 	ServerName string
@@ -62,7 +63,7 @@ templ DashboardSessions(sessions []ActiveSessionInfo) {
 	if len(sessions) > 0 {
 		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 			for _, s := range sessions {
-				<a href={ templ.URL(fmt.Sprintf("/sessions/%d", s.SessionID)) } class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-lg transition-shadow">
+				<a href={ templ.URL(fmt.Sprintf("/sgc/%d", s.SGCID)) } class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-lg transition-shadow">
 					<div class="card-body p-4">
 						<div class="flex items-center justify-between mb-3">
 							@htmxui.Badge(s.Status, StatusBadgeVariant(statusVariant(s.Status)), htmxui.BadgeSizeSM, true, nil)
