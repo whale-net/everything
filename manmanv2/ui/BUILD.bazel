@@ -51,6 +51,7 @@ go_test(
     size = "small",
     srcs = [
         "handlers_servers_update_address_test.go",
+        "handlers_sgc_test.go",
         "main_test.go",
         "templ_render_test.go",
     ],
