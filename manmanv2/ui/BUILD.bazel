@@ -50,12 +50,15 @@ go_test(
     name = "ui_test",
     size = "small",
     srcs = [
+        "handlers_servers_update_address_test.go",
         "main_test.go",
         "templ_render_test.go",
     ],
     embed = [":ui_lib"],
     deps = [
         "//libs/go/htmxui",
+        "//manmanv2/protos:manmanpb",
+        "@org_golang_google_grpc//:grpc",
     ],
 )
 
