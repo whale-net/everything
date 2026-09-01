@@ -22,6 +22,18 @@ func statusBadgeVariant(status string) htmxui.BadgeVariant {
 	return components.StatusBadgeVariant(status)
 }
 
+// deploymentStatusLabel renders components.DeploymentStatus's two-state
+// rollup as the gamer-facing label (FR2): never the raw Session.status
+// string. statusBadgeVariant(string(status)) already maps "running" ->
+// success and "stopped" -> neutral via the same StatusBadgeVariant table,
+// so this only supplies the label text, not a second colour mapping.
+func deploymentStatusLabel(status components.DeploymentStatus) string {
+	if status == components.DeploymentRunning {
+		return "Running"
+	}
+	return "Stopped/Offline"
+}
+
 func timeAgo(timestamp int64) string {
 	if timestamp == 0 {
 		return "Never"

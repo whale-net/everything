@@ -19,6 +19,17 @@ type SGCDetailPageData struct {
 	PendingCount       int
 	BackupConfigs      []BackupConfigGroup
 	RecentBackups      []*manmanpb.Backup
+	// DeploymentStatus is the gamer-facing running/stopped rollup (FR2),
+	// computed by handleSGCDetail via components.ComputeDeploymentStatus
+	// -- never derived here from the raw Session.status string.
+	DeploymentStatus components.DeploymentStatus
+	// ConnectAddresses is the set of host:port addresses for the current
+	// deployment (FR5/FR6), computed via components.ComputeConnectAddresses.
+	// Empty means "no address to show" -- see ConnectAddressUnavailable.
+	ConnectAddresses []components.ConnectAddress
+	// ConnectAddressUnavailable is true when ComputeConnectAddresses
+	// returned no addresses (FR7), e.g. no host_public_address configured.
+	ConnectAddressUnavailable bool
 }
 
 type LibraryAttachment struct {
@@ -59,6 +70,48 @@ templ SGCDetail(data SGCDetailPageData) {
 						Start Session
 					</button>
 				</form>
+			</div>
+		</div>
+		<!--
+			Status & Connect: the gamer-facing landing block (FR2, FR5, FR6,
+			FR7, FR12). Status and addresses are computed once by
+			handleSGCDetail via the components.ComputeDeploymentStatus /
+			components.ComputeConnectAddresses helpers (NFR1); this
+			template does no status-string comparison or "%s:%d" address
+			building of its own.
+		-->
+		<div class="card bg-base-100 border border-base-300 shadow-sm mb-6">
+			<div class="card-body">
+				<div class="flex items-center gap-3 mb-4">
+					<h2 class="text-lg font-semibold text-base-content">Status &amp; Connect</h2>
+					@htmxui.Badge(deploymentStatusLabel(data.DeploymentStatus), statusBadgeVariant(string(data.DeploymentStatus)), htmxui.BadgeSizeMD, true, nil)
+				</div>
+				if data.ConnectAddressUnavailable {
+					<p class="text-sm text-base-content/60">Connect address unavailable — no public address configured for this host.</p>
+				} else if data.DeploymentStatus == components.DeploymentRunning {
+					<ul class="space-y-1">
+						for _, addr := range data.ConnectAddresses {
+							<li class="flex items-center gap-2">
+								<code class="text-sm font-mono bg-base-200 text-base-content px-2 py-1 rounded">{ addr.Address }</code>
+								<span class="text-xs text-base-content/60">{ addr.Protocol }</span>
+							</li>
+						}
+					</ul>
+				} else {
+					<div x-data="{ showConnectAddress: false }">
+						<button type="button" @click="showConnectAddress = !showConnectAddress" class="btn btn-secondary btn-sm">
+							<span x-text="showConnectAddress ? 'Hide last-known connect address' : 'Show last-known connect address'">Show last-known connect address</span>
+						</button>
+						<ul x-show="showConnectAddress" x-cloak class="space-y-1 mt-2">
+							for _, addr := range data.ConnectAddresses {
+								<li class="flex items-center gap-2">
+									<code class="text-sm font-mono bg-base-200 text-base-content px-2 py-1 rounded">{ addr.Address }</code>
+									<span class="text-xs text-base-content/60">{ addr.Protocol }</span>
+								</li>
+							}
+						</ul>
+					</div>
+				}
 			</div>
 		</div>
 		<!-- SGC Info -->
