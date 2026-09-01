@@ -45,10 +45,17 @@ runs:
         # per-repo external-cache (which only caches repos >=10MB) by also
         # capturing all the small Go module repos that fall below that threshold.
         # Key includes MODULE.bazel so the cache is invalidated on any dep change.
+        #
+        # v2: bumped from v1 because a run that was cancelled/failed mid-fetch
+        # saved an incomplete external/ dir (missing rules_go's extracted Go
+        # SDK binary) under a v1 key, and every subsequent run restored that
+        # same broken cache -- exact-key hits never get overwritten by a
+        # later successful run, only a cache-key change forces a clean save.
+        # See CI run 33572384271 (bin/go: No such file or directory).
         path: ~/.bazel/external
-        key: bazel-external-v1-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'WORKSPACE') }}
+        key: bazel-external-v2-${{ runner.os }}-${{ hashFiles('MODULE.bazel', 'WORKSPACE.bazel', 'WORKSPACE.bzlmod', 'WORKSPACE') }}
         restore-keys: |
-          bazel-external-v1-${{ runner.os }}-
+          bazel-external-v2-${{ runner.os }}-
 
     - name: Setup Remote Cache Environment
       shell: bash
