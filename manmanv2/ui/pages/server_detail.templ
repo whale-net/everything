@@ -31,7 +31,32 @@ templ ServerDetail(layout components.LayoutData, server *manmanpb.Server, config
 					</div>
 					@components.DLItem("Environment", orDash(server.Environment))
 					@components.DLItem("Last Seen", fmt.Sprintf("%s (%s)", timeAgo(server.LastSeen), formatTime(server.LastSeen)))
+					<div>
+						<dt class="text-sm font-medium text-base-content/60">Public Address</dt>
+						<dd class="mt-1 text-sm text-base-content">
+							if server.HostPublicAddress == "" {
+								Not set
+							} else {
+								{ server.HostPublicAddress }
+							}
+						</dd>
+					</div>
 				</dl>
+				<form method="POST" action={ templ.URL(fmt.Sprintf("/servers/%d/update-address", server.ServerId)) } class="mt-4 flex flex-col gap-2 max-w-md">
+					<label for="host_public_address" class="block text-sm font-medium text-base-content">Edit Public Address</label>
+					<input
+						type="text"
+						id="host_public_address"
+						name="host_public_address"
+						value={ server.HostPublicAddress }
+						placeholder="e.g., game.example.com:27015"
+						class="input input-bordered w-full"
+					/>
+					<p class="text-xs text-base-content/60">Leave blank to clear.</p>
+					<div>
+						<button type="submit" class="btn btn-success btn-sm">Save Public Address</button>
+					</div>
+				</form>
 			</div>
 		</div>
 		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
