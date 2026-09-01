@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# Embeds the real golang-migrate SQL so both the migration binary
+# (//audience_score_system/migrate) and any future Postgres integration
+# tests apply the exact same schema instead of maintaining separate copies.
+# See schema.go for why the embed directive uses "all:migrations" instead
+# of a "*.sql" glob while no migrations exist yet.
+#
+# A trivial go_test asserting the embed resolves is added by the M1 Testing
+# task for this scaffold (#1566), not here — Scaffold only wires the target.
+go_library(
+    name = "schema",
+    srcs = ["schema.go"],
+    embedsrcs = glob(
+        ["migrations/*"],
+        allow_empty = True,
+    ),
+    importpath = "github.com/whale-net/everything/audience_score_system/migrate/schema",
+    visibility = ["//visibility:public"],
+)

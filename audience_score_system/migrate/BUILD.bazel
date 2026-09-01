@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_binary")
+load("//tools/bazel:release.bzl", "release_app")
+
+go_binary(
+    name = "migration",
+    srcs = ["main.go"],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//libs/go/migrate",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata for migration job. domain "audience-score-system" + name
+# "migration" produces the "audience-score-system-migration" image/app
+# identity (canonical naming decided in #1566 — every other M1 task assumes
+# these exact strings).
+release_app(
+    name = "migration",
+    binary_name = ":migration",
+    language = "go",
+    domain = "audience-score-system",
+    description = "Audience Score System database migration runner",
+    app_type = "job",
+)
