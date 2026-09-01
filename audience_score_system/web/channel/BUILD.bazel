@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# YouTube Channel-connect OAuth grant (C2: FR3, FR4, NFR1) -- see
+# channel.go's package doc comment for why this is a separate grant from
+# web/auth's Google sign-in (C1).
+#
+# Scaffold only (issue #1571) -- every Handler method is a stub. Real
+# consent URL construction, code exchange, channels.list?mine=true
+# resolution, FR4/NFR5's CanReconnect gate, and the needs-reauth lifecycle
+# wiring land in the Implementation phase.
+go_library(
+    name = "channel",
+    srcs = ["channel.go"],
+    importpath = "github.com/whale-net/everything/audience_score_system/web/channel",
+    visibility = ["//audience_score_system/web:__subpackages__"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/tokens",
+        "//audience_score_system/web/auth",
+    ],
+)
