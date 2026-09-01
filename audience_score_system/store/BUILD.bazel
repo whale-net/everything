@@ -8,8 +8,8 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # (authz.go) are the only sanctioned M1 authorization entry points (NFR5).
 #
 # idea.go/research.go/verdict.go/pacing.go/schedule.go/sync.go/match.go/
-# idempotency.go are scaffold only (issue #1569) -- every method is a stub.
-# Full implementation lands in a later phase.
+# idempotency.go are real SQL-backed implementations against migration
+# 002's tables (issue #1569's Implementation phase).
 go_library(
     name = "store",
     srcs = [

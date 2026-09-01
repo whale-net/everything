@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -23,17 +25,50 @@ type PacingStore interface {
 
 // pacingStore implements PacingStore against `pacing_policy` (migration
 // 002).
-//
-// Scaffold only -- every method below is a stub. Full implementation lands
-// in the Implementation phase (issue #1569's "Implementation" scope).
 type pacingStore struct{ pool *pgxpool.Pool }
 
 var _ PacingStore = pacingStore{}
 
+const pacingPolicyColumns = `id, channel_id, target_uploads_per_week, preferred_days, updated_at, updated_by_person_id`
+
+func scanPacingPolicy(row pgx.Row) (PacingPolicy, error) {
+	var p PacingPolicy
+	err := row.Scan(&p.ID, &p.ChannelID, &p.TargetUploadsPerWeek, &p.PreferredDays, &p.UpdatedAt, &p.UpdatedByPersonID)
+	return p, err
+}
+
+// Upsert relies on ON CONFLICT (channel_id) DO UPDATE -- the same
+// find-or-create-in-one-round-trip idiom as PersonStore.
+// UpsertByGoogleSubject -- so repeated calls with identical values leave
+// exactly one row with identical content (NFR2).
 func (s pacingStore) Upsert(ctx context.Context, channelID uuid.UUID, p PacingPolicy) (PacingPolicy, error) {
-	return PacingPolicy{}, errors.New("not implemented")
+	days := p.PreferredDays
+	if days == nil {
+		days = []string{}
+	}
+	out, err := scanPacingPolicy(s.pool.QueryRow(ctx, `
+		INSERT INTO pacing_policy (channel_id, target_uploads_per_week, preferred_days, updated_by_person_id)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (channel_id) DO UPDATE
+			SET target_uploads_per_week = EXCLUDED.target_uploads_per_week,
+				preferred_days = EXCLUDED.preferred_days,
+				updated_at = NOW(),
+				updated_by_person_id = EXCLUDED.updated_by_person_id
+		RETURNING `+pacingPolicyColumns,
+		channelID, p.TargetUploadsPerWeek, days, p.UpdatedByPersonID))
+	if err != nil {
+		return PacingPolicy{}, fmt.Errorf("upsert pacing_policy: %w", err)
+	}
+	return out, nil
 }
 
 func (s pacingStore) Get(ctx context.Context, channelID uuid.UUID) (PacingPolicy, bool, error) {
-	return PacingPolicy{}, false, errors.New("not implemented")
+	p, err := scanPacingPolicy(s.pool.QueryRow(ctx, `SELECT `+pacingPolicyColumns+` FROM pacing_policy WHERE channel_id = $1`, channelID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PacingPolicy{}, false, nil
+		}
+		return PacingPolicy{}, false, fmt.Errorf("get pacing_policy: %w", err)
+	}
+	return p, true, nil
 }
