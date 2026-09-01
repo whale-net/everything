@@ -295,10 +295,17 @@ templ SGCDetail(data SGCDetailPageData) {
 				></div>
 			</div>
 		</div>
-		<!-- Sessions -->
+		<!--
+			Session history (#1531, FR8/FR9): the deployment's previous
+			sessions, newest-first. Ordering is computed once by
+			handleSGCDetail via components.SortSessionsNewestFirst; this
+			template renders data.Sessions in whatever order it was given,
+			it does not re-sort. Visible to every persona (NFR2): no role
+			conditional gates this section.
+		-->
 		<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
 			<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 p-4 border-b border-base-300">
-				<h2 class="text-lg font-semibold text-base-content">Sessions</h2>
+				<h2 class="text-lg font-semibold text-base-content">Session history</h2>
 				<a href={ templ.URL(fmt.Sprintf("/sessions?server_game_config_id=%d", data.SGC.ServerGameConfigId)) } class="btn btn-secondary btn-sm">View All</a>
 			</div>
 			if len(data.Sessions) > 0 {
@@ -316,12 +323,14 @@ templ SGCDetail(data SGCDetailPageData) {
 						<tbody>
 							for _, session := range data.Sessions {
 								<tr class="hover">
-									<td class="text-sm font-mono">{ fmt.Sprintf("%d", session.SessionId) }</td>
+									<td class="text-sm font-mono">
+										<a href={ templ.URL(fmt.Sprintf("/sessions/%d", session.SessionId)) } class="link link-primary">{ fmt.Sprintf("%d", session.SessionId) }</a>
+									</td>
 									<td>
 										@htmxui.Badge(session.Status, statusBadgeVariant(session.Status), htmxui.BadgeSizeSM, true, nil)
 									</td>
-									<td class="text-sm">{ timeAgo(session.StartedAt) }</td>
-									<td class="text-sm">{ timeAgo(session.EndedAt) }</td>
+									<td class="text-sm">{ timeAgo(session.StartedAt) } <span class="text-base-content/60">({ formatTime(session.StartedAt) })</span></td>
+									<td class="text-sm">{ timeAgo(session.EndedAt) } <span class="text-base-content/60">({ formatTime(session.EndedAt) })</span></td>
 									<td class="text-right">
 										<a href={ templ.URL(fmt.Sprintf("/sessions/%d", session.SessionId)) } class="btn btn-secondary btn-sm">View</a>
 									</td>
@@ -331,9 +340,7 @@ templ SGCDetail(data SGCDetailPageData) {
 					</table>
 				</div>
 			} else {
-				<div class="p-12 text-center">
-					<p class="text-base-content/60">No sessions yet for this SGC.</p>
-				</div>
+				@components.EmptyState("No session history", "This deployment has no previous sessions yet.", "", "")
 			}
 		</div>
 		<!--

@@ -124,6 +124,11 @@ func (app *App) handleSGCDetail(w http.ResponseWriter, r *http.Request) {
 		sessions = sessionsResp
 	}
 
+	// #1531 FR8/FR9: the session-history section needs a deterministic
+	// newest-first order rather than whatever order the RPC happened to
+	// return -- sorted once here so the template stays presentation-only.
+	components.SortSessionsNewestFirst(sessions)
+
 	// Compute the gamer-facing status/connect-address block from the
 	// sessions and server already fetched above (NFR1: same source of
 	// truth as the session-detail page, no second RPC). server is nil

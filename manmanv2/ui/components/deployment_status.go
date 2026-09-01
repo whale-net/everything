@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"sort"
 
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
 )
@@ -36,6 +37,25 @@ func LatestSession(sessions []*manmanpb.Session) *manmanpb.Session {
 		}
 	}
 	return latest
+}
+
+// SortSessionsNewestFirst sorts sessions newest-first, in place.
+//
+// This uses the same ordering rule as LatestSession (#1531, FR8/FR9): by
+// started_at descending, tie-broken by session_id descending -- so a
+// deployment's session-history list matches the "latest session" a caller
+// would independently derive via LatestSession, rather than the two
+// disagreeing whenever the RPC's own return order isn't already
+// deterministic. Callers that need the caller's own slice order preserved
+// (e.g. LatestSession itself) must not use this function.
+func SortSessionsNewestFirst(sessions []*manmanpb.Session) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		si, sj := sessions[i], sessions[j]
+		if si.GetStartedAt() != sj.GetStartedAt() {
+			return si.GetStartedAt() > sj.GetStartedAt()
+		}
+		return si.GetSessionId() > sj.GetSessionId()
+	})
 }
 
 // ComputeDeploymentStatus maps a latest session to the two-state gamer-facing rollup.
