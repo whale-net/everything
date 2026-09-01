@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # Compile-only smoke target for the three net-new external Go deps M1
 # needs (Go MCP SDK, YouTube Data API v3, YouTube Analytics API v2) --
@@ -14,4 +14,12 @@ go_library(
         "@org_golang_google_api//youtube/v3:youtube",
         "@org_golang_google_api//youtubeanalytics/v2:youtubeanalytics",
     ],
+)
+
+# Asserts Symbols actually resolves one distinct symbol per vendored
+# package, per the M1 Testing task for this scaffold (#1567).
+go_test(
+    name = "deps_test",
+    srcs = ["deps_smoke_test.go"],
+    embed = [":deps"],
 )
