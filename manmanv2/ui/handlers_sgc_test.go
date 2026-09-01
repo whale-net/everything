@@ -203,6 +203,69 @@ func TestHandleSGCDetail_GetServerFailure_RendersUnavailable(t *testing.T) {
 	}
 }
 
+// sessionHistorySection isolates the "Session history" card's markup from
+// the rest of the rendered page, mirroring
+// manmanv2/ui/pages/sgc_detail_sessions_test.go's helper of the same name.
+// Scoping matters here specifically: the unrelated Danger Zone further
+// down the page also references /sessions/{id}/stop hrefs and session ids.
+func sessionHistorySection(t *testing.T, body string) string {
+	t.Helper()
+	start := strings.Index(body, ">Session history<")
+	if start < 0 {
+		t.Fatalf("expected a 'Session history' heading in rendered body, got %q", body)
+	}
+	end := strings.Index(body[start:], "Danger Zone: intentionally kept")
+	if end < 0 {
+		t.Fatalf("expected a Danger Zone marker after the Session history card, got %q", body)
+	}
+	return body[start : start+end]
+}
+
+// TestHandleSGCDetail_SessionsSortedNewestFirst covers #1531's handler-side
+// ordering requirement: handleSGCDetail must sort ListSessionsWithFilters'
+// result via components.SortSessionsNewestFirst before handing it to the
+// page (NFR1), so sgc_detail.templ -- which does not re-sort, see
+// manmanv2/ui/pages/sgc_detail_sessions_test.go -- renders newest-first
+// regardless of the RPC's own return order. fakeManManAPIClient.ListSessions
+// returns f.sessions verbatim (no sorting of its own), so an out-of-order
+// fixture here only renders in order if the handler did the sorting.
+//
+// mutation-tested (verified red, by hand, then reverted): commenting out
+// the `components.SortSessionsNewestFirst(sessions)` call in
+// handleSGCDetail made this test fail -- session ids rendered in the fake's
+// original (unsorted) order -- while compiling cleanly; reverting restored
+// green.
+func TestHandleSGCDetail_SessionsSortedNewestFirst(t *testing.T) {
+	api := &fakeManManAPIClient{
+		sgc: &manmanpb.ServerGameConfig{
+			ServerGameConfigId: 50,
+			ServerId:           11,
+			Status:             "active",
+		},
+		server: &manmanpb.Server{ServerId: 11, Name: "Theta", HostPublicAddress: "play.example.com"},
+		// Deliberately out of started_at order, as returned by the RPC.
+		sessions: []*manmanpb.Session{
+			{SessionId: 1, StartedAt: 100, Status: "stopped"},
+			{SessionId: 2, StartedAt: 300, Status: "stopped"},
+			{SessionId: 3, StartedAt: 200, Status: "stopped"},
+		},
+	}
+	app := newTestApp(api, &fakeWorkshopServiceClient{})
+
+	body := renderSGCDetail(t, app, "50")
+	section := sessionHistorySection(t, body)
+
+	idx2 := strings.Index(section, "/sessions/2")
+	idx3 := strings.Index(section, "/sessions/3")
+	idx1 := strings.Index(section, "/sessions/1")
+	if idx2 < 0 || idx3 < 0 || idx1 < 0 {
+		t.Fatalf("expected all three session ids to render, got section: %s", section)
+	}
+	if !(idx2 < idx3 && idx3 < idx1) {
+		t.Errorf("expected handleSGCDetail to sort Sessions newest-first (2 [started_at=300], 3 [200], 1 [100]) before rendering, got indices 2=%d 3=%d 1=%d in section: %s", idx2, idx3, idx1, section)
+	}
+}
+
 // TestHandleSGCDetail_PendingSession_RendersStoppedNotRunning is the red/
 // green anchor documented at the top of this file: a pending latest
 // session must roll up to stopped/offline through
