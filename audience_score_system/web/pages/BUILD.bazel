@@ -1,0 +1,10 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "pages",
+    srcs = glob(["*.templ"]),
+    visibility = ["//audience_score_system/web:__pkg__"],
+    deps = [
+        "//audience_score_system/web/components",
+    ],
+)

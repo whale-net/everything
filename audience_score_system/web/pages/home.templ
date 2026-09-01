@@ -1,0 +1,22 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// Home is the minimal signed-in landing page (C1's Scaffold requirement):
+// it shows the signed-in Person. The Implementation phase adds the list of
+// Channels the Person has a live channel_person row for (via
+// store.RoleStore), per this task's Routes section.
+templ Home(data components.LayoutData) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Audience Score System</h1>
+				if data.User != nil {
+					<p>Signed in as { data.User.Email }.</p>
+				}
+			</div>
+		</div>
+	}
+}
