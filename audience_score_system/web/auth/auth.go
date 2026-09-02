@@ -285,3 +285,16 @@ func PersonFromContext(ctx context.Context) *store.Person {
 	p, _ := ctx.Value(personContextKey).(*store.Person)
 	return p
 }
+
+// ContextWithPerson returns a copy of ctx carrying p exactly as
+// RequireSignedIn would have placed it, so PersonFromContext resolves it.
+// This is a TEST-ONLY seam: it lets other packages' handler tests (e.g.
+// web/channel's #1571 CanReconnect-gating and connect/reconnect coverage)
+// exercise PersonFromContext-reading logic without a real signed-in
+// session/DB round trip, mirroring this package's own oauth2Exchanger/
+// idTokenVerifier stub-in-tests seams. Production code must never call
+// this -- only RequireSignedIn ever populates this context value outside
+// tests.
+func ContextWithPerson(ctx context.Context, p *store.Person) context.Context {
+	return context.WithValue(ctx, personContextKey, p)
+}
