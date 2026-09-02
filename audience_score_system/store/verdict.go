@@ -36,6 +36,13 @@ type VerdictStore interface {
 	// rows. Never UPDATEs an existing row (FR12).
 	Append(ctx context.Context, in AppendVerdictInput) (Verdict, error)
 
+	// GetByID returns the Verdict for id (a specific version), or an error
+	// if none exists. Backs save_viability_verdict's WriteRender step
+	// (mcp/tools/verdict.go), which always re-reads from Postgres rather
+	// than caching what Append returned (LB4 -- see
+	// server.RegisterWrite's doc).
+	GetByID(ctx context.Context, id uuid.UUID) (Verdict, error)
+
 	// Current returns the highest-version Verdict for ideaID (i.e.
 	// v_current_verdict's row for that idea), or an error if ideaID has no
 	// verdict yet.
@@ -158,6 +165,25 @@ func (s verdictStore) Append(ctx context.Context, in AppendVerdictInput) (Verdic
 	if err := tx.Commit(ctx); err != nil {
 		return Verdict{}, fmt.Errorf("commit: %w", err)
 	}
+	return v, nil
+}
+
+// GetByID returns the Verdict for id (a specific version), or an error if
+// none exists.
+func (s verdictStore) GetByID(ctx context.Context, id uuid.UUID) (Verdict, error) {
+	v, err := scanVerdict(s.pool.QueryRow(ctx, `SELECT `+verdictColumns+` FROM viability_verdict WHERE id = $1`, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Verdict{}, pgx.ErrNoRows
+		}
+		return Verdict{}, fmt.Errorf("get viability_verdict by id: %w", err)
+	}
+
+	cited, err := citedResearchNoteIDs(ctx, s.pool, v.ID)
+	if err != nil {
+		return Verdict{}, err
+	}
+	v.CitedResearchNoteIDs = cited
 	return v, nil
 }
 

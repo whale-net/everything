@@ -11,6 +11,7 @@ go_library(
     srcs = [
         "research.go",
         "schedule_read.go",
+        "verdict.go",
         "whoami.go",
     ],
     importpath = "github.com/whale-net/everything/audience_score_system/mcp/tools",
@@ -19,6 +20,7 @@ go_library(
         "//audience_score_system/mcp/server",
         "//audience_score_system/store",
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],
 )
