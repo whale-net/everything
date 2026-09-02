@@ -13,5 +13,7 @@ templ_library(
         "//audience_score_system/store",
         "//audience_score_system/web/auth",
         "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
     ],
 )
