@@ -1,16 +1,22 @@
 load("@rules_go//go:def.bzl", "go_library")
 
-# Audience Score System's MCP tool groups, one file per group. This task
-# (#1575) lands only whoami.go, the registry wiring proof; product tools
-# for C4-C7/C9/C10 land in later M1 tasks. See ../server/registry.go's
-# RegisterRead/RegisterWrite.
+# Audience Score System's MCP tool groups, one file per group. whoami.go
+# (#1575) is the registry wiring proof; research.go (#1577) lands the
+# first real product tools: C4's save_research_note/list_research_notes
+# plus create_idea/list_ideas. Remaining C5-C7/C9/C10 tools land in later
+# M1 tasks. See ../server/registry.go's RegisterRead/RegisterWrite.
 go_library(
     name = "tools",
-    srcs = ["whoami.go"],
+    srcs = [
+        "research.go",
+        "whoami.go",
+    ],
     importpath = "github.com/whale-net/everything/audience_score_system/mcp/tools",
     visibility = ["//visibility:public"],
     deps = [
         "//audience_score_system/mcp/server",
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],
 )

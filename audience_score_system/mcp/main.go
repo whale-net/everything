@@ -97,6 +97,7 @@ func run() error {
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterWhoami(reg)
+	tools.RegisterResearch(reg, st)
 
 	handler := server.NewHTTPHandler(srv, st.Credentials())
 
