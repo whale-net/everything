@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # Audience Score System's MCP tool groups, one file per group. whoami.go
 # (#1575) is the registry wiring proof; research.go (#1577) lands the
@@ -20,5 +20,65 @@ go_library(
         "//audience_score_system/store",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
+
+# Pure-Go coverage of validateSourceURL (FR10's rejection/NULL-coercion
+# rule) and toResearchNoteOutput's Cited derivation (research.go) -- no
+# Docker required, runs as part of `bazel test //...`. See
+# research_integration_test.go (this package, "integration" gotag) for the
+# real-Postgres + real-MCP-transport coverage of save_research_note,
+# create_idea, list_research_notes, and list_ideas that this cannot fake.
+go_test(
+    name = "tools_test",
+    srcs = ["research_test.go"],
+    embed = [":tools"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres + real HTTP-transport MCP client integration test for
+# research.go's tool group: save_research_note (write, idempotency-keyed
+# replay/conflict, FR9/FR10 NULL-vs-'' distinction), create_idea
+# (natural-key upsert, including the concurrent-create race resolved by
+# store.IdeaStore.FindOrCreate's Postgres advisory lock), and
+# list_research_notes/list_ideas (Channel-scoping, cited/uncited/idea_id
+# filters, note-count + verdict-exists stats). Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale, mirrored by
+# //audience_score_system/mcp/server:server_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:research_integration_test --test_output=all
+go_test(
+    name = "research_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["research_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
