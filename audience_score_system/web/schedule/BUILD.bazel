@@ -12,7 +12,10 @@ templ_library(
     name = "schedule",
     srcs = glob(["*.templ"]),
     go_srcs = ["schedule.go"],
-    visibility = ["//audience_score_system/web:__pkg__"],
+    visibility = [
+        "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/web:__pkg__",
+    ],
     deps = [
         "//audience_score_system/store",
         "//audience_score_system/web/auth",

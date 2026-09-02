@@ -10,7 +10,10 @@ go_library(
         "session.go",
     ],
     importpath = "github.com/whale-net/everything/audience_score_system/web/auth",
-    visibility = ["//audience_score_system/web:__subpackages__"],
+    visibility = [
+        "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/web:__subpackages__",
+    ],
     deps = [
         "//audience_score_system/store",
         "@com_github_coreos_go_oidc_v3//oidc",
