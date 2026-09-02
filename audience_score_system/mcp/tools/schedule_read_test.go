@@ -45,6 +45,14 @@ func (f fakeSyncStore) ListSchedule(context.Context, uuid.UUID) ([]store.SyncedV
 	return f.videos, f.err
 }
 
+func (f fakeSyncStore) GetByID(context.Context, uuid.UUID) (store.SyncedVideo, error) {
+	return store.SyncedVideo{}, errors.New("fakeSyncStore.GetByID is not used by these tests")
+}
+
+func (f fakeSyncStore) LatestMetricsFor(context.Context, uuid.UUID) (*store.VideoMetrics, error) {
+	return nil, errors.New("fakeSyncStore.LatestMetricsFor is not used by these tests")
+}
+
 func ptrTime(t time.Time) *time.Time { return &t }
 
 // ── withinWindow ─────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "tools",
     srcs = [
+        "matches.go",
         "research.go",
         "schedule_draft.go",
         "schedule_read.go",

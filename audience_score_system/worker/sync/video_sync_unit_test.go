@@ -93,6 +93,17 @@ func (f *fakeSyncStore) byVideoID(channelID uuid.UUID, videoID string) (store.Sy
 	return v, ok
 }
 
+// GetByID/LatestMetricsFor are not exercised by SyncSchedule's tests (this
+// file) -- see outcomes_test.go (issue #1581) for SyncOutcomes' coverage of
+// these.
+func (f *fakeSyncStore) GetByID(context.Context, uuid.UUID) (store.SyncedVideo, error) {
+	return store.SyncedVideo{}, errors.New("fakeSyncStore.GetByID is not used by these tests")
+}
+
+func (f *fakeSyncStore) LatestMetricsFor(context.Context, uuid.UUID) (*store.VideoMetrics, error) {
+	return nil, errors.New("fakeSyncStore.LatestMetricsFor is not used by these tests")
+}
+
 // ── fake tokens.Store ────────────────────────────────────────────────────
 
 type markNeedsReauthCall struct {

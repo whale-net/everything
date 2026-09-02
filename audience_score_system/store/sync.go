@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -23,6 +24,16 @@ type SyncStore interface {
 
 	// ListSchedule returns every SyncedVideo for channelID.
 	ListSchedule(ctx context.Context, channelID uuid.UUID) ([]SyncedVideo, error)
+
+	// GetByID returns the SyncedVideo for id, or pgx.ErrNoRows if none
+	// exists -- issue #1581's list_pending_matches/resolve_pending_match
+	// tools resolve a video_schedule_match's SyncedVideoID through this.
+	GetByID(ctx context.Context, id uuid.UUID) (SyncedVideo, error)
+
+	// LatestMetricsFor returns the most recent VideoMetrics row (by
+	// measured_at) for syncedVideoID, or nil if none has been recorded
+	// yet -- issue #1581's list_pending_matches metrics snapshot.
+	LatestMetricsFor(ctx context.Context, syncedVideoID uuid.UUID) (*VideoMetrics, error)
 }
 
 // syncStore implements SyncStore against `synced_video` and
@@ -108,6 +119,40 @@ func (s syncStore) UpsertMetrics(ctx context.Context, m []VideoMetrics) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// GetByID returns the SyncedVideo for id, or pgx.ErrNoRows if none exists.
+func (s syncStore) GetByID(ctx context.Context, id uuid.UUID) (SyncedVideo, error) {
+	v, err := scanSyncedVideo(s.pool.QueryRow(ctx, `SELECT `+syncedVideoColumns+` FROM synced_video WHERE id = $1`, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return SyncedVideo{}, pgx.ErrNoRows
+		}
+		return SyncedVideo{}, fmt.Errorf("get synced_video by id: %w", err)
+	}
+	return v, nil
+}
+
+// LatestMetricsFor returns the most recent video_metrics row (by
+// measured_at) for syncedVideoID, or (nil, nil) if none has been recorded
+// yet -- never an error for "no metrics yet", since a just-matched video
+// may not have completed its first outcome sync cycle.
+func (s syncStore) LatestMetricsFor(ctx context.Context, syncedVideoID uuid.UUID) (*VideoMetrics, error) {
+	var m VideoMetrics
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, synced_video_id, views, average_view_duration_seconds, average_view_percentage, impressions, impression_ctr, measured_at
+		FROM video_metrics
+		WHERE synced_video_id = $1
+		ORDER BY measured_at DESC
+		LIMIT 1
+	`, syncedVideoID).Scan(&m.ID, &m.SyncedVideoID, &m.Views, &m.AverageViewDurationSeconds, &m.AverageViewPercentage, &m.Impressions, &m.ImpressionCTR, &m.MeasuredAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest video_metrics for synced_video %s: %w", syncedVideoID, err)
+	}
+	return &m, nil
 }
 
 func (s syncStore) ListSchedule(ctx context.Context, channelID uuid.UUID) ([]SyncedVideo, error) {

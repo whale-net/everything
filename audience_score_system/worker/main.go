@@ -159,6 +159,7 @@ func run() error {
 		Channels: st.Channels(),
 		Tokens:   tokenStore,
 		Sync:     st.Sync(),
+		Matches:  st.Matches(),
 		NewYouTubeClient: func(ts oauth2.TokenSource) youtube.Client {
 			return youtube.New(ts)
 		},

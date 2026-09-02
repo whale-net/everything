@@ -17,25 +17,30 @@ import (
 //
 // SyncSchedule is #1576's real implementation (video_sync.go), built on
 // top of this workflow/worker machinery rather than editing it.
-// SyncOutcomes is #1581's, and remains a permanent no-op stub in THIS
-// package until that task lands -- see the package doc comment's
-// "Scaffold status".
+// SyncOutcomes is #1581's real implementation (outcomes.go), same pattern.
 type Activities struct {
 	// Channels backs LoadChannelState's store.Channel lookup and
-	// SyncSchedule's `channel.youtube_channel_id` lookup.
+	// SyncSchedule's/SyncOutcomes' `channel.youtube_channel_id` lookup.
 	Channels store.ChannelStore
 
-	// Tokens resolves channelID's oauth2.TokenSource (SyncSchedule builds
-	// a youtube.Client from it) and marks a Channel needs-reauth when
-	// SyncSchedule sees youtube.ErrRevoked -- see video_sync.go.
+	// Tokens resolves channelID's oauth2.TokenSource (SyncSchedule/
+	// SyncOutcomes build a youtube.Client from it) and marks a Channel
+	// needs-reauth when either sees youtube.ErrRevoked -- see
+	// video_sync.go/outcomes.go.
 	Tokens tokens.Store
 
-	// Sync is SyncSchedule's `synced_video` write target (migration 002).
+	// Sync is SyncSchedule's `synced_video` write target and SyncOutcomes'
+	// `synced_video` read source + `video_metrics` write target (migration
+	// 002).
 	Sync store.SyncStore
 
-	// NewYouTubeClient builds SyncSchedule's youtube.Client for a given
-	// oauth2.TokenSource -- production wiring (../main.go) sets this to
-	// youtube.New; tests substitute a factory returning a
+	// Matches is SyncOutcomes' `video_schedule_match` write target and
+	// matcher-candidate read source (migration 002, issue #1581).
+	Matches store.MatchStore
+
+	// NewYouTubeClient builds SyncSchedule's/SyncOutcomes' youtube.Client
+	// for a given oauth2.TokenSource -- production wiring (../main.go)
+	// sets this to youtube.New; tests substitute a factory returning a
 	// youtube/fake.Client so no test here ever makes a live network call.
 	NewYouTubeClient func(ts oauth2.TokenSource) youtube.Client
 }
@@ -51,12 +56,4 @@ func (a *Activities) LoadChannelState(ctx context.Context, channelID uuid.UUID) 
 		return ChannelState{}, fmt.Errorf("%s: load channel %s: %w", ActivityLoadChannelState, channelID, err)
 	}
 	return ChannelState{ConnectionState: ch.ConnectionState}, nil
-}
-
-// SyncOutcomes is a genuine no-op stub (issue #1574's Scaffold section):
-// it always succeeds without doing anything, so ChannelSyncWorkflow's
-// connected-Channel path is independently buildable and testable before
-// #1581 lands with the real YouTube outcome-sync activity.
-func (a *Activities) SyncOutcomes(ctx context.Context, channelID uuid.UUID) error {
-	return nil
 }
