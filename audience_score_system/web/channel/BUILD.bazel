@@ -15,6 +15,7 @@ go_library(
         "//audience_score_system/store",
         "//audience_score_system/tokens",
         "//audience_score_system/web/auth",
+        "//libs/go/logging",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
         "@org_golang_google_api//option",

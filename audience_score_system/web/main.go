@@ -29,14 +29,27 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/invite"
 	"github.com/whale-net/everything/audience_score_system/web/pages"
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
+	"github.com/whale-net/everything/audience_score_system/worker/sync"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
+	temporallib "github.com/whale-net/everything/libs/go/temporal"
 )
 
 // sessionName is both the DB session store's row-scoping key and the
 // browser cookie name it derives from that argument, mirroring
 // leaflab/ui's sessionName convention.
 const sessionName = "ass_web_session"
+
+// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 20 minutes, inside
+// sync.MinSyncInterval/MaxSyncInterval's 15-30 minute NFR4 band. Must
+// match worker/main.go's identical constant exactly (issue #1614's
+// interval-consistency caveat -- see ../ARCHITECTURE.md "OAuth grants"):
+// sync.ScheduleManager.EnsureSchedule bakes in whichever interval its
+// first caller passes at schedule-creation time and never updates it on a
+// later call, so `web` and `worker` diverging here would silently create
+// schedules at different cadences depending on which binary connects a
+// Channel first.
+const defaultSyncInterval = 20 * time.Minute
 
 // config holds `web`'s configuration, loaded entirely from environment
 // variables -- no config files (see ../ENV.md).
@@ -51,11 +64,32 @@ type config struct {
 	OAuthRedirectBase  string
 	SessionSecret      string
 	TokenEncryptionKey string
+
+	// SyncInterval is FR14/NFR4's per-Channel Temporal sync cadence,
+	// passed to sync.NewScheduleManager (issue #1614) -- see
+	// defaultSyncInterval's doc comment above for why this must match
+	// worker's identically-loaded value.
+	SyncInterval time.Duration
 }
 
-// loadConfig loads configuration from environment variables. See
-// ../ENV.md for the full variable list.
-func loadConfig() config {
+// loadConfig loads configuration from environment variables, failing fast
+// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 15-30
+// minute band (sync.ValidateSyncInterval) -- mirrors worker/main.go's
+// loadConfig exactly, per issue #1614. See ../ENV.md for the full
+// variable list.
+func loadConfig() (config, error) {
+	interval := defaultSyncInterval
+	if raw := os.Getenv("ASS_SYNC_INTERVAL"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return config{}, fmt.Errorf("parse ASS_SYNC_INTERVAL %q: %w", raw, err)
+		}
+		interval = parsed
+	}
+	if err := sync.ValidateSyncInterval(interval); err != nil {
+		return config{}, fmt.Errorf("ASS_SYNC_INTERVAL: %w", err)
+	}
+
 	return config{
 		HTTPAddr:           getEnv("ASS_HTTP_ADDR", ":8080"),
 		DatabaseURL:        os.Getenv("PG_DATABASE_URL"),
@@ -65,7 +99,8 @@ func loadConfig() config {
 		OAuthRedirectBase:  os.Getenv("ASS_OAUTH_REDIRECT_BASE_URL"),
 		SessionSecret:      os.Getenv("ASS_SESSION_SECRET"),
 		TokenEncryptionKey: os.Getenv("ASS_TOKEN_ENCRYPTION_KEY"),
-	}
+		SyncInterval:       interval,
+	}, nil
 }
 
 func getEnv(key, defaultValue string) string {
@@ -92,7 +127,10 @@ func main() {
 }
 
 func run() error {
-	cfg := loadConfig()
+	cfg, err := loadConfig()
+	if err != nil {
+		return err
+	}
 
 	logLevel := slog.LevelInfo
 	switch cfg.LogLevel {
@@ -156,11 +194,34 @@ func run() error {
 		ClientID:     cfg.GoogleClientID,
 		ClientSecret: cfg.GoogleClientSecret,
 	})
+
+	// `web` constructs its own Temporal client and sync.ScheduleManager,
+	// following worker/main.go's exact pattern -- FR14/NFR4, issue #1614:
+	// so a Channel connected (or reconnected) while `worker` is already
+	// running gets its Temporal sync schedule immediately, rather than
+	// waiting for worker's next-startup Reconcile. `web` hard-depends on
+	// Temporal being reachable at startup the same way it already
+	// hard-depends on Postgres above -- fail fast rather than silently
+	// degrade, since a `web` that starts but can never schedule a Channel
+	// would be a confusing partial failure mode.
+	temporalCfg := temporallib.ConfigFromEnv()
+	if temporalCfg.TaskQueue == "" {
+		temporalCfg.TaskQueue = sync.TaskQueue
+	}
+	logger.Info("connecting to temporal", "host_port", temporalCfg.HostPort, "namespace", temporalCfg.Namespace, "task_queue", temporalCfg.TaskQueue)
+	temporalClient, err := temporallib.NewClient(temporalCfg, temporallib.NewLogger("audience-score-system-web"))
+	if err != nil {
+		return fmt.Errorf("connect to temporal: %w", err)
+	}
+	defer temporalClient.Close()
+
+	scheduleManager := sync.NewScheduleManager(temporalClient.ScheduleClient(), st.Channels(), cfg.SyncInterval)
+
 	channelHandler := channel.NewHandler(channel.Config{
 		ClientID:     cfg.GoogleClientID,
 		ClientSecret: cfg.GoogleClientSecret,
 		RedirectURL:  cfg.OAuthRedirectBase + "/oauth/youtube/callback",
-	}, st.Channels(), st.Roles(), tokenStore, sessions)
+	}, st.Channels(), st.Roles(), tokenStore, sessions, scheduleManager)
 
 	// scheduleHandlers is C8's Creator-only approve/un-approve/edit surface
 	// (#1580, FR19/FR20) -- needs only st (store.CanRead/store.CanApprove +

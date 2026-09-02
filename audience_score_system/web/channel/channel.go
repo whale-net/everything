@@ -30,7 +30,10 @@ import (
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/tokens"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
+	"github.com/whale-net/everything/libs/go/logging"
 )
+
+var logger = logging.Get("audience_score_system/web/channel")
 
 // Scopes is the NFR1/LB1 scope set requested at first Channel-connect
 // consent -- see ../../ENV.md "OAuth scopes" for the full LB1 tradeoff
@@ -101,6 +104,17 @@ type channelResolver interface {
 
 // youtubeChannelResolver is channelResolver's real, YouTube-Data-API-backed
 // implementation.
+// scheduleManager is the subset of sync.ScheduleManager's behavior
+// HandleCallback needs -- *sync.scheduleManager (via sync.NewScheduleManager)
+// satisfies this implicitly. Factored out so tests can substitute a stub,
+// mirroring oauth2Exchanger/channelResolver above -- this package
+// deliberately does NOT import worker/sync's package for the interface
+// itself, only main.go constructs the real implementation and passes it in
+// through this narrow interface (see ../main.go).
+type scheduleManager interface {
+	EnsureSchedule(ctx context.Context, channelID uuid.UUID) error
+}
+
 type youtubeChannelResolver struct{}
 
 func (youtubeChannelResolver) ResolveOwnChannel(ctx context.Context, tok *oauth2.Token) (string, string, error) {
@@ -137,14 +151,18 @@ type Handler struct {
 
 	oauth2Config oauth2Exchanger
 	resolver     channelResolver
+	schedules    scheduleManager
 }
 
 // NewHandler wires config, the Channel/Role stores (store.ChannelStore/
 // store.RoleStore -- CanReconnect in particular, FR4/NFR5), the token
-// store (tokens.Store), and the already-established (C1) session manager
-// into a Handler, building the real *oauth2.Config (google.Endpoint, the
-// NFR1/LB1 Scopes above) HandleConnect/HandleReconnect/HandleCallback use.
-func NewHandler(config Config, channels store.ChannelStore, roles store.RoleStore, tokenStore tokens.Store, sessions *auth.SessionManager) *Handler {
+// store (tokens.Store), the already-established (C1) session manager, and
+// a scheduleManager (../main.go constructs the real
+// sync.NewScheduleManager, following worker/main.go's exact Temporal
+// client pattern -- FR14/NFR4, issue #1614) into a Handler, building the
+// real *oauth2.Config (google.Endpoint, the NFR1/LB1 Scopes above)
+// HandleConnect/HandleReconnect/HandleCallback use.
+func NewHandler(config Config, channels store.ChannelStore, roles store.RoleStore, tokenStore tokens.Store, sessions *auth.SessionManager, schedules scheduleManager) *Handler {
 	return &Handler{
 		config:   config,
 		channels: channels,
@@ -158,7 +176,8 @@ func NewHandler(config Config, channels store.ChannelStore, roles store.RoleStor
 			Endpoint:     google.Endpoint,
 			Scopes:       Scopes,
 		},
-		resolver: youtubeChannelResolver{},
+		resolver:  youtubeChannelResolver{},
+		schedules: schedules,
 	}
 }
 
@@ -293,6 +312,18 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Best-effort, non-fatal (FR14/NFR4, issue #1614): the Channel is
+		// already correctly connected in Postgres at this point, so a
+		// transient Temporal hiccup here must degrade to "worker's next
+		// startup Reconcile will pick it up" (previous behavior), not turn
+		// an otherwise-successful connect into a 500 for the user.
+		// EnsureSchedule is idempotent (deterministic sync.ScheduleID), so
+		// this races safely against worker's own Reconcile/EnsureSchedule
+		// call for the same Channel.
+		if err := h.schedules.EnsureSchedule(ctx, ch.ID); err != nil {
+			logger.Warn("failed to ensure temporal sync schedule after connect", "channel_id", ch.ID, "error", err)
+		}
+
 		http.Redirect(w, r, h.sessions.GetNextURL(w, r), http.StatusSeeOther)
 		return
 	}
@@ -317,6 +348,12 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	if err := h.channels.SetConnectionState(ctx, existing.ID, store.ConnectionStateConnected); err != nil {
 		http.Error(w, "failed to update connection state", http.StatusInternalServerError)
 		return
+	}
+
+	// Best-effort, non-fatal -- see the fresh-connect branch above for the
+	// full rationale (FR14/NFR4, issue #1614).
+	if err := h.schedules.EnsureSchedule(ctx, existing.ID); err != nil {
+		logger.Warn("failed to ensure temporal sync schedule after reconnect", "channel_id", existing.ID, "error", err)
 	}
 
 	http.Redirect(w, r, h.sessions.GetNextURL(w, r), http.StatusSeeOther)
