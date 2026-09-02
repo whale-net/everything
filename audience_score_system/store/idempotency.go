@@ -39,17 +39,33 @@ type idempotencyStore struct{ pool *pgxpool.Pool }
 
 var _ Idempotency = idempotencyStore{}
 
-// Do looks up the (tool, personID, key) triple's mcp_idempotency row
-// first: a matching fingerprint replays result_ref without running fn
-// again; a differing fingerprint returns ErrIdempotencyConflict without
-// running fn; no row runs fn and records its result under a new row keyed
-// by the PRIMARY KEY (tool_name, person_id, idempotency_key) -- the same
-// constraint that makes a genuinely concurrent double-insert for the same
-// key fail loudly rather than silently duplicating state.
+// Do serializes concurrent callers for the same (tool, personID, key)
+// triple behind a transaction-scoped Postgres advisory lock
+// (pg_advisory_xact_lock, keyed on a server-side hash of the triple)
+// before looking up mcp_idempotency: a plain SELECT-then-INSERT with no
+// lock lets N concurrent callers all observe "no row" and all run fn,
+// which both breaks the "run exactly once" contract and surfaces the
+// losing INSERTs' raw unique_violation to the caller instead of a replay.
+// The lock is held only for the duration of this one triple's Do call --
+// other tools, other people, or other keys never contend with it -- and
+// is released automatically at transaction end, so a losing caller that
+// blocks on the lock always finds a fully-written row (fn already ran and
+// committed) once it acquires it, with no polling required.
 func (s idempotencyStore) Do(ctx context.Context, tool string, personID uuid.UUID, key, fingerprint string, fn func(context.Context) (uuid.UUID, error)) (uuid.UUID, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("begin idempotency tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		tool+"\x1f"+personID.String()+"\x1f"+key); err != nil {
+		return uuid.Nil, false, fmt.Errorf("acquire idempotency lock: %w", err)
+	}
+
 	var existingFingerprint string
 	var resultRef *uuid.UUID
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT request_fingerprint, result_ref
 		FROM mcp_idempotency
 		WHERE tool_name = $1 AND person_id = $2 AND idempotency_key = $3
@@ -74,11 +90,15 @@ func (s idempotencyStore) Do(ctx context.Context, tool string, personID uuid.UUI
 		return uuid.Nil, false, err
 	}
 
-	if _, err := s.pool.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO mcp_idempotency (tool_name, person_id, idempotency_key, request_fingerprint, result_ref)
 		VALUES ($1, $2, $3, $4, $5)
 	`, tool, personID, key, fingerprint, result); err != nil {
 		return uuid.Nil, false, fmt.Errorf("record mcp_idempotency: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, false, fmt.Errorf("commit idempotency tx: %w", err)
 	}
 
 	return result, false, nil
