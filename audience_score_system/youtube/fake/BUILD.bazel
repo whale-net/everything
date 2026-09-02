@@ -1,0 +1,13 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# In-memory youtube.Client double, fully working from Scaffold on (unlike
+# the rest of //audience_score_system/youtube) -- see fake.go's package
+# doc comment. Consumers (#1574/#1576/#1581) depend on this to test
+# without a live network call.
+go_library(
+    name = "fake",
+    srcs = ["fake.go"],
+    importpath = "github.com/whale-net/everything/audience_score_system/youtube/fake",
+    visibility = ["//visibility:public"],
+    deps = ["//audience_score_system/youtube"],
+)

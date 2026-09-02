@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# The sole point of contact with google.golang.org/api/youtube/v3 and
+# youtubeanalytics/v2 anywhere in this repo -- see client.go's package doc
+# comment. Scaffold only (issue #1573): every Client method is a stub
+# returning errNotImplemented. Real request/pagination/classification
+# logic against the vendored clients (see //audience_score_system/deps)
+# lands in the Implementation phase.
+go_library(
+    name = "youtube",
+    srcs = [
+        "client.go",
+        "errors.go",
+        "metrics.go",
+        "schedule.go",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/youtube",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//audience_score_system/store",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)

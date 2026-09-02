@@ -50,6 +50,16 @@ Channel-level OAuth token flow (C2). See
 `//audience_score_system/deps` for the compile-only smoke target proving
 all three packages resolve under Bazel.
 
+`//audience_score_system/youtube` (`Client`, #1573) is the sole point of
+contact with those two vendored clients — quota handling, error
+classification (`ErrRevoked`/`ErrQuotaExceeded`/`ErrTransient`/
+`ErrPermanent`), and revoked-credential detection (FR4) live here once, so
+`mcp` and `worker` never import `google.golang.org/api/...` directly. The
+only accepted exception is `web/channel`'s own inline
+`channels.list?mine=true` resolver (#1571), which `youtube.Client`'s
+`ChannelInfo` may absorb later. `youtube/fake` is an in-memory `Client`
+double consumers use in tests with no network call.
+
 ## Component map
 
 | Component | Binary | `release_app` identity | Responsibility |
