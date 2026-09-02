@@ -18,7 +18,7 @@ server precedent used elsewhere in the repo.
 | `migrate/` | `migration` | `job` | Migration 001 (identity core, #1568) applied |
 | `web/` | `web` | `external-api` | Scaffold only (#1570): binary + health endpoint + UI shell build; Google OAuth sign-in/sign-up not yet implemented |
 | `mcp/` | `mcp` | `external-api` | Not yet built |
-| `worker/` | `worker` | `worker` | Not yet built |
+| `worker/` | `worker` | `worker` | Scaffold only (#1574): binary + `sync.ChannelSyncWorkflow`/`SyncActivities`/`ScheduleManager` machinery build; real `LoadChannelState`/`ScheduleManager` logic and the #1576/#1581 sync activities not yet implemented |
 
 All four share the `audience-score-system` `release_app` domain, producing
 images `audience-score-system-migration`, `-web`, `-mcp`, `-worker`.
@@ -49,8 +49,8 @@ bazel run //audience_score_system/mcp
 bazel run //audience_score_system/worker
 ```
 
-Today `migrate/` and `web/` exist (`web` is scaffold-only — sign-in isn't
-implemented yet, see the table above):
+Today `migrate/`, `web/`, `mcp/`, and `worker/` all exist as buildable
+binaries (see the table above for what's scaffold-only vs. real):
 
 ```bash
 bazel run //audience_score_system/migrate:migration

@@ -174,7 +174,7 @@ caller or session violates LB4 even if it "only" affects performance.
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
 | `web` | `audience_score_system/web` (scaffold only, #1570) | `web` (external-api) | The **only** UI surface. Limited to C1/C2/C3/C8 (see "NFR3 interface allocation" below). |
 | `mcp` | `audience_score_system/mcp` (scaffold only, #1575) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10): research notes, viability verdicts, schedule sync reads, schedule draft proposals, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
-| `worker` | `audience_score_system/worker` (not yet built) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. |
+| `worker` | `audience_score_system/worker` (scaffold only, #1574) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
 All four share the `audience-score-system` `release_app` domain, so images
@@ -250,16 +250,23 @@ implementation detail to slip in under an existing task.
 
 ## Temporal: no scheduled-workflow helper yet
 
-`//libs/go/temporal` (the shared Go bootstrap `worker` will use) has no
-equivalent to `friendly_computing_machine`'s hand-rolled
-`AbstractScheduleWorkflow` (`temporal/base.py`) — the only in-repo
-*scheduled*-workflow precedent, and it's Python/FCM-specific, not a shared
-library. This is a gap `worker` inherits from `product/01-current-state.md`
-and knowingly accepts for M1: the per-Channel sync schedule (NFR4, ~15-30
-minute interval) will be built directly against the Temporal Go SDK's
-native `ScheduleClient`, not a repo-shared helper. Worth revisiting if a
-second Go scheduled-workflow consumer shows up — at that point the
-duplication is worth generalizing into `//libs/go/temporal`.
+`//libs/go/temporal` (the shared Go bootstrap `worker` uses for its
+client/worker construction) has no equivalent to
+`friendly_computing_machine`'s hand-rolled `AbstractScheduleWorkflow`
+(`temporal/base.py`) — the only in-repo *scheduled*-workflow precedent, and
+it's Python/FCM-specific, not a shared library. This is a gap `worker`
+inherits from `product/01-current-state.md` and knowingly accepts for M1:
+issue #1574 built the per-Channel sync schedule (NFR4, ~15-30 minute
+interval) directly against the Temporal Go SDK's native `ScheduleClient`
+(`audience_score_system/worker/sync.ScheduleManager`, wrapping
+`client.Client.ScheduleClient()`), not a repo-shared helper. `ScheduleManager`
+is a small, three-method interface (`EnsureSchedule`/`RemoveSchedule`/
+`Reconcile`) with nothing app-registry-specific about its shape — worth
+promoting into `//libs/go/temporal` if a second Go scheduled-workflow
+consumer shows up; at that point the duplication is worth generalizing.
+Until then it stays local to `worker/sync`, since a one-off abstraction
+extracted from a single caller tends to guess wrong about what a second
+caller will actually need.
 
 ## Data model
 
