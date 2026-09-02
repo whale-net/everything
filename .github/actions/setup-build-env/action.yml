@@ -77,15 +77,9 @@ runs:
           HAS_REMOTE_CACHE=true
         fi
 
-        # TEMPORARILY DISABLED (see issue #1596): the remote asset downloader
-        # at whalenet.dev is serving a corrupted/empty blob for the Go SDK
-        # archive, breaking Gazelle's Go SDK bootstrap on every CI run.
-        # GitHub Actions cache layers were ruled out (both busted, failure
-        # persisted). Re-enable once the server-side cache is confirmed
-        # healthy -- see issue #1596 for the re-enable steps.
-        # if [[ -n "$DOWNLOADER_URL" ]]; then
-        #   HAS_REMOTE_DOWNLOADER=true
-        # fi
+        if [[ -n "$DOWNLOADER_URL" ]]; then
+          HAS_REMOTE_DOWNLOADER=true
+        fi
 
         if [[ "$HAS_REMOTE_CACHE" = "true" || "$HAS_REMOTE_DOWNLOADER" = "true" ]]; then
           # Initialize .bazelrc.remote
