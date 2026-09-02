@@ -20,6 +20,13 @@ type ChannelStore interface {
 	// GetByID returns the Channel for id, or an error if none exists.
 	GetByID(ctx context.Context, id uuid.UUID) (Channel, error)
 
+	// GetByYouTubeChannelID returns the Channel for youtubeChannelID
+	// (`channel.youtube_channel_id`, UNIQUE), or pgx.ErrNoRows if no
+	// Channel has ever connected that YouTube channel -- the
+	// Channel-connect callback's (#1571) "does this Channel already
+	// exist" check.
+	GetByYouTubeChannelID(ctx context.Context, youtubeChannelID string) (Channel, error)
+
 	// SetConnectionState updates connection_state and stamps
 	// connection_state_changed_at (FR4).
 	SetConnectionState(ctx context.Context, channelID uuid.UUID, state ConnectionState) error
@@ -90,6 +97,17 @@ func (s channelStore) GetByID(ctx context.Context, id uuid.UUID) (Channel, error
 
 // SetConnectionState errors if channelID does not exist, rather than
 // silently no-op'ing on a zero-row UPDATE (FR4).
+func (s channelStore) GetByYouTubeChannelID(ctx context.Context, youtubeChannelID string) (Channel, error) {
+	ch, err := scanChannel(s.pool.QueryRow(ctx, `SELECT `+channelColumns+` FROM channel WHERE youtube_channel_id = $1`, youtubeChannelID))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Channel{}, pgx.ErrNoRows
+		}
+		return Channel{}, fmt.Errorf("get channel by youtube channel id: %w", err)
+	}
+	return ch, nil
+}
+
 func (s channelStore) SetConnectionState(ctx context.Context, channelID uuid.UUID, state ConnectionState) error {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE channel

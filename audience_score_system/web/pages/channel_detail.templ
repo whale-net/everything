@@ -1,0 +1,61 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// connectionStateLabel renders a human-readable label for
+// store.ConnectionState -- "Connected" / "Needs re-authentication" (FR4).
+func connectionStateLabel(state store.ConnectionState) string {
+	switch state {
+	case store.ConnectionStateConnected:
+		return "Connected"
+	case store.ConnectionStateNeedsReauth:
+		return "Needs re-authentication"
+	default:
+		return string(state)
+	}
+}
+
+// connectionStateBadgeClass picks a daisyUI badge color matching
+// connectionStateLabel -- success (green) when connected, warning (amber)
+// when needs_reauth.
+func connectionStateBadgeClass(state store.ConnectionState) string {
+	if state == store.ConnectionStateConnected {
+		return "badge badge-success"
+	}
+	return "badge badge-warning"
+}
+
+// ChannelDetail is a Channel's detail page (C2, FR4): shows its
+// connection_state, and -- for a Creator only (canReconnect, resolved via
+// store.CanReconnect / NFR5) -- a reconnect affordance that starts the
+// same YouTube consent flow as the initial connect
+// (POST /channels/{id}/reconnect, web/channel.Handler.HandleReconnect).
+templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect bool) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title }</h1>
+				<p>
+					Status:
+					<span class={ connectionStateBadgeClass(ch.ConnectionState) }>
+						{ connectionStateLabel(ch.ConnectionState) }
+					</span>
+				</p>
+				if canReconnect {
+					<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/reconnect") }>
+						<button type="submit" class="btn btn-primary">
+							if ch.ConnectionState == store.ConnectionStateNeedsReauth {
+								Reconnect
+							} else {
+								Re-authenticate
+							}
+						</button>
+					</form>
+				}
+			</div>
+		</div>
+	}
+}
