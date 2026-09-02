@@ -1,0 +1,22 @@
+load("//tools:templ.bzl", "templ_library")
+
+# Creator-only schedule approval (C8: FR19, FR20) -- handlers (schedule.go)
+# and templ views (views.templ) in one package, see schedule.go's package
+# doc comment for why they are not split across a components/pages sibling
+# pair like web/pages (mirrors web/invite's own rationale). Postgres-backed
+# handler coverage (Testing phase, issue #1580) lands as
+# schedule_integration_test.go, mirroring
+# //audience_score_system/web/invite:invite_integration_test.
+templ_library(
+    name = "schedule",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["schedule.go"],
+    visibility = ["//audience_score_system/web:__pkg__"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)

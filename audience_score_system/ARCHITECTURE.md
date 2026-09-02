@@ -172,7 +172,7 @@ caller or session violates LB4 even if it "only" affects performance.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (scaffold only, #1570) | `web` (external-api) | The **only** UI surface. Limited to C1/C2/C3/C8 (see "NFR3 interface allocation" below). |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule approval #1580) | `web` (external-api) | The **only** UI surface. Limited to C1/C2/C3/C8 (see "NFR3 interface allocation" below). |
 | `mcp` | `audience_score_system/mcp` (scaffold only, #1575) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10): research notes, viability verdicts, schedule sync reads, schedule draft proposals, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (scaffold only, #1574) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |

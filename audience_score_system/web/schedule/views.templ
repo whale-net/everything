@@ -1,0 +1,137 @@
+package schedule
+
+import (
+	"strconv"
+
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// stateLabel renders a human-readable label for store.ScheduleState,
+// mirroring pages.connectionStateLabel's convention.
+func stateLabel(s store.ScheduleState) string {
+	if s == store.ScheduleStateCommitted {
+		return "Committed"
+	}
+	return "Draft"
+}
+
+// stateBadgeClass picks a daisyUI badge color matching stateLabel.
+func stateBadgeClass(s store.ScheduleState) string {
+	if s == store.ScheduleStateCommitted {
+		return "badge badge-success"
+	}
+	return "badge badge-ghost"
+}
+
+// youtubeWatchURL builds a watch URL for a published video's id -- the
+// only place `web` constructs a YouTube URL (see schedule.go's package
+// doc comment); videoID is always a value this package itself read back
+// from store.ScheduleEntryDetail.PublishedVideoID, never unsanitized user
+// input.
+func youtubeWatchURL(videoID string) string {
+	return "https://www.youtube.com/watch?v=" + videoID
+}
+
+// List is the Channel schedule page (C8, FR19/FR20): every
+// store.ScheduleEntryDetail for ch, in proposed_publish_at order.
+// canApprove (store.CanApprove -- Creator only, NFR5) gates whether
+// entryActions renders at all; an Analyst (canApprove == false) sees a
+// read-only list with no approve/un-approve/edit forms anywhere in the
+// markup.
+templ List(data components.LayoutData, ch store.Channel, entries []store.ScheduleEntryDetail, canApprove bool) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title } schedule</h1>
+				if len(entries) == 0 {
+					<p class="text-base-content/70">No schedule drafts yet.</p>
+				}
+				for _, e := range entries {
+					@entryCard(e, canApprove)
+				}
+			</div>
+		</div>
+	}
+}
+
+// entryCard renders one ScheduleEntryDetail: idea title, its bound
+// verdict version/value/reasoning (LB3's load-bearing link, never just
+// the idea's latest verdict), proposed slot, state badge, approver (when
+// set), the published video link (when e.Published), and -- for a Creator
+// only -- entryActions.
+templ entryCard(e store.ScheduleEntryDetail, canApprove bool) {
+	<div class="border border-base-300 rounded p-4 mb-2">
+		<div class="flex justify-between items-start gap-4">
+			<div>
+				<h2 class="font-semibold">{ e.IdeaTitle }</h2>
+				<p class="text-sm text-base-content/70">
+					Verdict v{ strconv.Itoa(e.VerdictVersion) }: { string(e.Verdict) } -- { e.VerdictReasoning }
+				</p>
+				<p class="text-sm">
+					Proposed: { e.Entry.ProposedPublishAt.UTC().Format("2006-01-02 15:04 UTC") }
+				</p>
+				if e.ApproverName != "" {
+					<p class="text-sm text-base-content/70">Approved by { e.ApproverName }</p>
+				}
+				if e.Published {
+					<p class="text-sm">
+						Published:
+						<a
+							class="link"
+							href={ templ.URL(youtubeWatchURL(e.PublishedVideoID)) }
+							target="_blank"
+							rel="noopener"
+						>
+							{ e.PublishedVideoTitle }
+						</a>
+					</p>
+				}
+			</div>
+			<span class={ stateBadgeClass(e.Entry.State) }>{ stateLabel(e.Entry.State) }</span>
+		</div>
+		if canApprove {
+			@entryActions(e)
+		}
+	</div>
+}
+
+// entryActions renders the Creator-only approve/un-approve/edit
+// affordances for one entry, honoring FR20's published freeze
+// (e.Published): once true, neither un-approve nor edit is rendered at
+// all -- only an explanation -- since the server (schedule.go's mutate,
+// via store.ErrScheduleEntryPublished) would 409 either request anyway.
+// This is presentation only; the server-side check is what actually
+// enforces the freeze (see schedule.go's package doc comment).
+templ entryActions(e store.ScheduleEntryDetail) {
+	<div class="card-actions justify-end mt-2 items-center gap-2">
+		if e.Published {
+			<p class="text-xs text-base-content/50">
+				This entry is frozen -- its video has already published, so it can
+				no longer be un-approved or edited.
+			</p>
+		} else if e.Entry.State == store.ScheduleStateDraft {
+			<form method="post" action={ templ.URL("/schedule/" + e.Entry.ID.String() + "/approve") }>
+				<button type="submit" class="btn btn-primary btn-sm">Approve</button>
+			</form>
+			<form
+				method="post"
+				action={ templ.URL("/schedule/" + e.Entry.ID.String() + "/edit") }
+				class="flex gap-2 items-center"
+			>
+				<input
+					type="datetime-local"
+					name="proposed_publish_at"
+					class="input input-bordered input-sm"
+					value={ e.Entry.ProposedPublishAt.UTC().Format(proposedPublishAtInputFormat) }
+					required
+				/>
+				<button type="submit" class="btn btn-secondary btn-sm">Save slot</button>
+			</form>
+		} else {
+			<form method="post" action={ templ.URL("/schedule/" + e.Entry.ID.String() + "/unapprove") }>
+				<button type="submit" class="btn btn-secondary btn-sm">Un-approve</button>
+			</form>
+		}
+	</div>
+}
