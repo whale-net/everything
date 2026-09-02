@@ -8,9 +8,9 @@ import (
 // Home is the signed-in landing page (C1): it shows the signed-in Person
 // and lists every Channel they currently have a live (valid_to IS NULL)
 // channel_person row for, via store.RoleStore.ChannelsForPerson (see
-// web/main.go's handleHome). Channel *creation* (C2) is out of scope for
-// this task (#1571) -- in M1 up to and including this task, `channels` is
-// always empty for every Person, since nothing yet inserts a channel row.
+// web/main.go's handleHome), each linking to its detail page
+// (web/pages.ChannelDetail). "Connect a Channel" starts the Channel-connect
+// OAuth grant (C2, #1571: web/channel.Handler.HandleConnect).
 templ Home(data components.LayoutData, channels []store.Channel) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
@@ -24,10 +24,13 @@ templ Home(data components.LayoutData, channels []store.Channel) {
 				} else {
 					<ul class="list-disc list-inside">
 						for _, ch := range channels {
-							<li>{ ch.Title }</li>
+							<li><a class="link" href={ templ.URL("/channels/" + ch.ID.String()) }>{ ch.Title }</a></li>
 						}
 					</ul>
 				}
+				<div>
+					<a href="/channels/connect" class="btn btn-primary">Connect a Channel</a>
+				</div>
 			</div>
 		</div>
 	}

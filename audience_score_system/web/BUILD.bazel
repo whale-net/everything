@@ -22,10 +22,10 @@ go_library(
         "//audience_score_system/web/invite",
         "//audience_score_system/web/pages",
         "//libs/go/db",
-        "//libs/go/htmxbase",
-        "//libs/go/htmxui",
         "//libs/go/logging",
         "@com_github_a_h_templ//:templ",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
 )
