@@ -237,6 +237,18 @@ func (a *Authenticator) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// NewForTests returns an *Authenticator wired with only persons and
+// sessions -- no Google OAuth2/OIDC configuration -- so other web
+// sub-packages' tests (e.g. web/invite, web/channel) can exercise
+// RequireSignedIn against a real session (real cookie, real store.Person)
+// without live Google calls or NewAuthenticator's network OIDC discovery.
+// Callers of the returned *Authenticator must never call HandleLogin or
+// HandleCallback on it -- those two flows are covered exclusively by this
+// package's own tests (auth_test.go/auth_integration_test.go).
+func NewForTests(persons store.PersonStore, sessions *SessionManager) *Authenticator {
+	return &Authenticator{persons: persons, sessions: sessions}
+}
+
 // RequireSignedIn is middleware that resolves the caller's session cookie
 // to a store.Person and places it on the request context (readable via
 // PersonFromContext), redirecting to /login when no valid session exists
@@ -272,4 +284,17 @@ func (a *Authenticator) RequireSignedIn(next http.HandlerFunc) http.HandlerFunc 
 func PersonFromContext(ctx context.Context) *store.Person {
 	p, _ := ctx.Value(personContextKey).(*store.Person)
 	return p
+}
+
+// ContextWithPerson returns a copy of ctx carrying p exactly as
+// RequireSignedIn would have placed it, so PersonFromContext resolves it.
+// This is a TEST-ONLY seam: it lets other packages' handler tests (e.g.
+// web/channel's #1571 CanReconnect-gating and connect/reconnect coverage)
+// exercise PersonFromContext-reading logic without a real signed-in
+// session/DB round trip, mirroring this package's own oauth2Exchanger/
+// idTokenVerifier stub-in-tests seams. Production code must never call
+// this -- only RequireSignedIn ever populates this context value outside
+// tests.
+func ContextWithPerson(ctx context.Context, p *store.Person) context.Context {
+	return context.WithValue(ctx, personContextKey, p)
 }
