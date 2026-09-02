@@ -138,11 +138,9 @@ func run() error {
 	// Reconcile ensures a schedule exists for every already-connected
 	// Channel, per ../ARCHITECTURE.md/issue #1574's Implementation scope:
 	// "a Channel connected while the worker was down still gets a
-	// schedule". Non-fatal at startup -- Reconcile (and EnsureSchedule
-	// generally) is unimplemented at Scaffold time (see sync.ScheduleManager's
-	// doc comment), and even once implemented, a reconcile hiccup should
-	// not prevent the worker from starting and processing already-scheduled
-	// Channels.
+	// schedule". Non-fatal at startup -- a reconcile hiccup (e.g. Temporal
+	// transiently unreachable) should not prevent the worker from starting
+	// and processing already-scheduled Channels.
 	if err := scheduleManager.Reconcile(ctx); err != nil {
 		logger.Warn("schedule reconcile failed at startup", "error", err)
 	}

@@ -2,11 +2,16 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"hash/fnv"
 	"time"
+
+	enumspb "go.temporal.io/api/enums/v1"
 
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/temporal"
 
 	"github.com/whale-net/everything/audience_score_system/store"
 )
@@ -51,12 +56,6 @@ func ScheduleID(channelID uuid.UUID) string {
 // AbstractScheduleWorkflow, which does not transfer" -- see
 // ../../ARCHITECTURE.md for whether this is worth promoting to
 // //libs/go/temporal later).
-//
-// EnsureSchedule/RemoveSchedule/Reconcile are all unimplemented at
-// Scaffold time -- issue #1574's own Implementation phase adds the real
-// ScheduleSpec (interval + per-Channel jitter/offset so N Channels don't
-// stampede Google at the same instant), overlap-skip policy, and
-// idempotent create-or-update logic described there.
 type ScheduleManager interface {
 	// EnsureSchedule idempotently creates (or, on a later call, leaves
 	// alone) channelID's schedule -- ScheduleID(channelID) is deterministic,
@@ -98,28 +97,83 @@ func NewScheduleManager(schedules client.ScheduleClient, channels store.ChannelS
 	return &scheduleManager{Schedules: schedules, Channels: channels, Interval: interval}
 }
 
-// EnsureSchedule is unimplemented at scaffold time. See ScheduleManager's
-// doc comment and issue #1574's Implementation scope: the real
-// implementation calls Schedules.Create with a ScheduleWorkflowAction
-// targeting ChannelSyncWorkflow on TaskQueue, an interval ScheduleSpec
-// derived from m.Interval plus a per-Channel jitter/offset, and
-// SCHEDULE_OVERLAP_POLICY_SKIP -- tolerating (as success) the
-// already-exists error Temporal returns when ScheduleID(channelID) is
-// already in use.
+// channelScheduleOffset returns a deterministic offset in [0, interval) for
+// channelID, derived from an FNV-1a hash of the Channel's UUID bytes. Used
+// as ScheduleIntervalSpec.Offset so N Channels sharing the same interval
+// don't all fire at the same instant and stampede Google (issue #1574's
+// Implementation scope) -- deterministic (not random) so repeated
+// EnsureSchedule calls for the same Channel always compute the same
+// ScheduleSpec, keeping Update-free idempotency simple.
+func channelScheduleOffset(channelID uuid.UUID, interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(channelID[:]) // hash.Hash.Write never errors
+	return time.Duration(h.Sum64() % uint64(interval))
+}
+
+// EnsureSchedule idempotently creates channelID's schedule: a
+// ScheduleWorkflowAction targeting ChannelSyncWorkflow on TaskQueue, an
+// interval ScheduleSpec of m.Interval with a per-Channel jitter offset
+// (channelScheduleOffset), and SCHEDULE_OVERLAP_POLICY_SKIP so a slow run
+// never stacks concurrent runs for the same Channel. Temporal's
+// already-exists response (temporal.ErrScheduleAlreadyRunning) is treated
+// as success, not an error -- see ScheduleManager's doc comment.
 func (m *scheduleManager) EnsureSchedule(ctx context.Context, channelID uuid.UUID) error {
-	return unimplemented("EnsureSchedule")
+	_, err := m.Schedules.Create(ctx, client.ScheduleOptions{
+		ID: ScheduleID(channelID),
+		Spec: client.ScheduleSpec{
+			Intervals: []client.ScheduleIntervalSpec{{
+				Every:  m.Interval,
+				Offset: channelScheduleOffset(channelID, m.Interval),
+			}},
+		},
+		Action: &client.ScheduleWorkflowAction{
+			Workflow:  ChannelSyncWorkflow,
+			Args:      []interface{}{ChannelSyncInput{ChannelID: channelID}},
+			TaskQueue: TaskQueue,
+		},
+		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+	})
+	if err != nil {
+		if errors.Is(err, temporal.ErrScheduleAlreadyRunning) {
+			return nil
+		}
+		return fmt.Errorf("ensure schedule for channel %s: %w", channelID, err)
+	}
+	return nil
 }
 
-// RemoveSchedule is unimplemented at scaffold time. See ScheduleManager's
-// doc comment and issue #1574's Implementation scope: the real
-// implementation calls Schedules.GetHandle(ScheduleID(channelID)).Delete.
+// RemoveSchedule deletes channelID's schedule via
+// Schedules.GetHandle(ScheduleID(channelID)).Delete -- see ScheduleManager's
+// doc comment for why this is NOT called for a needs_reauth Channel.
 func (m *scheduleManager) RemoveSchedule(ctx context.Context, channelID uuid.UUID) error {
-	return unimplemented("RemoveSchedule")
+	if err := m.Schedules.GetHandle(ctx, ScheduleID(channelID)).Delete(ctx); err != nil {
+		return fmt.Errorf("remove schedule for channel %s: %w", channelID, err)
+	}
+	return nil
 }
 
-// Reconcile is unimplemented at scaffold time. See ScheduleManager's doc
-// comment and issue #1574's Implementation scope: the real implementation
-// lists m.Channels.ListConnected and calls m.EnsureSchedule for each.
+// Reconcile ensures a schedule exists for every m.Channels.ListConnected
+// Channel -- run once at worker startup (../main.go) so a Channel
+// connected while the worker was down still gets a schedule. Does not
+// stop at the first failing Channel: it attempts every Channel and joins
+// any errors, so one bad EnsureSchedule call can't mask the rest.
 func (m *scheduleManager) Reconcile(ctx context.Context) error {
-	return unimplemented("Reconcile")
+	channels, err := m.Channels.ListConnected(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile: list connected channels: %w", err)
+	}
+
+	var errs []error
+	for _, ch := range channels {
+		if err := m.EnsureSchedule(ctx, ch.ID); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("reconcile: %w", errors.Join(errs...))
+	}
+	return nil
 }
