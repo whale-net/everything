@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 # Audience Score System's MCP tool groups, one file per group. This task
 # (#1575) lands only whoami.go, the registry wiring proof; product tools
@@ -17,5 +17,68 @@ go_library(
         "//audience_score_system/store",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
+
+# Pure-Go coverage of get_channel_schedule's withinWindow from/to semantics
+# and getChannelScheduleHandler's include_drafts filtering (schedule_read.go,
+# issue #1576), driven directly against an in-memory store.SyncStore fake --
+# no Docker required, runs as part of `bazel test //...`. See
+# schedule_read_integration_test.go ("integration" gotag) for the real
+# end-to-end Channel-scoping coverage this cannot fake.
+go_test(
+    name = "tools_test",
+    srcs = ["schedule_read_test.go"],
+    embed = [":tools"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres + real HTTP-transport MCP client integration test for
+# get_channel_schedule (schedule_read.go, issue #1576): Channel-scoping
+# (creator + analyst read, unassociated Person denied -- store.CanRead via
+# server.RegisterRead), include_drafts default-true/explicit-false
+# filtering, from/to window filtering, and an empty Channel returning an
+# empty list rather than an error -- all against the real embedded schema
+# (//audience_score_system/migrate/schema) and a real *mcp.Server hosted
+# over HTTP, mirroring
+# //audience_score_system/mcp/server:server_integration_test's pattern.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale. `# keep` tells a later `bazel run
+# //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:schedule_read_integration_test --test_output=all
+go_test(
+    # keep
+    name = "schedule_read_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["schedule_read_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
     ],
 )
