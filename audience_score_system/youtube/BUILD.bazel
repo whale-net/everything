@@ -2,10 +2,10 @@ load("@rules_go//go:def.bzl", "go_library")
 
 # The sole point of contact with google.golang.org/api/youtube/v3 and
 # youtubeanalytics/v2 anywhere in this repo -- see client.go's package doc
-# comment. Scaffold only (issue #1573): every Client method is a stub
-# returning errNotImplemented. Real request/pagination/classification
-# logic against the vendored clients (see //audience_score_system/deps)
-# lands in the Implementation phase.
+# comment. Real ListSchedule/Metrics/ChannelInfo request/pagination/error-
+# classification logic against the vendored clients (see
+# //audience_score_system/deps) lands here (issue #1573's Implementation
+# phase).
 go_library(
     name = "youtube",
     srcs = [
@@ -18,6 +18,11 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//audience_score_system/store",
+        "//libs/go/logging",
+        "@org_golang_google_api//googleapi",
+        "@org_golang_google_api//option",
+        "@org_golang_google_api//youtube/v3:youtube",
+        "@org_golang_google_api//youtubeanalytics/v2:youtubeanalytics",
         "@org_golang_x_oauth2//:oauth2",
     ],
 )
