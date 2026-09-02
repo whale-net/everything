@@ -35,12 +35,17 @@ go_test(
     srcs = [
         "activities_test.go",
         "schedule_test.go",
+        "video_sync_unit_test.go",
         "workflow_test.go",
     ],
     embed = [":sync"],
     deps = [
         "//audience_score_system/store",
+        "//audience_score_system/tokens",
+        "//audience_score_system/youtube",
+        "//audience_score_system/youtube/fake",
         "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//mock",
         "@com_github_stretchr_testify//require",
         "@io_temporal_go_api//enums/v1:enums",
@@ -48,5 +53,55 @@ go_test(
         "@io_temporal_go_sdk//client",
         "@io_temporal_go_sdk//temporal",
         "@io_temporal_go_sdk//testsuite",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
+
+# Real Postgres integration test for SyncSchedule (video_sync.go, issue
+# #1576): the mixed-fixture upsert mapping, double-run idempotency (no row
+# churn beyond last_synced_at), a changed-title update-in-place, a
+# disappeared video's row retention, and the ErrRevoked -> MarkNeedsReauth
+# + non-retryable RevokedErrorType / ErrQuotaExceeded+ErrTransient ->
+# retryable classifications -- all against the real embedded schema
+# through 002_research_schedule_outcome
+# (//audience_score_system/migrate/schema), driven by a youtube/fake.Client
+# so no test here ever makes a live YouTube API call. Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale, mirrored by
+# //audience_score_system/tokens:tokens_integration_test. `# keep` tells a
+# later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/worker/sync:sync_integration_test --test_output=all
+go_test(
+    # keep
+    name = "sync_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["video_sync_test.go"],
+    embed = [":sync"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/tokens",
+        "//audience_score_system/youtube",
+        "//audience_score_system/youtube/fake",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_temporal_go_sdk//temporal",
+        "@org_golang_x_oauth2//:oauth2",
     ],
 )
