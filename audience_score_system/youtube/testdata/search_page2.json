@@ -1,0 +1,6 @@
+{
+  "items": [
+    { "id": { "kind": "youtube#video", "videoId": "vid-public" } },
+    { "id": { "kind": "youtube#video", "videoId": "vid-unlisted" } }
+  ]
+}
