@@ -300,6 +300,23 @@ signal turns out to be needed for FR18 collision detection or a UI
 surface -- at that point add the column via a new migration rather than
 overloading `last_synced_at`.
 
+**FR17 authority (issue #1579):** FR17 reads "A Creator can define and
+update a per-Channel pacing policy" -- read narrowly, that would gate
+`set_pacing_policy` on `store.CanApprove` (Creator-only), matching FR19's
+explicit "An Analyst cannot approve a draft." FR17 carries no matching
+explicit exclusion, though, unlike FR19 -- and the Analyst already holds
+write authority over every other drafting-adjacent surface (research
+notes, verdicts, `save_schedule_draft` itself) with no approval power of
+its own. Gating pacing policy -- a planning input, not an approval action
+-- more restrictively than the drafting tools it informs would be an
+inconsistent authority model with no stated product reason. `mcp/tools/
+schedule_draft.go`'s `set_pacing_policy` therefore reads FR17's "a Creator
+can" as "at least a Creator can" and is gated on `store.CanWrite`
+(Creator and Analyst both), the same as `save_schedule_draft`,
+`save_research_note`, and `save_viability_verdict`. Revisit only if
+product feedback says otherwise -- switching the gate to `store.CanApprove`
+is a one-line change in `registerSetPacingPolicy`.
+
 Migration 003 (`003_web_session.up.sql`, issue #1570) lands `web_session`
 -- C1's Google sign-in session store (see "OAuth grants" above).
 

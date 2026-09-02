@@ -45,6 +45,12 @@ type ScheduleStore interface {
 
 	// ListByChannel returns every ScheduleEntry for channelID.
 	ListByChannel(ctx context.Context, channelID uuid.UUID) ([]ScheduleEntry, error)
+
+	// GetByID returns the ScheduleEntry for id, or pgx.ErrNoRows if none
+	// exists. Backs save_schedule_draft's WriteRender step
+	// (mcp/tools/schedule_draft.go, issue #1579), which always re-reads
+	// from Postgres rather than caching what SaveDraft returned (LB4).
+	GetByID(ctx context.Context, id uuid.UUID) (ScheduleEntry, error)
 }
 
 // scheduleStore implements ScheduleStore against `schedule_entry`
@@ -62,9 +68,15 @@ func scanScheduleEntry(row pgx.Row) (ScheduleEntry, error) {
 }
 
 // SaveDraft honours IdempotencyKey (a replayed (channel, author, key)
-// triple returns the original row unchanged), then -- inside the same
-// transaction -- looks up in.VerdictID's verdict and rejects anything but
-// VerdictViable with ErrVerdictNotViable before inserting (FR16, LB3).
+// triple returns the original row unchanged); when no key is supplied, it
+// instead falls back to the (channel_id, idea_id, proposed_publish_at)
+// natural key (NFR2) -- a keyless retry with the identical triple
+// converges on the already-persisted row rather than inserting a
+// duplicate, the same "lock the natural key, look up, insert if absent"
+// idiom IdeaStore.FindOrCreate uses. Either way, -- inside the same
+// transaction -- SaveDraft then looks up in.VerdictID's verdict and
+// rejects anything but VerdictViable with ErrVerdictNotViable before
+// inserting (FR16, LB3).
 func (s scheduleStore) SaveDraft(ctx context.Context, in SaveDraftInput) (ScheduleEntry, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -86,6 +98,32 @@ func (s scheduleStore) SaveDraft(ctx context.Context, in SaveDraftInput) (Schedu
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return ScheduleEntry{}, fmt.Errorf("lookup schedule_entry by idempotency key: %w", err)
+		}
+	} else {
+		// No idempotency_key -- fall back to the (channel_id, idea_id,
+		// proposed_publish_at) natural key. The advisory lock serializes a
+		// racing duplicate call for the identical triple the same way
+		// IdeaStore.FindOrCreate's lock does for (channel_id, lower(title)).
+		lockKey := in.ChannelID.String() + ":" + in.IdeaID.String() + ":" + in.ProposedPublishAt.UTC().Format(time.RFC3339Nano)
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+			return ScheduleEntry{}, fmt.Errorf("lock schedule_entry natural key: %w", err)
+		}
+
+		existing, err := scanScheduleEntry(tx.QueryRow(ctx, `
+			SELECT `+scheduleEntryColumns+`
+			FROM schedule_entry
+			WHERE channel_id = $1 AND idea_id = $2 AND proposed_publish_at = $3
+			ORDER BY created_at
+			LIMIT 1
+		`, in.ChannelID, in.IdeaID, in.ProposedPublishAt))
+		if err == nil {
+			if err := tx.Commit(ctx); err != nil {
+				return ScheduleEntry{}, fmt.Errorf("commit: %w", err)
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return ScheduleEntry{}, fmt.Errorf("lookup schedule_entry by natural key: %w", err)
 		}
 	}
 
@@ -160,6 +198,17 @@ func (s scheduleStore) Update(ctx context.Context, entryID uuid.UUID, proposedPu
 		return fmt.Errorf("schedule_entry %s not a draft: %w", entryID, pgx.ErrNoRows)
 	}
 	return nil
+}
+
+func (s scheduleStore) GetByID(ctx context.Context, id uuid.UUID) (ScheduleEntry, error) {
+	e, err := scanScheduleEntry(s.pool.QueryRow(ctx, `SELECT `+scheduleEntryColumns+` FROM schedule_entry WHERE id = $1`, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ScheduleEntry{}, pgx.ErrNoRows
+		}
+		return ScheduleEntry{}, fmt.Errorf("get schedule_entry by id: %w", err)
+	}
+	return e, nil
 }
 
 func (s scheduleStore) ListByChannel(ctx context.Context, channelID uuid.UUID) ([]ScheduleEntry, error) {

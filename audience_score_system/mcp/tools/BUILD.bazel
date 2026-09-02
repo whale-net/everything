@@ -10,6 +10,7 @@ go_library(
     name = "tools",
     srcs = [
         "research.go",
+        "schedule_draft.go",
         "schedule_read.go",
         "verdict.go",
         "whoami.go",
