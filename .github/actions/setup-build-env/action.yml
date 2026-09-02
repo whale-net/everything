@@ -38,6 +38,10 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Report disk space
+      shell: bash
+      run: df -h /
+
     - name: Cache Bazel External Repositories (all sizes)
       uses: actions/cache@v6
       with:
@@ -156,24 +160,33 @@ runs:
         # Disk cache - disabled to avoid duplicating the Bazel remote cache into GHA's 10GB cache limit
         disk-cache: false
 
-    - name: Warm up Go SDK / Gazelle repository tools
+    - name: Warm up Go SDK
       shell: bash
       run: |
         # Works around a race in Bazel/Gazelle's bzlmod repository-rule
-        # resolution: when many external repos fetch in parallel (as any
-        # wide //... query/build/coverage does), gazelle's
-        # go_repository_tools repo can start executing before rules_go's
-        # go_sdk download+extract has fully materialized, failing with
-        # "env: '.../go_sdk+main___download_0/bin/go': No such file or
-        # directory". Two parallel CI jobs from the same clean commit have
-        # been observed to split on this -- one green, one red -- ruling out
-        # cache corruption (see issue #1596 investigation).
+        # resolution: gazelle's go_repository_tools repo can start executing
+        # before rules_go's go_sdk download+extract has fully materialized,
+        # failing with "env: '.../go_sdk+main___download_0/bin/go': No such
+        # file or directory" (or, seen once, a truncated stdlib extraction --
+        # "cannot find package 'os'/'fmt'/'runtime'"). Two parallel CI jobs
+        # from the same clean commit have been observed to split on this --
+        # one green, one red -- ruling out cache corruption.
         #
-        # Building one small Go target here, alone, forces go_sdk and
-        # go_repository_tools to resolve serially and get memoized in this
-        # output_base before any wide parallel fetch runs, sidestepping the
-        # race entirely.
-        bazel build --config=ci //libs/go/dbtest:dbtest
+        # An earlier version of this warm-up built a small go_library target
+        # instead of fetching this repo directly. That didn't help: gazelle's
+        # go_deps extension resolves its *entire* dependency graph as one
+        # unit regardless of target scope, so even a "narrow" go target still
+        # triggered the same wide parallel fetch this step exists to avoid.
+        #
+        # Fetching the go_sdk repo by its canonical label bypasses go_deps
+        # entirely -- nothing else fetches in parallel -- so go_sdk finishes
+        # and gets memoized in this output_base before anything that could
+        # race it starts. The canonical name is derived from MODULE.bazel's
+        # rules_go bazel_dep + go_sdk.download() call and is stable as long
+        # as those aren't changed; if a rules_go upgrade renames it, this
+        # step will fail loudly (unknown repository) rather than silently
+        # no-op.
+        bazel fetch --config=ci @@rules_go++go_sdk+main___download_0//...
 
     - name: Set up Docker Buildx
       if: ${{ inputs.setup-docker == 'true' }}
