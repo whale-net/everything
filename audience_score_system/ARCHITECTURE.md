@@ -284,6 +284,22 @@ version log, not SCD2 -- see `AGENTS.md`'s SCD2 event-log exclusion),
 pacing policy, schedule entries, synced videos/metrics, and pending
 matches, plus the `mcp_idempotency` ledger (NFR2/LB4).
 
+**`synced_video` retention on disappearance (issue #1576):** C6's schedule
+sync (`worker/sync.Activities.SyncSchedule`) upserts every video YouTube's
+`ListSchedule` response returns for a cycle, keyed on `(channel_id,
+youtube_video_id)`, but never deletes a row for a video that has dropped
+out of the response. No `disappeared_at` column was added for this: a
+disappeared video's row is simply left untouched, so its `last_synced_at`
+stops advancing while every still-present video's `last_synced_at` keeps
+moving forward -- a caller can already tell "not reconfirmed this cycle"
+from a stale `last_synced_at` relative to the Channel's other rows,
+without a second signal to keep consistent. This also keeps
+`synced_video.id` permanently stable, which `video_schedule_match`
+(#1581) depends on via FK. Revisit only if a positive "confirmed gone"
+signal turns out to be needed for FR18 collision detection or a UI
+surface -- at that point add the column via a new migration rather than
+overloading `last_synced_at`.
+
 Migration 003 (`003_web_session.up.sql`, issue #1570) lands `web_session`
 -- C1's Google sign-in session store (see "OAuth grants" above).
 

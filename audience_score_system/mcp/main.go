@@ -98,6 +98,7 @@ func run() error {
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterWhoami(reg)
 	tools.RegisterResearch(reg, st)
+	tools.RegisterGetChannelSchedule(reg, st.Sync())
 
 	handler := server.NewHTTPHandler(srv, st.Credentials())
 

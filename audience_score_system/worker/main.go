@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,9 +16,12 @@ import (
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/worker"
+	"golang.org/x/oauth2"
 
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/tokens"
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
+	"github.com/whale-net/everything/audience_score_system/youtube"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
@@ -33,6 +37,16 @@ type config struct {
 	DatabaseURL  string
 	LogLevel     string
 	SyncInterval time.Duration
+
+	// GoogleClientID/GoogleClientSecret/TokenEncryptionKey wire
+	// sync.Activities.Tokens (SyncSchedule's oauth2.TokenSource, #1576) --
+	// the SAME Channel-connect client credentials and
+	// ASS_TOKEN_ENCRYPTION_KEY-derived key `web` uses for the same
+	// purpose (see ../ARCHITECTURE.md "OAuth grants"), never a separate
+	// pair.
+	GoogleClientID     string
+	GoogleClientSecret string
+	TokenEncryptionKey string
 }
 
 // loadConfig loads configuration from environment variables, failing fast
@@ -52,9 +66,12 @@ func loadConfig() (config, error) {
 	}
 
 	return config{
-		DatabaseURL:  os.Getenv("PG_DATABASE_URL"),
-		LogLevel:     getEnv("LOG_LEVEL", "info"),
-		SyncInterval: interval,
+		DatabaseURL:        os.Getenv("PG_DATABASE_URL"),
+		LogLevel:           getEnv("LOG_LEVEL", "info"),
+		SyncInterval:       interval,
+		GoogleClientID:     os.Getenv("ASS_GOOGLE_CLIENT_ID"),
+		GoogleClientSecret: os.Getenv("ASS_GOOGLE_CLIENT_SECRET"),
+		TokenEncryptionKey: os.Getenv("ASS_TOKEN_ENCRYPTION_KEY"),
 	}, nil
 }
 
@@ -114,6 +131,16 @@ func run() error {
 
 	st := store.New(pool)
 
+	// encKey mirrors web/main.go's derivation exactly -- see
+	// ../ARCHITECTURE.md "OAuth grants": TokenEncryptionKey encrypts C2's
+	// channel_credential at rest, the same key `web` uses for the same
+	// table, never a separate one.
+	encKey := sha256.Sum256([]byte(cfg.TokenEncryptionKey))
+	tokenStore := tokens.NewStore(pool, st.Channels(), encKey, tokens.Config{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleClientSecret,
+	})
+
 	temporalCfg := temporallib.ConfigFromEnv()
 	if temporalCfg.TaskQueue == "" {
 		temporalCfg.TaskQueue = sync.TaskQueue
@@ -128,7 +155,14 @@ func run() error {
 	w := temporallib.NewWorker(temporalClient, temporalCfg.TaskQueue, worker.Options{})
 	w.RegisterWorkflow(sync.ChannelSyncWorkflow)
 
-	syncActivities := &sync.Activities{Channels: st.Channels()}
+	syncActivities := &sync.Activities{
+		Channels: st.Channels(),
+		Tokens:   tokenStore,
+		Sync:     st.Sync(),
+		NewYouTubeClient: func(ts oauth2.TokenSource) youtube.Client {
+			return youtube.New(ts)
+		},
+	}
 	w.RegisterActivityWithOptions(syncActivities.LoadChannelState, activityOptions(sync.ActivityLoadChannelState))
 	w.RegisterActivityWithOptions(syncActivities.SyncSchedule, activityOptions(sync.ActivitySyncSchedule))
 	w.RegisterActivityWithOptions(syncActivities.SyncOutcomes, activityOptions(sync.ActivitySyncOutcomes))

@@ -24,13 +24,13 @@
 // (FR4) are the machinery this task's Scaffold phase settles, so
 // Testing-phase work (workflow_test.go) asserts against it as-is.
 // activities.go's LoadChannelState is fully implemented (real
-// store.ChannelStore-backed lookup) as of this task's Implementation
-// phase. SyncSchedule/SyncOutcomes remain genuine, permanent no-op stubs
-// (return nil, not an error) -- issue #1574's Scaffold section calls these
-// "no-op stub implementations" specifically so this package is
-// independently buildable and testable before #1576/#1581 land with their
-// real implementations, which plug into these same methods rather than
-// editing this package.
+// store.ChannelStore-backed lookup) as of #1574's Implementation phase.
+// SyncSchedule is now real too (video_sync.go, issue #1576). SyncOutcomes
+// remains a genuine, permanent no-op stub (returns nil, not an error) --
+// issue #1574's Scaffold section calls these "no-op stub implementations"
+// specifically so this package is independently buildable and testable
+// before #1576/#1581 land with their real implementations, which plug
+// into these same methods rather than editing this package.
 package sync
 
 import (
