@@ -79,15 +79,19 @@ func setupSyncChannel(t *testing.T, ctx context.Context, st *store.Store) store.
 }
 
 // newSyncActivities builds an *Activities wired against st (real Channels/
-// Sync/Tokens, all backed by db's Postgres) with NewYouTubeClient fixed to
-// always return ytClient, regardless of the oauth2.TokenSource it is
-// handed -- so every test below drives SyncSchedule's real upsert/error-
-// classification logic without ever making a live YouTube API call.
+// Sync/Matches/Tokens, all backed by db's Postgres) with NewYouTubeClient
+// fixed to always return ytClient, regardless of the oauth2.TokenSource it
+// is handed -- so every test below (SyncSchedule here, SyncOutcomes in
+// outcomes_test.go) drives real upsert/matching/error-classification logic
+// without ever making a live YouTube API call. Matches is wired here too
+// (not just in an outcomes-specific helper) so both files share one
+// fixture builder.
 func newSyncActivities(st *store.Store, ytClient youtube.Client) *Activities {
 	return &Activities{
 		Channels:         st.Channels(),
 		Tokens:           tokens.NewStore(nil, st.Channels(), [32]byte{}, tokens.Config{}), // pool arg unused: TokenSource is never exercised, see file doc comment
 		Sync:             st.Sync(),
+		Matches:          st.Matches(),
 		NewYouTubeClient: func(oauth2.TokenSource) youtube.Client { return ytClient },
 	}
 }
