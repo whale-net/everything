@@ -33,12 +33,11 @@ func RegisterWhoami(reg *server.Registry) {
 	}, whoami)
 }
 
-// whoami takes no input (In = any); see server.PersonMiddleware
-// (../server/auth.go) for how PersonFromContext gets populated. It errors
-// today because store.CredentialStore.VerifyTokenHash -- the auth
-// middleware's underlying store call -- is a Scaffold-only stub (issue
-// #1575's Implementation phase fills it in), so no real HTTP call ever
-// reaches this handler with a resolved Person yet.
+// whoami takes no input (In = any) and no channel_id -- it doesn't
+// implement server.ChannelScoped, so server.RegisterRead never
+// Channel-scopes it; it exists purely to prove the auth wiring connects
+// end to end. See server.PersonMiddleware (../server/auth.go) for how
+// PersonFromContext gets populated ahead of this handler running.
 func whoami(ctx context.Context, _ *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, WhoamiOutput, error) {
 	person := server.PersonFromContext(ctx)
 	if person == nil {

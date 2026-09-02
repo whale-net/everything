@@ -2,9 +2,9 @@
 // C4-C7/C9/C10 tool plugs into (see ../../ARCHITECTURE.md "MCP server"),
 // wiring the caller-auth middleware (auth.go), and exposing it over
 // streamable HTTP (transport.go). Channel-scoping (channelscope.go) and
-// idempotency (idempotency.go) are Scaffold-only skeletons, not yet wired
-// into tool registration (registry.go) -- see issue #1575's Implementation
-// phase.
+// idempotency (idempotency.go) are wired into tool registration
+// (registry.go)'s RegisterRead/RegisterWrite, so every product tool gets
+// both automatically.
 //
 // Statelessness (LB4): New returns a single *mcp.Server built only from a
 // *store.Store -- no in-memory maps keyed by session/conversation, no

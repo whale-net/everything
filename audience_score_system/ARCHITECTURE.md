@@ -99,10 +99,48 @@ Mechanically, resolution happens in two layers (see
    that doesn't resolve to a real Person, is rejected here — the tool
    handler is never entered.
 
-`CredentialStore.VerifyTokenHash` is a Scaffold-only stub (returns "not
-implemented") until issue #1575's Implementation phase lands the real
-`mcp_credential` lookup — the wiring above is real; the backing data
-access is not yet.
+`CredentialStore.VerifyTokenHash`, `Mint`, `Revoke`, and `ListForPerson`
+(issue #1575's Implementation phase) are real SQL-backed implementations
+against `mcp_credential` — `VerifyTokenHash` also stamps `last_used_at` in
+the same round trip, so it doubles as the "last seen" signal for a future
+credential-management view (see issue #1591's scope note).
+
+### MCP server: Channel-scoping and idempotency middleware
+
+Both wired into `mcp/server/registry.go`'s `RegisterRead`/`RegisterWrite`
+so a product tool author gets them automatically rather than having to
+remember to call them:
+
+- **Channel-scoping (NFR5):** a tool's input type opts in by implementing
+  `ChannelScoped` (`channelscope.go`, one `ChannelScopeID() uuid.UUID`
+  method). `RegisterRead`/`RegisterWrite` type-assert each call's decoded
+  input against that interface at call time and, when it matches, run
+  `RequireChannelRole` against `store.CanRead`/`store.CanWrite` before the
+  handler runs — a caller with no live `channel_person` row for that
+  Channel gets a permission error and the handler is never entered. A tool
+  whose input carries no `channel_id` (only `whoami` today) simply doesn't
+  implement the interface and is left unscoped; this is deliberate, not an
+  oversight — NFR5 only applies to Channel-scoped data.
+- **Idempotency (NFR2/LB4):** `RegisterWrite` splits a write tool into a
+  `WriteMutate` step (the side-effecting write, returning the UUID of the
+  entity it created or affected) and a `WriteRender` step (builds the
+  tool's structured response from that ref). This split exists because
+  `store.Idempotency.Do` (already real, migration 002/#1569) only ever
+  persists/returns a UUID (`mcp_idempotency.result_ref`) — there is
+  nowhere in that ledger to cache an arbitrary tool response, so replaying
+  a call means re-deriving the response from the ref via `WriteRender`,
+  not replaying a cached response body; `WriteRender` runs on every call,
+  first run and every replay alike, so a write tool's response always
+  reflects current DB state. A tool's input opts into key-based replay by
+  implementing `IdempotencyKeyed` (`idempotency.go`, one
+  `IdempotencyKey() string` method) and returning a nonempty key;
+  `RegisterWrite` then computes `request_fingerprint` as a stable hash of
+  the tool name plus the input's JSON encoding and runs `WriteMutate`
+  under `store.Idempotency.Do`'s guard. A tool with no key (or whose input
+  doesn't implement `IdempotencyKeyed`) runs `WriteMutate` directly every
+  call and must be safe via natural-key upsert instead — per this task's
+  Implementation notes, every write tool states which of the two
+  mechanisms it uses.
 
 ### MCP server: statelessness (LB4)
 

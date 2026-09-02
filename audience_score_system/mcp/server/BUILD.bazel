@@ -1,10 +1,10 @@
 load("@rules_go//go:def.bzl", "go_library")
 
 # `mcp`'s server bootstrap, caller-auth middleware (auth.go/context.go),
-# Channel-scoping/idempotency middleware skeletons (channelscope.go/
-# idempotency.go, Scaffold-only per issue #1575), streamable HTTP transport
-# (transport.go), and tool registry (registry.go). See
-# ../../ARCHITECTURE.md "MCP server".
+# Channel-scoping/idempotency middleware (channelscope.go/idempotency.go,
+# wired into RegisterRead/RegisterWrite by registry.go per issue #1575's
+# Implementation phase), streamable HTTP transport (transport.go), and
+# tool registry (registry.go). See ../../ARCHITECTURE.md "MCP server".
 go_library(
     name = "server",
     srcs = [

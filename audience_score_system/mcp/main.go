@@ -95,7 +95,7 @@ func run() error {
 	st := store.New(pool)
 
 	srv := server.New(st)
-	reg := server.NewRegistry(srv)
+	reg := server.NewRegistry(srv, st)
 	tools.RegisterWhoami(reg)
 
 	handler := server.NewHTTPHandler(srv, st.Credentials())
