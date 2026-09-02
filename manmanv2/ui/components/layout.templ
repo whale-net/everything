@@ -124,7 +124,7 @@ func userIdentityLabel(user *htmxauth.UserInfo) string {
 templ ServerSelector(servers []*manmanpb.Server, selectedServer *manmanpb.Server) {
 	if len(servers) > 0 {
 		<form method="POST" action="/select-server" class="flex items-center">
-			<select name="server_id" onchange="this.form.submit()" class="select select-sm">
+			<select name="server_id" onchange="this.form.submit()" class="select select-sm text-base-content">
 				<option value="">Select Server</option>
 				for _, server := range servers {
 					if selectedServer != nil && selectedServer.ServerId == server.ServerId {

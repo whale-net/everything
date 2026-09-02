@@ -51,13 +51,21 @@ and a close link to `#/<parent>`.
   or the app's `_shell.html`.
 - Colors only via semantic roles (primary/success/error/etc.) — never raw
   palette classes like `bg-purple-500`.
+- `wf-*` classes (`wf-hero`, `wf-note`, `wf-panel`, `wf-scrim`) hardcode
+  colors outside the theme system and are wireframe-only — never reference
+  them from production templ code.
 - Keep each fragment roughly one screenful of markup; split dense ideas into
   more screens instead.
 
 ## Turning an approved design into code
 
 Approved fragments map to templ components in `manmanv2/ui/components/` and
-pages in `manmanv2/ui/pages/`. daisyUI adoption in the real app (replacing
+pages in `manmanv2/ui/pages/`. Translate any `wf-*` class to its themed
+daisyUI equivalent during that mapping (e.g. `wf-hero` → a gradient built
+from `var(--color-primary)`/`var(--color-secondary)`, `wf-note` → plain
+muted text or an `alert`) — copying it verbatim breaks contrast in themes
+the wireframe was never checked against. daisyUI adoption in the real app
+(replacing
 `cdn.tailwindcss.com` in `manmanv2/ui/templ_render.go` with the kit's pinned
 daisyUI/Tailwind CDN builds + `themes.css`) is the agreed endgame but a
 separate task — don't fold it into a wireframe session.

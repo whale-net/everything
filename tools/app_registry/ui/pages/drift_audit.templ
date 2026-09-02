@@ -41,7 +41,7 @@ func adoptedOwnerFullName(m *matrix.Matrix, a *pb.Artifact) string {
 // deferred, so this screen has no write control.
 templ DriftAudit(user *htmxauth.UserInfo, m *matrix.Matrix, driftRows []matrix.DriftRow, adopted []*pb.Artifact, adoptedErr error, ownerFilter string) {
 	@components.Shell("Drift & Audit", user) {
-		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100">
+		<div class="p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100 text-base-content">
 			<h1 class="text-2xl md:text-3xl font-bold mb-2">Drift &amp; Audit</h1>
 			<p class="text-sm opacity-80">
 				Overridden promotions that no longer match their chart's pin, and

@@ -124,6 +124,20 @@
 
 /* Kit additions */
 
+/* daisyUI's .btn-ghost sets its own `color` (falling back to
+ * --color-base-content) in a cascade layer that outranks our plain
+ * utility classes, so a bare `text-neutral-content` class on a ghost
+ * button inside Shell's navbar (shell.templ) can't win the color
+ * property -- base-content and neutral-content diverge per theme (e.g.
+ * sunset: #431407 vs #fff7ed), leaving the brand link/theme
+ * switcher/user menu buttons unreadable against the neutral navbar
+ * background. This rule lives outside any @layer, so per the CSS
+ * cascade spec it always outranks daisyUI's layered .btn-ghost rule
+ * regardless of source order or specificity. */
+.navbar .btn-ghost {
+  color: var(--color-neutral-content);
+}
+
 /* Design-standard touch targets: 44px standard buttons, 36px small. */
 .btn:not(.btn-sm):not(.btn-xs) {
   min-height: 2.75rem;

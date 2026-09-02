@@ -63,7 +63,7 @@ templ releaseOverallStateBadge(rel *pb.GetReleaseResponse) {
 // and with what outcome").
 templ ReleaseHistory(user *htmxauth.UserInfo, s ReleaseHistoryViewState) {
 	@components.Shell("Release History", user) {
-		<div class="wf-hero p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100">
+		<div class="p-6 md:p-8 mb-6 shadow-lg rounded-box bg-base-100 text-base-content">
 			<h1 class="text-2xl md:text-3xl font-bold mb-2">Release History</h1>
 			<p class="text-sm opacity-80">
 				Every release attempt triggered through this registry, most
