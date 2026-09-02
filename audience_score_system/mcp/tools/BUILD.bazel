@@ -6,11 +6,16 @@ load("@rules_go//go:def.bzl", "go_library")
 # RegisterRead/RegisterWrite.
 go_library(
     name = "tools",
-    srcs = ["whoami.go"],
+    srcs = [
+        "schedule_read.go",
+        "whoami.go",
+    ],
     importpath = "github.com/whale-net/everything/audience_score_system/mcp/tools",
     visibility = ["//visibility:public"],
     deps = [
         "//audience_score_system/mcp/server",
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],
 )

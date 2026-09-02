@@ -12,12 +12,15 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//audience_score_system/store",
+        "//audience_score_system/tokens",
         "//audience_score_system/worker/sync",
+        "//audience_score_system/youtube",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/temporal",
         "@io_temporal_go_sdk//activity",
         "@io_temporal_go_sdk//worker",
+        "@org_golang_x_oauth2//:oauth2",
     ],
 )
 
