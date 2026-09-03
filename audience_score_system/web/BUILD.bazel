@@ -11,6 +11,9 @@ go_library(
         "main.go",
         "templ_render.go",
     ],
+    embedsrcs = [
+        "favicon.ico",
+    ],
     importpath = "github.com/whale-net/everything/audience_score_system/web",
     visibility = ["//visibility:private"],
     deps = [
@@ -24,6 +27,7 @@ go_library(
         "//audience_score_system/web/schedule",
         "//audience_score_system/worker/sync",
         "//libs/go/db",
+        "//libs/go/htmxbase",
         "//libs/go/logging",
         "//libs/go/mcpauth",
         "//libs/go/temporal",
