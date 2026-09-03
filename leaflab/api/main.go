@@ -48,6 +48,9 @@ func run() error {
 	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
 	grpcOIDCIssuer := getEnv("GRPC_OIDC_ISSUER", "")
 	grpcOIDCClientID := getEnv("GRPC_OIDC_CLIENT_ID", "")
+	if grpcAuthMode == "none" {
+		logger.Warn("GRPC_AUTH_MODE=none — leaflab-api is running without authentication (development only)")
+	}
 
 	pool, err := db.NewPool(ctx, databaseURL)
 	if err != nil {

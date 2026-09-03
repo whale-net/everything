@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 
@@ -45,7 +44,7 @@ func (app *App) handleBoards(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, loginURL, http.StatusSeeOther)
 			return
 		}
-		log.Printf("ListBoardsWithState failed: %v", err)
+		app.log().Warn("ListBoardsWithState failed", "err", err)
 	}
 
 	layoutData := components.LayoutData{
@@ -57,7 +56,7 @@ func (app *App) handleBoards(w http.ResponseWriter, r *http.Request) {
 	// path above) is safe: generated proto getters nil-check their
 	// receiver and return the zero value.
 	if renderErr := RenderTempl(w, r, "Boards", pages.Boards(layoutData, resp.GetBoards(), err)); renderErr != nil {
-		log.Printf("Error rendering boards page: %v", renderErr)
+		app.log().Error("failed to render boards page", "err", renderErr)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -106,7 +105,7 @@ func (app *App) handleBoardDetail(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		log.Printf("GetBoardDetail(%d) failed: %v", boardID, err)
+		app.log().Warn("GetBoardDetail failed", "board_id", boardID, "err", err)
 	}
 
 	layoutData := components.LayoutData{
@@ -118,7 +117,7 @@ func (app *App) handleBoardDetail(w http.ResponseWriter, r *http.Request) {
 	// non-NotFound path above) is safe: generated proto getters nil-check
 	// their receiver and return the zero value.
 	if renderErr := RenderTempl(w, r, "Board Detail", pages.BoardDetail(layoutData, resp.GetBoardId(), resp.GetDeviceId(), resp.GetSensors(), err)); renderErr != nil {
-		log.Printf("Error rendering board detail page: %v", renderErr)
+		app.log().Error("failed to render board detail page", "board_id", boardID, "err", renderErr)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }

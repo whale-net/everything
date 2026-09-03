@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/whale-net/everything/leaflab/ui/components"
@@ -22,7 +21,7 @@ func (app *App) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := RenderTempl(w, r, "LeafLab", pages.Home(layoutData)); err != nil {
-		log.Printf("Error rendering home page: %v", err)
+		app.log().Error("failed to render home page", "err", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }

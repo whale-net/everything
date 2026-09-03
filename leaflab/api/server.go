@@ -124,8 +124,10 @@ func (s *LeafLabAPIServer) GetDeviceConfig(ctx context.Context, req *pb.GetDevic
 		return nil, status.Errorf(codes.Internal, "get config: %v", err)
 	}
 	if cfg == nil {
+		s.logger.Info("device config requested — none accepted yet", "device_id", req.DeviceId)
 		return &pb.GetDeviceConfigResponse{Found: false}, nil
 	}
+	s.logger.Info("device config requested", "device_id", req.DeviceId, "version", cfg.Version)
 	return &pb.GetDeviceConfigResponse{Config: cfg, Found: true}, nil
 }
 
@@ -142,6 +144,7 @@ func (s *LeafLabAPIServer) ListBoards(ctx context.Context, _ *pb.ListBoardsReque
 			BoardId:  r.BoardID,
 		})
 	}
+	s.logger.Info("boards listed", "count", len(boards))
 	return &pb.ListBoardsResponse{Boards: boards}, nil
 }
 
@@ -283,6 +286,20 @@ func (s *LeafLabAPIServer) GetSensorReadingHistory(ctx context.Context, req *pb.
 	if history.Capped {
 		resp.CoveredFrom = timestamppb.New(history.CoveredFrom)
 		resp.CoveredTo = timestamppb.New(history.CoveredTo)
+		s.logger.Warn("sensor reading history capped — requested range exceeds point cap",
+			"sensor_id", req.SensorId,
+			"point_cap", historyPointCap,
+			"covered_from", history.CoveredFrom,
+			"covered_to", history.CoveredTo,
+			"requested_from", from,
+			"requested_to", to,
+		)
 	}
+	s.logger.Info("sensor reading history served",
+		"sensor_id", req.SensorId,
+		"points", len(history.Points),
+		"excluded_invalid", history.ExcludedInvalidCount,
+		"capped", history.Capped,
+	)
 	return resp, nil
 }
