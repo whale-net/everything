@@ -282,6 +282,11 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	youtubeChannelID, title, err := h.resolver.ResolveOwnChannel(ctx, tok)
 	if err != nil {
+		// The underlying cause (no channel on the Google account, YouTube
+		// Data API not enabled on the project, insufficient/partially
+		// granted scope, quota) is otherwise invisible: the response the
+		// browser sees is always this same generic 500.
+		logger.Error("failed to resolve YouTube channel", "person_id", person.ID, "error", err)
 		http.Error(w, "failed to resolve YouTube channel", http.StatusInternalServerError)
 		return
 	}
