@@ -22,7 +22,7 @@ Drives `tools/project-manager/CONVENTIONS.md` § System validation. Only meaning
    ```
    If any task issues remain in `Scaffold`, `Implementation`, `Testing`, or `Validation`, implementation is not complete — inform the user to finish `/project-manager:implement <n>` first and stop.
 
-2. **Build the integration branch** per CONVENTIONS.md § Git hygiene step 6 — `mergepush` only ever registers each task's own branch into the plan's `gh stack` stack via `gh stack link` (CONVENTIONS.md § Git hygiene step 5), it never rebases one task's content onto another's, so no single branch on the stack contains every task's combined work. Build one locally, right before dispatching system-validator, and never push it:
+2. **Build the integration branch** per CONVENTIONS.md § Git hygiene step 6 — `mergepush` cherry-picks each task onto the previous one's stack tip (CONVENTIONS.md § Git hygiene step 5), so the topmost registered branch's remote state already contains every task's combined work in principle, but treat that as an implementation detail rather than something to build on directly. Build a local integration branch explicitly, right before dispatching system-validator, and never push it:
    ```sh
    git branch -D pm-<n>-integration 2>/dev/null
    git checkout main && git pull
