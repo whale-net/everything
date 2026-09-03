@@ -51,6 +51,7 @@ go_test(
     name = "ui_test",
     size = "small",
     srcs = [
+        "deployment_actions_acceptance_test.go",
         "handlers_deployment_actions_test.go",
         "handlers_deployment_row_refresh_test.go",
         "handlers_home_test.go",
