@@ -244,6 +244,55 @@ func (app *App) renderDeploymentRow(w http.ResponseWriter, r *http.Request, sgcI
 	}
 }
 
+// handleDeploymentRowFragment serves GET /api/deployments/{sgcID}/row: the
+// target the row's own self-terminating poll (#1628, DeploymentRow's
+// deploymentRowPollAttrs wiring in sessions.templ) hits to refresh itself
+// in place. It reuses buildDeploymentRowData + pages.DeploymentRow from
+// #1627 -- no second derivation of status or action availability -- and
+// always renders freshly observed state with no ActionError: a poll
+// refresh is not itself an action attempt, so a stale error from a prior
+// Start/Stop/Restart click is cleared on the next successful poll (the
+// error belongs to a single action attempt, not to the row's persistent
+// state). Because the response is itself a pages.DeploymentRow, a settled
+// row's fragment carries no hx-trigger and the poll loop stops on its own.
+//
+// Registered as "/api/deployments/" in main.go, a distinct prefix from
+// "/api/sessions/" (handleSessionStdin's catch-all) so the two never
+// collide under Go's ServeMux longest-pattern-wins dispatch.
+func (app *App) handleDeploymentRowFragment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	rest := strings.TrimPrefix(r.URL.Path, "/api/deployments/")
+	parts := strings.Split(strings.Trim(rest, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "row" {
+		http.Error(w, "Invalid deployment row path", http.StatusBadRequest)
+		return
+	}
+
+	sgcID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid server_game_config_id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	data, err := app.buildDeploymentRowData(ctx, sgcID)
+	if err != nil {
+		log.Printf("Error building deployment row data for SGC %d: %v", sgcID, err)
+		http.Error(w, "Deployment not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusOK)
+	if err := pages.DeploymentRow(data).Render(ctx, w); err != nil {
+		log.Printf("Error rendering deployment row fragment for SGC %d: %v", sgcID, err)
+	}
+}
+
 // buildDeploymentRowData resolves one deployment's row view model from the
 // API: the SGC itself (for status + display-name resolution), its latest
 // session (Start/Stop/Restart availability, LatestSession badge), and its

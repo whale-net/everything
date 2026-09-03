@@ -255,6 +255,11 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sessions/check-active", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCheckActiveSession)))
 	mux.HandleFunc("/api/sessions/historical-logs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHistoricalLogs)))
 	mux.HandleFunc("/api/sessions/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionStdin)))
+	// "/api/deployments/" is a distinct prefix from "/api/sessions/" above
+	// (handleSessionStdin's catch-all), so the row's self-polling GET
+	// (#1628) never collides with it under Go's ServeMux
+	// longest-pattern-wins dispatch.
+	mux.HandleFunc("/api/deployments/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentRowFragment)))
 
 	// Note: Log streaming endpoint is handled by handleSessionDetail which routes to handleSessionLogsStream
 

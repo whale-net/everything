@@ -182,13 +182,35 @@ templ StartSessionPanel(selectedServerID string, sgcOptions []SGCDisplayInfo, st
 	</div>
 }
 
+// deploymentRowPollAttrs returns the row's self-terminating poll wiring
+// (FR7, #1628): hx-get/hx-trigger/hx-target/hx-swap are present only when
+// the row's latest session is in a components.IsTransientStatus state
+// (pending/starting/stopping). Because the endpoint's response is itself a
+// DeploymentRow (#1628's GET /api/deployments/{sgcID}/row), a settled
+// row's next render comes back without these attributes and the polling
+// loop stops on its own -- no client-side timer bookkeeping, and this is
+// independent of ActionError: a row with an inline action error still
+// polls (and the error clears) as long as the underlying status is still
+// transient.
+func deploymentRowPollAttrs(data DeploymentRowData) templ.Attributes {
+	if !components.IsTransientStatus(data.LatestSession.GetStatus()) {
+		return templ.Attributes{}
+	}
+	return templ.Attributes{
+		"hx-get":     fmt.Sprintf("/api/deployments/%d/row", data.ServerGameConfigID),
+		"hx-trigger": "every 3s",
+		"hx-target":  "this",
+		"hx-swap":    "outerHTML",
+	}
+}
+
 // DeploymentRow renders a single deployment's <tr>, keyed by the stable
 // "deployment-row-<sgcID>" id that the action endpoints (#1627) and the
 // refresh endpoint (#1628) target as their HTMX swap target. Cell content
 // lives in DeploymentRowInner so both whole-row swaps (this component) and
 // future inner-swap responses can reuse it.
 templ DeploymentRow(data DeploymentRowData) {
-	<tr id={ fmt.Sprintf("deployment-row-%d", data.ServerGameConfigID) } class="hover">
+	<tr id={ fmt.Sprintf("deployment-row-%d", data.ServerGameConfigID) } class="hover" { deploymentRowPollAttrs(data)... }>
 		@DeploymentRowInner(data)
 	</tr>
 }
