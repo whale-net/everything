@@ -29,6 +29,7 @@ go_test(
     srcs = [
         "daisyui_migration_test.go",
         "server_detail_public_address_test.go",
+        "sessions_deployment_row_test.go",
         "sgc_detail_sessions_test.go",
         "sgc_detail_status_connect_test.go",
     ],

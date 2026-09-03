@@ -40,16 +40,17 @@ import (
 // leaflab/ui's sessionName convention.
 const sessionName = "ass_web_session"
 
-// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 20 minutes, inside
-// sync.MinSyncInterval/MaxSyncInterval's 15-30 minute NFR4 band. Must
-// match worker/main.go's identical constant exactly (issue #1614's
-// interval-consistency caveat -- see ../ARCHITECTURE.md "OAuth grants"):
-// sync.ScheduleManager.EnsureSchedule bakes in whichever interval its
-// first caller passes at schedule-creation time and never updates it on a
-// later call, so `web` and `worker` diverging here would silently create
-// schedules at different cadences depending on which binary connects a
-// Channel first.
-const defaultSyncInterval = 20 * time.Minute
+// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 3 hours, inside
+// sync.MinSyncInterval/MaxSyncInterval's 1-6 hour NFR4 band (widened from
+// the original 20-minute default, which proved too aggressive against
+// YouTube API quota for M1's Channel count). Must match worker/main.go's
+// identical constant exactly (issue #1614's interval-consistency caveat --
+// see ../ARCHITECTURE.md "OAuth grants"): sync.ScheduleManager.EnsureSchedule
+// bakes in whichever interval its first caller passes at schedule-creation
+// time and never updates it on a later call, so `web` and `worker`
+// diverging here would silently create schedules at different cadences
+// depending on which binary connects a Channel first.
+const defaultSyncInterval = 3 * time.Hour
 
 // config holds `web`'s configuration, loaded entirely from environment
 // variables -- no config files (see ../ENV.md).
@@ -73,8 +74,8 @@ type config struct {
 }
 
 // loadConfig loads configuration from environment variables, failing fast
-// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 15-30
-// minute band (sync.ValidateSyncInterval) -- mirrors worker/main.go's
+// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 1-6 hour
+// band (sync.ValidateSyncInterval) -- mirrors worker/main.go's
 // loadConfig exactly, per issue #1614. See ../ENV.md for the full
 // variable list.
 func loadConfig() (config, error) {
@@ -342,7 +343,8 @@ func (a *app) handleHome(w http.ResponseWriter, r *http.Request) {
 
 // handleChannelDetail renders a Channel's connection state (connected /
 // needs re-authentication) and, for a Creator only (store.CanReconnect --
-// NFR5), the reconnect affordance (#1571's Implementation section).
+// NFR5), the reconnect affordance (#1571's Implementation section) and the
+// invite-analyst affordance (store.CanInvite, C3/FR5).
 func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	person := auth.PersonFromContext(r.Context())
 	if person == nil {
@@ -372,11 +374,17 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	canInvite, err := store.CanInvite(r.Context(), a.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	data := components.LayoutData{
 		Title: ch.Title,
 		User:  person,
 	}
-	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect)); err != nil {
+	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

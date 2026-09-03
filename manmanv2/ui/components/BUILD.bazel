@@ -4,7 +4,10 @@ load("//tools:templ.bzl", "templ_library")
 templ_library(
     name = "components",
     srcs = glob(["*.templ"]),
-    go_srcs = ["deployment_status.go"],
+    go_srcs = [
+        "deployment_actions.go",
+        "deployment_status.go",
+    ],
     visibility = ["//manmanv2/ui:__subpackages__"],
     deps = [
         "//libs/go/htmxauth",
@@ -24,6 +27,7 @@ go_test(
     size = "small",
     srcs = [
         "dashboard_test.go",
+        "deployment_actions_test.go",
         "deployment_status_test.go",
         "layout_test.go",
     ],

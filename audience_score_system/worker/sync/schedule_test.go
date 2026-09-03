@@ -47,6 +47,10 @@ type fakeScheduleClient struct {
 
 	deleteCalls []string
 	deleteErr   error
+
+	triggerCalls   []string
+	triggerOptions []client.ScheduleTriggerOptions
+	triggerErr     error
 }
 
 var _ client.ScheduleClient = (*fakeScheduleClient)(nil)
@@ -78,6 +82,12 @@ func (h *fakeScheduleHandle) GetID() string { return h.id }
 func (h *fakeScheduleHandle) Delete(_ context.Context) error {
 	h.owner.deleteCalls = append(h.owner.deleteCalls, h.id)
 	return h.owner.deleteErr
+}
+
+func (h *fakeScheduleHandle) Trigger(_ context.Context, options client.ScheduleTriggerOptions) error {
+	h.owner.triggerCalls = append(h.owner.triggerCalls, h.id)
+	h.owner.triggerOptions = append(h.owner.triggerOptions, options)
+	return h.owner.triggerErr
 }
 
 // ── ScheduleID ───────────────────────────────────────────────────────────
@@ -113,7 +123,7 @@ func TestChannelScheduleOffset_Deterministic(t *testing.T) {
 // in [0, interval) -- the ScheduleIntervalSpec.Offset contract -- across a
 // range of Channel ids and interval bands.
 func TestChannelScheduleOffset_WithinInterval(t *testing.T) {
-	intervals := []time.Duration{MinSyncInterval, 20 * time.Minute, MaxSyncInterval}
+	intervals := []time.Duration{MinSyncInterval, 3 * time.Hour, MaxSyncInterval}
 	for _, interval := range intervals {
 		for i := 0; i < 25; i++ {
 			channelID := uuid.New()
@@ -153,11 +163,11 @@ func TestValidateSyncInterval(t *testing.T) {
 		d       time.Duration
 		wantErr bool
 	}{
-		{name: "below band", d: 14*time.Minute + 59*time.Second, wantErr: true},
-		{name: "lower bound inclusive", d: 15 * time.Minute, wantErr: false},
-		{name: "mid band", d: 20 * time.Minute, wantErr: false},
-		{name: "upper bound inclusive", d: 30 * time.Minute, wantErr: false},
-		{name: "above band", d: 30*time.Minute + time.Second, wantErr: true},
+		{name: "below band", d: 1*time.Hour - time.Second, wantErr: true},
+		{name: "lower bound inclusive", d: 1 * time.Hour, wantErr: false},
+		{name: "mid band", d: 3 * time.Hour, wantErr: false},
+		{name: "upper bound inclusive", d: 6 * time.Hour, wantErr: false},
+		{name: "above band", d: 6*time.Hour + time.Second, wantErr: true},
 	}
 
 	for _, tc := range cases {
@@ -256,6 +266,29 @@ func TestRemoveSchedule_PropagatesDeleteError(t *testing.T) {
 
 	channelID := uuid.New()
 	err := m.RemoveSchedule(context.Background(), channelID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), channelID.String())
+}
+
+// ── TriggerNow ───────────────────────────────────────────────────────────
+
+func TestTriggerNow_TriggersByDeterministicID(t *testing.T) {
+	channels := &fakeChannelStore{}
+	schedules := &fakeScheduleClient{}
+	m := NewScheduleManager(schedules, channels, 3*time.Hour)
+
+	channelID := uuid.New()
+	require.NoError(t, m.TriggerNow(context.Background(), channelID))
+	require.Equal(t, []string{ScheduleID(channelID)}, schedules.triggerCalls)
+}
+
+func TestTriggerNow_PropagatesTriggerError(t *testing.T) {
+	channels := &fakeChannelStore{}
+	schedules := &fakeScheduleClient{triggerErr: errors.New("schedule not found")}
+	m := NewScheduleManager(schedules, channels, 3*time.Hour)
+
+	channelID := uuid.New()
+	err := m.TriggerNow(context.Background(), channelID)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), channelID.String())
 }

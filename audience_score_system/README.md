@@ -18,7 +18,7 @@ server precedent used elsewhere in the repo.
 | `migrate/` | `migration` | `job` | Applies every migration (001-005: identity, research/schedule/outcome, web session, channel credentials, MCP credentials). |
 | `web/` | `web` | `external-api` | The only UI surface. Three of its surfaces are UI-only (NFR3): Google OAuth sign-in/sign-up (C1), Channel connect (C2), Analyst invite/accept (C3). Its fourth, schedule-draft approve/un-approve/edit (C8), is also reachable via `mcp` (issue #1648) -- both are equally-capable front ends onto the same store. |
 | `mcp/` | `mcp` | `external-api` | Every other capability (C4-C7, C8, C9, C10) as MCP tools -- research notes, viability verdicts, schedule sync reads, pacing policy, schedule drafting/commit/un-commit/edit, outcome match confirm/reject, and browsing. |
-| `worker/` | `worker` | `worker` | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). |
+| `worker/` | `worker` | `worker` | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-6 hour cadence (NFR4, default 3h). A manual run can be forced via `mcp`'s `trigger_channel_sync` tool. |
 
 All four are complete as of M1 (see [`PRODUCT.md`](PRODUCT.md)'s roadmap)
 and share the `audience-score-system` `release_app` domain, producing
@@ -119,6 +119,7 @@ end-to-end without a human hand-authoring every tool call:
 This is deliberately still "MCP plus an external MCP-capable client,"
 per the product brief's non-goal -- the plugin is a client-side
 convenience for driving that client, not a hosted agent loop inside the
-product. Schedule *approval* (C8) is intentionally absent from both
-personas: it's a Creator-only action in `web`, with no MCP tool to call
-instead.
+product. Schedule *commit/un-commit/edit* (C8) tools exist and are
+Creator-only (`store.CanApprove`, matching `web`), but the `analyst`
+persona never calls them on its own initiative -- only on the human's
+explicit instruction (see `plugin/user/agents/analyst.md`).
