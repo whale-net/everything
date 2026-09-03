@@ -193,8 +193,8 @@ the raw token or its hash.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule approval #1580) | `web` (external-api) | The **only** UI surface. Limited to C1/C2/C3/C8 (see "NFR3 interface allocation" below). |
-| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10): research notes, viability verdicts, schedule sync reads, schedule draft proposals, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule un-approve/edit #1580) | `web` (external-api) | The **only** UI surface. Limited to C1/C2/C3/C8 (see "NFR3 interface allocation" below). |
+| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1648) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10) plus C8's approve/commit step (#1648): research notes, viability verdicts, schedule sync reads, schedule draft proposals and commits, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
@@ -298,8 +298,10 @@ MCP-only, per the product brief's MCP-agent-first interface decision:
   join row, LB2).
 - **C3** — Analyst invite/accept (invite code generation and
   accept/decline).
-- **C8** — Schedule-draft approval/revocation (Creator-only approve,
-  un-approve, edit, re-approve up until publish).
+- **C8** — Schedule-draft revocation and editing (Creator-only un-approve,
+  edit, re-approve up until publish). Un-approve/edit remain `web`-only:
+  reversing or changing an already-committed slot stays a deliberate,
+  synchronous human action.
 
 Every other capability — C4 (research notes), C5 (viability verdicts), C6
 (schedule sync reads), C7 (schedule drafting, pacing policy), C9 (outcome
@@ -307,6 +309,24 @@ comparison, pending-match confirm/reject), C10 (browsing) — is exposed only
 through `mcp` tools. `web` must never grow a UI surface for these; if a
 future milestone needs one, that's a scope change to NFR3, not an
 implementation detail to slip in under an existing task.
+
+**NFR3 amendment (issue #1648): C8's initial approve is now also
+MCP-exposed.** M1 originally kept *all* of C8 (approve, un-approve, edit)
+`web`-only, on the theory that committing a schedule was a deliberate human
+action best gated behind a UI click. In practice this made the
+FR16→FR19→FR22/FR23 pipeline (draft → commit → auto/pending-match →
+resolve) structurally unreachable from an MCP-only client: `mcp`'s outcome
+matcher and `resolve_pending_match` only ever consider *committed* entries,
+and nothing in `mcp` could ever produce one. `commit_schedule_draft`
+(`mcp/tools/schedule_draft.go`) closes that gap -- it calls the exact same
+`store.ScheduleStore.Approve` and `store.CanApprove` (Creator-only) that
+`web`'s approve button already uses, so the authority boundary is
+unchanged: an Analyst credential is still rejected, whether the caller is
+`web` or `mcp`. What changed is only *which surface* a Creator may use to
+say "commit this" -- un-approve/edit (the reversal/correction half of C8)
+stay `web`-only, since those are lower-frequency, deliberately-slower
+actions with no equivalent pipeline-completion need. Revisit this split if
+un-approve/edit ever gain the same MCP-reachability argument.
 
 ## Temporal: no scheduled-workflow helper yet
 

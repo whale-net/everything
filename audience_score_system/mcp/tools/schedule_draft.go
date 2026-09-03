@@ -1,10 +1,14 @@
 // C7's pacing-policy + schedule-drafting MCP tool group (issue #1579,
 // FR16-FR18): set_pacing_policy/get_pacing_policy (FR17), get_drafting_context
 // (FR18's context half), save_schedule_draft (FR16 + FR18's flagging half),
-// and list_schedule_entries. See ../../ARCHITECTURE.md's "FR17 authority"
-// note for who may call set_pacing_policy, and ../../store/pacing.go /
-// ../../store/schedule.go (PacingStore/ScheduleStore, already real from
-// #1569) for the storage this group reads and writes.
+// and list_schedule_entries. Also C8's commit_schedule_draft (FR19, issue
+// #1648), added later than the rest of this group -- see
+// ../../ARCHITECTURE.md's "NFR3 interface allocation" note for why C8 was
+// originally web-only and what changed. See ../../ARCHITECTURE.md's "FR17
+// authority" note for who may call set_pacing_policy, and
+// ../../store/pacing.go / ../../store/schedule.go (PacingStore/
+// ScheduleStore, already real from #1569) for the storage this group reads
+// and writes.
 package tools
 
 import (
@@ -794,16 +798,122 @@ func listScheduleEntriesHandler(schedules store.ScheduleStore, ideas store.IdeaS
 	}
 }
 
+// -- commit_schedule_draft -----------------------------------------------------
+
+// CommitScheduleDraftInput is commit_schedule_draft's argument schema
+// (FR19, issue #1648).
+type CommitScheduleDraftInput struct {
+	ChannelID         string `json:"channel_id" jsonschema:"Channel the draft belongs to, as a UUID string"`
+	ScheduleEntryID   string `json:"schedule_entry_id" jsonschema:"the draft schedule_entry to commit, as a UUID string (from save_schedule_draft or list_schedule_entries)"`
+	IdempotencyKeyArg string `json:"idempotency_key,omitempty" jsonschema:"Caller-supplied idempotency key. Strongly recommended: a replay with the same key is a no-op returning the original result (NFR2); committing an already-committed entry without one is rejected as a conflict, never a silent no-op."`
+}
+
+// ChannelScopeID implements server.ChannelScoped.
+func (i CommitScheduleDraftInput) ChannelScopeID() uuid.UUID {
+	id, _ := uuid.Parse(i.ChannelID)
+	return id
+}
+
+// IdempotencyKey implements server.IdempotencyKeyed.
+func (i CommitScheduleDraftInput) IdempotencyKey() string { return i.IdempotencyKeyArg }
+
+// registerCommitScheduleDraft registers commit_schedule_draft via
+// server.RegisterWrite. RegisterWrite's automatic ChannelScoped gate only
+// enforces store.CanWrite (Creator and Analyst) -- FR19 requires the
+// stricter store.CanApprove (Creator-only, matching web/schedule.go's
+// HandleApprove), so commitScheduleDraftMutate checks it explicitly before
+// calling store.ScheduleStore.Approve, the same store method the web UI's
+// approve button already calls (issue #1580, C8).
+func registerCommitScheduleDraft(reg *server.Registry, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore, roles store.RoleStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name: "commit_schedule_draft",
+		Description: "Approve a draft schedule_entry, transitioning it draft -> committed and recording the approving " +
+			"Creator (FR19). Creator-only (store.CanApprove) -- an Analyst calling this is rejected with a permission " +
+			"error, even though an Analyst may create the draft via save_schedule_draft. Committing is required before " +
+			"the outcome matcher will ever consider this entry a candidate: list_pending_matches/resolve_pending_match " +
+			"(FR22/FR23) and the sync worker's auto-match only ever match against committed entries, never drafts. " +
+			"Rejected with a conflict if schedule_entry_id is not currently a draft, or if it is already frozen by a " +
+			"live match to a published video (FR20). Always supply idempotency_key: committing an already-committed " +
+			"entry without one is rejected as a conflict, not treated as a no-op replay.",
+	}, commitScheduleDraftMutate(schedules, roles), commitScheduleDraftRender(schedules, ideas, verdicts, persons))
+}
+
+func commitScheduleDraftMutate(schedules store.ScheduleStore, roles store.RoleStore) server.WriteMutate[CommitScheduleDraftInput] {
+	return func(ctx context.Context, in CommitScheduleDraftInput) (uuid.UUID, error) {
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		entryID, err := uuid.Parse(in.ScheduleEntryID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("schedule_entry_id is not a valid UUID: %w", err)
+		}
+
+		entry, err := schedules.GetByID(ctx, entryID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, fmt.Errorf("schedule_entry_id does not exist")
+			}
+			return uuid.Nil, fmt.Errorf("load schedule_entry: %w", err)
+		}
+		if entry.ChannelID != channelID {
+			return uuid.Nil, fmt.Errorf("schedule_entry_id does not belong to channel_id")
+		}
+
+		person := server.PersonFromContext(ctx)
+		if person == nil {
+			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+
+		canApprove, err := store.CanApprove(ctx, roles, channelID, person.ID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
+		}
+		if !canApprove {
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Creator may commit a schedule draft (FR19)")
+		}
+
+		if err := schedules.Approve(ctx, entryID, person.ID); err != nil {
+			if errors.Is(err, store.ErrScheduleEntryPublished) {
+				return uuid.Nil, fmt.Errorf("cannot commit: %w", err)
+			}
+			return uuid.Nil, err
+		}
+		return entryID, nil
+	}
+}
+
+// commitScheduleDraftRender always re-reads the entry (by ref, the entry
+// ID mutate returned) from Postgres rather than trusting anything cached
+// from mutate -- see server.RegisterWrite's doc on why render runs on
+// every call, replay included.
+func commitScheduleDraftRender(schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore) server.WriteRender[ScheduleEntryOutput] {
+	return func(ctx context.Context, ref uuid.UUID) (*mcp.CallToolResult, ScheduleEntryOutput, error) {
+		entry, err := schedules.GetByID(ctx, ref)
+		if err != nil {
+			return nil, ScheduleEntryOutput{}, fmt.Errorf("load committed schedule entry: %w", err)
+		}
+		out, err := renderScheduleEntry(ctx, ideas, verdicts, persons, entry)
+		if err != nil {
+			return nil, ScheduleEntryOutput{}, err
+		}
+		return nil, out, nil
+	}
+}
+
 // -- registration ------------------------------------------------------------
 
 // RegisterScheduleDraft registers set_pacing_policy, get_pacing_policy,
-// get_drafting_context, save_schedule_draft, and list_schedule_entries
-// against reg (see ../server/registry.go), backed by st's
-// PacingStore/ScheduleStore/SyncStore/IdeaStore/VerdictStore/PersonStore.
+// get_drafting_context, save_schedule_draft, commit_schedule_draft, and
+// list_schedule_entries against reg (see ../server/registry.go), backed by
+// st's PacingStore/ScheduleStore/SyncStore/IdeaStore/VerdictStore/
+// PersonStore/RoleStore.
 func RegisterScheduleDraft(reg *server.Registry, st *store.Store) {
 	registerSetPacingPolicy(reg, st.Pacing(), st.Persons())
 	registerGetPacingPolicy(reg, st.Pacing(), st.Persons())
 	registerGetDraftingContext(reg, st.Pacing(), st.Sync(), st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons())
 	registerSaveScheduleDraft(reg, st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons(), st.Pacing(), st.Sync())
+	registerCommitScheduleDraft(reg, st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons(), st.Roles())
 	registerListScheduleEntries(reg, st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons())
 }
