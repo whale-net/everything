@@ -46,6 +46,7 @@ go_test(
         "//audience_score_system/youtube",
         "//audience_score_system/youtube/fake",
         "//libs/go/dbtest",
+        "//libs/go/mcpauth",
         "//libs/go/migrate",
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//stdlib",

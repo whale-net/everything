@@ -62,27 +62,37 @@ double consumers use in tests with no network call.
 
 ### MCP server: caller authentication
 
-**Decision (resolved for #1575's Scaffold phase, before any of this task's
-Implementation work landed):** an MCP client authenticates as a Person
-with a bearer credential that `mcp`'s auth middleware
-(`audience_score_system/mcp/server/auth.go`) resolves to `person.id`
-server-side. The credential is a high-entropy random token; only its
-SHA-256 hash is ever persisted, in `mcp_credential` (migration 005,
-`audience_score_system/store/credential.go`'s `CredentialStore`) — the raw
-token is shown to the Person exactly once, at mint time, and is never
-recoverable from the database afterward.
+**Decision (landed in #1575's Scaffold/Implementation phases, migrated
+onto the shared `//libs/go/mcpauth` library by #1643):** an MCP client
+authenticates as a Person with a bearer credential that `mcp`'s auth stack
+resolves to `person.id` server-side. The credential is a high-entropy
+random token; only its SHA-256 hash is ever persisted, in `mcp_credential`
+(migration 006, backed by `libs/go/mcpauth.CredentialStore` — see
+`libs/go/mcpauth/README.md`'s schema contract) — the raw token is shown to
+the Person exactly once, at mint time, and is never recoverable from the
+database afterward. `mcp_credential` was originally created by migration
+005 against ASS's own bespoke `store.CredentialStore` (#1575); migration
+006 drops and recreates it against `mcpauth`'s generic contract while
+preserving ASS's own referential integrity (`person_id` stays a real
+foreign key to `person(id)`, and both of 005's indexes are kept verbatim)
+— `mcpauth` itself treats identity as an opaque string
+(`StoreConfig.IdentityColumn = "person_id"`,
+`StoreConfig.IdentityCast = "uuid"` tell it how to bind/cast against this
+column), so that genericity never became a reason ASS lost its FK
+(FR13/NFR5).
 
 - **(a) Obtained:** minted by an authenticated endpoint on `web`, reusing
   the Person's existing C1 sign-in session (`web/auth`'s
   `RequireSignedIn`) rather than any new credential-collection UI. That
-  endpoint is not yet built — this task lands the schema and store
-  interface (`CredentialStore.Mint`) it will call; adding the endpoint
-  itself is filed as a scope note (no other M1 task owns it).
-- **(b) Revoked:** `CredentialStore.Revoke` closes a credential by setting
-  `revoked_at`; a revoked credential's hash no longer resolves in
-  `VerifyTokenHash`, so any MCP call bearing it is rejected on the next
-  request without needing to invalidate anything client-side. Revocation
-  is idempotent (NFR2) — revoking an already-revoked or nonexistent
+  endpoint is not yet built (`mcpauth.CredentialStore.Mint` has no
+  production caller today) — it is filed as a scope note (no other M1 task
+  owns it; #1646 wires the OAuth2 front-end onto `web`, not this mint
+  endpoint).
+- **(b) Revoked:** `mcpauth.CredentialStore.Revoke` closes a credential by
+  setting `revoked_at`; a revoked credential's hash no longer resolves in
+  `Verify`, so any MCP call bearing it is rejected on the next request
+  without needing to invalidate anything client-side. Revocation is
+  idempotent (NFR2) — revoking an already-revoked or nonexistent
   credential is not an error.
 - **(c) NFR3 rationale:** minting a credential is sign-in machinery — it
   bootstraps an already-authenticated Person's access to `mcp`, the same
@@ -94,26 +104,32 @@ recoverable from the database afterward.
 Mechanically, resolution happens in two layers (see
 `audience_score_system/mcp/server/`):
 
-1. **HTTP layer** (`transport.go`): `auth.RequireBearerToken` (from the
-   vendored SDK's `auth` package) wraps the streamable HTTP handler,
-   calling `TokenVerifier` (`auth.go`) to hash the raw token and resolve it
-   via `CredentialStore.VerifyTokenHash`, producing an `auth.TokenInfo`
-   whose `UserID` is the resolved Person's ID. Credentials do not expire on
-   a timer (they live until revoked), so `AllowMissingExpiration: true` is
-   set rather than requiring a per-token `exp` claim.
+1. **HTTP layer** (`transport.go`): `mcpauth.RequireBearerToken` wraps the
+   streamable HTTP handler, calling `mcpauth.TokenVerifier` under the hood
+   to hash the raw token and resolve it via
+   `mcpauth.CredentialStore.Verify`, producing an `auth.TokenInfo` whose
+   `UserID` is the resolved Person's ID (rendered as a string). Credentials
+   do not expire on a timer (they live until revoked), so
+   `mcpauth.RequireBearerToken` always forces `AllowMissingExpiration:
+   true` internally rather than requiring a per-token `exp` claim.
 2. **MCP-protocol layer** (`server.go`/`auth.go`): `PersonMiddleware`, wired
    via `mcp.Server.AddReceivingMiddleware`, reads that `TokenInfo` off each
-   request's `RequestExtra`, resolves the full `store.Person`, and places
-   it on the handler's `context.Context` (`PersonFromContext`,
-   `context.go`). A request with no resolved `TokenInfo`, or a `UserID`
-   that doesn't resolve to a real Person, is rejected here — the tool
-   handler is never entered.
+   request's `RequestExtra`, parses `UserID` back into a `uuid.UUID`,
+   resolves the full `store.Person` via `store.PersonStore`, and places it
+   on the handler's `context.Context` (`PersonFromContext`, `context.go`).
+   A request with no resolved `TokenInfo`, an unparseable `UserID`, or a
+   `UserID` that doesn't resolve to a real Person, is rejected here — the
+   tool handler is never entered. This step is unchanged by the #1643
+   migration — `mcpauth` only replaces the credential storage/verification
+   layer, not how a resolved identity becomes a Person.
 
-`CredentialStore.VerifyTokenHash`, `Mint`, `Revoke`, and `ListForPerson`
-(issue #1575's Implementation phase) are real SQL-backed implementations
-against `mcp_credential` — `VerifyTokenHash` also stamps `last_used_at` in
-the same round trip, so it doubles as the "last seen" signal for a future
-credential-management view (see issue #1591's scope note).
+`mcpauth.CredentialStore.Verify`, `Mint`, `Revoke`, and `List` are real
+SQL-backed implementations against `mcp_credential`, constructed in
+`mcp/main.go` via `mcpauth.NewCredentialStore` — its preflight probe means
+a missing migration 006 fails `mcp` at boot instead of at first call.
+`Verify` also stamps `last_used_at` in the same round trip, so it doubles
+as the "last seen" signal for a future credential-management view (see
+issue #1591's scope note).
 
 ### MCP server: Channel-scoping and idempotency middleware
 

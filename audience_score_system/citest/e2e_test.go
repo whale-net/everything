@@ -135,6 +135,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/youtube"
 	"github.com/whale-net/everything/audience_score_system/youtube/fake"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -155,6 +156,7 @@ type world struct {
 	ctx      context.Context
 	pg       *dbtest.Postgres
 	st       *store.Store
+	creds    mcpauth.CredentialStore
 	sessions *auth.SessionManager
 	web      http.Handler
 	mcpURL   string
@@ -174,6 +176,13 @@ func newWorld(t *testing.T) *world {
 	require.NoError(t, runner.Up(), "apply every migration from the real embedded schema")
 
 	st := store.New(pg.Pool)
+	creds, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+		Pool:           pg.Pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
 	sessions := auth.NewSessionManager(pg.Pool, testCookieName, "session-secret", testEncKey())
 	a := auth.NewForTests(st.Persons(), sessions)
 	inv := invite.New(st, sessions)
@@ -204,11 +213,11 @@ func newWorld(t *testing.T) *world {
 	mcptools.RegisterScheduleDraft(reg, st)
 	mcptools.RegisterMatches(reg, st)
 	mcptools.RegisterBrowse(reg, st)
-	mcpHandler := mcpserver.NewHTTPHandler(srv, st.Credentials())
+	mcpHandler := mcpserver.NewHTTPHandler(srv, creds)
 	mcpTS := httptest.NewServer(mcpHandler)
 	t.Cleanup(mcpTS.Close)
 
-	return &world{t: t, ctx: ctx, pg: pg, st: st, sessions: sessions, web: mux, mcpURL: mcpTS.URL}
+	return &world{t: t, ctx: ctx, pg: pg, st: st, creds: creds, sessions: sessions, web: mux, mcpURL: mcpTS.URL}
 }
 
 // establishSession stands in for a completed C1 Google sign-in (FR1/FR2's
@@ -267,12 +276,12 @@ func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return http.DefaultTransport.RoundTrip(req)
 }
 
-// mcpConnect mints a real bearer credential for personID (store.
+// mcpConnect mints a real bearer credential for personID (mcpauth.
 // CredentialStore.Mint, the same mechanism web's token-mint endpoint uses
 // in production) and opens a real streamable-HTTP MCP client session.
 func (w *world) mcpConnect(personID uuid.UUID) *mcp.ClientSession {
 	w.t.Helper()
-	token, _, err := w.st.Credentials().Mint(w.ctx, personID)
+	token, _, err := w.creds.Mint(w.ctx, personID.String())
 	require.NoError(w.t, err)
 
 	transport := &mcp.StreamableClientTransport{

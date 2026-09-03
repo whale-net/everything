@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -49,6 +50,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -71,12 +73,29 @@ func newScheduleDraftTestDB(t *testing.T) *dbtest.Postgres {
 	return pg
 }
 
+// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// mcp_credential table (migration 006) -- the same construction main.go
+// does, mirrored here so tests mint/verify through the identical backing
+// this task migrated onto (FR13/NFR3 parity).
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+	t.Helper()
+	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+	return creds
+}
+
 // scheduleDraftFixture is the common setup every test below needs: a
 // Channel with a live Creator and Analyst, an unassociated Person with no
 // role on it, and an Idea to attach verdicts/drafts to, hosted behind a
 // real MCP server with RegisterVerdict + RegisterScheduleDraft wired.
 type scheduleDraftFixture struct {
 	st       *store.Store
+	creds    mcpauth.CredentialStore
 	ch       store.Channel
 	creator  store.Person
 	analyst  store.Person
@@ -91,6 +110,7 @@ func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
 
 	pg := newScheduleDraftTestDB(t)
 	st := store.New(pg.Pool)
+	creds := newTestCredentialStore(t, pg.Pool)
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-sd-creator-"+uuid.NewString(), "sd-creator@example.com", "Creator Person")
 	require.NoError(t, err)
@@ -111,12 +131,12 @@ func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
 	tools.RegisterVerdict(reg, st)
 	tools.RegisterScheduleDraft(reg, st)
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, creds)
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
 	return &scheduleDraftFixture{
-		st: st, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
+		st: st, creds: creds, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
 		idea: idea,
 		url:  ts.URL,
 	}
@@ -138,7 +158,7 @@ func (f *scheduleDraftFixture) connect(t *testing.T, personID uuid.UUID) *mcp.Cl
 	t.Helper()
 	ctx := context.Background()
 
-	token, _, err := f.st.Credentials().Mint(ctx, personID)
+	token, _, err := f.creds.Mint(ctx, personID.String())
 	require.NoError(t, err)
 
 	transport := &mcp.StreamableClientTransport{

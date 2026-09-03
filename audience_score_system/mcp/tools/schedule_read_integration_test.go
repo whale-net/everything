@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -36,14 +37,16 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
 // newScheduleTestStack provisions an isolated Postgres database via
 // dbtest, applies every migration in the real embedded schema, and
-// returns a ready *store.Store -- mirrors server_integration_test.go's
-// newTestDB.
-func newScheduleTestStack(t *testing.T) *store.Store {
+// returns a ready *store.Store plus the *pgxpool.Pool backing it (needed
+// to construct mcpauth.CredentialStore) -- mirrors
+// server_integration_test.go's newTestDB.
+func newScheduleTestStack(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -56,7 +59,23 @@ func newScheduleTestStack(t *testing.T) *store.Store {
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Up(), "apply every migration from the real embedded schema")
 
-	return store.New(pg.Pool)
+	return store.New(pg.Pool), pg.Pool
+}
+
+// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// mcp_credential table (migration 006) -- the same construction main.go
+// does, mirrored here so tests mint/verify through the identical backing
+// this task migrated onto (FR13/NFR3 parity).
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+	t.Helper()
+	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+	return creds
 }
 
 // bearerRoundTripper injects an "Authorization: Bearer <token>" header on
@@ -136,14 +155,14 @@ func callSchedule(t *testing.T, cs *mcp.ClientSession, args tools.GetChannelSche
 
 // newScheduleTestServer wires a real *mcp.Server with get_channel_schedule
 // registered (mirroring ../main.go's production wiring), hosted over HTTP.
-func newScheduleTestServer(t *testing.T, st *store.Store) *httptest.Server {
+func newScheduleTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool) *httptest.Server {
 	t.Helper()
 
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterGetChannelSchedule(reg, st.Sync())
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool))
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	return ts
@@ -152,7 +171,7 @@ func newScheduleTestServer(t *testing.T, st *store.Store) *httptest.Server {
 // ── Channel-scoping: creator + analyst read, unassociated Person denied ────
 
 func TestGetChannelSchedule_ChannelScoping_CreatorAndAnalystRead_UnassociatedDenied(t *testing.T) {
-	st := newScheduleTestStack(t)
+	st, pool := newScheduleTestStack(t)
 	ctx := context.Background()
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-creator", "creator@example.com", "Creator")
@@ -173,24 +192,24 @@ func TestGetChannelSchedule_ChannelScoping_CreatorAndAnalystRead_UnassociatedDen
 		LastSyncedAt:   time.Now(),
 	}}))
 
-	ts := newScheduleTestServer(t, st)
+	ts := newScheduleTestServer(t, st, pool)
 
 	t.Run("creator reads the schedule", func(t *testing.T) {
-		cs := connectAs(t, ts, mintScheduleToken(t, st, creator.ID))
+		cs := connectAs(t, ts, mintScheduleToken(t, pool, creator.ID))
 		res, out := callSchedule(t, cs, tools.GetChannelScheduleInput{ChannelID: ch.ID.String()})
 		require.False(t, res.IsError, "unexpected error: %s", textOf(res))
 		assert.Equal(t, []string{"vid-1"}, videoIDs(out))
 	})
 
 	t.Run("analyst reads the schedule", func(t *testing.T) {
-		cs := connectAs(t, ts, mintScheduleToken(t, st, analyst.ID))
+		cs := connectAs(t, ts, mintScheduleToken(t, pool, analyst.ID))
 		res, out := callSchedule(t, cs, tools.GetChannelScheduleInput{ChannelID: ch.ID.String()})
 		require.False(t, res.IsError, "unexpected error: %s", textOf(res))
 		assert.Equal(t, []string{"vid-1"}, videoIDs(out))
 	})
 
 	t.Run("unassociated Person is denied, sees no rows", func(t *testing.T) {
-		cs := connectAs(t, ts, mintScheduleToken(t, st, unassociated.ID))
+		cs := connectAs(t, ts, mintScheduleToken(t, pool, unassociated.ID))
 		res, _ := callSchedule(t, cs, tools.GetChannelScheduleInput{ChannelID: ch.ID.String()})
 		assert.True(t, res.IsError)
 		assert.Contains(t, textOf(res), "permission denied")
@@ -200,7 +219,7 @@ func TestGetChannelSchedule_ChannelScoping_CreatorAndAnalystRead_UnassociatedDen
 // ── include_drafts filtering ────────────────────────────────────────────
 
 func TestGetChannelSchedule_IncludeDrafts_DefaultTrue_FalseOmitsDrafts(t *testing.T) {
-	st := newScheduleTestStack(t)
+	st, pool := newScheduleTestStack(t)
 	ctx := context.Background()
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-creator-2", "creator2@example.com", "Creator")
@@ -228,8 +247,8 @@ func TestGetChannelSchedule_IncludeDrafts_DefaultTrue_FalseOmitsDrafts(t *testin
 		},
 	}))
 
-	ts := newScheduleTestServer(t, st)
-	token := mintScheduleToken(t, st, creator.ID)
+	ts := newScheduleTestServer(t, st, pool)
+	token := mintScheduleToken(t, pool, creator.ID)
 
 	t.Run("default (unset) includes drafts", func(t *testing.T) {
 		cs := connectAs(t, ts, token)
@@ -258,7 +277,7 @@ func TestGetChannelSchedule_IncludeDrafts_DefaultTrue_FalseOmitsDrafts(t *testin
 // ── from/to window filtering ────────────────────────────────────────────
 
 func TestGetChannelSchedule_FromToWindow_FiltersByEffectiveTimestamp(t *testing.T) {
-	st := newScheduleTestStack(t)
+	st, pool := newScheduleTestStack(t)
 	ctx := context.Background()
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-creator-3", "creator3@example.com", "Creator")
@@ -277,8 +296,8 @@ func TestGetChannelSchedule_FromToWindow_FiltersByEffectiveTimestamp(t *testing.
 		{YouTubeVideoID: "vid-late", Title: "Late draft", PrivacyStatus: store.PrivacyStatusPrivate, PublishAt: &late, IsScheduledDraft: true, LastSyncedAt: now},
 	}))
 
-	ts := newScheduleTestServer(t, st)
-	token := mintScheduleToken(t, st, creator.ID)
+	ts := newScheduleTestServer(t, st, pool)
+	token := mintScheduleToken(t, pool, creator.ID)
 
 	from := now.Add(-48 * time.Hour)
 	to := now.Add(48 * time.Hour)
@@ -291,7 +310,7 @@ func TestGetChannelSchedule_FromToWindow_FiltersByEffectiveTimestamp(t *testing.
 // ── empty Channel: empty list, not an error ─────────────────────────────
 
 func TestGetChannelSchedule_EmptyChannel_ReturnsEmptyListNotError(t *testing.T) {
-	st := newScheduleTestStack(t)
+	st, pool := newScheduleTestStack(t)
 	ctx := context.Background()
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-creator-4", "creator4@example.com", "Creator")
@@ -299,8 +318,8 @@ func TestGetChannelSchedule_EmptyChannel_ReturnsEmptyListNotError(t *testing.T) 
 	ch, err := st.Channels().Create(ctx, "yt-schedule-empty-1", "Channel", creator.ID)
 	require.NoError(t, err)
 
-	ts := newScheduleTestServer(t, st)
-	cs := connectAs(t, ts, mintScheduleToken(t, st, creator.ID))
+	ts := newScheduleTestServer(t, st, pool)
+	cs := connectAs(t, ts, mintScheduleToken(t, pool, creator.ID))
 
 	res, out := callSchedule(t, cs, tools.GetChannelScheduleInput{ChannelID: ch.ID.String()})
 	require.False(t, res.IsError, "unexpected error: %s", textOf(res))
@@ -308,10 +327,10 @@ func TestGetChannelSchedule_EmptyChannel_ReturnsEmptyListNotError(t *testing.T) 
 }
 
 // mintScheduleToken mints a real bearer credential for personID via
-// store.CredentialStore (migration 005).
-func mintScheduleToken(t *testing.T, st *store.Store, personID uuid.UUID) string {
+// mcpauth.CredentialStore (migration 006).
+func mintScheduleToken(t *testing.T, pool *pgxpool.Pool, personID uuid.UUID) string {
 	t.Helper()
-	raw, _, err := st.Credentials().Mint(context.Background(), personID)
+	raw, _, err := newTestCredentialStore(t, pool).Mint(context.Background(), personID.String())
 	require.NoError(t, err)
 	return raw
 }

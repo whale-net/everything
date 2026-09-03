@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -39,6 +40,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -61,6 +63,22 @@ func newMatchesTestDB(t *testing.T) *dbtest.Postgres {
 	return pg
 }
 
+// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// mcp_credential table (migration 006) -- the same construction main.go
+// does, mirrored here so tests mint/verify through the identical backing
+// this task migrated onto (FR13/NFR3 parity).
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+	t.Helper()
+	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+	return creds
+}
+
 // matchesFixture is the common setup every test below needs: a Channel
 // with a live Creator and Analyst, an unassociated Person with no role on
 // it, a committed schedule_entry (the matcher's candidate), a published
@@ -70,6 +88,7 @@ func newMatchesTestDB(t *testing.T) *dbtest.Postgres {
 type matchesFixture struct {
 	pg       *dbtest.Postgres
 	st       *store.Store
+	creds    mcpauth.CredentialStore
 	ch       store.Channel
 	creator  store.Person
 	analyst  store.Person
@@ -86,6 +105,7 @@ func newMatchesFixture(t *testing.T) *matchesFixture {
 
 	pg := newMatchesTestDB(t)
 	st := store.New(pg.Pool)
+	creds := newTestCredentialStore(t, pg.Pool)
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-creator-"+uuid.NewString(), "creator@example.com", "Creator Person")
 	require.NoError(t, err)
@@ -137,12 +157,12 @@ func newMatchesFixture(t *testing.T) *matchesFixture {
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterMatches(reg, st)
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, creds)
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
 	return &matchesFixture{
-		pg: pg, st: st, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
+		pg: pg, st: st, creds: creds, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
 		entry: entry, video: video, match: match, url: ts.URL,
 	}
 }
@@ -164,7 +184,7 @@ func (f *matchesFixture) connect(t *testing.T, personID uuid.UUID) *mcp.ClientSe
 	t.Helper()
 	ctx := context.Background()
 
-	token, _, err := f.st.Credentials().Mint(ctx, personID)
+	token, _, err := f.creds.Mint(ctx, personID.String())
 	require.NoError(t, err)
 
 	transport := &mcp.StreamableClientTransport{

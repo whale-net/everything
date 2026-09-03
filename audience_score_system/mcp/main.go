@@ -23,6 +23,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 )
 
@@ -106,6 +107,20 @@ func run() error {
 
 	st := store.New(pool)
 
+	// mcpauth.NewCredentialStore preflights the mcp_credential table at
+	// boot -- a missing migration 006 fails `mcp` at startup instead of at
+	// first bearer-token verification (see ../ENV.md's mcp_credential
+	// entry).
+	creds, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	if err != nil {
+		return fmt.Errorf("mcpauth credential store: apply migration 006_mcpauth_credential before starting mcp: %w", err)
+	}
+
 	// `mcp` constructs its own Temporal client and sync.ScheduleManager,
 	// the same pattern `web` (issue #1614) and `worker` already use --
 	// trigger_channel_sync (issue #1650) needs ScheduleManager.TriggerNow
@@ -137,7 +152,7 @@ func run() error {
 	tools.RegisterBrowse(reg, st)
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), scheduleManager)
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, creds)
 
 	httpServer := &http.Server{
 		Addr:         cfg.MCPAddr,

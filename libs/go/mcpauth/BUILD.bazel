@@ -3,12 +3,16 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "mcpauth",
     srcs = [
+        "authcode.go",
+        "authorize.go",
         "clients.go",
         "credential.go",
         "mcpauth.go",
         "metadata.go",
+        "pkce.go",
         "provider.go",
         "resolver.go",
+        "token.go",
         "verify.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/mcpauth",
@@ -25,11 +29,14 @@ go_library(
 go_test(
     name = "mcpauth_test",
     srcs = [
+        "authorize_test.go",
         "clients_test.go",
         "credential_test.go",
         "metadata_test.go",
+        "pkce_test.go",
         "provider_test.go",
         "resolver_test.go",
+        "token_test.go",
         "verify_test.go",
     ],
     embed = [":mcpauth"],
@@ -60,6 +67,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "authcode_integration_test.go",
         "clients_integration_test.go",
         "credential_integration_test.go",
     ],
