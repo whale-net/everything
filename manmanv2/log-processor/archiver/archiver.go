@@ -5,7 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -119,7 +119,7 @@ func (a *Archiver) AddLog(sgcID, sessionID int64, timestamp time.Time, source, m
 			MinuteTimestamp: minuteTimestamp,
 		}
 		a.windows[key] = window
-		log.Printf("[archiver] Created new window for SGC %d, Session %d at minute %s", sgcID, sessionID, minuteTimestamp.Format("15:04"))
+		slog.Info("created new archive window", "sgc_id", sgcID, "session_id", sessionID, "minute", minuteTimestamp.Format("15:04"))
 	}
 
 	// Add log to window
@@ -178,7 +178,7 @@ func (a *Archiver) closeStaleWindows() {
 	}
 
 	if closedCount > 0 {
-		log.Printf("[archiver] Closed %d stale window(s) for upload (active windows: %d)", closedCount, len(a.windows))
+		slog.Info("closed stale windows for upload", "closed_count", closedCount, "active_windows", len(a.windows))
 	}
 }
 
@@ -192,7 +192,7 @@ func (a *Archiver) uploadWorker() {
 			return
 		case window := <-a.uploadChan:
 			if err := a.uploadWindow(a.ctx, window); err != nil {
-				log.Printf("Failed to upload window %s: %v", window.GetKey(), err)
+				slog.Error("failed to upload window", "window_key", window.GetKey(), "error", err)
 			}
 		}
 	}
@@ -220,7 +220,7 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 			age := time.Since(existingLog.CreatedAt)
 			if age < concurrencyProtectionWindow {
 				// Another worker is handling this, abort
-				log.Printf("Aborting upload of window %s: recent pending record exists (age: %v)", window.GetKey(), age)
+				slog.Warn("aborting window upload: recent pending record exists", "window_key", window.GetKey(), "age", age)
 				return nil
 			}
 		}
@@ -291,7 +291,7 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 			return fmt.Errorf("failed to compress appended data: %w", err)
 		}
 
-		log.Printf("Appending to existing S3 object: %s", s3Key)
+		slog.Info("appending to existing S3 object", "s3_key", s3Key)
 		if _, err := a.s3Client.Upload(ctx, s3Key, compressedData, &s3.UploadOptions{
 			ContentType:     "application/gzip",
 			ContentEncoding: "gzip",
@@ -316,8 +316,9 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 			return fmt.Errorf("failed to upload to S3: %w", err)
 		}
 
-		log.Printf("Uploaded compressed log: %d bytes → %d bytes (%.1f%% reduction)",
-			len(logData), len(compressedData), 100.0*(1-float64(len(compressedData))/float64(len(logData))))
+		slog.Info("uploaded compressed log",
+			"raw_bytes", len(logData), "compressed_bytes", len(compressedData),
+			"reduction_pct", 100.0*(1-float64(len(compressedData))/float64(len(logData))))
 	}
 
 	// Mark as complete
@@ -325,13 +326,13 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 		return fmt.Errorf("failed to update log state: %w", err)
 	}
 
-	log.Printf("Successfully uploaded window %s: %d lines to %s", window.GetKey(), window.LineCount, s3Key)
+	slog.Info("successfully uploaded window", "window_key", window.GetKey(), "line_count", window.LineCount, "s3_key", s3Key)
 	return nil
 }
 
 // FlushSession uploads all pending windows for a specific session (called on session stop)
 func (a *Archiver) FlushSession(ctx context.Context, sessionID int64) error {
-	log.Printf("[archiver] Flushing pending log windows for session %d...", sessionID)
+	slog.Info("flushing pending log windows for session", "session_id", sessionID)
 
 	a.windowsMu.Lock()
 	sessionWindows := make([]*MinuteWindow, 0)
@@ -344,7 +345,7 @@ func (a *Archiver) FlushSession(ctx context.Context, sessionID int64) error {
 	a.windowsMu.Unlock()
 
 	if len(sessionWindows) == 0 {
-		log.Printf("[archiver] No pending windows for session %d", sessionID)
+		slog.Info("no pending windows for session", "session_id", sessionID)
 		return nil
 	}
 
@@ -360,13 +361,13 @@ func (a *Archiver) FlushSession(ctx context.Context, sessionID int64) error {
 		return fmt.Errorf("failed to flush %d windows for session %d: %v", len(errs), sessionID, errs)
 	}
 
-	log.Printf("[archiver] Successfully flushed %d window(s) for session %d", len(sessionWindows), sessionID)
+	slog.Info("successfully flushed windows for session", "window_count", len(sessionWindows), "session_id", sessionID)
 	return nil
 }
 
 // FlushAll uploads all pending windows synchronously (for graceful shutdown)
 func (a *Archiver) FlushAll(ctx context.Context) error {
-	log.Println("Flushing all pending log windows...")
+	slog.Info("flushing all pending log windows")
 
 	a.windowsMu.Lock()
 	windows := make([]*MinuteWindow, 0, len(a.windows))
@@ -388,17 +389,17 @@ func (a *Archiver) FlushAll(ctx context.Context) error {
 		return fmt.Errorf("failed to flush %d windows: %v", len(errs), errs)
 	}
 
-	log.Printf("Successfully flushed %d windows", len(windows))
+	slog.Info("successfully flushed windows", "window_count", len(windows))
 	return nil
 }
 
 // Close gracefully shuts down the archiver
 func (a *Archiver) Close() error {
-	log.Println("Shutting down archiver...")
+	slog.Info("shutting down archiver")
 
 	// Flush all pending windows
 	if err := a.FlushAll(context.Background()); err != nil {
-		log.Printf("Error during flush: %v", err)
+		slog.Error("error during archiver shutdown flush", "error", err)
 	}
 
 	// Stop the background closer
@@ -409,7 +410,7 @@ func (a *Archiver) Close() error {
 	close(a.uploadChan)
 	a.wg.Wait()
 
-	log.Println("Archiver shutdown complete")
+	slog.Info("archiver shutdown complete")
 	return nil
 }
 

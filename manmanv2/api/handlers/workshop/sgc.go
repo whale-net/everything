@@ -2,6 +2,7 @@ package workshop
 
 import (
 	"context"
+	"log/slog"
 
 	pb "github.com/whale-net/everything/manmanv2/protos"
 	"google.golang.org/grpc/codes"
@@ -31,8 +32,11 @@ func (h *WorkshopServiceHandler) AddLibraryToSGC(ctx context.Context, req *pb.Ad
 	}
 
 	if err := h.sgcRepo.AddLibrary(ctx, req.SgcId, req.LibraryId, presetID, volumeID, installationPathOverride); err != nil {
+		slog.Warn("failed to add workshop library to SGC", "sgc_id", req.SgcId, "library_id", req.LibraryId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to add library to SGC: %v", err)
 	}
+
+	slog.Info("workshop library added to SGC", "sgc_id", req.SgcId, "library_id", req.LibraryId)
 
 	return &pb.AddLibraryToSGCResponse{}, nil
 }
@@ -47,8 +51,11 @@ func (h *WorkshopServiceHandler) RemoveLibraryFromSGC(ctx context.Context, req *
 	}
 
 	if err := h.sgcRepo.RemoveLibrary(ctx, req.SgcId, req.LibraryId); err != nil {
+		slog.Warn("failed to remove workshop library from SGC", "sgc_id", req.SgcId, "library_id", req.LibraryId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to remove library from SGC: %v", err)
 	}
+
+	slog.Info("workshop library removed from SGC", "sgc_id", req.SgcId, "library_id", req.LibraryId)
 
 	return &pb.RemoveLibraryFromSGCResponse{}, nil
 }

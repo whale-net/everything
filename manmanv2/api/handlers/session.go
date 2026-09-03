@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -132,6 +131,7 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	activeSessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 10, 0) // Fetch a few to check statuses
 	if err != nil {
+		slog.Warn("failed to check active sessions for start", "sgc_id", req.ServerGameConfigId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to check active sessions: %v", err)
 	}
 
@@ -156,7 +156,7 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	if internalForce {
 		// User requested force start: mark other sessions as stopped and deallocate ports
-		log.Printf("Force start requested by user for SGC %d, will invalidate %d active sessions", req.ServerGameConfigId, len(activeSessions))
+		slog.Info("force start requested", "sgc_id", req.ServerGameConfigId, "active_sessions_invalidated", len(activeSessions))
 	}
 
 	// Create session in database
@@ -167,25 +167,30 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 
 	session, err = h.sessionRepo.Create(ctx, session)
 	if err != nil {
+		slog.Warn("failed to create session", "sgc_id", req.ServerGameConfigId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
 	}
+
+	slog.Info("session start requested", "session_id", session.SessionID, "sgc_id", req.ServerGameConfigId, "force", internalForce)
 
 	if internalForce {
 		// Mark other sessions as stopped in DB immediately
 		if err := h.sessionRepo.StopOtherSessionsForSGC(ctx, session.SessionID, req.ServerGameConfigId); err != nil {
-			log.Printf("Warning: Failed to invalidate other sessions for SGC %d: %v", req.ServerGameConfigId, err)
+			slog.Warn("failed to invalidate other sessions for SGC", "sgc_id", req.ServerGameConfigId, "session_id", session.SessionID, "error", err)
 		}
 	}
 
 	// Fetch ServerGameConfig to get server ID and deployment details
 	sgc, err := h.sgcRepo.Get(ctx, req.ServerGameConfigId)
 	if err != nil {
+		slog.Warn("failed to fetch server game config for start", "sgc_id", req.ServerGameConfigId, "session_id", session.SessionID, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to fetch server game config: %v", err)
 	}
 
 	// Fetch GameConfig to get game details
 	gc, err := h.gcRepo.Get(ctx, sgc.GameConfigID)
 	if err != nil {
+		slog.Warn("failed to fetch game config for start", "config_id", sgc.GameConfigID, "session_id", session.SessionID, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to fetch game config: %v", err)
 	}
 
@@ -198,12 +203,12 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		}
 		terminalSessions, err := h.sessionRepo.ListWithFilters(ctx, filters, 100, 0)
 		if err != nil {
-			log.Printf("Warning: Failed to list terminal sessions for SGC %d: %v", sgc.SGCID, err)
+			slog.Warn("failed to list terminal sessions for force start", "sgc_id", sgc.SGCID, "session_id", session.SessionID, "error", err)
 		} else {
 			for _, ts := range terminalSessions {
-				log.Printf("[session %d] force=true: deallocating ports for terminal session %d (status: %s)", session.SessionID, ts.SessionID, ts.Status)
+				slog.Info("force start: deallocating ports for terminal session", "session_id", session.SessionID, "terminal_session_id", ts.SessionID, "terminal_status", ts.Status)
 				if err := h.repo.ServerPorts.DeallocatePortsBySessionID(ctx, ts.SessionID); err != nil {
-					log.Printf("Warning: Failed to deallocate ports for session %d: %v", ts.SessionID, err)
+					slog.Warn("failed to deallocate ports for terminal session", "terminal_session_id", ts.SessionID, "session_id", session.SessionID, "error", err)
 				}
 			}
 		}
@@ -229,15 +234,16 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 			// Rollback: mark session as failed
 			session.Status = manman.SessionStatusCrashed
 			h.sessionRepo.Update(ctx, session)
+			slog.Warn("failed to allocate ports for session start", "session_id", session.SessionID, "server_id", sgc.ServerID, "error", err)
 			return nil, status.Errorf(codes.ResourceExhausted, "failed to allocate ports (ports may be in use by another session): %v", err)
 		}
-		log.Printf("[session %d] allocated %d ports on server %d", session.SessionID, len(portBindings), sgc.ServerID)
+		slog.Info("allocated ports for session", "session_id", session.SessionID, "port_count", len(portBindings), "server_id", sgc.ServerID)
 	}
 
 	// Fetch volumes for this GameConfig
 	volumes, err := h.repo.GameConfigVolumes.ListByGameConfig(ctx, gc.ConfigID)
 	if err != nil {
-		log.Printf("Warning: Failed to fetch volumes for config %d: %v", gc.ConfigID, err)
+		slog.Warn("failed to fetch volumes for game config", "config_id", gc.ConfigID, "session_id", session.SessionID, "error", err)
 		volumes = []*manman.GameConfigVolume{}
 	}
 
@@ -249,8 +255,10 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 		cmd := buildStartSessionCommand(session, sgc, gc, internalForce, volumes)
 		// Short timeout: host manager replies immediately on receipt (work runs async).
 		if err := h.publisher.PublishStartSession(ctx, sgc.ServerID, cmd, 30*time.Second); err != nil {
-			log.Printf("Warning: Failed to publish start session command: %v", err)
+			slog.Warn("failed to publish start session command", "session_id", session.SessionID, "server_id", sgc.ServerID, "error", err)
 			// Don't fail the request - the session is created, operator can manually trigger
+		} else {
+			slog.Info("start session command published", "session_id", session.SessionID, "server_id", sgc.ServerID)
 		}
 	}
 
@@ -262,12 +270,16 @@ func (h *SessionHandler) StartSession(ctx context.Context, req *pb.StartSessionR
 func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionRequest) (*pb.StopSessionResponse, error) {
 	session, err := h.sessionRepo.Get(ctx, req.SessionId)
 	if err != nil {
+		slog.Warn("stop requested for unknown session", "session_id", req.SessionId, "error", err)
 		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
 	}
+
+	slog.Info("session stop requested", "session_id", session.SessionID, "sgc_id", session.SGCID)
 
 	// Fetch ServerGameConfig to get server ID
 	sgc, err := h.sgcRepo.Get(ctx, session.SGCID)
 	if err != nil {
+		slog.Warn("failed to fetch server game config for stop", "sgc_id", session.SGCID, "session_id", session.SessionID, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to fetch server game config: %v", err)
 	}
 
@@ -279,22 +291,23 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 		}
 		// Short timeout: host manager replies immediately on receipt (work runs async).
 		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd, 1*time.Minute); err != nil {
-			log.Printf("Warning: Failed to publish stop session command: %v", err)
+			slog.Warn("failed to publish stop session command", "session_id", session.SessionID, "server_id", sgc.ServerID, "error", err)
 		}
 	}
 
 	// Update session status
 	session.Status = manman.SessionStatusStopping
 	if err := h.sessionRepo.Update(ctx, session); err != nil {
+		slog.Warn("failed to update session status to stopping", "session_id", session.SessionID, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to update session: %v", err)
 	}
 
 	// Deallocate ports for this session to allow other sessions to use them
 	if err := h.repo.ServerPorts.DeallocatePortsBySessionID(ctx, session.SessionID); err != nil {
-		log.Printf("Warning: Failed to deallocate ports for session %d: %v", session.SessionID, err)
+		slog.Warn("failed to deallocate ports for session", "session_id", session.SessionID, "error", err)
 		// Don't fail the stop request - ports can be cleaned up later
 	} else {
-		log.Printf("[session %d] deallocated ports", session.SessionID)
+		slog.Info("deallocated ports for stopped session", "session_id", session.SessionID)
 	}
 
 	return &pb.StopSessionResponse{
@@ -305,17 +318,20 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest) (*pb.SendInputResponse, error) {
 	session, err := h.sessionRepo.Get(ctx, req.SessionId)
 	if err != nil {
+		slog.Warn("send input requested for unknown session", "session_id", req.SessionId, "error", err)
 		return nil, status.Errorf(codes.NotFound, "session not found: %v", err)
 	}
 
 	// Only allow sending input to running sessions
 	if session.Status != manman.SessionStatusRunning {
+		slog.Warn("send input rejected: session not running", "session_id", session.SessionID, "status", session.Status)
 		return nil, status.Errorf(codes.FailedPrecondition, "session is not running (status: %s)", session.Status)
 	}
 
 	// Fetch ServerGameConfig to get server ID
 	sgc, err := h.sgcRepo.Get(ctx, session.SGCID)
 	if err != nil {
+		slog.Warn("failed to fetch server game config for send input", "sgc_id", session.SGCID, "session_id", session.SessionID, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to fetch server game config: %v", err)
 	}
 
@@ -326,9 +342,12 @@ func (h *SessionHandler) SendInput(ctx context.Context, req *pb.SendInputRequest
 			"input":      req.Input,
 		}
 		if err := h.publisher.PublishSendInput(ctx, sgc.ServerID, cmd, 10*time.Second); err != nil {
+			slog.Warn("failed to publish send input command", "session_id", session.SessionID, "server_id", sgc.ServerID, "error", err)
 			return nil, status.Errorf(codes.Internal, "failed to send input: %v", err)
 		}
+		slog.Info("input sent to session", "session_id", session.SessionID)
 	} else {
+		slog.Warn("send input failed: publisher not configured", "session_id", session.SessionID)
 		return nil, status.Errorf(codes.Internal, "publisher not configured")
 	}
 

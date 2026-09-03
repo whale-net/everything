@@ -3,7 +3,7 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 )
@@ -58,30 +58,30 @@ func (h *Handler) Start(ctx context.Context) error {
 	h.consumer.RegisterHandler("#", func(ctx context.Context, msg rmq.Message) error {
 		var event SessionLifecycleEvent
 		if err := json.Unmarshal(msg.Body, &event); err != nil {
-			log.Printf("[lifecycle] failed to unmarshal event: %v", err)
+			slog.Warn("failed to unmarshal lifecycle event", "error", err)
 			return nil // Don't retry on unmarshal errors
 		}
 
-		log.Printf("[lifecycle] received event: session_id=%d status=%s", event.SessionID, event.Status)
+		slog.Info("received lifecycle event", "session_id", event.SessionID, "status", event.Status)
 
 		switch event.Status {
 		case "running":
 			// Create queue and consumer for this session
 			if err := h.consumerManager.CreateConsumerForSession(ctx, event.SessionID); err != nil {
-				log.Printf("[lifecycle] failed to create consumer for session %d: %v", event.SessionID, err)
+				slog.Warn("failed to create consumer for session", "session_id", event.SessionID, "error", err)
 				return err // Retry on error
 			}
 
 		case "stopped", "crashed":
 			// Delete queue and close consumer
 			if err := h.consumerManager.DeleteConsumerForSession(event.SessionID); err != nil {
-				log.Printf("[lifecycle] failed to delete consumer for session %d: %v", event.SessionID, err)
+				slog.Warn("failed to delete consumer for session", "session_id", event.SessionID, "error", err)
 				return err // Retry on error
 			}
 
 		case "lost":
 			// Do nothing - session may recover
-			log.Printf("[lifecycle] session %d marked as lost, keeping queue alive", event.SessionID)
+			slog.Info("session marked as lost, keeping queue alive", "session_id", event.SessionID)
 		}
 
 		return nil

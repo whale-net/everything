@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/whale-net/everything/libs/go/s3"
 	"github.com/whale-net/everything/manmanv2/models"
@@ -129,27 +130,34 @@ func (h *BackupHandler) DeleteBackup(ctx context.Context, req *pb.DeleteBackupRe
 	// Get backup to find S3 URL
 	backup, err := h.backupRepo.Get(ctx, req.BackupId)
 	if err != nil {
+		slog.Warn("delete requested for unknown backup", "backup_id", req.BackupId, "error", err)
 		return nil, status.Errorf(codes.NotFound, "backup not found: %v", err)
 	}
 
 	// Extract S3 key from URL (format: s3://bucket/key)
 	if backup.S3URL == nil {
+		slog.Warn("backup delete rejected: no S3 URL", "backup_id", req.BackupId)
 		return nil, status.Error(codes.FailedPrecondition, "backup has no S3 URL")
 	}
 	s3Key, err := extractS3Key(*backup.S3URL)
 	if err != nil {
+		slog.Warn("backup delete rejected: invalid S3 URL", "backup_id", req.BackupId, "s3_url", *backup.S3URL, "error", err)
 		return nil, status.Errorf(codes.Internal, "invalid S3 URL: %v", err)
 	}
 
 	// Delete from S3
 	if err := h.s3Client.Delete(ctx, s3Key); err != nil {
+		slog.Warn("failed to delete backup from S3", "backup_id", req.BackupId, "s3_key", s3Key, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to delete from S3: %v", err)
 	}
 
 	// Delete from database
 	if err := h.backupRepo.Delete(ctx, req.BackupId); err != nil {
+		slog.Warn("failed to delete backup record", "backup_id", req.BackupId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to delete backup: %v", err)
 	}
+
+	slog.Info("backup deleted", "backup_id", req.BackupId, "session_id", backup.SessionID)
 
 	return &pb.DeleteBackupResponse{}, nil
 }

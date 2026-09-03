@@ -2,6 +2,7 @@ package workshop
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/whale-net/everything/manmanv2/models"
 	pb "github.com/whale-net/everything/manmanv2/protos"
@@ -20,8 +21,11 @@ func (h *WorkshopServiceHandler) InstallAddon(ctx context.Context, req *pb.Insta
 
 	installation, err := h.workshopManager.InstallAddon(ctx, req.SgcId, req.AddonId, req.ForceReinstall, req.SkipDispatch, req.InstallationPathOverride, req.PresetIdOverride, req.VolumeIdOverride)
 	if err != nil {
+		slog.Warn("failed to install workshop addon", "sgc_id", req.SgcId, "addon_id", req.AddonId, "force_reinstall", req.ForceReinstall, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to install addon: %v", err)
 	}
+
+	slog.Info("workshop addon install requested", "installation_id", installation.InstallationID, "sgc_id", req.SgcId, "addon_id", req.AddonId, "force_reinstall", req.ForceReinstall)
 
 	return &pb.InstallAddonResponse{
 		Installation: installationToProto(installation),
@@ -104,8 +108,11 @@ func (h *WorkshopServiceHandler) RemoveInstallation(ctx context.Context, req *pb
 	}
 
 	if err := h.workshopManager.RemoveInstallation(ctx, req.InstallationId); err != nil {
+		slog.Warn("failed to remove workshop installation", "installation_id", req.InstallationId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to remove installation: %v", err)
 	}
+
+	slog.Info("workshop installation removed", "installation_id", req.InstallationId)
 
 	return &pb.RemoveInstallationResponse{}, nil
 }
@@ -118,8 +125,11 @@ func (h *WorkshopServiceHandler) ResetInstallation(ctx context.Context, req *pb.
 
 	installation, err := h.workshopManager.ResetInstallation(ctx, req.InstallationId)
 	if err != nil {
+		slog.Warn("failed to reset workshop installation", "installation_id", req.InstallationId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to reset installation: %v", err)
 	}
+
+	slog.Info("workshop installation reset to pending", "installation_id", req.InstallationId)
 
 	return &pb.ResetInstallationResponse{
 		Installation: installationToProto(installation),

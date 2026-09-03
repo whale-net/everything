@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -271,7 +271,7 @@ func (m *Manager) CreateConsumerForSession(ctx context.Context, sessionID int64)
 
 	// Check if consumer already exists
 	if _, exists := m.consumers[sessionID]; exists {
-		log.Printf("[consumer-manager] consumer already exists for session %d", sessionID)
+		slog.Info("consumer already exists for session", "session_id", sessionID)
 		return nil // Idempotent
 	}
 
@@ -282,7 +282,7 @@ func (m *Manager) CreateConsumerForSession(ctx context.Context, sessionID int64)
 	}
 
 	m.consumers[sessionID] = consumer
-	log.Printf("[consumer-manager] created consumer for session %d (lifecycle-driven)", sessionID)
+	slog.Info("created consumer for session", "session_id", sessionID, "trigger", "lifecycle")
 	return nil
 }
 
@@ -293,15 +293,15 @@ func (m *Manager) DeleteConsumerForSession(sessionID int64) error {
 
 	consumer, exists := m.consumers[sessionID]
 	if !exists {
-		log.Printf("[consumer-manager] no consumer exists for session %d", sessionID)
+		slog.Info("no consumer exists for session", "session_id", sessionID)
 		return nil // Idempotent
 	}
 
 	// Flush pending logs to S3 before closing consumer
 	if m.archiver != nil {
-		log.Printf("[consumer-manager] flushing logs for session %d before deletion", sessionID)
+		slog.Info("flushing logs for session before deletion", "session_id", sessionID)
 		if err := m.archiver.FlushSession(context.Background(), sessionID); err != nil {
-			log.Printf("[consumer-manager] failed to flush logs for session %d: %v", sessionID, err)
+			slog.Warn("failed to flush logs for session before deletion", "session_id", sessionID, "error", err)
 			// Continue anyway - we don't want to block consumer deletion
 		}
 	}
@@ -311,14 +311,14 @@ func (m *Manager) DeleteConsumerForSession(sessionID int64) error {
 
 	// Explicitly delete the queue
 	if err := consumer.consumer.DeleteQueue(); err != nil {
-		log.Printf("[consumer-manager] failed to delete queue for session %d: %v", sessionID, err)
+		slog.Warn("failed to delete queue for session", "session_id", sessionID, "error", err)
 		// Continue anyway to clean up the consumer
 	}
 
 	// Remove from maps
 	delete(m.consumers, sessionID)
 	delete(m.retainedLogs, sessionID)
-	log.Printf("[consumer-manager] deleted consumer for session %d", sessionID)
+	slog.Info("deleted consumer for session", "session_id", sessionID)
 	return nil
 }
 
@@ -448,13 +448,13 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool, ar
 		// Parse log message
 		var logMsg LogMessage
 		if err := json.Unmarshal(msg.Body, &logMsg); err != nil {
-			log.Printf("[log-processor] failed to unmarshal log message: %v", err)
+			slog.Warn("failed to unmarshal log message", "session_id", sc.sessionID, "error", err)
 			return nil // Don't retry on unmarshal errors
 		}
 
 		// Debug output
 		if debugOutput {
-			log.Printf("[session %d] [%s] %s", logMsg.SessionID, logMsg.Source, logMsg.Message)
+			slog.Debug("log message received", "session_id", logMsg.SessionID, "source", logMsg.Source, "message", logMsg.Message)
 		}
 
 		// Increment processed counter
@@ -488,7 +488,7 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool, ar
 			case ch <- pbMsg:
 			default:
 				// Channel full, skip (slow consumer)
-				log.Printf("[log-processor] subscriber channel full for session %d", sc.sessionID)
+				slog.Warn("subscriber channel full, dropping log message", "session_id", sc.sessionID)
 			}
 		}
 		sc.mu.RUnlock()
@@ -507,7 +507,7 @@ func (sc *SessionConsumer) consumeLoop(ctx context.Context, debugOutput bool, ar
 		if err := sc.consumer.Start(ctx); err == nil {
 			break
 		} else {
-			log.Printf("[log-processor] failed to start consuming for session %d: %v, retrying in %s", sc.sessionID, err, retryDelay)
+			slog.Warn("failed to start consuming for session, retrying", "session_id", sc.sessionID, "retry_delay", retryDelay, "error", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -542,7 +542,7 @@ func (m *Manager) logStats() {
 			m.mu.RUnlock()
 
 			logsProcessed := atomic.LoadInt64(&m.logsProcessed)
-			log.Printf("[log-processor] Stats: %d logs processed from %d active source(s)", logsProcessed, activeSources)
+			slog.Info("log-processor stats", "logs_processed", logsProcessed, "active_sources", activeSources)
 		}
 	}
 }
@@ -587,7 +587,7 @@ func (m *Manager) reapIdleConsumers() {
 			}
 			c.close()
 			delete(m.consumers, sessionID)
-			log.Printf("[consumer-manager] reaped idle consumer for session %d (retained %d messages)", sessionID, len(logs))
+			slog.Info("reaped idle consumer for session", "session_id", sessionID, "retained_messages", len(logs))
 		}
 	}
 }
