@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,10 +32,19 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/schedule"
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
 	"github.com/whale-net/everything/libs/go/db"
+	"github.com/whale-net/everything/libs/go/htmxbase"
 	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/mcpauth"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 )
+
+// faviconIco is a pixel-art donkey face -- ASS's on-brand icon (audience
+// _score_system). Generated as a real .ico (16x16 + 32x32 PNG-in-ICO,
+// matching manmanv2/ui and tools/app_registry/ui's embed pattern), not
+// hand-drawn.
+//
+//go:embed favicon.ico
+var faviconIco []byte
 
 // sessionName is both the DB session store's row-scoping key and the
 // browser cookie name it derives from that argument, mirroring
@@ -334,6 +344,7 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// Public routes -- must sit outside RequireSignedIn, or the sign-in
 	// flow itself would redirect back to /login.
 	mux.HandleFunc("/healthz", handleHealthz)
+	mux.HandleFunc("/favicon.ico", htmxbase.FaviconHandler(faviconIco))
 	mux.HandleFunc("/login", a.auth.HandleLogin)
 	mux.HandleFunc("/oauth/google/callback", a.auth.HandleCallback)
 	mux.HandleFunc("POST /logout", a.auth.HandleLogout)
