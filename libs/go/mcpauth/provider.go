@@ -178,12 +178,9 @@ const (
 
 // Mount registers every OAuth2 endpoint this provider serves on mux, at
 // paths matching the metadata it advertises (see the path constants
-// above). Discovery metadata (RFC 9728/8414) and dynamic client
-// registration (RFC 7591) are fully implemented here; `/authorize`
-// (authorize.go) and `/token` (token.go) route to their real handlers but
-// those handler bodies stay 501 (notImplementedHandler) until the
-// Implementation phase of #1642 lands their authorization-code + PKCE
-// logic.
+// above): discovery metadata (RFC 9728/8414), dynamic client registration
+// (RFC 7591), and — landed by #1642 — the authorization-code + PKCE
+// `/authorize` (GET) and `/token` (POST) endpoints.
 func (p *Provider) Mount(mux *http.ServeMux) {
 	// The two metadata endpoints are registered on the bare path, not a
 	// "GET <path>" method-restricted pattern: both handlers answer OPTIONS
@@ -193,14 +190,8 @@ func (p *Provider) Mount(mux *http.ServeMux) {
 	mux.Handle(protectedResourceMetadataPath, p.protectedResourceMetadataHandler())
 	mux.Handle(authServerMetadataPath, p.authServerMetadataHandler())
 	mux.HandleFunc("POST "+registerPath, p.handleRegister)
-	mux.HandleFunc(authorizePath, p.handleAuthorize)
-	mux.HandleFunc(tokenPath, p.handleToken)
-}
-
-// notImplementedHandler is the fixed 501 body shared by every endpoint this
-// package has not yet implemented behind its real logic.
-func notImplementedHandler(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "mcpauth: not implemented yet", http.StatusNotImplemented)
+	mux.HandleFunc("GET "+authorizePath, p.handleAuthorize)
+	mux.HandleFunc("POST "+tokenPath, p.handleToken)
 }
 
 // ResourceMetadataURL is the value a consuming domain passes as

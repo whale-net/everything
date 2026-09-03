@@ -29,11 +29,14 @@ go_library(
 go_test(
     name = "mcpauth_test",
     srcs = [
+        "authorize_test.go",
         "clients_test.go",
         "credential_test.go",
         "metadata_test.go",
+        "pkce_test.go",
         "provider_test.go",
         "resolver_test.go",
+        "token_test.go",
         "verify_test.go",
     ],
     embed = [":mcpauth"],
