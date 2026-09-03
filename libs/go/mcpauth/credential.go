@@ -2,10 +2,16 @@ package mcpauth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -65,6 +71,31 @@ const (
 	defaultIdentityColumn = "identity"
 )
 
+// ErrInvalidCredential is returned by Verify for any raw token that does not
+// resolve to a live credential: unrecognized, malformed, and revoked tokens
+// are all indistinguishable to a caller (FR6, NFR1) — the error value and
+// its message never vary, and never include the presented token or its
+// hash.
+var ErrInvalidCredential = errors.New("mcpauth: invalid or revoked credential")
+
+// identifierPattern is the strict allow-list StoreConfig.TableName,
+// StoreConfig.IdentityColumn, and StoreConfig.IdentityCast must match.
+// These three values are interpolated directly into generated SQL (they
+// cannot be bound query parameters), so NewCredentialStore rejects
+// anything not matching this pattern before ever building a query string —
+// this is a hard requirement against SQL injection via configuration, not
+// a style nicety.
+var identifierPattern = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+
+// validateIdentifier rejects any name that is not a safe, lowercase SQL
+// identifier for direct interpolation into generated SQL.
+func validateIdentifier(name, label string) error {
+	if !identifierPattern.MatchString(name) {
+		return fmt.Errorf("mcpauth: StoreConfig.%s %q is not a valid SQL identifier (must match %s)", label, name, identifierPattern.String())
+	}
+	return nil
+}
+
 // StoreConfig configures NewCredentialStore. TableName, IdentityColumn, and
 // IdentityCast are interpolated directly into generated SQL (they cannot be
 // bound as query parameters), so NewCredentialStore validates them against
@@ -111,13 +142,14 @@ type StoreConfig struct {
 // the table/column names in cfg (defaults applied for anything left
 // zero-valued).
 //
-// Scaffold note: this constructor currently only applies StoreConfig
-// defaults and captures configuration; it does not yet validate
-// TableName/IdentityColumn/IdentityCast as SQL identifiers, and does not
-// yet run the boot-time preflight probe against the configured table. Both
-// land in the Implementation phase of issue #1639 — see that issue's
-// "Implementation" section for the exact preflight and validation
-// requirements (mirroring htmxauth.DBSessionManager.probeSessionTable).
+// TableName, IdentityColumn, and IdentityCast are validated as safe SQL
+// identifiers before any query is built, and the configured table is
+// preflighted with a minimal query (mirroring
+// htmxauth.DBSessionManager.probeSessionTable) using its unqualified name
+// so the probe exercises the same search_path every runtime query
+// resolves against. A failed preflight returns an error naming the table
+// and does not silently degrade — the caller must apply their domain's
+// migration and retry.
 func NewCredentialStore(ctx context.Context, cfg StoreConfig) (CredentialStore, error) {
 	if cfg.Pool == nil {
 		return nil, errors.New("mcpauth: StoreConfig.Pool is required")
@@ -129,12 +161,28 @@ func NewCredentialStore(ctx context.Context, cfg StoreConfig) (CredentialStore, 
 		cfg.IdentityColumn = defaultIdentityColumn
 	}
 
-	// TODO(Implementation, issue #1639): validate cfg.TableName,
-	// cfg.IdentityColumn, and cfg.IdentityCast (if set) against
-	// identifierPattern, and run the boot-time preflight probe of
-	// cfg.TableName before returning — see mcpauth.go's schema-ownership
-	// section and README.md for the required error shape.
-	return &pgxCredentialStore{cfg: cfg}, nil
+	if err := validateIdentifier(cfg.TableName, "TableName"); err != nil {
+		return nil, err
+	}
+	if err := validateIdentifier(cfg.IdentityColumn, "IdentityColumn"); err != nil {
+		return nil, err
+	}
+	if cfg.IdentityCast != "" {
+		if err := validateIdentifier(cfg.IdentityCast, "IdentityCast"); err != nil {
+			return nil, err
+		}
+	}
+
+	s := &pgxCredentialStore{cfg: cfg}
+
+	if err := s.probeTable(ctx); err != nil {
+		return nil, fmt.Errorf(
+			"mcpauth: credential table preflight failed for table %q — apply your domain's mcp_credential migration (see libs/go/mcpauth/README.md schema contract) before calling NewCredentialStore: %w",
+			cfg.TableName, err,
+		)
+	}
+
+	return s, nil
 }
 
 // pgxCredentialStore is the pgx-backed CredentialStore implementation.
@@ -144,24 +192,148 @@ type pgxCredentialStore struct {
 
 var _ CredentialStore = (*pgxCredentialStore)(nil)
 
-// errNotImplemented is returned by every method stub below until the
-// Implementation phase of issue #1639 lands the real SQL. Scaffold exists
-// to settle the package's public shape and the identity-cast schema
-// question, not the method bodies.
-var errNotImplemented = errors.New("mcpauth: not implemented yet (scaffold phase, see issue #1639)")
+// probeTable runs a minimal query against the configured table to confirm
+// it exists and is accessible. It uses the unqualified table name so it
+// exercises the same search_path resolution every runtime query in this
+// file uses (mirrors htmxauth.DBSessionManager.probeSessionTable).
+func (s *pgxCredentialStore) probeTable(ctx context.Context) error {
+	_, err := s.cfg.Pool.Exec(ctx, "SELECT 1 FROM "+s.cfg.TableName+" LIMIT 0")
+	return err
+}
 
+// columns is the RETURNING/SELECT column list, in Credential scan order.
+func (s *pgxCredentialStore) columns() string {
+	return fmt.Sprintf("id, %s, token_hash, created_at, last_used_at, revoked_at", s.cfg.IdentityColumn)
+}
+
+// identityCastSuffix returns the "::<type>" suffix to append after an
+// identity parameter placeholder, or "" if no cast was configured.
+func (s *pgxCredentialStore) identityCastSuffix() string {
+	if s.cfg.IdentityCast == "" {
+		return ""
+	}
+	return "::" + s.cfg.IdentityCast
+}
+
+// identityPlaceholder renders "<IdentityColumn> = $<paramNum>[::<cast>]"
+// for use in a WHERE clause.
+func (s *pgxCredentialStore) identityPlaceholder(paramNum int) string {
+	return fmt.Sprintf("%s = $%d%s", s.cfg.IdentityColumn, paramNum, s.identityCastSuffix())
+}
+
+func scanCredential(row pgx.Row) (Credential, error) {
+	var c Credential
+	err := row.Scan(&c.ID, &c.Identity, &c.TokenHash, &c.CreatedAt, &c.LastUsedAt, &c.RevokedAt)
+	return c, err
+}
+
+// generateToken returns a high-entropy (crypto/rand), hex-encoded bearer
+// token — mirrors audience_score_system/store/credential.go's
+// generateCredentialToken, the behavioral bar this package reproduces.
+func generateToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// hashToken returns the hex-encoded SHA-256 hash of the raw token — the
+// only form of the credential this store ever persists (NFR1). Byte-for-
+// byte identical to audience_score_system/store/credential.go's hashToken,
+// which credential_test.go asserts directly (FR13 parity).
+func hashToken(rawToken string) string {
+	sum := sha256.Sum256([]byte(rawToken))
+	return hex.EncodeToString(sum[:])
+}
+
+// Mint generates a fresh high-entropy token, persists only its SHA-256
+// hash, and returns the raw token (the caller must show it to the operator
+// exactly once — it is never recoverable again) plus the persisted row.
 func (s *pgxCredentialStore) Mint(ctx context.Context, identity string) (string, Credential, error) {
-	return "", Credential{}, errNotImplemented
+	rawToken, err := generateToken()
+	if err != nil {
+		return "", Credential{}, fmt.Errorf("mcpauth: generate credential token: %w", err)
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO %s (%s, token_hash)
+		VALUES ($1%s, $2)
+		RETURNING %s
+	`, s.cfg.TableName, s.cfg.IdentityColumn, s.identityCastSuffix(), s.columns())
+
+	cred, err := scanCredential(s.cfg.Pool.QueryRow(ctx, query, identity, hashToken(rawToken)))
+	if err != nil {
+		return "", Credential{}, fmt.Errorf("mcpauth: insert credential: %w", err)
+	}
+	return rawToken, cred, nil
 }
 
+// Verify hashes rawToken and resolves it to a live credential, stamping
+// last_used_at in the same round trip (FR9) so repeated calls keep it an
+// accurate "last seen" signal without a separate write. An unrecognized,
+// malformed, or revoked token all fail identically with
+// ErrInvalidCredential — the WHERE clause simply matches zero rows in
+// every case, so there is no branch that could vary the error (FR6, NFR1).
 func (s *pgxCredentialStore) Verify(ctx context.Context, rawToken string) (string, Credential, error) {
-	return "", Credential{}, errNotImplemented
+	query := fmt.Sprintf(`
+		UPDATE %s SET last_used_at = NOW()
+		WHERE token_hash = $1 AND revoked_at IS NULL
+		RETURNING %s
+	`, s.cfg.TableName, s.columns())
+
+	cred, err := scanCredential(s.cfg.Pool.QueryRow(ctx, query, hashToken(rawToken)))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", Credential{}, ErrInvalidCredential
+		}
+		return "", Credential{}, fmt.Errorf("mcpauth: verify credential: %w", err)
+	}
+	return cred.Identity, cred, nil
 }
 
+// Revoke sets revoked_at on id if it is live and owned by identity.
+// Idempotent by design (FR7): revoking an already-revoked, nonexistent, or
+// not-owned credential is not an error and does not leak whether a
+// not-owned id exists — the WHERE clause simply matches zero rows.
 func (s *pgxCredentialStore) Revoke(ctx context.Context, id uuid.UUID, identity string) error {
-	return errNotImplemented
+	query := fmt.Sprintf(`
+		UPDATE %s SET revoked_at = NOW()
+		WHERE id = $1 AND %s AND revoked_at IS NULL
+	`, s.cfg.TableName, s.identityPlaceholder(2))
+
+	if _, err := s.cfg.Pool.Exec(ctx, query, id, identity); err != nil {
+		return fmt.Errorf("mcpauth: revoke credential: %w", err)
+	}
+	return nil
 }
 
+// List returns every credential (live and revoked) identity has ever
+// minted, most recent first (FR8).
 func (s *pgxCredentialStore) List(ctx context.Context, identity string) ([]Credential, error) {
-	return nil, errNotImplemented
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM %s
+		WHERE %s
+		ORDER BY created_at DESC, id
+	`, s.columns(), s.cfg.TableName, s.identityPlaceholder(1))
+
+	rows, err := s.cfg.Pool.Query(ctx, query, identity)
+	if err != nil {
+		return nil, fmt.Errorf("mcpauth: list credentials: %w", err)
+	}
+	defer rows.Close()
+
+	var creds []Credential
+	for rows.Next() {
+		c, err := scanCredential(rows)
+		if err != nil {
+			return nil, fmt.Errorf("mcpauth: scan credential: %w", err)
+		}
+		creds = append(creds, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("mcpauth: list credentials: %w", err)
+	}
+	return creds, nil
 }
