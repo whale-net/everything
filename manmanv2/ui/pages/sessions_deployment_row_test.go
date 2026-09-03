@@ -222,7 +222,92 @@ func TestDeploymentRow_ActionError(t *testing.T) {
 	}
 }
 
-// --- 8. GSCStatusTable loops rows and includes an Actions header -----------
+// --- 8. self-terminating poll wiring (#1628) --------------------------------
+//
+// deploymentRowPollAttrs/DeploymentRow must carry the hx-get/hx-trigger/
+// hx-target/hx-swap poll attributes only while the row's latest session is
+// in a components.IsTransientStatus state (pending/starting/stopping); a
+// settled row (running/stopped/crashed/lost/never-started) must carry no
+// hx-trigger at all so the poll loop stops itself once the endpoint's own
+// response (itself a DeploymentRow) comes back settled.
+//
+// mutation-tested (verified red, by hand, then reverted): replacing
+// deploymentRowPollAttrs' `if !components.IsTransientStatus(...)` guard
+// with an unconditional `return templ.Attributes{"hx-get": ..., "hx-trigger":
+// "every 3s", ...}` (i.e. always polling) made
+// TestDeploymentRow_SettledStatuses_NoPollTrigger fail across every settled
+// status in its table, exactly as expected for the "settled rows do not
+// poll" guarantee; reverting restored green.
+
+func TestDeploymentRow_TransientStatuses_CarryPollAttrs(t *testing.T) {
+	for _, status := range []string{"pending", "starting", "stopping"} {
+		t.Run(status, func(t *testing.T) {
+			latest := &manmanpb.Session{SessionId: 50, ServerGameConfigId: 30, Status: status}
+			data := buildDeploymentRowData(30, "Kappa", "active", latest, nil, "")
+			body := deploymentRowMarkup(t, data)
+
+			wantGet := `hx-get="/api/deployments/30/row"`
+			if !strings.Contains(body, wantGet) {
+				t.Errorf("expected %q for a %s row, got body %q", wantGet, status, body)
+			}
+			if !strings.Contains(body, `hx-trigger="every 3s"`) {
+				t.Errorf("expected hx-trigger=\"every 3s\" for a %s row, got body %q", status, body)
+			}
+			if !strings.Contains(body, `hx-target="this"`) {
+				t.Errorf("expected hx-target=\"this\" on the polling <tr> for a %s row, got body %q", status, body)
+			}
+			// The row's own <tr> must carry hx-swap="outerHTML" as part of
+			// its poll attrs -- distinct from the per-action-form
+			// hx-swap="outerHTML" attributes already covered by
+			// TestDeploymentRow_IDAndSwapTargetsMatch.
+			trOpen := body[:strings.Index(body, ">")+1]
+			if !strings.Contains(trOpen, `hx-swap="outerHTML"`) {
+				t.Errorf("expected the <tr> itself to carry hx-swap=\"outerHTML\" for a %s row, got opening tag %q", status, trOpen)
+			}
+		})
+	}
+}
+
+func TestDeploymentRow_SettledStatuses_NoPollTrigger(t *testing.T) {
+	settledCases := []struct {
+		name   string
+		latest *manmanpb.Session
+	}{
+		{"running", &manmanpb.Session{SessionId: 51, ServerGameConfigId: 31, Status: "running"}},
+		{"stopped", &manmanpb.Session{SessionId: 52, ServerGameConfigId: 31, Status: "stopped"}},
+		{"crashed", &manmanpb.Session{SessionId: 53, ServerGameConfigId: 31, Status: "crashed"}},
+		{"lost", &manmanpb.Session{SessionId: 54, ServerGameConfigId: 31, Status: "lost"}},
+		{"never-started", nil},
+	}
+	for _, tc := range settledCases {
+		t.Run(tc.name, func(t *testing.T) {
+			data := buildDeploymentRowData(31, "Lambda", "active", tc.latest, nil, "")
+			body := deploymentRowMarkup(t, data)
+
+			if strings.Contains(body, "hx-trigger") {
+				t.Errorf("expected no hx-trigger at all for a settled (%s) row, got body %q", tc.name, body)
+			}
+			if strings.Contains(body, `hx-get="/api/deployments/31/row"`) {
+				t.Errorf("expected no poll hx-get for a settled (%s) row, got body %q", tc.name, body)
+			}
+		})
+	}
+}
+
+func TestDeploymentRow_ActionErrorWithTransientStatus_StillPolls(t *testing.T) {
+	latest := &manmanpb.Session{SessionId: 55, ServerGameConfigId: 32, Status: "starting"}
+	data := buildDeploymentRowData(32, "Mu", "active", latest, nil, "Failed to start: timeout")
+	body := deploymentRowMarkup(t, data)
+
+	if !strings.Contains(body, `hx-trigger="every 3s"`) {
+		t.Errorf("expected a row with ActionError set but a transient status to still poll, got body %q", body)
+	}
+	if !strings.Contains(body, "alert-error") {
+		t.Errorf("expected the ActionError to still render inline, got body %q", body)
+	}
+}
+
+// --- 9. GSCStatusTable loops rows and includes an Actions header -----------
 
 func TestGSCStatusTable_RendersAllRowsWithActionsHeader(t *testing.T) {
 	latestRunning := &manmanpb.Session{SessionId: 7, ServerGameConfigId: 20, Status: "running"}
