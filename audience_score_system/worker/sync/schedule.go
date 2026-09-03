@@ -17,12 +17,15 @@ import (
 )
 
 // MinSyncInterval and MaxSyncInterval bound ASS_SYNC_INTERVAL to NFR4's
-// ~15-30 minute cadence. ../main.go's config loader fails fast at startup
-// if the configured interval falls outside this band -- see
+// ~1-6 hour cadence (widened from the original ~15-30 minute band: 20m
+// proved too aggressive against YouTube API quota for M1's Channel count,
+// so the default moved to 3h -- see defaultSyncInterval in ../main.go and
+// ../../web/main.go). ../main.go's config loader fails fast at startup if
+// the configured interval falls outside this band -- see
 // ValidateSyncInterval.
 const (
-	MinSyncInterval = 15 * time.Minute
-	MaxSyncInterval = 30 * time.Minute
+	MinSyncInterval = 1 * time.Hour
+	MaxSyncInterval = 6 * time.Hour
 )
 
 // ValidateSyncInterval reports an error if d falls outside
@@ -76,6 +79,15 @@ type ScheduleManager interface {
 	// ListConnected Channel -- run once at worker startup so a Channel
 	// connected while the worker was down still gets a schedule.
 	Reconcile(ctx context.Context) error
+
+	// TriggerNow forces an immediate, out-of-band run of channelID's
+	// ChannelSyncWorkflow via Temporal's schedule-trigger patch, rather
+	// than waiting for the schedule's normal interval cadence -- issue
+	// #1650: there was no way to verify a schedule/matching change took
+	// effect without waiting up to ASS_SYNC_INTERVAL. Called by the MCP
+	// trigger_channel_sync tool (mcp/tools/sync_trigger.go). Returns an
+	// error if channelID has no schedule (e.g. never connected).
+	TriggerNow(ctx context.Context, channelID uuid.UUID) error
 }
 
 // scheduleManager is ScheduleManager's real implementation, wrapping a
@@ -174,6 +186,18 @@ func (m *scheduleManager) Reconcile(ctx context.Context) error {
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("reconcile: %w", errors.Join(errs...))
+	}
+	return nil
+}
+
+// TriggerNow patches channelID's schedule with a TriggerImmediately request
+// (client.ScheduleHandle.Trigger) -- see ScheduleManager's doc comment.
+// Uses the schedule's own overlap policy (SCHEDULE_OVERLAP_POLICY_SKIP, set
+// in EnsureSchedule) rather than overriding it, so a manual trigger racing
+// an already-running cycle for the same Channel is skipped, not stacked.
+func (m *scheduleManager) TriggerNow(ctx context.Context, channelID uuid.UUID) error {
+	if err := m.Schedules.GetHandle(ctx, ScheduleID(channelID)).Trigger(ctx, client.ScheduleTriggerOptions{}); err != nil {
+		return fmt.Errorf("trigger sync for channel %s: %w", channelID, err)
 	}
 	return nil
 }
