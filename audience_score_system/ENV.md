@@ -27,14 +27,15 @@ Read via `//libs/go/temporal`'s `ConfigFromEnv` (`web` and `worker` both,
 as of issue #1614; `mcp` also, as of issue #1650, to build the
 `sync.ScheduleManager` `trigger_channel_sync` calls), plus
 `ASS_SYNC_INTERVAL` (issue #1574, NFR4, widened by issue-#1650's follow-up
-work), also now read by `web` and `worker`.
+work and again to a 24h default for quota headroom), also now read by
+`web` and `worker`.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
 | `TEMPORAL_HOST` | web, worker, mcp | `localhost:7233` | Temporal frontend service `host:port`. |
 | `TEMPORAL_NAMESPACE` | web, worker, mcp | `default` | Temporal namespace. |
 | `TEMPORAL_TASK_QUEUE` | web, worker, mcp | `audience-score-system-sync` | Task queue name for the per-Channel sync worker (`sync.TaskQueue`). Unlike `//libs/go/temporal`'s own zero-default, `web`'s, `worker`'s, and `mcp`'s `main.go` all fall back to `sync.TaskQueue` when unset, mirroring `tools/app_registry/worker`'s identical fallback-to-package-constant pattern. |
-| `ASS_SYNC_INTERVAL` | web, worker | `3h` | How often `sync.ChannelSyncWorkflow` runs per connected Channel (a Go `time.Duration` string, e.g. `3h`). Must fall within NFR4's ~1-6 hour band (`sync.MinSyncInterval`/`sync.MaxSyncInterval`) — both `web` and `worker` fail fast at startup on an out-of-band or unparseable value rather than silently clamping it. Raised from the original 20m default (too aggressive against YouTube API quota); `mcp`'s `trigger_channel_sync` tool lets a caller force an out-of-band run without waiting for this cadence. |
+| `ASS_SYNC_INTERVAL` | web, worker | `24h` | How often `sync.ChannelSyncWorkflow` runs per connected Channel (a Go `time.Duration` string, e.g. `24h`). Must fall within NFR4's ~1-24 hour band (`sync.MinSyncInterval`/`sync.MaxSyncInterval`) — both `web` and `worker` fail fast at startup on an out-of-band or unparseable value rather than silently clamping it. Raised from an earlier 3h default (still spent enough quota on the schedule-discovery `search.list` call per Channel to threaten YouTube's default daily project quota); `mcp`'s `trigger_channel_sync` tool lets a caller force an out-of-band run without waiting for this cadence. |
 
 **`web` reads these too, as of issue #1614:** `web/channel.Handler`
 calls `sync.ScheduleManager.EnsureSchedule` right after a Channel-connect

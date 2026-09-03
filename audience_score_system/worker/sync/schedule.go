@@ -17,15 +17,18 @@ import (
 )
 
 // MinSyncInterval and MaxSyncInterval bound ASS_SYNC_INTERVAL to NFR4's
-// ~1-6 hour cadence (widened from the original ~15-30 minute band: 20m
-// proved too aggressive against YouTube API quota for M1's Channel count,
-// so the default moved to 3h -- see defaultSyncInterval in ../main.go and
-// ../../web/main.go). ../main.go's config loader fails fast at startup if
-// the configured interval falls outside this band -- see
+// ~1-24 hour cadence (widened again from the ~1-6 hour band: even 3h still
+// spent the schedule-discovery search.list(forMine=true) call -- 100 quota
+// units -- often enough per Channel to threaten YouTube's default daily
+// project quota at M1's Channel count, so the default moved to 24h. On-demand
+// freshness is available anytime via mcp's trigger_channel_sync tool
+// (issue #1650), which is unaffected by this band -- see defaultSyncInterval
+// in ../main.go and ../../web/main.go). ../main.go's config loader fails
+// fast at startup if the configured interval falls outside this band -- see
 // ValidateSyncInterval.
 const (
 	MinSyncInterval = 1 * time.Hour
-	MaxSyncInterval = 6 * time.Hour
+	MaxSyncInterval = 24 * time.Hour
 )
 
 // ValidateSyncInterval reports an error if d falls outside

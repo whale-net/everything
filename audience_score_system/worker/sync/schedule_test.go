@@ -166,8 +166,8 @@ func TestValidateSyncInterval(t *testing.T) {
 		{name: "below band", d: 1*time.Hour - time.Second, wantErr: true},
 		{name: "lower bound inclusive", d: 1 * time.Hour, wantErr: false},
 		{name: "mid band", d: 3 * time.Hour, wantErr: false},
-		{name: "upper bound inclusive", d: 6 * time.Hour, wantErr: false},
-		{name: "above band", d: 6*time.Hour + time.Second, wantErr: true},
+		{name: "upper bound inclusive", d: 24 * time.Hour, wantErr: false},
+		{name: "above band", d: 24*time.Hour + time.Second, wantErr: true},
 	}
 
 	for _, tc := range cases {

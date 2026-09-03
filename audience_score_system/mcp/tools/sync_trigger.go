@@ -1,7 +1,7 @@
 // trigger_channel_sync -- manual C6/C9 sync trigger (issue #1650): lets a
 // caller force an immediate, out-of-band run of a Channel's Temporal
 // worker/sync.ChannelSyncWorkflow instead of waiting for its regular
-// ASS_SYNC_INTERVAL cadence (default 3h as of this issue -- see
+// ASS_SYNC_INTERVAL cadence (default 24h -- see
 // ../../ENV.md). This is the pain point issue #1650 hit directly:
 // committing a schedule draft or reconnecting a Channel has no way to
 // verify the change took effect without polling list_pending_matches /

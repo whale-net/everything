@@ -41,17 +41,19 @@ import (
 // leaflab/ui's sessionName convention.
 const sessionName = "ass_web_session"
 
-// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 3 hours, inside
-// sync.MinSyncInterval/MaxSyncInterval's 1-6 hour NFR4 band (widened from
-// the original 20-minute default, which proved too aggressive against
-// YouTube API quota for M1's Channel count). Must match worker/main.go's
-// identical constant exactly (issue #1614's interval-consistency caveat --
-// see ../ARCHITECTURE.md "OAuth grants"): sync.ScheduleManager.EnsureSchedule
+// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 24 hours, inside
+// sync.MinSyncInterval/MaxSyncInterval's 1-24 hour NFR4 band (widened from
+// 3h, which still spent enough quota on the schedule-discovery search.list
+// call per Channel to threaten YouTube's default daily project quota at
+// M1's Channel count; use mcp's trigger_channel_sync tool for on-demand
+// freshness between cycles). Must match worker/main.go's identical constant
+// exactly (issue #1614's interval-consistency caveat -- see
+// ../ARCHITECTURE.md "OAuth grants"): sync.ScheduleManager.EnsureSchedule
 // bakes in whichever interval its first caller passes at schedule-creation
 // time and never updates it on a later call, so `web` and `worker`
 // diverging here would silently create schedules at different cadences
 // depending on which binary connects a Channel first.
-const defaultSyncInterval = 3 * time.Hour
+const defaultSyncInterval = 24 * time.Hour
 
 // config holds `web`'s configuration, loaded entirely from environment
 // variables -- no config files (see ../ENV.md).
@@ -82,7 +84,7 @@ type config struct {
 }
 
 // loadConfig loads configuration from environment variables, failing fast
-// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 1-6 hour
+// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 1-24 hour
 // band (sync.ValidateSyncInterval) -- mirrors worker/main.go's
 // loadConfig exactly, per issue #1614. See ../ENV.md for the full
 // variable list.

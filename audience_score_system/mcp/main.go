@@ -34,7 +34,7 @@ import (
 // read that variable (see ../ENV.md "Temporal"), and this constant must
 // satisfy sync.ValidateSyncInterval only so a future caller relying on the
 // same construction can't be surprised by an out-of-band value here.
-const scheduleManagerInterval = 3 * time.Hour
+const scheduleManagerInterval = 24 * time.Hour
 
 // config holds `mcp`'s configuration, loaded entirely from environment
 // variables -- no config files (see ../ENV.md).
