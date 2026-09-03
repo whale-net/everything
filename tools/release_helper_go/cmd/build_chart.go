@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -151,9 +152,11 @@ func ExecuteBuildCharts(p BuildChartParams) ([]BuildChartResult, error) {
 	for _, chart := range selected {
 		chartTarget, chartDir := chartOutputPaths(workspaceRoot, chart)
 		fmt.Printf("Building bazel target: %s\n", chartTarget)
+		chartStart := time.Now()
 		if _, err := bazel.Run("build", chartTarget); err != nil {
 			return nil, fmt.Errorf("bazel build %s: %w", chartTarget, err)
 		}
+		fmt.Printf("Built %s in %s\n", chartTarget, time.Since(chartStart).Round(time.Second))
 
 		relDir := chart.Name
 		dest := filepath.Join(outputDir, relDir)

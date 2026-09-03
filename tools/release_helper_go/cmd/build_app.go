@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -181,14 +182,19 @@ func ExecuteBuildApp(p BuildAppParams) (*BuildAppManifest, error) {
 	pushTarget := imagePushTarget(*matchedApp)
 
 	fmt.Printf("Building and pushing %s (build tag: %s) via %s...\n", fullName, p.GitSHA, pushTarget)
+	buildStart := time.Now()
 	if _, err := bazel.Run("run", pushTarget, "--", "--tag", p.GitSHA); err != nil {
 		return nil, fmt.Errorf("bazel run %s: %w", pushTarget, err)
 	}
+	buildDuration := time.Since(buildStart)
 
+	digestStart := time.Now()
 	digest := extractImageDigest(docker, repoPath, p.GitSHA)
 	if digest == "" {
 		return nil, fmt.Errorf("could not resolve pushed digest for %s:%s", repoPath, p.GitSHA)
 	}
+	fmt.Printf("Built and pushed %s in %s (digest lookup: %s)\n",
+		fullName, buildDuration.Round(time.Second), time.Since(digestStart).Round(time.Second))
 
 	manifest := &BuildAppManifest{
 		Domain:     p.Domain,

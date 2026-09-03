@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -48,29 +49,70 @@ const (
 )
 
 func (r *realBazelRunner) Run(args ...string) (string, error) {
+	start := time.Now()
 	var out string
 	var err error
 	for attempt := 1; attempt <= bazelRetryAttempts; attempt++ {
 		out, err = r.runOnce(args...)
 		if err == nil {
+			logBazelDuration(args, time.Since(start))
 			return out, nil
 		}
 		if attempt == bazelRetryAttempts || !isTransientBazelError(err.Error()) {
+			logBazelDuration(args, time.Since(start))
 			return out, err
 		}
-		fmt.Fprintf(os.Stderr, "bazel %s: transient failure (attempt %d/%d), retrying in %s: %v\n",
-			strings.Join(args, " "), attempt, bazelRetryAttempts, bazelRetryDelay, err)
+		fmt.Fprintf(os.Stderr, "bazel %s: transient failure (attempt %d/%d, %s elapsed), retrying in %s: %v\n",
+			strings.Join(args, " "), attempt, bazelRetryAttempts, time.Since(start).Round(time.Second), bazelRetryDelay, err)
 		time.Sleep(bazelRetryDelay)
 	}
 	return out, err
+}
+
+// shouldStreamBazelOutput reports whether a bazel invocation is worth
+// streaming live and timing: "build" and "run" are the subcommands that
+// actually compile/cross-compile/push artifacts and can run for minutes
+// (see the app-image and chart/openapi/CLI-binary build paths); "query",
+// "cquery", and "info" return in milliseconds and would just add noise.
+func shouldStreamBazelOutput(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "run", "build":
+		return true
+	default:
+		return false
+	}
+}
+
+// logBazelDuration reports how long a slow (build/run) bazel invocation
+// took, so a CI log shows where time actually went instead of one opaque
+// "Building and pushing..." line followed by silence for minutes.
+func logBazelDuration(args []string, d time.Duration) {
+	if !shouldStreamBazelOutput(args) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "bazel %s finished in %s\n", strings.Join(args, " "), d.Round(time.Second))
 }
 
 func (r *realBazelRunner) runOnce(args ...string) (string, error) {
 	cmd := exec.Command("bazel", args...)
 	cmd.Dir = r.workspaceRoot
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	if shouldStreamBazelOutput(args) {
+		// bazel's own progress output (action counts, cache hits/misses,
+		// remote-execution/network stalls) previously went straight into
+		// these buffers and was discarded on success -- a slow or hung
+		// build/push was silent in CI until it finished or errored. Tee it
+		// live to the process's own stdout/stderr as well, so it shows up
+		// in the CI step log in real time.
+		cmd.Stdout = io.MultiWriter(&stdout, os.Stdout)
+		cmd.Stderr = io.MultiWriter(&stderr, os.Stderr)
+	} else {
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+	}
 	err := cmd.Run()
 	out := strings.TrimSpace(stdout.String())
 	if err != nil {
