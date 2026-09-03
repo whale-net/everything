@@ -91,6 +91,37 @@ func TestValidateIdentifier_RejectsUnsafeNames(t *testing.T) {
 	}
 }
 
+// TestValidateIdentifier_RejectsInjectionPayloads is a dedicated,
+// injection-focused pass beyond TestValidateIdentifier_RejectsUnsafeNames:
+// StoreConfig.TableName/IdentityColumn/IdentityCast are interpolated
+// directly into generated SQL (see identifierPattern's doc comment), so any
+// of these getting past validateIdentifier would be a SQL injection via
+// configuration. Each case below targets a distinct injection technique.
+func TestValidateIdentifier_RejectsInjectionPayloads(t *testing.T) {
+	cases := map[string]string{
+		"statement terminator + stacked query": "mcp_credential; DROP TABLE mcp_credential;--",
+		"inline SQL comment":                   "mcp_credential--",
+		"block comment":                        "mcp_credential/*",
+		"single quote (string escape)":         "mcp_credential' OR '1'='1",
+		"double quote (identifier escape)":     `mcp_credential"`,
+		"backtick":                             "mcp_credential`",
+		"whitespace inside identifier":         "mcp cred",
+		"leading whitespace":                   " mcp_credential",
+		"trailing whitespace":                  "mcp_credential ",
+		"newline injection":                    "mcp_credential\nDROP TABLE x",
+		"null byte":                            "mcp_credential\x00",
+		"parenthesis (subquery attempt)":       "mcp_credential)",
+		"percent wildcard":                     "mcp_credential%",
+		"unicode homoglyph (fullwidth semi)":   "mcp_credential；",
+	}
+	for name, payload := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := validateIdentifier(payload, "TableName")
+			assert.Error(t, err, "validateIdentifier must reject injection payload %q (%s)", payload, name)
+		})
+	}
+}
+
 func TestValidateIdentifier_AcceptsSafeNames(t *testing.T) {
 	cases := []string{"person_id", "mcp_credential"}
 	for _, name := range cases {

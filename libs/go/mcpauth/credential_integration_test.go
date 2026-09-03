@@ -25,6 +25,7 @@ package mcpauth
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -224,6 +225,125 @@ func TestGeneric_List_ReturnsLiveAndRevoked_MostRecentFirst(t *testing.T) {
 	assert.Equal(t, first.ID, creds[1].ID)
 	assert.NotNil(t, creds[1].RevokedAt)
 	assert.Nil(t, creds[0].RevokedAt)
+}
+
+// TestGeneric_List_IsolatesAcrossIdentities proves List(identity) never
+// leaks another identity's credentials — cross-identity isolation, not just
+// cross-identity revoke (TestGeneric_Revoke_WrongIdentity_IsNoOpCredentialStillVerifies
+// covers the write side; this covers the read side).
+func TestGeneric_List_IsolatesAcrossIdentities(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: genericCredentialSchema})
+
+	store, err := NewCredentialStore(ctx, StoreConfig{Pool: db.Pool})
+	require.NoError(t, err)
+
+	const identityA = "identity-a"
+	const identityB = "identity-b"
+
+	_, credA, err := store.Mint(ctx, identityA)
+	require.NoError(t, err)
+	_, credB1, err := store.Mint(ctx, identityB)
+	require.NoError(t, err)
+	_, credB2, err := store.Mint(ctx, identityB)
+	require.NoError(t, err)
+	require.NoError(t, store.Revoke(ctx, credB1.ID, identityB))
+
+	listA, err := store.List(ctx, identityA)
+	require.NoError(t, err)
+	require.Len(t, listA, 1, "identity A's list must only contain identity A's credential")
+	assert.Equal(t, credA.ID, listA[0].ID)
+
+	listB, err := store.List(ctx, identityB)
+	require.NoError(t, err)
+	require.Len(t, listB, 2, "identity B's list must only contain identity B's credentials (live + revoked)")
+	gotIDs := map[uuid.UUID]bool{listB[0].ID: true, listB[1].ID: true}
+	assert.True(t, gotIDs[credB1.ID])
+	assert.True(t, gotIDs[credB2.ID])
+	assert.False(t, gotIDs[credA.ID], "identity B's list must not contain identity A's credential")
+
+	// An identity that never minted anything gets an empty (not erroring)
+	// list.
+	listC, err := store.List(ctx, "identity-c-never-minted")
+	require.NoError(t, err)
+	assert.Empty(t, listC)
+}
+
+// TestGeneric_ConcurrentRevoke_SameCredential_IsSafeAndIdempotent fires many
+// concurrent Revoke calls at the same credential/identity pair. Every call
+// must return nil (idempotent, FR7) and the credential must end up revoked
+// exactly once with no error, panic, or lost update under concurrency.
+func TestGeneric_ConcurrentRevoke_SameCredential_IsSafeAndIdempotent(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: genericCredentialSchema})
+
+	store, err := NewCredentialStore(ctx, StoreConfig{Pool: db.Pool})
+	require.NoError(t, err)
+
+	const identity = "svc-account-concurrent"
+	rawToken, minted, err := store.Mint(ctx, identity)
+	require.NoError(t, err)
+
+	const workers = 20
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			errs <- store.Revoke(ctx, minted.ID, identity)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		assert.NoError(t, err, "every concurrent Revoke call must succeed (idempotent, no error)")
+	}
+
+	// The credential must be revoked exactly once (no double-processing) and
+	// verify must now fail.
+	creds, err := store.List(ctx, identity)
+	require.NoError(t, err)
+	require.Len(t, creds, 1)
+	assert.NotNil(t, creds[0].RevokedAt)
+
+	_, _, verifyErr := store.Verify(ctx, rawToken)
+	assert.ErrorIs(t, verifyErr, ErrInvalidCredential)
+}
+
+// TestGeneric_ConcurrentVerify_SameToken_AllSucceed proves concurrent
+// Verify calls against the same live token all succeed (the
+// last_used_at-stamping UPDATE must not lock out concurrent readers/writers
+// of the same row).
+func TestGeneric_ConcurrentVerify_SameToken_AllSucceed(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: genericCredentialSchema})
+
+	store, err := NewCredentialStore(ctx, StoreConfig{Pool: db.Pool})
+	require.NoError(t, err)
+
+	const identity = "svc-account-concurrent-verify"
+	rawToken, _, err := store.Mint(ctx, identity)
+	require.NoError(t, err)
+
+	const workers = 20
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			_, _, err := store.Verify(ctx, rawToken)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		assert.NoError(t, err, "every concurrent Verify call against a live token must succeed")
+	}
 }
 
 // ── ASS-shaped (person_id UUID) lifecycle: proves IdentityCast ─────────
