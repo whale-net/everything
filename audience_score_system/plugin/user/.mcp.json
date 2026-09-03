@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "audience-score-system-mcp-dev": {
+      "type": "http",
+      "url": "https://dev-mcp.ass.whalenet.dev",
+      "headers": {
+        "Authorization": "Bearer ${ASS_MCP_DEV_TOKEN}"
+      }
+    },
+    "audience-score-system-mcp-prod": {
+      "type": "http",
+      "url": "https://mcp.ass.whalenet.app",
+      "headers": {
+        "Authorization": "Bearer ${ASS_MCP_PROD_TOKEN}"
+      }
+    }
+  }
+}
