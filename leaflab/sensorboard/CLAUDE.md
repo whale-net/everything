@@ -71,7 +71,7 @@ Scenarios are JSON files in `leaflab/scripts/scenarios/`. Each entry needs `chip
    WHERE b.device_id = '<device_id>'
    ORDER BY sr.recorded_at DESC LIMIT 10;
    ```
-   Use `mcp__postgres-leaflab__execute_sql` for this.
+   Use `mcp__leaflab-pg-tilt__execute_sql` for this.
 
 3. Check device config ACK:
    ```
