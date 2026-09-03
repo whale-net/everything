@@ -25,7 +25,10 @@ go_library(
 go_test(
     name = "mcpauth_test",
     srcs = [
+        "clients_test.go",
         "credential_test.go",
+        "metadata_test.go",
+        "provider_test.go",
         "resolver_test.go",
         "verify_test.go",
     ],
@@ -33,13 +36,16 @@ go_test(
     deps = [
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//oauthex",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
 )
 
 # Real-Postgres tests (preflight search_path resolution, real hash-at-rest
-# round trip, IdentityCast against a genuine uuid column). Gated behind
+# round trip, IdentityCast against a genuine uuid column, and — for the
+# OAuth client registry — a real multi-replica round trip: register via one
+# *pgxClientRegistry instance, Get via another). Gated behind
 # `//go:build integration`, gazelle skips it when scanning for go_test srcs;
 # this go_test is hand-written with EXACTLY the tag set from
 # //libs/go/dbtest:postgres_constraints_test (see that package's
@@ -53,7 +59,10 @@ go_test(
     name = "mcpauth_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["credential_integration_test.go"],
+    srcs = [
+        "clients_integration_test.go",
+        "credential_integration_test.go",
+    ],
     embed = [":mcpauth"],
     gotags = ["integration"],
     tags = [
@@ -67,6 +76,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//oauthex",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

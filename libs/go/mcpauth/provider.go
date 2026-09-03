@@ -2,25 +2,26 @@ package mcpauth
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 // ProviderConfig configures NewProvider.
 type ProviderConfig struct {
 	// Issuer is this authorization server's issuer identifier: an https URL
-	// with no trailing slash. It is also the base every endpoint URL this
-	// package advertises (in both metadata documents) is built from.
-	// Required.
-	//
-	// Scaffold note: NewProvider currently only checks Issuer is non-empty.
-	// The Implementation phase of #1641 adds the "must be an absolute URL"
-	// format check the issue's Implementation section requires.
+	// (or an http URL on loopback, for local dev/tests — see
+	// validateAbsoluteURL) with no trailing slash. It is also the base
+	// every endpoint URL this package advertises (in both metadata
+	// documents) is built from. Required.
 	Issuer string
 
 	// Resource is the MCP server's resource identifier — the URL an MCP
 	// client connects to — as it appears in protected-resource metadata's
-	// `resource` field (RFC 9728 §2). Required. Same scaffold note as
-	// Issuer applies: only a non-empty check runs today.
+	// `resource` field (RFC 9728 §2). Required; validated the same way as
+	// Issuer (see validateAbsoluteURL).
 	Resource string
 
 	// ResourceName is the protected-resource metadata's human-readable
@@ -61,20 +62,25 @@ type Provider struct {
 }
 
 // NewProvider constructs a Provider from cfg, defaulting cfg.Clients to
-// NewMemoryClientRegistry() when left nil.
-//
-// Scaffold note: this constructor currently only checks that Issuer and
-// Resource are non-empty and that Resolver and Credentials are non-nil.
-// The Implementation phase of #1641 adds the "Issuer/Resource must be an
-// absolute URL" format validation the issue's Implementation section
-// requires — see that section. It must never panic at request time either
-// way; every failure here is a returned error.
+// NewMemoryClientRegistry() when left nil. Issuer and Resource are
+// validated as absolute URLs (see validateAbsoluteURL) and Resolver and
+// Credentials must be non-nil. NewProvider never panics — every
+// construction-time failure is a returned error, not a request-time panic.
 func NewProvider(cfg ProviderConfig) (*Provider, error) {
 	if cfg.Issuer == "" {
 		return nil, errors.New("mcpauth: ProviderConfig.Issuer is required")
 	}
+	if err := validateAbsoluteURL(cfg.Issuer); err != nil {
+		return nil, fmt.Errorf("mcpauth: ProviderConfig.Issuer %q is invalid: %w", cfg.Issuer, err)
+	}
+	if strings.HasSuffix(cfg.Issuer, "/") {
+		return nil, fmt.Errorf("mcpauth: ProviderConfig.Issuer %q must not have a trailing slash", cfg.Issuer)
+	}
 	if cfg.Resource == "" {
 		return nil, errors.New("mcpauth: ProviderConfig.Resource is required")
+	}
+	if err := validateAbsoluteURL(cfg.Resource); err != nil {
+		return nil, fmt.Errorf("mcpauth: ProviderConfig.Resource %q is invalid: %w", cfg.Resource, err)
 	}
 	if cfg.Resolver == nil {
 		return nil, errors.New("mcpauth: ProviderConfig.Resolver is required")
@@ -87,6 +93,48 @@ func NewProvider(cfg ProviderConfig) (*Provider, error) {
 	}
 
 	return &Provider{cfg: cfg}, nil
+}
+
+// validateAbsoluteURL checks raw is an absolute URL with a host, using
+// https — or http, but only when the host is loopback (127.0.0.1, ::1, or
+// "localhost"): the shape a local dev server or an httptest-backed test
+// harness uses. This is the same scheme rule clients.go's
+// validateRedirectURI applies to registered redirect URIs, because Issuer
+// and Resource are both URLs a browser or native MCP client dereferences
+// directly, exactly like a redirect URI.
+func validateAbsoluteURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errors.New("must be a valid URL")
+	}
+	if !u.IsAbs() || u.Host == "" {
+		return errors.New("must be an absolute URL with a scheme and host")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return nil
+	case "http":
+		if isLoopbackHost(u.Hostname()) {
+			return nil
+		}
+		return errors.New("must use https (http is only allowed on loopback)")
+	default:
+		return errors.New("must use http or https")
+	}
+}
+
+// isLoopbackHost reports whether host (already stripped of any port, e.g.
+// via url.URL.Hostname()) is a loopback address: "localhost", or an IP
+// address for which net.IP.IsLoopback reports true (127.0.0.0/8, ::1).
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Fixed endpoint paths. These are not configurable: Mount registers every
@@ -104,17 +152,18 @@ const (
 
 // Mount registers every OAuth2 endpoint this provider serves on mux, at
 // paths matching the metadata it advertises (see the path constants
-// above).
-//
-// Scaffold note: every handler Mount wires in currently answers with a
-// fixed 501 (see notImplementedHandler, and metadata.go/clients.go's
-// per-handler stubs) — this settles the routing shape (which path serves
-// which concern) that later phases fill in, not the response bodies.
-// `/authorize` and `/token` in particular stay 501 for the lifetime of
-// this issue; #1642 lands their authorization-code + PKCE bodies.
+// above). Discovery metadata (RFC 9728/8414) and dynamic client
+// registration (RFC 7591) are fully implemented here; `/authorize` and
+// `/token` stay 501 (notImplementedHandler) for the lifetime of this
+// issue — #1642 lands their authorization-code + PKCE bodies.
 func (p *Provider) Mount(mux *http.ServeMux) {
-	mux.Handle("GET "+protectedResourceMetadataPath, p.protectedResourceMetadataHandler())
-	mux.Handle("GET "+authServerMetadataPath, p.authServerMetadataHandler())
+	// The two metadata endpoints are registered on the bare path, not a
+	// "GET <path>" method-restricted pattern: both handlers answer OPTIONS
+	// themselves (CORS preflight, 204 no body) as well as GET, and Go's
+	// ServeMux would otherwise 405 an OPTIONS request against a
+	// GET-restricted pattern before the handler ever ran.
+	mux.Handle(protectedResourceMetadataPath, p.protectedResourceMetadataHandler())
+	mux.Handle(authServerMetadataPath, p.authServerMetadataHandler())
 	mux.HandleFunc("POST "+registerPath, p.handleRegister)
 	mux.HandleFunc(authorizePath, notImplementedHandler)
 	mux.HandleFunc(tokenPath, notImplementedHandler)

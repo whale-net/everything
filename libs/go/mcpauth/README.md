@@ -164,6 +164,32 @@ CREATE TABLE mcp_oauth_client (
 boot-time preflight probe resolves through the same `search_path` the
 runtime uses.
 
+### Registration is open
+
+`POST /register` is intentionally **unauthenticated** — this is what RFC
+7591 dynamic client registration requires and what every MCP client (Claude
+Desktop, GitHub Copilot, opencode) expects to be able to call before it has
+any credential at all (see the Context section this issue was scoped from).
+Consequently, a client registration by itself confers **no access**: it
+only mints a `client_id` (and validates/echoes the client's redirect URIs)
+so the client can go on to run `/authorize` — access still requires a
+signed-in caller completing that flow (#1642). Do not treat "has a
+registered `client_id`" as any kind of authorization signal.
+
+`/register` validates every submitted `redirect_uri` is either `https`,
+`http` on loopback (native/CLI MCP clients that run a local callback
+listener, e.g. `http://127.0.0.1:PORT/callback`), or a private-use custom
+scheme (native app deep links, e.g. `com.example.app:/callback`); it
+rejects `javascript:`/`data:`/`vbscript:` outright, since those could turn
+`/authorize`'s eventual redirect into script execution rather than a
+navigation. On success it mints a random `client_id`, issues no
+`client_secret` (mcpauth only registers public PKCE clients — see the
+authorization-server metadata's `token_endpoint_auth_methods_supported:
+["none"]`), and returns `201` with an RFC 7591
+`ClientRegistrationResponse`. Bad input gets `400` with an RFC 7591 error
+body (`{"error": "invalid_redirect_uri" | "invalid_client_metadata"}`) —
+never a raw Go error string.
+
 ## Usage
 
 ```go
@@ -233,17 +259,39 @@ store, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
 
 ## Testing
 
-Pure-Go unit tests (`credential_test.go`) cover token generation, hashing
-parity with ASS's current `hashToken`, `StoreConfig` defaults, and
-identifier validation — no database required, run via
-`bazel test //libs/go/mcpauth/...`.
+Pure-Go unit tests cover, no database required, run via
+`bazel test //libs/go/mcpauth/...`:
 
-Integration tests against a real Postgres
-(`credential_integration_test.go`, `//go:build integration`, using
-`//libs/go/dbtest`) cover both a generic `identity TEXT` table and an
-ASS-shaped `person_id UUID` table, proving the full mint/verify/revoke/list
-lifecycle and the preflight failure path against real SQL. Run explicitly
-(requires a working Docker daemon):
+- `credential_test.go` — token generation, hashing parity with ASS's
+  current `hashToken`, `StoreConfig` defaults, and identifier validation.
+- `provider_test.go` — `NewProvider` validation (`Issuer`/`Resource` must
+  be absolute URLs, required fields), `validateAbsoluteURL`/
+  `isLoopbackHost`.
+- `metadata_test.go` — protected-resource and authorization-server
+  metadata's exact JSON shape (against an `httptest`-mounted `*Provider`),
+  CORS + `OPTIONS` handling, the metadata/route drift guard (every
+  advertised endpoint URL actually routes, not 404), and the full
+  protected-resource → authorization-server → `/register` bootstrap chain
+  in one test (the NFR4 sequence every MCP client runs).
+- `clients_test.go` — `NewMemoryClientRegistry`'s register/get round trip
+  and cross-instance isolation, `validateRedirectURI`'s allow/reject
+  cases, and `/register`'s full happy-path and RFC 7591 rejection-body
+  behavior (asserting no raw Go error text ever reaches the response).
+
+Integration tests against a real Postgres (`//go:build integration`, using
+`//libs/go/dbtest`) cover what pure-Go tests cannot:
+
+- `credential_integration_test.go` — both a generic `identity TEXT` table
+  and an ASS-shaped `person_id UUID` table, proving the full
+  mint/verify/revoke/list lifecycle and the preflight failure path against
+  real SQL.
+- `clients_integration_test.go` — the `mcp_oauth_client` preflight
+  failure/success path, and the guarantee `NewMemoryClientRegistry` cannot
+  give at all: a client registered via one `NewPostgresClientRegistry`
+  instance ("replica A") is retrievable via a second, separately
+  constructed instance sharing the same database ("replica B").
+
+Run explicitly (requires a working Docker daemon):
 
 ```sh
 bazel test //libs/go/mcpauth:mcpauth_integration_test --test_output=all

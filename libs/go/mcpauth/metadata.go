@@ -1,7 +1,7 @@
 package mcpauth
 
 import (
-	"errors"
+	"encoding/json"
 	"net/http"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -85,25 +85,30 @@ func (p *Provider) authServerMetadataDoc() authServerMetadata {
 	}
 }
 
-// errMetadataNotImplemented is returned by authServerMetadataHandler's
-// stub body until the Implementation phase of #1641 lands the real CORS
-// + OPTIONS + JSON-encoding behavior the issue's Implementation section
-// specifies (mirroring the CORS headers sdkauth.ProtectedResourceMetadataHandler
-// sets). Scaffold exists to settle authServerMetadata's shape (including
-// the JWKSURI decision above), not this handler's body.
-var errMetadataNotImplemented = errors.New("mcpauth: authorization-server metadata handler not implemented yet (see issue #1641)")
-
 // authServerMetadataHandler serves this Provider's RFC 8414
-// authorization-server metadata.
-//
-// Scaffold note: stubbed to 501 — authServerMetadataDoc() above already
-// settles the document's shape and content; #1641's Implementation phase
-// wires it into an http.Handler that sets the same CORS headers
-// sdkauth.ProtectedResourceMetadataHandler sets, answers OPTIONS, and
-// encodes authServerMetadataDoc() as the response body.
+// authorization-server metadata (authServerMetadataDoc()), setting the
+// same CORS headers sdkauth.ProtectedResourceMetadataHandler sets (OAuth
+// metadata is public, discovery-time information — see that function's
+// doc) and answering OPTIONS the same way: 204 with no body.
 func (p *Provider) authServerMetadataHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = errMetadataNotImplemented
-		notImplementedHandler(w, r)
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(p.authServerMetadataDoc()); err != nil {
+			http.Error(w, "mcpauth: failed to encode authorization-server metadata", http.StatusInternalServerError)
+			return
+		}
 	})
 }
