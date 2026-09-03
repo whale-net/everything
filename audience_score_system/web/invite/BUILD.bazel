@@ -1,0 +1,64 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+# Analyst invite generate/accept/decline (C3: FR5-FR8) -- handlers
+# (invite.go) and templ views (views.templ) in one package, see invite.go's
+# package doc comment for why they are not split across a components/pages
+# sibling pair like web/pages.
+templ_library(
+    name = "invite",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["invite.go"],
+    visibility = ["//audience_score_system/web:__pkg__"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)
+
+# Postgres-backed handler coverage (FR5-FR8, this task's Testing section):
+# generate invalidates the prior live code, non-Creator generate is
+# forbidden, the new-visitor and existing-Person redemption paths, decline's
+# state-change-free no-op, an already-consumed code's terminal error,
+# concurrent-accept atomicity, and redeeming your own Channel's invite as
+# its Creator (the SCD2 addRoleTx edge case). Gated behind
+# `//go:build integration`, gazelle skips it when scanning for go_test srcs;
+# this go_test is hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required), mirroring
+# //audience_score_system/web/auth:auth_integration_test. `# keep` markers
+# tell a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web/invite:invite_integration_test --test_output=all
+go_test(
+    # keep
+    name = "invite_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["invite_integration_test.go"],
+    embed = [":invite"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

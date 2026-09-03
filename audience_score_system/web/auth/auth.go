@@ -237,6 +237,18 @@ func (a *Authenticator) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// NewForTests returns an *Authenticator wired with only persons and
+// sessions -- no Google OAuth2/OIDC configuration -- so other web
+// sub-packages' tests (e.g. web/invite, web/channel) can exercise
+// RequireSignedIn against a real session (real cookie, real store.Person)
+// without live Google calls or NewAuthenticator's network OIDC discovery.
+// Callers of the returned *Authenticator must never call HandleLogin or
+// HandleCallback on it -- those two flows are covered exclusively by this
+// package's own tests (auth_test.go/auth_integration_test.go).
+func NewForTests(persons store.PersonStore, sessions *SessionManager) *Authenticator {
+	return &Authenticator{persons: persons, sessions: sessions}
+}
+
 // RequireSignedIn is middleware that resolves the caller's session cookie
 // to a store.Person and places it on the request context (readable via
 // PersonFromContext), redirecting to /login when no valid session exists
