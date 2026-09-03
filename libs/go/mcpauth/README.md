@@ -286,10 +286,14 @@ Integration tests against a real Postgres (`//go:build integration`, using
   mint/verify/revoke/list lifecycle and the preflight failure path against
   real SQL.
 - `clients_integration_test.go` — the `mcp_oauth_client` preflight
-  failure/success path, and the guarantee `NewMemoryClientRegistry` cannot
-  give at all: a client registered via one `NewPostgresClientRegistry`
+  failure/success path, the guarantee `NewMemoryClientRegistry` cannot
+  give at all (a client registered via one `NewPostgresClientRegistry`
   instance ("replica A") is retrievable via a second, separately
-  constructed instance sharing the same database ("replica B").
+  constructed instance sharing the same database ("replica B")), and a
+  concurrent-registration race test (many goroutines calling `Register`
+  against one registry at once, asserting every `client_id` is distinct,
+  every row persists, and none is lost to the primary-key-constrained
+  `INSERT`).
 
 Run explicitly (requires a working Docker daemon):
 

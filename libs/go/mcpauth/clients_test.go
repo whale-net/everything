@@ -199,6 +199,18 @@ func TestRegister_RejectsBadInput_WithRFC7591ErrorBodyNoGoErrorText(t *testing.T
 			contentType: "application/json",
 		},
 		{
+			name:        "redirect_uris key entirely absent",
+			body:        `{"client_name": "No Redirects"}`,
+			wantCode:    "invalid_client_metadata",
+			contentType: "application/json",
+		},
+		{
+			name:        "empty body",
+			body:        `{}`,
+			wantCode:    "invalid_client_metadata",
+			contentType: "application/json",
+		},
+		{
 			name:        "javascript redirect_uri",
 			body:        `{"redirect_uris": ["javascript:alert(1)"]}`,
 			wantCode:    "invalid_redirect_uri",

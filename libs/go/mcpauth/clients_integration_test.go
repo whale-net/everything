@@ -16,6 +16,8 @@ package mcpauth
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -98,6 +100,60 @@ func TestPostgresClientRegistry_Get_UnknownClientID_ReturnsErrClientNotFound(t *
 
 	_, err = reg.Get(ctx, "never-registered")
 	assert.ErrorIs(t, err, ErrClientNotFound)
+}
+
+// TestPostgresClientRegistry_ConcurrentRegistrations_AllSucceedWithDistinctIDs
+// proves NewPostgresClientRegistry.Register is safe under concurrent load
+// against the pool's connections — a real MCP client population hits
+// /register from many replicas/goroutines around the same moment, and
+// generateClientID's crypto/rand + a PRIMARY KEY-constrained INSERT must
+// not race into either a lost registration or a client_id collision.
+func TestPostgresClientRegistry_ConcurrentRegistrations_AllSucceedWithDistinctIDs(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{Schema: oauthClientSchema})
+
+	reg, err := NewPostgresClientRegistry(ctx, ClientRegistryConfig{Pool: db.Pool})
+	require.NoError(t, err)
+
+	const n = 25
+	var wg sync.WaitGroup
+	ids := make([]string, n)
+	errs := make([]error, n)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			meta := oauthex.ClientRegistrationMetadata{
+				RedirectURIs: []string{"https://client.example.com/callback"},
+				ClientName:   fmt.Sprintf("Concurrent Client %d", i),
+			}
+			client, err := reg.Register(ctx, meta)
+			ids[i] = client.ClientID
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	seen := make(map[string]bool, n)
+	for i, err := range errs {
+		require.NoError(t, err, "registration %d must not fail under concurrent load", i)
+		require.NotEmpty(t, ids[i])
+		require.False(t, seen[ids[i]], "client_id %q must not be issued to two concurrent registrations", ids[i])
+		seen[ids[i]] = true
+	}
+
+	// Every concurrently minted client_id must actually be retrievable
+	// afterward — proves the race didn't silently drop a row.
+	for i, id := range ids {
+		got, err := reg.Get(ctx, id)
+		require.NoError(t, err, "registration %d's client_id must be retrievable", i)
+		assert.Equal(t, id, got.ClientID)
+	}
+
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, "SELECT COUNT(*) FROM mcp_oauth_client").Scan(&count))
+	assert.Equal(t, n, count, "every concurrent registration must persist exactly one row")
 }
 
 func TestPostgresClientRegistry_TwoRegistrations_GetDistinctClientIDs(t *testing.T) {
