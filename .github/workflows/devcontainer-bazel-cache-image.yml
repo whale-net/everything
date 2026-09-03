@@ -42,6 +42,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
 
+      # Renders to $RUNNER_TEMP (outside the git checkout, so it can never
+      # be picked up by COPY . . in the Dockerfile) and is fed to the build
+      # below via a BuildKit secret mount, not a build-arg -- see
+      # .devcontainer/Dockerfile and docs/BAZEL_CACHE_IMAGE.md "Remote
+      # cache during the warm build" for why. Most of what `bazel build
+      # //...` would otherwise recompile from scratch here is already in
+      # the remote cache from ci.yml's own `test` job runs on this same
+      # `main`, so this is mainly a speedup for the warm build itself, not
+      # a correctness requirement -- the step above still works with no
+      # cache configured.
+      - name: Setup Bazel Remote Cache Config
+        uses: ./.github/actions/setup-bazel-remote-cache-config
+        with:
+          cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+          cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+          cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+          downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+          output-path: ${{ runner.temp }}/.bazelrc.remote
+
       # Builds unconditionally (validates the Dockerfile on every manual
       # dispatch) but only pushes once a human has opted in, matching this
       # repo's other opt-in-via-repo-variable gates (e.g.
@@ -53,6 +72,8 @@ jobs:
           file: .devcontainer/Dockerfile
           build-args: |
             WARM_TARGETS=${{ github.event.inputs.warm_targets || '//...' }}
+          secret-files: |
+            bazelrc_remote=${{ runner.temp }}/.bazelrc.remote
           push: ${{ vars.BAZEL_CACHE_IMAGE_ENABLED == 'true' }}
           tags: |
             ghcr.io/${{ github.repository_owner }}/bazel-cache-devcontainer:latest
