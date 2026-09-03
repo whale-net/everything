@@ -342,7 +342,8 @@ func (a *app) handleHome(w http.ResponseWriter, r *http.Request) {
 
 // handleChannelDetail renders a Channel's connection state (connected /
 // needs re-authentication) and, for a Creator only (store.CanReconnect --
-// NFR5), the reconnect affordance (#1571's Implementation section).
+// NFR5), the reconnect affordance (#1571's Implementation section) and the
+// invite-analyst affordance (store.CanInvite, C3/FR5).
 func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	person := auth.PersonFromContext(r.Context())
 	if person == nil {
@@ -372,11 +373,17 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	canInvite, err := store.CanInvite(r.Context(), a.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	data := components.LayoutData{
 		Title: ch.Title,
 		User:  person,
 	}
-	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect)); err != nil {
+	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

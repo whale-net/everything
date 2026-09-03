@@ -4,20 +4,26 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
 
-// GenerateResult renders the newly generated invite code (FR5) for the
+// GenerateResult renders the newly generated invite link (FR5) for the
 // Creator to copy and share out of band -- no email delivery exists
-// anywhere in this system (see package doc comment).
-templ GenerateResult(data components.LayoutData, code string) {
+// anywhere in this system (see package doc comment). channelID links back
+// to the Channel detail page this invite was generated from.
+templ GenerateResult(data components.LayoutData, code string, channelID string) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
-				<h1 class="card-title">Invite code generated</h1>
+				<h1 class="card-title">Invite link generated</h1>
 				<p class="text-base-content/70">
-					Share this code with the analyst you want to invite. Generating a
-					new code replaces this one -- only one invite can be live per
+					Share this link with the analyst you want to invite. Generating a
+					new link replaces this one -- only one invite can be live per
 					Channel at a time.
 				</p>
-				<code class="block bg-base-200 rounded p-4 text-lg break-all">{ code }</code>
+				<code class="block bg-base-200 rounded p-4 text-lg break-all">/invites/{ code }</code>
+				<div class="card-actions justify-end mt-2">
+					<a href={ templ.URL("/channels/" + channelID) } class="btn btn-secondary btn-sm">
+						Back to channel
+					</a>
+				</div>
 			</div>
 		</div>
 	}

@@ -98,7 +98,7 @@ func (h *Handlers) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := components.LayoutData{Title: "Invite code generated", User: person}
-	if err := components.Render(w, r, "Invite code generated", GenerateResult(data, inv.Code)); err != nil {
+	if err := components.Render(w, r, "Invite link generated", GenerateResult(data, inv.Code, channelID.String())); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
