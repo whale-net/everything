@@ -158,6 +158,42 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		sgcDisplayNames[sgc.ServerGameConfigId] = displayName
 	}
 
+	// Build DeploymentRows from each SGC's *latest* session, not the
+	// live-only liveSessionByConfig fetch above -- a stopped/crashed/lost
+	// deployment has no live session but still needs a row with Start/
+	// Restart available. Deliberately not reusing the page's own
+	// `sessions` slice either: it is shaped by the user's status/
+	// live_only/server_game_config_id filters and would silently
+	// mis-derive the latest session whenever a filter is applied.
+	var deploymentRows []pages.DeploymentRowData
+	if selectedServerID > 0 {
+		allReq := &manmanpb.ListSessionsRequest{
+			ServerId: selectedServerID,
+			PageSize: 200,
+		}
+		allSessions, err := app.grpc.ListSessionsWithFilters(ctx, allReq)
+		if err != nil {
+			log.Printf("Error fetching all sessions for deployment rows: %v", err)
+			allSessions = nil
+		}
+		sessionsBySGC := make(map[int64][]*manmanpb.Session, len(serverConfigs))
+		for _, session := range allSessions {
+			sessionsBySGC[session.ServerGameConfigId] = append(sessionsBySGC[session.ServerGameConfigId], session)
+		}
+		deploymentRows = make([]pages.DeploymentRowData, 0, len(serverConfigs))
+		for _, sgc := range serverConfigs {
+			latest := components.LatestSession(sessionsBySGC[sgc.ServerGameConfigId])
+			deploymentRows = append(deploymentRows, pages.DeploymentRowData{
+				ServerGameConfigID: sgc.ServerGameConfigId,
+				DisplayName:        sgcDisplayNames[sgc.ServerGameConfigId],
+				SGCStatus:          sgc.Status,
+				LatestSession:      latest,
+				LiveSession:        liveSessionByConfig[sgc.ServerGameConfigId],
+				Actions:            components.ComputeDeploymentActions(latest),
+			})
+		}
+	}
+
 	var startWarning string
 	if selectedServerID > 0 && selectedServerStatus != "" && selectedServerStatus != "online" {
 		startWarning = "Selected server is offline. Starting a session may fail."
@@ -177,6 +213,7 @@ func (app *App) handleSessions(w http.ResponseWriter, r *http.Request) {
 		ShowForce:    showForce,
 		ForceSGCID:   forceSGCID,
 		LiveSessionByConfig: liveSessionByConfig,
+		DeploymentRows:      deploymentRows,
 	}
 
 	breadcrumbs := []components.Breadcrumb{
