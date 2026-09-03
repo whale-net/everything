@@ -19,6 +19,7 @@ go_library(
     name = "store",
     srcs = [
         "authz.go",
+        "browse.go",
         "channel.go",
         "credential.go",
         "idea.go",

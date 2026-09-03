@@ -306,3 +306,58 @@ type PredictionVsOutcome struct {
 	ImpressionCTR              *float64
 	MetricsMeasuredAt          time.Time
 }
+
+// PredictionOutcome is one row of BrowseStore.PredictionVsOutcome (issue
+// #1582, FR24, C10's comparison read) -- an idea's committed, matched
+// (auto or confirmed), published video, alongside the SPECIFIC
+// viability_verdict version bound to that schedule_entry
+// (schedule_entry.verdict_id, LB3's FK chain) -- never the idea's current
+// verdict. Deliberately NOT the same shape as PredictionVsOutcome above:
+// see BrowseStore.PredictionVsOutcome's doc (browse.go) for why this is a
+// distinct, corrected query rather than a read of migration 002's
+// v_prediction_vs_outcome view, plus the verdict author fields that view
+// does not carry.
+type PredictionOutcome struct {
+	IdeaID    uuid.UUID
+	IdeaTitle string
+
+	VerdictID                uuid.UUID
+	VerdictVersion           int
+	Verdict                  VerdictValue
+	VerdictReasoning         string
+	VerdictAuthorPersonID    uuid.UUID
+	VerdictAuthorDisplayName string
+	VerdictCreatedAt         time.Time
+
+	ScheduleEntryID   uuid.UUID
+	ProposedPublishAt time.Time
+	ApprovedAt        *time.Time
+
+	MatchID         uuid.UUID
+	MatchState      MatchState // always MatchStateAuto or MatchStateConfirmed.
+	MatchConfidence float64
+
+	SyncedVideoID  uuid.UUID
+	YouTubeVideoID string
+	VideoTitle     string
+	PublishedAt    *time.Time
+
+	Views                      *int64
+	AverageViewDurationSeconds *float64
+	AverageViewPercentage      *float64
+	Impressions                *int64
+	ImpressionCTR              *float64
+	MetricsMeasuredAt          time.Time
+}
+
+// IdeaOverview is one Idea plus its current verdict (all four
+// CurrentVerdict* fields nil if none has been recorded yet) --
+// BrowseStore.IdeasWithCurrentVerdict's row shape, backing
+// get_channel_overview's ideas section (issue #1582, FR24).
+type IdeaOverview struct {
+	Idea
+	CurrentVerdictID        *uuid.UUID
+	CurrentVerdictVersion   *int
+	CurrentVerdict          *VerdictValue
+	CurrentVerdictReasoning *string
+}

@@ -102,6 +102,7 @@ func run() error {
 	tools.RegisterGetChannelSchedule(reg, st.Sync())
 	tools.RegisterScheduleDraft(reg, st)
 	tools.RegisterMatches(reg, st)
+	tools.RegisterBrowse(reg, st)
 
 	handler := server.NewHTTPHandler(srv, st.Credentials())
 

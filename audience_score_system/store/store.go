@@ -80,3 +80,7 @@ func (s *Store) Idempotency() Idempotency { return idempotencyStore{pool: s.pool
 // Credentials returns the CredentialStore implementation (migration 005,
 // issue #1575) -- `mcp`'s bearer-credential-to-Person auth mechanism.
 func (s *Store) Credentials() CredentialStore { return credentialStore{pool: s.pool} }
+
+// Browse returns the BrowseStore implementation (issue #1582, FR24) --
+// C10's cross-entity Channel-overview and prediction-vs-outcome reads.
+func (s *Store) Browse() BrowseStore { return browseStore{pool: s.pool} }
