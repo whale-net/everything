@@ -22,11 +22,24 @@ type SessionsPageData struct {
 	ForceSGCID          string
 	ServerConfigs       []*manmanpb.ServerGameConfig
 	LiveSessionByConfig map[int64]*manmanpb.Session
+	DeploymentRows      []DeploymentRowData
 }
 
 type SGCDisplayInfo struct {
 	ServerGameConfigId int64
 	DisplayName        string
+}
+
+// DeploymentRowData is everything one deployment row needs to render itself,
+// standalone (HTMX fragment) or inside GSCStatusTable.
+type DeploymentRowData struct {
+	ServerGameConfigID int64
+	DisplayName        string
+	SGCStatus          string            // ServerGameConfig.Status (deploy state)
+	LatestSession      *manmanpb.Session // nil when never started
+	LiveSession        *manmanpb.Session // nil when not live
+	Actions            components.DeploymentActions
+	ActionError        string // FR8 inline error; "" when none
 }
 
 templ Sessions(layout components.LayoutData, data SessionsPageData) {
@@ -39,8 +52,8 @@ templ Sessions(layout components.LayoutData, data SessionsPageData) {
 		}
 		@SessionFilters(data.StatusFilter, data.ServerGameConfigID, data.LiveOnly, data.SGCOptions)
 		@StartSessionPanel(data.SelectedServerID, data.SGCOptions, data.StartWarning, data.StartError, data.ShowForce, data.ForceSGCID)
-		if len(data.ServerConfigs) > 0 {
-			@GSCStatusTable(data.ServerConfigs, data.SGCDisplayNames, data.LiveSessionByConfig)
+		if len(data.DeploymentRows) > 0 {
+			@GSCStatusTable(data.DeploymentRows)
 		}
 		if len(data.Sessions) > 0 {
 			@SessionsTable(data.Sessions, data.SGCDisplayNames)
@@ -169,7 +182,141 @@ templ StartSessionPanel(selectedServerID string, sgcOptions []SGCDisplayInfo, st
 	</div>
 }
 
-templ GSCStatusTable(serverConfigs []*manmanpb.ServerGameConfig, sgcDisplayNames map[int64]string, liveSessionByConfig map[int64]*manmanpb.Session) {
+// deploymentRowPollAttrs returns the row's self-terminating poll wiring
+// (FR7, #1628): hx-get/hx-trigger/hx-target/hx-swap are present only when
+// the row's latest session is in a components.IsTransientStatus state
+// (pending/starting/stopping). Because the endpoint's response is itself a
+// DeploymentRow (#1628's GET /api/deployments/{sgcID}/row), a settled
+// row's next render comes back without these attributes and the polling
+// loop stops on its own -- no client-side timer bookkeeping, and this is
+// independent of ActionError: a row with an inline action error still
+// polls (and the error clears) as long as the underlying status is still
+// transient.
+func deploymentRowPollAttrs(data DeploymentRowData) templ.Attributes {
+	if !components.IsTransientStatus(data.LatestSession.GetStatus()) {
+		return templ.Attributes{}
+	}
+	return templ.Attributes{
+		"hx-get":     fmt.Sprintf("/api/deployments/%d/row", data.ServerGameConfigID),
+		"hx-trigger": "every 3s",
+		"hx-target":  "this",
+		"hx-swap":    "outerHTML",
+	}
+}
+
+// DeploymentRow renders a single deployment's <tr>, keyed by the stable
+// "deployment-row-<sgcID>" id that the action endpoints (#1627) and the
+// refresh endpoint (#1628) target as their HTMX swap target. Cell content
+// lives in DeploymentRowInner so both whole-row swaps (this component) and
+// future inner-swap responses can reuse it.
+templ DeploymentRow(data DeploymentRowData) {
+	<tr id={ fmt.Sprintf("deployment-row-%d", data.ServerGameConfigID) } class="hover" { deploymentRowPollAttrs(data)... }>
+		@DeploymentRowInner(data)
+	</tr>
+}
+
+// DeploymentRowInner renders just the <td>s for a deployment row: display
+// name, status (with a session-status badge, or "Never started" when the
+// deployment has no session yet), live session link, and the Start/Stop/
+// Restart actions cell. Availability of each action control comes entirely
+// from data.Actions (components.ComputeDeploymentActions, #1625) -- no
+// status-string comparisons here decide which button shows.
+templ DeploymentRowInner(data DeploymentRowData) {
+	<td class="text-sm">
+		if data.DisplayName != "" {
+			{ data.DisplayName }
+		} else {
+			{ fmt.Sprintf("SGC %d", data.ServerGameConfigID) }
+		}
+	</td>
+	<td class="text-sm">
+		{ data.SGCStatus }
+		if data.LatestSession != nil {
+			@htmxui.Badge(data.LatestSession.Status, statusBadgeVariant(sessionStatusVariant(data.LatestSession.Status)), htmxui.BadgeSizeSM, true, nil)
+		} else {
+			@htmxui.Badge("Never started", htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, nil)
+		}
+	</td>
+	<td class="text-sm">
+		if data.LiveSession != nil {
+			<a href={ templ.URL(fmt.Sprintf("/sessions/%d", data.LiveSession.SessionId)) } class="btn btn-primary btn-sm">View Live Session</a>
+		} else {
+			@htmxui.Badge("None", htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, nil)
+		}
+	</td>
+	// Actions cell: intentionally kept on the same Alpine.js x-show /
+	// click-handler reveal-then-confirm interaction as sgc_detail.templ's
+	// Danger Zone (see that file's comment). Stop and Restart both
+	// interrupt a live game process, so both are confirm-gated; Start is
+	// not. Do not adopt htmxui.Confirm here: its always-visible
+	// single-submit shape is a different interaction than this
+	// click-to-reveal gate, and daisyui_migration_test.go already guards
+	// that distinction elsewhere on this page family.
+	<td class="text-sm" x-data="{ confirmStop: false, confirmRestart: false }">
+		<div class="flex flex-col gap-2 items-start">
+			if data.Actions.CanStart {
+				<form
+					method="POST"
+					action={ templ.URL(fmt.Sprintf("/sessions/deployments/%d/start", data.ServerGameConfigID)) }
+					hx-post={ fmt.Sprintf("/sessions/deployments/%d/start", data.ServerGameConfigID) }
+					hx-target={ fmt.Sprintf("#deployment-row-%d", data.ServerGameConfigID) }
+					hx-swap="outerHTML"
+					class="inline"
+				>
+					<button type="submit" class="btn btn-success btn-sm">Start</button>
+				</form>
+			}
+			if data.Actions.CanStop {
+				<div>
+					<button type="button" x-show="!confirmStop" @click="confirmStop = true" class="btn btn-warning btn-sm">Stop</button>
+					<div x-show="confirmStop" x-cloak class="flex gap-2 items-center">
+						<span class="text-sm text-warning font-medium">Stop now?</span>
+						<form
+							method="POST"
+							action={ templ.URL(fmt.Sprintf("/sessions/deployments/%d/stop", data.ServerGameConfigID)) }
+							hx-post={ fmt.Sprintf("/sessions/deployments/%d/stop", data.ServerGameConfigID) }
+							hx-target={ fmt.Sprintf("#deployment-row-%d", data.ServerGameConfigID) }
+							hx-swap="outerHTML"
+							class="inline"
+						>
+							<button type="submit" class="btn btn-warning btn-sm">Yes, Stop</button>
+						</form>
+						<button type="button" @click="confirmStop = false" class="btn btn-secondary btn-sm">Cancel</button>
+					</div>
+				</div>
+			}
+			if data.Actions.CanRestart {
+				<div>
+					<button type="button" x-show="!confirmRestart" @click="confirmRestart = true" class="btn btn-info btn-sm">Restart</button>
+					<div x-show="confirmRestart" x-cloak class="flex gap-2 items-center">
+						<span class="text-sm text-info font-medium">Restart now?</span>
+						<form
+							method="POST"
+							action={ templ.URL(fmt.Sprintf("/sessions/deployments/%d/restart", data.ServerGameConfigID)) }
+							hx-post={ fmt.Sprintf("/sessions/deployments/%d/restart", data.ServerGameConfigID) }
+							hx-target={ fmt.Sprintf("#deployment-row-%d", data.ServerGameConfigID) }
+							hx-swap="outerHTML"
+							class="inline"
+						>
+							<button type="submit" class="btn btn-info btn-sm">Yes, Restart</button>
+						</form>
+						<button type="button" @click="confirmRestart = false" class="btn btn-secondary btn-sm">Cancel</button>
+					</div>
+				</div>
+			}
+			if !data.Actions.CanStart && !data.Actions.CanStop && !data.Actions.CanRestart {
+				<span class="text-base-content/40">&mdash;</span>
+			}
+		</div>
+		if data.ActionError != "" {
+			<div role="alert" class="alert alert-error alert-sm mt-2">
+				<span class="text-xs">{ data.ActionError }</span>
+			</div>
+		}
+	</td>
+}
+
+templ GSCStatusTable(rows []DeploymentRowData) {
 	<div class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden mb-6">
 		<div class="flex justify-between items-center p-4 border-b border-base-300 bg-base-200">
 			<h2 class="text-lg font-semibold text-base-content">Game Server Containers (GSCs) Status</h2>
@@ -181,27 +328,12 @@ templ GSCStatusTable(serverConfigs []*manmanpb.ServerGameConfig, sgcDisplayNames
 						<th>GSC (Server Game Config)</th>
 						<th>Status</th>
 						<th>Live Session</th>
+						<th>Actions</th>
 					</tr>
 				</thead>
 				<tbody>
-					for _, sgc := range serverConfigs {
-						<tr class="hover">
-							<td class="text-sm">
-								if name, ok := sgcDisplayNames[sgc.ServerGameConfigId]; ok {
-									{ name }
-								} else {
-									{ fmt.Sprintf("SGC %d", sgc.ServerGameConfigId) }
-								}
-							</td>
-							<td class="text-sm">{ sgc.Status }</td>
-							<td class="text-sm">
-								if session, ok := liveSessionByConfig[sgc.ServerGameConfigId]; ok {
-									<a href={ templ.URL(fmt.Sprintf("/sessions/%d", session.SessionId)) } class="btn btn-primary btn-sm">View Live Session</a>
-								} else {
-									@htmxui.Badge("None", htmxui.BadgeNeutral, htmxui.BadgeSizeSM, true, nil)
-								}
-							</td>
-						</tr>
+					for _, row := range rows {
+						@DeploymentRow(row)
 					}
 				</tbody>
 			</table>

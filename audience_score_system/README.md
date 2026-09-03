@@ -17,8 +17,8 @@ server precedent used elsewhere in the repo.
 |--------|---------------------|----------|--------|
 | `migrate/` | `migration` | `job` | Applies every migration (001-005: identity, research/schedule/outcome, web session, channel credentials, MCP credentials). |
 | `web/` | `web` | `external-api` | The only UI surface (NFR3): Google OAuth sign-in/sign-up (C1), Channel connect (C2), Analyst invite/accept (C3), schedule-draft approval (C8). |
-| `mcp/` | `mcp` | `external-api` | Every other capability (C4-C7, C9, C10) as MCP tools -- research notes, viability verdicts, schedule sync reads, pacing policy, schedule drafting, outcome match confirm/reject, and browsing. |
-| `worker/` | `worker` | `worker` | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). |
+| `mcp/` | `mcp` | `external-api` | Every other capability (C4-C7, C9, C10) as MCP tools -- Channel access discovery (`list_channels`, issue #1631), research notes, viability verdicts, schedule sync reads, pacing policy, schedule drafting, outcome match confirm/reject, and browsing. |
+| `worker/` | `worker` | `worker` | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-6 hour cadence (NFR4, default 3h). A manual run can be forced via `mcp`'s `trigger_channel_sync` tool. |
 
 All four are complete as of M1 (see [`PRODUCT.md`](PRODUCT.md)'s roadmap)
 and share the `audience-score-system` `release_app` domain, producing
@@ -89,8 +89,10 @@ there is no separate MCP-specific client-secret variable.
    - **Transport**: streamable HTTP
    - **Authorization header**: `Bearer <the minted token>`
 4. Call `whoami` first to confirm the credential resolves to the expected
-   Person, then any Channel-scoped tool (e.g. `list_research_notes`,
-   `get_channel_schedule`) with that Person's `channel_id`.
+   Person, then `list_channels` (issue #1631) to discover which Channels
+   that Person has access to and their `channel_id`s, then any
+   Channel-scoped tool (e.g. `list_research_notes`, `get_channel_schedule`)
+   with one of those ids.
 
 `//audience_score_system/citest`'s end-to-end test
 (`e2e_test.go`) does exactly this against a real, in-process `mcp.Server`

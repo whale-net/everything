@@ -87,6 +87,23 @@ type App struct {
 	grpc         *ControlClient
 	logProcessor manmanpb.LogProcessorClient
 	userAuthOpt  grpc.DialOption
+
+	// deploymentStopPollInterval/deploymentStopTimeout override
+	// handleDeploymentAction's restart stop-then-start poll (#1627). Zero
+	// value means "use the production defaults" -- see
+	// handlers_deployment_actions.go's deploymentStopPoll -- so only tests
+	// that need a fast timeout set these.
+	deploymentStopPollInterval time.Duration
+	deploymentStopTimeout      time.Duration
+
+	// deploymentActionTimeout overrides boundDeploymentRPC's bound around
+	// Stop/Restart/Start's own outbound StopSession/StartSession RPC call
+	// (#1664 defense-in-depth, hardened and extended to Start by #1668,
+	// well under main.go's 15s WriteTimeout). Zero value means "use the
+	// production default" -- see handlers_deployment_actions.go's
+	// deploymentActionBound -- so only tests that need a fast timeout set
+	// this.
+	deploymentActionTimeout time.Duration
 }
 
 // NewApp creates a new application instance
@@ -236,10 +253,22 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
 	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessions)))
 	mux.HandleFunc("/sessions/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
+	// Registered ahead of (and more specific than) the "/sessions/" catch-all
+	// above: Go's ServeMux dispatches on longest-matching-pattern, so
+	// "/sessions/deployments/" wins over "/sessions/" for these paths and
+	// never reaches handleSessionDetail, which parses path segments
+	// positionally and would otherwise try (and fail) to parse
+	// "deployments" as a session id (#1627).
+	mux.HandleFunc("/sessions/deployments/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentAction)))
 	mux.HandleFunc("/sessions/start", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionStart)))
 	mux.HandleFunc("/api/sessions/check-active", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCheckActiveSession)))
 	mux.HandleFunc("/api/sessions/historical-logs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHistoricalLogs)))
 	mux.HandleFunc("/api/sessions/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionStdin)))
+	// "/api/deployments/" is a distinct prefix from "/api/sessions/" above
+	// (handleSessionStdin's catch-all), so the row's self-polling GET
+	// (#1628) never collides with it under Go's ServeMux
+	// longest-pattern-wins dispatch.
+	mux.HandleFunc("/api/deployments/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentRowFragment)))
 
 	// Note: Log streaming endpoint is handled by handleSessionDetail which routes to handleSessionLogsStream
 

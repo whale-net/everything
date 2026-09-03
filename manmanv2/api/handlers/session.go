@@ -277,6 +277,7 @@ func (h *SessionHandler) StopSession(ctx context.Context, req *pb.StopSessionReq
 			"session_id": session.SessionID,
 			"force":      false,
 		}
+		// Short timeout: host manager replies immediately on receipt (work runs async).
 		if err := h.publisher.PublishStopSession(ctx, sgc.ServerID, cmd, 1*time.Minute); err != nil {
 			log.Printf("Warning: Failed to publish stop session command: %v", err)
 		}
