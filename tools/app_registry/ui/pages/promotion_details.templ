@@ -225,6 +225,7 @@ templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 			@retryArgoSyncButton(user, d.GetPromotion().GetPromotionId())
 		</div>
 	</div>
+	@components.PromotionReadinessBanner(d.GetOutcome(), d.GetCurrentSyncStatus(), d.GetCurrentHealthStatus())
 	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
 		<div class="card-body">
 			<h3 class="card-title text-base">Request</h3>

@@ -181,3 +181,52 @@ templ PromotionSyncOutcomeBadge(o pb.PromotionSyncOutcome) {
 	{{ label, class := promotionSyncOutcomeLabel(o) }}
 	<span class={ "badge", class }>{ label }</span>
 }
+
+// promotionReadinessStatusPair renders the raw sync/health fields for the
+// readiness banner's detail line -- "not yet observed" instead of a blank
+// dash, since the banner's whole point is to be read at a glance rather
+// than cross-referenced against the raw status rows below it.
+func promotionReadinessStatusPair(syncStatus, healthStatus string) string {
+	if syncStatus == "" {
+		syncStatus = "not yet observed"
+	}
+	if healthStatus == "" {
+		healthStatus = "not yet observed"
+	}
+	return "Sync: " + syncStatus + " · Health: " + healthStatus
+}
+
+// promotionReadinessLabel collapses a PromotionSyncOutcome plus the raw
+// sync/health strings into a single readiness verdict: PENDING covers both
+// "sync not yet triggered" and "synced but health still Progressing" --
+// both are equally "not ready for consumption" from a caller's point of
+// view, so this deliberately does not split them into a fourth state.
+func promotionReadinessLabel(o pb.PromotionSyncOutcome, syncStatus, healthStatus string) (headline, detail, alertClass string) {
+	detail = promotionReadinessStatusPair(syncStatus, healthStatus)
+	switch o {
+	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY:
+		return "Ready for consumption", detail, "alert-success"
+	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNC_FAILED:
+		return "Not ready — sync failed", detail, "alert-error"
+	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_PENDING:
+		return "Waiting on ArgoCD", detail, "alert-info"
+	default:
+		return "Unknown", "No sync observation recorded yet.", "alert-warning"
+	}
+}
+
+// PromotionReadinessBanner is the Promotion Details page's live-updating
+// readiness indicator: it collapses "is the sync done" and "is everything
+// healthy" into a single answer to "is this promotion ready for
+// consumption," rendered inside the same sse-swap region as the rest of
+// PromotionDetailsBody so it updates in place as new PromotionSyncEvent
+// observations arrive, with no reload.
+templ PromotionReadinessBanner(o pb.PromotionSyncOutcome, syncStatus, healthStatus string) {
+	{{ headline, detail, class := promotionReadinessLabel(o, syncStatus, healthStatus) }}
+	<div role="status" class={ "alert", class, "mb-4" }>
+		<div>
+			<div class="font-semibold">{ headline }</div>
+			<div class="text-sm opacity-80">{ detail }</div>
+		</div>
+	</div>
+}
