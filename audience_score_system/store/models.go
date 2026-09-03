@@ -167,6 +167,26 @@ type ScheduleEntry struct {
 	IdempotencyKey     string
 }
 
+// ScheduleEntryDetail is one `schedule_entry` row joined with its bound
+// Idea title, its bound Verdict version/value/reasoning (schedule_entry.
+// verdict_id -- LB3), the approver's display name (empty when not
+// approved), and -- when Published holds -- the identity of the video
+// that fulfilled it (issue #1580, C8: FR19/FR20). Published mirrors
+// ScheduleStore.IsPublished exactly: a live (auto/confirmed)
+// video_schedule_match to a synced_video whose published_at is non-null.
+// Backs `web`'s GET /channels/{id}/schedule page.
+type ScheduleEntryDetail struct {
+	Entry               ScheduleEntry
+	IdeaTitle           string
+	VerdictVersion      int
+	Verdict             VerdictValue
+	VerdictReasoning    string
+	ApproverName        string
+	Published           bool
+	PublishedVideoID    string // YouTube video id; "" unless Published.
+	PublishedVideoTitle string
+}
+
 // PrivacyStatus is `synced_video.privacy_status` (migration 002, FR14).
 type PrivacyStatus string
 

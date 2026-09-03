@@ -28,6 +28,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/invite"
 	"github.com/whale-net/everything/audience_score_system/web/pages"
+	"github.com/whale-net/everything/audience_score_system/web/schedule"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
 )
@@ -80,6 +81,7 @@ type app struct {
 	auth     *auth.Authenticator
 	invite   *invite.Handlers
 	channels *channel.Handler
+	schedule *schedule.Handlers
 }
 
 func main() {
@@ -160,7 +162,12 @@ func run() error {
 		RedirectURL:  cfg.OAuthRedirectBase + "/oauth/youtube/callback",
 	}, st.Channels(), st.Roles(), tokenStore, sessions)
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler}
+	// scheduleHandlers is C8's Creator-only approve/un-approve/edit surface
+	// (#1580, FR19/FR20) -- needs only st (store.CanRead/store.CanApprove +
+	// Schedules()/Roles()/Channels()), no separate OAuth grant of its own.
+	scheduleHandlers := schedule.New(st)
+
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -232,6 +239,16 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// (Creator only, via store.CanReconnect -- NFR5) the reconnect
 	// affordance (#1571's Implementation section).
 	mux.HandleFunc("GET /channels/{id}", a.auth.RequireSignedIn(a.handleChannelDetail))
+
+	// Protected: schedule-draft approval (C8: FR19/FR20, #1580). GET is
+	// Creator and Analyst both (store.CanRead); the three mutating POSTs
+	// are Creator only (store.CanApprove, re-checked fresh inside each
+	// handler -- see schedule.go's package doc comment for why hiding the
+	// button client-side is never sufficient on its own).
+	mux.HandleFunc("GET /channels/{id}/schedule", a.auth.RequireSignedIn(a.schedule.HandleList))
+	mux.HandleFunc("POST /schedule/{entryID}/approve", a.auth.RequireSignedIn(a.schedule.HandleApprove))
+	mux.HandleFunc("POST /schedule/{entryID}/unapprove", a.auth.RequireSignedIn(a.schedule.HandleUnapprove))
+	mux.HandleFunc("POST /schedule/{entryID}/edit", a.auth.RequireSignedIn(a.schedule.HandleEdit))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

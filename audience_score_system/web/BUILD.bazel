@@ -21,6 +21,7 @@ go_library(
         "//audience_score_system/web/components",
         "//audience_score_system/web/invite",
         "//audience_score_system/web/pages",
+        "//audience_score_system/web/schedule",
         "//libs/go/db",
         "//libs/go/logging",
         "@com_github_a_h_templ//:templ",

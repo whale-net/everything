@@ -1,0 +1,70 @@
+load("@rules_go//go:def.bzl", "go_test")
+load("//tools:templ.bzl", "templ_library")
+
+# Creator-only schedule approval (C8: FR19, FR20) -- handlers (schedule.go)
+# and templ views (views.templ) in one package, see schedule.go's package
+# doc comment for why they are not split across a components/pages sibling
+# pair like web/pages (mirrors web/invite's own rationale). Postgres-backed
+# handler coverage (Testing phase, issue #1580) lands as
+# schedule_integration_test.go, mirroring
+# //audience_score_system/web/invite:invite_integration_test.
+templ_library(
+    name = "schedule",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["schedule.go"],
+    visibility = ["//audience_score_system/web:__pkg__"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+    ],
+)
+
+# Postgres-backed handler coverage (Testing phase, issue #1580, C8:
+# FR19/FR20): Creator approves a draft, Analyst/no-role/closed-creator-row
+# approve attempts are 403 with no state change (NFR5), the approve ->
+# un-approve -> edit -> re-approve cycle repeated three times, the published
+# freeze (409 + unchanged state + omitted affordances) and its near-misses
+# (pending/rejected match, live match to an unpublished video -- neither
+# freezes), an already-committed re-approve, and HandleList's Creator+
+# Analyst read / outsider-forbidden split. Gated behind `//go:build
+# integration`, gazelle skips it when scanning for go_test srcs; this
+# go_test is hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required), mirroring
+# //audience_score_system/web/invite:invite_integration_test. `# keep`
+# markers tell a later `bazel run //:gazelle` not to touch or remove this
+# rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web/schedule:schedule_integration_test --test_output=all
+go_test(
+    # keep
+    name = "schedule_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["schedule_integration_test.go"],
+    embed = [":schedule"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
