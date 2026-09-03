@@ -1,0 +1,13 @@
+"""Audience Score System domain root.
+
+No release_helm_chart yet — the domain currently has only the migration
+job (//audience_score_system/migrate). Later M1 tasks add the web, mcp, and
+worker binaries (see ARCHITECTURE.md); the chart composing all four apps is
+wired up once they exist.
+"""
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)

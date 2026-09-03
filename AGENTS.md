@@ -178,6 +178,6 @@ Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plu
 | `docs/` | Cross-cutting infrastructure and build system docs | [TOC](docs/TOC.md) |
 | `firmware/` | Board-agnostic C++ sensor libraries (ISensor, II2CBus, MQTTWriter) | [TOC](firmware/TOC.md) |
 | `leaflab/` | Plant monitoring firmware and data pipeline | [TOC](leaflab/TOC.md) |
-| `audience_score_system/` | YouTube creator research/schedule/outcome tracking system, MCP-exposed (Go) — product brief only, no code yet | [PRODUCT](audience_score_system/PRODUCT.md) |
+| `audience_score_system/` | YouTube creator research/schedule/outcome tracking system, MCP-exposed (Go) | [TOC](audience_score_system/TOC.md) |
 | `demo/` | Example applications — see individual READMEs | — |
 | `generated/` | Auto-generated OpenAPI clients — do not edit manually | — |
