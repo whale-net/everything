@@ -1,0 +1,60 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "mcpauth",
+    srcs = [
+        "credential.go",
+        "mcpauth.go",
+    ],
+    importpath = "github.com/whale-net/everything/libs/go/mcpauth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+go_test(
+    name = "mcpauth_test",
+    srcs = ["credential_test.go"],
+    embed = [":mcpauth"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real-Postgres tests (preflight search_path resolution, real hash-at-rest
+# round trip, IdentityCast against a genuine uuid column). Gated behind
+# `//go:build integration`, gazelle skips it when scanning for go_test srcs;
+# this go_test is hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` marker tells
+# a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //libs/go/mcpauth:mcpauth_integration_test --test_output=all
+go_test(
+    # keep
+    name = "mcpauth_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["credential_integration_test.go"],
+    embed = [":mcpauth"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//libs/go/dbtest",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
