@@ -52,6 +52,7 @@ go_test(
     size = "small",
     srcs = [
         "handlers_deployment_actions_test.go",
+        "handlers_deployment_row_refresh_test.go",
         "handlers_home_test.go",
         "handlers_servers_update_address_test.go",
         "handlers_sessions_deployment_row_test.go",
