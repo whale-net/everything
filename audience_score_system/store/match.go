@@ -46,14 +46,24 @@ type MatchStore interface {
 	// with no existing live match").
 	ListCandidates(ctx context.Context, channelID uuid.UUID) ([]MatchCandidate, error)
 
-	// HasMatch reports whether syncedVideoID already has a
-	// video_schedule_match row in ANY state (auto, pending, confirmed, OR
-	// rejected). SyncOutcomes (worker/sync/outcomes.go) skips a video that
-	// already has one -- matching is idempotent and never re-links or
-	// duplicates; a rejected match does not by itself make its video
-	// eligible for re-evaluation (default: rejected stays rejected, the
-	// video stays unmatched, unless a future explicit re-queue tool clears
-	// it -- not implemented in M1).
+	// HasMatch reports whether syncedVideoID already has a "settled"
+	// video_schedule_match row: auto, confirmed, or rejected in any case, OR
+	// pending with a real schedule_entry_id (a candidate was found and is
+	// awaiting human resolution). SyncOutcomes (worker/sync/outcomes.go)
+	// skips a video that already has one -- matching is idempotent and
+	// never re-links or duplicates; a rejected match does not by itself
+	// make its video eligible for re-evaluation (default: rejected stays
+	// rejected, the video stays unmatched, unless a future explicit
+	// re-queue tool clears it -- not implemented in M1).
+	//
+	// A pending row with schedule_entry_id IS NULL (no plausible candidate
+	// existed at all when it was recorded, e.g. issue #1652: a synced_video
+	// backdated before any committed schedule_entry existed for its
+	// Channel) is deliberately NOT "settled" -- HasMatch reports false for
+	// it, so syncMatches re-scores that video on every later cycle until a
+	// committed schedule_entry actually becomes a candidate (Record then
+	// updates the same row in place rather than inserting a duplicate) or a
+	// human explicitly rejects it via resolve_pending_match.
 	HasMatch(ctx context.Context, syncedVideoID uuid.UUID) (bool, error)
 
 	// GetByID returns the VideoScheduleMatch for id, or pgx.ErrNoRows if
@@ -85,10 +95,27 @@ func scanVideoScheduleMatch(row pgx.Row) (VideoScheduleMatch, error) {
 // Record lets `id`/`created_at` take their column defaults rather than
 // trusting a caller-supplied VideoScheduleMatch.ID -- the matching worker
 // never needs the generated id back, only ListPending/Resolve do.
+//
+// Upserts on video_schedule_match_synced_video_id_live (migration 002's
+// partial unique index on synced_video_id WHERE state != 'rejected') so a
+// re-score of a video whose only existing row is the "no candidate at all"
+// placeholder (state = 'pending', schedule_entry_id IS NULL -- see
+// MatchStore.HasMatch's doc comment, issue #1652) updates that same row in
+// place instead of colliding with the unique index. The DO UPDATE ... WHERE
+// clause restricts the update to exactly that placeholder case: a
+// conflicting row that already carries a real schedule_entry_id (auto,
+// confirmed, or pending-with-a-candidate) is left untouched, so this never
+// clobbers a match already offered for human review or already resolved.
 func (s matchStore) Record(ctx context.Context, m VideoScheduleMatch) error {
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state, resolved_by_person_id, resolved_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (synced_video_id) WHERE state != 'rejected'
+		DO UPDATE SET
+			schedule_entry_id = EXCLUDED.schedule_entry_id,
+			confidence = EXCLUDED.confidence,
+			state = EXCLUDED.state
+		WHERE video_schedule_match.state = 'pending' AND video_schedule_match.schedule_entry_id IS NULL
 	`, m.SyncedVideoID, m.ScheduleEntryID, m.Confidence, m.State, m.ResolvedByPersonID, m.ResolvedAt); err != nil {
 		return fmt.Errorf("insert video_schedule_match: %w", err)
 	}
@@ -197,12 +224,17 @@ func (s matchStore) ListCandidates(ctx context.Context, channelID uuid.UUID) ([]
 	return candidates, nil
 }
 
-// HasMatch reports whether syncedVideoID has any video_schedule_match row
-// at all, in any state -- see the MatchStore.HasMatch doc comment.
+// HasMatch reports whether syncedVideoID has a "settled" video_schedule_match
+// row -- see the MatchStore.HasMatch doc comment for exactly which rows
+// count (everything except a pending row with no schedule_entry_id).
 func (s matchStore) HasMatch(ctx context.Context, syncedVideoID uuid.UUID) (bool, error) {
 	var exists bool
 	err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS (SELECT 1 FROM video_schedule_match WHERE synced_video_id = $1)
+		SELECT EXISTS (
+			SELECT 1 FROM video_schedule_match
+			WHERE synced_video_id = $1
+			  AND NOT (state = 'pending' AND schedule_entry_id IS NULL)
+		)
 	`, syncedVideoID).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check video_schedule_match exists for synced_video %s: %w", syncedVideoID, err)
