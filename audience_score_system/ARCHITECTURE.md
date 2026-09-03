@@ -443,6 +443,33 @@ version log, not SCD2 -- see `AGENTS.md`'s SCD2 event-log exclusion),
 pacing policy, schedule entries, synced videos/metrics, and pending
 matches, plus the `mcp_idempotency` ledger (NFR2/LB4).
 
+Migration 008 (`008_strategy.up.sql`, issue #1637) lands `strategy` and
+`strategy_verdict`: a cadence (weekly/biweekly/monthly, optional preferred
+weekday) sitting between viability verdicts and scheduling -- independent
+of, and finer-grained than, the Channel-wide `pacing_policy` (FR17). A
+Strategy is built directly from one or more `viability_verdict` rows via
+`strategy_verdict` -- not from Ideas: `idea_id` is derived through
+`viability_verdict.idea_id` rather than stored on the join row, the same
+LB3 pattern `schedule_entry.verdict_id` uses one layer downstream, applied
+to the join itself. The relationship is many-to-many in both directions --
+a Strategy is typically grounded in several verdicts (often several
+Ideas), and the same verdict may ground more than one Strategy -- which is
+the point: `save_strategy` records exactly which analysis justified the
+cadence, not just "whichever idea is currently viable."
+
+**No persisted "Plan" table (issue #1637):** the issue's proposed
+`generate_schedule_from_strategies` surface is implemented as
+`generate_schedule_plan` (`mcp/tools/strategy.go`), a read-only tool that
+derives next-slot proposals fresh on every call from active Strategies +
+the current schedule (LB4: nothing about a plan is cached in Postgres).
+Committing a proposal reuses the existing `save_schedule_draft` tool
+rather than a second write path, so FR16's viable-verdict gate and FR18's
+non-blocking flags stay defined in exactly one place. Revisit only if a
+product need emerges to browse/audit past *generated* plans as their own
+record, distinct from the `schedule_entry` rows a caller chose to commit
+from them -- at that point a `plan`/`plan_proposal` pair is a new
+migration, not a retrofit of this one.
+
 **`synced_video` retention on disappearance (issue #1576):** C6's schedule
 sync (`worker/sync.Activities.SyncSchedule`) upserts every video YouTube's
 `ListSchedule` response returns for a cycle, keyed on `(channel_id,

@@ -336,6 +336,55 @@ type PredictionOutcome struct {
 	MetricsMeasuredAt          time.Time
 }
 
+// Cadence is `strategy.cadence` (migration 008, issue #1637) -- a
+// Strategy's own recurrence, independent of and finer-grained than the
+// Channel-wide pacing_policy (FR17).
+type Cadence string
+
+const (
+	CadenceWeekly   Cadence = "weekly"
+	CadenceBiweekly Cadence = "biweekly"
+	CadenceMonthly  Cadence = "monthly"
+)
+
+// Strategy is one row of `strategy` (migration 008, issue #1637) -- a
+// cadence built directly from one or more viability_verdict rows (via
+// strategy_verdict), sitting between viability verdicts and scheduling.
+// PreferredWeekday is "" for no day preference, else a full English
+// weekday name in the same vocabulary as PacingPolicy.PreferredDays.
+type Strategy struct {
+	ID                uuid.UUID
+	ChannelID         uuid.UUID
+	Title             string
+	Cadence           Cadence
+	PreferredWeekday  string
+	Active            bool
+	CreatedByPersonID uuid.UUID
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	IdempotencyKey    string
+}
+
+// StrategyVerdictDetail is one `strategy_verdict` row joined with its
+// verdict's version and idea id/title -- what StrategyStore.GetByID/
+// ListByChannel resolve into StrategyDetail.Verdicts, and what
+// mcp/tools/strategy.go renders per linked verdict.
+type StrategyVerdictDetail struct {
+	VerdictID      uuid.UUID
+	VerdictVersion int
+	IdeaID         uuid.UUID
+	IdeaTitle      string
+}
+
+// StrategyDetail is a Strategy plus every viability_verdict it's built
+// from (StrategyVerdictDetail, migration 008) -- StrategyStore.GetByID/
+// ListByChannel/Save's return shape. The same verdict may appear on more
+// than one StrategyDetail (a verdict can ground multiple Strategies).
+type StrategyDetail struct {
+	Strategy
+	Verdicts []StrategyVerdictDetail
+}
+
 // IdeaOverview is one Idea plus its current verdict (all four
 // CurrentVerdict* fields nil if none has been recorded yet) --
 // BrowseStore.IdeasWithCurrentVerdict's row shape, backing

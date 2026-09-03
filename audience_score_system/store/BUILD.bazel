@@ -32,6 +32,7 @@ go_library(
         "role.go",
         "schedule.go",
         "store.go",
+        "strategy.go",
         "sync.go",
         "verdict.go",
     ],

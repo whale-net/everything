@@ -171,6 +171,7 @@ func run() error {
 	tools.RegisterScheduleDraft(reg, st)
 	tools.RegisterMatches(reg, st)
 	tools.RegisterBrowse(reg, st)
+	tools.RegisterStrategy(reg, st)
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), scheduleManager)
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
