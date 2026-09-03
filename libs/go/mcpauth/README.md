@@ -190,6 +190,59 @@ authorization-server metadata's `token_endpoint_auth_methods_supported:
 body (`{"error": "invalid_redirect_uri" | "invalid_client_metadata"}`) —
 never a raw Go error string.
 
+## OAuth2 authorization-code + PKCE flow — memory vs. Postgres, and its schema contract
+
+`Provider`'s `GET /authorize` (`authorize.go`) and `POST /token`
+(`token.go`) implement the authorization-code + PKCE flow (RFC 6749 +
+PKCE `S256` only — no `plain`, no device-code, no client-credentials).
+Between those two requests, a pending authorization code is held in a
+pluggable `AuthCodeStore`, exactly parallel to `ClientRegistry` above:
+
+- `NewMemoryAuthCodeStore()` — an in-process map. This is
+  `ProviderConfig.AuthCodes`'s **default** because it is enough for a
+  single-replica server.
+- `NewPostgresAuthCodeStore(ctx, AuthCodeStoreConfig)` — backed by
+  Postgres, safe across replicas.
+
+**A multi-replica deployment MUST use `NewPostgresAuthCodeStore`, not the
+memory default.** `/authorize` and `/token` can land on different
+replicas — the same warning as the OAuth2 client registry above, and for
+the same reason: each process's memory store is its own isolated map.
+
+Like the bearer credential (`mcp_credential`), an authorization code is
+persisted only as a SHA-256 hash (NFR1) — a leaked table read must not
+yield a redeemable code.
+
+`ProviderConfig.AuthCodeTTL` controls how long a minted code stays
+redeemable before `/token` rejects it as expired. Defaults to 60 seconds,
+per OAuth 2.1 guidance that codes be short-lived.
+
+### Schema contract
+
+Exactly like `mcp_credential` and `mcp_oauth_client` above, `mcpauth` does
+**not** own, embed, or run this migration (NFR5) — the consuming domain's
+own migration tooling must create this table before the first call to
+`NewPostgresAuthCodeStore`:
+
+```sql
+CREATE TABLE mcp_auth_code (
+    code_hash             TEXT        PRIMARY KEY,
+    client_id             TEXT        NOT NULL,
+    redirect_uri          TEXT        NOT NULL,
+    identity              TEXT        NOT NULL,
+    code_challenge        TEXT        NOT NULL,
+    code_challenge_method TEXT        NOT NULL,
+    expires_at            TIMESTAMPTZ NOT NULL,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX mcp_auth_code_expires_at ON mcp_auth_code(expires_at);
+```
+
+`AuthCodeStoreConfig.TableName` defaults to `mcp_auth_code`; like
+`StoreConfig.TableName`, it names an **unqualified** table so the
+boot-time preflight probe resolves through the same `search_path` the
+runtime uses.
+
 ## Usage
 
 ```go

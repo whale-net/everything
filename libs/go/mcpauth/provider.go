@@ -7,7 +7,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// defaultAuthCodeTTL is ProviderConfig.AuthCodeTTL's default: how long a
+// minted authorization code remains redeemable before POST /token rejects
+// it as expired, per OAuth 2.1 guidance that codes be short-lived.
+const defaultAuthCodeTTL = 60 * time.Second
 
 // ProviderConfig configures NewProvider.
 type ProviderConfig struct {
@@ -51,6 +57,20 @@ type ProviderConfig struct {
 	// could not resolve, so they can establish a session and retry (see
 	// #1642).
 	SignInURL string
+
+	// AuthCodes stores pending OAuth2 authorization codes minted by
+	// `/authorize` and redeemed by `/token` (#1642). Defaults to
+	// NewMemoryAuthCodeStore() — see that constructor's doc for why a
+	// multi-replica deployment must instead set this to
+	// NewPostgresAuthCodeStore(...): `/authorize` and `/token` can land
+	// on different replicas.
+	AuthCodes AuthCodeStore
+
+	// AuthCodeTTL is how long a minted authorization code remains
+	// redeemable before `/token` rejects it as expired. Defaults to 60s
+	// (defaultAuthCodeTTL), per OAuth 2.1 guidance that codes be
+	// short-lived.
+	AuthCodeTTL time.Duration
 }
 
 // Provider is the object every OAuth2 endpoint mcpauth serves hangs off:
@@ -90,6 +110,12 @@ func NewProvider(cfg ProviderConfig) (*Provider, error) {
 	}
 	if cfg.Clients == nil {
 		cfg.Clients = NewMemoryClientRegistry()
+	}
+	if cfg.AuthCodes == nil {
+		cfg.AuthCodes = NewMemoryAuthCodeStore()
+	}
+	if cfg.AuthCodeTTL == 0 {
+		cfg.AuthCodeTTL = defaultAuthCodeTTL
 	}
 
 	return &Provider{cfg: cfg}, nil
@@ -153,9 +179,11 @@ const (
 // Mount registers every OAuth2 endpoint this provider serves on mux, at
 // paths matching the metadata it advertises (see the path constants
 // above). Discovery metadata (RFC 9728/8414) and dynamic client
-// registration (RFC 7591) are fully implemented here; `/authorize` and
-// `/token` stay 501 (notImplementedHandler) for the lifetime of this
-// issue — #1642 lands their authorization-code + PKCE bodies.
+// registration (RFC 7591) are fully implemented here; `/authorize`
+// (authorize.go) and `/token` (token.go) route to their real handlers but
+// those handler bodies stay 501 (notImplementedHandler) until the
+// Implementation phase of #1642 lands their authorization-code + PKCE
+// logic.
 func (p *Provider) Mount(mux *http.ServeMux) {
 	// The two metadata endpoints are registered on the bare path, not a
 	// "GET <path>" method-restricted pattern: both handlers answer OPTIONS
@@ -165,8 +193,8 @@ func (p *Provider) Mount(mux *http.ServeMux) {
 	mux.Handle(protectedResourceMetadataPath, p.protectedResourceMetadataHandler())
 	mux.Handle(authServerMetadataPath, p.authServerMetadataHandler())
 	mux.HandleFunc("POST "+registerPath, p.handleRegister)
-	mux.HandleFunc(authorizePath, notImplementedHandler)
-	mux.HandleFunc(tokenPath, notImplementedHandler)
+	mux.HandleFunc(authorizePath, p.handleAuthorize)
+	mux.HandleFunc(tokenPath, p.handleToken)
 }
 
 // notImplementedHandler is the fixed 501 body shared by every endpoint this
