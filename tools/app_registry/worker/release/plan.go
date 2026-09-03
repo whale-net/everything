@@ -271,5 +271,6 @@ func (a *Activities) ResolvePlan(ctx context.Context, targets []ReleaseTarget) (
 		versions[t.key()] = v
 	}
 
+	workerLog.Info("release plan resolved", "target_count", len(targets), "versions", versions)
 	return ResolvedPlan{Versions: versions, RawJSON: stdout.Bytes()}, nil
 }

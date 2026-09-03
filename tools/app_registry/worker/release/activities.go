@@ -4,8 +4,18 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
+
+// workerLog is this package's logger, shared by every activity file here.
+// Deliberately a package-level slog logger via logging.Get, not
+// activity.GetLogger(ctx): several of these methods are called directly by
+// unit tests with a plain context.Background() (not through Temporal's
+// activity execution machinery), and activity.GetLogger panics outside a
+// real activity context -- see worker/reaper and worker/outbox for the same
+// "background component gets its own slog logger" precedent.
+var workerLog = logging.Get("app-registry-worker-release")
 
 // Activities is the concrete ReleaseActivities implementation
 // worker/main.go registers. CheckApproval (approval.go) is real -- FR14's
@@ -196,6 +206,8 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 	// plan.ReleaseRunID (see the FR9-FR11 app_build_log resolution below,
 	// which is keyed by target, not by release run).
 	if run, _, err := a.Registry.ReleaseRuns().GetReleaseRun(ctx, plan.ReleaseRunID); err == nil && run.BuildRefRunID != "" {
+		workerLog.Info("build already dispatched, reusing existing run",
+			"release_run_id", plan.ReleaseRunID, "run_id", run.BuildRefRunID, "run_url", run.BuildRefRunURL)
 		return BuildRef{ReleaseRunID: plan.ReleaseRunID, RunID: run.BuildRefRunID, RunURL: run.BuildRefRunURL}, nil
 	}
 
@@ -298,7 +310,11 @@ func (a *Activities) DispatchBuild(ctx context.Context, plan ResolvedPlan, diges
 	// NEXT retry. A failed write here just means this one dispatch isn't
 	// remembered, degrading to today's behavior (no check-before-dispatch)
 	// rather than regressing it.
-	_ = a.Registry.ReleaseRuns().SetBuildRef(ctx, plan.ReleaseRunID, ref.RunID, ref.RunURL)
+	if serr := a.Registry.ReleaseRuns().SetBuildRef(ctx, plan.ReleaseRunID, ref.RunID, ref.RunURL); serr != nil {
+		workerLog.Warn("best-effort persist of dispatched build ref failed; a retry may dispatch a duplicate run",
+			"release_run_id", plan.ReleaseRunID, "run_id", ref.RunID, "error", serr)
+	}
+	workerLog.Info("build dispatched", "release_run_id", plan.ReleaseRunID, "run_id", ref.RunID, "run_url", ref.RunURL)
 	return ref, nil
 }
 
