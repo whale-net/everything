@@ -41,6 +41,10 @@ func (f fakeRoleStore) AddRole(context.Context, uuid.UUID, uuid.UUID, store.Role
 	return errors.New("fakeRoleStore.AddRole is not used by authz tests")
 }
 
+func (f fakeRoleStore) ChannelsForPerson(context.Context, uuid.UUID) ([]store.Channel, error) {
+	return nil, errors.New("fakeRoleStore.ChannelsForPerson is not used by authz tests")
+}
+
 func TestAuthz_CreatorOnlyChecks(t *testing.T) {
 	ctx := context.Background()
 	channelID, personID := uuid.New(), uuid.New()

@@ -1,0 +1,48 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+# `web` -- Audience Score System's only UI surface (NFR3): Google OAuth
+# sign-in/sign-up (C1, this task's scope), Channel connect (C2, #1571),
+# analyst invite/accept (C3), and schedule-draft approval (C8). See
+# ../ARCHITECTURE.md.
+go_library(
+    name = "web_lib",
+    srcs = [
+        "main.go",
+        "templ_render.go",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/web",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/components",
+        "//audience_score_system/web/pages",
+        "//libs/go/db",
+        "//libs/go/htmxbase",
+        "//libs/go/htmxui",
+        "//libs/go/logging",
+        "@com_github_a_h_templ//:templ",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
+)
+
+go_binary(
+    name = "web",
+    embed = [":web_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata. domain "audience-score-system" + name "web" produces
+# the "audience-score-system-web" image/app identity (see #1566).
+# external-api: signed-in creators/analysts reach this over ingress, same
+# category as leaflab-ui and app-registry's api.
+release_app(
+    name = "web",
+    binary_name = ":web",
+    language = "go",
+    domain = "audience-score-system",
+    description = "Audience Score System web UI: Google OAuth sign-in, Channel connect, analyst invite/accept, schedule-draft approval",
+    app_type = "external-api",
+    port = 8080,
+)

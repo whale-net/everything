@@ -34,6 +34,14 @@ type RoleStore interface {
 	// for the same (channelID, personID) pair, then inserts a new open
 	// row for role.
 	AddRole(ctx context.Context, channelID, personID uuid.UUID, role Role) error
+
+	// ChannelsForPerson returns every Channel personID currently holds any
+	// role on (creator or analyst) -- reads the open (valid_to IS NULL)
+	// channel_person rows for personID joined to channel. This is `web`'s
+	// signed-in home page (C1)'s data source for "the Channels the Person
+	// has a live channel_person row for" -- see web/main.go's
+	// handleHome.
+	ChannelsForPerson(ctx context.Context, personID uuid.UUID) ([]Channel, error)
 }
 
 // roleStore implements RoleStore against `channel_person` (migration 001).
@@ -83,6 +91,35 @@ func (s roleStore) AddRole(ctx context.Context, channelID, personID uuid.UUID, r
 		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
+}
+
+// ChannelsForPerson joins channel_person (open rows only) to channel,
+// ordered by title then id for stable rendering on `web`'s home page.
+func (s roleStore) ChannelsForPerson(ctx context.Context, personID uuid.UUID) ([]Channel, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT c.id, c.youtube_channel_id, COALESCE(c.title, ''), c.connection_state, c.connection_state_changed_at, c.created_at
+		FROM channel c
+		JOIN channel_person cp ON cp.channel_id = c.id
+		WHERE cp.person_id = $1 AND cp.valid_to IS NULL
+		ORDER BY c.title, c.id
+	`, personID)
+	if err != nil {
+		return nil, fmt.Errorf("channels for person: %w", err)
+	}
+	defer rows.Close()
+
+	var channels []Channel
+	for rows.Next() {
+		c, err := scanChannel(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan channel: %w", err)
+		}
+		channels = append(channels, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("channels for person: %w", err)
+	}
+	return channels, nil
 }
 
 // addRoleTx is the SCD2 close-and-open pattern from AGENTS.md "SCD2",

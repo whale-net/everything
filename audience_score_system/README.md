@@ -16,7 +16,7 @@ server precedent used elsewhere in the repo.
 | Binary | `release_app` name | app_type | Status |
 |--------|---------------------|----------|--------|
 | `migrate/` | `migration` | `job` | Migration 001 (identity core, #1568) applied |
-| `web/` | `web` | `external-api` | Not yet built |
+| `web/` | `web` | `external-api` | Scaffold only (#1570): binary + health endpoint + UI shell build; Google OAuth sign-in/sign-up not yet implemented |
 | `mcp/` | `mcp` | `external-api` | Not yet built |
 | `worker/` | `worker` | `worker` | Not yet built |
 
@@ -49,12 +49,15 @@ bazel run //audience_score_system/mcp
 bazel run //audience_score_system/worker
 ```
 
-Today only `migrate/` exists:
+Today `migrate/` and `web/` exist (`web` is scaffold-only — sign-in isn't
+implemented yet, see the table above):
 
 ```bash
 bazel run //audience_score_system/migrate:migration
 bazel run //audience_score_system/migrate:migration -- -version
 bazel run //audience_score_system/migrate:migration -- -history
+
+bazel run //audience_score_system/web
 ```
 
 See [`ENV.md`](ENV.md) for the full environment variable list and

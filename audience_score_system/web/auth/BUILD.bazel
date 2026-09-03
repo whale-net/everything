@@ -1,0 +1,90 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# Google OAuth2 sign-in/sign-up (C1: FR1, FR2) -- see auth.go's package doc
+# comment for why this copies libs/go/htmxauth's mechanics instead of
+# depending on it.
+go_library(
+    name = "auth",
+    srcs = [
+        "auth.go",
+        "session.go",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/web/auth",
+    visibility = ["//audience_score_system/web:__subpackages__"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_coreos_go_oidc_v3//oidc",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_gorilla_sessions//:sessions",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
+
+# Pure-Go coverage: CSRF state (mismatch/missing/expired), ID-token claim
+# extraction against a real *oidc.IDTokenVerifier built from
+# oidc.StaticKeySet + a locally generated key (no live Google calls), and
+# the one RequireSignedIn/HandleLogout path that never touches Postgres. See
+# auth_test.go's package doc comment. No Docker required, runs as part of
+# `bazel test //...`.
+go_test(
+    name = "auth_test",
+    srcs = ["auth_test.go"],
+    embed = [":auth"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_coreos_go_oidc_v3//oidc",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
+
+# FR1/FR2 end to end (real store.PersonStore.UpsertByGoogleSubject + a real
+# web_session row -- migration 003) and RequireSignedIn against real
+# live/tampered/expired session rows. Gated behind `//go:build integration`,
+# gazelle skips it when scanning for go_test srcs; this go_test is
+# hand-written with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
+# BUILD.bazel/README.md for why each tag is required). `# keep` markers tell
+# a later `bazel run //:gazelle` not to touch or remove this rule.
+# auth_test.go is included in srcs (not just embedded via :auth) because
+# this file reuses its stubExchanger/fakePersonStore/newTestVerifier/
+# signTestIDToken/findCookie helpers -- both files are package `auth`.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web/auth:auth_integration_test --test_output=all
+go_test(
+    # keep
+    name = "auth_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "auth_integration_test.go",
+        "auth_test.go",
+    ],
+    embed = [":auth"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_coreos_go_oidc_v3//oidc",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
