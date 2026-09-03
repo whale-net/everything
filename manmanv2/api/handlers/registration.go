@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -31,16 +32,20 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 	}
 
 	// Check if server with this name exists
+	isNewServer := false
 	server, err := h.serverRepo.GetByName(ctx, req.Name)
 	if err != nil {
 		// Only create if server doesn't exist (not found error)
 		if errors.Is(err, pgx.ErrNoRows) {
 			server, err = h.serverRepo.Create(ctx, req.Name)
 			if err != nil {
+				slog.Warn("failed to create server during registration", "name", req.Name, "error", err)
 				return nil, status.Errorf(codes.Internal, "failed to create server: %v", err)
 			}
+			isNewServer = true
 		} else {
 			// Database error or other issue - don't swallow it
+			slog.Warn("failed to query server during registration", "name", req.Name, "error", err)
 			return nil, status.Errorf(codes.Internal, "failed to query server: %v", err)
 		}
 	}
@@ -58,6 +63,7 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 	}
 
 	if err := h.serverRepo.Update(ctx, server); err != nil {
+		slog.Warn("failed to update server status during registration", "server_id", server.ServerID, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to update server status: %v", err)
 	}
 
@@ -73,9 +79,12 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 		}
 
 		if err := h.capabilityRepo.Insert(ctx, capability); err != nil {
+			slog.Warn("failed to store server capabilities during registration", "server_id", server.ServerID, "error", err)
 			return nil, status.Errorf(codes.Internal, "failed to store capabilities: %v", err)
 		}
 	}
+
+	slog.Info("server registered", "server_id", server.ServerID, "name", req.Name, "environment", req.Environment, "new_server", isNewServer)
 
 	return &pb.RegisterServerResponse{
 		ServerId: server.ServerID,
@@ -86,6 +95,7 @@ func (h *RegistrationHandler) RegisterServer(ctx context.Context, req *pb.Regist
 func (h *RegistrationHandler) Heartbeat(ctx context.Context, req *pb.HeartbeatRequest) (*pb.HeartbeatResponse, error) {
 	server, err := h.serverRepo.Get(ctx, req.ServerId)
 	if err != nil {
+		slog.Warn("heartbeat from unknown server", "server_id", req.ServerId, "error", err)
 		return nil, status.Errorf(codes.NotFound, "server not found")
 	}
 
@@ -94,6 +104,7 @@ func (h *RegistrationHandler) Heartbeat(ctx context.Context, req *pb.HeartbeatRe
 	server.LastSeen = &now
 
 	if err := h.serverRepo.Update(ctx, server); err != nil {
+		slog.Warn("failed to update server on heartbeat", "server_id", req.ServerId, "error", err)
 		return nil, status.Errorf(codes.Internal, "failed to update server: %v", err)
 	}
 
@@ -109,6 +120,7 @@ func (h *RegistrationHandler) Heartbeat(ctx context.Context, req *pb.HeartbeatRe
 		}
 
 		if err := h.capabilityRepo.Insert(ctx, capability); err != nil {
+			slog.Warn("failed to update server capabilities on heartbeat", "server_id", req.ServerId, "error", err)
 			return nil, status.Errorf(codes.Internal, "failed to update capabilities: %v", err)
 		}
 	}

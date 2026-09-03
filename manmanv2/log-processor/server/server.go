@@ -2,7 +2,7 @@ package server
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/whale-net/everything/manmanv2/log-processor/consumer"
 	manmanpb "github.com/whale-net/everything/manmanv2/protos"
@@ -28,7 +28,7 @@ func (s *Server) StreamSessionLogs(req *manmanpb.StreamSessionLogsRequest, strea
 		return fmt.Errorf("invalid session_id: %d", sessionID)
 	}
 
-	log.Printf("[log-processor] client subscribed to session %d logs", sessionID)
+	slog.Info("client subscribed to session logs", "session_id", sessionID)
 
 	// Subscribe to consumer manager
 	subscription, err := s.consumerManager.Subscribe(stream.Context(), sessionID, req.AfterSequenceNumber)
@@ -42,7 +42,7 @@ func (s *Server) StreamSessionLogs(req *manmanpb.StreamSessionLogsRequest, strea
 	// missed or duplicated when we transition to the live channel below.
 	for _, msg := range subscription.Backlog() {
 		if err := stream.Send(msg); err != nil {
-			log.Printf("[log-processor] failed to send backlog message for session %d: %v", sessionID, err)
+			slog.Warn("failed to send backlog message for session", "session_id", sessionID, "error", err)
 			return err
 		}
 	}
@@ -52,17 +52,17 @@ func (s *Server) StreamSessionLogs(req *manmanpb.StreamSessionLogsRequest, strea
 	for {
 		select {
 		case <-stream.Context().Done():
-			log.Printf("[log-processor] client disconnected from session %d logs", sessionID)
+			slog.Info("client disconnected from session logs", "session_id", sessionID)
 			return stream.Context().Err()
 		case msg, ok := <-logCh:
 			if !ok {
 				// Channel closed
-				log.Printf("[log-processor] log channel closed for session %d", sessionID)
+				slog.Info("log channel closed for session", "session_id", sessionID)
 				return nil
 			}
 
 			if err := stream.Send(msg); err != nil {
-				log.Printf("[log-processor] failed to send log message: %v", err)
+				slog.Warn("failed to send log message", "session_id", sessionID, "error", err)
 				return err
 			}
 		}

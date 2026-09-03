@@ -23,9 +23,11 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 		return fmt.Errorf("presigned_url is empty for backup %d", cmd.BackupID)
 	}
 
+	start := time.Now()
 	slog.Info("processing backup command", "backup_id", cmd.BackupID, "sgc_id", cmd.SGCID, "s3_key", cmd.S3Key, "volume_type", cmd.VolumeType)
 
 	fail := func(err error) error {
+		slog.Warn("backup failed", "backup_id", cmd.BackupID, "sgc_id", cmd.SGCID, "error", err)
 		msg := err.Error()
 		_ = h.publisher.PublishBackupStatus(ctx, &hostrmq.BackupStatusUpdate{
 			BackupID:     cmd.BackupID,
@@ -125,7 +127,7 @@ func (h *CommandHandlerImpl) HandleBackup(ctx context.Context, cmd *hostrmq.Back
 	}
 
 	s3URL := fmt.Sprintf("s3://%s", cmd.S3Key)
-	slog.Info("backup completed", "backup_id", cmd.BackupID, "s3_url", s3URL)
+	slog.Info("backup completed", "backup_id", cmd.BackupID, "s3_url", s3URL, "size_bytes", size, "duration", time.Since(start))
 
 	return h.publisher.PublishBackupStatus(ctx, &hostrmq.BackupStatusUpdate{
 		BackupID: cmd.BackupID,
@@ -210,6 +212,7 @@ func (h *CommandHandlerImpl) runBackupHelperContainer(ctx context.Context, confi
 			break
 		}
 		if attempt < maxPullAttempts {
+			slog.Warn("failed to pull backup helper image, retrying", "image", config.Image, "attempt", attempt, "error", pullErr)
 			time.Sleep(time.Duration(attempt) * time.Second)
 		}
 	}

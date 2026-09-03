@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"text/template"
@@ -119,7 +120,10 @@ func (h *ActionHandler) ExecuteAction(ctx context.Context, req *pb.ExecuteAction
 			Status:          manman.ActionStatusValidationError,
 			ErrorMessage:    strPtr(err.Error()),
 		}
-		_ = h.actionRepo.LogExecution(ctx, execution)
+		if logErr := h.actionRepo.LogExecution(ctx, execution); logErr != nil {
+			slog.Warn("failed to log action validation error", "action_id", req.ActionId, "session_id", req.SessionId, "error", logErr)
+		}
+		slog.Warn("action execution validation failed", "action_id", req.ActionId, "session_id", req.SessionId, "error", err)
 
 		return &pb.ExecuteActionResponse{
 			Success:      false,
@@ -138,7 +142,10 @@ func (h *ActionHandler) ExecuteAction(ctx context.Context, req *pb.ExecuteAction
 			Status:          manman.ActionStatusFailed,
 			ErrorMessage:    strPtr(fmt.Sprintf("template rendering failed: %v", err)),
 		}
-		_ = h.actionRepo.LogExecution(ctx, execution)
+		if logErr := h.actionRepo.LogExecution(ctx, execution); logErr != nil {
+			slog.Warn("failed to log action template rendering error", "action_id", req.ActionId, "session_id", req.SessionId, "error", logErr)
+		}
+		slog.Warn("action command template rendering failed", "action_id", req.ActionId, "session_id", req.SessionId, "error", err)
 
 		return &pb.ExecuteActionResponse{
 			Success:      false,
@@ -174,7 +181,10 @@ func (h *ActionHandler) ExecuteAction(ctx context.Context, req *pb.ExecuteAction
 			Status:          manman.ActionStatusFailed,
 			ErrorMessage:    strPtr(fmt.Sprintf("failed to send command: %v", err)),
 		}
-		_ = h.actionRepo.LogExecution(ctx, execution)
+		if logErr := h.actionRepo.LogExecution(ctx, execution); logErr != nil {
+			slog.Warn("failed to log action send failure", "action_id", req.ActionId, "session_id", req.SessionId, "error", logErr)
+		}
+		slog.Warn("failed to send action command to session", "action_id", req.ActionId, "session_id", req.SessionId, "error", err)
 
 		return &pb.ExecuteActionResponse{
 			Success:      false,
@@ -194,7 +204,9 @@ func (h *ActionHandler) ExecuteAction(ctx context.Context, req *pb.ExecuteAction
 	err = h.actionRepo.LogExecution(ctx, execution)
 	if err != nil {
 		// Log error but don't fail the request - the command was sent successfully
-		fmt.Printf("Warning: failed to log action execution: %v\n", err)
+		slog.Warn("failed to log successful action execution", "action_id", req.ActionId, "session_id", req.SessionId, "error", err)
+	} else {
+		slog.Info("action executed", "action_id", req.ActionId, "session_id", req.SessionId, "execution_id", execution.ExecutionID)
 	}
 
 	return &pb.ExecuteActionResponse{
