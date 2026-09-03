@@ -14,15 +14,29 @@ FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
 
 USER root
 
-# A system python3 and C toolchain are needed even though rules_python fetches
-# its own hermetic interpreter: Bazel bootstraps some host-side tooling (e.g.
-# rules_pycross's wheel_installer, invoked as `/usr/bin/env python3` before
-# any hermetic toolchain is available) against whatever `python3` is on PATH.
+# GitHub's ubuntu-latest runner (where `ci.yml`'s `test` job already runs a
+# full `bazel build //...` successfully) ships a huge preinstalled toolset;
+# this devcontainer base image is deliberately minimal and has almost none
+# of it. Packages below were added as real `bazel build //...` failures
+# surfaced a missing host tool -- see docs/BAZEL_CACHE_IMAGE.md for the
+# specific error each one fixed (e.g. python3: rules_pycross's
+# wheel_installer runs as `/usr/bin/env python3` before any hermetic Python
+# toolchain exists; zstd: //tools/lib32:lib32_extracted shells out to it to
+# unpack a .deb).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          python3 \
          build-essential \
          unzip \
+         zip \
+         git \
+         ca-certificates \
+         zstd \
+         xz-utils \
+         pkg-config \
+         cmake \
+         ninja-build \
+         rsync \
     && rm -rf /var/lib/apt/lists/*
 
 # Bazelisk resolves the exact version pinned by .bazelversion (8.3.1 today),
