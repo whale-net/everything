@@ -162,7 +162,11 @@ func newScheduleTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool) *h
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterGetChannelSchedule(reg, st.Sync())
 
-	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool))
+	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool), server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	return ts

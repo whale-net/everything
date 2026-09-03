@@ -218,17 +218,46 @@ func TestAuthorize_UnresolvedCaller_SignInURLSet_RedirectsWithReturnTo(t *testin
 	assert.Equal(t, "consuming-domain.example.com", loc.Host)
 	assert.Equal(t, "/sign-in", loc.Path)
 
-	returnTo := loc.Query().Get("return_to")
+	// SignInReturnParam defaults to "next" (matching
+	// audience_score_system/web/auth.HandleLogin's `?next=` convention,
+	// issue #1646) when ProviderConfig leaves it unset.
+	returnTo := loc.Query().Get("next")
 	require.NotEmpty(t, returnTo)
 	returnToURL, err := url.Parse(returnTo)
 	require.NoError(t, err)
 	assert.Equal(t, ts.srv.URL+"/authorize", returnToURL.Scheme+"://"+returnToURL.Host+returnToURL.Path)
-	assert.Equal(t, params.Encode(), returnToURL.RawQuery, "return_to must carry the exact original authorize query string")
+	assert.Equal(t, params.Encode(), returnToURL.RawQuery, "next must carry the exact original authorize query string")
 
 	// No code was issued.
 	mem, ok := ts.provider.cfg.AuthCodes.(*memoryAuthCodeStore)
 	require.True(t, ok)
 	assert.Empty(t, mem.codes, "an unresolved caller must never result in an issued authorization code")
+}
+
+func TestAuthorize_UnresolvedCaller_CustomSignInReturnParam_UsesConfiguredName(t *testing.T) {
+	ts := newAuthTestServer(t, func(cfg *ProviderConfig) {
+		cfg.SignInURL = "https://consuming-domain.example.com/sign-in"
+		cfg.SignInReturnParam = "return_to"
+	})
+	ts.resolver.ok = false
+
+	redirectURI := "https://client.example.com/callback"
+	client := ts.registerClient(t, redirectURI)
+	_, challenge := genPKCEPair(t)
+
+	resp := ts.doAuthorize(t, url.Values{
+		"response_type":         {"code"},
+		"client_id":             {client.ClientID},
+		"redirect_uri":          {redirectURI},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	})
+
+	require.Equal(t, http.StatusFound, resp.StatusCode)
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	require.NoError(t, err)
+	assert.Empty(t, loc.Query().Get("next"), "must not fall back to the default param name once a custom one is configured")
+	assert.NotEmpty(t, loc.Query().Get("return_to"), "must use the configured SignInReturnParam name")
 }
 
 func TestAuthorize_UnresolvedCaller_NoSignInURL_Returns401(t *testing.T) {

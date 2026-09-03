@@ -118,7 +118,11 @@ func newListChannelsTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterListChannels(reg, st.Roles())
 
-	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool))
+	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool), server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	return ts

@@ -32,6 +32,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 )
 
@@ -65,6 +66,13 @@ type config struct {
 	OAuthRedirectBase  string
 	SessionSecret      string
 	TokenEncryptionKey string
+
+	// MCPPublicURL is ASS_MCP_PUBLIC_URL (issue #1646, FR12/NFR4) -- the
+	// externally reachable URL of the `mcp` server, passed as
+	// mcpauth.ProviderConfig.Resource. `web` (this binary, the OAuth2
+	// authorization server) and `mcp` (the OAuth2 protected resource) must
+	// agree on this exact value -- see ../ENV.md.
+	MCPPublicURL string
 
 	// SyncInterval is FR14/NFR4's per-Channel Temporal sync cadence,
 	// passed to sync.NewScheduleManager (issue #1614) -- see
@@ -100,6 +108,7 @@ func loadConfig() (config, error) {
 		OAuthRedirectBase:  os.Getenv("ASS_OAUTH_REDIRECT_BASE_URL"),
 		SessionSecret:      os.Getenv("ASS_SESSION_SECRET"),
 		TokenEncryptionKey: os.Getenv("ASS_TOKEN_ENCRYPTION_KEY"),
+		MCPPublicURL:       os.Getenv("ASS_MCP_PUBLIC_URL"),
 		SyncInterval:       interval,
 	}, nil
 }
@@ -118,6 +127,15 @@ type app struct {
 	invite   *invite.Handlers
 	channels *channel.Handler
 	schedule *schedule.Handlers
+
+	// mcpProvider is mcpauth's OAuth2 authorization-server front end
+	// (issue #1646, FR12/NFR4): /authorize, /token, /register, and
+	// discovery metadata, mounted in setupRoutes. `web` hosts this because
+	// it is the only process holding the caller's session cookie
+	// (auth.MCPCallerResolver reads it); `mcp` hosts only the
+	// protected-resource half. See ../ARCHITECTURE.md "MCP server: caller
+	// authentication".
+	mcpProvider *mcpauth.Provider
 }
 
 func main() {
@@ -229,7 +247,55 @@ func run() error {
 	// Schedules()/Roles()/Channels()), no separate OAuth grant of its own.
 	scheduleHandlers := schedule.New(st)
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers}
+	// mcpauth's OAuth2 authorization-server front end (issue #1646,
+	// FR12/NFR4): mints the bearer credential an MCP client presents to
+	// `mcp`, reusing this Person's existing C1 Google-OIDC-backed session
+	// (auth.MCPCallerResolver) rather than any new sign-in UI. `web` and
+	// `mcp` share one Postgres, so a credential minted here is immediately
+	// verifiable by `mcp` -- no cross-service call.
+	//
+	// The client registry and pending-authorization-code store MUST be the
+	// Postgres-backed implementations, not mcpauth's in-memory defaults:
+	// /authorize, /token, and /register can each land on a different `web`
+	// replica.
+	mcpClients, err := mcpauth.NewPostgresClientRegistry(ctx, mcpauth.ClientRegistryConfig{Pool: pool})
+	if err != nil {
+		return fmt.Errorf("mcpauth client registry: apply migration 007_mcpauth_oauth before starting web: %w", err)
+	}
+	mcpAuthCodes, err := mcpauth.NewPostgresAuthCodeStore(ctx, mcpauth.AuthCodeStoreConfig{Pool: pool})
+	if err != nil {
+		return fmt.Errorf("mcpauth auth code store: apply migration 007_mcpauth_oauth before starting web: %w", err)
+	}
+	// Same table/column configuration mcp/main.go uses for its own
+	// mcpauth.NewCredentialStore -- one shared mcp_credential table
+	// (migration 006), keyed on the Person UUID.
+	mcpCredentials, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	if err != nil {
+		return fmt.Errorf("mcpauth credential store: apply migration 006_mcpauth_credential before starting web: %w", err)
+	}
+	if cfg.MCPPublicURL == "" {
+		return fmt.Errorf("ASS_MCP_PUBLIC_URL is required")
+	}
+	mcpProvider, err := mcpauth.NewProvider(mcpauth.ProviderConfig{
+		Issuer:       cfg.OAuthRedirectBase,
+		Resource:     cfg.MCPPublicURL,
+		ResourceName: "Audience Score System MCP",
+		Resolver:     authenticator.MCPCallerResolver(),
+		Credentials:  mcpCredentials,
+		Clients:      mcpClients,
+		AuthCodes:    mcpAuthCodes,
+		SignInURL:    "/login",
+	})
+	if err != nil {
+		return fmt.Errorf("construct mcpauth provider: %w", err)
+	}
+
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, mcpProvider: mcpProvider}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -271,6 +337,15 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/login", a.auth.HandleLogin)
 	mux.HandleFunc("/oauth/google/callback", a.auth.HandleCallback)
 	mux.HandleFunc("POST /logout", a.auth.HandleLogout)
+
+	// mcpauth's OAuth2 authorization-server endpoints (/authorize, /token,
+	// /register, discovery metadata -- issue #1646, FR12/NFR4) also sit
+	// outside RequireSignedIn: mcpauth's own Resolver + SignInURL do the
+	// gating for /authorize (an unauthenticated request round-trips through
+	// /login?next=<authorize URL> and back), and /token and /register are
+	// called directly by the MCP client with no session cookie at all --
+	// wrapping them in RequireSignedIn would break both.
+	a.mcpProvider.Mount(mux)
 
 	// GET /invites/{code} is public (no session required, FR6/FR7/FR8) --
 	// it must sit outside RequireSignedIn, since it renders differently

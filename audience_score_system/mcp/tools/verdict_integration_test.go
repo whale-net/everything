@@ -153,7 +153,11 @@ func newVerdictFixture(t *testing.T) *verdictFixture {
 	tools.RegisterVerdict(reg, st)
 	tools.RegisterResearch(reg, st)
 
-	handler := server.NewHTTPHandler(srv, creds)
+	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 

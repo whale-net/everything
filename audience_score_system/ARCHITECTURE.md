@@ -81,13 +81,22 @@ foreign key to `person(id)`, and both of 005's indexes are kept verbatim)
 column), so that genericity never became a reason ASS lost its FK
 (FR13/NFR5).
 
-- **(a) Obtained:** minted by an authenticated endpoint on `web`, reusing
-  the Person's existing C1 sign-in session (`web/auth`'s
-  `RequireSignedIn`) rather than any new credential-collection UI. That
-  endpoint is not yet built (`mcpauth.CredentialStore.Mint` has no
-  production caller today) — it is filed as a scope note (no other M1 task
-  owns it; #1646 wires the OAuth2 front-end onto `web`, not this mint
-  endpoint).
+- **(a) Obtained:** minted via `mcpauth`'s own OAuth2 authorization-code +
+  PKCE `/token` endpoint, mounted on `web` (issue #1646). An MCP client
+  drives the standard RFC 9728/8414/7591 discovery-to-registration chain
+  against `web`, then `/authorize` resolves the caller through
+  `web/auth.Authenticator.MCPCallerResolver()` — reusing the Person's
+  existing C1 sign-in session (`SessionManager.PersonID`, the same read
+  `RequireSignedIn` performs) rather than any new credential-collection UI
+  or a fresh IdP round trip. An unresolved caller is redirected to `/login`
+  with the exact original `/authorize` request preserved via ASS's
+  existing `?next=` convention (`mcpauth.ProviderConfig.SignInReturnParam`,
+  defaulted to `"next"`) and returns to `/authorize` after Google sign-in.
+  `mcpauth.CredentialStore.Mint`'s only production caller is `/token`'s
+  handler, invoked once the authorization code is redeemed. A self-serve
+  mint/revoke/list UI page on `web` is separate scope (#1591) — not
+  needed for a caller that IS an MCP client, since the client itself
+  drives the OAuth2 flow.
 - **(b) Revoked:** `mcpauth.CredentialStore.Revoke` closes a credential by
   setting `revoked_at`; a revoked credential's hash no longer resolves in
   `Verify`, so any MCP call bearing it is rejected on the next request
@@ -130,6 +139,54 @@ a missing migration 006 fails `mcp` at boot instead of at first call.
 `Verify` also stamps `last_used_at` in the same round trip, so it doubles
 as the "last seen" signal for a future credential-management view (see
 issue #1591's scope note).
+
+**Split across two binaries (issue #1646).** `mcpauth`'s OAuth2
+authorization-code + PKCE `/authorize` endpoint needs the caller's ASS web
+session cookie, which only `web` has; the OAuth2 protected resource an MCP
+client ultimately calls is `mcp`. So:
+
+- `web` hosts the full OAuth2 authorization server: `/authorize`, `/token`,
+  `/register`, and `/.well-known/oauth-authorization-server`
+  (`mcpauth.Provider`, `web/main.go`'s `run()`, mounted outside
+  `RequireSignedIn` — `mcpauth`'s own `Resolver`/`SignInURL` do the gating
+  for `/authorize`, and `/token`/`/register` are called directly by the MCP
+  client with no session cookie at all, so wrapping either in
+  `RequireSignedIn` would break them).
+- `mcp` hosts only the protected-resource half: `/.well-known/oauth-protected-resource`
+  (`mcpauth.NewProtectedResourceMetadataHandler`, `mcp/server/transport.go`'s
+  `NewHTTPHandler`) plus the `WWW-Authenticate: Bearer resource_metadata="..."`
+  challenge a missing/invalid bearer token gets
+  (`mcpauth.ProtectedResourceMetadataURL`, passed as
+  `sdkauth.RequireBearerTokenOptions.ResourceMetadataURL`). `mcp` never
+  mounts `/authorize` or `/token` — it has no session cookie to resolve a
+  caller from, and has no business doing so.
+- Both well-known/discovery paths are registered at each binary's mux
+  root, never under a prefix — MCP clients probe fixed well-known
+  locations (RFC 9728 §3, RFC 8414 §3).
+- `web` and `mcp` share one Postgres and nothing else (no cross-service
+  call, no shared in-process state): a credential minted by `web`'s
+  `/token` is immediately verifiable by `mcp`'s
+  `mcpauth.CredentialStore.Verify` against the same `mcp_credential`
+  table, and an authorization code or dynamically registered client
+  `/authorize`/`/register` create on one `web` replica is resolvable by
+  `/token` on a different `web` replica — this is why ASS MUST construct
+  `mcpauth.NewPostgresClientRegistry` and `mcpauth.NewPostgresAuthCodeStore`
+  (migration 007, `mcp_oauth_client`/`mcp_auth_code`) rather than
+  `mcpauth`'s single-replica in-memory defaults (NFR5's schema-ownership
+  split: `mcpauth` ships no migrations of its own, ASS's own migration
+  tooling owns 006 and 007 against `mcpauth`'s documented schema
+  contracts).
+- Discovery chain an MCP client actually drives, end to end: unauthenticated
+  call to `mcp` → 401 naming `mcp`'s own `resource_metadata` URL → GET that
+  URL (`mcp`) → follow its `authorization_servers[0]` (`web`'s issuer,
+  `ASS_OAUTH_REDIRECT_BASE_URL`) → GET `web`'s
+  `/.well-known/oauth-authorization-server` → `POST /register` → `GET
+  /authorize` (real session cookie) → `POST /token` → bearer credential,
+  now usable against `mcp`. No step in this chain is ASS- or
+  client-specific (NFR4) — see
+  `mcp/server/oauth_bootstrap_integration_test.go` for the test that drives
+  this exact sequence across two independently constructed `web`-shaped and
+  `mcp`-shaped server instances sharing one database.
 
 ### MCP server: Channel-scoping and idempotency middleware
 

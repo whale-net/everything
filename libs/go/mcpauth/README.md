@@ -243,6 +243,60 @@ CREATE INDEX mcp_auth_code_expires_at ON mcp_auth_code(expires_at);
 boot-time preflight probe resolves through the same `search_path` the
 runtime uses.
 
+## Caller resolution and the sign-in redirect
+
+`ProviderConfig.Resolver` (a `CallerResolver`, `resolver.go`) is how
+`/authorize` learns who the caller already is — see that interface's doc
+comment for the hard rule: it must only read an identity the consuming
+domain's own sign-in flow already established (a session cookie, a trusted
+proxy header, etc.), never perform a fresh IdP round trip itself.
+
+When `Resolver.ResolveCaller` reports `ok == false`, `/authorize` redirects
+to `ProviderConfig.SignInURL` (if set — otherwise it 401s) with the exact
+original `/authorize` request, query string intact, carried in a query
+parameter named by `ProviderConfig.SignInReturnParam` (defaults to
+`"next"` — see that field's doc for why this defaults to ASS's own
+`?next=` convention rather than an mcpauth-invented name). The consuming
+domain's sign-in flow is expected to redirect back to that URL once the
+caller is signed in, and `/authorize` re-runs from the top — this is a
+plain redirect round trip, not a callback URL mcpauth calls itself.
+
+## Split authorization-server / resource-server binaries
+
+Some consumers run their OAuth2 authorization server and their MCP
+resource server as two separate processes — e.g. because only one process
+holds the caller's session cookie `Resolver` needs (see
+`audience_score_system/web` vs. `audience_score_system/mcp`, issue #1646).
+For that shape, the resource-server binary must NOT construct a full
+`Provider`: `Provider` requires a `CallerResolver` and `CredentialStore` it
+may not have, and `Provider.Mount` would also wire `/authorize`, `/token`,
+and `/register`, which a pure resource server must never serve (it has no
+session to resolve a caller from).
+
+Use these instead, on the resource server's own mux:
+
+```go
+mux.Handle(mcpauth.ProtectedResourceMetadataPath, mcpauth.NewProtectedResourceMetadataHandler(mcpauth.ProtectedResourceMetadataConfig{
+    Resource:            "https://mcp.example.com",      // this resource server's own URL
+    AuthorizationServer: "https://auth.example.com",     // the OTHER process's Provider.Issuer
+    ResourceName:        "Example MCP",
+}))
+
+requireBearer := mcpauth.RequireBearerToken(credentials, &sdkauth.RequireBearerTokenOptions{
+    ResourceMetadataURL: mcpauth.ProtectedResourceMetadataURL("https://mcp.example.com"),
+})
+```
+
+`credentials` is the same `CredentialStore` (backed by the same
+`mcp_credential` table) the authorization-server process's `Provider`
+mints against via its own `ProviderConfig.Credentials` — the two processes
+share this table (and, for a multi-replica authorization server, the
+Postgres-backed `ClientRegistry`/`AuthCodeStore` above) but nothing else;
+see `audience_score_system/ARCHITECTURE.md` "MCP server: caller
+authentication" → "Split across two binaries" for a worked example
+end to end, including the exact discovery chain an MCP client drives
+across both processes.
+
 ## Usage
 
 ```go

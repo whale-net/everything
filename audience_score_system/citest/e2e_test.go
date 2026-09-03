@@ -213,7 +213,11 @@ func newWorld(t *testing.T) *world {
 	mcptools.RegisterScheduleDraft(reg, st)
 	mcptools.RegisterMatches(reg, st)
 	mcptools.RegisterBrowse(reg, st)
-	mcpHandler := mcpserver.NewHTTPHandler(srv, creds)
+	mcpHandler := mcpserver.NewHTTPHandler(srv, creds, mcpserver.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
 	mcpTS := httptest.NewServer(mcpHandler)
 	t.Cleanup(mcpTS.Close)
 

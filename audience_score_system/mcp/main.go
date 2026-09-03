@@ -43,15 +43,30 @@ type config struct {
 
 	DatabaseURL string
 	LogLevel    string
+
+	// MCPPublicURL is ASS_MCP_PUBLIC_URL (issue #1646, FR12/NFR4) -- this
+	// instance's own externally reachable URL, passed as
+	// mcpauth.ProtectedResourceMetadataConfig.Resource. Must equal `web`'s
+	// mcpauth.ProviderConfig.Resource exactly.
+	MCPPublicURL string
+
+	// OAuthIssuer is ASS_OAUTH_REDIRECT_BASE_URL (issue #1646, FR12/NFR4)
+	// -- `web`'s OAuth2 issuer identifier, named here as the
+	// authorization_servers entry `mcp`'s protected-resource metadata
+	// advertises. `mcp` never talks to this URL itself; it only publishes
+	// it for MCP clients to follow.
+	OAuthIssuer string
 }
 
 // loadConfig loads configuration from environment variables. See
 // ../ENV.md for the full variable list.
 func loadConfig() config {
 	return config{
-		MCPAddr:     getEnv("ASS_MCP_ADDR", ":8081"),
-		DatabaseURL: os.Getenv("PG_DATABASE_URL"),
-		LogLevel:    getEnv("LOG_LEVEL", "info"),
+		MCPAddr:      getEnv("ASS_MCP_ADDR", ":8081"),
+		DatabaseURL:  os.Getenv("PG_DATABASE_URL"),
+		LogLevel:     getEnv("LOG_LEVEL", "info"),
+		MCPPublicURL: os.Getenv("ASS_MCP_PUBLIC_URL"),
+		OAuthIssuer:  os.Getenv("ASS_OAUTH_REDIRECT_BASE_URL"),
 	}
 }
 
@@ -97,6 +112,12 @@ func run() error {
 
 	if cfg.DatabaseURL == "" {
 		return fmt.Errorf("PG_DATABASE_URL is required")
+	}
+	if cfg.MCPPublicURL == "" {
+		return fmt.Errorf("ASS_MCP_PUBLIC_URL is required")
+	}
+	if cfg.OAuthIssuer == "" {
+		return fmt.Errorf("ASS_OAUTH_REDIRECT_BASE_URL is required")
 	}
 
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
@@ -152,7 +173,11 @@ func run() error {
 	tools.RegisterBrowse(reg, st)
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), scheduleManager)
 
-	handler := server.NewHTTPHandler(srv, creds)
+	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
+		Resource:            cfg.MCPPublicURL,
+		AuthorizationServer: cfg.OAuthIssuer,
+		ResourceName:        "Audience Score System MCP",
+	})
 
 	httpServer := &http.Server{
 		Addr:         cfg.MCPAddr,
