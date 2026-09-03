@@ -1,0 +1,10 @@
+{
+  "id": "vid-private-published",
+  "snippet": {
+    "title": "Private, Already Published",
+    "publishedAt": "2023-05-01T00:00:00Z"
+  },
+  "status": {
+    "privacyStatus": "private"
+  }
+}

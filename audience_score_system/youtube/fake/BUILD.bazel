@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# In-memory youtube.Client double, fully working from Scaffold on (unlike
+# the rest of //audience_score_system/youtube) -- see fake.go's package
+# doc comment. Consumers (#1574/#1576/#1581) depend on this to test
+# without a live network call.
+go_library(
+    name = "fake",
+    srcs = ["fake.go"],
+    importpath = "github.com/whale-net/everything/audience_score_system/youtube/fake",
+    visibility = ["//visibility:public"],
+    deps = ["//audience_score_system/youtube"],
+)
+
+# Drives fake.Client the way a future consumer test would -- no external
+# consumer exists yet as of issue #1573 (see fake_test.go's package doc
+# comment) -- plus the Err-propagates-from-every-method and
+# missing-id-falls-back-to-zero-value contracts fake.go documents.
+go_test(
+    name = "fake_test",
+    srcs = ["fake_test.go"],
+    embed = [":fake"],
+    deps = [
+        "//audience_score_system/youtube",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
