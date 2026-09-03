@@ -229,6 +229,81 @@ func TestRequireBearerToken_ForcesAllowMissingExpirationTrue(t *testing.T) {
 	assert.True(t, handlerCalled)
 }
 
+// TestRequireBearerToken_MalformedAuthorizationHeader_Returns401 exercises
+// the Authorization-header parsing variants a real client could plausibly
+// send that are not simply "missing" or "wrong scheme" (already covered
+// above): a Bearer scheme with no token at all, extra whitespace between
+// scheme and token, and a lower/mixed-case scheme. The SDK's own verify()
+// (github.com/modelcontextprotocol/go-sdk/auth) tokenizes the header with
+// strings.Fields (collapses runs of whitespace, requires exactly two
+// fields, compares the scheme case-insensitively) — these cases pin that
+// behavior as observed through mcpauth's RequireBearerToken wiring, not
+// just the SDK's own tests.
+func TestRequireBearerToken_MalformedAuthorizationHeader_Returns401(t *testing.T) {
+	store := newFakeCredentialStore()
+
+	cases := map[string]string{
+		"bearer scheme with no token":        "Bearer",
+		"bearer scheme with only whitespace": "Bearer    ",
+	}
+
+	for name, header := range cases {
+		t.Run(name, func(t *testing.T) {
+			mw := RequireBearerToken(store, nil)
+			handlerCalled := false
+			h := mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { handlerCalled = true }))
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Authorization", header)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code, name)
+			assert.False(t, handlerCalled, name)
+		})
+	}
+}
+
+// TestRequireBearerToken_AuthorizationHeaderWhitespaceAndCaseTolerant proves
+// the two variants that are NOT malformed and must still succeed: extra
+// whitespace between "Bearer" and the token, and a non-canonical-case
+// scheme ("bearer", "BEARER"). Both are accepted per RFC 7230's token/OWS
+// grammar and the SDK's strings.Fields-based parse.
+func TestRequireBearerToken_AuthorizationHeaderWhitespaceAndCaseTolerant(t *testing.T) {
+	store := newFakeCredentialStore()
+	rawToken, _, err := store.Mint(context.Background(), "person-11")
+	require.NoError(t, err)
+
+	cases := map[string]string{
+		"extra whitespace between scheme and token": "Bearer    " + rawToken,
+		"lowercase scheme":                          "bearer " + rawToken,
+		"uppercase scheme":                          "BEARER " + rawToken,
+	}
+
+	for name, header := range cases {
+		t.Run(name, func(t *testing.T) {
+			mw := RequireBearerToken(store, nil)
+			handlerCalled := false
+			var gotUserID string
+			h := mw(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				handlerCalled = true
+				info := sdkauth.TokenInfoFromContext(r.Context())
+				require.NotNil(t, info)
+				gotUserID = info.UserID
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set("Authorization", header)
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusOK, rec.Code, name)
+			assert.True(t, handlerCalled, name)
+			assert.Equal(t, "person-11", gotUserID, name)
+		})
+	}
+}
+
 func TestRequireBearerToken_InvalidToken_Returns401(t *testing.T) {
 	store := newFakeCredentialStore()
 	mw := RequireBearerToken(store, nil)
