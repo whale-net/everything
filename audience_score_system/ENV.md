@@ -23,15 +23,29 @@ Read via `//libs/go/db` (`web`, `mcp`, `worker`) and `//libs/go/migrate`
 
 ## Temporal
 
-Read via `//libs/go/temporal`'s `ConfigFromEnv` (`worker`), plus
-`worker`'s own `ASS_SYNC_INTERVAL` (issue #1574, NFR4).
+Read via `//libs/go/temporal`'s `ConfigFromEnv` (`web` and `worker` both,
+as of issue #1614), plus `ASS_SYNC_INTERVAL` (issue #1574, NFR4), also now
+read by both.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
-| `TEMPORAL_HOST` | worker | `localhost:7233` | Temporal frontend service `host:port`. |
-| `TEMPORAL_NAMESPACE` | worker | `default` | Temporal namespace. |
-| `TEMPORAL_TASK_QUEUE` | worker | `audience-score-system-sync` | Task queue name for the per-Channel sync worker (`sync.TaskQueue`). Unlike `//libs/go/temporal`'s own zero-default, `worker`'s `main.go` falls back to `sync.TaskQueue` when unset, mirroring `tools/app_registry/worker`'s identical fallback-to-package-constant pattern. |
-| `ASS_SYNC_INTERVAL` | worker | `20m` | How often `sync.ChannelSyncWorkflow` runs per connected Channel (a Go `time.Duration` string, e.g. `20m`). Must fall within NFR4's ~15-30 minute band (`sync.MinSyncInterval`/`sync.MaxSyncInterval`) — `worker` fails fast at startup on an out-of-band or unparseable value rather than silently clamping it. |
+| `TEMPORAL_HOST` | web, worker | `localhost:7233` | Temporal frontend service `host:port`. |
+| `TEMPORAL_NAMESPACE` | web, worker | `default` | Temporal namespace. |
+| `TEMPORAL_TASK_QUEUE` | web, worker | `audience-score-system-sync` | Task queue name for the per-Channel sync worker (`sync.TaskQueue`). Unlike `//libs/go/temporal`'s own zero-default, both `web`'s and `worker`'s `main.go` fall back to `sync.TaskQueue` when unset, mirroring `tools/app_registry/worker`'s identical fallback-to-package-constant pattern. |
+| `ASS_SYNC_INTERVAL` | web, worker | `20m` | How often `sync.ChannelSyncWorkflow` runs per connected Channel (a Go `time.Duration` string, e.g. `20m`). Must fall within NFR4's ~15-30 minute band (`sync.MinSyncInterval`/`sync.MaxSyncInterval`) — both `web` and `worker` fail fast at startup on an out-of-band or unparseable value rather than silently clamping it. |
+
+**`web` reads these too, as of issue #1614:** `web/channel.Handler`
+calls `sync.ScheduleManager.EnsureSchedule` right after a Channel-connect
+callback reaches `connection_state = connected` (FR14/NFR4 — see
+`ARCHITECTURE.md` "Schedule creation at connect time, not just at worker
+startup"), so `web`'s `main.go` now constructs its own Temporal client
+and `sync.ScheduleManager` at startup, following `worker/main.go`'s exact
+pattern. **`web` and `worker` MUST be configured with the same
+`ASS_SYNC_INTERVAL` value** (same default, same NFR4 band-check) — a
+schedule's interval is fixed at whichever `EnsureSchedule` call creates it
+first and never updated by a later call for the same Channel, so a
+`web`/`worker` divergence here could silently create a Channel's schedule
+at the wrong cadence depending on which binary connects it first.
 
 `worker` also reads C2's `ASS_GOOGLE_CLIENT_ID`/`ASS_GOOGLE_CLIENT_SECRET`/
 `ASS_TOKEN_ENCRYPTION_KEY` (see "OAuth scopes" below) as of issue #1576:

@@ -187,6 +187,24 @@ func (f *fakeTokenStore) MarkNeedsReauth(_ context.Context, channelID uuid.UUID,
 
 var _ tokens.Store = (*fakeTokenStore)(nil)
 
+// ── stub scheduleManager ─────────────────────────────────────────────────
+
+// stubScheduleManager mirrors stubExchanger/stubResolver above -- a
+// substitute for the real sync.NewScheduleManager-backed implementation
+// ../main.go wires in, so no test here makes a live Temporal call (issue
+// #1614, FR14/NFR4).
+type stubScheduleManager struct {
+	calls []uuid.UUID
+	err   error
+}
+
+func (s *stubScheduleManager) EnsureSchedule(_ context.Context, channelID uuid.UUID) error {
+	s.calls = append(s.calls, channelID)
+	return s.err
+}
+
+var _ scheduleManager = (*stubScheduleManager)(nil)
+
 // ── test helpers ─────────────────────────────────────────────────────────
 
 func findCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
@@ -355,7 +373,8 @@ func callbackWithValidState(t *testing.T, sessions *auth.SessionManager, code st
 
 func TestHandleCallback_StateMismatch_Rejected(t *testing.T) {
 	sessions := testSessions()
-	h := &Handler{sessions: sessions, oauth2Config: &stubExchanger{}}
+	sched := &stubScheduleManager{}
+	h := &Handler{sessions: sessions, oauth2Config: &stubExchanger{}, schedules: sched}
 
 	person := &store.Person{ID: uuid.New()}
 	req := withPerson(callbackWithValidState(t, sessions, "abc"), person)
@@ -364,23 +383,27 @@ func TestHandleCallback_StateMismatch_Rejected(t *testing.T) {
 	h.HandleCallback(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Empty(t, sched.calls, "a bad-state callback must never reach EnsureSchedule")
 }
 
 func TestHandleCallback_NotSignedIn_Unauthorized(t *testing.T) {
 	sessions := testSessions()
-	h := &Handler{sessions: sessions, oauth2Config: &stubExchanger{}}
+	sched := &stubScheduleManager{}
+	h := &Handler{sessions: sessions, oauth2Config: &stubExchanger{}, schedules: sched}
 
 	req := callbackWithValidState(t, sessions, "abc")
 	w := httptest.NewRecorder()
 	h.HandleCallback(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Empty(t, sched.calls, "an unsigned-in callback must never reach EnsureSchedule")
 }
 
 func TestHandleCallback_NoRefreshTokenFromGoogle_Rejected(t *testing.T) {
 	sessions := testSessions()
 	exch := &stubExchanger{token: &oauth2.Token{AccessToken: "at"}} // no RefreshToken
 	channels := &fakeChannelStore{}
+	sched := &stubScheduleManager{}
 	h := &Handler{
 		sessions:     sessions,
 		oauth2Config: exch,
@@ -388,6 +411,7 @@ func TestHandleCallback_NoRefreshTokenFromGoogle_Rejected(t *testing.T) {
 		roles:        &fakeRoleStore{},
 		tokens:       &fakeTokenStore{},
 		resolver:     stubResolver{},
+		schedules:    sched,
 	}
 
 	person := &store.Person{ID: uuid.New()}
@@ -397,6 +421,7 @@ func TestHandleCallback_NoRefreshTokenFromGoogle_Rejected(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.False(t, channels.getByYouTubeChannelIDCalled, "must fail before ever resolving/looking up the Channel when no refresh token comes back")
+	assert.Empty(t, sched.calls, "an exchange failure (no refresh token) must never reach EnsureSchedule")
 }
 
 // ── HandleCallback: fresh connect (FR3) ─────────────────────────────────
@@ -410,6 +435,7 @@ func TestHandleCallback_FreshConnect_CreatesChannelAndSavesCredential(t *testing
 		createResult:             store.Channel{ID: newChannelID, YouTubeChannelID: "yt-123", Title: "My Channel"},
 	}
 	tok := &fakeTokenStore{}
+	sched := &stubScheduleManager{}
 	h := &Handler{
 		sessions:     sessions,
 		oauth2Config: exch,
@@ -417,6 +443,7 @@ func TestHandleCallback_FreshConnect_CreatesChannelAndSavesCredential(t *testing
 		roles:        &fakeRoleStore{},
 		tokens:       tok,
 		resolver:     stubResolver{youtubeChannelID: "yt-123", title: "My Channel"},
+		schedules:    sched,
 	}
 
 	person := &store.Person{ID: uuid.New()}
@@ -435,6 +462,42 @@ func TestHandleCallback_FreshConnect_CreatesChannelAndSavesCredential(t *testing
 	assert.Equal(t, person.ID, tok.saveByPersonID)
 	assert.ElementsMatch(t, Scopes, tok.saveScopes)
 	assert.False(t, tok.markNeedsReauthCalled, "MarkNeedsReauth must not run on the happy path")
+
+	require.Len(t, sched.calls, 1, "FR14/NFR4 (issue #1614): a fresh connect must call EnsureSchedule exactly once")
+	assert.Equal(t, newChannelID, sched.calls[0], "EnsureSchedule must be called with the newly-created Channel's ID")
+}
+
+// TestHandleCallback_FreshConnect_EnsureScheduleErrors_StillRedirectsNoServerError
+// covers issue #1614's non-fatal contract: a Channel is already correctly
+// connected in Postgres by the time EnsureSchedule runs, so a Temporal
+// hiccup here must degrade to "worker's next startup Reconcile will pick
+// it up" rather than turn an otherwise-successful connect into a 500.
+func TestHandleCallback_FreshConnect_EnsureScheduleErrors_StillRedirectsNoServerError(t *testing.T) {
+	sessions := testSessions()
+	exch := &stubExchanger{token: &oauth2.Token{AccessToken: "at", RefreshToken: "rt"}}
+	newChannelID := uuid.New()
+	channels := &fakeChannelStore{
+		getByYouTubeChannelIDErr: pgx.ErrNoRows,
+		createResult:             store.Channel{ID: newChannelID, YouTubeChannelID: "yt-123", Title: "My Channel"},
+	}
+	sched := &stubScheduleManager{err: assertErr}
+	h := &Handler{
+		sessions:     sessions,
+		oauth2Config: exch,
+		channels:     channels,
+		roles:        &fakeRoleStore{},
+		tokens:       &fakeTokenStore{},
+		resolver:     stubResolver{youtubeChannelID: "yt-123", title: "My Channel"},
+		schedules:    sched,
+	}
+
+	person := &store.Person{ID: uuid.New()}
+	req := withPerson(callbackWithValidState(t, sessions, "abc"), person)
+	w := httptest.NewRecorder()
+	h.HandleCallback(w, req)
+
+	assert.Equal(t, http.StatusSeeOther, w.Code, "an EnsureSchedule failure must not turn an otherwise-successful connect into a 500")
+	require.Len(t, sched.calls, 1, "EnsureSchedule must still have been attempted")
 }
 
 // TestHandleCallback_SaveFailsAfterCreate_CompensatesWithMarkNeedsReauth
@@ -452,6 +515,7 @@ func TestHandleCallback_SaveFailsAfterCreate_CompensatesWithMarkNeedsReauth(t *t
 		createResult:             store.Channel{ID: newChannelID, YouTubeChannelID: "yt-123"},
 	}
 	tok := &fakeTokenStore{saveErr: assertErr}
+	sched := &stubScheduleManager{}
 	h := &Handler{
 		sessions:     sessions,
 		oauth2Config: exch,
@@ -459,6 +523,7 @@ func TestHandleCallback_SaveFailsAfterCreate_CompensatesWithMarkNeedsReauth(t *t
 		roles:        &fakeRoleStore{},
 		tokens:       tok,
 		resolver:     stubResolver{youtubeChannelID: "yt-123"},
+		schedules:    sched,
 	}
 
 	person := &store.Person{ID: uuid.New()}
@@ -469,6 +534,7 @@ func TestHandleCallback_SaveFailsAfterCreate_CompensatesWithMarkNeedsReauth(t *t
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	require.True(t, tok.markNeedsReauthCalled, "a Save failure right after a fresh Create must be compensated with MarkNeedsReauth, since Create+Save are two separate transactions")
 	assert.Equal(t, newChannelID, tok.markNeedsReauthChannelID, "MarkNeedsReauth must target the Channel Create just created, never leaving it claiming a live credential it doesn't have")
+	assert.Empty(t, sched.calls, "the Channel never reached connected here (Save failed), so EnsureSchedule must never be called")
 }
 
 func TestHandleCallback_ResolveOwnChannelFails_NeverCreatesOrSaves(t *testing.T) {
@@ -476,6 +542,7 @@ func TestHandleCallback_ResolveOwnChannelFails_NeverCreatesOrSaves(t *testing.T)
 	exch := &stubExchanger{token: &oauth2.Token{AccessToken: "at", RefreshToken: "rt"}}
 	channels := &fakeChannelStore{}
 	tok := &fakeTokenStore{}
+	sched := &stubScheduleManager{}
 	h := &Handler{
 		sessions:     sessions,
 		oauth2Config: exch,
@@ -483,6 +550,7 @@ func TestHandleCallback_ResolveOwnChannelFails_NeverCreatesOrSaves(t *testing.T)
 		roles:        &fakeRoleStore{},
 		tokens:       tok,
 		resolver:     stubResolver{err: assertErr},
+		schedules:    sched,
 	}
 
 	person := &store.Person{ID: uuid.New()}
@@ -493,6 +561,7 @@ func TestHandleCallback_ResolveOwnChannelFails_NeverCreatesOrSaves(t *testing.T)
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.False(t, channels.createCalled)
 	assert.False(t, tok.saveCalled)
+	assert.Empty(t, sched.calls, "a resolver failure must never reach EnsureSchedule")
 }
 
 // ── HandleCallback: reconnect path (FR4, NFR5 defense in depth) ─────────
@@ -503,6 +572,7 @@ func TestHandleCallback_ExistingChannel_AnalystReconnect_ForbiddenNoSave(t *test
 	existing := store.Channel{ID: uuid.New(), YouTubeChannelID: "yt-existing"}
 	channels := &fakeChannelStore{getByYouTubeChannelIDResult: existing}
 	tok := &fakeTokenStore{}
+	sched := &stubScheduleManager{}
 	h := &Handler{
 		sessions:     sessions,
 		oauth2Config: exch,
@@ -510,6 +580,7 @@ func TestHandleCallback_ExistingChannel_AnalystReconnect_ForbiddenNoSave(t *test
 		roles:        &fakeRoleStore{roles: []store.Role{store.RoleAnalyst}},
 		tokens:       tok,
 		resolver:     stubResolver{youtubeChannelID: "yt-existing"},
+		schedules:    sched,
 	}
 
 	person := &store.Person{ID: uuid.New()}
@@ -520,6 +591,7 @@ func TestHandleCallback_ExistingChannel_AnalystReconnect_ForbiddenNoSave(t *test
 	assert.Equal(t, http.StatusForbidden, w.Code, "a forged-but-otherwise-valid callback for an existing Channel must still be gated by CanReconnect (defense in depth)")
 	assert.False(t, tok.saveCalled, "no credential row may be written for a forbidden reconnect")
 	assert.False(t, channels.setConnectionStateCalled)
+	assert.Empty(t, sched.calls, "a forbidden reconnect (CanReconnect false) must never reach EnsureSchedule")
 }
 
 func TestHandleCallback_ExistingChannel_CreatorReconnect_SavesAndSetsConnected(t *testing.T) {
@@ -528,6 +600,7 @@ func TestHandleCallback_ExistingChannel_CreatorReconnect_SavesAndSetsConnected(t
 	existing := store.Channel{ID: uuid.New(), YouTubeChannelID: "yt-existing"}
 	channels := &fakeChannelStore{getByYouTubeChannelIDResult: existing}
 	tok := &fakeTokenStore{}
+	sched := &stubScheduleManager{}
 	h := &Handler{
 		sessions:     sessions,
 		oauth2Config: exch,
@@ -535,6 +608,7 @@ func TestHandleCallback_ExistingChannel_CreatorReconnect_SavesAndSetsConnected(t
 		roles:        &fakeRoleStore{roles: []store.Role{store.RoleCreator}},
 		tokens:       tok,
 		resolver:     stubResolver{youtubeChannelID: "yt-existing"},
+		schedules:    sched,
 	}
 
 	person := &store.Person{ID: uuid.New()}
@@ -549,6 +623,9 @@ func TestHandleCallback_ExistingChannel_CreatorReconnect_SavesAndSetsConnected(t
 	assert.Equal(t, existing.ID, channels.setConnectionStateChannelID)
 	assert.Equal(t, store.ConnectionStateConnected, channels.setConnectionStateValue, "a successful reconnect must return connection_state to connected")
 	assert.False(t, channels.createCalled, "an existing Channel must never be re-Created")
+
+	require.Len(t, sched.calls, 1, "FR14/NFR4 (issue #1614): a successful reconnect must call EnsureSchedule exactly once")
+	assert.Equal(t, existing.ID, sched.calls[0], "EnsureSchedule must be called with the existing Channel's ID")
 }
 
 // assertErr is a fixed sentinel error used by tests that only need a store

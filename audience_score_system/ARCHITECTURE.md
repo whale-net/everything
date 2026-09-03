@@ -228,6 +228,45 @@ deleted) and the worker (#1574) skips its sync cycle for that Channel
 without erroring the workflow, until a Creator reconnects (FR4) and
 `connection_state` returns to `connected` with no other manual step.
 
+**Schedule creation at connect time, not just at worker startup (FR14/NFR4,
+issue #1614):** `web/channel.Handler.HandleCallback` calls
+`sync.ScheduleManager.EnsureSchedule` itself, immediately after a Channel
+reaches `connection_state = connected` (both the fresh-connect and
+reconnect branches) -- `web` constructs its own Temporal client and
+`sync.ScheduleManager`, following `worker/main.go`'s exact construction
+pattern, rather than introducing a new cross-binary signaling mechanism.
+This closes the gap where a Channel connected while `worker` was already
+running would otherwise wait for `worker`'s next process restart (its
+`Reconcile` only runs at startup) before getting a live schedule.
+`EnsureSchedule` is safe to call from two independent places -- `web` at
+connect time and `worker` at startup `Reconcile` -- because it is
+idempotent (deterministic `sync.ScheduleID(channelID)`): whichever call
+lands first creates the schedule, the other gets Temporal's
+already-exists response, which `EnsureSchedule` already treats as
+success. The call is best-effort and non-fatal from `web`'s HTTP request
+path: the Channel is already correctly `connected` in Postgres by the
+time it runs, so a transient Temporal failure here logs a warning and
+still redirects, degrading to "worker's next startup Reconcile will pick
+it up" rather than turning an otherwise-successful connect into a 500.
+
+**Interval-consistency caveat:** `EnsureSchedule`'s `ScheduleSpec` bakes in
+whichever `Interval` its *first* caller passes at schedule-creation time
+and is never updated by a later `EnsureSchedule` call for the same
+Channel (only created-or-no-op). Because `web` and `worker` are now both
+callers, they must load `ASS_SYNC_INTERVAL` with the identical default
+and the identical `sync.ValidateSyncInterval` band-check (see `ENV.md`
+"Temporal") -- a misconfigured `web` diverging from `worker` here could
+silently create a Channel's schedule at the wrong cadence, since whichever
+binary's `EnsureSchedule` call happens to land first wins.
+
+**NFR3 check for this change:** NFR3 (below) restricts `web` to four *UI
+surfaces* (C1/C2/C3/C8) -- calling `EnsureSchedule` from
+`HandleCallback` adds no new HTTP route, no new MCP tool, and no new
+capability visible to a user or agent; it is backend plumbing inside the
+already-allocated C2 (Channel-connect) surface, exactly analogous to
+`web` already writing `channel_credential` and `connection_state` as part
+of that same flow. NFR3 stands unmodified.
+
 ## NFR3 interface allocation
 
 The web UI is **limited to exactly four surfaces** — everything else is
