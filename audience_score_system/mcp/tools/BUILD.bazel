@@ -14,6 +14,7 @@ go_library(
         "research.go",
         "schedule_draft.go",
         "schedule_read.go",
+        "strategy.go",
         "verdict.go",
         "whoami.go",
     ],
@@ -47,6 +48,7 @@ go_test(
         "research_test.go",
         "schedule_draft_test.go",
         "schedule_read_test.go",
+        "strategy_test.go",
         "verdict_test.go",
     ],
     embed = [":tools"],
@@ -316,6 +318,53 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["browse_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# save_strategy/get_strategy/list_strategies/generate_schedule_plan
+# (strategy.go, issue #1637): save_strategy's FR16-style viable-verdict
+# gate (rejecting an idea_id whose current verdict is not viable, nothing
+# written), create-vs-update (strategy_id) semantics including wholesale
+# idea-link replacement, idempotent replay convergence (a Strategy has no
+# natural key), Creator+Analyst write / unassociated-Person-denied authz,
+# get_strategy's wrong-channel rejection, list_strategies' active_only
+# filter, and generate_schedule_plan's read-only cadence-driven proposal
+# derivation (including skipping an Idea whose verdict has since gone
+# non-viable, and ignoring inactive Strategies) -- all against the real
+# embedded schema and a real HTTP-hosted MCP server, mirroring
+# schedule_draft_integration_test.go's pattern. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:strategy_integration_test --test_output=all
+go_test(
+    # keep
+    name = "strategy_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["strategy_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",

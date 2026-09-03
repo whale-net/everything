@@ -84,3 +84,7 @@ func (s *Store) Credentials() CredentialStore { return credentialStore{pool: s.p
 // Browse returns the BrowseStore implementation (issue #1582, FR24) --
 // C10's cross-entity Channel-overview and prediction-vs-outcome reads.
 func (s *Store) Browse() BrowseStore { return browseStore{pool: s.pool} }
+
+// Strategies returns the StrategyStore implementation (migration 006,
+// issue #1637) -- per-Idea cadence built from viable-verdict Ideas.
+func (s *Store) Strategies() StrategyStore { return strategyStore{pool: s.pool} }

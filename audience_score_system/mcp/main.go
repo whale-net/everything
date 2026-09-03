@@ -103,6 +103,7 @@ func run() error {
 	tools.RegisterScheduleDraft(reg, st)
 	tools.RegisterMatches(reg, st)
 	tools.RegisterBrowse(reg, st)
+	tools.RegisterStrategy(reg, st)
 
 	handler := server.NewHTTPHandler(srv, st.Credentials())
 

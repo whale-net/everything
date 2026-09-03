@@ -350,6 +350,54 @@ type PredictionOutcome struct {
 	MetricsMeasuredAt          time.Time
 }
 
+// Cadence is `strategy.cadence` (migration 006, issue #1637) -- a
+// Strategy's own recurrence, independent of and finer-grained than the
+// Channel-wide pacing_policy (FR17).
+type Cadence string
+
+const (
+	CadenceWeekly   Cadence = "weekly"
+	CadenceBiweekly Cadence = "biweekly"
+	CadenceMonthly  Cadence = "monthly"
+)
+
+// Strategy is one row of `strategy` (migration 006, issue #1637) -- a
+// per-Idea cadence built from one or more viable-verdict Ideas (via
+// strategy_idea), sitting between viability verdicts and scheduling.
+// PreferredWeekday is "" for no day preference, else a full English
+// weekday name in the same vocabulary as PacingPolicy.PreferredDays.
+type Strategy struct {
+	ID                uuid.UUID
+	ChannelID         uuid.UUID
+	Title             string
+	Cadence           Cadence
+	PreferredWeekday  string
+	Active            bool
+	CreatedByPersonID uuid.UUID
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	IdempotencyKey    string
+}
+
+// StrategyIdeaDetail is one `strategy_idea` row joined with its Idea's
+// title and bound verdict version -- what StrategyStore.GetByID/
+// ListByChannel resolve into StrategyDetail.Ideas, and what
+// mcp/tools/strategy.go renders per linked Idea.
+type StrategyIdeaDetail struct {
+	IdeaID         uuid.UUID
+	IdeaTitle      string
+	VerdictID      uuid.UUID
+	VerdictVersion int
+}
+
+// StrategyDetail is a Strategy plus every Idea it's built from
+// (StrategyIdeaDetail, migration 006) -- StrategyStore.GetByID/
+// ListByChannel/Save's return shape.
+type StrategyDetail struct {
+	Strategy
+	Ideas []StrategyIdeaDetail
+}
+
 // IdeaOverview is one Idea plus its current verdict (all four
 // CurrentVerdict* fields nil if none has been recorded yet) --
 // BrowseStore.IdeasWithCurrentVerdict's row shape, backing
