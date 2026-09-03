@@ -1,0 +1,59 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+# M1's milestone acceptance test (issue #1583): one idea driven by one
+# Creator and one Analyst through research -> verdict -> schedule ->
+# approve -> sync -> outcome, end to end, on one Channel -- proving the
+# outcome sentence itself, not any one task's own slice (each of which
+# already has its own *_integration_test.go proving that slice in
+# isolation). See e2e_test.go's package doc comment for the full FR
+# coverage inventory and NFR spot-check pointers.
+#
+# Modelled on //tools/app_registry/citest's role in that domain, adapted to
+# this domain's dbtest + real-MCP-client + real-web-router +
+# Temporal-testsuite conventions. Gated behind `//go:build integration`
+# exactly like every other *_integration_test.go in this domain -- gazelle
+# skips it when scanning for go_test srcs; this go_test is hand-written
+# with the same tag set every sibling integration test target uses. `# keep`
+# tells a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/citest:e2e_test --test_output=all
+go_test(
+    # keep
+    name = "e2e_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["e2e_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/mcp/tools",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/tokens",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/invite",
+        "//audience_score_system/web/schedule",
+        "//audience_score_system/worker/sync",
+        "//audience_score_system/youtube",
+        "//audience_score_system/youtube/fake",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_temporal_go_sdk//activity",
+        "@io_temporal_go_sdk//testsuite",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
