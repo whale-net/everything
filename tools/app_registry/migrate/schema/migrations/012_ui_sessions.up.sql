@@ -1,18 +1,9 @@
--- UI session storage: cookie holds only an opaque session_id; tokens live here.
--- refresh_token is AES-256-GCM encrypted by the application (SECRET_KEY).
+-- No-op placeholder. ui_sessions now lives in libs/go/htmxauth's bundled
+-- migration (version 900001), merged into this domain's sequence via
+-- migrate.WithSource in migrate/main.go -- see that package's migrations.go
+-- for why (avoiding copy-pasted schema SQL across every htmxauth adopter).
 --
--- Owner of this schema shape: libs/go/htmxauth. If a future library change
--- alters the table definition, coordinated migrations are required in every
--- adopting domain before that library bump can land.
-
-CREATE TABLE IF NOT EXISTS ui_sessions (
-    session_id       TEXT        PRIMARY KEY,
-    user_info        JSONB       NOT NULL DEFAULT '{}',
-    access_token     TEXT        NOT NULL,
-    refresh_token    TEXT        NOT NULL,
-    token_expires_at TIMESTAMPTZ NOT NULL,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at       TIMESTAMPTZ NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_ui_sessions_expires_at ON ui_sessions(expires_at);
+-- This file is kept (rather than deleted) only to hold open version slot
+-- 012, since postgres_integration_*_test.go steps through this domain's
+-- migrations by ordinal position (e.g. Steps(14) to reach migration 014)
+-- and deleting a slot would silently shift every later Steps(N) checkpoint.

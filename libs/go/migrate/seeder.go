@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"embed"
 )
 
 // Seeder is an idempotent function that seeds reference data after migrations.
@@ -22,8 +23,22 @@ func WithSeeder(s Seeder) Option {
 	}
 }
 
+// WithSource merges an additional migration directory (typically a shared
+// library's own `//go:embed migrations/*.sql`, e.g. htmxauth.Migrations)
+// into the runner's version sequence alongside the caller's own migrations
+// passed to RunCLI. To avoid version collisions with the caller's own
+// sequence, shared-library sources must number their migrations at or above
+// reservedSharedVersionFloor (see source.go) — htmxauth.Migrations already
+// does.
+func WithSource(fsys embed.FS, dir string) Option {
+	return func(o *runOptions) {
+		o.sources = append(o.sources, Source{FS: fsys, Dir: dir})
+	}
+}
+
 type runOptions struct {
 	seeders []Seeder
+	sources []Source
 }
 
 func applyOptions(opts []Option) *runOptions {

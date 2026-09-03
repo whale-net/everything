@@ -86,6 +86,7 @@ go_test(
     deps = [
         "//libs/go/dbtest",
         "//libs/go/grpcauth",
+        "//libs/go/htmxauth",
         "//libs/go/migrate",
         "//tools/app_registry/migrate/schema",
         "//tools/app_registry/protos:appregistrypb",

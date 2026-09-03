@@ -70,8 +70,18 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 	}
 	defer db.Close()
 
-	runner := NewRunner(db, migrations, migrateDir)
 	o := applyOptions(opts)
+
+	var runner *Runner
+	if len(o.sources) > 0 {
+		all := append([]Source{{FS: migrations, Dir: migrateDir}}, o.sources...)
+		runner, err = NewMultiRunner(db, all...)
+		if err != nil {
+			log.Fatalf("Failed to build merged migration source: %v", err)
+		}
+	} else {
+		runner = NewRunner(db, migrations, migrateDir)
+	}
 
 	// Handle history flag
 	if *history {

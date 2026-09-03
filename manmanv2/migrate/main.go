@@ -3,6 +3,7 @@ package main
 import (
 	"embed"
 
+	"github.com/whale-net/everything/libs/go/htmxauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -10,5 +11,6 @@ import (
 var migrations embed.FS
 
 func main() {
-	migrate.RunCLI(migrations, "migrations")
+	migrate.RunCLI(migrations, "migrations",
+		migrate.WithSource(htmxauth.Migrations, "migrations"))
 }

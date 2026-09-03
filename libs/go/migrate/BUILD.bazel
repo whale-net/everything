@@ -8,6 +8,7 @@ go_library(
         "history_repo.go",
         "migrate.go",
         "seeder.go",
+        "source.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/migrate",
     visibility = ["//visibility:public"],
@@ -17,6 +18,17 @@ go_library(
         "@com_github_golang_migrate_migrate_v4//source/iofs",
         "@com_github_jackc_pgx_v5//stdlib",
     ],
+)
+
+go_test(
+    name = "migrate_test",
+    srcs = ["source_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":migrate"],
+    embedsrcs = glob([
+        "testdata/migrations/*.sql",
+        "testdata/migrations_extra/*.sql",
+    ]),
 )
 
 # Real Postgres integration test for Runner, exercising Up/Down/Steps and

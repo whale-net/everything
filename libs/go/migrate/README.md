@@ -18,6 +18,29 @@ func main() {
 }
 ```
 
+## Shared library migrations
+
+A shared library that owns a table (e.g. `libs/go/htmxauth`'s `ui_sessions`)
+can bundle its own `//go:embed migrations/*.sql` and have every adopting
+domain merge it in with `WithSource`, instead of each domain copying the
+library's SQL into its own migrations directory:
+
+```go
+migrate.RunCLI(migrations, "migrations",
+	migrate.WithSource(htmxauth.Migrations, "migrations"))
+```
+
+`WithSource` merges the library's migration files into the same version
+sequence as the domain's own migrations. To do that safely it needs every
+source's version numbers to be globally unique, so **a shared library's
+migrations must number from 900001** (see `reservedSharedVersionFloor` in
+`source.go`) — comfortably above where any domain's own sequential
+numbering (1, 2, 3, ...) is expected to ever reach. A domain's own
+migrations never need to know or care that a merge is happening.
+
+Only reach for this when a second domain actually needs the same
+library-owned schema; a single adopter can just embed its own copy.
+
 ## CLI flags / env vars
 
 | Flag | Env var | Default | Description |
