@@ -22,11 +22,24 @@ type SessionsPageData struct {
 	ForceSGCID          string
 	ServerConfigs       []*manmanpb.ServerGameConfig
 	LiveSessionByConfig map[int64]*manmanpb.Session
+	DeploymentRows      []DeploymentRowData
 }
 
 type SGCDisplayInfo struct {
 	ServerGameConfigId int64
 	DisplayName        string
+}
+
+// DeploymentRowData is everything one deployment row needs to render itself,
+// standalone (HTMX fragment) or inside GSCStatusTable.
+type DeploymentRowData struct {
+	ServerGameConfigID int64
+	DisplayName        string
+	SGCStatus          string            // ServerGameConfig.Status (deploy state)
+	LatestSession      *manmanpb.Session // nil when never started
+	LiveSession        *manmanpb.Session // nil when not live
+	Actions            components.DeploymentActions
+	ActionError        string // FR8 inline error; "" when none
 }
 
 templ Sessions(layout components.LayoutData, data SessionsPageData) {
@@ -167,6 +180,26 @@ templ StartSessionPanel(selectedServerID string, sgcOptions []SGCDisplayInfo, st
 			}
 		</div>
 	</div>
+}
+
+// DeploymentRow renders a single deployment's <tr>, keyed by the stable
+// "deployment-row-<sgcID>" id that the action endpoints (#1627) and the
+// refresh endpoint (#1628) target as their HTMX swap target. Scaffold only
+// -- cell content lives in DeploymentRowInner, filled in during
+// Implementation (#1626).
+templ DeploymentRow(data DeploymentRowData) {
+	<tr id={ fmt.Sprintf("deployment-row-%d", data.ServerGameConfigID) } class="hover">
+		@DeploymentRowInner(data)
+	</tr>
+}
+
+// DeploymentRowInner renders just the <td>s for a deployment row, so
+// DeploymentRow (whole-row swap) and future partial-refresh/action
+// responses (inner-swap) can both reuse it. Scaffold placeholder --
+// display name / status / live session / actions cells land in
+// Implementation (#1626).
+templ DeploymentRowInner(data DeploymentRowData) {
+	<td colspan="4" class="text-sm text-base-content/50">Deployment row scaffold pending implementation (#1626)</td>
 }
 
 templ GSCStatusTable(serverConfigs []*manmanpb.ServerGameConfig, sgcDisplayNames map[int64]string, liveSessionByConfig map[int64]*manmanpb.Session) {

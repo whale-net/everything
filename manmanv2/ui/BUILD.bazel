@@ -52,6 +52,7 @@ go_test(
     srcs = [
         "handlers_home_test.go",
         "handlers_servers_update_address_test.go",
+        "handlers_sessions_deployment_row_test.go",
         "handlers_sgc_test.go",
         "main_test.go",
         "templ_render_test.go",
