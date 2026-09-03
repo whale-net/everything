@@ -73,10 +73,13 @@ type Client interface {
 	// uuid.
 	ListSchedule(ctx context.Context, channelID string) ([]Video, error)
 
-	// Metrics returns views, retention, and CTR/impressions for each of
-	// videoIDs measured since since (FR21). A video with no Analytics rows
-	// yet (e.g. just published) still yields a zero-valued VideoMetrics
-	// entry for that id, never an error for that video alone.
+	// Metrics returns views and retention for each of videoIDs measured
+	// since since (FR21). CTR/impressions is not queryable through this API
+	// (see metrics.go's analyticsMetrics doc comment), so the returned
+	// VideoMetrics' Impressions/ImpressionCTR fields are always nil. A video
+	// with no Analytics rows yet (e.g. just published) still yields a
+	// zero-valued VideoMetrics entry for that id, never an error for that
+	// video alone.
 	Metrics(ctx context.Context, channelID string, videoIDs []string, since time.Time) ([]VideoMetrics, error)
 
 	// ChannelInfo resolves the authorized Channel's own id and title --

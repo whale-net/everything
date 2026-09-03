@@ -13,10 +13,16 @@ import (
 // store.VideoMetrics' data columns (migration 002, FR21) minus the
 // SyncedVideoID foreign key, which only a caller holding the matching
 // store.SyncedVideo row can resolve; YouTubeVideoID is the join key a
-// caller (worker, #1574) uses to find it. Only views + retention +
-// CTR/impressions are in M1 scope (C16 is out of scope), but the field set
-// intentionally mirrors store.VideoMetrics so adding a metric later never
-// requires changing this shape's meaning, just adding a field to both.
+// caller (worker, #1574) uses to find it. The field set intentionally
+// mirrors store.VideoMetrics so adding a metric later never requires
+// changing this shape's meaning, just adding a field to both.
+//
+// Impressions/ImpressionCTR are always nil today: see analyticsMetrics'
+// doc comment -- the YouTube Studio "impressions and click-through rate"
+// numbers these were meant to hold (C9) are not queryable through this
+// API at all, under any identifier. The fields and store column stay so a
+// future bulk-Reporting-API integration can populate them without a
+// reshape.
 //
 // Fields are pointers because YouTube Analytics can omit any of them (e.g.
 // a just-published video with no rows yet) -- see Client.Metrics' doc
@@ -33,18 +39,25 @@ type VideoMetrics struct {
 
 // analyticsDimension/analyticsMetrics are the fixed query shape every
 // Metrics call issues: one row per video id (dimensions=video), filtered
-// to the requested ids, with M1's metric set (views, retention,
-// CTR/impressions -- C16 is out of scope, but adding a metric later only
-// means adding a name here and a field above, never changing Client's
-// signature).
+// to the requested ids, with M1's queryable metric set (views, retention).
+//
+// "impressions"/"impressionClickThroughRate" (what C9 wanted for
+// CTR/impressions) are NOT valid identifiers here -- the Reports.Query
+// endpoint (youtubeanalytics/v2, this file) rejects them with
+// "Unknown identifier (impressions) given in field parameters.metrics."
+// That data only exists as YouTube's "Reach reports"
+// (videoThumbnailImpressions/videoThumbnailImpressionsClickRate), which
+// Google exposes exclusively through the separate, asynchronous bulk
+// YouTube Reporting API (scheduled CSV report jobs) -- never through this
+// synchronous query API, under any metric name. Getting C9's CTR/
+// impressions data requires that separate integration, not a metric-name
+// fix here.
 const analyticsDimension = "video"
 
 var analyticsMetrics = []string{
 	"views",
 	"averageViewDuration",
 	"averageViewPercentage",
-	"impressions",
-	"impressionClickThroughRate",
 }
 
 // analyticsFilterBatchSize bounds how many video ids go into a single
@@ -56,10 +69,11 @@ const analyticsFilterBatchSize = 200
 // for startDate/endDate.
 const dateLayout = "2006-01-02"
 
-// Metrics returns views, retention, and CTR/impressions for each of
-// videoIDs measured since since (FR21): retention from
-// averageViewDuration/averageViewPercentage, CTR/impressions from
-// impressions/impressionClickThroughRate, all via YouTube Analytics.
+// Metrics returns views and retention for each of videoIDs measured since
+// since (FR21): retention from averageViewDuration/averageViewPercentage,
+// via YouTube Analytics. CTR/impressions is not included -- see
+// analyticsMetrics' doc comment -- so the returned VideoMetrics' Impressions/
+// ImpressionCTR fields are always nil.
 //
 // A single request-level failure (auth/quota/transient/permanent) aborts
 // the whole call; a video with no Analytics rows in the queried range
