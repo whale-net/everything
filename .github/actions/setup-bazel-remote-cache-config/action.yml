@@ -1,0 +1,117 @@
+name: 'Setup Bazel Remote Cache Config'
+description: 'Renders a .bazelrc.remote-style file from remote cache/downloader secrets, with credential masking'
+branding:
+  icon: 'lock'
+  color: 'green'
+
+inputs:
+  cache-url:
+    description: 'HTTP or gRPC URL for Bazel remote cache from secrets'
+    required: false
+    default: ''
+  cache-user:
+    description: 'Username for remote cache basic auth from secrets'
+    required: false
+    default: ''
+  cache-password:
+    description: 'Password for remote cache basic auth from secrets'
+    required: false
+    default: ''
+  downloader-url:
+    description: 'gRPC URL for Bazel remote asset downloader from secrets/vars (e.g. grpc://host:9092 or grpcs://host:443)'
+    required: false
+    default: ''
+  output-path:
+    description: >
+      Where to write the rendered bazelrc. Bazel consumers should
+      try-import this path (the default matches .bazelrc's own
+      `try-import %workspace%/.bazelrc.remote`); non-Bazel consumers (e.g.
+      a Docker buildx secret-files mount) can point anywhere writable.
+    required: false
+    default: '.bazelrc.remote'
+
+runs:
+  using: composite
+  steps:
+    - name: Render remote cache config
+      shell: bash
+      env:
+        # Passed via env (not templated into the script body) so the raw
+        # secret values never appear in the rendered/logged step command,
+        # and so a value containing shell metacharacters (', ", $(...))
+        # can't inject into the script.
+        CACHE_URL: ${{ inputs.cache-url }}
+        CACHE_USER: ${{ inputs.cache-user }}
+        CACHE_PASSWORD: ${{ inputs.cache-password }}
+        DOWNLOADER_URL: ${{ inputs.downloader-url }}
+        OUTPUT_PATH: ${{ inputs.output-path }}
+      run: |
+        HAS_REMOTE_CACHE=false
+        HAS_REMOTE_DOWNLOADER=false
+
+        if [[ -n "$CACHE_URL" ]]; then
+          HAS_REMOTE_CACHE=true
+        fi
+
+        if [[ -n "$DOWNLOADER_URL" ]]; then
+          HAS_REMOTE_DOWNLOADER=true
+        fi
+
+        # Always write OUTPUT_PATH -- even a header-only stub when nothing
+        # is configured -- rather than deleting it, so a consumer that
+        # always references this path (e.g. a Docker buildx secret-files
+        # mount, which errors if the referenced file doesn't exist) never
+        # has to conditionally omit the reference.
+        cat > "$OUTPUT_PATH" << 'EOF'
+        # Remote cache & downloader configuration (auto-generated)
+        EOF
+
+        if [[ "$HAS_REMOTE_CACHE" = "true" || "$HAS_REMOTE_DOWNLOADER" = "true" ]]; then
+          if [[ "$HAS_REMOTE_CACHE" = "true" ]]; then
+            echo "Setting up Bazel remote cache..."
+
+            # Check if CACHE_URL is gRPC (grpc:// or grpcs://) vs HTTP (http:// or https://)
+            if [[ "$CACHE_URL" =~ ^grpcs?:// ]]; then
+              echo "build --remote_cache=${CACHE_URL}" >> "$OUTPUT_PATH"
+              echo "build --remote_upload_local_results=true" >> "$OUTPUT_PATH"
+              if [[ -n "$CACHE_USER" && -n "$CACHE_PASSWORD" ]]; then
+                AUTH_BASE64=$(printf '%s' "${CACHE_USER}:${CACHE_PASSWORD}" | base64 -w 0)
+                # Mask the encoded credential in logs too: it's trivially
+                # reversible (plain base64, not a hash), so anywhere Bazel
+                # or Actions might echo the resolved --remote_header flag
+                # (e.g. --announce_rc's "Inherited 'build' options" banner)
+                # would otherwise leak it verbatim.
+                echo "::add-mask::${AUTH_BASE64}"
+                echo "build --remote_header=Authorization=\"Basic ${AUTH_BASE64}\"" >> "$OUTPUT_PATH"
+              fi
+            else
+              # HTTP-based remote cache: embed credentials in URL
+              if [[ -n "$CACHE_USER" && -n "$CACHE_PASSWORD" ]]; then
+                PROTOCOL=$(echo "$CACHE_URL" | sed -n 's#^\([^:]*\)://.*#\1#p')
+                HOST_PATH=$(echo "$CACHE_URL" | sed -n 's#^[^:]*://\(.*\)#\1#p')
+                CACHE_URL="${PROTOCOL}://${CACHE_USER}:${CACHE_PASSWORD}@${HOST_PATH}"
+                echo "::add-mask::${CACHE_URL}"
+              fi
+              echo "build --remote_cache=${CACHE_URL}" >> "$OUTPUT_PATH"
+              echo "build --remote_upload_local_results=true" >> "$OUTPUT_PATH"
+            fi
+
+            echo "✅ Remote cache configured"
+          fi
+
+          if [[ "$HAS_REMOTE_DOWNLOADER" = "true" ]]; then
+            echo "Setting up Bazel remote asset downloader..."
+
+            echo "build --experimental_remote_downloader=${DOWNLOADER_URL}" >> "$OUTPUT_PATH"
+
+            if [[ -n "$CACHE_USER" && -n "$CACHE_PASSWORD" ]]; then
+              AUTH_BASE64=$(printf '%s' "${CACHE_USER}:${CACHE_PASSWORD}" | base64 -w 0)
+              echo "::add-mask::${AUTH_BASE64}"
+              echo "build --remote_downloader_header=Authorization=\"Basic ${AUTH_BASE64}\"" >> "$OUTPUT_PATH"
+            fi
+
+            echo "✅ Remote asset downloader configured"
+          fi
+        else
+          echo "No remote cache or downloader URL provided -- $OUTPUT_PATH left as a no-op stub"
+        fi

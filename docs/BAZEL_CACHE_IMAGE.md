@@ -37,9 +37,38 @@ doesn't control -- and still hit the baked cache, by passing the same
 on input content digests, not absolute paths, so this works regardless of
 checkout location.
 
-No remote cache credentials are involved in building this image -- it's a
-from-scratch local build against public upstream registries only, so
-nothing sensitive ever reaches the image layers.
+## Remote cache during the warm build
+
+The image build *also* wires in the real Bazel remote cache (optional --
+the build works fine with none configured). This isn't redundant with the
+image cache: the remote cache only stores *compiled action outputs*, and
+`ci.yml`'s `test` job on `main` keeps it populated continuously via
+`--remote_upload_local_results=true`, so a from-scratch warm build can
+mostly *download* already-compiled outputs instead of recompiling
+everything -- a large speedup for the warm build's own wall-clock time. It
+does not help the external-repo/toolchain *download* step (a separate
+mechanism, the repository cache / remote asset downloader), so this is a
+build-speed optimization, not a replacement for anything else here.
+
+Credentials reach the build only via a BuildKit secret mount
+(`RUN --mount=type=secret,id=bazelrc_remote,...` in the Dockerfile, fed by
+`docker/build-push-action`'s `secret-files` input, itself rendered by the
+new `.github/actions/setup-bazel-remote-cache-config` composite action) --
+never a build-arg or `ENV`, which would land in `docker history` and the
+image's layers. Verified locally: a fake unreachable remote-cache URL
+passed via `--secret` produced the expected DNS-resolution failure inside
+the build, and a build with no `--secret` at all still succeeds (the
+mount target is simply absent; `.bazelrc`'s `try-import` no-ops on that
+like it would on any missing file) -- so a plain local
+`docker build -f .devcontainer/Dockerfile` (no credentials available)
+keeps working exactly as before.
+
+Deliberately **not** `--config=ci` for this warm build: that config's
+`--remote_download_minimal` would leave remote-cache-hit outputs
+unmaterialized on local disk, which defeats the point of this image --
+every action's output, whether freshly compiled or pulled from the
+remote cache, must actually land under `${BAZEL_OUTPUT_BASE}` so a later
+fully-offline consumer still finds it there.
 
 ## Freshness & honest limits
 
@@ -128,8 +157,13 @@ gh variable set BAZEL_CACHE_IMAGE_ENABLED --repo whale-net/everything --body tru
 With it set to `true`:
 - `.github/workflows/devcontainer-bazel-cache-image.yml` (manual dispatch) pushes
   `ghcr.io/<owner>/bazel-cache-devcontainer:latest` and `:<sha>`.
-- `ci.yml`'s `test-bazel-cache-image` job runs a full `bazel build //...`
-  inside that image and reports its own (non-required) result.
+- `ci.yml`'s `test-bazel-cache-image` job runs a full `bazel build --config=ci //...`
+  inside that image and reports its own (non-required) result. It skips
+  `./.github/actions/setup-build-env` entirely -- no GH Actions cache
+  restore, no `bazel-contrib/setup-bazel` -- since the image already bakes
+  in what that would restore; it only adds the remote cache (via the same
+  `setup-bazel-remote-cache-config` action used by the image build) to
+  cover anything that's drifted since the image was last built.
 
 ## Local dev use
 

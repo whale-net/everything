@@ -59,8 +59,21 @@ COPY . .
 # smoke test of this Dockerfile without paying for a full //... build.
 ARG WARM_TARGETS=//...
 
-# No remote cache is wired up here on purpose: this is a from-scratch local
-# build, so nothing but public upstream registries is contacted, and no
-# cache credentials ever need to reach the image build or its layers.
-RUN bazel --output_base=${BAZEL_OUTPUT_BASE} build ${WARM_TARGETS} \
+# Optional remote-cache config, supplied only via a BuildKit secret mount
+# (never a build-arg or ENV, which would land in `docker history`/layers)
+# -- see docs/BAZEL_CACHE_IMAGE.md "Remote cache during the warm build".
+# CI passes a rendered .bazelrc.remote (see the setup-bazel-remote-cache-config
+# composite action) via `secret-files`/`--secret`; a plain local `docker
+# build` without `--secret` leaves the mount target simply absent, and
+# .bazelrc's `try-import` no-ops on that exactly like it would on a
+# missing file anywhere else.
+#
+# Deliberately NOT --config=ci here: that config's --remote_download_minimal
+# would leave remote-cache-hit outputs unmaterialized on local disk, which
+# defeats the entire point of this image -- every action's output must
+# actually land in ${BAZEL_OUTPUT_BASE}, whether it was freshly compiled or
+# pulled from the remote cache, so a later fully-offline consumer still
+# finds it there.
+RUN --mount=type=secret,id=bazelrc_remote,target=/workspace/.bazelrc.remote \
+    bazel --output_base=${BAZEL_OUTPUT_BASE} build ${WARM_TARGETS} \
     && bazel --output_base=${BAZEL_OUTPUT_BASE} shutdown
