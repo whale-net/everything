@@ -1,0 +1,7 @@
+{
+  "name": "leaflab-data",
+  "description": "Postgres MCP access (crystaldba postgres-mcp) to the LeafLab database across tilt/dev/prod",
+  "author": {
+    "name": "whale_net"
+  }
+}

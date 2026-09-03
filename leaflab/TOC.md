@@ -12,6 +12,7 @@ Plant and environment monitoring firmware and data pipeline.
 - [PRODUCT.md](PRODUCT.md) — Product brief: vision, personas, load-bearing decisions, and a jump table to the current state, capability map, and milestone roadmap. Read before scoping or designing any leaflab milestone.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Link-seam board config pattern, dynamic sensor factory, pipeline overview
 - [DATA.md](DATA.md) — ER diagram, sensor identity model, SCD2 convention, config push flow, reading write path, mux_path format, analytical views reference
+- [ENV.md](ENV.md) — Domain-level environment variables; currently just the `leaflab-data` Postgres MCP plugin's tilt/dev/prod connection vars
 
 ## Projects
 

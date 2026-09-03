@@ -23,6 +23,11 @@
       "name": "audience-score-system-data",
       "description": "Postgres MCP access (crystaldba postgres-mcp) to the Audience Score System database across tilt/dev/prod",
       "source": "./audience_score_system/plugin/data"
+    },
+    {
+      "name": "leaflab-data",
+      "description": "Postgres MCP access (crystaldba postgres-mcp) to the LeafLab database across tilt/dev/prod",
+      "source": "./leaflab/plugin/data"
     }
   ]
 }
