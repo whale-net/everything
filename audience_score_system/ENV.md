@@ -137,3 +137,25 @@ now fails `mcp` at startup rather than at first bearer-token verification.
 |----------|-----------|---------|--------------|
 | `ASS_MCP_ADDR` | mcp | `:8081` | HTTP listen address for the `mcp` binary (streamable HTTP transport). |
 | `ASS_MCP_PUBLIC_URL` | web, mcp | *(required)* | The externally reachable URL of the `mcp` server (issue #1646, FR12/NFR4) — the OAuth2 `resource` identifier both binaries must agree on exactly. `web` passes it as `mcpauth.ProviderConfig.Resource` when constructing its OAuth2 authorization server (see "Web" above); `mcp` passes the same value as `mcpauth.ProtectedResourceMetadataConfig.Resource` (`mcp/server.ResourceMetadataConfig.Resource`) — both the `resource` field its own `/.well-known/oauth-protected-resource` document advertises, and the base its `WWW-Authenticate: Bearer resource_metadata="..."` 401 challenge is built from (`mcpauth.ProtectedResourceMetadataURL`). A mismatch between the two binaries breaks MCP client discovery (RFC 9728), since the `resource` an MCP client requests a token for would no longer match the `resource` `mcp` actually serves. Both `web` and `mcp` fail fast at startup if unset. |
+
+## Postgres MCP (Claude Code plugin)
+
+`.mcp.json` at the plugin root (`audience_score_system/plugin/data/.mcp.json`,
+symlinked to `.agents/plugins/audience-score-system-data` — see
+`.claude-plugin/marketplace.json`) wires up three read-restricted
+(`--access-mode=restricted`) crystaldba `postgres-mcp` servers via `uvx`, one
+per environment, following `tools/app_registry`'s identical plugin pattern:
+
+| Server | Connection |
+|---|---|
+| `audience-score-system-pg-tilt` | Hardcoded to the local default (`postgres://postgres:password@localhost:5432/audience_score_system`) — not a secret |
+| `audience-score-system-pg-dev` | `ASS_DEV_DATABASE_URI` (shell env var, not set by default) |
+| `audience-score-system-pg-prod` | `ASS_PROD_DATABASE_URI` (shell env var, not set by default) |
+
+These are separate from `PG_DATABASE_URL` above (which the `web`/`mcp`/
+`worker`/`migrate` binaries read) so that tilt, dev, and prod can be queried
+side by side from the same Claude Code session without swapping a single
+variable. This is also separate from the `audience-score-system` plugin
+(`audience_score_system/plugin/user`), which gives streamable-HTTP MCP
+access to the app's own `mcp` server (C4-C7, C9, C10 tools) rather than
+direct Postgres access.
