@@ -412,12 +412,28 @@ call site touches the literal. See `matching.go`'s doc comments and
 `matching_test.go` (issue #1581's Testing phase) for the boundary cases
 this value was checked against.
 
-A video already carrying a `video_schedule_match` row in ANY state (auto,
-pending, confirmed, or rejected) is skipped by SyncOutcomes on every later
-cycle (`MatchStore.HasMatch`) -- matching never re-links or duplicates. A
+A video already carrying a SETTLED `video_schedule_match` row -- auto,
+confirmed, or rejected in any case, or pending with a real
+`schedule_entry_id` -- is skipped by SyncOutcomes on every later cycle
+(`MatchStore.HasMatch`) -- matching never re-links or duplicates. A
 `rejected` match's video stays unmatched by default; nothing in M1
 automatically re-queues it (that would require an explicit future re-queue
 tool, not built here).
+
+**Bug fix (issue #1652): the no-candidate placeholder is not settled.** A
+`pending` row with `schedule_entry_id IS NULL` means no committed
+`schedule_entry` existed as a candidate at all when the video was first
+scored -- most commonly a backdated/historical video synced before its
+matching `schedule_entry` was ever committed. `HasMatch` deliberately
+reports false for this row (unlike every other state), so the video is
+re-scored on every later `SyncOutcomes` cycle until either a real candidate
+appears or a human explicitly rejects it via `resolve_pending_match`.
+`MatchStore.Record` upserts on `video_schedule_match_synced_video_id_live`
+(migration 002's partial unique index) so a later re-score updates that same
+placeholder row in place instead of colliding with the unique index or
+leaving a stale duplicate; the `DO UPDATE ... WHERE` clause is scoped so a
+conflicting row that already carries a real `schedule_entry_id` is left
+untouched.
 
 Migration 003 (`003_web_session.up.sql`, issue #1570) lands `web_session`
 -- C1's Google sign-in session store (see "OAuth grants" above).
