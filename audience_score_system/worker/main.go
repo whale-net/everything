@@ -1,7 +1,7 @@
 // Command worker is Audience Score System's Temporal worker: the
 // per-Channel scheduled sync machinery (issue #1574, FR14/FR21, NFR4) that
-// runs sync.ChannelSyncWorkflow for every connected Channel on a ~1-6 hour
-// cadence (default 3h). See ../ARCHITECTURE.md's Component map and
+// runs sync.ChannelSyncWorkflow for every connected Channel on a ~1-24 hour
+// cadence (default 24h). See ../ARCHITECTURE.md's Component map and
 // audience_score_system/worker/sync's package doc comment for the
 // workflow/activity/schedule machinery this binary registers.
 package main
@@ -27,11 +27,13 @@ import (
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 )
 
-// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 3 hours, inside
-// sync.MinSyncInterval/MaxSyncInterval's 1-6 hour NFR4 band (widened from
-// the original 20-minute default, which proved too aggressive against
-// YouTube API quota for M1's Channel count).
-const defaultSyncInterval = 3 * time.Hour
+// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 24 hours, inside
+// sync.MinSyncInterval/MaxSyncInterval's 1-24 hour NFR4 band (widened from
+// 3h, which still spent enough quota on the schedule-discovery search.list
+// call per Channel to threaten YouTube's default daily project quota at
+// M1's Channel count). Use mcp's trigger_channel_sync tool for on-demand
+// freshness between cycles.
+const defaultSyncInterval = 24 * time.Hour
 
 // config holds `worker`'s configuration, loaded entirely from environment
 // variables -- no config files (see ../ENV.md).
@@ -52,7 +54,7 @@ type config struct {
 }
 
 // loadConfig loads configuration from environment variables, failing fast
-// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 1-6 hour
+// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 1-24 hour
 // band (sync.ValidateSyncInterval) -- see ../ENV.md.
 func loadConfig() (config, error) {
 	interval := defaultSyncInterval

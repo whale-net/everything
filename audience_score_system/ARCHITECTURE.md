@@ -270,7 +270,7 @@ the raw token or its hash.
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
 | `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule approve/un-approve/edit UI #1580) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C8 schedule page is a UI front end onto the same `store.ScheduleStore` that `mcp`'s schedule-draft tools also write to. |
 | `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650) | `mcp` (external-api) | Every other capability (C4-C7, C8, C9, C10): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes, viability verdicts, schedule sync reads, schedule draft proposals/commit/un-commit/edit, pacing policy, outcome-match confirm/reject, all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
-| `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-6 hour cadence (NFR4, default 3h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
+| `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
 All four share the `audience-score-system` `release_app` domain, so images
@@ -413,8 +413,8 @@ client/worker construction) has no equivalent to
 (`temporal/base.py`) — the only in-repo *scheduled*-workflow precedent, and
 it's Python/FCM-specific, not a shared library. This is a gap `worker`
 inherits from `product/01-current-state.md` and knowingly accepts for M1:
-issue #1574 built the per-Channel sync schedule (NFR4, ~1-6 hour
-interval, default 3h) directly against the Temporal Go SDK's native `ScheduleClient`
+issue #1574 built the per-Channel sync schedule (NFR4, ~1-24 hour
+interval, default 24h) directly against the Temporal Go SDK's native `ScheduleClient`
 (`audience_score_system/worker/sync.ScheduleManager`, wrapping
 `client.Client.ScheduleClient()`), not a repo-shared helper. `ScheduleManager`
 is a small, four-method interface (`EnsureSchedule`/`RemoveSchedule`/
