@@ -87,6 +87,14 @@ type App struct {
 	grpc         *ControlClient
 	logProcessor manmanpb.LogProcessorClient
 	userAuthOpt  grpc.DialOption
+
+	// deploymentStopPollInterval/deploymentStopTimeout override
+	// handleDeploymentAction's restart stop-then-start poll (#1627). Zero
+	// value means "use the production defaults" -- see
+	// handlers_deployment_actions.go's deploymentStopPoll -- so only tests
+	// that need a fast timeout set these.
+	deploymentStopPollInterval time.Duration
+	deploymentStopTimeout      time.Duration
 }
 
 // NewApp creates a new application instance
