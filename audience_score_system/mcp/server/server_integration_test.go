@@ -326,6 +326,36 @@ func TestMCP_EndToEnd_AuthAndChannelScoping(t *testing.T) {
 			assert.Equal(t, before+1, atomic.LoadInt32(&calls))
 		}
 	})
+
+	// This is the migration's key parity/regression case (FR13/NFR3): a
+	// credential minted then revoked via mcpauth.CredentialStore must be
+	// rejected at the real HTTP/MCP layer exactly like an unauthenticated
+	// call, not just at the mcpauth unit level (libs/go/mcpauth's own
+	// integration suite proves Verify-after-Revoke in isolation; this
+	// proves the whole auth stack this task rewired -- transport.go's
+	// mcpauth.RequireBearerToken plus PersonMiddleware -- still rejects it
+	// end to end).
+	t.Run("revoked credential is rejected at the HTTP layer, handler not invoked", func(t *testing.T) {
+		creds := newTestCredentialStore(t, pg.Pool)
+		rawToken, minted, err := creds.Mint(ctx, creator.ID.String())
+		require.NoError(t, err)
+
+		// A live token still works before revocation.
+		cs, err := ts.connect(t, rawToken)
+		require.NoError(t, err)
+		before := atomic.LoadInt32(&calls)
+		res := callTool(cs)
+		require.False(t, res.IsError, "unexpected error: %s", textOf(res))
+		assert.Equal(t, before+1, atomic.LoadInt32(&calls))
+		_ = cs.Close()
+
+		require.NoError(t, creds.Revoke(ctx, minted.ID, creator.ID.String()))
+
+		before = atomic.LoadInt32(&calls)
+		_, err = ts.connect(t, rawToken)
+		require.Error(t, err, "a revoked bearer token must be rejected before the MCP session even opens")
+		assert.Equal(t, before, atomic.LoadInt32(&calls), "the handler must not run for a revoked token")
+	})
 }
 
 // textOf concatenates every TextContent block in res.Content -- the error
