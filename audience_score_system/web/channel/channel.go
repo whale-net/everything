@@ -209,10 +209,12 @@ func (h *Handler) HandleReconnect(w http.ResponseWriter, r *http.Request) {
 
 	ok, err := store.CanReconnect(r.Context(), h.roles, channelID, person.ID)
 	if err != nil {
+		logger.Error("reconnect authorization check failed", "channel_id", channelID, "person_id", person.ID, "error", err)
 		http.Error(w, "authorization check failed", http.StatusInternalServerError)
 		return
 	}
 	if !ok {
+		logger.Warn("reconnect rejected: caller is not the channel's creator", "channel_id", channelID, "person_id", person.ID)
 		http.Error(w, "forbidden: only a Channel's creator may reconnect it", http.StatusForbidden)
 		return
 	}
@@ -260,6 +262,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	valid, err := h.sessions.VerifyOAuthState(r, state)
 	if err != nil || !valid {
+		logger.Warn("channel-connect callback rejected: invalid or expired oauth state", "person_id", person.ID, "error", err)
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
 		return
 	}
@@ -267,6 +270,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	tok, err := h.oauth2Config.Exchange(ctx, code)
 	if err != nil {
+		logger.Error("channel-connect callback failed: token exchange", "person_id", person.ID, "error", err)
 		http.Error(w, "failed to exchange token", http.StatusInternalServerError)
 		return
 	}
@@ -276,6 +280,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		// refresh past the first access-token expiry, so fail loudly here
 		// rather than silently persisting a credential doomed to
 		// needs-reauth the moment it expires.
+		logger.Warn("channel-connect callback rejected: no refresh token in Google's response", "person_id", person.ID)
 		http.Error(w, "no refresh token returned by Google -- retry the connect flow", http.StatusInternalServerError)
 		return
 	}
@@ -294,6 +299,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	existing, err := h.channels.GetByYouTubeChannelID(ctx, youtubeChannelID)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
+			logger.Error("channel-connect callback failed: look up channel", "youtube_channel_id", youtubeChannelID, "error", err)
 			http.Error(w, "failed to look up channel", http.StatusInternalServerError)
 			return
 		}
@@ -303,6 +309,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		// Create) before saving the credential.
 		ch, err := h.channels.Create(ctx, youtubeChannelID, title, person.ID)
 		if err != nil {
+			logger.Error("channel-connect callback failed: create channel", "youtube_channel_id", youtubeChannelID, "person_id", person.ID, "error", err)
 			http.Error(w, "failed to create channel", http.StatusInternalServerError)
 			return
 		}
@@ -312,10 +319,12 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			// Channel row claiming connection_state=connected with no
 			// live credential behind it: flip it to needs_reauth so the
 			// UI's reconnect affordance can recover it (FR4).
+			logger.Error("channel-connect callback failed: save credential, marking needs-reauth", "channel_id", ch.ID, "person_id", person.ID, "error", err)
 			_ = h.tokens.MarkNeedsReauth(ctx, ch.ID, "initial credential save failed")
 			http.Error(w, "failed to save credential", http.StatusInternalServerError)
 			return
 		}
+		logger.Info("channel connected", "channel_id", ch.ID, "youtube_channel_id", youtubeChannelID, "person_id", person.ID)
 
 		// Best-effort, non-fatal (FR14/NFR4, issue #1614): the Channel is
 		// already correctly connected in Postgres at this point, so a
@@ -338,22 +347,27 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// parameter can never bypass the creator-only gate.
 	ok, err := store.CanReconnect(ctx, h.roles, existing.ID, person.ID)
 	if err != nil {
+		logger.Error("reconnect authorization check failed", "channel_id", existing.ID, "person_id", person.ID, "error", err)
 		http.Error(w, "authorization check failed", http.StatusInternalServerError)
 		return
 	}
 	if !ok {
+		logger.Warn("reconnect rejected: caller is not the channel's creator", "channel_id", existing.ID, "person_id", person.ID)
 		http.Error(w, "forbidden: only a Channel's creator may reconnect it", http.StatusForbidden)
 		return
 	}
 
 	if err := h.tokens.Save(ctx, existing.ID, person.ID, tok, Scopes); err != nil {
+		logger.Error("channel-reconnect callback failed: save credential", "channel_id", existing.ID, "person_id", person.ID, "error", err)
 		http.Error(w, "failed to save credential", http.StatusInternalServerError)
 		return
 	}
 	if err := h.channels.SetConnectionState(ctx, existing.ID, store.ConnectionStateConnected); err != nil {
+		logger.Error("channel-reconnect callback failed: update connection state", "channel_id", existing.ID, "error", err)
 		http.Error(w, "failed to update connection state", http.StatusInternalServerError)
 		return
 	}
+	logger.Info("channel reconnected", "channel_id", existing.ID, "person_id", person.ID)
 
 	// Best-effort, non-fatal -- see the fresh-connect branch above for the
 	// full rationale (FR14/NFR4, issue #1614).

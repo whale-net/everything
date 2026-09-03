@@ -152,8 +152,10 @@ func (m *scheduleManager) EnsureSchedule(ctx context.Context, channelID uuid.UUI
 		if errors.Is(err, temporal.ErrScheduleAlreadyRunning) {
 			return nil
 		}
+		logger.WarnContext(ctx, "failed to ensure channel sync schedule", "channel_id", channelID, "error", err.Error())
 		return fmt.Errorf("ensure schedule for channel %s: %w", channelID, err)
 	}
+	logger.InfoContext(ctx, "created channel sync schedule", "channel_id", channelID, "interval", m.Interval)
 	return nil
 }
 
@@ -164,6 +166,7 @@ func (m *scheduleManager) RemoveSchedule(ctx context.Context, channelID uuid.UUI
 	if err := m.Schedules.GetHandle(ctx, ScheduleID(channelID)).Delete(ctx); err != nil {
 		return fmt.Errorf("remove schedule for channel %s: %w", channelID, err)
 	}
+	logger.InfoContext(ctx, "removed channel sync schedule", "channel_id", channelID)
 	return nil
 }
 
@@ -184,6 +187,7 @@ func (m *scheduleManager) Reconcile(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
+	logger.InfoContext(ctx, "schedule reconcile complete", "channels_checked", len(channels), "errors", len(errs))
 	if len(errs) > 0 {
 		return fmt.Errorf("reconcile: %w", errors.Join(errs...))
 	}
@@ -199,5 +203,6 @@ func (m *scheduleManager) TriggerNow(ctx context.Context, channelID uuid.UUID) e
 	if err := m.Schedules.GetHandle(ctx, ScheduleID(channelID)).Trigger(ctx, client.ScheduleTriggerOptions{}); err != nil {
 		return fmt.Errorf("trigger sync for channel %s: %w", channelID, err)
 	}
+	logger.InfoContext(ctx, "triggered out-of-band channel sync", "channel_id", channelID)
 	return nil
 }

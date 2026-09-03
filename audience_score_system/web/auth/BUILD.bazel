@@ -18,6 +18,7 @@ go_library(
     ],
     deps = [
         "//audience_score_system/store",
+        "//libs/go/logging",
         "//libs/go/mcpauth",
         "@com_github_coreos_go_oidc_v3//oidc",
         "@com_github_google_uuid//:uuid",
