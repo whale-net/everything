@@ -1,15 +1,25 @@
-# mcpauth — MCP credential lifecycle store
+# mcpauth — MCP OAuth2 authorization-server front end + credential lifecycle store
 
-A Go library providing the credential lifecycle (mint / verify / revoke /
-list) for MCP (Model Context Protocol) server bearer authentication.
+A Go library providing an OAuth2 authorization-server front end for MCP
+(Model Context Protocol) servers — RFC 9728/8414 discovery metadata, RFC
+7591 dynamic client registration (this doc), and (via #1642)
+authorization-code + PKCE `/authorize`/`/token` endpoints — together with
+the credential lifecycle (mint / verify / revoke / list) for the opaque
+bearer credential that front end issues.
 
 ## What this is (and isn't)
 
-OAuth2 (or any other identity-provider flow) is the *obtain* step only. The
-credential this library manages is what comes after: a long-lived,
-database-backed, individually revocable bearer token an MCP client presents
-on every call. See `mcpauth.go`'s package doc for the full "what this is
-not" boundary (no IdP integration, no access/refresh-token lifecycle).
+mcpauth runs its own OAuth2 authorization server; it does not, however,
+verify a caller's identity against an *external* identity provider
+(Keycloak, Google OIDC, or any other obtain-step IdP) itself. By the time
+its `/authorize` endpoint runs, the consuming domain's own sign-in flow has
+already established who the caller is (a session cookie, a trusted proxy
+header, ...); `CallerResolver` (see `resolver.go`) just reads that
+already-established identity back off the request. The credential this
+library then mints is a long-lived, database-backed, individually
+revocable bearer token an MCP client presents on every subsequent call.
+See `mcpauth.go`'s package doc for the full "what this is not" boundary
+(no external-IdP verification, no access/refresh-token lifecycle).
 
 This package has **zero domain-specific types or imports** (NFR2) —
 `Identity` is a plain `string`. The worked precedent this behavior was
@@ -111,6 +121,48 @@ into generated SQL — they cannot be bound query parameters — so
 (`^[a-z_][a-z0-9_]*$`) before building any query, rejecting anything else
 with a clear construction-time error. This is a hard requirement (SQL
 injection surface), not a style nicety.
+
+## OAuth2 client registry — memory vs. Postgres, and its schema contract
+
+`Provider`'s RFC 7591 dynamic client registration (`POST /register`, see
+`clients.go`) is backed by a pluggable `ClientRegistry`, exactly parallel
+to `CredentialStore` above:
+
+- `NewMemoryClientRegistry()` — an in-process map. This is
+  `ProviderConfig.Clients`'s **default** because it is enough for a
+  single-replica server.
+- `NewPostgresClientRegistry(ctx, ClientRegistryConfig)` — backed by
+  Postgres, safe across replicas.
+
+**A multi-replica deployment MUST use `NewPostgresClientRegistry`, not the
+memory default.** Each process's memory registry is its own isolated map:
+a client that dynamically registers against replica A is completely
+unknown to replica B, so the next request that lands on B (a load
+balancer gives no affinity guarantee) fails as if the client had never
+registered at all. There is no way to make the memory registry safe for
+more than one replica — this is not a tuning knob, it is a hard
+single-replica constraint.
+
+### Schema contract
+
+Exactly like `mcp_credential` above, `mcpauth` does **not** own, embed, or
+run this migration (NFR5) — the consuming domain's own migration tooling
+must create this table before the first call to
+`NewPostgresClientRegistry`, in the same domain-owned-migration style as
+`mcp_credential`:
+
+```sql
+CREATE TABLE mcp_oauth_client (
+    client_id  TEXT        PRIMARY KEY,
+    metadata   JSONB       NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+`ClientRegistryConfig.TableName` defaults to `mcp_oauth_client`; like
+`StoreConfig.TableName`, it names an **unqualified** table so the
+boot-time preflight probe resolves through the same `search_path` the
+runtime uses.
 
 ## Usage
 

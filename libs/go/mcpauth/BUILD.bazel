@@ -3,8 +3,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "mcpauth",
     srcs = [
+        "clients.go",
         "credential.go",
         "mcpauth.go",
+        "metadata.go",
+        "provider.go",
         "resolver.go",
         "verify.go",
     ],
@@ -15,6 +18,7 @@ go_library(
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//oauthex",
     ],
 )
 
