@@ -10,6 +10,7 @@ go_library(
     name = "tools",
     srcs = [
         "browse.go",
+        "list_channels.go",
         "matches.go",
         "research.go",
         "schedule_draft.go",
@@ -335,6 +336,49 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/migrate",
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# list_channels (list_channels.go, issue #1631): the caller's own
+# Channel-access discovery -- every Channel they hold a live role on, with
+# that Channel's title/connection_state and the caller's role(s). No
+# Channel-scoping to prove (list_channels takes no channel_id), so this
+# covers a caller with one role, a caller with no Channels (empty list,
+# not an error), a caller with multiple Channels, and two different
+# callers on the same Channel seeing their own distinct role -- all
+# against the real embedded schema and a real HTTP-hosted MCP server,
+# mirroring schedule_read_integration_test.go's pattern. Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:list_channels_integration_test --test_output=all
+go_test(
+    # keep
+    name = "list_channels_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["list_channels_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@com_github_stretchr_testify//assert",
