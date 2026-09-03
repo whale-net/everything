@@ -37,7 +37,9 @@ go_library(
         "@com_github_a_h_templ//:templ",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
         "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//status",
     ],
 )
 
@@ -52,6 +54,7 @@ go_test(
     size = "small",
     srcs = [
         "deployment_actions_acceptance_test.go",
+        "handlers_deployment_actions_realtransport_test.go",
         "handlers_deployment_actions_test.go",
         "handlers_deployment_row_refresh_test.go",
         "handlers_home_test.go",
@@ -63,6 +66,7 @@ go_test(
     ],
     embed = [":ui_lib"],
     deps = [
+        "//libs/go/grpcauth",
         "//libs/go/htmxauth",
         "//libs/go/htmxui",
         "//manmanv2/protos:manmanpb",
