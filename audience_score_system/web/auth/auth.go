@@ -27,7 +27,10 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/logging"
 )
+
+var logger = logging.Get("audience_score_system/web/auth")
 
 // googleIssuer is Google's fixed OIDC discovery issuer. Unlike htmxauth's
 // Config.OIDCIssuer (configurable, since it targets any Keycloak realm),
@@ -179,6 +182,7 @@ func (a *Authenticator) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	valid, err := a.sessions.VerifyOAuthState(r, state)
 	if err != nil || !valid {
+		logger.WarnContext(ctx, "sign-in callback rejected: invalid or expired oauth state", "error", err)
 		http.Error(w, "invalid state parameter", http.StatusBadRequest)
 		return
 	}
@@ -186,42 +190,51 @@ func (a *Authenticator) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	oauth2Token, err := a.oauth2Config.Exchange(ctx, code)
 	if err != nil {
+		logger.ErrorContext(ctx, "sign-in callback failed: token exchange", "error", err)
 		http.Error(w, "failed to exchange token", http.StatusInternalServerError)
 		return
 	}
 
 	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
 	if !ok {
+		logger.ErrorContext(ctx, "sign-in callback failed: no id_token in token response")
 		http.Error(w, "no id_token in token response", http.StatusInternalServerError)
 		return
 	}
 
 	idToken, err := a.verifier.Verify(ctx, rawIDToken)
 	if err != nil {
+		logger.WarnContext(ctx, "sign-in callback rejected: id token verification failed", "error", err)
 		http.Error(w, "failed to verify id token", http.StatusInternalServerError)
 		return
 	}
 
 	var claims googleIDTokenClaims
 	if err := idToken.Claims(&claims); err != nil {
+		logger.ErrorContext(ctx, "sign-in callback failed: parse id token claims", "error", err)
 		http.Error(w, "failed to parse id token claims", http.StatusInternalServerError)
 		return
 	}
 	if claims.Sub == "" {
+		logger.ErrorContext(ctx, "sign-in callback failed: id token missing sub claim")
 		http.Error(w, "id token missing sub claim", http.StatusInternalServerError)
 		return
 	}
 
-	person, _, err := a.persons.UpsertByGoogleSubject(ctx, claims.Sub, claims.Email, claims.Name)
+	person, created, err := a.persons.UpsertByGoogleSubject(ctx, claims.Sub, claims.Email, claims.Name)
 	if err != nil {
+		logger.ErrorContext(ctx, "sign-in callback failed: resolve person", "error", err)
 		http.Error(w, "failed to resolve person", http.StatusInternalServerError)
 		return
 	}
 
 	if err := a.sessions.Establish(ctx, w, person.ID.String(), oauth2Token.RefreshToken); err != nil {
+		logger.ErrorContext(ctx, "sign-in callback failed: establish session", "person_id", person.ID, "error", err)
 		http.Error(w, "failed to establish session", http.StatusInternalServerError)
 		return
 	}
+
+	logger.InfoContext(ctx, "person signed in", "person_id", person.ID, "created", created)
 
 	nextURL := a.sessions.GetNextURL(w, r)
 	http.Redirect(w, r, nextURL, http.StatusSeeOther)

@@ -34,7 +34,10 @@ import (
 	"golang.org/x/oauth2/google"
 
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/logging"
 )
+
+var logger = logging.Get("audience_score_system/tokens")
 
 // refreshSkew is how far ahead of access_token_expires_at Store.token
 // proactively refreshes -- mirrors htmxauth.DBSessionManager.GetAccessToken's
@@ -203,6 +206,7 @@ func (s tokenStore) token(ctx context.Context, channelID uuid.UUID) (*oauth2.Tok
 		// Transient network/5xx failure -- do NOT call MarkNeedsReauth
 		// (FR4): connection_state stays "connected" and the caller should
 		// retry later.
+		logger.WarnContext(ctx, "channel token refresh failed (transient, will retry)", "channel_id", channelID, "error", err.Error())
 		return nil, fmt.Errorf("refresh access token (retryable): %w", err)
 	}
 
@@ -239,6 +243,7 @@ func (s tokenStore) token(ctx context.Context, channelID uuid.UUID) (*oauth2.Tok
 		return nil, fmt.Errorf("commit refreshed credential: %w", err)
 	}
 
+	logger.InfoContext(ctx, "refreshed channel access token", "channel_id", channelID, "new_expiry", newExpiry)
 	return &oauth2.Token{AccessToken: newTok.AccessToken, Expiry: newExpiry, TokenType: "Bearer"}, nil
 }
 
@@ -305,6 +310,7 @@ func (s tokenStore) Save(ctx context.Context, channelID, byPersonID uuid.UUID, t
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
+	logger.InfoContext(ctx, "saved channel credential", "channel_id", channelID, "by_person_id", byPersonID, "scopes", scopes)
 	return nil
 }
 
@@ -317,6 +323,7 @@ func (s tokenStore) MarkNeedsReauth(ctx context.Context, channelID uuid.UUID, re
 	if err := s.channels.SetConnectionState(ctx, channelID, store.ConnectionStateNeedsReauth); err != nil {
 		return fmt.Errorf("mark needs-reauth (reason=%s): %w", reason, err)
 	}
+	logger.WarnContext(ctx, "channel marked needs-reauth", "channel_id", channelID, "reason", reason)
 	return nil
 }
 

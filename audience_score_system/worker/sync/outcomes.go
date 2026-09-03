@@ -210,8 +210,10 @@ func (a *Activities) syncMatches(ctx context.Context, channelID uuid.UUID, publi
 
 		if state == store.MatchStateAuto {
 			matched++
+			logger.Info("video auto-matched to schedule entry", "channel_id", channelID.String(), "synced_video_id", v.ID, "schedule_entry_id", scheduleEntryID, "confidence", confidence)
 		} else {
 			pending++
+			logger.Warn("video queued for pending match review", "channel_id", channelID.String(), "synced_video_id", v.ID, "candidate_schedule_entry_id", scheduleEntryID, "confidence", confidence)
 		}
 	}
 	return matched, pending, nil
