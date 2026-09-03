@@ -22,8 +22,8 @@ go_library(
     deps = [
         "//audience_score_system/store",
         "//libs/go/logging",
+        "//libs/go/mcpauth",
         "@com_github_google_uuid//:uuid",
-        "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel//codes",

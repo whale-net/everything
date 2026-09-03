@@ -15,6 +15,7 @@ go_library(
         "//audience_score_system/store",
         "//libs/go/db",
         "//libs/go/logging",
+        "//libs/go/mcpauth",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
     ],
 )

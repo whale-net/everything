@@ -21,6 +21,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 )
 
 // config holds `mcp`'s configuration, loaded entirely from environment
@@ -94,6 +95,20 @@ func run() error {
 
 	st := store.New(pool)
 
+	// mcpauth.NewCredentialStore preflights the mcp_credential table at
+	// boot -- a missing migration 006 fails `mcp` at startup instead of at
+	// first bearer-token verification (see ../ENV.md's mcp_credential
+	// entry).
+	creds, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	if err != nil {
+		return fmt.Errorf("mcpauth credential store: apply migration 006_mcpauth_credential before starting mcp: %w", err)
+	}
+
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterWhoami(reg)
@@ -104,7 +119,7 @@ func run() error {
 	tools.RegisterMatches(reg, st)
 	tools.RegisterBrowse(reg, st)
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, creds)
 
 	httpServer := &http.Server{
 		Addr:         cfg.MCPAddr,

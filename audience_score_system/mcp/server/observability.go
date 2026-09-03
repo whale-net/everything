@@ -10,9 +10,11 @@
 // product handler -- through it, so a tool author gets tracing/logging the
 // same way they already get Channel-scope authorization and idempotency,
 // by going through the registry rather than by remembering to add it
-// themselves. auth.go's own rejections (PersonMiddleware, TokenVerifier),
-// which happen before a call ever reaches the registry, log directly
-// against the package-level logger below.
+// themselves. auth.go's own rejections (PersonMiddleware) -- and, since
+// #1643, mcpauth's TokenVerifier at the HTTP layer, which logs nothing
+// and returns a single fixed error (see libs/go/mcpauth's NFR1) -- happen
+// before a call ever reaches the registry; PersonMiddleware's rejections
+// log directly against the package-level logger below.
 package server
 
 import (
