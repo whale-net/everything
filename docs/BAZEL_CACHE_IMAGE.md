@@ -86,6 +86,22 @@ hermetic Python toolchain is available (`/usr/bin/env: 'python3': No such
 file or directory`) — the Dockerfile now installs `python3`,
 `build-essential`, and `unzip` before running Bazel.
 
+### Real `//...` run against `main` (first attempt failed, second passed the same gap)
+
+Dispatching `devcontainer-bazel-cache-image.yml` with the default `WARM_TARGETS=//...`
+against `main` failed at `//tools/lib32:lib32_extracted`, a genrule that
+shells out to a system `zstd` binary to unpack a `.deb` — present on
+GitHub's `ubuntu-latest` runner (where `ci.yml`'s `test` job already builds
+`//...` successfully) but not in this deliberately-minimal devcontainer
+base image. Fixed by installing `zstd` plus a broader set of common
+build-time tools GitHub's runner ships and this base image doesn't
+(`git`, `ca-certificates`, `xz-utils`, `pkg-config`, `cmake`, `ninja-build`,
+`rsync`, `zip`) — verified locally against `//tools/lib32/...` before
+re-dispatching. This section will be updated with the actual `//...`
+outcome once that re-run completes; a monorepo this size touching
+ESP32/Pigweed toolchains may well surface further host-tool gaps the same
+way, which is exactly what this section is for.
+
 ## Trying it
 
 **Build the image build args without pushing anything** (validates the
