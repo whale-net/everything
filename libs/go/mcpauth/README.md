@@ -1,0 +1,202 @@
+# mcpauth — MCP credential lifecycle store
+
+A Go library providing the credential lifecycle (mint / verify / revoke /
+list) for MCP (Model Context Protocol) server bearer authentication.
+
+## What this is (and isn't)
+
+OAuth2 (or any other identity-provider flow) is the *obtain* step only. The
+credential this library manages is what comes after: a long-lived,
+database-backed, individually revocable bearer token an MCP client presents
+on every call. See `mcpauth.go`'s package doc for the full "what this is
+not" boundary (no IdP integration, no access/refresh-token lifecycle).
+
+This package has **zero domain-specific types or imports** (NFR2) —
+`Identity` is a plain `string`. The worked precedent this behavior was
+lifted from is `audience_score_system/store/credential.go`
+(`CredentialStore` over `mcp_credential`, migration 005); read that file for
+the exact behavioral bar this package reproduces.
+
+## Schema ownership — the consuming domain owns the migration
+
+This library does **not** own, embed, or run any migration. Exactly like
+`libs/go/htmxauth`'s `DBSessionManager` (see its `README.md` "DB-Backed
+Sessions" section and `db_session.go`'s `probeSessionTable`), it:
+
+- names an **unqualified** table (`StoreConfig.TableName`, default
+  `mcp_credential`) so every query — including the boot-time preflight
+  probe — resolves through the same `search_path` the runtime uses;
+- probes that table at construction time and fails loudly, naming the
+  table, if it is missing;
+- expects the consuming domain's own migration tooling to have created the
+  table before the first call to `NewCredentialStore`.
+
+### Schema contract
+
+A consuming migration must create exactly this shape. The identity column's
+name and type are configurable (`StoreConfig.IdentityColumn`,
+`StoreConfig.IdentityCast`); everything else must match.
+
+```sql
+-- Generic consumer (identity is an opaque string, e.g. a service-account name):
+CREATE TABLE mcp_credential (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    identity     TEXT        NOT NULL,
+    token_hash   TEXT        NOT NULL UNIQUE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ,
+    revoked_at   TIMESTAMPTZ
+);
+CREATE INDEX mcp_credential_token_hash ON mcp_credential(token_hash) WHERE revoked_at IS NULL;
+CREATE INDEX mcp_credential_identity ON mcp_credential(identity);
+```
+
+```sql
+-- ASS-shaped consumer (identity is a Person UUID foreign key):
+CREATE TABLE mcp_credential (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    person_id    UUID        NOT NULL REFERENCES person(id),
+    token_hash   TEXT        NOT NULL UNIQUE,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ,
+    revoked_at   TIMESTAMPTZ
+);
+CREATE INDEX mcp_credential_token_hash ON mcp_credential(token_hash) WHERE revoked_at IS NULL;
+CREATE INDEX mcp_credential_person_id ON mcp_credential(person_id);
+```
+
+The ASS consumer sets `StoreConfig{TableName: "mcp_credential", IdentityColumn: "person_id"}`.
+
+**Not SCD2.** The lifecycle here is mint-then-revoke — a one-way
+`revoked_at` soft close, not a dimension whose value changes over time and
+needs history. Do **not** add `valid_from`/`valid_to` to this table; if a
+future reviewer suggests it per the repo's SCD2 convention (see
+`AGENTS.md`), point them at this paragraph — SCD2 answers "what was this
+row's value at time T", which is not a question this table needs to answer
+(a credential has exactly one terminal state transition: live → revoked).
+
+## Identity column and casting
+
+`Verify`/`Revoke`/`List` take a plain Go `string` identity, but a consuming
+domain's identity column may be a non-text PostgreSQL type (ASS's
+`person_id` is `UUID`). `StoreConfig.IdentityCast` lets that domain tell
+`mcpauth` to emit `<IdentityColumn> = $N::<IdentityCast>` instead of
+`<IdentityColumn> = $N` in generated SQL.
+
+**Resolved: is the cast actually required?** No — verified directly against
+a real Postgres (`postgres:16-alpine`, via a throwaway pgxpool spike
+mirroring `//libs/go/dbtest`'s container setup) that pgx v5's default
+(extended/prepared-statement) query protocol:
+
+- encodes a Go `string` parameter against a `uuid` column with **no**
+  explicit cast, for `INSERT`, `SELECT ... WHERE`, and
+  `UPDATE ... RETURNING`;
+- scans a `uuid` column into a Go `string` destination with **no** explicit
+  cast.
+
+All four cases returned correct results with no error. `IdentityCast`
+therefore stays in `StoreConfig` as an **optional** escape hatch — for
+identity columns whose type pgx cannot infer from query context alone (a
+custom domain/enum type, for example), and as cheap insurance against a
+future pgx or Postgres version silently regressing the implicit-cast
+behavior — rather than as a requirement every UUID-keyed consumer must set.
+ASS's task in this plan may still set it explicitly for clarity; that is a
+style choice, not a functional requirement.
+
+## Identifier validation
+
+`TableName`, `IdentityColumn`, and `IdentityCast` are interpolated directly
+into generated SQL — they cannot be bound query parameters — so
+`NewCredentialStore` validates each one against a strict identifier regex
+(`^[a-z_][a-z0-9_]*$`) before building any query, rejecting anything else
+with a clear construction-time error. This is a hard requirement (SQL
+injection surface), not a style nicety.
+
+## Usage
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    "github.com/whale-net/everything/libs/go/mcpauth"
+    "github.com/jackc/pgx/v5/pgxpool"
+)
+
+func main() {
+    ctx := context.Background()
+    pool, err := pgxpool.New(ctx, "" /* reads PG_DATABASE_URL via //libs/go/db, or pass explicitly */)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Generic consumer.
+    store, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{Pool: pool})
+    if err != nil {
+        log.Fatalf("mcpauth: %v — apply your domain's mcp_credential migration first", err)
+    }
+
+    rawToken, cred, err := store.Mint(ctx, "my-service-account")
+    if err != nil {
+        log.Fatal(err)
+    }
+    // Show rawToken to the operator now — it is never recoverable again.
+    log.Printf("minted credential %s for %s", cred.ID, cred.Identity)
+
+    identity, cred, err := store.Verify(ctx, rawToken)
+    if err != nil {
+        log.Fatal("invalid or revoked credential")
+    }
+    log.Printf("verified as %s (last used %v)", identity, cred.LastUsedAt)
+
+    if err := store.Revoke(ctx, cred.ID, identity); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+ASS-shaped consumer (Person UUID identity):
+
+```go
+store, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+    Pool:           pool,
+    IdentityColumn: "person_id",
+    IdentityCast:   "uuid",
+})
+```
+
+## Setup
+
+1. Apply your domain's own migration creating the schema above (see
+   "Schema contract"). This library does not ship or run migrations
+   (NFR5) — see `tools/app_registry/migrate/schema/migrations/012_ui_sessions.up.sql`
+   and `manmanv2/migrate/migrations/032_ui_sessions.up.sql` for how
+   `htmxauth`'s adopting domains do this for `ui_sessions`; mirror that
+   pattern for `mcp_credential`.
+2. Construct a `*pgxpool.Pool` (see `//libs/go/db`).
+3. Call `mcpauth.NewCredentialStore` — it preflights the configured table
+   and returns an error naming it if the migration has not been applied.
+
+## Testing
+
+Pure-Go unit tests (`credential_test.go`) cover token generation, hashing
+parity with ASS's current `hashToken`, `StoreConfig` defaults, and
+identifier validation — no database required, run via
+`bazel test //libs/go/mcpauth/...`.
+
+Integration tests against a real Postgres
+(`credential_integration_test.go`, `//go:build integration`, using
+`//libs/go/dbtest`) cover both a generic `identity TEXT` table and an
+ASS-shaped `person_id UUID` table, proving the full mint/verify/revoke/list
+lifecycle and the preflight failure path against real SQL. Run explicitly
+(requires a working Docker daemon):
+
+```sh
+bazel test //libs/go/mcpauth:mcpauth_integration_test --test_output=all
+```
+
+## License
+
+Part of the Everything monorepo.

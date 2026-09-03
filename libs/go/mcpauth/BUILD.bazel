@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "mcpauth",
+    srcs = [
+        "credential.go",
+        "mcpauth.go",
+    ],
+    importpath = "github.com/whale-net/everything/libs/go/mcpauth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
