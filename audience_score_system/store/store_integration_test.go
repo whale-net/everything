@@ -662,8 +662,9 @@ func ptrInt64(v int64) *int64        { return &v }
 // TestMigrations_UpDownUp_LeavesNoOrphanObjects exercises schema.Migrations'
 // full up/down/up cycle across every embedded migration, not just one in
 // isolation -- it was written against 001 alone (#1568), extended for 002
-// (#1569), and extended again for 003 (web_session, #1570), so the version
-// assertion and table list below cover all three rather than any single one.
+// (#1569), 003 (web_session, #1570), and 004 (channel_credential, #1571),
+// so the version assertion and table list below cover all four rather than
+// any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -680,7 +681,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(3), version, "highest migration in schema.Migrations is 003_web_session")
+	assert.Equal(t, uint(4), version, "highest migration in schema.Migrations is 004_channel_credentials")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -688,6 +689,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"pacing_policy", "schedule_entry", "synced_video", "video_metrics",
 		"video_schedule_match", "mcp_idempotency",
 		"web_session",
+		"channel_credential",
 	} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,

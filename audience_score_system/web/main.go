@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,10 +17,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/tokens"
 	"github.com/whale-net/everything/audience_score_system/web/auth"
+	"github.com/whale-net/everything/audience_score_system/web/channel"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 	"github.com/whale-net/everything/audience_score_system/web/pages"
 	"github.com/whale-net/everything/libs/go/db"
@@ -70,8 +75,9 @@ func getEnv(key, defaultValue string) string {
 
 // app holds the wired-up application state.
 type app struct {
-	store *store.Store
-	auth  *auth.Authenticator
+	store    *store.Store
+	auth     *auth.Authenticator
+	channels *channel.Handler
 }
 
 func main() {
@@ -136,7 +142,21 @@ func run() error {
 		return fmt.Errorf("failed to initialize Google OAuth2 authenticator: %w", err)
 	}
 
-	application := &app{store: st, auth: authenticator}
+	// tokenStore is the Channel-connect grant's (C2, #1571) credential
+	// store -- a SEPARATE token store from `sessions` above (C1's Google
+	// sign-in session), sharing only the ASS_TOKEN_ENCRYPTION_KEY-derived
+	// encKey. See ../ARCHITECTURE.md "OAuth grants".
+	tokenStore := tokens.NewStore(pool, st.Channels(), encKey, tokens.Config{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleClientSecret,
+	})
+	channelHandler := channel.NewHandler(channel.Config{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleClientSecret,
+		RedirectURL:  cfg.OAuthRedirectBase + "/oauth/youtube/callback",
+	}, st.Channels(), st.Roles(), tokenStore, sessions)
+
+	application := &app{store: st, auth: authenticator, channels: channelHandler}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -182,6 +202,18 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// Protected: the signed-in landing page listing the Channels the
 	// Person has a live channel_person row for (via store.RoleStore).
 	mux.HandleFunc("/", a.auth.RequireSignedIn(a.handleHome))
+
+	// Protected: Channel-connect OAuth grant (C2, #1571) -- a SEPARATE
+	// consent from /login's Google sign-in above. All three sit behind
+	// RequireSignedIn per that issue's Implementation section.
+	mux.HandleFunc("GET /channels/connect", a.auth.RequireSignedIn(a.channels.HandleConnect))
+	mux.HandleFunc("GET /oauth/youtube/callback", a.auth.RequireSignedIn(a.channels.HandleCallback))
+	mux.HandleFunc("POST /channels/{id}/reconnect", a.auth.RequireSignedIn(a.channels.HandleReconnect))
+
+	// Protected: Channel detail -- shows connected/needs-reauth state, and
+	// (Creator only, via store.CanReconnect -- NFR5) the reconnect
+	// affordance (#1571's Implementation section).
+	mux.HandleFunc("GET /channels/{id}", a.auth.RequireSignedIn(a.handleChannelDetail))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +240,47 @@ func (a *app) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := renderTempl(w, r, "Home", pages.Home(data, channels)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// handleChannelDetail renders a Channel's connection state (connected /
+// needs re-authentication) and, for a Creator only (store.CanReconnect --
+// NFR5), the reconnect affordance (#1571's Implementation section).
+func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
+	person := auth.PersonFromContext(r.Context())
+	if person == nil {
+		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
+	}
+
+	channelID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "invalid channel id", http.StatusBadRequest)
+		return
+	}
+
+	ch, err := a.store.Channels().GetByID(r.Context(), channelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	canReconnect, err := store.CanReconnect(r.Context(), a.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := components.LayoutData{
+		Title: ch.Title,
+		User:  person,
+	}
+	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

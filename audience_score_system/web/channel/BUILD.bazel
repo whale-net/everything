@@ -1,0 +1,49 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# YouTube Channel-connect OAuth grant (C2: FR3, FR4, NFR1) -- see
+# channel.go's package doc comment for why this is a separate grant from
+# web/auth's Google sign-in (C1). Real consent URL construction, code
+# exchange, channels.list?mine=true resolution, FR4/NFR5's CanReconnect
+# gate, and the needs-reauth lifecycle wiring land here (Implementation
+# phase, issue #1571).
+go_library(
+    name = "channel",
+    srcs = ["channel.go"],
+    importpath = "github.com/whale-net/everything/audience_score_system/web/channel",
+    visibility = ["//audience_score_system/web:__subpackages__"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/tokens",
+        "//audience_score_system/web/auth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@org_golang_google_api//option",
+        "@org_golang_google_api//youtube/v3:youtube",
+        "@org_golang_x_oauth2//:oauth2",
+        "@org_golang_x_oauth2//google",
+    ],
+)
+
+# Pure-Go coverage of the consent URL (exact scope set/access_type=offline/
+# prompt=consent/bound state, NFR1), the CanReconnect gate on both
+# HandleReconnect and HandleCallback's reconnect branch (FR4, NFR5), the
+# fresh-connect vs. reconnect branch selection (FR3), and the
+# Create-then-Save compensation path (MarkNeedsReauth) -- no Docker, no
+# live Google/YouTube calls, runs as part of `bazel test //...` (issue
+# #1571's Testing phase).
+go_test(
+    name = "channel_test",
+    srcs = ["channel_test.go"],
+    embed = [":channel"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/tokens",
+        "//audience_score_system/web/auth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_oauth2//:oauth2",
+        "@org_golang_x_oauth2//google",
+    ],
+)

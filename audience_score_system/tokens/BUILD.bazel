@@ -1,0 +1,85 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# Per-Channel OAuth credential storage and refresh (C2, `channel_credential`
+# migration 004) -- see store.go's package doc comment. Real token
+# persistence, AES-256-GCM encryption at rest, SELECT ... FOR UPDATE
+# single-flight refresh, and the invalid_grant -> needs-reauth mapping land
+# here (Implementation phase, issue #1571).
+go_library(
+    name = "tokens",
+    srcs = ["store.go"],
+    importpath = "github.com/whale-net/everything/audience_score_system/tokens",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@org_golang_x_oauth2//:oauth2",
+        "@org_golang_x_oauth2//google",
+    ],
+)
+
+# Pure-Go coverage of isInvalidGrant's error classification and
+# encrypt/decrypt's round-trip + "no plaintext substring" guarantee -- no
+# Docker required, runs as part of `bazel test //...`. See
+# store_integration_test.go for the Postgres-backed coverage of Save/
+# TokenSource/MarkNeedsReauth themselves (issue #1571's Testing phase).
+go_test(
+    name = "tokens_test",
+    srcs = ["store_test.go"],
+    embed = [":tokens"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
+
+# Real Postgres integration test: Save/TokenSource round-trip, ciphertext
+# has no plaintext substring, reconnect close-and-open, the
+# invalid_grant -> needs-reauth and transient-error -> retryable mappings
+# against a real channel.connection_state row, MarkNeedsReauth's FR4
+# data-retention guarantee, and the SELECT ... FOR UPDATE single-flight
+# refresh under real concurrency -- all against the real embedded schema
+# through 004_channel_credentials (//audience_score_system/migrate/schema),
+# not a hand-copied one. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale behind each tag. `#
+# keep` tells a later `bazel run //:gazelle` not to touch or remove this
+# rule (mirrors web/auth:auth_integration_test's own `# keep`). store_test.go
+# is included in srcs (not just embedded via :tokens) because this file
+# reuses its testEncKey helper -- both files are package `tokens`.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/tokens:tokens_integration_test --test_output=all
+go_test(
+    # keep
+    name = "tokens_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "store_integration_test.go",
+        "store_test.go",
+    ],
+    embed = [":tokens"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
