@@ -22,7 +22,7 @@
 | `htmxsse` | Server-sent events over RabbitMQ for HTMX live updates with reconnect baseline suppression | [README](go/htmxsse/README.md) |
 | `htmxui` | Shared HTMX UI primitives/chrome/themes (`templ_library` BUILD shape — diverges from `htmxauth`/`htmxbase`'s plain `go_library`) | [README](go/htmxui/README.md) |
 | `logging` | Go structured logging | [README](go/logging/README.md) |
-| `mcpauth` | OAuth2 (authorization-code + PKCE) caller authentication for MCP servers: mints long-lived, DB-backed, revocable bearer credentials against a pluggable authenticated-caller resolver; schema is applied by the consuming domain's own migration | [README](go/mcpauth/README.md) |
+| `mcpauth` | DB-backed credential lifecycle (mint/verify/revoke/list) for MCP server bearer authentication: long-lived, individually revocable, hashed-at-rest tokens issued after the consuming domain's own OAuth2/OIDC "obtain" step; schema is applied by the consuming domain's own migration | [README](go/mcpauth/README.md) |
 | `migrate` | Postgres schema migration CLI/library (history tracking, rollback detection) | [README](go/migrate/README.md) |
 | `rmq` | RabbitMQ connection, publishing, and consumption with automatic channel recovery | [README](go/rmq/README.md) |
 | `temporal` | Temporal SDK client/worker bootstrap, env config, logging bridge | [README](go/temporal/README.md) |
