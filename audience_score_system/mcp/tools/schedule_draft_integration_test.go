@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -49,6 +50,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -71,12 +73,29 @@ func newScheduleDraftTestDB(t *testing.T) *dbtest.Postgres {
 	return pg
 }
 
+// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// mcp_credential table (migration 006) -- the same construction main.go
+// does, mirrored here so tests mint/verify through the identical backing
+// this task migrated onto (FR13/NFR3 parity).
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+	t.Helper()
+	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+	return creds
+}
+
 // scheduleDraftFixture is the common setup every test below needs: a
 // Channel with a live Creator and Analyst, an unassociated Person with no
 // role on it, and an Idea to attach verdicts/drafts to, hosted behind a
 // real MCP server with RegisterVerdict + RegisterScheduleDraft wired.
 type scheduleDraftFixture struct {
 	st       *store.Store
+	creds    mcpauth.CredentialStore
 	ch       store.Channel
 	creator  store.Person
 	analyst  store.Person
@@ -91,6 +110,7 @@ func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
 
 	pg := newScheduleDraftTestDB(t)
 	st := store.New(pg.Pool)
+	creds := newTestCredentialStore(t, pg.Pool)
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-sd-creator-"+uuid.NewString(), "sd-creator@example.com", "Creator Person")
 	require.NoError(t, err)
@@ -111,12 +131,16 @@ func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
 	tools.RegisterVerdict(reg, st)
 	tools.RegisterScheduleDraft(reg, st)
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
 	return &scheduleDraftFixture{
-		st: st, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
+		st: st, creds: creds, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
 		idea: idea,
 		url:  ts.URL,
 	}
@@ -138,7 +162,7 @@ func (f *scheduleDraftFixture) connect(t *testing.T, personID uuid.UUID) *mcp.Cl
 	t.Helper()
 	ctx := context.Background()
 
-	token, _, err := f.st.Credentials().Mint(ctx, personID)
+	token, _, err := f.creds.Mint(ctx, personID.String())
 	require.NoError(t, err)
 
 	transport := &mcp.StreamableClientTransport{
@@ -778,4 +802,305 @@ func TestListScheduleEntries_EmptyChannel_ReturnsEmptyListNotError(t *testing.T)
 	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
 	out := sdDecode[tools.ListScheduleEntriesOutput](t, res)
 	assert.Empty(t, out.Entries)
+}
+
+// ── commit_schedule_draft: FR19 Creator-only approval (issue #1648) ─────
+
+// saveDraft is a convenience wrapper mirroring saveViableVerdict: as
+// personID (via cs), record a viable verdict on ideaID and immediately
+// save a draft for it, returning the rendered SaveScheduleDraftOutput.
+func (f *scheduleDraftFixture) saveDraft(t *testing.T, cs *mcp.ClientSession, ideaID uuid.UUID, proposedPublishAt time.Time) tools.SaveScheduleDraftOutput {
+	t.Helper()
+	verdict := f.saveViableVerdict(t, cs, ideaID, "viable, for commit_schedule_draft")
+	res := f.call(t, cs, "save_schedule_draft", tools.SaveScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		IdeaID:            ideaID.String(),
+		VerdictID:         verdict.ID,
+		ProposedPublishAt: proposedPublishAt.Format(time.RFC3339),
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	return sdDecode[tools.SaveScheduleDraftOutput](t, res)
+}
+
+func TestCommitScheduleDraft_Creator_TransitionsDraftToCommitted_ReadBackFromDB(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+
+	res := f.call(t, cs, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.ScheduleEntryOutput](t, res)
+	assert.Equal(t, "committed", out.State)
+	require.NotNil(t, out.ApprovedByPersonID)
+	assert.Equal(t, f.creator.ID.String(), *out.ApprovedByPersonID)
+	require.NotNil(t, out.ApprovedAt)
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateCommitted, entry.State, "the entry must actually be committed in the database, not just in the rendered response")
+	require.NotNil(t, entry.ApprovedByPersonID)
+	assert.Equal(t, f.creator.ID, *entry.ApprovedByPersonID)
+}
+
+func TestCommitScheduleDraft_AnalystDenied_OutsiderDenied_EntryStaysDraft(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	creatorCS := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, creatorCS, f.idea.ID, mondayAt(9))
+
+	analystCS := f.connect(t, f.analyst.ID)
+	analystRes := f.call(t, analystCS, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, analystRes.IsError, "an Analyst must not be able to commit a draft (FR19)")
+	assert.Contains(t, sdTextOf(analystRes), "permission denied")
+
+	outsiderCS := f.connect(t, f.outsider.ID)
+	outsiderRes := f.call(t, outsiderCS, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, outsiderRes.IsError, "an unassociated Person must not be able to commit a draft")
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateDraft, entry.State, "both denied calls must have left the entry untouched")
+}
+
+func TestCommitScheduleDraft_AlreadyCommitted_RejectedAsConflict(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+
+	first := f.call(t, cs, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, first.IsError, "unexpected error: %s", sdTextOf(first))
+
+	second := f.call(t, cs, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(), // deliberately a different key -- not a replay
+	})
+	assert.True(t, second.IsError, "committing an already-committed entry under a different key must be rejected, never a silent no-op")
+}
+
+func TestCommitScheduleDraft_Replay_SameKeyReturnsOriginalResult_NoDoubleApprove(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+
+	args := tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: "commit-replay-1",
+	}
+	first := sdDecode[tools.ScheduleEntryOutput](t, f.call(t, cs, "commit_schedule_draft", args))
+	second := sdDecode[tools.ScheduleEntryOutput](t, f.call(t, cs, "commit_schedule_draft", args))
+	assert.Equal(t, first, second, "an identical replay must return the same committed result, not error or double-approve")
+}
+
+func TestCommitScheduleDraft_UnknownOrCrossChannelEntry_Rejected(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	t.Run("unknown schedule_entry_id", func(t *testing.T) {
+		res := f.call(t, cs, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+			ChannelID:         f.ch.ID.String(),
+			ScheduleEntryID:   uuid.NewString(),
+			IdempotencyKeyArg: uuid.NewString(),
+		})
+		assert.True(t, res.IsError)
+	})
+
+	t.Run("schedule_entry_id belongs to a different channel", func(t *testing.T) {
+		ctx := context.Background()
+		otherCreator, _, err := f.st.Persons().UpsertByGoogleSubject(ctx, "sub-sd-other-creator-"+uuid.NewString(), "sd-other-creator@example.com", "Other Creator")
+		require.NoError(t, err)
+		otherCh, err := f.st.Channels().Create(ctx, "yt-sd-other-"+uuid.NewString(), "Other Channel", otherCreator.ID)
+		require.NoError(t, err)
+		otherIdea, err := f.st.Ideas().FindOrCreate(ctx, otherCh.ID, "Other channel idea "+uuid.NewString(), otherCreator.ID)
+		require.NoError(t, err)
+		otherVerdict, err := f.st.Verdicts().Append(ctx, store.AppendVerdictInput{
+			IdeaID:         otherIdea.ID,
+			Verdict:        store.VerdictViable,
+			Reasoning:      "viable, other channel",
+			AuthorPersonID: otherCreator.ID,
+			IdempotencyKey: uuid.NewString(),
+		})
+		require.NoError(t, err)
+		otherEntry, err := f.st.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+			ChannelID:         otherCh.ID,
+			IdeaID:            otherIdea.ID,
+			VerdictID:         otherVerdict.ID,
+			ProposedPublishAt: mondayAt(9),
+			CreatedByPersonID: otherCreator.ID,
+			IdempotencyKey:    uuid.NewString(),
+		})
+		require.NoError(t, err)
+
+		res := f.call(t, cs, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+			ChannelID:         f.ch.ID.String(),
+			ScheduleEntryID:   otherEntry.ID.String(),
+			IdempotencyKeyArg: uuid.NewString(),
+		})
+		assert.True(t, res.IsError, "a schedule_entry_id belonging to a different channel_id must be rejected")
+		assert.Contains(t, sdTextOf(res), "does not belong to channel_id")
+	})
+}
+
+// ── uncommit_schedule_draft: FR20 Creator-only reversal ──────────────────
+
+func (f *scheduleDraftFixture) commitDraft(t *testing.T, cs *mcp.ClientSession, entryID string) tools.ScheduleEntryOutput {
+	t.Helper()
+	res := f.call(t, cs, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   entryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	return sdDecode[tools.ScheduleEntryOutput](t, res)
+}
+
+func TestUncommitScheduleDraft_Creator_TransitionsCommittedBackToDraft_ClearsApprover(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+	f.commitDraft(t, cs, draft.ScheduleEntryID)
+
+	res := f.call(t, cs, "uncommit_schedule_draft", tools.UncommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.ScheduleEntryOutput](t, res)
+	assert.Equal(t, "draft", out.State)
+	assert.Nil(t, out.ApprovedByPersonID)
+	assert.Nil(t, out.ApprovedAt)
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateDraft, entry.State, "the entry must actually be back to draft in the database")
+	assert.Nil(t, entry.ApprovedByPersonID)
+}
+
+func TestUncommitScheduleDraft_AnalystDenied_StaysCommitted(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	creatorCS := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, creatorCS, f.idea.ID, mondayAt(9))
+	f.commitDraft(t, creatorCS, draft.ScheduleEntryID)
+
+	analystCS := f.connect(t, f.analyst.ID)
+	res := f.call(t, analystCS, "uncommit_schedule_draft", tools.UncommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "an Analyst must not be able to un-commit an entry (FR20)")
+	assert.Contains(t, sdTextOf(res), "permission denied")
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateCommitted, entry.State, "the denied call must not have changed anything")
+}
+
+func TestUncommitScheduleDraft_AlreadyDraft_RejectedAsConflict(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+
+	res := f.call(t, cs, "uncommit_schedule_draft", tools.UncommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "un-committing an entry that is still a draft must be rejected as a conflict")
+}
+
+// ── update_schedule_draft: FR20 Creator-only reschedule ───────────────────
+
+func TestUpdateScheduleDraft_Creator_ChangesProposedPublishAt_ReadBackFromDB(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+	newTime := mondayAt(9).AddDate(0, 0, 1)
+
+	res := f.call(t, cs, "update_schedule_draft", tools.UpdateScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		ProposedPublishAt: newTime.Format(time.RFC3339),
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.SaveScheduleDraftOutput](t, res)
+	assert.Equal(t, newTime.Format(time.RFC3339), out.ProposedPublishAt)
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.True(t, newTime.Equal(entry.ProposedPublishAt), "the new proposed_publish_at must be persisted in the database")
+}
+
+func TestUpdateScheduleDraft_AnalystDenied_TimeUnchanged(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	creatorCS := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, creatorCS, f.idea.ID, mondayAt(9))
+
+	analystCS := f.connect(t, f.analyst.ID)
+	res := f.call(t, analystCS, "update_schedule_draft", tools.UpdateScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		ProposedPublishAt: mondayAt(9).AddDate(0, 0, 3).Format(time.RFC3339),
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "an Analyst must not be able to reschedule an existing draft, even though it may create one (FR20)")
+	assert.Contains(t, sdTextOf(res), "permission denied")
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.True(t, mondayAt(9).Equal(entry.ProposedPublishAt), "the denied call must not have changed proposed_publish_at")
+}
+
+func TestUpdateScheduleDraft_CommittedEntry_RejectedAsConflict(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+	f.commitDraft(t, cs, draft.ScheduleEntryID)
+
+	res := f.call(t, cs, "update_schedule_draft", tools.UpdateScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		ProposedPublishAt: mondayAt(9).AddDate(0, 0, 5).Format(time.RFC3339),
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "a committed entry must be un-committed before it can be rescheduled")
 }

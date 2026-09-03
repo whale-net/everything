@@ -7,15 +7,18 @@ go_library(
     name = "auth",
     srcs = [
         "auth.go",
+        "mcpauth.go",
         "session.go",
     ],
     importpath = "github.com/whale-net/everything/audience_score_system/web/auth",
     visibility = [
         "//audience_score_system/citest:__pkg__",
+        "//audience_score_system/mcp/server:__pkg__",
         "//audience_score_system/web:__subpackages__",
     ],
     deps = [
         "//audience_score_system/store",
+        "//libs/go/mcpauth",
         "@com_github_coreos_go_oidc_v3//oidc",
         "@com_github_google_uuid//:uuid",
         "@com_github_gorilla_sessions//:sessions",
@@ -33,7 +36,10 @@ go_library(
 # `bazel test //...`.
 go_test(
     name = "auth_test",
-    srcs = ["auth_test.go"],
+    srcs = [
+        "auth_test.go",
+        "mcpauth_test.go",
+    ],
     embed = [":auth"],
     deps = [
         "//audience_score_system/store",
@@ -67,6 +73,7 @@ go_test(
     srcs = [
         "auth_integration_test.go",
         "auth_test.go",
+        "mcpauth_integration_test.go",
     ],
     embed = [":auth"],
     gotags = ["integration"],

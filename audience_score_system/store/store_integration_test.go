@@ -796,16 +796,19 @@ func TestPredictionVsOutcomeView_OnlyMatchedPublishedCommittedIdeasAppear(t *tes
 func ptrTime(t time.Time) *time.Time { return &t }
 func ptrInt64(v int64) *int64        { return &v }
 
-// ── Migration reversibility (001 + 002 + 003 + 005) ─────────────────────────
+// ── Migration reversibility (001 + 002 + 003 + 004 + 005 + 006 + 007) ──────
 
 // TestMigrations_UpDownUp_LeavesNoOrphanObjects exercises schema.Migrations'
 // full up/down/up cycle across every embedded migration, not just one in
 // isolation -- it was written against 001 alone (#1568), extended for 002
 // (#1569), extended again for 003 (web_session, #1570), again for 005
-// (mcp_credential, #1575), and again for 006 (strategy/strategy_verdict,
-// #1637 -- 004 is Channel-connect's channel_credential store, #1571), so
-// the version assertion and table list below cover all of them rather than
-// any single one.
+// (mcp_credential, #1575 -- 004 is Channel-connect's channel_credential
+// store, #1571), again for 006 (mcp_credential dropped and recreated
+// against libs/go/mcpauth's schema contract, #1643), again for 007
+// (mcp_oauth_client + mcp_auth_code, mcpauth's OAuth2 authorization-code +
+// PKCE front end, #1646), and again for 008 (strategy/strategy_verdict,
+// #1637), so the version assertion and table list below cover all of them
+// rather than any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -822,7 +825,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(6), version, "highest migration in schema.Migrations is 006_strategy")
+	assert.Equal(t, uint(8), version, "highest migration in schema.Migrations is 008_strategy")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -832,6 +835,8 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"web_session",
 		"channel_credential",
 		"mcp_credential",
+		"mcp_oauth_client",
+		"mcp_auth_code",
 		"strategy", "strategy_verdict",
 	} {
 		var exists bool
@@ -903,4 +908,67 @@ func TestMigration003_WebSessionTable_ConstraintsSurviveDownUp(t *testing.T) {
 		VALUES ('sess-dup', $1, NOW() + interval '1 hour')
 	`, personID)
 	assert.Error(t, err, "web_session.session_id PRIMARY KEY must reject a duplicate session_id")
+}
+
+// TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp
+// machine-checks (rather than eyeballs) the two things FR13/NFR5 require
+// migration 006 preserve from 005's mcp_credential shape even though the
+// table is now built against mcpauth's generic schema contract: the
+// person_id FOREIGN KEY (mcpauth itself treats identity as an opaque
+// string -- ASS's own FK is layered on top and must not get lost) and both
+// indexes named in 006's SQL. TestMigrations_UpDownUp_LeavesNoOrphanObjects
+// above only proves the table itself exists after down/up; this proves its
+// constraints do too.
+func TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Up(), "first up")
+	require.NoError(t, runner.Down(), "down")
+	require.NoError(t, runner.Up(), "second up")
+
+	// FOREIGN KEY: a mcp_credential row referencing a person_id that does
+	// not exist must be rejected -- mcpauth's own CredentialStore never
+	// exercises this (it only ever binds identities the caller already
+	// validated), so it can only be proven with a direct SQL insert like
+	// this one.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO mcp_credential (person_id, token_hash)
+		VALUES ($1, 'deadbeef')
+	`, uuid.New())
+	assert.Error(t, err, "mcp_credential.person_id FOREIGN KEY must reject a nonexistent person")
+
+	var personID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO person (google_subject) VALUES ($1) RETURNING id
+	`, "sub-mcp-credential-fk-check").Scan(&personID))
+
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO mcp_credential (person_id, token_hash)
+		VALUES ($1, 'deadbeef')
+	`, personID)
+	require.NoError(t, err, "a mcp_credential row referencing a real person must be accepted")
+
+	// UNIQUE: a second row reusing the same token_hash must be rejected --
+	// both 005 and 006 declare token_hash TEXT NOT NULL UNIQUE.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO mcp_credential (person_id, token_hash)
+		VALUES ($1, 'deadbeef')
+	`, personID)
+	assert.Error(t, err, "mcp_credential.token_hash UNIQUE must reject a duplicate hash")
+
+	// Both indexes 006's SQL names must actually exist, not merely be
+	// implied by the UNIQUE constraint above.
+	for _, idx := range []string{"mcp_credential_token_hash", "mcp_credential_person_id"} {
+		var exists bool
+		require.NoError(t, db.Pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE tablename = 'mcp_credential' AND indexname = $1)`, idx,
+		).Scan(&exists))
+		assert.True(t, exists, "index %s must exist on mcp_credential after up/down/up", idx)
+	}
 }

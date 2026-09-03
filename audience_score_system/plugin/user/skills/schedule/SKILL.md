@@ -5,7 +5,7 @@ description: Run Audience Score System's Loop 2 for one Channel — pull the rea
 
 # schedule
 
-Orchestrates ASS's schedule-drafting loop (C6, C7): reads the Channel's actual YouTube schedule and pacing policy as planning context, then proposes draft slots for viable ideas. It stops at the draft — turning a draft into the Channel's committed schedule (C8) is a Creator-only action in the `web` UI, not something this skill or any MCP tool does.
+Orchestrates ASS's schedule-drafting loop (C6, C7): reads the Channel's actual YouTube schedule and pacing policy as planning context, then proposes draft slots for viable ideas (falling back to cadence-driven Strategy proposals where one is active). It stops at the draft — turning a draft into the Channel's committed schedule (C8) is a Creator-only action (`commit_schedule_draft`/`uncommit_schedule_draft`/`update_schedule_draft`, issue #1648) that this skill never calls on its own initiative; it only happens on the human's explicit instruction, whether via `web`'s approve/un-approve/edit UI or a follow-up MCP call the human asks for by name.
 
 ## Usage
 
@@ -24,7 +24,7 @@ If `--server` is omitted, ask which of `audience-score-system-mcp-dev` / `audien
 5. For each idea needing a slot with no Strategy-derived proposal, dispatch the **analyst** agent with the channel_id, idea_id, the pacing policy, and (via `get_drafting_context`, `around` if given) the synced schedule and existing entries in the relevant window. It proposes a `proposed_publish_at` and calls `save_schedule_draft`.
 6. For a Strategy-derived proposal (step 4), call `save_schedule_draft` directly with the proposal's `idea_id`/`verdict_id`/`proposed_publish_at` — no analyst dispatch needed, since the cadence decision was already made when the Strategy was saved.
 7. Collect each draft's flags (`cadence_exceeded`, `off_preferred_day`, `collision`) from the analyst's report (step 5) or the direct call (step 6) and surface them plainly to the human — they're advisory, the draft is saved regardless (FR18), but the human deciding whether to approve needs to see them.
-8. Report every draft created (idea, proposed time, flags, and whether it came from a Strategy) and remind the human: **approval into the committed schedule (C8) happens in `web`, by the Creator**, not here — do not proceed as if a draft were committed.
+8. Report every draft created (idea, proposed time, flags, and whether it came from a Strategy) and remind the human: **committing, un-committing, or rescheduling within the schedule (C8) is the Creator's call**, available either via `web`'s approve/un-approve/edit UI or `commit_schedule_draft`/`uncommit_schedule_draft`/`update_schedule_draft` if the human explicitly asks for one of them by name — do not call any of them yourself as part of this skill's own steps, and do not proceed as if a draft were committed.
 
 ## Rules
 

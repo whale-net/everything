@@ -32,6 +32,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/worker/sync"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/logging"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	temporallib "github.com/whale-net/everything/libs/go/temporal"
 )
 
@@ -40,16 +41,17 @@ import (
 // leaflab/ui's sessionName convention.
 const sessionName = "ass_web_session"
 
-// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 20 minutes, inside
-// sync.MinSyncInterval/MaxSyncInterval's 15-30 minute NFR4 band. Must
-// match worker/main.go's identical constant exactly (issue #1614's
-// interval-consistency caveat -- see ../ARCHITECTURE.md "OAuth grants"):
-// sync.ScheduleManager.EnsureSchedule bakes in whichever interval its
-// first caller passes at schedule-creation time and never updates it on a
-// later call, so `web` and `worker` diverging here would silently create
-// schedules at different cadences depending on which binary connects a
-// Channel first.
-const defaultSyncInterval = 20 * time.Minute
+// defaultSyncInterval is ASS_SYNC_INTERVAL's default -- 3 hours, inside
+// sync.MinSyncInterval/MaxSyncInterval's 1-6 hour NFR4 band (widened from
+// the original 20-minute default, which proved too aggressive against
+// YouTube API quota for M1's Channel count). Must match worker/main.go's
+// identical constant exactly (issue #1614's interval-consistency caveat --
+// see ../ARCHITECTURE.md "OAuth grants"): sync.ScheduleManager.EnsureSchedule
+// bakes in whichever interval its first caller passes at schedule-creation
+// time and never updates it on a later call, so `web` and `worker`
+// diverging here would silently create schedules at different cadences
+// depending on which binary connects a Channel first.
+const defaultSyncInterval = 3 * time.Hour
 
 // config holds `web`'s configuration, loaded entirely from environment
 // variables -- no config files (see ../ENV.md).
@@ -65,6 +67,13 @@ type config struct {
 	SessionSecret      string
 	TokenEncryptionKey string
 
+	// MCPPublicURL is ASS_MCP_PUBLIC_URL (issue #1646, FR12/NFR4) -- the
+	// externally reachable URL of the `mcp` server, passed as
+	// mcpauth.ProviderConfig.Resource. `web` (this binary, the OAuth2
+	// authorization server) and `mcp` (the OAuth2 protected resource) must
+	// agree on this exact value -- see ../ENV.md.
+	MCPPublicURL string
+
 	// SyncInterval is FR14/NFR4's per-Channel Temporal sync cadence,
 	// passed to sync.NewScheduleManager (issue #1614) -- see
 	// defaultSyncInterval's doc comment above for why this must match
@@ -73,8 +82,8 @@ type config struct {
 }
 
 // loadConfig loads configuration from environment variables, failing fast
-// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 15-30
-// minute band (sync.ValidateSyncInterval) -- mirrors worker/main.go's
+// if ASS_SYNC_INTERVAL is set but unparseable or outside NFR4's 1-6 hour
+// band (sync.ValidateSyncInterval) -- mirrors worker/main.go's
 // loadConfig exactly, per issue #1614. See ../ENV.md for the full
 // variable list.
 func loadConfig() (config, error) {
@@ -99,6 +108,7 @@ func loadConfig() (config, error) {
 		OAuthRedirectBase:  os.Getenv("ASS_OAUTH_REDIRECT_BASE_URL"),
 		SessionSecret:      os.Getenv("ASS_SESSION_SECRET"),
 		TokenEncryptionKey: os.Getenv("ASS_TOKEN_ENCRYPTION_KEY"),
+		MCPPublicURL:       os.Getenv("ASS_MCP_PUBLIC_URL"),
 		SyncInterval:       interval,
 	}, nil
 }
@@ -117,6 +127,15 @@ type app struct {
 	invite   *invite.Handlers
 	channels *channel.Handler
 	schedule *schedule.Handlers
+
+	// mcpProvider is mcpauth's OAuth2 authorization-server front end
+	// (issue #1646, FR12/NFR4): /authorize, /token, /register, and
+	// discovery metadata, mounted in setupRoutes. `web` hosts this because
+	// it is the only process holding the caller's session cookie
+	// (auth.MCPCallerResolver reads it); `mcp` hosts only the
+	// protected-resource half. See ../ARCHITECTURE.md "MCP server: caller
+	// authentication".
+	mcpProvider *mcpauth.Provider
 }
 
 func main() {
@@ -228,7 +247,55 @@ func run() error {
 	// Schedules()/Roles()/Channels()), no separate OAuth grant of its own.
 	scheduleHandlers := schedule.New(st)
 
-	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers}
+	// mcpauth's OAuth2 authorization-server front end (issue #1646,
+	// FR12/NFR4): mints the bearer credential an MCP client presents to
+	// `mcp`, reusing this Person's existing C1 Google-OIDC-backed session
+	// (auth.MCPCallerResolver) rather than any new sign-in UI. `web` and
+	// `mcp` share one Postgres, so a credential minted here is immediately
+	// verifiable by `mcp` -- no cross-service call.
+	//
+	// The client registry and pending-authorization-code store MUST be the
+	// Postgres-backed implementations, not mcpauth's in-memory defaults:
+	// /authorize, /token, and /register can each land on a different `web`
+	// replica.
+	mcpClients, err := mcpauth.NewPostgresClientRegistry(ctx, mcpauth.ClientRegistryConfig{Pool: pool})
+	if err != nil {
+		return fmt.Errorf("mcpauth client registry: apply migration 007_mcpauth_oauth before starting web: %w", err)
+	}
+	mcpAuthCodes, err := mcpauth.NewPostgresAuthCodeStore(ctx, mcpauth.AuthCodeStoreConfig{Pool: pool})
+	if err != nil {
+		return fmt.Errorf("mcpauth auth code store: apply migration 007_mcpauth_oauth before starting web: %w", err)
+	}
+	// Same table/column configuration mcp/main.go uses for its own
+	// mcpauth.NewCredentialStore -- one shared mcp_credential table
+	// (migration 006), keyed on the Person UUID.
+	mcpCredentials, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	if err != nil {
+		return fmt.Errorf("mcpauth credential store: apply migration 006_mcpauth_credential before starting web: %w", err)
+	}
+	if cfg.MCPPublicURL == "" {
+		return fmt.Errorf("ASS_MCP_PUBLIC_URL is required")
+	}
+	mcpProvider, err := mcpauth.NewProvider(mcpauth.ProviderConfig{
+		Issuer:       cfg.OAuthRedirectBase,
+		Resource:     cfg.MCPPublicURL,
+		ResourceName: "Audience Score System MCP",
+		Resolver:     authenticator.MCPCallerResolver(),
+		Credentials:  mcpCredentials,
+		Clients:      mcpClients,
+		AuthCodes:    mcpAuthCodes,
+		SignInURL:    "/login",
+	})
+	if err != nil {
+		return fmt.Errorf("construct mcpauth provider: %w", err)
+	}
+
+	application := &app{store: st, auth: authenticator, invite: inviteHandlers, channels: channelHandler, schedule: scheduleHandlers, mcpProvider: mcpProvider}
 
 	mux := http.NewServeMux()
 	application.setupRoutes(mux)
@@ -270,6 +337,15 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/login", a.auth.HandleLogin)
 	mux.HandleFunc("/oauth/google/callback", a.auth.HandleCallback)
 	mux.HandleFunc("POST /logout", a.auth.HandleLogout)
+
+	// mcpauth's OAuth2 authorization-server endpoints (/authorize, /token,
+	// /register, discovery metadata -- issue #1646, FR12/NFR4) also sit
+	// outside RequireSignedIn: mcpauth's own Resolver + SignInURL do the
+	// gating for /authorize (an unauthenticated request round-trips through
+	// /login?next=<authorize URL> and back), and /token and /register are
+	// called directly by the MCP client with no session cookie at all --
+	// wrapping them in RequireSignedIn would break both.
+	a.mcpProvider.Mount(mux)
 
 	// GET /invites/{code} is public (no session required, FR6/FR7/FR8) --
 	// it must sit outside RequireSignedIn, since it renders differently
@@ -342,7 +418,8 @@ func (a *app) handleHome(w http.ResponseWriter, r *http.Request) {
 
 // handleChannelDetail renders a Channel's connection state (connected /
 // needs re-authentication) and, for a Creator only (store.CanReconnect --
-// NFR5), the reconnect affordance (#1571's Implementation section).
+// NFR5), the reconnect affordance (#1571's Implementation section) and the
+// invite-analyst affordance (store.CanInvite, C3/FR5).
 func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	person := auth.PersonFromContext(r.Context())
 	if person == nil {
@@ -372,11 +449,17 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	canInvite, err := store.CanInvite(r.Context(), a.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	data := components.LayoutData{
 		Title: ch.Title,
 		User:  person,
 	}
-	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect)); err != nil {
+	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

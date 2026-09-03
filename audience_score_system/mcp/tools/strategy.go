@@ -6,7 +6,7 @@
 // the existing schedule and proposes cadence-driven next slots, which a
 // caller commits via the existing save_schedule_draft tool rather than a
 // second write path. See ../../store/strategy.go (StrategyStore) and
-// migration 006's comment for the schema and design rationale.
+// migration 008's comment for the schema and design rationale.
 package tools
 
 import (
@@ -86,7 +86,7 @@ func renderStrategy(ctx context.Context, persons store.PersonStore, d store.Stra
 }
 
 // parseCadence validates raw against the three values the
-// strategy.cadence CHECK constraint (migration 006) allows, rejecting
+// strategy.cadence CHECK constraint (migration 008) allows, rejecting
 // anything else before a write tool ever opens a transaction.
 func parseCadence(raw string) (store.Cadence, error) {
 	switch c := store.Cadence(strings.ToLower(strings.TrimSpace(raw))); c {

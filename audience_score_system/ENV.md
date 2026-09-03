@@ -24,15 +24,17 @@ Read via `//libs/go/db` (`web`, `mcp`, `worker`) and `//libs/go/migrate`
 ## Temporal
 
 Read via `//libs/go/temporal`'s `ConfigFromEnv` (`web` and `worker` both,
-as of issue #1614), plus `ASS_SYNC_INTERVAL` (issue #1574, NFR4), also now
-read by both.
+as of issue #1614; `mcp` also, as of issue #1650, to build the
+`sync.ScheduleManager` `trigger_channel_sync` calls), plus
+`ASS_SYNC_INTERVAL` (issue #1574, NFR4, widened by issue-#1650's follow-up
+work), also now read by `web` and `worker`.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
-| `TEMPORAL_HOST` | web, worker | `localhost:7233` | Temporal frontend service `host:port`. |
-| `TEMPORAL_NAMESPACE` | web, worker | `default` | Temporal namespace. |
-| `TEMPORAL_TASK_QUEUE` | web, worker | `audience-score-system-sync` | Task queue name for the per-Channel sync worker (`sync.TaskQueue`). Unlike `//libs/go/temporal`'s own zero-default, both `web`'s and `worker`'s `main.go` fall back to `sync.TaskQueue` when unset, mirroring `tools/app_registry/worker`'s identical fallback-to-package-constant pattern. |
-| `ASS_SYNC_INTERVAL` | web, worker | `20m` | How often `sync.ChannelSyncWorkflow` runs per connected Channel (a Go `time.Duration` string, e.g. `20m`). Must fall within NFR4's ~15-30 minute band (`sync.MinSyncInterval`/`sync.MaxSyncInterval`) — both `web` and `worker` fail fast at startup on an out-of-band or unparseable value rather than silently clamping it. |
+| `TEMPORAL_HOST` | web, worker, mcp | `localhost:7233` | Temporal frontend service `host:port`. |
+| `TEMPORAL_NAMESPACE` | web, worker, mcp | `default` | Temporal namespace. |
+| `TEMPORAL_TASK_QUEUE` | web, worker, mcp | `audience-score-system-sync` | Task queue name for the per-Channel sync worker (`sync.TaskQueue`). Unlike `//libs/go/temporal`'s own zero-default, `web`'s, `worker`'s, and `mcp`'s `main.go` all fall back to `sync.TaskQueue` when unset, mirroring `tools/app_registry/worker`'s identical fallback-to-package-constant pattern. |
+| `ASS_SYNC_INTERVAL` | web, worker | `3h` | How often `sync.ChannelSyncWorkflow` runs per connected Channel (a Go `time.Duration` string, e.g. `3h`). Must fall within NFR4's ~1-6 hour band (`sync.MinSyncInterval`/`sync.MaxSyncInterval`) — both `web` and `worker` fail fast at startup on an out-of-band or unparseable value rather than silently clamping it. Raised from the original 20m default (too aggressive against YouTube API quota); `mcp`'s `trigger_channel_sync` tool lets a caller force an out-of-band run without waiting for this cadence. |
 
 **`web` reads these too, as of issue #1614:** `web/channel.Handler`
 calls `sync.ScheduleManager.EnsureSchedule` right after a Channel-connect
@@ -53,6 +55,16 @@ at the wrong cadence depending on which binary connects it first.
 through the SAME `tokens.Store` construction `web` uses, so it needs the
 same three variables to build it — no worker-specific credential
 variable is introduced.
+
+**`mcp` reads `TEMPORAL_HOST`/`TEMPORAL_NAMESPACE`/`TEMPORAL_TASK_QUEUE`
+too, as of issue #1650:** the `trigger_channel_sync` tool
+(`mcp/tools/sync_trigger.go`) forces an out-of-band run of a Channel's
+`ChannelSyncWorkflow` via `sync.ScheduleManager.TriggerNow`, so `mcp`'s
+`main.go` now constructs its own Temporal client and `sync.ScheduleManager`
+at startup, the same pattern `web` and `worker` already use. `mcp` does
+NOT read `ASS_SYNC_INTERVAL` — `TriggerNow` only patches an
+already-created schedule (`ScheduleHandle.Trigger`), it never calls
+`EnsureSchedule`, so no interval value is needed to build it.
 
 ## Logging
 
@@ -76,7 +88,7 @@ doc comment for why these are Google-only and deliberately separate from
 | `ASS_HTTP_ADDR` | web | `:8080` | HTTP listen address for the `web` binary. |
 | `ASS_GOOGLE_CLIENT_ID` | web, worker | *(required)* | Google OAuth2 client ID (Google Cloud Console "OAuth client ID") for the sign-in consent screen. `worker` reads the same variable to refresh a Channel's C2 credential (see "Temporal" above, issue #1576) — it never runs the sign-in flow itself. |
 | `ASS_GOOGLE_CLIENT_SECRET` | web, worker | *(required)* | Google OAuth2 client secret paired with `ASS_GOOGLE_CLIENT_ID`. Same worker note as above. |
-| `ASS_OAUTH_REDIRECT_BASE_URL` | web | *(required)* | This app's own externally-reachable origin, e.g. `https://audience-score.whalenet.dev` — `web/auth` appends `/oauth/google/callback` to build the redirect URL Google calls back to. |
+| `ASS_OAUTH_REDIRECT_BASE_URL` | web, mcp | *(required)* | This app's own externally-reachable origin, e.g. `https://audience-score.whalenet.dev` — `web/auth` appends `/oauth/google/callback` to build the redirect URL Google calls back to. **Also doubles as the OAuth2 issuer** (issue #1646, FR12/NFR4): `web` passes it as `mcpauth.ProviderConfig.Issuer`, so it is the base every `mcpauth` endpoint URL `web` advertises (`/authorize`, `/token`, `/register`, `/.well-known/oauth-authorization-server`) is built from — one origin, two roles (Google's redirect target and mcpauth's issuer), not two variables. `mcp` reads the SAME value (never calling it) purely to name it as the sole `authorization_servers` entry in its own protected-resource metadata (see "MCP" below) — `web` and `mcp` MUST agree on this exactly, or an MCP client's discovery chain (RFC 9728 → RFC 8414) points at the wrong authorization server. |
 | `ASS_SESSION_SECRET` | web | *(required)* | Secret used to sign/protect the short-lived OAuth2 state cookie (CSRF) during the login round trip. |
 | `ASS_TOKEN_ENCRYPTION_KEY` | web, worker | *(required)* | Secret hashed (SHA-256) into a 32-byte AES-256-GCM key used to encrypt any stored Google refresh token at rest — mirrors `libs/go/htmxauth.DBSessionManager`'s `encKey` derivation. This same key also encrypts `channel_credential`'s YouTube token ciphertext (see "OAuth scopes" below) — one key, two independent token stores. `worker` derives the same key to decrypt/refresh `channel_credential` for `SyncSchedule` (issue #1576). |
 
@@ -115,9 +127,13 @@ here.
 
 Read by `mcp`'s `main.go`. See `ARCHITECTURE.md`'s "MCP server: caller
 authentication" for how a caller authenticates — there is no MCP-specific
-client-secret variable here, because `mcp_credential` (migration 005)
-stores only a SHA-256 hash, not a reversible secret.
+client-secret variable here, because `mcp_credential` (migration 006,
+backed by `libs/go/mcpauth.CredentialStore`) stores only a SHA-256 hash,
+not a reversible secret. `mcpauth.NewCredentialStore` preflights this
+table at boot (a `SELECT 1 ... LIMIT 0` probe), so a missing migration 006
+now fails `mcp` at startup rather than at first bearer-token verification.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
 | `ASS_MCP_ADDR` | mcp | `:8081` | HTTP listen address for the `mcp` binary (streamable HTTP transport). |
+| `ASS_MCP_PUBLIC_URL` | web, mcp | *(required)* | The externally reachable URL of the `mcp` server (issue #1646, FR12/NFR4) — the OAuth2 `resource` identifier both binaries must agree on exactly. `web` passes it as `mcpauth.ProviderConfig.Resource` when constructing its OAuth2 authorization server (see "Web" above); `mcp` passes the same value as `mcpauth.ProtectedResourceMetadataConfig.Resource` (`mcp/server.ResourceMetadataConfig.Resource`) — both the `resource` field its own `/.well-known/oauth-protected-resource` document advertises, and the base its `WWW-Authenticate: Bearer resource_metadata="..."` 401 challenge is built from (`mcpauth.ProtectedResourceMetadataURL`). A mismatch between the two binaries breaks MCP client discovery (RFC 9728), since the `resource` an MCP client requests a token for would no longer match the `resource` `mcp` actually serves. Both `web` and `mcp` fail fast at startup if unset. |

@@ -231,6 +231,54 @@ func TestSyncOutcomes_NoCandidates_StillPendingNeverAutoLinked(t *testing.T) {
 	assert.Equal(t, 0.0, m.Confidence)
 }
 
+// ── issue #1652: a candidate committed AFTER the video already synced with
+// no candidates must still get matched on the next cycle, not stay stuck
+// on the first cycle's "no candidate at all" placeholder forever ─────────
+
+func TestSyncOutcomes_CandidateCommittedAfterFirstSync_SecondCycleMatchesInPlace(t *testing.T) {
+	ctx := context.Background()
+	f := newOutcomesFixture(t)
+
+	publishAt := time.Now().Add(-time.Hour)
+	// The video syncs BEFORE any committed schedule_entry exists for the
+	// Channel (the backdated/historical scenario issue #1652 reproduced) --
+	// first SyncOutcomes call must still record the documented "no
+	// plausible candidate at all" pending placeholder (confidence 0, nil
+	// schedule_entry_id).
+	video := f.syncedVideo(t, ctx, "yt-late-candidate", "Exact Title Match", publishAt)
+
+	yt := &fake.Client{MetricsByVideoID: map[string]youtube.VideoMetrics{
+		"yt-late-candidate": {YouTubeVideoID: "yt-late-candidate", Views: ptrInt64(7), MeasuredAt: time.Now()},
+	}}
+	a := newSyncActivities(f.st, yt)
+
+	require.NoError(t, a.SyncOutcomes(ctx, f.ch.ID))
+	first := f.singleMatchFor(t, ctx, video.ID)
+	firstID := first.ID
+	assert.Equal(t, store.MatchStatePending, first.State)
+	assert.Nil(t, first.ScheduleEntryID)
+	assert.Equal(t, 0.0, first.Confidence)
+
+	// Now the matching schedule_entry gets committed (e.g. a human commits
+	// a backdated draft against this exact already-synced video). A second
+	// sync cycle must NOT skip this video just because it already carries a
+	// video_schedule_match row -- that row is the no-candidate placeholder,
+	// not a settled match.
+	entry := f.committedEntry(t, ctx, "Exact Title Match", publishAt)
+	require.NoError(t, a.SyncOutcomes(ctx, f.ch.ID))
+
+	second := f.singleMatchFor(t, ctx, video.ID)
+	assert.Equal(t, firstID, second.ID, "the placeholder row must be updated in place, not duplicated")
+	assert.Equal(t, store.MatchStateAuto, second.State, "exact title+date match must auto-link once the candidate exists (FR22)")
+	require.NotNil(t, second.ScheduleEntryID)
+	assert.Equal(t, entry.ID, *second.ScheduleEntryID)
+	assert.GreaterOrEqual(t, second.Confidence, MatchConfidenceThreshold)
+
+	var matchCount int
+	require.NoError(t, f.db.Pool.QueryRow(ctx, `SELECT count(*) FROM video_schedule_match WHERE synced_video_id = $1`, video.ID).Scan(&matchCount))
+	assert.Equal(t, 1, matchCount, "must never leave a stale duplicate row behind")
+}
+
 // ── double run: no duplicate matches, no duplicate metric rows ─────────────
 
 func TestSyncOutcomes_DoubleRun_NoDuplicateMatchesNoDuplicateMetricRows(t *testing.T) {

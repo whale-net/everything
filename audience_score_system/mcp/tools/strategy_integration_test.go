@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -46,6 +47,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -85,12 +87,30 @@ func stDecode[T any](t *testing.T, res *mcp.CallToolResult) T {
 	return out
 }
 
+// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// mcp_credential table (migration 006) -- the same construction main.go
+// does, mirrored here so tests mint/verify through the identical backing
+// production uses (FR13/NFR3 parity), per verdict_integration_test.go's
+// identical helper.
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+	t.Helper()
+	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+	return creds
+}
+
 // strategyFixture mirrors scheduleDraftFixture: a Channel with a live
 // Creator and Analyst, an unassociated Person, and a viable-verdict Idea
 // ready to build a Strategy from, hosted behind a real MCP server with
 // RegisterVerdict + RegisterScheduleDraft + RegisterStrategy wired.
 type strategyFixture struct {
 	st       *store.Store
+	creds    mcpauth.CredentialStore
 	ch       store.Channel
 	creator  store.Person
 	analyst  store.Person
@@ -110,6 +130,7 @@ func newStrategyFixture(t *testing.T) *strategyFixture {
 	require.NoError(t, runner.Up())
 
 	st := store.New(pg.Pool)
+	creds := newTestCredentialStore(t, pg.Pool)
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-strat-creator-"+uuid.NewString(), "strat-creator@example.com", "Creator Person")
 	require.NoError(t, err)
@@ -128,17 +149,21 @@ func newStrategyFixture(t *testing.T) *strategyFixture {
 	tools.RegisterScheduleDraft(reg, st)
 	tools.RegisterStrategy(reg, st)
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
-	return &strategyFixture{st: st, ch: ch, creator: creator, analyst: analyst, outsider: outsider, url: ts.URL}
+	return &strategyFixture{st: st, creds: creds, ch: ch, creator: creator, analyst: analyst, outsider: outsider, url: ts.URL}
 }
 
 func (f *strategyFixture) connect(t *testing.T, personID uuid.UUID) *mcp.ClientSession {
 	t.Helper()
 	ctx := context.Background()
-	token, _, err := f.st.Credentials().Mint(ctx, personID)
+	token, _, err := f.creds.Mint(ctx, personID.String())
 	require.NoError(t, err)
 
 	transport := &mcp.StreamableClientTransport{

@@ -5,8 +5,9 @@ package server
 // TokenInfo, empty UserID, unparseable UserID, unresolvable Person) plus
 // the success path (Person placed on ctx, next invoked exactly once), all
 // without a real HTTP request or database. server_integration_test.go
-// separately proves the HTTP half (auth.RequireBearerToken -> TokenVerifier
-// -> mcp_credential) against a real Postgres-backed CredentialStore.
+// separately proves the HTTP half (mcpauth.RequireBearerToken ->
+// mcpauth.TokenVerifier -> mcp_credential) against a real Postgres-backed
+// mcpauth.CredentialStore.
 import (
 	"context"
 	"testing"

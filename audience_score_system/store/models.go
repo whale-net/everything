@@ -262,20 +262,6 @@ type MatchCandidate struct {
 	ProposedPublishAt time.Time
 }
 
-// MCPCredential is one row of `mcp_credential` (migration 005, issue
-// #1575) -- the bearer credential `mcp` resolves to a Person. TokenHash is
-// the SHA-256 hash of the raw token; the raw token itself is never
-// persisted (see migration 005's comment). RevokedAt nil means the
-// credential is still live.
-type MCPCredential struct {
-	ID         uuid.UUID
-	PersonID   uuid.UUID
-	TokenHash  string
-	CreatedAt  time.Time
-	LastUsedAt *time.Time
-	RevokedAt  *time.Time
-}
-
 // PredictionVsOutcome is one row of the `v_prediction_vs_outcome` view
 // (migration 002, FR24) -- the pre-joined idea x current-verdict x
 // committed-schedule-entry x resolved-match x synced-video x
@@ -350,7 +336,7 @@ type PredictionOutcome struct {
 	MetricsMeasuredAt          time.Time
 }
 
-// Cadence is `strategy.cadence` (migration 006, issue #1637) -- a
+// Cadence is `strategy.cadence` (migration 008, issue #1637) -- a
 // Strategy's own recurrence, independent of and finer-grained than the
 // Channel-wide pacing_policy (FR17).
 type Cadence string
@@ -361,7 +347,7 @@ const (
 	CadenceMonthly  Cadence = "monthly"
 )
 
-// Strategy is one row of `strategy` (migration 006, issue #1637) -- a
+// Strategy is one row of `strategy` (migration 008, issue #1637) -- a
 // cadence built directly from one or more viability_verdict rows (via
 // strategy_verdict), sitting between viability verdicts and scheduling.
 // PreferredWeekday is "" for no day preference, else a full English
@@ -391,7 +377,7 @@ type StrategyVerdictDetail struct {
 }
 
 // StrategyDetail is a Strategy plus every viability_verdict it's built
-// from (StrategyVerdictDetail, migration 006) -- StrategyStore.GetByID/
+// from (StrategyVerdictDetail, migration 008) -- StrategyStore.GetByID/
 // ListByChannel/Save's return shape. The same verdict may appear on more
 // than one StrategyDetail (a verdict can ground multiple Strategies).
 type StrategyDetail struct {

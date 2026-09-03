@@ -119,10 +119,21 @@ func (c *Consumer) handleStopSession(ctx context.Context, msg rmq.Message) error
 		return fmt.Errorf("failed to unmarshal stop session command: %w", err)
 	}
 	slog.Info("received command", "command", "stop_session", "session_id", cmd.SessionID, "force", cmd.Force, "routing_key", msg.RoutingKey)
-	if err := c.handler.HandleStopSession(ctx, &cmd); err != nil {
-		return err
-	}
-	slog.Info("command completed", "command", "stop_session", "session_id", cmd.SessionID)
+
+	// Run in a goroutine to avoid blocking the RMQ consumer, mirroring
+	// handleStartSession. Stopping a container can take up to ~30s (SIGTERM
+	// grace period before SIGKILL), and QoS=1 means no other messages would be
+	// processable while this handler blocks. The API gets an immediate
+	// "acknowledged" reply; session progress is reported via the "stopping"/
+	// "stopped" status updates HandleStopSession already publishes independently.
+	go func() {
+		if err := c.handler.HandleStopSession(context.Background(), &cmd); err != nil {
+			slog.Error("session stop failed", "session_id", cmd.SessionID, "error", err)
+		} else {
+			slog.Info("command completed", "command", "stop_session", "session_id", cmd.SessionID)
+		}
+	}()
+
 	return nil
 }
 

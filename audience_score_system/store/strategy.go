@@ -46,7 +46,7 @@ type SaveStrategyInput struct {
 	IdempotencyKey    string
 }
 
-// StrategyStore covers `strategy` and `strategy_verdict` (migration 006,
+// StrategyStore covers `strategy` and `strategy_verdict` (migration 008,
 // issue #1637).
 type StrategyStore interface {
 	// Save creates a new Strategy (in.StrategyID nil) or updates an
@@ -69,7 +69,7 @@ type StrategyStore interface {
 }
 
 // strategyStore implements StrategyStore against `strategy` and
-// `strategy_verdict` (migration 006).
+// `strategy_verdict` (migration 008).
 type strategyStore struct{ pool *pgxpool.Pool }
 
 var _ StrategyStore = strategyStore{}

@@ -62,27 +62,46 @@ double consumers use in tests with no network call.
 
 ### MCP server: caller authentication
 
-**Decision (resolved for #1575's Scaffold phase, before any of this task's
-Implementation work landed):** an MCP client authenticates as a Person
-with a bearer credential that `mcp`'s auth middleware
-(`audience_score_system/mcp/server/auth.go`) resolves to `person.id`
-server-side. The credential is a high-entropy random token; only its
-SHA-256 hash is ever persisted, in `mcp_credential` (migration 005,
-`audience_score_system/store/credential.go`'s `CredentialStore`) — the raw
-token is shown to the Person exactly once, at mint time, and is never
-recoverable from the database afterward.
+**Decision (landed in #1575's Scaffold/Implementation phases, migrated
+onto the shared `//libs/go/mcpauth` library by #1643):** an MCP client
+authenticates as a Person with a bearer credential that `mcp`'s auth stack
+resolves to `person.id` server-side. The credential is a high-entropy
+random token; only its SHA-256 hash is ever persisted, in `mcp_credential`
+(migration 006, backed by `libs/go/mcpauth.CredentialStore` — see
+`libs/go/mcpauth/README.md`'s schema contract) — the raw token is shown to
+the Person exactly once, at mint time, and is never recoverable from the
+database afterward. `mcp_credential` was originally created by migration
+005 against ASS's own bespoke `store.CredentialStore` (#1575); migration
+006 drops and recreates it against `mcpauth`'s generic contract while
+preserving ASS's own referential integrity (`person_id` stays a real
+foreign key to `person(id)`, and both of 005's indexes are kept verbatim)
+— `mcpauth` itself treats identity as an opaque string
+(`StoreConfig.IdentityColumn = "person_id"`,
+`StoreConfig.IdentityCast = "uuid"` tell it how to bind/cast against this
+column), so that genericity never became a reason ASS lost its FK
+(FR13/NFR5).
 
-- **(a) Obtained:** minted by an authenticated endpoint on `web`, reusing
-  the Person's existing C1 sign-in session (`web/auth`'s
-  `RequireSignedIn`) rather than any new credential-collection UI. That
-  endpoint is not yet built — this task lands the schema and store
-  interface (`CredentialStore.Mint`) it will call; adding the endpoint
-  itself is filed as a scope note (no other M1 task owns it).
-- **(b) Revoked:** `CredentialStore.Revoke` closes a credential by setting
-  `revoked_at`; a revoked credential's hash no longer resolves in
-  `VerifyTokenHash`, so any MCP call bearing it is rejected on the next
-  request without needing to invalidate anything client-side. Revocation
-  is idempotent (NFR2) — revoking an already-revoked or nonexistent
+- **(a) Obtained:** minted via `mcpauth`'s own OAuth2 authorization-code +
+  PKCE `/token` endpoint, mounted on `web` (issue #1646). An MCP client
+  drives the standard RFC 9728/8414/7591 discovery-to-registration chain
+  against `web`, then `/authorize` resolves the caller through
+  `web/auth.Authenticator.MCPCallerResolver()` — reusing the Person's
+  existing C1 sign-in session (`SessionManager.PersonID`, the same read
+  `RequireSignedIn` performs) rather than any new credential-collection UI
+  or a fresh IdP round trip. An unresolved caller is redirected to `/login`
+  with the exact original `/authorize` request preserved via ASS's
+  existing `?next=` convention (`mcpauth.ProviderConfig.SignInReturnParam`,
+  defaulted to `"next"`) and returns to `/authorize` after Google sign-in.
+  `mcpauth.CredentialStore.Mint`'s only production caller is `/token`'s
+  handler, invoked once the authorization code is redeemed. A self-serve
+  mint/revoke/list UI page on `web` is separate scope (#1591) — not
+  needed for a caller that IS an MCP client, since the client itself
+  drives the OAuth2 flow.
+- **(b) Revoked:** `mcpauth.CredentialStore.Revoke` closes a credential by
+  setting `revoked_at`; a revoked credential's hash no longer resolves in
+  `Verify`, so any MCP call bearing it is rejected on the next request
+  without needing to invalidate anything client-side. Revocation is
+  idempotent (NFR2) — revoking an already-revoked or nonexistent
   credential is not an error.
 - **(c) NFR3 rationale:** minting a credential is sign-in machinery — it
   bootstraps an already-authenticated Person's access to `mcp`, the same
@@ -94,26 +113,80 @@ recoverable from the database afterward.
 Mechanically, resolution happens in two layers (see
 `audience_score_system/mcp/server/`):
 
-1. **HTTP layer** (`transport.go`): `auth.RequireBearerToken` (from the
-   vendored SDK's `auth` package) wraps the streamable HTTP handler,
-   calling `TokenVerifier` (`auth.go`) to hash the raw token and resolve it
-   via `CredentialStore.VerifyTokenHash`, producing an `auth.TokenInfo`
-   whose `UserID` is the resolved Person's ID. Credentials do not expire on
-   a timer (they live until revoked), so `AllowMissingExpiration: true` is
-   set rather than requiring a per-token `exp` claim.
+1. **HTTP layer** (`transport.go`): `mcpauth.RequireBearerToken` wraps the
+   streamable HTTP handler, calling `mcpauth.TokenVerifier` under the hood
+   to hash the raw token and resolve it via
+   `mcpauth.CredentialStore.Verify`, producing an `auth.TokenInfo` whose
+   `UserID` is the resolved Person's ID (rendered as a string). Credentials
+   do not expire on a timer (they live until revoked), so
+   `mcpauth.RequireBearerToken` always forces `AllowMissingExpiration:
+   true` internally rather than requiring a per-token `exp` claim.
 2. **MCP-protocol layer** (`server.go`/`auth.go`): `PersonMiddleware`, wired
    via `mcp.Server.AddReceivingMiddleware`, reads that `TokenInfo` off each
-   request's `RequestExtra`, resolves the full `store.Person`, and places
-   it on the handler's `context.Context` (`PersonFromContext`,
-   `context.go`). A request with no resolved `TokenInfo`, or a `UserID`
-   that doesn't resolve to a real Person, is rejected here — the tool
-   handler is never entered.
+   request's `RequestExtra`, parses `UserID` back into a `uuid.UUID`,
+   resolves the full `store.Person` via `store.PersonStore`, and places it
+   on the handler's `context.Context` (`PersonFromContext`, `context.go`).
+   A request with no resolved `TokenInfo`, an unparseable `UserID`, or a
+   `UserID` that doesn't resolve to a real Person, is rejected here — the
+   tool handler is never entered. This step is unchanged by the #1643
+   migration — `mcpauth` only replaces the credential storage/verification
+   layer, not how a resolved identity becomes a Person.
 
-`CredentialStore.VerifyTokenHash`, `Mint`, `Revoke`, and `ListForPerson`
-(issue #1575's Implementation phase) are real SQL-backed implementations
-against `mcp_credential` — `VerifyTokenHash` also stamps `last_used_at` in
-the same round trip, so it doubles as the "last seen" signal for a future
-credential-management view (see issue #1591's scope note).
+`mcpauth.CredentialStore.Verify`, `Mint`, `Revoke`, and `List` are real
+SQL-backed implementations against `mcp_credential`, constructed in
+`mcp/main.go` via `mcpauth.NewCredentialStore` — its preflight probe means
+a missing migration 006 fails `mcp` at boot instead of at first call.
+`Verify` also stamps `last_used_at` in the same round trip, so it doubles
+as the "last seen" signal for a future credential-management view (see
+issue #1591's scope note).
+
+**Split across two binaries (issue #1646).** `mcpauth`'s OAuth2
+authorization-code + PKCE `/authorize` endpoint needs the caller's ASS web
+session cookie, which only `web` has; the OAuth2 protected resource an MCP
+client ultimately calls is `mcp`. So:
+
+- `web` hosts the full OAuth2 authorization server: `/authorize`, `/token`,
+  `/register`, and `/.well-known/oauth-authorization-server`
+  (`mcpauth.Provider`, `web/main.go`'s `run()`, mounted outside
+  `RequireSignedIn` — `mcpauth`'s own `Resolver`/`SignInURL` do the gating
+  for `/authorize`, and `/token`/`/register` are called directly by the MCP
+  client with no session cookie at all, so wrapping either in
+  `RequireSignedIn` would break them).
+- `mcp` hosts only the protected-resource half: `/.well-known/oauth-protected-resource`
+  (`mcpauth.NewProtectedResourceMetadataHandler`, `mcp/server/transport.go`'s
+  `NewHTTPHandler`) plus the `WWW-Authenticate: Bearer resource_metadata="..."`
+  challenge a missing/invalid bearer token gets
+  (`mcpauth.ProtectedResourceMetadataURL`, passed as
+  `sdkauth.RequireBearerTokenOptions.ResourceMetadataURL`). `mcp` never
+  mounts `/authorize` or `/token` — it has no session cookie to resolve a
+  caller from, and has no business doing so.
+- Both well-known/discovery paths are registered at each binary's mux
+  root, never under a prefix — MCP clients probe fixed well-known
+  locations (RFC 9728 §3, RFC 8414 §3).
+- `web` and `mcp` share one Postgres and nothing else (no cross-service
+  call, no shared in-process state): a credential minted by `web`'s
+  `/token` is immediately verifiable by `mcp`'s
+  `mcpauth.CredentialStore.Verify` against the same `mcp_credential`
+  table, and an authorization code or dynamically registered client
+  `/authorize`/`/register` create on one `web` replica is resolvable by
+  `/token` on a different `web` replica — this is why ASS MUST construct
+  `mcpauth.NewPostgresClientRegistry` and `mcpauth.NewPostgresAuthCodeStore`
+  (migration 007, `mcp_oauth_client`/`mcp_auth_code`) rather than
+  `mcpauth`'s single-replica in-memory defaults (NFR5's schema-ownership
+  split: `mcpauth` ships no migrations of its own, ASS's own migration
+  tooling owns 006 and 007 against `mcpauth`'s documented schema
+  contracts).
+- Discovery chain an MCP client actually drives, end to end: unauthenticated
+  call to `mcp` → 401 naming `mcp`'s own `resource_metadata` URL → GET that
+  URL (`mcp`) → follow its `authorization_servers[0]` (`web`'s issuer,
+  `ASS_OAUTH_REDIRECT_BASE_URL`) → GET `web`'s
+  `/.well-known/oauth-authorization-server` → `POST /register` → `GET
+  /authorize` (real session cookie) → `POST /token` → bearer credential,
+  now usable against `mcp`. No step in this chain is ASS- or
+  client-specific (NFR4) — see
+  `mcp/server/oauth_bootstrap_integration_test.go` for the test that drives
+  this exact sequence across two independently constructed `web`-shaped and
+  `mcp`-shaped server instances sharing one database.
 
 ### MCP server: Channel-scoping and idempotency middleware
 
@@ -128,7 +201,9 @@ remember to call them:
   `RequireChannelRole` against `store.CanRead`/`store.CanWrite` before the
   handler runs — a caller with no live `channel_person` row for that
   Channel gets a permission error and the handler is never entered. A tool
-  whose input carries no `channel_id` (only `whoami` today) simply doesn't
+  whose input carries no `channel_id` (`whoami` and `list_channels`, #1631 --
+  a tool that reports the caller's own identity/access rather than a
+  specific Channel's data has nothing to scope) simply doesn't
   implement the interface and is left unscoped; this is deliberate, not an
   oversight — NFR5 only applies to Channel-scoped data.
 - **Idempotency (NFR2/LB4):** `RegisterWrite` splits a write tool into a
@@ -193,9 +268,9 @@ the raw token or its hash.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule approval #1580) | `web` (external-api) | The **only** UI surface. Limited to C1/C2/C3/C8 (see "NFR3 interface allocation" below). |
-| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10): research notes, viability verdicts, schedule sync reads, schedule draft proposals, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
-| `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule approve/un-approve/edit UI #1580) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C8 schedule page is a UI front end onto the same `store.ScheduleStore` that `mcp`'s schedule-draft tools also write to. |
+| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650) | `mcp` (external-api) | Every other capability (C4-C7, C8, C9, C10): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes, viability verdicts, schedule sync reads, schedule draft proposals/commit/un-commit/edit, pacing policy, outcome-match confirm/reject, all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
+| `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-6 hour cadence (NFR4, default 3h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
 All four share the `audience-score-system` `release_app` domain, so images
@@ -280,33 +355,55 @@ and the identical `sync.ValidateSyncInterval` band-check (see `ENV.md`
 silently create a Channel's schedule at the wrong cadence, since whichever
 binary's `EnsureSchedule` call happens to land first wins.
 
-**NFR3 check for this change:** NFR3 (below) restricts `web` to four *UI
-surfaces* (C1/C2/C3/C8) -- calling `EnsureSchedule` from
+**NFR3 check for this change:** NFR3 (below) restricts `web` to three
+*UI-only* surfaces (C1/C2/C3) -- calling `EnsureSchedule` from
 `HandleCallback` adds no new HTTP route, no new MCP tool, and no new
 capability visible to a user or agent; it is backend plumbing inside the
 already-allocated C2 (Channel-connect) surface, exactly analogous to
 `web` already writing `channel_credential` and `connection_state` as part
-of that same flow. NFR3 stands unmodified.
+of that same flow. NFR3 stands unmodified. (This predates issue #1648's
+NFR3 amendment, which moved C8 off the `web`-only list entirely -- the
+citation here is updated to match, but the `EnsureSchedule` reasoning
+itself is unaffected.)
 
 ## NFR3 interface allocation
 
-The web UI is **limited to exactly four surfaces** — everything else is
-MCP-only, per the product brief's MCP-agent-first interface decision:
+The web UI is **limited to exactly three UI-only surfaces** — everything
+else is MCP-exposed too, per the product brief's MCP-agent-first interface
+decision:
 
 - **C1** — OAuth signup/login (Google OAuth consent → Person record).
 - **C2** — Channel connect (YouTube OAuth consent → Channel + `role=creator`
   join row, LB2).
 - **C3** — Analyst invite/accept (invite code generation and
   accept/decline).
-- **C8** — Schedule-draft approval/revocation (Creator-only approve,
-  un-approve, edit, re-approve up until publish).
 
-Every other capability — C4 (research notes), C5 (viability verdicts), C6
-(schedule sync reads), C7 (schedule drafting, pacing policy), C9 (outcome
-comparison, pending-match confirm/reject), C10 (browsing) — is exposed only
-through `mcp` tools. `web` must never grow a UI surface for these; if a
-future milestone needs one, that's a scope change to NFR3, not an
-implementation detail to slip in under an existing task.
+These three are OAuth-consent flows tied to a browser redirect and cannot
+be MCP tools by construction (there is no meaningful "call this MCP tool
+to complete a Google consent screen"). Every other capability — C4
+(research notes), C5 (viability verdicts), C6 (schedule sync reads), C7
+(schedule drafting, pacing policy), **C8 (schedule-draft
+commit/un-commit/edit)**, C9 (outcome comparison, pending-match
+confirm/reject), C10 (browsing) — is exposed as `mcp` tools, whether or not
+`web` also renders a UI for it.
+
+**NFR3 amendment (issue #1648): C8 is no longer a `web`-only surface.** M1
+originally kept all of C8 (approve, un-approve, edit) `web`-only, on the
+theory that committing a schedule was a deliberate human action best gated
+behind a UI click. In practice this made the FR16→FR19→FR22/FR23 pipeline
+(draft → commit → auto/pending-match → resolve) structurally unreachable
+from an MCP-only client: `mcp`'s outcome matcher and `resolve_pending_match`
+only ever consider *committed* entries, and nothing in `mcp` could ever
+produce one. `mcp/tools/schedule_draft.go` now exposes the full set --
+`commit_schedule_draft`, `uncommit_schedule_draft`, `update_schedule_draft`
+-- each calling the exact same `store.ScheduleStore` method and
+`store.CanApprove` (Creator-only) check `web`'s approve/unapprove/edit
+handlers already use, so the authority boundary is unchanged: an Analyst
+credential is rejected on either surface. `web`'s schedule page is
+unaffected and keeps rendering the same approve/un-approve/edit
+affordances -- the two surfaces are now two independent, equally-capable
+front ends onto the same `store.ScheduleStore`, not a primary (`web`) and a
+read-only shadow (`mcp`).
 
 ## Temporal: no scheduled-workflow helper yet
 
@@ -316,12 +413,14 @@ client/worker construction) has no equivalent to
 (`temporal/base.py`) — the only in-repo *scheduled*-workflow precedent, and
 it's Python/FCM-specific, not a shared library. This is a gap `worker`
 inherits from `product/01-current-state.md` and knowingly accepts for M1:
-issue #1574 built the per-Channel sync schedule (NFR4, ~15-30 minute
-interval) directly against the Temporal Go SDK's native `ScheduleClient`
+issue #1574 built the per-Channel sync schedule (NFR4, ~1-6 hour
+interval, default 3h) directly against the Temporal Go SDK's native `ScheduleClient`
 (`audience_score_system/worker/sync.ScheduleManager`, wrapping
 `client.Client.ScheduleClient()`), not a repo-shared helper. `ScheduleManager`
-is a small, three-method interface (`EnsureSchedule`/`RemoveSchedule`/
-`Reconcile`) with nothing app-registry-specific about its shape — worth
+is a small, four-method interface (`EnsureSchedule`/`RemoveSchedule`/
+`Reconcile`/`TriggerNow`, the last added by issue #1650 to back the
+`trigger_channel_sync` MCP tool) with nothing app-registry-specific about
+its shape — worth
 promoting into `//libs/go/temporal` if a second Go scheduled-workflow
 consumer shows up; at that point the duplication is worth generalizing.
 Until then it stays local to `worker/sync`, since a one-off abstraction
@@ -344,7 +443,7 @@ version log, not SCD2 -- see `AGENTS.md`'s SCD2 event-log exclusion),
 pacing policy, schedule entries, synced videos/metrics, and pending
 matches, plus the `mcp_idempotency` ledger (NFR2/LB4).
 
-Migration 006 (`006_strategy.up.sql`, issue #1637) lands `strategy` and
+Migration 008 (`008_strategy.up.sql`, issue #1637) lands `strategy` and
 `strategy_verdict`: a cadence (weekly/biweekly/monthly, optional preferred
 weekday) sitting between viability verdicts and scheduling -- independent
 of, and finer-grained than, the Channel-wide `pacing_policy` (FR17). A
@@ -439,12 +538,28 @@ call site touches the literal. See `matching.go`'s doc comments and
 `matching_test.go` (issue #1581's Testing phase) for the boundary cases
 this value was checked against.
 
-A video already carrying a `video_schedule_match` row in ANY state (auto,
-pending, confirmed, or rejected) is skipped by SyncOutcomes on every later
-cycle (`MatchStore.HasMatch`) -- matching never re-links or duplicates. A
+A video already carrying a SETTLED `video_schedule_match` row -- auto,
+confirmed, or rejected in any case, or pending with a real
+`schedule_entry_id` -- is skipped by SyncOutcomes on every later cycle
+(`MatchStore.HasMatch`) -- matching never re-links or duplicates. A
 `rejected` match's video stays unmatched by default; nothing in M1
 automatically re-queues it (that would require an explicit future re-queue
 tool, not built here).
+
+**Bug fix (issue #1652): the no-candidate placeholder is not settled.** A
+`pending` row with `schedule_entry_id IS NULL` means no committed
+`schedule_entry` existed as a candidate at all when the video was first
+scored -- most commonly a backdated/historical video synced before its
+matching `schedule_entry` was ever committed. `HasMatch` deliberately
+reports false for this row (unlike every other state), so the video is
+re-scored on every later `SyncOutcomes` cycle until either a real candidate
+appears or a human explicitly rejects it via `resolve_pending_match`.
+`MatchStore.Record` upserts on `video_schedule_match_synced_video_id_live`
+(migration 002's partial unique index) so a later re-score updates that same
+placeholder row in place instead of colliding with the unique index or
+leaving a stale duplicate; the `DO UPDATE ... WHERE` clause is scoped so a
+conflicting row that already carries a real `schedule_entry_id` is left
+untouched.
 
 Migration 003 (`003_web_session.up.sql`, issue #1570) lands `web_session`
 -- C1's Google sign-in session store (see "OAuth grants" above).
