@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/whale-net/everything/libs/go/htmxauth"
@@ -109,12 +108,14 @@ func (app *App) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 		user, err := app.auth.CurrentUser(withSession)
 		if err != nil {
-			log.Printf("leaflab-ui: FR2 upsert skipped — could not read back signed-in user: %v", err)
+			app.log().Warn("FR2 upsert skipped — could not read back signed-in user", "err", err)
 		} else if err := app.upsertLeafLabUser(r.Context(), user); err != nil {
 			// Best-effort relative to the sign-in itself: a failed upsert
 			// must not strand the user on an error page in the middle of
 			// an OAuth redirect. The next sign-in retries the upsert.
-			log.Printf("leaflab-ui: FR2 leaflab_user upsert failed for sub=%q: %v", user.Sub, err)
+			app.log().Warn("FR2 leaflab_user upsert failed", "sub", user.Sub, "err", err)
+		} else {
+			app.log().Info("leaflab_user upserted on sign-in", "sub", user.Sub, "preferred_username", user.PreferredUsername)
 		}
 	}
 

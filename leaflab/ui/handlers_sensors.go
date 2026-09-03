@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -137,7 +136,7 @@ func (app *App) handleSensorHistory(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		log.Printf("GetSensorReadingHistory(%d) failed: %v", sensorID, err)
+		app.log().Warn("GetSensorReadingHistory failed", "sensor_id", sensorID, "err", err)
 	}
 
 	layoutData := components.LayoutData{
@@ -148,10 +147,14 @@ func (app *App) handleSensorHistory(w http.ResponseWriter, r *http.Request) {
 	var chartData components.ReadingChartData
 	if err == nil {
 		chartData = toChartData(sensorID, unit, from, to, resp)
+		if resp.GetCapped() {
+			app.log().Warn("sensor history chart truncated — response hit the point cap",
+				"sensor_id", sensorID, "point_cap", resp.GetPointCap())
+		}
 	}
 
 	if renderErr := RenderTempl(w, r, "Sensor History", pages.SensorHistory(layoutData, boardID, deviceID, sensorID, sensorName, chartData, err)); renderErr != nil {
-		log.Printf("Error rendering sensor history page: %v", renderErr)
+		app.log().Error("failed to render sensor history page", "sensor_id", sensorID, "err", renderErr)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
@@ -209,9 +212,14 @@ func (app *App) handleSensorHistoryData(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		log.Printf("GetSensorReadingHistory(%d) failed: %v", sensorID, err)
+		app.log().Warn("GetSensorReadingHistory failed", "sensor_id", sensorID, "err", err)
 		http.Error(w, "failed to load reading history", http.StatusBadGateway)
 		return
+	}
+
+	if resp.GetCapped() {
+		app.log().Warn("sensor history chart data truncated — response hit the point cap",
+			"sensor_id", sensorID, "point_cap", resp.GetPointCap())
 	}
 
 	// unit is not carried on the wire response (ReadingChartData tags it
@@ -221,6 +229,6 @@ func (app *App) handleSensorHistoryData(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	if encErr := json.NewEncoder(w).Encode(data); encErr != nil {
-		log.Printf("failed to encode sensor history JSON for sensor %d: %v", sensorID, encErr)
+		app.log().Error("failed to encode sensor history JSON", "sensor_id", sensorID, "err", encErr)
 	}
 }
