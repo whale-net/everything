@@ -278,7 +278,7 @@ jobs:
         #
         # Uses --config=ci (defined in .bazelrc with --noimplicit_deps) and
         # --universe_scope to accelerate target discovery.
-        SCOPE='//libs/... + //tools/... + //manmanv2/...'
+        SCOPE='//libs/... + //tools/... + //manmanv2/... + //audience_score_system/...'
         TARGETS=$(bazel query \
           --config=ci \
           --universe_scope=//... \
