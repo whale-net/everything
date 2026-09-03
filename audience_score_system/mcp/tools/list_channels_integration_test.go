@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,13 +38,14 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
 // newListChannelsTestStack mirrors schedule_read_integration_test.go's
 // newScheduleTestStack: an isolated Postgres via dbtest with every real
 // embedded migration applied.
-func newListChannelsTestStack(t *testing.T) *store.Store {
+func newListChannelsTestStack(t *testing.T) (*store.Store, *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -56,7 +58,22 @@ func newListChannelsTestStack(t *testing.T) *store.Store {
 	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
 	require.NoError(t, runner.Up(), "apply every migration from the real embedded schema")
 
-	return store.New(pg.Pool)
+	return store.New(pg.Pool), pg.Pool
+}
+
+// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// mcp_credential table (migration 006) -- mirrors
+// schedule_read_integration_test.go's helper of the same name.
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+	t.Helper()
+	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+	return creds
 }
 
 type lcBearerRoundTripper struct{ token string }
@@ -94,14 +111,14 @@ func lcTextOf(res *mcp.CallToolResult) string {
 
 // newListChannelsTestServer wires a real *mcp.Server with list_channels
 // registered (mirroring ../main.go's production wiring), hosted over HTTP.
-func newListChannelsTestServer(t *testing.T, st *store.Store) *httptest.Server {
+func newListChannelsTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool) *httptest.Server {
 	t.Helper()
 
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterListChannels(reg, st.Roles())
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool))
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 	return ts
@@ -127,8 +144,9 @@ func lcCall(t *testing.T, cs *mcp.ClientSession) (*mcp.CallToolResult, tools.Lis
 // ── list_channels ────────────────────────────────────────────────────────
 
 func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *testing.T) {
-	st := newListChannelsTestStack(t)
+	st, pool := newListChannelsTestStack(t)
 	ctx := context.Background()
+	creds := newTestCredentialStore(t, pool)
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-creator", "lc-creator@example.com", "Creator")
 	require.NoError(t, err)
@@ -141,10 +159,10 @@ func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *te
 	require.NoError(t, err)
 	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
 
-	ts := newListChannelsTestServer(t, st)
+	ts := newListChannelsTestServer(t, st, pool)
 
 	t.Run("creator sees the channel with role creator", func(t *testing.T) {
-		token, _, err := st.Credentials().Mint(ctx, creator.ID)
+		token, _, err := creds.Mint(ctx, creator.ID.String())
 		require.NoError(t, err)
 		cs := lcConnectAs(t, ts, token)
 		res, out := lcCall(t, cs)
@@ -157,7 +175,7 @@ func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *te
 	})
 
 	t.Run("analyst sees the same channel with role analyst", func(t *testing.T) {
-		token, _, err := st.Credentials().Mint(ctx, analyst.ID)
+		token, _, err := creds.Mint(ctx, analyst.ID.String())
 		require.NoError(t, err)
 		cs := lcConnectAs(t, ts, token)
 		res, out := lcCall(t, cs)
@@ -168,7 +186,7 @@ func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *te
 	})
 
 	t.Run("unassociated Person sees an empty list, not an error", func(t *testing.T) {
-		token, _, err := st.Credentials().Mint(ctx, unassociated.ID)
+		token, _, err := creds.Mint(ctx, unassociated.ID.String())
 		require.NoError(t, err)
 		cs := lcConnectAs(t, ts, token)
 		res, out := lcCall(t, cs)
@@ -178,8 +196,9 @@ func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *te
 }
 
 func TestListChannels_MultipleChannels_AllReturned(t *testing.T) {
-	st := newListChannelsTestStack(t)
+	st, pool := newListChannelsTestStack(t)
 	ctx := context.Background()
+	creds := newTestCredentialStore(t, pool)
 
 	person, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-lc-multi", "lc-multi@example.com", "Multi")
 	require.NoError(t, err)
@@ -189,8 +208,8 @@ func TestListChannels_MultipleChannels_AllReturned(t *testing.T) {
 	chB, err := st.Channels().Create(ctx, "yt-list-channels-b", "Channel B", person.ID)
 	require.NoError(t, err)
 
-	ts := newListChannelsTestServer(t, st)
-	token, _, err := st.Credentials().Mint(ctx, person.ID)
+	ts := newListChannelsTestServer(t, st, pool)
+	token, _, err := creds.Mint(ctx, person.ID.String())
 	require.NoError(t, err)
 
 	cs := lcConnectAs(t, ts, token)
