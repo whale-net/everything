@@ -17,6 +17,7 @@ C11 — A Creator can manage multiple Channels.
 C12 — An Analyst can work across every Channel they're associated with.
 C13 — A Channel can have multiple Creators sharing ownership and decision authority.
 C14 — A Creator or Analyst can browse calibration trends (prediction accuracy over time) across many ideas, not just one at a time.
+C17 — A Creator or Analyst can ground a viability discussion in the Channel's own content history and comparable channels, not just topic research.
 
 ### Later
 C15 — A Creator can delegate close guidance of research steps to an Analyst, reducing the Creator's direct involvement in Loop 1.
