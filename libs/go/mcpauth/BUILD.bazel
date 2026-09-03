@@ -5,6 +5,8 @@ go_library(
     srcs = [
         "credential.go",
         "mcpauth.go",
+        "resolver.go",
+        "verify.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/mcpauth",
     visibility = ["//visibility:public"],
@@ -12,14 +14,21 @@ go_library(
         "@com_github_google_uuid//:uuid",
         "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
     ],
 )
 
 go_test(
     name = "mcpauth_test",
-    srcs = ["credential_test.go"],
+    srcs = [
+        "credential_test.go",
+        "resolver_test.go",
+        "verify_test.go",
+    ],
     embed = [":mcpauth"],
     deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],
