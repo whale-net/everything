@@ -23,13 +23,15 @@ Read via `//libs/go/db` (`web`, `mcp`, `worker`) and `//libs/go/migrate`
 
 ## Temporal
 
-Read via `//libs/go/temporal`'s `ConfigFromEnv` (`worker`).
+Read via `//libs/go/temporal`'s `ConfigFromEnv` (`worker`), plus
+`worker`'s own `ASS_SYNC_INTERVAL` (issue #1574, NFR4).
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
 | `TEMPORAL_HOST` | worker | `localhost:7233` | Temporal frontend service `host:port`. |
 | `TEMPORAL_NAMESPACE` | worker | `default` | Temporal namespace. |
-| `TEMPORAL_TASK_QUEUE` | worker | *(none)* | Task queue name for the per-Channel sync worker. No default — must be set explicitly. |
+| `TEMPORAL_TASK_QUEUE` | worker | `audience-score-system-sync` | Task queue name for the per-Channel sync worker (`sync.TaskQueue`). Unlike `//libs/go/temporal`'s own zero-default, `worker`'s `main.go` falls back to `sync.TaskQueue` when unset, mirroring `tools/app_registry/worker`'s identical fallback-to-package-constant pattern. |
+| `ASS_SYNC_INTERVAL` | worker | `20m` | How often `sync.ChannelSyncWorkflow` runs per connected Channel (a Go `time.Duration` string, e.g. `20m`). Must fall within NFR4's ~15-30 minute band (`sync.MinSyncInterval`/`sync.MaxSyncInterval`) — `worker` fails fast at startup on an out-of-band or unparseable value rather than silently clamping it. |
 
 ## Logging
 
