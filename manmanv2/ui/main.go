@@ -236,6 +236,13 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHome)))
 	mux.HandleFunc("/sessions", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessions)))
 	mux.HandleFunc("/sessions/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionDetail)))
+	// Registered ahead of (and more specific than) the "/sessions/" catch-all
+	// above: Go's ServeMux dispatches on longest-matching-pattern, so
+	// "/sessions/deployments/" wins over "/sessions/" for these paths and
+	// never reaches handleSessionDetail, which parses path segments
+	// positionally and would otherwise try (and fail) to parse
+	// "deployments" as a session id (#1627).
+	mux.HandleFunc("/sessions/deployments/", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleDeploymentAction)))
 	mux.HandleFunc("/sessions/start", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSessionStart)))
 	mux.HandleFunc("/api/sessions/check-active", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleCheckActiveSession)))
 	mux.HandleFunc("/api/sessions/historical-logs", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleHistoricalLogs)))

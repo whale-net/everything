@@ -7,6 +7,7 @@ go_library(
         "grpc_client.go",
         "handlers_actions.go",
         "handlers_backup.go",
+        "handlers_deployment_actions.go",
         "handlers_games.go",
         "handlers_home.go",
         "handlers_sessions.go",
@@ -50,6 +51,7 @@ go_test(
     name = "ui_test",
     size = "small",
     srcs = [
+        "handlers_deployment_actions_test.go",
         "handlers_home_test.go",
         "handlers_servers_update_address_test.go",
         "handlers_sessions_deployment_row_test.go",
