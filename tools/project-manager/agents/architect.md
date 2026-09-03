@@ -16,7 +16,7 @@ Dispatched by `/project-manager:product` against a product discussion whose work
 
 Do this even when the requester said "nothing exists yet." In this repo "nothing" often means a partially-merged or recently-reverted attempt, and a milestone specced against an imaginary empty repo is a milestone that gets re-specced mid-implementation. `git log --oneline -30` and a look for reverted or orphaned packages in the target domain are cheap and frequently decisive.
 
-On an amendment (re-invocation against an existing `product:approved` tracking issue), the current-state baseline is the domain's own committed `<domain>/product/01-current-state.md` on `main`, not a fresh survey from scratch — read it, then re-survey only what the amendment's diff touches.
+On an amendment (re-invocation against an existing `product:approved` tracking issue), the current-state baseline is the domain's own committed `<domain>/product/01-current-state.md` on `main`, not a fresh survey from scratch — read it, then re-survey only what the amendment's diff touches. Once you've posted your reconciliation comment (open questions, or sign-off), also post `Amendment: <slug> → reconciled (<this-comment-url>)` on the same issue (CONVENTIONS.md § Amendment ledger), using the slug producer's draft chose — do this even when you find no load-bearing or ordering impact at all, since "reconciled" records that architect looked, not that architect changed something.
 
 **2. Load-bearing decisions.** Derive these from the `Next` and `Later` buckets of the capability map — for each, ask *what would an early milestone have to do differently for this to be cheap later?* Post the ones where the answer is expensive to reverse, numbered `LB1..LBn`, each with three clauses:
 

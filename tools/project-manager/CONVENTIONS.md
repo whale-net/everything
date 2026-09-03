@@ -116,6 +116,19 @@ Each writer checks the root plan issue's first line for `Product: #<p> — Miles
 
 The spec is a living document but is never edited silently. `/project-manager:product <issue-number>` drafts the amendment as a comment on the tracking issue; architect reconciles it there if it touches load-bearing decisions or milestone ordering; once the user approves, producer opens a small PR editing whichever files the amendment actually touches — `PRODUCT.md` itself for a load-bearing or non-goal change, `product/02-capability-map.md` for a new capability, `product/03-roadmap.md` for a re-cut milestone (same mechanics as publishing — producer.md Mode P3) — and, once it merges, comments `Amended: <summary> (#<pr-number>)` on the tracking issue. A shipped milestone's history is never rewritten — ship what shipped, change what is ahead; git history on the files is the audit trail, so the issue comment only needs to summarize, not narrate, the diff.
 
+**Amendment ledger.** An amendment in flight otherwise has no queryable state the way a milestone does (§ Roadmap ledger above) — its comments are shaped by role (a draft, a sign-off, a terminal `Amended:` line), not a common prefix a reader can grep for. Close that gap the same way: producer picks a short kebab-case slug when it drafts (e.g. `channel-history-grounding`), and every stage of an amendment also gets its own append-only comment:
+
+```
+Amendment: <slug> → <status> (<link-or-none>)
+```
+
+Status moves `drafted → reconciled → merged`, one comment per transition, written by:
+- **producer** — `drafted`, linking its own draft comment, right after posting it.
+- **architect** — `reconciled`, linking its own reconciliation comment, right after posting sign-off — post it even when reconciliation finds no load-bearing/ordering impact at all; "reconciled" means "architect looked," not "architect changed something." If capped at 5 rounds without sign-off, post `reconciled` anyway, linking the summary comment, and say in it that the amendment stalled.
+- **producer** — `merged (#<pr-number>)` once the PR merges — the `Amended: <summary> (#<pr-number>)` comment still carries the human-readable summary; this line just makes the state grep-able alongside the others.
+
+Same rule as the roadmap ledger: the **last** `Amendment: <slug> →` comment on the issue wins; no such comment for a slug means that amendment hasn't reached that stage yet.
+
 ### When a milestone re-balloons
 
 Occasionally a single milestone's own design pass turns out to be product-sized again — the outcome sentence was right but the behavior needed to reach it wasn't as small as it looked. `/project-manager:design` step 0 flags this the same way it flags a fresh request: past roughly 20 FRs, it recommends running `/project-manager:product` on the milestone's draft instead of pushing the design through oversized. Because a product maps 1:1 to a domain, that recommendation only cleanly applies when the milestone genuinely spans a new domain-sized subsystem; if it's still one domain, splitting into an additional milestone of the existing brief is usually the better fix rather than nesting a second product under it. Either way this is a recommendation, not a block — the user decides.
