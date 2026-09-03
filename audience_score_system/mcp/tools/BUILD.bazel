@@ -11,6 +11,7 @@ go_library(
     srcs = [
         "research.go",
         "schedule_read.go",
+        "verdict.go",
         "whoami.go",
     ],
     importpath = "github.com/whale-net/everything/audience_score_system/mcp/tools",
@@ -19,6 +20,7 @@ go_library(
         "//audience_score_system/mcp/server",
         "//audience_score_system/store",
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
     ],
 )
@@ -27,16 +29,19 @@ go_library(
 # rule) and toResearchNoteOutput's Cited derivation (research.go), plus
 # get_channel_schedule's withinWindow from/to semantics and
 # getChannelScheduleHandler's include_drafts filtering (schedule_read.go,
-# issue #1576, driven against an in-memory store.SyncStore fake) -- no
-# Docker required, runs as part of `bazel test //...`. See
-# research_integration_test.go and schedule_read_integration_test.go
-# (this package, "integration" gotag) for the real-Postgres +
-# real-MCP-transport coverage these cannot fake.
+# issue #1576, driven against an in-memory store.SyncStore fake), plus
+# parseVerdictValue's enum-rejection and excerpt's rune-safe truncation
+# (verdict.go, issue #1578) -- no Docker required, runs as part of `bazel
+# test //...`. See research_integration_test.go,
+# schedule_read_integration_test.go, and verdict_integration_test.go (this
+# package, "integration" gotag) for the real-Postgres + real-MCP-transport
+# coverage these cannot fake.
 go_test(
     name = "tools_test",
     srcs = [
         "research_test.go",
         "schedule_read_test.go",
+        "verdict_test.go",
     ],
     embed = [":tools"],
     deps = [
@@ -109,6 +114,52 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["schedule_read_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# save_viability_verdict/get_viability_verdict (verdict.go, issue #1578):
+# FR12 append-only/never-UPDATE (byte-for-byte re-read of a prior version
+# after a later save), version allocation under genuine concurrency
+# (two simultaneous saves converge on versions 1 and 2, no lost write),
+# idea_id-not-belonging-to-channel_id rejection, citation validation
+# (same-Channel, exists) rejecting the whole write atomically, NFR2
+# idempotency replay/conflict semantics, Creator+Analyst write /
+# unassociated-Person-denied authz, FR13's current+full-history-in-one-call
+# shape (including the no-verdict-yet null/empty case), and FR10's cited
+# boolean on resolved citations -- all against the real embedded schema and
+# a real HTTP-hosted MCP server, mirroring research_integration_test.go's
+# pattern. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:verdict_integration_test --test_output=all
+go_test(
+    # keep
+    name = "verdict_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["verdict_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",
