@@ -31,20 +31,24 @@ func NewRegistry(srv *mcp.Server, st *store.Store) *Registry {
 // (channelscope.go), every call is authorized via store.CanRead before h
 // runs -- a caller with no live channel_person row for the requested
 // Channel gets a permission error and h is never entered. Tools whose
-// input carries no channel_id (e.g. whoami) are unaffected.
+// input carries no channel_id (e.g. whoami) are unaffected. Every call --
+// authorized or rejected -- is traced and logged by instrumentToolCall
+// (observability.go).
 func RegisterRead[In, Out any](reg *Registry, tool *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		var zero Out
-		person := PersonFromContext(ctx)
-		if person == nil {
-			return nil, zero, fmt.Errorf("unauthenticated: no caller credential resolved")
-		}
-		if scoped, ok := any(in).(ChannelScoped); ok {
-			if err := RequireChannelRole(ctx, reg.roles, store.CanRead, scoped.ChannelScopeID(), person.ID); err != nil {
-				return nil, zero, err
+		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
+			var zero Out
+			person := PersonFromContext(ctx)
+			if person == nil {
+				return nil, zero, fmt.Errorf("unauthenticated: no caller credential resolved")
 			}
-		}
-		return h(ctx, req, in)
+			if scoped, ok := any(in).(ChannelScoped); ok {
+				if err := RequireChannelRole(ctx, reg.roles, store.CanRead, scoped.ChannelScopeID(), person.ID); err != nil {
+					return nil, zero, err
+				}
+			}
+			return h(ctx, req, in)
+		})
 	}
 	mcp.AddTool(reg.server, tool, wrapped)
 }
@@ -81,42 +85,45 @@ type WriteRender[Out any] func(ctx context.Context, ref uuid.UUID) (*mcp.CallToo
 // computed here via computeFingerprint and RunIdempotent -- so a tool
 // author cannot forget it. A tool whose input carries no key (or doesn't
 // implement IdempotencyKeyed) runs mutate directly every call and must be
-// safe via natural-key upsert instead.
+// safe via natural-key upsert instead. Every call -- authorized or
+// rejected -- is traced and logged by instrumentToolCall (observability.go).
 func RegisterWrite[In, Out any](reg *Registry, tool *mcp.Tool, mutate WriteMutate[In], render WriteRender[Out]) {
 	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		var zero Out
-		person := PersonFromContext(ctx)
-		if person == nil {
-			return nil, zero, fmt.Errorf("unauthenticated: no caller credential resolved")
-		}
-		if scoped, ok := any(in).(ChannelScoped); ok {
-			if err := RequireChannelRole(ctx, reg.roles, store.CanWrite, scoped.ChannelScopeID(), person.ID); err != nil {
-				return nil, zero, err
+		return instrumentToolCall(ctx, tool.Name, func(ctx context.Context) (*mcp.CallToolResult, Out, error) {
+			var zero Out
+			person := PersonFromContext(ctx)
+			if person == nil {
+				return nil, zero, fmt.Errorf("unauthenticated: no caller credential resolved")
 			}
-		}
+			if scoped, ok := any(in).(ChannelScoped); ok {
+				if err := RequireChannelRole(ctx, reg.roles, store.CanWrite, scoped.ChannelScopeID(), person.ID); err != nil {
+					return nil, zero, err
+				}
+			}
 
-		runMutate := func(ctx context.Context) (uuid.UUID, error) { return mutate(ctx, in) }
+			runMutate := func(ctx context.Context) (uuid.UUID, error) { return mutate(ctx, in) }
 
-		var ref uuid.UUID
-		if keyed, ok := any(in).(IdempotencyKeyed); ok && keyed.IdempotencyKey() != "" {
-			fingerprint, err := computeFingerprint(tool.Name, in)
-			if err != nil {
-				return nil, zero, fmt.Errorf("compute idempotency fingerprint: %w", err)
+			var ref uuid.UUID
+			if keyed, ok := any(in).(IdempotencyKeyed); ok && keyed.IdempotencyKey() != "" {
+				fingerprint, err := computeFingerprint(tool.Name, in)
+				if err != nil {
+					return nil, zero, fmt.Errorf("compute idempotency fingerprint: %w", err)
+				}
+				r, _, err := RunIdempotent(ctx, reg.idempotency, tool.Name, person.ID, keyed.IdempotencyKey(), fingerprint, runMutate)
+				if err != nil {
+					return nil, zero, err
+				}
+				ref = r
+			} else {
+				r, err := runMutate(ctx)
+				if err != nil {
+					return nil, zero, err
+				}
+				ref = r
 			}
-			r, _, err := RunIdempotent(ctx, reg.idempotency, tool.Name, person.ID, keyed.IdempotencyKey(), fingerprint, runMutate)
-			if err != nil {
-				return nil, zero, err
-			}
-			ref = r
-		} else {
-			r, err := runMutate(ctx)
-			if err != nil {
-				return nil, zero, err
-			}
-			ref = r
-		}
 
-		return render(ctx, ref)
+			return render(ctx, ref)
+		})
 	}
 	mcp.AddTool(reg.server, tool, wrapped)
 }

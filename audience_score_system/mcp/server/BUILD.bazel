@@ -12,6 +12,7 @@ go_library(
         "channelscope.go",
         "context.go",
         "idempotency.go",
+        "observability.go",
         "registry.go",
         "server.go",
         "transport.go",
@@ -20,9 +21,12 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//audience_score_system/store",
+        "//libs/go/logging",
         "@com_github_google_uuid//:uuid",
         "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
     ],
 )
 

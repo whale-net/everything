@@ -167,6 +167,27 @@ produces identical results to the first. Enforce this in review: a
 handler or middleware that introduces an in-memory cache/map keyed by
 caller or session violates LB4 even if it "only" affects performance.
 
+### MCP server: observability
+
+`mcp/main.go` configures `//libs/go/logging` the same way `web` and
+`worker` do (`ServiceName: "audience-score-system-mcp"`, OTLP logs +
+tracing enabled) and wraps its HTTP handler in `otelhttp.NewHandler` --
+but every MCP tool call multiplexes over that one HTTP endpoint as
+JSON-RPC, so an HTTP-level span alone never shows which tool ran, for
+which caller, or whether it succeeded. `mcp/server/observability.go`'s
+`instrumentToolCall` closes that gap: `RegisterRead`/`RegisterWrite`
+(`registry.go`) route every registered tool's full call -- including the
+unauthenticated/permission-denied paths they check before the product
+handler runs, not just the handler itself -- through it, so a tool author
+gets a `mcp.tool/<name>` trace span and a structured success/failure log
+line (tool, resolved caller, duration) the same way they already get
+Channel-scope authorization and idempotency: by going through the
+registry, not by remembering to add it themselves. Rejections that never
+reach the registry -- `PersonMiddleware`'s caller-identity checks and
+`TokenVerifier`'s bearer-token verification (both `auth.go`) -- log
+directly at `Warn` against the same package-level logger, never including
+the raw token or its hash.
+
 ## Component map
 
 | Component | Binary | `release_app` identity | Responsibility |

@@ -42,12 +42,17 @@ import (
 // auth.RequireBearerToken middleware (transport.go) uses: it hashes the
 // raw bearer token (never storing or logging the raw value) and resolves
 // it to a Person via credentials.VerifyTokenHash, reporting the resolved
-// PersonID as auth.TokenInfo.UserID.
+// PersonID as auth.TokenInfo.UserID. A failed verification is logged at
+// Warn (never the raw token or its hash -- only that verification
+// failed) so a spike in invalid/revoked-credential attempts is visible
+// without needing a tool-level span, since a rejection here never reaches
+// instrumentToolCall (observability.go).
 func TokenVerifier(credentials store.CredentialStore) sdkauth.TokenVerifier {
 	return func(ctx context.Context, token string, _ *http.Request) (*sdkauth.TokenInfo, error) {
 		sum := sha256.Sum256([]byte(token))
 		personID, err := credentials.VerifyTokenHash(ctx, hex.EncodeToString(sum[:]))
 		if err != nil {
+			logger.WarnContext(ctx, "mcp bearer token verification failed", "error", err.Error())
 			return nil, fmt.Errorf("%w: %v", sdkauth.ErrInvalidToken, err)
 		}
 		return &sdkauth.TokenInfo{UserID: personID.String()}, nil
@@ -62,21 +67,28 @@ func TokenVerifier(credentials store.CredentialStore) sdkauth.TokenVerifier {
 // calling next. A call with no resolved TokenInfo, an unparseable UserID,
 // or a UserID that doesn't resolve to a real Person is rejected here and
 // next is never invoked -- the handler cannot be entered unauthenticated.
+// Every rejection is logged at Warn with the JSON-RPC method (e.g.
+// "tools/call") -- these calls never reach instrumentToolCall
+// (observability.go), since that only wraps a tool once RegisterRead/
+// RegisterWrite's mcp.AddTool handler is actually entered.
 func PersonMiddleware(persons store.PersonStore) mcp.Middleware {
 	return func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			extra := req.GetExtra()
 			if extra == nil || extra.TokenInfo == nil || extra.TokenInfo.UserID == "" {
+				logger.WarnContext(ctx, "mcp call rejected: no caller credential resolved", "method", method)
 				return nil, fmt.Errorf("unauthenticated: no caller credential resolved")
 			}
 
 			personID, err := uuid.Parse(extra.TokenInfo.UserID)
 			if err != nil {
+				logger.WarnContext(ctx, "mcp call rejected: invalid caller identity", "method", method)
 				return nil, fmt.Errorf("unauthenticated: invalid caller identity")
 			}
 
 			person, err := persons.GetByID(ctx, personID)
 			if err != nil {
+				logger.WarnContext(ctx, "mcp call rejected: caller identity not found", "method", method, "person_id", personID)
 				return nil, fmt.Errorf("unauthenticated: caller identity not found")
 			}
 
