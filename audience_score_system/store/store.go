@@ -8,8 +8,9 @@
 //
 // Store is the single entry point, built over //libs/go/db's
 // *pgxpool.Pool. Its Persons/Channels/Roles/Invites/Ideas/Research/
-// Verdicts/Pacing/Schedules/Sync/Matches/Idempotency accessors hand back
-// the per-entity Store implementations -- kept as separate concrete types,
+// Verdicts/Pacing/Schedules/Sync/Matches/Idempotency/Credentials accessors
+// hand back the per-entity Store implementations -- kept as separate
+// concrete types,
 // not all methods on Store itself, because e.g. PersonStore.GetByID and
 // ChannelStore.GetByID share a method name but return different types; a
 // single receiver type cannot implement both.
@@ -75,3 +76,7 @@ func (s *Store) Matches() MatchStore { return matchStore{pool: s.pool} }
 // Idempotency returns the Idempotency implementation (migration 002,
 // NFR2/LB4).
 func (s *Store) Idempotency() Idempotency { return idempotencyStore{pool: s.pool} }
+
+// Credentials returns the CredentialStore implementation (migration 005,
+// issue #1575) -- `mcp`'s bearer-credential-to-Person auth mechanism.
+func (s *Store) Credentials() CredentialStore { return credentialStore{pool: s.pool} }

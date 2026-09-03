@@ -84,3 +84,14 @@ exists to avoid paying twice, so it is deferred until a monetary-adjacent
 field is genuinely wanted — at which point that is its own
 scope-and-re-consent decision, not something to have silently pre-granted
 here.
+
+## MCP (C4-C7, C9, C10: MCP server foundation)
+
+Read by `mcp`'s `main.go`. See `ARCHITECTURE.md`'s "MCP server: caller
+authentication" for how a caller authenticates — there is no MCP-specific
+client-secret variable here, because `mcp_credential` (migration 005)
+stores only a SHA-256 hash, not a reversible secret.
+
+| Variable | Component | Default | Description |
+|----------|-----------|---------|--------------|
+| `ASS_MCP_ADDR` | mcp | `:8081` | HTTP listen address for the `mcp` binary (streamable HTTP transport). |

@@ -50,13 +50,120 @@ Channel-level OAuth token flow (C2). See
 `//audience_score_system/deps` for the compile-only smoke target proving
 all three packages resolve under Bazel.
 
+### MCP server: caller authentication
+
+**Decision (resolved for #1575's Scaffold phase, before any of this task's
+Implementation work landed):** an MCP client authenticates as a Person
+with a bearer credential that `mcp`'s auth middleware
+(`audience_score_system/mcp/server/auth.go`) resolves to `person.id`
+server-side. The credential is a high-entropy random token; only its
+SHA-256 hash is ever persisted, in `mcp_credential` (migration 005,
+`audience_score_system/store/credential.go`'s `CredentialStore`) — the raw
+token is shown to the Person exactly once, at mint time, and is never
+recoverable from the database afterward.
+
+- **(a) Obtained:** minted by an authenticated endpoint on `web`, reusing
+  the Person's existing C1 sign-in session (`web/auth`'s
+  `RequireSignedIn`) rather than any new credential-collection UI. That
+  endpoint is not yet built — this task lands the schema and store
+  interface (`CredentialStore.Mint`) it will call; adding the endpoint
+  itself is filed as a scope note (no other M1 task owns it).
+- **(b) Revoked:** `CredentialStore.Revoke` closes a credential by setting
+  `revoked_at`; a revoked credential's hash no longer resolves in
+  `VerifyTokenHash`, so any MCP call bearing it is rejected on the next
+  request without needing to invalidate anything client-side. Revocation
+  is idempotent (NFR2) — revoking an already-revoked or nonexistent
+  credential is not an error.
+- **(c) NFR3 rationale:** minting a credential is sign-in machinery — it
+  bootstraps an already-authenticated Person's access to `mcp`, the same
+  way `web/auth`'s OAuth callback bootstraps access to `web`. It performs
+  none of C4-C10's actions itself (no research notes, verdicts, schedule
+  drafts, pacing, outcome confirmation, or browsing happen at mint time),
+  so it does not grow a new capability surface on `web` and NFR3 stands.
+
+Mechanically, resolution happens in two layers (see
+`audience_score_system/mcp/server/`):
+
+1. **HTTP layer** (`transport.go`): `auth.RequireBearerToken` (from the
+   vendored SDK's `auth` package) wraps the streamable HTTP handler,
+   calling `TokenVerifier` (`auth.go`) to hash the raw token and resolve it
+   via `CredentialStore.VerifyTokenHash`, producing an `auth.TokenInfo`
+   whose `UserID` is the resolved Person's ID. Credentials do not expire on
+   a timer (they live until revoked), so `AllowMissingExpiration: true` is
+   set rather than requiring a per-token `exp` claim.
+2. **MCP-protocol layer** (`server.go`/`auth.go`): `PersonMiddleware`, wired
+   via `mcp.Server.AddReceivingMiddleware`, reads that `TokenInfo` off each
+   request's `RequestExtra`, resolves the full `store.Person`, and places
+   it on the handler's `context.Context` (`PersonFromContext`,
+   `context.go`). A request with no resolved `TokenInfo`, or a `UserID`
+   that doesn't resolve to a real Person, is rejected here — the tool
+   handler is never entered.
+
+`CredentialStore.VerifyTokenHash`, `Mint`, `Revoke`, and `ListForPerson`
+(issue #1575's Implementation phase) are real SQL-backed implementations
+against `mcp_credential` — `VerifyTokenHash` also stamps `last_used_at` in
+the same round trip, so it doubles as the "last seen" signal for a future
+credential-management view (see issue #1591's scope note).
+
+### MCP server: Channel-scoping and idempotency middleware
+
+Both wired into `mcp/server/registry.go`'s `RegisterRead`/`RegisterWrite`
+so a product tool author gets them automatically rather than having to
+remember to call them:
+
+- **Channel-scoping (NFR5):** a tool's input type opts in by implementing
+  `ChannelScoped` (`channelscope.go`, one `ChannelScopeID() uuid.UUID`
+  method). `RegisterRead`/`RegisterWrite` type-assert each call's decoded
+  input against that interface at call time and, when it matches, run
+  `RequireChannelRole` against `store.CanRead`/`store.CanWrite` before the
+  handler runs — a caller with no live `channel_person` row for that
+  Channel gets a permission error and the handler is never entered. A tool
+  whose input carries no `channel_id` (only `whoami` today) simply doesn't
+  implement the interface and is left unscoped; this is deliberate, not an
+  oversight — NFR5 only applies to Channel-scoped data.
+- **Idempotency (NFR2/LB4):** `RegisterWrite` splits a write tool into a
+  `WriteMutate` step (the side-effecting write, returning the UUID of the
+  entity it created or affected) and a `WriteRender` step (builds the
+  tool's structured response from that ref). This split exists because
+  `store.Idempotency.Do` (already real, migration 002/#1569) only ever
+  persists/returns a UUID (`mcp_idempotency.result_ref`) — there is
+  nowhere in that ledger to cache an arbitrary tool response, so replaying
+  a call means re-deriving the response from the ref via `WriteRender`,
+  not replaying a cached response body; `WriteRender` runs on every call,
+  first run and every replay alike, so a write tool's response always
+  reflects current DB state. A tool's input opts into key-based replay by
+  implementing `IdempotencyKeyed` (`idempotency.go`, one
+  `IdempotencyKey() string` method) and returning a nonempty key;
+  `RegisterWrite` then computes `request_fingerprint` as a stable hash of
+  the tool name plus the input's JSON encoding and runs `WriteMutate`
+  under `store.Idempotency.Do`'s guard. A tool with no key (or whose input
+  doesn't implement `IdempotencyKeyed`) runs `WriteMutate` directly every
+  call and must be safe via natural-key upsert instead — per this task's
+  Implementation notes, every write tool states which of the two
+  mechanisms it uses.
+
+### MCP server: statelessness (LB4)
+
+`mcp` holds no server-side per-session state beyond Postgres. `server.New`
+builds one `*mcp.Server` from a `*store.Store` and nothing else; the
+streamable HTTP handler's `getServer` callback (`transport.go`) always
+returns that same instance, never constructing per-request state, and no
+package in `audience_score_system/mcp/...` keeps an in-memory map keyed by
+session or conversation ID. Every cross-cutting concern this task owns —
+caller identity, Channel-scope authorization, and the idempotency ledger —
+resolves through a Postgres read/write on every call, so a second,
+independently-constructed server instance sharing the same database
+produces identical results to the first. Enforce this in review: a
+handler or middleware that introduces an in-memory cache/map keyed by
+caller or session violates LB4 even if it "only" affects performance.
+
 ## Component map
 
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
 | `web` | `audience_score_system/web` (scaffold only, #1570) | `web` (external-api) | The **only** UI surface. Limited to C1/C2/C3/C8 (see "NFR3 interface allocation" below). |
-| `mcp` | `audience_score_system/mcp` (not yet built) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10): research notes, viability verdicts, schedule sync reads, schedule draft proposals, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
+| `mcp` | `audience_score_system/mcp` (scaffold only, #1575) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10): research notes, viability verdicts, schedule sync reads, schedule draft proposals, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (not yet built) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 

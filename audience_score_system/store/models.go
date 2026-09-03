@@ -231,6 +231,20 @@ type VideoScheduleMatch struct {
 	CreatedAt          time.Time
 }
 
+// MCPCredential is one row of `mcp_credential` (migration 005, issue
+// #1575) -- the bearer credential `mcp` resolves to a Person. TokenHash is
+// the SHA-256 hash of the raw token; the raw token itself is never
+// persisted (see migration 005's comment). RevokedAt nil means the
+// credential is still live.
+type MCPCredential struct {
+	ID         uuid.UUID
+	PersonID   uuid.UUID
+	TokenHash  string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+	RevokedAt  *time.Time
+}
+
 // PredictionVsOutcome is one row of the `v_prediction_vs_outcome` view
 // (migration 002, FR24) -- the pre-joined idea x current-verdict x
 // committed-schedule-entry x resolved-match x synced-video x
