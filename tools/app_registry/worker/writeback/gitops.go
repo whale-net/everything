@@ -271,9 +271,11 @@ func (a *GitOpsActivities) Publish(ctx context.Context, state RenderedState) (Pu
 // activity RetryPolicy (5 attempts, see workflow.go) covers further
 // retries from a fresh clone.
 func (a *GitOpsActivities) publishToClone(ctx context.Context, repoDir, branch, relPath string, doc []byte, token string) (PublishResult, error) {
+	log := workerLog
 	if skip, err := isNoOp(repoDir, relPath, doc); err != nil {
 		return PublishResult{}, err
 	} else if skip {
+		log.Info("gitops writeback skipped, state unchanged", "path", relPath, "branch", branch)
 		return PublishResult{Location: relPath, Skipped: true}, nil
 	}
 	if err := writeAndCommit(ctx, repoDir, relPath, doc, a.Config.AuthorName, a.Config.AuthorEmail, token); err != nil {
@@ -284,12 +286,17 @@ func (a *GitOpsActivities) publishToClone(ctx context.Context, repoDir, branch, 
 		if err != nil {
 			return PublishResult{}, err
 		}
+		log.Info("gitops writeback published", "path", relPath, "branch", branch, "commit_sha", sha)
 		return PublishResult{Location: relPath, CommitSHA: sha}, nil
 	}
 
 	// Push was rejected -- re-fetch the branch's current tip and re-check
 	// no-op against what's actually there now, per this method's doc
-	// comment.
+	// comment. Warn, not Info: this is a real concurrent-writer collision
+	// (someone else published to the same file since this clone was made),
+	// not routine operation -- worth standing out even though this method
+	// recovers from it automatically.
+	log.Warn("gitops push rejected, retrying after re-fetch", "path", relPath, "branch", branch)
 	if err := runGit(ctx, repoDir, token, "fetch", "origin", branch); err != nil {
 		return PublishResult{}, fmt.Errorf("push conflict retry: fetch: %w", err)
 	}
@@ -299,6 +306,7 @@ func (a *GitOpsActivities) publishToClone(ctx context.Context, repoDir, branch, 
 	if skip, err := isNoOp(repoDir, relPath, doc); err != nil {
 		return PublishResult{}, err
 	} else if skip {
+		log.Info("gitops writeback skipped after retry, state unchanged", "path", relPath, "branch", branch)
 		return PublishResult{Location: relPath, Skipped: true}, nil
 	}
 	if err := writeAndCommit(ctx, repoDir, relPath, doc, a.Config.AuthorName, a.Config.AuthorEmail, token); err != nil {
@@ -311,6 +319,7 @@ func (a *GitOpsActivities) publishToClone(ctx context.Context, repoDir, branch, 
 	if err != nil {
 		return PublishResult{}, err
 	}
+	log.Info("gitops writeback published after retry", "path", relPath, "branch", branch, "commit_sha", sha)
 	return PublishResult{Location: relPath, CommitSHA: sha}, nil
 }
 

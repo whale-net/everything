@@ -304,8 +304,14 @@ func (d *GitHubDispatcher) PollRun(ctx context.Context, ref BuildRef) (BuildStat
 			return BuildStatus{}, fmt.Errorf("poll build %s: %w", ref.RunID, err)
 		}
 		if run.Status == "completed" {
+			succeeded := run.Conclusion == "success"
+			if succeeded {
+				workerLog.Info("github actions run completed", "run_id", ref.RunID, "run_url", run.HTMLURL, "conclusion", run.Conclusion)
+			} else {
+				workerLog.Warn("github actions run completed without success", "run_id", ref.RunID, "run_url", run.HTMLURL, "conclusion", run.Conclusion)
+			}
 			return BuildStatus{
-				Succeeded: run.Conclusion == "success",
+				Succeeded: succeeded,
 				Detail:    fmt.Sprintf("run %s conclusion=%s", ref.RunID, run.Conclusion),
 			}, nil
 		}

@@ -490,6 +490,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			detail := fmt.Sprintf("%s: no build-manifest entry in run %s", fullName, ref.RunID)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
+			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
 		}
 		appDigests[fullName] = m.Digest
@@ -513,6 +514,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			detail := fmt.Sprintf("%s: finalize-app: %v", fullName, err)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
+			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
 		}
 
@@ -616,6 +618,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			detail := fmt.Sprintf("%s: no chart-sources manifest entry in run %s", fullName, ref.RunID)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
+			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
 		}
 
@@ -639,6 +642,7 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 			detail := fmt.Sprintf("%s: finalize-chart: %v", fullName, err)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
+			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
 		}
 
@@ -659,8 +663,11 @@ func (a *Activities) FinalizePublish(ctx context.Context, plan ResolvedPlan, ref
 	}
 
 	if len(failures) > 0 {
+		workerLog.Warn("finalize publish completed with failures",
+			"run_id", ref.RunID, "target_count", len(apps)+len(charts), "failure_count", len(failures))
 		return FinalizeResult{Succeeded: false, Detail: strings.Join(failures, "; "), Targets: finalizeTargets}, nil
 	}
+	workerLog.Info("finalize publish succeeded", "run_id", ref.RunID, "target_count", len(finalizeTargets))
 	return FinalizeResult{Succeeded: true, Targets: finalizeTargets}, nil
 }
 
@@ -871,6 +878,7 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 				detail := fmt.Sprintf("%s: construct release-tools S3 client: %v", fullName, err)
 				finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 				failures = append(failures, detail)
+				workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 				continue
 			}
 			uploader = u
@@ -882,6 +890,7 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 			detail := fmt.Sprintf("%s: no cli-binaries artifact entry for %q (expected dir %s)", fullName, binaryName, binDir)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
+			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
 		}
 
@@ -919,6 +928,7 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 			detail := fmt.Sprintf("%s: publish cli binaries: %v", fullName, uploadErr)
 			finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 			failures = append(failures, detail)
+			workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 			continue
 		}
 
@@ -927,9 +937,11 @@ func (a *Activities) publishCLIBinaries(ctx context.Context, apps []string, vers
 				detail := fmt.Sprintf("%s: record published artifact in App Registry: %v", fullName, err)
 				finalizeTargets[key] = FinalizeTargetOutcome{Failed: true, Detail: detail}
 				failures = append(failures, detail)
+				workerLog.Warn("finalize target failed", "target", fullName, "detail", detail)
 				continue
 			}
 		}
+		workerLog.Info("cli binary published", "target", fullName, "version", version)
 		finalizeTargets[key] = FinalizeTargetOutcome{EffectiveVersion: version}
 	}
 

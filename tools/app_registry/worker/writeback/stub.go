@@ -103,6 +103,7 @@ func (a *StubActivities) Publish(ctx context.Context, state RenderedState) (Publ
 		// already matches, so writing again would be a byte-identical,
 		// pointless commit -- see ARCHITECTURE.md "Activities are
 		// individually retryable and idempotent."
+		workerLog.Info("writeback publish skipped, state unchanged", "environment_key", state.EnvironmentKey, "location", docPath)
 		return PublishResult{Location: docPath, Skipped: true}, nil
 	}
 
@@ -112,5 +113,6 @@ func (a *StubActivities) Publish(ctx context.Context, state RenderedState) (Publ
 	if err := os.WriteFile(hashPath, []byte(state.StateHash), 0o644); err != nil {
 		return PublishResult{}, fmt.Errorf("write state hash to %s: %w", hashPath, err)
 	}
+	workerLog.Info("writeback published (stub)", "environment_key", state.EnvironmentKey, "location", docPath)
 	return PublishResult{Location: docPath}, nil
 }

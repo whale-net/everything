@@ -15,9 +15,19 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/tools/app_registry/events"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 )
+
+// workerLog is this package's logger, shared by every activity file here.
+// Deliberately a package-level slog logger via logging.Get, not
+// activity.GetLogger(ctx): several of these methods are called directly by
+// unit tests with a plain context.Background() (not through Temporal's
+// activity execution machinery), and activity.GetLogger panics outside a
+// real activity context -- see worker/reaper and worker/outbox for the same
+// "background component gets its own slog logger" precedent.
+var workerLog = logging.Get("app-registry-worker-writeback")
 
 // Recorder implements the RecordWritebackResult activity against
 // repository.Registry. Constructed and registered by ../main.go alongside
@@ -47,6 +57,7 @@ func (r *Recorder) RecordWritebackResult(ctx context.Context, promotionID, locat
 	if err := r.Registry.Writeback().RecordResult(ctx, "", promotionID, location, commitSHA); err != nil {
 		return fmt.Errorf("record writeback result for promotion %s: %w", promotionID, err)
 	}
+	workerLog.Info("writeback result recorded", "promotion_id", promotionID, "location", location, "commit_sha", commitSHA)
 
 	// FR7a/FR7c: publish after write commits, but only if publisher is configured.
 	// Publish errors are discarded and logged by the publisher; see #1130 for details.

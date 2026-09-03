@@ -2,13 +2,21 @@ package handlers
 
 import (
 	"context"
+	"log/slog"
 
+	"github.com/whale-net/everything/libs/go/logging"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
 	"github.com/whale-net/everything/tools/app_registry/server/repository"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// environmentLog is this file's logger name, matching app.go/artifact.go/
+// promotion.go's *Log pattern -- every write RPC here is admin-only and
+// rare, so each is worth a durable audit record beyond the generic gRPC
+// interceptor's method/code/duration line.
+var environmentLog = logging.Get("app-registry-handlers")
 
 // EnvironmentServer implements pb.EnvironmentRegistryServer, backed by
 // repository.Registry. Role: admin for every RPC's write path, per
@@ -51,6 +59,11 @@ func (s *EnvironmentServer) UpsertEnvironment(ctx context.Context, req *pb.Upser
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
+	environmentLog.Info("environment upserted",
+		slog.String("key", req.Key),
+		slog.Bool("created", created),
+		slog.Int("rank", int(req.Rank)),
+	)
 	return &pb.UpsertEnvironmentResponse{Environment: environmentToPB(*env), Created: created}, nil
 }
 
@@ -94,5 +107,9 @@ func (s *EnvironmentServer) ArchiveEnvironment(ctx context.Context, req *pb.Arch
 	if err != nil {
 		return nil, mapRepoErr(err)
 	}
+	environmentLog.Info("environment archived",
+		slog.String("key", req.Key),
+		slog.String("reason", req.Reason),
+	)
 	return &pb.ArchiveEnvironmentResponse{Environment: environmentToPB(*env)}, nil
 }

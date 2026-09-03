@@ -163,6 +163,8 @@ func (a *ArgoSyncActivities) TriggerArgoRefresh(ctx context.Context, in ArgoSync
 	if _, err := a.recordSyncEvent(ctx, in.PromotionID, source, "", ""); err != nil {
 		return fmt.Errorf("trigger argo refresh for promotion %s: %w", in.PromotionID, err)
 	}
+	workerLog.Info("argo refresh triggered",
+		"promotion_id", in.PromotionID, "domain", in.Domain, "application_name", in.ApplicationName, "is_retry", in.IsRetry)
 	return nil
 }
 
@@ -214,6 +216,8 @@ func (a *ArgoSyncActivities) PollArgoSyncStatus(ctx context.Context, in ArgoSync
 		last = ArgoSyncResult{SyncStatus: syncStatus, HealthStatus: healthStatus}
 		if isTerminalArgoSyncState(syncStatus, healthStatus) {
 			last.Terminal = true
+			workerLog.Info("argo sync reached terminal state",
+				"promotion_id", in.PromotionID, "attempt", attempt, "sync_status", syncStatus, "health_status", healthStatus)
 			return last, nil
 		}
 
@@ -228,7 +232,13 @@ func (a *ArgoSyncActivities) PollArgoSyncStatus(ctx context.Context, in ArgoSync
 	}
 	// FR5: exhausted every attempt without reaching terminal -- the
 	// last-observed pair stands as "still pending". Must never fail the
-	// workflow (see doc comment above).
+	// workflow (see doc comment above), but it's a real signal an operator
+	// should be able to find without digging through Temporal's own event
+	// history: ArgoCD taking longer than ~6 minutes to settle usually means
+	// something downstream (the workload itself, not this activity) needs
+	// attention.
+	workerLog.Warn("argo sync did not reach terminal state within poll budget",
+		"promotion_id", in.PromotionID, "attempts", pollArgoSyncMaxAttempts, "sync_status", last.SyncStatus, "health_status", last.HealthStatus)
 	return last, nil
 }
 

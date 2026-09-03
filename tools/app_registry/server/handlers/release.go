@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/libs/go/semver"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
@@ -16,6 +18,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// releaseLog is this file's logger name, matching this package's other
+// *Log vars -- a release run's start is a durable business fact ("who
+// triggered what, and under which workflow") the generic gRPC interceptor
+// log doesn't carry.
+var releaseLog = logging.Get("app-registry-handlers")
 
 // releaseTriggerEnv is the environment key server/auth.RequirePromoter is
 // checked against for ReleaseRegistry writes. TriggerRelease has no
@@ -199,7 +207,17 @@ func (s *ReleaseServer) TriggerRelease(ctx context.Context, req *pb.TriggerRelea
 		switch {
 		case werr == nil:
 			// Started (or, per Temporal's own dedup, already running under
-			// this exact workflow id) -- see this method's doc comment.
+			// this exact workflow id) -- see this method's doc comment. Info,
+			// not Debug: "what release ran, on whose request, over which
+			// targets" is exactly the audit trail an operator reaches for
+			// when a release goes wrong later.
+			releaseLog.Info("release triggered",
+				slog.String("release_run_id", created.ReleaseRunID),
+				slog.String("workflow_id", workflowID),
+				slog.String("triggered_by", run.TriggeredBy),
+				slog.String("requested_scope", req.GetRequestedScope()),
+				slog.Int("target_count", len(releaseTargets)),
+			)
 		case errors.As(werr, &alreadyStarted):
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"a release for these exact targets is already in progress (workflow %s)", workflowID)
