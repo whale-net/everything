@@ -131,7 +131,11 @@ func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
 	tools.RegisterVerdict(reg, st)
 	tools.RegisterScheduleDraft(reg, st)
 
-	handler := server.NewHTTPHandler(srv, creds)
+	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 

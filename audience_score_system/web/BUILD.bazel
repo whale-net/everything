@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 load("//tools/bazel:release.bzl", "release_app")
 
 # `web` -- Audience Score System's only UI surface (NFR3): Google OAuth
@@ -25,6 +25,7 @@ go_library(
         "//audience_score_system/worker/sync",
         "//libs/go/db",
         "//libs/go/logging",
+        "//libs/go/mcpauth",
         "//libs/go/temporal",
         "@com_github_a_h_templ//:templ",
         "@com_github_google_uuid//:uuid",
@@ -37,6 +38,44 @@ go_binary(
     name = "web",
     embed = [":web_lib"],
     visibility = ["//visibility:public"],
+)
+
+# `web` handler tests via httptest against the real mcpauth.Provider mounted
+# exactly like run() mounts it in main.go (issue #1646). Gated behind
+# `//go:build integration`; hand-written with the same tag set as
+# //audience_score_system/web/auth:auth_integration_test (see that
+# BUILD.bazel comment for why each tag is required). `# keep` tells a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web:web_oauth_integration_test --test_output=all
+go_test(
+    # keep
+    name = "web_oauth_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["oauth_integration_test.go"],
+    embed = [":web_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
 )
 
 # Release metadata. domain "audience-score-system" + name "web" produces

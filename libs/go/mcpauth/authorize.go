@@ -48,7 +48,7 @@ func (p *Provider) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		// request-target the client actually sent.
 		returnTo := p.cfg.Issuer + r.URL.RequestURI()
 		values := signIn.Query()
-		values.Set("return_to", returnTo)
+		values.Set(p.cfg.SignInReturnParam, returnTo)
 		signIn.RawQuery = values.Encode()
 
 		http.Redirect(w, r, signIn.String(), http.StatusFound)

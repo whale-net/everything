@@ -58,6 +58,16 @@ type ProviderConfig struct {
 	// #1642).
 	SignInURL string
 
+	// SignInReturnParam is the query parameter name handleAuthorize's
+	// SignInURL redirect uses to carry the return-to target (the exact
+	// original /authorize request, query string intact) back to the
+	// consuming domain's own sign-in flow. Defaults to "next" — chosen to
+	// match audience_score_system/web/auth.HandleLogin's existing `?next=`
+	// support (issue #1646) rather than introducing a domain-specific
+	// special case; a consuming domain whose sign-in flow expects a
+	// different parameter name sets this instead.
+	SignInReturnParam string
+
 	// AuthCodes stores pending OAuth2 authorization codes minted by
 	// `/authorize` and redeemed by `/token` (#1642). Defaults to
 	// NewMemoryAuthCodeStore() — see that constructor's doc for why a
@@ -117,6 +127,9 @@ func NewProvider(cfg ProviderConfig) (*Provider, error) {
 	if cfg.AuthCodeTTL == 0 {
 		cfg.AuthCodeTTL = defaultAuthCodeTTL
 	}
+	if cfg.SignInReturnParam == "" {
+		cfg.SignInReturnParam = "next"
+	}
 
 	return &Provider{cfg: cfg}, nil
 }
@@ -175,6 +188,15 @@ const (
 	authorizePath                 = "/authorize"
 	tokenPath                     = "/token"
 )
+
+// ProtectedResourceMetadataPath is the fixed RFC 9728 well-known path
+// protected-resource metadata is served at — by Provider.Mount in the
+// single-binary case, and by NewProtectedResourceMetadataHandler
+// (metadata.go) in the resource-server-only split case (issue #1646).
+// Register a handler at exactly this path on the resource server's own
+// mux, at the mux root rather than under any prefix — MCP clients probe
+// this fixed well-known location.
+const ProtectedResourceMetadataPath = protectedResourceMetadataPath
 
 // Mount registers every OAuth2 endpoint this provider serves on mux, at
 // paths matching the metadata it advertises (see the path constants

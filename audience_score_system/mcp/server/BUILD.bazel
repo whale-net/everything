@@ -24,6 +24,7 @@ go_library(
         "//libs/go/logging",
         "//libs/go/mcpauth",
         "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
         "@com_github_modelcontextprotocol_go_sdk//mcp",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel//codes",
@@ -75,7 +76,10 @@ go_test(
     name = "server_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["server_integration_test.go"],
+    srcs = [
+        "oauth_bootstrap_integration_test.go",
+        "server_integration_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",
@@ -87,8 +91,10 @@ go_test(
     ],
     deps = [
         ":server",
+        "//audience_score_system/mcp/tools",
         "//audience_score_system/migrate/schema",
         "//audience_score_system/store",
+        "//audience_score_system/web/auth",
         "//libs/go/db",
         "//libs/go/dbtest",
         "//libs/go/mcpauth",

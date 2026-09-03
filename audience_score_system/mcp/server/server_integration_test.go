@@ -217,7 +217,11 @@ func newTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool, register f
 	reg := server.NewRegistry(srv, st)
 	register(reg)
 
-	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool))
+	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool), server.ResourceMetadataConfig{
+		Resource:            "https://mcp.example.com",
+		AuthorizationServer: "https://web.example.com",
+		ResourceName:        "Test MCP",
+	})
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
