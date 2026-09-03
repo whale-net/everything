@@ -202,6 +202,34 @@ jobs:
         path: bazel-testlogs/
         retention-days: 7
 
+  # Bazel Cache Image (POC) -- demonstrates consuming the image built by
+  # devcontainer-bazel-cache-image.yml instead of restoring the GH Actions/remote caches
+  # `test` uses above. Not wired into build-summary's `needs:` and not
+  # required for merge: this is a proof of concept for the caching
+  # *approach*, not a replacement for the real Setup Build Environment path.
+  # See docs/BAZEL_CACHE_IMAGE.md.
+  test-bazel-cache-image:
+    name: Test (Bazel Cache Image POC)
+    runs-on: ubuntu-latest
+    if: ${{ vars.BAZEL_CACHE_IMAGE_ENABLED == 'true' }}
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/bazel-cache-devcontainer:latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Build all targets from the pre-warmed cache
+      run: |
+        # Same explicit --output_base the image was warmed with (see
+        # .devcontainer/Dockerfile) -- no --remote_cache, no restored GH
+        # Actions cache, no setup-build-env action. If the image is fresh
+        # relative to this checkout, this should be almost entirely cache
+        # hits with zero network cache round-trips.
+        bazel --output_base=/var/cache/bazel/ob build //...
+        bazel --output_base=/var/cache/bazel/ob shutdown
+
   # Container architecture test - verify cross-compilation works correctly
   # Runs in parallel with test job for faster CI
   # Only runs on main branch to reduce CI overhead on feature branches

@@ -1,0 +1,9 @@
+# Keep the bazel-cache-image build context (see .devcontainer/Dockerfile)
+# limited to real source: symlinks, worktrees, and VCS metadata below would
+# either confuse a recursive `bazel build //...` pattern or bloat the
+# context for no benefit (git history isn't a build input).
+.git
+.claude/worktrees
+bazel-*
+**/node_modules
+**/__pycache__
