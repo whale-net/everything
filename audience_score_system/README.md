@@ -97,3 +97,27 @@ there is no separate MCP-specific client-secret variable.
 via `mcp.NewClient` + `StreamableClientTransport` -- read it for a
 working, minimal reference client if wiring up a new MCP client
 integration.
+
+### Claude plugin: agents and skills for the three loops
+
+`plugin/user/` (marketplace name `audience-score-system`) registers the
+dev/prod MCP endpoints above as a Claude Code plugin, plus two agent
+personas and three skills that drive the product's three loops
+end-to-end without a human hand-authoring every tool call:
+
+- **Agents** (`plugin/user/agents/`): `researcher` gathers cited research
+  notes (C4); `analyst` makes every judgment call the loops require --
+  viability verdicts (C5), schedule-draft proposals (C7), and
+  outcome-match resolution (C9) -- always through the MCP write tools,
+  never by editing anything directly.
+- **Skills** (`plugin/user/skills/`): `/audience-score-system:research`
+  (Loop 1, C4-C5), `/audience-score-system:schedule` (Loop 2, C6-C7),
+  and `/audience-score-system:outcomes` (Loop 3, C9-C10) each orchestrate
+  the two agents against one Channel.
+
+This is deliberately still "MCP plus an external MCP-capable client,"
+per the product brief's non-goal -- the plugin is a client-side
+convenience for driving that client, not a hosted agent loop inside the
+product. Schedule *approval* (C8) is intentionally absent from both
+personas: it's a Creator-only action in `web`, with no MCP tool to call
+instead.
