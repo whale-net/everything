@@ -128,6 +128,7 @@ func run() error {
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterWhoami(reg)
+	tools.RegisterListChannels(reg, st.Roles())
 	tools.RegisterResearch(reg, st)
 	tools.RegisterVerdict(reg, st)
 	tools.RegisterGetChannelSchedule(reg, st.Sync())
