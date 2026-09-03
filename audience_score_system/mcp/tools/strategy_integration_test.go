@@ -178,7 +178,7 @@ func (f *strategyFixture) viableIdea(t *testing.T, cs *mcp.ClientSession, person
 
 // ── save_strategy: FR16-style viable-verdict gate ────────────────────────
 
-func TestSaveStrategy_ViableIdeas_CreatesWithLinkedIdeasAndVerdictVersions(t *testing.T) {
+func TestSaveStrategy_ViableVerdicts_CreatesWithLinkedVerdictsAndIdeas(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
@@ -190,7 +190,7 @@ func TestSaveStrategy_ViableIdeas_CreatesWithLinkedIdeasAndVerdictVersions(t *te
 		Title:             "Short themed clips",
 		Cadence:           "weekly",
 		PreferredWeekday:  "Monday",
-		IdeaIDs:           []string{idea1.ID.String(), idea2.ID.String()},
+		VerdictIDs:        []string{v1.ID, v2.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
 	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
@@ -200,93 +200,114 @@ func TestSaveStrategy_ViableIdeas_CreatesWithLinkedIdeasAndVerdictVersions(t *te
 	assert.Equal(t, "weekly", out.Cadence)
 	assert.Equal(t, "Monday", out.PreferredWeekday)
 	assert.True(t, out.Active, "active must default to true when omitted")
-	require.Len(t, out.Ideas, 2)
+	require.Len(t, out.Verdicts, 2)
 
-	byID := map[string]tools.StrategyIdeaOutput{}
-	for _, i := range out.Ideas {
-		byID[i.IdeaID] = i
+	byVerdictID := map[string]tools.StrategyVerdictOutput{}
+	for _, v := range out.Verdicts {
+		byVerdictID[v.VerdictID] = v
 	}
-	require.Contains(t, byID, idea1.ID.String())
-	assert.Equal(t, v1.ID, byID[idea1.ID.String()].VerdictID)
-	require.Contains(t, byID, idea2.ID.String())
-	assert.Equal(t, v2.ID, byID[idea2.ID.String()].VerdictID)
+	require.Contains(t, byVerdictID, v1.ID)
+	assert.Equal(t, idea1.ID.String(), byVerdictID[v1.ID].IdeaID)
+	require.Contains(t, byVerdictID, v2.ID)
+	assert.Equal(t, idea2.ID.String(), byVerdictID[v2.ID].IdeaID)
 }
 
-func TestSaveStrategy_NonViableIdea_RejectedNoRowWritten(t *testing.T) {
+func TestSaveStrategy_NonViableVerdict_RejectedNoRowWritten(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
 	idea, err := f.st.Ideas().Create(context.Background(), f.ch.ID, "Not viable idea "+uuid.NewString(), f.creator.ID)
 	require.NoError(t, err)
-	f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
+	verdictRes := f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
 		ChannelID:         f.ch.ID.String(),
 		IdeaID:            idea.ID.String(),
 		Verdict:           "not-viable",
 		Reasoning:         "too niche",
 		IdempotencyKeyArg: uuid.NewString(),
 	})
+	notViable := stDecode[tools.VerdictOutput](t, verdictRes)
 
 	res := f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Should fail",
 		Cadence:           "monthly",
-		IdeaIDs:           []string{idea.ID.String()},
+		VerdictIDs:        []string{notViable.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
-	assert.True(t, res.IsError, "a not-viable idea must be rejected")
+	assert.True(t, res.IsError, "a not-viable verdict must be rejected")
 
 	strategies, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false)
 	require.NoError(t, err)
 	assert.Empty(t, strategies, "no strategy row must exist after a rejected save")
 }
 
-func TestSaveStrategy_IdeaWithNoVerdict_Rejected(t *testing.T) {
+func TestSaveStrategy_UnknownVerdictID_Rejected(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
-
-	idea, err := f.st.Ideas().Create(context.Background(), f.ch.ID, "No verdict idea "+uuid.NewString(), f.creator.ID)
-	require.NoError(t, err)
 
 	res := f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Should fail",
 		Cadence:           "weekly",
-		IdeaIDs:           []string{idea.ID.String()},
+		VerdictIDs:        []string{uuid.NewString()},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
-	assert.True(t, res.IsError, "an idea with no verdict at all must be rejected")
+	assert.True(t, res.IsError, "a verdict_id that does not exist at all must be rejected")
+}
+
+func TestSaveStrategy_SameVerdictLinkedToMultipleStrategies(t *testing.T) {
+	f := newStrategyFixture(t)
+	cs := f.connect(t, f.creator.ID)
+	idea, v := f.viableIdea(t, cs, f.creator.ID, "Shared verdict idea")
+
+	first := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "First strategy", Cadence: "weekly",
+		VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
+	}))
+	second := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "Second strategy", Cadence: "monthly",
+		VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
+	}))
+
+	assert.NotEqual(t, first.StrategyID, second.StrategyID, "two distinct Strategies must be created")
+	require.Len(t, first.Verdicts, 1)
+	require.Len(t, second.Verdicts, 1)
+	assert.Equal(t, v.ID, first.Verdicts[0].VerdictID)
+	assert.Equal(t, v.ID, second.Verdicts[0].VerdictID)
+	assert.Equal(t, idea.ID.String(), first.Verdicts[0].IdeaID)
+	assert.Equal(t, idea.ID.String(), second.Verdicts[0].IdeaID)
 }
 
 // ── save_strategy: create vs. update ──────────────────────────────────────
 
-func TestSaveStrategy_StrategyIDSupplied_UpdatesAndReplacesLinkedIdeasWholesale(t *testing.T) {
+func TestSaveStrategy_StrategyIDSupplied_UpdatesAndReplacesLinkedVerdictsWholesale(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
-	idea1, _ := f.viableIdea(t, cs, f.creator.ID, "Original idea")
+	_, v1 := f.viableIdea(t, cs, f.creator.ID, "Original idea")
 	created := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Original title",
 		Cadence:           "weekly",
-		IdeaIDs:           []string{idea1.ID.String()},
+		VerdictIDs:        []string{v1.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	}))
 
-	idea2, _ := f.viableIdea(t, cs, f.creator.ID, "Replacement idea")
+	idea2, v2 := f.viableIdea(t, cs, f.creator.ID, "Replacement idea")
 	updated := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		StrategyID:        created.StrategyID,
 		Title:             "Updated title",
 		Cadence:           "monthly",
-		IdeaIDs:           []string{idea2.ID.String()},
+		VerdictIDs:        []string{v2.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	}))
 
 	assert.Equal(t, created.StrategyID, updated.StrategyID, "supplying strategy_id must update the same row, not create a new one")
 	assert.Equal(t, "Updated title", updated.Title)
 	assert.Equal(t, "monthly", updated.Cadence)
-	require.Len(t, updated.Ideas, 1, "the linked idea set must be replaced wholesale, not merged")
-	assert.Equal(t, idea2.ID.String(), updated.Ideas[0].IdeaID)
+	require.Len(t, updated.Verdicts, 1, "the linked verdict set must be replaced wholesale, not merged")
+	assert.Equal(t, idea2.ID.String(), updated.Verdicts[0].IdeaID)
 
 	all, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false)
 	require.NoError(t, err)
@@ -296,14 +317,14 @@ func TestSaveStrategy_StrategyIDSupplied_UpdatesAndReplacesLinkedIdeasWholesale(
 func TestSaveStrategy_UnknownStrategyID_Rejected(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
-	idea, _ := f.viableIdea(t, cs, f.creator.ID, "Idea")
+	_, v := f.viableIdea(t, cs, f.creator.ID, "Idea")
 
 	res := f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		StrategyID:        uuid.NewString(),
 		Title:             "Should fail",
 		Cadence:           "weekly",
-		IdeaIDs:           []string{idea.ID.String()},
+		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
 	assert.True(t, res.IsError)
@@ -314,13 +335,13 @@ func TestSaveStrategy_UnknownStrategyID_Rejected(t *testing.T) {
 func TestSaveStrategy_IdempotentReplay_ConvergesOnSameRow(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
-	idea, _ := f.viableIdea(t, cs, f.creator.ID, "Replay idea")
+	_, v := f.viableIdea(t, cs, f.creator.ID, "Replay idea")
 
 	args := tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Replay strategy",
 		Cadence:           "weekly",
-		IdeaIDs:           []string{idea.ID.String()},
+		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: "replay-key-strategy",
 	}
 	first := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", args))
@@ -337,13 +358,13 @@ func TestSaveStrategy_IdempotentReplay_ConvergesOnSameRow(t *testing.T) {
 func TestSaveStrategy_AnalystCanSave_UnassociatedPersonDeniedWritesNothing(t *testing.T) {
 	f := newStrategyFixture(t)
 	analystCS := f.connect(t, f.analyst.ID)
-	idea, _ := f.viableIdea(t, analystCS, f.analyst.ID, "Analyst idea")
+	_, v := f.viableIdea(t, analystCS, f.analyst.ID, "Analyst idea")
 
 	res := f.call(t, analystCS, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Analyst strategy",
 		Cadence:           "weekly",
-		IdeaIDs:           []string{idea.ID.String()},
+		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
 	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
@@ -353,7 +374,7 @@ func TestSaveStrategy_AnalystCanSave_UnassociatedPersonDeniedWritesNothing(t *te
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Should be denied",
 		Cadence:           "weekly",
-		IdeaIDs:           []string{idea.ID.String()},
+		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
 	assert.True(t, denied.IsError)
@@ -369,13 +390,13 @@ func TestSaveStrategy_AnalystCanSave_UnassociatedPersonDeniedWritesNothing(t *te
 func TestGetStrategy_ReturnsSavedStrategy_WrongChannelRejected(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
-	idea, _ := f.viableIdea(t, cs, f.creator.ID, "Get idea")
+	_, v := f.viableIdea(t, cs, f.creator.ID, "Get idea")
 
 	saved := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Gettable strategy",
 		Cadence:           "biweekly",
-		IdeaIDs:           []string{idea.ID.String()},
+		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	}))
 
@@ -394,17 +415,17 @@ func TestListStrategies_ActiveOnlyFilter(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
 
-	idea1, _ := f.viableIdea(t, cs, f.creator.ID, "Active idea")
-	idea2, _ := f.viableIdea(t, cs, f.creator.ID, "Inactive idea")
+	_, v1 := f.viableIdea(t, cs, f.creator.ID, "Active idea")
+	_, v2 := f.viableIdea(t, cs, f.creator.ID, "Inactive idea")
 
 	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID: f.ch.ID.String(), Title: "Active strategy", Cadence: "weekly",
-		IdeaIDs: []string{idea1.ID.String()}, IdempotencyKeyArg: uuid.NewString(),
+		VerdictIDs: []string{v1.ID}, IdempotencyKeyArg: uuid.NewString(),
 	})
 	inactive := false
 	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID: f.ch.ID.String(), Title: "Inactive strategy", Cadence: "monthly",
-		Active: &inactive, IdeaIDs: []string{idea2.ID.String()}, IdempotencyKeyArg: uuid.NewString(),
+		Active: &inactive, VerdictIDs: []string{v2.ID}, IdempotencyKeyArg: uuid.NewString(),
 	})
 
 	all := stDecode[tools.ListStrategiesOutput](t, f.call(t, cs, "list_strategies", tools.ListStrategiesInput{ChannelID: f.ch.ID.String()}))
@@ -424,7 +445,7 @@ func TestGenerateSchedulePlan_ProposesCadenceSlotsWithoutWriting(t *testing.T) {
 
 	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID: f.ch.ID.String(), Title: "Weekly plan strategy", Cadence: "weekly",
-		IdeaIDs: []string{idea.ID.String()}, IdempotencyKeyArg: uuid.NewString(),
+		VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
 	})
 
 	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String(), CountPerIdea: 3})
@@ -453,11 +474,11 @@ func TestGenerateSchedulePlan_ProposesCadenceSlotsWithoutWriting(t *testing.T) {
 func TestGenerateSchedulePlan_SkipsIdeaWhoseVerdictIsNoLongerViable(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
-	idea, _ := f.viableIdea(t, cs, f.creator.ID, "Now not viable idea")
+	idea, verdict := f.viableIdea(t, cs, f.creator.ID, "Now not viable idea")
 
 	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID: f.ch.ID.String(), Title: "Strategy about to be undermined", Cadence: "weekly",
-		IdeaIDs: []string{idea.ID.String()}, IdempotencyKeyArg: uuid.NewString(),
+		VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
 	})
 
 	// A newer verdict version flips the idea to not-viable after the
@@ -483,12 +504,12 @@ func TestGenerateSchedulePlan_SkipsIdeaWhoseVerdictIsNoLongerViable(t *testing.T
 func TestGenerateSchedulePlan_IgnoresInactiveStrategies(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
-	idea, _ := f.viableIdea(t, cs, f.creator.ID, "Inactive plan idea")
+	_, verdict := f.viableIdea(t, cs, f.creator.ID, "Inactive plan idea")
 
 	inactive := false
 	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID: f.ch.ID.String(), Title: "Inactive strategy", Cadence: "weekly",
-		Active: &inactive, IdeaIDs: []string{idea.ID.String()}, IdempotencyKeyArg: uuid.NewString(),
+		Active: &inactive, VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
 	})
 
 	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})

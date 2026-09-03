@@ -1,7 +1,7 @@
 // Strategy MCP tool group (issue #1637): save_strategy/get_strategy/
-// list_strategies manage a per-Idea cadence built from one or more
-// viable-verdict Ideas -- independent of, and finer-grained than, the
-// Channel-wide pacing policy (FR17, schedule_draft.go). generate_schedule_plan
+// list_strategies manage a cadence built directly from one or more
+// viable viability_verdict rows -- independent of, and finer-grained
+// than, the Channel-wide pacing policy (FR17, schedule_draft.go). generate_schedule_plan
 // is the "Plan" half: a read-only tool that reads active Strategies plus
 // the existing schedule and proposes cadence-driven next slots, which a
 // caller commits via the existing save_schedule_draft tool rather than a
@@ -26,29 +26,29 @@ import (
 
 // -- shared rendering ---------------------------------------------------------
 
-// StrategyIdeaOutput is one Idea a Strategy is built from, as
-// save_strategy/get_strategy/list_strategies all render it.
-type StrategyIdeaOutput struct {
-	IdeaID         string `json:"idea_id" jsonschema:"this linked Idea's ID, as a UUID string"`
-	IdeaTitle      string `json:"idea_title" jsonschema:"that Idea's title"`
-	VerdictID      string `json:"verdict_id" jsonschema:"the Idea's current viable verdict version at the time this Strategy was last saved, as a UUID string"`
+// StrategyVerdictOutput is one viability_verdict a Strategy is built
+// from, as save_strategy/get_strategy/list_strategies all render it.
+type StrategyVerdictOutput struct {
+	VerdictID      string `json:"verdict_id" jsonschema:"this linked verdict's ID, as a UUID string"`
 	VerdictVersion int    `json:"verdict_version" jsonschema:"that verdict version's number"`
+	IdeaID         string `json:"idea_id" jsonschema:"the Idea this verdict judged, as a UUID string"`
+	IdeaTitle      string `json:"idea_title" jsonschema:"that Idea's title"`
 }
 
-// StrategyOutput is one `strategy` row plus its linked Ideas, as
-// save_strategy/get_strategy/list_strategies all render it.
+// StrategyOutput is one `strategy` row plus the verdicts it's built from,
+// as save_strategy/get_strategy/list_strategies all render it.
 type StrategyOutput struct {
-	StrategyID           string               `json:"strategy_id" jsonschema:"this Strategy's ID, as a UUID string"`
-	ChannelID            string               `json:"channel_id" jsonschema:"the Channel this Strategy belongs to, as a UUID string"`
-	Title                string               `json:"title" jsonschema:"this Strategy's short description"`
-	Cadence              string               `json:"cadence" jsonschema:"weekly, biweekly, or monthly"`
-	PreferredWeekday     string               `json:"preferred_weekday,omitempty" jsonschema:"full English weekday name this Strategy's slots roll onto; empty means no day preference"`
-	Active               bool                 `json:"active" jsonschema:"whether this Strategy is currently active -- only active Strategies are read by generate_schedule_plan"`
-	Ideas                []StrategyIdeaOutput `json:"ideas" jsonschema:"the viable-verdict Ideas this Strategy is built from"`
-	CreatedByPersonID    string               `json:"created_by_person_id" jsonschema:"the Person who created this Strategy, as a UUID string"`
-	CreatedByDisplayName string               `json:"created_by_display_name" jsonschema:"that Person's display name"`
-	CreatedAt            string               `json:"created_at" jsonschema:"when this Strategy was created, RFC3339"`
-	UpdatedAt            string               `json:"updated_at" jsonschema:"when this Strategy was last saved, RFC3339"`
+	StrategyID           string                  `json:"strategy_id" jsonschema:"this Strategy's ID, as a UUID string"`
+	ChannelID            string                  `json:"channel_id" jsonschema:"the Channel this Strategy belongs to, as a UUID string"`
+	Title                string                  `json:"title" jsonschema:"this Strategy's short description"`
+	Cadence              string                  `json:"cadence" jsonschema:"weekly, biweekly, or monthly"`
+	PreferredWeekday     string                  `json:"preferred_weekday,omitempty" jsonschema:"full English weekday name this Strategy's slots roll onto; empty means no day preference"`
+	Active               bool                    `json:"active" jsonschema:"whether this Strategy is currently active -- only active Strategies are read by generate_schedule_plan"`
+	Verdicts             []StrategyVerdictOutput `json:"verdicts" jsonschema:"the viable viability_verdict rows this Strategy is built from"`
+	CreatedByPersonID    string                  `json:"created_by_person_id" jsonschema:"the Person who created this Strategy, as a UUID string"`
+	CreatedByDisplayName string                  `json:"created_by_display_name" jsonschema:"that Person's display name"`
+	CreatedAt            string                  `json:"created_at" jsonschema:"when this Strategy was created, RFC3339"`
+	UpdatedAt            string                  `json:"updated_at" jsonschema:"when this Strategy was last saved, RFC3339"`
 }
 
 // renderStrategy resolves d's creator's display name and renders the
@@ -60,13 +60,13 @@ func renderStrategy(ctx context.Context, persons store.PersonStore, d store.Stra
 		return StrategyOutput{}, fmt.Errorf("load strategy creator: %w", err)
 	}
 
-	ideas := make([]StrategyIdeaOutput, 0, len(d.Ideas))
-	for _, link := range d.Ideas {
-		ideas = append(ideas, StrategyIdeaOutput{
-			IdeaID:         link.IdeaID.String(),
-			IdeaTitle:      link.IdeaTitle,
+	verdicts := make([]StrategyVerdictOutput, 0, len(d.Verdicts))
+	for _, link := range d.Verdicts {
+		verdicts = append(verdicts, StrategyVerdictOutput{
 			VerdictID:      link.VerdictID.String(),
 			VerdictVersion: link.VerdictVersion,
+			IdeaID:         link.IdeaID.String(),
+			IdeaTitle:      link.IdeaTitle,
 		})
 	}
 
@@ -77,7 +77,7 @@ func renderStrategy(ctx context.Context, persons store.PersonStore, d store.Stra
 		Cadence:              string(d.Cadence),
 		PreferredWeekday:     d.PreferredWeekday,
 		Active:               d.Active,
-		Ideas:                ideas,
+		Verdicts:             verdicts,
 		CreatedByPersonID:    d.CreatedByPersonID.String(),
 		CreatedByDisplayName: creator.DisplayName,
 		CreatedAt:            d.CreatedAt.Format(time.RFC3339),
@@ -100,19 +100,19 @@ func parseCadence(raw string) (store.Cadence, error) {
 // -- save_strategy --------------------------------------------------------
 
 // SaveStrategyInput is save_strategy's argument schema (issue #1637).
-// ChannelID/StrategyID/IdeaIDs are JSON-wire strings, not uuid.UUID
+// ChannelID/StrategyID/VerdictIDs are JSON-wire strings, not uuid.UUID
 // fields directly -- see ../server/fakes_test.go's scopedInput doc for
 // why.
 type SaveStrategyInput struct {
 	ChannelID string `json:"channel_id" jsonschema:"Channel this Strategy belongs to, as a UUID string"`
 	// StrategyID updates an existing Strategy (replacing its linked
-	// Ideas wholesale) when supplied; omit to create a new Strategy.
+	// verdicts wholesale) when supplied; omit to create a new Strategy.
 	StrategyID       string   `json:"strategy_id,omitempty" jsonschema:"update this existing Strategy (as a UUID string) instead of creating a new one; omit to create"`
 	Title            string   `json:"title" jsonschema:"short description of this Strategy, e.g. \"short themed clips\"; must not be empty"`
 	Cadence          string   `json:"cadence" jsonschema:"weekly, biweekly, or monthly"`
 	PreferredWeekday string   `json:"preferred_weekday,omitempty" jsonschema:"full English weekday name (e.g. Monday) this Strategy's slots should roll onto; omit for no day preference"`
 	Active           *bool    `json:"active,omitempty" jsonschema:"whether this Strategy is active; defaults to true when omitted"`
-	IdeaIDs          []string `json:"idea_ids" jsonschema:"the viable-verdict Ideas (as UUID strings) this Strategy is built from; must be non-empty, and each must currently have a viable verdict (issue #1637)"`
+	VerdictIDs       []string `json:"verdict_ids" jsonschema:"the viability_verdict rows (as UUID strings) this Strategy is built from -- not idea_ids; must be non-empty, and each must currently be viable (issue #1637). The same verdict_id may be passed to more than one Strategy."`
 	// IdempotencyKeyArg backs IdempotencyKey() below -- named ...Arg
 	// because a Go type cannot declare both a field and a method named
 	// IdempotencyKey.
@@ -134,11 +134,13 @@ func (i SaveStrategyInput) IdempotencyKey() string { return i.IdempotencyKeyArg 
 func registerSaveStrategy(reg *server.Registry, strategies store.StrategyStore, persons store.PersonStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "save_strategy",
-		Description: "Create or update a Strategy: a per-Idea cadence (weekly/biweekly/monthly, optionally pinned to a " +
-			"preferred weekday) built from one or more viable-verdict Ideas (issue #1637) -- finer-grained than the " +
-			"Channel-wide pacing policy (set_pacing_policy). Omit strategy_id to create a new Strategy; supply it to " +
-			"update an existing one, replacing its linked idea_ids wholesale. Rejects an idea_id that doesn't currently " +
-			"have a viable verdict -- nothing is written in that case. Always supply idempotency_key: a Strategy has no " +
+		Description: "Create or update a Strategy: a cadence (weekly/biweekly/monthly, optionally pinned to a " +
+			"preferred weekday) built directly from one or more viable viability_verdict rows (issue #1637) -- " +
+			"finer-grained than the Channel-wide pacing policy (set_pacing_policy). Pass verdict_ids, not idea_ids: " +
+			"grounding on the exact verdict records what analysis justified this Strategy, and the same verdict_id may " +
+			"be reused across multiple Strategies. Omit strategy_id to create a new Strategy; supply it to update an " +
+			"existing one, replacing its linked verdict_ids wholesale. Rejects a verdict_id that doesn't exist or isn't " +
+			"currently viable -- nothing is written in that case. Always supply idempotency_key: a Strategy has no " +
 			"natural key, so a keyless retry creates a duplicate rather than converging.",
 	}, saveStrategyMutate(strategies), saveStrategyRender(strategies, persons))
 }
@@ -177,16 +179,16 @@ func saveStrategyMutate(strategies store.StrategyStore) server.WriteMutate[SaveS
 			strategyID = &id
 		}
 
-		if len(in.IdeaIDs) == 0 {
-			return uuid.Nil, fmt.Errorf("idea_ids must not be empty -- a Strategy must be built from at least one viable-verdict Idea")
+		if len(in.VerdictIDs) == 0 {
+			return uuid.Nil, fmt.Errorf("verdict_ids must not be empty -- a Strategy must be built from at least one viable verdict")
 		}
-		ideaIDs := make([]uuid.UUID, 0, len(in.IdeaIDs))
-		for _, raw := range in.IdeaIDs {
+		verdictIDs := make([]uuid.UUID, 0, len(in.VerdictIDs))
+		for _, raw := range in.VerdictIDs {
 			id, err := uuid.Parse(raw)
 			if err != nil {
-				return uuid.Nil, fmt.Errorf("idea_ids contains an invalid UUID %q: %w", raw, err)
+				return uuid.Nil, fmt.Errorf("verdict_ids contains an invalid UUID %q: %w", raw, err)
 			}
-			ideaIDs = append(ideaIDs, id)
+			verdictIDs = append(verdictIDs, id)
 		}
 
 		active := true
@@ -206,13 +208,13 @@ func saveStrategyMutate(strategies store.StrategyStore) server.WriteMutate[SaveS
 			Cadence:           cadence,
 			PreferredWeekday:  preferredWeekday,
 			Active:            active,
-			IdeaIDs:           ideaIDs,
+			VerdictIDs:        verdictIDs,
 			CreatedByPersonID: person.ID,
 			IdempotencyKey:    in.IdempotencyKeyArg,
 		})
 		if err != nil {
-			if errors.Is(err, store.ErrStrategyIdeaNotViable) {
-				return uuid.Nil, fmt.Errorf("save_strategy only accepts Ideas with a current viable verdict (issue #1637): %w", err)
+			if errors.Is(err, store.ErrStrategyVerdictNotViable) {
+				return uuid.Nil, fmt.Errorf("save_strategy only accepts verdict_ids that exist and are currently viable (issue #1637): %w", err)
 			}
 			if errors.Is(err, store.ErrStrategyNotFound) {
 				return uuid.Nil, fmt.Errorf("strategy_id does not exist on channel_id: %w", err)
@@ -258,7 +260,7 @@ func (i GetStrategyInput) ChannelScopeID() uuid.UUID {
 func registerGetStrategy(reg *server.Registry, strategies store.StrategyStore, persons store.PersonStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name:        "get_strategy",
-		Description: "Read one Strategy (issue #1637) by ID, including the viable-verdict Ideas it's built from.",
+		Description: "Read one Strategy (issue #1637) by ID, including the viable viability_verdict rows it's built from.",
 	}, getStrategyHandler(strategies, persons))
 }
 
@@ -314,7 +316,7 @@ type ListStrategiesOutput struct {
 func registerListStrategies(reg *server.Registry, strategies store.StrategyStore, persons store.PersonStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name:        "list_strategies",
-		Description: "List a Channel's Strategies (issue #1637), each with its cadence and the viable-verdict Ideas it's built from.",
+		Description: "List a Channel's Strategies (issue #1637), each with its cadence and the viable viability_verdict rows it's built from.",
 	}, listStrategiesHandler(strategies, persons))
 }
 
@@ -381,20 +383,21 @@ type ScheduledProposal struct {
 	SequenceIndex     int    `json:"sequence_index" jsonschema:"1-based position of this proposal within its Idea's count_per_idea run"`
 }
 
-// SkippedStrategyIdea is one Strategy-linked Idea generate_schedule_plan
-// excluded from Proposals, and why.
-type SkippedStrategyIdea struct {
-	StrategyID string `json:"strategy_id" jsonschema:"the Strategy this linked Idea belongs to, as a UUID string"`
-	IdeaID     string `json:"idea_id" jsonschema:"the skipped Idea, as a UUID string"`
+// SkippedStrategyVerdict is one Strategy-linked verdict
+// generate_schedule_plan excluded from Proposals, and why.
+type SkippedStrategyVerdict struct {
+	StrategyID string `json:"strategy_id" jsonschema:"the Strategy this linked verdict belongs to, as a UUID string"`
+	VerdictID  string `json:"verdict_id" jsonschema:"the skipped verdict, as a UUID string"`
+	IdeaID     string `json:"idea_id" jsonschema:"the Idea that verdict judged, as a UUID string"`
 	IdeaTitle  string `json:"idea_title" jsonschema:"that Idea's title"`
-	Reason     string `json:"reason" jsonschema:"why this linked Idea produced no proposals"`
+	Reason     string `json:"reason" jsonschema:"why this linked verdict produced no proposals"`
 }
 
 // GenerateSchedulePlanOutput is generate_schedule_plan's structured
 // result.
 type GenerateSchedulePlanOutput struct {
-	Proposals []ScheduledProposal   `json:"proposals" jsonschema:"cadence-computed next slots, not yet saved -- nothing is written by this tool"`
-	Skipped   []SkippedStrategyIdea `json:"skipped" jsonschema:"linked Ideas excluded from proposals (e.g. no longer viable) and why"`
+	Proposals []ScheduledProposal      `json:"proposals" jsonschema:"cadence-computed next slots, not yet saved -- nothing is written by this tool"`
+	Skipped   []SkippedStrategyVerdict `json:"skipped" jsonschema:"linked verdicts excluded from proposals (e.g. the idea is no longer viable) and why"`
 }
 
 func registerGenerateSchedulePlan(reg *server.Registry, strategies store.StrategyStore, schedules store.ScheduleStore, verdicts store.VerdictStore) {
@@ -467,11 +470,12 @@ func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store
 		out := GenerateSchedulePlanOutput{}
 		now := time.Now().UTC()
 		for _, strat := range active {
-			for _, link := range strat.Ideas {
+			for _, link := range strat.Verdicts {
 				current, err := verdicts.Current(ctx, link.IdeaID)
 				if err != nil || current.Verdict != store.VerdictViable {
-					out.Skipped = append(out.Skipped, SkippedStrategyIdea{
+					out.Skipped = append(out.Skipped, SkippedStrategyVerdict{
 						StrategyID: strat.ID.String(),
+						VerdictID:  link.VerdictID.String(),
 						IdeaID:     link.IdeaID.String(),
 						IdeaTitle:  link.IdeaTitle,
 						Reason:     "idea's current verdict is no longer viable",

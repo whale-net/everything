@@ -4,11 +4,14 @@
 -- (FR17, migration 002) -- e.g. "short themed clips" weekly while
 -- "absurd gaming comedy" is monthly, on the same Channel.
 --
--- A Strategy is built from one or more viable-verdict Ideas via
--- strategy_idea, each row pinned to the exact viability_verdict version
--- that judged that Idea viable at link time -- the LB3 pattern
--- (schedule_entry.verdict_id, migration 002) applied one layer earlier:
--- never just idea_id.
+-- A Strategy is built directly from one or more viability_verdict rows via
+-- strategy_verdict -- not from ideas: idea_id is derivable from
+-- viability_verdict.idea_id, and grounding on verdict_id (rather than
+-- idea_id) means the exact analysis that justified this Strategy is what's
+-- pinned, the LB3 pattern (schedule_entry.verdict_id, migration 002)
+-- applied one layer earlier. Cardinality is many-to-many in both
+-- directions: a Strategy is usually built from several verdicts (often
+-- several Ideas), and the same verdict may ground more than one Strategy.
 --
 -- There is deliberately no separate "plan" table: a Plan is the computed
 -- proposal generate_schedule_plan (mcp/tools/strategy.go) derives from
@@ -32,20 +35,19 @@ CREATE TABLE strategy (
 -- Supports "strategies for this Channel" reads (StrategyStore.ListByChannel).
 CREATE INDEX strategy_channel_id ON strategy(channel_id);
 
--- -- strategy_idea -------------------------------------------------------
--- Which viable-verdict Ideas a Strategy is built from. verdict_id is NOT
--- NULL and not nullable-by-design: StrategyStore.Save rejects linking an
--- Idea whose current verdict is not 'viable' before writing anything, the
--- same FR16 gate ScheduleStore.SaveDraft already enforces one layer
--- downstream.
+-- -- strategy_verdict -----------------------------------------------------
+-- Which viability_verdict rows a Strategy is built from -- many-to-many:
+-- StrategyStore.Save rejects linking a verdict whose verdict column is not
+-- 'viable' before writing anything, the same FR16 gate
+-- ScheduleStore.SaveDraft already enforces one layer downstream. idea_id
+-- is intentionally not a column here -- join through viability_verdict.
 
-CREATE TABLE strategy_idea (
+CREATE TABLE strategy_verdict (
     strategy_id  UUID NOT NULL REFERENCES strategy(id),
-    idea_id      UUID NOT NULL REFERENCES idea(id),
     verdict_id   UUID NOT NULL REFERENCES viability_verdict(id),
-    PRIMARY KEY (strategy_id, idea_id)
+    PRIMARY KEY (strategy_id, verdict_id)
 );
 
--- Supports "which Strategies is this Idea part of" lookups and the
--- generate_schedule_plan join from idea back to its Strategy.
-CREATE INDEX strategy_idea_idea_id ON strategy_idea(idea_id);
+-- Supports "which Strategies is this verdict part of" lookups and the
+-- generate_schedule_plan join from verdict back to its Strategies.
+CREATE INDEX strategy_verdict_verdict_id ON strategy_verdict(verdict_id);

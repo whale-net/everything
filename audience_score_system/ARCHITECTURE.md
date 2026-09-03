@@ -345,13 +345,18 @@ pacing policy, schedule entries, synced videos/metrics, and pending
 matches, plus the `mcp_idempotency` ledger (NFR2/LB4).
 
 Migration 006 (`006_strategy.up.sql`, issue #1637) lands `strategy` and
-`strategy_idea`: a per-Idea cadence (weekly/biweekly/monthly, optional
-preferred weekday) sitting between viability verdicts and scheduling --
-independent of, and finer-grained than, the Channel-wide `pacing_policy`
-(FR17). A Strategy is built from one or more viable-verdict Ideas via
-`strategy_idea`, each row pinned to the exact `viability_verdict` version
-that judged that Idea viable at link time, the same LB3 pattern
-`schedule_entry.verdict_id` uses one layer downstream.
+`strategy_verdict`: a cadence (weekly/biweekly/monthly, optional preferred
+weekday) sitting between viability verdicts and scheduling -- independent
+of, and finer-grained than, the Channel-wide `pacing_policy` (FR17). A
+Strategy is built directly from one or more `viability_verdict` rows via
+`strategy_verdict` -- not from Ideas: `idea_id` is derived through
+`viability_verdict.idea_id` rather than stored on the join row, the same
+LB3 pattern `schedule_entry.verdict_id` uses one layer downstream, applied
+to the join itself. The relationship is many-to-many in both directions --
+a Strategy is typically grounded in several verdicts (often several
+Ideas), and the same verdict may ground more than one Strategy -- which is
+the point: `save_strategy` records exactly which analysis justified the
+cadence, not just "whichever idea is currently viable."
 
 **No persisted "Plan" table (issue #1637):** the issue's proposed
 `generate_schedule_from_strategies` surface is implemented as

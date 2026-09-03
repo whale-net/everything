@@ -1,2 +1,2 @@
-DROP TABLE strategy_idea;
+DROP TABLE strategy_verdict;
 DROP TABLE strategy;

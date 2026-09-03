@@ -802,7 +802,7 @@ func ptrInt64(v int64) *int64        { return &v }
 // full up/down/up cycle across every embedded migration, not just one in
 // isolation -- it was written against 001 alone (#1568), extended for 002
 // (#1569), extended again for 003 (web_session, #1570), again for 005
-// (mcp_credential, #1575), and again for 006 (strategy/strategy_idea,
+// (mcp_credential, #1575), and again for 006 (strategy/strategy_verdict,
 // #1637 -- 004 is Channel-connect's channel_credential store, #1571), so
 // the version assertion and table list below cover all of them rather than
 // any single one.
@@ -832,7 +832,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 		"web_session",
 		"channel_credential",
 		"mcp_credential",
-		"strategy", "strategy_idea",
+		"strategy", "strategy_verdict",
 	} {
 		var exists bool
 		require.NoError(t, db.Pool.QueryRow(ctx,

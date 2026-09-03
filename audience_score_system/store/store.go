@@ -86,5 +86,6 @@ func (s *Store) Credentials() CredentialStore { return credentialStore{pool: s.p
 func (s *Store) Browse() BrowseStore { return browseStore{pool: s.pool} }
 
 // Strategies returns the StrategyStore implementation (migration 006,
-// issue #1637) -- per-Idea cadence built from viable-verdict Ideas.
+// issue #1637) -- a cadence built directly from viable viability_verdict
+// rows (many-to-many with Strategy).
 func (s *Store) Strategies() StrategyStore { return strategyStore{pool: s.pool} }

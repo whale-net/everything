@@ -362,8 +362,8 @@ const (
 )
 
 // Strategy is one row of `strategy` (migration 006, issue #1637) -- a
-// per-Idea cadence built from one or more viable-verdict Ideas (via
-// strategy_idea), sitting between viability verdicts and scheduling.
+// cadence built directly from one or more viability_verdict rows (via
+// strategy_verdict), sitting between viability verdicts and scheduling.
 // PreferredWeekday is "" for no day preference, else a full English
 // weekday name in the same vocabulary as PacingPolicy.PreferredDays.
 type Strategy struct {
@@ -379,23 +379,24 @@ type Strategy struct {
 	IdempotencyKey    string
 }
 
-// StrategyIdeaDetail is one `strategy_idea` row joined with its Idea's
-// title and bound verdict version -- what StrategyStore.GetByID/
-// ListByChannel resolve into StrategyDetail.Ideas, and what
-// mcp/tools/strategy.go renders per linked Idea.
-type StrategyIdeaDetail struct {
-	IdeaID         uuid.UUID
-	IdeaTitle      string
+// StrategyVerdictDetail is one `strategy_verdict` row joined with its
+// verdict's version and idea id/title -- what StrategyStore.GetByID/
+// ListByChannel resolve into StrategyDetail.Verdicts, and what
+// mcp/tools/strategy.go renders per linked verdict.
+type StrategyVerdictDetail struct {
 	VerdictID      uuid.UUID
 	VerdictVersion int
+	IdeaID         uuid.UUID
+	IdeaTitle      string
 }
 
-// StrategyDetail is a Strategy plus every Idea it's built from
-// (StrategyIdeaDetail, migration 006) -- StrategyStore.GetByID/
-// ListByChannel/Save's return shape.
+// StrategyDetail is a Strategy plus every viability_verdict it's built
+// from (StrategyVerdictDetail, migration 006) -- StrategyStore.GetByID/
+// ListByChannel/Save's return shape. The same verdict may appear on more
+// than one StrategyDetail (a verdict can ground multiple Strategies).
 type StrategyDetail struct {
 	Strategy
-	Ideas []StrategyIdeaDetail
+	Verdicts []StrategyVerdictDetail
 }
 
 // IdeaOverview is one Idea plus its current verdict (all four
