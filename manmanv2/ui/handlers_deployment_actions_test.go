@@ -71,12 +71,28 @@ type fakeDeploymentAPIClient struct {
 
 	// stopBlocksUntilCtxDone simulates a hung/slow StopSession RPC (#1664's
 	// FR8 defense-in-depth scenario): StopSession blocks until the passed
-	// ctx is done (i.e. until deploymentActionCtx's bounded timeout fires)
-	// and returns ctx.Err() -- mirroring how a real gRPC call whose context
-	// deadline expires returns a DeadlineExceeded-flavored error that
-	// ControlClient.StopSession wraps with %w, so errors.Is still sees
-	// through to context.DeadlineExceeded.
+	// ctx is done (i.e. until deploymentActionBound's bounded timeout
+	// fires) and returns ctx.Err() -- mirroring how a real gRPC call whose
+	// context deadline expires returns a DeadlineExceeded-flavored error
+	// that ControlClient.StopSession wraps with %w, so errors.Is still
+	// sees through to context.DeadlineExceeded.
 	stopBlocksUntilCtxDone bool
+	// startBlocksUntilCtxDone is stopBlocksUntilCtxDone's StartSession
+	// counterpart, covering #1668's extension of the bound to Start.
+	startBlocksUntilCtxDone bool
+
+	// stopIgnoresCtx/startIgnoresCtx simulate a StopSession/StartSession
+	// RPC that never returns and never even looks at ctx -- i.e. the
+	// production symptom #1667 actually reported (the API's own handler
+	// blocked for its downstream's full unbounded duration regardless of
+	// what context it was given). Unlike stopBlocksUntilCtxDone above,
+	// these prove boundDeploymentRPC's handler-side race against
+	// time.After(timeout) is what saves the caller here, not the
+	// context.WithTimeout cancellation reaching the fake at all -- the
+	// exact "necessary but not sufficient" gap #1668 calls out about a
+	// fake client that already respects context cancellation instantly.
+	stopIgnoresCtx  bool
+	startIgnoresCtx bool
 
 	// liveOnlyCallsUntilClear, when > 0, simulates a live session that takes
 	// several LiveOnly ListSessions observations to actually disappear
@@ -147,9 +163,17 @@ func (f *fakeDeploymentAPIClient) StopSession(ctx context.Context, in *manmanpb.
 	f.calls = append(f.calls, "stop")
 	f.stopCalls = append(f.stopCalls, in)
 	blocks := f.stopBlocksUntilCtxDone
+	ignoresCtx := f.stopIgnoresCtx
 	stopErr := f.stopErr
 	f.mu.Unlock()
 
+	if ignoresCtx {
+		// Never returns and never looks at ctx -- see stopIgnoresCtx's doc
+		// comment: this is what actually proves boundDeploymentRPC's
+		// time.After race (not context cancellation reaching the fake)
+		// bounds the caller.
+		select {}
+	}
 	if blocks {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -168,13 +192,24 @@ func (f *fakeDeploymentAPIClient) StopSession(ctx context.Context, in *manmanpb.
 
 func (f *fakeDeploymentAPIClient) StartSession(ctx context.Context, in *manmanpb.StartSessionRequest, opts ...grpc.CallOption) (*manmanpb.StartSessionResponse, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, "start")
 	f.startCalls = append(f.startCalls, in)
-	if f.startErr != nil {
-		return nil, f.startErr
-	}
+	blocks := f.startBlocksUntilCtxDone
+	ignoresCtx := f.startIgnoresCtx
+	startErr := f.startErr
 	resp := f.startResp
+	f.mu.Unlock()
+
+	if ignoresCtx {
+		select {}
+	}
+	if blocks {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if startErr != nil {
+		return nil, startErr
+	}
 	if resp == nil {
 		resp = &manmanpb.Session{SessionId: 999, Status: "pending"}
 	}
@@ -499,12 +534,12 @@ func TestDeploymentAction_Restart_StopNeverCompletes_RowStaysTransitional(t *tes
 
 // TestDeploymentAction_Stop_SlowStopSession_ReturnsInlineErrorNotDroppedConnection
 // covers #1664's FR8 defense-in-depth on the plain Stop path: a StopSession
-// call that hangs past App.deploymentActionTimeout (App.deploymentActionCtx's
-// bounded context) must not be allowed to block the handler indefinitely --
-// it must return promptly with a distinct timeout-flavored inline error
-// (deploymentStopErrorMessage's context.DeadlineExceeded branch), not a hang
-// that would risk main.go's 15s http.Server.WriteTimeout dropping the
-// connection.
+// call that hangs past App.deploymentActionTimeout (boundDeploymentRPC's
+// bound, App.deploymentActionBound) must not be allowed to block the
+// handler indefinitely -- it must return promptly with a distinct
+// timeout-flavored inline error (deploymentStopErrorMessage's
+// isDeploymentActionTimeout branch), not a hang that would risk main.go's
+// 15s http.Server.WriteTimeout dropping the connection.
 func TestDeploymentAction_Stop_SlowStopSession_ReturnsInlineErrorNotDroppedConnection(t *testing.T) {
 	api := &fakeDeploymentAPIClient{
 		sgc:                    stoppedSGC(42),
@@ -531,6 +566,102 @@ func TestDeploymentAction_Stop_SlowStopSession_ReturnsInlineErrorNotDroppedConne
 	}
 	if !strings.Contains(body, "deployment-row-42") {
 		t.Errorf("expected the row fragment for SGC 42, got: %s", body)
+	}
+}
+
+// TestDeploymentAction_Start_SlowStartSession_ReturnsInlineErrorNotDroppedConnection
+// covers #1668's extension of #1664's FR8 defense-in-depth to the plain
+// Start path: prior to this fix, handleDeploymentAction's "start" case
+// called StartSession on the raw, unbounded request context, so a hung
+// Start had no bound at all.
+func TestDeploymentAction_Start_SlowStartSession_ReturnsInlineErrorNotDroppedConnection(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:                     stoppedSGC(42),
+		startBlocksUntilCtxDone: true,
+	}
+	app := newDeploymentTestApp(api)
+	app.deploymentActionTimeout = 5 * time.Millisecond
+
+	start := time.Now()
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/start", true)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("handler took %s to return, want well under 1s (must not block past the bounded timeout)", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "taking longer than expected") {
+		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", body)
+	}
+	if !strings.Contains(body, "deployment-row-42") {
+		t.Errorf("expected the row fragment for SGC 42, got: %s", body)
+	}
+}
+
+// TestDeploymentAction_Stop_HungStopSession_IgnoresCtx_StillReturnsWithinBound
+// is #1668's belt-and-suspenders proof: stopIgnoresCtx's StopSession never
+// returns and never looks at ctx at all, so if boundDeploymentRPC relied
+// solely on context cancellation reaching the RPC (the way #1664's plain
+// context.WithTimeout did, and the way stopBlocksUntilCtxDone's "necessary
+// but not sufficient" fake-client test above already covers), this test
+// would hang forever. It only passes because boundDeploymentRPC races the
+// call against its own independent time.After(timeout) in the calling
+// goroutine, so the handler returns on the bound regardless of whether the
+// callee ever cooperates -- the closest a fake client can get to
+// reproducing #1667's live-Tilt symptom (a downstream that never answers
+// and a handler that never checked its own context either) without an
+// actual network hang.
+func TestDeploymentAction_Stop_HungStopSession_IgnoresCtx_StillReturnsWithinBound(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:            stoppedSGC(42),
+		liveSession:    &manmanpb.Session{SessionId: 777, Status: "running"},
+		allSessions:    []*manmanpb.Session{{SessionId: 777, Status: "running"}},
+		stopIgnoresCtx: true,
+	}
+	app := newDeploymentTestApp(api)
+	app.deploymentActionTimeout = 10 * time.Millisecond
+
+	start := time.Now()
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/stop", true)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("handler took %s to return, want well under 1s (a hung callee that ignores ctx must not block the handler)", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "taking longer than expected") {
+		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", w.Body.String())
+	}
+}
+
+// TestDeploymentAction_Start_HungStartSession_IgnoresCtx_StillReturnsWithinBound
+// is TestDeploymentAction_Stop_HungStopSession_IgnoresCtx_StillReturnsWithinBound's
+// Start counterpart.
+func TestDeploymentAction_Start_HungStartSession_IgnoresCtx_StillReturnsWithinBound(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:             stoppedSGC(42),
+		startIgnoresCtx: true,
+	}
+	app := newDeploymentTestApp(api)
+	app.deploymentActionTimeout = 10 * time.Millisecond
+
+	start := time.Now()
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/start", true)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("handler took %s to return, want well under 1s (a hung callee that ignores ctx must not block the handler)", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "taking longer than expected") {
+		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", w.Body.String())
 	}
 }
 
