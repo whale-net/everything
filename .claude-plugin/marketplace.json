@@ -18,6 +18,11 @@
       "name": "audience-score-system",
       "description": "Streamable-HTTP MCP access to the Audience Score System server across dev/prod, plus researcher/analyst agents and loop skills for research, schedule, and outcomes",
       "source": "./audience_score_system/plugin/user"
+    },
+    {
+      "name": "audience-score-system-data",
+      "description": "Postgres MCP access (crystaldba postgres-mcp) to the Audience Score System database across tilt/dev/prod",
+      "source": "./audience_score_system/plugin/data"
     }
   ]
 }
