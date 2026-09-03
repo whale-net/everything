@@ -95,6 +95,14 @@ type App struct {
 	// that need a fast timeout set these.
 	deploymentStopPollInterval time.Duration
 	deploymentStopTimeout      time.Duration
+
+	// deploymentActionTimeout overrides the bounded context.WithTimeout
+	// wrapped around stopDeployment/restartDeployment's initial StopSession
+	// RPC call (#1664 defense-in-depth, well under main.go's 15s
+	// WriteTimeout). Zero value means "use the production default" -- see
+	// handlers_deployment_actions.go's deploymentActionCtx -- so only tests
+	// that need a fast timeout set this.
+	deploymentActionTimeout time.Duration
 }
 
 // NewApp creates a new application instance
