@@ -12,7 +12,7 @@
 // covers RegisterRead/RegisterWrite's wiring logic against fakes. What
 // this file proves instead is exactly what a fake cannot:
 //   - the full caller-auth stack end to end -- a real bearer credential
-//     minted via store.CredentialStore, verified by auth.RequireBearerToken
+//     minted via mcpauth.CredentialStore, verified by mcpauth.RequireBearerToken
 //     over a real HTTP connection, resolved to a Person by PersonMiddleware
 //     -- using a real in-process MCP client (mcp.NewClient +
 //     StreamableClientTransport) against an httptest.Server wrapping
@@ -53,8 +53,25 @@ import (
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/db"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
+
+// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// mcp_credential table (migration 006) -- the same construction main.go
+// does, mirrored here so tests mint/verify through the identical backing
+// this task migrated onto (FR13/NFR3 parity).
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+	t.Helper()
+	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+	return creds
+}
 
 // mcpTestWriteResultSchema is a scratch table, self-contained and unrelated
 // to any real migration, purely so this file's fake write tool can persist
@@ -193,14 +210,14 @@ type testServer struct {
 	st  *store.Store
 }
 
-func newTestServer(t *testing.T, st *store.Store, register func(*server.Registry)) *testServer {
+func newTestServer(t *testing.T, st *store.Store, pool *pgxpool.Pool, register func(*server.Registry)) *testServer {
 	t.Helper()
 
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	register(reg)
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, newTestCredentialStore(t, pool))
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
@@ -239,11 +256,11 @@ func (ts *testServer) connect(t *testing.T, token string) (*mcp.ClientSession, e
 }
 
 // mintToken mints a real bearer credential for personID via
-// store.CredentialStore (migration 005) -- the same mechanism `web`'s
+// mcpauth.CredentialStore (migration 006) -- the same mechanism `web`'s
 // token-mint endpoint uses in production.
-func mintToken(t *testing.T, st *store.Store, personID uuid.UUID) string {
+func mintToken(t *testing.T, pool *pgxpool.Pool, personID uuid.UUID) string {
 	t.Helper()
-	raw, _, err := st.Credentials().Mint(context.Background(), personID)
+	raw, _, err := newTestCredentialStore(t, pool).Mint(context.Background(), personID.String())
 	require.NoError(t, err)
 	return raw
 }
@@ -267,7 +284,7 @@ func TestMCP_EndToEnd_AuthAndChannelScoping(t *testing.T) {
 	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
 
 	var calls int32
-	ts := newTestServer(t, st, func(reg *server.Registry) {
+	ts := newTestServer(t, st, pg.Pool, func(reg *server.Registry) {
 		server.RegisterRead(reg, &mcp.Tool{Name: "scoped_read"}, countingReadHandler(&calls))
 	})
 
@@ -288,7 +305,7 @@ func TestMCP_EndToEnd_AuthAndChannelScoping(t *testing.T) {
 	})
 
 	t.Run("authenticated Person with no role on the Channel gets a permission error, handler not invoked", func(t *testing.T) {
-		cs, err := ts.connect(t, mintToken(t, st, unassociated.ID))
+		cs, err := ts.connect(t, mintToken(t, pg.Pool, unassociated.ID))
 		require.NoError(t, err)
 		before := atomic.LoadInt32(&calls)
 
@@ -301,7 +318,7 @@ func TestMCP_EndToEnd_AuthAndChannelScoping(t *testing.T) {
 	t.Run("creator and analyst both pass the CanRead gate", func(t *testing.T) {
 		for _, personID := range []uuid.UUID{creator.ID, analyst.ID} {
 			before := atomic.LoadInt32(&calls)
-			cs, err := ts.connect(t, mintToken(t, st, personID))
+			cs, err := ts.connect(t, mintToken(t, pg.Pool, personID))
 			require.NoError(t, err)
 
 			res := callTool(cs)
@@ -344,11 +361,11 @@ func TestMCP_Idempotency_ConcurrentSameKey_HandlerRunsExactlyOnce(t *testing.T) 
 	require.NoError(t, err)
 
 	handler := newPGWriteHandler(pg.Pool)
-	ts := newTestServer(t, st, func(reg *server.Registry) {
+	ts := newTestServer(t, st, pg.Pool, func(reg *server.Registry) {
 		server.RegisterWrite(reg, &mcp.Tool{Name: "scoped_write"}, handler.mutate, handler.render)
 	})
 
-	token := mintToken(t, st, creator.ID)
+	token := mintToken(t, pg.Pool, creator.ID)
 
 	const n = 10
 	var wg sync.WaitGroup
@@ -425,17 +442,17 @@ func TestMCP_Statelessness_ReplayAcrossTwoIndependentServerInstances(t *testing.
 	require.NoError(t, err)
 	ch, err := setupStore.Channels().Create(ctx, "yt-stateless-1", "Channel", creator.ID)
 	require.NoError(t, err)
-	token := mintToken(t, setupStore, creator.ID)
+	token := mintToken(t, pg.Pool, creator.ID)
 
 	st1, pool1 := newIndependentStore(t, pg)
 	handler1 := newPGWriteHandler(pool1)
-	ts1 := newTestServer(t, st1, func(reg *server.Registry) {
+	ts1 := newTestServer(t, st1, pool1, func(reg *server.Registry) {
 		server.RegisterWrite(reg, &mcp.Tool{Name: "scoped_write"}, handler1.mutate, handler1.render)
 	})
 
 	st2, pool2 := newIndependentStore(t, pg)
 	handler2 := newPGWriteHandler(pool2)
-	ts2 := newTestServer(t, st2, func(reg *server.Registry) {
+	ts2 := newTestServer(t, st2, pool2, func(reg *server.Registry) {
 		server.RegisterWrite(reg, &mcp.Tool{Name: "scoped_write"}, handler2.mutate, handler2.render)
 	})
 

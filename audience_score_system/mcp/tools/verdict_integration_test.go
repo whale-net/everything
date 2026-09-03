@@ -35,6 +35,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -45,6 +46,7 @@ import (
 	"github.com/whale-net/everything/audience_score_system/migrate/schema"
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/libs/go/dbtest"
+	"github.com/whale-net/everything/libs/go/mcpauth"
 	"github.com/whale-net/everything/libs/go/migrate"
 )
 
@@ -67,15 +69,32 @@ func newVerdictTestDB(t *testing.T) *dbtest.Postgres {
 	return pg
 }
 
+// newTestCredentialStore builds the mcpauth.CredentialStore against pool's
+// mcp_credential table (migration 006) -- the same construction main.go
+// does, mirrored here so tests mint/verify through the identical backing
+// this task migrated onto (FR13/NFR3 parity).
+func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.CredentialStore {
+	t.Helper()
+	creds, err := mcpauth.NewCredentialStore(context.Background(), mcpauth.StoreConfig{
+		Pool:           pool,
+		TableName:      "mcp_credential",
+		IdentityColumn: "person_id",
+		IdentityCast:   "uuid",
+	})
+	require.NoError(t, err)
+	return creds
+}
+
 // verdictFixture is the common setup every test below needs: a Channel
 // with a live Creator and Analyst, an unassociated Person with no role on
 // it, an Idea to record verdicts against, a second Channel with its own
 // Idea and research note (for the cross-Channel-citation rejection
 // tests), and a real MCP client session per Person minted via
-// store.CredentialStore (migration 005) -- the same mechanism `web`'s
+// mcpauth.CredentialStore (migration 006) -- the same mechanism `web`'s
 // token-mint endpoint uses in production.
 type verdictFixture struct {
 	st           *store.Store
+	creds        mcpauth.CredentialStore
 	ch           store.Channel
 	creator      store.Person
 	analyst      store.Person
@@ -94,6 +113,7 @@ func newVerdictFixture(t *testing.T) *verdictFixture {
 
 	pg := newVerdictTestDB(t)
 	st := store.New(pg.Pool)
+	creds := newTestCredentialStore(t, pg.Pool)
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-creator-"+uuid.NewString(), "creator@example.com", "Creator Person")
 	require.NoError(t, err)
@@ -133,12 +153,12 @@ func newVerdictFixture(t *testing.T) *verdictFixture {
 	tools.RegisterVerdict(reg, st)
 	tools.RegisterResearch(reg, st)
 
-	handler := server.NewHTTPHandler(srv, st.Credentials())
+	handler := server.NewHTTPHandler(srv, creds)
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
 	return &verdictFixture{
-		st: st, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
+		st: st, creds: creds, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
 		idea: idea, note: note, otherChannel: otherChannel, otherCreator: otherCreator, otherNote: otherNote,
 		url: ts.URL,
 	}
@@ -160,7 +180,7 @@ func (f *verdictFixture) connect(t *testing.T, personID uuid.UUID) *mcp.ClientSe
 	t.Helper()
 	ctx := context.Background()
 
-	token, _, err := f.st.Credentials().Mint(ctx, personID)
+	token, _, err := f.creds.Mint(ctx, personID.String())
 	require.NoError(t, err)
 
 	transport := &mcp.StreamableClientTransport{

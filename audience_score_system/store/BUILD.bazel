@@ -11,17 +11,16 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 # idempotency.go are real SQL-backed implementations against migration
 # 002's tables (issue #1569's Implementation phase).
 #
-# credential.go (migration 005, mcp_credential) is a real SQL-backed
-# implementation against migration 005's table (issue #1575's
-# Implementation phase) -- the caller-auth mechanism `mcp` uses to resolve
-# a bearer credential to a Person.
+# The bearer-credential-to-Person caller-auth mechanism `mcp` uses no
+# longer lives here (migration 005/credential.go, issue #1575) -- issue
+# #1643 migrated it onto the shared //libs/go/mcpauth.CredentialStore
+# against migration 006's mcp_credential table.
 go_library(
     name = "store",
     srcs = [
         "authz.go",
         "browse.go",
         "channel.go",
-        "credential.go",
         "idea.go",
         "idempotency.go",
         "invite.go",

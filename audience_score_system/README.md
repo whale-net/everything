@@ -78,8 +78,8 @@ there is no separate MCP-specific client-secret variable.
 
 1. Sign in to `web` (`/login`) as the Person you want the MCP client to
    act as.
-2. Mint a credential for that Person via `store.CredentialStore.Mint`
-   (`mcp_credential`, migration 005) -- exposing this as a `web` endpoint
+2. Mint a credential for that Person via `mcpauth.CredentialStore.Mint`
+   (`mcp_credential`, migration 006) -- exposing this as a `web` endpoint
    is filed as a scope note (see issue #1591); until then, mint one
    directly against the running Postgres, e.g. via a short Go snippet or
    `psql` calling the same store method a future endpoint would.

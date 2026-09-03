@@ -796,17 +796,16 @@ func TestPredictionVsOutcomeView_OnlyMatchedPublishedCommittedIdeasAppear(t *tes
 func ptrTime(t time.Time) *time.Time { return &t }
 func ptrInt64(v int64) *int64        { return &v }
 
-// ── Migration reversibility (001 + 002 + 003 + 005) ─────────────────────────
+// ── Migration reversibility (001 + 002 + 003 + 004 + 005 + 006) ────────────
 
 // TestMigrations_UpDownUp_LeavesNoOrphanObjects exercises schema.Migrations'
 // full up/down/up cycle across every embedded migration, not just one in
 // isolation -- it was written against 001 alone (#1568), extended for 002
-// (#1569), extended again for 003 (web_session, #1570), and again for 005
-// (mcp_credential, #1575 -- 004 is reserved for #1571's Channel-connect
-// token store and has not landed yet, so the highest applied version is 5
-// with a gap at 4; golang-migrate does not require contiguous versions), so
-// the version assertion and table list below cover all of them rather than
-// any single one.
+// (#1569), extended again for 003 (web_session, #1570), again for 005
+// (mcp_credential, #1575), and again for 006 (mcp_credential dropped and
+// recreated against libs/go/mcpauth's schema contract, #1643), so the
+// version assertion and table list below cover all of them rather than any
+// single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -823,7 +822,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(5), version, "highest migration in schema.Migrations is 005_mcp_credential")
+	assert.Equal(t, uint(6), version, "highest migration in schema.Migrations is 006_mcpauth_credential")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",

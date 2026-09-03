@@ -115,8 +115,11 @@ here.
 
 Read by `mcp`'s `main.go`. See `ARCHITECTURE.md`'s "MCP server: caller
 authentication" for how a caller authenticates — there is no MCP-specific
-client-secret variable here, because `mcp_credential` (migration 005)
-stores only a SHA-256 hash, not a reversible secret.
+client-secret variable here, because `mcp_credential` (migration 006,
+backed by `libs/go/mcpauth.CredentialStore`) stores only a SHA-256 hash,
+not a reversible secret. `mcpauth.NewCredentialStore` preflights this
+table at boot (a `SELECT 1 ... LIMIT 0` probe), so a missing migration 006
+now fails `mcp` at startup rather than at first bearer-token verification.
 
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
