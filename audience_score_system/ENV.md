@@ -33,6 +33,13 @@ Read via `//libs/go/temporal`'s `ConfigFromEnv` (`worker`), plus
 | `TEMPORAL_TASK_QUEUE` | worker | `audience-score-system-sync` | Task queue name for the per-Channel sync worker (`sync.TaskQueue`). Unlike `//libs/go/temporal`'s own zero-default, `worker`'s `main.go` falls back to `sync.TaskQueue` when unset, mirroring `tools/app_registry/worker`'s identical fallback-to-package-constant pattern. |
 | `ASS_SYNC_INTERVAL` | worker | `20m` | How often `sync.ChannelSyncWorkflow` runs per connected Channel (a Go `time.Duration` string, e.g. `20m`). Must fall within NFR4's ~15-30 minute band (`sync.MinSyncInterval`/`sync.MaxSyncInterval`) — `worker` fails fast at startup on an out-of-band or unparseable value rather than silently clamping it. |
 
+`worker` also reads C2's `ASS_GOOGLE_CLIENT_ID`/`ASS_GOOGLE_CLIENT_SECRET`/
+`ASS_TOKEN_ENCRYPTION_KEY` (see "OAuth scopes" below) as of issue #1576:
+`SyncSchedule` refreshes/decrypts each Channel's `channel_credential` row
+through the SAME `tokens.Store` construction `web` uses, so it needs the
+same three variables to build it — no worker-specific credential
+variable is introduced.
+
 ## Logging
 
 `//libs/go/logging`'s `Config.Level` is set programmatically per binary, not
@@ -53,20 +60,23 @@ doc comment for why these are Google-only and deliberately separate from
 | Variable | Component | Default | Description |
 |----------|-----------|---------|--------------|
 | `ASS_HTTP_ADDR` | web | `:8080` | HTTP listen address for the `web` binary. |
-| `ASS_GOOGLE_CLIENT_ID` | web | *(required)* | Google OAuth2 client ID (Google Cloud Console "OAuth client ID") for the sign-in consent screen. |
-| `ASS_GOOGLE_CLIENT_SECRET` | web | *(required)* | Google OAuth2 client secret paired with `ASS_GOOGLE_CLIENT_ID`. |
+| `ASS_GOOGLE_CLIENT_ID` | web, worker | *(required)* | Google OAuth2 client ID (Google Cloud Console "OAuth client ID") for the sign-in consent screen. `worker` reads the same variable to refresh a Channel's C2 credential (see "Temporal" above, issue #1576) — it never runs the sign-in flow itself. |
+| `ASS_GOOGLE_CLIENT_SECRET` | web, worker | *(required)* | Google OAuth2 client secret paired with `ASS_GOOGLE_CLIENT_ID`. Same worker note as above. |
 | `ASS_OAUTH_REDIRECT_BASE_URL` | web | *(required)* | This app's own externally-reachable origin, e.g. `https://audience-score.whalenet.dev` — `web/auth` appends `/oauth/google/callback` to build the redirect URL Google calls back to. |
 | `ASS_SESSION_SECRET` | web | *(required)* | Secret used to sign/protect the short-lived OAuth2 state cookie (CSRF) during the login round trip. |
-| `ASS_TOKEN_ENCRYPTION_KEY` | web | *(required)* | Secret hashed (SHA-256) into a 32-byte AES-256-GCM key used to encrypt any stored Google refresh token at rest — mirrors `libs/go/htmxauth.DBSessionManager`'s `encKey` derivation. This same key also encrypts `channel_credential`'s YouTube token ciphertext (see "OAuth scopes" below) — one key, two independent token stores. |
+| `ASS_TOKEN_ENCRYPTION_KEY` | web, worker | *(required)* | Secret hashed (SHA-256) into a 32-byte AES-256-GCM key used to encrypt any stored Google refresh token at rest — mirrors `libs/go/htmxauth.DBSessionManager`'s `encKey` derivation. This same key also encrypts `channel_credential`'s YouTube token ciphertext (see "OAuth scopes" below) — one key, two independent token stores. `worker` derives the same key to decrypt/refresh `channel_credential` for `SyncSchedule` (issue #1576). |
 
 ## OAuth scopes (C2: YouTube Channel-connect)
 
-Read by `web`'s `main.go` and `web/channel` (issue #1571). This is a
-SEPARATE OAuth grant from "Web (C1: Google OAuth sign-in/sign-up)" above —
-see `../ARCHITECTURE.md` "OAuth grants" for why. It reuses C1's
+Read by `web`'s `main.go` and `web/channel` (issue #1571), and by
+`worker`'s `main.go` and `tokens.Store` for the token-refresh half of the
+same grant (issue #1576, `SyncSchedule`). This is a SEPARATE OAuth grant
+from "Web (C1: Google OAuth sign-in/sign-up)" above — see
+`../ARCHITECTURE.md` "OAuth grants" for why. It reuses C1's
 `ASS_GOOGLE_CLIENT_ID`/`ASS_GOOGLE_CLIENT_SECRET`/
 `ASS_OAUTH_REDIRECT_BASE_URL` (same Google OAuth2 client, a different
-redirect path — `web/channel` appends `/oauth/youtube/callback`) and
+redirect path — `web/channel` appends `/oauth/youtube/callback`; `worker`
+never redirects anywhere, it only refreshes an already-granted token) and
 `ASS_TOKEN_ENCRYPTION_KEY` (same derivation, a different table:
 `channel_credential`, migration 004, vs. `web_session`, migration 003). No
 net-new environment variable is introduced by this grant.
