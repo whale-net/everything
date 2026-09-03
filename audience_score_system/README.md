@@ -16,8 +16,8 @@ server precedent used elsewhere in the repo.
 | Binary | `release_app` name | app_type | Responsibility |
 |--------|---------------------|----------|--------|
 | `migrate/` | `migration` | `job` | Applies every migration (001-005: identity, research/schedule/outcome, web session, channel credentials, MCP credentials). |
-| `web/` | `web` | `external-api` | The only UI surface (NFR3): Google OAuth sign-in/sign-up (C1), Channel connect (C2), Analyst invite/accept (C3), schedule-draft un-approve/edit (C8). |
-| `mcp/` | `mcp` | `external-api` | Every other capability (C4-C7, C9, C10) plus C8's commit/approve step (issue #1648) as MCP tools -- research notes, viability verdicts, schedule sync reads, pacing policy, schedule drafting and commit, outcome match confirm/reject, and browsing. |
+| `web/` | `web` | `external-api` | The only UI surface. Three of its surfaces are UI-only (NFR3): Google OAuth sign-in/sign-up (C1), Channel connect (C2), Analyst invite/accept (C3). Its fourth, schedule-draft approve/un-approve/edit (C8), is also reachable via `mcp` (issue #1648) -- both are equally-capable front ends onto the same store. |
+| `mcp/` | `mcp` | `external-api` | Every other capability (C4-C7, C8, C9, C10) as MCP tools -- research notes, viability verdicts, schedule sync reads, pacing policy, schedule drafting/commit/un-commit/edit, outcome match confirm/reject, and browsing. |
 | `worker/` | `worker` | `worker` | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). |
 
 All four are complete as of M1 (see [`PRODUCT.md`](PRODUCT.md)'s roadmap)
@@ -54,11 +54,12 @@ bazel run //audience_score_system/migrate:migration
 bazel run //audience_score_system/migrate:migration -- -version   # check current version
 bazel run //audience_score_system/migrate:migration -- -history   # applied-migration history
 
-# 2. Run the web UI (OAuth signup/login, Channel connect, invite/accept,
-#    schedule un-approve/edit -- the only four UI surfaces, per NFR3)
+# 2. Run the web UI (OAuth signup/login, Channel connect, invite/accept --
+#    its three UI-only surfaces, per NFR3 -- plus a schedule approve/
+#    un-approve/edit UI that mcp's schedule-draft tools also cover)
 bazel run //audience_score_system/web
 
-# 3. Run the MCP server (every other capability -- C4-C7, C9, C10)
+# 3. Run the MCP server (every other capability -- C4-C7, C8, C9, C10)
 bazel run //audience_score_system/mcp
 
 # 4. Run the Temporal worker (per-Channel schedule/outcome sync)

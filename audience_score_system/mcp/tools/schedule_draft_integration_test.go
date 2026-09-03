@@ -940,3 +940,143 @@ func TestCommitScheduleDraft_UnknownOrCrossChannelEntry_Rejected(t *testing.T) {
 		assert.Contains(t, sdTextOf(res), "does not belong to channel_id")
 	})
 }
+
+// ── uncommit_schedule_draft: FR20 Creator-only reversal ──────────────────
+
+func (f *scheduleDraftFixture) commitDraft(t *testing.T, cs *mcp.ClientSession, entryID string) tools.ScheduleEntryOutput {
+	t.Helper()
+	res := f.call(t, cs, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   entryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	return sdDecode[tools.ScheduleEntryOutput](t, res)
+}
+
+func TestUncommitScheduleDraft_Creator_TransitionsCommittedBackToDraft_ClearsApprover(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+	f.commitDraft(t, cs, draft.ScheduleEntryID)
+
+	res := f.call(t, cs, "uncommit_schedule_draft", tools.UncommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.ScheduleEntryOutput](t, res)
+	assert.Equal(t, "draft", out.State)
+	assert.Nil(t, out.ApprovedByPersonID)
+	assert.Nil(t, out.ApprovedAt)
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateDraft, entry.State, "the entry must actually be back to draft in the database")
+	assert.Nil(t, entry.ApprovedByPersonID)
+}
+
+func TestUncommitScheduleDraft_AnalystDenied_StaysCommitted(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	creatorCS := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, creatorCS, f.idea.ID, mondayAt(9))
+	f.commitDraft(t, creatorCS, draft.ScheduleEntryID)
+
+	analystCS := f.connect(t, f.analyst.ID)
+	res := f.call(t, analystCS, "uncommit_schedule_draft", tools.UncommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "an Analyst must not be able to un-commit an entry (FR20)")
+	assert.Contains(t, sdTextOf(res), "permission denied")
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateCommitted, entry.State, "the denied call must not have changed anything")
+}
+
+func TestUncommitScheduleDraft_AlreadyDraft_RejectedAsConflict(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+
+	res := f.call(t, cs, "uncommit_schedule_draft", tools.UncommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "un-committing an entry that is still a draft must be rejected as a conflict")
+}
+
+// ── update_schedule_draft: FR20 Creator-only reschedule ───────────────────
+
+func TestUpdateScheduleDraft_Creator_ChangesProposedPublishAt_ReadBackFromDB(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+	newTime := mondayAt(9).AddDate(0, 0, 1)
+
+	res := f.call(t, cs, "update_schedule_draft", tools.UpdateScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		ProposedPublishAt: newTime.Format(time.RFC3339),
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.SaveScheduleDraftOutput](t, res)
+	assert.Equal(t, newTime.Format(time.RFC3339), out.ProposedPublishAt)
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.True(t, newTime.Equal(entry.ProposedPublishAt), "the new proposed_publish_at must be persisted in the database")
+}
+
+func TestUpdateScheduleDraft_AnalystDenied_TimeUnchanged(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	creatorCS := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, creatorCS, f.idea.ID, mondayAt(9))
+
+	analystCS := f.connect(t, f.analyst.ID)
+	res := f.call(t, analystCS, "update_schedule_draft", tools.UpdateScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		ProposedPublishAt: mondayAt(9).AddDate(0, 0, 3).Format(time.RFC3339),
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "an Analyst must not be able to reschedule an existing draft, even though it may create one (FR20)")
+	assert.Contains(t, sdTextOf(res), "permission denied")
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.True(t, mondayAt(9).Equal(entry.ProposedPublishAt), "the denied call must not have changed proposed_publish_at")
+}
+
+func TestUpdateScheduleDraft_CommittedEntry_RejectedAsConflict(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, cs, f.idea.ID, mondayAt(9))
+	f.commitDraft(t, cs, draft.ScheduleEntryID)
+
+	res := f.call(t, cs, "update_schedule_draft", tools.UpdateScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		ProposedPublishAt: mondayAt(9).AddDate(0, 0, 5).Format(time.RFC3339),
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	assert.True(t, res.IsError, "a committed entry must be un-committed before it can be rescheduled")
+}

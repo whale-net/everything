@@ -193,8 +193,8 @@ the raw token or its hash.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule un-approve/edit #1580) | `web` (external-api) | The **only** UI surface. Limited to C1/C2/C3/C8 (see "NFR3 interface allocation" below). |
-| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1648) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10) plus C8's approve/commit step (#1648): research notes, viability verdicts, schedule sync reads, schedule draft proposals and commits, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule approve/un-approve/edit UI #1580) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C8 schedule page is a UI front end onto the same `store.ScheduleStore` that `mcp`'s schedule-draft tools also write to. |
+| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1648) | `mcp` (external-api) | Every other capability (C4-C7, C8, C9, C10): research notes, viability verdicts, schedule sync reads, schedule draft proposals/commit/un-commit/edit, pacing policy, outcome-match confirm/reject, and all browsing. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~15-30 minute cadence (NFR4). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
@@ -280,53 +280,55 @@ and the identical `sync.ValidateSyncInterval` band-check (see `ENV.md`
 silently create a Channel's schedule at the wrong cadence, since whichever
 binary's `EnsureSchedule` call happens to land first wins.
 
-**NFR3 check for this change:** NFR3 (below) restricts `web` to four *UI
-surfaces* (C1/C2/C3/C8) -- calling `EnsureSchedule` from
+**NFR3 check for this change:** NFR3 (below) restricts `web` to three
+*UI-only* surfaces (C1/C2/C3) -- calling `EnsureSchedule` from
 `HandleCallback` adds no new HTTP route, no new MCP tool, and no new
 capability visible to a user or agent; it is backend plumbing inside the
 already-allocated C2 (Channel-connect) surface, exactly analogous to
 `web` already writing `channel_credential` and `connection_state` as part
-of that same flow. NFR3 stands unmodified.
+of that same flow. NFR3 stands unmodified. (This predates issue #1648's
+NFR3 amendment, which moved C8 off the `web`-only list entirely -- the
+citation here is updated to match, but the `EnsureSchedule` reasoning
+itself is unaffected.)
 
 ## NFR3 interface allocation
 
-The web UI is **limited to exactly four surfaces** — everything else is
-MCP-only, per the product brief's MCP-agent-first interface decision:
+The web UI is **limited to exactly three UI-only surfaces** — everything
+else is MCP-exposed too, per the product brief's MCP-agent-first interface
+decision:
 
 - **C1** — OAuth signup/login (Google OAuth consent → Person record).
 - **C2** — Channel connect (YouTube OAuth consent → Channel + `role=creator`
   join row, LB2).
 - **C3** — Analyst invite/accept (invite code generation and
   accept/decline).
-- **C8** — Schedule-draft revocation and editing (Creator-only un-approve,
-  edit, re-approve up until publish). Un-approve/edit remain `web`-only:
-  reversing or changing an already-committed slot stays a deliberate,
-  synchronous human action.
 
-Every other capability — C4 (research notes), C5 (viability verdicts), C6
-(schedule sync reads), C7 (schedule drafting, pacing policy), C9 (outcome
-comparison, pending-match confirm/reject), C10 (browsing) — is exposed only
-through `mcp` tools. `web` must never grow a UI surface for these; if a
-future milestone needs one, that's a scope change to NFR3, not an
-implementation detail to slip in under an existing task.
+These three are OAuth-consent flows tied to a browser redirect and cannot
+be MCP tools by construction (there is no meaningful "call this MCP tool
+to complete a Google consent screen"). Every other capability — C4
+(research notes), C5 (viability verdicts), C6 (schedule sync reads), C7
+(schedule drafting, pacing policy), **C8 (schedule-draft
+commit/un-commit/edit)**, C9 (outcome comparison, pending-match
+confirm/reject), C10 (browsing) — is exposed as `mcp` tools, whether or not
+`web` also renders a UI for it.
 
-**NFR3 amendment (issue #1648): C8's initial approve is now also
-MCP-exposed.** M1 originally kept *all* of C8 (approve, un-approve, edit)
-`web`-only, on the theory that committing a schedule was a deliberate human
-action best gated behind a UI click. In practice this made the
-FR16→FR19→FR22/FR23 pipeline (draft → commit → auto/pending-match →
-resolve) structurally unreachable from an MCP-only client: `mcp`'s outcome
-matcher and `resolve_pending_match` only ever consider *committed* entries,
-and nothing in `mcp` could ever produce one. `commit_schedule_draft`
-(`mcp/tools/schedule_draft.go`) closes that gap -- it calls the exact same
-`store.ScheduleStore.Approve` and `store.CanApprove` (Creator-only) that
-`web`'s approve button already uses, so the authority boundary is
-unchanged: an Analyst credential is still rejected, whether the caller is
-`web` or `mcp`. What changed is only *which surface* a Creator may use to
-say "commit this" -- un-approve/edit (the reversal/correction half of C8)
-stay `web`-only, since those are lower-frequency, deliberately-slower
-actions with no equivalent pipeline-completion need. Revisit this split if
-un-approve/edit ever gain the same MCP-reachability argument.
+**NFR3 amendment (issue #1648): C8 is no longer a `web`-only surface.** M1
+originally kept all of C8 (approve, un-approve, edit) `web`-only, on the
+theory that committing a schedule was a deliberate human action best gated
+behind a UI click. In practice this made the FR16→FR19→FR22/FR23 pipeline
+(draft → commit → auto/pending-match → resolve) structurally unreachable
+from an MCP-only client: `mcp`'s outcome matcher and `resolve_pending_match`
+only ever consider *committed* entries, and nothing in `mcp` could ever
+produce one. `mcp/tools/schedule_draft.go` now exposes the full set --
+`commit_schedule_draft`, `uncommit_schedule_draft`, `update_schedule_draft`
+-- each calling the exact same `store.ScheduleStore` method and
+`store.CanApprove` (Creator-only) check `web`'s approve/unapprove/edit
+handlers already use, so the authority boundary is unchanged: an Analyst
+credential is rejected on either surface. `web`'s schedule page is
+unaffected and keeps rendering the same approve/un-approve/edit
+affordances -- the two surfaces are now two independent, equally-capable
+front ends onto the same `store.ScheduleStore`, not a primary (`web`) and a
+read-only shadow (`mcp`).
 
 ## Temporal: no scheduled-workflow helper yet
 

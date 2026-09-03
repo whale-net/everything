@@ -902,18 +902,195 @@ func commitScheduleDraftRender(schedules store.ScheduleStore, ideas store.IdeaSt
 	}
 }
 
+// -- uncommit_schedule_draft ---------------------------------------------------
+
+// UncommitScheduleDraftInput is uncommit_schedule_draft's argument schema
+// (FR20, issue #1648's full-parity follow-up).
+type UncommitScheduleDraftInput struct {
+	ChannelID         string `json:"channel_id" jsonschema:"Channel the entry belongs to, as a UUID string"`
+	ScheduleEntryID   string `json:"schedule_entry_id" jsonschema:"the committed schedule_entry to revert to draft, as a UUID string"`
+	IdempotencyKeyArg string `json:"idempotency_key,omitempty" jsonschema:"Caller-supplied idempotency key. Strongly recommended: a replay with the same key is a no-op returning the original result (NFR2); un-committing an already-draft entry without one is rejected as a conflict, never a silent no-op."`
+}
+
+// ChannelScopeID implements server.ChannelScoped.
+func (i UncommitScheduleDraftInput) ChannelScopeID() uuid.UUID {
+	id, _ := uuid.Parse(i.ChannelID)
+	return id
+}
+
+// IdempotencyKey implements server.IdempotencyKeyed.
+func (i UncommitScheduleDraftInput) IdempotencyKey() string { return i.IdempotencyKeyArg }
+
+// registerUncommitScheduleDraft registers uncommit_schedule_draft via
+// server.RegisterWrite. Like commit_schedule_draft, this checks
+// store.CanApprove explicitly (Creator-only) rather than relying on
+// RegisterWrite's automatic store.CanWrite gate, matching
+// web/schedule.go's HandleUnapprove (FR20).
+func registerUncommitScheduleDraft(reg *server.Registry, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore, roles store.RoleStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name: "uncommit_schedule_draft",
+		Description: "Reverse commit_schedule_draft: transition a committed schedule_entry back to draft, clearing " +
+			"its approver and approved_at (FR20). Creator-only (store.CanApprove) -- an Analyst calling this is " +
+			"rejected with a permission error. Rejected with a conflict if schedule_entry_id is not currently " +
+			"committed, or if it is already frozen by a live match to a published video (FR20's freeze) -- once a " +
+			"video has published against an entry, its commit can no longer be reversed here or in web. Always " +
+			"supply idempotency_key: un-committing an already-draft entry without one is rejected as a conflict, " +
+			"not treated as a no-op replay.",
+	}, uncommitScheduleDraftMutate(schedules, roles), commitScheduleDraftRender(schedules, ideas, verdicts, persons))
+}
+
+func uncommitScheduleDraftMutate(schedules store.ScheduleStore, roles store.RoleStore) server.WriteMutate[UncommitScheduleDraftInput] {
+	return func(ctx context.Context, in UncommitScheduleDraftInput) (uuid.UUID, error) {
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		entryID, err := uuid.Parse(in.ScheduleEntryID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("schedule_entry_id is not a valid UUID: %w", err)
+		}
+
+		entry, err := schedules.GetByID(ctx, entryID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, fmt.Errorf("schedule_entry_id does not exist")
+			}
+			return uuid.Nil, fmt.Errorf("load schedule_entry: %w", err)
+		}
+		if entry.ChannelID != channelID {
+			return uuid.Nil, fmt.Errorf("schedule_entry_id does not belong to channel_id")
+		}
+
+		person := server.PersonFromContext(ctx)
+		if person == nil {
+			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+
+		canApprove, err := store.CanApprove(ctx, roles, channelID, person.ID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
+		}
+		if !canApprove {
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Creator may un-commit a schedule entry (FR20)")
+		}
+
+		if err := schedules.Unapprove(ctx, entryID, person.ID); err != nil {
+			if errors.Is(err, store.ErrScheduleEntryPublished) {
+				return uuid.Nil, fmt.Errorf("cannot un-commit: %w", err)
+			}
+			return uuid.Nil, err
+		}
+		return entryID, nil
+	}
+}
+
+// -- update_schedule_draft -----------------------------------------------------
+
+// UpdateScheduleDraftInput is update_schedule_draft's argument schema
+// (FR20's edit route, issue #1648's full-parity follow-up).
+type UpdateScheduleDraftInput struct {
+	ChannelID         string `json:"channel_id" jsonschema:"Channel the entry belongs to, as a UUID string"`
+	ScheduleEntryID   string `json:"schedule_entry_id" jsonschema:"the draft schedule_entry to reschedule, as a UUID string"`
+	ProposedPublishAt string `json:"proposed_publish_at" jsonschema:"the new proposed publish slot, RFC3339"`
+	IdempotencyKeyArg string `json:"idempotency_key,omitempty" jsonschema:"Caller-supplied idempotency key. Strongly recommended: a replay with the same key is a no-op returning the original result (NFR2); editing an entry that is no longer a draft without one is rejected as a conflict, never a silent no-op."`
+}
+
+// ChannelScopeID implements server.ChannelScoped.
+func (i UpdateScheduleDraftInput) ChannelScopeID() uuid.UUID {
+	id, _ := uuid.Parse(i.ChannelID)
+	return id
+}
+
+// IdempotencyKey implements server.IdempotencyKeyed.
+func (i UpdateScheduleDraftInput) IdempotencyKey() string { return i.IdempotencyKeyArg }
+
+// registerUpdateScheduleDraft registers update_schedule_draft via
+// server.RegisterWrite. Like commit_schedule_draft, this checks
+// store.CanApprove explicitly (Creator-only) rather than relying on
+// RegisterWrite's automatic store.CanWrite gate -- matching
+// web/schedule.go's HandleEdit, which gates re-scheduling an *existing*
+// draft more strictly than save_schedule_draft gates creating one (FR20).
+func registerUpdateScheduleDraft(reg *server.Registry, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore, pacing store.PacingStore, sync store.SyncStore, roles store.RoleStore) {
+	server.RegisterWrite(reg, &mcp.Tool{
+		Name: "update_schedule_draft",
+		Description: "Change a draft schedule_entry's proposed_publish_at (FR20's edit route). Creator-only " +
+			"(store.CanApprove) -- an Analyst calling this is rejected with a permission error, even though an " +
+			"Analyst may create the original draft via save_schedule_draft. Rejected with a conflict if " +
+			"schedule_entry_id is not currently a draft (a committed entry must be un-committed first via " +
+			"uncommit_schedule_draft), or if it is already frozen by a live match to a published video (FR20). " +
+			"Recomputes and returns FR18's non-blocking flags (cadence_exceeded, off_preferred_day, collision) " +
+			"against the new slot, same as save_schedule_draft. Always supply idempotency_key: editing a " +
+			"non-draft entry without one is rejected as a conflict, not treated as a no-op replay.",
+	}, updateScheduleDraftMutate(schedules, roles), saveScheduleDraftRender(schedules, ideas, verdicts, persons, pacing, sync))
+}
+
+func updateScheduleDraftMutate(schedules store.ScheduleStore, roles store.RoleStore) server.WriteMutate[UpdateScheduleDraftInput] {
+	return func(ctx context.Context, in UpdateScheduleDraftInput) (uuid.UUID, error) {
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		entryID, err := uuid.Parse(in.ScheduleEntryID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("schedule_entry_id is not a valid UUID: %w", err)
+		}
+
+		proposedPublishAt, err := time.Parse(time.RFC3339, in.ProposedPublishAt)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("proposed_publish_at is not a valid RFC3339 timestamp: %w", err)
+		}
+
+		entry, err := schedules.GetByID(ctx, entryID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, fmt.Errorf("schedule_entry_id does not exist")
+			}
+			return uuid.Nil, fmt.Errorf("load schedule_entry: %w", err)
+		}
+		if entry.ChannelID != channelID {
+			return uuid.Nil, fmt.Errorf("schedule_entry_id does not belong to channel_id")
+		}
+
+		person := server.PersonFromContext(ctx)
+		if person == nil {
+			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+
+		canApprove, err := store.CanApprove(ctx, roles, channelID, person.ID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
+		}
+		if !canApprove {
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Creator may reschedule a schedule entry (FR20)")
+		}
+
+		if err := schedules.Update(ctx, entryID, proposedPublishAt); err != nil {
+			if errors.Is(err, store.ErrScheduleEntryPublished) {
+				return uuid.Nil, fmt.Errorf("cannot reschedule: %w", err)
+			}
+			return uuid.Nil, err
+		}
+		return entryID, nil
+	}
+}
+
 // -- registration ------------------------------------------------------------
 
 // RegisterScheduleDraft registers set_pacing_policy, get_pacing_policy,
-// get_drafting_context, save_schedule_draft, commit_schedule_draft, and
-// list_schedule_entries against reg (see ../server/registry.go), backed by
-// st's PacingStore/ScheduleStore/SyncStore/IdeaStore/VerdictStore/
-// PersonStore/RoleStore.
+// get_drafting_context, save_schedule_draft, commit_schedule_draft,
+// uncommit_schedule_draft, update_schedule_draft, and list_schedule_entries
+// against reg (see ../server/registry.go), backed by st's
+// PacingStore/ScheduleStore/SyncStore/IdeaStore/VerdictStore/PersonStore/
+// RoleStore.
 func RegisterScheduleDraft(reg *server.Registry, st *store.Store) {
 	registerSetPacingPolicy(reg, st.Pacing(), st.Persons())
 	registerGetPacingPolicy(reg, st.Pacing(), st.Persons())
 	registerGetDraftingContext(reg, st.Pacing(), st.Sync(), st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons())
 	registerSaveScheduleDraft(reg, st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons(), st.Pacing(), st.Sync())
 	registerCommitScheduleDraft(reg, st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons(), st.Roles())
+	registerUncommitScheduleDraft(reg, st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons(), st.Roles())
+	registerUpdateScheduleDraft(reg, st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons(), st.Pacing(), st.Sync(), st.Roles())
 	registerListScheduleEntries(reg, st.Schedules(), st.Ideas(), st.Verdicts(), st.Persons())
 }
