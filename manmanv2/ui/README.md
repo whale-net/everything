@@ -70,15 +70,32 @@ for any of the three actions.
   current live session (via `ListSessions` with `LiveOnly: true`) and stops
   it. A deployment with no live session any more (raced with a crash/stop)
   is not an error -- it renders an inline notice, and `StopSession` is never
-  called.
+  called. The `StopSession` RPC itself is wrapped in a bounded
+  `context.WithTimeout` (`app.deploymentActionTimeout`, defaulting to 8s --
+  comfortably under `main.go`'s 15s `http.Server.WriteTimeout`) as
+  defense-in-depth (#1664): a command that times out renders a distinct
+  inline "taking longer than expected" message rather than a generic
+  failure, or -- if the host/API layer ever regresses on its fast-ack
+  behavior -- a dropped connection.
 - `POST /sessions/deployments/{sgcID}/restart` -- **literally stop-then-start
   over the same helpers** the plain Stop/Start endpoints use: no distinct
-  RPC, no distinct config resolution. It resolves the live session, calls
-  `StopSession`, polls (`app.deploymentStopPollInterval`/
-  `deploymentStopTimeout`, overridable for tests) until no live session
-  remains or the poll times out, then calls the same `StartSession` helper
-  the plain Start path uses (`force=false`). A deployment with no live
-  session (crashed/lost) degenerates to the start step alone.
+  RPC, no distinct config resolution. It resolves the live session and
+  dispatches the same bounded-timeout `StopSession` call as the plain Stop
+  endpoint above. If that dispatch fails or times out, it returns the same
+  inline error and never attempts to start (#1664). Otherwise -- since
+  `StopSession` is a fast, ack-only dispatch (#1663) -- the request returns
+  immediately, rendering the transitional "stopping" row; the actual wait for
+  the live session to disappear (polling `app.deploymentStopPollInterval`/
+  `deploymentStopTimeout`, overridable for tests) and the subsequent
+  `StartSession` call (the same helper the plain Start path uses,
+  `force=false`) finish in a background goroutine using `context.Background()`
+  rather than the request's own (about-to-be-cancelled) context, mirroring
+  the host manager's async-dispatch pattern from #1663. The row's own
+  self-terminating poll (see below) picks up convergence from "stopping"
+  through to stopped/crashed or starting/running with no additional client
+  logic. A deployment with no live session (crashed/lost) degenerates to the
+  start step alone, synchronously, exactly as before -- that path was
+  already fast and isn't implicated in #1662/#1664.
 - `GET /api/deployments/{sgcID}/row` -- returns just that deployment's
   `<tr id="deployment-row-{sgcID}">` fragment (`pages.DeploymentRow`), never
   a full page. This is the target of the row's own self-terminating poll

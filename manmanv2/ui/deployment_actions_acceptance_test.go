@@ -49,12 +49,14 @@ import (
 //     the post-tick state, deterministically.
 //   - A short auto-converge countdown on "stopping" sessions, applied only
 //     inside the LiveOnly=true query path, exists solely so
-//     restartDeployment's own internal, synchronous wait-for-no-live-session
-//     poll loop (waitForNoLiveSession in handlers_deployment_actions.go)
-//     resolves within a couple of (test-shortened, ~1ms)
-//     app.deploymentStopPollInterval iterations instead of hanging for the
-//     real 15s default -- a test cannot inject a Tick() mid-handler-call
-//     since mux.ServeHTTP runs synchronously on the test's own goroutine.
+//     restartDeployment's background wait-for-no-live-session poll loop
+//     (waitForNoLiveSession, run from finishRestartInBackground since #1664
+//     moved it off the request's own goroutine) resolves within a couple of
+//     (test-shortened, ~1ms) app.deploymentStopPollInterval iterations
+//     instead of hanging for the real 15s default -- a test cannot inject a
+//     Tick() mid-goroutine since the background goroutine runs concurrently
+//     with (and typically outlives) the test's own doPost call, so
+//     waitForStartCall polls instead of relying on a single well-timed Tick.
 //
 // Red/green discipline (verified by hand, then reverted -- see individual
 // notes at each check):
@@ -274,8 +276,8 @@ func (f *fakeAcceptanceAPIClient) ListSessions(ctx context.Context, in *manmanpb
 		}
 
 		// LiveOnly path: a "stopping" session auto-converges to "stopped"
-		// after one more observation, so restartDeployment's own
-		// synchronous waitForNoLiveSession loop resolves within a couple of
+		// after one more observation, so restartDeployment's background
+		// waitForNoLiveSession loop resolves within a couple of
 		// (test-shortened) poll iterations -- see the file header comment.
 		if sess.status == "stopping" {
 			if sess.stopChecksLeft > 0 {
@@ -380,6 +382,29 @@ func doPost(mux *http.ServeMux, path string, htmx bool) *httptest.ResponseRecord
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	return w
+}
+
+// waitForStartCall polls until the fake's StartSession call count reaches
+// at least want, failing the test if it doesn't land within a generous
+// deadline. Needed because restartDeployment (#1664) no longer completes
+// its stop-then-start inline within the HTTP request/response cycle -- once
+// the initial StopSession dispatch acks, the wait-for-no-live-session +
+// StartSession finishes in a background goroutine, so a test asserting on
+// StartSession must wait for it rather than reading it synchronously right
+// after doPost returns.
+func waitForStartCall(t *testing.T, api *fakeAcceptanceAPIClient, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		api.mu.Lock()
+		n := len(api.startCalls)
+		api.mu.Unlock()
+		if n >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for the background restart goroutine's StartSession call(s) to land")
 }
 
 // ── FR1 ──────────────────────────────────────────────────────────────────
@@ -576,14 +601,17 @@ func TestFR6_RestartIsStopThenStart(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
 
-	if len(restartAPI.callOrder) != 2 || restartAPI.callOrder[0] != "stop" || restartAPI.callOrder[1] != "start" {
-		t.Fatalf("call order = %v, want [stop start]", restartAPI.callOrder)
-	}
+	// The response returns as soon as the initial StopSession dispatch acks
+	// (#1664) -- StopSession must already have landed, but StartSession only
+	// lands once the background wait-then-start goroutine converges.
 	if len(restartAPI.stopCalls) != 1 || restartAPI.stopCalls[0].SessionId != liveID {
 		t.Fatalf("expected StopSession called once with the live session's id %d, got %+v", liveID, restartAPI.stopCalls)
 	}
-	if len(restartAPI.startCalls) != 1 {
-		t.Fatalf("expected StartSession called once, got %d calls", len(restartAPI.startCalls))
+
+	waitForStartCall(t, restartAPI, 1)
+
+	if len(restartAPI.callOrder) != 2 || restartAPI.callOrder[0] != "stop" || restartAPI.callOrder[1] != "start" {
+		t.Fatalf("call order = %v, want [stop start]", restartAPI.callOrder)
 	}
 	restartStart := restartAPI.startCalls[0]
 

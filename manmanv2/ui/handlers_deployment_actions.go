@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,14 +16,22 @@ import (
 )
 
 // defaultDeploymentStopPollInterval/Timeout govern how restart's
-// stop-then-start waits for the live session to actually disappear before
-// starting a new one (FR6). They are package-level defaults rather than
-// hardcoded inline so tests can override App.deploymentStopPollInterval/
-// deploymentStopTimeout with small values and finish quickly instead of
-// waiting out the real 15s deadline.
+// background stop-then-start waits for the live session to actually
+// disappear before starting a new one (FR6). They are package-level
+// defaults rather than hardcoded inline so tests can override
+// App.deploymentStopPollInterval/deploymentStopTimeout with small values
+// and finish quickly instead of waiting out the real 15s deadline.
+//
+// defaultDeploymentActionTimeout bounds stopDeployment/restartDeployment's
+// initial StopSession RPC call (#1664): defense-in-depth so a slow action
+// degrades to a rendered inline error (FR8) well under main.go's 15s
+// http.Server.WriteTimeout, rather than ever risking a dropped connection
+// again if the host/API layer regresses on the fast-ack behavior #1663
+// establishes.
 const (
 	defaultDeploymentStopPollInterval = 500 * time.Millisecond
 	defaultDeploymentStopTimeout      = 15 * time.Second
+	defaultDeploymentActionTimeout    = 8 * time.Second
 )
 
 // handleDeploymentAction routes POST /sessions/deployments/{sgcID}/{start|stop|restart}.
@@ -84,6 +93,11 @@ func (app *App) handleDeploymentAction(w http.ResponseWriter, r *http.Request) {
 // deployment with no live session any more (raced with a crash/stop) is
 // not an error -- it renders an inline notice instead, and StopSession is
 // never called.
+//
+// The StopSession call itself is wrapped in a bounded context.WithTimeout
+// (#1664 defense-in-depth) so a slow/hung command surfaces as an inline
+// timeout-flavored error (FR8) rather than ever risking main.go's 15s
+// http.Server.WriteTimeout dropping the connection with no response at all.
 func (app *App) stopDeployment(ctx context.Context, sgcID int64) string {
 	live, err := app.getLiveSession(ctx, sgcID)
 	if err != nil {
@@ -93,9 +107,11 @@ func (app *App) stopDeployment(ctx context.Context, sgcID int64) string {
 	if live == nil {
 		return "No running session to stop for this deployment."
 	}
-	if _, err := app.grpc.StopSession(ctx, live.SessionId); err != nil {
+	stopCtx, cancel := app.deploymentActionCtx(ctx)
+	defer cancel()
+	if _, err := app.grpc.StopSession(stopCtx, live.SessionId); err != nil {
 		log.Printf("Error stopping session %d for deployment %d: %v", live.SessionId, sgcID, err)
-		return "Failed to stop the running session."
+		return deploymentStopErrorMessage(err)
 	}
 	return ""
 }
@@ -103,7 +119,22 @@ func (app *App) stopDeployment(ctx context.Context, sgcID int64) string {
 // restartDeployment is literally stop-then-start over the same helpers as
 // stopDeployment/handleDeploymentAction's start case -- no distinct RPC, no
 // distinct config resolution (FR6). A deployment with no live session (e.g.
-// crashed/lost) degenerates to the start step alone.
+// crashed/lost) degenerates to the start step alone, synchronously, exactly
+// as before -- that path was already fast and isn't implicated in #1662.
+//
+// When there is a live session, only the initial StopSession dispatch is
+// awaited inline (bounded by the same defense-in-depth timeout as
+// stopDeployment). Once that fast, ack-only dispatch succeeds, the request
+// returns immediately -- rendering the transitional "stopping" row via the
+// normal renderDeploymentRow path -- instead of blocking on
+// waitForNoLiveSession, which is bounded by real container-stop time, not
+// RPC-ack speed (#1662's restart-specific bug even after #1663's host-side
+// fix). The wait-then-start is finished in a background goroutine using
+// context.Background(), mirroring the host manager's own async-dispatch
+// pattern from #1663, since the request's ctx is cancelled the moment the
+// HTTP response is written. The pre-existing self-terminating row poll
+// (#1628) picks up convergence from the "stopping" row through to
+// stopped/crashed or starting/running with no new poll logic needed.
 func (app *App) restartDeployment(ctx context.Context, sgcID int64) string {
 	live, err := app.getLiveSession(ctx, sgcID)
 	if err != nil {
@@ -111,31 +142,65 @@ func (app *App) restartDeployment(ctx context.Context, sgcID int64) string {
 		return "Failed to check the running session for this deployment."
 	}
 
-	if live != nil {
-		if _, err := app.grpc.StopSession(ctx, live.SessionId); err != nil {
-			log.Printf("Error stopping session %d for deployment %d during restart: %v", live.SessionId, sgcID, err)
-			return "Failed to stop the running session."
+	if live == nil {
+		if _, err := app.grpc.StartSession(ctx, sgcID, false); err != nil {
+			log.Printf("Error starting deployment %d during restart: %v", sgcID, err)
+			return deploymentStartErrorMessage(err)
 		}
-
-		interval, timeout := app.deploymentStopPoll()
-		if err := app.waitForNoLiveSession(ctx, sgcID, interval, timeout); err != nil {
-			log.Printf("Timed out waiting for deployment %d to stop before restart: %v", sgcID, err)
-			return "Stop did not complete in time; deployment left in its current state."
-		}
+		return ""
 	}
 
-	if _, err := app.grpc.StartSession(ctx, sgcID, false); err != nil {
-		log.Printf("Error starting deployment %d during restart: %v", sgcID, err)
-		return deploymentStartErrorMessage(err)
+	stopCtx, cancel := app.deploymentActionCtx(ctx)
+	defer cancel()
+	if _, err := app.grpc.StopSession(stopCtx, live.SessionId); err != nil {
+		log.Printf("Error stopping session %d for deployment %d during restart: %v", live.SessionId, sgcID, err)
+		return deploymentStopErrorMessage(err)
 	}
+
+	go app.finishRestartInBackground(sgcID)
+
 	return ""
 }
 
-// deploymentStopPoll returns the interval/timeout restartDeployment should
-// poll with, falling back to the production defaults when the App wasn't
-// configured with overrides (tests inject small values via these fields so
-// TestDeploymentAction_Restart_StopNeverCompletes_DoesNotStart doesn't wait
-// out the real 15s deadline).
+// finishRestartInBackground waits for the just-dispatched stop to actually
+// converge (no live session left) and then starts a new session, entirely
+// off the original request's goroutine/context. Errors and timeouts can no
+// longer be surfaced inline to the request that triggered the restart, so
+// they're only logged; the row's own self-terminating poll (#1628) is what
+// surfaces the eventual observed state to the user.
+func (app *App) finishRestartInBackground(sgcID int64) {
+	interval, timeout := app.deploymentStopPoll()
+	if err := app.waitForNoLiveSession(context.Background(), sgcID, interval, timeout); err != nil {
+		log.Printf("Background restart: timed out waiting for deployment %d to stop: %v", sgcID, err)
+		return
+	}
+	if _, err := app.grpc.StartSession(context.Background(), sgcID, false); err != nil {
+		log.Printf("Background restart: error starting deployment %d: %v", sgcID, err)
+		return
+	}
+	log.Printf("Background restart: deployment %d stopped and restarted successfully", sgcID)
+}
+
+// deploymentActionCtx returns a bounded context.WithTimeout derived from
+// ctx for stopDeployment/restartDeployment's initial StopSession dispatch
+// (#1664 defense-in-depth), falling back to defaultDeploymentActionTimeout
+// when the App wasn't configured with an override -- tests inject a small
+// value via App.deploymentActionTimeout so a simulated slow StopSession
+// doesn't wait out the real 8s deadline. The caller owns the returned
+// cancel func.
+func (app *App) deploymentActionCtx(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := app.deploymentActionTimeout
+	if timeout <= 0 {
+		timeout = defaultDeploymentActionTimeout
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+// deploymentStopPoll returns the interval/timeout
+// finishRestartInBackground's waitForNoLiveSession call should poll with,
+// falling back to the production defaults when the App wasn't configured
+// with overrides (tests inject small values via these fields so a
+// simulated stuck stop doesn't wait out the real 15s deadline).
 func (app *App) deploymentStopPoll() (time.Duration, time.Duration) {
 	interval := app.deploymentStopPollInterval
 	if interval <= 0 {
@@ -202,6 +267,19 @@ func deploymentStartErrorMessage(err error) string {
 		return "A session is already active for this deployment."
 	}
 	return "Failed to start the deployment."
+}
+
+// deploymentStopErrorMessage turns a StopSession error into a
+// human-readable inline message, distinguishing a bounded-context timeout
+// (FR8's "command times out" trigger) from a generic failure. ControlClient
+// wraps the underlying gRPC error with %w (grpc_client.go's StopSession),
+// so errors.Is sees through to context.DeadlineExceeded when
+// deploymentActionCtx's deadline is what actually stopped the call.
+func deploymentStopErrorMessage(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "The stop command is taking longer than expected; check back shortly."
+	}
+	return "Failed to stop the running session."
 }
 
 // renderDeploymentRow re-fetches a single deployment's state and writes the

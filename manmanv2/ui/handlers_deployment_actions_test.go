@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,8 +30,20 @@ import (
 // handleDeploymentAction's call graph reaches are overridden, so an
 // unexpected call panics loudly on the nil embedded interface instead of
 // silently returning a zero value.
+// mu guards calls/startCalls/stopCalls/liveSession below. Since #1664,
+// restartDeployment's live-session path finishes stop-then-start in a
+// background goroutine (finishRestartInBackground), which can run
+// concurrently with a test's own goroutine -- StopSession/StartSession/
+// ListSessions all take the lock, and any test whose scenario involves that
+// background goroutine (i.e. a restart with a live session) must read
+// through waitForCalls below rather than touching the fields directly.
+// Tests whose scenario never spawns the goroutine (plain stop/start, or
+// restart's no-live-session path) may still read the fields directly, since
+// there's nothing running concurrently with them.
 type fakeDeploymentAPIClient struct {
 	manmanpb.ManManAPIClient
+
+	mu sync.Mutex
 
 	sgc    *manmanpb.ServerGameConfig
 	sgcErr error
@@ -85,6 +98,8 @@ func (f *fakeDeploymentAPIClient) GetGame(ctx context.Context, in *manmanpb.GetG
 }
 
 func (f *fakeDeploymentAPIClient) ListSessions(ctx context.Context, in *manmanpb.ListSessionsRequest, opts ...grpc.CallOption) (*manmanpb.ListSessionsResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if in.LiveOnly {
 		if f.liveSession == nil {
 			return &manmanpb.ListSessionsResponse{}, nil
@@ -95,6 +110,8 @@ func (f *fakeDeploymentAPIClient) ListSessions(ctx context.Context, in *manmanpb
 }
 
 func (f *fakeDeploymentAPIClient) StopSession(ctx context.Context, in *manmanpb.StopSessionRequest, opts ...grpc.CallOption) (*manmanpb.StopSessionResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, "stop")
 	f.stopCalls = append(f.stopCalls, in)
 	if f.stopErr != nil {
@@ -107,6 +124,8 @@ func (f *fakeDeploymentAPIClient) StopSession(ctx context.Context, in *manmanpb.
 }
 
 func (f *fakeDeploymentAPIClient) StartSession(ctx context.Context, in *manmanpb.StartSessionRequest, opts ...grpc.CallOption) (*manmanpb.StartSessionResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls = append(f.calls, "start")
 	f.startCalls = append(f.startCalls, in)
 	if f.startErr != nil {
@@ -117,6 +136,28 @@ func (f *fakeDeploymentAPIClient) StartSession(ctx context.Context, in *manmanpb
 		resp = &manmanpb.Session{SessionId: 999, Status: "pending"}
 	}
 	return &manmanpb.StartSessionResponse{Session: resp}, nil
+}
+
+// waitForCalls polls (under f.mu) until f.startCalls has at least want
+// entries, failing the test if it doesn't land within a generous deadline.
+// Needed for restart scenarios with a live session: since #1664,
+// finishRestartInBackground runs the wait-then-start step in a goroutine
+// that outlives the HTTP request, so a test asserting on StartSession must
+// wait for it rather than reading the field synchronously right after
+// doDeploymentAction returns.
+func waitForCalls(t *testing.T, f *fakeDeploymentAPIClient, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		f.mu.Lock()
+		n := len(f.startCalls)
+		f.mu.Unlock()
+		if n >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for the background restart goroutine's StartSession call(s) to land")
 }
 
 func newDeploymentTestApp(api *fakeDeploymentAPIClient) *App {
@@ -290,16 +331,29 @@ func TestDeploymentAction_Restart_StopsThenStarts(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
 
-	if got := restartAPI.calls; len(got) != 2 || got[0] != "stop" || got[1] != "start" {
+	// The response returns as soon as the initial StopSession dispatch acks
+	// (#1664) -- StopSession must already have landed, but StartSession only
+	// lands once the background finishRestartInBackground goroutine
+	// converges, so wait for it before asserting call order/content.
+	restartAPI.mu.Lock()
+	stopCallCount, stopSessionID := len(restartAPI.stopCalls), int64(0)
+	if len(restartAPI.stopCalls) > 0 {
+		stopSessionID = restartAPI.stopCalls[0].SessionId
+	}
+	restartAPI.mu.Unlock()
+	if stopCallCount != 1 || stopSessionID != 777 {
+		t.Fatalf("expected StopSession called once with the live session's id 777, got count=%d id=%d", stopCallCount, stopSessionID)
+	}
+
+	waitForCalls(t, restartAPI, 1)
+
+	restartAPI.mu.Lock()
+	got := append([]string(nil), restartAPI.calls...)
+	restartStart := restartAPI.startCalls[0]
+	restartAPI.mu.Unlock()
+	if len(got) != 2 || got[0] != "stop" || got[1] != "start" {
 		t.Fatalf("call order = %v, want [stop start]", got)
 	}
-	if len(restartAPI.stopCalls) != 1 || restartAPI.stopCalls[0].SessionId != 777 {
-		t.Fatalf("expected StopSession called once with the live session's id 777, got %+v", restartAPI.stopCalls)
-	}
-	if len(restartAPI.startCalls) != 1 {
-		t.Fatalf("expected StartSession called once, got %d calls", len(restartAPI.startCalls))
-	}
-	restartStart := restartAPI.startCalls[0]
 
 	// Compare against the plain-Start path's own recorded call, rather than
 	// just asserting restartStart's fields in isolation, per the plan's
@@ -350,19 +404,22 @@ func TestDeploymentAction_Restart_CrashedNoLiveSession_StartsOnly(t *testing.T) 
 	}
 }
 
-// TestDeploymentAction_Restart_StopNeverCompletes_DoesNotStart covers FR6's
-// timeout guard: if the stop never actually clears the live session within
-// the (injected, short) deadline, restart must not force-kill and must not
-// start a second container -- StartSession is never called, and the row
-// carries an inline timeout error.
-func TestDeploymentAction_Restart_StopNeverCompletes_DoesNotStart(t *testing.T) {
+// TestDeploymentAction_Restart_StopNeverCompletes_RowStaysTransitional
+// covers FR6/FR7 defense-in-depth (#1664): restartDeployment no longer
+// blocks the HTTP response on waitForNoLiveSession, so even when the wait
+// would time out (the live session never actually disappears), the request
+// returns immediately with the transitional "stopping" row rather than an
+// inline stop-timeout error -- and StartSession is never called, since the
+// background convergence goroutine gives up once its own bounded timeout
+// elapses without a second container ever being started.
+func TestDeploymentAction_Restart_StopNeverCompletes_RowStaysTransitional(t *testing.T) {
 	api := &fakeDeploymentAPIClient{
 		sgc:         stoppedSGC(42),
 		liveSession: &manmanpb.Session{SessionId: 777, Status: "running"},
 		allSessions: []*manmanpb.Session{{SessionId: 777, Status: "running"}},
 		// stopClearsLive left false: the fake keeps reporting the session
-		// as live no matter how many times StopSession is called, so
-		// waitForNoLiveSession's poll loop never converges.
+		// as live no matter how many times StopSession is called, so the
+		// background waitForNoLiveSession poll loop never converges.
 	}
 	app := newDeploymentTestApp(api)
 	app.deploymentStopPollInterval = time.Millisecond
@@ -372,15 +429,28 @@ func TestDeploymentAction_Restart_StopNeverCompletes_DoesNotStart(t *testing.T) 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
-	if len(api.stopCalls) != 1 {
-		t.Errorf("StopSession call count = %d, want 1", len(api.stopCalls))
-	}
-	if len(api.startCalls) != 0 {
-		t.Errorf("StartSession call count = %d, want 0 (must not start a second container after a stop timeout)", len(api.startCalls))
+	api.mu.Lock()
+	stopCallCount := len(api.stopCalls)
+	api.mu.Unlock()
+	if stopCallCount != 1 {
+		t.Errorf("StopSession call count = %d, want 1", stopCallCount)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "did not complete in time") {
-		t.Errorf("expected an inline stop-timeout error, got: %s", body)
+	if strings.Contains(body, "alert-error") {
+		t.Errorf("expected no inline error on the immediate response (the wait for convergence now happens in the background), got: %s", body)
+	}
+	if strings.Contains(body, "did not complete in time") {
+		t.Errorf("expected no synchronous stop-timeout error (FR6's guard now lives in the background goroutine), got: %s", body)
+	}
+
+	// Give the background goroutine's bounded timeout (5ms) room to elapse
+	// so we can assert it gave up rather than ever calling StartSession.
+	time.Sleep(50 * time.Millisecond)
+	api.mu.Lock()
+	startCallCount := len(api.startCalls)
+	api.mu.Unlock()
+	if startCallCount != 0 {
+		t.Errorf("StartSession call count = %d, want 0 (must not start a second container after a background stop timeout)", startCallCount)
 	}
 }
 
