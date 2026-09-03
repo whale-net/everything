@@ -10,6 +10,8 @@ go_library(
     name = "sync",
     srcs = [
         "activities.go",
+        "matching.go",
+        "outcomes.go",
         "schedule.go",
         "video_sync.go",
         "workflow.go",
@@ -34,6 +36,7 @@ go_test(
     name = "sync_test",
     srcs = [
         "activities_test.go",
+        "matching_test.go",
         "schedule_test.go",
         "video_sync_unit_test.go",
         "workflow_test.go",
@@ -78,7 +81,10 @@ go_test(
     name = "sync_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["video_sync_test.go"],
+    srcs = [
+        "outcomes_test.go",
+        "video_sync_test.go",
+    ],
     embed = [":sync"],
     gotags = ["integration"],
     tags = [

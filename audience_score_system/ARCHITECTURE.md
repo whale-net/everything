@@ -317,6 +317,48 @@ can" as "at least a Creator can" and is gated on `store.CanWrite`
 product feedback says otherwise -- switching the gate to `store.CanApprove`
 is a one-line change in `registerSetPacingPolicy`.
 
+**Outcome matching: confidence threshold (issue #1581, FR21-FR23):**
+`worker/sync.Activities.SyncOutcomes` scores every newly-published
+`synced_video` against the Channel's committed, still-unmatched
+`schedule_entry` rows (`worker/sync.Match`, `matching.go`) and combines
+title similarity and publish-date proximity into a single `confidence` in
+`[0,1]`:
+
+- **Title similarity (weight 0.7):** the Jaccard index (intersection over
+  union) of the video's title and the candidate's bound idea title, each
+  normalized (lowercased, punctuation stripped, English stopwords
+  dropped) into a word set -- 1.0 for identical normalized word sets
+  (including pure case/punctuation differences), 0.0 for no shared words.
+- **Publish-date proximity (weight 0.3):** 1.0 for the video's
+  `published_at` landing exactly on the candidate's `proposed_publish_at`,
+  decaying linearly to 0.0 at a 14-day separation (either direction) and
+  staying 0.0 beyond it.
+
+**`worker/sync.MatchConfidenceThreshold = 0.8`** is the value at or above
+which SyncOutcomes auto-links (`video_schedule_match.state = 'auto'`,
+FR22); below it (including "no plausible candidate at all", scored 0) the
+match is queued `pending` for a human via `resolve_pending_match`
+(FR23) -- never guessed. Title is weighted more heavily than date because a
+Channel's pacing policy can legitimately slip a video's actual publish date
+by days without it being a different upload (FR18), whereas two
+differently-titled videos landing on the same day are a real ambiguity far
+more often than a false negative; the combined score only clears 0.8 when
+BOTH the title match is strong and the dates are close, which is the
+"confident enough to skip human review" bar FR22 requires. `0.8` is a
+starting value, not a permanent one -- it lives in exactly one place
+(`worker/sync/matching.go`'s `MatchConfidenceThreshold` constant) specifically
+so retuning it against real match outcomes later is a one-line change, no
+call site touches the literal. See `matching.go`'s doc comments and
+`matching_test.go` (issue #1581's Testing phase) for the boundary cases
+this value was checked against.
+
+A video already carrying a `video_schedule_match` row in ANY state (auto,
+pending, confirmed, or rejected) is skipped by SyncOutcomes on every later
+cycle (`MatchStore.HasMatch`) -- matching never re-links or duplicates. A
+`rejected` match's video stays unmatched by default; nothing in M1
+automatically re-queues it (that would require an explicit future re-queue
+tool, not built here).
+
 Migration 003 (`003_web_session.up.sql`, issue #1570) lands `web_session`
 -- C1's Google sign-in session store (see "OAuth grants" above).
 

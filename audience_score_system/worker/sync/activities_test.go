@@ -91,15 +91,6 @@ func TestActivities_LoadChannelState_StoreError(t *testing.T) {
 	require.Contains(t, err.Error(), channelID.String())
 }
 
-// TestActivities_SyncOutcomes_AlwaysSucceeds proves SyncOutcomes is a
-// genuine permanent no-op stub (issue #1574's Scaffold status, pending
-// #1581): it never errors, regardless of input, so ChannelSyncWorkflow's
-// connected-Channel path is independently testable before #1581 lands.
-// SyncSchedule is real as of #1576 -- see video_sync_test.go for its
-// coverage.
-func TestActivities_SyncOutcomes_AlwaysSucceeds(t *testing.T) {
-	a := &Activities{}
-	channelID := uuid.New()
-
-	require.NoError(t, a.SyncOutcomes(context.Background(), channelID))
-}
+// SyncOutcomes is real as of #1581 -- see outcomes_test.go for its
+// coverage (this file previously asserted SyncOutcomes was a permanent
+// no-op stub, per issue #1574's Scaffold status; that stub is gone).

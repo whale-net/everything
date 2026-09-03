@@ -9,6 +9,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "tools",
     srcs = [
+        "matches.go",
         "research.go",
         "schedule_draft.go",
         "schedule_read.go",
@@ -164,6 +165,55 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = ["verdict_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# list_pending_matches/resolve_pending_match (matches.go, issue #1581,
+# FR22/FR23): list_pending_matches' video+metrics+best-guess-entry+
+# confidence rendering and Channel-scoping (a Channel's pending matches
+# never leak into another Channel's list, unassociated Person denied),
+# resolve_pending_match's confirm (creates the outcome link -- the video's
+# idea appears in v_prediction_vs_outcome afterward) and reject (leaves the
+# video unmatched, never appears in the comparison, FR23) paths, confirming
+# against an explicit schedule_entry_id override rather than the matcher's
+# best guess, NFR2 idempotency replay (identical result, no second
+# mutation) and conflict (a second resolve under a different key on an
+# already-resolved match is rejected, first resolution unchanged --
+# store.ErrMatchNotPending) semantics, and Creator+Analyst write /
+# unassociated-Person-denied authz -- all against the real embedded schema
+# and a real HTTP-hosted MCP server, mirroring verdict_integration_test.go's
+# pattern. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:matches_integration_test --test_output=all
+go_test(
+    # keep
+    name = "matches_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["matches_integration_test.go"],
     gotags = ["integration"],
     tags = [
         "external",

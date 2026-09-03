@@ -251,6 +251,17 @@ type VideoScheduleMatch struct {
 	CreatedAt          time.Time
 }
 
+// MatchCandidate is one committed `schedule_entry` eligible for
+// worker/sync's matcher (issue #1581, FR22/FR23): a committed entry on a
+// Channel with no existing live (auto/confirmed) video_schedule_match,
+// joined with its bound idea's title -- schedule_entry itself carries no
+// title, only idea_id. MatchStore.ListCandidates returns these.
+type MatchCandidate struct {
+	ScheduleEntryID   uuid.UUID
+	IdeaTitle         string
+	ProposedPublishAt time.Time
+}
+
 // MCPCredential is one row of `mcp_credential` (migration 005, issue
 // #1575) -- the bearer credential `mcp` resolves to a Person. TokenHash is
 // the SHA-256 hash of the raw token; the raw token itself is never

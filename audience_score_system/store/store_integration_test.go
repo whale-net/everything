@@ -502,6 +502,145 @@ func TestSyncStore_UpsertVideos_SameYouTubeIDUpdatesNotDuplicates(t *testing.T) 
 	assert.Equal(t, 1, count)
 }
 
+// ── MatchStore.Resolve (FR22/FR23, issue #1581) ─────────────────────────────
+
+// setupPendingMatch creates a Channel/creator, a committed schedule_entry,
+// a published synced_video, and one MatchStatePending video_schedule_match
+// row linking them (as if the matcher had queued it below threshold) --
+// the fixture every Resolve test below starts from.
+func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store) (ch store.Channel, creator store.Person, entry store.ScheduleEntry, video store.SyncedVideo, match store.VideoScheduleMatch) {
+	t.Helper()
+
+	ch, creator = setupChannel(t, ctx, s)
+
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Resolve Test Idea", creator.ID)
+	require.NoError(t, err)
+	verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "greenlit", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	entry, err = s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+		ChannelID: ch.ID, IdeaID: idea.ID, VerdictID: verdict.ID,
+		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.Schedules().Approve(ctx, entry.ID, creator.ID))
+
+	require.NoError(t, s.Sync().UpsertVideos(ctx, ch.ID, []store.SyncedVideo{{
+		YouTubeVideoID: "yt-resolve-" + uuid.NewString(), Title: "A Video",
+		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: ptrTime(time.Now()), LastSyncedAt: time.Now(),
+	}}))
+	synced, err := s.Sync().ListSchedule(ctx, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, synced, 1)
+	video = synced[0]
+
+	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.5, State: store.MatchStatePending,
+	}))
+	pending, err := s.Matches().ListPending(ctx, ch.ID)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	match = pending[0]
+
+	return ch, creator, entry, video, match
+}
+
+func TestMatchStore_Resolve_Confirm_SetsConfirmedLinkAndResolver(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	_, creator, entry, _, match := setupPendingMatch(t, ctx, s)
+
+	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, nil))
+
+	got, err := s.Matches().GetByID(ctx, match.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateConfirmed, got.State)
+	require.NotNil(t, got.ScheduleEntryID)
+	assert.Equal(t, entry.ID, *got.ScheduleEntryID, "confirming with a nil override must keep the original best-guess entry")
+	require.NotNil(t, got.ResolvedByPersonID)
+	assert.Equal(t, creator.ID, *got.ResolvedByPersonID)
+	require.NotNil(t, got.ResolvedAt)
+}
+
+func TestMatchStore_Resolve_ConfirmWithOverrideEntryID_LinksToChosenEntryNotBestGuess(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator, _, _, match := setupPendingMatch(t, ctx, s)
+
+	otherIdea, err := s.Ideas().Create(ctx, ch.ID, "A Different Idea", creator.ID)
+	require.NoError(t, err)
+	otherVerdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: otherIdea.ID, Verdict: store.VerdictViable, Reasoning: "also greenlit", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	otherEntry, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+		ChannelID: ch.ID, IdeaID: otherIdea.ID, VerdictID: otherVerdict.ID,
+		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.Schedules().Approve(ctx, otherEntry.ID, creator.ID))
+
+	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, &otherEntry.ID))
+
+	got, err := s.Matches().GetByID(ctx, match.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateConfirmed, got.State)
+	require.NotNil(t, got.ScheduleEntryID)
+	assert.Equal(t, otherEntry.ID, *got.ScheduleEntryID, "an explicit override must replace the matcher's original best guess")
+}
+
+func TestMatchStore_Resolve_Reject_LeavesScheduleEntryIDUntouchedVideoUnmatched(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	_, creator, entry, _, match := setupPendingMatch(t, ctx, s)
+
+	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, false, nil))
+
+	got, err := s.Matches().GetByID(ctx, match.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.MatchStateRejected, got.State)
+	// Resolve's contract: a reject leaves schedule_entry_id exactly as
+	// Record originally wrote it (here, the matcher's best guess) -- FR23's
+	// "the video remains unmatched" is enforced by v_prediction_vs_outcome
+	// only ever joining state IN ('auto','confirmed'), not by nulling this
+	// column out.
+	require.NotNil(t, got.ScheduleEntryID)
+	assert.Equal(t, entry.ID, *got.ScheduleEntryID)
+	require.NotNil(t, got.ResolvedByPersonID)
+	assert.Equal(t, creator.ID, *got.ResolvedByPersonID)
+}
+
+func TestMatchStore_Resolve_AlreadyResolved_ReturnsErrMatchNotPending_NoSilentStateFlip(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	_, creator, _, _, match := setupPendingMatch(t, ctx, s)
+
+	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, nil))
+	firstResolve, err := s.Matches().GetByID(ctx, match.ID)
+	require.NoError(t, err)
+
+	// A second resolution attempt -- even the opposite direction (reject) --
+	// must be rejected as a conflict, never silently re-flip the state.
+	err = s.Matches().Resolve(ctx, match.ID, creator.ID, false, nil)
+	assert.ErrorIs(t, err, store.ErrMatchNotPending)
+
+	secondRead, err := s.Matches().GetByID(ctx, match.ID)
+	require.NoError(t, err)
+	assert.Equal(t, firstResolve.State, secondRead.State, "state must be unchanged after a rejected re-resolution attempt")
+	assert.Equal(t, firstResolve.ScheduleEntryID, secondRead.ScheduleEntryID)
+	assert.Equal(t, firstResolve.ResolvedAt, secondRead.ResolvedAt)
+}
+
+func TestMatchStore_Resolve_NonexistentMatchID_ReturnsErrMatchNotPending(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	_, creator := setupChannel(t, ctx, s)
+
+	err := s.Matches().Resolve(ctx, uuid.New(), creator.ID, true, nil)
+	assert.ErrorIs(t, err, store.ErrMatchNotPending, "resolving a match id that does not exist at all must be the same error as resolving an already-resolved one, never a distinct not-found")
+}
+
 // ── Idempotency (NFR2/LB4) ───────────────────────────────────────────────────
 
 func TestIdempotency_Do_ReplayConflictAndDistinctKeySemantics(t *testing.T) {
