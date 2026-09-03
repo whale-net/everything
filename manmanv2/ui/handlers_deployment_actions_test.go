@@ -665,6 +665,81 @@ func TestDeploymentAction_Start_HungStartSession_IgnoresCtx_StillReturnsWithinBo
 	}
 }
 
+// TestDeploymentAction_Restart_LiveSession_StopHangs_ReturnsInlineErrorNotDroppedConnection
+// covers issue #1668 scope item 3 for restart's live-session branch: the
+// initial StopSession dispatch restartDeployment awaits inline (before ever
+// launching finishRestartInBackground) must be bounded exactly like
+// stopDeployment's own StopSession call -- a hung/ctx-ignoring callee here
+// must still produce a prompt inline timeout error, and must never launch
+// the background stop-then-start goroutine (StartSession must not be
+// called).
+func TestDeploymentAction_Restart_LiveSession_StopHangs_ReturnsInlineErrorNotDroppedConnection(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:            stoppedSGC(42),
+		liveSession:    &manmanpb.Session{SessionId: 777, Status: "running"},
+		allSessions:    []*manmanpb.Session{{SessionId: 777, Status: "running"}},
+		stopIgnoresCtx: true,
+	}
+	app := newDeploymentTestApp(api)
+	app.deploymentActionTimeout = 10 * time.Millisecond
+
+	start := time.Now()
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("handler took %s to return, want well under 1s (a hung stop dispatch must not block restart's handler)", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "taking longer than expected") {
+		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", w.Body.String())
+	}
+
+	// Give any errant background goroutine room to run before asserting it
+	// never fired -- restart must never launch finishRestartInBackground
+	// when the initial stop dispatch itself times out.
+	time.Sleep(50 * time.Millisecond)
+	api.mu.Lock()
+	startCallCount := len(api.startCalls)
+	api.mu.Unlock()
+	if startCallCount != 0 {
+		t.Errorf("StartSession call count = %d, want 0 (no background goroutine should be launched when the initial stop dispatch times out)", startCallCount)
+	}
+}
+
+// TestDeploymentAction_Restart_NoLiveSession_StartHangs_ReturnsInlineErrorNotDroppedConnection
+// covers issue #1668 scope item 3 for restart's degenerate "no live
+// session, just start" branch (~handlers_deployment_actions.go lines
+// 145-151): this StartSession call must get the same bound as
+// handleDeploymentAction's plain "start" case, since it's the identical
+// underlying RPC -- prior to #1668 only Stop/Restart's StopSession call was
+// ever bounded.
+func TestDeploymentAction_Restart_NoLiveSession_StartHangs_ReturnsInlineErrorNotDroppedConnection(t *testing.T) {
+	api := &fakeDeploymentAPIClient{
+		sgc:             stoppedSGC(42),
+		allSessions:     []*manmanpb.Session{{SessionId: 5, Status: "crashed"}},
+		startIgnoresCtx: true,
+	}
+	app := newDeploymentTestApp(api)
+	app.deploymentActionTimeout = 10 * time.Millisecond
+
+	start := time.Now()
+	w := doDeploymentAction(app, http.MethodPost, "/sessions/deployments/42/restart", true)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("handler took %s to return, want well under 1s (restart's degenerate start-only path must be bounded too)", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (failure still re-renders the row); body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "taking longer than expected") {
+		t.Errorf("expected a distinct timeout-flavored inline error, got: %s", w.Body.String())
+	}
+}
+
 // TestDeploymentAction_Restart_ReturnsBeforeStopConverges covers #1664's
 // core restart fix: the HTTP response must return as soon as the initial
 // StopSession dispatch acks, not after however many LiveOnly polls it takes
