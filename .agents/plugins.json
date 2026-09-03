@@ -5,6 +5,9 @@
     },
     {
       "path": "tools/project-manager"
+    },
+    {
+      "path": "audience_score_system/plugin/user"
     }
   ]
 }

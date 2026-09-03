@@ -1,0 +1,7 @@
+{
+  "name": "audience-score-system",
+  "description": "Streamable-HTTP MCP access to the Audience Score System server across dev/prod",
+  "author": {
+    "name": "whale_net"
+  }
+}

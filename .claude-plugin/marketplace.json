@@ -13,6 +13,11 @@
       "name": "app-registry",
       "description": "Postgres MCP access (crystaldba postgres-mcp) to the App Registry database across tilt/dev/prod",
       "source": "./tools/app_registry"
+    },
+    {
+      "name": "audience-score-system",
+      "description": "Streamable-HTTP MCP access to the Audience Score System server across dev/prod",
+      "source": "./audience_score_system/plugin/user"
     }
   ]
 }
