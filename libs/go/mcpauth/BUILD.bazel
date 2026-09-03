@@ -67,6 +67,7 @@ go_test(
     size = "large",
     timeout = "long",
     srcs = [
+        "authcode_integration_test.go",
         "clients_integration_test.go",
         "credential_integration_test.go",
     ],
