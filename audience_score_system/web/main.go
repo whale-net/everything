@@ -455,9 +455,20 @@ func (a *app) handleChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO(#1722 Implementation): FR25's "Connect another Channel" gating
-	// decision -- always shown for now.
+	// showConnect (FR25): hidden only when every open role this Person
+	// holds is Analyst -- the strict reading of #1709's Analyst persona
+	// text ("no Connect another Channel action"). A Person with zero
+	// rows still sees it, via pages.Channels's empty state.
 	showConnect := true
+	if len(rows) > 0 {
+		showConnect = false
+		for _, row := range rows {
+			if row.Role != store.RoleAnalyst {
+				showConnect = true
+				break
+			}
+		}
+	}
 
 	data := components.LayoutData{
 		Title: "Channels",
