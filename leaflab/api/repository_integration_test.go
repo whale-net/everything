@@ -97,6 +97,26 @@ const testSchema = `
 	LEFT JOIN sensor_name_history snh
 		ON snh.sensor_id = s.sensor_id
 		AND snh.valid_to IS NULL;
+
+	-- Ownership shape (leaflab/migrate/migrations/013_ownership.up.sql),
+	-- added for GetCurrentBoardOwner coverage: SCD2 board_owner_history,
+	-- unowned expressed as the absence of an open (valid_to IS NULL) row,
+	-- never as a NULL owner on an open row.
+	CREATE TABLE leaflab_user (
+		leaflab_user_id BIGSERIAL PRIMARY KEY,
+		oidc_sub        TEXT NOT NULL UNIQUE
+	);
+
+	CREATE TABLE board_owner_history (
+		board_owner_history_id BIGSERIAL   PRIMARY KEY,
+		board_id                BIGINT      NOT NULL REFERENCES board(board_id) ON DELETE CASCADE,
+		leaflab_user_id         BIGINT      NOT NULL REFERENCES leaflab_user(leaflab_user_id),
+		valid_from              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		valid_to                TIMESTAMPTZ
+	);
+
+	CREATE UNIQUE INDEX idx_board_owner_history_current
+		ON board_owner_history(board_id) WHERE valid_to IS NULL;
 `
 
 // newTestRepository starts a real Postgres container (via dbtest), applies
@@ -116,6 +136,39 @@ func seedBoard(t *testing.T, pool *pgxpool.Pool, deviceID string) int64 {
 		t.Fatalf("seed board %s: %v", deviceID, err)
 	}
 	return boardID
+}
+
+// seedLeafLabUser inserts a leaflab_user row and returns its ID.
+func seedLeafLabUser(t *testing.T, pool *pgxpool.Pool, oidcSub string) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO leaflab_user (oidc_sub) VALUES ($1) RETURNING leaflab_user_id`, oidcSub).Scan(&id); err != nil {
+		t.Fatalf("seed leaflab_user %s: %v", oidcSub, err)
+	}
+	return id
+}
+
+// openBoardOwnerHistory inserts an open (valid_to IS NULL) board_owner_history
+// row for boardID/ownerUserID.
+func openBoardOwnerHistory(t *testing.T, pool *pgxpool.Pool, boardID, ownerUserID int64) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO board_owner_history (board_id, leaflab_user_id) VALUES ($1, $2)`,
+		boardID, ownerUserID); err != nil {
+		t.Fatalf("open board_owner_history for board %d owner %d: %v", boardID, ownerUserID, err)
+	}
+}
+
+// closeBoardOwnerHistory closes the current open board_owner_history row for
+// boardID, mirroring the SCD2 close-and-open write path (AGENTS.md § SCD2).
+func closeBoardOwnerHistory(t *testing.T, pool *pgxpool.Pool, boardID int64) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE board_owner_history SET valid_to = NOW() WHERE board_id = $1 AND valid_to IS NULL`,
+		boardID); err != nil {
+		t.Fatalf("close current board_owner_history row for board %d: %v", boardID, err)
+	}
 }
 
 func seedSensorType(t *testing.T, pool *pgxpool.Pool, name string) int64 {
@@ -578,5 +631,88 @@ func TestGetBoardIdentity_UnknownBoardReturnsErrNoRows(t *testing.T) {
 	_, err := repo.GetBoardIdentity(context.Background(), 999999)
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("expected pgx.ErrNoRows for an unknown board_id, got %v", err)
+	}
+}
+
+// ─── #1763: GetCurrentBoardOwner ────────────────────────────────────────────
+
+// TestGetCurrentBoardOwner_NoRowsIsUnowned proves a board with no
+// board_owner_history rows at all comes back owned=false, per
+// 013_ownership.up.sql's convention that unowned is the absence of an open
+// row, never a NULL owner on an open row.
+func TestGetCurrentBoardOwner_NoRowsIsUnowned(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "board-owner-none")
+
+	_, owned, err := repo.GetCurrentBoardOwner(context.Background(), boardID)
+	if err != nil {
+		t.Fatalf("GetCurrentBoardOwner: %v", err)
+	}
+	if owned {
+		t.Fatalf("expected owned=false for a board with no board_owner_history rows")
+	}
+}
+
+// TestGetCurrentBoardOwner_OpenRowReturnsOwner proves the straightforward
+// case: one open board_owner_history row resolves to that owner.
+func TestGetCurrentBoardOwner_OpenRowReturnsOwner(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "board-owner-open")
+	ownerID := seedLeafLabUser(t, pool, "sub-owner-open")
+	openBoardOwnerHistory(t, pool, boardID, ownerID)
+
+	gotOwnerID, owned, err := repo.GetCurrentBoardOwner(context.Background(), boardID)
+	if err != nil {
+		t.Fatalf("GetCurrentBoardOwner: %v", err)
+	}
+	if !owned {
+		t.Fatalf("expected owned=true for a board with an open board_owner_history row")
+	}
+	if gotOwnerID != ownerID {
+		t.Errorf("expected owner %d, got %d", ownerID, gotOwnerID)
+	}
+}
+
+// TestGetCurrentBoardOwner_ClosedThenReopenedReturnsCurrentOwner is the case
+// #1763's Testing criteria call out explicitly: a board that was claimed by
+// one user, released (closed row), and then claimed by a second user
+// (reopened row) must resolve to the *current* open row's owner, not the
+// closed/original one, and must use the valid_to IS NULL predicate rather
+// than e.g. the most-recently-inserted row or MAX(board_owner_history_id).
+// This proves GetCurrentBoardOwner reads the SCD2 "current" slice correctly
+// against real Postgres (idx_board_owner_history_current), not just against
+// an in-memory fake.
+func TestGetCurrentBoardOwner_ClosedThenReopenedReturnsCurrentOwner(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "board-owner-reopened")
+	firstOwnerID := seedLeafLabUser(t, pool, "sub-owner-first")
+	secondOwnerID := seedLeafLabUser(t, pool, "sub-owner-second")
+
+	// Claim by the first owner, then release (close-and-no-open, i.e. an
+	// unowned gap) to prove the closed row alone does not still count.
+	openBoardOwnerHistory(t, pool, boardID, firstOwnerID)
+	closeBoardOwnerHistory(t, pool, boardID)
+
+	if _, owned, err := repo.GetCurrentBoardOwner(context.Background(), boardID); err != nil {
+		t.Fatalf("GetCurrentBoardOwner after release: %v", err)
+	} else if owned {
+		t.Fatalf("expected owned=false immediately after the only board_owner_history row was closed")
+	}
+
+	// Re-claim by a second owner: close-then-open per the SCD2 write path
+	// (AGENTS.md § SCD2) -- here there's nothing open to close, so this is
+	// just the open half, mirroring C25's re-claim of a released board.
+	openBoardOwnerHistory(t, pool, boardID, secondOwnerID)
+
+	gotOwnerID, owned, err := repo.GetCurrentBoardOwner(context.Background(), boardID)
+	if err != nil {
+		t.Fatalf("GetCurrentBoardOwner after re-claim: %v", err)
+	}
+	if !owned {
+		t.Fatalf("expected owned=true after re-claim opened a new board_owner_history row")
+	}
+	if gotOwnerID != secondOwnerID {
+		t.Errorf("expected the reopened row's owner %d (not the closed row's owner %d), got %d",
+			secondOwnerID, firstOwnerID, gotOwnerID)
 	}
 }
