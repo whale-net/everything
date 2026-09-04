@@ -63,6 +63,29 @@ func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slo
 	}
 }
 
+// -- M2 ownership/authorization helpers --------------------------------------
+// Scaffold only (#1763): signatures exist so //leaflab/api:api_lib compiles
+// and can be wired into PushDeviceConfig and the future ClaimBoard/
+// RenameBoard/RenameSensor handlers. Real bodies land in this task's own
+// Implementation phase.
+
+// callerUserID resolves the authenticated caller (via grpcauth.Claims in
+// ctx) to a leaflab_user_id. Returns codes.Unauthenticated when no claims
+// are present, and codes.PermissionDenied when the claims' subject resolves
+// to no leaflab_user row (leaflab-api never creates one -- LB1).
+func (s *LeafLabAPIServer) callerUserID(ctx context.Context) (int64, error) {
+	return 0, status.Error(codes.Unimplemented, "callerUserID: not implemented")
+}
+
+// authorizeBoardWrite returns nil iff the caller is boardID's current
+// owner. Returns codes.PermissionDenied both for a different owner AND for
+// an unowned board (FR6) -- ClaimBoard is the sole write path that does not
+// call this helper. Consults no role information: FR5 has no admin
+// exception here.
+func (s *LeafLabAPIServer) authorizeBoardWrite(ctx context.Context, boardID int64) (callerUserID int64, err error) {
+	return 0, status.Error(codes.Unimplemented, "authorizeBoardWrite: not implemented")
+}
+
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
 	if err := validateDeviceID(req.DeviceId); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())

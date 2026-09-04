@@ -300,6 +300,45 @@ type SensorReadingHistory struct {
 	ExcludedInvalidCount uint32
 }
 
+// -- M2 ownership/authorization repository methods --------------------------
+// Scaffold only (#1763): signatures exist so //leaflab/api:api_lib compiles
+// and callers (authorizeBoardWrite, PushDeviceConfig) can be wired against a
+// stable interface. Real bodies land in this task's own Implementation
+// phase.
+
+// GetLeafLabUserIDBySub resolves an OIDC subject claim to a leaflab_user_id.
+// Returns (0, false, nil) when no leaflab_user row exists for the subject --
+// leaflab-api never creates one (LB1, hard constraint); provisioning stays
+// leaflab-ui's exclusive responsibility via upsertLeafLabUser
+// (leaflab/ui/handlers_auth.go).
+func (r *Repository) GetLeafLabUserIDBySub(ctx context.Context, oidcSub string) (int64, bool, error) {
+	return 0, false, fmt.Errorf("GetLeafLabUserIDBySub: not implemented")
+}
+
+// GetCurrentBoardOwner returns the leaflab_user_id of a board's current
+// owner. owned=false means board_owner_history has no open (valid_to IS
+// NULL) row for this board -- the board is unowned, never expressed as a
+// NULL owner on an open row (see migration 013_ownership.up.sql). Must read
+// via the valid_to IS NULL predicate backed by
+// idx_board_owner_history_current.
+func (r *Repository) GetCurrentBoardOwner(ctx context.Context, boardID int64) (int64, bool, error) {
+	return 0, false, fmt.Errorf("GetCurrentBoardOwner: not implemented")
+}
+
+// GetBoardIDForSensor resolves a sensor_id to its owning board_id. ok=false
+// means no sensor with that ID exists.
+func (r *Repository) GetBoardIDForSensor(ctx context.Context, sensorID int64) (int64, bool, error) {
+	return 0, false, fmt.Errorf("GetBoardIDForSensor: not implemented")
+}
+
+// GetBoardIDForDeviceID resolves a device_id to its board_id without
+// creating a row -- unlike GetOrCreateBoard, an unknown device_id must
+// surface as codes.NotFound to the caller (FR7), not silently register a new
+// board. ok=false means no board with that device_id exists.
+func (r *Repository) GetBoardIDForDeviceID(ctx context.Context, deviceID string) (int64, bool, error) {
+	return 0, false, fmt.Errorf("GetBoardIDForDeviceID: not implemented")
+}
+
 // GetSensorReadingHistory queries sensor_reading directly (not the enriched
 // view -- its per-row dimension joins are pure overhead on a 15,000-row
 // result) for one sensor's raw readings in [from, to).
