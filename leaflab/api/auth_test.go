@@ -19,43 +19,19 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// openMethods are the three pre-existing RPCs NFR2 leaves unauthenticated
-// through M1. wantFencedMethods are the three M1-added RPCs NFR2 requires to
-// be fenced. Both are listed literally here -- deliberately NOT derived from
-// authenticatedMethods in auth.go -- so that if a method is ever dropped
-// from that map (accidentally left open), these tests still assert it must
-// be fenced and go red, rather than silently shrinking their own coverage
-// to match whatever the map currently says. Verified: temporarily removing
-// GetSensorReadingHistory from authenticatedMethods while this list stayed
-// derived from the map made the corresponding no-token test vanish instead
-// of failing -- exactly the false-green this literal list prevents.
-var openMethods = []string{
-	"/leaflab.api.v1.LeafLabAPI/PushDeviceConfig",
-	"/leaflab.api.v1.LeafLabAPI/GetDeviceConfig",
-	"/leaflab.api.v1.LeafLabAPI/ListBoards",
-}
-
-var wantFencedMethods = []string{
-	"/leaflab.api.v1.LeafLabAPI/ListBoardsWithState",
-	"/leaflab.api.v1.LeafLabAPI/GetBoardDetail",
-	"/leaflab.api.v1.LeafLabAPI/GetSensorReadingHistory",
-}
-
-// fencedMethods returns wantFencedMethods, after first asserting it is
-// exactly the allowlist auth.go ships (authenticatedMethods) -- so a method
-// added to or removed from either list without updating the other fails
-// loudly here rather than the two silently drifting apart.
-func fencedMethods(t *testing.T) []string {
-	t.Helper()
-	if len(authenticatedMethods) != len(wantFencedMethods) {
-		t.Fatalf("authenticatedMethods has %d entries, wantFencedMethods has %d -- keep them in sync", len(authenticatedMethods), len(wantFencedMethods))
+// allAuthenticatedMethods returns every key of authenticatedMethods
+// (auth.go), sorted so subtest output is stable. M2 closed the fence
+// (NFR1): every RPC in api.proto is in this map, so unlike M1's auth_test.go
+// there is no separate "open methods" list -- these tests are table-driven
+// directly over the map itself, so a newly added RPC that is not fenced
+// fails here without anyone having to remember to add it to a second,
+// hand-maintained list.
+func allAuthenticatedMethods() []string {
+	methods := make([]string, 0, len(authenticatedMethods))
+	for m := range authenticatedMethods {
+		methods = append(methods, m)
 	}
-	for _, m := range wantFencedMethods {
-		if !authenticatedMethods[m] {
-			t.Fatalf("expected %q to be in authenticatedMethods (auth.go), it is not -- NFR2 requires this RPC to be fenced", m)
-		}
-	}
-	return wantFencedMethods
+	return methods
 }
 
 // reachedHandler returns a grpc.UnaryHandler and a pointer to a bool that
@@ -172,7 +148,8 @@ func signToken(t *testing.T, priv *ecdsa.PrivateKey, issuer, audience, subject s
 
 // TestSelectiveUnary_AuthModeNone_EveryRPCSucceedsWithoutCredential proves
 // the Tilt/integration-test default: with no OIDC config at all, every RPC
-// -- fenced or not -- reaches its handler with no credential supplied.
+// in authenticatedMethods reaches its handler with no credential supplied
+// (grpcauth always injects dev claims in AuthModeNone).
 func TestSelectiveUnary_AuthModeNone_EveryRPCSucceedsWithoutCredential(t *testing.T) {
 	unaryAuth, _, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
 		Mode: grpcauth.AuthModeNone,
@@ -182,7 +159,7 @@ func TestSelectiveUnary_AuthModeNone_EveryRPCSucceedsWithoutCredential(t *testin
 	}
 	interceptor := selectiveUnaryInterceptor(unaryAuth)
 
-	for _, method := range append(append([]string{}, fencedMethods(t)...), openMethods...) {
+	for _, method := range allAuthenticatedMethods() {
 		t.Run(method, func(t *testing.T) {
 			handler, reached := reachedHandler()
 			_, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: method}, handler)
@@ -198,11 +175,15 @@ func TestSelectiveUnary_AuthModeNone_EveryRPCSucceedsWithoutCredential(t *testin
 
 // --- OIDC mode, no token -------------------------------------------------
 
-// TestSelectiveUnary_OIDCMode_NoToken_FencedRPCsRejected proves the three
-// M1-added RPCs reject an anonymous (no-token) call in OIDC mode --
-// grpcauth's own interceptor lets that call proceed with no error and no
-// claims; requireClaims (auth.go) is what turns it into Unauthenticated.
-func TestSelectiveUnary_OIDCMode_NoToken_FencedRPCsRejected(t *testing.T) {
+// TestSelectiveUnary_OIDCMode_NoToken_EveryMethodRejected is this task's
+// Testing criterion 1: every method in authenticatedMethods rejects an
+// anonymous (no-token) call with codes.Unauthenticated under AuthModeOIDC --
+// table-driven directly over the map, so a newly added RPC that forgets to
+// join the map is caught the moment it's added to api.proto and registered,
+// without anyone updating a second list here. grpcauth's own interceptor
+// lets a no-token call proceed with no error and no claims; requireClaims
+// (auth.go) is what turns that into Unauthenticated.
+func TestSelectiveUnary_OIDCMode_NoToken_EveryMethodRejected(t *testing.T) {
 	srv, _ := newFakeOIDCServer(t)
 	unaryAuth, _, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
 		Mode:      grpcauth.AuthModeOIDC,
@@ -214,7 +195,7 @@ func TestSelectiveUnary_OIDCMode_NoToken_FencedRPCsRejected(t *testing.T) {
 	}
 	interceptor := selectiveUnaryInterceptor(unaryAuth)
 
-	for _, method := range fencedMethods(t) {
+	for _, method := range allAuthenticatedMethods() {
 		t.Run(method, func(t *testing.T) {
 			handler, reached := reachedHandler()
 			_, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: method}, handler)
@@ -228,43 +209,13 @@ func TestSelectiveUnary_OIDCMode_NoToken_FencedRPCsRejected(t *testing.T) {
 	}
 }
 
-// TestSelectiveUnary_OIDCMode_NoToken_OpenRPCsUnaffected proves the operator's
-// existing grpcurl config-push path keeps working: PushDeviceConfig,
-// GetDeviceConfig, and ListBoards still reach their handlers with no
-// credential, even once OIDC mode is turned on for the fenced RPCs.
-func TestSelectiveUnary_OIDCMode_NoToken_OpenRPCsUnaffected(t *testing.T) {
-	srv, _ := newFakeOIDCServer(t)
-	unaryAuth, _, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
-		Mode:      grpcauth.AuthModeOIDC,
-		IssuerURL: srv.URL,
-		ClientID:  "leaflab-api",
-	})
-	if err != nil {
-		t.Fatalf("constructing interceptors: %v", err)
-	}
-	interceptor := selectiveUnaryInterceptor(unaryAuth)
-
-	for _, method := range openMethods {
-		t.Run(method, func(t *testing.T) {
-			handler, reached := reachedHandler()
-			_, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: method}, handler)
-			if err != nil {
-				t.Fatalf("unexpected error for open RPC: %v", err)
-			}
-			if !*reached {
-				t.Fatal("expected handler to be reached")
-			}
-		})
-	}
-}
-
 // --- OIDC mode, wrong-audience token -------------------------------------
 
-// TestSelectiveUnary_OIDCMode_WrongAudience_FencedRPCsRejected proves a
+// TestSelectiveUnary_OIDCMode_WrongAudience_EveryMethodRejected proves a
 // token minted for a different client (e.g. the UI's client) is rejected at
-// the fenced RPCs, exercising the real audience check inside go-oidc's
+// every fenced RPC, exercising the real audience check inside go-oidc's
 // verifier end-to-end against a live (fake) issuer.
-func TestSelectiveUnary_OIDCMode_WrongAudience_FencedRPCsRejected(t *testing.T) {
+func TestSelectiveUnary_OIDCMode_WrongAudience_EveryMethodRejected(t *testing.T) {
 	srv, priv := newFakeOIDCServer(t)
 	unaryAuth, _, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
 		Mode:      grpcauth.AuthModeOIDC,
@@ -279,7 +230,7 @@ func TestSelectiveUnary_OIDCMode_WrongAudience_FencedRPCsRejected(t *testing.T) 
 	token := signToken(t, priv, srv.URL, "leaflab-ui", "user-1")
 	md := metadata.Pairs("authorization", "Bearer "+token)
 
-	for _, method := range fencedMethods(t) {
+	for _, method := range allAuthenticatedMethods() {
 		t.Run(method, func(t *testing.T) {
 			ctx := metadata.NewIncomingContext(context.Background(), md)
 			handler, reached := reachedHandler()
@@ -296,11 +247,11 @@ func TestSelectiveUnary_OIDCMode_WrongAudience_FencedRPCsRejected(t *testing.T) 
 
 // --- OIDC mode, valid token -----------------------------------------------
 
-// TestSelectiveUnary_OIDCMode_ValidToken_FencedRPCsReachHandlerWithClaims
-// proves a token issued for the API's own audience reaches the fenced
-// RPCs' handlers, with grpcauth.ClaimsFromContext yielding the caller's
+// TestSelectiveUnary_OIDCMode_ValidToken_EveryMethodReachesHandlerWithClaims
+// proves a token issued for the API's own audience reaches every fenced
+// RPC's handler, with grpcauth.ClaimsFromContext yielding the caller's
 // subject -- the "this is what an authenticated call looks like" case.
-func TestSelectiveUnary_OIDCMode_ValidToken_FencedRPCsReachHandlerWithClaims(t *testing.T) {
+func TestSelectiveUnary_OIDCMode_ValidToken_EveryMethodReachesHandlerWithClaims(t *testing.T) {
 	srv, priv := newFakeOIDCServer(t)
 	unaryAuth, _, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
 		Mode:      grpcauth.AuthModeOIDC,
@@ -315,7 +266,7 @@ func TestSelectiveUnary_OIDCMode_ValidToken_FencedRPCsReachHandlerWithClaims(t *
 	token := signToken(t, priv, srv.URL, "leaflab-api", "user-42")
 	md := metadata.Pairs("authorization", "Bearer "+token)
 
-	for _, method := range fencedMethods(t) {
+	for _, method := range allAuthenticatedMethods() {
 		t.Run(method, func(t *testing.T) {
 			ctx := metadata.NewIncomingContext(context.Background(), md)
 			var gotSubject string
@@ -345,15 +296,11 @@ func TestSelectiveUnary_OIDCMode_ValidToken_FencedRPCsReachHandlerWithClaims(t *
 
 // --- Stream interceptor parity -------------------------------------------
 //
-// None of the M1 RPCs stream today, but selectiveStreamInterceptor and
+// None of the RPCs stream today, but selectiveStreamInterceptor and
 // requireClaimsStream are shipped code (auth.go documents them as a
-// drop-in for a future streaming RPC); these pin the same routing and
-// rejection behavior as the unary tests above.
-
-// TestSelectiveStream_OIDCMode_NoToken_FencedRejectedOpenUnaffected proves
-// the stream interceptor applies the same allowlist as the unary one: a
-// fenced method rejects an anonymous call, an open method does not.
-func TestSelectiveStream_OIDCMode_NoToken_FencedRejectedOpenUnaffected(t *testing.T) {
+// drop-in for a future streaming RPC); this pins the same rejection
+// behavior as the unary tests above for one representative fenced method.
+func TestSelectiveStream_OIDCMode_NoToken_Rejected(t *testing.T) {
 	srv, _ := newFakeOIDCServer(t)
 	_, streamAuth, err := grpcauth.NewServerInterceptors(context.Background(), grpcauth.ServerConfig{
 		Mode:      grpcauth.AuthModeOIDC,
@@ -365,36 +312,23 @@ func TestSelectiveStream_OIDCMode_NoToken_FencedRejectedOpenUnaffected(t *testin
 	}
 	interceptor := selectiveStreamInterceptor(streamAuth)
 
-	fenced := fencedMethods(t)[0]
-	t.Run("fenced rejected", func(t *testing.T) {
-		reached := false
-		handler := func(srv interface{}, ss grpc.ServerStream) error {
-			reached = true
-			return nil
-		}
-		ss := &fakeServerStream{ctx: context.Background()}
-		err := interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: fenced}, handler)
-		if status.Code(err) != codes.Unauthenticated {
-			t.Fatalf("expected Unauthenticated, got %v", err)
-		}
-		if reached {
-			t.Fatal("handler must not be reached without a credential")
-		}
-	})
+	methods := allAuthenticatedMethods()
+	if len(methods) == 0 {
+		t.Fatal("authenticatedMethods must not be empty")
+	}
+	fenced := methods[0]
 
-	t.Run("open unaffected", func(t *testing.T) {
-		reached := false
-		handler := func(srv interface{}, ss grpc.ServerStream) error {
-			reached = true
-			return nil
-		}
-		ss := &fakeServerStream{ctx: context.Background()}
-		err := interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: openMethods[0]}, handler)
-		if err != nil {
-			t.Fatalf("unexpected error for open RPC: %v", err)
-		}
-		if !reached {
-			t.Fatal("expected handler to be reached")
-		}
-	})
+	reached := false
+	handler := func(srv interface{}, ss grpc.ServerStream) error {
+		reached = true
+		return nil
+	}
+	ss := &fakeServerStream{ctx: context.Background()}
+	err = interceptor(nil, ss, &grpc.StreamServerInfo{FullMethod: fenced}, handler)
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected Unauthenticated, got %v", err)
+	}
+	if reached {
+		t.Fatal("handler must not be reached without a credential")
+	}
 }

@@ -76,8 +76,9 @@ func run() error {
 	apiServer := NewLeafLabAPIServer(repo, publisher, logging.Get("api"))
 
 	// grpcauth's interceptor pair applies globally, so it is wrapped here to
-	// authenticate only authenticatedMethods (leaflab/api/auth.go) --
-	// PushDeviceConfig, GetDeviceConfig, and ListBoards stay open per NFR2.
+	// authenticate only authenticatedMethods (leaflab/api/auth.go) -- as of
+	// M2 that is every RPC (NFR1); PushDeviceConfig is additionally
+	// authorized against board ownership inside its own handler.
 	unaryAuth, streamAuth, err := grpcauth.NewServerInterceptors(ctx, grpcauth.ServerConfig{
 		Mode:      grpcauth.AuthMode(grpcAuthMode),
 		IssuerURL: grpcOIDCIssuer,
