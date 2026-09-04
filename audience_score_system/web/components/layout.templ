@@ -1,0 +1,74 @@
+package components
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// LayoutData carries every `web` page's shared chrome data. Kept
+// deliberately small for M1 -- no role/grant-driven nav gating, since NFR3
+// limits this binary to exactly four surfaces (C1/C2/C3/C8) and nothing
+// here reads channel_person directly (that's store.CanApprove/CanInvite/
+// CanReconnect/CanRead/CanWrite's job, per NFR5).
+//
+// User is *store.Person, not htmxauth.UserInfo -- this binary resolves
+// identity through web/auth (Google sign-in, FR1/FR2), never through
+// libs/go/htmxauth, so its chrome speaks the domain's own Person type
+// instead of a shared-library auth struct (mirrors htmxui.ShellData's
+// UserLabel being a plain string for the same reason).
+type LayoutData struct {
+	Title string
+	User  *store.Person
+}
+
+// themes is the theme list `web` offers through the shared
+// htmxui.ThemeSwitcher (mounted by Layout, below).
+var themes = []htmxui.Theme{
+	{Value: "light", Label: "☀️ Light"},
+	{Value: "night", Label: "🌙 Night"},
+}
+
+// nav is `web`'s app-owned nav item list (FR1a -- htmxui.Shell hardcodes
+// no nav of its own, see htmxui.ShellData's doc comment). Home remains the
+// only global entry: every other surface (Channel detail C2, analyst
+// invite C3, schedule approval C8) is Channel-scoped and reached by
+// navigating from a specific Channel (e.g. pages.ChannelDetail's "View
+// schedule" link), not from this global nav.
+templ nav() {
+	<ul class="menu menu-horizontal px-1">
+		<li><a href="/">Home</a></li>
+	</ul>
+}
+
+// identityLabel picks the best available display label for UserMenu:
+// DisplayName when present, falling back to Email. Both empty (e.g. a
+// LayoutData the caller never populated) yields "", which is UserMenu's
+// documented "render nothing" signal.
+func identityLabel(user *store.Person) string {
+	if user == nil {
+		return ""
+	}
+	if user.DisplayName != "" {
+		return user.DisplayName
+	}
+	return user.Email
+}
+
+// Layout is `web`'s thin wrapper around libs/go/htmxui's shared Shell and
+// UserMenu, mirroring leaflab/ui/components/layout.templ's adoption.
+// children are rendered inside Shell's main content region.
+templ Layout(data LayoutData) {
+	@htmxui.Shell(htmxui.ShellData{
+		Title:      data.Title,
+		BrandLabel: "Audience Score System",
+		BrandHref:  "/",
+		Nav:        nav(),
+		HeaderRight: htmxui.UserMenu(htmxui.UserMenuData{
+			IdentityLabel: identityLabel(data.User),
+			LogoutHref:    "/logout",
+		}),
+		Themes: themes,
+	}) {
+		{ children... }
+	}
+}

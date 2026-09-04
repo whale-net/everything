@@ -157,6 +157,14 @@ func (a *Activities) VerifyPublished(ctx context.Context, releaseRunID string, e
 			result.Failed[key] = fmt.Sprintf("published artifact version %q does not match expected version %q", artifact.Version, expectedVersion)
 		}
 	}
+	if !result.AllPublished {
+		// Warn: this is what ReleaseWorkflow's caller ends up seeing as "the
+		// release didn't verify" -- worth the detail (which targets, why)
+		// right here rather than only reconstructable from the eventual
+		// terminal Failed release_run_target rows RecordTargetState writes.
+		workerLog.Warn("verify published found unverified targets",
+			"release_run_id", releaseRunID, "failed", result.Failed)
+	}
 	return result, nil
 }
 
@@ -224,7 +232,14 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 	repo := a.Registry.ReleaseRuns()
 
 	if newState == repository.ReleaseRunTargetStateFailed {
-		return repo.UpdateTargetState(ctx, row.ReleaseRunTargetID, repository.ReleaseRunTargetStateFailed, buildID, errorDetail)
+		if err := repo.UpdateTargetState(ctx, row.ReleaseRunTargetID, repository.ReleaseRunTargetStateFailed, buildID, errorDetail); err != nil {
+			return err
+		}
+		// Warn: the authoritative "this release target failed" record --
+		// worth finding by grep without a Postgres round trip.
+		workerLog.Warn("release target failed",
+			"release_run_id", releaseRunID, "target", target.key(), "build_id", buildID, "error_detail", errorDetail)
+		return nil
 	}
 
 	startIdx := indexOfState(row.State)
@@ -245,6 +260,10 @@ func (a *Activities) RecordTargetState(ctx context.Context, releaseRunID string,
 		if err := repo.UpdateTargetState(ctx, row.ReleaseRunTargetID, step, stepBuildID, stepErrorDetail); err != nil {
 			return fmt.Errorf("record target state for release run %s: transition %s -> %s for %s: %w", releaseRunID, row.State, step, target.key(), err)
 		}
+	}
+	if newState == repository.ReleaseRunTargetStateSucceeded {
+		workerLog.Info("release target succeeded",
+			"release_run_id", releaseRunID, "target", target.key(), "build_id", buildID)
 	}
 	return nil
 }

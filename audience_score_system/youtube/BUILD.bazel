@@ -1,0 +1,58 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# The sole point of contact with google.golang.org/api/youtube/v3 and
+# youtubeanalytics/v2 anywhere in this repo -- see client.go's package doc
+# comment. Real ListSchedule/Metrics/ChannelInfo request/pagination/error-
+# classification logic against the vendored clients (see
+# //audience_score_system/deps) lands here (issue #1573's Implementation
+# phase).
+go_library(
+    name = "youtube",
+    srcs = [
+        "client.go",
+        "errors.go",
+        "metrics.go",
+        "schedule.go",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/youtube",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//audience_score_system/store",
+        "//libs/go/logging",
+        "@org_golang_google_api//googleapi",
+        "@org_golang_google_api//option",
+        "@org_golang_google_api//youtube/v3:youtube",
+        "@org_golang_google_api//youtubeanalytics/v2:youtubeanalytics",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)
+
+# Table-driven classify coverage (errors_test.go), ListSchedule/Metrics/
+# ChannelInfo mapping + pagination + error-classification-through-the-real-
+# request-path coverage (schedule_test.go, metrics_test.go, client_test.go)
+# against handcrafted testdata/ fixtures, all via an httptest.Server wired
+# in through WithHTTPClient + the package-internal withServiceOptions test
+# seam (testhelpers_test.go) -- no test here ever makes a live network call
+# (issue #1573's Testing phase).
+go_test(
+    name = "youtube_test",
+    srcs = [
+        "client_test.go",
+        "errors_test.go",
+        "metrics_test.go",
+        "schedule_test.go",
+        "testhelpers_test.go",
+    ],
+    embed = [":youtube"],
+    embedsrcs = glob(["testdata/**"]),
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_api//googleapi",
+        "@org_golang_google_api//option",
+        "@org_golang_google_api//youtube/v3:youtube",
+        "@org_golang_google_api//youtubeanalytics/v2:youtubeanalytics",
+        "@org_golang_x_oauth2//:oauth2",
+    ],
+)

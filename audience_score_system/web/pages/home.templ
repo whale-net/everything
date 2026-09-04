@@ -1,0 +1,37 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// Home is the signed-in landing page (C1): it shows the signed-in Person
+// and lists every Channel they currently have a live (valid_to IS NULL)
+// channel_person row for, via store.RoleStore.ChannelsForPerson (see
+// web/main.go's handleHome), each linking to its detail page
+// (web/pages.ChannelDetail). "Connect a Channel" starts the Channel-connect
+// OAuth grant (C2, #1571: web/channel.Handler.HandleConnect).
+templ Home(data components.LayoutData, channels []store.Channel) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Audience Score System</h1>
+				if data.User != nil {
+					<p>Signed in as { data.User.Email }.</p>
+				}
+				if len(channels) == 0 {
+					<p class="text-base-content/70">No connected Channels yet.</p>
+				} else {
+					<ul class="list-disc list-inside">
+						for _, ch := range channels {
+							<li><a class="link" href={ templ.URL("/channels/" + ch.ID.String()) }>{ ch.Title }</a></li>
+						}
+					</ul>
+				}
+				<div>
+					<a href="/channels/connect" class="btn btn-primary">Connect a Channel</a>
+				</div>
+			</div>
+		</div>
+	}
+}

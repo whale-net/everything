@@ -3,7 +3,7 @@ package workshop
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 
 	"github.com/whale-net/everything/libs/go/rmq"
 	"github.com/whale-net/everything/manmanv2/api/repository"
@@ -84,21 +84,21 @@ func (h *WorkshopStatusHandler) Close() error {
 func (h *WorkshopStatusHandler) handleStatusUpdate(ctx context.Context, msg rmq.Message) error {
 	var update hostrmq.InstallationStatusUpdate
 	if err := json.Unmarshal(msg.Body, &update); err != nil {
-		log.Printf("Failed to unmarshal installation status update: %v", err)
+		slog.Warn("failed to unmarshal installation status update", "error", err)
 		return err
 	}
 
-	log.Printf("Received installation status update: installation_id=%d, status=%s, progress=%d%%",
-		update.InstallationID, update.Status, update.ProgressPercent)
+	slog.Info("received installation status update",
+		"installation_id", update.InstallationID, "status", update.Status, "progress_percent", update.ProgressPercent)
 
 	if err := h.installationRepo.UpdateStatus(ctx, update.InstallationID, update.Status, update.ErrorMessage); err != nil {
-		log.Printf("Failed to update installation status: %v", err)
+		slog.Warn("failed to update installation status", "installation_id", update.InstallationID, "status", update.Status, "error", err)
 		return err
 	}
 
 	if update.ProgressPercent > 0 {
 		if err := h.installationRepo.UpdateProgress(ctx, update.InstallationID, update.ProgressPercent); err != nil {
-			log.Printf("Failed to update installation progress: %v", err)
+			slog.Warn("failed to update installation progress", "installation_id", update.InstallationID, "progress_percent", update.ProgressPercent, "error", err)
 			return err
 		}
 	}

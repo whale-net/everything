@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -216,6 +217,7 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 		cliOutputDir = "/tmp/cli-binaries"
 	}
 
+	overallStart := time.Now()
 	result := &BuildReleaseArtifactsResult{}
 
 	matrixItems, err := parseReleaseMatrixItems(p.Plan.Matrix)
@@ -223,9 +225,13 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 		return nil, fmt.Errorf("parse release matrix: %w", err)
 	}
 
+	fmt.Printf("build-release: %d app(s), %d chart(s), has_specs=%t, dry_run=%t, git_sha=%s, registry=%s\n",
+		len(matrixItems), len(p.Plan.Charts), p.Plan.HasSpecs, p.DryRun, p.GitSHA, p.Registry)
+
 	// App images (push by digest) -- mirrors the former "Build app images"
 	// step's `if: dry_run == 'false' && release-matrix != ''`.
 	if !p.DryRun && len(matrixItems) > 0 {
+		appsStart := time.Now()
 		for _, item := range matrixItems {
 			manifest, err := ExecuteBuildApp(BuildAppParams{
 				Ctx:           p.Ctx,
@@ -245,6 +251,7 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 				result.Apps = append(result.Apps, manifest)
 			}
 		}
+		fmt.Printf("Built %d app image(s) in %s\n", len(result.Apps), time.Since(appsStart).Round(time.Second))
 	}
 
 	// Chart source trees -- mirrors the former step's
@@ -252,6 +259,7 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 	// equivalent of that raw input being empty. See DryRun's doc comment
 	// above: deliberately not gated on DryRun.
 	if len(p.Plan.Charts) > 0 {
+		chartsStart := time.Now()
 		chartResults, err := ExecuteBuildCharts(BuildChartParams{
 			Ctx:           p.Ctx,
 			Charts:        strings.Join(p.Plan.Charts, ","),
@@ -264,11 +272,13 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 			return nil, fmt.Errorf("build charts: %w", err)
 		}
 		result.Charts = chartResults
+		fmt.Printf("Built %d chart(s) in %s\n", len(result.Charts), time.Since(chartsStart).Round(time.Second))
 	}
 
 	// OpenAPI specs -- mirrors the former build-openapi-specs job's
 	// `if: has-specs == 'true' && dry_run == 'false'`.
 	if p.Plan.HasSpecs && !p.DryRun {
+		specsStart := time.Now()
 		specEntries, err := parseOpenAPIMatrixItems(p.Plan.OpenAPIMatrix)
 		if err != nil {
 			return nil, fmt.Errorf("parse openapi matrix: %w", err)
@@ -278,6 +288,7 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 			return nil, fmt.Errorf("build openapi specs: %w", err)
 		}
 		result.OpenAPISpecs = specResults
+		fmt.Printf("Built %d openapi spec(s) in %s\n", len(result.OpenAPISpecs), time.Since(specsStart).Round(time.Second))
 	}
 
 	// CLI binaries -- mirrors the former build-cli-binaries job's
@@ -292,6 +303,7 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 			}
 		}
 		if len(cliApps) > 0 {
+			cliStart := time.Now()
 			allApps, err := ListAllApps(bazel, fs, workspaceRoot)
 			if err != nil {
 				return nil, fmt.Errorf("list all apps: %w", err)
@@ -308,15 +320,19 @@ func ExecuteBuildReleaseArtifacts(p BuildReleaseArtifactsParams) (*BuildReleaseA
 				if err != nil {
 					return nil, fmt.Errorf("resolve app %s: %w", name, err)
 				}
+				appStart := time.Now()
 				assets, err := PackageAppAssets(bazel, fs, workspaceRoot, resolved[0], filepath.Join(cliOutputDir, name), cliPlatformNames)
 				if err != nil {
 					return nil, fmt.Errorf("package cli binaries for %s: %w", name, err)
 				}
 				result.CLIBinaries[name] = assets
+				fmt.Printf("Packaged %d cli-binary asset(s) for %s in %s\n", len(assets), name, time.Since(appStart).Round(time.Second))
 			}
+			fmt.Printf("Built %d cli-binary app(s) in %s\n", len(result.CLIBinaries), time.Since(cliStart).Round(time.Second))
 		}
 	}
 
+	fmt.Printf("build-release finished in %s\n", time.Since(overallStart).Round(time.Second))
 	return result, nil
 }
 

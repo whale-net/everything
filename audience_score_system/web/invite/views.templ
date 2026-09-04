@@ -1,0 +1,76 @@
+package invite
+
+import (
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// GenerateResult renders the newly generated invite link (FR5) for the
+// Creator to copy and share out of band -- no email delivery exists
+// anywhere in this system (see package doc comment). channelID links back
+// to the Channel detail page this invite was generated from.
+templ GenerateResult(data components.LayoutData, code string, channelID string) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Invite link generated</h1>
+				<p class="text-base-content/70">
+					Share this link with the analyst you want to invite. Generating a
+					new link replaces this one -- only one invite can be live per
+					Channel at a time.
+				</p>
+				<code class="block bg-base-200 rounded p-4 text-lg break-all">/invites/{ code }</code>
+				<div class="card-actions justify-end mt-2">
+					<a href={ templ.URL("/channels/" + channelID) } class="btn btn-secondary btn-sm">
+						Back to channel
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}
+
+// Invalid renders the terminal "this invite is no longer valid" view
+// (FR8) -- reached for an already-consumed or invalidated code. No
+// Channel association is created and no state changes as a result of
+// rendering this view.
+templ Invalid(data components.LayoutData) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Invite no longer valid</h1>
+				<p class="text-base-content/70">
+					This invite code has already been used or was replaced by a newer
+					one. Ask the Channel's creator to generate a new invite.
+				</p>
+			</div>
+		</div>
+	}
+}
+
+// AcceptPrompt renders the accept/decline prompt (FR7) for a signed-in
+// Person visiting a live invite code directly -- naming channelTitle so
+// the Person knows which Channel they are about to join as an analyst.
+// Declining (see invite.go's HandleDecline) makes no state change: the
+// code stays live for later redemption.
+templ AcceptPrompt(data components.LayoutData, channelTitle, code string) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Join { channelTitle } as an analyst?</h1>
+				<p class="text-base-content/70">
+					You were invited to help with { channelTitle }. Accepting grants
+					you analyst access; declining leaves this invite untouched so it
+					can be redeemed later or by someone else.
+				</p>
+				<div class="card-actions justify-end">
+					<form method="post" action={ templ.URL("/invites/" + code + "/decline") }>
+						<button type="submit" class="btn btn-secondary">Decline</button>
+					</form>
+					<form method="post" action={ templ.URL("/invites/" + code + "/accept") }>
+						<button type="submit" class="btn btn-primary">Accept</button>
+					</form>
+				</div>
+			</div>
+		</div>
+	}
+}

@@ -9,6 +9,16 @@
 - Do not patch production environments — rely on release actions and human inputs.
 - Read relevant docs before falling back to search or bash exploration.
 
+## Logging Levels
+
+Use these levels consistently across all code (Go, Python, etc.) — they signal severity to on-call humans and downstream alerting, so don't pick one by feel:
+
+- **INFO** — something notable happened and completed normally; worth knowing but requires no action (e.g. a sync finished, a schedule was created).
+- **WARNING** — the system had to adjust something to keep going (e.g. a fallback path was taken, a retry succeeded, an optional dependency was skipped) — the operation still completed but not exactly as expected.
+- **ERROR** — the system cannot continue the current operation; something failed and needs attention.
+
+Do not log expected/handled control flow at WARNING or ERROR — reserve those for genuine deviations or failures.
+
 ## Effective Subagent Usage
 
 Prompt-cache read cost per turn grows with a session's own turn count (roughly 9x higher in 300-500 turn sessions vs. under-50-turn sessions, measured across this account's history) — every turn re-sends and re-reads the full prior transcript, so cost compounds as a session's transcript grows. Subagents are one of the two effective levers against this (the other is starting a fresh session); use them to keep the *main* session's turn count down, not as an end in themselves.
@@ -178,6 +188,6 @@ Beyond the standard `bug`/`enhancement`/`chore`/etc. and the project-manager plu
 | `docs/` | Cross-cutting infrastructure and build system docs | [TOC](docs/TOC.md) |
 | `firmware/` | Board-agnostic C++ sensor libraries (ISensor, II2CBus, MQTTWriter) | [TOC](firmware/TOC.md) |
 | `leaflab/` | Plant monitoring firmware and data pipeline | [TOC](leaflab/TOC.md) |
-| `audience_score_system/` | YouTube creator research/schedule/outcome tracking system, MCP-exposed (Go) — product brief only, no code yet | [PRODUCT](audience_score_system/PRODUCT.md) |
+| `audience_score_system/` | YouTube creator research/schedule/outcome tracking system, MCP-exposed (Go) | [TOC](audience_score_system/TOC.md) |
 | `demo/` | Example applications — see individual READMEs | — |
 | `generated/` | Auto-generated OpenAPI clients — do not edit manually | — |

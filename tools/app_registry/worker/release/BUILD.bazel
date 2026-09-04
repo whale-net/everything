@@ -15,6 +15,7 @@ go_library(
     importpath = "github.com/whale-net/everything/tools/app_registry/worker/release",
     visibility = ["//visibility:public"],
     deps = [
+        "//libs/go/logging",
         "//libs/go/s3",
         "//tools/app_registry/server/repository",
         "//tools/app_registry/worker/writeback",
@@ -38,6 +39,7 @@ go_test(
     ],
     embed = [":release"],
     deps = [
+        "//libs/go/s3",
         "//tools/app_registry/server/repository",
         "//tools/app_registry/server/repository/fake",
         "//tools/app_registry/worker/writeback",

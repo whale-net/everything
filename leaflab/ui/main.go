@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -100,19 +101,22 @@ type App struct {
 	// pool backs the FR2 leaflab_user upsert in handlers_auth.go — the only
 	// other direct database use besides htmxauth's own session storage
 	// (NFR2: this UI never queries board/sensor/sensor_reading/v_* itself).
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	logger *slog.Logger
 }
 
 // NewApp creates a new application instance.
 func NewApp(ctx context.Context, config *Config) (*App, error) {
+	logger := logging.Get("ui")
+
 	var authMode htmxauth.AuthMode
 	switch config.AuthMode {
 	case "none", "":
 		authMode = htmxauth.AuthModeNone
-		log.Println("⚠️  Running in NO-AUTH mode (development only)")
+		logger.Warn("running in NO-AUTH mode (development only)")
 	case "oidc":
 		authMode = htmxauth.AuthModeOIDC
-		log.Println("Running in OIDC mode")
+		logger.Info("running in OIDC auth mode")
 	default:
 		return nil, fmt.Errorf("invalid AUTH_MODE: %s (must be 'none' or 'oidc')", config.AuthMode)
 	}
@@ -170,7 +174,17 @@ func NewApp(ctx context.Context, config *Config) (*App, error) {
 		userAuthOpt: userAuthOpt,
 		sessionMgr:  store,
 		pool:        pool,
+		logger:      logger,
 	}, nil
+}
+
+// log returns app.logger, falling back to slog.Default() for an App built
+// directly as a struct literal (e.g. in unit tests) rather than via NewApp.
+func (app *App) log() *slog.Logger {
+	if app.logger != nil {
+		return app.logger
+	}
+	return slog.Default()
 }
 
 // Close cleans up application resources.
@@ -185,8 +199,6 @@ func (app *App) Close() error {
 }
 
 func main() {
-	log.Println("Starting LeafLab UI...")
-
 	config := LoadConfig()
 	ctx := context.Background()
 
@@ -198,6 +210,9 @@ func main() {
 		EnableTracing: true,
 	})
 	defer logging.Shutdown(ctx) //nolint:errcheck
+
+	logger := logging.Get("main")
+	logger.Info("starting leaflab-ui")
 
 	app, err := NewApp(ctx, config)
 	if err != nil {
@@ -223,20 +238,19 @@ func main() {
 	defer stop()
 
 	go func() {
-		log.Printf("Server listening on %s", addr)
-		log.Printf("leaflab-api: %s", config.APIURL)
+		logger.Info("server listening", "addr", addr, "leaflab_api", config.APIURL)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}
 	}()
 
 	<-shutdownCtx.Done()
-	log.Println("Shutdown signal received, draining in-flight requests...")
+	logger.Info("shutdown signal received, draining in-flight requests")
 
 	drainCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(drainCtx); err != nil {
-		log.Printf("Graceful shutdown did not complete cleanly: %v", err)
+		logger.Warn("graceful shutdown did not complete cleanly", "err", err)
 	}
 }
 

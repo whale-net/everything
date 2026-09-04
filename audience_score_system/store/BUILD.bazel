@@ -1,0 +1,100 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# pgx-based repository over //libs/go/db for Audience Score System's
+# identity core (migration 001: person, channel, channel_person (LB2),
+# channel_invite) plus the LB3 research/verdict/schedule/outcome record
+# chain, its read models, and the mcp_idempotency ledger (migration 002,
+# issue #1569). CanApprove/CanInvite/CanReconnect/CanRead/CanWrite
+# (authz.go) are the only sanctioned M1 authorization entry points (NFR5).
+#
+# idea.go/research.go/verdict.go/pacing.go/schedule.go/sync.go/match.go/
+# idempotency.go are real SQL-backed implementations against migration
+# 002's tables (issue #1569's Implementation phase).
+#
+# The bearer-credential-to-Person caller-auth mechanism `mcp` uses no
+# longer lives here (migration 005/credential.go, issue #1575) -- issue
+# #1643 migrated it onto the shared //libs/go/mcpauth.CredentialStore
+# against migration 006's mcp_credential table.
+go_library(
+    name = "store",
+    srcs = [
+        "authz.go",
+        "browse.go",
+        "channel.go",
+        "idea.go",
+        "idempotency.go",
+        "invite.go",
+        "match.go",
+        "models.go",
+        "pacing.go",
+        "person.go",
+        "research.go",
+        "role.go",
+        "schedule.go",
+        "store.go",
+        "strategy.go",
+        "sync.go",
+        "verdict.go",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/store",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgconn",
+        "@com_github_jackc_pgx_v5//pgxpool",
+    ],
+)
+
+# Real Postgres integration test for the whole store package: PersonStore
+# (FR1/FR2), ChannelStore.Create (FR3, LB2), authz.go's Can* functions
+# against the real SQL-backed RoleStore (NFR5), InviteStore (FR5-FR8), and
+# migration 001 up/down/up reversibility -- all against migration 001's
+# real embedded SQL (//audience_score_system/migrate/schema), not a
+# hand-copied schema. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale behind each tag and how
+# to run tests like this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/store:store_integration_test --test_output=all
+go_test(
+    name = "store_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["store_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":store",
+        "//audience_score_system/migrate/schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Pure-Go coverage of authz.go against a fake RoleStore -- no Docker
+# required, runs as part of `bazel test //...`. See
+# store_integration_test.go above for the Postgres-backed coverage of the
+# same functions plus PersonStore/ChannelStore/InviteStore/migration 001
+# reversibility (issue #1568).
+go_test(
+    name = "store_test",
+    srcs = ["authz_test.go"],
+    deps = [
+        ":store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

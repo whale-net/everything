@@ -1,0 +1,13 @@
+load("//tools:templ.bzl", "templ_library")
+
+templ_library(
+    name = "components",
+    srcs = glob(["*.templ"]),
+    go_srcs = ["render.go"],
+    visibility = ["//audience_score_system/web:__subpackages__"],
+    deps = [
+        "//audience_score_system/store",
+        "//libs/go/htmxbase",
+        "//libs/go/htmxui",
+    ],
+)

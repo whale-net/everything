@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//tools/bazel:release.bzl", "release_app")
+
+# `mcp` -- Audience Score System's MCP server: the only interface for C4,
+# C5, C6 (read), C7, C9 (confirm/reject), and C10 (NFR3). See
+# ../ARCHITECTURE.md.
+go_library(
+    name = "mcp_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/whale-net/everything/audience_score_system/mcp",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/mcp/tools",
+        "//audience_score_system/store",
+        "//audience_score_system/worker/sync",
+        "//libs/go/db",
+        "//libs/go/logging",
+        "//libs/go/mcpauth",
+        "//libs/go/temporal",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
+)
+
+go_binary(
+    name = "mcp",
+    embed = [":mcp_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Release metadata. domain "audience-score-system" + name "mcp" produces
+# the "audience-score-system-mcp" image/app identity (see #1566).
+# external-api: MCP-capable agent clients reach this over ingress, same
+# category as `web`.
+release_app(
+    name = "mcp",
+    binary_name = ":mcp",
+    language = "go",
+    domain = "audience-score-system",
+    description = "Audience Score System MCP server: research notes, viability verdicts, schedule sync/drafting, pacing policy, outcome confirm/reject, and browsing (C4-C7, C9, C10)",
+    app_type = "external-api",
+    port = 8081,
+)

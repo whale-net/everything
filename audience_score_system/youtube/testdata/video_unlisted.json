@@ -1,0 +1,10 @@
+{
+  "id": "vid-unlisted",
+  "snippet": {
+    "title": "Unlisted Video",
+    "publishedAt": "2024-02-15T08:30:00Z"
+  },
+  "status": {
+    "privacyStatus": "unlisted"
+  }
+}

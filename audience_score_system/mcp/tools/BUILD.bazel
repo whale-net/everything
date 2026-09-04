@@ -1,0 +1,452 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# Audience Score System's MCP tool groups, one file per group. whoami.go
+# (#1575) is the registry wiring proof; research.go (#1577) lands the
+# first real product tools: C4's save_research_note/list_research_notes
+# plus create_idea/list_ideas. schedule_read.go (#1576) lands
+# get_channel_schedule (C6 read). Remaining C5/C7/C9/C10 tools land in
+# later M1 tasks. See ../server/registry.go's RegisterRead/RegisterWrite.
+go_library(
+    name = "tools",
+    srcs = [
+        "browse.go",
+        "list_channels.go",
+        "matches.go",
+        "research.go",
+        "schedule_draft.go",
+        "schedule_read.go",
+        "strategy.go",
+        "sync_trigger.go",
+        "verdict.go",
+        "whoami.go",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/mcp/tools",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+    ],
+)
+
+# Pure-Go coverage of validateSourceURL (FR10's rejection/NULL-coercion
+# rule) and toResearchNoteOutput's Cited derivation (research.go), plus
+# get_channel_schedule's withinWindow from/to semantics and
+# getChannelScheduleHandler's include_drafts filtering (schedule_read.go,
+# issue #1576, driven against an in-memory store.SyncStore fake), plus
+# parseVerdictValue's enum-rejection and excerpt's rune-safe truncation
+# (verdict.go, issue #1578), plus parseWeekdayName/weekBounds/
+# computeScheduleFlags's FR18 cadence/off-day/collision derivation
+# (schedule_draft.go, issue #1579) -- no Docker required, runs as part of
+# `bazel test //...`. See research_integration_test.go,
+# schedule_read_integration_test.go, verdict_integration_test.go, and
+# schedule_draft_integration_test.go (this package, "integration" gotag)
+# for the real-Postgres + real-MCP-transport coverage these cannot fake.
+go_test(
+    name = "tools_test",
+    srcs = [
+        "research_test.go",
+        "schedule_draft_test.go",
+        "schedule_read_test.go",
+        "strategy_test.go",
+        "sync_trigger_test.go",
+        "verdict_test.go",
+    ],
+    embed = [":tools"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres + real HTTP-transport MCP client integration test for
+# research.go's tool group: save_research_note (write, idempotency-keyed
+# replay/conflict, FR9/FR10 NULL-vs-'' distinction), create_idea
+# (natural-key upsert, including the concurrent-create race resolved by
+# store.IdeaStore.FindOrCreate's Postgres advisory lock), and
+# list_research_notes/list_ideas (Channel-scoping, cited/uncited/idea_id
+# filters, note-count + verdict-exists stats). Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale, mirrored by
+# //audience_score_system/mcp/server:server_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:research_integration_test --test_output=all
+go_test(
+    name = "research_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["research_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# get_channel_schedule (schedule_read.go, issue #1576): Channel-scoping
+# (creator + analyst read, unassociated Person denied -- store.CanRead via
+# server.RegisterRead), include_drafts default-true/explicit-false
+# filtering, from/to window filtering, and an empty Channel returning an
+# empty list rather than an error -- all against the real embedded schema
+# (//audience_score_system/migrate/schema) and a real *mcp.Server hosted
+# over HTTP, mirroring
+# //audience_score_system/mcp/server:server_integration_test's pattern.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale. `# keep` tells a later `bazel run
+# //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:schedule_read_integration_test --test_output=all
+go_test(
+    # keep
+    name = "schedule_read_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["schedule_read_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# save_viability_verdict/get_viability_verdict (verdict.go, issue #1578):
+# FR12 append-only/never-UPDATE (byte-for-byte re-read of a prior version
+# after a later save), version allocation under genuine concurrency
+# (two simultaneous saves converge on versions 1 and 2, no lost write),
+# idea_id-not-belonging-to-channel_id rejection, citation validation
+# (same-Channel, exists) rejecting the whole write atomically, NFR2
+# idempotency replay/conflict semantics, Creator+Analyst write /
+# unassociated-Person-denied authz, FR13's current+full-history-in-one-call
+# shape (including the no-verdict-yet null/empty case), and FR10's cited
+# boolean on resolved citations -- all against the real embedded schema and
+# a real HTTP-hosted MCP server, mirroring research_integration_test.go's
+# pattern. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:verdict_integration_test --test_output=all
+go_test(
+    # keep
+    name = "verdict_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["verdict_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# list_pending_matches/resolve_pending_match (matches.go, issue #1581,
+# FR22/FR23): list_pending_matches' video+metrics+best-guess-entry+
+# confidence rendering and Channel-scoping (a Channel's pending matches
+# never leak into another Channel's list, unassociated Person denied),
+# resolve_pending_match's confirm (creates the outcome link -- the video's
+# idea appears in v_prediction_vs_outcome afterward) and reject (leaves the
+# video unmatched, never appears in the comparison, FR23) paths, confirming
+# against an explicit schedule_entry_id override rather than the matcher's
+# best guess, NFR2 idempotency replay (identical result, no second
+# mutation) and conflict (a second resolve under a different key on an
+# already-resolved match is rejected, first resolution unchanged --
+# store.ErrMatchNotPending) semantics, and Creator+Analyst write /
+# unassociated-Person-denied authz -- all against the real embedded schema
+# and a real HTTP-hosted MCP server, mirroring verdict_integration_test.go's
+# pattern. Deliberately NOT part of `bazel test //...` -- see
+# //libs/go/dbtest's README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:matches_integration_test --test_output=all
+go_test(
+    # keep
+    name = "matches_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["matches_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# set_pacing_policy/get_pacing_policy/get_drafting_context/
+# save_schedule_draft/list_schedule_entries (schedule_draft.go, issue
+# #1579): FR17's upsert convergence (repeated calls -> one row, same ID,
+# identical content -- NFR2), save_schedule_draft's LB3 verdict-version
+# binding (read back directly from ScheduleStore.GetByID, not just what the
+# tool rendered) including newer-vs-explicit-older-verdict_id binding,
+# FR16's viable-verdict gate rejecting not-viable/needs-more-research/
+# absent verdicts and a cross-idea verdict_id with nothing written, FR18's
+# non-blocking cadence_exceeded/off_preferred_day/collision flags (each
+# proven still-persists-the-draft), flags recomputed fresh on an
+# idempotent replay rather than cached from the first save (LB4),
+# Creator+Analyst write / unassociated-Person-denied authz on both
+# set_pacing_policy and save_schedule_draft, get_drafting_context's
+# explicit-null-vs-zero-value policy rendering, and list_schedule_entries --
+# all against the real embedded schema and a real HTTP-hosted MCP server,
+# mirroring verdict_integration_test.go's pattern. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:schedule_draft_integration_test --test_output=all
+go_test(
+    # keep
+    name = "schedule_draft_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["schedule_draft_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# get_channel_overview/get_prediction_vs_outcome (browse.go, issue #1582,
+# FR24, C10): the load-bearing regression is
+# TestGetPredictionVsOutcome_BoundVerdictSurvivesNewerVerdictVersion --
+# proving store.BrowseStore.PredictionVsOutcome's deliberate deviation from
+# migration 002's v_prediction_vs_outcome view (joining schedule_entry
+# directly to viability_verdict via verdict_id rather than through
+# v_current_verdict) actually holds: a schedule_entry committed under an
+# older verdict version keeps reporting that bound version after a newer
+# one is appended for the same Idea. Also covers get_channel_overview's
+# full-population/empty-channel/truncation/needs_reauth-still-browses
+# behavior, get_prediction_vs_outcome's auto/confirmed/pending/rejected
+# match-state qualifying-row rules and pending_match_count, and Creator +
+# Analyst byte-identical read responses / unassociated-Person denial for
+# both tools -- all against the real embedded schema and a real
+# HTTP-hosted MCP server, mirroring matches_integration_test.go's pattern.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:browse_integration_test --test_output=all
+go_test(
+    # keep
+    name = "browse_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["browse_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# list_channels (list_channels.go, issue #1631): the caller's own
+# Channel-access discovery -- every Channel they hold a live role on, with
+# that Channel's title/connection_state and the caller's role(s). No
+# Channel-scoping to prove (list_channels takes no channel_id), so this
+# covers a caller with one role, a caller with no Channels (empty list,
+# not an error), a caller with multiple Channels, and two different
+# callers on the same Channel seeing their own distinct role -- all
+# against the real embedded schema and a real HTTP-hosted MCP server,
+# mirroring schedule_read_integration_test.go's pattern. Deliberately NOT
+# part of `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:list_channels_integration_test --test_output=all
+go_test(
+    # keep
+    name = "list_channels_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["list_channels_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# save_strategy/get_strategy/list_strategies/generate_schedule_plan
+# (strategy.go, issue #1637): save_strategy's FR16-style viable-verdict
+# gate (rejecting an idea_id whose current verdict is not viable, nothing
+# written), create-vs-update (strategy_id) semantics including wholesale
+# idea-link replacement, idempotent replay convergence (a Strategy has no
+# natural key), Creator+Analyst write / unassociated-Person-denied authz,
+# get_strategy's wrong-channel rejection, list_strategies' active_only
+# filter, and generate_schedule_plan's read-only cadence-driven proposal
+# derivation (including skipping an Idea whose verdict has since gone
+# non-viable, and ignoring inactive Strategies) -- all against the real
+# embedded schema and a real HTTP-hosted MCP server, mirroring
+# schedule_draft_integration_test.go's pattern. Deliberately NOT part of
+# `bazel test //...` -- see //libs/go/dbtest's README for the full
+# rationale.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/tools:strategy_integration_test --test_output=all
+go_test(
+    # keep
+    name = "strategy_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["strategy_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":tools",
+        "//audience_score_system/mcp/server",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

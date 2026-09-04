@@ -1,0 +1,109 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# `mcp`'s server bootstrap, caller-auth middleware (auth.go/context.go),
+# Channel-scoping/idempotency middleware (channelscope.go/idempotency.go,
+# wired into RegisterRead/RegisterWrite by registry.go per issue #1575's
+# Implementation phase), streamable HTTP transport (transport.go), and
+# tool registry (registry.go). See ../../ARCHITECTURE.md "MCP server".
+go_library(
+    name = "server",
+    srcs = [
+        "auth.go",
+        "channelscope.go",
+        "context.go",
+        "idempotency.go",
+        "observability.go",
+        "registry.go",
+        "server.go",
+        "transport.go",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/mcp/server",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//audience_score_system/store",
+        "//libs/go/logging",
+        "//libs/go/mcpauth",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+    ],
+)
+
+# Pure-Go coverage of PersonMiddleware (auth.go), RequireChannelRole
+# (channelscope.go), computeFingerprint (idempotency.go), and
+# RegisterRead/RegisterWrite (registry.go) against in-memory fakes
+# (fakes_test.go) -- no Docker required, runs as part of `bazel test //...`.
+# See server_integration_test.go (this package, "integration" gotag) for
+# the real-Postgres + real-HTTP-transport coverage of the same wiring this
+# cannot fake: real caller-auth credentials, and the concurrent-contention
+# and cross-instance statelessness guarantees (NFR2/LB4) that only a real
+# database can prove.
+go_test(
+    name = "server_test",
+    srcs = [
+        "auth_test.go",
+        "channelscope_test.go",
+        "fakes_test.go",
+        "idempotency_test.go",
+        "registry_test.go",
+    ],
+    embed = [":server"],
+    deps = [
+        "//audience_score_system/store",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_modelcontextprotocol_go_sdk//auth",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Real Postgres + real HTTP-transport MCP client integration test: the full
+# caller-auth (auth.go) -> Channel-scoping (channelscope.go) ->
+# idempotency (idempotency.go) stack, end to end, plus the two guarantees
+# a fake cannot prove -- concurrent-same-key contention resolved by
+# Postgres (not an in-memory lock) and statelessness across two
+# independently constructed server instances sharing one database (LB4).
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale, mirrored by
+# //audience_score_system/store:store_integration_test.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/mcp/server:server_integration_test --test_output=all
+go_test(
+    name = "server_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = [
+        "oauth_bootstrap_integration_test.go",
+        "server_integration_test.go",
+    ],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":server",
+        "//audience_score_system/mcp/tools",
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/db",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_modelcontextprotocol_go_sdk//mcp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

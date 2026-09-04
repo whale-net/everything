@@ -59,8 +59,10 @@ func run() error {
 
 	logger.Info("starting event-processor",
 		"queue", cfg.QueueName,
-		"stale_threshold", cfg.StaleHostThreshold,
+		"stale_host_threshold", cfg.StaleHostThreshold,
+		"stale_session_threshold", cfg.StaleSessionThreshold,
 		"external_exchange", cfg.ExternalExchange,
+		"health_check_port", cfg.HealthCheckPort,
 	)
 
 	// Initialize database connection

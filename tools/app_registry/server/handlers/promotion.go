@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/whale-net/everything/libs/go/grpcauth"
+	"github.com/whale-net/everything/libs/go/logging"
 	"github.com/whale-net/everything/tools/app_registry/events"
 	pb "github.com/whale-net/everything/tools/app_registry/protos"
 	"github.com/whale-net/everything/tools/app_registry/server/auth"
@@ -22,6 +24,14 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
+
+// promotionLog is this file's logger name, matching app.go/artifact.go's
+// appLog/artifactLog pattern. The generic gRPC interceptor
+// (logging.NewUnaryServerLoggingInterceptor) already logs every RPC's
+// method/code/duration/error -- these calls exist for business facts that
+// log line doesn't carry: which target moved where, at whose request, and
+// whether a guardrail was bypassed.
+var promotionLog = logging.Get("app-registry-handlers")
 
 // PromotionServer implements pb.PromotionRegistryServer, backed by
 // repository.Registry. See ARCHITECTURE.md "Promotability" and
@@ -129,6 +139,20 @@ func (s *PromotionServer) Promote(ctx context.Context, req *pb.PromoteRequest) (
 			action := repository.PromotionActionPromote
 			if candidate.IsOverride {
 				action = repository.PromotionActionOverride
+				// Warn, not Info: allow_override means the caller deliberately
+				// bypassed the chart-composition guardrail
+				// (buildCandidatePromotion's PromotabilityViaChart branch) to
+				// promote an image directly. Legal and sometimes necessary, but
+				// it's exactly the kind of action that should stand out in logs
+				// rather than blend in with routine promotions -- same
+				// "silent success worth flagging" rationale as
+				// AppServer.ReconcileApps's skipped_stale/chart-skipped Warns.
+				promotionLog.Warn("promotion bypassed chart composition (allow_override)",
+					slog.String("environment_key", env.Key),
+					slog.String("target_key", string(candidate.TargetKey)),
+					slog.String("artifact_id", artifact.ArtifactID),
+					slog.String("actor", actorFromCtx(ctx)),
+				)
 			}
 			event, eerr := r.Promotions().RecordEvent(ctx, repository.PromotionEvent{
 				PromotionID: current.PromotionID,
@@ -155,6 +179,23 @@ func (s *PromotionServer) Promote(ctx context.Context, req *pb.PromoteRequest) (
 		return nil, mapRepoErr(err)
 	}
 	promoteResp := resp.(*pb.PromoteResponse)
+
+	// Info, not Debug: "what got promoted where, by whom" is the core audit
+	// trail this whole service exists to keep -- worth a durable record on
+	// every real write, not just the allow_override anomaly above. Skipped
+	// on replay/AlreadyPromoted since neither actually changed state.
+	if !replayed && !promoteResp.AlreadyPromoted {
+		promotionLog.Info("promoted",
+			slog.String("environment_key", req.EnvironmentKey),
+			slog.String("target_key", string(candidate.TargetKey)),
+			slog.String("kind", string(candidate.Kind)),
+			slog.String("version", candidate.Version),
+			slog.String("digest", candidate.Digest),
+			slog.Bool("is_override", candidate.IsOverride),
+			slog.String("actor", actorFromCtx(ctx)),
+			slog.String("promotion_id", promoteResp.Promotion.PromotionId),
+		)
+	}
 
 	// FR7a: publish after write commits, but only if not a replayed response and not AlreadyPromoted.
 	// Publish errors are discarded; see #1130 for details.
@@ -332,6 +373,21 @@ func (s *PromotionServer) Rollback(ctx context.Context, req *pb.RollbackRequest)
 		return nil, mapRepoErr(err)
 	}
 	rollbackResp := resp.(*pb.RollbackResponse)
+
+	// Info audit trail, same rationale as Promote's -- a rollback is just as
+	// much a "what changed and who did it" fact worth a durable record.
+	if !replayed {
+		promotionLog.Info("rolled back",
+			slog.String("environment_key", req.EnvironmentKey),
+			slog.String("target_key", string(targetKey)),
+			slog.String("kind", string(kind)),
+			slog.String("owner_full_name", req.OwnerFullName),
+			slog.String("version", candidate.Version),
+			slog.String("digest", candidate.Digest),
+			slog.String("actor", actorFromCtx(ctx)),
+			slog.String("promotion_id", rollbackResp.Promotion.PromotionId),
+		)
+	}
 
 	// FR7a: publish after write commits, but only if not a replayed response.
 	// Publish errors are discarded; see #1130 for details.
@@ -686,7 +742,15 @@ func (s *PromotionServer) RetryArgoSync(ctx context.Context, req *pb.RetryArgoSy
 		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
 		switch {
 		case werr == nil:
-			// Started -- see this method's doc comment.
+			// Started -- see this method's doc comment. Info, not Debug: an
+			// admin-triggered retry of a stuck ArgoCD sync is deliberate and
+			// rare, worth a durable record of who asked and which workflow
+			// execution is now doing the retrying.
+			promotionLog.Info("retry argo sync started",
+				slog.String("promotion_id", promotionID),
+				slog.String("workflow_id", workflowID),
+				slog.String("actor", actorFromCtx(ctx)),
+			)
 		case errors.As(werr, &alreadyStarted):
 			// Practically unreachable given RetryArgoSyncWorkflowID's
 			// nanosecond-suffixed uniqueness (see that function's doc

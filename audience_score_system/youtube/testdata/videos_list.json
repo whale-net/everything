@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "id": "vid-public",
+      "snippet": {
+        "title": "Public Upload",
+        "publishedAt": "2024-01-01T00:00:00Z"
+      },
+      "status": {
+        "privacyStatus": "public"
+      }
+    },
+    {
+      "id": "vid-draft",
+      "snippet": {
+        "title": "Scheduled Draft"
+      },
+      "status": {
+        "privacyStatus": "private",
+        "publishAt": "2099-06-01T12:00:00Z"
+      }
+    },
+    {
+      "id": "vid-unlisted",
+      "snippet": {
+        "title": "Unlisted Video",
+        "publishedAt": "2024-02-15T08:30:00Z"
+      },
+      "status": {
+        "privacyStatus": "unlisted"
+      }
+    }
+  ]
+}

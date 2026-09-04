@@ -1,0 +1,28 @@
+"""Audience Score System domain root."""
+
+load("//tools/bazel:release.bzl", "release_helm_chart")
+
+filegroup(
+    name = "docs",
+    srcs = glob(["*.md"]),
+    visibility = ["//visibility:public"],
+)
+
+# Composes all four M1 binaries (migrate, web, mcp, worker) into one
+# deployable chart. domain "audience-score-system" + chart_name
+# "ass-backend" produces the "helm-audience-score-system-ass-backend"
+# chart identity (see #1566 for the canonical naming precedent).
+release_helm_chart(
+    name = "ass_backend_chart",
+    chart_name = "ass-backend",
+    domain = "audience-score-system",
+    namespace = "audience-score-system",
+    environment = "dev",
+    apps = [
+        "//audience_score_system/migrate:migration_metadata",
+        "//audience_score_system/web:web_metadata",
+        "//audience_score_system/mcp:mcp_metadata",
+        "//audience_score_system/worker:worker_metadata",
+    ],
+    visibility = ["//visibility:public"],
+)

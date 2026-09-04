@@ -18,8 +18,9 @@ go_library(
 go_test(
     name = "rmq_test",
     size = "small",
-    srcs = ["messages_test.go"],
-    deps = [
-        ":rmq",
+    srcs = [
+        "consumer_test.go",
+        "messages_test.go",
     ],
+    embed = [":rmq"],
 )

@@ -106,6 +106,8 @@ func (r *Renderer) WriteRenderedFiles(files []*RenderedFile) error {
 		r.logger.Debug("wrote file", "path", file.HostPath, "bytes", len(file.Content))
 	}
 
+	r.logger.Info("wrote configuration files", "count", len(files))
+
 	return nil
 }
 

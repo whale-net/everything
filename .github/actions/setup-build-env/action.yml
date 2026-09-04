@@ -62,85 +62,12 @@ runs:
           bazel-external-v2-${{ runner.os }}-
 
     - name: Setup Remote Cache Environment
-      shell: bash
-      env:
-        # Passed via env (not templated into the script body) so the raw
-        # secret values never appear in the rendered/logged step command,
-        # and so a value containing shell metacharacters (', ", $(...))
-        # can't inject into the script.
-        CACHE_URL: ${{ inputs.bazel-remote-cache-url }}
-        CACHE_USER: ${{ inputs.bazel-remote-cache-user }}
-        CACHE_PASSWORD: ${{ inputs.bazel-remote-cache-password }}
-        DOWNLOADER_URL: ${{ inputs.bazel-remote-downloader-url }}
-      run: |
-        # Configure remote cache and/or remote asset downloader if provided
-        HAS_REMOTE_CACHE=false
-        HAS_REMOTE_DOWNLOADER=false
-
-        if [[ -n "$CACHE_URL" ]]; then
-          HAS_REMOTE_CACHE=true
-        fi
-
-        if [[ -n "$DOWNLOADER_URL" ]]; then
-          HAS_REMOTE_DOWNLOADER=true
-        fi
-
-        if [[ "$HAS_REMOTE_CACHE" = "true" || "$HAS_REMOTE_DOWNLOADER" = "true" ]]; then
-          # Initialize .bazelrc.remote
-          cat > .bazelrc.remote << 'EOF'
-        # Remote cache & downloader configuration (auto-generated)
-        EOF
-
-          if [[ "$HAS_REMOTE_CACHE" = "true" ]]; then
-            echo "Setting up Bazel remote cache..."
-
-            # Check if CACHE_URL is gRPC (grpc:// or grpcs://) vs HTTP (http:// or https://)
-            if [[ "$CACHE_URL" =~ ^grpcs?:// ]]; then
-              echo "build --remote_cache=${CACHE_URL}" >> .bazelrc.remote
-              echo "build --remote_upload_local_results=true" >> .bazelrc.remote
-              if [[ -n "$CACHE_USER" && -n "$CACHE_PASSWORD" ]]; then
-                AUTH_BASE64=$(printf '%s' "${CACHE_USER}:${CACHE_PASSWORD}" | base64 -w 0)
-                # Mask the encoded credential in logs too: it's trivially
-                # reversible (plain base64, not a hash), so anywhere Bazel
-                # or Actions might echo the resolved --remote_header flag
-                # (e.g. --announce_rc's "Inherited 'build' options" banner)
-                # would otherwise leak it verbatim.
-                echo "::add-mask::${AUTH_BASE64}"
-                echo "build --remote_header=Authorization=\"Basic ${AUTH_BASE64}\"" >> .bazelrc.remote
-              fi
-            else
-              # HTTP-based remote cache: embed credentials in URL
-              if [[ -n "$CACHE_USER" && -n "$CACHE_PASSWORD" ]]; then
-                PROTOCOL=$(echo "$CACHE_URL" | sed -n 's#^\([^:]*\)://.*#\1#p')
-                HOST_PATH=$(echo "$CACHE_URL" | sed -n 's#^[^:]*://\(.*\)#\1#p')
-                CACHE_URL="${PROTOCOL}://${CACHE_USER}:${CACHE_PASSWORD}@${HOST_PATH}"
-                echo "::add-mask::${CACHE_URL}"
-              fi
-              echo "build --remote_cache=${CACHE_URL}" >> .bazelrc.remote
-              echo "build --remote_upload_local_results=true" >> .bazelrc.remote
-            fi
-
-            echo "✅ Remote cache configured at: ${{ inputs.bazel-remote-cache-url }}"
-          fi
-
-          if [[ "$HAS_REMOTE_DOWNLOADER" = "true" ]]; then
-            echo "Setting up Bazel remote asset downloader..."
-
-            echo "build --experimental_remote_downloader=${DOWNLOADER_URL}" >> .bazelrc.remote
-
-            if [[ -n "$CACHE_USER" && -n "$CACHE_PASSWORD" ]]; then
-              AUTH_BASE64=$(printf '%s' "${CACHE_USER}:${CACHE_PASSWORD}" | base64 -w 0)
-              echo "::add-mask::${AUTH_BASE64}"
-              echo "build --remote_downloader_header=Authorization=\"Basic ${AUTH_BASE64}\"" >> .bazelrc.remote
-            fi
-
-            echo "✅ Remote asset downloader configured at: ${{ inputs.bazel-remote-downloader-url }}"
-          fi
-        else
-          echo "No remote cache or downloader URL provided, using local caching only"
-          # Remove any existing .bazelrc.remote file to ensure clean state
-          rm -f .bazelrc.remote
-        fi
+      uses: ./.github/actions/setup-bazel-remote-cache-config
+      with:
+        cache-url: ${{ inputs.bazel-remote-cache-url }}
+        cache-user: ${{ inputs.bazel-remote-cache-user }}
+        cache-password: ${{ inputs.bazel-remote-cache-password }}
+        downloader-url: ${{ inputs.bazel-remote-downloader-url }}
 
     - name: Setup Bazel with Optimized Caching
       id: setup-bazel

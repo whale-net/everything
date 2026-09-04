@@ -1,0 +1,10 @@
+{
+  "id": "vid-draft",
+  "snippet": {
+    "title": "Scheduled Draft"
+  },
+  "status": {
+    "privacyStatus": "private",
+    "publishAt": "2099-06-01T12:00:00Z"
+  }
+}

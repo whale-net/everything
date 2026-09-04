@@ -1,0 +1,76 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// connectionStateLabel renders a human-readable label for
+// store.ConnectionState -- "Connected" / "Needs re-authentication" (FR4).
+func connectionStateLabel(state store.ConnectionState) string {
+	switch state {
+	case store.ConnectionStateConnected:
+		return "Connected"
+	case store.ConnectionStateNeedsReauth:
+		return "Needs re-authentication"
+	default:
+		return string(state)
+	}
+}
+
+// connectionStateBadgeClass picks a daisyUI badge color matching
+// connectionStateLabel -- success (green) when connected, warning (amber)
+// when needs_reauth.
+func connectionStateBadgeClass(state store.ConnectionState) string {
+	if state == store.ConnectionStateConnected {
+		return "badge badge-success"
+	}
+	return "badge badge-warning"
+}
+
+// ChannelDetail is a Channel's detail page (C2, FR4): shows its
+// connection_state, and -- for a Creator only -- the reconnect affordance
+// (canReconnect, store.CanReconnect / NFR5) that starts the same YouTube
+// consent flow as the initial connect (POST /channels/{id}/reconnect,
+// web/channel.Handler.HandleReconnect), and the invite-analyst affordance
+// (canInvite, store.CanInvite / C3 FR5) that generates a single-use
+// invite code via POST /channels/{id}/invites (web/invite.Handlers.
+// HandleGenerate).
+templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect bool, canInvite bool) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title }</h1>
+				<p>
+					Status:
+					<span class={ connectionStateBadgeClass(ch.ConnectionState) }>
+						{ connectionStateLabel(ch.ConnectionState) }
+					</span>
+				</p>
+				if canReconnect {
+					<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/reconnect") }>
+						<button type="submit" class="btn btn-primary">
+							if ch.ConnectionState == store.ConnectionStateNeedsReauth {
+								Reconnect
+							} else {
+								Re-authenticate
+							}
+						</button>
+					</form>
+				}
+				if canInvite {
+					<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/invites") }>
+						<button type="submit" class="btn btn-primary btn-sm mt-2">
+							Invite analyst
+						</button>
+					</form>
+				}
+				<div class="card-actions justify-end mt-2">
+					<a href={ templ.URL("/channels/" + ch.ID.String() + "/schedule") } class="btn btn-secondary btn-sm">
+						View schedule
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}

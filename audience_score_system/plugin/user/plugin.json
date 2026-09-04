@@ -1,0 +1,7 @@
+{
+  "name": "audience-score-system",
+  "description": "Streamable-HTTP MCP access to the Audience Score System server across dev/prod, plus researcher/analyst agents and loop skills for research, schedule, and outcomes",
+  "author": {
+    "name": "whale_net"
+  }
+}

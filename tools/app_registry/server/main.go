@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -50,6 +51,7 @@ func run() error {
 		EnableTracing: true,
 	})
 	defer logging.Shutdown(ctx) //nolint:errcheck
+	logger := logging.Get("app-registry-api")
 
 	port := getEnv("PORT", "50051")
 	grpcAuthMode := getEnv("GRPC_AUTH_MODE", "none")
@@ -68,20 +70,22 @@ func run() error {
 	releaseToolsS3SecretKey := getEnv("RELEASE_TOOLS_S3_SECRET_KEY", "")
 
 	// Initialize database pool (reads PG_DATABASE_URL)
-	log.Println("Connecting to database...")
+	logger.Info("connecting to database")
 	pool, err := db.NewPool(ctx, "")
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 	defer pool.Close()
 	repo := postgres.NewRepository(pool)
-	log.Println("Database connection established")
+	logger.Info("database connection established")
 
 	// Temporal client, so ReleaseServer.TriggerRelease (issue #889) can
 	// start ReleaseWorkflow executions directly from this process -- see
 	// worker/main.go's identical NewClient construction (the worker
 	// process this client's workflow starts on; see release.TaskQueue).
-	temporalClient, err := temporallib.NewClient(temporallib.ConfigFromEnv(), temporallib.NewLogger("app-registry-api"))
+	temporalCfg := temporallib.ConfigFromEnv()
+	logger.Info("connecting to temporal", "host_port", temporalCfg.HostPort, "namespace", temporalCfg.Namespace)
+	temporalClient, err := temporallib.NewClient(temporalCfg, temporallib.NewLogger("app-registry-api"))
 	if err != nil {
 		return fmt.Errorf("failed to connect to temporal: %w", err)
 	}
@@ -102,6 +106,15 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to create auth interceptors: %w", err)
 	}
+	// AuthModeNone (every write RPC's role check trivially satisfied via
+	// DevRoles above) is only appropriate for local Tilt/CI -- worth an
+	// explicit Warn so it's obvious in logs if it's ever set somewhere it
+	// shouldn't be, rather than silently accepting unauthenticated writes.
+	if grpcauth.AuthMode(grpcAuthMode) == grpcauth.AuthModeNone {
+		logger.Warn("GRPC_AUTH_MODE=none: every RPC is authenticated as a dev principal holding every role -- do not use outside local dev/CI")
+	} else {
+		logger.Info("grpc auth configured", "mode", grpcAuthMode, "oidc_issuer", grpcOIDCIssuer)
+	}
 
 	// Create gRPC server
 	grpcServer := grpc.NewServer(
@@ -112,7 +125,7 @@ func run() error {
 		grpc.ChainStreamInterceptor(logging.NewStreamServerLoggingInterceptor("grpc"), streamInt),
 	)
 
-	publisher := initializePublisher(ctx)
+	publisher := initializePublisher(ctx, logger)
 
 	healthServer := registerServices(grpcServer, repo, temporalClient, publisher, releaseToolsS3Bucket, releaseToolsS3PublicEndpoint, releaseToolsS3Region, releaseToolsS3AccessKey, releaseToolsS3SecretKey)
 
@@ -122,7 +135,7 @@ func run() error {
 		return fmt.Errorf("failed to listen on port %s: %w", port, err)
 	}
 
-	log.Printf("App Registry API listening on :%s", port)
+	logger.Info("app registry api listening", "port", port)
 
 	// Handle graceful shutdown
 	done := make(chan error, 1)
@@ -131,7 +144,7 @@ func run() error {
 		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 		<-sigCh
 
-		log.Println("Shutting down gracefully...")
+		logger.Info("shutting down gracefully")
 		healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
 		grpcServer.GracefulStop()
 		done <- nil
@@ -191,20 +204,20 @@ func registerServices(grpcServer *grpc.Server, repo repository.Registry, tempora
 // channel/exchange failures; a connection that never dialed successfully at
 // startup is not retried by this process (matches *rmq.Connection's own
 // dial-once-then-self-heal contract) -- restart once the broker is back.
-func initializePublisher(ctx context.Context) events.PublisherInterface {
+func initializePublisher(ctx context.Context, logger *slog.Logger) events.PublisherInterface {
 	brokerURL := getEnv("RABBITMQ_URL", "")
 	if brokerURL == "" {
-		log.Println("RABBITMQ_URL not set; promotion events will not be published")
+		logger.Info("RABBITMQ_URL not set; promotion events will not be published")
 		return nil
 	}
 
 	conn, err := rmq.NewConnectionFromURL(brokerURL)
 	if err != nil {
-		log.Printf("WARNING: failed to connect to RabbitMQ for event publishing, promotion events will not be published: %v", err)
+		logger.Warn("failed to connect to RabbitMQ for event publishing, promotion events will not be published", "error", err)
 		return nil
 	}
 
-	return events.NewPublisher(ctx, conn, logging.Get("app-registry-api"), 100, rmq.NewPublisherWithExchange)
+	return events.NewPublisher(ctx, conn, logger, 100, rmq.NewPublisherWithExchange)
 }
 
 func getEnv(key, defaultValue string) string {

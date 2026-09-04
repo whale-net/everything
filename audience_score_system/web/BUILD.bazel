@@ -1,0 +1,97 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//tools/bazel:release.bzl", "release_app")
+
+# `web` -- Audience Score System's only UI surface (NFR3): Google OAuth
+# sign-in/sign-up (C1, this task's scope), Channel connect (C2, #1571),
+# analyst invite/accept (C3), and schedule-draft approval (C8). See
+# ../ARCHITECTURE.md.
+go_library(
+    name = "web_lib",
+    srcs = [
+        "main.go",
+        "templ_render.go",
+    ],
+    embedsrcs = [
+        "favicon.ico",
+    ],
+    importpath = "github.com/whale-net/everything/audience_score_system/web",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//audience_score_system/store",
+        "//audience_score_system/tokens",
+        "//audience_score_system/web/auth",
+        "//audience_score_system/web/channel",
+        "//audience_score_system/web/components",
+        "//audience_score_system/web/invite",
+        "//audience_score_system/web/pages",
+        "//audience_score_system/web/schedule",
+        "//audience_score_system/worker/sync",
+        "//libs/go/db",
+        "//libs/go/htmxbase",
+        "//libs/go/logging",
+        "//libs/go/mcpauth",
+        "//libs/go/temporal",
+        "@com_github_a_h_templ//:templ",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+    ],
+)
+
+go_binary(
+    name = "web",
+    embed = [":web_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# `web` handler tests via httptest against the real mcpauth.Provider mounted
+# exactly like run() mounts it in main.go (issue #1646). Gated behind
+# `//go:build integration`; hand-written with the same tag set as
+# //audience_score_system/web/auth:auth_integration_test (see that
+# BUILD.bazel comment for why each tag is required). `# keep` tells a later
+# `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web:web_oauth_integration_test --test_output=all
+go_test(
+    # keep
+    name = "web_oauth_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["oauth_integration_test.go"],
+    embed = [":web_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/mcpauth",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
+# Release metadata. domain "audience-score-system" + name "web" produces
+# the "audience-score-system-web" image/app identity (see #1566).
+# external-api: signed-in creators/analysts reach this over ingress, same
+# category as leaflab-ui and app-registry's api.
+release_app(
+    name = "web",
+    binary_name = ":web",
+    language = "go",
+    domain = "audience-score-system",
+    description = "Audience Score System web UI: Google OAuth sign-in, Channel connect, analyst invite/accept, schedule-draft approval",
+    app_type = "external-api",
+    port = 8080,
+)

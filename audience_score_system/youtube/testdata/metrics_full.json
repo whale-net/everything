@@ -1,0 +1,13 @@
+{
+  "columnHeaders": [
+    { "name": "video", "columnType": "DIMENSION", "dataType": "STRING" },
+    { "name": "views", "columnType": "METRIC", "dataType": "INTEGER" },
+    { "name": "averageViewDuration", "columnType": "METRIC", "dataType": "INTEGER" },
+    { "name": "averageViewPercentage", "columnType": "METRIC", "dataType": "FLOAT" },
+    { "name": "impressions", "columnType": "METRIC", "dataType": "INTEGER" },
+    { "name": "impressionClickThroughRate", "columnType": "METRIC", "dataType": "FLOAT" }
+  ],
+  "rows": [
+    ["vid-full", 1000, 245, 62.3, 5000, 8.5]
+  ]
+}
