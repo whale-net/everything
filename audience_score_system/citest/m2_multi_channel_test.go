@@ -531,3 +531,5 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 		}
 	})
 }
+
+// Trailing comment added to re-trigger CI (empty-commit synchronize did not fire).
