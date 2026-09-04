@@ -895,7 +895,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 // by-natural-key getter of its own (only GetByID/ListSchedule).
 func mustSyncedVideoID(t *testing.T, ctx context.Context, st *store.Store, channelID uuid.UUID, youtubeVideoID string) uuid.UUID {
 	t.Helper()
-	vids, err := st.Sync().ListSchedule(ctx, channelID)
+	vids, _, err := st.Sync().ListSchedule(ctx, channelID, nil, nil, true, 0)
 	require.NoError(t, err)
 	for _, v := range vids {
 		if v.YouTubeVideoID == youtubeVideoID {
