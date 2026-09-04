@@ -115,21 +115,46 @@ hermetic Python toolchain is available (`/usr/bin/env: 'python3': No such
 file or directory`) — the Dockerfile now installs `python3`,
 `build-essential`, and `unzip` before running Bazel.
 
-### Real `//...` run against `main` (first attempt failed, second passed the same gap)
+### Real `//...` run against `main`
 
-Dispatching `devcontainer-bazel-cache-image.yml` with the default `WARM_TARGETS=//...`
-against `main` failed at `//tools/lib32:lib32_extracted`, a genrule that
-shells out to a system `zstd` binary to unpack a `.deb` — present on
-GitHub's `ubuntu-latest` runner (where `ci.yml`'s `test` job already builds
-`//...` successfully) but not in this deliberately-minimal devcontainer
-base image. Fixed by installing `zstd` plus a broader set of common
-build-time tools GitHub's runner ships and this base image doesn't
+First dispatch of `devcontainer-bazel-cache-image.yml` with the default
+`WARM_TARGETS=//...` against `main` failed at `//tools/lib32:lib32_extracted`,
+a genrule that shells out to a system `zstd` binary to unpack a `.deb` --
+present on GitHub's `ubuntu-latest` runner (where `ci.yml`'s `test` job
+already builds `//...` successfully) but not in this deliberately-minimal
+devcontainer base image. Fixed by installing `zstd` plus a broader set of
+common build-time tools GitHub's runner ships and this base image doesn't
 (`git`, `ca-certificates`, `xz-utils`, `pkg-config`, `cmake`, `ninja-build`,
-`rsync`, `zip`) — verified locally against `//tools/lib32/...` before
-re-dispatching. This section will be updated with the actual `//...`
-outcome once that re-run completes; a monorepo this size touching
-ESP32/Pigweed toolchains may well surface further host-tool gaps the same
-way, which is exactly what this section is for.
+`rsync`, `zip`).
+
+The re-dispatch with that fix (no remote cache configured yet -- this
+predates the remote cache work below) **succeeded**: full `//...`,
+including the ESP32/Pigweed toolchains, in **23m9s**, and pushed
+`ghcr.io/whale-net/bazel-cache-devcontainer:latest`.
+
+Consuming that image from `ci.yml`'s `test-bazel-cache-image` job then
+validated the actual POC claim at real scale:
+
+```
+INFO: Elapsed time: 77.435s, Critical Path: 5.76s
+INFO: 221 processes: 4610 action cache hit, 26 remote cache hit, 182 internal, 13 processwrapper-sandbox.
+INFO: Build completed successfully, 221 total actions
+```
+
+The entire monorepo's `//...` build, from a cold container, completed in
+under 80 seconds -- 4610 actions served straight from the image's baked
+cache, 26 more from the remote cache covering drift since the bake, only
+13 (the same non-hermetic OpenAPI codegen `[for tool]` steps noted above)
+re-executed.
+
+One more real gap this surfaced, unrelated to the build itself: a trailing
+`bazel shutdown` after this build hung and had to be SIGKILL'd, failing
+the job despite the build having already succeeded -- apparently specific
+to how GH Actions execs steps into a job `container:` (a plain `docker
+build` RUN step, both locally and in the real image-build workflow, shuts
+down cleanly with the identical command). Fixed by simply not calling
+`bazel shutdown` in that job -- the container is destroyed the moment the
+job ends regardless, so a clean shutdown buys nothing there.
 
 ## Trying it
 
