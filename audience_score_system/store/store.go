@@ -85,8 +85,9 @@ func (s *Store) Idempotency() Idempotency { return idempotencyStore{pool: s.pool
 func (s *Store) Browse() BrowseStore { return browseStore{pool: s.pool} }
 
 // Strategies returns the StrategyStore implementation (migration 008,
-// issue #1637) -- a cadence built directly from viable viability_verdict
-// rows (many-to-many with Strategy).
+// issue #1637) -- a grouping of viable viability_verdict rows
+// (many-to-many with Strategy), with no recurrence/pacing mechanics of
+// its own (FR47, issue #1833).
 func (s *Store) Strategies() StrategyStore { return strategyStore{pool: s.pool} }
 
 // Access returns the AccessStore implementation (migration 009, issue

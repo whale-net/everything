@@ -32,7 +32,6 @@ type SaveStrategyInput struct {
 	StrategyID       *uuid.UUID
 	ChannelID        uuid.UUID
 	Title            string
-	Cadence          Cadence
 	PreferredWeekday string // "" for no day preference.
 	Active           bool
 	// VerdictIDs are the viability_verdict rows this Strategy is built
@@ -63,12 +62,10 @@ type StrategyStore interface {
 	GetByID(ctx context.Context, id uuid.UUID) (StrategyDetail, error)
 
 	// ListByChannel returns Strategies for channelID, ordered by
-	// created_at. activeOnly restricts to active = TRUE -- the set
-	// generate_schedule_plan (mcp/tools/strategy.go) reads from, always
-	// unbounded (limit 0) since it needs every active Strategy to compute
-	// pacing correctly. limit (<=0 = unbounded) caps the response for
-	// list_strategies (mcp/tools/strategy.go, issue #1813's follow-up);
-	// truncated reports whether more matching rows exist beyond it.
+	// created_at. activeOnly restricts to active = TRUE. limit
+	// (<=0 = unbounded) caps the response for list_strategies
+	// (mcp/tools/strategy.go, issue #1813's follow-up); truncated reports
+	// whether more matching rows exist beyond it.
 	ListByChannel(ctx context.Context, channelID uuid.UUID, activeOnly bool, limit int) (details []StrategyDetail, truncated bool, err error)
 }
 
@@ -78,11 +75,11 @@ type strategyStore struct{ pool *pgxpool.Pool }
 
 var _ StrategyStore = strategyStore{}
 
-const strategyColumns = `id, channel_id, title, cadence, COALESCE(preferred_weekday, ''), active, created_by_person_id, created_at, updated_at, COALESCE(idempotency_key, '')`
+const strategyColumns = `id, channel_id, title, COALESCE(preferred_weekday, ''), active, created_by_person_id, created_at, updated_at, COALESCE(idempotency_key, '')`
 
 func scanStrategy(row pgx.Row) (Strategy, error) {
 	var s Strategy
-	err := row.Scan(&s.ID, &s.ChannelID, &s.Title, &s.Cadence, &s.PreferredWeekday, &s.Active, &s.CreatedByPersonID, &s.CreatedAt, &s.UpdatedAt, &s.IdempotencyKey)
+	err := row.Scan(&s.ID, &s.ChannelID, &s.Title, &s.PreferredWeekday, &s.Active, &s.CreatedByPersonID, &s.CreatedAt, &s.UpdatedAt, &s.IdempotencyKey)
 	return s, err
 }
 
@@ -185,10 +182,10 @@ func (s strategyStore) Save(ctx context.Context, in SaveStrategyInput) (Strategy
 	var strategy Strategy
 	if in.StrategyID == nil {
 		strategy, err = scanStrategy(tx.QueryRow(ctx, `
-			INSERT INTO strategy (channel_id, title, cadence, preferred_weekday, active, created_by_person_id, idempotency_key)
-			VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, NULLIF($7, ''))
+			INSERT INTO strategy (channel_id, title, preferred_weekday, active, created_by_person_id, idempotency_key)
+			VALUES ($1, $2, NULLIF($3, ''), $4, $5, NULLIF($6, ''))
 			RETURNING `+strategyColumns,
-			in.ChannelID, in.Title, in.Cadence, in.PreferredWeekday, in.Active, in.CreatedByPersonID, in.IdempotencyKey))
+			in.ChannelID, in.Title, in.PreferredWeekday, in.Active, in.CreatedByPersonID, in.IdempotencyKey))
 		if err != nil {
 			return StrategyDetail{}, fmt.Errorf("insert strategy: %w", err)
 		}
@@ -208,11 +205,11 @@ func (s strategyStore) Save(ctx context.Context, in SaveStrategyInput) (Strategy
 
 		strategy, err = scanStrategy(tx.QueryRow(ctx, `
 			UPDATE strategy
-			SET title = $1, cadence = $2, preferred_weekday = NULLIF($3, ''), active = $4,
-				updated_at = NOW(), idempotency_key = NULLIF($5, '')
-			WHERE id = $6
+			SET title = $1, preferred_weekday = NULLIF($2, ''), active = $3,
+				updated_at = NOW(), idempotency_key = NULLIF($4, '')
+			WHERE id = $5
 			RETURNING `+strategyColumns,
-			in.Title, in.Cadence, in.PreferredWeekday, in.Active, in.IdempotencyKey, *in.StrategyID))
+			in.Title, in.PreferredWeekday, in.Active, in.IdempotencyKey, *in.StrategyID))
 		if err != nil {
 			return StrategyDetail{}, fmt.Errorf("update strategy: %w", err)
 		}

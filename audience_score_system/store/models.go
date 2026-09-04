@@ -408,27 +408,17 @@ type PredictionOutcome struct {
 	MetricsMeasuredAt          time.Time
 }
 
-// Cadence is `strategy.cadence` (migration 008, issue #1637) -- a
-// Strategy's own recurrence, independent of and finer-grained than the
-// Channel-wide pacing_policy (FR17).
-type Cadence string
-
-const (
-	CadenceWeekly   Cadence = "weekly"
-	CadenceBiweekly Cadence = "biweekly"
-	CadenceMonthly  Cadence = "monthly"
-)
-
 // Strategy is one row of `strategy` (migration 008, issue #1637) -- a
-// cadence built directly from one or more viability_verdict rows (via
-// strategy_verdict), sitting between viability verdicts and scheduling.
+// grouping of one or more viability_verdict rows (via strategy_verdict)
+// under a title and an active flag. It has no recurrence/pacing mechanics
+// of its own (FR47, issue #1833 dropped `cadence`); `strategy_id` on
+// video_script uses it purely for context grouping (FR36, LB3).
 // PreferredWeekday is "" for no day preference, else a full English
 // weekday name in the same vocabulary as PacingPolicy.PreferredDays.
 type Strategy struct {
 	ID                uuid.UUID
 	ChannelID         uuid.UUID
 	Title             string
-	Cadence           Cadence
 	PreferredWeekday  string
 	Active            bool
 	CreatedByPersonID uuid.UUID

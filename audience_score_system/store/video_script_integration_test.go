@@ -49,7 +49,7 @@ func setupVideoScriptChannel(t *testing.T, ctx context.Context, s *store.Store, 
 	require.NoError(t, err)
 
 	strategy, err = s.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: ch.ID, Title: ideaTitle + " Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: ch.ID, Title: ideaTitle + " Strategy", Active: true,
 		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestVideoScriptStore_Propose_RejectsNonViableVerdicts_NothingInserted(t *te
 	})
 	require.NoError(t, err)
 	strategy, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: ch.ID, Title: "Grounding Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: ch.ID, Title: "Grounding Strategy", Active: true,
 		VerdictIDs: []uuid.UUID{groundingVerdict.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -195,7 +195,7 @@ func TestVideoScriptStore_Propose_SupersededVerdictVersionStillAccepted(t *testi
 	require.NotEqual(t, v1.ID, v2.ID)
 
 	strategy, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: ch.ID, Title: "Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: ch.ID, Title: "Strategy", Active: true,
 		VerdictIDs: []uuid.UUID{v2.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -484,7 +484,7 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 	})
 	require.NoError(t, err)
 	strategy1, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: ch.ID, Title: "Groundable Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: ch.ID, Title: "Groundable Strategy", Active: true,
 		VerdictIDs: []uuid.UUID{verdict1.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)

@@ -62,8 +62,8 @@ type ScheduleStore interface {
 	// unbounded; truncated reports whether more matching rows exist beyond
 	// it). Callers needing the complete, unbounded set for a correctness-
 	// sensitive computation (save_schedule_draft's cadence/collision
-	// detection, generate_schedule_plan's pacing tracker) pass since=nil,
-	// before=nil, limit=0 -- see mcp/tools/schedule_draft.go's
+	// detection) pass since=nil, before=nil, limit=0 -- see
+	// mcp/tools/schedule_draft.go's
 	// list_schedule_entries and get_drafting_context for the bounded
 	// callers (issue #1812's follow-up: filtering/pagination belongs in
 	// this layer, not re-implemented over an unbounded Go-side fetch).
