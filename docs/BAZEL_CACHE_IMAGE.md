@@ -2,6 +2,19 @@
 
 **Status: proof of concept, opt-in, not wired into any required pipeline.**
 
+**Result: doesn't win on GitHub-hosted runners as built.** The baked
+`//...` output_base makes the image **5.45 GB** (one single layer is
+5.14 GB). GitHub-hosted runners are fresh VMs per job with no persistent
+Docker layer cache across jobs, so that layer gets re-pulled in full on
+*every* job -- **3m26s** just to pull the image, against **77s** for the
+actual `bazel build //...` once it's local. Total consumer-job wall clock
+(~4m7s) is *slower* than the existing `test` job's baseline (~2m50s, per
+`docs/CI_CD.md`). The core bet of this POC -- bake once, skip the network
+cost forever -- doesn't hold when "forever" resets to zero every job. See
+"Real `//...` run against `main`" below for the full numbers and what
+would need to change (self-hosted/persistent runners, or a much smaller
+baked image) for this to actually win.
+
 ## Problem
 
 Every CI job pays a cold-start tax before it runs a single Bazel action:
@@ -155,6 +168,56 @@ build` RUN step, both locally and in the real image-build workflow, shuts
 down cleanly with the identical command). Fixed by simply not calling
 `bazel shutdown` in that job -- the container is destroyed the moment the
 job ends regardless, so a clean shutdown buys nothing there.
+
+### The image-pull cost dominates on GitHub-hosted runners
+
+`docker manifest inspect` on the pushed image:
+
+```
+num layers: 14
+total layer bytes: 5454054504 = 5.45 GB
+5136.7 MB  <-- the baked output_base layer
+161.8 MB
+ 74.4 MB
+ ... (11 more, all small)
+```
+
+One layer -- the baked `//...` output_base itself -- is 5.14 GB of the
+image's 5.45 GB. The consumer job's own timeline, once the image already
+existed in `ghcr.io`:
+
+| Phase | Duration |
+|---|---|
+| `Initialize containers` (pull the image) | **3m26s** |
+| Checkout + remote-cache config | ~4s |
+| `bazel build --config=ci //...` | **77s** |
+| **Total** | **~4m7s** |
+
+GitHub-hosted runners are a fresh VM per job -- there is no persistent
+Docker layer cache across separate job runs the way there is on a
+long-lived machine, so this 3m26s pull is not a one-time cost; it's paid
+in full on every job that uses this image. That erases the win: the
+existing `test` job's own baseline (`docs/CI_CD.md`: ~30s setup + ~139s
+build ≈ **2m50s**) is *faster* end-to-end than this POC's ~4m7s, despite
+this POC's actual `bazel build` step alone being ~2x faster (77s vs 139s)
+than the equivalent portion of that baseline. The image cache genuinely
+works -- 4610/4636 non-internal actions were cache hits -- it's the
+mechanism for *delivering* that cache to the runner that costs more than
+it saves here.
+
+This is the central finding of this POC: baking a full `//...` cache into
+a single Docker image is not a net win for GitHub-hosted, ephemeral CI
+runners as currently sized. It would need one of:
+- **Self-hosted/persistent runners**, where a pulled image's layers stay
+  in the local Docker cache across many subsequent job runs on the same
+  machine, so the 3m26s pull is amortized instead of repeated -- unproven
+  here, no persistent runner pool exists in this repo today.
+- **A much smaller baked image** -- warming a curated subset of
+  frequently-rebuilt targets instead of the entire `//...` graph (which
+  includes rarely-changing ESP32/Pigweed toolchains contributing
+  disproportionately to the 5.14 GB layer), trading "cache everything"
+  completeness for a pull time that can actually beat the existing
+  restore-cache path.
 
 ## Trying it
 
