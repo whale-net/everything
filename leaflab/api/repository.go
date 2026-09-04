@@ -760,3 +760,68 @@ func (r *Repository) GetSensorReadingHistory(ctx context.Context, sensorID int64
 	}
 	return result, nil
 }
+
+// -- M2 admin ownership screen repository methods ----------------------------
+// Scaffold only (#1777): signatures exist so //leaflab/api:api_lib compiles
+// and can be wired into the ListOwnedBoards/ReassignBoardOwner/
+// ClearBoardOwner/ListUsers RPCs (server.go). Real bodies land in this
+// task's own Implementation phase.
+
+// OwnedBoardRow is one row of the admin ownership list (FR11): a board's
+// identity plus its current owner. Mirrors api.proto's OwnedBoard message.
+// Unlike BoardWithReadingRow.Owner, Owner here is never a nil/zero
+// placeholder -- ListOwnedBoards only ever returns boards with an open
+// board_owner_history row.
+type OwnedBoardRow struct {
+	BoardID   int64
+	DeviceID  string
+	BoardName *string
+	Owner     OwnerRow
+}
+
+// LeafLabUserRow is the repository-side projection of a leaflab_user row
+// used to populate the admin reassign picker's candidate list (FR11,
+// FR12). Mirrors api.proto's LeafLabUser message but never carries
+// oidc_sub (NFR5) -- this struct carries no such field to begin with.
+type LeafLabUserRow struct {
+	LeafLabUserID     int64
+	DisplayName       string
+	PreferredUsername string
+	Email             string
+}
+
+// ListOwnedBoards returns every board with an open board_owner_history row
+// (FR11), joined to its owner. Filters on valid_to IS NULL (backed by
+// idx_board_owner_history_current); unowned boards are absent from the
+// result entirely, never listed with an empty owner.
+func (r *Repository) ListOwnedBoards(ctx context.Context) ([]OwnedBoardRow, error) {
+	return nil, fmt.Errorf("ListOwnedBoards: not implemented")
+}
+
+// ReassignBoardOwner closes boardID's open board_owner_history row and
+// opens a new one for newOwnerUserID, in one transaction (FR12): SCD2
+// close-and-open per AGENTS.md section SCD2. Never UPDATEs the existing
+// row's leaflab_user_id in place -- the prior ownership must stay recorded
+// as a closed interval. Callers (server.go's ReassignBoardOwner RPC) are
+// responsible for the unowned-board, reassign-to-current-owner, and
+// unknown-user checks before calling this.
+func (r *Repository) ReassignBoardOwner(ctx context.Context, boardID, newOwnerUserID int64) error {
+	return fmt.Errorf("ReassignBoardOwner: not implemented")
+}
+
+// ClearBoardOwner closes boardID's open board_owner_history row and opens
+// none (FR13): SCD2 close, no re-open. After this, the board behaves
+// exactly as any other unowned board (FR6) -- open to claim by any
+// signed-in user, closed to every other write. Callers (server.go's
+// ClearBoardOwner RPC) are responsible for the unowned-board check before
+// calling this.
+func (r *Repository) ClearBoardOwner(ctx context.Context, boardID int64) error {
+	return fmt.Errorf("ClearBoardOwner: not implemented")
+}
+
+// ListUsers returns every leaflab_user row, the reassign picker's
+// candidate list (FR11, FR12). Never returns oidc_sub (NFR5) --
+// LeafLabUserRow carries no such field to begin with.
+func (r *Repository) ListUsers(ctx context.Context) ([]LeafLabUserRow, error) {
+	return nil, fmt.Errorf("ListUsers: not implemented")
+}

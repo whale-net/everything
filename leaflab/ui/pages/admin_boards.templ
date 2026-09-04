@@ -1,0 +1,112 @@
+package pages
+
+import (
+	"fmt"
+
+	leaflabapipb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/ui/components"
+	"github.com/whale-net/everything/libs/go/htmxui"
+)
+
+// AdminBoards is the admin-only ownership correction screen (#1777:
+// FR11-FR14, deviation from the C25 boundary per the root plan's intake --
+// see the task issue's "Scope boundary (C25, explicit per intake)" note):
+// every currently-owned board, its current owner, and per-row reassign/
+// clear controls. Reachable only by a caller holding the admin role --
+// hiding the "Admin" nav link (components/layout.templ) is presentation
+// only, the real enforcement is server-side requireAdmin on all four
+// backing RPCs (NFR1); this page itself makes no local role determination
+// (the task issue's UI screen section).
+//
+// boards/users and loadErr are mutually exclusive, mirroring Boards'
+// loadErr shape (boards.templ): handlers_admin.go passes a nil boards/
+// users slice on a load failure and a nil loadErr on success.
+//
+// Scaffold scope (#1777): loadErr renders as a single generic alert
+// regardless of gRPC code. Distinguishing codes.PermissionDenied into a
+// dedicated 403-style page (Testing criterion 17) is this task's own
+// Implementation-phase work, landing once ListOwnedBoards itself is wired
+// to requireAdmin.
+templ AdminBoards(data components.LayoutData, boards []*leaflabapipb.OwnedBoard, users []*leaflabapipb.LeafLabUser, loadErr error) {
+	@components.Layout(data) {
+		<h1 class="text-2xl font-bold mb-4">Board Ownership</h1>
+		if loadErr != nil {
+			<div role="alert" class="alert alert-error shadow-md">
+				<span>Failed to load owned boards from leaflab-api: { loadErr.Error() }</span>
+			</div>
+		} else if len(boards) == 0 {
+			<div class="card bg-base-100 border border-base-300 shadow-sm">
+				<div class="card-body items-center text-center py-12">
+					<p class="text-base-content/60">No boards are currently owned.</p>
+				</div>
+			</div>
+		} else {
+			@htmxui.Card(nil, OwnedBoardsTable(boards, users), nil, nil)
+		}
+	}
+}
+
+// OwnedBoardsTable renders one row per owned board (FR11): board name
+// (falling back to device_id, boardDisplayName -- boards.templ), device_id,
+// current owner, and per-row reassign/clear controls (FR12, FR13).
+// Exported (unlike boards.templ's unexported boardsTable) and wrapped in
+// "owned-boards-table" so handlers_admin.go's handleReassignBoardOwner/
+// handleClearBoardOwner can re-render exactly this fragment via HTMX after
+// a mutation attempt, mirroring board_detail.templ's exported BoardHeader
+// fragment pattern -- see the task issue's UI screen section ("Mutations
+// re-render the affected table fragment via HTMX").
+templ OwnedBoardsTable(boards []*leaflabapipb.OwnedBoard, users []*leaflabapipb.LeafLabUser) {
+	<div id="owned-boards-table" class="overflow-x-auto">
+		<table class="table">
+			<thead>
+				<tr>
+					<th>Board</th>
+					<th>Device ID</th>
+					<th>Owner</th>
+					<th></th>
+				</tr>
+			</thead>
+			<tbody>
+				for _, board := range boards {
+					<tr class="hover">
+						<td>{ boardDisplayName(board.GetBoardName(), board.GetDeviceId()) }</td>
+						<td class="font-mono text-xs">{ board.GetDeviceId() }</td>
+						<td>{ ownerDisplayName(board.GetOwner()) }</td>
+						<td class="text-right">@ownershipControls(board.GetBoardId(), users)</td>
+					</tr>
+				}
+			</tbody>
+		</table>
+	</div>
+}
+
+// ownershipControls is one row's reassign picker (a user select plus
+// submit button, FR12) and clear button with a confirmation step (FR13,
+// via htmx's hx-confirm — a native browser confirm() prompt before the
+// request fires). Both forms post to routes registered in main.go's
+// setupRoutes and swap the "#owned-boards-table" fragment on response.
+templ ownershipControls(boardID int64, users []*leaflabapipb.LeafLabUser) {
+	<div class="flex items-center gap-2 justify-end">
+		<form
+			hx-post={ fmt.Sprintf("/admin/boards/%d/reassign", boardID) }
+			hx-target="#owned-boards-table"
+			hx-swap="outerHTML"
+			class="flex items-center gap-1"
+		>
+			<select name="new_owner_leaflab_user_id" class="select select-bordered select-sm">
+				for _, u := range users {
+					<option value={ fmt.Sprintf("%d", u.GetLeaflabUserId()) }>{ ownerDisplayName(u) }</option>
+				}
+			</select>
+			<button type="submit" class="btn btn-sm btn-primary">Reassign</button>
+		</form>
+		<form
+			hx-post={ fmt.Sprintf("/admin/boards/%d/clear", boardID) }
+			hx-target="#owned-boards-table"
+			hx-swap="outerHTML"
+			hx-confirm="Clear ownership of this board? It will become unowned and claimable by anyone."
+		>
+			<button type="submit" class="btn btn-sm btn-error btn-outline">Clear</button>
+		</form>
+	</div>
+}

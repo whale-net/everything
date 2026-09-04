@@ -13,6 +13,14 @@ import (
 type LayoutData struct {
 	Title string
 	User  *htmxauth.UserInfo
+	// IsAdmin gates the "Admin" nav link (#1777: FR14's presentation half)
+	// — sourced from the caller_is_admin signal server.go's
+	// ListBoardsWithState/ListOwnedBoards RPCs already surface (#1775),
+	// never determined locally. Hiding the link is presentation only; the
+	// real enforcement is requireAdmin server-side on every admin RPC
+	// (NFR1). Zero value (false) on every page that does not explicitly
+	// set it, so the link stays hidden by default.
+	IsAdmin bool
 }
 
 // themes is the theme list leaflab-ui offers through the shared
@@ -24,11 +32,17 @@ var themes = []htmxui.Theme{
 
 // nav is leaflab-ui's app-owned nav item list (FR1a — htmxui.Shell
 // hardcodes no nav of its own, see htmxui.ShellData's doc comment).
-// "Boards" links to the boards list screen (#1502).
-templ nav() {
+// "Boards" links to the boards list screen (#1502). "Admin" links to the
+// admin ownership screen (#1777: FR11-FR14) and renders only when isAdmin
+// is true — see LayoutData.IsAdmin's doc comment for why hiding it here is
+// presentation only.
+templ nav(isAdmin bool) {
 	<ul class="menu menu-horizontal px-1">
 		<li><a href="/">Home</a></li>
 		<li><a href="/boards">Boards</a></li>
+		if isAdmin {
+			<li><a href="/admin/boards">Admin</a></li>
+		}
 	</ul>
 }
 
@@ -56,7 +70,7 @@ templ Layout(data LayoutData) {
 		Title:      data.Title,
 		BrandLabel: "LeafLab",
 		BrandHref:  "/",
-		Nav:        nav(),
+		Nav:        nav(data.IsAdmin),
 		HeaderRight: htmxui.UserMenu(htmxui.UserMenuData{
 			IdentityLabel: identityLabel(data.User),
 			LogoutHref:    "/auth/logout",
