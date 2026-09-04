@@ -136,4 +136,10 @@ const (
 
 	// Workshop platform types
 	PlatformTypeSteamWorkshop = "steam_workshop"
+
+	// Pending restart statuses
+	PendingRestartStatusPending = "pending"
+	PendingRestartStatusStarted = "started"
+	PendingRestartStatusFailed  = "failed"
+	PendingRestartStatusExpired = "expired"
 )
