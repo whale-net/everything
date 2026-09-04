@@ -78,3 +78,14 @@ two-column target.
 A `v_current_promotion` view pre-joins promotion → artifact → app/chart → build
 so the CLI, the writeback worker, and any future UI never re-derive the join.
 
+**Transaction-abort hazard.** A failed statement aborts the surrounding
+Postgres transaction, so any error-message or logging code that queries
+afterwards — inside that same transaction — silently degrades (Postgres
+rejects every further statement until rollback, including a `SELECT` meant
+only to build a better error message). This bit `RecordArtifact` once
+already, and the close-and-open write above is exactly the shape that can
+hit it again: both statements run inside one transaction, so if the `UPDATE`
+or `INSERT` fails partway, don't add a follow-up read in the same
+transaction to explain the failure — either build the error from data
+already in hand, or read it back in a fresh transaction after rollback.
+

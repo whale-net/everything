@@ -162,6 +162,7 @@ checks. All rules live server-side so a future UI cannot drift from it.
 ## Status
 
 Not tracked here — it changes independently of this file and duplicating it
-invites drift. See [PLAN.md](PLAN.md) → "Current status" for what's deployed
-and merged right now, and [ARCHITECTURE.md](ARCHITECTURE.md) for the data
-model and the decisions behind it.
+invites drift. See [product/01-current-state.md](product/01-current-state.md)
+for what's deployed and merged right now, [OPERATIONS.md](OPERATIONS.md) for
+day-2 status, and [ARCHITECTURE.md](ARCHITECTURE.md) for the data model and
+the decisions behind it.

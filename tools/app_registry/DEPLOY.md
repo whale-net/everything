@@ -11,7 +11,7 @@ secrets.
 > **Status: AR-3d.** The role model, `PromotionRegistry`, its CLI commands, and
 > `promote.yml` are all merged. Promoter clients (marked ⏳ below) are safe to
 > create now and are load-bearing the moment `promote.yml` runs against a
-> `oidc`-mode server. See [PLAN.md](PLAN.md).
+> `oidc`-mode server. See [PLAN-HISTORY.md](PLAN-HISTORY.md)'s "AR-3d" section.
 
 ---
 
@@ -461,5 +461,6 @@ approve the run when prompted.
 - [`libs/go/grpcauth/KEYCLOAK.md`](../../libs/go/grpcauth/KEYCLOAK.md) — Keycloak configuration, step by step, and the reusable pattern
 - [ENV.md](ENV.md) — every environment variable for the server, CLI, and migration
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the authorization model and why it splits where it does
-- [PLAN.md](PLAN.md) — phase status and what is still to come
+- [PLAN-HISTORY.md](PLAN-HISTORY.md) — as-built phase status
+- [PRODUCT.md](PRODUCT.md) — what is still to come
 - [TESTING.md](TESTING.md) — running the registry locally in Tilt

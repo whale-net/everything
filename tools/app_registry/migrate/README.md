@@ -58,7 +58,7 @@ to `005`. Migration numbers must be unique: golang-migrate fails on a
 duplicate version at **deploy** time, not build time, so a collision is
 invisible to CI.
 
-**Numbering note (AR-7b):** PLAN.md's AR-7 design section names this
+**Numbering note (AR-7b):** PLAN-HISTORY.md's AR-7 section names this
 migration `007_artifact_lifecycle` throughout, and that is exactly what it
 is numbered here too — `006` was already taken by `006_reconcile_watermark`
 (issue #545, landed between the AR-7 design session and AR-7b's
@@ -96,7 +96,8 @@ CREATE UNIQUE INDEX artifact_version_idx ON artifact (owner_id, kind, version);
 
 -- numeric ordering for "latest"/"next" -- TEXT ordering on `version` is
 -- lexical and wrong ("v1.10.0" sorts before "v1.9.0"); see the AR-5
--- addendum in PLAN.md and migration 004's comments.
+-- addendum in ARCHITECTURE.md's "Version model" (architecture/04-version-model.md)
+-- and migration 004's comments.
 CREATE INDEX artifact_version_order_idx
   ON artifact (owner_id, kind, version_major DESC, version_minor DESC, version_patch DESC);
 

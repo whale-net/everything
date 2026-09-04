@@ -6,8 +6,10 @@ promotion state.
 Recording, promotion, writeback, and the AR-7 release-lifecycle artifact
 states (`allocated → publishing → published`) all exist server-side; what's
 *actually deployed and in use* changes over time and is **not** repeated
-here — see [PLAN.md](PLAN.md) → "Current status" for the live branch/PR map,
-what's next, and the carry-over items. Start there when picking this up
+here — see [product/01-current-state.md](product/01-current-state.md) for
+what's actually shipped per-capability, [OPERATIONS.md](OPERATIONS.md) for
+day-2 status (known issues, the v1/v2 release-job migration checklist), and
+[PRODUCT.md](PRODUCT.md) for what's next. Start there when picking this up
 cold; this file only indexes where things live.
 
 ## Documents
@@ -17,12 +19,11 @@ cold; this file only indexes where things live.
 | [README.md](README.md) | Starting point — what the registry is, core concepts, end-to-end flow diagrams |
 | [PRODUCT.md](PRODUCT.md) | Before scoping or designing anything in this domain — vision, personas, load-bearing decisions, and milestone roadmap; jump table there points into `product/` for the current-state survey, capability map, and roadmap detail |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Before changing the data model, promotability rules, auth split, or writeback mechanism. Index + design principles only — the actual sections live one-per-file under [architecture/](architecture/); jump straight to the file you need via ARCHITECTURE.md's table rather than grepping the old monolith. Contains rejected alternatives and open questions. |
-| [PLAN.md](PLAN.md) | Before starting work — current status, what's deployed, deferred/carry-over work, what's next |
-| [PLAN-HISTORY.md](PLAN-HISTORY.md) | As-built detail for a specific completed phase (AR-0 … AR-7f) — goal, scope, exit criteria, what shipped. Not meant to be read start to finish; follow a link from PLAN.md's status table. |
+| [PLAN-HISTORY.md](PLAN-HISTORY.md) | As-built detail for a specific completed phase (AR-0 … AR-7f) — goal, scope, exit criteria, what shipped — plus an intro on why phases were sequenced as they were. Not meant to be read start to finish; follow a link from PRODUCT.md/product/01-current-state.md or OPERATIONS.md instead. |
 | [ENV.md](ENV.md) | Configuring, deploying, or debugging server/migration/worker/UI runtime behavior |
 | [TESTING.md](TESTING.md) | Running the registry locally in Tilt for manual integration testing; which checks belong in unit vs Postgres vs Tilt tiers |
 | [DEPLOY.md](DEPLOY.md) | Deploying for real — which Keycloak clients and roles to create, server env vars, and where each CI secret goes. Start here when standing the service up in an environment. |
-| [OPERATIONS.md](OPERATIONS.md) | Day-2 operations — the release → record → promote → verify → rollback lifecycle, how to spot a silently failed recording, how to check drift, and how to tell whether the registry is actually in use yet. Start here once DEPLOY.md is done and you need to ship something through it. |
+| [OPERATIONS.md](OPERATIONS.md) | Day-2 operations — the release → record → promote → verify → rollback lifecycle, how to spot a silently failed recording, how to check drift, and how to tell whether the registry is actually in use yet. Also carries the cross-cutting "Known issues" list and the ongoing v1/v2 release-job migration checklist. Start here once DEPLOY.md is done and you need to ship something through it. |
 | [mcp_config.json](mcp_config.json) | AGY & Claude Code plugin (`app-registry`, see `plugin.json` and `.mcp.json`) — three crystaldba `postgres-mcp` servers (`app-registry-pg-{tilt,dev,prod}`) for querying the database directly; see ENV.md "Postgres MCP" |
 | [design/USER_STORIES.md](design/USER_STORIES.md) | Designing or reviewing the admin UI — the persona and stories the wireframes answer to |
 | [design/RELEASE_PROMOTE_STORIES.md](design/RELEASE_PROMOTE_STORIES.md) | Scoping AR-5+/AR-8+ release-path work — domain-owner stories for image-only/chart-only builds, one image shared across charts, and redundant (no-op digest) builds; marks what's shipped vs. still a gap |

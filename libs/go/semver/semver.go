@@ -5,8 +5,9 @@
 // Before this package existed, tools/release_helper_go/cmd/plan.go had its
 // own regex-plus-strings.Split parser, and tools/app_registry (AR-5) needed
 // the same logic server-side to populate artifact.version_major/minor/patch
-// and to implement AllocateVersion — see tools/app_registry/PLAN.md's AR-5
-// addendum ("semver semantics"). Rather than add a third copy, both consume
+// and to implement AllocateVersion — see
+// tools/app_registry/architecture/04-version-model.md ("semver semantics").
+// Rather than add a third copy, both consume
 // this package: release_helper_go's incrementVersion is now a thin wrapper,
 // and tools/app_registry/server/repository/postgres imports it directly.
 // This is a plain shared library with no dependency on either caller, which
@@ -28,7 +29,7 @@ import (
 var re = regexp.MustCompile(`^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$`)
 
 // Version is a parsed semantic version. Prerelease/Build are populated by
-// Parse but rejected by ParseRelease — see PLAN.md's AR-5 addendum item 3:
+// Parse but rejected by ParseRelease — see architecture/04-version-model.md:
 // this repo's release tooling does not support prerelease ordering today,
 // but keeps the field so a caller can detect and reject one explicitly
 // rather than silently mis-sorting it.
@@ -61,8 +62,9 @@ func Parse(s string) (Version, error) {
 }
 
 // ParseRelease parses like Parse but rejects a prerelease or build-metadata
-// suffix. This is the AllocateVersion contract from PLAN.md's AR-5 addendum
-// item 3: "AllocateVersion rejects a prerelease or build-metadata version
+// suffix. This is the AllocateVersion contract from
+// tools/app_registry/architecture/04-version-model.md: "AllocateVersion
+// rejects a prerelease or build-metadata version
 // explicitly ... rather than half-accepting one and sorting it wrongly."
 func ParseRelease(s string) (Version, error) {
 	v, err := Parse(s)
@@ -106,7 +108,7 @@ func (v Version) Increment(kind string) (Version, error) {
 
 // Compare returns -1, 0, or 1 comparing a and b by MAJOR, then MINOR, then
 // PATCH — numerically, never lexically. This is the load-bearing behaviour
-// PLAN.md's AR-5 addendum item 2 exists to guarantee: lexical TEXT ordering
+// architecture/04-version-model.md exists to guarantee: lexical TEXT ordering
 // puts "v1.10.0" before "v1.9.0", which is wrong.
 func Compare(a, b Version) int {
 	if a.Major != b.Major {

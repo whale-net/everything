@@ -4,8 +4,8 @@ Temporal worker that drains `writeback_outbox` and runs one
 `WritebackWorkflow` per row, rendering promotion state and writing it to a
 local path. Built in **AR-4b**. Publishes nowhere else — no gitops commit,
 no S3 put; see [`../ARCHITECTURE.md`](../ARCHITECTURE.md) "Writeback: outbox
--> Temporal" and [`../PLAN.md`](../PLAN.md)'s AR-4b section for what is
-deliberately out of scope.
+-> Temporal" and [`../PLAN-HISTORY.md`](../PLAN-HISTORY.md)'s AR-4b section
+for what is deliberately out of scope.
 
 ## Why a worker at all
 
@@ -76,7 +76,7 @@ worker/
    then `Publish`. All I/O lives in the activity implementation; the
    workflow function itself does nothing but sequence two
    `workflow.ExecuteActivity` calls, per the "Workflow determinism" hazard
-   in `AGENTS.md`/`PLAN.md`.
+   in `AGENTS.md`.
 5. `StubActivities` (`writeback/stub.go`) implements `Writeback` for AR-4b:
    `RenderEnvironmentState` reads state via the App Registry API's
    `GetEnvironmentState` RPC (never Postgres directly — see
