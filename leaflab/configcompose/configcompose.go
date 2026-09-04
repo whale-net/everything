@@ -39,11 +39,18 @@ type InventorySensor struct {
 // Sensors are matched by hardware identity — (mux_path, i2c_address) — per
 // PushDeviceConfigRequest.sensors' existing contract, never by name (a
 // rename changes the name, so name matching would fork a sensor into two
-// entries). sensor_type only enters the match when the DB inventory shows
-// two or more sensors co-located at the same (mux_path, i2c_address) —
-// e.g. an SHT3x's temperature and humidity virtual sensors — since that is
-// the only situation where (mux_path, i2c_address) alone is ambiguous. For
-// every other address (the common, single-sensor-per-address case),
+// entries). sensor_type only enters the match when two or more distinct
+// sensors will ultimately share the same (mux_path, i2c_address) once
+// inventory, lastAccepted, and overrides are all considered together —
+// e.g. an SHT3x's temperature and humidity virtual sensors, whether they
+// already exist in the DB inventory or are being introduced for the first
+// time together in this same call's overrides — since that is the only
+// situation where (mux_path, i2c_address) alone is ambiguous. This
+// co-located/not classification is decided once, up front, from the final
+// set of distinct sensor_type values every input contributes at each
+// address (see computeCoLocated) — never incrementally as entries are
+// processed, which would make the classification depend on input order.
+// For every other address (the common, single-sensor-per-address case),
 // matching stays address-only, so overrides that (correctly, per
 // SensorConfig.sensor_type's own doc comment) leave sensor_type at its
 // proto3 zero value keep matching that one sensor. A lastAccepted or
@@ -69,14 +76,18 @@ func ComposeDesiredSensors(
 ) []*configpb.SensorConfig {
 	base := make(map[hwKey]*configpb.SensorConfig, len(inventory))
 	order := make([]hwKey, 0, len(inventory))
-	// idx tracks hardware-address co-location live as entries are added to
-	// base below (inventory, then lastAccepted, then overrides, in that
-	// precedence order) -- not just from inventory. A sensor known only
-	// from lastAccepted (the DB has not caught up yet, criterion 4) must
-	// still register as "the one sensor at this address" so a same-address
-	// override that omits sensor_type keeps matching it, exactly as it
-	// would if the sensor were already in inventory.
-	idx := newHWIndex()
+	// idx's co-located/not classification is decided once, up front, from
+	// the *final* set of distinct sensor_type values every input
+	// (inventory, lastAccepted, overrides) will contribute at each hardware
+	// address -- see computeCoLocated. This must not be decided
+	// incrementally while entries are added below: two brand-new sensors
+	// sharing an address, introduced together only via overrides (neither
+	// in inventory nor lastAccepted), would otherwise have their
+	// co-located status depend on which override happens to be processed
+	// first -- the address has 0 or 1 *registered* entries when the first
+	// one is resolved, so it would wrongly match address-only and collide
+	// with the second (#1819's second gap).
+	idx := newHWIndex(computeCoLocated(inventory, lastAccepted, overrides))
 
 	// Lowest precedence: DB inventory. Every sensor the board has ever
 	// registered gets a stand-in entry, even if no config has ever
@@ -163,7 +174,7 @@ func ComposeDesiredSensors(
 // legitimate rename or an explicit config push for that sensor resets the
 // attempt count").
 func TouchedSensorIDs(inventory []InventorySensor, overrides []*configpb.SensorConfig) []int64 {
-	idx := newHWIndexFromInventory(inventory)
+	idx := newHWIndexForTouched(inventory, overrides)
 	byKey := make(map[hwKey]int64, len(inventory))
 	for _, inv := range inventory {
 		byKey[makeHWKey(inv.I2CAddress, inv.MuxPath, inv.SensorType)] = inv.SensorID
@@ -270,61 +281,128 @@ func makeHWKey(i2cAddress uint32, muxPath []*configpb.MuxHop, sensorType firmwar
 	return hwKey(fmt.Sprintf("%s#%010d", makeAddrKey(i2cAddress, muxPath), int32(sensorType)))
 }
 
+// computeCoLocated decides, once and up front, whether each hardware
+// address touched by inventory, lastAccepted, and/or overrides will
+// ultimately host two or more distinct sensors ("co-located") or at most
+// one -- based on the *final* set of distinct sensor_type values every
+// input contributes there, combined. This must be computed before any
+// entry is resolved against the base map: deciding co-location
+// incrementally, as entries are processed in input order, makes the
+// decision depend on which entry happens to be processed first -- e.g. two
+// brand-new sensors sharing an address, introduced together only via
+// overrides in one call, would each see the address as having 0 or 1
+// *registered* entries at the moment they're resolved, so the first would
+// wrongly claim the address-only key and the second would collide with it
+// (#1819's second gap).
+//
+// A sensor_type value counts as a distinct sensor identity at an address
+// when it is non-zero (inventory always supplies a real, non-zero
+// SensorType; lastAccepted/overrides may too, when naming one of several
+// co-located sensors). An entry that leaves sensor_type at the proto3 zero
+// value contributes at most one anonymous identity -- it never creates a
+// second bucket by itself, since a zero value can't be told apart from
+// another zero value at the same address.
+func computeCoLocated(
+	inventory []InventorySensor,
+	lastAccepted []*configpb.SensorConfig,
+	overrides []*configpb.SensorConfig,
+) map[addrKey]bool {
+	types := make(map[addrKey]map[firmwarepb.SensorType]bool)
+	hasZero := make(map[addrKey]bool)
+
+	note := func(i2cAddress uint32, muxPath []*configpb.MuxHop, sensorType firmwarepb.SensorType) {
+		ak := makeAddrKey(i2cAddress, muxPath)
+		if sensorType == 0 {
+			hasZero[ak] = true
+			return
+		}
+		if types[ak] == nil {
+			types[ak] = make(map[firmwarepb.SensorType]bool)
+		}
+		types[ak][sensorType] = true
+	}
+
+	for _, inv := range inventory {
+		note(inv.I2CAddress, inv.MuxPath, inv.SensorType)
+	}
+	for _, la := range lastAccepted {
+		note(la.GetI2CAddress(), la.GetMuxPath(), la.GetSensorType())
+	}
+	for _, ov := range overrides {
+		note(ov.GetI2CAddress(), ov.GetMuxPath(), ov.GetSensorType())
+	}
+
+	coLocated := make(map[addrKey]bool, len(types))
+	for ak := range types {
+		coLocated[ak] = len(types[ak]) >= 2
+	}
+	for ak := range hasZero {
+		if _, seen := coLocated[ak]; !seen {
+			coLocated[ak] = false
+		}
+	}
+	return coLocated
+}
+
 // hwIndex resolves a lastAccepted/override entry's hardware address and
-// (possibly zero-value) sensor_type to the hwKey it should match, tracking
-// how many distinct sensors are known at each hardware address as they are
-// registered via add.
+// (possibly zero-value) sensor_type to the hwKey it should match, using a
+// co-located/not classification decided up front by computeCoLocated --
+// never a live, order-dependent count.
 type hwIndex struct {
-	// count is, per hardware address, how many distinct sensors have been
-	// registered there so far.
-	count map[addrKey]int
-	// single is, per hardware address with exactly one registered sensor,
-	// that sensor's full hwKey. Absent (including after being deleted, once
-	// a second sensor registers at the address) means "no unambiguous
-	// single sensor known here".
+	// coLocated is the precomputed final classification, per hardware
+	// address: true means two or more distinct sensors are known there
+	// (from any of inventory, lastAccepted, overrides), so sensor_type is
+	// required to resolve a match; false (including "address not present")
+	// means matching stays address-only regardless of sensor_type.
+	coLocated map[addrKey]bool
+	// single is, per non-co-located hardware address, the one hwKey every
+	// entry there resolves to -- fixed by whichever entry registers it
+	// first via add.
 	single map[addrKey]hwKey
 }
 
-func newHWIndex() *hwIndex {
-	return &hwIndex{count: make(map[addrKey]int), single: make(map[addrKey]hwKey)}
+func newHWIndex(coLocated map[addrKey]bool) *hwIndex {
+	return &hwIndex{coLocated: coLocated, single: make(map[addrKey]hwKey)}
 }
 
-// newHWIndexFromInventory builds an hwIndex from a board's DB inventory
-// alone -- what TouchedSensorIDs needs, since only inventory sensors have a
-// real sensor_id to report.
-func newHWIndexFromInventory(inventory []InventorySensor) *hwIndex {
-	idx := newHWIndex()
+// newHWIndexForTouched builds an hwIndex for TouchedSensorIDs, classifying
+// co-location from the same inputs TouchedSensorIDs itself sees (inventory
+// and overrides -- it has no lastAccepted parameter), so its matching stays
+// consistent with ComposeDesiredSensors' rule per this function's own doc
+// comment.
+func newHWIndexForTouched(inventory []InventorySensor, overrides []*configpb.SensorConfig) *hwIndex {
+	idx := newHWIndex(computeCoLocated(inventory, nil, overrides))
 	for _, inv := range inventory {
 		idx.add(inv.I2CAddress, inv.MuxPath, makeHWKey(inv.I2CAddress, inv.MuxPath, inv.SensorType))
 	}
 	return idx
 }
 
-// add registers a newly-seen hwKey at the given hardware address, updating
-// co-location bookkeeping. Callers must call this exactly once per distinct
-// key the first time it is added to the composition's base map (never for
-// an update to an already-present key) -- see its call sites in
-// ComposeDesiredSensors.
+// add registers a newly-seen hwKey at the given hardware address. Callers
+// must call this exactly once per distinct key the first time it is added
+// to the composition's base map (never for an update to an already-present
+// key) -- see its call sites in ComposeDesiredSensors. Only the first key
+// registered at a non-co-located address is kept: computeCoLocated
+// guarantees at most one distinct key is ever registered there, so a
+// second call for the same address (if it ever happened) would be a bug
+// elsewhere, not a new legitimate sensor.
 func (idx *hwIndex) add(i2cAddress uint32, muxPath []*configpb.MuxHop, key hwKey) {
 	ak := makeAddrKey(i2cAddress, muxPath)
-	idx.count[ak]++
-	if idx.count[ak] == 1 {
+	if _, known := idx.single[ak]; !known {
 		idx.single[ak] = key
-	} else {
-		delete(idx.single, ak)
 	}
 }
 
 // resolve returns the hwKey a lastAccepted/override entry with the given
 // hardware address and sensor_type should match, and whether the match is
-// well-defined. ok is false only when the address is co-located (idx.count
-// > 1) and sensorType is the proto3 zero value (SENSOR_TYPE_UNKNOWN): more
-// than one candidate sensor is known there and none was named, so the
-// caller must not guess -- see ComposeDesiredSensors' doc comment for what
-// each caller does with that.
+// well-defined. ok is false only when the address is co-located per the
+// precomputed classification and sensorType is the proto3 zero value
+// (SENSOR_TYPE_UNKNOWN): more than one candidate sensor is known there and
+// none was named, so the caller must not guess -- see ComposeDesiredSensors'
+// doc comment for what each caller does with that.
 func (idx *hwIndex) resolve(i2cAddress uint32, muxPath []*configpb.MuxHop, sensorType firmwarepb.SensorType) (key hwKey, ok bool) {
 	ak := makeAddrKey(i2cAddress, muxPath)
-	if idx.count[ak] <= 1 {
+	if !idx.coLocated[ak] {
 		if single, known := idx.single[ak]; known {
 			return single, true
 		}

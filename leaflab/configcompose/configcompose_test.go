@@ -392,3 +392,32 @@ func TestComposeDesiredSensors_SingleSensorAtAddress_OverrideOmitsSensorType_Reg
 	require.Len(t, got, 1)
 	assert.Equal(t, "single_sensor_renamed", got[0].GetName(), "an override that omits sensor_type must still match a single sensor at that address")
 }
+
+// TestComposeDesiredSensors_TwoNewCoLocatedSensors_IntroducedTogetherViaOverridesOnly
+// is #1819's second required regression case (found in validation): two
+// brand-new co-located sensors -- neither in DB inventory nor in the last
+// accepted config -- introduced together in a single call's overrides, each
+// explicitly naming a distinct sensor_type. Before the fix, co-location was
+// decided incrementally as each override was resolved in order: the first
+// override saw 0 registered entries at the address and matched
+// address-only, so the second override's resolve collided with it and
+// silently overwrote it in the base map. The final-count precompute
+// (computeCoLocated) must classify this address as co-located from the
+// combined overrides alone, before either override is resolved, so both
+// survive as distinct entries.
+func TestComposeDesiredSensors_TwoNewCoLocatedSensors_IntroducedTogetherViaOverridesOnly(t *testing.T) {
+	const newCoLocatedAddr = 0x99
+	overrides := []*configpb.SensorConfig{
+		typedOverride(newCoLocatedAddr, firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE, "new_temp"),
+		typedOverride(newCoLocatedAddr, firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY, "new_humidity"),
+	}
+
+	got := ComposeDesiredSensors(nil, nil, overrides)
+
+	require.Len(t, got, 2, "both brand-new co-located sensors must be present, not collapsed into one")
+	byType := indexBySensorType(got, newCoLocatedAddr)
+	require.NotNil(t, byType[firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE], "the temperature override must not be silently dropped")
+	assert.Equal(t, "new_temp", byType[firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE].GetName())
+	require.NotNil(t, byType[firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY], "the humidity override must not be silently dropped")
+	assert.Equal(t, "new_humidity", byType[firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY].GetName())
+}
