@@ -667,6 +667,8 @@ func boardWithStateByID(boards []*pb.BoardWithState, boardID int64) *pb.BoardWit
 		}
 	}
 	return nil
+}
+
 // -- RenameBoard (#1767, FR3) --------------------------------------------
 //
 // These exercise LeafLabAPIServer.RenameBoard directly against the same
@@ -683,7 +685,7 @@ func TestRenameBoard_Owner_Succeeds(t *testing.T) {
 	repo := newFakeRepository()
 	repo.users["owner-sub"] = 1
 	repo.owners[100] = 1
-	repo.boardIdentity[100] = "device-a"
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
 	srv := newOwnershipTestServer(repo, &fakePublisher{})
 
 	resp, err := srv.RenameBoard(claimsCtx("owner-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: "greenhouse"})
@@ -701,7 +703,7 @@ func TestRenameBoard_NonOwner_PermissionDenied(t *testing.T) {
 	repo.users["owner-sub"] = 1
 	repo.users["other-sub"] = 2
 	repo.owners[100] = 1
-	repo.boardIdentity[100] = "device-a"
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
 	srv := newOwnershipTestServer(repo, &fakePublisher{})
 
 	_, err := srv.RenameBoard(claimsCtx("other-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: "greenhouse"})
@@ -716,7 +718,7 @@ func TestRenameBoard_NonOwner_PermissionDenied(t *testing.T) {
 func TestRenameBoard_UnownedBoard_PermissionDenied(t *testing.T) {
 	repo := newFakeRepository()
 	repo.users["some-sub"] = 1
-	repo.boardIdentity[100] = "device-a"
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
 	// No repo.owners[100] entry -- unowned.
 	srv := newOwnershipTestServer(repo, &fakePublisher{})
 
@@ -735,7 +737,7 @@ func TestRenameBoard_AdminRole_NoBypass_PermissionDenied(t *testing.T) {
 	repo.users["admin-sub"] = 1
 	repo.users["owner-sub"] = 2
 	repo.owners[100] = 2 // owned by someone else
-	repo.boardIdentity[100] = "device-a"
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
 	srv := newOwnershipTestServer(repo, &fakePublisher{})
 
 	_, err := srv.RenameBoard(claimsCtx("admin-sub", "admin"), &pb.RenameBoardRequest{BoardId: 100, Name: "greenhouse"})
@@ -753,7 +755,7 @@ func TestRenameBoard_EmptyOrWhitespaceName_InvalidArgument(t *testing.T) {
 			repo := newFakeRepository()
 			repo.users["owner-sub"] = 1
 			repo.owners[100] = 1
-			repo.boardIdentity[100] = "device-a"
+			repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
 			srv := newOwnershipTestServer(repo, &fakePublisher{})
 
 			_, err := srv.RenameBoard(claimsCtx("owner-sub"), &pb.RenameBoardRequest{BoardId: 100, Name: name})
@@ -808,8 +810,8 @@ func TestRenameBoard_NoLengthFormatOrUniquenessRule(t *testing.T) {
 			repo.users["owner-sub"] = 1
 			repo.owners[100] = 1
 			repo.owners[200] = 1
-			repo.boardIdentity[100] = "device-a"
-			repo.boardIdentity[200] = "device-b"
+			repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+			repo.boardIdentity[200] = BoardIdentity{DeviceID: "device-b"}
 			srv := newOwnershipTestServer(repo, &fakePublisher{})
 
 			// Board 200 already has this name (conceptually -- the fake
@@ -833,7 +835,7 @@ func TestRenameBoard_NoPublish(t *testing.T) {
 	repo := newFakeRepository()
 	repo.users["owner-sub"] = 1
 	repo.owners[100] = 1
-	repo.boardIdentity[100] = "device-a"
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
 	pub := &fakePublisher{}
 	srv := newOwnershipTestServer(repo, pub)
 
