@@ -118,7 +118,10 @@ func newBuildHelmChartCmd() *cobra.Command {
 			chartTarget, chartDir := chartOutputPaths(workspaceRoot, chart)
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Building bazel target: %s\n", chartTarget)
-			if _, err := defaultBazel.Run("build", chartTarget); err != nil {
+			// --config=ci-images: chartDir below is read straight off
+			// bazel-bin, same real-file-on-disk requirement as build_app.go's
+			// image push (see .bazelrc's comment on ci-images).
+			if _, err := defaultBazel.Run("build", "--config=ci-images", chartTarget); err != nil {
 				return fmt.Errorf("bazel build %s: %w", chartTarget, err)
 			}
 

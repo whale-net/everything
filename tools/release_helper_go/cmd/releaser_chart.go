@@ -71,7 +71,10 @@ func (r *ChartReleaser) Build(ctx context.Context, version string) (string, erro
 		var chartTarget string
 		chartTarget, chartDir = chartOutputPaths(r.WorkspaceRoot, r.Chart)
 		fmt.Printf("Building bazel target: %s\n", chartTarget)
-		if _, err := r.Bazel.Run("build", chartTarget); err != nil {
+		// --config=ci-images: chartDir below is read straight off bazel-bin,
+		// same real-file-on-disk requirement as build_app.go's image push
+		// (see .bazelrc's comment on ci-images).
+		if _, err := r.Bazel.Run("build", "--config=ci-images", chartTarget); err != nil {
 			return "", fmt.Errorf("bazel build %s: %w", chartTarget, err)
 		}
 	}

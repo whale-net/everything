@@ -122,7 +122,12 @@ func PackageAppAssets(bazel BazelRunner, _ FileSystem, workspaceRoot string, app
 		pkg, binName := binaryTargetPkgAndName(app)
 
 		for _, plat := range platforms {
-			args := []string{"build", "--platforms=" + plat.BazelPlatform, app.BinaryTarget}
+			// --config=ci-images: this build's output is read straight off
+			// bazel-bin below, so it needs a real file on disk afterward --
+			// see .bazelrc's comment on ci-images and build_app.go's push,
+			// which had the same gap (issue found while investigating GH
+			// Actions run 33833765164/job/100902056651's push slowness).
+			args := []string{"build", "--config=ci-images", "--platforms=" + plat.BazelPlatform, app.BinaryTarget}
 			if _, err := bazel.Run(args...); err != nil {
 				return nil, fmt.Errorf("bazel build %s for platform %s: %w", app.BinaryTarget, plat.Name, err)
 			}
@@ -186,11 +191,14 @@ func PackageAppAssets(bazel BazelRunner, _ FileSystem, workspaceRoot string, app
 		pkg, targetName := binaryTargetPkgAndName(app)
 		fwTarget := firmwareTarget(app)
 
-		args := []string{"build", "--config=esp32", fwTarget}
+		// --config=ci-images (chained after esp32): same real-file-on-disk
+		// requirement as the platform build above -- the firmware binary is
+		// read from bazel-bin below.
+		args := []string{"build", "--config=esp32", "--config=ci-images", fwTarget}
 		if _, err := bazel.Run(args...); err != nil {
 			// Try without _merged_bin fallback
 			fwTarget = fmt.Sprintf("//%s:%s_bin", pkg, targetName)
-			args = []string{"build", "--config=esp32", fwTarget}
+			args = []string{"build", "--config=esp32", "--config=ci-images", fwTarget}
 			if _, err2 := bazel.Run(args...); err2 != nil {
 				return nil, fmt.Errorf("bazel build %s: %w (fallback failed: %v)", fwTarget, err, err2)
 			}
