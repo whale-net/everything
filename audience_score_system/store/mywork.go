@@ -48,8 +48,10 @@ type MyWorkStore interface {
 }
 
 // myWorkStore implements MyWorkStore over research_note, viability_verdict/
-// idea, schedule_entry, and the predictionOutcomeJoin chain (browse.go),
-// scoped by AccessStore.ChannelsWithRoleForPerson's Channel set.
+// idea, schedule_entry (loadScheduleState only -- #1835's retirement task
+// still owns that section), and the predictionOutcomeJoin chain (browse.go,
+// video_script-anchored per #1830's FR44 re-anchor), scoped by
+// AccessStore.ChannelsWithRoleForPerson's Channel set.
 type myWorkStore struct{ pool *pgxpool.Pool }
 
 var _ MyWorkStore = myWorkStore{}
@@ -223,7 +225,7 @@ func (s myWorkStore) loadLatestOutcomes(ctx context.Context, channelIDs []uuid.U
 	rows, err := s.pool.Query(ctx, `
 		SELECT channel_id, idea_id, idea_title,
 		       verdict_id, version, verdict, reasoning, author_person_id, author_display_name, verdict_created_at,
-		       schedule_entry_id, proposed_publish_at, approved_at,
+		       video_script_id, script_title, script_status, target_publish_date, decided_at,
 		       match_id, match_state, match_confidence,
 		       synced_video_id, youtube_video_id, video_title, published_at,
 		       views, average_view_duration_seconds, average_view_percentage, impressions, impression_ctr, measured_at
@@ -233,7 +235,7 @@ func (s myWorkStore) loadLatestOutcomes(ctx context.Context, channelIDs []uuid.U
 				i.id AS idea_id, i.title AS idea_title,
 				vv.id AS verdict_id, vv.version, vv.verdict, vv.reasoning, vv.author_person_id,
 				COALESCE(NULLIF(author.display_name, ''), COALESCE(author.email, '')) AS author_display_name, vv.created_at AS verdict_created_at,
-				se.id AS schedule_entry_id, se.proposed_publish_at, se.approved_at,
+				vs.id AS video_script_id, vs.title AS script_title, vs.status AS script_status, vs.target_publish_date, vs.decided_at,
 				vsm.id AS match_id, vsm.state AS match_state, vsm.confidence AS match_confidence,
 				sv.id AS synced_video_id, sv.youtube_video_id, COALESCE(sv.title, '') AS video_title, sv.published_at,
 				vm.views, vm.average_view_duration_seconds, vm.average_view_percentage,
@@ -256,7 +258,7 @@ func (s myWorkStore) loadLatestOutcomes(ctx context.Context, channelIDs []uuid.U
 			&channelID, &r.IdeaID, &r.IdeaTitle,
 			&r.VerdictID, &r.VerdictVersion, &r.Verdict, &r.VerdictReasoning, &r.VerdictAuthorPersonID,
 			&r.VerdictAuthorDisplayName, &r.VerdictCreatedAt,
-			&r.ScheduleEntryID, &r.ProposedPublishAt, &r.ApprovedAt,
+			&r.VideoScriptID, &r.ScriptTitle, &r.ScriptStatus, &r.TargetPublishDate, &r.DecidedAt,
 			&r.MatchID, &r.MatchState, &r.MatchConfidence,
 			&r.SyncedVideoID, &r.YouTubeVideoID, &r.VideoTitle, &r.PublishedAt,
 			&r.Views, &r.AverageViewDurationSeconds, &r.AverageViewPercentage,

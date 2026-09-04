@@ -42,12 +42,17 @@ type MatchStore interface {
 
 	// Resolve sets matchID's state to MatchStateConfirmed (confirm==true)
 	// or MatchStateRejected (confirm==false), stamping
-	// resolved_by_person_id/resolved_at (FR23), and -- when scheduleEntryID
-	// is non-nil -- overriding schedule_entry_id to it (a human confirming
-	// against a different entry than the matcher's best guess). Returns
-	// ErrMatchNotPending, with no state change, if matchID is not currently
-	// MatchStatePending.
-	Resolve(ctx context.Context, matchID, byPersonID uuid.UUID, confirm bool, scheduleEntryID *uuid.UUID) error
+	// resolved_by_person_id/resolved_at (FR23), and -- when videoScriptID
+	// is non-nil -- overriding video_script_id to it (a human confirming
+	// against a different script than the matcher's best guess). Resolve
+	// itself applies NO status filter to videoScriptID -- unlike
+	// ListCandidates' greenlit-only candidate pool, a human may confirm
+	// against ANY video_script on the match's Channel, including an
+	// archived one (FR40's archive/match interaction note, FR44, #1830);
+	// callers validate only that the script exists and is on the match's
+	// Channel before calling this. Returns ErrMatchNotPending, with no
+	// state change, if matchID is not currently MatchStatePending.
+	Resolve(ctx context.Context, matchID, byPersonID uuid.UUID, confirm bool, videoScriptID *uuid.UUID) error
 
 	// ListCandidates returns every MatchCandidate for channelID -- the
 	// worker/sync matcher's candidate pool (FR43's "greenlit video_script
@@ -172,11 +177,14 @@ func (s matchStore) ListPending(ctx context.Context, channelID uuid.UUID, since 
 // AND state = 'pending'` below) -- zero rows affected means matchID either
 // doesn't exist or is already resolved, either of which is
 // ErrMatchNotPending, never a silent no-op re-flip. A confirm with a
-// non-nil scheduleEntryID overrides schedule_entry_id to the human's
-// explicit choice rather than leaving whatever best-guess entry (or NULL)
-// Record originally wrote; a reject always leaves schedule_entry_id
-// untouched (FR23: a rejected match's video stays unmatched).
-func (s matchStore) Resolve(ctx context.Context, matchID, byPersonID uuid.UUID, confirm bool, scheduleEntryID *uuid.UUID) error {
+// non-nil videoScriptID overrides video_script_id to the human's explicit
+// choice rather than leaving whatever best-guess script (or NULL) Record
+// originally wrote -- no status filter applied here (FR40/FR44: the
+// override accepts a non-greenlit, including archived, script; the
+// greenlit-only restriction is ListCandidates' alone). A reject always
+// leaves video_script_id untouched (FR23: a rejected match's video stays
+// unmatched).
+func (s matchStore) Resolve(ctx context.Context, matchID, byPersonID uuid.UUID, confirm bool, videoScriptID *uuid.UUID) error {
 	state := MatchStateRejected
 	if confirm {
 		state = MatchStateConfirmed
@@ -184,12 +192,12 @@ func (s matchStore) Resolve(ctx context.Context, matchID, byPersonID uuid.UUID, 
 
 	var tag pgconn.CommandTag
 	var err error
-	if confirm && scheduleEntryID != nil {
+	if confirm && videoScriptID != nil {
 		tag, err = s.pool.Exec(ctx, `
 			UPDATE video_schedule_match
-			SET state = $1, schedule_entry_id = $2, resolved_by_person_id = $3, resolved_at = NOW()
+			SET state = $1, video_script_id = $2, resolved_by_person_id = $3, resolved_at = NOW()
 			WHERE id = $4 AND state = $5
-		`, state, *scheduleEntryID, byPersonID, matchID, MatchStatePending)
+		`, state, *videoScriptID, byPersonID, matchID, MatchStatePending)
 	} else {
 		tag, err = s.pool.Exec(ctx, `
 			UPDATE video_schedule_match

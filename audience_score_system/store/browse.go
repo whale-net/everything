@@ -22,22 +22,22 @@ import (
 // follow-up).
 type BrowseStore interface {
 	// PredictionVsOutcome returns one PredictionOutcome row per published
-	// video with a live (auto or confirmed) match to a committed
-	// schedule_entry on channelID, most-recently-published first,
+	// video with a live (auto or confirmed) match to a greenlit or
+	// archived video_script on channelID, most-recently-published first,
 	// optionally narrowed to a single ideaID (nil = no filter) and/or a
 	// lower/upper bound on the video's published_at (since/before, nil =
 	// no filter on that side; since/before together let a caller page
 	// backward past a truncated response, issue #1808), capped at limit
 	// (<=0 = unbounded; truncated reports whether more matching rows exist
 	// beyond it). A video with no recorded metrics yet does not appear --
-	// mirrors migration 002's v_prediction_vs_outcome qualifying-row rule
+	// mirrors migration 012's v_prediction_vs_outcome qualifying-row rule
 	// (see that view's SQL comment) with one deliberate difference: this
-	// query joins schedule_entry directly to viability_verdict via
-	// schedule_entry.verdict_id, never through v_current_verdict. The view
-	// requires se.verdict_id to equal the idea's CURRENT verdict's id,
-	// which means a schedule_entry committed under an older verdict
-	// version silently drops out of the view entirely the moment a newer
-	// verdict is appended for the same idea -- backwards from LB3's "bound
+	// query joins video_script directly to viability_verdict via
+	// video_script.verdict_id, never through v_current_verdict. The view
+	// requires vs.verdict_id to equal the idea's CURRENT verdict's id,
+	// which means a video_script proposed under an older verdict version
+	// silently drops out of the view entirely the moment a newer verdict
+	// is appended for the same idea -- backwards from LB3's "bound
 	// version, not a moving target" contract on that column. This method
 	// returns the bound version's data regardless of what the idea's
 	// current verdict has since become.
@@ -52,9 +52,9 @@ type BrowseStore interface {
 	IdeasWithCurrentVerdict(ctx context.Context, channelID uuid.UUID, limit int) (ideas []IdeaOverview, truncated bool, err error)
 }
 
-// browseStore implements BrowseStore against `idea`, `schedule_entry`,
+// browseStore implements BrowseStore against `idea`, `video_script`,
 // `viability_verdict`, `video_schedule_match`, `synced_video`,
-// `video_metrics` (migration 002), and `v_current_verdict`.
+// `video_metrics` (migrations 002/010/012), and `v_current_verdict`.
 type browseStore struct{ pool *pgxpool.Pool }
 
 var _ BrowseStore = browseStore{}
@@ -62,21 +62,27 @@ var _ BrowseStore = browseStore{}
 // predictionOutcomeJoin is the FROM/JOIN chain shared by
 // BrowseStore.PredictionVsOutcome (one Channel, every qualifying row) and
 // MyWorkStore.SummariesForPerson (issue #1717, many Channels, top-1-per-
-// Channel): idea -> its committed schedule_entry -> the SPECIFIC
-// viability_verdict version bound to that entry (LB3, not the idea's
-// current verdict) -> its author -> a live (auto/confirmed)
-// video_schedule_match -> the synced_video it points at -> that video's
-// latest video_metrics snapshot. Factored out so this join -- and in
-// particular the LB3 "bound version, not current" subtlety documented at
-// length on PredictionVsOutcome's doc comment above -- is written exactly
-// once; callers add their own SELECT list, WHERE, and ORDER BY/window
-// function on top of it.
+// Channel): idea -> its greenlit-or-archived video_script (#1830's FR44
+// re-anchor) -> the SPECIFIC viability_verdict version bound to that
+// script (LB3, not the idea's current verdict) -> its author -> a live
+// (auto/confirmed) video_schedule_match -> the synced_video it points at
+// -> that video's latest video_metrics snapshot. Factored out so this
+// join -- and in particular the LB3 "bound version, not current" subtlety
+// documented at length on PredictionVsOutcome's doc comment above -- is
+// written exactly once; callers add their own SELECT list, WHERE, and
+// ORDER BY/window function on top of it.
+//
+// greenlit AND archived scripts qualify here, mirroring migration 012's
+// v_prediction_vs_outcome view -- FR40's archive/match interaction note:
+// a video can legitimately have published under a script the Channel
+// later pulled back, and dropping those rows would silently lose exactly
+// the outcome comparison this join exists to provide.
 const predictionOutcomeJoin = `
 	FROM idea i
-	JOIN schedule_entry se ON se.idea_id = i.id AND se.state = 'committed'
-	JOIN viability_verdict vv ON vv.id = se.verdict_id
+	JOIN video_script vs ON vs.idea_id = i.id AND vs.status IN ('greenlit', 'archived')
+	JOIN viability_verdict vv ON vv.id = vs.verdict_id
 	JOIN person author ON author.id = vv.author_person_id
-	JOIN video_schedule_match vsm ON vsm.schedule_entry_id = se.id AND vsm.state IN ('auto', 'confirmed')
+	JOIN video_schedule_match vsm ON vsm.video_script_id = vs.id AND vsm.state IN ('auto', 'confirmed')
 	JOIN synced_video sv ON sv.id = vsm.synced_video_id
 	JOIN LATERAL (
 		SELECT m.views, m.average_view_duration_seconds, m.average_view_percentage,
@@ -102,7 +108,7 @@ func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUI
 			i.id, i.title,
 			vv.id, vv.version, vv.verdict, vv.reasoning, vv.author_person_id,
 			COALESCE(NULLIF(author.display_name, ''), COALESCE(author.email, '')), vv.created_at,
-			se.id, se.proposed_publish_at, se.approved_at,
+			vs.id, vs.title, vs.status, vs.target_publish_date, vs.decided_at,
 			vsm.id, vsm.state, vsm.confidence,
 			sv.id, sv.youtube_video_id, COALESCE(sv.title, ''), sv.published_at,
 			vm.views, vm.average_view_duration_seconds, vm.average_view_percentage,
@@ -127,7 +133,7 @@ func (s browseStore) PredictionVsOutcome(ctx context.Context, channelID uuid.UUI
 			&r.IdeaID, &r.IdeaTitle,
 			&r.VerdictID, &r.VerdictVersion, &r.Verdict, &r.VerdictReasoning, &r.VerdictAuthorPersonID,
 			&r.VerdictAuthorDisplayName, &r.VerdictCreatedAt,
-			&r.ScheduleEntryID, &r.ProposedPublishAt, &r.ApprovedAt,
+			&r.VideoScriptID, &r.ScriptTitle, &r.ScriptStatus, &r.TargetPublishDate, &r.DecidedAt,
 			&r.MatchID, &r.MatchState, &r.MatchConfidence,
 			&r.SyncedVideoID, &r.YouTubeVideoID, &r.VideoTitle, &r.PublishedAt,
 			&r.Views, &r.AverageViewDurationSeconds, &r.AverageViewPercentage,
