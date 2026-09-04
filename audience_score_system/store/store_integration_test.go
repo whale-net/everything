@@ -330,7 +330,12 @@ func TestAuthz_CoCreator_HasCreatorTierAuthority_AgainstRealRoleStore(t *testing
 
 // ── InviteStore (FR5-FR8) ──────────────────────────────────────────────────
 
-func TestInviteStore_Generate_TwiceLeavesExactlyOneLiveCode(t *testing.T) {
+// TestInviteStore_Generate_SameTierTwice_ReturnsSameLiveCode is the M2
+// rewrite of the M1 test with this behavior: FR30 replaces "regenerate
+// invalidates the prior code" with "regenerate returns the existing live
+// code" -- the same tier's second Generate call must hand back inv1
+// unchanged, not mint and invalidate-replace it.
+func TestInviteStore_Generate_SameTierTwice_ReturnsSameLiveCode(t *testing.T) {
 	ctx := context.Background()
 	s, db := newStore(t)
 
@@ -339,28 +344,79 @@ func TestInviteStore_Generate_TwiceLeavesExactlyOneLiveCode(t *testing.T) {
 	ch, err := s.Channels().Create(ctx, "yt-inv-1", "Channel", creator.ID)
 	require.NoError(t, err)
 
-	inv1, err := s.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv1, err := s.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 	assert.Nil(t, inv1.InvalidatedAt)
 
-	inv2, err := s.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv2, err := s.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 	assert.Nil(t, inv2.InvalidatedAt)
-	assert.NotEqual(t, inv1.Code, inv2.Code)
+	assert.Equal(t, inv1.Code, inv2.Code, "FR30: a repeat Generate for the same tier must return the SAME live code")
+	assert.Equal(t, inv1.ID, inv2.ID)
 
 	got1, err := s.Invites().Lookup(ctx, inv1.Code)
 	require.NoError(t, err)
-	assert.NotNil(t, got1.InvalidatedAt, "generating a second invite must invalidate the first (FR5)")
+	assert.Nil(t, got1.InvalidatedAt, "the existing live code must not be invalidated by a repeat generate")
 
 	var liveCount int
 	require.NoError(t, db.Pool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_invite
 		WHERE channel_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL
 	`, ch.ID).Scan(&liveCount))
-	assert.Equal(t, 1, liveCount, "at most one live code per Channel")
+	assert.Equal(t, 1, liveCount, "at most one live code per (Channel, tier)")
 
-	err = s.Invites().Consume(ctx, inv1.Code, creator.ID)
-	assert.ErrorIs(t, err, store.ErrInviteInvalidated, "consuming an invalidated code must fail (FR8)")
+	require.NoError(t, s.Invites().Consume(ctx, inv1.Code, creator.ID))
+}
+
+// TestInviteStore_Generate_BothTiers_TwoLiveCodesCoexist proves NFR11's
+// rescoped uniqueness index and Generate's per-tier idempotency compose
+// correctly: an Analyst invite and a Co-Creator invite on the same
+// Channel are distinct, both live, and both independently consumable.
+func TestInviteStore_Generate_BothTiers_TwoLiveCodesCoexist(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	analystInv, err := s.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
+	require.NoError(t, err)
+	coCreatorInv, err := s.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleCoCreator)
+	require.NoError(t, err)
+
+	assert.NotEqual(t, analystInv.Code, coCreatorInv.Code)
+	assert.Equal(t, store.RoleAnalyst, analystInv.Role)
+	assert.Equal(t, store.RoleCoCreator, coCreatorInv.Role)
+
+	analyst, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "a@example.com", "Analyst")
+	require.NoError(t, err)
+	require.NoError(t, s.Invites().Consume(ctx, analystInv.Code, analyst.ID))
+
+	coCreator, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "cc@example.com", "Co-Creator")
+	require.NoError(t, err)
+	require.NoError(t, s.Invites().Consume(ctx, coCreatorInv.Code, coCreator.ID))
+
+	analystRoles, err := s.Roles().RolesFor(ctx, ch.ID, analyst.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []store.Role{store.RoleAnalyst}, analystRoles)
+
+	coCreatorRoles, err := s.Roles().RolesFor(ctx, ch.ID, coCreator.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []store.Role{store.RoleCoCreator}, coCreatorRoles)
+}
+
+// TestInviteStore_Generate_CreatorRole_Rejected proves Generate rejects
+// role=creator before touching the DB (FR25/FR29: no invite path ever
+// grants Founder).
+func TestInviteStore_Generate_CreatorRole_Rejected(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	_, err := s.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleCreator)
+	assert.ErrorIs(t, err, store.ErrInviteRoleUnsupported)
+
+	var count int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM channel_invite WHERE channel_id = $1`, ch.ID).Scan(&count))
+	assert.Equal(t, 0, count, "a rejected Generate call must insert no row")
 }
 
 func TestInviteStore_Consume_GrantsAnalystRole_SecondConsumeFailsAndAddsNoRow(t *testing.T) {
@@ -375,7 +431,7 @@ func TestInviteStore_Consume_GrantsAnalystRole_SecondConsumeFailsAndAddsNoRow(t 
 	invitee, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-invitee", "i@example.com", "Invitee")
 	require.NoError(t, err)
 
-	inv, err := s.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv, err := s.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 
 	require.NoError(t, s.Invites().Consume(ctx, inv.Code, invitee.ID))
@@ -398,6 +454,69 @@ func TestInviteStore_Consume_GrantsAnalystRole_SecondConsumeFailsAndAddsNoRow(t 
 		SELECT count(*) FROM channel_person WHERE channel_id = $1 AND person_id = $2
 	`, ch.ID, invitee.ID).Scan(&roleRowCount))
 	assert.Equal(t, 1, roleRowCount, "a failed second consume must not add a duplicate role row")
+}
+
+// TestInviteStore_Consume_CoCreatorInvite_GrantsCoCreatorRole proves
+// Consume grants the invite's OWN Role rather than a hardcoded Analyst
+// (FR30), and that granted_by_person_id is the inviter (the Person who
+// generated the code, FR34), not the accepter.
+func TestInviteStore_Consume_CoCreatorInvite_GrantsCoCreatorRole(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	invitee, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "cc@example.com", "Co-Creator")
+	require.NoError(t, err)
+
+	inv, err := s.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleCoCreator)
+	require.NoError(t, err)
+
+	require.NoError(t, s.Invites().Consume(ctx, inv.Code, invitee.ID))
+
+	roles, err := s.Roles().RolesFor(ctx, ch.ID, invitee.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []store.Role{store.RoleCoCreator}, roles, "Consume must grant the invite's own role (co_creator), not a hardcoded analyst")
+
+	var grantedBy uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT granted_by_person_id FROM channel_person WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
+	`, ch.ID, invitee.ID).Scan(&grantedBy))
+	assert.Equal(t, creator.ID, grantedBy, "granted_by_person_id must be the inviter (FR34), not the accepter")
+}
+
+// TestInviteStore_Consume_ByExistingAnalyst_ClosesAnalystRowOpensCoCreatorRow
+// proves the interaction with #1714's SCD2 close-and-open: an existing
+// Analyst accepting a Co-Creator invite for the same Channel closes their
+// analyst row and opens a co_creator row -- exactly one open row survives,
+// per channel_person_channel_id_person_id_current.
+func TestInviteStore_Consume_ByExistingAnalyst_ClosesAnalystRowOpensCoCreatorRow(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "p@example.com", "Person")
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, person.ID, store.RoleAnalyst, creator.ID))
+
+	inv, err := s.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleCoCreator)
+	require.NoError(t, err)
+	require.NoError(t, s.Invites().Consume(ctx, inv.Code, person.ID))
+
+	roles, err := s.Roles().RolesFor(ctx, ch.ID, person.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []store.Role{store.RoleCoCreator}, roles, "exactly one open row, now co_creator")
+
+	var rowCount int
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM channel_person WHERE channel_id = $1 AND person_id = $2
+	`, ch.ID, person.ID).Scan(&rowCount))
+	assert.Equal(t, 2, rowCount, "the prior analyst row must be closed, not deleted -- one closed plus one open")
+
+	var closedValidTo *time.Time
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		SELECT valid_to FROM channel_person WHERE channel_id = $1 AND person_id = $2 AND role = 'analyst'
+	`, ch.ID, person.ID).Scan(&closedValidTo))
+	assert.NotNil(t, closedValidTo, "the previous analyst row must be closed (valid_to set)")
 }
 
 // ── RoleStore.AddRole/RemoveRole attribution (FR33/FR34) ────────────────────

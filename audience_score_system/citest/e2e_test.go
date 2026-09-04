@@ -47,7 +47,7 @@
 //     SyncSchedule's own ErrRevoked/ErrQuotaExceeded/ErrTransient
 //     classification: worker/sync/video_sync_test.go.
 //   - FR5  -- exercised here (step 2: Invites().Generate). Regenerate-
-//     invalidates-prior-code semantics: store/store_integration_test.go.
+//     returns-existing-code idempotency (FR30): store/store_integration_test.go.
 //   - FR6  -- exercised here (step 2: brand-new Analyst redeems via
 //     GET /invites/{code}/resume).
 //   - FR7  -- pointer: web/invite/invite_integration_test.go (existing-Person
@@ -460,9 +460,9 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 	t.Run("2_invite_analyst", func(t *testing.T) {
 		// FR5: Creator generates a single-use invite code -- the same
 		// store call web/invite.Handlers.HandleGenerate makes.
-		// Regenerate-invalidates-prior-code semantics are covered by
+		// Regenerate-returns-existing-code idempotency (FR30) is covered by
 		// store/store_integration_test.go.
-		inv, err := w.st.Invites().Generate(ctx, ch.ID, creator.ID)
+		inv, err := w.st.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 		require.NoError(t, err)
 		require.NotEmpty(t, inv.Code)
 

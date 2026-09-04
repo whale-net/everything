@@ -168,9 +168,10 @@ func liveChannelPersonCount(t *testing.T, ctx context.Context, s *inviteTestStac
 	return n
 }
 
-// ── FR5/FR8: generate invalidates the prior live code, redeeming it fails ──
+// ── FR30: generate is idempotent per tier -- a repeat call returns the
+// SAME live code rather than invalidating and replacing it ─────────────────
 
-func TestHandleGenerate_TwiceLeavesOneLiveCode_FirstBecomesUnredeemable(t *testing.T) {
+func TestHandleGenerate_Twice_ReturnsSameLiveCode(t *testing.T) {
 	ctx := context.Background()
 	s := newInviteTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
@@ -184,28 +185,23 @@ func TestHandleGenerate_TwiceLeavesOneLiveCode_FirstBecomesUnredeemable(t *testi
 
 	w2 := s.do(t, http.MethodPost, "/channels/"+ch.ID.String()+"/invites", cookie)
 	require.Equal(t, http.StatusOK, w2.Code, "body: %s", w2.Body.String())
+	assert.Contains(t, w2.Body.String(), firstCode, "a repeat generate must hand back the SAME live code (FR30), not a new one")
 
 	var liveCount int
 	require.NoError(t, s.db.Pool.QueryRow(ctx, `
 		SELECT count(*) FROM channel_invite WHERE channel_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL
 	`, ch.ID).Scan(&liveCount))
-	assert.Equal(t, 1, liveCount, "exactly one live code must remain after generating twice (FR5)")
+	assert.Equal(t, 1, liveCount, "exactly one live code must exist after generating twice")
 
 	var invalidatedAt sql.NullTime
 	require.NoError(t, s.db.Pool.QueryRow(ctx, `SELECT invalidated_at FROM channel_invite WHERE code = $1`, firstCode).Scan(&invalidatedAt))
-	assert.True(t, invalidatedAt.Valid, "the first code must be invalidated once a second is generated")
+	assert.False(t, invalidatedAt.Valid, "FR30: the existing live code must NOT be invalidated by a repeat generate")
 
-	// Redeeming the invalidated first code must fail terminally (FR8): the
-	// public GET renders Invalid without ever needing a session.
-	showW := s.do(t, http.MethodGet, "/invites/"+firstCode, nil)
-	assert.Equal(t, http.StatusOK, showW.Code)
-	assert.Contains(t, showW.Body.String(), "no longer valid")
-
+	// The original code must still be redeemable.
 	analyst := s.newPerson(t, ctx, "analyst")
 	acceptW := s.do(t, http.MethodPost, "/invites/"+firstCode+"/accept", s.sessionCookie(t, ctx, analyst.ID))
-	assert.Equal(t, http.StatusOK, acceptW.Code)
-	assert.Contains(t, acceptW.Body.String(), "no longer valid")
-	assert.Equal(t, "", liveChannelPersonRole(t, ctx, s, ch.ID, analyst.ID), "redeeming an invalidated code must create no association")
+	assert.Equal(t, http.StatusSeeOther, acceptW.Code, "body: %s", acceptW.Body.String())
+	assert.Equal(t, string(store.RoleAnalyst), liveChannelPersonRole(t, ctx, s, ch.ID, analyst.ID))
 }
 
 // ── NFR5: only a Creator may generate a code ────────────────────────────────
@@ -230,7 +226,7 @@ func TestNewVisitorPath_ShowRedirectsToLogin_ResumeConsumesAndGrantsRole(t *test
 	ctx := context.Background()
 	s := newInviteTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
-	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 
 	showW := s.do(t, http.MethodGet, "/invites/"+inv.Code, nil)
@@ -262,7 +258,7 @@ func TestExistingPersonPath_ShowRendersPrompt_AcceptConsumesAndAssociates(t *tes
 	ctx := context.Background()
 	s := newInviteTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
-	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 
 	analyst := s.newPerson(t, ctx, "analyst")
@@ -291,7 +287,7 @@ func TestDecline_LeavesCodeLiveAndCreatesNoAssociation(t *testing.T) {
 	ctx := context.Background()
 	s := newInviteTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
-	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 
 	analyst := s.newPerson(t, ctx, "decliner")
@@ -320,7 +316,7 @@ func TestAlreadyConsumedCode_AcceptIsTerminal_NoAssociationCreated(t *testing.T)
 	ctx := context.Background()
 	s := newInviteTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
-	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 
 	first := s.newPerson(t, ctx, "first")
@@ -341,7 +337,7 @@ func TestConcurrentAccept_ExactlyOneSucceeds_ExactlyOneLiveRoleGranted(t *testin
 	ctx := context.Background()
 	s := newInviteTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
-	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 
 	personA := s.newPerson(t, ctx, "racer-a")
@@ -400,7 +396,7 @@ func TestRedeemAsExistingCreator_NoDuplicateLiveRow_NoServerError(t *testing.T) 
 	ctx := context.Background()
 	s := newInviteTestStack(t)
 	ch, creator := s.setupChannel(t, ctx)
-	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID)
+	inv, err := s.store.Invites().Generate(ctx, ch.ID, creator.ID, store.RoleAnalyst)
 	require.NoError(t, err)
 
 	w := s.do(t, http.MethodPost, "/invites/"+inv.Code+"/accept", s.sessionCookie(t, ctx, creator.ID))
