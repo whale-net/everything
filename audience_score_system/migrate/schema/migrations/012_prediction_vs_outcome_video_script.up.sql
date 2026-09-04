@@ -17,7 +17,14 @@
 -- comparison C9 exists to provide. proposed and denied scripts are
 -- excluded -- neither can carry a live match.
 
-CREATE OR REPLACE VIEW v_prediction_vs_outcome AS
+-- CREATE OR REPLACE VIEW cannot rename or reorder an existing view's output
+-- columns (only append new ones at the end) -- Postgres rejects the rename
+-- of position 8 (schedule_entry_id -> video_script_id) with
+-- "cannot change name of view column ... (SQLSTATE 42P16)". Drop and
+-- recreate instead. See #1849.
+DROP VIEW v_prediction_vs_outcome;
+
+CREATE VIEW v_prediction_vs_outcome AS
 SELECT
     i.id                             AS idea_id,
     i.channel_id                     AS channel_id,

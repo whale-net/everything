@@ -24,3 +24,38 @@ go_test(
     srcs = ["schema_test.go"],
     embed = [":schema"],
 )
+
+# Real Postgres integration test proving individual migrations actually
+# apply -- specifically migration 012's up/down (v_prediction_vs_outcome's
+# re-anchor onto video_script, FR44/#1830), whose original CREATE OR
+# REPLACE VIEW form was rejected by Postgres outright (SQLSTATE 42P16,
+# #1849) in a way schema_test.go's ReadDir-only check could never catch.
+# Deliberately NOT part of `bazel test //...` -- see //libs/go/dbtest's
+# README for the full rationale behind each tag and how to run tests like
+# this one.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/migrate/schema:schema_integration_test --test_output=all
+go_test(
+    name = "schema_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["schema_integration_test.go"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        ":schema",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

@@ -1,7 +1,12 @@
 -- Reverse migration 012: restore the migration-002 definition of
 -- v_prediction_vs_outcome verbatim (schedule_entry-anchored).
 
-CREATE OR REPLACE VIEW v_prediction_vs_outcome AS
+-- Same DROP+CREATE requirement as the up migration (see its comment and
+-- #1849): restoring the migration-002 column set also renames/reorders
+-- columns, which CREATE OR REPLACE VIEW rejects.
+DROP VIEW v_prediction_vs_outcome;
+
+CREATE VIEW v_prediction_vs_outcome AS
 SELECT
     i.id                             AS idea_id,
     i.channel_id                     AS channel_id,
