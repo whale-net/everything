@@ -164,7 +164,7 @@ func run() error {
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterWhoami(reg)
-	tools.RegisterListChannels(reg, st.Roles())
+	tools.RegisterListChannels(reg, st.Access())
 	tools.RegisterResearch(reg, st)
 	tools.RegisterVerdict(reg, st)
 	tools.RegisterGetChannelSchedule(reg, st.Sync())
@@ -174,6 +174,8 @@ func run() error {
 	tools.RegisterStrategy(reg, st)
 	tools.RegisterTriggerChannelSync(reg, st.Channels(), scheduleManager)
 	tools.RegisterAccess(reg, st)
+	tools.RegisterMyWork(reg, st.MyWork())
+	tools.RegisterChannelAccess(reg, st.Access(), st.Roles())
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{
 		Resource:            cfg.MCPPublicURL,

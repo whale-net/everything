@@ -10,9 +10,11 @@ go_library(
     name = "tools",
     srcs = [
         "access.go",
+        "access_audit.go",
         "browse.go",
         "list_channels.go",
         "matches.go",
+        "my_work.go",
         "research.go",
         "schedule_draft.go",
         "schedule_read.go",
