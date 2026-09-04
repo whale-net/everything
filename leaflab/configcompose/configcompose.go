@@ -45,23 +45,33 @@ type InventorySensor struct {
 // e.g. an SHT3x's temperature and humidity virtual sensors, whether they
 // already exist in the DB inventory or are being introduced for the first
 // time together in this same call's overrides — since that is the only
-// situation where (mux_path, i2c_address) alone is ambiguous. This
-// co-located/not classification is decided once, up front, from the final
-// set of distinct sensor_type values every input contributes at each
-// address (see computeCoLocated) — never incrementally as entries are
-// processed, which would make the classification depend on input order.
-// For every other address (the common, single-sensor-per-address case),
-// matching stays address-only, so overrides that (correctly, per
-// SensorConfig.sensor_type's own doc comment) leave sensor_type at its
-// proto3 zero value keep matching that one sensor. A lastAccepted or
-// override entry for a co-located address that itself leaves sensor_type
-// at the zero value is genuinely ambiguous (more than one candidate, none
-// named) — such an override is applied to none of the co-located sensors
-// (every one of them is carried through unchanged, not dropped); such a
-// lastAccepted entry is skipped (defensive only: a previous compose's
-// output always carries the real, non-zero sensor_type for a co-located
-// sensor, per the DB-inventory loop below, so this should be unreachable
-// in practice).
+// situation where (mux_path, i2c_address) alone is ambiguous. A single
+// override that sets sensor_type alongside a second, same-call override at
+// the same address that omits it counts too: the zero-type override cannot
+// be told apart from "the same sensor" vs "a second, new one", so it is
+// just as ambiguous as the already-co-located case. This co-located/not
+// classification is decided once, up front, from the final set of distinct
+// sensor_type values every input contributes at each address, plus whether
+// a same-call override left sensor_type at its zero value alongside a type
+// that only that same call's overrides established (see computeCoLocated
+// for the exact rule) — never incrementally as entries are processed, which
+// would make the classification depend on input order. For every other
+// address (the common, single-sensor-per-address case, including a
+// brand-new sensor introduced by a single override, and a rename of a
+// sensor already known from inventory/lastAccepted), matching stays
+// address-only, so overrides that (correctly, per SensorConfig.sensor_type's
+// own doc comment) leave sensor_type at its proto3 zero value keep matching
+// that one sensor. A lastAccepted or override entry for a co-located
+// address that itself leaves sensor_type at the zero value is genuinely
+// ambiguous (more than one candidate, none named) — such an override is
+// applied to none of the co-located sensors: an existing co-located
+// sensor's entry is carried through unchanged, not dropped, while a
+// same-call sibling override that would have introduced a brand-new sensor
+// simply is not created (there is no existing entry to preserve, and
+// nothing to safely guess); such a lastAccepted entry is skipped (defensive
+// only: a previous compose's output always carries the real, non-zero
+// sensor_type for a co-located sensor, per the DB-inventory loop below, so
+// this should be unreachable in practice).
 //
 // Every sensor known from the DB inventory or the last accepted config
 // appears in the output exactly once, whether or not the caller mentioned
@@ -298,22 +308,43 @@ func makeHWKey(i2cAddress uint32, muxPath []*configpb.MuxHop, sensorType firmwar
 // A sensor_type value counts as a distinct sensor identity at an address
 // when it is non-zero (inventory always supplies a real, non-zero
 // SensorType; lastAccepted/overrides may too, when naming one of several
-// co-located sensors). An entry that leaves sensor_type at the proto3 zero
-// value contributes at most one anonymous identity -- it never creates a
-// second bucket by itself, since a zero value can't be told apart from
-// another zero value at the same address.
+// co-located sensors). Two or more distinct non-zero sensor_type values at
+// one address is unconditionally co-located, regardless of source.
+//
+// A single known non-zero sensor_type is only pushed into "co-located" by a
+// same-call, zero-type *override* -- and only when that lone type is not
+// already established by inventory or lastAccepted (i.e. it was itself
+// introduced fresh by an override in this same call). Established
+// (inventory/lastAccepted) state predates this call, so a zero-type
+// override always unambiguously refers to that one pre-existing sensor --
+// this is what lets a single-ISensor-chip rename correctly omit
+// sensor_type. But when the lone type is only known because an override in
+// *this* call just introduced it, a second, zero-type override at the same
+// address in the same call is genuinely ambiguous: it might mean "this same
+// sensor" or "a second, new one" -- there is nothing to disambiguate
+// against, so the address must be treated as co-located and the zero-type
+// override applied to none (via hwIndex.resolve's ambiguous branch), never
+// silently merged onto the typed one. A zero-type entry alone, with no
+// non-zero sensor_type anywhere at that address, never creates a second
+// bucket by itself -- it contributes at most one anonymous identity, since
+// a zero value can't be told apart from another zero value at the same
+// address.
 func computeCoLocated(
 	inventory []InventorySensor,
 	lastAccepted []*configpb.SensorConfig,
 	overrides []*configpb.SensorConfig,
 ) map[addrKey]bool {
 	types := make(map[addrKey]map[firmwarepb.SensorType]bool)
-	hasZero := make(map[addrKey]bool)
+	// established marks an address touched by inventory or lastAccepted --
+	// state that predates this call, as opposed to an identity an override
+	// is introducing fresh right now.
+	established := make(map[addrKey]bool)
+	// overrideHasZero marks an address with at least one override that
+	// leaves sensor_type at its proto3 zero value.
+	overrideHasZero := make(map[addrKey]bool)
 
-	note := func(i2cAddress uint32, muxPath []*configpb.MuxHop, sensorType firmwarepb.SensorType) {
-		ak := makeAddrKey(i2cAddress, muxPath)
+	noteType := func(ak addrKey, sensorType firmwarepb.SensorType) {
 		if sensorType == 0 {
-			hasZero[ak] = true
 			return
 		}
 		if types[ak] == nil {
@@ -323,22 +354,36 @@ func computeCoLocated(
 	}
 
 	for _, inv := range inventory {
-		note(inv.I2CAddress, inv.MuxPath, inv.SensorType)
+		ak := makeAddrKey(inv.I2CAddress, inv.MuxPath)
+		established[ak] = true
+		noteType(ak, inv.SensorType)
 	}
 	for _, la := range lastAccepted {
-		note(la.GetI2CAddress(), la.GetMuxPath(), la.GetSensorType())
+		ak := makeAddrKey(la.GetI2CAddress(), la.GetMuxPath())
+		established[ak] = true
+		noteType(ak, la.GetSensorType())
 	}
 	for _, ov := range overrides {
-		note(ov.GetI2CAddress(), ov.GetMuxPath(), ov.GetSensorType())
+		ak := makeAddrKey(ov.GetI2CAddress(), ov.GetMuxPath())
+		if ov.GetSensorType() == 0 {
+			overrideHasZero[ak] = true
+			continue
+		}
+		noteType(ak, ov.GetSensorType())
 	}
 
 	coLocated := make(map[addrKey]bool, len(types))
-	for ak := range types {
-		coLocated[ak] = len(types[ak]) >= 2
-	}
-	for ak := range hasZero {
-		if _, seen := coLocated[ak]; !seen {
-			coLocated[ak] = false
+	for ak, ts := range types {
+		if len(ts) >= 2 {
+			coLocated[ak] = true
+			continue
+		}
+		// len(ts) == 1: only ambiguous if a same-call override introduced a
+		// zero-type entry alongside a lone type that was itself only
+		// established by an override in this same call (not by inventory or
+		// lastAccepted) -- see this function's doc comment.
+		if overrideHasZero[ak] && !established[ak] {
+			coLocated[ak] = true
 		}
 	}
 	return coLocated
@@ -369,7 +414,13 @@ func newHWIndex(coLocated map[addrKey]bool) *hwIndex {
 // co-location from the same inputs TouchedSensorIDs itself sees (inventory
 // and overrides -- it has no lastAccepted parameter), so its matching stays
 // consistent with ComposeDesiredSensors' rule per this function's own doc
-// comment.
+// comment. This includes computeCoLocated's mixed typed/zero-type-same-call-
+// override ambiguity: it is inert here in practice (not merely by
+// construction) because TouchedSensorIDs only ever reports a sensor_id for
+// an override that resolves to a key already present in byKey (i.e. an
+// inventory-known address), and a brand-new address with no inventory entry
+// -- the only shape that ambiguity can arise from -- never has one to report
+// regardless of how the override resolves.
 func newHWIndexForTouched(inventory []InventorySensor, overrides []*configpb.SensorConfig) *hwIndex {
 	idx := newHWIndex(computeCoLocated(inventory, nil, overrides))
 	for _, inv := range inventory {
