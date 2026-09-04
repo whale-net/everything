@@ -48,6 +48,11 @@ const mqttExchange = "amq.topic"
 // the request or response.
 const reportingThreshold = 10 * time.Minute
 
+// adminRole is the one leaflab-local role this milestone uses (FR10). Roles
+// are free text in leaflab_user_role; this constant is just this file's
+// single point of truth for the string, not a closed enum in the schema.
+const adminRole = "admin"
+
 // repositoryStore is the subset of *Repository's methods LeafLabAPIServer
 // calls, extracted so tests can substitute an in-memory fake (no Postgres)
 // while production code keeps passing the real *Repository straight
@@ -57,6 +62,7 @@ const reportingThreshold = 10 * time.Minute
 type repositoryStore interface {
 	GetLeafLabUserIDBySub(ctx context.Context, oidcSub string) (int64, bool, error)
 	GetCurrentBoardOwner(ctx context.Context, boardID int64) (int64, bool, error)
+	HasRole(ctx context.Context, leaflabUserID int64, role string) (bool, error)
 	GetBoardIDForDeviceID(ctx context.Context, deviceID string) (int64, bool, error)
 	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
@@ -192,6 +198,33 @@ func (s *LeafLabAPIServer) authorizeBoardWrite(ctx context.Context, boardID int6
 	}
 	if ownerID != callerUserID {
 		return 0, status.Error(codes.PermissionDenied, "caller does not own this board")
+	}
+	return callerUserID, nil
+}
+
+// requireAdmin resolves the caller and returns codes.PermissionDenied unless
+// they hold an open 'admin' grant in leaflab_user_role (FR14). This is the
+// only thing the admin role grants in this milestone: it gates
+// ListOwnedBoards, ReassignBoardOwner, ClearBoardOwner, and ListUsers.
+// authorizeBoardWrite deliberately never calls this -- FR5 has no admin
+// exception, and admin write access to a board it does not own (beyond
+// reassign/clear) is out of scope.
+//
+// Reads leaflab_user_role exclusively; grpcauth.Claims.Roles (OIDC
+// realm_access.roles) is never consulted here -- leaflab owns its own roles
+// (see leaflab/PRODUCT.md section Non-goals).
+func (s *LeafLabAPIServer) requireAdmin(ctx context.Context) (callerUserID int64, err error) {
+	callerUserID, err = s.callerUserID(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	isAdmin, err := s.repo.HasRole(ctx, callerUserID, adminRole)
+	if err != nil {
+		return 0, status.Errorf(codes.Internal, "check admin role: %v", err)
+	}
+	if !isAdmin {
+		return 0, status.Error(codes.PermissionDenied, "caller does not hold the admin role")
 	}
 	return callerUserID, nil
 }
@@ -339,8 +372,20 @@ func (s *LeafLabAPIServer) ListBoardsWithState(ctx context.Context, _ *pb.ListBo
 		boards = append(boards, bw)
 	}
 
+	// caller_is_admin is presentation-only (see the field's proto doc) --
+	// this RPC itself has no auth requirement (FR4: no owner filtering), so
+	// an unresolved caller (no claims, or no leaflab_user row yet) simply
+	// yields false rather than failing the whole listing.
+	callerIsAdmin := false
+	if callerUserID, err := s.callerUserID(ctx); err == nil {
+		callerIsAdmin, err = s.repo.HasRole(ctx, callerUserID, adminRole)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "check admin role: %v", err)
+		}
+	}
+
 	s.logger.Info("boards with state listed", "count", len(boards))
-	return &pb.ListBoardsWithStateResponse{Boards: boards}, nil
+	return &pb.ListBoardsWithStateResponse{Boards: boards, CallerIsAdmin: callerIsAdmin}, nil
 }
 
 // GetBoardDetail returns a board's identity plus every sensor recorded for

@@ -208,6 +208,54 @@ script's header comment.
 
 ---
 
+## The Admin Role (M2)
+
+LeafLab owns its own roles — `leaflab_user_role` (migration 016), an SCD2
+grant table with `valid_from`/`valid_to`. This is **not** derived from OIDC
+`realm_access.roles`; do not add a leaflab realm role to Keycloak. The only
+role this milestone uses is `'admin'`, which gates the admin ownership RPCs
+(`ListOwnedBoards`, `ReassignBoardOwner`, `ClearBoardOwner`, `ListUsers`) via
+`LeafLabAPIServer.requireAdmin` in `leaflab/api/server.go`. It grants no
+board-write access beyond those RPCs — `authorizeBoardWrite` never consults
+it (FR5 has no admin exception).
+
+**Bootstrap: how the first admin comes to exist.** After this milestone's
+migrations run, at least one user always holds `'admin'`, with no
+role-grant UI action required (there is none — role grant/revoke is
+`psql`-only until a later milestone):
+
+- **Non-empty database at migration time:** migration 016 grants `'admin'`
+  to the earliest existing `leaflab_user_id` directly, as part of the
+  migration itself.
+- **Empty database at migration time:** the migration's grant is a no-op
+  (nothing to grant to yet). Instead, `leaflab-ui`'s sign-in handler
+  (`upsertLeafLabUser` in `handlers_auth.go`) grants `'admin'` to whichever
+  user is the *first* to ever sign in — checked and granted inside the same
+  transaction as that user's `leaflab_user` row creation, so two people
+  racing to sign in first cannot both become admin. Every sign-in after
+  that first one is an ordinary user; the grant fires exactly once.
+
+**Moving admin to a different user.** No UI exists for this — do it by hand:
+
+```sql
+-- Close the current admin's grant and open one for a different user, by
+-- oidc_sub. Run as one statement so there is no window with zero admins.
+WITH closed AS (
+    UPDATE leaflab_user_role SET valid_to = NOW()
+    WHERE role = 'admin' AND valid_to IS NULL
+)
+INSERT INTO leaflab_user_role (leaflab_user_id, role)
+SELECT leaflab_user_id, 'admin' FROM leaflab_user WHERE oidc_sub = '<new-admin-sub>';
+```
+
+Revoking without granting a replacement (`UPDATE leaflab_user_role SET
+valid_to = NOW() WHERE role = 'admin' AND valid_to IS NULL`) is possible but
+leaves zero admins — nothing re-grants automatically once any admin grant
+has ever existed, so do this only if you are about to open a new grant in
+the same session.
+
+---
+
 ## Relationship to `//firmware`
 
 LeafLab firmware is built on top of the board-agnostic libraries in [`firmware/`](../firmware/README.md):

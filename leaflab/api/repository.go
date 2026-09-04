@@ -471,6 +471,88 @@ func (r *Repository) RenameBoard(ctx context.Context, boardID int64, name string
 	return nil
 }
 
+// HasRole reports whether leaflabUserID currently holds an open (valid_to IS
+// NULL) grant of role. Backed by idx_leaflab_user_role_current -- a closed
+// grant (valid_to set) does not count, per FR10's "revocation preserves
+// history but not access".
+func (r *Repository) HasRole(ctx context.Context, leaflabUserID int64, role string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM leaflab_user_role
+			WHERE leaflab_user_id = $1 AND role = $2 AND valid_to IS NULL
+		)
+	`, leaflabUserID, role).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check role %q for user %d: %w", role, leaflabUserID, err)
+	}
+	return exists, nil
+}
+
+// AnyOpenGrantExists reports whether any user currently holds an open grant
+// of role, for any leaflab_user_id. Used by the first-sign-in bootstrap
+// (leaflab/ui/handlers_auth.go) to decide whether the newly created user
+// should become the first admin.
+func (r *Repository) AnyOpenGrantExists(ctx context.Context, role string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM leaflab_user_role
+			WHERE role = $1 AND valid_to IS NULL
+		)
+	`, role).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check any open grant of role %q: %w", role, err)
+	}
+	return exists, nil
+}
+
+// GrantRole opens a grant of role for leaflabUserID, closing any existing
+// open grant of the same role for that same user first (SCD2 close-and-open,
+// per AGENTS.md section SCD2). Idempotent in effect: granting a role the
+// user already holds closes the old row and opens an equivalent new one
+// rather than erroring.
+func (r *Repository) GrantRole(ctx context.Context, leaflabUserID int64, role string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin grant role transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE leaflab_user_role SET valid_to = NOW()
+		WHERE leaflab_user_id = $1 AND role = $2 AND valid_to IS NULL
+	`, leaflabUserID, role); err != nil {
+		return fmt.Errorf("close existing grant of role %q for user %d: %w", role, leaflabUserID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO leaflab_user_role (leaflab_user_id, role) VALUES ($1, $2)
+	`, leaflabUserID, role); err != nil {
+		return fmt.Errorf("open grant of role %q for user %d: %w", role, leaflabUserID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit grant role transaction: %w", err)
+	}
+	return nil
+}
+
+// RevokeRole closes leaflabUserID's open grant of role by setting
+// valid_to -- it never deletes the row (FR10 requires that revoking a role
+// does not erase the fact it was once granted). A no-op (not an error) when
+// no open grant exists.
+func (r *Repository) RevokeRole(ctx context.Context, leaflabUserID int64, role string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE leaflab_user_role SET valid_to = NOW()
+		WHERE leaflab_user_id = $1 AND role = $2 AND valid_to IS NULL
+	`, leaflabUserID, role)
+	if err != nil {
+		return fmt.Errorf("revoke role %q for user %d: %w", role, leaflabUserID, err)
+	}
+	return nil
+}
+
 // GetBoardIDForSensor resolves a sensor_id to its owning board_id. ok=false
 // means no sensor with that ID exists.
 func (r *Repository) GetBoardIDForSensor(ctx context.Context, sensorID int64) (int64, bool, error) {

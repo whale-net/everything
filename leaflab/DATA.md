@@ -174,6 +174,21 @@ lowest `leaflab_user_id`, if any exist at migration time) holds an open
 invariant holds without further setup; the zero-users case is bootstrapped
 separately on first sign-in.
 
+The zero-users bootstrap lives in `leaflab-ui`'s `upsertLeafLabUser`
+(`handlers_auth.go`), the sign-in handler and sole writer of `leaflab_user`
+(LB1) -- `leaflab-api` never creates this grant. When the upsert *creates* a
+`leaflab_user` row (detected via Postgres's `xmax = 0` idiom on the `INSERT
+... ON CONFLICT` `RETURNING` clause, not a separate lookup) and no open
+`'admin'` grant exists for any user, the new user is granted `'admin'`.
+Both checks and the grant run inside the same transaction as the
+`leaflab_user` insert, serialized by a `pg_advisory_xact_lock` -- the
+per-user uniqueness of `idx_leaflab_user_role_current` does nothing to stop
+two *different* users racing to be first, which is what the lock is for.
+The grant is one-shot: once any admin grant has ever existed (from
+migration 016 or from this path), every later first-time sign-in creates an
+ordinary user. See `leaflab/README.md#the-admin-role-m2` for the
+by-hand `psql` snippet that moves the role to a different user.
+
 `sensor.corrective_push_attempts` and
 `sensor.corrective_push_outstanding_version` (NFR4, migration 016) back the
 corrective-push retry budget. This state lives on the `sensor` row in

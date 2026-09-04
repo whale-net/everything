@@ -125,6 +125,10 @@ type fakeRepository struct {
 	// owners maps a board_id to its current owner's leaflab_user_id. A
 	// board_id absent here is unowned (no open board_owner_history row).
 	owners map[int64]int64
+	// admins is the set of leaflab_user_ids holding an open 'admin' grant --
+	// a user_id absent (or present but false) here has no open admin grant,
+	// exactly like a fresh leaflab_user_role table would report.
+	admins map[int64]bool
 
 	insertedConfigs []insertedConfig
 	nextVersion     int64
@@ -170,6 +174,7 @@ func newFakeRepository() *fakeRepository {
 		users:         map[string]int64{},
 		devices:       map[string]int64{},
 		owners:        map[int64]int64{},
+		admins:        map[int64]bool{},
 		inventory:     map[int64][]InventorySensor{},
 		lastAccepted:  map[string]*configpb.DeviceConfig{},
 		boardIdentity: map[int64]BoardIdentity{},
@@ -187,6 +192,13 @@ func (f *fakeRepository) GetLeafLabUserIDBySub(_ context.Context, oidcSub string
 func (f *fakeRepository) GetCurrentBoardOwner(_ context.Context, boardID int64) (int64, bool, error) {
 	id, ok := f.owners[boardID]
 	return id, ok, nil
+}
+
+func (f *fakeRepository) HasRole(_ context.Context, leaflabUserID int64, role string) (bool, error) {
+	if role != adminRole {
+		return false, nil
+	}
+	return f.admins[leaflabUserID], nil
 }
 
 func (f *fakeRepository) GetBoardIDForDeviceID(_ context.Context, deviceID string) (int64, bool, error) {
@@ -468,6 +480,125 @@ func TestPushDeviceConfig_RecordedRowMatchesPublishedPayload(t *testing.T) {
 		assert.True(t, proto.Equal(recordedByAddr[addr], publishedByAddr[addr]),
 			"recorded row and published payload must carry the same sensor entry for 0x%x", addr)
 	}
+}
+
+// -- #1775: requireAdmin (FR14 server-side gate) tests ---------------------
+//
+// These are the same shape as the authorizeBoardWrite fence tests above:
+// LeafLabAPIServer.requireAdmin called directly against fakeRepository, with
+// caller identity injected via claimsCtx. requireAdmin is not wired to any
+// RPC yet (ListOwnedBoards/ReassignBoardOwner/ClearBoardOwner/ListUsers are
+// still Unimplemented stubs per #1760), so it is exercised directly rather
+// than through a handler -- exactly how #1763's callerUserID/
+// authorizeBoardWrite were proven before ClaimBoard/PushDeviceConfig existed.
+
+// TestRequireAdmin_NoClaims_Unauthenticated is Testing criterion 1: no
+// grpcauth.Claims in ctx at all yields codes.Unauthenticated.
+func TestRequireAdmin_NoClaims_Unauthenticated(t *testing.T) {
+	repo := newFakeRepository()
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.requireAdmin(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+}
+
+// TestRequireAdmin_NoLeafLabUserRow_PermissionDenied is Testing criterion 2:
+// a signed-in caller (claims present) whose subject resolves to no
+// leaflab_user row is denied, same as callerUserID's own contract (LB1).
+func TestRequireAdmin_NoLeafLabUserRow_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.requireAdmin(claimsCtx("unregistered-sub"))
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestRequireAdmin_NoOpenAdminGrant_PermissionDenied is Testing criterion 3:
+// a signed-in caller with a leaflab_user row but no open 'admin' grant is
+// denied.
+func TestRequireAdmin_NoOpenAdminGrant_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["plain-sub"] = 1
+	// No repo.admins[1] entry -- no open admin grant, exactly like a fresh
+	// leaflab_user_role table.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.requireAdmin(claimsCtx("plain-sub"))
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestRequireAdmin_OpenAdminGrant_Succeeds is Testing criterion 4: a caller
+// holding an open 'admin' grant is let through, and requireAdmin returns
+// their resolved leaflab_user_id.
+func TestRequireAdmin_OpenAdminGrant_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 7
+	repo.admins[7] = true
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	gotID, err := srv.requireAdmin(claimsCtx("admin-sub"))
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), gotID)
+}
+
+// TestRequireAdmin_ClosedAdminGrant_PermissionDenied is Testing criterion 5:
+// a user whose admin grant has been closed (valid_to set) is denied -- the
+// closed row does not count. HasRole's real-Postgres contract is that a
+// closed row never satisfies `valid_to IS NULL` (proven against real
+// Postgres by TestGrantRevokeGrant_HasRoleTrueOnlyWhileOpen in
+// repository_integration_test.go); at the fakeRepository level that same
+// contract collapses to "not present/false in admins", which is exactly
+// what a revoke leaves behind here -- grant then revoke, then assert denial.
+func TestRequireAdmin_ClosedAdminGrant_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["formerly-admin-sub"] = 3
+	repo.admins[3] = true  // grant...
+	delete(repo.admins, 3) // ...then revoke (valid_to set): no longer open.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.requireAdmin(claimsCtx("formerly-admin-sub"))
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestRequireAdmin_OIDCRoleClaimIgnored_PermissionDenied is Testing
+// criterion 6: leaflab owns its own roles (leaflab/PRODUCT.md § Non-goals).
+// A caller whose OIDC token carries Claims.Roles = ["admin"] but who holds
+// no leaflab_user_role grant must still be denied -- requireAdmin consults
+// only repo.HasRole, never grpcauth.Claims.Roles.
+func TestRequireAdmin_OIDCRoleClaimIgnored_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["oidc-admin-sub"] = 9
+	// No repo.admins[9] entry -- no leaflab_user_role grant, despite the
+	// token's realm_access.roles claiming "admin".
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.requireAdmin(claimsCtx("oidc-admin-sub", "admin"))
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+// TestAuthorizeBoardWrite_AdminRole_NoBypass_PermissionDenied is Testing
+// criterion 7: an admin caller is still denied by authorizeBoardWrite on a
+// board they do not own -- a regression guard on FR5's no-admin-exception
+// rule, exercised directly against authorizeBoardWrite (rather than through
+// PushDeviceConfig, which TestPushDeviceConfig_AdminRole_NoBypass_PermissionDenied
+// already covers at the handler level) to prove the helper itself, not just
+// one caller of it, never consults the admin grant.
+func TestAuthorizeBoardWrite_AdminRole_NoBypass_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.users["owner-sub"] = 2
+	repo.admins[1] = true // caller genuinely holds the admin role...
+	repo.owners[100] = 2  // ...but board 100 is owned by someone else.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.authorizeBoardWrite(claimsCtx("admin-sub"), 100)
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
 // TestReads_NonOwner_SameContentAsOwner is Testing criterion 8 (FR5): reads

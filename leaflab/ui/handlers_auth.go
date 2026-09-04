@@ -6,8 +6,23 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/whale-net/everything/libs/go/htmxauth"
 )
+
+// adminRole is the one leaflab-local role this milestone uses (FR10). Mirrors
+// leaflab/api/server.go's own adminRole constant -- leaflab-ui and
+// leaflab-api are separate Go binaries/packages, so this string is
+// duplicated rather than shared, same as the wire-safe adminRole surfaced
+// via ListBoardsWithStateResponse.caller_is_admin.
+const adminRole = "admin"
+
+// bootstrapAdminLockKey is an arbitrary, stable pg_advisory_xact_lock key
+// used to serialize concurrent first sign-ins so at most one can win FR10's
+// empty-database bootstrap grant (see maybeBootstrapAdmin). Picked once and
+// not reused for any other lock in this package.
+const bootstrapAdminLockKey = 78341001
 
 // responseCapture buffers a downstream handler's response so a wrapper can
 // inspect its side effects (here: whether a session cookie was set) before
@@ -131,14 +146,35 @@ func (app *App) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 // ON CONFLICT clause and the repeat-sign-in test goes red).
 //
 // This does not create, assign, or imply ownership of anything — it writes
-// only to leaflab_user, never board_owner_history or any owner_* column
+// only to leaflab_user (plus, on the one FR10 bootstrap path below,
+// leaflab_user_role), never board_owner_history or any owner_* column
 // (NFR5/NFR6: signing in claims nothing).
+//
+// FR10's empty-database bootstrap: when the upsert *creates* leaflab_user_id
+// (rather than merely refreshing an existing row) and no open admin grant
+// exists anywhere yet, the new user is granted 'admin' — see
+// maybeBootstrapAdmin. Both the upsert and the conditional grant run inside
+// one transaction so two simultaneous first sign-ins cannot both become
+// admin (idx_leaflab_user_role_current only protects one user holding the
+// role twice, not two different users racing to be first).
 func (app *App) upsertLeafLabUser(ctx context.Context, user *htmxauth.UserInfo) error {
 	if user == nil || user.Sub == "" {
 		return fmt.Errorf("cannot upsert leaflab_user: missing OIDC sub")
 	}
 
-	_, err := app.pool.Exec(ctx, `
+	tx, err := app.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin leaflab_user upsert transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit succeeds
+
+	// `xmax = 0` is the standard Postgres idiom for "this row was just
+	// inserted, not updated by the ON CONFLICT arm" -- a freshly inserted
+	// row's xmax is 0; ON CONFLICT DO UPDATE sets it to the current
+	// transaction's id on the pre-existing row instead.
+	var leaflabUserID int64
+	var created bool
+	err = tx.QueryRow(ctx, `
 		INSERT INTO leaflab_user (oidc_sub, preferred_username, email, display_name, last_seen_at)
 		VALUES ($1, $2, $3, $4, NOW())
 		ON CONFLICT (oidc_sub) DO UPDATE SET
@@ -146,9 +182,66 @@ func (app *App) upsertLeafLabUser(ctx context.Context, user *htmxauth.UserInfo) 
 			email = EXCLUDED.email,
 			display_name = EXCLUDED.display_name,
 			last_seen_at = NOW()
-	`, user.Sub, user.PreferredUsername, user.Email, user.Name)
+		RETURNING leaflab_user_id, (xmax = 0) AS created
+	`, user.Sub, user.PreferredUsername, user.Email, user.Name).Scan(&leaflabUserID, &created)
 	if err != nil {
 		return fmt.Errorf("failed to upsert leaflab_user: %w", err)
 	}
+
+	if created {
+		if err := app.maybeBootstrapAdmin(ctx, tx, leaflabUserID, user.Sub); err != nil {
+			return err
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit leaflab_user upsert transaction: %w", err)
+	}
+	return nil
+}
+
+// maybeBootstrapAdmin grants 'admin' to a newly created leaflab_user when no
+// open admin grant exists anywhere (FR10's empty-database case; migration
+// 016 already handles the non-empty case at migration time by granting the
+// earliest existing leaflab_user_id). Must run inside the same transaction
+// as the leaflab_user insert that created leaflabUserID -- see
+// upsertLeafLabUser's doc comment for why a bare read-then-write is not
+// safe here.
+//
+// pg_advisory_xact_lock is what actually serializes two concurrent first
+// sign-ins: idx_leaflab_user_role_current (UNIQUE on
+// (leaflab_user_id, role) WHERE valid_to IS NULL) only forbids the *same*
+// user from holding the role twice, not two *different* users both winning
+// this race under READ COMMITTED. Held for the rest of this transaction
+// (pg_advisory_xact_lock, not the session-scoped variant), so a second
+// concurrent caller blocks here until the first commits or rolls back, then
+// observes its grant via the AnyOpenGrantExists-equivalent check below.
+func (app *App) maybeBootstrapAdmin(ctx context.Context, tx pgx.Tx, leaflabUserID int64, sub string) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, bootstrapAdminLockKey); err != nil {
+		return fmt.Errorf("acquire bootstrap admin lock: %w", err)
+	}
+
+	var anyAdminExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM leaflab_user_role WHERE role = $1 AND valid_to IS NULL
+		)
+	`, adminRole).Scan(&anyAdminExists); err != nil {
+		return fmt.Errorf("check existing admin grants: %w", err)
+	}
+	if anyAdminExists {
+		return nil
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO leaflab_user_role (leaflab_user_id, role) VALUES ($1, $2)
+	`, leaflabUserID, adminRole); err != nil {
+		return fmt.Errorf("grant bootstrap admin role: %w", err)
+	}
+
+	// INFO: a notable event that completed normally, not a deviation
+	// (AGENTS.md § Logging Levels).
+	app.log().Info("bootstrap admin grant fired on first sign-in — no prior admin existed",
+		"leaflab_user_id", leaflabUserID, "sub", sub)
 	return nil
 }

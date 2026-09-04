@@ -118,6 +118,13 @@ message ListBoardsWithStateRequest {}
 
 message ListBoardsWithStateResponse {
   repeated BoardWithState boards = 1;
+  // Whether the calling user holds an open 'admin' grant (FR10, FR14). This
+  // is presentation-only -- it lets the UI decide whether to show admin
+  // navigation without a second round trip, but grants no privilege by
+  // itself. Every admin RPC re-checks LeafLabAPIServer.requireAdmin
+  // server-side; hiding a nav link based on this field is never the
+  // enforcement point (NFR1).
+  bool caller_is_admin = 2;
 }
 
 // BoardWithState is a board's identity plus its reporting state. Boards have
