@@ -67,6 +67,14 @@ func (f *fakeRoleStore) ChannelsForPerson(context.Context, uuid.UUID) ([]store.C
 	return nil, errors.New("fakeRoleStore.ChannelsForPerson is not used by these tests")
 }
 
+func (f *fakeRoleStore) RowID(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, errors.New("fakeRoleStore.RowID is not used by these tests")
+}
+
+func (f *fakeRoleStore) RowByID(context.Context, uuid.UUID) (store.ChannelPerson, error) {
+	return store.ChannelPerson{}, errors.New("fakeRoleStore.RowByID is not used by these tests")
+}
+
 var _ store.RoleStore = (*fakeRoleStore)(nil)
 
 // ── fake Idempotency ─────────────────────────────────────────────────────────
