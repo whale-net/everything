@@ -11,11 +11,12 @@ import "testing"
 // re-observing.
 func TestDerivePromotionSyncOutcome(t *testing.T) {
 	tests := []struct {
-		name             string
-		events           []PromotionSyncEvent
-		wantOutcome      PromotionSyncOutcome
-		wantSyncStatus   string
-		wantHealthStatus string
+		name               string
+		events             []PromotionSyncEvent
+		wantOutcome        PromotionSyncOutcome
+		wantSyncStatus     string
+		wantHealthStatus   string
+		wantOperationPhase string
 	}{
 		{
 			name:        "no events yet",
@@ -23,14 +24,26 @@ func TestDerivePromotionSyncOutcome(t *testing.T) {
 			wantOutcome: PromotionSyncOutcomePending,
 		},
 		{
-			name: "last entry Synced+Healthy",
+			name: "last entry Synced+Healthy+Succeeded",
 			events: []PromotionSyncEvent{
 				{Source: PromotionSyncEventSourceRefreshTriggered},
-				{Source: PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy"},
+				{Source: PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded"},
 			},
-			wantOutcome:      PromotionSyncOutcomeSyncedHealthy,
-			wantSyncStatus:   "Synced",
-			wantHealthStatus: "Healthy",
+			wantOutcome:        PromotionSyncOutcomeSyncedHealthy,
+			wantSyncStatus:     "Synced",
+			wantHealthStatus:   "Healthy",
+			wantOperationPhase: "Succeeded",
+		},
+		{
+			name: "last entry Synced+Healthy but hook operation still Running is NOT ready",
+			events: []PromotionSyncEvent{
+				{Source: PromotionSyncEventSourceRefreshTriggered},
+				{Source: PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Running"},
+			},
+			wantOutcome:        PromotionSyncOutcomePending,
+			wantSyncStatus:     "Synced",
+			wantHealthStatus:   "Healthy",
+			wantOperationPhase: "Running",
 		},
 		{
 			name: "last entry Degraded",
@@ -41,6 +54,17 @@ func TestDerivePromotionSyncOutcome(t *testing.T) {
 			wantOutcome:      PromotionSyncOutcomeSyncFailed,
 			wantSyncStatus:   "OutOfSync",
 			wantHealthStatus: "Degraded",
+		},
+		{
+			name: "last entry Healthy but hook operation Failed is SYNC_FAILED",
+			events: []PromotionSyncEvent{
+				{Source: PromotionSyncEventSourceRefreshTriggered},
+				{Source: PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Failed"},
+			},
+			wantOutcome:        PromotionSyncOutcomeSyncFailed,
+			wantSyncStatus:     "Synced",
+			wantHealthStatus:   "Healthy",
+			wantOperationPhase: "Failed",
 		},
 		{
 			name: "last entry never reached terminal (FR5 exhausted-attempts case)",
@@ -56,7 +80,7 @@ func TestDerivePromotionSyncOutcome(t *testing.T) {
 		{
 			name: "earlier terminal observation must not leak through a later non-terminal one",
 			events: []PromotionSyncEvent{
-				{Source: PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy"},
+				{Source: PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded"},
 				// A later redeploy started a fresh refresh/poll cycle that
 				// hasn't reached terminal again yet.
 				{Source: PromotionSyncEventSourceRefreshTriggered},
@@ -70,7 +94,7 @@ func TestDerivePromotionSyncOutcome(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			outcome, syncStatus, healthStatus := DerivePromotionSyncOutcome(tt.events)
+			outcome, syncStatus, healthStatus, operationPhase := DerivePromotionSyncOutcome(tt.events)
 			if outcome != tt.wantOutcome {
 				t.Errorf("outcome = %v, want %v", outcome, tt.wantOutcome)
 			}
@@ -79,6 +103,9 @@ func TestDerivePromotionSyncOutcome(t *testing.T) {
 			}
 			if healthStatus != tt.wantHealthStatus {
 				t.Errorf("currentHealthStatus = %q, want %q", healthStatus, tt.wantHealthStatus)
+			}
+			if operationPhase != tt.wantOperationPhase {
+				t.Errorf("currentOperationPhase = %q, want %q", operationPhase, tt.wantOperationPhase)
 			}
 		})
 	}

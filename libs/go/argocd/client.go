@@ -138,31 +138,49 @@ type applicationResponse struct {
 		Health struct {
 			Status string `json:"status"`
 		} `json:"health"`
+		// OperationState.Phase is the ONLY signal that reflects hook
+		// resources (PreSync/Sync/PostSync, e.g. a migration Job run via
+		// the argocd.argoproj.io/hook annotation) -- ArgoCD excludes hook
+		// resources from the Health rollup above entirely, so an
+		// Application can report Sync.Status=Synced, Health.Status=Healthy
+		// while a PostSync hook is still Running. Phase is one of ArgoCD's
+		// operation phases (e.g. "Running"/"Succeeded"/"Failed"/"Error"/
+		// "Terminating"), "" if no operation has ever run against this
+		// Application.
+		OperationState struct {
+			Phase string `json:"phase"`
+		} `json:"operationState"`
 	} `json:"status"`
 }
 
-// GetStatus fetches the named Application's current sync and health
-// status, scoped to project. It corresponds to
+// GetStatus fetches the named Application's current sync, health, and
+// operation-phase status, scoped to project. It corresponds to
 // GET {ServerURL}/api/v1/applications/{name}?project={project}.
 //
 // syncStatus is one of ArgoCD's sync states (e.g. "Synced"/"OutOfSync"/
 // "Unknown"); health is one of ArgoCD's health states (e.g.
-// "Healthy"/"Progressing"/"Degraded"/"Suspended"/"Missing"/"Unknown").
-func (c *Client) GetStatus(ctx context.Context, project, name string) (syncStatus, health string, err error) {
+// "Healthy"/"Progressing"/"Degraded"/"Suspended"/"Missing"/"Unknown");
+// operationPhase is the most recent sync operation's phase (e.g.
+// "Running"/"Succeeded"/"Failed"/"Error"/"Terminating"), "" if none has run.
+// Callers that want to know whether EVERY resource ArgoCD manages for this
+// Application -- including hooks -- has finished rolling out must check
+// operationPhase == "Succeeded" in addition to syncStatus/health, since
+// health alone does not cover hook resources.
+func (c *Client) GetStatus(ctx context.Context, project, name string) (syncStatus, health, operationPhase string, err error) {
 	q := url.Values{}
 	q.Set("project", project)
 	reqURL := fmt.Sprintf("%s/api/v1/applications/%s?%s", c.serverURL, url.PathEscape(name), q.Encode())
 
 	respBody, err := c.do(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return "", "", fmt.Errorf("argocd: GetStatus(%s/%s): %w", project, name, err)
+		return "", "", "", fmt.Errorf("argocd: GetStatus(%s/%s): %w", project, name, err)
 	}
 
 	var app applicationResponse
 	if err := json.Unmarshal(respBody, &app); err != nil {
-		return "", "", fmt.Errorf("argocd: GetStatus(%s/%s): parse response: %w", project, name, err)
+		return "", "", "", fmt.Errorf("argocd: GetStatus(%s/%s): parse response: %w", project, name, err)
 	}
-	return app.Status.Sync.Status, app.Status.Health.Status, nil
+	return app.Status.Sync.Status, app.Status.Health.Status, app.Status.OperationState.Phase, nil
 }
 
 // do issues an HTTP request with the bearer token attached and returns the

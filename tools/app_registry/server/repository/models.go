@@ -551,7 +551,15 @@ type PromotionSyncEvent struct {
 	Source       string // one of the CHECK-constrained values below
 	SyncStatus   string
 	HealthStatus string
-	OccurredAt   time.Time
+	// OperationPhase is ArgoCD's status.operationState.phase (migration
+	// 025) -- e.g. "Running"/"Succeeded"/"Failed"/"Error", "" if not
+	// applicable to this row. The only signal that reflects hook resources
+	// (PreSync/Sync/PostSync, e.g. a migration Job): SyncStatus/
+	// HealthStatus alone never reflect a hook still in flight, since
+	// ArgoCD's health rollup excludes hooks entirely -- see
+	// DerivePromotionSyncOutcome's doc comment.
+	OperationPhase string
+	OccurredAt     time.Time
 }
 
 // PromotionSyncEvent.Source values -- must match promotion_sync_event's
@@ -607,39 +615,59 @@ type PromotionDetails struct {
 	// SyncEvents is the full chronological history (#1028), oldest first --
 	// see PromotionRepository.ListSyncEvents.
 	SyncEvents []PromotionSyncEvent
-	// CurrentSyncStatus/CurrentHealthStatus mirror the most recent
-	// SyncEvents entry, "" if SyncEvents is empty.
-	CurrentSyncStatus   string
-	CurrentHealthStatus string
-	Outcome             PromotionSyncOutcome
+	// CurrentSyncStatus/CurrentHealthStatus/CurrentOperationPhase mirror
+	// the most recent SyncEvents entry, "" if SyncEvents is empty.
+	CurrentSyncStatus     string
+	CurrentHealthStatus   string
+	CurrentOperationPhase string
+	Outcome               PromotionSyncOutcome
 }
 
 // DerivePromotionSyncOutcome computes PromotionDetails' Outcome/
-// CurrentSyncStatus/CurrentHealthStatus (FR8) from a promotion's full
-// sync_events history, oldest-first (ListSyncEvents' own order) -- the
-// single shared implementation every GetDetails (postgres, fake) calls, so
-// the two backends never derive this classification differently. "Current"
-// is always the LAST entry, terminal or not: if the most recent poll
-// session exhausted its attempts without reaching Synced+Healthy/Degraded
-// (FR5's "still pending" case), that non-terminal pair IS the current
-// status, and the outcome is PENDING -- this method never falls back to
-// scanning further back in history for an earlier terminal observation.
-func DerivePromotionSyncOutcome(events []PromotionSyncEvent) (outcome PromotionSyncOutcome, currentSyncStatus, currentHealthStatus string) {
+// CurrentSyncStatus/CurrentHealthStatus/CurrentOperationPhase (FR8) from a
+// promotion's full sync_events history, oldest-first (ListSyncEvents' own
+// order) -- the single shared implementation every GetDetails (postgres,
+// fake) calls, so the two backends never derive this classification
+// differently. "Current" is always the LAST entry, terminal or not: if the
+// most recent poll session exhausted its attempts without reaching a
+// terminal state (FR5's "still pending" case), that non-terminal entry IS
+// the current status, and the outcome is PENDING -- this method never falls
+// back to scanning further back in history for an earlier terminal
+// observation.
+//
+// SYNCED_HEALTHY requires all three of SyncStatus==Synced,
+// HealthStatus==Healthy, AND OperationPhase==Succeeded -- not just the
+// first two. ArgoCD's health rollup excludes hook resources (PreSync/Sync/
+// PostSync, e.g. a migration Job run via the argocd.argoproj.io/hook
+// annotation) entirely, so Synced+Healthy alone can be observed while a
+// PostSync hook is still Running. OperationPhase is ArgoCD's own
+// confirmation that the most recent sync operation, including every hook
+// it ran, has fully completed -- see worker/writeback/argosync.go's
+// isTerminalArgoSyncState, which applies this same three-way rule when
+// deciding whether to keep polling.
+//
+// A Failed/Error OperationPhase is SYNC_FAILED even if HealthStatus still
+// reads Healthy, since that is exactly a hook failing while the resources
+// it gates remain healthy on their own.
+func DerivePromotionSyncOutcome(events []PromotionSyncEvent) (outcome PromotionSyncOutcome, currentSyncStatus, currentHealthStatus, currentOperationPhase string) {
 	if len(events) == 0 {
-		return PromotionSyncOutcomePending, "", ""
+		return PromotionSyncOutcomePending, "", "", ""
 	}
 	last := events[len(events)-1]
 	currentSyncStatus = last.SyncStatus
 	currentHealthStatus = last.HealthStatus
+	currentOperationPhase = last.OperationPhase
 	switch {
-	case last.SyncStatus == "Synced" && last.HealthStatus == "Healthy":
-		outcome = PromotionSyncOutcomeSyncedHealthy
 	case last.HealthStatus == "Degraded":
 		outcome = PromotionSyncOutcomeSyncFailed
+	case last.OperationPhase == "Failed" || last.OperationPhase == "Error":
+		outcome = PromotionSyncOutcomeSyncFailed
+	case last.SyncStatus == "Synced" && last.HealthStatus == "Healthy" && last.OperationPhase == "Succeeded":
+		outcome = PromotionSyncOutcomeSyncedHealthy
 	default:
 		outcome = PromotionSyncOutcomePending
 	}
-	return outcome, currentSyncStatus, currentHealthStatus
+	return outcome, currentSyncStatus, currentHealthStatus, currentOperationPhase
 }
 
 // PromotionListFilter is ListPromotionsRequest's filter set.

@@ -46,7 +46,7 @@ func TestPromotionDetails_AssemblesFullLifecycle(t *testing.T) {
 	}
 	if _, err := recordSyncEventTx(t, reg, repository.PromotionSyncEvent{
 		PromotionID: promotion.PromotionID, Source: repository.PromotionSyncEventSourcePollObserved,
-		SyncStatus: "Synced", HealthStatus: "Healthy",
+		SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded",
 	}); err != nil {
 		t.Fatalf("RecordSyncEvent (poll): %v", err)
 	}

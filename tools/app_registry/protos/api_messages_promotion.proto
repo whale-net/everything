@@ -180,6 +180,12 @@ message PromotionSyncEvent {
   string sync_status = 4;    // ArgoCD sync status, '' if not applicable
   string health_status = 5;  // ArgoCD health status, '' if not applicable
   int64 occurred_at = 6;
+  // ArgoCD status.operationState.phase (migration 025), e.g.
+  // "Running"/"Succeeded"/"Failed"/"Error", '' if not applicable. The only
+  // signal that reflects hook resources (PreSync/Sync/PostSync, e.g. a
+  // migration Job) -- ArgoCD's health rollup excludes hooks entirely, so
+  // sync_status/health_status alone never show a hook still in flight.
+  string operation_phase = 7;
 }
 
 // PromotionSyncOutcome is FR8's visibly-distinct-not-conflated summary of
@@ -223,6 +229,9 @@ message PromotionDetails {
   // Most recent sync_events entry's health_status, "" if none yet.
   string current_health_status = 9;
   PromotionSyncOutcome outcome = 10;
+  // Most recent sync_events entry's operation_phase, "" if none yet -- see
+  // PromotionSyncEvent.operation_phase.
+  string current_operation_phase = 11;
 }
 
 message GetPromotionDetailsResponse {

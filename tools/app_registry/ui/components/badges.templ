@@ -182,51 +182,73 @@ templ PromotionSyncOutcomeBadge(o pb.PromotionSyncOutcome) {
 	<span class={ "badge", class }>{ label }</span>
 }
 
-// promotionReadinessStatusPair renders the raw sync/health fields for the
-// readiness banner's detail line -- "not yet observed" instead of a blank
-// dash, since the banner's whole point is to be read at a glance rather
-// than cross-referenced against the raw status rows below it.
-func promotionReadinessStatusPair(syncStatus, healthStatus string) string {
+// promotionReadinessStatusPair renders the raw sync/health/operation-phase
+// fields for the readiness banner's detail line -- "not yet observed"
+// instead of a blank dash, since the banner's whole point is to be read at
+// a glance rather than cross-referenced against the raw status rows below
+// it. OperationPhase is included because it is the only field that shows a
+// hook (e.g. a migration Job) still in flight: Sync/Health can both already
+// read Synced/Healthy while a PostSync hook is Running.
+func promotionReadinessStatusPair(syncStatus, healthStatus, operationPhase string) string {
 	if syncStatus == "" {
 		syncStatus = "not yet observed"
 	}
 	if healthStatus == "" {
 		healthStatus = "not yet observed"
 	}
-	return "Sync: " + syncStatus + " · Health: " + healthStatus
+	if operationPhase == "" {
+		operationPhase = "not yet observed"
+	}
+	return "Sync: " + syncStatus + " · Health: " + healthStatus + " · Operation: " + operationPhase
 }
 
 // promotionReadinessLabel collapses a PromotionSyncOutcome plus the raw
-// sync/health strings into a single readiness verdict: PENDING covers both
-// "sync not yet triggered" and "synced but health still Progressing" --
-// both are equally "not ready for consumption" from a caller's point of
-// view, so this deliberately does not split them into a fourth state.
-func promotionReadinessLabel(o pb.PromotionSyncOutcome, syncStatus, healthStatus string) (headline, detail, alertClass string) {
-	detail = promotionReadinessStatusPair(syncStatus, healthStatus)
+// sync/health/operation-phase strings into a single readiness verdict:
+// PENDING covers "sync not yet triggered", "synced but health still
+// Progressing", AND "synced and healthy but a hook -- e.g. a migration job
+// -- is still rolling out" (repository.DerivePromotionSyncOutcome only
+// classifies SYNCED_HEALTHY once ArgoCD's operation_phase reports every
+// hook it ran has also finished) -- all equally "not ready for consumption"
+// from a caller's point of view, so this deliberately does not split them
+// into more states. class values are daisyUI badge (not alert) colors,
+// matching promotionSyncOutcomeLabel above -- see PromotionReadinessBanner's
+// doc comment for why this banner is styled to blend into the page rather
+// than stand out as an alert.
+func promotionReadinessLabel(o pb.PromotionSyncOutcome, syncStatus, healthStatus, operationPhase string) (headline, detail, class string) {
+	detail = promotionReadinessStatusPair(syncStatus, healthStatus, operationPhase)
 	switch o {
 	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNCED_HEALTHY:
-		return "Ready for consumption", detail, "alert-success"
+		return "Ready for consumption", detail, "badge-success"
 	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNC_FAILED:
-		return "Not ready — sync failed", detail, "alert-error"
+		return "Not ready — sync failed", detail, "badge-error"
 	case pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_PENDING:
-		return "Waiting on ArgoCD", detail, "alert-info"
+		return "Waiting on ArgoCD", detail, "badge-neutral"
 	default:
-		return "Unknown", "No sync observation recorded yet.", "alert-warning"
+		return "Unknown", "No sync observation recorded yet.", "badge-warning"
 	}
 }
 
 // PromotionReadinessBanner is the Promotion Details page's live-updating
-// readiness indicator: it collapses "is the sync done" and "is everything
-// healthy" into a single answer to "is this promotion ready for
-// consumption," rendered inside the same sse-swap region as the rest of
+// readiness indicator: it collapses "is the sync done," "is everything
+// healthy," and "has every hook (e.g. a migration job) finished rolling
+// out" into a single answer to "is this promotion ready for consumption."
+// Rendered at the BOTTOM of PromotionDetailsBody, after the raw status
+// cards it summarizes, and styled as a quiet bordered card (matching this
+// page's other `card bg-base-100 border border-base-300` sections) rather
+// than a loud daisyUI `alert` -- it is a summary of information already on
+// the page, not a warning that needs to interrupt the reader at the top.
+// Still rendered inside the same sse-swap region as the rest of
 // PromotionDetailsBody so it updates in place as new PromotionSyncEvent
 // observations arrive, with no reload.
-templ PromotionReadinessBanner(o pb.PromotionSyncOutcome, syncStatus, healthStatus string) {
-	{{ headline, detail, class := promotionReadinessLabel(o, syncStatus, healthStatus) }}
-	<div role="status" class={ "alert", class, "mb-4" }>
-		<div>
-			<div class="font-semibold">{ headline }</div>
-			<div class="text-sm opacity-80">{ detail }</div>
+templ PromotionReadinessBanner(o pb.PromotionSyncOutcome, syncStatus, healthStatus, operationPhase string) {
+	{{ headline, detail, class := promotionReadinessLabel(o, syncStatus, healthStatus, operationPhase) }}
+	<div role="status" class="card bg-base-100 border border-base-300 shadow-sm">
+		<div class="card-body flex-row items-center gap-3 py-3 px-4">
+			<span class={ "badge", class }></span>
+			<div>
+				<span class="font-semibold text-sm">{ headline }</span>
+				<span class="text-xs opacity-60"> — { detail }</span>
+			</div>
 		</div>
 	</div>
 }

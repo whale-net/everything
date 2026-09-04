@@ -225,7 +225,6 @@ templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 			@retryArgoSyncButton(user, d.GetPromotion().GetPromotionId())
 		</div>
 	</div>
-	@components.PromotionReadinessBanner(d.GetOutcome(), d.GetCurrentSyncStatus(), d.GetCurrentHealthStatus())
 	<div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
 		<div class="card-body">
 			<h3 class="card-title text-base">Request</h3>
@@ -284,6 +283,14 @@ templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 						<span class="opacity-60">—</span>
 					}
 				</dd>
+				<dt class="opacity-60">Current operation phase</dt>
+				<dd>
+					if d.GetCurrentOperationPhase() != "" {
+						{ d.GetCurrentOperationPhase() }
+					} else {
+						<span class="opacity-60">—</span>
+					}
+				</dd>
 			</dl>
 			if d.GetOutcome() == pb.PromotionSyncOutcome_PROMOTION_SYNC_OUTCOME_SYNC_FAILED {
 				<div role="alert" class="alert alert-error mt-2">
@@ -308,8 +315,8 @@ templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 							<div class="timeline-middle"><span class="badge badge-soft badge-neutral badge-xs"></span></div>
 							<div class="timeline-end timeline-box text-sm">
 								{ syncEventSourceLabel(e.GetSource()) }
-								if e.GetSyncStatus() != "" || e.GetHealthStatus() != "" {
-									— { e.GetSyncStatus() } / { e.GetHealthStatus() }
+								if e.GetSyncStatus() != "" || e.GetHealthStatus() != "" || e.GetOperationPhase() != "" {
+									— { e.GetSyncStatus() } / { e.GetHealthStatus() } / { e.GetOperationPhase() }
 								}
 							</div>
 							if i < len(d.GetSyncEvents())-1 {
@@ -321,6 +328,7 @@ templ PromotionDetailsBody(user *htmxauth.UserInfo, d *pb.PromotionDetails) {
 			}
 		</div>
 	</div>
+	@components.PromotionReadinessBanner(d.GetOutcome(), d.GetCurrentSyncStatus(), d.GetCurrentHealthStatus(), d.GetCurrentOperationPhase())
 }
 
 // retryArgoSyncButton is FR10-FR13's manual-retry action (issue #1033):
