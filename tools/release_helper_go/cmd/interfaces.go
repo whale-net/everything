@@ -15,6 +15,26 @@ type BazelRunner interface {
 	Run(args ...string) (string, error)
 }
 
+// bazelRunToDisk runs a bazel build/run subcommand with --config=ci-images,
+// which forces the invocation's outputs to be real, fully-downloaded files
+// on local disk afterward rather than remote-cache-only references (see
+// .bazelrc's comment on ci-images: "use whenever a step needs a real file
+// on disk afterward"). Use this instead of bazel.Run(...) directly for any
+// build/run whose result is read back off bazel-bin (a binary, chart
+// directory, image layers, etc.) -- plain bazel.Run is fine for query/
+// cquery/info calls that only need bazel's own stdout.
+//
+// args[0] must be the subcommand ("build" or "run"); --config=ci-images is
+// inserted right after it, so it composes with any other --config the
+// caller passes (e.g. "build", "--config=esp32", target).
+func bazelRunToDisk(bazel BazelRunner, args ...string) (string, error) {
+	if len(args) == 0 {
+		return "", fmt.Errorf("bazelRunToDisk: no subcommand given")
+	}
+	full := append([]string{args[0], "--config=ci-images"}, args[1:]...)
+	return bazel.Run(full...)
+}
+
 // GitRunner runs git commands and returns stdout.
 type GitRunner interface {
 	Run(args ...string) (string, error)

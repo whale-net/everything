@@ -47,10 +47,8 @@ func newReadChartLockfileCmd() *cobra.Command {
 
 			if !skipBuild {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Building bazel target: %s\n", chartTarget)
-				// --config=ci-images: the lockfile below is read straight off
-				// bazel-bin/chartDir, same real-file-on-disk requirement as
-				// build_app.go's image push (see .bazelrc's ci-images comment).
-				if _, err := defaultBazel.Run("build", "--config=ci-images", chartTarget); err != nil {
+				// the lockfile below is read straight off bazel-bin/chartDir.
+				if _, err := bazelRunToDisk(defaultBazel, "build", chartTarget); err != nil {
 					return fmt.Errorf("bazel build %s: %w", chartTarget, err)
 				}
 			}

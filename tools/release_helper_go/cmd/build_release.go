@@ -57,7 +57,7 @@ func BuildOpenAPISpecs(bazel BazelRunner, entries []openAPISpecEntry, outputDir 
 	results := make([]BuildOpenAPISpecResult, 0, len(entries))
 	for _, entry := range entries {
 		fmt.Printf("Building OpenAPI spec for %s-%s (target: %s)...\n", entry.Domain, entry.App, entry.OpenAPITarget)
-		if _, err := bazel.Run("build", "--config=ci-images", entry.OpenAPITarget); err != nil {
+		if _, err := bazelRunToDisk(bazel, "build", entry.OpenAPITarget); err != nil {
 			return nil, fmt.Errorf("bazel build %s: %w", entry.OpenAPITarget, err)
 		}
 

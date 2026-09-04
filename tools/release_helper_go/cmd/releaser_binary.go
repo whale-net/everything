@@ -33,7 +33,8 @@ func (r *BinaryReleaser) Build(ctx context.Context, version string) (string, err
 	fullName := r.App.FullName()
 	fmt.Printf("Building non-image application %s (%s)...\n", fullName, r.App.AppType)
 	if r.App.BinaryTarget != "" {
-		if _, err := r.Bazel.Run("build", r.App.BinaryTarget); err != nil {
+		// The binary is read straight off bazel-bin below (candidatePaths).
+		if _, err := bazelRunToDisk(r.Bazel, "build", r.App.BinaryTarget); err != nil {
 			return "", fmt.Errorf("bazel build %s: %w", r.App.BinaryTarget, err)
 		}
 	}
