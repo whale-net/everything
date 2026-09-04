@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/whale-net/everything/manmanv2/models"
@@ -205,6 +206,42 @@ type WorkshopLibraryRepository interface {
 	DetectCircularReference(ctx context.Context, parentLibraryID, childLibraryID int64) (bool, error)
 }
 
+// ErrPendingRestartExists is returned by PendingRestartRepository.Create when
+// a 'pending' record already exists for the target server_game_config_id --
+// the pending_restarts_one_pending_per_sgc unique partial index (migration
+// 036) is the actual FR10/NFR10 enforcement mechanism; this sentinel just
+// lets callers distinguish "already in flight" from a real failure without
+// inspecting a raw pgx/pgconn error.
+var ErrPendingRestartExists = errors.New("pending restart already exists for this deployment")
+
+// PendingRestartRepository defines operations for the durable pending-restart
+// intent (Track B, durable restart): "a Start is pending for this deployment,
+// gated on session <id>'s Stop reaching a terminal status". See
+// manmanv2/ARCHITECTURE.md "Data Model" for why this is not SCD2.
+type PendingRestartRepository interface {
+	// Create inserts a new pending record. A unique-violation on
+	// pending_restarts_one_pending_per_sgc must be returned as
+	// ErrPendingRestartExists, not a raw pgx error, so the caller can treat
+	// it as "already in flight" rather than a failure.
+	Create(ctx context.Context, sgcID, gatingSessionID int64, stallDeadline time.Time) (*manman.PendingRestart, error)
+	// ClaimForSession atomically transitions the pending record gated on
+	// gatingSessionID to 'started' and returns it. Returns (nil, nil) when
+	// there is no pending record to claim -- this single statement IS the
+	// NFR10 idempotency guard, so it must be one UPDATE ... WHERE
+	// status='pending' ... RETURNING *, never a SELECT-then-UPDATE.
+	ClaimForSession(ctx context.Context, gatingSessionID int64) (*manman.PendingRestart, error)
+	// MarkStarted records the session id the deferred Start produced.
+	MarkStarted(ctx context.Context, pendingRestartID, startedSessionID int64) error
+	// MarkFailed moves a claimed record to 'failed' with a reason.
+	MarkFailed(ctx context.Context, pendingRestartID int64, reason string) error
+	// ExpireStalled atomically moves every 'pending' record past its
+	// stall_deadline to 'expired' and returns them (FR11/NFR12).
+	ExpireStalled(ctx context.Context, now time.Time) ([]*manman.PendingRestart, error)
+	// GetLatestBySGCIDs returns the current non-resolved-or-recently-resolved
+	// state per SGC for the operator-facing read path (FR12).
+	GetLatestBySGCIDs(ctx context.Context, sgcIDs []int64) (map[int64]*manman.PendingRestart, error)
+}
+
 // AddonPathPresetRepository defines operations for game addon path presets
 type AddonPathPresetRepository interface {
 	Create(ctx context.Context, preset *manman.GameAddonPathPreset) (*manman.GameAddonPathPreset, error)
@@ -233,5 +270,6 @@ type Repository struct {
 	WorkshopInstallations   WorkshopInstallationRepository
 	WorkshopLibraries       WorkshopLibraryRepository
 	AddonPathPresets        AddonPathPresetRepository
+	PendingRestarts         PendingRestartRepository
 	Actions                 interface{} // ActionRepository from postgres package
 }

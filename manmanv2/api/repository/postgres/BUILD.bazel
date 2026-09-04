@@ -11,6 +11,7 @@ go_library(
         "gameconfigvolume.go",
         "log_reference.go",
         "patch.go",
+        "pending_restart.go",
         "repository.go",
         "server.go",
         "server_capability.go",

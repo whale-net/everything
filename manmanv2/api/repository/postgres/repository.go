@@ -25,6 +25,7 @@ func NewRepository(pool *pgxpool.Pool) *repository.Repository {
 		WorkshopInstallations:   NewWorkshopInstallationRepository(pool),
 		WorkshopLibraries:       NewWorkshopLibraryRepository(pool),
 		AddonPathPresets:        NewAddonPathPresetRepository(pool),
+		PendingRestarts:         NewPendingRestartRepository(pool),
 		Actions:                 NewActionRepository(pool),
 	}
 }

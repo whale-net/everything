@@ -172,6 +172,45 @@ Parameters can be overridden at three levels:
 - Multiple Sessions can use port sequentially (not concurrently)
 - API enforces allocation; eventual consistency acceptable
 
+### Pending Restarts (durable restart, Track B)
+
+```
+┌───────────────────────────┐
+│  PendingRestart           │
+├───────────────────────────┤
+│ pending_restart_id        │
+│ server_game_config_id (FK)│
+│ gating_session_id (FK)    │
+│ status                    │
+│ stall_deadline            │
+│ started_session_id        │
+│ failure_reason            │
+│ created_at                │
+│ resolved_at               │
+└───────────────────────────┘
+```
+
+`pending_restarts` (migration `036_pending_restarts`) gives "a Start is
+pending for this deployment, gated on session `<id>`'s Stop reaching a
+terminal status" a durable, control-plane-local home, instead of living only
+on `finishRestartInBackground`'s goroutine stack
+(`manmanv2/ui/handlers_deployment_actions.go`). It is control-plane state
+only — restarting does not add a new wire routing key or payload field.
+
+- **`status`**: `pending` → `started` | `failed` | `expired`.
+- At most one `pending` row per `server_game_config_id`, enforced by a unique
+  partial index (`pending_restarts_one_pending_per_sgc`), not application
+  logic — this is the DB-level idempotency guard.
+- Claiming a row (transition to `started`) and expiring stalled rows
+  (transition to `expired` past `stall_deadline`) are each a single atomic
+  `UPDATE ... RETURNING`, so concurrent callers resolve a row exactly once.
+
+**Not SCD2:** this table intentionally does not use `valid_from`/`valid_to`
+(see `AGENTS.md` § SCD2). A pending restart is a short-lived work intent with
+its own terminal state machine (`status` + `resolved_at`), not dimension
+history — SCD2's "current value = row with `valid_to IS NULL`" model doesn't
+fit a record that is created once and resolved exactly once.
+
 ---
 
 ## Communication Patterns
