@@ -553,3 +553,174 @@ func TestHandleRemove_ForgedCrossChannelActor_Rejected(t *testing.T) {
 	assert.Equal(t, 0, s.openRoleCount(t, ctx, chA.ID, personOnB.ID), "the forged request must not create any channel_person row on chA")
 	assert.Equal(t, 1, s.openRoleCount(t, ctx, chB.ID, personOnB.ID), "personOnB's real role on chB must be untouched")
 }
+
+// ── Audit trail (FR35, #1727) ───────────────────────────────────────────
+
+// insertHistoricalRow inserts a CLOSED channel_person row directly, with
+// NO granted_by_person_id/revoked_by_person_id -- exactly the shape
+// migration 009 describes for a pre-M2 row (no backfilled attribution).
+// Bypasses RoleStore entirely (RemoveRole always requires a
+// revokedByPersonID argument, so it cannot produce this shape) to prove
+// AccessStore.AuditTrail/the view render "unknown" rather than blank or
+// guessed for both the row's grant AND its revoke.
+func (s *accessTestStack) insertHistoricalRow(t *testing.T, ctx context.Context, channelID, personID uuid.UUID, role store.Role) {
+	t.Helper()
+	_, err := s.db.Pool.Exec(ctx, `
+		INSERT INTO channel_person (channel_id, person_id, role, valid_from, valid_to)
+		VALUES ($1, $2, $3, NOW() - interval '10 days', NOW() - interval '5 days')
+	`, channelID, personID, role)
+	require.NoError(t, err)
+}
+
+func TestAccessHistory_FounderAndCoCreatorSeeTrail_AnalystForbidden(t *testing.T) {
+	ctx := context.Background()
+	s := newAccessTestStack(t)
+	ch, founder := s.setupChannel(t, ctx)
+
+	coCreator := s.newPerson(t, ctx, "cocreator")
+	s.addRole(t, ctx, ch, coCreator, store.RoleCoCreator, founder)
+	analyst := s.newPerson(t, ctx, "analyst")
+	s.addRole(t, ctx, ch, analyst, store.RoleAnalyst, founder)
+
+	founderW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/access", s.sessionCookie(t, ctx, founder.ID))
+	require.Equal(t, http.StatusOK, founderW.Code, "body: %s", founderW.Body.String())
+	founderBody := founderW.Body.String()
+	assert.Contains(t, founderBody, "History")
+	assert.Contains(t, founderBody, "granted Co-Creator to "+coCreator.DisplayName)
+	assert.Contains(t, founderBody, "granted Analyst to "+analyst.DisplayName)
+
+	coCreatorW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/access", s.sessionCookie(t, ctx, coCreator.ID))
+	require.Equal(t, http.StatusOK, coCreatorW.Code, "body: %s", coCreatorW.Body.String())
+	coCreatorBody := coCreatorW.Body.String()
+	assert.Contains(t, coCreatorBody, "History")
+	assert.Contains(t, coCreatorBody, "granted Analyst to "+analyst.DisplayName)
+
+	analystW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/access", s.sessionCookie(t, ctx, analyst.ID))
+	require.Equal(t, http.StatusForbidden, analystW.Code)
+	analystBody := analystW.Body.String()
+	assert.NotContains(t, analystBody, "History", "an Analyst's 403 response must carry no history markup anywhere in the body")
+	assert.NotContains(t, analystBody, "granted")
+
+	outsider := s.newPerson(t, ctx, "outsider")
+	outsiderW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/access", s.sessionCookie(t, ctx, outsider.ID))
+	require.Equal(t, http.StatusForbidden, outsiderW.Code)
+	assert.NotContains(t, outsiderW.Body.String(), "History", "a non-member's 403 response must carry no history markup either")
+}
+
+func TestAccessHistory_ShowsGrantAndRevokeNewestFirst(t *testing.T) {
+	ctx := context.Background()
+	s := newAccessTestStack(t)
+	ch, founder := s.setupChannel(t, ctx)
+	cookie := s.sessionCookie(t, ctx, founder.ID)
+
+	member := s.newPerson(t, ctx, "member")
+	// Invite-accept: member joins as Analyst, granted by the Founder.
+	s.addRole(t, ctx, ch, member, store.RoleAnalyst, founder)
+
+	// Promote: Analyst -> Co-Creator, via the real HTTP handler. This is
+	// SCD2's close-and-open (AGENTS.md) -- one 'revoked analyst' event
+	// (with NO recorded actor: addRoleTx's closing UPDATE never stamps
+	// revoked_by_person_id) immediately followed by one 'granted
+	// co_creator' event (actor: the Founder).
+	promoteW := s.doForm(t, "/channels/"+ch.ID.String()+"/access/promote", cookie, url.Values{"person_id": {member.ID.String()}})
+	require.Equal(t, http.StatusSeeOther, promoteW.Code, "body: %s", promoteW.Body.String())
+
+	// Remove: the now-Co-Creator member is removed by the Founder.
+	removeW := s.doForm(t, "/channels/"+ch.ID.String()+"/access/remove", cookie, url.Values{"person_id": {member.ID.String()}})
+	require.Equal(t, http.StatusSeeOther, removeW.Code, "body: %s", removeW.Body.String())
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/access", cookie)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	removedCoCreatorLine := founder.DisplayName + " removed " + member.DisplayName + " (Co-Creator)"
+	grantedCoCreatorLine := founder.DisplayName + " granted Co-Creator to " + member.DisplayName
+	revokedAnalystLine := "unknown removed " + member.DisplayName + " (Analyst)"
+	grantedAnalystLine := founder.DisplayName + " granted Analyst to " + member.DisplayName
+
+	idxRemove := strings.Index(body, removedCoCreatorLine)
+	idxPromoteGrant := strings.Index(body, grantedCoCreatorLine)
+	idxPromoteRevoke := strings.Index(body, revokedAnalystLine)
+	idxInitialGrant := strings.Index(body, grantedAnalystLine)
+
+	require.Greater(t, idxRemove, -1, "missing removedCoCreatorLine in body: %s", body)
+	require.Greater(t, idxPromoteGrant, -1, "missing grantedCoCreatorLine in body: %s", body)
+	require.Greater(t, idxPromoteRevoke, -1, "missing revokedAnalystLine in body: %s", body)
+	require.Greater(t, idxInitialGrant, -1, "missing grantedAnalystLine in body: %s", body)
+
+	assert.Less(t, idxRemove, idxPromoteGrant, "the remove (most recent) must render before the promote's grant")
+	assert.Less(t, idxPromoteGrant, idxPromoteRevoke, "the promote's grant (newer half-instant) must render before its own implicit revoke (older half-instant)")
+	assert.Less(t, idxPromoteRevoke, idxInitialGrant, "the promote's implicit revoke must render before the original invite-accept grant (oldest)")
+}
+
+func TestAccessHistory_PreM2RowWithNoActor_RendersUnknown(t *testing.T) {
+	ctx := context.Background()
+	s := newAccessTestStack(t)
+	ch, founder := s.setupChannel(t, ctx)
+	subject := s.newPerson(t, ctx, "premtwo")
+	s.insertHistoricalRow(t, ctx, ch.ID, subject.ID, store.RoleAnalyst)
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/access", s.sessionCookie(t, ctx, founder.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	assert.Contains(t, body, "unknown granted Analyst to "+subject.DisplayName, "a pre-M2 grant with no recorded actor must render as unknown, never blank or guessed")
+	assert.Contains(t, body, "unknown removed "+subject.DisplayName+" (Analyst)", "a pre-M2 revoke with no recorded actor must render as unknown, never blank or guessed")
+}
+
+func TestAccessHistory_OtherChannelsEventsNeverAppear(t *testing.T) {
+	ctx := context.Background()
+	s := newAccessTestStack(t)
+	chA, founderA := s.setupChannel(t, ctx)
+	chB, founderB := s.setupChannel(t, ctx)
+
+	personOnB := s.newPerson(t, ctx, "person-on-b-history")
+	s.addRole(t, ctx, chB, personOnB, store.RoleCoCreator, founderB)
+	_, err := s.store.Roles().RemoveRole(ctx, chB.ID, personOnB.ID, founderB.ID)
+	require.NoError(t, err)
+
+	w := s.do(t, http.MethodGet, "/channels/"+chA.ID.String()+"/access", s.sessionCookie(t, ctx, founderA.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	// founderB's DisplayName/email are not usable here -- setupChannel
+	// gives every Founder fixture the same literal "Founder"/
+	// "founder@example.com" (see setupChannel), so they are
+	// indistinguishable from chA's own Founder by name alone.
+	// personOnB's uniquely-labeled identity is the meaningful probe: it
+	// only ever held a role on chB, so its presence anywhere in chA's
+	// page (roster or History) would prove cross-Channel leakage.
+	assert.NotContains(t, body, personOnB.DisplayName, "chB's audit events must never leak into chA's History panel")
+	assert.NotContains(t, body, personOnB.Email, "chB's audit events must never leak into chA's History panel")
+}
+
+func TestAccessHistory_RespectsDefaultLimit_IndicatesTruncation(t *testing.T) {
+	ctx := context.Background()
+	s := newAccessTestStack(t)
+	ch, founder := s.setupChannel(t, ctx)
+
+	// 60 grant events (well beyond the 50-event default cap) --
+	// AddRole-only, so each is one 'granted' event with no matching
+	// 'revoked' event, keeping the arithmetic simple: 60 events, 50
+	// rendered, 10 not.
+	const totalEvents = 60
+	for i := 0; i < totalEvents; i++ {
+		p := s.newPerson(t, ctx, "churn")
+		s.addRole(t, ctx, ch, p, store.RoleAnalyst, founder)
+	}
+
+	w := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/access", s.sessionCookie(t, ctx, founder.ID))
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	body := w.Body.String()
+
+	// " — " (the em dash separator auditEventLine uses before every
+	// timestamp) appears exactly once per rendered audit entry and
+	// nowhere else on the page (unlike "<li>", which the navbar's own
+	// menus also use) -- a reliable count of rendered History rows.
+	// "<li>...granted Analyst to churn" identifies one rendered audit
+	// entry unambiguously -- unlike a bare " — " em dash, which also
+	// appears in components/themes.go's CSS comments elsewhere on the
+	// page.
+	assert.Equal(t, 50, strings.Count(body, "<li>Founder granted Analyst to churn"), "the History panel must render at most the default 50-event cap")
+	assert.Contains(t, body, "50 most recent events", "a truncated trail must say so plainly")
+}

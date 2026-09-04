@@ -1,6 +1,8 @@
 package access
 
 import (
+	"strconv"
+
 	"github.com/whale-net/everything/audience_score_system/store"
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
@@ -33,18 +35,60 @@ func roleBadgeClass(r store.Role) string {
 	}
 }
 
+// auditActorLabel returns ev's recorded actor, or "unknown" when none was
+// recorded -- pre-M2 rows and grants that predate migration 009's
+// granted_by_person_id/revoked_by_person_id columns (see AuditEvent's doc
+// comment). Never blank, never guessed.
+func auditActorLabel(ev store.AuditEvent) string {
+	if ev.ActorDisplayName == "" {
+		return "unknown"
+	}
+	return ev.ActorDisplayName
+}
+
+// auditEventLine renders one store.AuditEvent (from
+// AccessStore.AuditTrail, i.e. one row of v_channel_person_audit) into
+// FR35's two required forms:
+//
+//   - "<actor> granted <tier> to <person> — <timestamp>"
+//   - "<actor> removed <person> (<tier>) — <timestamp>"
+//
+// Tier labels reuse roleLabel -- the same helper the roster table uses --
+// so the two views can never drift apart on tier naming. A promotion
+// (Analyst -> Co-Creator) surfaces here as two separate lines, a "revoked
+// analyst" immediately followed (in occurred_at order) by a "granted
+// co_creator", because that is exactly what SCD2's close-and-open write
+// path records (AGENTS.md's SCD2 convention) -- this is expected and
+// deliberate, not a bug to "fix" into a synthetic "promoted" line.
+func auditEventLine(ev store.AuditEvent) string {
+	ts := ev.OccurredAt.UTC().Format("2006-01-02 15:04 UTC")
+	actor := auditActorLabel(ev)
+	switch ev.Event {
+	case "revoked":
+		return actor + " removed " + ev.SubjectDisplayName + " (" + roleLabel(ev.Role) + ") — " + ts
+	default:
+		// "granted" is v_channel_person_audit's only other event value
+		// (migration 009); anything else would be a schema/view drift
+		// this rendering deliberately does not try to paper over.
+		return actor + " granted " + roleLabel(ev.Role) + " to " + ev.SubjectDisplayName + " — " + ts
+	}
+}
+
 // View is the access-management page (FR30/FR31/FR33): ch's roster, an
 // "Invite Co-Creator" action, and per-row Remove/Promote affordances --
 // each row's affordances already resolved server-side (access.go's
 // HandleShow, via store.CanRemove and RosterEntry.Role) before this
 // template ever runs, so no authorization decision is made here.
 //
-// Audit-trail slot (#1727): this page's history panel over
-// store.AccessStore.AuditTrail (FR35, gated by store.CanViewAudit) lands
-// in the marked spot inside the card body below. Deliberately empty in
-// this task -- do not render a second, duplicate history view anywhere
-// else on this page.
-templ View(data components.LayoutData, ch store.Channel, rows []rosterRow) {
+// Audit-trail panel (#1727, FR35): reverse-chronological role grant/
+// revoke history over store.AccessStore.AuditTrail, rendered into the
+// slot below. Gated by HandleShow's canManage check before this template
+// ever runs (the same Founder/Co-Creator tier set as store.CanViewAudit
+// -- see access.go's package doc comment) -- an Analyst or non-member
+// never reaches View at all, so this is never an empty or redacted shell
+// for them, it simply never executes. Do not render a second, duplicate
+// history view anywhere else on this page.
+templ View(data components.LayoutData, ch store.Channel, rows []rosterRow, audit auditTrailView) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
@@ -74,8 +118,24 @@ templ View(data components.LayoutData, ch store.Channel, rows []rosterRow) {
 						Back to channel
 					</a>
 				</div>
-				<!-- Audit-trail slot (#1727): see View's doc comment above. -->
-				<div id="audit-trail-slot"></div>
+				<!-- Audit-trail panel (#1727): see View's doc comment above. -->
+				<div id="audit-trail-slot" class="mt-6">
+					<h2 class="text-lg font-semibold">History</h2>
+					if len(audit.Entries) == 0 {
+						<p class="text-base-content/70">No role changes recorded yet.</p>
+					} else {
+						<ul class="mt-2 space-y-1 text-sm">
+							for _, ev := range audit.Entries {
+								<li>{ auditEventLine(ev) }</li>
+							}
+						</ul>
+					}
+					if audit.Truncated {
+						<p class="text-base-content/50 text-xs mt-2">
+							Showing the { strconv.Itoa(auditTrailLimit) } most recent events; older history is not shown.
+						</p>
+					}
+				</div>
 			</div>
 		</div>
 	}

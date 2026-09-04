@@ -48,6 +48,22 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
 
+// auditTrailLimit caps the History panel (FR35) at the most recent N
+// events, newest first -- the Implementation section's "documented
+// default" so a Channel with years of role churn never renders
+// unbounded. HandleShow fetches one extra row beyond this to detect
+// truncation without a second COUNT query.
+const auditTrailLimit = 50
+
+// auditTrailView is what HandleShow hands views.templ for the History
+// panel: at most auditTrailLimit entries (in AccessStore.AuditTrail's own
+// newest-first order, never re-sorted or re-derived here) plus whether
+// older history exists beyond that cap.
+type auditTrailView struct {
+	Entries   []store.AuditEvent
+	Truncated bool
+}
+
 // Handlers holds the dependency access's routes need: the Store (for
 // store.CanInvite/store.CanRemove and Access()/Roles()/Channels()/
 // Invites()).
@@ -135,8 +151,26 @@ func (h *Handlers) HandleShow(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Audit trail (FR35, #1727): gated by canManage above, which names
+	// the identical Founder/Co-Creator tier set as store.CanViewAudit
+	// (see this package's doc comment for why HandleShow standardizes on
+	// CanInvite) -- an Analyst or non-member never reaches this point at
+	// all, so the panel is never assembled, let alone rendered, for them.
+	// One extra row beyond auditTrailLimit is fetched purely to detect
+	// truncation without a second query.
+	auditRows, err := h.store.Access().AuditTrail(ctx, channelID, auditTrailLimit+1)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	audit := auditTrailView{Entries: auditRows}
+	if len(auditRows) > auditTrailLimit {
+		audit.Truncated = true
+		audit.Entries = auditRows[:auditTrailLimit]
+	}
+
 	data := components.LayoutData{Title: ch.Title + " access", User: person}
-	if err := components.Render(w, r, ch.Title+" access", View(data, ch, rows)); err != nil {
+	if err := components.Render(w, r, ch.Title+" access", View(data, ch, rows, audit)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
