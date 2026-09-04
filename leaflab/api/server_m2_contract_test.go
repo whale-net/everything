@@ -138,10 +138,11 @@ func TestM2RPCs_ReachableAndUnimplemented(t *testing.T) {
 		}
 	})
 
-	t.Run("RenameBoard", func(t *testing.T) {
-		_, err := client.RenameBoard(ctx, &pb.RenameBoardRequest{BoardId: 1, Name: "greenhouse"})
-		assertUnimplementedFromHandler(t, "RenameBoard", "RenameBoard: not implemented", err)
-	})
+	// RenameBoard is implemented (#1767, FR3) -- superseded per this test's
+	// own doc comment. Its real behavior (owner-only, non-empty-only,
+	// unknown-board_id NotFound, no publish) is covered against a fake
+	// repository in server_test.go, not here: this file's servers are built
+	// with NewRepository(nil), which cannot serve a real RenameBoard call.
 
 	t.Run("RenameSensor", func(t *testing.T) {
 		_, err := client.RenameSensor(ctx, &pb.RenameSensorRequest{SensorId: 1, Name: "topsoil"})

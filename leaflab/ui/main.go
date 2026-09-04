@@ -273,6 +273,9 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/boards/{board_id}", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleBoardDetail)))
 	// handleClaimBoard (#1765: FR1, FR2) -- the Claim button's POST target.
 	mux.HandleFunc("POST /boards/{board_id}/claim", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleClaimBoard)))
+	// handleRenameBoard (#1767: FR3) -- owner-only inline board rename,
+	// re-renders the "#board-header" fragment via HTMX.
+	mux.HandleFunc("POST /boards/{board_id}/rename", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRenameBoard)))
 	// handleSensorHistory (#1504: FR8, FR9, FR10) -- one sensor's reading
 	// history chart. handleSensorHistoryData is the small JSON endpoint
 	// its chart fetches range data from on every preset click or

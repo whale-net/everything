@@ -452,6 +452,25 @@ func (r *Repository) GetCurrentBoardOwner(ctx context.Context, boardID int64) (i
 	return ownerID, true, nil
 }
 
+// RenameBoard sets a board's name directly (FR3). A plain current-value
+// UPDATE against the board.name column added in migration 016 -- no history
+// table, no SCD2 close-and-open. board.name is not an attribution dimension
+// for any reading, so it follows region.name's precedent under LB6; this is
+// deliberately different from RenameSensor's sensor_name_history SCD2
+// extension. Enforces no uniqueness and no format/length restriction here --
+// that validation is a decided non-goal for M2 (see the RenameBoard task
+// issue), not something this method defers to a caller. Callers are
+// responsible for the non-empty check (RenameBoard RPC in server.go) and for
+// confirming boardID exists before calling this -- an UPDATE against an
+// unknown board_id affects zero rows and returns no error, which is why
+// server.go checks existence via GetBoardIdentity first.
+func (r *Repository) RenameBoard(ctx context.Context, boardID int64, name string) error {
+	if _, err := r.db.Exec(ctx, `UPDATE board SET name = $2 WHERE board_id = $1`, boardID, name); err != nil {
+		return fmt.Errorf("rename board %d: %w", boardID, err)
+	}
+	return nil
+}
+
 // GetBoardIDForSensor resolves a sensor_id to its owning board_id. ok=false
 // means no sensor with that ID exists.
 func (r *Repository) GetBoardIDForSensor(ctx context.Context, sensorID int64) (int64, bool, error) {

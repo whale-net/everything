@@ -96,6 +96,12 @@ type insertedConfig struct {
 	configJSON []byte
 }
 
+// renamedBoard is one recorded fakeRepository.RenameBoard call.
+type renamedBoard struct {
+	boardID int64
+	name    string
+}
+
 // publishedMessage is one recorded fakePublisher.Publish call.
 type publishedMessage struct {
 	exchange   string
@@ -128,6 +134,11 @@ type fakeRepository struct {
 	// board with no sensors yet / no config ever pushed.
 	inventory    map[int64][]InventorySensor
 	lastAccepted map[string]*configpb.DeviceConfig
+
+	// renamedBoards records every RenameBoard(boardID, name) call, in
+	// order, so a test can assert exactly what the repository received (or
+	// that it received nothing at all on a denied/rejected attempt).
+	renamedBoards []renamedBoard
 
 	// Read-path fixtures, returned identically regardless of caller -- FR5
 	// leaves reads unscoped by ownership, so these have no per-caller
@@ -223,6 +234,11 @@ func (f *fakeRepository) ClaimBoard(_ context.Context, boardID, leaflabUserID in
 	}
 	f.owners[boardID] = leaflabUserID
 	f.claimedBoards = append(f.claimedBoards, claimedBoard{boardID: boardID, leaflabUserID: leaflabUserID})
+	return nil
+}
+
+func (f *fakeRepository) RenameBoard(_ context.Context, boardID int64, name string) error {
+	f.renamedBoards = append(f.renamedBoards, renamedBoard{boardID: boardID, name: name})
 	return nil
 }
 

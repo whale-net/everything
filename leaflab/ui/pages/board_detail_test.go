@@ -398,3 +398,54 @@ func TestBoardDetail_ClaimErr_RendersInlineMessage(t *testing.T) {
 		t.Errorf("expected the claim error rendered as a warning, not an error, got %q", body)
 	}
 }
+
+// --- FR3: inline rename control (#1767) -------------------------------
+
+// TestBoardDetail_RenameControl_OwnedByCaller_Rendered is Testing
+// criterion 8's positive half: the rename control renders when
+// ownedByCaller is true.
+func TestBoardDetail_RenameControl_OwnedByCaller_Rendered(t *testing.T) {
+	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, nil), nil, ""))
+
+	if !strings.Contains(body, `hx-post="/boards/1/rename"`) {
+		t.Errorf("expected the rename form (hx-post to /boards/1/rename) when ownedByCaller is true, got %q", body)
+	}
+}
+
+// TestBoardDetail_RenameControl_NotOwnedByCaller_Hidden is Testing
+// criterion 8's negative half: the rename control is absent (not merely
+// disabled) when ownedByCaller is false, since NFR1's enforcement point is
+// server-side, not this hide.
+func TestBoardDetail_RenameControl_NotOwnedByCaller_Hidden(t *testing.T) {
+	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", false, nil, nil), nil, ""))
+
+	if strings.Contains(body, `hx-post="/boards/1/rename"`) {
+		t.Errorf("expected no rename form when ownedByCaller is false, got %q", body)
+	}
+}
+
+// TestBoardDetail_BoardName_RenderedWhenSet is Testing criterion 10's
+// named half: a board with a name shows it prefilled in the rename
+// control's value.
+func TestBoardDetail_BoardName_RenderedWhenSet(t *testing.T) {
+	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, nil), nil, ""))
+
+	if !strings.Contains(body, `value="greenhouse"`) {
+		t.Errorf("expected the board name prefilled as the rename input's value, got %q", body)
+	}
+}
+
+// TestBoardDetail_UnnamedBoard_ShowsDeviceIDPlaceholder is Testing
+// criterion 10's unnamed half: an unnamed board (boardName == "") shows an
+// empty rename field with device_id as the placeholder, per the task
+// issue's UI section.
+func TestBoardDetail_UnnamedBoard_ShowsDeviceIDPlaceholder(t *testing.T) {
+	body := renderPage(t, BoardDetail(layoutData(), boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "", true, nil, nil), nil, ""))
+
+	if !strings.Contains(body, `placeholder="leaflab-aaaaaaaaaaaa"`) {
+		t.Errorf("expected device_id as the rename input's placeholder for an unnamed board, got %q", body)
+	}
+	if strings.Contains(body, `value="leaflab-aaaaaaaaaaaa"`) {
+		t.Errorf("expected the rename input's value to stay empty (not prefilled with device_id), got %q", body)
+	}
+}

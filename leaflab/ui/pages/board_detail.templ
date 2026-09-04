@@ -10,21 +10,22 @@ import (
 )
 
 // BoardDetail is the board detail screen (#1503: FR6, FR7, NFR1; #1765
-// added the name/owner header and Claim button) -- every sensor on one
-// board, each with its own reporting state and, when present, its most
-// recent reading. resp and loadErr are mutually exclusive, mirroring
-// boards.templ's Boards(..., loadErr error) shape: handlers_boards.go
-// passes a nil resp on a load failure and a nil loadErr on success. Unlike
-// Boards, a codes.NotFound board_id never reaches this template at all --
-// handleBoardDetail short-circuits to a real HTTP 404 before rendering, so
-// loadErr here is only ever a transport/server failure, distinct from
-// "board has no sensors" (an empty sensors slice with loadErr == nil,
-// handled below).
+// added the name/owner header and Claim button; #1767 added the
+// owner-only inline rename control, factored into BoardHeader below) --
+// every sensor on one board, each with its own reporting state and, when
+// present, its most recent reading. resp and loadErr are mutually
+// exclusive, mirroring boards.templ's Boards(..., loadErr error) shape:
+// handlers_boards.go passes a nil resp on a load failure and a nil
+// loadErr on success. Unlike Boards, a codes.NotFound board_id never
+// reaches this template at all -- handleBoardDetail short-circuits to a
+// real HTTP 404 before rendering, so loadErr here is only ever a
+// transport/server failure, distinct from "board has no sensors" (an
+// empty sensors slice with loadErr == nil, handled below).
 //
 // resp.GetDeviceId() is shown verbatim, monospaced, never truncated -- the
 // same rule boards.templ's device_id column follows -- underneath the
 // board's name (falling back to device_id when unnamed, via
-// boardDisplayName).
+// boardDisplayName, inside BoardHeader).
 //
 // claimErr carries a claim attempt's failure message (set by
 // handleClaimBoard's redirect, e.g. "board is already owned") back onto
@@ -38,10 +39,7 @@ import (
 // render test guarding it.
 templ BoardDetail(data components.LayoutData, resp *leaflabapipb.GetBoardDetailResponse, loadErr error, claimErr string) {
 	@components.Layout(data) {
-		<h1 class="text-2xl font-bold mb-1">{ boardDisplayName(resp.GetBoardName(), resp.GetDeviceId()) }</h1>
-		if resp.GetBoardName() != "" {
-			<p class="font-mono text-sm text-base-content/70 mb-1">{ resp.GetDeviceId() }</p>
-		}
+		@BoardHeader(resp.GetBoardId(), resp.GetDeviceId(), resp.GetBoardName(), resp.GetOwnedByCaller(), "")
 		<div class="mb-4">@boardOwnerCell(resp.GetBoardId(), resp.GetOwnedByCaller(), resp.GetOwner())</div>
 		if claimErr != "" {
 			<div role="alert" class="alert alert-warning shadow-md mb-4">
@@ -62,6 +60,67 @@ templ BoardDetail(data components.LayoutData, resp *leaflabapipb.GetBoardDetailR
 			@htmxui.Card(nil, sensorsTable(resp.GetBoardId(), resp.GetDeviceId(), resp.GetSensors()), nil, nil)
 		}
 	}
+}
+
+// BoardHeader is the board detail screen's header fragment: the page
+// title, device_id, and (owner only) the inline rename control (#1767,
+// FR3). Factored out of BoardDetail so handleRenameBoard can re-render
+// exactly this fragment via HTMX after a rename attempt, wrapped in the
+// "board-header" id every renameBoardForm submission targets with
+// hx-target="#board-header" hx-swap="outerHTML" -- swapping only the
+// header, never the sensors table below it.
+//
+// renameErr, when non-empty, renders inline under the rename form --
+// handleRenameBoard passes the humanized message for InvalidArgument
+// (empty name) or PermissionDenied (non-owner/unowned), never a raw 500;
+// see handlers_boards.go's handleRenameBoard.
+//
+// The title uses boardDisplayName (boards.templ), the same board-name
+// fallback rule used everywhere else in the app (falls back to deviceID
+// when the board has no name yet), rather than a static "Board" label --
+// so a non-owner, who never sees renameBoardForm's input value, still has
+// somewhere on the page the actual current name is shown.
+//
+// Hiding the rename control for a non-owner (ownedByCaller == false) is
+// presentation only -- the enforcement point is authorizeBoardWrite inside
+// the RenameBoard RPC itself (NFR1's server-side-is-the-only-real-fence
+// rule), not this check.
+templ BoardHeader(boardID int64, deviceID, boardName string, ownedByCaller bool, renameErr string) {
+	<div id="board-header">
+		<h1 class="text-2xl font-bold mb-1">{ boardDisplayName(boardName, deviceID) }</h1>
+		<p class="font-mono text-sm text-base-content/70 mb-4">{ deviceID }</p>
+		if ownedByCaller {
+			@renameBoardForm(boardID, boardName, deviceID, renameErr)
+		}
+	</div>
+}
+
+// renameBoardForm is the owner-only inline rename control (FR3). Prefilled
+// with the board's current name; an unnamed board (boardName == "") shows
+// an empty field with device_id as the placeholder, per the task issue's
+// UI section. Posts to "/boards/{board_id}/rename" (main.go's setupRoutes)
+// and swaps the whole "#board-header" fragment on response.
+templ renameBoardForm(boardID int64, boardName, deviceID, renameErr string) {
+	<form
+		hx-post={ fmt.Sprintf("/boards/%d/rename", boardID) }
+		hx-target="#board-header"
+		hx-swap="outerHTML"
+		class="flex flex-col gap-1 mb-4"
+	>
+		<div class="flex items-center gap-2">
+			<input
+				type="text"
+				name="name"
+				value={ boardName }
+				placeholder={ deviceID }
+				class="input input-bordered input-sm"
+			/>
+			<button type="submit" class="btn btn-sm btn-primary">Rename</button>
+		</div>
+		if renameErr != "" {
+			<span class="text-sm text-error">{ renameErr }</span>
+		}
+	</form>
 }
 
 // sensorsTable renders one row per sensor (FR6: every sensor the API
