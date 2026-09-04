@@ -55,8 +55,19 @@ type ScheduleStore interface {
 	// with no state change, if IsPublished already holds for entryID.
 	Update(ctx context.Context, entryID uuid.UUID, proposedPublishAt time.Time) error
 
-	// ListByChannel returns every ScheduleEntry for channelID.
-	ListByChannel(ctx context.Context, channelID uuid.UUID) ([]ScheduleEntry, error)
+	// ListByChannel returns ScheduleEntry rows for channelID, ordered by
+	// proposed_publish_at ascending, optionally bounded by since
+	// (inclusive lower bound, nil = no bound) and before (exclusive upper
+	// bound, nil = no bound) on that same field, capped at limit (<=0 =
+	// unbounded; truncated reports whether more matching rows exist beyond
+	// it). Callers needing the complete, unbounded set for a correctness-
+	// sensitive computation (save_schedule_draft's cadence/collision
+	// detection, generate_schedule_plan's pacing tracker) pass since=nil,
+	// before=nil, limit=0 -- see mcp/tools/schedule_draft.go's
+	// list_schedule_entries and get_drafting_context for the bounded
+	// callers (issue #1812's follow-up: filtering/pagination belongs in
+	// this layer, not re-implemented over an unbounded Go-side fetch).
+	ListByChannel(ctx context.Context, channelID uuid.UUID, since, before *time.Time, limit int) (entries []ScheduleEntry, truncated bool, err error)
 
 	// GetByID returns the ScheduleEntry for id, or pgx.ErrNoRows if none
 	// exists. Backs save_schedule_draft's WriteRender step
@@ -76,10 +87,13 @@ type ScheduleStore interface {
 	// to an actually-published video does.
 	IsPublished(ctx context.Context, entryID uuid.UUID) (bool, error)
 
-	// ListDetailByChannel returns every ScheduleEntryDetail for
-	// channelID, ordered by proposed_publish_at -- `web`'s GET
-	// /channels/{id}/schedule read (issue #1580, C8: FR19/FR20).
-	ListDetailByChannel(ctx context.Context, channelID uuid.UUID) ([]ScheduleEntryDetail, error)
+	// ListDetailByChannel returns ScheduleEntryDetail rows for channelID,
+	// ordered by proposed_publish_at, capped at limit (<=0 = unbounded) --
+	// `web`'s GET /channels/{id}/schedule read (issue #1580, C8: FR19/
+	// FR20) passes limit=0 for its full page; get_channel_overview's
+	// schedule section (mcp/tools/browse.go, issue #1808's follow-up)
+	// passes its documented default limit.
+	ListDetailByChannel(ctx context.Context, channelID uuid.UUID, limit int) (details []ScheduleEntryDetail, truncated bool, err error)
 }
 
 // scheduleStore implements ScheduleStore against `schedule_entry`
@@ -296,10 +310,18 @@ func (s scheduleStore) GetByID(ctx context.Context, id uuid.UUID) (ScheduleEntry
 	return e, nil
 }
 
-func (s scheduleStore) ListByChannel(ctx context.Context, channelID uuid.UUID) ([]ScheduleEntry, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+scheduleEntryColumns+` FROM schedule_entry WHERE channel_id = $1 ORDER BY proposed_publish_at`, channelID)
+func (s scheduleStore) ListByChannel(ctx context.Context, channelID uuid.UUID, since, before *time.Time, limit int) ([]ScheduleEntry, bool, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+scheduleEntryColumns+`
+		FROM schedule_entry
+		WHERE channel_id = $1
+		  AND ($2::timestamptz IS NULL OR proposed_publish_at >= $2)
+		  AND ($3::timestamptz IS NULL OR proposed_publish_at < $3)
+		ORDER BY proposed_publish_at
+		LIMIT $4
+	`, channelID, since, before, fetchLimit(limit))
 	if err != nil {
-		return nil, fmt.Errorf("list schedule entries by channel: %w", err)
+		return nil, false, fmt.Errorf("list schedule entries by channel: %w", err)
 	}
 	defer rows.Close()
 
@@ -307,14 +329,15 @@ func (s scheduleStore) ListByChannel(ctx context.Context, channelID uuid.UUID) (
 	for rows.Next() {
 		e, err := scanScheduleEntry(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan schedule_entry: %w", err)
+			return nil, false, fmt.Errorf("scan schedule_entry: %w", err)
 		}
 		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list schedule entries by channel: %w", err)
+		return nil, false, fmt.Errorf("list schedule entries by channel: %w", err)
 	}
-	return entries, nil
+	entries, truncated := paginate(entries, limit)
+	return entries, truncated, nil
 }
 
 // dbQueryRower is the subset of *pgxpool.Pool and pgx.Tx isPublished
@@ -362,7 +385,7 @@ func (s scheduleStore) IsPublished(ctx context.Context, entryID uuid.UUID) (bool
 // row multiplication: nothing in the schema prevents more than one live
 // match row per schedule_entry_id, and a plain join would silently
 // duplicate the schedule_entry row for each one.
-func (s scheduleStore) ListDetailByChannel(ctx context.Context, channelID uuid.UUID) ([]ScheduleEntryDetail, error) {
+func (s scheduleStore) ListDetailByChannel(ctx context.Context, channelID uuid.UUID, limit int) ([]ScheduleEntryDetail, bool, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			`+scheduleEntryColumnsAliased+`,
@@ -390,9 +413,10 @@ func (s scheduleStore) ListDetailByChannel(ctx context.Context, channelID uuid.U
 		) pub ON TRUE
 		WHERE se.channel_id = $1
 		ORDER BY se.proposed_publish_at
-	`, channelID)
+		LIMIT $2
+	`, channelID, fetchLimit(limit))
 	if err != nil {
-		return nil, fmt.Errorf("list schedule entry details by channel: %w", err)
+		return nil, false, fmt.Errorf("list schedule entry details by channel: %w", err)
 	}
 	defer rows.Close()
 
@@ -407,13 +431,14 @@ func (s scheduleStore) ListDetailByChannel(ctx context.Context, channelID uuid.U
 			&published, &d.PublishedVideoID, &d.PublishedVideoTitle,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("scan schedule_entry detail: %w", err)
+			return nil, false, fmt.Errorf("scan schedule_entry detail: %w", err)
 		}
 		d.Published = published != nil && *published
 		details = append(details, d)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list schedule entry details by channel: %w", err)
+		return nil, false, fmt.Errorf("list schedule entry details by channel: %w", err)
 	}
-	return details, nil
+	details, truncated := paginate(details, limit)
+	return details, truncated, nil
 }

@@ -140,7 +140,7 @@ func TestSyncSchedule_MixedFixture_ProducesOneSyncedVideoRowEach(t *testing.T) {
 
 	require.NoError(t, a.SyncSchedule(ctx, ch.ID))
 
-	rows, err := st.Sync().ListSchedule(ctx, ch.ID)
+	rows, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, rows, 3, "one synced_video row per fixture video")
 
@@ -182,7 +182,7 @@ func TestSyncSchedule_DoubleRun_NoChurn_OnlyLastSyncedAtMoves(t *testing.T) {
 	a := newSyncActivities(st, yt)
 
 	require.NoError(t, a.SyncSchedule(ctx, ch.ID))
-	first, err := st.Sync().ListSchedule(ctx, ch.ID)
+	first, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, first, 2)
 
@@ -197,7 +197,7 @@ func TestSyncSchedule_DoubleRun_NoChurn_OnlyLastSyncedAtMoves(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	require.NoError(t, a.SyncSchedule(ctx, ch.ID))
-	second, err := st.Sync().ListSchedule(ctx, ch.ID)
+	second, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, second, 2, "re-running over unchanged YouTube data must not add or remove rows")
 
@@ -224,7 +224,7 @@ func TestSyncSchedule_ChangedTitleOnSecondRun_UpdatesInPlace(t *testing.T) {
 	a := newSyncActivities(st, yt)
 
 	require.NoError(t, a.SyncSchedule(ctx, ch.ID))
-	first, err := st.Sync().ListSchedule(ctx, ch.ID)
+	first, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, first, 1)
 	originalID := first[0].ID
@@ -232,7 +232,7 @@ func TestSyncSchedule_ChangedTitleOnSecondRun_UpdatesInPlace(t *testing.T) {
 	yt.Schedule[0].Title = "Updated Title"
 	require.NoError(t, a.SyncSchedule(ctx, ch.ID))
 
-	second, err := st.Sync().ListSchedule(ctx, ch.ID)
+	second, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, second, 1, "a title change must update the existing row, never insert a second one")
 	assert.Equal(t, originalID, second[0].ID)
@@ -253,7 +253,7 @@ func TestSyncSchedule_VideoDisappearsOnSecondRun_RowRetained(t *testing.T) {
 	a := newSyncActivities(st, yt)
 
 	require.NoError(t, a.SyncSchedule(ctx, ch.ID))
-	first, err := st.Sync().ListSchedule(ctx, ch.ID)
+	first, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, first, 2)
 
@@ -271,7 +271,7 @@ func TestSyncSchedule_VideoDisappearsOnSecondRun_RowRetained(t *testing.T) {
 	}
 	require.NoError(t, a.SyncSchedule(ctx, ch.ID))
 
-	second, err := st.Sync().ListSchedule(ctx, ch.ID)
+	second, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, second, 2, "a disappeared video's row must be retained, not deleted")
 
@@ -320,7 +320,7 @@ func TestSyncSchedule_ErrRevoked_MarksNeedsReauthRetainsDataNonRetryable(t *test
 	require.NoError(t, getErr)
 	assert.Equal(t, store.ConnectionStateNeedsReauth, got.ConnectionState, "ErrRevoked must mark the Channel needs-reauth (FR4)")
 
-	rows, listErr := st.Sync().ListSchedule(ctx, ch.ID)
+	rows, _, listErr := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, listErr)
 	require.Len(t, rows, 1, "existing synced_video rows must be retained, not deleted, on a revoked credential")
 	assert.Equal(t, "vid-existing", rows[0].YouTubeVideoID)

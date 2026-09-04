@@ -331,7 +331,7 @@ func TestSaveScheduleDraft_NonViableOrAbsentVerdict_RejectedNoRowWritten(t *test
 		})
 		assert.True(t, res.IsError, "a not-viable verdict must be rejected")
 
-		entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+		entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 		require.NoError(t, err)
 		for _, e := range entries {
 			assert.NotEqual(t, idea.ID, e.IdeaID, "no schedule_entry row must exist for a rejected idea")
@@ -357,7 +357,7 @@ func TestSaveScheduleDraft_NonViableOrAbsentVerdict_RejectedNoRowWritten(t *test
 		})
 		assert.True(t, res.IsError, "a needs-more-research verdict must be rejected")
 
-		entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+		entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 		require.NoError(t, err)
 		for _, e := range entries {
 			assert.NotEqual(t, idea.ID, e.IdeaID)
@@ -376,7 +376,7 @@ func TestSaveScheduleDraft_NonViableOrAbsentVerdict_RejectedNoRowWritten(t *test
 		})
 		assert.True(t, res.IsError, "an idea with no verdict at all must be rejected")
 
-		entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+		entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 		require.NoError(t, err)
 		for _, e := range entries {
 			assert.NotEqual(t, idea.ID, e.IdeaID)
@@ -402,7 +402,7 @@ func TestSaveScheduleDraft_VerdictIDBelongingToDifferentIdea_Rejected(t *testing
 	assert.True(t, res.IsError, "a verdict_id belonging to a different idea must be rejected")
 	assert.Contains(t, sdTextOf(res), "different idea")
 
-	entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+	entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Empty(t, entries, "a rejected cross-idea verdict_id must leave no schedule_entry row at all")
 }
@@ -513,7 +513,7 @@ func TestSaveScheduleDraft_CadenceExceeded_FlaggedButStillPersisted(t *testing.T
 	assert.True(t, out.CadenceExceeded, "the third entry in a week with target=2 must be flagged")
 	assert.False(t, out.Collision, "entries are spread far enough apart that collision must not also fire here")
 
-	entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+	entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Len(t, entries, 3, "cadence_exceeded is advisory only -- the flagged draft must still be persisted")
 }
@@ -542,7 +542,7 @@ func TestSaveScheduleDraft_Collision_WithSyncedScheduledDraft(t *testing.T) {
 	out := sdDecode[tools.SaveScheduleDraftOutput](t, res)
 	assert.True(t, out.Collision, "a slot 2h from a synced scheduled/private draft must collide")
 
-	entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+	entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "a collision flag is advisory only -- the draft must still be saved")
 }
@@ -682,7 +682,7 @@ func TestSaveScheduleDraft_Replay_FlagsRecomputedFreshEachCall_NotCachedFromFirs
 	assert.True(t, second.OffPreferredDay, "an idempotent replay must recompute flags fresh against current state, not reuse the first call's cached flags")
 	assert.Equal(t, first.ScheduleEntryID, second.ScheduleEntryID, "the replay must still resolve to the same, single persisted draft")
 
-	entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+	entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "a replay must never duplicate the schedule_entry row")
 }
@@ -709,7 +709,7 @@ func TestSaveScheduleDraft_AnalystCanSave_UnassociatedPersonDeniedWritesNothing(
 	assert.True(t, deniedRes.IsError)
 	assert.Contains(t, sdTextOf(deniedRes), "permission denied")
 
-	entries, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID)
+	entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "the denied outsider call must not have written a row -- only the Analyst's draft exists")
 }

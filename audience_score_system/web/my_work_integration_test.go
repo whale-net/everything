@@ -30,8 +30,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -195,7 +195,7 @@ func (s *myWorkTestStack) setupMyWorkOutcomeChain(t *testing.T, ctx context.Cont
 		YouTubeVideoID: "yt-" + uuid.NewString(), Title: videoTitle,
 		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
 	}}))
-	synced, err := s.store.Sync().ListSchedule(ctx, ch.ID)
+	synced, _, err := s.store.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	var video store.SyncedVideo
 	for _, sv := range synced {

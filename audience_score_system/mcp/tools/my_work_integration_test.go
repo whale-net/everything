@@ -197,7 +197,7 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 		YouTubeVideoID: "yt-mw-video-a", Title: "Video A",
 		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
 	}}))
-	syncedA, err := f.st.Sync().ListSchedule(ctx, chA.ID)
+	syncedA, _, err := f.st.Sync().ListSchedule(ctx, chA.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, syncedA, 1)
 	require.NoError(t, f.st.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{

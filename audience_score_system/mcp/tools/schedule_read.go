@@ -98,24 +98,23 @@ func getChannelScheduleHandler(syncStore store.SyncStore) mcp.ToolHandlerFor[Get
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in GetChannelScheduleInput) (*mcp.CallToolResult, GetChannelScheduleOutput, error) {
 		channelID := in.ChannelScopeID()
 
-		vids, err := syncStore.ListSchedule(ctx, channelID)
-		if err != nil {
-			return nil, GetChannelScheduleOutput{}, fmt.Errorf("get_channel_schedule: list schedule for channel %s: %w", channelID, err)
-		}
-
 		includeDrafts := true
 		if in.IncludeDrafts != nil {
 			includeDrafts = *in.IncludeDrafts
 		}
 
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultGetChannelScheduleLimit
+		}
+
+		vids, truncated, err := syncStore.ListSchedule(ctx, channelID, in.From, in.To, includeDrafts, limit)
+		if err != nil {
+			return nil, GetChannelScheduleOutput{}, fmt.Errorf("get_channel_schedule: list schedule for channel %s: %w", channelID, err)
+		}
+
 		out := make([]ScheduleVideo, 0, len(vids))
 		for _, v := range vids {
-			if v.IsScheduledDraft && !includeDrafts {
-				continue
-			}
-			if !withinWindow(v, in.From, in.To) {
-				continue
-			}
 			out = append(out, ScheduleVideo{
 				YouTubeVideoID:   v.YouTubeVideoID,
 				Title:            v.Title,
@@ -127,36 +126,6 @@ func getChannelScheduleHandler(syncStore store.SyncStore) mcp.ToolHandlerFor[Get
 			})
 		}
 
-		limit := in.Limit
-		if limit <= 0 {
-			limit = defaultGetChannelScheduleLimit
-		}
-		trimmed, truncated := truncateSlice(out, limit)
-
-		return nil, GetChannelScheduleOutput{Videos: trimmed, Truncated: truncated}, nil
+		return nil, GetChannelScheduleOutput{Videos: out, Truncated: truncated}, nil
 	}
-}
-
-// withinWindow reports whether v's effective timestamp (PublishAt if
-// still a scheduled draft, else PublishedAt) falls within [from, to]
-// (either bound nil-able and inclusive). A video with neither timestamp
-// set (never published, no scheduled publish time on file) always
-// passes -- there is nothing to compare a From/To window against, and
-// silently dropping such a row would be more surprising than including
-// it.
-func withinWindow(v store.SyncedVideo, from, to *time.Time) bool {
-	ts := v.PublishAt
-	if ts == nil {
-		ts = v.PublishedAt
-	}
-	if ts == nil {
-		return true
-	}
-	if from != nil && ts.Before(*from) {
-		return false
-	}
-	if to != nil && ts.After(*to) {
-		return false
-	}
-	return true
 }

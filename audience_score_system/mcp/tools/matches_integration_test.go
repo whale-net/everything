@@ -137,7 +137,7 @@ func newMatchesFixture(t *testing.T) *matchesFixture {
 		YouTubeVideoID: "yt-" + uuid.NewString(), Title: "A Published Video",
 		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
 	}}))
-	synced, err := st.Sync().ListSchedule(ctx, ch.ID)
+	synced, _, err := st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, synced, 1)
 	video := synced[0]
@@ -149,7 +149,7 @@ func newMatchesFixture(t *testing.T) *matchesFixture {
 	require.NoError(t, st.Matches().Record(ctx, store.VideoScheduleMatch{
 		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.55, State: store.MatchStatePending,
 	}))
-	pending, err := st.Matches().ListPending(ctx, ch.ID)
+	pending, _, err := st.Matches().ListPending(ctx, ch.ID, nil, 0)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	match := pending[0]
@@ -319,7 +319,7 @@ func TestListPendingMatches_LimitTruncatedAndSincePageForwardExactly(t *testing.
 			YouTubeVideoID: "yt-" + uuid.NewString(), Title: fmt.Sprintf("Extra Video %d", i),
 			PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
 		}}))
-		synced, err := f.st.Sync().ListSchedule(ctx, f.ch.ID)
+		synced, _, err := f.st.Sync().ListSchedule(ctx, f.ch.ID, nil, nil, true, 0)
 		require.NoError(t, err)
 		var video store.SyncedVideo
 		for _, v := range synced {

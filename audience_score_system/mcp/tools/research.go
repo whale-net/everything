@@ -262,20 +262,17 @@ func listResearchNotes(research store.ResearchStore) mcp.ToolHandlerFor[ListRese
 			cited = &v
 		}
 
-		notes, err := research.ListFiltered(ctx, channelID, ideaID, cited)
-		if err != nil {
-			return nil, ListResearchNotesOutput{}, err
-		}
-		notes = filterNotesRange(notes, in.Since, in.Before)
-
 		limit := in.Limit
 		if limit <= 0 {
 			limit = defaultListResearchNotesLimit
 		}
-		trimmed, truncated := truncateSlice(notes, limit)
+		notes, truncated, err := research.ListFiltered(ctx, channelID, ideaID, cited, in.Since, in.Before, limit)
+		if err != nil {
+			return nil, ListResearchNotesOutput{}, err
+		}
 
-		out := ListResearchNotesOutput{Notes: make([]ResearchNoteOutput, 0, len(trimmed)), Truncated: truncated}
-		for _, n := range trimmed {
+		out := ListResearchNotesOutput{Notes: make([]ResearchNoteOutput, 0, len(notes)), Truncated: truncated}
+		for _, n := range notes {
 			out.Notes = append(out.Notes, toResearchNoteOutput(n.ResearchNote, n.AuthorDisplayName))
 		}
 		return nil, out, nil
@@ -417,22 +414,6 @@ type ListIdeasOutput struct {
 	Truncated bool                `json:"truncated" jsonschema:"True if more matching Ideas exist beyond limit"`
 }
 
-// filterIdeasSince returns the subset of summaries created at or after
-// since (nil = no filter) -- the pagination bound list_ideas uses to page
-// forward past a truncated response (issue #1813).
-func filterIdeasSince(summaries []store.IdeaSummary, since *time.Time) []store.IdeaSummary {
-	if since == nil {
-		return summaries
-	}
-	out := make([]store.IdeaSummary, 0, len(summaries))
-	for _, s := range summaries {
-		if !s.CreatedAt.Before(*since) {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
 func registerListIdeas(reg *server.Registry, ideas store.IdeaStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_ideas",
@@ -449,20 +430,17 @@ func listIdeas(ideas store.IdeaStore) mcp.ToolHandlerFor[ListIdeasInput, ListIde
 			return nil, ListIdeasOutput{}, fmt.Errorf("channel_id is not a valid UUID: %w", err)
 		}
 
-		summaries, err := ideas.ListByChannelWithStats(ctx, channelID)
-		if err != nil {
-			return nil, ListIdeasOutput{}, err
-		}
-		summaries = filterIdeasSince(summaries, in.Since)
-
 		limit := in.Limit
 		if limit <= 0 {
 			limit = defaultListIdeasLimit
 		}
-		trimmed, truncated := truncateSlice(summaries, limit)
+		summaries, truncated, err := ideas.ListByChannelWithStats(ctx, channelID, in.Since, limit)
+		if err != nil {
+			return nil, ListIdeasOutput{}, err
+		}
 
-		out := ListIdeasOutput{Ideas: make([]IdeaSummaryOutput, 0, len(trimmed)), Truncated: truncated}
-		for _, s := range trimmed {
+		out := ListIdeasOutput{Ideas: make([]IdeaSummaryOutput, 0, len(summaries)), Truncated: truncated}
+		for _, s := range summaries {
 			out.Ideas = append(out.Ideas, IdeaSummaryOutput{
 				IdeaID:     s.ID.String(),
 				Title:      s.Title,

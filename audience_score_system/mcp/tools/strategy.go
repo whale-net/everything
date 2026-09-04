@@ -319,11 +319,9 @@ func getStrategyHandler(strategies store.StrategyStore, persons store.PersonStor
 // #1813), so this default is generous headroom rather than a tight cap --
 // it exists as a query-level guard against ever hitting the calling MCP
 // client's response-size cap, not because that's expected in normal use.
-// Note this bounds the rendered response only: ListByChannel still loads
-// every matching Strategy's linked verdicts (an N+1 query per Strategy)
-// before this handler ever sees the slice to truncate -- acceptable at
-// this cardinality, but the limit does not protect the database from a
-// pathological Channel the way #1808/#1813's other limits do.
+// The limit is pushed into ListByChannel's SQL LIMIT (issue #1808/#1813's
+// follow-up), so a Strategy trimmed by truncation never pays its N+1
+// linked-verdicts query either.
 const defaultListStrategiesLimit = 50
 
 // ListStrategiesInput is list_strategies's argument schema.
@@ -361,19 +359,17 @@ func listStrategiesHandler(strategies store.StrategyStore, persons store.PersonS
 			return nil, ListStrategiesOutput{}, fmt.Errorf("channel_id is not a valid UUID: %w", err)
 		}
 
-		details, err := strategies.ListByChannel(ctx, channelID, in.ActiveOnly)
-		if err != nil {
-			return nil, ListStrategiesOutput{}, err
-		}
-
 		limit := in.Limit
 		if limit <= 0 {
 			limit = defaultListStrategiesLimit
 		}
-		trimmed, truncated := truncateSlice(details, limit)
+		details, truncated, err := strategies.ListByChannel(ctx, channelID, in.ActiveOnly, limit)
+		if err != nil {
+			return nil, ListStrategiesOutput{}, err
+		}
 
-		out := ListStrategiesOutput{Strategies: make([]StrategyOutput, 0, len(trimmed)), Truncated: truncated}
-		for _, d := range trimmed {
+		out := ListStrategiesOutput{Strategies: make([]StrategyOutput, 0, len(details)), Truncated: truncated}
+		for _, d := range details {
 			rendered, err := renderStrategy(ctx, persons, d)
 			if err != nil {
 				return nil, ListStrategiesOutput{}, err
@@ -559,12 +555,15 @@ func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store
 			count = maxCountPerIdea
 		}
 
-		active, err := strategies.ListByChannel(ctx, channelID, true)
+		// Unbounded (limit 0): pacing/collision computation below needs
+		// every active Strategy and every schedule_entry, not a capped
+		// page.
+		active, _, err := strategies.ListByChannel(ctx, channelID, true, 0)
 		if err != nil {
 			return nil, GenerateSchedulePlanOutput{}, fmt.Errorf("generate_schedule_plan: list active strategies: %w", err)
 		}
 
-		entries, err := schedules.ListByChannel(ctx, channelID)
+		entries, _, err := schedules.ListByChannel(ctx, channelID, nil, nil, 0)
 		if err != nil {
 			return nil, GenerateSchedulePlanOutput{}, fmt.Errorf("generate_schedule_plan: list schedule entries: %w", err)
 		}
@@ -578,7 +577,7 @@ func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store
 			policy = &policyRow
 		}
 
-		synced, err := sync.ListSchedule(ctx, channelID)
+		synced, _, err := sync.ListSchedule(ctx, channelID, nil, nil, true, 0)
 		if err != nil {
 			return nil, GenerateSchedulePlanOutput{}, fmt.Errorf("generate_schedule_plan: list synced schedule: %w", err)
 		}

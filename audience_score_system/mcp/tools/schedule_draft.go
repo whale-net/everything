@@ -93,13 +93,18 @@ func parseWeekdayName(raw string) (string, error) {
 // idea, the exact verdict version it's bound to (LB3), state, approver, and
 // timestamps an agent needs without a follow-up call.
 type ScheduleEntryOutput struct {
-	ScheduleEntryID       string  `json:"schedule_entry_id" jsonschema:"this schedule_entry's ID, as a UUID string"`
-	ChannelID             string  `json:"channel_id" jsonschema:"the Channel this entry belongs to, as a UUID string"`
-	IdeaID                string  `json:"idea_id" jsonschema:"the Idea this entry schedules, as a UUID string"`
-	IdeaTitle             string  `json:"idea_title" jsonschema:"that Idea's title"`
-	VerdictID             string  `json:"verdict_id" jsonschema:"the specific viability_verdict version this entry is bound to (LB3), as a UUID string -- never a copy of the verdict text, never just the idea_id"`
-	VerdictVersion        int     `json:"verdict_version" jsonschema:"that verdict version's number, so a caller can tell a stale binding from a fresh one"`
-	ProposedPublishAt     string  `json:"proposed_publish_at" jsonschema:"the proposed (or, once committed, the approved) publish time, RFC3339"`
+	ScheduleEntryID string `json:"schedule_entry_id" jsonschema:"this schedule_entry's ID, as a UUID string"`
+	ChannelID       string `json:"channel_id" jsonschema:"the Channel this entry belongs to, as a UUID string"`
+	IdeaID          string `json:"idea_id" jsonschema:"the Idea this entry schedules, as a UUID string"`
+	IdeaTitle       string `json:"idea_title" jsonschema:"that Idea's title"`
+	VerdictID       string `json:"verdict_id" jsonschema:"the specific viability_verdict version this entry is bound to (LB3), as a UUID string -- never a copy of the verdict text, never just the idea_id"`
+	VerdictVersion  int    `json:"verdict_version" jsonschema:"that verdict version's number, so a caller can tell a stale binding from a fresh one"`
+	// ProposedPublishAt is formatted with sub-second precision
+	// (RFC3339Nano, still a valid RFC3339 string) rather than plain
+	// RFC3339 -- list_schedule_entries' since/before pagination (issue
+	// #1812) round-trips this value back as a cursor, mirroring
+	// ResearchNoteOutput.CreatedAt's #1808 fix.
+	ProposedPublishAt     string  `json:"proposed_publish_at" jsonschema:"the proposed (or, once committed, the approved) publish time, RFC3339 (with sub-second precision -- use verbatim as a since/before pagination cursor)"`
 	State                 string  `json:"state" jsonschema:"draft or committed"`
 	ApprovedByPersonID    *string `json:"approved_by_person_id,omitempty" jsonschema:"the Founder or Co-Creator who approved this entry, as a UUID string, if committed"`
 	ApprovedByDisplayName *string `json:"approved_by_display_name,omitempty" jsonschema:"that Person's display name, if committed"`
@@ -118,7 +123,7 @@ func toScheduleEntryOutput(e store.ScheduleEntry, ideaTitle string, verdictVersi
 		IdeaTitle:            ideaTitle,
 		VerdictID:            e.VerdictID.String(),
 		VerdictVersion:       verdictVersion,
-		ProposedPublishAt:    e.ProposedPublishAt.Format(time.RFC3339),
+		ProposedPublishAt:    e.ProposedPublishAt.Format(time.RFC3339Nano),
 		State:                string(e.State),
 		CreatedByPersonID:    e.CreatedByPersonID.String(),
 		CreatedByDisplayName: createdByDisplayName,
@@ -392,11 +397,17 @@ func getDraftingContextHandler(pacing store.PacingStore, sync store.SyncStore, s
 			out.Policy = &rendered
 		}
 
-		var from, to *time.Time
+		// from/before: the +/-14 day window's upper edge is passed as
+		// ScheduleStore.ListByChannel's exclusive `before` bound rather
+		// than an inclusive one (this handler's pre-#1808/#1812 Go-side
+		// filtering treated it as inclusive) -- an entry landing on the
+		// exact nanosecond of that boundary is not a real-world case this
+		// window is meant to catch.
+		var from, before *time.Time
 		if in.Around != nil {
 			f := in.Around.Add(-draftingContextWindow)
-			t := in.Around.Add(draftingContextWindow)
-			from, to = &f, &t
+			b := in.Around.Add(draftingContextWindow)
+			from, before = &f, &b
 		}
 
 		limit := in.Limit
@@ -404,20 +415,12 @@ func getDraftingContextHandler(pacing store.PacingStore, sync store.SyncStore, s
 			limit = defaultDraftingContextLimit
 		}
 
-		vids, err := sync.ListSchedule(ctx, channelID)
+		vids, syncedTruncated, err := sync.ListSchedule(ctx, channelID, from, before, true, limit)
 		if err != nil {
 			return nil, out, fmt.Errorf("get_drafting_context: list synced schedule: %w", err)
 		}
-		syncedFiltered := make([]store.SyncedVideo, 0, len(vids))
+		out.SyncedSchedule = make([]ScheduleVideo, 0, len(vids))
 		for _, v := range vids {
-			if !withinWindow(v, from, to) {
-				continue
-			}
-			syncedFiltered = append(syncedFiltered, v)
-		}
-		syncedTrimmed, syncedTruncated := truncateSlice(syncedFiltered, limit)
-		out.SyncedSchedule = make([]ScheduleVideo, 0, len(syncedTrimmed))
-		for _, v := range syncedTrimmed {
 			out.SyncedSchedule = append(out.SyncedSchedule, ScheduleVideo{
 				YouTubeVideoID:   v.YouTubeVideoID,
 				Title:            v.Title,
@@ -429,23 +432,12 @@ func getDraftingContextHandler(pacing store.PacingStore, sync store.SyncStore, s
 			})
 		}
 
-		entries, err := schedules.ListByChannel(ctx, channelID)
+		entries, entriesTruncated, err := schedules.ListByChannel(ctx, channelID, from, before, limit)
 		if err != nil {
 			return nil, out, fmt.Errorf("get_drafting_context: list schedule entries: %w", err)
 		}
-		entriesFiltered := make([]store.ScheduleEntry, 0, len(entries))
+		out.ScheduleEntries = make([]ScheduleEntryOutput, 0, len(entries))
 		for _, e := range entries {
-			if from != nil && e.ProposedPublishAt.Before(*from) {
-				continue
-			}
-			if to != nil && e.ProposedPublishAt.After(*to) {
-				continue
-			}
-			entriesFiltered = append(entriesFiltered, e)
-		}
-		entriesTrimmed, entriesTruncated := truncateSlice(entriesFiltered, limit)
-		out.ScheduleEntries = make([]ScheduleEntryOutput, 0, len(entriesTrimmed))
-		for _, e := range entriesTrimmed {
 			rendered, err := renderScheduleEntry(ctx, ideas, verdicts, persons, e)
 			if err != nil {
 				return nil, out, err
@@ -635,12 +627,15 @@ func saveScheduleDraftRender(schedules store.ScheduleStore, ideas store.IdeaStor
 			policy = &policyRow
 		}
 
-		otherEntries, err := schedules.ListByChannel(ctx, entry.ChannelID)
+		// Unbounded (limit 0): computeScheduleFlags' cadence/collision
+		// detection below needs every other schedule_entry and every
+		// synced video, not a capped page.
+		otherEntries, _, err := schedules.ListByChannel(ctx, entry.ChannelID, nil, nil, 0)
 		if err != nil {
 			return nil, SaveScheduleDraftOutput{}, fmt.Errorf("list schedule entries for flags: %w", err)
 		}
 
-		synced, err := sync.ListSchedule(ctx, entry.ChannelID)
+		synced, _, err := sync.ListSchedule(ctx, entry.ChannelID, nil, nil, true, 0)
 		if err != nil {
 			return nil, SaveScheduleDraftOutput{}, fmt.Errorf("list synced schedule for flags: %w", err)
 		}
@@ -657,7 +652,7 @@ func saveScheduleDraftRender(schedules store.ScheduleStore, ideas store.IdeaStor
 	}
 }
 
-// effectiveSyncedVideoTime mirrors withinWindow's (schedule_read.go)
+// effectiveSyncedVideoTime mirrors SyncStore.ListSchedule's (store/sync.go)
 // notion of a SyncedVideo's effective timestamp -- PublishAt while still a
 // scheduled/private draft, else PublishedAt, nil if neither is set.
 func effectiveSyncedVideoTime(v store.SyncedVideo) *time.Time {
@@ -818,28 +813,6 @@ type ListScheduleEntriesOutput struct {
 	Truncated bool                  `json:"truncated" jsonschema:"True if more matching entries exist beyond limit"`
 }
 
-// filterScheduleEntriesRange returns the subset of entries whose
-// ProposedPublishAt is at/after since (nil = no lower bound) and strictly
-// before before (nil = no upper bound) -- list_schedule_entries' pagination
-// bound (issue #1812), mirroring browse.go's filterNotesRange for the same
-// since/before shape over a different timestamp field.
-func filterScheduleEntriesRange(entries []store.ScheduleEntry, since, before *time.Time) []store.ScheduleEntry {
-	if since == nil && before == nil {
-		return entries
-	}
-	out := make([]store.ScheduleEntry, 0, len(entries))
-	for _, e := range entries {
-		if since != nil && e.ProposedPublishAt.Before(*since) {
-			continue
-		}
-		if before != nil && !e.ProposedPublishAt.Before(*before) {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out
-}
-
 func registerListScheduleEntries(reg *server.Registry, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_schedule_entries",
@@ -857,20 +830,17 @@ func listScheduleEntriesHandler(schedules store.ScheduleStore, ideas store.IdeaS
 			return nil, ListScheduleEntriesOutput{}, fmt.Errorf("channel_id is not a valid UUID: %w", err)
 		}
 
-		entries, err := schedules.ListByChannel(ctx, channelID)
-		if err != nil {
-			return nil, ListScheduleEntriesOutput{}, err
-		}
-		entries = filterScheduleEntriesRange(entries, in.Since, in.Before)
-
 		limit := in.Limit
 		if limit <= 0 {
 			limit = defaultListScheduleEntriesLimit
 		}
-		trimmed, truncated := truncateSlice(entries, limit)
+		entries, truncated, err := schedules.ListByChannel(ctx, channelID, in.Since, in.Before, limit)
+		if err != nil {
+			return nil, ListScheduleEntriesOutput{}, err
+		}
 
-		out := ListScheduleEntriesOutput{Entries: make([]ScheduleEntryOutput, 0, len(trimmed)), Truncated: truncated}
-		for _, e := range trimmed {
+		out := ListScheduleEntriesOutput{Entries: make([]ScheduleEntryOutput, 0, len(entries)), Truncated: truncated}
+		for _, e := range entries {
 			rendered, err := renderScheduleEntry(ctx, ideas, verdicts, persons, e)
 			if err != nil {
 				return nil, ListScheduleEntriesOutput{}, err

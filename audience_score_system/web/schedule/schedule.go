@@ -110,7 +110,7 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries, err := h.store.Schedules().ListDetailByChannel(ctx, channelID)
+	entries, _, err := h.store.Schedules().ListDetailByChannel(ctx, channelID, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

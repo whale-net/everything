@@ -243,7 +243,7 @@ func newFullChainFixture(t *testing.T) *fullChainFixture {
 		YouTubeVideoID: "yt-" + uuid.NewString(), Title: "Full Chain Video",
 		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
 	}}))
-	synced, err := f.st.Sync().ListSchedule(ctx, f.ch.ID)
+	synced, _, err := f.st.Sync().ListSchedule(ctx, f.ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	require.Len(t, synced, 1)
 	video := synced[0]
@@ -341,7 +341,7 @@ func TestGetPredictionVsOutcome_ConfirmedMatch_IncludedWithProvenanceConfirmed(t
 	// here) -- proves "confirmed" state renders provenance "confirmed".
 	_, err := f.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET state = 'pending' WHERE schedule_entry_id = $1`, f.entry.ID)
 	require.NoError(t, err)
-	pending, err := f.st.Matches().ListPending(ctx, f.ch.ID)
+	pending, _, err := f.st.Matches().ListPending(ctx, f.ch.ID, nil, 0)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
 	require.NoError(t, f.st.Matches().Resolve(ctx, pending[0].ID, f.creator.ID, true, nil))

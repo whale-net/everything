@@ -90,7 +90,7 @@ func (f *outcomesFixture) syncedVideo(t *testing.T, ctx context.Context, youtube
 		YouTubeVideoID: youtubeVideoID, Title: title,
 		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
 	}}))
-	rows, err := f.st.Sync().ListSchedule(ctx, f.ch.ID)
+	rows, _, err := f.st.Sync().ListSchedule(ctx, f.ch.ID, nil, nil, true, 0)
 	require.NoError(t, err)
 	for _, r := range rows {
 		if r.YouTubeVideoID == youtubeVideoID {
