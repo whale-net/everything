@@ -27,5 +27,5 @@ If `--server` is omitted, ask which of `audience-score-system-mcp-dev` / `audien
 ## Rules
 
 - Never call `save_schedule_draft` yourself — that judgment call belongs to the analyst persona, dispatched per idea, so its reasoning about pacing/collisions stays attached to that call.
-- If `get_drafting_context`/`get_channel_schedule` shows the synced schedule is stale (compare `last_synced_at` across rows), say so — a drafting decision made against stale sync data is a real risk the human should know about, not something to paper over.
+- If `get_drafting_context` shows the synced schedule is stale (compare `last_synced_at` across rows), say so — a drafting decision made against stale sync data is a real risk the human should know about, not something to paper over.
 - Multiple viable ideas in one run is fine; draft each independently so a flag on one doesn't block the others.

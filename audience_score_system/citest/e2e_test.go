@@ -66,8 +66,11 @@
 //   - FR14 -- exercised here (steps 5, 7, 9: ChannelSyncWorkflow run via
 //     Temporal's testsuite, real SyncSchedule activity, needs_reauth skip
 //     and resume).
-//   - FR15 -- exercised here (step 5: get_channel_schedule read by the
-//     Analyst).
+//   - FR15 -- retired outright by FR46 (issue #1831, milestone
+//     video-script-model): get_channel_schedule, FR15's MCP surface, no
+//     longer exists (C6 cut, not replaced). Step 5 now reads the synced
+//     schedule directly from store.SyncStore to keep proving FR14's sync
+//     population without depending on the retired tool.
 //   - FR16 -- exercised here (step 5: save_schedule_draft bound to the
 //     viable verdict version via verdict_id, FK-checked by re-reading the
 //     row back from the store).
@@ -229,7 +232,6 @@ func newWorld(t *testing.T) *world {
 	mcptools.RegisterListChannels(reg, st.Access())
 	mcptools.RegisterResearch(reg, st)
 	mcptools.RegisterVerdict(reg, st)
-	mcptools.RegisterGetChannelSchedule(reg, st.Sync())
 	mcptools.RegisterScheduleDraft(reg, st)
 	mcptools.RegisterMatches(reg, st)
 	mcptools.RegisterBrowse(reg, st)
@@ -638,12 +640,14 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		assert.EqualValues(t, 1, counts.syncSchedule)
 		assert.EqualValues(t, 1, counts.syncOutcomes)
 
-		// FR15: the Analyst reads it.
-		schedRes := callTool(t, csAnalyst, "get_channel_schedule", mcptools.GetChannelScheduleInput{ChannelID: ch.ID.String()})
-		sched := decode[mcptools.GetChannelScheduleOutput](t, schedRes)
-		require.Len(t, sched.Videos, 1)
-		assert.Equal(t, "yt-existing-draft", sched.Videos[0].YouTubeVideoID)
-		assert.True(t, sched.Videos[0].IsScheduledDraft)
+		// FR15 (retired, FR46): get_channel_schedule no longer exists, so
+		// this reads the synced schedule directly from the store instead of
+		// through an MCP tool.
+		syncedVids, _, err := w.st.Sync().ListSchedule(ctx, ch.ID, nil, nil, true, 0)
+		require.NoError(t, err)
+		require.Len(t, syncedVids, 1)
+		assert.Equal(t, "yt-existing-draft", syncedVids[0].YouTubeVideoID)
+		assert.True(t, syncedVids[0].IsScheduledDraft)
 
 		// FR16/FR18: the Analyst saves a draft bound to the viable verdict
 		// version, deliberately colliding (within 12h) with the synced

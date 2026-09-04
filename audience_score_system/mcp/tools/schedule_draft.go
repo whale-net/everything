@@ -360,6 +360,20 @@ func (i GetDraftingContextInput) ChannelScopeID() uuid.UUID {
 	return id
 }
 
+// ScheduleVideo is one `synced_video` row as get_drafting_context reports
+// it -- originally get_channel_schedule's (C6, issue #1576) own render
+// type, moved here when FR46 (issue #1831) retired that tool outright;
+// get_drafting_context is the sole remaining consumer.
+type ScheduleVideo struct {
+	YouTubeVideoID   string     `json:"youtube_video_id" jsonschema:"the YouTube video id"`
+	Title            string     `json:"title" jsonschema:"the video's title"`
+	PrivacyStatus    string     `json:"privacy_status" jsonschema:"public, private, or unlisted"`
+	PublishAt        *time.Time `json:"publish_at,omitempty" jsonschema:"set for a scheduled/private draft not yet published"`
+	PublishedAt      *time.Time `json:"published_at,omitempty" jsonschema:"set once the video is actually live"`
+	IsScheduledDraft bool       `json:"is_scheduled_draft" jsonschema:"true for a private video with a future publish_at"`
+	LastSyncedAt     time.Time  `json:"last_synced_at" jsonschema:"when this row was last confirmed present on YouTube -- a stale value relative to the Channel's other rows means this video was not seen on the most recent sync cycle"`
+}
+
 // GetDraftingContextOutput is get_drafting_context's structured result --
 // everything an agent needs to propose a slot that isn't blind (FR18).
 type GetDraftingContextOutput struct {

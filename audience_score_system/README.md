@@ -105,7 +105,7 @@ ASS-specific configuration beyond the endpoint URL**:
    `/token` for a bearer credential scoped to your Person.
 5. Call `whoami` first to confirm the credential resolves to the expected
    Person, then any Channel-scoped tool (e.g. `list_research_notes`,
-   `get_channel_schedule`) with that Person's `channel_id`.
+   `get_channel_overview`) with that Person's `channel_id`.
 
 For local dev against an MCP client with no OAuth2 client support (or for
 scripting), you can still mint a credential directly:
