@@ -118,6 +118,19 @@ const testSchema = `
 
 	CREATE UNIQUE INDEX idx_board_owner_history_current
 		ON board_owner_history(board_id) WHERE valid_to IS NULL;
+
+	-- FR10/FR14 role grants (leaflab/migrate/migrations/016_m2_ownership_rename.up.sql),
+	-- added for HasRole/GrantRole/RevokeRole coverage.
+	CREATE TABLE leaflab_user_role (
+		leaflab_user_role_id BIGSERIAL   PRIMARY KEY,
+		leaflab_user_id      BIGINT      NOT NULL REFERENCES leaflab_user(leaflab_user_id) ON DELETE CASCADE,
+		role                 TEXT        NOT NULL,
+		valid_from           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		valid_to             TIMESTAMPTZ
+	);
+
+	CREATE UNIQUE INDEX idx_leaflab_user_role_current
+		ON leaflab_user_role(leaflab_user_id, role) WHERE valid_to IS NULL;
 `
 
 // newTestRepository starts a real Postgres container (via dbtest), applies
@@ -886,5 +899,151 @@ func TestClaimBoard_ConcurrentClaims_ExactlyOneWinner(t *testing.T) {
 			// subsequent attempt's INSERT takes.
 			closeBoardOwnerHistory(t, pool, boardID)
 		}()
+	}
+}
+
+// ─── #1775: HasRole / GrantRole / RevokeRole (FR10, FR14) ──────────────────
+
+// countRoleRows returns (total rows, open rows) for leaflabUserID/role in
+// leaflab_user_role, so tests can assert the SCD2 shape directly rather than
+// re-deriving it through HasRole alone.
+func countRoleRows(t *testing.T, pool *pgxpool.Pool, leaflabUserID int64, role string) (total, open int) {
+	t.Helper()
+	ctx := context.Background()
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM leaflab_user_role WHERE leaflab_user_id = $1 AND role = $2`,
+		leaflabUserID, role).Scan(&total); err != nil {
+		t.Fatalf("count total role rows: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM leaflab_user_role WHERE leaflab_user_id = $1 AND role = $2 AND valid_to IS NULL`,
+		leaflabUserID, role).Scan(&open); err != nil {
+		t.Fatalf("count open role rows: %v", err)
+	}
+	return total, open
+}
+
+// TestRevokeRole_ClosesRowThenGrantRole_OpensSecondRow is Testing criterion
+// 8: RevokeRole sets valid_to and leaves the row present; a subsequent
+// GrantRole opens a second row, so the table shows one closed and one open
+// grant.
+func TestRevokeRole_ClosesRowThenGrantRole_OpensSecondRow(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	ctx := context.Background()
+	userID := seedLeafLabUser(t, pool, "sub-revoke-then-grant")
+
+	if err := repo.GrantRole(ctx, userID, adminRole); err != nil {
+		t.Fatalf("initial GrantRole: %v", err)
+	}
+	if err := repo.RevokeRole(ctx, userID, adminRole); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+
+	total, open := countRoleRows(t, pool, userID, adminRole)
+	if total != 1 || open != 0 {
+		t.Fatalf("expected 1 total/0 open rows immediately after revoke, got total=%d open=%d", total, open)
+	}
+
+	if err := repo.GrantRole(ctx, userID, adminRole); err != nil {
+		t.Fatalf("GrantRole after revoke: %v", err)
+	}
+
+	total, open = countRoleRows(t, pool, userID, adminRole)
+	if total != 2 {
+		t.Fatalf("expected the revoked row to be preserved (2 total rows: one closed, one open), got %d", total)
+	}
+	if open != 1 {
+		t.Fatalf("expected exactly one open row after revoke-then-grant, got %d", open)
+	}
+}
+
+// TestGrantRevokeGrant_HasRoleTrueOnlyWhileOpen is Testing criterion 9:
+// grant → revoke → grant leaves exactly one open grant and two closed rows;
+// HasRole is true only while a grant is open.
+func TestGrantRevokeGrant_HasRoleTrueOnlyWhileOpen(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	ctx := context.Background()
+	userID := seedLeafLabUser(t, pool, "sub-grant-revoke-grant")
+
+	// Before any grant: HasRole is false.
+	has, err := repo.HasRole(ctx, userID, adminRole)
+	if err != nil {
+		t.Fatalf("HasRole before any grant: %v", err)
+	}
+	if has {
+		t.Fatal("expected HasRole=false before any grant exists")
+	}
+
+	// Grant #1.
+	if err := repo.GrantRole(ctx, userID, adminRole); err != nil {
+		t.Fatalf("GrantRole #1: %v", err)
+	}
+	has, err = repo.HasRole(ctx, userID, adminRole)
+	if err != nil {
+		t.Fatalf("HasRole after grant #1: %v", err)
+	}
+	if !has {
+		t.Fatal("expected HasRole=true immediately after GrantRole")
+	}
+
+	// Revoke.
+	if err := repo.RevokeRole(ctx, userID, adminRole); err != nil {
+		t.Fatalf("RevokeRole: %v", err)
+	}
+	has, err = repo.HasRole(ctx, userID, adminRole)
+	if err != nil {
+		t.Fatalf("HasRole after revoke: %v", err)
+	}
+	if has {
+		t.Fatal("expected HasRole=false after revoke -- the closed row must not count")
+	}
+
+	// Grant #2 (re-grant after revocation).
+	if err := repo.GrantRole(ctx, userID, adminRole); err != nil {
+		t.Fatalf("GrantRole #2: %v", err)
+	}
+	has, err = repo.HasRole(ctx, userID, adminRole)
+	if err != nil {
+		t.Fatalf("HasRole after grant #2: %v", err)
+	}
+	if !has {
+		t.Fatal("expected HasRole=true after re-granting")
+	}
+
+	total, open := countRoleRows(t, pool, userID, adminRole)
+	if total != 2 {
+		t.Fatalf("expected exactly 2 closed rows preserved from the grant/revoke/grant sequence (grant #1's row closed, grant #2's row open), got %d total", total)
+	}
+	if open != 1 {
+		t.Fatalf("expected exactly 1 open grant after grant-revoke-grant, got %d", open)
+	}
+}
+
+// TestAnyOpenGrantExists_ReflectsGlobalState proves AnyOpenGrantExists
+// answers across all users, not just one -- the property the first-sign-in
+// bootstrap (leaflab/ui/handlers_auth.go's maybeBootstrapAdmin) depends on.
+func TestAnyOpenGrantExists_ReflectsGlobalState(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	ctx := context.Background()
+
+	exists, err := repo.AnyOpenGrantExists(ctx, adminRole)
+	if err != nil {
+		t.Fatalf("AnyOpenGrantExists on empty table: %v", err)
+	}
+	if exists {
+		t.Fatal("expected AnyOpenGrantExists=false with zero leaflab_user_role rows")
+	}
+
+	userID := seedLeafLabUser(t, pool, "sub-any-open-grant")
+	if err := repo.GrantRole(ctx, userID, adminRole); err != nil {
+		t.Fatalf("GrantRole: %v", err)
+	}
+
+	exists, err = repo.AnyOpenGrantExists(ctx, adminRole)
+	if err != nil {
+		t.Fatalf("AnyOpenGrantExists after grant: %v", err)
+	}
+	if !exists {
+		t.Fatal("expected AnyOpenGrantExists=true once any user holds an open grant")
 	}
 }
