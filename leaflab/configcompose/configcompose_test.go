@@ -472,3 +472,60 @@ func TestComposeDesiredSensors_NewOverrides_ThreeMixedTypedAndZeroType_Ambiguous
 	require.NotNil(t, byType[firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY])
 	assert.Equal(t, "humidity1", byType[firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY].GetName())
 }
+
+// TestComposeDesiredSensors_TwoZeroTypeOverrides_AtNewAddress_BothDropped
+// covers a case the adversarial Testing pass for #1819 found uncovered: two
+// brand-new overrides at one never-before-seen address, both omitting
+// sensor_type -- neither in DB inventory nor in the last accepted config.
+// Before this fix, an address with no non-zero sensor_type anywhere was
+// never visited by computeCoLocated's classification loop at all (it only
+// iterates addresses with at least one noted non-zero type), so it stayed
+// "not co-located" and the two overrides collided via hwIndex's
+// address-only "single" path: the second override's resolve returned the
+// same key the first one had already registered, silently overwriting it
+// in the base map (first override's entry vanished entirely, not merely
+// blended). Since neither override carries any information to distinguish
+// it from the other, the only safe outcome is the same "ambiguous, apply to
+// none" policy already used for the typed+zero-type case -- both are
+// dropped, not one silently overwriting the other.
+func TestComposeDesiredSensors_TwoZeroTypeOverrides_AtNewAddress_BothDropped(t *testing.T) {
+	const newAddr = 0x46
+	ov1 := typedOverride(newAddr, 0, "anon1")
+	ov2 := typedOverride(newAddr, 0, "anon2")
+
+	got := ComposeDesiredSensors(nil, nil, []*configpb.SensorConfig{ov1, ov2})
+
+	assert.Empty(t, got, "two mutually-indistinguishable new overrides at one address must both be dropped, not have one silently overwrite the other")
+}
+
+// TestComposeDesiredSensors_ExistingSingleSensor_PlusOverrideNewDistinctType_BothPresent
+// covers a case the adversarial Testing pass for #1819 found uncovered: an
+// address with one established (DB inventory) sensor plus a same-call
+// override that explicitly names a *different* sensor_type at that same
+// address -- e.g. a firmware/wiring change that turns on a previously-inert
+// second virtual sensor (temperature already known, humidity now being
+// added) on an already-registered chip. This differs from both
+// TestComposeDesiredSensors_CoLocated_ExplicitSensorType_UpdatesOnlyThatOne
+// (both sensors already co-located/established) and
+// TestComposeDesiredSensors_TwoNewCoLocatedSensors_IntroducedTogetherViaOverridesOnly
+// (both sensors brand-new): here exactly one side is established and the
+// other is newly introduced by this call. The explicit, distinct
+// sensor_type on the override is enough to disambiguate on its own -- both
+// the pre-existing inventory sensor and the newly-added one must survive as
+// separate entries, neither overwritten nor blended.
+func TestComposeDesiredSensors_ExistingSingleSensor_PlusOverrideNewDistinctType_BothPresent(t *testing.T) {
+	const addr = 0x77
+	inventory := []InventorySensor{inv(addr, "existing_temp", nil)} // TEMPERATURE, established
+	overrides := []*configpb.SensorConfig{
+		typedOverride(addr, firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY, "new_humidity"),
+	}
+
+	got := ComposeDesiredSensors(inventory, nil, overrides)
+
+	byType := indexBySensorType(got, addr)
+	require.NotNil(t, byType[firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE], "existing inventory sensor must survive untouched")
+	assert.Equal(t, "existing_temp", byType[firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE].GetName())
+	require.NotNil(t, byType[firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY], "new co-located sensor must be added, not collapsed onto the existing one")
+	assert.Equal(t, "new_humidity", byType[firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY].GetName())
+	require.Len(t, got, 2)
+}

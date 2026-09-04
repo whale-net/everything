@@ -324,11 +324,17 @@ func makeHWKey(i2cAddress uint32, muxPath []*configpb.MuxHop, sensorType firmwar
 // sensor" or "a second, new one" -- there is nothing to disambiguate
 // against, so the address must be treated as co-located and the zero-type
 // override applied to none (via hwIndex.resolve's ambiguous branch), never
-// silently merged onto the typed one. A zero-type entry alone, with no
-// non-zero sensor_type anywhere at that address, never creates a second
+// silently merged onto the typed one. A single zero-type entry alone, with
+// no non-zero sensor_type anywhere at that address, never creates a second
 // bucket by itself -- it contributes at most one anonymous identity, since
 // a zero value can't be told apart from another zero value at the same
-// address.
+// address. But two or more same-call zero-type overrides at a
+// never-established address are just as ambiguous as a typed+zero-type
+// pair, for the same reason: nothing distinguishes one from the other
+// either. That address is classified co-located too, even though no
+// non-zero sensor_type is ever seen there, so hwIndex.resolve's ambiguous
+// branch applies every one of those overrides to none rather than letting
+// the last one silently overwrite the rest.
 func computeCoLocated(
 	inventory []InventorySensor,
 	lastAccepted []*configpb.SensorConfig,
@@ -342,6 +348,14 @@ func computeCoLocated(
 	// overrideHasZero marks an address with at least one override that
 	// leaves sensor_type at its proto3 zero value.
 	overrideHasZero := make(map[addrKey]bool)
+	// overrideZeroCount counts, per address, how many same-call overrides
+	// leave sensor_type at its proto3 zero value. Two or more such
+	// overrides at one never-established address are mutually
+	// indistinguishable from each other -- there is no typed entry, no
+	// inventory/lastAccepted entry, nothing at all to tell them apart -- so
+	// that address must be treated as co-located too (see below), even
+	// though no non-zero sensor_type is ever seen there.
+	overrideZeroCount := make(map[addrKey]int)
 
 	noteType := func(ak addrKey, sensorType firmwarepb.SensorType) {
 		if sensorType == 0 {
@@ -367,6 +381,7 @@ func computeCoLocated(
 		ak := makeAddrKey(ov.GetI2CAddress(), ov.GetMuxPath())
 		if ov.GetSensorType() == 0 {
 			overrideHasZero[ak] = true
+			overrideZeroCount[ak]++
 			continue
 		}
 		noteType(ak, ov.GetSensorType())
@@ -383,6 +398,21 @@ func computeCoLocated(
 		// established by an override in this same call (not by inventory or
 		// lastAccepted) -- see this function's doc comment.
 		if overrideHasZero[ak] && !established[ak] {
+			coLocated[ak] = true
+		}
+	}
+	// An address with no established state (no inventory, no lastAccepted)
+	// and two or more same-call overrides that all leave sensor_type at its
+	// zero value is also ambiguous, even though it never accumulates a
+	// single non-zero sensor_type and so is never visited by the loop
+	// above: none of those overrides can be told apart from each other, so
+	// there is no well-defined single entry for them to collapse onto
+	// either -- see this function's doc comment.
+	for ak, cnt := range overrideZeroCount {
+		if coLocated[ak] || established[ak] {
+			continue
+		}
+		if cnt >= 2 {
 			coLocated[ak] = true
 		}
 	}
@@ -414,13 +444,15 @@ func newHWIndex(coLocated map[addrKey]bool) *hwIndex {
 // co-location from the same inputs TouchedSensorIDs itself sees (inventory
 // and overrides -- it has no lastAccepted parameter), so its matching stays
 // consistent with ComposeDesiredSensors' rule per this function's own doc
-// comment. This includes computeCoLocated's mixed typed/zero-type-same-call-
-// override ambiguity: it is inert here in practice (not merely by
-// construction) because TouchedSensorIDs only ever reports a sensor_id for
-// an override that resolves to a key already present in byKey (i.e. an
-// inventory-known address), and a brand-new address with no inventory entry
-// -- the only shape that ambiguity can arise from -- never has one to report
-// regardless of how the override resolves.
+// comment. This includes both of computeCoLocated's same-call-override
+// ambiguity rules (a typed override paired with a same-call zero-type one,
+// and two or more same-call zero-type overrides alone): both are inert here
+// in practice (not merely by construction) because TouchedSensorIDs only
+// ever reports a sensor_id for an override that resolves to a key already
+// present in byKey (i.e. an inventory-known address), and a brand-new
+// address with no inventory entry -- the only shape either ambiguity rule
+// can arise from, since both require !established -- never has one to
+// report regardless of how the override resolves.
 func newHWIndexForTouched(inventory []InventorySensor, overrides []*configpb.SensorConfig) *hwIndex {
 	idx := newHWIndex(computeCoLocated(inventory, nil, overrides))
 	for _, inv := range inventory {
