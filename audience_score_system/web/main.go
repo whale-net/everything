@@ -1,8 +1,10 @@
 // Command web is Audience Score System's HTMX/templ web app -- the only UI
 // surface (NFR3), limited to Google OAuth sign-in/sign-up (C1, this task),
 // Channel connect (C2, #1571), analyst invite/accept (C3), and
-// schedule-draft approval (C8). See ../ARCHITECTURE.md's "NFR3 interface
-// allocation" for why every other capability is MCP-only.
+// video_script greenlight/deny/archive (milestone video-script-model,
+// FR48/FR49, #1834 -- rebuilt in place of C8's original schedule_entry
+// surface). See ../ARCHITECTURE.md's "NFR3 interface allocation" for why
+// every other capability is MCP-only.
 package main
 
 import (
@@ -256,10 +258,12 @@ func run() error {
 		RedirectURL:  cfg.OAuthRedirectBase + "/oauth/youtube/callback",
 	}, st.Channels(), st.Roles(), tokenStore, sessions, scheduleManager)
 
-	// scheduleHandlers is C8's Creator-tier (Founder or Co-Creator,
-	// symmetrically per FR32) approve/un-approve/edit surface (#1580,
-	// FR19/FR20) -- needs only st (store.CanRead/store.CanApprove +
-	// Schedules()/Roles()/Channels()), no separate OAuth grant of its own.
+	// scheduleHandlers is the milestone video-script-model Creator-tier
+	// (Founder or Co-Creator, symmetrically per FR32) greenlight/deny/
+	// archive surface (#1834, FR48/FR49 -- rebuilt in place of C8's
+	// original schedule_entry surface, #1580's FR19/FR20) -- needs only
+	// st (store.CanRead/store.CanApprove + VideoScripts()/Roles()/
+	// Channels()), no separate OAuth grant of its own.
 	scheduleHandlers := schedule.New(st)
 
 	// accessHandlers is M2's Founder/Co-Creator-only access-management
@@ -408,17 +412,23 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// Implementation section).
 	mux.HandleFunc("GET /channels/{id}", a.auth.RequireSignedIn(a.handleChannelDetail))
 
-	// Protected: schedule-draft approval (C8: FR19/FR20, #1580). GET is
+	// Protected: video_script greenlight/deny/archive (milestone
+	// video-script-model, FR48/FR49, #1834 -- rebuilt in place of C8's
+	// original schedule_entry surface, #1580's FR19/FR20). GET is
 	// Founder, Co-Creator, and Analyst all (store.CanRead); the three
 	// mutating POSTs require Creator-tier authority -- Founder or
 	// Co-Creator, symmetrically per FR32 (store.CanApprove, re-checked
 	// fresh inside each handler -- see schedule.go's package doc comment
 	// for why hiding the button client-side is never sufficient on its
-	// own).
+	// own). Route paths are unchanged from C8 (FR49's route-and-package-
+	// naming note) even though {scriptID} now addresses a video_script
+	// row; /unapprove and /edit have no analog and are gone (FR40 defines
+	// no greenlit->proposed transition, and a video_script's target date
+	// is set once at propose time, FR36).
 	mux.HandleFunc("GET /channels/{id}/schedule", a.auth.RequireSignedIn(a.schedule.HandleList))
-	mux.HandleFunc("POST /schedule/{entryID}/approve", a.auth.RequireSignedIn(a.schedule.HandleApprove))
-	mux.HandleFunc("POST /schedule/{entryID}/unapprove", a.auth.RequireSignedIn(a.schedule.HandleUnapprove))
-	mux.HandleFunc("POST /schedule/{entryID}/edit", a.auth.RequireSignedIn(a.schedule.HandleEdit))
+	mux.HandleFunc("POST /schedule/{scriptID}/approve", a.auth.RequireSignedIn(a.schedule.HandleGreenlight))
+	mux.HandleFunc("POST /schedule/{scriptID}/deny", a.auth.RequireSignedIn(a.schedule.HandleDeny))
+	mux.HandleFunc("POST /schedule/{scriptID}/archive", a.auth.RequireSignedIn(a.schedule.HandleArchive))
 
 	// Protected: access management (M2: FR30/FR31/FR33, #1723). GET is
 	// Founder/Co-Creator only (store.CanInvite); the three mutating POSTs

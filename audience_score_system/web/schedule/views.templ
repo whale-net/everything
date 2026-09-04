@@ -7,132 +7,118 @@ import (
 	"github.com/whale-net/everything/audience_score_system/web/components"
 )
 
-// stateLabel renders a human-readable label for store.ScheduleState,
+// statusLabel renders a human-readable label for store.VideoScriptStatus,
 // mirroring pages.connectionStateLabel's convention.
-func stateLabel(s store.ScheduleState) string {
-	if s == store.ScheduleStateCommitted {
-		return "Committed"
+func statusLabel(s store.VideoScriptStatus) string {
+	switch s {
+	case store.VideoScriptStatusGreenlit:
+		return "Greenlit"
+	case store.VideoScriptStatusDenied:
+		return "Denied"
+	case store.VideoScriptStatusArchived:
+		return "Archived"
+	default:
+		return "Proposed"
 	}
-	return "Draft"
 }
 
-// stateBadgeClass picks a daisyUI badge color matching stateLabel.
-func stateBadgeClass(s store.ScheduleState) string {
-	if s == store.ScheduleStateCommitted {
+// statusBadgeClass picks a daisyUI badge color matching statusLabel.
+func statusBadgeClass(s store.VideoScriptStatus) string {
+	switch s {
+	case store.VideoScriptStatusGreenlit:
 		return "badge badge-success"
+	case store.VideoScriptStatusDenied:
+		return "badge badge-error"
+	case store.VideoScriptStatusArchived:
+		return "badge badge-neutral"
+	default:
+		return "badge badge-ghost"
 	}
-	return "badge badge-ghost"
 }
 
-// youtubeWatchURL builds a watch URL for a published video's id -- the
-// only place `web` constructs a YouTube URL (see schedule.go's package
-// doc comment); videoID is always a value this package itself read back
-// from store.ScheduleEntryDetail.PublishedVideoID, never unsanitized user
-// input.
-func youtubeWatchURL(videoID string) string {
-	return "https://www.youtube.com/watch?v=" + videoID
-}
-
-// List is the Channel schedule page (C8, FR19/FR20): every
-// store.ScheduleEntryDetail for ch, in proposed_publish_at order.
-// canApprove (store.CanApprove -- Creator-tier, i.e. Founder or
-// Co-Creator symmetrically per FR32, NFR5) gates whether entryActions
-// renders at all; an Analyst (canApprove == false) sees a read-only list
-// with no approve/un-approve/edit forms anywhere in the markup.
-templ List(data components.LayoutData, ch store.Channel, entries []store.ScheduleEntryDetail, canApprove bool) {
+// List is the Channel schedule page (FR48/FR49): every
+// store.VideoScriptDetail for ch, in created_at order. canApprove
+// (store.CanApprove -- Creator-tier, i.e. Founder or Co-Creator
+// symmetrically per FR32, NFR5) gates whether entryActions renders at
+// all; an Analyst (canApprove == false) sees a read-only list with no
+// greenlight/deny/archive forms anywhere in the markup.
+templ List(data components.LayoutData, ch store.Channel, scripts []store.VideoScriptDetail, canApprove bool) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
 			<div class="card-body">
 				<h1 class="card-title">{ ch.Title } schedule</h1>
-				if len(entries) == 0 {
-					<p class="text-base-content/70">No schedule drafts yet.</p>
+				if len(scripts) == 0 {
+					<p class="text-base-content/70">No video scripts yet.</p>
 				}
-				for _, e := range entries {
-					@entryCard(e, canApprove)
+				for _, s := range scripts {
+					@scriptCard(s, canApprove)
 				}
 			</div>
 		</div>
 	}
 }
 
-// entryCard renders one ScheduleEntryDetail: idea title, its bound
-// verdict version/value/reasoning (LB3's load-bearing link, never just
-// the idea's latest verdict), proposed slot, state badge, approver (when
-// set), the published video link (when e.Published), and -- for a
+// scriptCard renders one VideoScriptDetail: title, its bound verdict
+// version/value/reasoning (LB3's load-bearing link, never just the idea's
+// latest verdict), target publish date (or an explicit "no target date"
+// -- an undated script is normal per FR36), status badge, decider (when
+// set), the published video link (when s.Published), and -- for a
 // Founder or Co-Creator -- entryActions.
-templ entryCard(e store.ScheduleEntryDetail, canApprove bool) {
+templ scriptCard(s store.VideoScriptDetail, canApprove bool) {
 	<div class="border border-base-300 rounded p-4 mb-2">
 		<div class="flex justify-between items-start gap-4">
 			<div>
-				<h2 class="font-semibold">{ e.IdeaTitle }</h2>
+				<h2 class="font-semibold">{ s.Script.Title }</h2>
 				<p class="text-sm text-base-content/70">
-					Verdict v{ strconv.Itoa(e.VerdictVersion) }: { string(e.Verdict) } -- { e.VerdictReasoning }
+					Verdict v{ strconv.Itoa(s.VerdictVersion) }: { string(s.Verdict) }
 				</p>
-				<p class="text-sm">
-					Proposed: { e.Entry.ProposedPublishAt.UTC().Format("2006-01-02 15:04 UTC") }
-				</p>
-				if e.ApproverName != "" {
-					<p class="text-sm text-base-content/70">Approved by { e.ApproverName }</p>
-				}
-				if e.Published {
+				<p class="text-sm text-base-content/70">Idea: { s.IdeaTitle } -- Strategy: { s.StrategyTitle }</p>
+				if s.Script.TargetPublishDate != nil {
 					<p class="text-sm">
-						Published:
-						<a
-							class="link"
-							href={ templ.URL(youtubeWatchURL(e.PublishedVideoID)) }
-							target="_blank"
-							rel="noopener"
-						>
-							{ e.PublishedVideoTitle }
-						</a>
+						Target: { s.Script.TargetPublishDate.UTC().Format("2006-01-02") }
 					</p>
+				} else {
+					<p class="text-sm text-base-content/70">No target date</p>
 				}
 			</div>
-			<span class={ stateBadgeClass(e.Entry.State) }>{ stateLabel(e.Entry.State) }</span>
+			<span class={ statusBadgeClass(s.Script.Status) }>{ statusLabel(s.Script.Status) }</span>
 		</div>
 		if canApprove {
-			@entryActions(e)
+			@entryActions(s)
 		}
 	</div>
 }
 
 // entryActions renders the Creator-tier (Founder or Co-Creator)
-// approve/un-approve/edit affordances for one entry, honoring FR20's
-// published freeze
-// (e.Published): once true, neither un-approve nor edit is rendered at
-// all -- only an explanation -- since the server (schedule.go's mutate,
-// via store.ErrScheduleEntryPublished) would 409 either request anyway.
-// This is presentation only; the server-side check is what actually
-// enforces the freeze (see schedule.go's package doc comment).
-templ entryActions(e store.ScheduleEntryDetail) {
+// greenlight/deny/archive affordances for one script, honoring FR39's
+// published freeze (s.Published): once true, no archive affordance is
+// rendered at all -- only an explanation -- since the server (schedule.
+// go's mutate, via store.ErrVideoScriptPublished) would 409 the request
+// anyway. This is presentation only; the server-side check is what
+// actually enforces the freeze (see schedule.go's package doc comment).
+// A proposed script shows greenlight/deny; a greenlit one shows archive
+// (unless frozen); denied and archived scripts show no affordances at
+// all (FR40: both are terminal).
+templ entryActions(s store.VideoScriptDetail) {
 	<div class="card-actions justify-end mt-2 items-center gap-2">
-		if e.Published {
-			<p class="text-xs text-base-content/50">
-				This entry is frozen -- its video has already published, so it can
-				no longer be un-approved or edited.
-			</p>
-		} else if e.Entry.State == store.ScheduleStateDraft {
-			<form method="post" action={ templ.URL("/schedule/" + e.Entry.ID.String() + "/approve") }>
-				<button type="submit" class="btn btn-primary btn-sm">Approve</button>
+		if s.Script.Status == store.VideoScriptStatusProposed {
+			<form method="post" action={ templ.URL("/schedule/" + s.Script.ID.String() + "/approve") }>
+				<button type="submit" class="btn btn-primary btn-sm">Greenlight</button>
 			</form>
-			<form
-				method="post"
-				action={ templ.URL("/schedule/" + e.Entry.ID.String() + "/edit") }
-				class="flex gap-2 items-center"
-			>
-				<input
-					type="datetime-local"
-					name="proposed_publish_at"
-					class="input input-bordered input-sm"
-					value={ e.Entry.ProposedPublishAt.UTC().Format(proposedPublishAtInputFormat) }
-					required
-				/>
-				<button type="submit" class="btn btn-secondary btn-sm">Save slot</button>
+			<form method="post" action={ templ.URL("/schedule/" + s.Script.ID.String() + "/deny") }>
+				<button type="submit" class="btn btn-secondary btn-sm">Deny</button>
 			</form>
-		} else {
-			<form method="post" action={ templ.URL("/schedule/" + e.Entry.ID.String() + "/unapprove") }>
-				<button type="submit" class="btn btn-secondary btn-sm">Un-approve</button>
-			</form>
+		} else if s.Script.Status == store.VideoScriptStatusGreenlit {
+			if s.Published {
+				<p class="text-xs text-base-content/50">
+					This script is frozen -- its video has already published, so it
+					can no longer be archived.
+				</p>
+			} else {
+				<form method="post" action={ templ.URL("/schedule/" + s.Script.ID.String() + "/archive") }>
+					<button type="submit" class="btn btn-secondary btn-sm">Archive</button>
+				</form>
+			}
 		}
 	</div>
 }
