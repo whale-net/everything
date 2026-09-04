@@ -297,14 +297,18 @@ func TestHandleApprove_ClosedCreatorRow_Forbidden(t *testing.T) {
 	// forbids two simultaneously-OPEN creator rows on one Channel; a
 	// closed row followed by a new open row on the same Channel is fine,
 	// which is exactly what this sequence needs to prove a closed row on
-	// THIS Channel (not just "no relationship to it at all") can't
-	// approve.
+	// THIS Channel (not just "no relationship to it at all", already
+	// covered by TestHandleApprove_NoRoleOnChannel_Forbidden above) can't
+	// approve. Mirrors store_integration_test.go's setupChannelWithRoles,
+	// which scopes the closed row and the checked channel to the same
+	// formerChannelID field.
 	former := s.newPerson(t, ctx, "former-creator")
 	ch, err := s.store.Channels().Create(ctx, "yt-"+uuid.NewString(), "Test Channel", former.ID)
 	require.NoError(t, err)
 	// Close former's row directly (bypassing the store API, which has no
-	// "revoke" method yet) to simulate a Person whose creator role has
-	// lapsed -- mirrors store_integration_test.go's setupChannelWithRoles.
+	// "revoke" method wired through AddRole's close-and-open pattern
+	// here) to simulate a Person whose creator role has lapsed --
+	// mirrors store_integration_test.go's setupChannelWithRoles.
 	_, err = s.db.Pool.Exec(ctx, `
 		UPDATE channel_person SET valid_to = NOW()
 		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
