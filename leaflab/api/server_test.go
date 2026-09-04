@@ -123,10 +123,23 @@ type fakeRepository struct {
 	// leaves reads unscoped by ownership, so these have no per-caller
 	// variant to configure.
 	boardsWithState []BoardWithReadingRow
-	boardIdentity   map[int64]string
+	boardIdentity   map[int64]BoardIdentity
 	sensorDetails   map[int64][]SensorDetailRow
 	sensorExists    map[int64]bool
 	sensorHistory   map[int64]*SensorReadingHistory
+
+	// claimedBoards records every successful ClaimBoard call, in order --
+	// tests assert on this to prove a refused claim (already owned) issues
+	// no write at all, not just that it returns an error.
+	claimedBoards []claimedBoard
+}
+
+// claimedBoard is one recorded fakeRepository.ClaimBoard call that actually
+// opened a new ownership row (an already-owned refusal is never appended
+// here).
+type claimedBoard struct {
+	boardID       int64
+	leaflabUserID int64
 }
 
 func newFakeRepository() *fakeRepository {
@@ -134,7 +147,7 @@ func newFakeRepository() *fakeRepository {
 		users:         map[string]int64{},
 		devices:       map[string]int64{},
 		owners:        map[int64]int64{},
-		boardIdentity: map[int64]string{},
+		boardIdentity: map[int64]BoardIdentity{},
 		sensorDetails: map[int64][]SensorDetailRow{},
 		sensorExists:  map[int64]bool{},
 		sensorHistory: map[int64]*SensorReadingHistory{},
@@ -174,12 +187,27 @@ func (f *fakeRepository) ListBoardsWithState(_ context.Context) ([]BoardWithRead
 	return f.boardsWithState, nil
 }
 
-func (f *fakeRepository) GetBoardIdentity(_ context.Context, boardID int64) (string, error) {
-	deviceID, ok := f.boardIdentity[boardID]
+func (f *fakeRepository) GetBoardIdentity(_ context.Context, boardID int64) (BoardIdentity, error) {
+	bi, ok := f.boardIdentity[boardID]
 	if !ok {
-		return "", pgx.ErrNoRows
+		return BoardIdentity{}, pgx.ErrNoRows
 	}
-	return deviceID, nil
+	return bi, nil
+}
+
+// ClaimBoard mirrors ClaimBoard's production race-safety contract (a
+// unique-violation-mapped ErrBoardAlreadyOwned) closely enough for the
+// unit-level FR1/FR2 tests below -- the fake has no concurrent callers, so
+// it only needs to refuse a second claim, not actually resolve a race
+// (that's NFR2, proven against real Postgres in
+// repository_integration_test.go).
+func (f *fakeRepository) ClaimBoard(_ context.Context, boardID, leaflabUserID int64) error {
+	if _, owned := f.owners[boardID]; owned {
+		return ErrBoardAlreadyOwned
+	}
+	f.owners[boardID] = leaflabUserID
+	f.claimedBoards = append(f.claimedBoards, claimedBoard{boardID: boardID, leaflabUserID: leaflabUserID})
+	return nil
 }
 
 func (f *fakeRepository) ListSensorDetailsForBoard(_ context.Context, boardID int64) ([]SensorDetailRow, error) {
@@ -342,7 +370,7 @@ func TestReads_NonOwner_SameContentAsOwner(t *testing.T) {
 	repo.users["other-sub"] = 2
 	repo.owners[100] = 1
 	repo.boardsWithState = []BoardWithReadingRow{{BoardID: 100, DeviceID: "device-a"}}
-	repo.boardIdentity[100] = "device-a"
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
 	repo.sensorDetails[100] = []SensorDetailRow{{SensorID: 1, SensorName: "topsoil"}}
 	repo.sensorExists[1] = true
 	repo.sensorHistory[1] = &SensorReadingHistory{Points: []ReadingPoint{{Value: 1.0}}}
@@ -374,4 +402,159 @@ func TestReads_NonOwner_SameContentAsOwner(t *testing.T) {
 	nonOwnerHistory, err := srv.GetSensorReadingHistory(nonOwnerCtx, historyReq)
 	require.NoError(t, err)
 	assert.Equal(t, ownerHistory, nonOwnerHistory)
+}
+
+// -- #1765 ClaimBoard tests (FR1, FR2, NFR2's unit-level half) --------------
+//
+// NFR2's actual race-safety proof (two concurrent Postgres INSERTs, the
+// partial unique index, exactly one winner) needs a real database and lives
+// in repository_integration_test.go -- fakeRepository.ClaimBoard has no
+// concurrent callers, so it can only stand in for the read-then-write
+// *outcome* (refuse a second claim), not the atomicity mechanism itself.
+
+// TestClaimBoard_UnownedBoard_Succeeds is Testing criterion 1: a signed-in
+// user claiming an unowned board succeeds and opens exactly one ownership
+// row.
+func TestClaimBoard_UnownedBoard_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["claimant-sub"] = 1
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	// No repo.owners[100] entry -- unowned.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	resp, err := srv.ClaimBoard(claimsCtx("claimant-sub"), &pb.ClaimBoardRequest{BoardId: 100})
+	require.NoError(t, err)
+	assert.NotNil(t, resp)
+	assert.Equal(t, int64(1), repo.owners[100], "expected the claimant to become the board's owner")
+	require.Len(t, repo.claimedBoards, 1, "expected exactly one ownership row opened")
+	assert.Equal(t, claimedBoard{boardID: 100, leaflabUserID: 1}, repo.claimedBoards[0])
+}
+
+// TestClaimBoard_OwnedBoard_FailedPrecondition_NoWrite is Testing criterion
+// 2 (FR2): claiming an already-owned board is refused with
+// codes.FailedPrecondition and issues no write -- the existing ownership
+// record (repo.owners[100]) is left untouched, not reassigned to the
+// claimant.
+func TestClaimBoard_OwnedBoard_FailedPrecondition_NoWrite(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.users["claimant-sub"] = 2
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	repo.owners[100] = 1
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ClaimBoard(claimsCtx("claimant-sub"), &pb.ClaimBoardRequest{BoardId: 100})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Equal(t, int64(1), repo.owners[100], "existing ownership must be untouched by a refused claim")
+	assert.Empty(t, repo.claimedBoards, "a refused claim must issue no write")
+}
+
+// TestClaimBoard_ReclaimByCurrentOwner_FailedPrecondition is Testing
+// criterion 3: a re-claim by the board's own current owner is still a
+// refusal, not a no-op success -- per the issue's "the open row's
+// valid_from is never disturbed" requirement.
+func TestClaimBoard_ReclaimByCurrentOwner_FailedPrecondition(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	repo.owners[100] = 1
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ClaimBoard(claimsCtx("owner-sub"), &pb.ClaimBoardRequest{BoardId: 100})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Empty(t, repo.claimedBoards, "a re-claim by the current owner must issue no write")
+}
+
+// TestClaimBoard_NoLeafLabUserForCaller_PermissionDenied is Testing
+// criterion 4 (LB1): a caller with no leaflab_user row for their subject is
+// denied, with no implicit provisioning and no write.
+func TestClaimBoard_NoLeafLabUserForCaller_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	ctx := claimsCtx("unregistered-sub")
+	_, err := srv.ClaimBoard(ctx, &pb.ClaimBoardRequest{BoardId: 100})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+
+	_, found, _ := repo.GetLeafLabUserIDBySub(ctx, "unregistered-sub")
+	assert.False(t, found, "leaflab-api must never create a leaflab_user row (LB1)")
+	assert.Empty(t, repo.claimedBoards)
+}
+
+// TestClaimBoard_UnknownBoardID_NotFound is Testing criterion 5: claiming
+// an unknown board_id returns codes.NotFound and issues no write.
+func TestClaimBoard_UnknownBoardID_NotFound(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["claimant-sub"] = 1
+	// No repo.boardIdentity[999] entry -- unknown board_id.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ClaimBoard(claimsCtx("claimant-sub"), &pb.ClaimBoardRequest{BoardId: 999})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Empty(t, repo.claimedBoards)
+}
+
+// TestListBoardsWithState_And_GetBoardDetail_OwnedByCallerOnlyForOwner is
+// Testing criterion 6: owned_by_caller is true only for the calling user
+// (not for any other authenticated caller, including a different owner
+// entirely) and owner is unset (nil) for an unowned board, on both
+// ListBoardsWithState and GetBoardDetail.
+func TestListBoardsWithState_And_GetBoardDetail_OwnedByCallerOnlyForOwner(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.users["other-sub"] = 2
+	ownerRow := &OwnerRow{LeafLabUserID: 1, DisplayName: "Board Owner"}
+
+	repo.boardsWithState = []BoardWithReadingRow{
+		{BoardID: 100, DeviceID: "device-owned", Owner: ownerRow},
+		{BoardID: 200, DeviceID: "device-unowned"},
+	}
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-owned", Owner: ownerRow}
+	repo.boardIdentity[200] = BoardIdentity{DeviceID: "device-unowned"}
+
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	ownerList, err := srv.ListBoardsWithState(claimsCtx("owner-sub"), &pb.ListBoardsWithStateRequest{})
+	require.NoError(t, err)
+	otherList, err := srv.ListBoardsWithState(claimsCtx("other-sub"), &pb.ListBoardsWithStateRequest{})
+	require.NoError(t, err)
+
+	ownedByOwner := boardWithStateByID(ownerList.Boards, 100)
+	ownedByOther := boardWithStateByID(otherList.Boards, 100)
+	assert.True(t, ownedByOwner.GetOwnedByCaller(), "the board's actual owner must see owned_by_caller=true")
+	assert.False(t, ownedByOther.GetOwnedByCaller(), "a different authenticated caller must see owned_by_caller=false")
+	assert.NotNil(t, ownedByOwner.GetOwner(), "an owned board must carry its owner")
+
+	unownedByOwner := boardWithStateByID(ownerList.Boards, 200)
+	assert.False(t, unownedByOwner.GetOwnedByCaller(), "an unowned board must never report owned_by_caller=true")
+	assert.Nil(t, unownedByOwner.GetOwner(), "an unowned board must leave owner unset, never a sentinel user id")
+
+	ownerDetail, err := srv.GetBoardDetail(claimsCtx("owner-sub"), &pb.GetBoardDetailRequest{BoardId: 100})
+	require.NoError(t, err)
+	otherDetail, err := srv.GetBoardDetail(claimsCtx("other-sub"), &pb.GetBoardDetailRequest{BoardId: 100})
+	require.NoError(t, err)
+	assert.True(t, ownerDetail.GetOwnedByCaller())
+	assert.False(t, otherDetail.GetOwnedByCaller())
+
+	unownedDetail, err := srv.GetBoardDetail(claimsCtx("owner-sub"), &pb.GetBoardDetailRequest{BoardId: 200})
+	require.NoError(t, err)
+	assert.False(t, unownedDetail.GetOwnedByCaller())
+	assert.Nil(t, unownedDetail.GetOwner())
+}
+
+// boardWithStateByID finds the board with boardID in boards, failing loudly
+// (a nil dereference downstream) if it's ever missing -- every test that
+// uses this seeds every board_id it looks up.
+func boardWithStateByID(boards []*pb.BoardWithState, boardID int64) *pb.BoardWithState {
+	for _, b := range boards {
+		if b.GetBoardId() == boardID {
+			return b
+		}
+	}
+	return nil
 }

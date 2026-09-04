@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -34,6 +35,9 @@ type fakeLeafLabAPIClient struct {
 
 	historyResp *leaflabapipb.GetSensorReadingHistoryResponse
 	historyErr  error
+
+	claimResp *leaflabapipb.ClaimBoardResponse
+	claimErr  error
 }
 
 func (f *fakeLeafLabAPIClient) ListBoardsWithState(ctx context.Context, in *leaflabapipb.ListBoardsWithStateRequest, opts ...grpc.CallOption) (*leaflabapipb.ListBoardsWithStateResponse, error) {
@@ -55,6 +59,16 @@ func (f *fakeLeafLabAPIClient) GetSensorReadingHistory(ctx context.Context, in *
 		return nil, f.historyErr
 	}
 	return f.historyResp, nil
+}
+
+func (f *fakeLeafLabAPIClient) ClaimBoard(ctx context.Context, in *leaflabapipb.ClaimBoardRequest, opts ...grpc.CallOption) (*leaflabapipb.ClaimBoardResponse, error) {
+	if f.claimErr != nil {
+		return nil, f.claimErr
+	}
+	if f.claimResp != nil {
+		return f.claimResp, nil
+	}
+	return &leaflabapipb.ClaimBoardResponse{}, nil
 }
 
 // TestHandleBoards_RendersBoardsFromAPI covers the happy path: handleBoards
@@ -270,5 +284,156 @@ func TestHandleBoardDetail_GenericError_RendersErrorState(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "Failed to load board detail") {
 		t.Errorf("expected the load-error message in the rendered page, got %q", rec.Body.String())
+	}
+}
+
+// --- handleClaimBoard (#1765: FR1, FR2) -------------------------------------
+
+// newClaimBoardRequest builds a "/boards/{board_id}/claim" POST request with
+// the board_id path value set the way the real route (main.go's
+// setupRoutes) would populate it.
+func newClaimBoardRequest(boardID string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/boards/"+boardID+"/claim", nil)
+	req.SetPathValue("board_id", boardID)
+	return req
+}
+
+// TestHandleClaimBoard_Succeeds_RedirectsToBoardDetailNoError covers the
+// happy path (FR1): a successful claim redirects back to the board detail
+// page with no claim_error query param.
+func TestHandleClaimBoard_Succeeds_RedirectsToBoardDetailNoError(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleClaimBoard(rec, newClaimBoardRequest("7"))
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d (redirect)", rec.Code, http.StatusSeeOther)
+	}
+	if got, want := rec.Header().Get("Location"), "/boards/7"; got != want {
+		t.Errorf("Location = %q, want %q (no claim_error on success)", got, want)
+	}
+}
+
+// TestHandleClaimBoard_FailedPrecondition_RedirectsWithInlineAlreadyOwnedError
+// is Testing criterion 8: a codes.FailedPrecondition from the API (already
+// owned) maps to an inline already-owned message carried on the redirect,
+// never a 500 and never a silent no-op.
+func TestHandleClaimBoard_FailedPrecondition_RedirectsWithInlineAlreadyOwnedError(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{claimErr: status.Error(codes.FailedPrecondition, "board 7 is already owned")}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleClaimBoard(rec, newClaimBoardRequest("7"))
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d (redirect, not a 500)", rec.Code, http.StatusSeeOther)
+	}
+	loc := rec.Header().Get("Location")
+	if !strings.HasPrefix(loc, "/boards/7?claim_error=") {
+		t.Fatalf("Location = %q, want a redirect back to /boards/7 carrying claim_error", loc)
+	}
+	// The purpose-built FailedPrecondition message, not the generic
+	// "Failed to claim board: <raw gRPC message>" fallback -- distinguishes
+	// this from TestHandleClaimBoard_GenericError_RedirectsWithRawMessage
+	// below, which would otherwise pass on the same substring since the
+	// fixture's raw error text itself happens to contain "already owned".
+	unescaped, err := url.QueryUnescape(loc)
+	if err != nil {
+		t.Fatalf("unescape Location %q: %v", loc, err)
+	}
+	if !strings.Contains(unescaped, "This board is already owned.") {
+		t.Errorf("expected the purpose-built already-owned message in the claim_error query param, got %q", unescaped)
+	}
+	if strings.Contains(unescaped, "Failed to claim board:") {
+		t.Errorf("expected the FailedPrecondition branch, not the generic fallback message, got %q", unescaped)
+	}
+}
+
+// TestHandleClaimBoard_FailedPrecondition_HXRequest_SetsHXRedirectHeader
+// mirrors the htmx variant of the redirect: an htmx-driven claim POST must
+// get an HX-Redirect header carrying the same claim_error, not a plain 3xx.
+func TestHandleClaimBoard_FailedPrecondition_HXRequest_SetsHXRedirectHeader(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{claimErr: status.Error(codes.FailedPrecondition, "board 7 is already owned")}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	req := newClaimBoardRequest("7")
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	app.handleClaimBoard(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	redirect := rec.Header().Get("HX-Redirect")
+	if !strings.HasPrefix(redirect, "/boards/7?claim_error=") {
+		t.Errorf("HX-Redirect = %q, want a redirect back to /boards/7 carrying claim_error", redirect)
+	}
+}
+
+// TestHandleClaimBoard_UnknownBoardID_NotFound proves a codes.NotFound
+// response from leaflab-api (an unknown board_id) maps to a real HTTP 404,
+// not the inline claim_error path.
+func TestHandleClaimBoard_UnknownBoardID_NotFound(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{claimErr: status.Error(codes.NotFound, "board 999 not found")}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleClaimBoard(rec, newClaimBoardRequest("999"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// TestHandleClaimBoard_Unauthenticated_RedirectsToLogin mirrors
+// TestHandleBoards_Unauthenticated_RedirectsToLogin for the claim route.
+func TestHandleClaimBoard_Unauthenticated_RedirectsToLogin(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{claimErr: status.Error(codes.Unauthenticated, "token revoked")}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleClaimBoard(rec, newClaimBoardRequest("7"))
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d (redirect)", rec.Code, http.StatusSeeOther)
+	}
+	if got, want := rec.Header().Get("Location"), "/auth/login?next=/boards/7/claim"; got != want {
+		t.Errorf("Location = %q, want %q", got, want)
+	}
+}
+
+// TestHandleClaimBoard_MalformedBoardID_NotFound proves a non-numeric
+// board_id path segment short-circuits to a real HTTP 404 before any RPC
+// is attempted.
+func TestHandleClaimBoard_MalformedBoardID_NotFound(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleClaimBoard(rec, newClaimBoardRequest("not-a-number"))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// TestHandleClaimBoard_GenericError_RedirectsWithRawMessage proves a non-
+// FailedPrecondition, non-NotFound, non-Unauthenticated failure still
+// redirects with a claim_error rather than a 500, carrying the raw gRPC
+// message per claimErrorMessage's fallback.
+func TestHandleClaimBoard_GenericError_RedirectsWithRawMessage(t *testing.T) {
+	fake := &fakeLeafLabAPIClient{claimErr: status.Error(codes.Internal, "boom")}
+	app := &App{api: &LeafLabClient{api: fake}}
+
+	rec := httptest.NewRecorder()
+	app.handleClaimBoard(rec, newClaimBoardRequest("7"))
+
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d (redirect, not a 500)", rec.Code, http.StatusSeeOther)
+	}
+	if !strings.HasPrefix(rec.Header().Get("Location"), "/boards/7?claim_error=") {
+		t.Errorf("Location = %q, want a redirect back to /boards/7 carrying claim_error", rec.Header().Get("Location"))
 	}
 }

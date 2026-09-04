@@ -172,6 +172,109 @@ func TestBoards_UnspecifiedReportingState_RendersNeutralWithoutCrashing(t *testi
 	}
 }
 
+// -- #1765 owner/name column tests (Testing criterion 9) --------------------
+
+// TestBoards_Owner_UnownedShowsClaimButton proves an unowned board's row
+// renders the "Unowned" label plus a Claim button targeting that board's
+// own claim route.
+func TestBoards_Owner_UnownedShowsClaimButton(t *testing.T) {
+	boards := []*leaflabapipb.BoardWithState{
+		{BoardId: 42, DeviceId: "leaflab-aaaaaaaaaaaa", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
+	}
+	body := renderPage(t, Boards(layoutData(), boards, nil))
+
+	if !strings.Contains(body, "Unowned") {
+		t.Errorf("expected the 'Unowned' label, got %q", body)
+	}
+	if !strings.Contains(body, "/boards/42/claim") {
+		t.Errorf("expected the Claim button's form action to target /boards/42/claim, got %q", body)
+	}
+	if !strings.Contains(body, ">Claim<") {
+		t.Errorf("expected a Claim button, got %q", body)
+	}
+}
+
+// TestBoards_Owner_OwnedByCallerShowsYou proves the calling user's own
+// board renders "You", not a Claim button and not the raw owner name.
+func TestBoards_Owner_OwnedByCallerShowsYou(t *testing.T) {
+	boards := []*leaflabapipb.BoardWithState{
+		{
+			BoardId:        42,
+			DeviceId:       "leaflab-aaaaaaaaaaaa",
+			ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING,
+			OwnedByCaller:  true,
+			Owner:          &leaflabapipb.LeafLabUser{LeaflabUserId: 1, DisplayName: "Board Owner"},
+		},
+	}
+	body := renderPage(t, Boards(layoutData(), boards, nil))
+
+	if !strings.Contains(body, "You") {
+		t.Errorf("expected the 'You' label for the caller's own board, got %q", body)
+	}
+	if strings.Contains(body, ">Claim<") {
+		t.Errorf("expected no Claim button for a board the caller already owns, got %q", body)
+	}
+	if strings.Contains(body, "Board Owner") {
+		t.Errorf("expected the caller's own board to show 'You', not the raw owner display name, got %q", body)
+	}
+}
+
+// TestBoards_Owner_OwnedByOtherShowsDisplayName proves a board owned by
+// someone other than the caller renders that owner's display name, not
+// "You" and not a Claim button.
+func TestBoards_Owner_OwnedByOtherShowsDisplayName(t *testing.T) {
+	boards := []*leaflabapipb.BoardWithState{
+		{
+			BoardId:        42,
+			DeviceId:       "leaflab-aaaaaaaaaaaa",
+			ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING,
+			OwnedByCaller:  false,
+			Owner:          &leaflabapipb.LeafLabUser{LeaflabUserId: 2, DisplayName: "Someone Else"},
+		},
+	}
+	body := renderPage(t, Boards(layoutData(), boards, nil))
+
+	if !strings.Contains(body, "Someone Else") {
+		t.Errorf("expected the other owner's display name, got %q", body)
+	}
+	if strings.Contains(body, ">Claim<") {
+		t.Errorf("expected no Claim button for a board someone else owns, got %q", body)
+	}
+	if strings.Contains(body, ">You<") {
+		t.Errorf("expected no 'You' label for a board the caller does not own, got %q", body)
+	}
+}
+
+// TestBoards_Name_FallsBackToDeviceIDWhenEmpty proves an empty board_name
+// renders device_id as the primary label.
+func TestBoards_Name_FallsBackToDeviceIDWhenEmpty(t *testing.T) {
+	boards := []*leaflabapipb.BoardWithState{
+		{BoardId: 1, DeviceId: "leaflab-aaaaaaaaaaaa", BoardName: "", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
+	}
+	body := renderPage(t, Boards(layoutData(), boards, nil))
+
+	if !strings.Contains(body, "leaflab-aaaaaaaaaaaa") {
+		t.Errorf("expected device_id to appear as the fallback label, got %q", body)
+	}
+}
+
+// TestBoards_Name_UsesBoardNameAsPrimaryLabel proves a named board shows
+// its name as the primary label, with device_id still visible underneath
+// as secondary text.
+func TestBoards_Name_UsesBoardNameAsPrimaryLabel(t *testing.T) {
+	boards := []*leaflabapipb.BoardWithState{
+		{BoardId: 1, DeviceId: "leaflab-aaaaaaaaaaaa", BoardName: "Greenhouse Board", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
+	}
+	body := renderPage(t, Boards(layoutData(), boards, nil))
+
+	if !strings.Contains(body, "Greenhouse Board") {
+		t.Errorf("expected the board's name as the primary label, got %q", body)
+	}
+	if !strings.Contains(body, "leaflab-aaaaaaaaaaaa") {
+		t.Errorf("expected device_id to still appear as secondary text when the board is named, got %q", body)
+	}
+}
+
 // TestBoards_NoAutoRefreshMarkup is NFR1's guard: the rendered page must
 // never carry an hx-trigger polling interval or an sse-connect attribute,
 // across every state this page can render (three boards, empty, and error).
