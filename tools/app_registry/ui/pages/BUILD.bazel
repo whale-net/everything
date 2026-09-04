@@ -62,10 +62,29 @@ go_test(
     ],
 )
 
+# VIA_CHART app auto-select: a VIA_CHART app's picker checkbox implies its
+# owning chart's checkbox(es) (BuildDomainPickerGroups.ImpliedChartTokens,
+# wired to domainPickerGroupView's autoSelectRelatedCharts script), since
+# releasing the app's image alone doesn't get it deployed
+# (ARCHITECTURE.md "Promotability").
+go_test(
+    name = "release_trigger_test",
+    size = "small",
+    srcs = ["release_trigger_test.go"],
+    embed = [":pages"],
+    deps = [
+        "//tools/app_registry/protos:appregistrypb",
+        "//tools/appmeta/proto:appmetapb",
+    ],
+)
+
 # Source files exposed to //tools/app_registry/conformance's NFR-3
 # static-analysis test (#656).
 filegroup(
     name = "conformance_srcs",
-    srcs = glob(["*.go", "*.templ"]),
+    srcs = glob([
+        "*.go",
+        "*.templ",
+    ]),
     visibility = ["//tools/app_registry:__subpackages__"],
 )
