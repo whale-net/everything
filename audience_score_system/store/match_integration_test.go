@@ -45,7 +45,7 @@ func greenlitVideoScript(t *testing.T, ctx context.Context, s *store.Store, ch s
 	})
 	require.NoError(t, err)
 	st, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: ch.ID, Title: title + " Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: ch.ID, Title: title + " Strategy", Active: true,
 		VerdictIDs: []uuid.UUID{v.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -74,7 +74,7 @@ func proposedVideoScript(t *testing.T, ctx context.Context, s *store.Store, ch s
 	})
 	require.NoError(t, err)
 	st, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: ch.ID, Title: title + " Strategy", Cadence: store.CadenceWeekly, Active: true,
+		ChannelID: ch.ID, Title: title + " Strategy", Active: true,
 		VerdictIDs: []uuid.UUID{v.ID}, CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)

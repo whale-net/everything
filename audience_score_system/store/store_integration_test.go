@@ -873,6 +873,91 @@ func TestVerdictStore_Append_TwiceYieldsTwoVersions_FirstRowUnchanged(t *testing
 	assert.True(t, history[0].Version < history[1].Version, "History must be ordered by version ascending")
 }
 
+// ── StrategyStore (issue #1637, FR47 #1833) ─────────────────────────────────
+//
+// StrategyStore.Save/GetByID/ListByChannel round-trip through `strategy`
+// (migration 008, cadence dropped by migration 011) directly -- unlike the
+// compile-time proof that store.Strategy carries no Cadence field, this
+// actually executes Save's INSERT/UPDATE and GetByID/ListByChannel's SELECT
+// column lists (strategy.go's strategyColumns) against real Postgres, which
+// would fail at runtime (not compile time) if any of them still referenced
+// the now-dropped `cadence` column.
+
+func TestStrategyStore_Save_RoundTripsWithoutCadence(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Strategy Round Trip Idea", creator.ID)
+	require.NoError(t, err)
+	verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "viable for strategy round trip", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	detail, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: ch.ID, Title: "Round trip strategy", PreferredWeekday: "Tuesday", Active: true,
+		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err, "Save must succeed with no cadence field to populate")
+
+	assert.Equal(t, ch.ID, detail.ChannelID)
+	assert.Equal(t, "Round trip strategy", detail.Title)
+	assert.Equal(t, "Tuesday", detail.PreferredWeekday)
+	assert.True(t, detail.Active)
+	require.Len(t, detail.Verdicts, 1)
+	assert.Equal(t, verdict.ID, detail.Verdicts[0].VerdictID)
+	assert.Equal(t, idea.ID, detail.Verdicts[0].IdeaID)
+}
+
+func TestStrategyStore_GetByID_RoundTripsWithoutCadence(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Strategy GetByID Idea", creator.ID)
+	require.NoError(t, err)
+	verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "viable for GetByID round trip", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	saved, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: ch.ID, Title: "GetByID strategy", Active: true,
+		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	got, err := s.Strategies().GetByID(ctx, saved.ID)
+	require.NoError(t, err, "GetByID's SELECT column list must not reference the dropped cadence column")
+	assert.Equal(t, saved.Strategy, got.Strategy)
+	require.Len(t, got.Verdicts, 1)
+	assert.Equal(t, verdict.ID, got.Verdicts[0].VerdictID)
+}
+
+func TestStrategyStore_ListByChannel_RoundTripsWithoutCadence(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Strategy ListByChannel Idea", creator.ID)
+	require.NoError(t, err)
+	verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "viable for ListByChannel round trip", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	saved, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: ch.ID, Title: "ListByChannel strategy", Active: true,
+		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	details, truncated, err := s.Strategies().ListByChannel(ctx, ch.ID, false, 0)
+	require.NoError(t, err, "ListByChannel's SELECT column list must not reference the dropped cadence column")
+	assert.False(t, truncated)
+	require.Len(t, details, 1)
+	assert.Equal(t, saved.Strategy, details[0].Strategy)
+}
+
 // ── ScheduleStore.SaveDraft (FR16, LB3) ─────────────────────────────────────
 
 func TestScheduleStore_SaveDraft_RejectsNonViableVerdict_AcceptsViable(t *testing.T) {
@@ -1351,7 +1436,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(10), version, "highest migration in schema.Migrations is 010_video_script")
+	assert.Equal(t, uint(11), version, "highest migration in schema.Migrations is 011_drop_strategy_cadence")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
@@ -1688,6 +1773,79 @@ func TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp(t *t
 		).Scan(&exists))
 		assert.True(t, exists, "index %s must exist on mcp_credential after up/down/up", idx)
 	}
+}
+
+// ── Migration 011 (drop strategy.cadence, FR47, issue #1833) ───────────────
+
+// TestMigration011_DropStrategyCadence_UpDropsColumn_DownRestoresWithDefault
+// proves migration 011 up/down applies cleanly both ways: up drops
+// strategy.cadence (and its CHECK constraint) outright; down is not
+// losslessly reversible (the dropped values cannot be recovered), so it
+// re-adds the column backfilled with the documented default 'weekly'
+// rather than a NULL or a guess -- this proves that backfill actually
+// happens, not just that the column comes back.
+func TestMigration011_DropStrategyCadence_UpDropsColumn_DownBackfillsDefault(t *testing.T) {
+	ctx := context.Background()
+	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
+
+	sqlDB, err := sql.Open("pgx", db.ConnString)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	runner := migrate.NewRunner(sqlDB, schema.Migrations, schema.Dir)
+	require.NoError(t, runner.Migrate(11), "apply every migration including 011 -- cadence dropped")
+
+	var hasCadence bool
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'strategy' AND column_name = 'cadence')`,
+	).Scan(&hasCadence))
+	assert.False(t, hasCadence, "strategy.cadence must not exist after migration 011's up")
+
+	// Seed a post-011 strategy row (cadence doesn't exist, so StrategyStore
+	// -- which as of #1833 never writes it -- is exactly how a real row
+	// looks at this point).
+	s := store.New(db.Pool)
+	ch, creator := setupChannel(t, ctx, s)
+	idea, err := s.Ideas().Create(ctx, ch.ID, "Migration 011 Idea", creator.ID)
+	require.NoError(t, err)
+	verdict, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "viable for migration 011 test", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	saved, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: ch.ID, Title: "Pre-down Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{verdict.ID}, CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, runner.Migrate(10), "roll back to 010, running 011's down -- not losslessly reversible, backfills 'weekly'")
+
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'strategy' AND column_name = 'cadence')`,
+	).Scan(&hasCadence))
+	require.True(t, hasCadence, "strategy.cadence must exist again after 011's down")
+
+	var backfilled string
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT cadence FROM strategy WHERE id = $1`, saved.ID,
+	).Scan(&backfilled))
+	assert.Equal(t, "weekly", backfilled, "011's down migration must backfill the existing row's cadence to the documented default 'weekly', not NULL or a guess")
+
+	// The re-added column has no DEFAULT of its own (mirroring migration
+	// 008's original NOT NULL, no-default shape) -- only the backfill of
+	// already-existing rows gets 'weekly'; a fresh insert must still supply
+	// a value explicitly.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO strategy (channel_id, title, active, created_by_person_id)
+		VALUES ($1, $2, true, $3)
+	`, ch.ID, "No cadence supplied", creator.ID)
+	assert.Error(t, err, "011's re-added cadence column must still be NOT NULL with no default for new rows")
+
+	require.NoError(t, runner.Migrate(11), "re-apply 011's up")
+	require.NoError(t, db.Pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'strategy' AND column_name = 'cadence')`,
+	).Scan(&hasCadence))
+	assert.False(t, hasCadence, "strategy.cadence must be gone again after re-applying 011's up")
 }
 
 // ── MyWorkStore (issue #1717, FR27/FR28, NFR9) ─────────────────────────────

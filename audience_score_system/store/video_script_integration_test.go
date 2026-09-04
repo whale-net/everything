@@ -483,10 +483,20 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 		IdeaID: idea1.ID, Verdict: store.VerdictViable, Reasoning: "groundable", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
-	strategy1, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
-		ChannelID: ch.ID, Title: "Groundable Strategy", Active: true,
-		VerdictIDs: []uuid.UUID{verdict1.ID}, CreatedByPersonID: creator.ID,
-	})
+	// The schema is only migrated to 9 here -- pre-migration-011, `strategy.
+	// cadence` is still NOT NULL with no default (migration 008's original
+	// shape), but StrategyStore.Save (as of #1833/FR47) never populates it.
+	// Seed the row by SQL directly instead, exactly as a pre-011 caller
+	// would have, mirroring the video_schedule_match seed below for the
+	// same reason (a current store method that can't write a historical
+	// schema shape).
+	var strategy1ID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO strategy (channel_id, title, cadence, active, created_by_person_id)
+		VALUES ($1, $2, 'weekly', true, $3)
+		RETURNING id
+	`, ch.ID, "Groundable Strategy", creator.ID).Scan(&strategy1ID))
+	_, err = db.Pool.Exec(ctx, `INSERT INTO strategy_verdict (strategy_id, verdict_id) VALUES ($1, $2)`, strategy1ID, verdict1.ID)
 	require.NoError(t, err)
 	entry1, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
 		ChannelID: ch.ID, IdeaID: idea1.ID, VerdictID: verdict1.ID,
@@ -539,7 +549,7 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 	require.NoError(t, db.Pool.QueryRow(ctx, `
 		SELECT id, strategy_id, status FROM video_script WHERE idea_id = $1
 	`, idea1.ID).Scan(&groundedScriptID, &groundedStrategyID, &groundedStatus))
-	assert.Equal(t, strategy1.ID, groundedStrategyID, "strategy_id must be derived via strategy_verdict joined to the schedule_entry's verdict_id")
+	assert.Equal(t, strategy1ID, groundedStrategyID, "strategy_id must be derived via strategy_verdict joined to the schedule_entry's verdict_id")
 	assert.Equal(t, "greenlit", groundedStatus, "a committed schedule_entry must backfill to greenlit")
 
 	var groundedMatchScriptID *uuid.UUID

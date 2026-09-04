@@ -10,16 +10,22 @@
 // in-process MCP client.
 //
 // strategy_test.go's pure-Go suite (package tools, no build tag) already
-// covers parseCadence, advanceCadence, and rollToWeekday in isolation.
+// covers SaveStrategyInput/GetStrategyInput/ListStrategiesInput.
+// ChannelScopeID() and SaveStrategyInput.IdempotencyKey() in isolation.
 // What this file proves instead: save_strategy's FR16-style viable-verdict
 // gate (rejecting an idea_id whose current verdict is not viable, nothing
 // written), create-vs-update (strategy_id) semantics including wholesale
 // idea-link replacement, idempotent replay convergence, Channel-scoping
-// (Creator+Analyst write, unassociated Person denied), and
-// generate_schedule_plan's read-only cadence-driven proposal derivation
-// (including skipping an Idea whose verdict has since gone non-viable) --
-// all against the real embedded schema and a real HTTP-hosted MCP server,
-// mirroring schedule_draft_integration_test.go's pattern (issue #1637).
+// (Creator+Analyst write, unassociated Person denied), and -- FR47, issue
+// #1833 -- that a Strategy no longer carries any cadence: save_strategy
+// succeeds without one, rejects a caller that supplies one (struct-derived
+// input schemas set additionalProperties: false, so an unknown "cadence"
+// property fails schema validation before the handler ever runs), and
+// get_strategy/list_strategies output carries no cadence key. It also
+// proves generate_schedule_plan (retired by FR41, doubly dead under FR47)
+// is gone from the registry entirely -- all against the real embedded
+// schema and a real HTTP-hosted MCP server, mirroring
+// schedule_draft_integration_test.go's pattern (issue #1637).
 //
 // Run it explicitly (requires a working Docker daemon):
 //
@@ -34,7 +40,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -81,6 +86,22 @@ func stTextOf(res *mcp.CallToolResult) string {
 func stDecode[T any](t *testing.T, res *mcp.CallToolResult) T {
 	t.Helper()
 	var out T
+	require.False(t, res.IsError, "unexpected tool error: %s", stTextOf(res))
+	body, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(body, &out))
+	return out
+}
+
+// stDecodeMap decodes res.StructuredContent into a raw
+// map[string]any -- unlike stDecode[T], this surfaces every wire key
+// actually present (including one a typed struct like StrategyOutput
+// would silently drop), which is what proves "no cadence key" rather
+// than merely "cadence didn't unmarshal into a field that no longer
+// exists" (FR47, issue #1833).
+func stDecodeMap(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	var out map[string]any
 	require.False(t, res.IsError, "unexpected tool error: %s", stTextOf(res))
 	body, err := json.Marshal(res.StructuredContent)
 	require.NoError(t, err)
@@ -214,7 +235,6 @@ func TestSaveStrategy_ViableVerdicts_CreatesWithLinkedVerdictsAndIdeas(t *testin
 	res := f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Short themed clips",
-		Cadence:           "weekly",
 		PreferredWeekday:  "Monday",
 		VerdictIDs:        []string{v1.ID, v2.ID},
 		IdempotencyKeyArg: uuid.NewString(),
@@ -223,7 +243,6 @@ func TestSaveStrategy_ViableVerdicts_CreatesWithLinkedVerdictsAndIdeas(t *testin
 	out := stDecode[tools.StrategyOutput](t, res)
 
 	assert.Equal(t, f.ch.ID.String(), out.ChannelID)
-	assert.Equal(t, "weekly", out.Cadence)
 	assert.Equal(t, "Monday", out.PreferredWeekday)
 	assert.True(t, out.Active, "active must default to true when omitted")
 	require.Len(t, out.Verdicts, 2)
@@ -256,7 +275,6 @@ func TestSaveStrategy_NonViableVerdict_RejectedNoRowWritten(t *testing.T) {
 	res := f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Should fail",
-		Cadence:           "monthly",
 		VerdictIDs:        []string{notViable.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
@@ -274,7 +292,6 @@ func TestSaveStrategy_UnknownVerdictID_Rejected(t *testing.T) {
 	res := f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Should fail",
-		Cadence:           "weekly",
 		VerdictIDs:        []string{uuid.NewString()},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
@@ -287,11 +304,11 @@ func TestSaveStrategy_SameVerdictLinkedToMultipleStrategies(t *testing.T) {
 	idea, v := f.viableIdea(t, cs, f.creator.ID, "Shared verdict idea")
 
 	first := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "First strategy", Cadence: "weekly",
+		ChannelID: f.ch.ID.String(), Title: "First strategy",
 		VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
 	}))
 	second := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Second strategy", Cadence: "monthly",
+		ChannelID: f.ch.ID.String(), Title: "Second strategy",
 		VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
 	}))
 
@@ -314,7 +331,6 @@ func TestSaveStrategy_StrategyIDSupplied_UpdatesAndReplacesLinkedVerdictsWholesa
 	created := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Original title",
-		Cadence:           "weekly",
 		VerdictIDs:        []string{v1.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	}))
@@ -324,14 +340,12 @@ func TestSaveStrategy_StrategyIDSupplied_UpdatesAndReplacesLinkedVerdictsWholesa
 		ChannelID:         f.ch.ID.String(),
 		StrategyID:        created.StrategyID,
 		Title:             "Updated title",
-		Cadence:           "monthly",
 		VerdictIDs:        []string{v2.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	}))
 
 	assert.Equal(t, created.StrategyID, updated.StrategyID, "supplying strategy_id must update the same row, not create a new one")
 	assert.Equal(t, "Updated title", updated.Title)
-	assert.Equal(t, "monthly", updated.Cadence)
 	require.Len(t, updated.Verdicts, 1, "the linked verdict set must be replaced wholesale, not merged")
 	assert.Equal(t, idea2.ID.String(), updated.Verdicts[0].IdeaID)
 
@@ -349,7 +363,6 @@ func TestSaveStrategy_UnknownStrategyID_Rejected(t *testing.T) {
 		ChannelID:         f.ch.ID.String(),
 		StrategyID:        uuid.NewString(),
 		Title:             "Should fail",
-		Cadence:           "weekly",
 		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
@@ -366,7 +379,6 @@ func TestSaveStrategy_IdempotentReplay_ConvergesOnSameRow(t *testing.T) {
 	args := tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Replay strategy",
-		Cadence:           "weekly",
 		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: "replay-key-strategy",
 	}
@@ -389,7 +401,6 @@ func TestSaveStrategy_AnalystCanSave_UnassociatedPersonDeniedWritesNothing(t *te
 	res := f.call(t, analystCS, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Analyst strategy",
-		Cadence:           "weekly",
 		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
@@ -399,7 +410,6 @@ func TestSaveStrategy_AnalystCanSave_UnassociatedPersonDeniedWritesNothing(t *te
 	denied := f.call(t, outsiderCS, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Should be denied",
-		Cadence:           "weekly",
 		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	})
@@ -421,7 +431,6 @@ func TestGetStrategy_ReturnsSavedStrategy_WrongChannelRejected(t *testing.T) {
 	saved := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
 		ChannelID:         f.ch.ID.String(),
 		Title:             "Gettable strategy",
-		Cadence:           "biweekly",
 		VerdictIDs:        []string{v.ID},
 		IdempotencyKeyArg: uuid.NewString(),
 	}))
@@ -445,12 +454,12 @@ func TestListStrategies_ActiveOnlyFilter(t *testing.T) {
 	_, v2 := f.viableIdea(t, cs, f.creator.ID, "Inactive idea")
 
 	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Active strategy", Cadence: "weekly",
+		ChannelID: f.ch.ID.String(), Title: "Active strategy",
 		VerdictIDs: []string{v1.ID}, IdempotencyKeyArg: uuid.NewString(),
 	})
 	inactive := false
 	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Inactive strategy", Cadence: "monthly",
+		ChannelID: f.ch.ID.String(), Title: "Inactive strategy",
 		Active: &inactive, VerdictIDs: []string{v2.ID}, IdempotencyKeyArg: uuid.NewString(),
 	})
 
@@ -476,7 +485,7 @@ func TestListStrategies_LimitTruncated(t *testing.T) {
 	for i := 0; i < seeded; i++ {
 		_, v := f.viableIdea(t, cs, f.creator.ID, fmt.Sprintf("Idea %d", i))
 		f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-			ChannelID: f.ch.ID.String(), Title: fmt.Sprintf("Strategy %d", i), Cadence: "weekly",
+			ChannelID: f.ch.ID.String(), Title: fmt.Sprintf("Strategy %d", i),
 			VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
 		})
 	}
@@ -490,194 +499,104 @@ func TestListStrategies_LimitTruncated(t *testing.T) {
 	assert.False(t, all.Truncated)
 }
 
-// ── generate_schedule_plan ────────────────────────────────────────────────
-
-func TestGenerateSchedulePlan_ProposesCadenceSlotsWithoutWriting(t *testing.T) {
-	f := newStrategyFixture(t)
-	cs := f.connect(t, f.creator.ID)
-	idea, verdict := f.viableIdea(t, cs, f.creator.ID, "Plan idea")
-
-	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Weekly plan strategy", Cadence: "weekly",
-		VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
-	})
-
-	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String(), CountPerIdea: 3})
-	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
-	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
-
-	require.Len(t, out.Proposals, 3)
-	assert.Empty(t, out.Skipped)
-	for i, p := range out.Proposals {
-		assert.Equal(t, idea.ID.String(), p.IdeaID)
-		assert.Equal(t, verdict.ID, p.VerdictID)
-		assert.Equal(t, "weekly", p.Cadence)
-		assert.Equal(t, i+1, p.SequenceIndex)
-	}
-	first, err := time.Parse(time.RFC3339, out.Proposals[0].ProposedPublishAt)
-	require.NoError(t, err)
-	second, err := time.Parse(time.RFC3339, out.Proposals[1].ProposedPublishAt)
-	require.NoError(t, err)
-	assert.Equal(t, 7*24*time.Hour, second.Sub(first), "consecutive weekly proposals must be exactly 7 days apart")
-
-	entries, _, err := f.st.Schedules().ListByChannel(context.Background(), f.ch.ID, nil, nil, 0)
-	require.NoError(t, err)
-	assert.Empty(t, entries, "generate_schedule_plan must not write any schedule_entry rows")
-}
-
-func TestGenerateSchedulePlan_SkipsIdeaWhoseVerdictIsNoLongerViable(t *testing.T) {
-	f := newStrategyFixture(t)
-	cs := f.connect(t, f.creator.ID)
-	idea, verdict := f.viableIdea(t, cs, f.creator.ID, "Now not viable idea")
-
-	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Strategy about to be undermined", Cadence: "weekly",
-		VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
-	})
-
-	// A newer verdict version flips the idea to not-viable after the
-	// Strategy was saved -- generate_schedule_plan re-checks the current
-	// verdict on every call rather than trusting the pinned link.
-	f.call(t, cs, "save_viability_verdict", tools.SaveViabilityVerdictInput{
-		ChannelID:         f.ch.ID.String(),
-		IdeaID:            idea.ID.String(),
-		Verdict:           "not-viable",
-		Reasoning:         "changed our mind",
-		IdempotencyKeyArg: uuid.NewString(),
-	})
-
-	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})
-	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
-	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
-
-	assert.Empty(t, out.Proposals)
-	require.Len(t, out.Skipped, 1)
-	assert.Equal(t, idea.ID.String(), out.Skipped[0].IdeaID)
-}
-
-func TestGenerateSchedulePlan_IgnoresInactiveStrategies(t *testing.T) {
-	f := newStrategyFixture(t)
-	cs := f.connect(t, f.creator.ID)
-	_, verdict := f.viableIdea(t, cs, f.creator.ID, "Inactive plan idea")
-
-	inactive := false
-	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Inactive strategy", Cadence: "weekly",
-		Active: &inactive, VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
-	})
-
-	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})
-	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
-	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
-	assert.Empty(t, out.Proposals)
-	assert.Empty(t, out.Skipped, "an inactive strategy's ideas are simply not considered -- not reported as skipped")
-}
-
-// ── generate_schedule_plan: pacing policy reconciliation ─────────────────
+// ── FR47 (issue #1833): no more cadence ──────────────────────────────────
 //
-// Before this reconciliation, a Strategy's cadence and the Channel's
-// pacing policy were two independent, unreconciled numbers:
-// generate_schedule_plan would happily propose more slots into a
-// calendar week than the pacing policy's target_uploads_per_week allows,
-// discoverable only after the fact via FR18's cadence_exceeded flag on
-// save_schedule_draft. These tests prove generate_schedule_plan now
-// pushes a proposal forward (never earlier) until it fits.
+// A Strategy no longer carries any recurrence/pacing field. These tests
+// prove: save_strategy succeeds with no cadence argument at all (every
+// test above already does this implicitly; this one asserts it
+// explicitly and inspects the raw wire response); a caller that supplies
+// cadence anyway is rejected outright, not silently ignored (struct-
+// derived input schemas set additionalProperties: false, so an unknown
+// property fails schema validation before saveStrategyMutate ever runs);
+// and get_strategy/list_strategies carry no cadence key in their
+// responses.
 
-func TestGenerateSchedulePlan_NoPacingPolicy_UnaffectedByReconciliation(t *testing.T) {
+func TestSaveStrategy_NoCadenceArgument_Succeeds_ResponseHasNoCadenceKey(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
-	_, verdict := f.viableIdea(t, cs, f.creator.ID, "No policy idea")
+	_, v := f.viableIdea(t, cs, f.creator.ID, "No cadence idea")
 
-	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Weekly, no policy", Cadence: "weekly",
-		VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
+	res := f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "No cadence strategy",
+		VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
 	})
+	require.False(t, res.IsError, "save_strategy must succeed with no cadence argument at all: %s", stTextOf(res))
 
-	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})
-	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
-	require.Len(t, out.Proposals, 1)
-	assert.False(t, out.Proposals[0].PacingAdjusted, "no pacing policy set -- nothing to reconcile against")
+	out := stDecodeMap(t, res)
+	assert.NotContains(t, out, "cadence", "save_strategy's response must carry no cadence key (FR47)")
 }
 
-func TestGenerateSchedulePlan_TwoWeeklyStrategiesCollide_SecondPushedToFitPacingTarget(t *testing.T) {
+func TestSaveStrategy_CadenceArgument_Rejected(t *testing.T) {
 	f := newStrategyFixture(t)
 	cs := f.connect(t, f.creator.ID)
+	_, v := f.viableIdea(t, cs, f.creator.ID, "Cadence-supplied idea")
 
-	f.call(t, cs, "set_pacing_policy", tools.SetPacingPolicyInput{
-		ChannelID: f.ch.ID.String(), TargetUploadsPerWeek: 1,
+	res := f.call(t, cs, "save_strategy", map[string]any{
+		"channel_id":      f.ch.ID.String(),
+		"title":           "Should be rejected",
+		"cadence":         "weekly",
+		"verdict_ids":     []string{v.ID},
+		"idempotency_key": uuid.NewString(),
 	})
+	assert.True(t, res.IsError, "save_strategy must reject a caller-supplied cadence argument, not silently ignore it (FR47)")
 
-	_, verdict1 := f.viableIdea(t, cs, f.creator.ID, "First weekly idea")
-	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "First weekly strategy", Cadence: "weekly",
-		VerdictIDs: []string{verdict1.ID}, IdempotencyKeyArg: uuid.NewString(),
-	})
-	_, verdict2 := f.viableIdea(t, cs, f.creator.ID, "Second weekly idea")
-	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Second weekly strategy", Cadence: "weekly",
-		VerdictIDs: []string{verdict2.ID}, IdempotencyKeyArg: uuid.NewString(),
-	})
-
-	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})
-	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
-	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
-	require.Len(t, out.Proposals, 2)
-
-	// Both Strategies compute the same raw weekly slot (~now+7d) with no
-	// pacing policy in the picture -- against a target of 1/week, only
-	// one of the two can land in that week; the other must be reconciled
-	// forward into the next one.
-	adjustedCount := 0
-	var times []time.Time
-	for _, p := range out.Proposals {
-		if p.PacingAdjusted {
-			adjustedCount++
-		}
-		ts, err := time.Parse(time.RFC3339, p.ProposedPublishAt)
-		require.NoError(t, err)
-		times = append(times, ts)
-	}
-	assert.Equal(t, 1, adjustedCount, "exactly one of the two colliding weekly proposals must be pushed to fit the pacing target")
-
-	y1, w1 := times[0].ISOWeek()
-	y2, w2 := times[1].ISOWeek()
-	assert.False(t, y1 == y2 && w1 == w2, "the two proposals must land in different calendar weeks once reconciled: %v vs %v", times[0], times[1])
-	assert.Equal(t, 7*24*time.Hour, times[1].Sub(times[0]).Abs(), "the pushed proposal must land exactly one cadence step later, not further")
-}
-
-func TestGenerateSchedulePlan_PacingPolicyCountsPersistedScheduleEntries(t *testing.T) {
-	f := newStrategyFixture(t)
-	cs := f.connect(t, f.creator.ID)
-
-	f.call(t, cs, "set_pacing_policy", tools.SetPacingPolicyInput{
-		ChannelID: f.ch.ID.String(), TargetUploadsPerWeek: 1,
-	})
-
-	// An unrelated Idea already has a committed slot ~7 days out --
-	// occupying that week's entire pacing budget before any Strategy is
-	// even considered.
-	otherIdea, otherVerdict := f.viableIdea(t, cs, f.creator.ID, "Already-scheduled idea")
-	occupiedAt := time.Now().UTC().AddDate(0, 0, 7)
-	f.call(t, cs, "save_schedule_draft", tools.SaveScheduleDraftInput{
-		ChannelID: f.ch.ID.String(), IdeaID: otherIdea.ID.String(), VerdictID: otherVerdict.ID,
-		ProposedPublishAt: occupiedAt.Format(time.RFC3339), IdempotencyKeyArg: uuid.NewString(),
-	})
-
-	_, verdict := f.viableIdea(t, cs, f.creator.ID, "Contending weekly idea")
-	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
-		ChannelID: f.ch.ID.String(), Title: "Contending weekly strategy", Cadence: "weekly",
-		VerdictIDs: []string{verdict.ID}, IdempotencyKeyArg: uuid.NewString(),
-	})
-
-	res := f.call(t, cs, "generate_schedule_plan", tools.GenerateSchedulePlanInput{ChannelID: f.ch.ID.String()})
-	require.False(t, res.IsError, "unexpected error: %s", stTextOf(res))
-	out := stDecode[tools.GenerateSchedulePlanOutput](t, res)
-	require.Len(t, out.Proposals, 1)
-	assert.True(t, out.Proposals[0].PacingAdjusted, "the already-committed entry alone fills the week's pacing budget")
-
-	proposedAt, err := time.Parse(time.RFC3339, out.Proposals[0].ProposedPublishAt)
+	strategies, _, err := f.st.Strategies().ListByChannel(context.Background(), f.ch.ID, false, 0)
 	require.NoError(t, err)
-	oy, ow := occupiedAt.ISOWeek()
-	py, pw := proposedAt.ISOWeek()
-	assert.False(t, oy == py && ow == pw, "the new proposal must not land in the already-fully-booked week")
+	assert.Empty(t, strategies, "a rejected cadence argument must leave nothing written")
+}
+
+func TestGetStrategy_ResponseHasNoCadenceKey(t *testing.T) {
+	f := newStrategyFixture(t)
+	cs := f.connect(t, f.creator.ID)
+	_, v := f.viableIdea(t, cs, f.creator.ID, "Get no-cadence idea")
+
+	saved := stDecode[tools.StrategyOutput](t, f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "Get no-cadence strategy",
+		VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
+	}))
+
+	res := f.call(t, cs, "get_strategy", tools.GetStrategyInput{ChannelID: f.ch.ID.String(), StrategyID: saved.StrategyID})
+	out := stDecodeMap(t, res)
+	assert.NotContains(t, out, "cadence", "get_strategy's response must carry no cadence key (FR47)")
+}
+
+func TestListStrategies_ResponseHasNoCadenceKey(t *testing.T) {
+	f := newStrategyFixture(t)
+	cs := f.connect(t, f.creator.ID)
+	_, v := f.viableIdea(t, cs, f.creator.ID, "List no-cadence idea")
+
+	f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+		ChannelID: f.ch.ID.String(), Title: "List no-cadence strategy",
+		VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
+	})
+
+	res := f.call(t, cs, "list_strategies", tools.ListStrategiesInput{ChannelID: f.ch.ID.String()})
+	out := stDecodeMap(t, res)
+	strategies, ok := out["strategies"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, strategies)
+	for _, s := range strategies {
+		entry, ok := s.(map[string]any)
+		require.True(t, ok)
+		assert.NotContains(t, entry, "cadence", "list_strategies' per-Strategy response must carry no cadence key (FR47)")
+	}
+}
+
+// TestGenerateSchedulePlan_NotRegistered proves generate_schedule_plan
+// (retired by FR41, doubly dead under FR47 since both its only input --
+// cadence + pacing_policy -- and its only output -- a schedule_entry slot
+// proposal -- are gone) is not registered against this fixture's server,
+// which wires RegisterStrategy the same way production does.
+func TestGenerateSchedulePlan_NotRegistered(t *testing.T) {
+	f := newStrategyFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	res, err := cs.ListTools(context.Background(), nil)
+	require.NoError(t, err)
+
+	var names []string
+	for _, tl := range res.Tools {
+		names = append(names, tl.Name)
+	}
+	assert.NotContains(t, names, "generate_schedule_plan", "generate_schedule_plan must not be registered (FR41/FR47)")
 }
