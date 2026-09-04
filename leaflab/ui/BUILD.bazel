@@ -47,6 +47,7 @@ go_test(
     name = "ui_test",
     size = "small",
     srcs = [
+        "handlers_admin_test.go",
         "handlers_auth_test.go",
         "handlers_boards_test.go",
         "handlers_sensors_test.go",

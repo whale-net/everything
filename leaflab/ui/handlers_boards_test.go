@@ -41,6 +41,19 @@ type fakeLeafLabAPIClient struct {
 
 	renameBoardResp *leaflabapipb.RenameBoardResponse
 	renameBoardErr  error
+
+	// -- #1777: admin ownership screen (FR11-FR14) fixtures --
+	ownedBoardsResp *leaflabapipb.ListOwnedBoardsResponse
+	ownedBoardsErr  error
+
+	usersResp *leaflabapipb.ListUsersResponse
+	usersErr  error
+
+	reassignResp *leaflabapipb.ReassignBoardOwnerResponse
+	reassignErr  error
+
+	clearResp *leaflabapipb.ClearBoardOwnerResponse
+	clearErr  error
 }
 
 func (f *fakeLeafLabAPIClient) ListBoardsWithState(ctx context.Context, in *leaflabapipb.ListBoardsWithStateRequest, opts ...grpc.CallOption) (*leaflabapipb.ListBoardsWithStateResponse, error) {
@@ -82,6 +95,48 @@ func (f *fakeLeafLabAPIClient) RenameBoard(ctx context.Context, in *leaflabapipb
 		return f.renameBoardResp, nil
 	}
 	return &leaflabapipb.RenameBoardResponse{}, nil
+}
+
+// -- #1777: admin ownership screen (FR11-FR14) fakes -------------------
+
+func (f *fakeLeafLabAPIClient) ListOwnedBoards(ctx context.Context, in *leaflabapipb.ListOwnedBoardsRequest, opts ...grpc.CallOption) (*leaflabapipb.ListOwnedBoardsResponse, error) {
+	if f.ownedBoardsErr != nil {
+		return nil, f.ownedBoardsErr
+	}
+	if f.ownedBoardsResp != nil {
+		return f.ownedBoardsResp, nil
+	}
+	return &leaflabapipb.ListOwnedBoardsResponse{}, nil
+}
+
+func (f *fakeLeafLabAPIClient) ListUsers(ctx context.Context, in *leaflabapipb.ListUsersRequest, opts ...grpc.CallOption) (*leaflabapipb.ListUsersResponse, error) {
+	if f.usersErr != nil {
+		return nil, f.usersErr
+	}
+	if f.usersResp != nil {
+		return f.usersResp, nil
+	}
+	return &leaflabapipb.ListUsersResponse{}, nil
+}
+
+func (f *fakeLeafLabAPIClient) ReassignBoardOwner(ctx context.Context, in *leaflabapipb.ReassignBoardOwnerRequest, opts ...grpc.CallOption) (*leaflabapipb.ReassignBoardOwnerResponse, error) {
+	if f.reassignErr != nil {
+		return nil, f.reassignErr
+	}
+	if f.reassignResp != nil {
+		return f.reassignResp, nil
+	}
+	return &leaflabapipb.ReassignBoardOwnerResponse{}, nil
+}
+
+func (f *fakeLeafLabAPIClient) ClearBoardOwner(ctx context.Context, in *leaflabapipb.ClearBoardOwnerRequest, opts ...grpc.CallOption) (*leaflabapipb.ClearBoardOwnerResponse, error) {
+	if f.clearErr != nil {
+		return nil, f.clearErr
+	}
+	if f.clearResp != nil {
+		return f.clearResp, nil
+	}
+	return &leaflabapipb.ClearBoardOwnerResponse{}, nil
 }
 
 // TestHandleBoards_RendersBoardsFromAPI covers the happy path: handleBoards

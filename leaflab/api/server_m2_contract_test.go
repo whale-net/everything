@@ -149,24 +149,75 @@ func TestM2RPCs_ReachableAndUnimplemented(t *testing.T) {
 		assertUnimplementedFromHandler(t, "RenameSensor", "RenameSensor: not implemented", err)
 	})
 
+	// ListOwnedBoards/ReassignBoardOwner/ClearBoardOwner/ListUsers' own task
+	// (#1777, FR11-FR14) landed: these four subtests are superseded per
+	// this test's doc comment above, in place rather than deleted --
+	// exactly the same shape as the ClaimBoard subtest above. Each RPC now
+	// calls requireAdmin first (server.go), which resolves the caller via
+	// callerUserID before ever touching the repository -- with no auth
+	// claims in ctx, that's codes.Unauthenticated, proving the RPC is
+	// reachable and reaches the real handler rather than grpc-go's own
+	// "unknown service"/"unknown method" Unimplemented. Real FR11-FR14
+	// behavior (admin gate, SCD2 close-and-open, the unowned/
+	// current-owner/unknown-user checks) is covered against a fake
+	// repository in server_test.go, not here: this file's servers are
+	// built with NewRepository(nil), which cannot serve a real call past
+	// requireAdmin.
+
 	t.Run("ListOwnedBoards", func(t *testing.T) {
 		_, err := client.ListOwnedBoards(ctx, &pb.ListOwnedBoardsRequest{})
-		assertUnimplementedFromHandler(t, "ListOwnedBoards", "ListOwnedBoards: not implemented", err)
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Fatalf("ListOwnedBoards: expected a gRPC status error, got %v", err)
+		}
+		if st.Code() != codes.Unauthenticated {
+			t.Fatalf("ListOwnedBoards: expected codes.Unauthenticated (reachable, real handler, no claims in ctx), got %v (%v)", st.Code(), err)
+		}
+		if strings.Contains(st.Message(), "unknown service") || strings.Contains(st.Message(), "unknown method") {
+			t.Fatalf("ListOwnedBoards: got grpc's own %q -- the RPC was never registered/never reached the handler", st.Message())
+		}
 	})
 
 	t.Run("ReassignBoardOwner", func(t *testing.T) {
 		_, err := client.ReassignBoardOwner(ctx, &pb.ReassignBoardOwnerRequest{BoardId: 1, NewOwnerLeaflabUserId: 2})
-		assertUnimplementedFromHandler(t, "ReassignBoardOwner", "ReassignBoardOwner: not implemented", err)
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Fatalf("ReassignBoardOwner: expected a gRPC status error, got %v", err)
+		}
+		if st.Code() != codes.Unauthenticated {
+			t.Fatalf("ReassignBoardOwner: expected codes.Unauthenticated (reachable, real handler, no claims in ctx), got %v (%v)", st.Code(), err)
+		}
+		if strings.Contains(st.Message(), "unknown service") || strings.Contains(st.Message(), "unknown method") {
+			t.Fatalf("ReassignBoardOwner: got grpc's own %q -- the RPC was never registered/never reached the handler", st.Message())
+		}
 	})
 
 	t.Run("ClearBoardOwner", func(t *testing.T) {
 		_, err := client.ClearBoardOwner(ctx, &pb.ClearBoardOwnerRequest{BoardId: 1})
-		assertUnimplementedFromHandler(t, "ClearBoardOwner", "ClearBoardOwner: not implemented", err)
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Fatalf("ClearBoardOwner: expected a gRPC status error, got %v", err)
+		}
+		if st.Code() != codes.Unauthenticated {
+			t.Fatalf("ClearBoardOwner: expected codes.Unauthenticated (reachable, real handler, no claims in ctx), got %v (%v)", st.Code(), err)
+		}
+		if strings.Contains(st.Message(), "unknown service") || strings.Contains(st.Message(), "unknown method") {
+			t.Fatalf("ClearBoardOwner: got grpc's own %q -- the RPC was never registered/never reached the handler", st.Message())
+		}
 	})
 
 	t.Run("ListUsers", func(t *testing.T) {
 		_, err := client.ListUsers(ctx, &pb.ListUsersRequest{})
-		assertUnimplementedFromHandler(t, "ListUsers", "ListUsers: not implemented", err)
+		st, ok := status.FromError(err)
+		if !ok {
+			t.Fatalf("ListUsers: expected a gRPC status error, got %v", err)
+		}
+		if st.Code() != codes.Unauthenticated {
+			t.Fatalf("ListUsers: expected codes.Unauthenticated (reachable, real handler, no claims in ctx), got %v (%v)", st.Code(), err)
+		}
+		if strings.Contains(st.Message(), "unknown service") || strings.Contains(st.Message(), "unknown method") {
+			t.Fatalf("ListUsers: got grpc's own %q -- the RPC was never registered/never reached the handler", st.Message())
+		}
 	})
 }
 
