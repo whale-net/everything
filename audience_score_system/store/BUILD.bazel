@@ -70,7 +70,10 @@ go_test(
     name = "store_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["store_integration_test.go"],
+    srcs = [
+        "store_integration_test.go",
+        "video_script_integration_test.go",
+    ],
     gotags = ["integration"],
     tags = [
         "external",
