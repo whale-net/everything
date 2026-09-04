@@ -71,6 +71,9 @@ func RunCLI(migrations embed.FS, migrateDir string, opts ...Option) {
 	defer db.Close()
 
 	o := applyOptions(opts)
+	if err := validateSources(o.sources); err != nil {
+		log.Fatalf("Invalid WithSource configuration: %v", err)
+	}
 	runner := NewRunner(db, migrations, migrateDir)
 
 	// Handle history flag

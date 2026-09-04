@@ -65,3 +65,26 @@ func ApplySource(db *sql.DB, src Source) error {
 	}
 	return nil
 }
+
+// validateSources rejects an empty Name (every WithSource call must
+// identify itself) and duplicate Names among sources. Two sources resolving
+// to the same "schema_migrations_<name>" table would share -- and, via
+// SetVersion's TRUNCATE, repeatedly wipe -- each other's tracked version,
+// defeating the whole point of giving each Source its own table. A typo or
+// two libraries independently picking the same name is exactly the
+// "started overlapping" failure mode a dedicated table per source is
+// supposed to rule out; this check makes sure it's caught loudly instead of
+// silently corrupting version tracking.
+func validateSources(sources []Source) error {
+	seen := make(map[string]bool, len(sources))
+	for _, s := range sources {
+		if s.Name == "" {
+			return fmt.Errorf("migrate.WithSource: Name must not be empty")
+		}
+		if seen[s.Name] {
+			return fmt.Errorf("migrate.WithSource: duplicate source name %q -- each WithSource call must use a unique name, since it names a dedicated schema_migrations_%s table", s.Name, s.Name)
+		}
+		seen[s.Name] = true
+	}
+	return nil
+}
