@@ -34,6 +34,30 @@ service LeafLabAPI {
   // on GetSensorReadingHistoryRequest/Response before changing this RPC's
   // shape.
   rpc GetSensorReadingHistory(GetSensorReadingHistoryRequest) returns (GetSensorReadingHistoryResponse);
+
+  // Claim an unowned board for the calling user (FR1, FR2). The "already
+  // owned" case is a codes.FailedPrecondition status, not a response field —
+  // there is no success flag to ignore.
+  rpc ClaimBoard(ClaimBoardRequest) returns (ClaimBoardResponse);
+
+  // Rename a board the calling user owns (FR3).
+  rpc RenameBoard(RenameBoardRequest) returns (RenameBoardResponse);
+
+  // Rename a sensor on a board the calling user owns (FR4).
+  rpc RenameSensor(RenameSensorRequest) returns (RenameSensorResponse);
+
+  // Admin: list every currently-owned board and its current owner (FR11).
+  rpc ListOwnedBoards(ListOwnedBoardsRequest) returns (ListOwnedBoardsResponse);
+
+  // Admin: close the current ownership record and open one for another user
+  // (FR12).
+  rpc ReassignBoardOwner(ReassignBoardOwnerRequest) returns (ReassignBoardOwnerResponse);
+
+  // Admin: close the current ownership record and open none (FR13).
+  rpc ClearBoardOwner(ClearBoardOwnerRequest) returns (ClearBoardOwnerResponse);
+
+  // Admin: the user list the reassign picker selects from (FR11, FR12).
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
 }
 
 // ReportingState classifies a board or sensor by recency of its most recent
@@ -100,6 +124,13 @@ message BoardWithState {
   // Timestamp of the most recent reading across all of this board's sensors.
   // Unset when reporting_state is REPORTING_STATE_NEVER_REPORTED.
   google.protobuf.Timestamp last_reading_at = 4;
+  // M2 additions (FR3, FR11): board name, whether the calling user owns
+  // this board, and the current owner. board_name is empty when the board
+  // has no name -- the UI falls back to device_id. owner is unset when the
+  // board is unowned.
+  string board_name = 5;
+  bool owned_by_caller = 6;
+  LeafLabUser owner = 7;
 }
 
 message GetBoardDetailRequest {
@@ -110,6 +141,13 @@ message GetBoardDetailResponse {
   int64 board_id = 1;
   string device_id = 2;
   repeated SensorDetail sensors = 3;
+  // M2 additions (FR3, FR11): board name, whether the calling user owns
+  // this board, and the current owner. board_name is empty when the board
+  // has no name -- the UI falls back to device_id. owner is unset when the
+  // board is unowned.
+  string board_name = 4;
+  bool owned_by_caller = 5;
+  LeafLabUser owner = 6;
 }
 
 // SensorDetail describes one sensor on a board, including its most recent
@@ -189,4 +227,69 @@ message GetSensorReadingHistoryResponse {
   // excluded_invalid_count > 0 is the all-invalid case; zero `points` with
   // excluded_invalid_count == 0 is the no-readings-at-all case.
   uint32 excluded_invalid_count = 6;
+}
+
+// LeafLabUser is the wire-safe projection of a leaflab_user row. Never
+// carries oidc_sub (NFR5) -- every ownership reference on the wire points at
+// leaflab_user_id, never at the raw OIDC claim string.
+message LeafLabUser {
+  int64 leaflab_user_id = 1;
+  string display_name = 2;
+  string preferred_username = 3;
+  string email = 4;
+}
+
+message ClaimBoardRequest {
+  int64 board_id = 1;
+}
+
+message ClaimBoardResponse {}
+
+message RenameBoardRequest {
+  int64 board_id = 1;
+  string name = 2;
+}
+
+message RenameBoardResponse {}
+
+message RenameSensorRequest {
+  int64 sensor_id = 1;
+  string name = 2;
+}
+
+message RenameSensorResponse {}
+
+// OwnedBoard is one row of the admin ownership list (FR11): a board's
+// identity plus its current owner.
+message OwnedBoard {
+  int64 board_id = 1;
+  string device_id = 2;
+  string board_name = 3;
+  LeafLabUser owner = 4;
+}
+
+message ListOwnedBoardsRequest {}
+
+// No paging or filtering, matching ListBoardsWithState's M1 precedent.
+message ListOwnedBoardsResponse {
+  repeated OwnedBoard boards = 1;
+}
+
+message ReassignBoardOwnerRequest {
+  int64 board_id = 1;
+  int64 new_owner_leaflab_user_id = 2;
+}
+
+message ReassignBoardOwnerResponse {}
+
+message ClearBoardOwnerRequest {
+  int64 board_id = 1;
+}
+
+message ClearBoardOwnerResponse {}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  repeated LeafLabUser users = 1;
 }
