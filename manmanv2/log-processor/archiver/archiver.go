@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"sync"
 	"time"
 
@@ -13,6 +14,15 @@ import (
 	"github.com/whale-net/everything/manmanv2/models"
 	"github.com/whale-net/everything/manmanv2/api/repository"
 )
+
+// s3Uploader is the subset of s3.Client operations the archiver needs.
+// Defined as an interface so tests can inject a fake without a real S3 backend.
+type s3Uploader interface {
+	Upload(ctx context.Context, key string, data []byte, opts *s3.UploadOptions) (string, error)
+	Download(ctx context.Context, key string) ([]byte, error)
+	Exists(ctx context.Context, key string) (bool, error)
+	GetBucket() string
+}
 
 // MinuteWindow represents a batch of logs within a specific minute for a session
 type MinuteWindow struct {
@@ -23,6 +33,7 @@ type MinuteWindow struct {
 	LineCount       int32
 	FirstLogTime    time.Time
 	LastLogTime     time.Time
+	RetryCount      int32
 	mu              sync.Mutex
 }
 
@@ -51,7 +62,7 @@ func (w *MinuteWindow) GetKey() string {
 
 // Archiver manages log batching and S3 uploads
 type Archiver struct {
-	s3Client   *s3.Client
+	s3Client   s3Uploader
 	logRepo    repository.LogReferenceRepository
 	windows    map[string]*MinuteWindow
 	windowsMu  sync.RWMutex
@@ -61,6 +72,7 @@ type Archiver struct {
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 	closerWg   sync.WaitGroup
+	retryWg    sync.WaitGroup
 }
 
 const (
@@ -74,8 +86,20 @@ const (
 	concurrencyProtectionWindow = 15 * time.Second
 )
 
+var (
+	// maxUploadRetries bounds how many times a failed window upload is retried
+	// before the window is dropped for good. A var (not const) so tests can
+	// shrink it for fast, deterministic exercising of the give-up path.
+	maxUploadRetries int32 = 5
+	// baseUploadRetryDelay is the delay before the first retry; it doubles
+	// with each subsequent attempt, capped at maxUploadRetryDelay.
+	baseUploadRetryDelay = 5 * time.Second
+	// maxUploadRetryDelay caps the exponential backoff between retries.
+	maxUploadRetryDelay = 2 * time.Minute
+)
+
 // NewArchiver creates a new log archiver
-func NewArchiver(s3Client *s3.Client, logRepo repository.LogReferenceRepository) *Archiver {
+func NewArchiver(s3Client s3Uploader, logRepo repository.LogReferenceRepository) *Archiver {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	a := &Archiver{
@@ -192,10 +216,56 @@ func (a *Archiver) uploadWorker() {
 			return
 		case window := <-a.uploadChan:
 			if err := a.uploadWindow(a.ctx, window); err != nil {
-				slog.Error("failed to upload window", "window_key", window.GetKey(), "error", err)
+				a.scheduleRetry(window, err)
 			}
 		}
 	}
+}
+
+// scheduleRetry re-queues a window for another upload attempt after an
+// exponential backoff with jitter, up to maxUploadRetries. This is what
+// keeps a transient failure (e.g. the DB briefly failing over) from
+// permanently dropping the window's buffered logs.
+func (a *Archiver) scheduleRetry(window *MinuteWindow, uploadErr error) {
+	window.RetryCount++
+	if window.RetryCount > maxUploadRetries {
+		slog.Error("giving up on window upload after max retries",
+			"window_key", window.GetKey(), "retries", window.RetryCount-1, "error", uploadErr)
+		return
+	}
+
+	delay := uploadRetryBackoff(window.RetryCount)
+	slog.Warn("window upload failed, scheduling retry",
+		"window_key", window.GetKey(), "retry_count", window.RetryCount, "retry_in", delay, "error", uploadErr)
+
+	a.retryWg.Add(1)
+	go func() {
+		defer a.retryWg.Done()
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		select {
+		case a.uploadChan <- window:
+		case <-a.ctx.Done():
+		}
+	}()
+}
+
+// uploadRetryBackoff computes an exponential backoff delay (capped, with
+// jitter) for the given retry attempt number (1-indexed).
+func uploadRetryBackoff(retryCount int32) time.Duration {
+	delay := baseUploadRetryDelay * time.Duration(int64(1)<<uint(retryCount-1))
+	if delay <= 0 || delay > maxUploadRetryDelay {
+		delay = maxUploadRetryDelay
+	}
+	half := int64(delay) / 2
+	jitter := time.Duration(0)
+	if half > 0 {
+		jitter = time.Duration(rand.Int63n(half))
+	}
+	return time.Duration(half) + jitter
 }
 
 // uploadWindow uploads a minute window to S3
@@ -215,8 +285,12 @@ func (a *Archiver) uploadWindow(ctx context.Context, window *MinuteWindow) error
 	}
 
 	if existingLog != nil {
-		// Check if it's a recent pending record
-		if existingLog.State == manman.LogStatePending {
+		// Check if it's a recent pending record. Skip this check when we're
+		// retrying our own earlier failed attempt (RetryCount > 0) - that
+		// pending record is one we created ourselves, not evidence of a
+		// concurrent worker, and waiting it out would just silently drop
+		// the window once the retry backoff exceeds this window.
+		if existingLog.State == manman.LogStatePending && window.RetryCount == 0 {
 			age := time.Since(existingLog.CreatedAt)
 			if age < concurrencyProtectionWindow {
 				// Another worker is handling this, abort
@@ -405,6 +479,10 @@ func (a *Archiver) Close() error {
 	// Stop the background closer
 	a.cancel()
 	a.closerWg.Wait()
+
+	// Wait for any in-flight retry timers to observe cancellation before
+	// closing the channel they'd otherwise send into.
+	a.retryWg.Wait()
 
 	// Close upload channel and wait for workers
 	close(a.uploadChan)
