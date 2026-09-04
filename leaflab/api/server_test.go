@@ -193,12 +193,32 @@ type fakeRepository struct {
 	listOwnedBoardsCalls  int
 	listUsersCalls        int
 	getBoardIdentityCalls int
+
+	// sensorBoards maps a sensor_id to its owning board_id, backing
+	// GetBoardIDForSensor -- a sensor_id absent here does not exist.
+	sensorBoards map[int64]int64
+	// renamedSensors records every successful RenameSensor call, in order --
+	// tests assert on this to prove a refused rename (unauthorized, empty
+	// name, or a name conflict) issues no write at all.
+	renamedSensors []renamedSensor
+	// renameConflictSensors marks sensor_ids whose RenameSensor call should
+	// return ErrSensorNameConflict, standing in for a real Postgres 23505 on
+	// sensor's UNIQUE(board_id, name) constraint (see repository.go's
+	// ErrSensorNameConflict doc comment) without a real database.
+	renameConflictSensors map[int64]bool
 }
 
 // reassignedOwner is one recorded fakeRepository.ReassignBoardOwner call.
 type reassignedOwner struct {
 	boardID        int64
 	newOwnerUserID int64
+}
+
+// renamedSensor is one recorded fakeRepository.RenameSensor call that
+// actually wrote (a refused rename is never appended here).
+type renamedSensor struct {
+	sensorID int64
+	name     string
 }
 
 // claimedBoard is one recorded fakeRepository.ClaimBoard call that actually
@@ -211,17 +231,19 @@ type claimedBoard struct {
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		users:         map[string]int64{},
-		devices:       map[string]int64{},
-		owners:        map[int64]int64{},
-		admins:        map[int64]bool{},
-		inventory:     map[int64][]InventorySensor{},
-		lastAccepted:  map[string]*configpb.DeviceConfig{},
-		boardIdentity: map[int64]BoardIdentity{},
-		sensorDetails: map[int64][]SensorDetailRow{},
-		sensorExists:  map[int64]bool{},
-		sensorHistory: map[int64]*SensorReadingHistory{},
-		existingUsers: map[int64]bool{},
+		users:                 map[string]int64{},
+		devices:               map[string]int64{},
+		owners:                map[int64]int64{},
+		admins:                map[int64]bool{},
+		inventory:             map[int64][]InventorySensor{},
+		lastAccepted:          map[string]*configpb.DeviceConfig{},
+		boardIdentity:         map[int64]BoardIdentity{},
+		sensorDetails:         map[int64][]SensorDetailRow{},
+		sensorExists:          map[int64]bool{},
+		sensorHistory:         map[int64]*SensorReadingHistory{},
+		existingUsers:         map[int64]bool{},
+		sensorBoards:          map[int64]int64{},
+		renameConflictSensors: map[int64]bool{},
 	}
 }
 
@@ -359,6 +381,23 @@ func (f *fakeRepository) LeafLabUserExists(_ context.Context, leaflabUserID int6
 func (f *fakeRepository) ListUsers(_ context.Context) ([]LeafLabUserRow, error) {
 	f.listUsersCalls++
 	return f.userRows, nil
+}
+
+func (f *fakeRepository) GetBoardIDForSensor(_ context.Context, sensorID int64) (int64, bool, error) {
+	id, ok := f.sensorBoards[sensorID]
+	return id, ok, nil
+}
+
+// RenameSensor mirrors production RenameSensor's ErrSensorNameConflict
+// contract closely enough for the unit-level FR4 tests: a sensor_id marked
+// in renameConflictSensors refuses with no write, exactly like a real
+// 23505 unique-violation would.
+func (f *fakeRepository) RenameSensor(_ context.Context, sensorID int64, name string) error {
+	if f.renameConflictSensors[sensorID] {
+		return ErrSensorNameConflict
+	}
+	f.renamedSensors = append(f.renamedSensors, renamedSensor{sensorID: sensorID, name: name})
+	return nil
 }
 
 // fakePublisher is an in-memory configPublisher double: Publish always
@@ -1138,6 +1177,106 @@ func TestAdminRPCs_NonAdmin_PermissionDenied_NoRepositoryAccess(t *testing.T) {
 	}
 }
 
+// -- RenameSensor (#1770, FR4) -------------------------------------------
+//
+// These exercise LeafLabAPIServer.RenameSensor directly against the same
+// fakeRepository/fakePublisher doubles as RenameBoard's tests above,
+// asserting both the returned error/response and, via repo.renamedSensors
+// and pub.published, exactly what (if anything) reached the repository and
+// the publisher -- a denied or rejected call must write and publish
+// nothing.
+
+// TestRenameSensor_Owner_Succeeds is Testing criterion 1: the sensor's
+// board's current owner can rename it, and the repository receives the
+// exact string the caller sent.
+func TestRenameSensor_Owner_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.owners[100] = 1
+	repo.sensorBoards[10] = 100
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	resp, err := srv.RenameSensor(claimsCtx("owner-sub"), &pb.RenameSensorRequest{SensorId: 10, Name: "soil-moisture-2"})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, repo.renamedSensors, 1)
+	assert.Equal(t, renamedSensor{sensorID: 10, name: "soil-moisture-2"}, repo.renamedSensors[0])
+}
+
+// TestRenameSensor_NonOwner_PermissionDenied is Testing criterion 2: an
+// authenticated caller who is not the sensor's board's owner is denied, and
+// the write never reaches the repository.
+func TestRenameSensor_NonOwner_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.users["other-sub"] = 2
+	repo.owners[100] = 1
+	repo.sensorBoards[10] = 100
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameSensor(claimsCtx("other-sub"), &pb.RenameSensorRequest{SensorId: 10, Name: "soil-moisture-2"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.renamedSensors)
+}
+
+// TestRenameSensor_UnownedBoard_PermissionDenied is Testing criterion 3: a
+// sensor on an unowned board denies every renamer -- authorizeBoardWrite
+// treats "unowned" identically to "owned by someone else", not as a
+// free-for-all.
+func TestRenameSensor_UnownedBoard_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["some-sub"] = 1
+	repo.sensorBoards[10] = 100
+	// No repo.owners[100] entry -- unowned.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameSensor(claimsCtx("some-sub"), &pb.RenameSensorRequest{SensorId: 10, Name: "soil-moisture-2"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.renamedSensors)
+}
+
+// TestRenameSensor_AdminRole_NoBypass_PermissionDenied is Testing criterion
+// 4 (FR5): holding the admin role grants no rename access to a sensor on a
+// board the caller does not own -- authorizeBoardWrite consults no role
+// information at all, so RenameSensor has no admin exception either.
+func TestRenameSensor_AdminRole_NoBypass_PermissionDenied(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.users["owner-sub"] = 2
+	repo.owners[100] = 2 // owned by someone else
+	repo.sensorBoards[10] = 100
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameSensor(claimsCtx("admin-sub", "admin"), &pb.RenameSensorRequest{SensorId: 10, Name: "soil-moisture-2"})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, repo.renamedSensors)
+}
+
+// TestRenameSensor_EmptyOrWhitespaceName_InvalidArgument is Testing
+// criterion 5: an empty string and a whitespace-only string are both
+// rejected as InvalidArgument, and neither reaches the repository -- nor
+// even GetBoardIDForSensor, since server.go validates the name before
+// resolving sensor_id -> board_id.
+func TestRenameSensor_EmptyOrWhitespaceName_InvalidArgument(t *testing.T) {
+	for _, name := range []string{"", "   ", "\t\n"} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			repo := newFakeRepository()
+			repo.users["owner-sub"] = 1
+			repo.owners[100] = 1
+			repo.sensorBoards[10] = 100
+			srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+			_, err := srv.RenameSensor(claimsCtx("owner-sub"), &pb.RenameSensorRequest{SensorId: 10, Name: name})
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+			assert.Empty(t, repo.renamedSensors)
+		})
+	}
+}
+
 // TestAdminRPCs_NoClaims_Unauthenticated is Testing criterion 2: no
 // grpcauth.Claims in ctx at all yields codes.Unauthenticated from all four
 // RPCs, with no repository access either.
@@ -1359,3 +1498,58 @@ func TestListUsers_ResponseCarriesNoOIDCSub(t *testing.T) {
 // repo.reassignedOwners gained an entry, exactly the leak FR14 exists to
 // prevent. Restoring the requireAdmin call brought it back to green. See
 // the Testing-phase issue comment on #1777 for the transcript.
+// TestRenameSensor_UnknownSensorID_NotFound covers the RPC section's
+// "Unknown sensor_id -> codes.NotFound" contract point: GetBoardIDForSensor
+// returns ok=false for a sensor_id with no row at all, distinct from a
+// sensor whose board happens to be unowned.
+func TestRenameSensor_UnknownSensorID_NotFound(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["some-sub"] = 1
+	// No repo.sensorBoards[999] entry -- unknown sensor_id.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameSensor(claimsCtx("some-sub"), &pb.RenameSensorRequest{SensorId: 999, Name: "soil-moisture-2"})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Empty(t, repo.renamedSensors)
+}
+
+// TestRenameSensor_NameConflict_FailedPrecondition proves the one narrow
+// exception to FR4's "no uniqueness" rule (see leaflab/DATA.md's "Sensor
+// rename uniqueness" section and repository.ErrSensorNameConflict's doc
+// comment): a same-board-same-name collision is mapped to
+// codes.FailedPrecondition, not an unhandled 500 or a silent no-op, and
+// still issues no successful-write record.
+func TestRenameSensor_NameConflict_FailedPrecondition(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.owners[100] = 1
+	repo.sensorBoards[10] = 100
+	repo.renameConflictSensors[10] = true
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.RenameSensor(claimsCtx("owner-sub"), &pb.RenameSensorRequest{SensorId: 10, Name: "taken-name"})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Empty(t, repo.renamedSensors)
+}
+
+// TestRenameSensor_NoPublish is Testing criteria 7 and 8: RenameSensor never
+// issues a publish at all (server.go's doc comment: "This RPC deliberately
+// issues no config push"), so a publish failure can never happen on this
+// path (criterion 7 holds vacuously) and there is no push to check the
+// composition of (criterion 8 does not apply) -- the rename is a pure
+// Postgres write that never blocks on, or is undone by, RabbitMQ (LB2).
+// Convergence to the device is FR9's job (#1772), not this RPC's.
+func TestRenameSensor_NoPublish(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.owners[100] = 1
+	repo.sensorBoards[10] = 100
+	pub := &fakePublisher{}
+	srv := newOwnershipTestServer(repo, pub)
+
+	_, err := srv.RenameSensor(claimsCtx("owner-sub"), &pb.RenameSensorRequest{SensorId: 10, Name: "soil-moisture-2"})
+	require.NoError(t, err)
+	assert.Empty(t, pub.published)
+}

@@ -57,8 +57,7 @@ const adminRole = "admin"
 // calls, extracted so tests can substitute an in-memory fake (no Postgres)
 // while production code keeps passing the real *Repository straight
 // through -- *Repository already satisfies this interface, no adapter
-// needed. GetBoardIDForSensor is deliberately excluded: no handler in this
-// file calls it yet (it exists for the RenameSensor task).
+// needed.
 type repositoryStore interface {
 	GetLeafLabUserIDBySub(ctx context.Context, oidcSub string) (int64, bool, error)
 	GetCurrentBoardOwner(ctx context.Context, boardID int64) (int64, bool, error)
@@ -77,7 +76,7 @@ type repositoryStore interface {
 	// ClaimBoard is ClaimBoard's own write path (FR1, FR2, NFR2) -- see
 	// repository.go's doc comment for the race-safety argument.
 	ClaimBoard(ctx context.Context, boardID, leaflabUserID int64) error
-	// The remaining five methods back the admin ownership screen (#1777:
+	// The following five methods back the admin ownership screen (#1777:
 	// FR11-FR14) -- ListOwnedBoards, ReassignBoardOwner, ClearBoardOwner,
 	// LeafLabUserExists, and ListUsers.
 	ListOwnedBoards(ctx context.Context) ([]OwnedBoardRow, error)
@@ -85,6 +84,14 @@ type repositoryStore interface {
 	ClearBoardOwner(ctx context.Context, boardID int64) error
 	LeafLabUserExists(ctx context.Context, leaflabUserID int64) (bool, error)
 	ListUsers(ctx context.Context) ([]LeafLabUserRow, error)
+	// GetBoardIDForSensor resolves sensor_id -> board_id so RenameSensor
+	// (FR4) can authorize the write via authorizeBoardWrite before touching
+	// sensor_name_history.
+	GetBoardIDForSensor(ctx context.Context, sensorID int64) (int64, bool, error)
+	// RenameSensor is RenameSensor's own write path (FR4) -- SCD2
+	// close-and-open plus the NFR4 counter reset, one transaction; see
+	// repository.go's doc comment.
+	RenameSensor(ctx context.Context, sensorID int64, name string) error
 }
 
 // configPublisher is the one *rmq.Publisher method PushDeviceConfig calls,
@@ -619,9 +626,52 @@ func (s *LeafLabAPIServer) RenameBoard(ctx context.Context, req *pb.RenameBoardR
 	return &pb.RenameBoardResponse{}, nil
 }
 
-// RenameSensor is implemented by the RenameSensor task (FR4).
+// RenameSensor renames a sensor via the sensor_name_history SCD2 table
+// (FR4). Resolves sensor_id -> board_id (GetBoardIDForSensor) then
+// authorizeBoardWrite: only the sensor's board's current owner may rename
+// it, and an unowned board is codes.PermissionDenied identically to a
+// non-owner (FR5/FR6 -- no admin exception here, same as every other write
+// this milestone gates through authorizeBoardWrite).
+//
+// Non-empty validation only (FR4) -- no length limit, no uniqueness check
+// beyond the one narrow same-board-same-name collision
+// repository.RenameSensor's ErrSensorNameConflict documents.
+//
+// Writes directly to Postgres and never waits on, or is gated by, a device
+// round trip (LB2): the rename is visible on the very next GetBoardDetail
+// regardless of whether the board is online. This RPC deliberately issues
+// no config push -- leaflab-processor's handleManifest may transiently
+// revert sensor.name from a stale device reconnect until the device is
+// told about the rename; that is expected, unmodified existing behavior
+// (see this task's issue § "Interaction with manifest ingest"), converged
+// by FR9's corrective push (#1772), not by this RPC.
 func (s *LeafLabAPIServer) RenameSensor(ctx context.Context, req *pb.RenameSensorRequest) (*pb.RenameSensorResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "RenameSensor: not implemented")
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, status.Error(codes.InvalidArgument, "name must not be empty")
+	}
+
+	boardID, ok, err := s.repo.GetBoardIDForSensor(ctx, req.SensorId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get board for sensor: %v", err)
+	}
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "sensor %d not found", req.SensorId)
+	}
+
+	if _, err := s.authorizeBoardWrite(ctx, boardID); err != nil {
+		return nil, err
+	}
+
+	if err := s.repo.RenameSensor(ctx, req.SensorId, req.Name); err != nil {
+		if errors.Is(err, ErrSensorNameConflict) {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"sensor name %q is already used by another sensor on this board", req.Name)
+		}
+		return nil, status.Errorf(codes.Internal, "rename sensor: %v", err)
+	}
+
+	s.logger.Info("sensor renamed", "sensor_id", req.SensorId, "board_id", boardID)
+	return &pb.RenameSensorResponse{}, nil
 }
 
 // ListOwnedBoards returns every currently-owned board and its owner (FR11).

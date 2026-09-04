@@ -553,6 +553,86 @@ func (r *Repository) RevokeRole(ctx context.Context, leaflabUserID int64, role s
 	return nil
 }
 
+// ErrSensorNameConflict is returned by RenameSensor when the requested name
+// collides with another sensor's name on the same board -- mapped from
+// Postgres' 23505 unique-violation on sensor's UNIQUE(board_id, name)
+// constraint (001_initial_schema.up.sql).
+//
+// FR4 (#1770) requires no uniqueness enforcement across sensors on a
+// board, but this pre-existing constraint is load-bearing for
+// leaflab/processor/repository.go's UpsertSensor: its hardware-address-less
+// name-based fallback path does `ON CONFLICT (board_id, name) DO UPDATE`
+// to keep re-flashing a board idempotent (no duplicate sensor rows/forked
+// reading history on every reboot). Dropping the constraint would either
+// break that ON CONFLICT clause outright (Postgres errors on an ON
+// CONFLICT target with no matching unique index) or require replacing it
+// with a race-prone select-then-write, and leaflab/processor/repository.go
+// is outside this task's scope. See leaflab/DATA.md's "Sensor rename
+// uniqueness" section for the full reasoning.
+//
+// The practical effect: FR4's "no uniqueness" holds for every rename
+// except the one narrow case of renaming to a name another sensor on the
+// *same* board already holds -- that case is refused, surfaced by
+// server.go as codes.FailedPrecondition rather than an unhandled 500 or a
+// silent no-op.
+var ErrSensorNameConflict = errors.New("sensor name already used on this board")
+
+// RenameSensor renames a sensor via the sensor_name_history SCD2 table
+// (FR4): closes the currently-open history row and opens a new one with
+// name, keeps sensor.name in sync (UpsertSensor's name-based fallback and
+// the UNIQUE(board_id, name) constraint both read it -- leaving it stale
+// would fork the sensor on the next manifest), and resets the NFR4
+// corrective-push retry counters -- all in one transaction, per AGENTS.md
+// § SCD2's close-and-open pattern.
+//
+// The corrective_push_attempts = 0 / corrective_push_outstanding_version =
+// NULL reset is required by NFR4 ("auto-retry does not resume on its own
+// -- only a fresh legitimate rename or an explicit config push restarts
+// the attempt count") and must be atomic with the rename, which is why it
+// is a third statement in this same transaction rather than a separate
+// repository call.
+//
+// Never issues a device round trip (LB2) -- this is a pure Postgres write;
+// the caller (server.go's RenameSensor RPC) never blocks the response on a
+// publish.
+func (r *Repository) RenameSensor(ctx context.Context, sensorID int64, name string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin rename sensor %d tx: %w", sensorID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor_name_history SET valid_to = NOW()
+		WHERE sensor_id = $1 AND valid_to IS NULL
+	`, sensorID); err != nil {
+		return fmt.Errorf("close open sensor_name_history row for sensor %d: %w", sensorID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO sensor_name_history (sensor_id, name) VALUES ($1, $2)
+	`, sensorID, name); err != nil {
+		return fmt.Errorf("insert sensor_name_history row for sensor %d: %w", sensorID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor
+		SET name = $2, corrective_push_attempts = 0, corrective_push_outstanding_version = NULL
+		WHERE sensor_id = $1
+	`, sensorID, name); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrSensorNameConflict
+		}
+		return fmt.Errorf("sync sensor.name for sensor %d: %w", sensorID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit rename sensor %d tx: %w", sensorID, err)
+	}
+	return nil
+}
+
 // GetBoardIDForSensor resolves a sensor_id to its owning board_id. ok=false
 // means no sensor with that ID exists.
 func (r *Repository) GetBoardIDForSensor(ctx context.Context, sensorID int64) (int64, bool, error) {

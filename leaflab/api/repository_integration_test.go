@@ -47,14 +47,19 @@ const testSchema = `
 		default_unit   VARCHAR(16) NOT NULL
 	);
 
+	-- corrective_push_attempts/corrective_push_outstanding_version (NFR4,
+	-- migration 016) added for RenameSensor's (#1770) atomic counter-reset
+	-- coverage below.
 	CREATE TABLE sensor (
-		sensor_id      BIGSERIAL PRIMARY KEY,
-		board_id       BIGINT NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
-		sensor_type_id BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
-		name           VARCHAR(128) NOT NULL,
-		unit           VARCHAR(16) NOT NULL,
-		registered_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-		last_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		sensor_id                           BIGSERIAL PRIMARY KEY,
+		board_id                            BIGINT NOT NULL REFERENCES board(board_id) ON DELETE RESTRICT,
+		sensor_type_id                      BIGINT NOT NULL REFERENCES sensor_type(sensor_type_id),
+		name                                VARCHAR(128) NOT NULL,
+		unit                                VARCHAR(16) NOT NULL,
+		registered_at                       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		last_seen_at                        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		corrective_push_attempts            INT NOT NULL DEFAULT 0,
+		corrective_push_outstanding_version BIGINT,
 		UNIQUE (board_id, name)
 	);
 
@@ -1192,5 +1197,273 @@ func TestReassignBoardOwner_IntervalsDoNotOverlap(t *testing.T) {
 	}
 	if closedValidTo.After(openValidFrom) {
 		t.Fatalf("expected the closed row's valid_to (%v) to equal or precede the new row's valid_from (%v) -- intervals must not overlap", closedValidTo, openValidFrom)
+	}
+}
+
+// -- RenameSensor (#1770, FR4) -------------------------------------------
+
+// nameHistoryRow is one sensor_name_history row read back for assertions
+// below -- validTo is nil for the currently open row.
+type nameHistoryRow struct {
+	name      string
+	validFrom time.Time
+	validTo   *time.Time
+}
+
+// nameHistoryRows returns every sensor_name_history row for sensorID,
+// ordered oldest first (by valid_from), so a test can assert both the
+// count and the sequence.
+func nameHistoryRows(t *testing.T, pool *pgxpool.Pool, sensorID int64) []nameHistoryRow {
+	t.Helper()
+	rows, err := pool.Query(context.Background(),
+		`SELECT name, valid_from, valid_to FROM sensor_name_history WHERE sensor_id = $1 ORDER BY valid_from`, sensorID)
+	if err != nil {
+		t.Fatalf("query sensor_name_history for sensor %d: %v", sensorID, err)
+	}
+	defer rows.Close()
+
+	var out []nameHistoryRow
+	for rows.Next() {
+		var r nameHistoryRow
+		if err := rows.Scan(&r.name, &r.validFrom, &r.validTo); err != nil {
+			t.Fatalf("scan sensor_name_history row: %v", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate sensor_name_history rows: %v", err)
+	}
+	return out
+}
+
+// seedCorrectivePushState directly sets sensor's NFR4 counter columns,
+// standing in for whatever prior corrective-push attempts left the sensor
+// in this state -- RenameSensor's job under test is resetting exactly
+// these two columns.
+func seedCorrectivePushState(t *testing.T, pool *pgxpool.Pool, sensorID int64, attempts int, outstandingVersion *int64) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE sensor SET corrective_push_attempts = $2, corrective_push_outstanding_version = $3 WHERE sensor_id = $1`,
+		sensorID, attempts, outstandingVersion); err != nil {
+		t.Fatalf("seed corrective-push state for sensor %d: %v", sensorID, err)
+	}
+}
+
+// TestRenameSensor_ClosesOldRowOpensNewWithCurrentName is Testing criterion
+// 9: after a rename there is exactly one open sensor_name_history row with
+// the new name, and the previously-open row is closed (valid_to set) --
+// the old row is never deleted.
+func TestRenameSensor_ClosesOldRowOpensNewWithCurrentName(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "device-a")
+	typeID := seedSensorType(t, pool, "temperature")
+	sensorID := seedSensor(t, pool, boardID, typeID, "original-name")
+
+	if err := repo.RenameSensor(context.Background(), sensorID, "renamed"); err != nil {
+		t.Fatalf("RenameSensor: %v", err)
+	}
+
+	rows := nameHistoryRows(t, pool, sensorID)
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 sensor_name_history rows (old closed, new open), got %d: %+v", len(rows), rows)
+	}
+	if rows[0].name != "original-name" || rows[0].validTo == nil {
+		t.Errorf("expected the first row to be the closed original-name row, got %+v", rows[0])
+	}
+	if rows[1].name != "renamed" || rows[1].validTo != nil {
+		t.Errorf("expected the second row to be the open renamed row, got %+v", rows[1])
+	}
+
+	var sensorName string
+	if err := pool.QueryRow(context.Background(), `SELECT name FROM sensor WHERE sensor_id = $1`, sensorID).Scan(&sensorName); err != nil {
+		t.Fatalf("select sensor.name: %v", err)
+	}
+	if sensorName != "renamed" {
+		t.Errorf("expected sensor.name to be kept in sync with the new sensor_name_history row, got %q", sensorName)
+	}
+}
+
+// TestRenameSensor_TwoRenamesSequence_ThreeRowsNonOverlapping is Testing
+// criterion 10: two renames in sequence produce three rows total (two
+// closed, one open), with each row's [valid_from, valid_to) interval not
+// overlapping the next.
+func TestRenameSensor_TwoRenamesSequence_ThreeRowsNonOverlapping(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "device-a")
+	typeID := seedSensorType(t, pool, "temperature")
+	sensorID := seedSensor(t, pool, boardID, typeID, "v1")
+
+	if err := repo.RenameSensor(context.Background(), sensorID, "v2"); err != nil {
+		t.Fatalf("first RenameSensor: %v", err)
+	}
+	if err := repo.RenameSensor(context.Background(), sensorID, "v3"); err != nil {
+		t.Fatalf("second RenameSensor: %v", err)
+	}
+
+	rows := nameHistoryRows(t, pool, sensorID)
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 sensor_name_history rows after two renames, got %d: %+v", len(rows), rows)
+	}
+	wantNames := []string{"v1", "v2", "v3"}
+	for i, row := range rows {
+		if row.name != wantNames[i] {
+			t.Errorf("row %d: expected name %q, got %q", i, wantNames[i], row.name)
+		}
+		isLast := i == len(rows)-1
+		if isLast && row.validTo != nil {
+			t.Errorf("row %d (%q): expected the current row to be open (valid_to IS NULL), got valid_to=%v", i, row.name, *row.validTo)
+		}
+		if !isLast {
+			if row.validTo == nil {
+				t.Fatalf("row %d (%q): expected a closed row (valid_to set), got open", i, row.name)
+			}
+			// Non-overlapping: this row's close must not be after the next
+			// row's open.
+			if row.validTo.After(rows[i+1].validFrom) {
+				t.Errorf("row %d (%q) closes at %v, after row %d (%q) opens at %v -- intervals overlap",
+					i, row.name, *row.validTo, i+1, rows[i+1].name, rows[i+1].validFrom)
+			}
+		}
+	}
+}
+
+// TestRenameSensor_ResetsCorrectivePushCountersAtomically is Testing
+// criterion 11 (NFR4): a rename resets both corrective_push_attempts to 0
+// and corrective_push_outstanding_version to NULL, in the same transaction
+// as the name-history close-and-open.
+//
+// Red/green discipline: temporarily removing the third UPDATE statement
+// (the counter reset) from Repository.RenameSensor while running this test
+// turns it red on both assertions below (attempts stays 2,
+// outstandingVersion stays non-nil); restoring the statement turns it green
+// again. Exercised by hand during Testing (see the Testing-phase issue
+// comment on #1770), not left as a permanent toggle in test code, since NFR4
+// requires the reset to always happen, not to be an optional feature.
+func TestRenameSensor_ResetsCorrectivePushCountersAtomically(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "device-a")
+	typeID := seedSensorType(t, pool, "temperature")
+	sensorID := seedSensor(t, pool, boardID, typeID, "original-name")
+
+	outstanding := int64(5)
+	seedCorrectivePushState(t, pool, sensorID, 2, &outstanding)
+
+	if err := repo.RenameSensor(context.Background(), sensorID, "renamed"); err != nil {
+		t.Fatalf("RenameSensor: %v", err)
+	}
+
+	var attempts int
+	var outstandingVersion *int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT corrective_push_attempts, corrective_push_outstanding_version FROM sensor WHERE sensor_id = $1`, sensorID,
+	).Scan(&attempts, &outstandingVersion); err != nil {
+		t.Fatalf("select corrective-push columns: %v", err)
+	}
+	if attempts != 0 {
+		t.Errorf("expected corrective_push_attempts reset to 0 by the rename, got %d", attempts)
+	}
+	if outstandingVersion != nil {
+		t.Errorf("expected corrective_push_outstanding_version reset to NULL by the rename, got %d", *outstandingVersion)
+	}
+}
+
+// TestRenameSensor_SameBoardSameName_ErrSensorNameConflictNoWrite is Testing
+// criterion 12's negative half, exercising the one narrow exception FR4
+// carves out (see leaflab/DATA.md's "Sensor rename uniqueness" section):
+// renaming a sensor to a name another sensor on the *same* board currently
+// holds fails with ErrSensorNameConflict (mapped from Postgres' real 23505
+// on sensor's UNIQUE(board_id, name)), and neither sensor_name_history nor
+// sensor.name nor the NFR4 counters are touched.
+func TestRenameSensor_SameBoardSameName_ErrSensorNameConflictNoWrite(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "device-a")
+	typeID := seedSensorType(t, pool, "temperature")
+	sensorAID := seedSensor(t, pool, boardID, typeID, "temp-1")
+	sensorBID := seedSensor(t, pool, boardID, typeID, "temp-2")
+
+	outstanding := int64(9)
+	seedCorrectivePushState(t, pool, sensorBID, 1, &outstanding)
+
+	err := repo.RenameSensor(context.Background(), sensorBID, "temp-1")
+	if !errors.Is(err, ErrSensorNameConflict) {
+		t.Fatalf("expected ErrSensorNameConflict renaming sensor B to sensor A's name, got: %v", err)
+	}
+
+	// sensorAID must still hold its own name -- it should not have been
+	// touched at all by the failed rename attempt on sensorBID.
+	rowsA := nameHistoryRows(t, pool, sensorAID)
+	if len(rowsA) != 1 || rowsA[0].name != "temp-1" {
+		t.Errorf("expected sensor A's history untouched (1 row, temp-1), got %+v", rowsA)
+	}
+
+	// sensorBID's own history and sensor.name must be unchanged by the
+	// refused rename -- the transaction must have rolled back in full.
+	rowsB := nameHistoryRows(t, pool, sensorBID)
+	if len(rowsB) != 1 || rowsB[0].name != "temp-2" || rowsB[0].validTo != nil {
+		t.Errorf("expected sensor B's history untouched by the refused rename (1 open row, temp-2), got %+v", rowsB)
+	}
+	var sensorBName string
+	if err := pool.QueryRow(context.Background(), `SELECT name FROM sensor WHERE sensor_id = $1`, sensorBID).Scan(&sensorBName); err != nil {
+		t.Fatalf("select sensor B name: %v", err)
+	}
+	if sensorBName != "temp-2" {
+		t.Errorf("expected sensor.name untouched by the refused rename, got %q", sensorBName)
+	}
+	var attempts int
+	var outstandingVersion *int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT corrective_push_attempts, corrective_push_outstanding_version FROM sensor WHERE sensor_id = $1`, sensorBID,
+	).Scan(&attempts, &outstandingVersion); err != nil {
+		t.Fatalf("select corrective-push columns: %v", err)
+	}
+	if attempts != 1 || outstandingVersion == nil || *outstandingVersion != 9 {
+		t.Errorf("expected the NFR4 counters untouched by the refused rename (rolled back), got attempts=%d outstandingVersion=%v", attempts, outstandingVersion)
+	}
+}
+
+// TestRenameSensor_DifferentBoardsCanShareName is Testing criterion 12's
+// positive half: FR4's "no uniqueness across boards" holds -- a sensor on
+// one board can be renamed to a name another sensor on a *different* board
+// already holds.
+func TestRenameSensor_DifferentBoardsCanShareName(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	typeID := seedSensorType(t, pool, "temperature")
+	board1ID := seedBoard(t, pool, "device-1")
+	board2ID := seedBoard(t, pool, "device-2")
+	_ = seedSensor(t, pool, board1ID, typeID, "shared-name")
+	sensor2ID := seedSensor(t, pool, board2ID, typeID, "other-name")
+
+	if err := repo.RenameSensor(context.Background(), sensor2ID, "shared-name"); err != nil {
+		t.Fatalf("expected renaming across boards to the same name to succeed, got: %v", err)
+	}
+
+	rows := nameHistoryRows(t, pool, sensor2ID)
+	if len(rows) != 2 || rows[1].name != "shared-name" || rows[1].validTo != nil {
+		t.Errorf("expected sensor 2's current name to be shared-name, got %+v", rows)
+	}
+}
+
+// TestRenameSensor_NameFreedAfterOriginalHolderRenamedAway is Testing
+// criterion 12's third documented case (leaflab/DATA.md): a name matching a
+// sensor on the same board that was itself renamed away in the same request
+// sequence succeeds -- the UNIQUE(board_id, name) constraint only ever
+// blocks a collision against a currently-held name, not a historical one.
+func TestRenameSensor_NameFreedAfterOriginalHolderRenamedAway(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	boardID := seedBoard(t, pool, "device-a")
+	typeID := seedSensorType(t, pool, "temperature")
+	sensorAID := seedSensor(t, pool, boardID, typeID, "name-x")
+	sensorBID := seedSensor(t, pool, boardID, typeID, "name-y")
+
+	if err := repo.RenameSensor(context.Background(), sensorAID, "name-z"); err != nil {
+		t.Fatalf("expected renaming sensor A away from name-x to succeed, got: %v", err)
+	}
+	if err := repo.RenameSensor(context.Background(), sensorBID, "name-x"); err != nil {
+		t.Fatalf("expected sensor B to be able to take the now-freed name-x, got: %v", err)
+	}
+
+	rowsB := nameHistoryRows(t, pool, sensorBID)
+	if len(rowsB) != 2 || rowsB[1].name != "name-x" || rowsB[1].validTo != nil {
+		t.Errorf("expected sensor B's current name to be name-x, got %+v", rowsB)
 	}
 }

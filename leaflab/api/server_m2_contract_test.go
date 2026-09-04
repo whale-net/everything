@@ -144,10 +144,13 @@ func TestM2RPCs_ReachableAndUnimplemented(t *testing.T) {
 	// repository in server_test.go, not here: this file's servers are built
 	// with NewRepository(nil), which cannot serve a real RenameBoard call.
 
-	t.Run("RenameSensor", func(t *testing.T) {
-		_, err := client.RenameSensor(ctx, &pb.RenameSensorRequest{SensorId: 1, Name: "topsoil"})
-		assertUnimplementedFromHandler(t, "RenameSensor", "RenameSensor: not implemented", err)
-	})
+	// RenameSensor is implemented (#1770, FR4) -- superseded per this test's
+	// own doc comment, same as RenameBoard above. Its real behavior is
+	// covered against a fake repository in server_test.go, not here: like
+	// RenameBoard, it resolves an existence lookup (GetBoardIDForSensor)
+	// before authorizeBoardWrite, so a call against this file's
+	// NewRepository(nil) servers cannot be reachability-tested without a
+	// real Postgres pool.
 
 	// ListOwnedBoards/ReassignBoardOwner/ClearBoardOwner/ListUsers' own task
 	// (#1777, FR11-FR14) landed: these four subtests are superseded per
