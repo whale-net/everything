@@ -1,12 +1,29 @@
 // Strategy MCP tool group (issue #1637): save_strategy/get_strategy/
 // list_strategies manage a cadence built directly from one or more
 // viable viability_verdict rows -- independent of, and finer-grained
-// than, the Channel-wide pacing policy (FR17, schedule_draft.go). generate_schedule_plan
+// than, the Channel-wide pacing policy (FR17, schedule_draft.go) as far
+// as what grounds each cadence: a Strategy answers "how often does this
+// verdict-backed Idea deserve a slot", pacing policy answers "how many
+// uploads total does this Channel want per week." generate_schedule_plan
 // is the "Plan" half: a read-only tool that reads active Strategies plus
 // the existing schedule and proposes cadence-driven next slots, which a
 // caller commits via the existing save_schedule_draft tool rather than a
 // second write path. See ../../store/strategy.go (StrategyStore) and
 // migration 008's comment for the schema and design rationale.
+//
+// Pacing reconciliation: generate_schedule_plan reads the Channel's
+// pacing policy (if set) and pushes a proposal forward a week at a time
+// (never earlier than its Strategy's own cadence would place it) until
+// its week's projected committed+draft+synced+already-proposed-this-call
+// count no longer exceeds target_uploads_per_week -- see pacingTracker
+// below. Before this, a Strategy's cadence and the Channel's pacing
+// policy were two independent, unreconciled numbers: generate_schedule_plan
+// would happily keep proposing slots a pacing-respecting caller could
+// never actually commit without tripping FR18's cadence_exceeded flag on
+// every one of them. pacingTracker's fits/commit logic deliberately
+// mirrors computeScheduleFlags's cadence_exceeded check (schedule_draft.go)
+// so a plan's proposals and what save_schedule_draft reports at commit
+// time agree.
 package tools
 
 import (
@@ -381,6 +398,7 @@ type ScheduledProposal struct {
 	VerdictVersion    int    `json:"verdict_version" jsonschema:"that verdict version's number"`
 	ProposedPublishAt string `json:"proposed_publish_at" jsonschema:"the cadence-computed slot, RFC3339 -- pass to save_schedule_draft's proposed_publish_at to commit it"`
 	SequenceIndex     int    `json:"sequence_index" jsonschema:"1-based position of this proposal within its Idea's count_per_idea run"`
+	PacingAdjusted    bool   `json:"pacing_adjusted" jsonschema:"true if this slot was pushed later than the Strategy's raw cadence would place it, to stay within the Channel's pacing policy target_uploads_per_week; always false if no policy is set"`
 }
 
 // SkippedStrategyVerdict is one Strategy-linked verdict
@@ -400,16 +418,87 @@ type GenerateSchedulePlanOutput struct {
 	Skipped   []SkippedStrategyVerdict `json:"skipped" jsonschema:"linked verdicts excluded from proposals (e.g. the idea is no longer viable) and why"`
 }
 
-func registerGenerateSchedulePlan(reg *server.Registry, strategies store.StrategyStore, schedules store.ScheduleStore, verdicts store.VerdictStore) {
+func registerGenerateSchedulePlan(reg *server.Registry, strategies store.StrategyStore, schedules store.ScheduleStore, verdicts store.VerdictStore, pacing store.PacingStore, sync store.SyncStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "generate_schedule_plan",
 		Description: "Compute the next cadence-driven schedule slot(s) for a Channel's active Strategies (issue #1637): " +
 			"for each linked Idea whose verdict is still viable, the next slot(s) after its most recent schedule_entry, " +
-			"spaced by that Strategy's cadence and rolled onto its preferred_weekday if set. Read-only -- nothing is " +
+			"spaced by that Strategy's cadence and rolled onto its preferred_weekday if set, then pushed a week at a " +
+			"time (never earlier) until its week fits the Channel's pacing policy (set_pacing_policy's " +
+			"target_uploads_per_week), if one is set -- see a proposal's pacing_adjusted flag. Read-only -- nothing is " +
 			"saved by this tool. Pass a proposal's idea_id/verdict_id/proposed_publish_at to save_schedule_draft to " +
 			"actually commit it (which re-applies FR16's viable-verdict gate and reports FR18's flags).",
-	}, generateSchedulePlanHandler(strategies, schedules, verdicts))
+	}, generateSchedulePlanHandler(strategies, schedules, verdicts, pacing, sync))
 }
+
+// pacingTracker decides whether adding one more proposal to a candidate
+// slot's calendar week would exceed the Channel's pacing policy, counting
+// both what's already persisted (schedule_entry rows and synced videos)
+// and every proposal generate_schedule_plan has already produced earlier
+// in the same call -- so several Strategies proposing into the same week
+// within one call compete for that week's budget instead of each being
+// evaluated as if it were the only proposal. nil policy (no pacing policy
+// set on the Channel) makes fits always true, preserving pre-reconciliation
+// behavior exactly.
+type pacingTracker struct {
+	policy      *store.PacingPolicy
+	baseline    map[time.Time]int // week start (UTC) -> persisted schedule_entry + synced_video count.
+	provisional map[time.Time]int // week start (UTC) -> proposals already produced earlier in this call.
+}
+
+func newPacingTracker(policy *store.PacingPolicy, entries []store.ScheduleEntry, synced []store.SyncedVideo) *pacingTracker {
+	t := &pacingTracker{policy: policy, baseline: map[time.Time]int{}, provisional: map[time.Time]int{}}
+	if policy == nil {
+		return t
+	}
+	for _, e := range entries {
+		ws, _ := weekBounds(e.ProposedPublishAt)
+		t.baseline[ws]++
+	}
+	for _, v := range synced {
+		ts := effectiveSyncedVideoTime(v)
+		if ts == nil {
+			continue
+		}
+		ws, _ := weekBounds(*ts)
+		t.baseline[ws]++
+	}
+	return t
+}
+
+// fits reports whether one more entry at "at" would keep its calendar
+// week at or under t.policy.TargetUploadsPerWeek -- mirroring
+// computeScheduleFlags's cadence_exceeded check (schedule_draft.go) so a
+// plan's proposals agree with what save_schedule_draft will flag at
+// commit time. Always true when no policy is set.
+func (t *pacingTracker) fits(at time.Time) bool {
+	if t.policy == nil {
+		return true
+	}
+	ws, _ := weekBounds(at)
+	count := t.baseline[ws] + t.provisional[ws] + 1
+	return float64(count) <= t.policy.TargetUploadsPerWeek
+}
+
+// commit records at's week as holding one more entry, so a later
+// proposal generated in this same call sees it as taken. No-op when no
+// policy is set (fits is always true then, so nothing needs tracking).
+func (t *pacingTracker) commit(at time.Time) {
+	if t.policy == nil {
+		return
+	}
+	ws, _ := weekBounds(at)
+	t.provisional[ws]++
+}
+
+// maxPacingPushWeeks bounds how many weeks generate_schedule_plan will
+// push a proposal forward looking for one that fits the pacing policy,
+// so a degenerate policy (e.g. target_uploads_per_week under 1, which no
+// single week can ever satisfy once anything is scheduled in it) can
+// never spin forever -- it gives up and returns the furthest slot tried,
+// same as if no reconciliation were attempted, and the commit-time FR18
+// flag remains the backstop.
+const maxPacingPushWeeks = 104
 
 // advanceCadence returns from advanced by one occurrence of cadence.
 func advanceCadence(from time.Time, cadence store.Cadence) time.Time {
@@ -435,7 +524,7 @@ func rollToWeekday(t time.Time, weekday string) time.Time {
 	return t
 }
 
-func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store.ScheduleStore, verdicts store.VerdictStore) mcp.ToolHandlerFor[GenerateSchedulePlanInput, GenerateSchedulePlanOutput] {
+func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store.ScheduleStore, verdicts store.VerdictStore, pacing store.PacingStore, sync store.SyncStore) mcp.ToolHandlerFor[GenerateSchedulePlanInput, GenerateSchedulePlanOutput] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in GenerateSchedulePlanInput) (*mcp.CallToolResult, GenerateSchedulePlanOutput, error) {
 		channelID := in.ChannelScopeID()
 
@@ -456,6 +545,22 @@ func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store
 		if err != nil {
 			return nil, GenerateSchedulePlanOutput{}, fmt.Errorf("generate_schedule_plan: list schedule entries: %w", err)
 		}
+
+		policyRow, ok, err := pacing.Get(ctx, channelID)
+		if err != nil {
+			return nil, GenerateSchedulePlanOutput{}, fmt.Errorf("generate_schedule_plan: load pacing policy: %w", err)
+		}
+		var policy *store.PacingPolicy
+		if ok {
+			policy = &policyRow
+		}
+
+		synced, err := sync.ListSchedule(ctx, channelID)
+		if err != nil {
+			return nil, GenerateSchedulePlanOutput{}, fmt.Errorf("generate_schedule_plan: list synced schedule: %w", err)
+		}
+		tracker := newPacingTracker(policy, entries, synced)
+
 		// latestByIdea is each Idea's most recent proposed_publish_at
 		// across its draft/committed schedule_entry rows -- the base a
 		// proposal's cadence is advanced from, so a plan never proposes a
@@ -492,6 +597,17 @@ func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store
 					if strat.PreferredWeekday != "" {
 						base = rollToWeekday(base, strat.PreferredWeekday)
 					}
+
+					adjusted := false
+					for attempt := 0; !tracker.fits(base) && attempt < maxPacingPushWeeks; attempt++ {
+						base = base.AddDate(0, 0, 7)
+						if strat.PreferredWeekday != "" {
+							base = rollToWeekday(base, strat.PreferredWeekday)
+						}
+						adjusted = true
+					}
+					tracker.commit(base)
+
 					out.Proposals = append(out.Proposals, ScheduledProposal{
 						StrategyID:        strat.ID.String(),
 						StrategyTitle:     strat.Title,
@@ -502,6 +618,7 @@ func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store
 						VerdictVersion:    current.Version,
 						ProposedPublishAt: base.Format(time.RFC3339),
 						SequenceIndex:     i,
+						PacingAdjusted:    adjusted,
 					})
 				}
 			}
@@ -514,10 +631,11 @@ func generateSchedulePlanHandler(strategies store.StrategyStore, schedules store
 
 // RegisterStrategy registers save_strategy, get_strategy, list_strategies,
 // and generate_schedule_plan against reg (see ../server/registry.go),
-// backed by st's StrategyStore/ScheduleStore/VerdictStore/PersonStore.
+// backed by st's StrategyStore/ScheduleStore/VerdictStore/PacingStore/
+// SyncStore/PersonStore.
 func RegisterStrategy(reg *server.Registry, st *store.Store) {
 	registerSaveStrategy(reg, st.Strategies(), st.Persons())
 	registerGetStrategy(reg, st.Strategies(), st.Persons())
 	registerListStrategies(reg, st.Strategies(), st.Persons())
-	registerGenerateSchedulePlan(reg, st.Strategies(), st.Schedules(), st.Verdicts())
+	registerGenerateSchedulePlan(reg, st.Strategies(), st.Schedules(), st.Verdicts(), st.Pacing(), st.Sync())
 }

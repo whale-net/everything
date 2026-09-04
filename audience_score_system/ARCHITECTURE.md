@@ -543,6 +543,31 @@ Ideas), and the same verdict may ground more than one Strategy -- which is
 the point: `save_strategy` records exactly which analysis justified the
 cadence, not just "whichever idea is currently viable."
 
+**Strategy cadence is reconciled against pacing policy (issue #1637
+follow-up):** `generate_schedule_plan` reads the Channel's `pacing_policy`
+(if set) and, for each proposal, pushes its cadence-computed slot forward
+a week at a time -- never earlier -- until that week's projected
+committed+draft+synced+already-proposed-this-call count no longer
+exceeds `target_uploads_per_week` (`pacingTracker` in `strategy.go`,
+mirroring `computeScheduleFlags`'s `cadence_exceeded` check in
+`schedule_draft.go` so a plan's proposals agree with what
+`save_schedule_draft` will flag at commit time). Each proposal reports
+this via `pacing_adjusted`. Before this, a Strategy's cadence and the
+Channel-wide pacing policy were two independent, unreconciled numbers --
+`generate_schedule_plan` would happily propose more slots into a
+calendar week than the pacing policy allowed, discoverable only after
+the fact via FR18's non-blocking flag once a caller tried to commit.
+Strategy's cadence still answers a different question than pacing
+policy's `target_uploads_per_week` ("how often does this specific
+verdict-backed Idea deserve a slot" vs. "how many uploads total does the
+Channel want per week") -- reconciliation only makes generation respect
+the aggregate ceiling, it doesn't collapse the two concepts into one. A
+degenerate policy (`target_uploads_per_week` under 1, which no single
+week can ever satisfy once anything at all is scheduled in it) is bounded
+by `maxPacingPushWeeks` (104) rather than pushed forever; past that bound
+the raw cadence-computed slot is returned as before, with FR18's flag
+remaining the backstop at commit time.
+
 **No persisted "Plan" table (issue #1637):** the issue's proposed
 `generate_schedule_from_strategies` surface is implemented as
 `generate_schedule_plan` (`mcp/tools/strategy.go`), a read-only tool that
