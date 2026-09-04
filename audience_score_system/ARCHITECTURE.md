@@ -337,23 +337,31 @@ running would otherwise wait for `worker`'s next process restart (its
 `EnsureSchedule` is safe to call from two independent places -- `web` at
 connect time and `worker` at startup `Reconcile` -- because it is
 idempotent (deterministic `sync.ScheduleID(channelID)`): whichever call
-lands first creates the schedule, the other gets Temporal's
-already-exists response, which `EnsureSchedule` already treats as
-success. The call is best-effort and non-fatal from `web`'s HTTP request
-path: the Channel is already correctly `connected` in Postgres by the
-time it runs, so a transient Temporal failure here logs a warning and
-still redirects, degrading to "worker's next startup Reconcile will pick
-it up" rather than turning an otherwise-successful connect into a 500.
+lands first creates the schedule, and any later call for the same Channel
+reconciles the existing schedule to match rather than erroring. The call
+is best-effort and non-fatal from `web`'s HTTP request path: the Channel
+is already correctly `connected` in Postgres by the time it runs, so a
+transient Temporal failure here logs a warning and still redirects,
+degrading to "worker's next startup Reconcile will pick it up" rather
+than turning an otherwise-successful connect into a 500.
 
-**Interval-consistency caveat:** `EnsureSchedule`'s `ScheduleSpec` bakes in
-whichever `Interval` its *first* caller passes at schedule-creation time
-and is never updated by a later `EnsureSchedule` call for the same
-Channel (only created-or-no-op). Because `web` and `worker` are now both
-callers, they must load `ASS_SYNC_INTERVAL` with the identical default
-and the identical `sync.ValidateSyncInterval` band-check (see `ENV.md`
-"Temporal") -- a misconfigured `web` diverging from `worker` here could
-silently create a Channel's schedule at the wrong cadence, since whichever
-binary's `EnsureSchedule` call happens to land first wins.
+**Interval-consistency caveat (updated by issue #1742):** `EnsureSchedule`
+now builds its desired `client.ScheduleOptions` and hands them to
+`temporallib.UpsertSchedule` (`//libs/go/temporal`, promoted out of this
+package by #1742 -- see "Temporal: schedule upsert helper" below), which
+tries `Create` and, on Temporal's already-exists response, patches the
+existing schedule's `Spec`/`Action`/`Overlap` via `ScheduleHandle.Update`
+instead of leaving them at whatever a prior caller set. So a Channel's
+schedule interval is no longer permanently pinned to whichever
+`EnsureSchedule` call created it first -- a later call (e.g. `worker`
+restarting after `ASS_SYNC_INTERVAL` changes, or `web` handling a
+reconnect) reconciles it to the current `Interval`. `web` and `worker`
+must still load `ASS_SYNC_INTERVAL` with the identical default and the
+identical `sync.ValidateSyncInterval` band-check (see `ENV.md`
+"Temporal"): a persistent mismatch no longer just loses the race
+permanently to whichever binary connects first -- it makes the effective
+interval flip-flop between whichever binary's `EnsureSchedule` call ran
+most recently.
 
 **NFR3 check for this change:** NFR3 (below) restricts `web` to three
 *UI-only* surfaces (C1/C2/C3) -- calling `EnsureSchedule` from
@@ -405,27 +413,45 @@ affordances -- the two surfaces are now two independent, equally-capable
 front ends onto the same `store.ScheduleStore`, not a primary (`web`) and a
 read-only shadow (`mcp`).
 
-## Temporal: no scheduled-workflow helper yet
+## Temporal: schedule upsert helper
 
 `//libs/go/temporal` (the shared Go bootstrap `worker` uses for its
 client/worker construction) has no equivalent to
 `friendly_computing_machine`'s hand-rolled `AbstractScheduleWorkflow`
 (`temporal/base.py`) — the only in-repo *scheduled*-workflow precedent, and
-it's Python/FCM-specific, not a shared library. This is a gap `worker`
-inherits from `product/01-current-state.md` and knowingly accepts for M1:
-issue #1574 built the per-Channel sync schedule (NFR4, ~1-24 hour
-interval, default 24h) directly against the Temporal Go SDK's native `ScheduleClient`
-(`audience_score_system/worker/sync.ScheduleManager`, wrapping
-`client.Client.ScheduleClient()`), not a repo-shared helper. `ScheduleManager`
-is a small, four-method interface (`EnsureSchedule`/`RemoveSchedule`/
-`Reconcile`/`TriggerNow`, the last added by issue #1650 to back the
-`trigger_channel_sync` MCP tool) with nothing app-registry-specific about
-its shape — worth
-promoting into `//libs/go/temporal` if a second Go scheduled-workflow
-consumer shows up; at that point the duplication is worth generalizing.
-Until then it stays local to `worker/sync`, since a one-off abstraction
-extracted from a single caller tends to guess wrong about what a second
-caller will actually need.
+it's Python/FCM-specific, not a shared library. `worker` inherits this gap
+from `product/01-current-state.md` and knowingly accepts it for M1: issue
+#1574 built the per-Channel sync schedule (NFR4, ~1-24 hour interval,
+default 24h) directly against the Temporal Go SDK's native
+`ScheduleClient` (`audience_score_system/worker/sync.ScheduleManager`,
+wrapping `client.Client.ScheduleClient()`), not a repo-shared helper.
+`ScheduleManager` is a small, four-method interface
+(`EnsureSchedule`/`RemoveSchedule`/`Reconcile`/`TriggerNow`, the last
+added by issue #1650 to back the `trigger_channel_sync` MCP tool) with
+nothing app-registry-specific about its shape; it still stays local to
+`worker/sync`, since a one-off abstraction extracted from a single caller
+tends to guess wrong about what a second caller will actually need.
+
+What *did* get promoted, by issue #1742, is the one piece of that
+duplication with a real, demonstrated bug behind it:
+`client.ScheduleClient.Create`'s already-exists response
+(`sdktemporal.ErrScheduleAlreadyRunning`) has to be tolerated as success
+by any idempotent caller, but `EnsureSchedule` originally treated it as a
+pure no-op -- so a schedule's `Spec`/`Action`/`Overlap` were pinned
+forever to whatever its first creator passed, and changing
+`ASS_SYNC_INTERVAL` (e.g. 20m → 24h) never took effect for an
+already-connected Channel no matter how many times `worker` restarted.
+`temporallib.UpsertSchedule(ctx, schedules, opts)`
+(`libs/go/temporal/schedule.go`) generalizes the fix: `Create`, and on
+already-exists, `GetHandle(opts.ID).Update` to reconcile the existing
+schedule's `Spec`/`Action`/`Overlap` to `opts` (its `State` -- paused/note
+-- is left untouched, so a hand-paused schedule doesn't get silently
+resumed). `worker/sync.ScheduleManager.EnsureSchedule` now calls this
+instead of `Schedules.Create` directly -- see "Interval-consistency
+caveat" above for what that changes for `ASS_SYNC_INTERVAL` specifically.
+The helper is generic Temporal SDK plumbing (same bar `NewClient`/
+`NewWorker` already clear), not `ScheduleManager`'s app-specific shape, so
+it lives in `//libs/go/temporal` even with only one caller today.
 
 ## Data model
 

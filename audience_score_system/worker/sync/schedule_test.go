@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -45,12 +46,26 @@ type fakeScheduleClient struct {
 	// createErr, if set, is returned for every Create call regardless of ID.
 	createErr error
 
+	// existingByID pre-seeds the ScheduleDescription GetHandle(id).Update's
+	// DoUpdate callback observes for a given already-exists schedule id --
+	// used together with createErrByID[id] = temporal.ErrScheduleAlreadyRunning
+	// to simulate temporallib.UpsertSchedule's update path (issue #1742).
+	existingByID map[string]client.ScheduleDescription
+
 	deleteCalls []string
 	deleteErr   error
 
 	triggerCalls   []string
 	triggerOptions []client.ScheduleTriggerOptions
 	triggerErr     error
+
+	// updateCallsByID and appliedByID record, per schedule id, how many
+	// times Update ran and the *client.Schedule its DoUpdate callback
+	// produced -- what proves temporallib.UpsertSchedule actually
+	// reconciles an already-exists response instead of no-op'ing it.
+	updateCallsByID map[string]int
+	appliedByID     map[string]*client.Schedule
+	updateErr       error
 }
 
 var _ client.ScheduleClient = (*fakeScheduleClient)(nil)
@@ -88,6 +103,30 @@ func (h *fakeScheduleHandle) Trigger(_ context.Context, options client.ScheduleT
 	h.owner.triggerCalls = append(h.owner.triggerCalls, h.id)
 	h.owner.triggerOptions = append(h.owner.triggerOptions, options)
 	return h.owner.triggerErr
+}
+
+// Update simulates the server-side contract closely enough to exercise
+// temporallib.UpsertSchedule's DoUpdate callback: it actually invokes the
+// callback against the pre-seeded existingByID[h.id] description and
+// records the resulting *client.Schedule, rather than just recording that
+// Update ran.
+func (h *fakeScheduleHandle) Update(_ context.Context, options client.ScheduleUpdateOptions) error {
+	if h.owner.updateCallsByID == nil {
+		h.owner.updateCallsByID = map[string]int{}
+	}
+	h.owner.updateCallsByID[h.id]++
+	if h.owner.updateErr != nil {
+		return h.owner.updateErr
+	}
+	result, err := options.DoUpdate(client.ScheduleUpdateInput{Description: h.owner.existingByID[h.id]})
+	if err != nil {
+		return err
+	}
+	if h.owner.appliedByID == nil {
+		h.owner.appliedByID = map[string]*client.Schedule{}
+	}
+	h.owner.appliedByID[h.id] = result.Schedule
+	return nil
 }
 
 // ── ScheduleID ───────────────────────────────────────────────────────────
@@ -230,6 +269,53 @@ func TestEnsureSchedule_IdempotentAcrossRepeatedCalls(t *testing.T) {
 	// Temporal server returns on a repeat Create.
 	err := m.EnsureSchedule(context.Background(), channelID)
 	require.NoError(t, err, "an already-exists response must be tolerated, not surfaced as an error")
+}
+
+// TestEnsureSchedule_AlreadyExists_UpdatesIntervalInPlace is the regression
+// test for issue #1742: a later EnsureSchedule call for a Channel whose
+// schedule already exists (e.g. worker restarted after ASS_SYNC_INTERVAL
+// changed) must patch the existing schedule's interval via
+// temporallib.UpsertSchedule, not silently keep firing at whatever
+// interval the schedule was first created with.
+func TestEnsureSchedule_AlreadyExists_UpdatesIntervalInPlace(t *testing.T) {
+	channels := &fakeChannelStore{}
+	channelID := uuid.New()
+	scheduleID := ScheduleID(channelID)
+	schedules := &fakeScheduleClient{
+		createErrByID: map[string]error{scheduleID: temporal.ErrScheduleAlreadyRunning},
+		existingByID: map[string]client.ScheduleDescription{
+			scheduleID: {
+				Schedule: client.Schedule{
+					Spec: &client.ScheduleSpec{
+						Intervals: []client.ScheduleIntervalSpec{{Every: 20 * time.Minute}},
+					},
+					Action: &client.ScheduleWorkflowAction{Workflow: "stale-workflow-name"},
+					Policy: &client.SchedulePolicies{Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP},
+				},
+			},
+		},
+	}
+	newInterval := 24 * time.Hour
+	m := NewScheduleManager(schedules, channels, newInterval)
+
+	err := m.EnsureSchedule(context.Background(), channelID)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, schedules.updateCallsByID[scheduleID])
+	applied := schedules.appliedByID[scheduleID]
+	require.NotNil(t, applied)
+	require.Len(t, applied.Spec.Intervals, 1)
+	require.Equal(t, newInterval, applied.Spec.Intervals[0].Every, "the schedule's interval must be reconciled to the newly-configured value")
+	require.Equal(t, channelScheduleOffset(channelID, newInterval), applied.Spec.Intervals[0].Offset)
+
+	action, ok := applied.Action.(*client.ScheduleWorkflowAction)
+	require.True(t, ok)
+	require.Equal(t, TaskQueue, action.TaskQueue)
+	require.Equal(t,
+		reflect.ValueOf(ChannelSyncWorkflow).Pointer(),
+		reflect.ValueOf(action.Workflow).Pointer(),
+		"the stale workflow the existing schedule pointed at must be replaced by ChannelSyncWorkflow",
+	)
 }
 
 // TestEnsureSchedule_OtherErrorPropagates proves EnsureSchedule does not
