@@ -89,3 +89,76 @@ func (c *LeafLabClient) GetSensorReadingHistory(ctx context.Context, sensorID in
 	}
 	return resp, nil
 }
+
+// ClaimBoard claims an unowned board for the calling user (FR1, FR2). The
+// "already owned" case comes back as codes.FailedPrecondition on the
+// wrapped error -- status.FromError(err) still sees it -- there is no
+// success flag to check.
+func (c *LeafLabClient) ClaimBoard(ctx context.Context, boardID int64) (*leaflabapipb.ClaimBoardResponse, error) {
+	resp, err := c.api.ClaimBoard(ctx, &leaflabapipb.ClaimBoardRequest{BoardId: boardID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to claim board %d: %w", boardID, err)
+	}
+	return resp, nil
+}
+
+// RenameBoard renames a board the calling user owns (FR3).
+func (c *LeafLabClient) RenameBoard(ctx context.Context, boardID int64, name string) (*leaflabapipb.RenameBoardResponse, error) {
+	resp, err := c.api.RenameBoard(ctx, &leaflabapipb.RenameBoardRequest{BoardId: boardID, Name: name})
+	if err != nil {
+		return nil, fmt.Errorf("failed to rename board %d: %w", boardID, err)
+	}
+	return resp, nil
+}
+
+// RenameSensor renames a sensor on a board the calling user owns (FR4).
+func (c *LeafLabClient) RenameSensor(ctx context.Context, sensorID int64, name string) (*leaflabapipb.RenameSensorResponse, error) {
+	resp, err := c.api.RenameSensor(ctx, &leaflabapipb.RenameSensorRequest{SensorId: sensorID, Name: name})
+	if err != nil {
+		return nil, fmt.Errorf("failed to rename sensor %d: %w", sensorID, err)
+	}
+	return resp, nil
+}
+
+// ListOwnedBoards lists every currently-owned board and its current owner
+// (FR11, admin ownership screen).
+func (c *LeafLabClient) ListOwnedBoards(ctx context.Context) (*leaflabapipb.ListOwnedBoardsResponse, error) {
+	resp, err := c.api.ListOwnedBoards(ctx, &leaflabapipb.ListOwnedBoardsRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list owned boards: %w", err)
+	}
+	return resp, nil
+}
+
+// ReassignBoardOwner closes the current ownership record on a board and
+// opens a new one for the given user (FR12, admin ownership screen).
+func (c *LeafLabClient) ReassignBoardOwner(ctx context.Context, boardID, newOwnerLeafLabUserID int64) (*leaflabapipb.ReassignBoardOwnerResponse, error) {
+	resp, err := c.api.ReassignBoardOwner(ctx, &leaflabapipb.ReassignBoardOwnerRequest{
+		BoardId:               boardID,
+		NewOwnerLeaflabUserId: newOwnerLeafLabUserID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to reassign owner for board %d: %w", boardID, err)
+	}
+	return resp, nil
+}
+
+// ClearBoardOwner closes the current ownership record on a board and opens
+// none (FR13, admin ownership screen).
+func (c *LeafLabClient) ClearBoardOwner(ctx context.Context, boardID int64) (*leaflabapipb.ClearBoardOwnerResponse, error) {
+	resp, err := c.api.ClearBoardOwner(ctx, &leaflabapipb.ClearBoardOwnerRequest{BoardId: boardID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to clear owner for board %d: %w", boardID, err)
+	}
+	return resp, nil
+}
+
+// ListUsers lists every leaflab user, the source list the admin reassign
+// picker selects from (FR11, FR12).
+func (c *LeafLabClient) ListUsers(ctx context.Context) (*leaflabapipb.ListUsersResponse, error) {
+	resp, err := c.api.ListUsers(ctx, &leaflabapipb.ListUsersRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list users: %w", err)
+	}
+	return resp, nil
+}
