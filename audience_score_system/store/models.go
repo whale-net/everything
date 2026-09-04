@@ -74,9 +74,10 @@ type ChannelPerson struct {
 	ValidTo   *time.Time
 }
 
-// Invite is one row of `channel_invite` (migration 001, FR5-FR8) -- a
-// single-use, high-entropy code a Channel's creator generates to let
-// another Person accept an analyst role.
+// Invite is one row of `channel_invite` (migration 001, FR5-FR8; widened by
+// migration 009 for M2, FR29/FR30) -- a single-use, high-entropy code a
+// Channel's Creator (or Co-Creator, FR32) generates to let another Person
+// accept a specific tier (Co-Creator or Analyst).
 type Invite struct {
 	ID                 uuid.UUID
 	ChannelID          uuid.UUID
@@ -86,6 +87,10 @@ type Invite struct {
 	ConsumedAt         *time.Time
 	ConsumedByPersonID *uuid.UUID
 	InvalidatedAt      *time.Time
+	// Role is the tier this invite grants on accept (migration 009, FR29/
+	// FR30) -- RoleCoCreator or RoleAnalyst; RoleCreator is never a valid
+	// invite role (FR25/FR29: only Channel-connect grants Founder).
+	Role Role
 }
 
 // -- migration 002: idea -> verdict version -> schedule draft -> committed

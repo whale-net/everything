@@ -62,9 +62,11 @@ func New(st *store.Store, sessions *auth.SessionManager) *Handlers {
 }
 
 // HandleGenerate serves POST /channels/{id}/invites (FR5). Creator only --
-// store.CanInvite(channelID, person) must hold, else 403 -- and it never
-// invalidates a live code without also handing back the new one, since
-// store.InviteStore.Generate does both atomically.
+// store.CanInvite(channelID, person) must hold, else 403. Always generates
+// an Analyst-tier invite (store.RoleAnalyst) -- the Co-Creator web action
+// is #1723's job. store.InviteStore.Generate is idempotent per (Channel,
+// tier) (FR30): a repeat call while an Analyst invite is already live
+// returns that same code rather than minting a new one.
 func (h *Handlers) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	person := auth.PersonFromContext(ctx)
@@ -91,7 +93,7 @@ func (h *Handlers) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inv, err := h.store.Invites().Generate(ctx, channelID, person.ID)
+	inv, err := h.store.Invites().Generate(ctx, channelID, person.ID, store.RoleAnalyst)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -166,8 +168,8 @@ func (h *Handlers) HandleResume(w http.ResponseWriter, r *http.Request) {
 
 // HandleAccept serves POST /invites/{code}/accept -- signed-in only
 // (FR7). store.InviteStore.Consume(code, person) in one transaction: sets
-// consumed_at/consumed_by_person_id and grants role=analyst. Redirects to
-// the Channel on success.
+// consumed_at/consumed_by_person_id and grants the invite's own tier
+// (FR30 -- co_creator or analyst). Redirects to the Channel on success.
 func (h *Handlers) HandleAccept(w http.ResponseWriter, r *http.Request) {
 	h.consumeAndRedirect(w, r)
 }
