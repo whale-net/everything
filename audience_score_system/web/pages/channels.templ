@@ -1,0 +1,100 @@
+package pages
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// tierLabel renders store.Role in the product language FR26 asks for:
+// "Founder" for the Founder tier (store.RoleCreator), "Co-Creator", and
+// "Analyst" -- presentation only. This is the single helper the mapping
+// lives in; it must never leak into the store or authz layers (see
+// #1722's Implementation section).
+func tierLabel(role store.Role) string {
+	switch role {
+	case store.RoleCreator:
+		return "Founder"
+	case store.RoleCoCreator:
+		return "Co-Creator"
+	case store.RoleAnalyst:
+		return "Analyst"
+	default:
+		return string(role)
+	}
+}
+
+// channelDisplayTitle falls back to the YouTube channel id when a
+// Channel's title hasn't synced yet (store.Channel.Title can be "" per
+// AccessStore.ChannelsWithRoleForPerson's COALESCE), matching FR26's row
+// requirement.
+func channelDisplayTitle(ch store.Channel) string {
+	if ch.Title != "" {
+		return ch.Title
+	}
+	return ch.YouTubeChannelID
+}
+
+// Channels is the Channel list/switcher page (FR26): one row per Channel
+// the signed-in Person holds an open role on -- title, tier (tierLabel),
+// and connection state (carried from M1) -- sourced from exactly one
+// store call, store.AccessStore.ChannelsWithRoleForPerson (see
+// ../main.go's handleChannels), so NFR9 holds for this page too. Clicking
+// a row navigates to that Channel's existing per-Channel dashboard
+// (GET /channels/{id}); this page holds no session/cookie/server-side
+// "current channel" state of its own -- every downstream view re-scopes
+// and re-authorizes by the {id} in that path alone.
+//
+// showConnect gates the "Connect another Channel" action (FR25): true for
+// any Person who holds a Founder or Co-Creator role on at least one
+// Channel, false for a Person whose every open role is Analyst -- the
+// strict reading of #1709's Analyst persona text ("no Connect another
+// Channel action"). A brand-new Person with zero rows also sees the
+// action, via the empty state below, since they hold no Analyst-only
+// restriction yet.
+templ Channels(data components.LayoutData, rows []store.ChannelRole, showConnect bool) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Channels</h1>
+				if len(rows) == 0 {
+					<p class="text-base-content/70">No connected Channels yet.</p>
+					<div>
+						<a href="/channels/connect" class="btn btn-primary">Connect a Channel</a>
+					</div>
+				} else {
+					<table class="table">
+						<thead>
+							<tr>
+								<th>Channel</th>
+								<th>Your role</th>
+								<th>Status</th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range rows {
+								<tr>
+									<td>
+										<a class="link" href={ templ.URL("/channels/" + row.Channel.ID.String()) }>
+											{ channelDisplayTitle(row.Channel) }
+										</a>
+									</td>
+									<td>{ tierLabel(row.Role) }</td>
+									<td>
+										<span class={ connectionStateBadgeClass(row.Channel.ConnectionState) }>
+											{ connectionStateLabel(row.Channel.ConnectionState) }
+										</span>
+									</td>
+								</tr>
+							}
+						</tbody>
+					</table>
+					if showConnect {
+						<div class="card-actions justify-end mt-2">
+							<a href="/channels/connect" class="btn btn-primary">Connect another Channel</a>
+						</div>
+					}
+				}
+			</div>
+		</div>
+	}
+}

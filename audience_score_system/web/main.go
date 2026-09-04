@@ -367,9 +367,17 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	// anonymous one away (see invite.Handlers.HandleShow).
 	mux.HandleFunc("GET /invites/{code}", a.invite.HandleShow)
 
-	// Protected: the signed-in landing page listing the Channels the
-	// Person has a live channel_person row for (via store.RoleStore).
+	// Protected: the signed-in landing page. It carries no content of its
+	// own -- it redirects straight to /channels, FR26's Channel list/
+	// switcher, so there is exactly one place a signed-in Person lands on
+	// and exactly one Channel list rendered (see handleChannels's doc
+	// comment for why the old inline list here was retired, #1722).
 	mux.HandleFunc("/", a.auth.RequireSignedIn(a.handleHome))
+
+	// Protected: FR26's Channel list/switcher -- one row per Channel the
+	// signed-in Person holds an open role on, plus FR25's "Connect
+	// another Channel" entry point. See handleChannels's doc comment.
+	mux.HandleFunc("GET /channels", a.auth.RequireSignedIn(a.handleChannels))
 
 	// Analyst invite generate/accept/decline (C3: FR5-FR8, #1572). All
 	// four require a session -- HandleGenerate additionally 403s unless
@@ -411,24 +419,62 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, `{"status":"ok"}`)
 }
 
+// handleHome is the signed-in landing page. It renders nothing itself --
+// see handleChannels's doc comment for why "/" is a bare redirect to
+// /channels rather than a second, competing Channel list (#1722).
 func (a *app) handleHome(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, "/channels", http.StatusSeeOther)
+}
+
+// handleChannels is FR26's Channel list/switcher: one row per Channel the
+// signed-in Person holds an open role on, each showing the Channel's
+// title, the Person's tier (pages.tierLabel), and connection state --
+// sourced from exactly one store call, store.AccessStore.
+// ChannelsWithRoleForPerson (#1716), so the query count does not grow
+// with Channel count (NFR9). This replaces M1's inline list on the "/"
+// home page (store.RoleStore.ChannelsForPerson) as the one place a
+// signed-in Person sees every Channel they're associated with -- "/" now
+// just redirects here (handleHome above).
+//
+// This handler introduces no session-held "current channel" and sets no
+// cookie: clicking a row navigates straight to that Channel's existing
+// GET /channels/{id} detail page (handleChannelDetail below), which
+// re-derives its own authorization from the {id} path segment alone. See
+// pages.Channels's doc comment for the FR25 "Connect another Channel"
+// visibility rule this handler computes (showConnect).
+func (a *app) handleChannels(w http.ResponseWriter, r *http.Request) {
 	person := auth.PersonFromContext(r.Context())
-	data := components.LayoutData{
-		Title: "Home",
-		User:  person,
+	if person == nil {
+		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
 	}
 
-	var channels []store.Channel
-	if person != nil {
-		var err error
-		channels, err = a.store.Roles().ChannelsForPerson(r.Context(), person.ID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+	rows, err := a.store.Access().ChannelsWithRoleForPerson(r.Context(), person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// showConnect (FR25): hidden only when every open role this Person
+	// holds is Analyst -- the strict reading of #1709's Analyst persona
+	// text ("no Connect another Channel action"). A Person with zero
+	// rows still sees it, via pages.Channels's empty state.
+	showConnect := true
+	if len(rows) > 0 {
+		showConnect = false
+		for _, row := range rows {
+			if row.Role != store.RoleAnalyst {
+				showConnect = true
+				break
+			}
 		}
 	}
 
-	if err := renderTempl(w, r, "Home", pages.Home(data, channels)); err != nil {
+	data := components.LayoutData{
+		Title: "Channels",
+		User:  person,
+	}
+	if err := renderTempl(w, r, "Channels", pages.Channels(data, rows, showConnect)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
@@ -458,6 +504,20 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Re-authorize strictly by this Channel's ID (store.CanRead), never by
+	// anything the Channel list/switcher (handleChannels above) might have
+	// implied -- that page introduces no session-held "current channel"
+	// and grants nothing on its own (FR26, #1722).
+	canRead, err := store.CanRead(r.Context(), a.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !canRead {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 
