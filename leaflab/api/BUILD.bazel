@@ -44,6 +44,7 @@ go_test(
     srcs = [
         "auth_test.go",
         "history_test.go",
+        "server_m2_contract_test.go",
         "server_test.go",
     ],
     embed = [":api_lib"],
@@ -55,8 +56,11 @@ go_test(
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",
         "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
         "@org_golang_google_grpc//metadata",
         "@org_golang_google_grpc//status",
+        "@org_golang_google_grpc//test/bufconn",
+        "@org_golang_google_protobuf//reflect/protoreflect",
         "@org_golang_google_protobuf//types/known/timestamppb",
     ],
 )
@@ -101,11 +105,11 @@ go_test(
 
 release_app(
     name = "leaflab-api",
-    binary_name = ":api",
-    language = "go",
-    domain = "leaflab",
-    description = "LeafLab gRPC API — device config push and board management",
     app_type = "internal-api",
+    binary_name = ":api",
+    description = "LeafLab gRPC API — device config push and board management",
+    domain = "leaflab",
+    language = "go",
     port = 50051,
     replicas = 1,
 )
