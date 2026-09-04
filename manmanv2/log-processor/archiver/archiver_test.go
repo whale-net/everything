@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -123,12 +124,24 @@ func (m *mockLogRepo) ListByTimeRange(ctx context.Context, sgcID int64, startTim
 	return nil, nil
 }
 
+func (m *mockLogRepo) ListBySession(ctx context.Context, sessionID int64) ([]*manman.LogReference, error) {
+	return nil, nil
+}
+
+func (m *mockLogRepo) ListBySessionAndTimeRange(ctx context.Context, sessionID int64, startTime, endTime time.Time) ([]*manman.LogReference, error) {
+	return nil, nil
+}
+
 func (m *mockLogRepo) GetMinMaxTimes(ctx context.Context, sgcID int64) (minTime, maxTime *time.Time, err error) {
 	return nil, nil, nil
 }
 
 func (m *mockLogRepo) GetMinMaxTimesBySession(ctx context.Context, sessionID int64) (minTime, maxTime *time.Time, err error) {
 	return nil, nil, nil
+}
+
+func (m *mockLogRepo) GetHistogramBySession(ctx context.Context, sessionID int64, bucketSeconds int64, startTime, endTime *int64) (map[int64]map[string]int32, error) {
+	return nil, nil
 }
 
 // TestAppendPreservesData tests that appending to an existing log file preserves all data
@@ -464,6 +477,176 @@ func decompressTestData(data []byte) ([]byte, error) {
 	defer gzReader.Close()
 
 	return io.ReadAll(gzReader)
+}
+
+// flakyS3Client fails Upload for a given key a fixed number of times before
+// succeeding, to simulate a transient outage (e.g. the DB/S3 backend recovering).
+type flakyS3Client struct {
+	*mockS3Client
+	mu           sync.Mutex
+	failuresLeft map[string]int
+	attempts     map[string]int
+}
+
+func newFlakyS3Client(failuresPerKey int, keys ...string) *flakyS3Client {
+	f := &flakyS3Client{
+		mockS3Client: newMockS3Client(),
+		failuresLeft: make(map[string]int),
+		attempts:     make(map[string]int),
+	}
+	for _, k := range keys {
+		f.failuresLeft[k] = failuresPerKey
+	}
+	return f
+}
+
+func (f *flakyS3Client) Upload(ctx context.Context, key string, data []byte, opts *s3.UploadOptions) (string, error) {
+	f.mu.Lock()
+	f.attempts[key]++
+	if f.failuresLeft[key] > 0 {
+		f.failuresLeft[key]--
+		f.mu.Unlock()
+		return "", fmt.Errorf("simulated transient failure: connection refused")
+	}
+	f.mu.Unlock()
+	return f.mockS3Client.Upload(ctx, key, data, opts)
+}
+
+func (f *flakyS3Client) AttemptCount(key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts[key]
+}
+
+// alwaysFailS3Client fails every Upload, to exercise the give-up path.
+type alwaysFailS3Client struct {
+	*mockS3Client
+	attempts int32
+}
+
+func (f *alwaysFailS3Client) Upload(ctx context.Context, key string, data []byte, opts *s3.UploadOptions) (string, error) {
+	atomic.AddInt32(&f.attempts, 1)
+	return "", fmt.Errorf("simulated permanent failure: connection refused")
+}
+
+// withFastRetryBackoff overrides the package's retry timing for the duration
+// of a test so retry-loop tests run in milliseconds instead of minutes.
+func withFastRetryBackoff(t *testing.T, base, max time.Duration, retries int32) {
+	t.Helper()
+	origBase, origMax, origRetries := baseUploadRetryDelay, maxUploadRetryDelay, maxUploadRetries
+	baseUploadRetryDelay, maxUploadRetryDelay, maxUploadRetries = base, max, retries
+	t.Cleanup(func() {
+		baseUploadRetryDelay, maxUploadRetryDelay, maxUploadRetries = origBase, origMax, origRetries
+	})
+}
+
+// TestUploadRetrySurvivesTransientFailure is a regression test for the bug where
+// a single upload failure (e.g. the DB briefly failing over) permanently
+// dropped the window's buffered logs. It exercises the real Archiver/uploadWorker
+// path end to end: a window that fails twice must still land in S3 once the
+// backend recovers, instead of being silently discarded after the first error.
+func TestUploadRetrySurvivesTransientFailure(t *testing.T) {
+	withFastRetryBackoff(t, 2*time.Millisecond, 10*time.Millisecond, 5)
+
+	sgcID := int64(10)
+	sessionID := int64(97)
+	minuteTimestamp := time.Date(2026, 9, 3, 23, 3, 0, 0, time.UTC)
+	s3Key := fmt.Sprintf("logs/sgc-%d/session-%d/2026/09/03/23/03.log.gz", sgcID, sessionID)
+
+	flaky := newFlakyS3Client(2, s3Key) // fail twice, then succeed
+	repo := newMockLogRepo()
+
+	a := NewArchiver(flaky, repo)
+	defer a.Close()
+
+	window := &MinuteWindow{
+		SGCID:           sgcID,
+		SessionID:       sessionID,
+		MinuteTimestamp: minuteTimestamp,
+		FirstLogTime:    minuteTimestamp.Add(1 * time.Second),
+		LastLogTime:     minuteTimestamp.Add(2 * time.Second),
+		LineCount:       1,
+	}
+	window.Buffer.WriteString("[stdout] a hiccup should not lose this line\n")
+
+	// Simulate closeStaleWindows() handing the window to the upload workers.
+	a.uploadChan <- window
+
+	ctx := context.Background()
+	deadline := time.Now().Add(2 * time.Second)
+	var uploaded bool
+	for time.Now().Before(deadline) {
+		if exists, _ := flaky.Exists(ctx, s3Key); exists {
+			uploaded = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !uploaded {
+		t.Fatalf("window was never uploaded after retries (attempts=%d)", flaky.AttemptCount(s3Key))
+	}
+
+	if attempts := flaky.AttemptCount(s3Key); attempts != 3 {
+		t.Errorf("expected 3 upload attempts (2 failures + 1 success), got %d", attempts)
+	}
+
+	compressed, err := flaky.Download(ctx, s3Key)
+	if err != nil {
+		t.Fatalf("failed to download uploaded window: %v", err)
+	}
+	data, err := decompressTestData(compressed)
+	if err != nil {
+		t.Fatalf("failed to decompress uploaded window: %v", err)
+	}
+	if !strings.Contains(string(data), "a hiccup should not lose this line") {
+		t.Error("uploaded data is missing the window's log line - data was lost despite eventual success")
+	}
+}
+
+// TestUploadGivesUpAfterMaxRetries documents the bound on retries: a sustained
+// (non-transient) failure eventually stops retrying rather than retrying forever.
+func TestUploadGivesUpAfterMaxRetries(t *testing.T) {
+	const maxRetries = int32(3)
+	withFastRetryBackoff(t, 2*time.Millisecond, 5*time.Millisecond, maxRetries)
+
+	failing := &alwaysFailS3Client{mockS3Client: newMockS3Client()}
+	repo := newMockLogRepo()
+
+	a := NewArchiver(failing, repo)
+	defer a.Close()
+
+	window := &MinuteWindow{
+		SGCID:           1,
+		SessionID:       2,
+		MinuteTimestamp: time.Now().UTC().Truncate(time.Minute),
+		FirstLogTime:    time.Now().UTC(),
+		LastLogTime:     time.Now().UTC(),
+		LineCount:       1,
+	}
+	window.Buffer.WriteString("line\n")
+
+	a.uploadChan <- window
+
+	// Let the initial attempt plus all retries play out.
+	deadline := time.Now().Add(1 * time.Second)
+	wantAttempts := int32(1) + maxRetries // initial attempt + retries
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&failing.attempts) >= wantAttempts {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	got := atomic.LoadInt32(&failing.attempts)
+	if got != wantAttempts {
+		t.Fatalf("expected %d total upload attempts (1 initial + %d retries), got %d", wantAttempts, maxRetries, got)
+	}
+
+	// No further retries should be scheduled once the budget is exhausted.
+	time.Sleep(50 * time.Millisecond)
+	if got2 := atomic.LoadInt32(&failing.attempts); got2 != got {
+		t.Errorf("archiver kept retrying past maxUploadRetries: attempts grew from %d to %d", got, got2)
+	}
 }
 
 // TestFlushSession tests that FlushSession only flushes windows for a specific session
