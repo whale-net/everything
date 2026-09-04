@@ -498,12 +498,18 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 	`, ch.ID, "Groundable Strategy", creator.ID).Scan(&strategy1ID))
 	_, err = db.Pool.Exec(ctx, `INSERT INTO strategy_verdict (strategy_id, verdict_id) VALUES ($1, $2)`, strategy1ID, verdict1.ID)
 	require.NoError(t, err)
-	entry1, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: idea1.ID, VerdictID: verdict1.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	require.NoError(t, s.Schedules().Approve(ctx, entry1.ID, creator.ID))
+	// store.ScheduleStore (store/schedule.go) no longer exists (deleted
+	// outright by #1835's retirement task) -- seed the pre-010
+	// schedule_entry row directly by SQL instead, exactly as a pre-010
+	// caller would have (mirroring the video_schedule_match seed below for
+	// the same reason: a current store method that can't write a
+	// historical schema shape).
+	var entry1ID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO schedule_entry (channel_id, idea_id, verdict_id, proposed_publish_at, state, approved_by_person_id, approved_at, created_by_person_id)
+		VALUES ($1, $2, $3, $4, 'committed', $5, NOW(), $5)
+		RETURNING id
+	`, ch.ID, idea1.ID, verdict1.ID, time.Now().Add(24*time.Hour), creator.ID).Scan(&entry1ID))
 
 	video1 := syncOneVideo(t, ctx, s, ch, "Groundable Video", ptrTime(time.Now().Add(-time.Hour)))
 	// The schema is only migrated to 9 here (video_script_id doesn't exist
@@ -514,7 +520,7 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
 		VALUES ($1, $2, $3, $4)
-	`, video1.ID, entry1.ID, 0.9, store.MatchStateConfirmed)
+	`, video1.ID, entry1ID, 0.9, store.MatchStateConfirmed)
 	require.NoError(t, err)
 
 	// -- Ungroundable: verdict2 has no strategy_verdict row at all. --------
@@ -524,18 +530,18 @@ func TestMigration010_ScheduleEntryBackfill_DerivesStrategyDropsUngroundable(t *
 		IdeaID: idea2.ID, Verdict: store.VerdictViable, Reasoning: "ungroundable", AuthorPersonID: creator.ID,
 	})
 	require.NoError(t, err)
-	entry2, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: idea2.ID, VerdictID: verdict2.ID,
-		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-	require.NoError(t, s.Schedules().Approve(ctx, entry2.ID, creator.ID))
+	var entry2ID uuid.UUID
+	require.NoError(t, db.Pool.QueryRow(ctx, `
+		INSERT INTO schedule_entry (channel_id, idea_id, verdict_id, proposed_publish_at, state, approved_by_person_id, approved_at, created_by_person_id)
+		VALUES ($1, $2, $3, $4, 'committed', $5, NOW(), $5)
+		RETURNING id
+	`, ch.ID, idea2.ID, verdict2.ID, time.Now().Add(48*time.Hour), creator.ID).Scan(&entry2ID))
 
 	video2 := syncOneVideo(t, ctx, s, ch, "Ungroundable Video", ptrTime(time.Now().Add(-time.Hour)))
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
 		VALUES ($1, $2, $3, $4)
-	`, video2.ID, entry2.ID, 0.9, store.MatchStateConfirmed)
+	`, video2.ID, entry2ID, 0.9, store.MatchStateConfirmed)
 	require.NoError(t, err)
 
 	require.NoError(t, runner.Migrate(10), "apply 010, running the backfill")

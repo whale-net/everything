@@ -71,15 +71,21 @@
 //     longer exists (C6 cut, not replaced). Step 5 now reads the synced
 //     schedule directly from store.SyncStore to keep proving FR14's sync
 //     population without depending on the retired tool.
-//   - FR16 -- exercised here (step 5: save_schedule_draft bound to the
-//     viable verdict version via verdict_id, FK-checked by re-reading the
-//     row back from the store).
-//   - FR17 -- exercised here (step 5: set_pacing_policy).
-//   - FR18 -- exercised here (step 5: a deliberately colliding slot
-//     returns collision=true and the draft is still saved).
-//   - FR19 -- exercised here (step 6: Analyst 403, Creator approves).
-//   - FR20 -- exercised here (steps 6 and 8: un-approve/edit/re-approve
-//     while unpublished, then both rejected 409 once published).
+//   - FR16-FR18 -- retired outright by FR41 (issue #1832, milestone
+//     video-script-model): schedule_entry drafting, and the Channel pacing
+//     policy FR18's collision check depended on, no longer exist (C6/C7/C8
+//     cut, not replaced). Step 5 proposes a video_script instead (FR36),
+//     bound to the viable verdict version via verdict_id, FK-checked by
+//     re-reading the row back from the store -- the closest surviving
+//     analog of FR16's binding check.
+//   - FR19/FR37 -- exercised here (step 6: Analyst 403, Creator greenlights
+//     the proposed video_script -- FR19's approve gate, rebuilt against
+//     video_script by FR37/FR49).
+//   - FR20/FR39 -- exercised here (step 8: greenlighting/archiving rejected
+//     409 once published -- FR20's freeze, rebuilt against video_script's
+//     publish-freeze predicate by FR39/FR49). FR20's un-approve/edit
+//     affordances have no video_script analog (FR49's HandleUnapprove/
+//     HandleEdit retirement note) and are not exercised here.
 //   - FR21 -- exercised here (step 7: SyncOutcomes' real metrics upsert).
 //   - FR22 -- exercised here (step 7: an exact title/date match auto-links
 //     at/above the confidence threshold).
@@ -91,8 +97,8 @@
 // NFR spot-check pointers for the validator (per this task's Validation
 // section): NFR1 (both OAuth scopes requested) --
 // web/channel/channel_test.go; NFR2 (write-tool replay safety) -- each
-// tool group's own *_integration_test.go (research/verdict/
-// schedule_draft/matches); NFR3 (web hosts only C1/C2/C3/C8) -- structural,
+// tool group's own *_integration_test.go (research/verdict/video_script/
+// matches); NFR3 (web hosts only C1/C2/C3/C8) -- structural,
 // see ARCHITECTURE.md's "NFR3 interface allocation"; NFR4 (sync cadence,
 // one schedule per Channel) -- worker/sync/schedule_test.go; NFR5
 // (authorization via the join table) -- exercised throughout this file
@@ -217,9 +223,9 @@ func newWorld(t *testing.T) *world {
 	mux.HandleFunc("POST /invites/{code}/accept", a.RequireSignedIn(inv.HandleAccept))
 	mux.HandleFunc("POST /invites/{code}/decline", a.RequireSignedIn(inv.HandleDecline))
 	mux.HandleFunc("GET /channels/{id}/schedule", a.RequireSignedIn(sch.HandleList))
-	mux.HandleFunc("POST /schedule/{entryID}/approve", a.RequireSignedIn(sch.HandleApprove))
-	mux.HandleFunc("POST /schedule/{entryID}/unapprove", a.RequireSignedIn(sch.HandleUnapprove))
-	mux.HandleFunc("POST /schedule/{entryID}/edit", a.RequireSignedIn(sch.HandleEdit))
+	mux.HandleFunc("POST /schedule/{scriptID}/approve", a.RequireSignedIn(sch.HandleGreenlight))
+	mux.HandleFunc("POST /schedule/{scriptID}/deny", a.RequireSignedIn(sch.HandleDeny))
+	mux.HandleFunc("POST /schedule/{scriptID}/archive", a.RequireSignedIn(sch.HandleArchive))
 	mux.HandleFunc("GET /channels/{id}/access", a.RequireSignedIn(acc.HandleShow))
 	mux.HandleFunc("POST /channels/{id}/access/invites", a.RequireSignedIn(acc.HandleInviteCoCreator))
 	mux.HandleFunc("POST /channels/{id}/access/promote", a.RequireSignedIn(acc.HandlePromote))
@@ -232,7 +238,8 @@ func newWorld(t *testing.T) *world {
 	mcptools.RegisterListChannels(reg, st.Access())
 	mcptools.RegisterResearch(reg, st)
 	mcptools.RegisterVerdict(reg, st)
-	mcptools.RegisterScheduleDraft(reg, st)
+	mcptools.RegisterVideoScript(reg, st)
+	mcptools.RegisterStrategy(reg, st)
 	mcptools.RegisterMatches(reg, st)
 	mcptools.RegisterBrowse(reg, st)
 	mcptools.RegisterAccess(reg, st)
@@ -435,11 +442,11 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 
 	// existingDraftTime is a scheduled/private draft ALREADY on YouTube
 	// (e.g. the Creator scheduled it manually in Studio) -- distinct from
-	// the Analyst's own schedule_entry proposal below, which is
-	// deliberately placed within collisionWindow of it (FR18).
+	// the Analyst's own video_script proposal below, whose target publish
+	// date (proposedSlot) FR43's matcher scores against once the
+	// corresponding video actually publishes (step 7).
 	existingDraftTime := time.Date(2026, 3, 2, 15, 0, 0, 0, time.UTC)
 	proposedSlot := existingDraftTime.Add(2 * time.Hour)
-	editedSlot := existingDraftTime.Add(30 * 24 * time.Hour) // step 6's re-approved slot
 
 	var (
 		creator, analyst             store.Person
@@ -447,7 +454,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		creatorCookie, analystCookie *http.Cookie
 		ideaID, note1ID, note2ID     uuid.UUID
 		verdict1ID, verdict2ID       uuid.UUID
-		entryID                      uuid.UUID
+		scriptID                     uuid.UUID
 	)
 
 	// ── Step 1: signup & connect ────────────────────────────────────────
@@ -609,18 +616,11 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 	// ── Step 5: schedule loop ────────────────────────────────────────────
 	var fc1 *fake.Client
 	t.Run("5_schedule_loop", func(t *testing.T) {
-		csCreator := w.mcpConnect(creator.ID)
 		csAnalyst := w.mcpConnect(analyst.ID)
 
-		// FR17: Creator sets a pacing policy.
-		pacingRes := callTool(t, csCreator, "set_pacing_policy", mcptools.SetPacingPolicyInput{
-			ChannelID:            ch.ID.String(),
-			TargetUploadsPerWeek: 1,
-			PreferredDays:        []string{"Monday"},
-			IdempotencyKeyArg:    uuid.NewString(),
-		})
-		pacing := decode[mcptools.PacingPolicyOutput](t, pacingRes)
-		assert.Equal(t, float64(1), pacing.TargetUploadsPerWeek)
+		// FR17 retired outright by FR41 (issue #1832): the Channel pacing
+		// policy this step used to set no longer exists (C7 cut, not
+		// replaced).
 
 		// FR14: sync populates the synced schedule, including a
 		// scheduled/private draft already on YouTube.
@@ -649,75 +649,72 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 		assert.Equal(t, "yt-existing-draft", syncedVids[0].YouTubeVideoID)
 		assert.True(t, syncedVids[0].IsScheduledDraft)
 
-		// FR16/FR18: the Analyst saves a draft bound to the viable verdict
-		// version, deliberately colliding (within 12h) with the synced
-		// draft above -- must return collision=true AND still save.
-		draftRes := callTool(t, csAnalyst, "save_schedule_draft", mcptools.SaveScheduleDraftInput{
+		// FR36's own Strategy grounding requirement: the Analyst first
+		// builds a Strategy from the viable verdict version, then proposes
+		// a video_script under it (FR16's closest surviving analog --
+		// FR18's collision check itself was retired with pacing_policy,
+		// #1832).
+		strategyRes := callTool(t, csAnalyst, "save_strategy", mcptools.SaveStrategyInput{
 			ChannelID:         ch.ID.String(),
-			IdeaID:            ideaID.String(),
-			ProposedPublishAt: proposedSlot.Format(time.RFC3339),
-			VerdictID:         verdict2ID.String(),
+			Title:             "Widget Strategy",
+			VerdictIDs:        []string{verdict2ID.String()},
 			IdempotencyKeyArg: uuid.NewString(),
 		})
-		draft := decode[mcptools.SaveScheduleDraftOutput](t, draftRes)
-		assert.True(t, draft.Collision, "FR18: a slot within 12h of an existing synced draft must be flagged")
-		assert.NotEmpty(t, draft.Flags)
-		assert.Equal(t, verdict2ID.String(), draft.VerdictID, "FR16: bound to the specific viable verdict version")
-		assert.Equal(t, string(store.ScheduleStateDraft), draft.State)
-		entryID = uuid.MustParse(draft.ScheduleEntryID)
+		strategy := decode[mcptools.StrategyOutput](t, strategyRes)
 
-		// The draft is genuinely persisted, not just returned -- re-read
-		// directly from the store (LB3's FK chain: schedule_entry ->
+		scriptRes := callTool(t, csAnalyst, "save_video_script", mcptools.SaveVideoScriptInput{
+			ChannelID:         ch.ID.String(),
+			VerdictID:         verdict2ID.String(),
+			StrategyID:        strategy.StrategyID,
+			Title:             ideaTitle,
+			ScriptText:        "Script text for " + ideaTitle,
+			TargetPublishDate: proposedSlot.Format(time.RFC3339),
+			IdempotencyKeyArg: uuid.NewString(),
+		})
+		script := decode[mcptools.VideoScriptOutput](t, scriptRes)
+		assert.Equal(t, verdict2ID.String(), script.VerdictID, "FR36: bound to the specific viable verdict version")
+		assert.Equal(t, "proposed", script.Status)
+		scriptID = uuid.MustParse(script.VideoScriptID)
+
+		// The proposed script is genuinely persisted, not just returned --
+		// re-read directly from the store (LB3's FK chain: video_script ->
 		// verdict_id).
-		stored, err := w.st.Schedules().GetByID(ctx, entryID)
+		stored, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
 		assert.Equal(t, verdict2ID, stored.VerdictID)
-		assert.Equal(t, store.ScheduleStateDraft, stored.State)
+		assert.Equal(t, store.VideoScriptStatusProposed, stored.Status)
 	})
 
 	// ── Step 6: approval ─────────────────────────────────────────────────
 	t.Run("6_approval", func(t *testing.T) {
-		// FR19: Analyst's approve attempt is 403, no state change.
-		rec := w.postForm(analystCookie, "/schedule/"+entryID.String()+"/approve", nil)
+		// FR19/FR37: Analyst's greenlight attempt is 403, no state change.
+		// The route path keeps its pre-existing "approve" spelling (FR49's
+		// route-and-package-naming note); the store transition it drives is
+		// video_script's proposed->greenlit.
+		rec := w.postForm(analystCookie, "/schedule/"+scriptID.String()+"/approve", nil)
 		assert.Equal(t, http.StatusForbidden, rec.Code)
-		entry, err := w.st.Schedules().GetByID(ctx, entryID)
+		script, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateDraft, entry.State, "an Analyst's rejected approve must not change state")
+		assert.Equal(t, store.VideoScriptStatusProposed, script.Status, "an Analyst's rejected greenlight must not change status")
 
-		// FR19: Creator approves.
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/approve", nil)
+		// FR19/FR37: Creator greenlights.
+		rec = w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err = w.st.Schedules().GetByID(ctx, entryID)
+		script, err = w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateCommitted, entry.State)
+		assert.Equal(t, store.VideoScriptStatusGreenlit, script.Status)
 
-		// FR20: Creator un-approves, edits the slot, re-approves.
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/unapprove", nil)
-		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err = w.st.Schedules().GetByID(ctx, entryID)
-		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateDraft, entry.State)
-
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/edit", url.Values{
-			"proposed_publish_at": {editedSlot.Format(time.RFC3339)},
-		})
-		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err = w.st.Schedules().GetByID(ctx, entryID)
-		require.NoError(t, err)
-		assert.WithinDuration(t, editedSlot, entry.ProposedPublishAt, time.Second)
-
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/approve", nil)
-		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err = w.st.Schedules().GetByID(ctx, entryID)
-		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateCommitted, entry.State)
+		// FR20's un-approve/edit affordances have no video_script analog
+		// (FR49's HandleUnapprove/HandleEdit retirement note): a
+		// video_script's target date is set once at propose time (FR36),
+		// and FR40 defines no greenlit->proposed transition.
 	})
 
 	// ── Step 7: outcome loop ─────────────────────────────────────────────
 	var matchBID uuid.UUID
 	t.Run("7_outcome_loop", func(t *testing.T) {
-		publishedAtA := editedSlot
-		publishedAtB := editedSlot.Add(20 * 24 * time.Hour)
+		publishedAtA := proposedSlot
+		publishedAtB := proposedSlot.Add(20 * 24 * time.Hour)
 
 		viewsA, viewsB := int64(12345), int64(50)
 		fc2 := &fake.Client{
@@ -733,11 +730,12 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 					IsScheduledDraft: true,
 				},
 				// The idea's own video, now published with a title/date
-				// that exactly matches the committed schedule entry --
-				// scores confidence 1.0, auto-links (FR22). Ordered before
-				// the ambiguous video below (ListSchedule/SyncOutcomes
-				// process in COALESCE(publish_at, published_at) order) so
-				// it claims the sole committed candidate first.
+				// that exactly matches the greenlit video_script's target
+				// date (FR43) -- scores confidence 1.0, auto-links (FR22).
+				// Ordered before the ambiguous video below (ListSchedule/
+				// SyncOutcomes process in COALESCE(publish_at,
+				// published_at) order) so it claims the sole greenlit
+				// candidate first.
 				{
 					YouTubeVideoID: "yt-idea-video",
 					Title:          ideaTitle,
@@ -828,7 +826,7 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 			ChannelID:         ch.ID.String(),
 			MatchID:           matchBID.String(),
 			Confirm:           true,
-			ScheduleEntryID:   entryID.String(),
+			VideoScriptID:     scriptID.String(),
 			IdempotencyKeyArg: uuid.NewString(),
 		})
 		resolved := decode[mcptools.ResolvedMatchOutput](t, resolveRes)
@@ -850,21 +848,18 @@ func TestE2E_ThreeLoopsEndToEnd(t *testing.T) {
 
 	// ── Step 8: freeze ───────────────────────────────────────────────────
 	t.Run("8_freeze", func(t *testing.T) {
-		published, err := w.st.Schedules().IsPublished(ctx, entryID)
+		published, err := w.st.VideoScripts().IsPublished(ctx, scriptID)
 		require.NoError(t, err)
-		require.True(t, published, "the committed entry's video is now auto-matched and published")
+		require.True(t, published, "the greenlit script's video is now auto-matched and published")
 
-		rec := w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/unapprove", nil)
-		assert.Equal(t, http.StatusConflict, rec.Code, "FR20: un-approve must be rejected once published")
+		// FR20/FR39: archive must be rejected once published (the
+		// video_script analog of FR20's freeze, rebuilt by FR39/FR49).
+		rec := w.postForm(creatorCookie, "/schedule/"+scriptID.String()+"/archive", nil)
+		assert.Equal(t, http.StatusConflict, rec.Code, "FR39: archive must be rejected once published")
 
-		rec = w.postForm(creatorCookie, "/schedule/"+entryID.String()+"/edit", url.Values{
-			"proposed_publish_at": {editedSlot.Add(time.Hour).Format(time.RFC3339)},
-		})
-		assert.Equal(t, http.StatusConflict, rec.Code, "FR20: edit must be rejected once published")
-
-		entry, err := w.st.Schedules().GetByID(ctx, entryID)
+		script, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateCommitted, entry.State, "no state change from either rejected mutation")
+		assert.Equal(t, store.VideoScriptStatusGreenlit, script.Status, "no state change from the rejected archive")
 	})
 
 	// ── Step 9: disconnect/reconnect ─────────────────────────────────────

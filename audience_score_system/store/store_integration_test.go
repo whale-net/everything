@@ -958,55 +958,6 @@ func TestStrategyStore_ListByChannel_RoundTripsWithoutCadence(t *testing.T) {
 	assert.Equal(t, saved.Strategy, details[0].Strategy)
 }
 
-// ── ScheduleStore.SaveDraft (FR16, LB3) ─────────────────────────────────────
-
-func TestScheduleStore_SaveDraft_RejectsNonViableVerdict_AcceptsViable(t *testing.T) {
-	ctx := context.Background()
-	s, db := newStore(t)
-	ch, creator := setupChannel(t, ctx, s)
-
-	idea, err := s.Ideas().Create(ctx, ch.ID, "Idea Needing Judgement", creator.ID)
-	require.NoError(t, err)
-
-	notViable, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea.ID, Verdict: store.VerdictNotViable, Reasoning: "saturated niche", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-
-	_, err = s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: idea.ID, VerdictID: notViable.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	assert.ErrorIs(t, err, store.ErrVerdictNotViable, "SaveDraft must reject a not-viable verdict (FR16)")
-
-	needsMore, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea.ID, Verdict: store.VerdictNeedsMoreResearch, Reasoning: "more comps needed", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-
-	_, err = s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: idea.ID, VerdictID: needsMore.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	assert.ErrorIs(t, err, store.ErrVerdictNotViable, "SaveDraft must reject a needs-more-research verdict (FR16)")
-
-	viable, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: "green light", AuthorPersonID: creator.ID,
-	})
-	require.NoError(t, err)
-
-	entry, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: ch.ID, IdeaID: idea.ID, VerdictID: viable.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
-	})
-	require.NoError(t, err, "SaveDraft must accept a viable verdict (FR16)")
-	assert.Equal(t, viable.ID, entry.VerdictID, "the draft must store the exact verdict_id that judged the idea viable (LB3)")
-
-	var count int
-	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM schedule_entry WHERE idea_id = $1`, idea.ID).Scan(&count))
-	assert.Equal(t, 1, count, "the two rejected SaveDraft calls must not have written any schedule_entry row")
-}
-
 // ── ResearchStore (FR9/FR10) ────────────────────────────────────────────────
 
 func TestResearchStore_SaveNote_UncitedAndCitedRoundTripDistinctly(t *testing.T) {
@@ -1036,34 +987,6 @@ func TestResearchStore_SaveNote_UncitedAndCitedRoundTripDistinctly(t *testing.T)
 	assert.Nil(t, byID[uncited.ID].SourceURL, "the read model must distinguish the uncited note")
 	require.NotNil(t, byID[cited.ID].SourceURL)
 	assert.Equal(t, url, *byID[cited.ID].SourceURL, "the read model must distinguish the cited note")
-}
-
-// ── PacingStore (FR17, NFR2) ────────────────────────────────────────────────
-
-func TestPacingStore_Upsert_TwiceWithIdenticalValuesLeavesOneRow(t *testing.T) {
-	ctx := context.Background()
-	s, db := newStore(t)
-	ch, creator := setupChannel(t, ctx, s)
-
-	policy := store.PacingPolicy{
-		TargetUploadsPerWeek: 3,
-		PreferredDays:        []string{"mon", "wed", "fri"},
-		UpdatedByPersonID:    creator.ID,
-	}
-
-	first, err := s.Pacing().Upsert(ctx, ch.ID, policy)
-	require.NoError(t, err)
-
-	second, err := s.Pacing().Upsert(ctx, ch.ID, policy)
-	require.NoError(t, err)
-
-	assert.Equal(t, first.ID, second.ID, "repeated Upsert with identical values must converge on the same row (NFR2)")
-	assert.Equal(t, policy.TargetUploadsPerWeek, second.TargetUploadsPerWeek)
-	assert.Equal(t, policy.PreferredDays, second.PreferredDays)
-
-	var count int
-	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM pacing_policy WHERE channel_id = $1`, ch.ID).Scan(&count))
-	assert.Equal(t, 1, count, "must leave exactly one row, not one per Upsert call")
 }
 
 // ── SyncStore (FR14/FR21) ────────────────────────────────────────────────────
@@ -1484,9 +1407,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // PKCE front end, #1646), again for 008 (strategy/strategy_verdict,
 // #1637), again for 009 (co_creator_tier, #1713), again for 010
 // (video_script + video_schedule_match.video_script_id, issues
-// #1823/#1824), again for 011 (strategy.cadence drop, FR47, #1833), and
-// again for 012 (v_prediction_vs_outcome's re-anchor onto video_script,
-// FR44, #1830), so the version assertion and table list below cover all
+// #1823/#1824), again for 011 (strategy.cadence drop, FR47, #1833), again
+// for 012 (v_prediction_vs_outcome's re-anchor onto video_script, FR44,
+// #1830), and again for 013 (pacing_policy/schedule_entry drop, FR41/
+// FR45, #1835), so the version assertion and table list below cover all
 // of them rather than any single one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
@@ -1504,12 +1428,12 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(12), version, "highest migration in schema.Migrations is 012_prediction_vs_outcome_video_script")
+	assert.Equal(t, uint(13), version, "highest migration in schema.Migrations is 013_retire_schedule_entry")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
 		"idea", "research_note", "viability_verdict", "verdict_citation",
-		"pacing_policy", "schedule_entry", "synced_video", "video_metrics",
+		"synced_video", "video_metrics",
 		"video_schedule_match", "mcp_idempotency",
 		"web_session",
 		"channel_credential",
@@ -1524,6 +1448,17 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`, tbl,
 		).Scan(&exists))
 		assert.True(t, exists, "table %s must exist after up/down/up", tbl)
+	}
+
+	// pacing_policy and schedule_entry are dropped outright by migration
+	// 013 (FR41/FR45, #1835) -- a down/up cycle must leave them gone, not
+	// resurrected.
+	for _, tbl := range []string{"pacing_policy", "schedule_entry"} {
+		var exists bool
+		require.NoError(t, db.Pool.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`, tbl,
+		).Scan(&exists))
+		assert.False(t, exists, "table %s must not exist after up/down/up (migration 013 drops it outright)", tbl)
 	}
 
 	// Migration 002's views must also survive the down/up cycle -- the down
@@ -1990,7 +1925,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "p@example.com", "Person")
 	require.NoError(t, err)
 
-	// A: person is Founder -- one draft-only schedule_entry, no outcome yet.
+	// A: person is Founder -- one proposed-only video_script, no outcome yet.
 	chA, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "A Channel", person.ID)
 	require.NoError(t, err)
 	noteA, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chA.ID, Text: "A note", AuthorPersonID: person.ID})
@@ -2001,14 +1936,25 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 		IdeaID: ideaA.ID, Verdict: store.VerdictViable, Reasoning: "A reasoning", AuthorPersonID: person.ID,
 	})
 	require.NoError(t, err)
-	_, err = s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: chA.ID, IdeaID: ideaA.ID, VerdictID: verdictA.ID,
-		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: person.ID,
+	strategyA, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: chA.ID, Title: "A Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{verdictA.ID}, CreatedByPersonID: person.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: chA.ID, VerdictID: verdictA.ID, StrategyID: strategyA.ID,
+		Title: "A Script", ScriptText: "A script text", CreatedByPersonID: person.ID,
 	})
 	require.NoError(t, err)
 
 	// B: person is Co-Creator, granted by B's own Founder -- full outcome
-	// chain (committed schedule entry, published matched video).
+	// chain (greenlit video_script, published matched video), plus a
+	// second, separately-proposed video_script (loadVideoScriptState,
+	// mywork.go, aggregates video_script directly -- retargeted from
+	// schedule_entry by #1835), seeded on a distinct Idea/Verdict BEFORE
+	// setupMyWorkOutcomeChain below so its verdict is not the
+	// most-recently-created one for the Channel (loadLatestVerdicts takes
+	// the single latest across every Idea).
 	founderB, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "fb@example.com", "Founder B")
 	require.NoError(t, err)
 	chB, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "B Channel", founderB.ID)
@@ -2016,25 +1962,22 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	require.NoError(t, s.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
 	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B note", AuthorPersonID: founderB.ID})
 	require.NoError(t, err)
-	// loadScheduleState (mywork.go) is unchanged by #1830 -- it still
-	// aggregates schedule_entry directly (that column/table's retirement
-	// is #1835's scope, not this task's) -- so ScheduleState.CommittedCount
-	// below needs its own, separate committed schedule_entry, seeded on a
-	// distinct Idea/Verdict BEFORE setupMyWorkOutcomeChain below so its
-	// verdict is not the most-recently-created one for the Channel
-	// (loadLatestVerdicts takes the single latest across every Idea).
-	scheduleIdeaB, err := s.Ideas().Create(ctx, chB.ID, "B Schedule Idea", founderB.ID)
+	proposedIdeaB, err := s.Ideas().Create(ctx, chB.ID, "B Proposed Idea", founderB.ID)
 	require.NoError(t, err)
-	scheduleVerdictB, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
-		IdeaID: scheduleIdeaB.ID, Verdict: store.VerdictViable, Reasoning: "B schedule reasoning", AuthorPersonID: founderB.ID,
+	proposedVerdictB, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: proposedIdeaB.ID, Verdict: store.VerdictViable, Reasoning: "B proposed reasoning", AuthorPersonID: founderB.ID,
 	})
 	require.NoError(t, err)
-	scheduleEntryB, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: chB.ID, IdeaID: scheduleIdeaB.ID, VerdictID: scheduleVerdictB.ID,
-		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: founderB.ID,
+	proposedStrategyB, err := s.Strategies().Save(ctx, store.SaveStrategyInput{
+		ChannelID: chB.ID, Title: "B Proposed Strategy", Active: true,
+		VerdictIDs: []uuid.UUID{proposedVerdictB.ID}, CreatedByPersonID: founderB.ID,
 	})
 	require.NoError(t, err)
-	require.NoError(t, s.Schedules().Approve(ctx, scheduleEntryB.ID, founderB.ID))
+	_, err = s.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: chB.ID, VerdictID: proposedVerdictB.ID, StrategyID: proposedStrategyB.ID,
+		Title: "B Proposed Script", ScriptText: "B proposed script text", CreatedByPersonID: founderB.ID,
+	})
+	require.NoError(t, err)
 	ideaB, verdictB := setupMyWorkOutcomeChain(t, ctx, s, db, chB, founderB, "B Idea")
 
 	// C: person is Analyst, granted by C's own Founder -- a note and a
@@ -2057,7 +2000,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	require.NoError(t, err)
 	require.Len(t, got, 3, "must cover every Channel the Person holds an open role on")
 
-	// A: Founder tier, one draft, no outcome.
+	// A: Founder tier, one proposed script, no outcome.
 	assert.Equal(t, chA.ID, got[0].Channel.ID)
 	assert.Equal(t, store.RoleCreator, got[0].Role)
 	require.Len(t, got[0].LatestNotes, 1)
@@ -2065,21 +2008,25 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	require.NotNil(t, got[0].LatestVerdict)
 	assert.Equal(t, verdictA.ID, got[0].LatestVerdict.VerdictID)
 	assert.Equal(t, ideaA.ID, got[0].LatestVerdict.IdeaID)
-	assert.Equal(t, 1, got[0].ScheduleState.DraftCount)
-	assert.Equal(t, 0, got[0].ScheduleState.CommittedCount)
-	require.NotNil(t, got[0].ScheduleState.NextProposedPublishAt)
+	assert.Equal(t, 1, got[0].ScriptState.ProposedCount)
+	assert.Equal(t, 0, got[0].ScriptState.GreenlitCount)
+	assert.Equal(t, 0, got[0].ScriptState.DeniedCount)
+	assert.Equal(t, 0, got[0].ScriptState.ArchivedCount)
 	assert.Nil(t, got[0].LatestOutcome, "A has no published/matched video yet")
 
-	// B: Co-Creator tier, full outcome chain.
+	// B: Co-Creator tier, one proposed script plus the outcome chain's
+	// greenlit script.
 	assert.Equal(t, chB.ID, got[1].Channel.ID)
 	assert.Equal(t, store.RoleCoCreator, got[1].Role)
 	require.Len(t, got[1].LatestNotes, 1)
 	assert.Equal(t, noteB.ID, got[1].LatestNotes[0].ID)
 	require.NotNil(t, got[1].LatestVerdict)
 	assert.Equal(t, verdictB.ID, got[1].LatestVerdict.VerdictID)
-	assert.Equal(t, 0, got[1].ScheduleState.DraftCount)
-	assert.Equal(t, 1, got[1].ScheduleState.CommittedCount)
-	require.NotNil(t, got[1].LatestOutcome, "B has a full committed/matched/published chain")
+	assert.Equal(t, 1, got[1].ScriptState.ProposedCount)
+	assert.Equal(t, 1, got[1].ScriptState.GreenlitCount)
+	assert.Equal(t, 0, got[1].ScriptState.DeniedCount)
+	assert.Equal(t, 0, got[1].ScriptState.ArchivedCount)
+	require.NotNil(t, got[1].LatestOutcome, "B has a full greenlit/matched/published chain")
 	assert.Equal(t, ideaB.ID, got[1].LatestOutcome.IdeaID)
 	assert.Equal(t, verdictB.ID, got[1].LatestOutcome.VerdictID)
 
@@ -2090,9 +2037,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	assert.Equal(t, noteC.ID, got[2].LatestNotes[0].ID)
 	require.NotNil(t, got[2].LatestVerdict)
 	assert.Equal(t, verdictC.ID, got[2].LatestVerdict.VerdictID)
-	assert.Equal(t, 0, got[2].ScheduleState.DraftCount)
-	assert.Equal(t, 0, got[2].ScheduleState.CommittedCount)
-	assert.Nil(t, got[2].ScheduleState.NextProposedPublishAt)
+	assert.Equal(t, store.VideoScriptState{}, got[2].ScriptState)
 	assert.Nil(t, got[2].LatestOutcome)
 }
 
@@ -2113,7 +2058,7 @@ func TestMyWorkStore_SummariesForPerson_EmptyChannelStillAppears(t *testing.T) {
 	assert.NotNil(t, got[0].LatestNotes, "must be an empty slice, not nil, for a Channel with no notes")
 	assert.Empty(t, got[0].LatestNotes)
 	assert.Nil(t, got[0].LatestVerdict)
-	assert.Equal(t, store.ScheduleDraftState{}, got[0].ScheduleState)
+	assert.Equal(t, store.VideoScriptState{}, got[0].ScriptState)
 	assert.Nil(t, got[0].LatestOutcome)
 }
 

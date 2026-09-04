@@ -17,7 +17,7 @@
 // transient-error -> retryable mappings actually flipping (or not
 // flipping) a real channel.connection_state row -- plus MarkNeedsReauth's
 // FR4 data-retention guarantee against real synced_video/video_metrics/
-// schedule_entry rows.
+// video_script rows.
 //
 // tokenStore is built directly (white-box, package tokens) with a
 // stubRefresher rather than through NewStore, so no test here ever makes a
@@ -295,7 +295,7 @@ func TestTokenSource_5xxRetrieveError_LeavesConnectionStateConnected(t *testing.
 	assert.Equal(t, store.ConnectionStateConnected, connState, "a 503 (no invalid_grant error code) must be treated as retryable")
 }
 
-// ── MarkNeedsReauth retains synced_video/video_metrics/schedule_entry rows ──
+// ── MarkNeedsReauth retains synced_video/video_metrics/video_script rows ──
 
 func TestMarkNeedsReauth_FlipsStateAndRetainsSyncedDataRows(t *testing.T) {
 	ctx := context.Background()
@@ -304,8 +304,8 @@ func TestMarkNeedsReauth_FlipsStateAndRetainsSyncedDataRows(t *testing.T) {
 
 	s := newTokenStore(st, db, &stubRefresher{})
 
-	// Build the full LB3 chain (idea -> viable verdict -> committed
-	// schedule_entry) plus a synced_video/video_metrics pair, so this test
+	// Build the full LB3 chain (idea -> viable verdict -> proposed
+	// video_script) plus a synced_video/video_metrics pair, so this test
 	// proves MarkNeedsReauth touches none of FR4's protected tables.
 	idea, err := st.Ideas().Create(ctx, ch.ID, "Idea title", creator.ID)
 	require.NoError(t, err)
@@ -318,11 +318,21 @@ func TestMarkNeedsReauth_FlipsStateAndRetainsSyncedDataRows(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	entry, err := st.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+	strategy, err := st.Strategies().Save(ctx, store.SaveStrategyInput{
 		ChannelID:         ch.ID,
-		IdeaID:            idea.ID,
+		Title:             "Idea title Strategy",
+		Active:            true,
+		VerdictIDs:        []uuid.UUID{verdict.ID},
+		CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	script, err := st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID:         ch.ID,
 		VerdictID:         verdict.ID,
-		ProposedPublishAt: time.Now().Add(48 * time.Hour),
+		StrategyID:        strategy.ID,
+		Title:             "Idea title",
+		ScriptText:        "script text",
 		CreatedByPersonID: creator.ID,
 	})
 	require.NoError(t, err)
@@ -348,11 +358,11 @@ func TestMarkNeedsReauth_FlipsStateAndRetainsSyncedDataRows(t *testing.T) {
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT connection_state FROM channel WHERE id = $1`, ch.ID).Scan(&connState))
 	assert.Equal(t, store.ConnectionStateNeedsReauth, connState)
 
-	var scheduleCount, videoCount, metricsCount int
-	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM schedule_entry WHERE id = $1`, entry.ID).Scan(&scheduleCount))
+	var scriptCount, videoCount, metricsCount int
+	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM video_script WHERE id = $1`, script.ID).Scan(&scriptCount))
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM synced_video WHERE channel_id = $1`, ch.ID).Scan(&videoCount))
 	require.NoError(t, db.Pool.QueryRow(ctx, `SELECT count(*) FROM video_metrics WHERE synced_video_id = $1`, videos[0].ID).Scan(&metricsCount))
-	assert.Equal(t, 1, scheduleCount, "MarkNeedsReauth must not delete/touch schedule_entry rows (FR4)")
+	assert.Equal(t, 1, scriptCount, "MarkNeedsReauth must not delete/touch video_script rows (FR4)")
 	assert.Equal(t, 1, videoCount, "MarkNeedsReauth must not delete/touch synced_video rows (FR4)")
 	assert.Equal(t, 1, metricsCount, "MarkNeedsReauth must not delete/touch video_metrics rows (FR4)")
 }

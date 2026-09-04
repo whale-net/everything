@@ -168,7 +168,7 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 	require.NoError(t, err)
 
 	// Channel A: person is Founder. Fully populated: a research note, a
-	// verdict, a committed schedule entry, and a full published-outcome
+	// verdict, a greenlit video_script, and a full published-outcome
 	// chain -- so all four FR27 content areas are reachable in one place.
 	chA, err := f.st.Channels().Create(ctx, "yt-mw-a", "Channel A", person.ID)
 	require.NoError(t, err)
@@ -185,20 +185,12 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	entryA, err := f.st.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: chA.ID, IdeaID: ideaA.ID, VerdictID: verdictA.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: person.ID,
-	})
-	require.NoError(t, err)
-	require.NoError(t, f.st.Schedules().Approve(ctx, entryA.ID, person.ID))
-
-	// loadScheduleState (store/mywork.go) is unchanged by #1830 -- it still
-	// aggregates schedule_entry directly (that column/table's retirement
-	// is #1835's scope, not this task's) -- entryA above covers
-	// a.Schedule.CommittedCount==1. The outcome chain below (FR44's
-	// re-anchor) is now separately grounded on a greenlit video_script
-	// bound to the SAME verdictA, rather than entryA, so it does not
-	// disturb a.LatestVerdict's "most-recently-created" ordering.
+	// loadVideoScriptState (store/mywork.go, retargeted from schedule_entry
+	// by #1835) aggregates video_script directly -- the greenlit script
+	// proposed below (grounding the outcome chain, FR44's re-anchor) is
+	// what covers a.VideoScriptState.GreenlitCount==1; it's bound to the
+	// SAME verdictA so it does not disturb a.LatestVerdict's
+	// "most-recently-created" ordering.
 	stratA, err := f.st.Strategies().Save(ctx, store.SaveStrategyInput{
 		ChannelID: chA.ID, Title: "Idea A Strategy", Active: true,
 		VerdictIDs: []uuid.UUID{verdictA.ID}, CreatedByPersonID: person.ID,
@@ -262,8 +254,10 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 	require.NotNil(t, a.LatestVerdict, "Channel A's verdict must be reachable")
 	assert.Equal(t, ideaA.ID.String(), a.LatestVerdict.IdeaID)
 	assert.Equal(t, "viable", a.LatestVerdict.Verdict)
-	assert.Equal(t, 1, a.Schedule.CommittedCount)
-	assert.Equal(t, 0, a.Schedule.DraftCount)
+	assert.Equal(t, 0, a.VideoScriptState.ProposedCount)
+	assert.Equal(t, 1, a.VideoScriptState.GreenlitCount)
+	assert.Equal(t, 0, a.VideoScriptState.DeniedCount)
+	assert.Equal(t, 0, a.VideoScriptState.ArchivedCount)
 	require.NotNil(t, a.LatestOutcome, "Channel A's outcome must be reachable")
 	assert.Equal(t, "yt-mw-video-a", a.LatestOutcome.Video.YouTubeVideoID)
 	require.NotNil(t, a.LatestOutcome.Metrics.Views)
@@ -274,8 +268,7 @@ func TestGetMyWork_ThreeChannelsThreeTiers_FourthChannelExcluded(t *testing.T) {
 	assert.Equal(t, string(store.RoleCoCreator), b.Role)
 	assert.Empty(t, b.ResearchNotes)
 	assert.Nil(t, b.LatestVerdict)
-	assert.Equal(t, 0, b.Schedule.DraftCount)
-	assert.Equal(t, 0, b.Schedule.CommittedCount)
+	assert.Equal(t, tools.MyWorkVideoScriptStateOutput{}, b.VideoScriptState)
 	assert.Nil(t, b.LatestOutcome)
 
 	c := channelByID(out, chC.ID)

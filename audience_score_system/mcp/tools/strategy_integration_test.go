@@ -126,10 +126,11 @@ func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.Credential
 	return creds
 }
 
-// strategyFixture mirrors scheduleDraftFixture: a Channel with a live
-// Creator and Analyst, an unassociated Person, and a viable-verdict Idea
-// ready to build a Strategy from, hosted behind a real MCP server with
-// RegisterVerdict + RegisterScheduleDraft + RegisterStrategy wired.
+// strategyFixture: a Channel with a live Creator and Analyst, an
+// unassociated Person, and a viable-verdict Idea ready to build a
+// Strategy from, hosted behind a real MCP server with RegisterVerdict +
+// RegisterStrategy wired (RegisterScheduleDraft was retired outright by
+// #1832, before schedule_draft.go itself was deleted).
 type strategyFixture struct {
 	st       *store.Store
 	creds    mcpauth.CredentialStore
@@ -168,7 +169,6 @@ func newStrategyFixture(t *testing.T) *strategyFixture {
 	srv := server.New(st)
 	reg := server.NewRegistry(srv, st)
 	tools.RegisterVerdict(reg, st)
-	tools.RegisterScheduleDraft(reg, st)
 	tools.RegisterStrategy(reg, st)
 
 	handler := server.NewHTTPHandler(srv, creds, server.ResourceMetadataConfig{

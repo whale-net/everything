@@ -268,8 +268,8 @@ the raw token or its hash.
 | Component | Binary | `release_app` identity | Responsibility |
 |---|---|---|---|
 | `migrate` | `audience_score_system/migrate` | `migration` (job) | Applies golang-migrate SQL migrations to Postgres. Runs once, ahead of the other three, as a Helm job hook (see `libs/go/migrate/README.md`). |
-| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C8 schedule approve/un-approve/edit UI #1580) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C8 schedule page is a UI front end onto the same `store.ScheduleStore` that `mcp`'s schedule-draft tools also write to. |
-| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650) | `mcp` (external-api) | Every other capability (C4-C7, C8, C9, C10): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes, viability verdicts, schedule sync reads, schedule draft proposals/commit/un-commit/edit, pacing policy, outcome-match confirm/reject, all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
+| `web` | `audience_score_system/web` (C1 sign-in #1570, C2 Channel-connect #1571, C3 analyst invite #1572, C19 video_script greenlight/deny/archive UI #1834 -- rebuilt in place of C8's original schedule_entry-backed approve/un-approve/edit UI #1580) | `web` (external-api) | The **only** UI surface. Its three UI-only OAuth-consent surfaces are C1/C2/C3 (see "NFR3 interface allocation" below); its C19 schedule page (`web/schedule`, route paths unchanged per FR49) is a UI front end onto the same `store.VideoScriptStore` that `mcp`'s video_script tools also write to. |
+| `mcp` | `audience_score_system/mcp` (#1575, #1577-#1582, #1631, #1648, #1650, #1823-#1835) | `mcp` (external-api) | Every other capability (C4-C7, C9, C10, C18, C19): Channel access discovery (`list_channels`, #1631 -- resolves which Channels the caller holds a role on, and that role, without dropping to the web UI), research notes, viability verdicts, schedule sync reads, video_script propose/greenlight/deny/archive (C18/C19, milestone video-script-model -- the schedule-draft/pacing-policy tool surface, C6/C7/C8, was retired outright, FR41), outcome-match confirm/reject (re-anchored onto `video_script`, FR43/FR44), all browsing, and (#1650) forcing an out-of-band `ChannelSyncWorkflow` run via `trigger_channel_sync`. Exposed as MCP tools to any MCP-capable agent client. |
 | `worker` | `audience_score_system/worker` (#1574, #1576, #1581) | `worker` (worker) | Per-Channel Temporal scheduled workflow: syncs YouTube schedule (C6) and published-video metrics (C9) on a ~1-24 hour cadence (NFR4, default 24h). Skips a cycle for a disconnected/needs-reauth Channel without erroring the workflow. `mcp`'s `trigger_channel_sync` tool (#1650) can force an out-of-band run of the same workflow without waiting for this cadence. |
 | Postgres | — | — | System of record for all four components, accessed via `//libs/go/db` (`PG_DATABASE_URL`). No separate cache/read-model store in M1. |
 
@@ -321,7 +321,7 @@ refresh path distinguishes a revoked grant (`invalid_grant` from Google) --
 which calls `tokens.Store.MarkNeedsReauth`, flipping `connection_state` to
 `needs_reauth` -- from a transient network/5xx failure, which must NOT
 trip needs-reauth. A `needs_reauth` Channel retains every previously
-synced row (`synced_video`/`video_metrics`/`schedule_entry` are never
+synced row (`synced_video`/`video_metrics`/`video_script` are never
 deleted) and the worker (#1574) skips its sync cycle for that Channel
 without erroring the workflow, until a Creator reconnects (FR4) and
 `connection_state` returns to `connected` with no other manual step.
@@ -391,30 +391,59 @@ decision:
 These three are OAuth-consent flows tied to a browser redirect and cannot
 be MCP tools by construction (there is no meaningful "call this MCP tool
 to complete a Google consent screen"). Every other capability — C4
-(research notes), C5 (viability verdicts), C6 (schedule sync reads), C7
-(schedule drafting, pacing policy), **C8 (schedule-draft
-commit/un-commit/edit)**, C9 (outcome comparison, pending-match
-confirm/reject), C10 (browsing) — is exposed as `mcp` tools, whether or not
-`web` also renders a UI for it.
+(research notes), C5 (viability verdicts), C6 (schedule sync reads), C9
+(outcome comparison, pending-match confirm/reject), C10 (browsing), C18
+(video_script propose), **C19 (video_script greenlight/deny/archive)** —
+is exposed as `mcp` tools, whether or not `web` also renders a UI for it.
+C7 (schedule drafting, pacing policy) and the original C8 (schedule-draft
+commit/un-commit/edit) were retired outright by the video-script-model
+milestone (FR41/FR46/FR47, issues #1823-#1835) -- see the amendment below.
 
-**NFR3 amendment (issue #1648): C8 is no longer a `web`-only surface.** M1
+**NFR3 amendment (issue #1648): C8 was no longer a `web`-only surface
+(historical -- C8 itself is now retired, see the next amendment).** M1
 originally kept all of C8 (approve, un-approve, edit) `web`-only, on the
 theory that committing a schedule was a deliberate human action best gated
 behind a UI click. In practice this made the FR16→FR19→FR22/FR23 pipeline
 (draft → commit → auto/pending-match → resolve) structurally unreachable
 from an MCP-only client: `mcp`'s outcome matcher and `resolve_pending_match`
 only ever consider *committed* entries, and nothing in `mcp` could ever
-produce one. `mcp/tools/schedule_draft.go` now exposes the full set --
-`commit_schedule_draft`, `uncommit_schedule_draft`, `update_schedule_draft`
--- each calling the exact same `store.ScheduleStore` method and
-`store.CanApprove` (Creator-tier: Founder or Co-Creator, symmetrically per
-FR32) check `web`'s approve/unapprove/edit handlers already use, so the
-authority boundary is unchanged: an Analyst
-credential is rejected on either surface. `web`'s schedule page is
-unaffected and keeps rendering the same approve/un-approve/edit
-affordances -- the two surfaces are now two independent, equally-capable
-front ends onto the same `store.ScheduleStore`, not a primary (`web`) and a
-read-only shadow (`mcp`).
+produce one. `mcp/tools/schedule_draft.go` (deleted by #1832) exposed the
+full set -- `commit_schedule_draft`, `uncommit_schedule_draft`,
+`update_schedule_draft` -- each calling the exact same `store.ScheduleStore`
+method and `store.CanApprove` (Creator-tier: Founder or Co-Creator,
+symmetrically per FR32) check `web`'s approve/unapprove/edit handlers
+already used, so the authority boundary was unchanged: an Analyst
+credential was rejected on either surface. The two surfaces were two
+independent, equally-capable front ends onto the same `store.ScheduleStore`,
+not a primary (`web`) and a read-only shadow (`mcp`) -- until the whole
+`store.ScheduleStore` surface was retired outright by the next amendment.
+
+**NFR3 amendment (milestone video-script-model, issues #1823-#1835): C6/C7/
+C8 retired outright, C18/C19 replace C7/C8 under `video_script`.** FR41
+retires C7's schedule-draft/pacing-policy MCP tool surface and FR46 retires
+C6's read-only YouTube-schedule tool (`get_channel_schedule`) with no
+successor -- neither is reintroduced as a new capability; the underlying
+YouTube sync job (`worker/sync`) is unaffected, only the two read/write
+surfaces presenting synced data *as a schedule* are gone. FR47 drops
+Strategy's `cadence` field, the only remaining input `generate_schedule_plan`
+(C7's slot-proposal tool) read, so that tool is retired too. In their place,
+C18 (propose a `video_script`, `save_video_script`, Founder/Co-Creator/
+Analyst via `store.CanWrite`) and C19 (greenlight/deny/archive a
+`video_script`, `greenlight_video_script`/`deny_video_script`/
+`archive_video_script` plus `web/schedule`'s rebuilt UI, Creator-tier via
+`store.CanApprove`) are dual-surface from the start (FR48/FR49) -- `mcp`
+and `web` call the exact same `store.VideoScriptStore` methods, the same
+"two independent, equally-capable front ends" shape the retired C8
+amendment above established, just re-anchored onto `video_script` instead
+of `schedule_entry`. `web/schedule`'s route paths and package name are
+unchanged (FR49's route-and-package-naming note -- `{scriptID}` replaces
+`{entryID}` as the path parameter's referent, not its literal spelling);
+`HandleUnapprove` and `HandleEdit` have no `video_script` analog and were
+retired outright, not rebuilt (FR40 defines no `greenlit→proposed`
+transition, and a `video_script`'s target date is set once at propose
+time). Migration 013 (issue #1835) drops `schedule_entry`/`pacing_policy`
+outright once every reader was retargeted -- `store.ScheduleStore` and
+`store.PacingStore` no longer exist.
 
 **NFR3 amendment (M2, issue #1728): C11/C12/C13 are dual-surface, except
 Channel-connect.** M2 adds three capabilities on top of M1's allocation
@@ -533,7 +562,7 @@ Migration 008 (`008_strategy.up.sql`, issue #1637) lands `strategy` and
 `strategy_verdict`. A Strategy is built directly from one or more
 `viability_verdict` rows via `strategy_verdict` -- not from Ideas:
 `idea_id` is derived through `viability_verdict.idea_id` rather than
-stored on the join row, the same LB3 pattern `schedule_entry.verdict_id`
+stored on the join row, the same LB3 pattern `video_script.verdict_id`
 uses one layer downstream, applied to the join itself. The relationship
 is many-to-many in both directions -- a Strategy is typically grounded in
 several verdicts (often several Ideas), and the same verdict may ground
@@ -575,47 +604,45 @@ signal turns out to be needed for FR18 collision detection or a UI
 surface -- at that point add the column via a new migration rather than
 overloading `last_synced_at`.
 
-**FR17 authority (issue #1579):** FR17 reads "A Creator can define and
-update a per-Channel pacing policy" -- read narrowly, that would gate
-`set_pacing_policy` on `store.CanApprove` (Creator-only), matching FR19's
-explicit "An Analyst cannot approve a draft." FR17 carries no matching
-explicit exclusion, though, unlike FR19 -- and the Analyst already holds
-write authority over every other drafting-adjacent surface (research
-notes, verdicts, `save_schedule_draft` itself) with no approval power of
-its own. Gating pacing policy -- a planning input, not an approval action
--- more restrictively than the drafting tools it informs would be an
-inconsistent authority model with no stated product reason. `mcp/tools/
-schedule_draft.go`'s `set_pacing_policy` therefore reads FR17's "a Creator
-can" as "at least a Creator can" and is gated on `store.CanWrite`
-(Creator and Analyst both), the same as `save_schedule_draft`,
-`save_research_note`, and `save_viability_verdict`. Revisit only if
-product feedback says otherwise -- switching the gate to `store.CanApprove`
-is a one-line change in `registerSetPacingPolicy`.
+**FR17 authority (issue #1579, historical):** FR17 (per-Channel pacing
+policy) and the `set_pacing_policy` tool this note explained the authority
+gate for are retired outright by the video-script-model milestone (FR41,
+issue #1832) -- `mcp/tools/schedule_draft.go` no longer exists. No
+successor capability carries a pacing-policy authority question forward.
 
-**Outcome matching: confidence threshold (issue #1581, FR21-FR23):**
-`worker/sync.Activities.SyncOutcomes` scores every newly-published
-`synced_video` against the Channel's committed, still-unmatched
-`schedule_entry` rows (`worker/sync.Match`, `matching.go`) and combines
+**Outcome matching: confidence threshold (issue #1581, FR21-FR23; re-anchored
+onto `video_script` by FR43/FR44, milestone video-script-model, issue
+#1829):** `worker/sync.Activities.SyncOutcomes` scores every newly-published
+`synced_video` against the Channel's `greenlit`, still-unmatched
+`video_script` rows (`worker/sync.Match`, `matching.go`) and combines
 title similarity and publish-date proximity into a single `confidence` in
 `[0,1]`:
 
 - **Title similarity (weight 0.7):** the Jaccard index (intersection over
-  union) of the video's title and the candidate's bound idea title, each
-  normalized (lowercased, punctuation stripped, English stopwords
-  dropped) into a word set -- 1.0 for identical normalized word sets
-  (including pure case/punctuation differences), 0.0 for no shared words.
+  union) of the video's title and the candidate `video_script`'s own
+  title, each normalized (lowercased, punctuation stripped, English
+  stopwords dropped) into a word set -- 1.0 for identical normalized word
+  sets (including pure case/punctuation differences), 0.0 for no shared
+  words.
 - **Publish-date proximity (weight 0.3):** 1.0 for the video's
-  `published_at` landing exactly on the candidate's `proposed_publish_at`,
+  `published_at` landing exactly on the candidate's `target_publish_date`,
   decaying linearly to 0.0 at a 14-day separation (either direction) and
-  staying 0.0 beyond it.
+  staying 0.0 beyond it. A `video_script` with no `target_publish_date`
+  (FR36 makes it optional) scores this term as exactly 0 -- deliberately
+  NOT renormalized to title-only, so an undated script's combined score is
+  capped at `0.7*titleSim <= 0.7`, below `MatchConfidenceThreshold`
+  (0.8) by construction, whatever the title match (FR43's load-bearing
+  invariant): an undated script can never auto-link, only ever land
+  `pending` for a human (FR44 frames manual resolution as the primary
+  path for an undated script).
 
 **`worker/sync.MatchConfidenceThreshold = 0.8`** is the value at or above
 which SyncOutcomes auto-links (`video_schedule_match.state = 'auto'`,
 FR22); below it (including "no plausible candidate at all", scored 0) the
 match is queued `pending` for a human via `resolve_pending_match`
 (FR23) -- never guessed. Title is weighted more heavily than date because a
-Channel's pacing policy can legitimately slip a video's actual publish date
-by days without it being a different upload (FR18), whereas two
+video's actual publish date can legitimately slip by days from a script's
+target date without it being a different upload, whereas two
 differently-titled videos landing on the same day are a real ambiguity far
 more often than a false negative; the combined score only clears 0.8 when
 BOTH the title match is strong and the dates are close, which is the
@@ -624,22 +651,22 @@ starting value, not a permanent one -- it lives in exactly one place
 (`worker/sync/matching.go`'s `MatchConfidenceThreshold` constant) specifically
 so retuning it against real match outcomes later is a one-line change, no
 call site touches the literal. See `matching.go`'s doc comments and
-`matching_test.go` (issue #1581's Testing phase) for the boundary cases
-this value was checked against.
+`matching_test.go` (issue #1581's Testing phase, extended for FR43 by
+#1829) for the boundary cases this value was checked against.
 
 A video already carrying a SETTLED `video_schedule_match` row -- auto,
 confirmed, or rejected in any case, or pending with a real
-`schedule_entry_id` -- is skipped by SyncOutcomes on every later cycle
+`video_script_id` -- is skipped by SyncOutcomes on every later cycle
 (`MatchStore.HasMatch`) -- matching never re-links or duplicates. A
 `rejected` match's video stays unmatched by default; nothing in M1
 automatically re-queues it (that would require an explicit future re-queue
 tool, not built here).
 
 **Bug fix (issue #1652): the no-candidate placeholder is not settled.** A
-`pending` row with `schedule_entry_id IS NULL` means no committed
-`schedule_entry` existed as a candidate at all when the video was first
+`pending` row with `video_script_id IS NULL` means no `greenlit`
+`video_script` existed as a candidate at all when the video was first
 scored -- most commonly a backdated/historical video synced before its
-matching `schedule_entry` was ever committed. `HasMatch` deliberately
+matching `video_script` was ever greenlit. `HasMatch` deliberately
 reports false for this row (unlike every other state), so the video is
 re-scored on every later `SyncOutcomes` cycle until either a real candidate
 appears or a human explicitly rejects it via `resolve_pending_match`.
@@ -647,7 +674,7 @@ appears or a human explicitly rejects it via `resolve_pending_match`.
 (migration 002's partial unique index) so a later re-score updates that same
 placeholder row in place instead of colliding with the unique index or
 leaving a stale duplicate; the `DO UPDATE ... WHERE` clause is scoped so a
-conflicting row that already carries a real `schedule_entry_id` is left
+conflicting row that already carries a real `video_script_id` is left
 untouched.
 
 Migration 003 (`003_web_session.up.sql`, issue #1570) lands `web_session`

@@ -46,8 +46,8 @@
 //     HandlePromote (web) agree on the same target -- one real
 //     promotion via web, one idempotent no-op replay via MCP).
 //   - FR32 -- exercised here (step 6: Co-Creator C alone -- no Founder
-//     cookie or session touched in this subtest -- approves a schedule
-//     draft and invites a second Analyst).
+//     cookie or session touched in this subtest -- greenlights a proposed
+//     video_script and invites a second Analyst).
 //   - FR33 -- exercised here (step 8: Co-Creator C's removal attempts
 //     against the Founder and against another Co-Creator are rejected on
 //     BOTH surfaces with no state change; step 9: the Founder's removal
@@ -67,7 +67,6 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -92,7 +91,7 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 		fCookie, nCookie, cCookie, n2C    *http.Cookie
 		coCreatorInviteCode, analystCode2 string
 		ideaID, verdictID                 uuid.UUID
-		entryID                           uuid.UUID
+		scriptID                          uuid.UUID
 	)
 
 	// ── Step 1: Founder connects Channel A ──────────────────────────────
@@ -278,23 +277,34 @@ func TestE2E_M2_MultiChannelMultiTier(t *testing.T) {
 		}))
 		verdictID = uuid.MustParse(verdict.ID)
 
-		draft := decode[mcptools.SaveScheduleDraftOutput](t, callTool(t, csAnalystN, "save_schedule_draft", mcptools.SaveScheduleDraftInput{
+		strategy := decode[mcptools.StrategyOutput](t, callTool(t, csAnalystN, "save_strategy", mcptools.SaveStrategyInput{
 			ChannelID:         chA.ID.String(),
-			IdeaID:            ideaID.String(),
-			ProposedPublishAt: time.Now().Add(72 * time.Hour).Format(time.RFC3339),
-			VerdictID:         verdictID.String(),
+			Title:             "M2 Story Strategy",
+			VerdictIDs:        []string{verdictID.String()},
 			IdempotencyKeyArg: uuid.NewString(),
 		}))
-		entryID = uuid.MustParse(draft.ScheduleEntryID)
 
-		// C alone approves it -- only cCookie is used in this subtest,
+		script := decode[mcptools.VideoScriptOutput](t, callTool(t, csAnalystN, "save_video_script", mcptools.SaveVideoScriptInput{
+			ChannelID:         chA.ID.String(),
+			VerdictID:         verdictID.String(),
+			StrategyID:        strategy.StrategyID,
+			Title:             "M2 Story Idea",
+			ScriptText:        "M2's story script text.",
+			IdempotencyKeyArg: uuid.NewString(),
+		}))
+		scriptID = uuid.MustParse(script.VideoScriptID)
+
+		// C alone greenlights it -- only cCookie is used in this subtest,
 		// fCookie never touched (FR32: "no consensus, voting, or
-		// Founder-tiebreak mechanic").
-		rec := w.postForm(cCookie, "/schedule/"+entryID.String()+"/approve", nil)
+		// Founder-tiebreak mechanic"). The route path keeps its
+		// pre-existing "approve" spelling (FR49's route-and-package-naming
+		// note); the store transition it drives is video_script's
+		// proposed->greenlit.
+		rec := w.postForm(cCookie, "/schedule/"+scriptID.String()+"/approve", nil)
 		require.Equal(t, http.StatusSeeOther, rec.Code, "body: %s", rec.Body.String())
-		entry, err := w.st.Schedules().GetByID(ctx, entryID)
+		gotScript, err := w.st.VideoScripts().GetByID(ctx, scriptID)
 		require.NoError(t, err)
-		assert.Equal(t, store.ScheduleStateCommitted, entry.State, "FR32: Co-Creator alone can commit a draft")
+		assert.Equal(t, store.VideoScriptStatusGreenlit, gotScript.Status, "FR32: Co-Creator alone can greenlight a proposed video_script")
 
 		// C also invites the second Analyst (FR32's invite-authority
 		// half) -- the tier-4 invite generated in step 4 is still live,

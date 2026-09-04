@@ -536,10 +536,9 @@ func getChannelOverview(deps overviewDeps) mcp.ToolHandlerFor[GetChannelOverview
 		}
 
 		if wantSections[overviewSectionVideoScripts] {
-			// VideoScriptStore.ListDetailByChannel is unbounded (unlike
-			// ScheduleStore.ListDetailByChannel, it takes no limit) --
-			// truncateSlice caps it here so this section's "bounded by
-			// construction" contract holds regardless.
+			// VideoScriptStore.ListDetailByChannel is unbounded -- it takes
+			// no limit -- so truncateSlice caps it here so this section's
+			// "bounded by construction" contract holds regardless.
 			details, err := deps.videoScripts.ListDetailByChannel(ctx, channelID)
 			if err != nil {
 				return nil, GetChannelOverviewOutput{}, fmt.Errorf("get_channel_overview: list video scripts: %w", err)
