@@ -270,6 +270,59 @@ func newFullChainFixture(t *testing.T) *fullChainFixture {
 
 func ptrInt64B(v int64) *int64 { return &v }
 
+// proposeVideoScript seeds a Strategy-grounded video_script on f's Channel
+// via VideoScriptStore.Propose (FR36) -- the store dependency
+// get_channel_overview's video_scripts section (FR42) reads through
+// (VideoScriptStore.ListDetailByChannel, #1824). The grounding Strategy
+// row is inserted directly by SQL rather than through StrategyStore.Save:
+// that write path currently fails on this branch ("column \"cadence\" of
+// relation \"strategy\" does not exist") because issue #1833's schema
+// migration (011, dropping strategy.cadence) has already landed on this
+// integration branch ahead of #1833's own Implementation updating
+// strategy.go to match -- unrelated pre-existing breakage, not #1831's to
+// fix. VideoScriptStore.Propose only requires the strategy row to exist
+// on channel_id (see its doc comment), so a direct insert sidesteps the
+// broken column cleanly. Each call creates its own Idea/verdict/Strategy
+// so callers can freely propose many scripts without them colliding with
+// one another.
+func (f *browseFixture) proposeVideoScript(t *testing.T, ctx context.Context, ideaTitle, scriptTitle string, targetPublishDate *time.Time) store.VideoScript {
+	t.Helper()
+
+	idea, err := f.st.Ideas().Create(ctx, f.ch.ID, ideaTitle, f.creator.ID)
+	require.NoError(t, err)
+	verdict, err := f.st.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: ideaTitle + " is viable", AuthorPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+
+	return f.proposeVideoScriptForVerdict(t, ctx, verdict.ID, scriptTitle, targetPublishDate)
+}
+
+// proposeVideoScriptForVerdict is proposeVideoScript's shared body, split
+// out so a caller that already holds a verdict (e.g.
+// fullChainFixture.verdictV1) can bind a video_script to it directly
+// rather than creating an unrelated extra Idea just to get one --
+// necessary for TestGetChannelOverview_FullyPopulatedChannel_
+// EveryomeSectionRendered, whose out.Ideas assertion is scoped to
+// fullChainFixture's single Idea.
+func (f *browseFixture) proposeVideoScriptForVerdict(t *testing.T, ctx context.Context, verdictID uuid.UUID, scriptTitle string, targetPublishDate *time.Time) store.VideoScript {
+	t.Helper()
+
+	strategyID := uuid.New()
+	_, err := f.pg.Pool.Exec(ctx, `
+		INSERT INTO strategy (id, channel_id, title, active, created_by_person_id)
+		VALUES ($1, $2, $3, TRUE, $4)
+	`, strategyID, f.ch.ID, scriptTitle+" Strategy", f.creator.ID)
+	require.NoError(t, err)
+
+	script, err := f.st.VideoScripts().Propose(ctx, store.ProposeVideoScriptInput{
+		ChannelID: f.ch.ID, VerdictID: verdictID, StrategyID: strategyID,
+		Title: scriptTitle, ScriptText: "script text for " + scriptTitle, TargetPublishDate: targetPublishDate, CreatedByPersonID: f.creator.ID,
+	})
+	require.NoError(t, err)
+	return script
+}
+
 // ── get_prediction_vs_outcome: the bound-verdict regression test ──────────
 
 // TestGetPredictionVsOutcome_BoundVerdictSurvivesNewerVerdictVersion is the
@@ -423,6 +476,12 @@ func TestGetChannelOverview_FullyPopulatedChannel_EveryomeSectionRendered(t *tes
 	})
 	require.NoError(t, err)
 
+	// Bound to f.idea/f.verdictV1 directly (rather than proposeVideoScript's
+	// usual fresh Idea) so this test's out.Ideas assertion below stays
+	// scoped to fullChainFixture's single Idea.
+	target := time.Now().Add(72 * time.Hour)
+	script := f.proposeVideoScriptForVerdict(t, ctx, f.verdictV1.ID, "Full Chain Script", &target)
+
 	res := f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{ChannelID: f.ch.ID.String()})
 	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
 	out := mdecode[tools.GetChannelOverviewOutput](t, res)
@@ -447,12 +506,15 @@ func TestGetChannelOverview_FullyPopulatedChannel_EveryomeSectionRendered(t *tes
 	assert.True(t, sawCited, "the cited note must render cited=true")
 	assert.True(t, sawUncited, "the uncited note must render cited=false")
 
-	require.Len(t, out.ScheduleEntries, 1)
-	assert.Equal(t, "committed", out.ScheduleEntries[0].State)
-	assert.Equal(t, 1, out.ScheduleEntries[0].VerdictVersion, "schedule section also reports the bound version (LB3), not the current one")
+	require.Len(t, out.VideoScripts, 1)
+	assert.Equal(t, script.ID.String(), out.VideoScripts[0].VideoScriptID)
+	assert.Equal(t, "Full Chain Script", out.VideoScripts[0].Title)
+	assert.Equal(t, "proposed", out.VideoScripts[0].Status)
+	require.NotNil(t, out.VideoScripts[0].TargetPublishDate, "a dated script must render target_publish_date")
+	assert.WithinDuration(t, target, *out.VideoScripts[0].TargetPublishDate, time.Second)
+	assert.Equal(t, 1, out.VideoScripts[0].VerdictVersion, "video_scripts also reports the bound version (LB3), not necessarily the current one")
+	assert.Equal(t, "viable", out.VideoScripts[0].Verdict)
 
-	assert.Equal(t, 1, out.SyncedSchedule.TotalVideos)
-	assert.Equal(t, 1, out.SyncedSchedule.Published)
 	assert.Equal(t, 0, out.PendingMatchCount)
 
 	require.Len(t, out.PredictionVsOutcome, 1)
@@ -475,12 +537,185 @@ func TestGetChannelOverview_FreshlyConnectedChannel_EmptySectionsNotNullsOrError
 	assert.Empty(t, out.Ideas)
 	assert.NotNil(t, out.ResearchNotes)
 	assert.Empty(t, out.ResearchNotes)
-	assert.NotNil(t, out.ScheduleEntries)
-	assert.Empty(t, out.ScheduleEntries)
+	assert.NotNil(t, out.VideoScripts, "video_scripts must be an empty list, never null, for a freshly connected Channel")
+	assert.Empty(t, out.VideoScripts)
 	assert.NotNil(t, out.PredictionVsOutcome)
 	assert.Empty(t, out.PredictionVsOutcome)
-	assert.Equal(t, 0, out.SyncedSchedule.TotalVideos)
 	assert.Empty(t, out.Truncated)
+}
+
+// TestGetChannelOverview_ResponseHasNoSyncedScheduleKey proves FR46's
+// retirement of the synced-schedule read surface reached
+// get_channel_overview's own response shape too, not just the standalone
+// get_channel_schedule tool: the raw JSON must carry no synced_schedule
+// key at all, not merely an empty/zero one.
+func TestGetChannelOverview_ResponseHasNoSyncedScheduleKey(t *testing.T) {
+	f := newFullChainFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	res := f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
+
+	body, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(body, &raw))
+	_, hasSyncedSchedule := raw["synced_schedule"]
+	assert.False(t, hasSyncedSchedule, "get_channel_overview's response must carry no synced_schedule key (FR46)")
+}
+
+// ── get_channel_overview: video_scripts section (FR42) ─────────────────────
+
+// TestGetChannelOverview_VideoScriptsSection_RendersEveryStatusWithBoundVerdict
+// proves FR42: get_channel_overview's video_scripts section renders each
+// script's own title, its status (across all four FR36-FR40 lifecycle
+// states), and the bound verdict (version + value) -- LB3, never
+// necessarily the idea's current verdict.
+func TestGetChannelOverview_VideoScriptsSection_RendersEveryStatusWithBoundVerdict(t *testing.T) {
+	f := newBrowseFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	proposed := f.proposeVideoScript(t, ctx, "Proposed Idea", "Proposed Script", nil)
+
+	greenlitScript := f.proposeVideoScript(t, ctx, "Greenlit Idea", "Greenlit Script", nil)
+	require.NoError(t, f.st.VideoScripts().Greenlight(ctx, greenlitScript.ID, f.creator.ID))
+
+	deniedScript := f.proposeVideoScript(t, ctx, "Denied Idea", "Denied Script", nil)
+	require.NoError(t, f.st.VideoScripts().Deny(ctx, deniedScript.ID, f.creator.ID))
+
+	archivedScript := f.proposeVideoScript(t, ctx, "Archived Idea", "Archived Script", nil)
+	require.NoError(t, f.st.VideoScripts().Greenlight(ctx, archivedScript.ID, f.creator.ID))
+	require.NoError(t, f.st.VideoScripts().Archive(ctx, archivedScript.ID, f.creator.ID))
+
+	res := f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
+	out := mdecode[tools.GetChannelOverviewOutput](t, res)
+
+	require.Len(t, out.VideoScripts, 4)
+	byTitle := make(map[string]tools.VideoScriptOverviewOutput, len(out.VideoScripts))
+	for _, s := range out.VideoScripts {
+		byTitle[s.Title] = s
+	}
+
+	require.Contains(t, byTitle, "Proposed Script")
+	assert.Equal(t, proposed.ID.String(), byTitle["Proposed Script"].VideoScriptID)
+	assert.Equal(t, "proposed", byTitle["Proposed Script"].Status)
+	assert.Equal(t, "viable", byTitle["Proposed Script"].Verdict)
+	assert.Equal(t, 1, byTitle["Proposed Script"].VerdictVersion)
+
+	require.Contains(t, byTitle, "Greenlit Script")
+	assert.Equal(t, "greenlit", byTitle["Greenlit Script"].Status)
+
+	require.Contains(t, byTitle, "Denied Script")
+	assert.Equal(t, "denied", byTitle["Denied Script"].Status)
+
+	require.Contains(t, byTitle, "Archived Script")
+	assert.Equal(t, "archived", byTitle["Archived Script"].Status)
+}
+
+// TestGetChannelOverview_VideoScriptsSection_UndatedScriptOmitsTargetPublishDate
+// proves an undated video_script -- a normal state, FR36 -- renders with
+// target_publish_date absent from the JSON entirely, never present as
+// null.
+func TestGetChannelOverview_VideoScriptsSection_UndatedScriptOmitsTargetPublishDate(t *testing.T) {
+	f := newBrowseFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	f.proposeVideoScript(t, ctx, "Undated Idea", "Undated Script", nil)
+
+	res := f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
+	out := mdecode[tools.GetChannelOverviewOutput](t, res)
+	require.Len(t, out.VideoScripts, 1)
+	assert.Nil(t, out.VideoScripts[0].TargetPublishDate, "an undated script must decode to a nil TargetPublishDate")
+
+	body, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(body, &raw))
+	scripts, ok := raw["video_scripts"].([]any)
+	require.True(t, ok)
+	require.Len(t, scripts, 1)
+	row, ok := scripts[0].(map[string]any)
+	require.True(t, ok)
+	_, hasKey := row["target_publish_date"]
+	assert.False(t, hasKey, "target_publish_date must be absent from the JSON, not present as null, for an undated script")
+}
+
+// TestGetChannelOverview_VideoScriptsTruncatedPastDefaultLimit mirrors
+// TestGetChannelOverview_ResearchNotesTruncatedPastDefaultLimit below for
+// the video_scripts section: defaultVideoScriptsOverviewLimit (browse.go)
+// caps it via truncateSlice, since VideoScriptStore.ListDetailByChannel
+// itself takes no limit.
+func TestGetChannelOverview_VideoScriptsTruncatedPastDefaultLimit(t *testing.T) {
+	f := newBrowseFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	// defaultVideoScriptsOverviewLimit is 50 (browse.go); seed one more.
+	const seeded = 51
+	for i := 0; i < seeded; i++ {
+		f.proposeVideoScript(t, ctx, fmt.Sprintf("Trunc Idea %d", i), fmt.Sprintf("Trunc Script %d", i), nil)
+	}
+
+	res := f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
+	out := mdecode[tools.GetChannelOverviewOutput](t, res)
+
+	assert.Len(t, out.VideoScripts, 50, "must be capped at the documented default")
+	assert.Contains(t, out.Truncated, "video_scripts", "the response must flag which section was cut")
+}
+
+// TestGetChannelOverview_SectionsFilter_VideoScriptsRestrictsAndOldNameRejected
+// proves sections accepts the new video_scripts name and restricts the
+// response to it, and that the old schedule_entries name FR42 retired is
+// no longer accepted.
+func TestGetChannelOverview_SectionsFilter_VideoScriptsRestrictsAndOldNameRejected(t *testing.T) {
+	f := newFullChainFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	f.proposeVideoScript(t, ctx, "Sections Idea", "Sections Script", nil)
+
+	res := f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{
+		ChannelID: f.ch.ID.String(), Sections: []string{"video_scripts"},
+	})
+	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
+	out := mdecode[tools.GetChannelOverviewOutput](t, res)
+
+	require.Len(t, out.VideoScripts, 1)
+	assert.Empty(t, out.Ideas, "sections: [video_scripts] must exclude every other section")
+	assert.Empty(t, out.ResearchNotes)
+	assert.Empty(t, out.PredictionVsOutcome)
+
+	rejected := f.call(t, cs, "get_channel_overview", tools.GetChannelOverviewInput{
+		ChannelID: f.ch.ID.String(), Sections: []string{"schedule_entries"},
+	})
+	assert.True(t, rejected.IsError, "the old schedule_entries section name must no longer be accepted")
+	assert.Contains(t, mtextOf(rejected), "unknown section")
+}
+
+// ── get_channel_schedule retirement (FR46) ──────────────────────────────────
+
+// TestRegistry_GetChannelScheduleNotRegistered enforces FR46's removal at
+// the registry level, rather than merely assuming its absence from this
+// package's source: get_channel_schedule must not appear in the live MCP
+// server's tool list at all.
+func TestRegistry_GetChannelScheduleNotRegistered(t *testing.T) {
+	f := newBrowseFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	listed, err := cs.ListTools(context.Background(), nil)
+	require.NoError(t, err)
+
+	var names []string
+	for _, tl := range listed.Tools {
+		names = append(names, tl.Name)
+	}
+	assert.NotContains(t, names, "get_channel_schedule", "get_channel_schedule must not be registered -- FR46 retires it outright")
+	assert.Contains(t, names, "get_channel_overview", "sanity check: the registry is actually populated")
 }
 
 // ── get_channel_overview: truncation ────────────────────────────────────
