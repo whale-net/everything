@@ -39,12 +39,16 @@ CREATE UNIQUE INDEX channel_person_channel_id_founder_current
 -- `creator` is deliberately not a valid invite role -- no invite path ever
 -- grants Founder (FR25/FR29); only 'co_creator' and 'analyst' invites
 -- exist. The DEFAULT 'analyst' backfills M1's existing rows as Analyst
--- invites, which is exactly what they are (M1 had no other invite kind);
--- the default is then dropped so every future insert must state its tier
--- explicitly rather than silently defaulting.
+-- invites, which is exactly what they are (M1 had no other invite kind).
+-- The default is kept (not dropped) because store/invite.go's Generate is
+-- not yet tier-aware -- it still inserts a channel_invite row without
+-- naming a role at all (#1715 will update it to set role explicitly per
+-- tier). Dropping the default here would NOT-NULL-violate every call to
+-- today's Generate; keeping it means every untouched invite keeps being an
+-- Analyst invite, exactly matching M1's actual (implicit) behavior, until
+-- #1715 lands.
 ALTER TABLE channel_invite ADD COLUMN role TEXT NOT NULL DEFAULT 'analyst'
     CHECK (role IN ('co_creator', 'analyst'));
-ALTER TABLE channel_invite ALTER COLUMN role DROP DEFAULT;
 
 -- Rescope the live-invite uniqueness index from one-live-invite-per-Channel
 -- to one-live-invite-per-(Channel, tier), so a live Analyst invite and a

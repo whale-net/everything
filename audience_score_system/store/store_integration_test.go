@@ -139,11 +139,25 @@ func TestChannelStore_Create_CreatesExactlyOneLiveCreatorRow(t *testing.T) {
 // ── authz.go against the real SQL-backed RoleStore ─────────────────────────
 
 // channelWithRoles sets up one Channel with a live creator, a live analyst,
-// a Person with no row at all, and a Person whose creator row has been
-// explicitly closed (valid_to stamped) -- the case that proves an authz
-// check reads live join-table state rather than a static/cached field.
+// a Person with no row at all, and a Person whose creator role on that same
+// Channel has been explicitly closed (valid_to stamped) -- the case that
+// proves an authz check reads live join-table state rather than a
+// static/cached field.
+//
+// The "former creator" is granted and then revoked on a *second*, throwaway
+// Channel rather than the main one: migration 009's NFR10 partial unique
+// index (channel_person_channel_id_founder_current) enforces at most one
+// *open* role=creator row per channel_id at any instant, and the main
+// Channel's own creator row (from Channels().Create below) is already open
+// for the whole lifetime of this fixture. Granting a second, simultaneous
+// open creator row to `former` on that same channel_id would violate the
+// index at INSERT time -- correctly so, per FR29/NFR10, since two live
+// Founders on one Channel was never a valid scenario. A dedicated channel
+// for the revoke-then-check sequence preserves this fixture's actual
+// intent (a closed creator row on the channel being checked must not
+// authorize) without ever creating two live creators on one Channel.
 type channelWithRoles struct {
-	channelID                                      uuid.UUID
+	channelID, formerChannelID                     uuid.UUID
 	creatorID, analystID, unassociatedID, formerID uuid.UUID
 }
 
@@ -165,7 +179,11 @@ func setupChannelWithRoles(t *testing.T, ctx context.Context, s *store.Store, db
 
 	former, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "former@example.com", "Former Creator")
 	require.NoError(t, err)
-	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, former.ID, store.RoleCreator))
+	// Own Channel (see channelWithRoles doc comment for why) -- Create
+	// itself grants role=creator to `former`, so no separate AddRole call
+	// is needed here.
+	formerCh, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "Former Channel", former.ID)
+	require.NoError(t, err)
 	// Close the row directly (bypassing the store API, which has no
 	// "revoke" method yet) to simulate a Person whose creator role has
 	// lapsed -- proves the Can* checks read valid_to IS NULL state, not a
@@ -173,15 +191,16 @@ func setupChannelWithRoles(t *testing.T, ctx context.Context, s *store.Store, db
 	_, err = db.Pool.Exec(ctx, `
 		UPDATE channel_person SET valid_to = NOW()
 		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
-	`, ch.ID, former.ID)
+	`, formerCh.ID, former.ID)
 	require.NoError(t, err)
 
 	return channelWithRoles{
-		channelID:      ch.ID,
-		creatorID:      creator.ID,
-		analystID:      analyst.ID,
-		unassociatedID: unassociated.ID,
-		formerID:       former.ID,
+		channelID:       ch.ID,
+		formerChannelID: formerCh.ID,
+		creatorID:       creator.ID,
+		analystID:       analyst.ID,
+		unassociatedID:  unassociated.ID,
+		formerID:        former.ID,
 	}
 }
 
@@ -214,7 +233,7 @@ func TestAuthz_CreatorOnlyChecks_AgainstRealRoleStore(t *testing.T) {
 			require.NoError(t, err)
 			assert.False(t, ok, "a Person with no row on the Channel must not be authorized")
 
-			ok, err = c.fn(ctx, rs, setup.channelID, setup.formerID)
+			ok, err = c.fn(ctx, rs, setup.formerChannelID, setup.formerID)
 			require.NoError(t, err)
 			assert.False(t, ok, "a Person whose creator row has been closed (valid_to set) must not be "+
 				"authorized -- proves the check reads the join table live, not a static owner field")
@@ -806,9 +825,10 @@ func ptrInt64(v int64) *int64        { return &v }
 // store, #1571), again for 006 (mcp_credential dropped and recreated
 // against libs/go/mcpauth's schema contract, #1643), again for 007
 // (mcp_oauth_client + mcp_auth_code, mcpauth's OAuth2 authorization-code +
-// PKCE front end, #1646), and again for 008 (strategy/strategy_verdict,
-// #1637), so the version assertion and table list below cover all of them
-// rather than any single one.
+// PKCE front end, #1646), again for 008 (strategy/strategy_verdict,
+// #1637), and again for 009 (co_creator_tier, #1713), so the version
+// assertion and table list below cover all of them rather than any single
+// one.
 func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	ctx := context.Background()
 	db := dbtest.NewPostgres(ctx, t, dbtest.Options{})
@@ -825,7 +845,7 @@ func TestMigrations_UpDownUp_LeavesNoOrphanObjects(t *testing.T) {
 	version, dirty, err := runner.Version()
 	require.NoError(t, err)
 	assert.False(t, dirty)
-	assert.Equal(t, uint(8), version, "highest migration in schema.Migrations is 008_strategy")
+	assert.Equal(t, uint(9), version, "highest migration in schema.Migrations is 009_co_creator_tier")
 
 	for _, tbl := range []string{
 		"person", "channel", "channel_person", "channel_invite",
