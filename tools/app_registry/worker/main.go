@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -110,11 +111,25 @@ func run() error {
 	// original (by-then-terminal) WritebackWorkflow.
 	w.RegisterWorkflow(writeback.RetryArgoSyncWorkflow)
 
+	// DISABLE_DEPLOYMENT is a kill switch, independent of the opt-in gates
+	// below: when true, this worker never commits to the gitops repo and
+	// never talks to ArgoCD, even if WRITEBACK_GITOPS_REPO/ARGOCD_SERVER are
+	// fully configured. Lets an environment's worker deployment keep its
+	// gitops/ArgoCD credentials in place (no secret churn) while
+	// intentionally not deploying anything -- e.g. a freeze, or an
+	// environment that records promotions but is deployed by another means.
+	// Rendering and recording (RenderEnvironmentState, RecordWritebackResult)
+	// still run; only the Publish/ArgoCD side effects are suppressed.
+	disableDeployment := getEnvBool("DISABLE_DEPLOYMENT", false)
+	if disableDeployment {
+		logger.Info("DISABLE_DEPLOYMENT set; gitops writeback and ArgoCD sync are disabled for this worker")
+	}
+
 	// Real (gitops) Writeback implementation is opt-in: only selected when
 	// WRITEBACK_GITOPS_REPO is set, so `bazel test`/local dev/Tilt keep
 	// working with zero config against StubActivities -- see issue #798's
 	// sequencing and worker/writeback/gitops.go's package doc comment.
-	if gitopsRepo := os.Getenv("WRITEBACK_GITOPS_REPO"); gitopsRepo != "" {
+	if gitopsRepo := os.Getenv("WRITEBACK_GITOPS_REPO"); gitopsRepo != "" && !disableDeployment {
 		gitops, gerr := writeback.NewGitOpsActivities(registryClient, appClient, writeback.GitOpsConfig{
 			Repo:           gitopsRepo,
 			Branch:         os.Getenv("WRITEBACK_GITOPS_BRANCH"),
@@ -160,6 +175,9 @@ func run() error {
 	// coverage -- this file's own run() connects to a real database/Temporal
 	// server and cannot be unit tested directly.
 	argoServer := os.Getenv("ARGOCD_SERVER")
+	if disableDeployment {
+		argoServer = ""
+	}
 	argoSync, aerr := writeback.SelectArgoSyncActivities(argoServer, os.Getenv("ARGOCD_AUTH_TOKEN"), repo)
 	if aerr != nil {
 		return fmt.Errorf("configure argocd sync activities: %w", aerr)
@@ -354,6 +372,18 @@ func getEnv(key, defaultValue string) string {
 		return v
 	}
 	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return defaultValue
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return defaultValue
+	}
+	return b
 }
 
 func getEnvInt(key string, defaultValue int) int {
