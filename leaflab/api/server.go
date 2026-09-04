@@ -303,3 +303,41 @@ func (s *LeafLabAPIServer) GetSensorReadingHistory(ctx context.Context, req *pb.
 	)
 	return resp, nil
 }
+
+// M2 handler stubs. Contract-only for this task (#1760); each is implemented
+// by its own task and this stub is replaced there.
+
+// ClaimBoard is implemented by the ClaimBoard task (FR1, FR2).
+func (s *LeafLabAPIServer) ClaimBoard(ctx context.Context, req *pb.ClaimBoardRequest) (*pb.ClaimBoardResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ClaimBoard: not implemented")
+}
+
+// RenameBoard is implemented by the RenameBoard task (FR3).
+func (s *LeafLabAPIServer) RenameBoard(ctx context.Context, req *pb.RenameBoardRequest) (*pb.RenameBoardResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "RenameBoard: not implemented")
+}
+
+// RenameSensor is implemented by the RenameSensor task (FR4).
+func (s *LeafLabAPIServer) RenameSensor(ctx context.Context, req *pb.RenameSensorRequest) (*pb.RenameSensorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "RenameSensor: not implemented")
+}
+
+// ListOwnedBoards is implemented by the admin ownership list task (FR11).
+func (s *LeafLabAPIServer) ListOwnedBoards(ctx context.Context, req *pb.ListOwnedBoardsRequest) (*pb.ListOwnedBoardsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListOwnedBoards: not implemented")
+}
+
+// ReassignBoardOwner is implemented by the admin reassign task (FR12).
+func (s *LeafLabAPIServer) ReassignBoardOwner(ctx context.Context, req *pb.ReassignBoardOwnerRequest) (*pb.ReassignBoardOwnerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ReassignBoardOwner: not implemented")
+}
+
+// ClearBoardOwner is implemented by the admin clear-owner task (FR13).
+func (s *LeafLabAPIServer) ClearBoardOwner(ctx context.Context, req *pb.ClearBoardOwnerRequest) (*pb.ClearBoardOwnerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ClearBoardOwner: not implemented")
+}
+
+// ListUsers is implemented by the admin ownership tasks (FR11, FR12).
+func (s *LeafLabAPIServer) ListUsers(ctx context.Context, req *pb.ListUsersRequest) (*pb.ListUsersResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListUsers: not implemented")
+}
