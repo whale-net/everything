@@ -7,11 +7,6 @@
 // authorization + rendering wrapper around store.VideoScriptStore
 // (../../store/video_script.go, already real from #1824) -- no schema or
 // store logic belongs in this file.
-//
-// Scaffold only: every mutate function below returns
-// errVideoScriptToolNotImplemented until Implementation wires in the real
-// calls, same scaffold/feat split store/video_script.go's own methods
-// followed (issue #1824).
 package tools
 
 import (
@@ -21,18 +16,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/whale-net/everything/audience_score_system/mcp/server"
 	"github.com/whale-net/everything/audience_score_system/store"
 )
-
-// errVideoScriptToolNotImplemented is returned by every video_script tool's
-// mutate function until Implementation lands (issue #1825's Implementation
-// phase). Never wrapped into a store error -- this is scaffold-only
-// scaffolding, not a runtime condition a caller can hit through the real
-// store.
-var errVideoScriptToolNotImplemented = errors.New("video_script tool not implemented yet")
 
 // -- shared rendering ---------------------------------------------------------
 
@@ -193,7 +182,59 @@ func registerSaveVideoScript(reg *server.Registry, scripts store.VideoScriptStor
 
 func saveVideoScriptMutate(scripts store.VideoScriptStore) server.WriteMutate[SaveVideoScriptInput] {
 	return func(ctx context.Context, in SaveVideoScriptInput) (uuid.UUID, error) {
-		return uuid.Nil, errVideoScriptToolNotImplemented
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		verdictID, err := uuid.Parse(in.VerdictID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("verdict_id is not a valid UUID: %w", err)
+		}
+
+		strategyID, err := uuid.Parse(in.StrategyID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("strategy_id is not a valid UUID: %w", err)
+		}
+
+		if in.Title == "" {
+			return uuid.Nil, fmt.Errorf("title must not be empty")
+		}
+		if in.ScriptText == "" {
+			return uuid.Nil, fmt.Errorf("script_text must not be empty")
+		}
+
+		var targetPublishDate *time.Time
+		if in.TargetPublishDate != "" {
+			parsed, err := time.Parse(time.RFC3339, in.TargetPublishDate)
+			if err != nil {
+				return uuid.Nil, fmt.Errorf("target_publish_date is not a valid RFC3339 timestamp: %w", err)
+			}
+			targetPublishDate = &parsed
+		}
+
+		person := server.PersonFromContext(ctx)
+		if person == nil {
+			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+
+		script, err := scripts.Propose(ctx, store.ProposeVideoScriptInput{
+			ChannelID:         channelID,
+			VerdictID:         verdictID,
+			StrategyID:        strategyID,
+			Title:             in.Title,
+			ScriptText:        in.ScriptText,
+			TargetPublishDate: targetPublishDate,
+			CreatedByPersonID: person.ID,
+			IdempotencyKey:    in.IdempotencyKeyArg,
+		})
+		if err != nil {
+			if errors.Is(err, store.ErrVerdictNotViable) {
+				return uuid.Nil, fmt.Errorf("verdict_id %s is not viable -- save_video_script only accepts a viable verdict (FR36): %w", in.VerdictID, err)
+			}
+			return uuid.Nil, err
+		}
+		return script.ID, nil
 	}
 }
 
@@ -237,7 +278,47 @@ func registerGreenlightVideoScript(reg *server.Registry, scripts store.VideoScri
 
 func greenlightVideoScriptMutate(scripts store.VideoScriptStore, roles store.RoleStore) server.WriteMutate[GreenlightVideoScriptInput] {
 	return func(ctx context.Context, in GreenlightVideoScriptInput) (uuid.UUID, error) {
-		return uuid.Nil, errVideoScriptToolNotImplemented
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		scriptID, err := uuid.Parse(in.VideoScriptID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("video_script_id is not a valid UUID: %w", err)
+		}
+
+		script, err := scripts.GetByID(ctx, scriptID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, fmt.Errorf("video_script_id does not exist")
+			}
+			return uuid.Nil, fmt.Errorf("load video_script: %w", err)
+		}
+		if script.ChannelID != channelID {
+			return uuid.Nil, fmt.Errorf("video_script_id does not belong to channel_id")
+		}
+
+		person := server.PersonFromContext(ctx)
+		if person == nil {
+			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+
+		canApprove, err := store.CanApprove(ctx, roles, channelID, person.ID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
+		}
+		if !canApprove {
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Founder or Co-Creator may greenlight a video_script (FR37)")
+		}
+
+		if err := scripts.Greenlight(ctx, scriptID, person.ID); err != nil {
+			if errors.Is(err, store.ErrVideoScriptTransition) {
+				return uuid.Nil, fmt.Errorf("cannot greenlight video_script currently %q: %w", script.Status, err)
+			}
+			return uuid.Nil, err
+		}
+		return scriptID, nil
 	}
 }
 
@@ -277,7 +358,47 @@ func registerDenyVideoScript(reg *server.Registry, scripts store.VideoScriptStor
 
 func denyVideoScriptMutate(scripts store.VideoScriptStore, roles store.RoleStore) server.WriteMutate[DenyVideoScriptInput] {
 	return func(ctx context.Context, in DenyVideoScriptInput) (uuid.UUID, error) {
-		return uuid.Nil, errVideoScriptToolNotImplemented
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		scriptID, err := uuid.Parse(in.VideoScriptID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("video_script_id is not a valid UUID: %w", err)
+		}
+
+		script, err := scripts.GetByID(ctx, scriptID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, fmt.Errorf("video_script_id does not exist")
+			}
+			return uuid.Nil, fmt.Errorf("load video_script: %w", err)
+		}
+		if script.ChannelID != channelID {
+			return uuid.Nil, fmt.Errorf("video_script_id does not belong to channel_id")
+		}
+
+		person := server.PersonFromContext(ctx)
+		if person == nil {
+			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+
+		canApprove, err := store.CanApprove(ctx, roles, channelID, person.ID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
+		}
+		if !canApprove {
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Founder or Co-Creator may deny a video_script (FR38)")
+		}
+
+		if err := scripts.Deny(ctx, scriptID, person.ID); err != nil {
+			if errors.Is(err, store.ErrVideoScriptTransition) {
+				return uuid.Nil, fmt.Errorf("cannot deny video_script currently %q: %w", script.Status, err)
+			}
+			return uuid.Nil, err
+		}
+		return scriptID, nil
 	}
 }
 
@@ -319,7 +440,50 @@ func registerArchiveVideoScript(reg *server.Registry, scripts store.VideoScriptS
 
 func archiveVideoScriptMutate(scripts store.VideoScriptStore, roles store.RoleStore) server.WriteMutate[ArchiveVideoScriptInput] {
 	return func(ctx context.Context, in ArchiveVideoScriptInput) (uuid.UUID, error) {
-		return uuid.Nil, errVideoScriptToolNotImplemented
+		channelID, err := uuid.Parse(in.ChannelID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("channel_id is not a valid UUID: %w", err)
+		}
+
+		scriptID, err := uuid.Parse(in.VideoScriptID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("video_script_id is not a valid UUID: %w", err)
+		}
+
+		script, err := scripts.GetByID(ctx, scriptID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, fmt.Errorf("video_script_id does not exist")
+			}
+			return uuid.Nil, fmt.Errorf("load video_script: %w", err)
+		}
+		if script.ChannelID != channelID {
+			return uuid.Nil, fmt.Errorf("video_script_id does not belong to channel_id")
+		}
+
+		person := server.PersonFromContext(ctx)
+		if person == nil {
+			return uuid.Nil, fmt.Errorf("unauthenticated: no caller credential resolved")
+		}
+
+		canApprove, err := store.CanApprove(ctx, roles, channelID, person.ID)
+		if err != nil {
+			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
+		}
+		if !canApprove {
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Founder or Co-Creator may archive a video_script (FR39)")
+		}
+
+		if err := scripts.Archive(ctx, scriptID, person.ID); err != nil {
+			if errors.Is(err, store.ErrVideoScriptPublished) {
+				return uuid.Nil, fmt.Errorf("cannot archive: %w", err)
+			}
+			if errors.Is(err, store.ErrVideoScriptTransition) {
+				return uuid.Nil, fmt.Errorf("cannot archive video_script currently %q: %w", script.Status, err)
+			}
+			return uuid.Nil, err
+		}
+		return scriptID, nil
 	}
 }
 
