@@ -5,7 +5,8 @@ import (
 )
 
 // GenerateResult renders the newly generated invite link (FR5) for the
-// Creator to copy and share out of band -- no email delivery exists
+// Founder or Co-Creator who generated it to copy and share out of band --
+// no email delivery exists
 // anywhere in this system (see package doc comment). channelID links back
 // to the Channel detail page this invite was generated from.
 templ GenerateResult(data components.LayoutData, code string, channelID string) {
@@ -40,7 +41,7 @@ templ Invalid(data components.LayoutData) {
 				<h1 class="card-title">Invite no longer valid</h1>
 				<p class="text-base-content/70">
 					This invite code has already been used or was replaced by a newer
-					one. Ask the Channel's creator to generate a new invite.
+					one. Ask a Channel's Founder or Co-Creator to generate a new invite.
 				</p>
 			</div>
 		</div>

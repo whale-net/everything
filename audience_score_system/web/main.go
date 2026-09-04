@@ -254,8 +254,9 @@ func run() error {
 		RedirectURL:  cfg.OAuthRedirectBase + "/oauth/youtube/callback",
 	}, st.Channels(), st.Roles(), tokenStore, sessions, scheduleManager)
 
-	// scheduleHandlers is C8's Creator-only approve/un-approve/edit surface
-	// (#1580, FR19/FR20) -- needs only st (store.CanRead/store.CanApprove +
+	// scheduleHandlers is C8's Creator-tier (Founder or Co-Creator,
+	// symmetrically per FR32) approve/un-approve/edit surface (#1580,
+	// FR19/FR20) -- needs only st (store.CanRead/store.CanApprove +
 	// Schedules()/Roles()/Channels()), no separate OAuth grant of its own.
 	scheduleHandlers := schedule.New(st)
 
@@ -386,15 +387,18 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /channels/{id}/reconnect", a.auth.RequireSignedIn(a.channels.HandleReconnect))
 
 	// Protected: Channel detail -- shows connected/needs-reauth state, and
-	// (Creator only, via store.CanReconnect -- NFR5) the reconnect
-	// affordance (#1571's Implementation section).
+	// (Creator-tier -- Founder or Co-Creator, symmetrically per FR32, via
+	// store.CanReconnect -- NFR5) the reconnect affordance (#1571's
+	// Implementation section).
 	mux.HandleFunc("GET /channels/{id}", a.auth.RequireSignedIn(a.handleChannelDetail))
 
 	// Protected: schedule-draft approval (C8: FR19/FR20, #1580). GET is
-	// Creator and Analyst both (store.CanRead); the three mutating POSTs
-	// are Creator only (store.CanApprove, re-checked fresh inside each
-	// handler -- see schedule.go's package doc comment for why hiding the
-	// button client-side is never sufficient on its own).
+	// Founder, Co-Creator, and Analyst all (store.CanRead); the three
+	// mutating POSTs require Creator-tier authority -- Founder or
+	// Co-Creator, symmetrically per FR32 (store.CanApprove, re-checked
+	// fresh inside each handler -- see schedule.go's package doc comment
+	// for why hiding the button client-side is never sufficient on its
+	// own).
 	mux.HandleFunc("GET /channels/{id}/schedule", a.auth.RequireSignedIn(a.schedule.HandleList))
 	mux.HandleFunc("POST /schedule/{entryID}/approve", a.auth.RequireSignedIn(a.schedule.HandleApprove))
 	mux.HandleFunc("POST /schedule/{entryID}/unapprove", a.auth.RequireSignedIn(a.schedule.HandleUnapprove))
@@ -430,9 +434,10 @@ func (a *app) handleHome(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleChannelDetail renders a Channel's connection state (connected /
-// needs re-authentication) and, for a Creator only (store.CanReconnect --
-// NFR5), the reconnect affordance (#1571's Implementation section) and the
-// invite-analyst affordance (store.CanInvite, C3/FR5).
+// needs re-authentication) and, for a Founder or Co-Creator (Creator-tier,
+// symmetrically per FR32, store.CanReconnect -- NFR5), the reconnect
+// affordance (#1571's Implementation section) and the invite-analyst
+// affordance (store.CanInvite, C3/FR5).
 func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 	person := auth.PersonFromContext(r.Context())
 	if person == nil {

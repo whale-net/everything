@@ -94,14 +94,15 @@ func newTestCredentialStore(t *testing.T, pool *pgxpool.Pool) mcpauth.Credential
 // role on it, and an Idea to attach verdicts/drafts to, hosted behind a
 // real MCP server with RegisterVerdict + RegisterScheduleDraft wired.
 type scheduleDraftFixture struct {
-	st       *store.Store
-	creds    mcpauth.CredentialStore
-	ch       store.Channel
-	creator  store.Person
-	analyst  store.Person
-	outsider store.Person
-	idea     store.Idea
-	url      string
+	st        *store.Store
+	creds     mcpauth.CredentialStore
+	ch        store.Channel
+	creator   store.Person
+	coCreator store.Person
+	analyst   store.Person
+	outsider  store.Person
+	idea      store.Idea
+	url       string
 }
 
 func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
@@ -114,6 +115,8 @@ func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
 
 	creator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-sd-creator-"+uuid.NewString(), "sd-creator@example.com", "Creator Person")
 	require.NoError(t, err)
+	coCreator, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-sd-co-creator-"+uuid.NewString(), "sd-co-creator@example.com", "Co-Creator Person")
+	require.NoError(t, err)
 	analyst, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-sd-analyst-"+uuid.NewString(), "sd-analyst@example.com", "Analyst Person")
 	require.NoError(t, err)
 	outsider, _, err := st.Persons().UpsertByGoogleSubject(ctx, "sub-sd-outsider-"+uuid.NewString(), "sd-outsider@example.com", "Outsider Person")
@@ -121,6 +124,7 @@ func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
 
 	ch, err := st.Channels().Create(ctx, "yt-sd-"+uuid.NewString(), "Channel", creator.ID)
 	require.NoError(t, err)
+	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
 	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
 	idea, err := st.Ideas().FindOrCreate(ctx, ch.ID, "Schedule Draft Test Idea", creator.ID)
@@ -140,7 +144,7 @@ func newScheduleDraftFixture(t *testing.T) *scheduleDraftFixture {
 	t.Cleanup(ts.Close)
 
 	return &scheduleDraftFixture{
-		st: st, creds: creds, ch: ch, creator: creator, analyst: analyst, outsider: outsider,
+		st: st, creds: creds, ch: ch, creator: creator, coCreator: coCreator, analyst: analyst, outsider: outsider,
 		idea: idea,
 		url:  ts.URL,
 	}
@@ -804,7 +808,7 @@ func TestListScheduleEntries_EmptyChannel_ReturnsEmptyListNotError(t *testing.T)
 	assert.Empty(t, out.Entries)
 }
 
-// ── commit_schedule_draft: FR19 Creator-only approval (issue #1648) ─────
+// ── commit_schedule_draft: FR19 Creator-tier approval, FR32 Founder/Co-Creator symmetry (issue #1648) ─────
 
 // saveDraft is a convenience wrapper mirroring saveViableVerdict: as
 // personID (via cs), record a viable verdict on ideaID and immediately
@@ -877,6 +881,35 @@ func TestCommitScheduleDraft_AnalystDenied_OutsiderDenied_EntryStaysDraft(t *tes
 	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
 	require.NoError(t, err)
 	assert.Equal(t, store.ScheduleStateDraft, entry.State, "both denied calls must have left the entry untouched")
+}
+
+// TestCommitScheduleDraft_CoCreator_TransitionsDraftToCommitted proves FR32:
+// a co_creator role holder has the exact same commit authority as the
+// Channel's Founder (TestCommitScheduleDraft_Creator_... above) -- no
+// consensus or Founder-tiebreak logic exists anywhere (NFR6).
+func TestCommitScheduleDraft_CoCreator_TransitionsDraftToCommitted(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	creatorCS := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, creatorCS, f.idea.ID, mondayAt(9))
+
+	coCreatorCS := f.connect(t, f.coCreator.ID)
+	res := f.call(t, coCreatorCS, "commit_schedule_draft", tools.CommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.ScheduleEntryOutput](t, res)
+	assert.Equal(t, "committed", out.State)
+	require.NotNil(t, out.ApprovedByPersonID)
+	assert.Equal(t, f.coCreator.ID.String(), *out.ApprovedByPersonID, "the approver recorded must be the calling Co-Creator, not the Founder")
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateCommitted, entry.State, "the entry must actually be committed in the database")
 }
 
 func TestCommitScheduleDraft_AlreadyCommitted_RejectedAsConflict(t *testing.T) {
@@ -965,7 +998,7 @@ func TestCommitScheduleDraft_UnknownOrCrossChannelEntry_Rejected(t *testing.T) {
 	})
 }
 
-// ── uncommit_schedule_draft: FR20 Creator-only reversal ──────────────────
+// ── uncommit_schedule_draft: FR20 Creator-tier reversal, FR32 symmetry ──────────────────
 
 func (f *scheduleDraftFixture) commitDraft(t *testing.T, cs *mcp.ClientSession, entryID string) tools.ScheduleEntryOutput {
 	t.Helper()
@@ -1001,6 +1034,33 @@ func TestUncommitScheduleDraft_Creator_TransitionsCommittedBackToDraft_ClearsApp
 	require.NoError(t, err)
 	assert.Equal(t, store.ScheduleStateDraft, entry.State, "the entry must actually be back to draft in the database")
 	assert.Nil(t, entry.ApprovedByPersonID)
+}
+
+// TestUncommitScheduleDraft_CoCreator_TransitionsCommittedBackToDraft proves
+// FR32's symmetric authority for uncommit, not just commit.
+func TestUncommitScheduleDraft_CoCreator_TransitionsCommittedBackToDraft(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	creatorCS := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, creatorCS, f.idea.ID, mondayAt(9))
+	f.commitDraft(t, creatorCS, draft.ScheduleEntryID)
+
+	coCreatorCS := f.connect(t, f.coCreator.ID)
+	res := f.call(t, coCreatorCS, "uncommit_schedule_draft", tools.UncommitScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.ScheduleEntryOutput](t, res)
+	assert.Equal(t, "draft", out.State)
+	assert.Nil(t, out.ApprovedByPersonID)
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateDraft, entry.State, "the entry must actually be back to draft in the database for a Co-Creator, same as a Founder")
 }
 
 func TestUncommitScheduleDraft_AnalystDenied_StaysCommitted(t *testing.T) {
@@ -1040,7 +1100,7 @@ func TestUncommitScheduleDraft_AlreadyDraft_RejectedAsConflict(t *testing.T) {
 	assert.True(t, res.IsError, "un-committing an entry that is still a draft must be rejected as a conflict")
 }
 
-// ── update_schedule_draft: FR20 Creator-only reschedule ───────────────────
+// ── update_schedule_draft: FR20 Creator-tier reschedule, FR32 symmetry ───────────────────
 
 func TestUpdateScheduleDraft_Creator_ChangesProposedPublishAt_ReadBackFromDB(t *testing.T) {
 	f := newScheduleDraftFixture(t)
@@ -1064,6 +1124,33 @@ func TestUpdateScheduleDraft_Creator_ChangesProposedPublishAt_ReadBackFromDB(t *
 	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
 	require.NoError(t, err)
 	assert.True(t, newTime.Equal(entry.ProposedPublishAt), "the new proposed_publish_at must be persisted in the database")
+}
+
+// TestUpdateScheduleDraft_CoCreator_ChangesProposedPublishAt proves FR32's
+// symmetric authority for reschedule, not just commit/uncommit.
+func TestUpdateScheduleDraft_CoCreator_ChangesProposedPublishAt(t *testing.T) {
+	f := newScheduleDraftFixture(t)
+	creatorCS := f.connect(t, f.creator.ID)
+
+	draft := f.saveDraft(t, creatorCS, f.idea.ID, mondayAt(9))
+	newTime := mondayAt(9).AddDate(0, 0, 1)
+
+	coCreatorCS := f.connect(t, f.coCreator.ID)
+	res := f.call(t, coCreatorCS, "update_schedule_draft", tools.UpdateScheduleDraftInput{
+		ChannelID:         f.ch.ID.String(),
+		ScheduleEntryID:   draft.ScheduleEntryID,
+		ProposedPublishAt: newTime.Format(time.RFC3339),
+		IdempotencyKeyArg: uuid.NewString(),
+	})
+	require.False(t, res.IsError, "unexpected error: %s", sdTextOf(res))
+	out := sdDecode[tools.SaveScheduleDraftOutput](t, res)
+	assert.Equal(t, newTime.Format(time.RFC3339), out.ProposedPublishAt)
+
+	entryID, err := uuid.Parse(draft.ScheduleEntryID)
+	require.NoError(t, err)
+	entry, err := f.st.Schedules().GetByID(context.Background(), entryID)
+	require.NoError(t, err)
+	assert.True(t, newTime.Equal(entry.ProposedPublishAt), "the new proposed_publish_at must be persisted for a Co-Creator's edit, same as a Founder's")
 }
 
 func TestUpdateScheduleDraft_AnalystDenied_TimeUnchanged(t *testing.T) {

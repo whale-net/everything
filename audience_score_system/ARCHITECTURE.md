@@ -296,12 +296,14 @@ behalf" and is requested only when a Creator actually connects a Channel
 change to one grant (e.g. LB1's forward-looking Analytics scope) never
 forces re-consent of the other.
 
-**Reconnect authorization (FR4, NFR5):** only a Person holding a live
-`role=creator` `channel_person` row on a Channel may (re)connect it --
-checked via `store.CanReconnect`, the same sanctioned authz entry point
-every other M1 permission check uses (see "Data model" below). This is
-enforced by `web/channel.Handler.HandleReconnect`, never inferred from
-who initiated the original connect.
+**Reconnect authorization (FR4, NFR5, FR32):** only a Person holding a
+live `role=creator` or `role=co_creator` `channel_person` row on a
+Channel may (re)connect it -- Founder and Co-Creator hold symmetric
+authority here (FR32), checked via `store.CanReconnect`, the same
+sanctioned authz entry point every other M1/M2 permission check uses (see
+"Data model" below). This is enforced by
+`web/channel.Handler.HandleReconnect`, never inferred from who initiated
+the original connect.
 
 **Token storage split:** C1's refresh token lives in `web_session`
 (managed by `web/auth.SessionManager`, one row per signed-in session); C2's
@@ -405,8 +407,9 @@ only ever consider *committed* entries, and nothing in `mcp` could ever
 produce one. `mcp/tools/schedule_draft.go` now exposes the full set --
 `commit_schedule_draft`, `uncommit_schedule_draft`, `update_schedule_draft`
 -- each calling the exact same `store.ScheduleStore` method and
-`store.CanApprove` (Creator-only) check `web`'s approve/unapprove/edit
-handlers already use, so the authority boundary is unchanged: an Analyst
+`store.CanApprove` (Creator-tier: Founder or Co-Creator, symmetrically per
+FR32) check `web`'s approve/unapprove/edit handlers already use, so the
+authority boundary is unchanged: an Analyst
 credential is rejected on either surface. `web`'s schedule page is
 unaffected and keeps rendering the same approve/un-approve/edit
 affordances -- the two surfaces are now two independent, equally-capable

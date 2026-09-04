@@ -5,7 +5,7 @@ description: Run Audience Score System's Loop 2 for one Channel — pull the rea
 
 # schedule
 
-Orchestrates ASS's schedule-drafting loop (C6, C7): reads the Channel's actual YouTube schedule and pacing policy as planning context, then proposes draft slots for viable ideas (falling back to cadence-driven Strategy proposals where one is active). It stops at the draft — turning a draft into the Channel's committed schedule (C8) is a Creator-only action (`commit_schedule_draft`/`uncommit_schedule_draft`/`update_schedule_draft`, issue #1648) that this skill never calls on its own initiative; it only happens on the human's explicit instruction, whether via `web`'s approve/un-approve/edit UI or a follow-up MCP call the human asks for by name.
+Orchestrates ASS's schedule-drafting loop (C6, C7): reads the Channel's actual YouTube schedule and pacing policy as planning context, then proposes draft slots for viable ideas (falling back to cadence-driven Strategy proposals where one is active). It stops at the draft — turning a draft into the Channel's committed schedule (C8) requires Creator-tier authority -- Founder or Co-Creator, symmetrically per FR32 (`commit_schedule_draft`/`uncommit_schedule_draft`/`update_schedule_draft`, issue #1648) that this skill never calls on its own initiative; it only happens on the human's explicit instruction, whether via `web`'s approve/un-approve/edit UI or a follow-up MCP call the human asks for by name.
 
 ## Usage
 

@@ -101,8 +101,8 @@ type ScheduleEntryOutput struct {
 	VerdictVersion        int     `json:"verdict_version" jsonschema:"that verdict version's number, so a caller can tell a stale binding from a fresh one"`
 	ProposedPublishAt     string  `json:"proposed_publish_at" jsonschema:"the proposed (or, once committed, the approved) publish time, RFC3339"`
 	State                 string  `json:"state" jsonschema:"draft or committed"`
-	ApprovedByPersonID    *string `json:"approved_by_person_id,omitempty" jsonschema:"the Creator who approved this entry, as a UUID string, if committed"`
-	ApprovedByDisplayName *string `json:"approved_by_display_name,omitempty" jsonschema:"that Creator's display name, if committed"`
+	ApprovedByPersonID    *string `json:"approved_by_person_id,omitempty" jsonschema:"the Founder or Co-Creator who approved this entry, as a UUID string, if committed"`
+	ApprovedByDisplayName *string `json:"approved_by_display_name,omitempty" jsonschema:"that Person's display name, if committed"`
 	ApprovedAt            *string `json:"approved_at,omitempty" jsonschema:"when this entry was approved, RFC3339, if committed"`
 	CreatedByPersonID     string  `json:"created_by_person_id" jsonschema:"the Person who proposed this entry, as a UUID string"`
 	CreatedByDisplayName  string  `json:"created_by_display_name" jsonschema:"that Person's display name"`
@@ -196,17 +196,17 @@ func (i SetPacingPolicyInput) ChannelScopeID() uuid.UUID {
 func (i SetPacingPolicyInput) IdempotencyKey() string { return i.IdempotencyKeyArg }
 
 // registerSetPacingPolicy registers set_pacing_policy via
-// server.RegisterWrite -- Channel-scoped via store.CanWrite (both Creator
-// and Analyst may call it; see ../../ARCHITECTURE.md's "FR17 authority"
-// note for why).
+// server.RegisterWrite -- Channel-scoped via store.CanWrite (Founder,
+// Co-Creator, and Analyst may all call it; see ../../ARCHITECTURE.md's
+// "FR17 authority" note for why).
 func registerSetPacingPolicy(reg *server.Registry, pacing store.PacingStore, persons store.PersonStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "set_pacing_policy",
 		Description: "Define or update a Channel's pacing policy: target uploads/week and optional preferred weekdays " +
 			"(FR17). System-owned -- never synced from or overwritten by YouTube's own schedule. Upserts by Channel " +
 			"(natural key): repeated calls with the same channel_id converge to one row with the latest values " +
-			"(NFR2 by construction) -- idempotency_key is accepted for uniformity but not required. Both Creator and " +
-			"Analyst may call this tool.",
+			"(NFR2 by construction) -- idempotency_key is accepted for uniformity but not required. Founder, " +
+			"Co-Creator, and Analyst may all call this tool.",
 	}, setPacingPolicyMutate(pacing), setPacingPolicyRender(pacing, persons))
 }
 
@@ -474,9 +474,10 @@ type SaveScheduleDraftOutput struct {
 
 // registerSaveScheduleDraft registers save_schedule_draft via
 // server.RegisterWrite, so the idempotency middleware (NFR2) applies
-// automatically -- see ../server/idempotency.go. Creator and Analyst may
-// both propose a draft (store.CanWrite, applied by RegisterWrite via
-// ChannelScoped) -- FR16 does not name a single proposer persona.
+// automatically -- see ../server/idempotency.go. Founder, Co-Creator, and
+// Analyst may all propose a draft (store.CanWrite, applied by
+// RegisterWrite via ChannelScoped) -- FR16 does not name a single
+// proposer persona.
 func registerSaveScheduleDraft(reg *server.Registry, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore, pacing store.PacingStore, sync store.SyncStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "save_schedule_draft",
@@ -819,8 +820,9 @@ func (i CommitScheduleDraftInput) IdempotencyKey() string { return i.Idempotency
 
 // registerCommitScheduleDraft registers commit_schedule_draft via
 // server.RegisterWrite. RegisterWrite's automatic ChannelScoped gate only
-// enforces store.CanWrite (Creator and Analyst) -- FR19 requires the
-// stricter store.CanApprove (Creator-only, matching web/schedule.go's
+// enforces store.CanWrite (Founder, Co-Creator, and Analyst) -- FR19
+// requires the stricter store.CanApprove (Creator-tier: Founder or
+// Co-Creator, symmetrically per FR32, matching web/schedule.go's
 // HandleApprove), so commitScheduleDraftMutate checks it explicitly before
 // calling store.ScheduleStore.Approve, the same store method the web UI's
 // approve button already calls (issue #1580, C8).
@@ -828,7 +830,8 @@ func registerCommitScheduleDraft(reg *server.Registry, schedules store.ScheduleS
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "commit_schedule_draft",
 		Description: "Approve a draft schedule_entry, transitioning it draft -> committed and recording the approving " +
-			"Creator (FR19). Creator-only (store.CanApprove) -- an Analyst calling this is rejected with a permission " +
+			"Founder or Co-Creator (FR19). Requires Creator-tier authority (store.CanApprove -- Founder or " +
+			"Co-Creator, symmetrically per FR32) -- an Analyst calling this is rejected with a permission " +
 			"error, even though an Analyst may create the draft via save_schedule_draft. Committing is required before " +
 			"the outcome matcher will ever consider this entry a candidate: list_pending_matches/resolve_pending_match " +
 			"(FR22/FR23) and the sync worker's auto-match only ever match against committed entries, never drafts. " +
@@ -871,7 +874,7 @@ func commitScheduleDraftMutate(schedules store.ScheduleStore, roles store.RoleSt
 			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
 		}
 		if !canApprove {
-			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Creator may commit a schedule draft (FR19)")
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Founder or Co-Creator may commit a schedule draft (FR19)")
 		}
 
 		if err := schedules.Approve(ctx, entryID, person.ID); err != nil {
@@ -923,14 +926,16 @@ func (i UncommitScheduleDraftInput) IdempotencyKey() string { return i.Idempoten
 
 // registerUncommitScheduleDraft registers uncommit_schedule_draft via
 // server.RegisterWrite. Like commit_schedule_draft, this checks
-// store.CanApprove explicitly (Creator-only) rather than relying on
-// RegisterWrite's automatic store.CanWrite gate, matching
-// web/schedule.go's HandleUnapprove (FR20).
+// store.CanApprove explicitly (Creator-tier: Founder or Co-Creator,
+// symmetrically per FR32) rather than relying on RegisterWrite's
+// automatic store.CanWrite gate, matching web/schedule.go's
+// HandleUnapprove (FR20).
 func registerUncommitScheduleDraft(reg *server.Registry, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore, roles store.RoleStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "uncommit_schedule_draft",
 		Description: "Reverse commit_schedule_draft: transition a committed schedule_entry back to draft, clearing " +
-			"its approver and approved_at (FR20). Creator-only (store.CanApprove) -- an Analyst calling this is " +
+			"its approver and approved_at (FR20). Requires Creator-tier authority (store.CanApprove -- Founder or " +
+			"Co-Creator, symmetrically per FR32) -- an Analyst calling this is " +
 			"rejected with a permission error. Rejected with a conflict if schedule_entry_id is not currently " +
 			"committed, or if it is already frozen by a live match to a published video (FR20's freeze) -- once a " +
 			"video has published against an entry, its commit can no longer be reversed here or in web. Always " +
@@ -972,7 +977,7 @@ func uncommitScheduleDraftMutate(schedules store.ScheduleStore, roles store.Role
 			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
 		}
 		if !canApprove {
-			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Creator may un-commit a schedule entry (FR20)")
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Founder or Co-Creator may un-commit a schedule entry (FR20)")
 		}
 
 		if err := schedules.Unapprove(ctx, entryID, person.ID); err != nil {
@@ -1007,15 +1012,17 @@ func (i UpdateScheduleDraftInput) IdempotencyKey() string { return i.Idempotency
 
 // registerUpdateScheduleDraft registers update_schedule_draft via
 // server.RegisterWrite. Like commit_schedule_draft, this checks
-// store.CanApprove explicitly (Creator-only) rather than relying on
-// RegisterWrite's automatic store.CanWrite gate -- matching
-// web/schedule.go's HandleEdit, which gates re-scheduling an *existing*
-// draft more strictly than save_schedule_draft gates creating one (FR20).
+// store.CanApprove explicitly (Creator-tier: Founder or Co-Creator,
+// symmetrically per FR32) rather than relying on RegisterWrite's
+// automatic store.CanWrite gate -- matching web/schedule.go's HandleEdit,
+// which gates re-scheduling an *existing* draft more strictly than
+// save_schedule_draft gates creating one (FR20).
 func registerUpdateScheduleDraft(reg *server.Registry, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore, pacing store.PacingStore, sync store.SyncStore, roles store.RoleStore) {
 	server.RegisterWrite(reg, &mcp.Tool{
 		Name: "update_schedule_draft",
-		Description: "Change a draft schedule_entry's proposed_publish_at (FR20's edit route). Creator-only " +
-			"(store.CanApprove) -- an Analyst calling this is rejected with a permission error, even though an " +
+		Description: "Change a draft schedule_entry's proposed_publish_at (FR20's edit route). Requires Creator-tier " +
+			"authority (store.CanApprove -- Founder or Co-Creator, symmetrically per FR32) -- an Analyst calling " +
+			"this is rejected with a permission error, even though an " +
 			"Analyst may create the original draft via save_schedule_draft. Rejected with a conflict if " +
 			"schedule_entry_id is not currently a draft (a committed entry must be un-committed first via " +
 			"uncommit_schedule_draft), or if it is already frozen by a live match to a published video (FR20). " +
@@ -1063,7 +1070,7 @@ func updateScheduleDraftMutate(schedules store.ScheduleStore, roles store.RoleSt
 			return uuid.Nil, fmt.Errorf("check approval authority: %w", err)
 		}
 		if !canApprove {
-			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Creator may reschedule a schedule entry (FR20)")
+			return uuid.Nil, fmt.Errorf("permission denied: only a Channel's Founder or Co-Creator may reschedule a schedule entry (FR20)")
 		}
 
 		if err := schedules.Update(ctx, entryID, proposedPublishAt); err != nil {

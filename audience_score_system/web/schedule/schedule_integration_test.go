@@ -332,6 +332,102 @@ func TestHandleApprove_ClosedCreatorRow_Forbidden(t *testing.T) {
 	assert.Equal(t, store.ScheduleStateDraft, got.State)
 }
 
+// ── FR32: Co-Creator holds the exact same approve authority as Founder ──────
+
+// TestHandleApprove_CoCreator_ApprovesDraft_SetsStateApproverApprovedAt
+// mirrors TestHandleApprove_Creator_ApprovesDraft_... above with a
+// role=co_creator caller instead of role=creator, proving FR32's
+// symmetric authority through the real HTTP route (not just store/authz_
+// test.go's pure-Go fake or store_integration_test.go's direct authz.go
+// call) -- no consensus or Founder-tiebreak logic exists anywhere
+// (NFR6's explicit non-goal).
+func TestHandleApprove_CoCreator_ApprovesDraft_SetsStateApproverApprovedAt(t *testing.T) {
+	ctx := context.Background()
+	s := newScheduleTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	cookie := s.sessionCookie(t, ctx, coCreator.ID)
+
+	w := s.do(t, http.MethodPost, "/schedule/"+entry.ID.String()+"/approve", cookie)
+	assert.Equal(t, http.StatusSeeOther, w.Code, "body: %s", w.Body.String())
+
+	got, err := s.store.Schedules().GetByID(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateCommitted, got.State)
+	if assert.NotNil(t, got.ApprovedByPersonID) {
+		assert.Equal(t, coCreator.ID, *got.ApprovedByPersonID, "the approver recorded must be the calling Co-Creator, not the Founder")
+	}
+	assert.NotNil(t, got.ApprovedAt, "approved_at must be stamped (FR19) for a Co-Creator's approval same as a Founder's")
+}
+
+// TestHandleUnapproveEdit_CoCreator_SameAuthorityAsCreator extends the FR32
+// symmetry proof to un-approve and edit, not just approve -- a Co-Creator
+// must be able to drive the full approve/un-approve/edit cycle
+// TestApproveUnapproveEditCycle_... above proves for a Founder.
+func TestHandleUnapproveEdit_CoCreator_SameAuthorityAsCreator(t *testing.T) {
+	ctx := context.Background()
+	s := newScheduleTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	cookie := s.sessionCookie(t, ctx, coCreator.ID)
+
+	w := s.do(t, http.MethodPost, "/schedule/"+entry.ID.String()+"/approve", cookie)
+	require.Equal(t, http.StatusSeeOther, w.Code, "approve, body: %s", w.Body.String())
+
+	w = s.do(t, http.MethodPost, "/schedule/"+entry.ID.String()+"/unapprove", cookie)
+	require.Equal(t, http.StatusSeeOther, w.Code, "unapprove, body: %s", w.Body.String())
+
+	got, err := s.store.Schedules().GetByID(ctx, entry.ID)
+	require.NoError(t, err)
+	require.Equal(t, store.ScheduleStateDraft, got.State, "unapprove must return to draft for a Co-Creator same as a Founder")
+	require.Nil(t, got.ApprovedByPersonID, "unapprove must clear the approver")
+
+	newSlot := entry.ProposedPublishAt.Add(2 * time.Hour).Format(time.RFC3339)
+	form := url.Values{"proposed_publish_at": {newSlot}}
+	w = s.doForm(t, "/schedule/"+entry.ID.String()+"/edit", cookie, form)
+	require.Equal(t, http.StatusSeeOther, w.Code, "edit, body: %s", w.Body.String())
+
+	got, err = s.store.Schedules().GetByID(ctx, entry.ID)
+	require.NoError(t, err)
+	parsed, err := time.Parse(time.RFC3339, newSlot)
+	require.NoError(t, err)
+	assert.True(t, got.ProposedPublishAt.Equal(parsed), "edit must persist the Co-Creator's new slot")
+}
+
+// TestHandleApprove_ClosedCoCreatorRow_Forbidden mirrors
+// TestHandleApprove_ClosedCreatorRow_Forbidden above for role=co_creator:
+// a co_creator row that has been closed (valid_to set) must not authorize
+// approve, proving CanApprove reads live join-table state for the
+// co_creator tier too, not just the creator tier.
+func TestHandleApprove_ClosedCoCreatorRow_Forbidden(t *testing.T) {
+	ctx := context.Background()
+	s := newScheduleTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
+
+	former := s.newPerson(t, ctx, "former-co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, former.ID, store.RoleCoCreator, creator.ID))
+	_, err := s.db.Pool.Exec(ctx, `
+		UPDATE channel_person SET valid_to = NOW()
+		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
+	`, ch.ID, former.ID)
+	require.NoError(t, err)
+
+	cookie := s.sessionCookie(t, ctx, former.ID)
+	w := s.do(t, http.MethodPost, "/schedule/"+entry.ID.String()+"/approve", cookie)
+	assert.Equal(t, http.StatusForbidden, w.Code, "a closed co_creator row on the target Channel must not authorize approve -- CanApprove must read live join-table state")
+
+	got, err := s.store.Schedules().GetByID(ctx, entry.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.ScheduleStateDraft, got.State)
+}
+
 // ── FR20: approve -> un-approve -> edit -> re-approve, repeated three times ─
 
 func TestApproveUnapproveEditCycle_RepeatedThreeTimes_EndsCommittedWithEditedSlot(t *testing.T) {
@@ -520,7 +616,7 @@ func TestHandleList_CreatorAndAnalyst_CanRead_OutsiderForbidden(t *testing.T) {
 	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
 
 	// entryCard (views.templ) never renders the entry's raw uuid as text --
-	// only inside the Creator-only affordance form actions -- so the read
+	// only inside the Creator-tier affordance form actions -- so the read
 	// side is asserted via the bound idea's title, which IS rendered
 	// unconditionally for both roles.
 	var ideaTitle string

@@ -191,9 +191,10 @@ func (h *Handler) HandleConnect(w http.ResponseWriter, r *http.Request) {
 
 // HandleReconnect starts the same consent flow as HandleConnect for an
 // existing Channel, but first requires store.CanReconnect(channelID,
-// person) -- 403 with no state change (no credential row written, no OAuth
-// state cookie set) for anyone else, e.g. an Analyst with no live creator
-// row (FR4, NFR5).
+// person) -- Creator-tier (Founder or Co-Creator, symmetrically per FR32)
+// -- 403 with no state change (no credential row written, no OAuth
+// state cookie set) for anyone else, e.g. an Analyst with no live
+// Creator-tier row (FR4, NFR5).
 func (h *Handler) HandleReconnect(w http.ResponseWriter, r *http.Request) {
 	person := auth.PersonFromContext(r.Context())
 	if person == nil {
@@ -214,8 +215,8 @@ func (h *Handler) HandleReconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		logger.Warn("reconnect rejected: caller is not the channel's creator", "channel_id", channelID, "person_id", person.ID)
-		http.Error(w, "forbidden: only a Channel's creator may reconnect it", http.StatusForbidden)
+		logger.Warn("reconnect rejected: caller holds no Founder or Co-Creator role on the channel", "channel_id", channelID, "person_id", person.ID)
+		http.Error(w, "forbidden: only a Channel's Founder or Co-Creator may reconnect it", http.StatusForbidden)
 		return
 	}
 
@@ -344,7 +345,7 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Found -- reconnect path (FR4, NFR5): re-verify CanReconnect here too
 	// (not just in HandleReconnect) so a forged-but-otherwise-valid state
-	// parameter can never bypass the creator-only gate.
+	// parameter can never bypass the Creator-tier gate.
 	ok, err := store.CanReconnect(ctx, h.roles, existing.ID, person.ID)
 	if err != nil {
 		logger.Error("reconnect authorization check failed", "channel_id", existing.ID, "person_id", person.ID, "error", err)
@@ -352,8 +353,8 @@ func (h *Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		logger.Warn("reconnect rejected: caller is not the channel's creator", "channel_id", existing.ID, "person_id", person.ID)
-		http.Error(w, "forbidden: only a Channel's creator may reconnect it", http.StatusForbidden)
+		logger.Warn("reconnect rejected: caller holds no Founder or Co-Creator role on the channel", "channel_id", existing.ID, "person_id", person.ID)
+		http.Error(w, "forbidden: only a Channel's Founder or Co-Creator may reconnect it", http.StatusForbidden)
 		return
 	}
 

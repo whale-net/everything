@@ -141,6 +141,7 @@ This is deliberately still "MCP plus an external MCP-capable client,"
 per the product brief's non-goal -- the plugin is a client-side
 convenience for driving that client, not a hosted agent loop inside the
 product. Schedule *commit/un-commit/edit* (C8) tools exist and are
-Creator-only (`store.CanApprove`, matching `web`), but the `analyst`
+gated by Creator-tier authority -- Founder or Co-Creator, symmetrically
+per FR32 (`store.CanApprove`, matching `web`) -- but the `analyst`
 persona never calls them on its own initiative -- only on the human's
 explicit instruction (see `plugin/user/agents/analyst.md`).

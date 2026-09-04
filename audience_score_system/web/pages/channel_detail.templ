@@ -29,13 +29,13 @@ func connectionStateBadgeClass(state store.ConnectionState) string {
 }
 
 // ChannelDetail is a Channel's detail page (C2, FR4): shows its
-// connection_state, and -- for a Creator only -- the reconnect affordance
-// (canReconnect, store.CanReconnect / NFR5) that starts the same YouTube
-// consent flow as the initial connect (POST /channels/{id}/reconnect,
-// web/channel.Handler.HandleReconnect), and the invite-analyst affordance
-// (canInvite, store.CanInvite / C3 FR5) that generates a single-use
-// invite code via POST /channels/{id}/invites (web/invite.Handlers.
-// HandleGenerate).
+// connection_state, and -- for a Founder or Co-Creator (Creator-tier,
+// symmetrically per FR32) -- the reconnect affordance (canReconnect,
+// store.CanReconnect / NFR5) that starts the same YouTube consent flow as
+// the initial connect (POST /channels/{id}/reconnect, web/channel.
+// Handler.HandleReconnect), and the invite-analyst affordance (canInvite,
+// store.CanInvite / C3 FR5) that generates a single-use invite code via
+// POST /channels/{id}/invites (web/invite.Handlers.HandleGenerate).
 templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect bool, canInvite bool) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
