@@ -260,6 +260,25 @@ this one's.
 `device_id` is `codes.NotFound`, not a silently-created row (a caller must
 not be able to conjure a board by pushing to an unregistered `device_id`).
 
+**`PushDeviceConfig` composes, rather than passes through, the published
+config (M2, FR8, NFR3).** Once `authorizeBoardWrite` clears the caller,
+`PushDeviceConfig` no longer publishes `req.Sensors` verbatim. It reads the
+board's DB sensor inventory (`Repository.ListSensorInventoryForBoard`) and
+its last accepted config (`GetLatestAcceptedConfig`), then merges them with
+the caller's requested overrides through `ComposeDesiredSensors`
+(`leaflab/api/configcompose.go`) — inventory lowest precedence, last
+accepted config next, caller overrides highest, matched by hardware
+identity `(mux_path, i2c_address)` never by name (a rename must not fork a
+sensor into two entries). The result: every sensor the board is known to
+have is in the published `DeviceConfig`, whether or not the caller
+mentioned it, so a single-sensor rename or reconfigure never removes or
+resets the board's other sensors (LB3). `ComposeDesiredSensors` takes no
+DB/transport dependencies so it is independently unit-testable and reusable
+by `leaflab-processor`'s FR9 corrective push. The two added reads are each a
+single indexed query (`idx_sensor_board_id`, the open-interval partial index
+on `sensor_name_history`) — no per-sensor round trip, so a typical board's
+push stays imperceptibly slower (NFR3).
+
 ---
 
 ## Relationship to `//firmware`

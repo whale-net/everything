@@ -230,6 +230,23 @@ sequenceDiagram
     Processor->>Processor: cache.SetConfigVersion(device, version)
 ```
 
+**API composes the full desired sensor list (FR8).** Before the `publish`
+step above, `leaflab-api`'s `PushDeviceConfig` (`leaflab/api/server.go`) is
+not a pass-through of the caller's request. It reads the board's current
+`sensor` inventory (`ListSensorInventoryForBoard`) and its last accepted
+config (`GetLatestAcceptedConfig`), then merges them with the caller's
+requested overrides via `ComposeDesiredSensors`
+(`leaflab/api/configcompose.go`) — inventory lowest precedence, last
+accepted config next, caller overrides highest, matched by hardware
+identity `(mux_path, i2c_address)` rather than name. The published
+`DeviceConfig` always carries every sensor the board is known to have,
+whether or not the caller named it, so a push that renames or reconfigures
+one sensor never removes or resets the board's other sensors (LB3).
+`ComposeDesiredSensors` is a pure function with no DB/transport
+dependencies precisely so `leaflab-processor`'s FR9 corrective push (a
+later milestone item) can reuse it and produce an identical desired list
+for the same DB state.
+
 ---
 
 ## Reading Write Path
