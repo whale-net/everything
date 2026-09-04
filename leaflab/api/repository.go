@@ -25,21 +25,6 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
 }
 
-// GetOrCreateBoard returns the board_id for the given device_id, creating a row if needed.
-func (r *Repository) GetOrCreateBoard(ctx context.Context, deviceID string) (int64, error) {
-	var id int64
-	err := r.db.QueryRow(ctx, `
-		INSERT INTO board (device_id, registered_at, last_seen_at)
-		VALUES ($1, NOW(), NOW())
-		ON CONFLICT (device_id) DO UPDATE SET last_seen_at = NOW()
-		RETURNING board_id
-	`, deviceID).Scan(&id)
-	if err != nil {
-		return 0, fmt.Errorf("get/create board %s: %w", deviceID, err)
-	}
-	return id, nil
-}
-
 // InsertDeviceConfigNextVersion assigns the next version for the board and
 // inserts the pending config row. ON CONFLICT DO NOTHING retries when two
 // concurrent writers compute the same MAX(version)+1; the unique constraint on
@@ -301,10 +286,6 @@ type SensorReadingHistory struct {
 }
 
 // -- M2 ownership/authorization repository methods --------------------------
-// Scaffold only (#1763): signatures exist so //leaflab/api:api_lib compiles
-// and callers (authorizeBoardWrite, PushDeviceConfig) can be wired against a
-// stable interface. Real bodies land in this task's own Implementation
-// phase.
 
 // GetLeafLabUserIDBySub resolves an OIDC subject claim to a leaflab_user_id.
 // Returns (0, false, nil) when no leaflab_user row exists for the subject --
@@ -312,7 +293,17 @@ type SensorReadingHistory struct {
 // leaflab-ui's exclusive responsibility via upsertLeafLabUser
 // (leaflab/ui/handlers_auth.go).
 func (r *Repository) GetLeafLabUserIDBySub(ctx context.Context, oidcSub string) (int64, bool, error) {
-	return 0, false, fmt.Errorf("GetLeafLabUserIDBySub: not implemented")
+	var id int64
+	err := r.db.QueryRow(ctx, `
+		SELECT leaflab_user_id FROM leaflab_user WHERE oidc_sub = $1
+	`, oidcSub).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("get leaflab_user by sub: %w", err)
+	}
+	return id, true, nil
 }
 
 // GetCurrentBoardOwner returns the leaflab_user_id of a board's current
@@ -322,21 +313,53 @@ func (r *Repository) GetLeafLabUserIDBySub(ctx context.Context, oidcSub string) 
 // via the valid_to IS NULL predicate backed by
 // idx_board_owner_history_current.
 func (r *Repository) GetCurrentBoardOwner(ctx context.Context, boardID int64) (int64, bool, error) {
-	return 0, false, fmt.Errorf("GetCurrentBoardOwner: not implemented")
+	var ownerID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT leaflab_user_id
+		FROM board_owner_history
+		WHERE board_id = $1 AND valid_to IS NULL
+	`, boardID).Scan(&ownerID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("get current owner for board %d: %w", boardID, err)
+	}
+	return ownerID, true, nil
 }
 
 // GetBoardIDForSensor resolves a sensor_id to its owning board_id. ok=false
 // means no sensor with that ID exists.
 func (r *Repository) GetBoardIDForSensor(ctx context.Context, sensorID int64) (int64, bool, error) {
-	return 0, false, fmt.Errorf("GetBoardIDForSensor: not implemented")
+	var boardID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT board_id FROM sensor WHERE sensor_id = $1
+	`, sensorID).Scan(&boardID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("get board for sensor %d: %w", sensorID, err)
+	}
+	return boardID, true, nil
 }
 
 // GetBoardIDForDeviceID resolves a device_id to its board_id without
-// creating a row -- unlike GetOrCreateBoard, an unknown device_id must
-// surface as codes.NotFound to the caller (FR7), not silently register a new
-// board. ok=false means no board with that device_id exists.
+// creating a row -- unlike the old GetOrCreateBoard, an unknown device_id
+// must surface as codes.NotFound to the caller (FR7), not silently register
+// a new board. ok=false means no board with that device_id exists.
 func (r *Repository) GetBoardIDForDeviceID(ctx context.Context, deviceID string) (int64, bool, error) {
-	return 0, false, fmt.Errorf("GetBoardIDForDeviceID: not implemented")
+	var boardID int64
+	err := r.db.QueryRow(ctx, `
+		SELECT board_id FROM board WHERE device_id = $1
+	`, deviceID).Scan(&boardID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("get board for device %s: %w", deviceID, err)
+	}
+	return boardID, true, nil
 }
 
 // GetSensorReadingHistory queries sensor_reading directly (not the enriched

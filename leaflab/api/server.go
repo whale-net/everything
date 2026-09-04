@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/libs/go/grpcauth"
 	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -64,17 +65,32 @@ func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slo
 }
 
 // -- M2 ownership/authorization helpers --------------------------------------
-// Scaffold only (#1763): signatures exist so //leaflab/api:api_lib compiles
-// and can be wired into PushDeviceConfig and the future ClaimBoard/
-// RenameBoard/RenameSensor handlers. Real bodies land in this task's own
-// Implementation phase.
 
 // callerUserID resolves the authenticated caller (via grpcauth.Claims in
 // ctx) to a leaflab_user_id. Returns codes.Unauthenticated when no claims
 // are present, and codes.PermissionDenied when the claims' subject resolves
 // to no leaflab_user row (leaflab-api never creates one -- LB1).
+//
+// This applies identically in AuthModeNone: grpcauth always injects dev
+// claims there (Subject "dev-user"), so a local/Tilt caller is denied here
+// exactly like an OIDC caller would be, until dev-user has a leaflab_user
+// row -- see leaflab/README.md's local-dev claim step.
 func (s *LeafLabAPIServer) callerUserID(ctx context.Context) (int64, error) {
-	return 0, status.Error(codes.Unimplemented, "callerUserID: not implemented")
+	claims, ok := grpcauth.ClaimsFromContext(ctx)
+	if !ok {
+		return 0, status.Error(codes.Unauthenticated, "authentication required")
+	}
+
+	userID, found, err := s.repo.GetLeafLabUserIDBySub(ctx, claims.Subject)
+	if err != nil {
+		return 0, status.Errorf(codes.Internal, "resolve caller identity: %v", err)
+	}
+	if !found {
+		return 0, status.Errorf(codes.PermissionDenied,
+			"no leaflab_user found for subject %q -- sign in to leaflab-ui at least once (this never happens automatically; see leaflab/README.md's local-dev claim step)",
+			claims.Subject)
+	}
+	return userID, nil
 }
 
 // authorizeBoardWrite returns nil iff the caller is boardID's current
@@ -83,7 +99,22 @@ func (s *LeafLabAPIServer) callerUserID(ctx context.Context) (int64, error) {
 // call this helper. Consults no role information: FR5 has no admin
 // exception here.
 func (s *LeafLabAPIServer) authorizeBoardWrite(ctx context.Context, boardID int64) (callerUserID int64, err error) {
-	return 0, status.Error(codes.Unimplemented, "authorizeBoardWrite: not implemented")
+	callerUserID, err = s.callerUserID(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	ownerID, owned, err := s.repo.GetCurrentBoardOwner(ctx, boardID)
+	if err != nil {
+		return 0, status.Errorf(codes.Internal, "get board owner: %v", err)
+	}
+	if !owned {
+		return 0, status.Errorf(codes.PermissionDenied, "board %d is unowned -- claim it before writing to it", boardID)
+	}
+	if ownerID != callerUserID {
+		return 0, status.Error(codes.PermissionDenied, "caller does not own this board")
+	}
+	return callerUserID, nil
 }
 
 func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDeviceConfigRequest) (*pb.PushDeviceConfigResponse, error) {
@@ -91,9 +122,16 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	boardID, err := s.repo.GetOrCreateBoard(ctx, req.DeviceId)
+	boardID, ok, err := s.repo.GetBoardIDForDeviceID(ctx, req.DeviceId)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "board lookup: %v", err)
+	}
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "device %q not registered", req.DeviceId)
+	}
+
+	if _, err := s.authorizeBoardWrite(ctx, boardID); err != nil {
+		return nil, err
 	}
 
 	// Build the proto with a placeholder version; we need configJSON for the

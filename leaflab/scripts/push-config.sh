@@ -16,6 +16,14 @@
 # Scenarios are JSON files in ./scenarios/.  Add a new file there to define
 # additional hardware setups without touching this script.
 #
+# Auth (M2): PushDeviceConfig now requires an authenticated, owning caller.
+# Under Tilt's default GRPC_AUTH_MODE=none this script's plain grpcurl call
+# (no token) is treated as the dev-user caller -- but dev-user must exist as
+# a leaflab_user row AND own the target board, or the push is rejected with
+# PermissionDenied/NotFound. One-time local setup: see leaflab/README.md
+# § "Local Dev: Claiming a Board Under Auth (M2)". This script does not
+# (and cannot) do that setup itself.
+#
 # Dependencies: grpcurl, jq
 
 set -euo pipefail

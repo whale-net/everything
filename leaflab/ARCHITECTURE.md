@@ -188,25 +188,77 @@ See [DATA.md](DATA.md#analytical-views) for the full view reference and example 
 
 ---
 
-## API Authentication (M1, NFR2)
+## API Authentication (M1→M2, NFR1, NFR2)
 
-`leaflab-api` is deliberately **half-authenticated** for one milestone. A
-leaflab-local wrapper interceptor (`leaflab/api/auth.go`) gates only the
-three read RPCs M1 adds — `ListBoardsWithState`, `GetBoardDetail`,
+`leaflab-api` was deliberately **half-authenticated** through M1: a
+leaflab-local wrapper interceptor (`leaflab/api/auth.go`) gated only the
+three read RPCs M1 added — `ListBoardsWithState`, `GetBoardDetail`,
 `GetSensorReadingHistory` — behind `libs/go/grpcauth`, an explicit allowlist
 keyed by full method name. `PushDeviceConfig`, `GetDeviceConfig`, and
-`ListBoards` predate M1 and stay unauthenticated so the operator's existing
-`grpcurl` config-push path (`leaflab/scripts/push-config.sh`) and
-`leaflab/Tiltfile` (which sets no OIDC config) keep working unchanged.
+`ListBoards` predated M1 and stayed unauthenticated so the operator's
+existing `grpcurl` config-push path (`leaflab/scripts/push-config.sh`) and
+`leaflab/Tiltfile` (which sets no OIDC config) kept working unchanged.
 
-This is safe because M1 adds no write path: authenticating a write RPC
-without also authorizing it (deciding *who* may push what) would not change
-who can push a config today, so there is no exposure gap to leave open by
-deferring it. M2 is expected to bring the remaining three RPCs inside the
-fence, at which point authorization (not just authentication) becomes the
-open question. See `leaflab/api/ENV.md` for the auth environment variables
-and the two-OIDC-client requirement, and `libs/go/grpcauth` for why the
-per-method policy lives in `leaflab/api/` rather than in the shared library.
+That was safe only because M1 added no write path: authenticating a write
+RPC without also authorizing it (deciding *who* may push what) would not
+have changed who could push a config, so there was no exposure gap to leave
+open by deferring it. M2 closed that gap — see "Ownership and
+authorization" below. See `leaflab/api/ENV.md` for the auth environment
+variables and the two-OIDC-client requirement, and `libs/go/grpcauth` for
+why the per-method policy lives in `leaflab/api/` rather than in the shared
+library.
+
+---
+
+## Ownership and authorization (M2, NFR1, FR5, FR6, FR7)
+
+`authenticatedMethods` in `leaflab/api/auth.go` now fences every RPC —
+including `PushDeviceConfig`, `GetDeviceConfig`, and `ListBoards`, which
+stayed open through M1. Authentication alone (a valid token) is not
+authorization to write, though: `PushDeviceConfig` — and every future
+caller-invoked board write (`RenameBoard`, `RenameSensor`) — additionally
+goes through the single chokepoint `authorizeBoardWrite`
+(`leaflab/api/server.go`), which:
+
+- resolves the caller's `grpcauth.Claims.Subject` to a `leaflab_user_id` via
+  `callerUserID`/`GetLeafLabUserIDBySub` — `codes.PermissionDenied` if the
+  subject has no `leaflab_user` row (leaflab-api never creates one; that
+  stays leaflab-ui's exclusive job on sign-in, LB1);
+- reads the board's current owner from `board_owner_history` (SCD2, `valid_to
+  IS NULL` = current; absence of an open row = unowned, never a `NULL` owner
+  on an open row);
+- denies (`codes.PermissionDenied`) both a non-owner caller **and** a write
+  to an unowned board (FR6) — `ClaimBoard` is the sole write path that
+  claims an unowned board and does not call this helper;
+- consults no role information — FR5 has no admin bypass here. Admin write
+  access to boards it does not own is out of scope beyond the dedicated
+  reassign/clear RPCs.
+
+Reads are deliberately **not** scoped by ownership (FR5): every signed-in
+user still reads every board, sensor, and reading through
+`ListBoardsWithState`/`GetBoardDetail`/`GetSensorReadingHistory`/
+`ListBoards`/`GetDeviceConfig` — those RPCs gained authentication in M2 but
+no ownership filter. Read-side scoping is a later milestone's concern, not
+this one's.
+
+**Two carve-outs that are not covered by this fence, by design:**
+
+- **Device-originated writes.** Manifest, status, sensor readings, and
+  config acks arrive over AMQP into `leaflab-processor`, never through this
+  gRPC surface. No ownership check applies to them, whether the board is
+  owned or unowned — the fence is a gRPC-layer concept and this traffic
+  never reaches it.
+- **FR9's corrective push.** When a rename changes what a device's next
+  config should say, `leaflab-processor` issues its own corrective config
+  push internally. It supplies no caller-originated content (every value is
+  already-committed DB state written by an owner's own FR4-authorized
+  rename) and never touches `PushDeviceConfig`. There is no
+  service-identity/machine-auth concept in this repo's `grpcauth` usage, and
+  none was introduced to accommodate this path.
+
+`PushDeviceConfig` also no longer implicitly registers a board: an unknown
+`device_id` is `codes.NotFound`, not a silently-created row (a caller must
+not be able to conjure a board by pushing to an unregistered `device_id`).
 
 ---
 

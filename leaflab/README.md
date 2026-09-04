@@ -164,6 +164,50 @@ Key design decisions:
 
 ---
 
+## Local Dev: Claiming a Board Under Auth (M2)
+
+Under Tilt, `leaflab-api` and `leaflab-ui` both run with `GRPC_AUTH_MODE=none`
+(no OIDC config), so every request is treated as a signed-in caller with
+subject `dev-user`. As of M2, that caller still has to exist as a
+`leaflab_user` row and own a board before `PushDeviceConfig`,
+`RenameBoard`, `RenameSensor`, etc. will do anything for it — `leaflab-api`
+never creates a `leaflab_user` row itself, and an unowned board accepts no
+write from anyone (see [ARCHITECTURE.md § Ownership and
+authorization](ARCHITECTURE.md#ownership-and-authorization)).
+
+One-time local setup, pick one:
+
+- **Sign in via `leaflab-ui` once**, then claim the board from its UI. Signing
+  in creates the `dev-user` `leaflab_user` row; claiming a board opens its
+  `board_owner_history` row.
+- **Or**, run this one-line `psql` snippet against the dev database (creates
+  the `dev-user` row and claims every currently-registered board for it —
+  adjust the `WHERE` if you only want one board):
+
+  ```sql
+  WITH u AS (
+      INSERT INTO leaflab_user (oidc_sub, preferred_username, display_name)
+      VALUES ('dev-user', 'dev-user', 'Local Dev')
+      ON CONFLICT (oidc_sub) DO UPDATE SET last_seen_at = NOW()
+      RETURNING leaflab_user_id
+  )
+  INSERT INTO board_owner_history (board_id, leaflab_user_id)
+  SELECT b.board_id, u.leaflab_user_id
+  FROM board b, u
+  WHERE NOT EXISTS (
+      SELECT 1 FROM board_owner_history boh
+      WHERE boh.board_id = b.board_id AND boh.valid_to IS NULL
+  );
+  ```
+
+This only applies to `AuthModeNone` — it is unreachable in `AuthModeOIDC`,
+where the caller's real `sub` must go through `leaflab-ui`'s sign-in flow
+exactly as any other user's would. `leaflab/scripts/push-config.sh` also
+needs this step done once before it can push to a given board; see that
+script's header comment.
+
+---
+
 ## Relationship to `//firmware`
 
 LeafLab firmware is built on top of the board-agnostic libraries in [`firmware/`](../firmware/README.md):

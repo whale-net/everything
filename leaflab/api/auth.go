@@ -9,18 +9,31 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// authenticatedMethods is the explicit allowlist of M1-added read RPCs that
-// require a valid access token for this API's audience (NFR2). A method
-// added later defaults to unauthenticated unless it is deliberately listed
-// here. PushDeviceConfig, GetDeviceConfig, and ListBoards predate M1 and
-// stay unauthenticated through M1 so leaflab/scripts/push-config.sh and
-// leaflab/Tiltfile keep working unchanged; M2 brings those three inside the
-// fence. Full method strings are written out literally so a proto rename
-// breaks this visibly rather than silently.
+// authenticatedMethods is the explicit allowlist of RPCs that require a
+// valid access token for this API's audience (NFR2). A method added later
+// defaults to unauthenticated unless it is deliberately listed here.
+//
+// M1 fenced only the three read RPCs it added and left PushDeviceConfig,
+// GetDeviceConfig, and ListBoards unauthenticated (they predate M1). M2
+// closes that gap (NFR1): every write RPC/handler is authenticated, and
+// PushDeviceConfig is additionally authorized via authorizeBoardWrite (FR5,
+// FR6, FR7) before it touches the DB or publishes. Full method strings are
+// written out literally so a proto rename breaks this visibly rather than
+// silently.
 var authenticatedMethods = map[string]bool{
 	"/leaflab.api.v1.LeafLabAPI/ListBoardsWithState":     true,
 	"/leaflab.api.v1.LeafLabAPI/GetBoardDetail":          true,
 	"/leaflab.api.v1.LeafLabAPI/GetSensorReadingHistory": true,
+	"/leaflab.api.v1.LeafLabAPI/PushDeviceConfig":        true,
+	"/leaflab.api.v1.LeafLabAPI/GetDeviceConfig":         true,
+	"/leaflab.api.v1.LeafLabAPI/ListBoards":              true,
+	"/leaflab.api.v1.LeafLabAPI/ClaimBoard":              true,
+	"/leaflab.api.v1.LeafLabAPI/RenameBoard":             true,
+	"/leaflab.api.v1.LeafLabAPI/RenameSensor":            true,
+	"/leaflab.api.v1.LeafLabAPI/ListOwnedBoards":         true,
+	"/leaflab.api.v1.LeafLabAPI/ReassignBoardOwner":      true,
+	"/leaflab.api.v1.LeafLabAPI/ClearBoardOwner":         true,
+	"/leaflab.api.v1.LeafLabAPI/ListUsers":               true,
 }
 
 // selectiveUnaryInterceptor routes calls to authenticatedMethods through
