@@ -110,15 +110,16 @@ release_app(
     replicas = 1,
 )
 
-# Real-Postgres integration coverage for ListBoardsWithState (#1497) and
-# ListSensorDetailsForBoard/GetBoardIdentity (#1498) -- see
-# repository_integration_test.go's doc comment and //libs/go/dbtest's README
-# for how to run it.
+# Real-Postgres integration coverage for ListBoardsWithState (#1497),
+# ListSensorDetailsForBoard/GetBoardIdentity (#1498), and migration 016's
+# board.name / leaflab_user_role / sensor corrective-push schema (#1759) --
+# see repository_integration_test.go's and migration_016_integration_test.go's
+# doc comments plus //libs/go/dbtest's README for how to run it.
 #
-# Gazelle does not generate this target: repository_integration_test.go is
-# gated behind `//go:build integration`, which gazelle skips when scanning
-# for go_test srcs. This go_test is hand-written, with EXACTLY the tag set
-# from //libs/go/dbtest:postgres_constraints_test (see that package's
+# Gazelle does not generate this target: both source files are gated behind
+# `//go:build integration`, which gazelle skips when scanning for go_test
+# srcs. This go_test is hand-written, with EXACTLY the tag set from
+# //libs/go/dbtest:postgres_constraints_test (see that package's
 # BUILD.bazel/README.md for why each tag is required). `# keep` markers tell
 # a later `bazel run //:gazelle` not to touch or remove this rule.
 #
@@ -129,7 +130,10 @@ go_test(
     name = "api_integration_test",
     size = "large",
     timeout = "long",
-    srcs = ["repository_integration_test.go"],
+    srcs = [
+        "migration_016_integration_test.go",
+        "repository_integration_test.go",
+    ],
     embed = [":api_lib"],
     gotags = ["integration"],
     tags = [
@@ -143,6 +147,7 @@ go_test(
     deps = [
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/dbtest",
+        "@com_github_jackc_pgx_v5//pgconn",
         "@com_github_jackc_pgx_v5//pgxpool",
     ],
 )
