@@ -161,7 +161,7 @@ func TestListChannels_ReturnsOnlyCallersChannelsWithRoleAndConnectionState(t *te
 
 	ch, err := st.Channels().Create(ctx, "yt-list-channels-1", "My Channel", creator.ID)
 	require.NoError(t, err)
-	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
 	ts := newListChannelsTestServer(t, st, pool)
 

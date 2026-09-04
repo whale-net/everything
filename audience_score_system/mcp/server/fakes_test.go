@@ -55,8 +55,12 @@ func (f *fakeRoleStore) RolesFor(_ context.Context, channelID, personID uuid.UUI
 	return f.roles[roleKey{channelID, personID}], nil
 }
 
-func (f *fakeRoleStore) AddRole(context.Context, uuid.UUID, uuid.UUID, store.Role) error {
+func (f *fakeRoleStore) AddRole(context.Context, uuid.UUID, uuid.UUID, store.Role, uuid.UUID) error {
 	return errors.New("fakeRoleStore.AddRole is not used by these tests")
+}
+
+func (f *fakeRoleStore) RemoveRole(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (bool, error) {
+	return false, errors.New("fakeRoleStore.RemoveRole is not used by these tests")
 }
 
 func (f *fakeRoleStore) ChannelsForPerson(context.Context, uuid.UUID) ([]store.Channel, error) {

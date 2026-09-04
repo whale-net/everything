@@ -285,7 +285,7 @@ func TestMCP_EndToEnd_AuthAndChannelScoping(t *testing.T) {
 
 	ch, err := st.Channels().Create(ctx, "yt-e2e-1", "Channel", creator.ID)
 	require.NoError(t, err)
-	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
 	var calls int32
 	ts := newTestServer(t, st, pg.Pool, func(reg *server.Registry) {

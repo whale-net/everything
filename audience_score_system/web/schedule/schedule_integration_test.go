@@ -250,7 +250,7 @@ func TestHandleApprove_Analyst_Forbidden_StateUnchanged(t *testing.T) {
 	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
 
 	analyst := s.newPerson(t, ctx, "analyst")
-	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 	cookie := s.sessionCookie(t, ctx, analyst.ID)
 
 	w := s.do(t, http.MethodPost, "/schedule/"+entry.ID.String()+"/approve", cookie)
@@ -316,7 +316,7 @@ func TestHandleApprove_ClosedCreatorRow_Forbidden(t *testing.T) {
 	// below is drafted and owned by this current creator, on the exact
 	// Channel former used to (but no longer) hold a creator row on.
 	creator := s.newPerson(t, ctx, "creator")
-	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, creator.ID, store.RoleCreator))
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, creator.ID, store.RoleCreator, former.ID))
 	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
 
 	cookie := s.sessionCookie(t, ctx, former.ID)
@@ -523,7 +523,7 @@ func TestHandleList_CreatorAndAnalyst_CanRead_OutsiderForbidden(t *testing.T) {
 	require.NoError(t, s.db.Pool.QueryRow(ctx, `SELECT title FROM idea WHERE id = $1`, entry.IdeaID).Scan(&ideaTitle))
 
 	analyst := s.newPerson(t, ctx, "analyst")
-	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 	outsider := s.newPerson(t, ctx, "outsider")
 
 	creatorW := s.do(t, http.MethodGet, "/channels/"+ch.ID.String()+"/schedule", s.sessionCookie(t, ctx, creator.ID))

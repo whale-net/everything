@@ -116,7 +116,7 @@ func newMatchesFixture(t *testing.T) *matchesFixture {
 
 	ch, err := st.Channels().Create(ctx, "yt-"+uuid.NewString(), "Channel", creator.ID)
 	require.NoError(t, err)
-	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst))
+	require.NoError(t, st.Roles().AddRole(ctx, ch.ID, analyst.ID, store.RoleAnalyst, creator.ID))
 
 	idea, err := st.Ideas().Create(ctx, ch.ID, "Best Guess Idea", creator.ID)
 	require.NoError(t, err)
