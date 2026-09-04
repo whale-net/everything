@@ -288,23 +288,40 @@ func TestHandleApprove_NoRoleOnChannel_Forbidden(t *testing.T) {
 func TestHandleApprove_ClosedCreatorRow_Forbidden(t *testing.T) {
 	ctx := context.Background()
 	s := newScheduleTestStack(t)
-	ch, creator := s.setupChannel(t, ctx)
-	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
 
+	// former is granted as ch's creator (via Channels().Create, which
+	// self-grants role=creator), then that row is closed on ch itself --
+	// NOT a separate Channel -- and a new Person is granted the current
+	// creator role on the same ch afterward. Migration 009's
+	// channel_person_channel_id_founder_current partial unique index only
+	// forbids two simultaneously-OPEN creator rows on one Channel; a
+	// closed row followed by a new open row on the same Channel is fine,
+	// which is exactly what this sequence needs to prove a closed row on
+	// THIS Channel (not just "no relationship to it at all") can't
+	// approve.
 	former := s.newPerson(t, ctx, "former-creator")
-	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, former.ID, store.RoleCreator))
-	// Close the row directly (bypassing the store API, which has no
+	ch, err := s.store.Channels().Create(ctx, "yt-"+uuid.NewString(), "Test Channel", former.ID)
+	require.NoError(t, err)
+	// Close former's row directly (bypassing the store API, which has no
 	// "revoke" method yet) to simulate a Person whose creator role has
 	// lapsed -- mirrors store_integration_test.go's setupChannelWithRoles.
-	_, err := s.db.Pool.Exec(ctx, `
+	_, err = s.db.Pool.Exec(ctx, `
 		UPDATE channel_person SET valid_to = NOW()
 		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
 	`, ch.ID, former.ID)
 	require.NoError(t, err)
 
+	// Now that former's row on ch is closed, grant a fresh Person the
+	// current (open) creator role on the same ch -- the entry approved
+	// below is drafted and owned by this current creator, on the exact
+	// Channel former used to (but no longer) hold a creator row on.
+	creator := s.newPerson(t, ctx, "creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, creator.ID, store.RoleCreator))
+	entry := s.draftEntry(t, ctx, ch, creator, time.Now().UTC().Add(24*time.Hour))
+
 	cookie := s.sessionCookie(t, ctx, former.ID)
 	w := s.do(t, http.MethodPost, "/schedule/"+entry.ID.String()+"/approve", cookie)
-	assert.Equal(t, http.StatusForbidden, w.Code, "a closed creator row must not authorize approve -- CanApprove must read live join-table state")
+	assert.Equal(t, http.StatusForbidden, w.Code, "a closed creator row on the target Channel must not authorize approve -- CanApprove must read live join-table state")
 
 	got, err := s.store.Schedules().GetByID(ctx, entry.ID)
 	require.NoError(t, err)
