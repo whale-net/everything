@@ -15,6 +15,7 @@ cold; this file only indexes where things live.
 | File | When to read it |
 |------|-----------------|
 | [README.md](README.md) | Starting point — what the registry is, core concepts, end-to-end flow diagrams |
+| [PRODUCT.md](PRODUCT.md) | Before scoping or designing anything in this domain — vision, personas, load-bearing decisions, and milestone roadmap; jump table there points into `product/` for the current-state survey, capability map, and roadmap detail |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Before changing the data model, promotability rules, auth split, or writeback mechanism. Index + design principles only — the actual sections live one-per-file under [architecture/](architecture/); jump straight to the file you need via ARCHITECTURE.md's table rather than grepping the old monolith. Contains rejected alternatives and open questions. |
 | [PLAN.md](PLAN.md) | Before starting work — current status, what's deployed, deferred/carry-over work, what's next |
 | [PLAN-HISTORY.md](PLAN-HISTORY.md) | As-built detail for a specific completed phase (AR-0 … AR-7f) — goal, scope, exit criteria, what shipped. Not meant to be read start to finish; follow a link from PLAN.md's status table. |
