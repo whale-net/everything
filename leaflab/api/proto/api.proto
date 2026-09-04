@@ -78,13 +78,19 @@ enum ReportingState {
 message PushDeviceConfigRequest {
   string device_id = 1;
   // Sensor overrides — each entry is matched to a hardware sensor by
-  // (mux_path, i2c_address). The server composes the full desired sensor
-  // list for the board (FR8): every sensor in the board's DB inventory and
-  // last accepted config is included in the published DeviceConfig,
-  // whether or not it appears here. An entry here replaces only the fields
-  // it sets on the matched sensor; a rename or single-sensor reconfigure
-  // never removes or resets the board's other sensors (LB3). An entry
-  // matching no known sensor is added as a new sensor.
+  // (mux_path, i2c_address), except when two or more of the board's sensors
+  // are co-located at the same (mux_path, i2c_address) — e.g. an SHT3x's
+  // temperature and humidity virtual sensors — in which case sensor_type
+  // additionally disambiguates which one an entry means. An entry for a
+  // co-located address that omits sensor_type is ambiguous and is applied
+  // to none of the co-located sensors, rather than guessing or dropping
+  // one. The server composes the full desired sensor list for the board
+  // (FR8): every sensor in the board's DB inventory and last accepted
+  // config is included in the published DeviceConfig, whether or not it
+  // appears here. An entry here replaces only the fields it sets on the
+  // matched sensor; a rename or single-sensor reconfigure never removes or
+  // resets the board's other sensors (LB3). An entry matching no known
+  // sensor is added as a new sensor.
   repeated firmware.SensorConfig sensors = 2;
 }
 
