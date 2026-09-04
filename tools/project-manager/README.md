@@ -79,7 +79,7 @@ gh project item-list <project-number> --owner whale-net --query "status:Implemen
 
 ## Skills
 
-Nine skills orchestrate the pipeline:
+Ten skills orchestrate the pipeline:
 
 | Skill | Drives | Dispatches |
 |---|---|---|
@@ -90,10 +90,11 @@ Nine skills orchestrate the pipeline:
 | `/project-manager:plan <issue-number> [--planner-model model]` | Task breakdown: converts the approved root Issue into a Project board with swimlanes and cohesive task issues (idempotent — reports the existing board instead of recreating it) | `planner` |
 | `/project-manager:implement <issue-number> [--max-subagents N]` | Orchestrates worker/validator subagents in parallel batches — up to `--max-subagents` (default 4) at a time — each in its own dedicated worktree from branch creation onward, over `gh stack`-managed per-task branches until all tasks are `Done`; each batch's push/PR integration is handed to `mergepush`, which registers every task into one real `gh stack` stack (`main → task-a → task-b → ...`) via `gh stack link` so the orchestrator's own session stays free of `git`/`gh stack` output. Requires a Project board to already exist | `worker`, `validator`, `mergepush` |
 | `/project-manager:validate <issue-number>` | Whole-system validation in Tilt (against a local branch merging every task's tip together, since the stack itself doesn't contain any single branch with everyone's combined work) once all tasks are `Done`; merges the whole plan's stack atomically with `gh stack merge` once validation passes, or routes findings to planner | `system-validator`, `planner` |
+| `/project-manager:loop-plan-implement-validate <issue-number> [--max-subagents N] [--planner-model model] [--max-iterations N]` | Unattended end-to-end runner: dispatches `plan`, `implement`, and `validate` each to their own fresh subagent (re-entering that skill via the `Skill` tool), re-looping `implement`→`validate` on findings, until `validate` reports a clean merge — then dispatches one more subagent to independently re-verify the merged stack from a branch/PR description, so this orchestrator's own session never absorbs any phase's `git`/`gh` output. Requires a `plan:approved` root Issue | *(the `plan`/`implement`/`validate` skills, each in its own subagent — which then dispatch their own personas as above)* |
 | `/project-manager:status <issue-number>` | Read-only: current lifecycle state and Project board breakdown by swimlane | *(none — pure `gh` reads)* |
 | `/project-manager:help "<question>"` | Not sure which skill applies? Describe the situation in plain language and get back the exact next skill/command and why | `help` |
 
-Typical flow for one feature: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again.
+Typical flow for one feature: `design` → `review` → `plan` → `implement` → `validate` → (if findings) `implement` again — or run `loop-plan-implement-validate` once `plan:approved` to drive `plan`→`implement`→`validate` (and any re-loop on findings) to a merged stack without re-invoking each phase by hand.
 
 For a product: `product` once, then that same flow per milestone — `design <product-issue> --milestone M1` → `review` → `plan` → `implement` → `validate`, then `M2`, and so on. `<domain>/PRODUCT.md` is read fresh from `main` at the start of each milestone's design, which is what keeps milestone N+1 aware of decisions made in milestone N without anyone re-reading milestone N's spec. `plan` and `validate` each gain one conditional step for this: posting a `Ledger: M<n> → in progress` / `→ shipped` comment on the tracking issue when the root plan names a product brief; ordinary single-feature plans are unaffected.
 

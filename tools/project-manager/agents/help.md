@@ -35,6 +35,7 @@ Read `tools/project-manager/CONVENTIONS.md` if you need mechanics beyond this su
 | Project board exists, tasks unclaimed or in progress | `implement <issue-number>` | Idempotent — safe to re-run; picks up whatever's unclaimed. |
 | All task issues `Done`, haven't checked the whole system yet | `validate <issue-number>` | Runs system-validator against Tilt; findings route back to planner as new tasks. |
 | Validation found bugs / findings issues exist | `implement <issue-number>` again | Findings land on the board in `Scaffold`/`Implementation`; `implement` picks them up like any other task. |
+| `plan:approved`, and the requester wants the whole thing driven to a merged stack without re-running each phase by hand | `loop-plan-implement-validate <issue-number>` | Chains `plan`→`implement`→`validate` in subagents, re-looping `implement`↔`validate` on findings, until the stack is merged. Not for a requester who wants to inspect/steer each phase themselves. |
 | "Where does this plan/product stand right now?" / unsure what phase something is in | `status <issue-number>` | Pure read — always safe to run first when state is unclear, including from inside your own triage. |
 | Noticed something out of scope while doing something else | *(no skill — file a scope note directly, per CONVENTIONS.md § Scope notes)* | Not a skill dispatch; it's a plain Issue added to the Project at `Status: Noted`. |
 

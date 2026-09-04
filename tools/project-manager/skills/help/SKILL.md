@@ -1,6 +1,6 @@
 ---
 name: help
-description: Not sure which project-manager skill applies? Describe your situation or ask a question in plain language and this recommends the exact next skill and command — product, design, review, plan, implement, validate, status, or stakeholder-meeting — with the reasoning behind it. Use whenever you're unsure where a plan/product stands or which command to run next; run `/project-manager:status <n>` yourself instead if you already know the issue number and just want the raw state.
+description: Not sure which project-manager skill applies? Describe your situation or ask a question in plain language and this recommends the exact next skill and command — product, design, review, plan, implement, validate, loop-plan-implement-validate, status, or stakeholder-meeting — with the reasoning behind it. Use whenever you're unsure where a plan/product stands or which command to run next; run `/project-manager:status <n>` yourself instead if you already know the issue number and just want the raw state.
 ---
 
 # help
