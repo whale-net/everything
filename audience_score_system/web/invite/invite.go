@@ -9,7 +9,8 @@
 //
 // Routes (all mounted on `web` by main.go's setupRoutes):
 //
-//   - POST /channels/{id}/invites -- Creator only (store.CanInvite), calls
+//   - POST /channels/{id}/invites -- Creator-tier: Founder or Co-Creator,
+//     symmetrically per FR32 (store.CanInvite), calls
 //     store.InviteStore.Generate (FR5).
 //   - GET /invites/{code} -- public, no session required. Consumed or
 //     invalidated code renders the terminal Invalid view with no state
@@ -61,12 +62,13 @@ func New(st *store.Store, sessions *auth.SessionManager) *Handlers {
 	return &Handlers{store: st, sessions: sessions}
 }
 
-// HandleGenerate serves POST /channels/{id}/invites (FR5). Creator only --
+// HandleGenerate serves POST /channels/{id}/invites (FR5). Creator-tier
+// (Founder or Co-Creator, symmetrically per FR32) --
 // store.CanInvite(channelID, person) must hold, else 403. Always generates
 // an Analyst-tier invite (store.RoleAnalyst) -- the Co-Creator web action
 // is #1723's job. store.InviteStore.Generate is idempotent per (Channel,
-// tier) (FR30): a repeat call while an Analyst invite is already live
-// returns that same code rather than minting a new one.
+// tier) (FR30) and never invalidates a live code without also handing
+// back the new one, since Generate does both atomically.
 func (h *Handlers) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	person := auth.PersonFromContext(ctx)

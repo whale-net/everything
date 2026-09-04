@@ -204,6 +204,36 @@ func TestHandleGenerate_Twice_ReturnsSameLiveCode(t *testing.T) {
 	assert.Equal(t, string(store.RoleAnalyst), liveChannelPersonRole(t, ctx, s, ch.ID, analyst.ID))
 }
 
+// ── FR32: Co-Creator holds the exact same invite-generate authority as
+// Founder ────────────────────────────────────────────────────────────────
+
+// TestHandleGenerate_CoCreator_GeneratesCode mirrors
+// TestHandleGenerate_TwiceLeavesOneLiveCode_FirstBecomesUnredeemable's
+// first-generate step with a role=co_creator caller instead of the
+// Channel's Founder, proving FR32's symmetric authority through the real
+// HTTP route (store.CanInvite) -- no consensus or Founder-tiebreak logic
+// exists anywhere (NFR6's explicit non-goal).
+func TestHandleGenerate_CoCreator_GeneratesCode(t *testing.T) {
+	ctx := context.Background()
+	s := newInviteTestStack(t)
+	ch, creator := s.setupChannel(t, ctx)
+
+	coCreator := s.newPerson(t, ctx, "co-creator")
+	require.NoError(t, s.store.Roles().AddRole(ctx, ch.ID, coCreator.ID, store.RoleCoCreator, creator.ID))
+	cookie := s.sessionCookie(t, ctx, coCreator.ID)
+
+	w := s.do(t, http.MethodPost, "/channels/"+ch.ID.String()+"/invites", cookie)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var code string
+	var createdBy uuid.UUID
+	require.NoError(t, s.db.Pool.QueryRow(ctx, `
+		SELECT code, created_by_person_id FROM channel_invite WHERE channel_id = $1
+	`, ch.ID).Scan(&code, &createdBy))
+	assert.Equal(t, coCreator.ID, createdBy, "the invite must record the calling Co-Creator, not the Founder, as its creator")
+	assert.NotEmpty(t, code, "a Co-Creator's generate call must actually create a redeemable code, same as a Founder's")
+}
+
 // ── NFR5: only a Creator may generate a code ────────────────────────────────
 
 func TestHandleGenerate_NonCreator_Forbidden_NoCodeCreated(t *testing.T) {

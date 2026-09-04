@@ -35,10 +35,10 @@ func youtubeWatchURL(videoID string) string {
 
 // List is the Channel schedule page (C8, FR19/FR20): every
 // store.ScheduleEntryDetail for ch, in proposed_publish_at order.
-// canApprove (store.CanApprove -- Creator only, NFR5) gates whether
-// entryActions renders at all; an Analyst (canApprove == false) sees a
-// read-only list with no approve/un-approve/edit forms anywhere in the
-// markup.
+// canApprove (store.CanApprove -- Creator-tier, i.e. Founder or
+// Co-Creator symmetrically per FR32, NFR5) gates whether entryActions
+// renders at all; an Analyst (canApprove == false) sees a read-only list
+// with no approve/un-approve/edit forms anywhere in the markup.
 templ List(data components.LayoutData, ch store.Channel, entries []store.ScheduleEntryDetail, canApprove bool) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
@@ -58,8 +58,8 @@ templ List(data components.LayoutData, ch store.Channel, entries []store.Schedul
 // entryCard renders one ScheduleEntryDetail: idea title, its bound
 // verdict version/value/reasoning (LB3's load-bearing link, never just
 // the idea's latest verdict), proposed slot, state badge, approver (when
-// set), the published video link (when e.Published), and -- for a Creator
-// only -- entryActions.
+// set), the published video link (when e.Published), and -- for a
+// Founder or Co-Creator -- entryActions.
 templ entryCard(e store.ScheduleEntryDetail, canApprove bool) {
 	<div class="border border-base-300 rounded p-4 mb-2">
 		<div class="flex justify-between items-start gap-4">
@@ -96,8 +96,9 @@ templ entryCard(e store.ScheduleEntryDetail, canApprove bool) {
 	</div>
 }
 
-// entryActions renders the Creator-only approve/un-approve/edit
-// affordances for one entry, honoring FR20's published freeze
+// entryActions renders the Creator-tier (Founder or Co-Creator)
+// approve/un-approve/edit affordances for one entry, honoring FR20's
+// published freeze
 // (e.Published): once true, neither un-approve nor edit is rendered at
 // all -- only an explanation -- since the server (schedule.go's mutate,
 // via store.ErrScheduleEntryPublished) would 409 either request anyway.

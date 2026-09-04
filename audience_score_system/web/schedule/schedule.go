@@ -1,4 +1,4 @@
-// Package schedule is `web`'s Creator-only schedule approval surface (C8:
+// Package schedule is `web`'s Creator-tier schedule approval surface (C8:
 // FR19, FR20) -- GET /channels/{id}/schedule, POST /schedule/{entryID}/
 // approve, POST /schedule/{entryID}/unapprove, and POST /schedule/{entryID}/
 // edit, all mounted behind web/auth.Authenticator.RequireSignedIn (see
@@ -7,15 +7,17 @@
 // the mutate-then-redirect flow and its one list view are tightly coupled
 // with no reuse outside this package.
 //
-// Authorization (NFR5, LB2): GET is visible to a Channel's Creator AND
-// Analyst (store.CanRead); the three mutating POST routes are Creator
-// only, each re-deriving authority from a fresh store.CanApprove call --
-// never from the session alone, a cached field, or the client's choice of
-// which button to render. The Analyst list view renders with no approve/
-// un-approve/edit affordances at all (see views.templ's List/entryActions),
-// but that omission is presentation only -- the server-side CanApprove
-// check in mutate below is what actually rejects a forged POST from an
-// Analyst, so hiding the button is never the only line of defense.
+// Authorization (NFR5, LB2): GET is visible to a Channel's Founder,
+// Co-Creator, AND Analyst (store.CanRead); the three mutating POST routes
+// require Creator-tier authority -- Founder or Co-Creator, symmetrically
+// (FR32) -- each re-deriving authority from a fresh store.CanApprove call
+// -- never from the session alone, a cached field, or the client's choice
+// of which button to render. The Analyst list view renders with no
+// approve/un-approve/edit affordances at all (see views.templ's List/
+// entryActions), but that omission is presentation only -- the
+// server-side CanApprove check in mutate below is what actually rejects a
+// forged POST from an Analyst, so hiding the button is never the only
+// line of defense.
 //
 // The published freeze (FR20): store.ScheduleStore.IsPublished is the
 // single, reusable "recorded as published" predicate (see
@@ -24,8 +26,8 @@
 // translates store.ErrScheduleEntryPublished to 409 with no state change;
 // views.templ additionally calls IsPublished (via ScheduleEntryDetail.
 // Published) to omit the un-approve/edit affordances from the rendered
-// page once true, so a Creator is never shown a button that would just
-// error.
+// page once true, so a Founder or Co-Creator is never shown a button that
+// would just error.
 package schedule
 
 import (
@@ -60,7 +62,7 @@ func New(st *store.Store) *Handlers {
 }
 
 // HandleList serves GET /channels/{id}/schedule (FR19/FR20's read side).
-// Visible to Creator and Analyst (store.CanRead) -- canApprove additionally
+// Visible to Founder, Co-Creator, and Analyst (store.CanRead) -- canApprove additionally
 // gates whether the rendered view includes the approve/un-approve/edit
 // affordances (views.templ's entryActions), never whether the schedule
 // itself is visible.
@@ -98,9 +100,10 @@ func (h *Handlers) HandleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// canApprove is Creator-only (store.CanApprove, NFR5) -- it gates the
-	// rendered affordances, not read access to the page itself (canRead
-	// above already covers both Creator and Analyst).
+	// canApprove is Creator-tier (store.CanApprove -- Founder or
+	// Co-Creator, symmetrically per FR32, NFR5) -- it gates the rendered
+	// affordances, not read access to the page itself (canRead above
+	// already covers Founder, Co-Creator, and Analyst).
 	canApprove, err := store.CanApprove(ctx, h.store.Roles(), channelID, person.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -158,9 +161,10 @@ func (h *Handlers) HandleEdit(w http.ResponseWriter, r *http.Request) {
 
 // mutate is HandleApprove/HandleUnapprove/HandleEdit's shared body: parse
 // entryID from the path, load the entry (to learn its ChannelID and
-// confirm it exists), require store.CanApprove for that Channel (Creator
-// only, NFR5 -- re-derived fresh on every call, never trusted from the
-// session or the client), run fn, and translate the result: fn succeeding
+// confirm it exists), require store.CanApprove for that Channel
+// (Creator-tier -- Founder or Co-Creator, symmetrically per FR32, NFR5 --
+// re-derived fresh on every call, never trusted from the session or the
+// client), run fn, and translate the result: fn succeeding
 // redirects back to the schedule page (303); store.ErrScheduleEntryPublished
 // (FR20's freeze) and any other error from fn (entry not in the state fn
 // requires, e.g. approving an already-committed entry or un-approving a
@@ -196,7 +200,7 @@ func (h *Handlers) mutate(w http.ResponseWriter, r *http.Request, fn func(ctx co
 		return
 	}
 	if !canApprove {
-		http.Error(w, "forbidden: only a Channel's creator may change its schedule", http.StatusForbidden)
+		http.Error(w, "forbidden: only a Channel's Founder or Co-Creator may change its schedule", http.StatusForbidden)
 		return
 	}
 
