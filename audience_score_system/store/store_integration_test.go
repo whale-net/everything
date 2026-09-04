@@ -1664,3 +1664,270 @@ func TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp(t *t
 		assert.True(t, exists, "index %s must exist on mcp_credential after up/down/up", idx)
 	}
 }
+
+// ── MyWorkStore (issue #1717, FR27/FR28, NFR9) ─────────────────────────────
+
+// setupMyWorkOutcomeChain builds one viable Idea on ch with a committed
+// schedule entry, a published SyncedVideo, one VideoMetrics snapshot, and
+// an "auto" video_schedule_match linking them -- the qualifying-row shape
+// BrowseStore.PredictionVsOutcome (and MyWorkStore's outcome section,
+// which shares its join) requires. Mirrors mcp/tools/
+// browse_integration_test.go's newFullChainFixture, at the store layer.
+func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, ch store.Channel, creator store.Person, ideaTitle string) (store.Idea, store.Verdict) {
+	t.Helper()
+
+	idea, err := s.Ideas().Create(ctx, ch.ID, ideaTitle, creator.ID)
+	require.NoError(t, err)
+
+	v, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: idea.ID, Verdict: store.VerdictViable, Reasoning: ideaTitle + " reasoning", AuthorPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+
+	entry, err := s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+		ChannelID: ch.ID, IdeaID: idea.ID, VerdictID: v.ID,
+		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: creator.ID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, s.Schedules().Approve(ctx, entry.ID, creator.ID))
+
+	videoTitle := ideaTitle + " Video"
+	publishedAt := time.Now().Add(-time.Hour)
+	require.NoError(t, s.Sync().UpsertVideos(ctx, ch.ID, []store.SyncedVideo{{
+		YouTubeVideoID: "yt-" + uuid.NewString(), Title: videoTitle,
+		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: &publishedAt, LastSyncedAt: time.Now(),
+	}}))
+	synced, err := s.Sync().ListSchedule(ctx, ch.ID)
+	require.NoError(t, err)
+	var video store.SyncedVideo
+	for _, sv := range synced {
+		if sv.Title == videoTitle {
+			video = sv
+		}
+	}
+	require.NotEqual(t, uuid.Nil, video.ID, "the just-synced video must be found by title")
+
+	require.NoError(t, s.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
+		SyncedVideoID: video.ID, Views: ptrInt64(500), MeasuredAt: time.Now(),
+	}}))
+
+	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.9, State: store.MatchStateAuto,
+	}))
+
+	return idea, v
+}
+
+// TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSectionContent
+// proves FR27: a Person on three Channels at three different tiers, each
+// with distinct note/verdict/schedule/outcome fixtures, gets exactly those
+// three Channels back, each paired with its own tier, with no cross-Channel
+// bleed into any section.
+func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSectionContent(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "p@example.com", "Person")
+	require.NoError(t, err)
+
+	// A: person is Founder -- one draft-only schedule_entry, no outcome yet.
+	chA, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "A Channel", person.ID)
+	require.NoError(t, err)
+	noteA, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chA.ID, Text: "A note", AuthorPersonID: person.ID})
+	require.NoError(t, err)
+	ideaA, err := s.Ideas().Create(ctx, chA.ID, "A Idea", person.ID)
+	require.NoError(t, err)
+	verdictA, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaA.ID, Verdict: store.VerdictViable, Reasoning: "A reasoning", AuthorPersonID: person.ID,
+	})
+	require.NoError(t, err)
+	_, err = s.Schedules().SaveDraft(ctx, store.SaveDraftInput{
+		ChannelID: chA.ID, IdeaID: ideaA.ID, VerdictID: verdictA.ID,
+		ProposedPublishAt: time.Now().Add(48 * time.Hour), CreatedByPersonID: person.ID,
+	})
+	require.NoError(t, err)
+
+	// B: person is Co-Creator, granted by B's own Founder -- full outcome
+	// chain (committed schedule entry, published matched video).
+	founderB, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "fb@example.com", "Founder B")
+	require.NoError(t, err)
+	chB, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "B Channel", founderB.ID)
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
+	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B note", AuthorPersonID: founderB.ID})
+	require.NoError(t, err)
+	ideaB, verdictB := setupMyWorkOutcomeChain(t, ctx, s, chB, founderB, "B Idea")
+
+	// C: person is Analyst, granted by C's own Founder -- a note and a
+	// (not-viable) verdict only, no schedule/outcome data at all.
+	founderC, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "fc@example.com", "Founder C")
+	require.NoError(t, err)
+	chC, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "C Channel", founderC.ID)
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, chC.ID, person.ID, store.RoleAnalyst, founderC.ID))
+	noteC, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chC.ID, Text: "C note", AuthorPersonID: founderC.ID})
+	require.NoError(t, err)
+	ideaC, err := s.Ideas().Create(ctx, chC.ID, "C Idea", founderC.ID)
+	require.NoError(t, err)
+	verdictC, err := s.Verdicts().Append(ctx, store.AppendVerdictInput{
+		IdeaID: ideaC.ID, Verdict: store.VerdictNotViable, Reasoning: "C reasoning", AuthorPersonID: founderC.ID,
+	})
+	require.NoError(t, err)
+
+	got, err := s.MyWork().SummariesForPerson(ctx, person.ID, 5)
+	require.NoError(t, err)
+	require.Len(t, got, 3, "must cover every Channel the Person holds an open role on")
+
+	// A: Founder tier, one draft, no outcome.
+	assert.Equal(t, chA.ID, got[0].Channel.ID)
+	assert.Equal(t, store.RoleCreator, got[0].Role)
+	require.Len(t, got[0].LatestNotes, 1)
+	assert.Equal(t, noteA.ID, got[0].LatestNotes[0].ID)
+	require.NotNil(t, got[0].LatestVerdict)
+	assert.Equal(t, verdictA.ID, got[0].LatestVerdict.VerdictID)
+	assert.Equal(t, ideaA.ID, got[0].LatestVerdict.IdeaID)
+	assert.Equal(t, 1, got[0].ScheduleState.DraftCount)
+	assert.Equal(t, 0, got[0].ScheduleState.CommittedCount)
+	require.NotNil(t, got[0].ScheduleState.NextProposedPublishAt)
+	assert.Nil(t, got[0].LatestOutcome, "A has no published/matched video yet")
+
+	// B: Co-Creator tier, full outcome chain.
+	assert.Equal(t, chB.ID, got[1].Channel.ID)
+	assert.Equal(t, store.RoleCoCreator, got[1].Role)
+	require.Len(t, got[1].LatestNotes, 1)
+	assert.Equal(t, noteB.ID, got[1].LatestNotes[0].ID)
+	require.NotNil(t, got[1].LatestVerdict)
+	assert.Equal(t, verdictB.ID, got[1].LatestVerdict.VerdictID)
+	assert.Equal(t, 0, got[1].ScheduleState.DraftCount)
+	assert.Equal(t, 1, got[1].ScheduleState.CommittedCount)
+	require.NotNil(t, got[1].LatestOutcome, "B has a full committed/matched/published chain")
+	assert.Equal(t, ideaB.ID, got[1].LatestOutcome.IdeaID)
+	assert.Equal(t, verdictB.ID, got[1].LatestOutcome.VerdictID)
+
+	// C: Analyst tier, note + verdict only.
+	assert.Equal(t, chC.ID, got[2].Channel.ID)
+	assert.Equal(t, store.RoleAnalyst, got[2].Role)
+	require.Len(t, got[2].LatestNotes, 1)
+	assert.Equal(t, noteC.ID, got[2].LatestNotes[0].ID)
+	require.NotNil(t, got[2].LatestVerdict)
+	assert.Equal(t, verdictC.ID, got[2].LatestVerdict.VerdictID)
+	assert.Equal(t, 0, got[2].ScheduleState.DraftCount)
+	assert.Equal(t, 0, got[2].ScheduleState.CommittedCount)
+	assert.Nil(t, got[2].ScheduleState.NextProposedPublishAt)
+	assert.Nil(t, got[2].LatestOutcome)
+}
+
+// TestMyWorkStore_SummariesForPerson_EmptyChannelStillAppears proves a
+// freshly connected Channel with no notes/verdicts/schedule/outcome data
+// still yields an entry -- empty sections, never a missing Channel.
+func TestMyWorkStore_SummariesForPerson_EmptyChannelStillAppears(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+	ch, creator := setupChannel(t, ctx, s)
+
+	got, err := s.MyWork().SummariesForPerson(ctx, creator.ID, 5)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+
+	assert.Equal(t, ch.ID, got[0].Channel.ID)
+	assert.Equal(t, store.RoleCreator, got[0].Role)
+	assert.NotNil(t, got[0].LatestNotes, "must be an empty slice, not nil, for a Channel with no notes")
+	assert.Empty(t, got[0].LatestNotes)
+	assert.Nil(t, got[0].LatestVerdict)
+	assert.Equal(t, store.ScheduleDraftState{}, got[0].ScheduleState)
+	assert.Nil(t, got[0].LatestOutcome)
+}
+
+// TestMyWorkStore_SummariesForPerson_QueryCountIsBoundedAcrossChannelCount
+// proves NFR9 -- the whole point of this task: the number of SQL
+// statements SummariesForPerson issues for a Person on 2 Channels equals
+// the number for a Person on 10 Channels, and both are <= 5 (one Channel
+// listing plus one each for notes/verdicts/schedule/outcomes). A naive
+// per-Channel loop would fail this by construction (the count would scale
+// with Channel count) -- this is the test that must be written and watched
+// fail against such a loop before this task's implementation exists.
+func TestMyWorkStore_SummariesForPerson_QueryCountIsBoundedAcrossChannelCount(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+
+	countQueriesFor := func(numChannels int) int64 {
+		person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), fmt.Sprintf("p%d@example.com", numChannels), "Person")
+		require.NoError(t, err)
+
+		for i := 0; i < numChannels; i++ {
+			founder, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), fmt.Sprintf("f%d-%d@example.com", numChannels, i), fmt.Sprintf("Founder %d-%d", numChannels, i))
+			require.NoError(t, err)
+			ch, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), fmt.Sprintf("Channel %d-%d", numChannels, i), founder.ID)
+			require.NoError(t, err)
+			require.NoError(t, s.Roles().AddRole(ctx, ch.ID, person.ID, store.RoleAnalyst, founder.ID))
+			_, err = s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: ch.ID, Text: "note", AuthorPersonID: founder.ID})
+			require.NoError(t, err)
+		}
+
+		counter := &queryCounter{}
+		traced := tracedStore(t, ctx, db, counter)
+
+		before := counter.n.Load()
+		got, err := traced.MyWork().SummariesForPerson(ctx, person.ID, 5)
+		require.NoError(t, err)
+		require.Len(t, got, numChannels)
+
+		return counter.n.Load() - before
+	}
+
+	count2 := countQueriesFor(2)
+	count10 := countQueriesFor(10)
+
+	assert.Equal(t, count2, count10, "query count must not scale with Channel count (NFR9)")
+	assert.LessOrEqual(t, count2, int64(5), "at most 5 statements total: channel list, notes, verdicts, schedule, outcomes")
+}
+
+// TestMyWorkStore_SummariesForPerson_RevokedRoleDropsChannelImmediately
+// proves FR28: revoking a Person's role on a Channel drops it from the
+// very next SummariesForPerson call, with no re-auth and no new store/
+// connection required.
+func TestMyWorkStore_SummariesForPerson_RevokedRoleDropsChannelImmediately(t *testing.T) {
+	ctx := context.Background()
+	s, _ := newStore(t)
+
+	person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "p@example.com", "Person")
+	require.NoError(t, err)
+	founder, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "f@example.com", "Founder")
+	require.NoError(t, err)
+	ch, err := s.Channels().Create(ctx, "yt-"+uuid.NewString(), "Channel", founder.ID)
+	require.NoError(t, err)
+	require.NoError(t, s.Roles().AddRole(ctx, ch.ID, person.ID, store.RoleAnalyst, founder.ID))
+
+	before, err := s.MyWork().SummariesForPerson(ctx, person.ID, 5)
+	require.NoError(t, err)
+	require.Len(t, before, 1, "must appear while the role is open")
+
+	removed, err := s.Roles().RemoveRole(ctx, ch.ID, person.ID, founder.ID)
+	require.NoError(t, err)
+	require.True(t, removed)
+
+	after, err := s.MyWork().SummariesForPerson(ctx, person.ID, 5)
+	require.NoError(t, err)
+	assert.Empty(t, after, "a revoked role must drop the Channel out on the very next call -- no re-auth, no new connection, no cache")
+}
+
+// TestMyWorkStore_SummariesForPerson_NoRoles_ReturnsEmpty_NoExtraQueries
+// proves a Person with no open role on any Channel gets an empty slice
+// back after exactly the one Channel-listing query, with no further
+// section queries issued.
+func TestMyWorkStore_SummariesForPerson_NoRoles_ReturnsEmpty_NoExtraQueries(t *testing.T) {
+	ctx := context.Background()
+	s, db := newStore(t)
+
+	unassociated, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "u@example.com", "Unassociated")
+	require.NoError(t, err)
+
+	counter := &queryCounter{}
+	traced := tracedStore(t, ctx, db, counter)
+
+	before := counter.n.Load()
+	got, err := traced.MyWork().SummariesForPerson(ctx, unassociated.ID, 5)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	assert.Equal(t, int64(1), counter.n.Load()-before, "no open role anywhere must short-circuit after the one Channel-listing query")
+}
