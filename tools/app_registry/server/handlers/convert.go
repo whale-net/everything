@@ -456,12 +456,13 @@ func promotionSyncOutcomeToPB(o repository.PromotionSyncOutcome) pb.PromotionSyn
 
 func promotionSyncEventToPB(e repository.PromotionSyncEvent) *pb.PromotionSyncEvent {
 	return &pb.PromotionSyncEvent{
-		SyncEventId:  e.SyncEventID,
-		PromotionId:  e.PromotionID,
-		Source:       e.Source,
-		SyncStatus:   e.SyncStatus,
-		HealthStatus: e.HealthStatus,
-		OccurredAt:   timeToUnix(e.OccurredAt),
+		SyncEventId:    e.SyncEventID,
+		PromotionId:    e.PromotionID,
+		Source:         e.Source,
+		SyncStatus:     e.SyncStatus,
+		HealthStatus:   e.HealthStatus,
+		OperationPhase: e.OperationPhase,
+		OccurredAt:     timeToUnix(e.OccurredAt),
 	}
 }
 
@@ -482,15 +483,16 @@ func promotionSyncEventsToPB(events []repository.PromotionSyncEvent) []*pb.Promo
 // but is not treated as a hard error either.
 func promotionDetailsToPB(d *repository.PromotionDetails) *pb.PromotionDetails {
 	out := &pb.PromotionDetails{
-		Promotion:           promotionToPB(d.Promotion),
-		FromVersion:         d.FromVersion,
-		ToVersion:           d.ToVersion,
-		WritebackLocation:   d.WritebackLocation,
-		WritebackCommitSha:  d.WritebackCommitSHA,
-		SyncEvents:          promotionSyncEventsToPB(d.SyncEvents),
-		CurrentSyncStatus:   d.CurrentSyncStatus,
-		CurrentHealthStatus: d.CurrentHealthStatus,
-		Outcome:             promotionSyncOutcomeToPB(d.Outcome),
+		Promotion:             promotionToPB(d.Promotion),
+		FromVersion:           d.FromVersion,
+		ToVersion:             d.ToVersion,
+		WritebackLocation:     d.WritebackLocation,
+		WritebackCommitSha:    d.WritebackCommitSHA,
+		SyncEvents:            promotionSyncEventsToPB(d.SyncEvents),
+		CurrentSyncStatus:     d.CurrentSyncStatus,
+		CurrentHealthStatus:   d.CurrentHealthStatus,
+		CurrentOperationPhase: d.CurrentOperationPhase,
+		Outcome:               promotionSyncOutcomeToPB(d.Outcome),
 	}
 	if d.RequestEvent.EventID != "" {
 		out.RequestEvent = promotionEventToPB(d.RequestEvent)

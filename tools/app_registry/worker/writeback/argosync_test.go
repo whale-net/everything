@@ -117,9 +117,10 @@ func TestArgoSyncActivities_TriggerArgoRefresh_ClientFailurePropagates(t *testin
 }
 
 // argoStatusServer returns an http.HandlerFunc serving the given
-// (syncStatus, healthStatus) pairs in order, one per GetStatus call --
-// letting a test script a specific attempt-by-attempt sequence.
-func argoStatusServer(statuses [][2]string) http.HandlerFunc {
+// (syncStatus, healthStatus, operationPhase) triples in order, one per
+// GetStatus call -- letting a test script a specific attempt-by-attempt
+// sequence.
+func argoStatusServer(statuses [][3]string) http.HandlerFunc {
 	call := 0
 	return func(w http.ResponseWriter, r *http.Request) {
 		i := call
@@ -127,9 +128,9 @@ func argoStatusServer(statuses [][2]string) http.HandlerFunc {
 			i = len(statuses) - 1
 		}
 		call++
-		pair := statuses[i]
+		triple := statuses[i]
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":{"sync":{"status":"` + pair[0] + `"},"health":{"status":"` + pair[1] + `"}}}`))
+		w.Write([]byte(`{"status":{"sync":{"status":"` + triple[0] + `"},"health":{"status":"` + triple[1] + `"},"operationState":{"phase":"` + triple[2] + `"}}}`))
 	}
 }
 
@@ -142,12 +143,12 @@ func TestArgoSyncActivities_PollArgoSyncStatus_StopsEarlyOnSyncedHealthy(t *test
 	a, registry, promotionID := newTestArgoSyncActivities(t, func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"}}}`))
+		w.Write([]byte(`{"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"},"operationState":{"phase":"Succeeded"}}}`))
 	})
 
 	result, err := runPollArgoSyncStatus(t, a, ArgoSyncInput{PromotionID: promotionID, Domain: "acme", ApplicationName: "foo-stage"})
 	require.NoError(t, err)
-	require.Equal(t, ArgoSyncResult{SyncStatus: "Synced", HealthStatus: "Healthy", Terminal: true}, result)
+	require.Equal(t, ArgoSyncResult{SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded", Terminal: true}, result)
 	require.Equal(t, 1, calls, "expected exactly one GetStatus call")
 
 	events, err := registry.Promotions().ListSyncEvents(t.Context(), promotionID)
@@ -156,6 +157,55 @@ func TestArgoSyncActivities_PollArgoSyncStatus_StopsEarlyOnSyncedHealthy(t *test
 	require.Equal(t, repository.PromotionSyncEventSourcePollObserved, events[0].Source)
 	require.Equal(t, "Synced", events[0].SyncStatus)
 	require.Equal(t, "Healthy", events[0].HealthStatus)
+	require.Equal(t, "Succeeded", events[0].OperationPhase)
+}
+
+// TestArgoSyncActivities_PollArgoSyncStatus_WaitsForHookToFinish is the
+// direct regression test for the bug this whole change fixes: a migration
+// Job implemented as a PostSync hook is excluded from ArgoCD's health
+// rollup, so the Application can report Synced+Healthy on attempt 1 while
+// the hook is still Running -- PollArgoSyncStatus must NOT stop early on
+// that observation, and must only report Terminal once operationPhase
+// flips to Succeeded on a later attempt.
+func TestArgoSyncActivities_PollArgoSyncStatus_WaitsForHookToFinish(t *testing.T) {
+	a, registry, promotionID := newTestArgoSyncActivities(t, argoStatusServer([][3]string{
+		{"Synced", "Healthy", "Running"},
+		{"Synced", "Healthy", "Running"},
+		{"Synced", "Healthy", "Succeeded"},
+	}))
+
+	result, err := runPollArgoSyncStatus(t, a, ArgoSyncInput{PromotionID: promotionID, Domain: "acme", ApplicationName: "foo-stage"})
+	require.NoError(t, err)
+	require.Equal(t, ArgoSyncResult{SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded", Terminal: true}, result)
+
+	events, err := registry.Promotions().ListSyncEvents(t.Context(), promotionID)
+	require.NoError(t, err)
+	require.Len(t, events, 3, "expected one poll_observed row per attempt until the hook finished")
+	require.False(t, isTerminalArgoSyncState(events[0].SyncStatus, events[0].HealthStatus, events[0].OperationPhase),
+		"Synced+Healthy while the hook operation is Running must not be treated as terminal")
+}
+
+// TestArgoSyncActivities_PollArgoSyncStatus_HookFailureIsTerminal proves the
+// other half of the fix: a Failed/Error operationPhase is terminal-failure
+// even when health still reads Healthy (the non-hook resources the failed
+// hook gates can look fine on their own).
+func TestArgoSyncActivities_PollArgoSyncStatus_HookFailureIsTerminal(t *testing.T) {
+	var calls int
+	a, registry, promotionID := newTestArgoSyncActivities(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":{"sync":{"status":"Synced"},"health":{"status":"Healthy"},"operationState":{"phase":"Failed"}}}`))
+	})
+
+	result, err := runPollArgoSyncStatus(t, a, ArgoSyncInput{PromotionID: promotionID, Domain: "acme", ApplicationName: "foo-stage"})
+	require.NoError(t, err)
+	require.True(t, result.Terminal)
+	require.Equal(t, "Failed", result.OperationPhase)
+	require.Equal(t, 1, calls, "expected exactly one GetStatus call")
+
+	events, err := registry.Promotions().ListSyncEvents(t.Context(), promotionID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
 }
 
 // TestArgoSyncActivities_PollArgoSyncStatus_StopsEarlyOnDegraded proves
@@ -212,10 +262,10 @@ func TestArgoSyncActivities_PollArgoSyncStatus_ExhaustsAttempts_NeverFails(t *te
 // stops at attempt 2, not attempt 3 -- exercising argoStatusServer's
 // sequenced-response helper.
 func TestArgoSyncActivities_PollArgoSyncStatus_TransitionsToTerminalMidway(t *testing.T) {
-	a, registry, promotionID := newTestArgoSyncActivities(t, argoStatusServer([][2]string{
-		{"OutOfSync", "Progressing"},
-		{"Synced", "Healthy"},
-		{"Synced", "Healthy"},
+	a, registry, promotionID := newTestArgoSyncActivities(t, argoStatusServer([][3]string{
+		{"OutOfSync", "Progressing", ""},
+		{"Synced", "Healthy", "Succeeded"},
+		{"Synced", "Healthy", "Succeeded"},
 	}))
 
 	result, err := runPollArgoSyncStatus(t, a, ArgoSyncInput{PromotionID: promotionID, Domain: "acme", ApplicationName: "foo-stage"})
@@ -322,7 +372,7 @@ func TestArgoSyncActivities_RecordSyncEvent_PublishesAfterWrite(t *testing.T) {
 	pub := NewFakePublisher()
 	a.Publisher = pub
 
-	_, err := a.recordSyncEvent(t.Context(), promotionID, repository.PromotionSyncEventSourceRefreshTriggered, "", "")
+	_, err := a.recordSyncEvent(t.Context(), promotionID, repository.PromotionSyncEventSourceRefreshTriggered, "", "", "")
 	require.NoError(t, err)
 
 	// Verify event was published with correct payload
@@ -342,7 +392,7 @@ func TestArgoSyncActivities_RecordSyncEvent_NoPublisherConfigured(t *testing.T) 
 	})
 	a.Publisher = nil // Explicitly nil
 
-	_, err := a.recordSyncEvent(t.Context(), promotionID, repository.PromotionSyncEventSourcePollObserved, "Synced", "Healthy")
+	_, err := a.recordSyncEvent(t.Context(), promotionID, repository.PromotionSyncEventSourcePollObserved, "Synced", "Healthy", "Succeeded")
 	require.NoError(t, err)
 
 	// Verify the event was still recorded in the database
@@ -355,9 +405,9 @@ func TestArgoSyncActivities_RecordSyncEvent_NoPublisherConfigured(t *testing.T) 
 // different sync event sources publish with the correct event kind.
 func TestArgoSyncActivities_RecordSyncEvent_PublishesCorrectEventKind(t *testing.T) {
 	tests := []struct {
-		name      string
-		source    string
-		wantKind  string
+		name     string
+		source   string
+		wantKind string
 	}{
 		{"RefreshTriggered", repository.PromotionSyncEventSourceRefreshTriggered, repository.PromotionSyncEventSourceRefreshTriggered},
 		{"PollObserved", repository.PromotionSyncEventSourcePollObserved, repository.PromotionSyncEventSourcePollObserved},
@@ -374,7 +424,7 @@ func TestArgoSyncActivities_RecordSyncEvent_PublishesCorrectEventKind(t *testing
 			pub := NewFakePublisher()
 			a.Publisher = pub
 
-			_, err := a.recordSyncEvent(t.Context(), promotionID, tt.source, "Synced", "Healthy")
+			_, err := a.recordSyncEvent(t.Context(), promotionID, tt.source, "Synced", "Healthy", "Succeeded")
 			require.NoError(t, err)
 
 			require.Len(t, pub.events, 1)
@@ -382,4 +432,3 @@ func TestArgoSyncActivities_RecordSyncEvent_PublishesCorrectEventKind(t *testing
 		})
 	}
 }
-

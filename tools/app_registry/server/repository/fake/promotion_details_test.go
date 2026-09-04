@@ -41,7 +41,7 @@ func TestPromotionFake_GetDetails_AssemblesFullLifecycle(t *testing.T) {
 		t.Fatalf("RecordSyncEvent (refresh): %v", err)
 	}
 	if _, err := r.Promotions().RecordSyncEvent(ctx, repository.PromotionSyncEvent{
-		PromotionID: promotion.PromotionID, Source: repository.PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy",
+		PromotionID: promotion.PromotionID, Source: repository.PromotionSyncEventSourcePollObserved, SyncStatus: "Synced", HealthStatus: "Healthy", OperationPhase: "Succeeded",
 	}); err != nil {
 		t.Fatalf("RecordSyncEvent (poll): %v", err)
 	}

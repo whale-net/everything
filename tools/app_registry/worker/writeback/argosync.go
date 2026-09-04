@@ -74,8 +74,16 @@ type ArgoSyncInput struct {
 type ArgoSyncResult struct {
 	SyncStatus   string
 	HealthStatus string
-	// Terminal is true when SyncStatus/HealthStatus reached a stop-early
-	// state (FR4) before pollArgoSyncMaxAttempts was exhausted.
+	// OperationPhase is ArgoCD's status.operationState.phase (e.g.
+	// "Running"/"Succeeded"/"Failed"/"Error"), "" if no operation has run.
+	// It is the only signal that reflects hook resources (PreSync/Sync/
+	// PostSync, e.g. a migration Job) -- see isTerminalArgoSyncState's doc
+	// comment for why SyncStatus/HealthStatus alone are not enough to know
+	// every resource has finished rolling out.
+	OperationPhase string
+	// Terminal is true when SyncStatus/HealthStatus/OperationPhase reached
+	// a stop-early state (FR4) before pollArgoSyncMaxAttempts was
+	// exhausted.
 	Terminal bool
 }
 
@@ -160,7 +168,7 @@ func (a *ArgoSyncActivities) TriggerArgoRefresh(ctx context.Context, in ArgoSync
 	if in.IsRetry {
 		source = repository.PromotionSyncEventSourceRetryTriggered
 	}
-	if _, err := a.recordSyncEvent(ctx, in.PromotionID, source, "", ""); err != nil {
+	if _, err := a.recordSyncEvent(ctx, in.PromotionID, source, "", "", ""); err != nil {
 		return fmt.Errorf("trigger argo refresh for promotion %s: %w", in.PromotionID, err)
 	}
 	workerLog.Info("argo refresh triggered",
@@ -205,19 +213,19 @@ func (a *ArgoSyncActivities) PollArgoSyncStatus(ctx context.Context, in ArgoSync
 	for attempt := 1; attempt <= pollArgoSyncMaxAttempts; attempt++ {
 		activity.RecordHeartbeat(ctx, fmt.Sprintf("attempt %d/%d", attempt, pollArgoSyncMaxAttempts))
 
-		syncStatus, healthStatus, err := a.Client.GetStatus(ctx, in.Domain, in.ApplicationName)
+		syncStatus, healthStatus, operationPhase, err := a.Client.GetStatus(ctx, in.Domain, in.ApplicationName)
 		if err != nil {
 			return ArgoSyncResult{}, fmt.Errorf("poll argo sync status for promotion %s (attempt %d/%d): %w", in.PromotionID, attempt, pollArgoSyncMaxAttempts, err)
 		}
-		if _, err := a.recordSyncEvent(ctx, in.PromotionID, pollSource, syncStatus, healthStatus); err != nil {
+		if _, err := a.recordSyncEvent(ctx, in.PromotionID, pollSource, syncStatus, healthStatus, operationPhase); err != nil {
 			return ArgoSyncResult{}, fmt.Errorf("poll argo sync status for promotion %s (attempt %d/%d): %w", in.PromotionID, attempt, pollArgoSyncMaxAttempts, err)
 		}
 
-		last = ArgoSyncResult{SyncStatus: syncStatus, HealthStatus: healthStatus}
-		if isTerminalArgoSyncState(syncStatus, healthStatus) {
+		last = ArgoSyncResult{SyncStatus: syncStatus, HealthStatus: healthStatus, OperationPhase: operationPhase}
+		if isTerminalArgoSyncState(syncStatus, healthStatus, operationPhase) {
 			last.Terminal = true
 			workerLog.Info("argo sync reached terminal state",
-				"promotion_id", in.PromotionID, "attempt", attempt, "sync_status", syncStatus, "health_status", healthStatus)
+				"promotion_id", in.PromotionID, "attempt", attempt, "sync_status", syncStatus, "health_status", healthStatus, "operation_phase", operationPhase)
 			return last, nil
 		}
 
@@ -242,16 +250,34 @@ func (a *ArgoSyncActivities) PollArgoSyncStatus(ctx context.Context, in ArgoSync
 	return last, nil
 }
 
-// isTerminalArgoSyncState reports whether the observed sync/health pair is
-// one PollArgoSyncStatus should stop early on (FR4): fully synced and
-// healthy, or degraded (ArgoCD's health status for an application whose
-// sync succeeded but whose workload failed to come up, or reports the sync
-// itself failing).
-func isTerminalArgoSyncState(syncStatus, healthStatus string) bool {
-	if syncStatus == "Synced" && healthStatus == "Healthy" {
+// isTerminalArgoSyncState reports whether the observed sync/health/
+// operation-phase triple is one PollArgoSyncStatus should stop early on
+// (FR4).
+//
+// Synced+Healthy alone is NOT sufficient to declare success: ArgoCD
+// excludes hook resources (PreSync/Sync/PostSync, e.g. a migration Job run
+// via the argocd.argoproj.io/hook annotation) from the Health rollup
+// entirely, so an Application can report Sync.Status=Synced,
+// Health.Status=Healthy while a PostSync hook is still Running -- exactly
+// the "readiness banner said ready before the migration job was even
+// scheduled" race this field exists to close. operationPhase=="Succeeded"
+// is ArgoCD's own confirmation that the most recent sync operation --
+// including every hook it ran -- has fully completed, so success requires
+// all three: Synced, Healthy, AND Succeeded.
+//
+// Degraded health is terminal-failure regardless of operationPhase (a
+// workload came up unhealthy after sync). A Failed/Error operationPhase is
+// ALSO terminal-failure even if health still reads Healthy, since that is
+// exactly the case of a hook (e.g. the migration job) failing while the
+// non-hook resources it gates remain healthy.
+func isTerminalArgoSyncState(syncStatus, healthStatus, operationPhase string) bool {
+	if healthStatus == "Degraded" {
 		return true
 	}
-	return healthStatus == "Degraded"
+	if operationPhase == "Failed" || operationPhase == "Error" {
+		return true
+	}
+	return syncStatus == "Synced" && healthStatus == "Healthy" && operationPhase == "Succeeded"
 }
 
 // NoopArgoSyncActivities is the zero-config fallback registered instead of
@@ -355,15 +381,16 @@ func RetryArgoSyncWorkflow(ctx workflow.Context, in ArgoSyncInput) (ArgoSyncResu
 // recordSyncEvent is TriggerArgoRefresh/PollArgoSyncStatus's shared
 // promotion_sync_event write -- see repository.PromotionRepository.
 // RecordSyncEvent's doc comment (append-only, NFR4).
-func (a *ArgoSyncActivities) recordSyncEvent(ctx context.Context, promotionID, source, syncStatus, healthStatus string) (*repository.PromotionSyncEvent, error) {
+func (a *ArgoSyncActivities) recordSyncEvent(ctx context.Context, promotionID, source, syncStatus, healthStatus, operationPhase string) (*repository.PromotionSyncEvent, error) {
 	if a.Registry == nil {
 		return nil, fmt.Errorf("record promotion sync event for promotion %s: ArgoSyncActivities.Registry not configured", promotionID)
 	}
 	e, err := a.Registry.Promotions().RecordSyncEvent(ctx, repository.PromotionSyncEvent{
-		PromotionID:  promotionID,
-		Source:       source,
-		SyncStatus:   syncStatus,
-		HealthStatus: healthStatus,
+		PromotionID:    promotionID,
+		Source:         source,
+		SyncStatus:     syncStatus,
+		HealthStatus:   healthStatus,
+		OperationPhase: operationPhase,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("record promotion sync event for promotion %s: %w", promotionID, err)

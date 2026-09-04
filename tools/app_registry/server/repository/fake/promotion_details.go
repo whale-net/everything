@@ -83,18 +83,19 @@ func (f promotionFake) GetDetails(ctx context.Context, promotionID string) (*rep
 	if err != nil {
 		return nil, fmt.Errorf("get promotion details for %s: list sync events: %w", promotionID, err)
 	}
-	outcome, currentSyncStatus, currentHealthStatus := repository.DerivePromotionSyncOutcome(syncEvents)
+	outcome, currentSyncStatus, currentHealthStatus, currentOperationPhase := repository.DerivePromotionSyncOutcome(syncEvents)
 
 	return &repository.PromotionDetails{
-		Promotion:           promotion,
-		RequestEvent:        requestEvent,
-		FromVersion:         fromVersion,
-		ToVersion:           promotion.Version,
-		WritebackLocation:   location,
-		WritebackCommitSHA:  commitSHA,
-		SyncEvents:          syncEvents,
-		CurrentSyncStatus:   currentSyncStatus,
-		CurrentHealthStatus: currentHealthStatus,
-		Outcome:             outcome,
+		Promotion:             promotion,
+		RequestEvent:          requestEvent,
+		FromVersion:           fromVersion,
+		ToVersion:             promotion.Version,
+		WritebackLocation:     location,
+		WritebackCommitSHA:    commitSHA,
+		SyncEvents:            syncEvents,
+		CurrentSyncStatus:     currentSyncStatus,
+		CurrentHealthStatus:   currentHealthStatus,
+		CurrentOperationPhase: currentOperationPhase,
+		Outcome:               outcome,
 	}, nil
 }

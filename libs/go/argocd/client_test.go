@@ -175,12 +175,13 @@ func TestGetStatus_SyncedHealthy(t *testing.T) {
 		w.Write([]byte(`{
 			"status": {
 				"sync": {"status": "Synced"},
-				"health": {"status": "Healthy"}
+				"health": {"status": "Healthy"},
+				"operationState": {"phase": "Succeeded"}
 			}
 		}`))
 	})
 
-	syncStatus, health, err := c.GetStatus(context.Background(), "my-project", "my-app")
+	syncStatus, health, operationPhase, err := c.GetStatus(context.Background(), "my-project", "my-app")
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
@@ -189,6 +190,37 @@ func TestGetStatus_SyncedHealthy(t *testing.T) {
 	}
 	if health != "Healthy" {
 		t.Errorf("health = %q, want Healthy", health)
+	}
+	if operationPhase != "Succeeded" {
+		t.Errorf("operationPhase = %q, want Succeeded", operationPhase)
+	}
+}
+
+// TestGetStatus_SyncedHealthyOperationRunning proves the exact race this
+// field exists to catch: a hook resource (e.g. a migration Job run as a
+// PostSync hook) is excluded from ArgoCD's health rollup, so
+// sync.status=Synced, health.status=Healthy can be reported while the
+// operation itself -- including that hook -- is still Running. Callers must
+// read operationPhase, not just syncStatus/health, to know the hook is
+// still in flight.
+func TestGetStatus_SyncedHealthyOperationRunning(t *testing.T) {
+	c, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{
+			"status": {
+				"sync": {"status": "Synced"},
+				"health": {"status": "Healthy"},
+				"operationState": {"phase": "Running"}
+			}
+		}`))
+	})
+
+	_, _, operationPhase, err := c.GetStatus(context.Background(), "my-project", "my-app")
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if operationPhase != "Running" {
+		t.Errorf("operationPhase = %q, want Running", operationPhase)
 	}
 }
 
@@ -203,7 +235,7 @@ func TestGetStatus_DegradedOutOfSync(t *testing.T) {
 		}`))
 	})
 
-	syncStatus, health, err := c.GetStatus(context.Background(), "my-project", "my-app")
+	syncStatus, health, _, err := c.GetStatus(context.Background(), "my-project", "my-app")
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
 	}
@@ -223,7 +255,7 @@ func TestGetStatus_NonOKStatus(t *testing.T) {
 				w.Write([]byte("error body"))
 			})
 
-			_, _, err := c.GetStatus(context.Background(), "proj", "app")
+			_, _, _, err := c.GetStatus(context.Background(), "proj", "app")
 			if err == nil {
 				t.Fatal("GetStatus: got nil error, want non-nil")
 			}
