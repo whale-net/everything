@@ -11,8 +11,8 @@
 // TestGetPredictionVsOutcome_BoundVerdictSurvivesNewerVerdictVersion: it
 // proves store.BrowseStore.PredictionVsOutcome's documented deliberate
 // deviation from migration 002's v_prediction_vs_outcome view (see
-// ../../store/browse.go's PredictionVsOutcome doc) -- that a schedule_entry
-// committed under an older viability_verdict version keeps showing that
+// ../../store/browse.go's PredictionVsOutcome doc) -- that a video_script
+// greenlit under an older viability_verdict version keeps showing that
 // bound version in the comparison read even after a newer version is
 // appended for the same Idea, rather than silently dropping the row or
 // re-deriving via idea_id the way the view does.
@@ -193,16 +193,17 @@ func mdecode[T any](t *testing.T, res *mcp.CallToolResult) T {
 }
 
 // fullChainFixture is a fully-populated Channel: one Idea with two
-// viability_verdict versions, a committed schedule_entry bound to the
-// OLDER version, a published SyncedVideo, one VideoMetrics snapshot, and
-// an "auto" video_schedule_match linking them -- the chain both
-// get_channel_overview and get_prediction_vs_outcome exist to render.
+// viability_verdict versions, a greenlit video_script bound to the OLDER
+// version (FR44/#1830's re-anchor onto video_script), a published
+// SyncedVideo, one VideoMetrics snapshot, and an "auto" video_schedule_match
+// linking them -- the chain both get_channel_overview and
+// get_prediction_vs_outcome exist to render.
 type fullChainFixture struct {
 	*browseFixture
 	idea        store.Idea
 	verdictV1   store.Verdict
 	verdictV2   store.Verdict
-	entry       store.ScheduleEntry
+	script      store.VideoScript
 	video       store.SyncedVideo
 	publishedAt time.Time
 }
@@ -220,15 +221,14 @@ func newFullChainFixture(t *testing.T) *fullChainFixture {
 	})
 	require.NoError(t, err)
 
-	entry, err := f.st.Schedules().SaveDraft(ctx, store.SaveDraftInput{
-		ChannelID: f.ch.ID, IdeaID: idea.ID, VerdictID: v1.ID,
-		ProposedPublishAt: time.Now().Add(24 * time.Hour), CreatedByPersonID: f.creator.ID,
-	})
+	script := f.proposeVideoScriptForVerdict(t, ctx, v1.ID, "Full Chain Idea", nil)
+	require.NoError(t, f.st.VideoScripts().Greenlight(ctx, script.ID, f.creator.ID))
+	got, err := f.st.VideoScripts().GetByID(ctx, script.ID)
 	require.NoError(t, err)
-	require.NoError(t, f.st.Schedules().Approve(ctx, entry.ID, f.creator.ID))
+	script = got
 
-	// A SECOND, newer verdict version is appended AFTER the schedule entry
-	// was committed against v1 -- the concrete regression scenario for
+	// A SECOND, newer verdict version is appended AFTER the video_script
+	// was greenlit against v1 -- the concrete regression scenario for
 	// BrowseStore.PredictionVsOutcome's documented "bound version, not
 	// current" contract.
 	v2, err := f.st.Verdicts().Append(ctx, store.AppendVerdictInput{
@@ -236,7 +236,7 @@ func newFullChainFixture(t *testing.T) *fullChainFixture {
 	})
 	require.NoError(t, err)
 	require.Equal(t, 2, v2.Version, "the newer verdict must be version 2")
-	require.Equal(t, 1, v1.Version, "the entry was committed against version 1")
+	require.Equal(t, 1, v1.Version, "the script was greenlit against version 1")
 
 	publishedAt := time.Now().Add(-time.Hour)
 	require.NoError(t, f.st.Sync().UpsertVideos(ctx, f.ch.ID, []store.SyncedVideo{{
@@ -252,19 +252,12 @@ func newFullChainFixture(t *testing.T) *fullChainFixture {
 		SyncedVideoID: video.ID, Views: ptrInt64B(500), MeasuredAt: time.Now(),
 	}}))
 
-	// get_prediction_vs_outcome/get_channel_overview still join
-	// video_schedule_match on schedule_entry_id (#1830's re-anchor onto
-	// video_script, not #1829's) -- seed it by direct SQL rather than
-	// through MatchStore.Record, which as of #1829 never writes
-	// schedule_entry_id (see Record's doc comment, store/match.go).
-	_, err = f.pg.Pool.Exec(ctx, `
-		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
-		VALUES ($1, $2, $3, $4)
-	`, video.ID, entry.ID, 0.91, store.MatchStateAuto)
-	require.NoError(t, err)
+	require.NoError(t, f.st.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &script.ID, Confidence: 0.91, State: store.MatchStateAuto,
+	}))
 
 	return &fullChainFixture{
-		browseFixture: f, idea: idea, verdictV1: v1, verdictV2: v2, entry: entry, video: video, publishedAt: publishedAt,
+		browseFixture: f, idea: idea, verdictV1: v1, verdictV2: v2, script: script, video: video, publishedAt: publishedAt,
 	}
 }
 
@@ -328,7 +321,7 @@ func (f *browseFixture) proposeVideoScriptForVerdict(t *testing.T, ctx context.C
 // TestGetPredictionVsOutcome_BoundVerdictSurvivesNewerVerdictVersion is the
 // concrete regression test for store.BrowseStore.PredictionVsOutcome's
 // documented deviation from v_prediction_vs_outcome: appending a newer
-// verdict version for an Idea AFTER its schedule_entry was committed under
+// verdict version for an Idea AFTER its video_script was greenlit under
 // an older version must not change, drop, or otherwise disturb the
 // comparison row -- it must keep reporting the OLDER, bound version.
 func TestGetPredictionVsOutcome_BoundVerdictSurvivesNewerVerdictVersion(t *testing.T) {
@@ -342,7 +335,7 @@ func TestGetPredictionVsOutcome_BoundVerdictSurvivesNewerVerdictVersion(t *testi
 	row := out.Rows[0]
 	assert.Equal(t, f.idea.ID.String(), row.IdeaID)
 
-	assert.Equal(t, f.verdictV1.ID.String(), row.Verdict.VerdictID, "must report the verdict bound to the schedule_entry (v1), not the idea's current verdict (v2)")
+	assert.Equal(t, f.verdictV1.ID.String(), row.Verdict.VerdictID, "must report the verdict bound to the video_script (v1), not the idea's current verdict (v2)")
 	assert.Equal(t, 1, row.Verdict.Version, "version must be the bound version (1), not the current one (2)")
 	assert.Equal(t, "v1 reasoning", row.Verdict.Reasoning)
 	assert.NotEqual(t, f.verdictV2.ID.String(), row.Verdict.VerdictID, "must NOT be the newer, current verdict version")
@@ -399,7 +392,7 @@ func TestGetPredictionVsOutcome_ConfirmedMatch_IncludedWithProvenanceConfirmed(t
 	// Flip the auto match to pending, then confirm it via MatchStore
 	// directly (resolve_pending_match is #1581's tool, not under test
 	// here) -- proves "confirmed" state renders provenance "confirmed".
-	_, err := f.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET state = 'pending' WHERE schedule_entry_id = $1`, f.entry.ID)
+	_, err := f.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET state = 'pending' WHERE video_script_id = $1`, f.script.ID)
 	require.NoError(t, err)
 	pending, _, err := f.st.Matches().ListPending(ctx, f.ch.ID, nil, 0)
 	require.NoError(t, err)
@@ -417,7 +410,7 @@ func TestGetPredictionVsOutcome_PendingMatch_ExcludedButCounted(t *testing.T) {
 	ctx := context.Background()
 	cs := f.connect(t, f.creator.ID)
 
-	_, err := f.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET state = 'pending' WHERE schedule_entry_id = $1`, f.entry.ID)
+	_, err := f.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET state = 'pending' WHERE video_script_id = $1`, f.script.ID)
 	require.NoError(t, err)
 
 	res := f.call(t, cs, "get_prediction_vs_outcome", tools.GetPredictionVsOutcomeInput{ChannelID: f.ch.ID.String()})
@@ -431,7 +424,7 @@ func TestGetPredictionVsOutcome_RejectedMatch_ExcludedEntirely(t *testing.T) {
 	ctx := context.Background()
 	cs := f.connect(t, f.creator.ID)
 
-	_, err := f.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET state = 'rejected' WHERE schedule_entry_id = $1`, f.entry.ID)
+	_, err := f.pg.Pool.Exec(ctx, `UPDATE video_schedule_match SET state = 'rejected' WHERE video_script_id = $1`, f.script.ID)
 	require.NoError(t, err)
 
 	res := f.call(t, cs, "get_prediction_vs_outcome", tools.GetPredictionVsOutcomeInput{ChannelID: f.ch.ID.String()})
@@ -456,6 +449,91 @@ func TestGetPredictionVsOutcome_VerdictWithNoPublishedVideo_DoesNotAppearOrError
 	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
 	out := mdecode[tools.GetPredictionVsOutcomeOutput](t, res)
 	assert.Empty(t, out.Rows)
+}
+
+// scriptWithConfirmedMatch proposes a fresh Idea/Verdict/Strategy/script
+// (via proposeVideoScript) with status left 'proposed', then transitions
+// it to targetStatus (nil = leave as proposed) before recording a
+// CONFIRMED video_schedule_match to a published, metriced video directly
+// via MatchStore.Record -- bypassing MatchStore.ListCandidates'
+// greenlit-only candidate gating entirely, since this test's point is
+// BrowseStore.PredictionVsOutcome's own qualifying-row rule (script status
+// IN ('greenlit','archived')), not the matcher's.
+func (f *browseFixture) scriptWithConfirmedMatch(t *testing.T, ctx context.Context, ideaTitle string, transition func(scriptID uuid.UUID)) store.VideoScript {
+	t.Helper()
+
+	script := f.proposeVideoScript(t, ctx, ideaTitle, ideaTitle+" Script", nil)
+	if transition != nil {
+		transition(script.ID)
+	}
+	got, err := f.st.VideoScripts().GetByID(ctx, script.ID)
+	require.NoError(t, err)
+
+	require.NoError(t, f.st.Sync().UpsertVideos(ctx, f.ch.ID, []store.SyncedVideo{{
+		YouTubeVideoID: "yt-" + uuid.NewString(), Title: ideaTitle + " Video",
+		PrivacyStatus: store.PrivacyStatusPublic, PublishedAt: ptrTimeB(time.Now()), LastSyncedAt: time.Now(),
+	}}))
+	synced, _, err := f.st.Sync().ListSchedule(ctx, f.ch.ID, nil, nil, true, 0)
+	require.NoError(t, err)
+	var video store.SyncedVideo
+	for _, v := range synced {
+		if v.Title == ideaTitle+" Video" {
+			video = v
+		}
+	}
+	require.NotEqual(t, uuid.Nil, video.ID)
+	require.NoError(t, f.st.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
+		SyncedVideoID: video.ID, Views: ptrInt64B(10), MeasuredAt: time.Now(),
+	}}))
+	require.NoError(t, f.st.Matches().Record(ctx, store.VideoScheduleMatch{
+		SyncedVideoID: video.ID, VideoScriptID: &got.ID, Confidence: 0.8, State: store.MatchStateConfirmed,
+	}))
+
+	return got
+}
+
+func ptrTimeB(t time.Time) *time.Time { return &t }
+
+// TestGetPredictionVsOutcome_ScriptStatusGating_GreenlitAndArchivedAppear_ProposedAndDeniedDoNot
+// is the explicit Testing-section coverage for BrowseStore.
+// PredictionVsOutcome's qualifying-row rule (FR44, #1830): a greenlit
+// script's confirmed match appears, an ARCHIVED script's does too (FR40's
+// archive/match interaction note -- a video can legitimately have
+// published under a script the Channel later pulled back), while a
+// proposed or denied script's never do, even with a live confirmed match
+// recorded directly.
+func TestGetPredictionVsOutcome_ScriptStatusGating_GreenlitAndArchivedAppear_ProposedAndDeniedDoNot(t *testing.T) {
+	f := newBrowseFixture(t)
+	ctx := context.Background()
+	cs := f.connect(t, f.creator.ID)
+
+	greenlit := f.scriptWithConfirmedMatch(t, ctx, "Greenlit Idea", func(id uuid.UUID) {
+		require.NoError(t, f.st.VideoScripts().Greenlight(ctx, id, f.creator.ID))
+	})
+	archived := f.scriptWithConfirmedMatch(t, ctx, "Archived Idea", func(id uuid.UUID) {
+		require.NoError(t, f.st.VideoScripts().Greenlight(ctx, id, f.creator.ID))
+		require.NoError(t, f.st.VideoScripts().Archive(ctx, id, f.creator.ID))
+	})
+	proposed := f.scriptWithConfirmedMatch(t, ctx, "Proposed Idea", nil)
+	denied := f.scriptWithConfirmedMatch(t, ctx, "Denied Idea", func(id uuid.UUID) {
+		require.NoError(t, f.st.VideoScripts().Deny(ctx, id, f.creator.ID))
+	})
+
+	res := f.call(t, cs, "get_prediction_vs_outcome", tools.GetPredictionVsOutcomeInput{ChannelID: f.ch.ID.String()})
+	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
+	out := mdecode[tools.GetPredictionVsOutcomeOutput](t, res)
+
+	byScriptID := make(map[string]tools.PredictionVsOutcomeRowOutput, len(out.Rows))
+	for _, r := range out.Rows {
+		byScriptID[r.Script.VideoScriptID] = r
+	}
+	require.Contains(t, byScriptID, greenlit.ID.String(), "a greenlit script's confirmed match must appear")
+	assert.Equal(t, "greenlit", byScriptID[greenlit.ID.String()].Script.Status)
+	require.Contains(t, byScriptID, archived.ID.String(), "an archived script's confirmed match must still appear (FR40's archive/match interaction note)")
+	assert.Equal(t, "archived", byScriptID[archived.ID.String()].Script.Status)
+	assert.NotContains(t, byScriptID, proposed.ID.String(), "a proposed script must never appear, even with a live confirmed match")
+	assert.NotContains(t, byScriptID, denied.ID.String(), "a denied script must never appear, even with a live confirmed match")
+	assert.Len(t, out.Rows, 2, "exactly the greenlit and archived rows, nothing else")
 }
 
 // ── get_channel_overview: full population + empty channel ─────────────────
@@ -506,14 +584,23 @@ func TestGetChannelOverview_FullyPopulatedChannel_EveryomeSectionRendered(t *tes
 	assert.True(t, sawCited, "the cited note must render cited=true")
 	assert.True(t, sawUncited, "the uncited note must render cited=false")
 
-	require.Len(t, out.VideoScripts, 1)
-	assert.Equal(t, script.ID.String(), out.VideoScripts[0].VideoScriptID)
-	assert.Equal(t, "Full Chain Script", out.VideoScripts[0].Title)
-	assert.Equal(t, "proposed", out.VideoScripts[0].Status)
-	require.NotNil(t, out.VideoScripts[0].TargetPublishDate, "a dated script must render target_publish_date")
-	assert.WithinDuration(t, target, *out.VideoScripts[0].TargetPublishDate, time.Second)
-	assert.Equal(t, 1, out.VideoScripts[0].VerdictVersion, "video_scripts also reports the bound version (LB3), not necessarily the current one")
-	assert.Equal(t, "viable", out.VideoScripts[0].Verdict)
+	// 2 scripts: fullChainFixture's own greenlit-and-matched one (script.go
+	// this test doesn't otherwise touch) plus the "proposed" one seeded
+	// just above.
+	require.Len(t, out.VideoScripts, 2)
+	byScriptID := make(map[string]tools.VideoScriptOverviewOutput, len(out.VideoScripts))
+	for _, s := range out.VideoScripts {
+		byScriptID[s.VideoScriptID] = s
+	}
+	got := byScriptID[script.ID.String()]
+	assert.Equal(t, "Full Chain Script", got.Title)
+	assert.Equal(t, "proposed", got.Status)
+	require.NotNil(t, got.TargetPublishDate, "a dated script must render target_publish_date")
+	assert.WithinDuration(t, target, *got.TargetPublishDate, time.Second)
+	assert.Equal(t, 1, got.VerdictVersion, "video_scripts also reports the bound version (LB3), not necessarily the current one")
+	assert.Equal(t, "viable", got.Verdict)
+	require.Contains(t, byScriptID, f.script.ID.String(), "fullChainFixture's own greenlit video_script must also appear")
+	assert.Equal(t, "greenlit", byScriptID[f.script.ID.String()].Status)
 
 	assert.Equal(t, 0, out.PendingMatchCount)
 
@@ -685,7 +772,7 @@ func TestGetChannelOverview_SectionsFilter_VideoScriptsRestrictsAndOldNameReject
 	require.False(t, res.IsError, "unexpected error: %s", mtextOf(res))
 	out := mdecode[tools.GetChannelOverviewOutput](t, res)
 
-	require.Len(t, out.VideoScripts, 1)
+	require.Len(t, out.VideoScripts, 2, "fullChainFixture's own greenlit script plus the one seeded above")
 	assert.Empty(t, out.Ideas, "sections: [video_scripts] must exclude every other section")
 	assert.Empty(t, out.ResearchNotes)
 	assert.Empty(t, out.PredictionVsOutcome)
