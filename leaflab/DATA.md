@@ -200,6 +200,39 @@ persists to NVS a fresh attempt budget on every deploy.
 outstanding, and otherwise holds the `device_config.version` of a push
 issued but not yet acked.
 
+### Sensor rename uniqueness (FR4, #1770)
+
+`RenameSensor` (`leaflab/api/repository.go`) extends the existing
+`sensor_name_history` SCD2 table -- no new table -- and, in the same
+transaction, syncs `sensor.name` and resets the NFR4 counters
+(`corrective_push_attempts = 0`, `corrective_push_outstanding_version =
+NULL`).
+
+FR4 requires no uniqueness enforcement across sensors on a board or
+across boards. `sensor` has carried `UNIQUE (board_id, name)` since
+`001_initial_schema.up.sql`, predating this milestone, for a different
+reason: it is what makes `leaflab-processor`'s `UpsertSensor`
+hardware-address-less name-based fallback (`leaflab/processor/
+repository.go`, `ON CONFLICT (board_id, name) DO UPDATE`) idempotent
+across a board re-flash -- without it, a board with no tracked I2C
+hardware address would fork into a duplicate `sensor` row (and a forked
+reading history) on every reboot. That fallback path lives in
+`leaflab/processor/`, outside this task's scope, and dropping or relaxing
+the constraint would either break its `ON CONFLICT` clause outright
+(Postgres rejects an `ON CONFLICT` target with no matching unique index)
+or require replacing it with a race-prone select-then-write.
+
+Resolution: the constraint stays. `RenameSensor` maps the one Postgres
+`23505` this can trigger -- renaming a sensor to a name another sensor on
+the *same* board already holds -- to a sentinel error
+(`repository.ErrSensorNameConflict`), which `server.go`'s `RenameSensor`
+RPC surfaces as `codes.FailedPrecondition`, never a raw 500 and never a
+silent no-op. Every other rename (a new name, a name matching a sensor on
+a *different* board, or a name matching a sensor on the same board that
+was itself renamed away in the same request sequence) succeeds with no
+uniqueness check at all, which is the case FR4's requirement is actually
+guarding against in practice.
+
 ---
 
 ## Sensor Identity Through Time

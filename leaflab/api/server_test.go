@@ -193,12 +193,32 @@ type fakeRepository struct {
 	listOwnedBoardsCalls  int
 	listUsersCalls        int
 	getBoardIdentityCalls int
+
+	// sensorBoards maps a sensor_id to its owning board_id, backing
+	// GetBoardIDForSensor -- a sensor_id absent here does not exist.
+	sensorBoards map[int64]int64
+	// renamedSensors records every successful RenameSensor call, in order --
+	// tests assert on this to prove a refused rename (unauthorized, empty
+	// name, or a name conflict) issues no write at all.
+	renamedSensors []renamedSensor
+	// renameConflictSensors marks sensor_ids whose RenameSensor call should
+	// return ErrSensorNameConflict, standing in for a real Postgres 23505 on
+	// sensor's UNIQUE(board_id, name) constraint (see repository.go's
+	// ErrSensorNameConflict doc comment) without a real database.
+	renameConflictSensors map[int64]bool
 }
 
 // reassignedOwner is one recorded fakeRepository.ReassignBoardOwner call.
 type reassignedOwner struct {
 	boardID        int64
 	newOwnerUserID int64
+}
+
+// renamedSensor is one recorded fakeRepository.RenameSensor call that
+// actually wrote (a refused rename is never appended here).
+type renamedSensor struct {
+	sensorID int64
+	name     string
 }
 
 // claimedBoard is one recorded fakeRepository.ClaimBoard call that actually
@@ -211,17 +231,19 @@ type claimedBoard struct {
 
 func newFakeRepository() *fakeRepository {
 	return &fakeRepository{
-		users:         map[string]int64{},
-		devices:       map[string]int64{},
-		owners:        map[int64]int64{},
-		admins:        map[int64]bool{},
-		inventory:     map[int64][]InventorySensor{},
-		lastAccepted:  map[string]*configpb.DeviceConfig{},
-		boardIdentity: map[int64]BoardIdentity{},
-		sensorDetails: map[int64][]SensorDetailRow{},
-		sensorExists:  map[int64]bool{},
-		sensorHistory: map[int64]*SensorReadingHistory{},
-		existingUsers: map[int64]bool{},
+		users:                 map[string]int64{},
+		devices:               map[string]int64{},
+		owners:                map[int64]int64{},
+		admins:                map[int64]bool{},
+		inventory:             map[int64][]InventorySensor{},
+		lastAccepted:          map[string]*configpb.DeviceConfig{},
+		boardIdentity:         map[int64]BoardIdentity{},
+		sensorDetails:         map[int64][]SensorDetailRow{},
+		sensorExists:          map[int64]bool{},
+		sensorHistory:         map[int64]*SensorReadingHistory{},
+		existingUsers:         map[int64]bool{},
+		sensorBoards:          map[int64]int64{},
+		renameConflictSensors: map[int64]bool{},
 	}
 }
 
@@ -359,6 +381,23 @@ func (f *fakeRepository) LeafLabUserExists(_ context.Context, leaflabUserID int6
 func (f *fakeRepository) ListUsers(_ context.Context) ([]LeafLabUserRow, error) {
 	f.listUsersCalls++
 	return f.userRows, nil
+}
+
+func (f *fakeRepository) GetBoardIDForSensor(_ context.Context, sensorID int64) (int64, bool, error) {
+	id, ok := f.sensorBoards[sensorID]
+	return id, ok, nil
+}
+
+// RenameSensor mirrors production RenameSensor's ErrSensorNameConflict
+// contract closely enough for the unit-level FR4 tests: a sensor_id marked
+// in renameConflictSensors refuses with no write, exactly like a real
+// 23505 unique-violation would.
+func (f *fakeRepository) RenameSensor(_ context.Context, sensorID int64, name string) error {
+	if f.renameConflictSensors[sensorID] {
+		return ErrSensorNameConflict
+	}
+	f.renamedSensors = append(f.renamedSensors, renamedSensor{sensorID: sensorID, name: name})
+	return nil
 }
 
 // fakePublisher is an in-memory configPublisher double: Publish always

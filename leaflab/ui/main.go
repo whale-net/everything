@@ -276,6 +276,9 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// handleRenameBoard (#1767: FR3) -- owner-only inline board rename,
 	// re-renders the "#board-header" fragment via HTMX.
 	mux.HandleFunc("POST /boards/{board_id}/rename", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRenameBoard)))
+	// handleRenameSensor (#1770: FR4) -- the per-sensor inline rename
+	// form's POST target, rendered only for the board's owner.
+	mux.HandleFunc("POST /sensors/{sensor_id}/rename", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleRenameSensor)))
 	// handleSensorHistory (#1504: FR8, FR9, FR10) -- one sensor's reading
 	// history chart. handleSensorHistoryData is the small JSON endpoint
 	// its chart fetches range data from on every preset click or

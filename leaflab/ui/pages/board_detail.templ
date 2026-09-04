@@ -57,7 +57,7 @@ templ BoardDetail(data components.LayoutData, resp *leaflabapipb.GetBoardDetailR
 				</div>
 			</div>
 		} else {
-			@htmxui.Card(nil, sensorsTable(resp.GetBoardId(), resp.GetDeviceId(), resp.GetSensors()), nil, nil)
+			@htmxui.Card(nil, sensorsTable(resp.GetBoardId(), resp.GetDeviceId(), resp.GetOwnedByCaller(), resp.GetSensors()), nil, nil)
 		}
 	}
 }
@@ -140,7 +140,11 @@ templ renameBoardForm(boardID int64, boardName, deviceID, renameErr string) {
 // RPC maps a sensor_id back to its board or name (see #1504's
 // sensor_history.templ doc comment), so this link is that page's only
 // source for its board/name/unit chrome.
-templ sensorsTable(boardID int64, deviceID string, sensors []*leaflabapipb.SensorDetail) {
+//
+// ownedByCaller gates the FR4 inline rename control (#1770) -- forwarded
+// straight through from GetBoardDetailResponse.owned_by_caller, the same
+// signal boardOwnerCell already renders the Claim button from.
+templ sensorsTable(boardID int64, deviceID string, ownedByCaller bool, sensors []*leaflabapipb.SensorDetail) {
 	<div class="overflow-x-auto">
 		<table class="table">
 			<thead>
@@ -154,19 +158,73 @@ templ sensorsTable(boardID int64, deviceID string, sensors []*leaflabapipb.Senso
 			</thead>
 			<tbody>
 				for _, sensor := range sensors {
-					<tr class="hover">
-						<td>{ sensor.GetSensorName() }</td>
-						<td>{ sensor.GetSensorTypeName() }</td>
-						<td>@htmxui.Badge(boardStateLabel(sensor.GetReportingState()), boardStateVariant(sensor.GetReportingState()), htmxui.BadgeSizeSM, true, nil)</td>
-						<td>@sensorReadingCell(sensor)</td>
-						<td class="text-right">
-							<a href={ templ.URL(sensorHistoryHref(boardID, deviceID, sensor)) } class="btn btn-ghost btn-sm">History</a>
-						</td>
-					</tr>
+					@SensorRow(boardID, deviceID, ownedByCaller, sensor, "")
 				}
 			</tbody>
 		</table>
 	</div>
+}
+
+// SensorRow renders one sensor's table row, including the FR4 inline
+// rename control when ownedByCaller. Exported (unlike sensorsTable) so
+// handlers_rename.go's handleRenameSensor can re-render a single row after
+// a rename attempt -- success or failure -- mirroring manmanv2/ui's
+// renderDeploymentRow/DeploymentRow fragment pattern: hx-target="this
+// row's id"/hx-swap="outerHTML" on renameSensorForm below lets htmx swap
+// the row in place with no full-page reload.
+//
+// renameErr is empty on a normal table render (sensorsTable's call site
+// above) and carries a human-readable message inline, next to the sensor
+// name, when the most recent rename attempt against this row failed
+// (InvalidArgument/PermissionDenied/FailedPrecondition/NotFound -- never a
+// bare 500).
+templ SensorRow(boardID int64, deviceID string, ownedByCaller bool, sensor *leaflabapipb.SensorDetail, renameErr string) {
+	<tr id={ fmt.Sprintf("sensor-row-%d", sensor.GetSensorId()) } class="hover">
+		<td>
+			<div class="flex flex-col gap-1">
+				<span>{ sensor.GetSensorName() }</span>
+				if ownedByCaller {
+					@renameSensorForm(boardID, deviceID, sensor)
+				}
+				if renameErr != "" {
+					<span class="text-xs text-error">{ renameErr }</span>
+				}
+			</div>
+		</td>
+		<td>{ sensor.GetSensorTypeName() }</td>
+		<td>@htmxui.Badge(boardStateLabel(sensor.GetReportingState()), boardStateVariant(sensor.GetReportingState()), htmxui.BadgeSizeSM, true, nil)</td>
+		<td>@sensorReadingCell(sensor)</td>
+		<td class="text-right">
+			<a href={ templ.URL(sensorHistoryHref(boardID, deviceID, sensor)) } class="btn btn-ghost btn-sm">History</a>
+		</td>
+	</tr>
+}
+
+// renameSensorForm is the FR4 inline rename control (#1770), rendered only
+// when the caller owns the sensor's board (SensorRow's ownedByCaller
+// gate). board_id/device_id ride along as hidden fields -- the RPC itself
+// only needs sensor_id (resolving board_id server-side via
+// GetBoardIDForSensor), but handleRenameSensor's HTMX row re-render needs
+// board_id to call GetBoardDetail again, and there is no other way for a
+// per-row POST to hand that back to the handler.
+templ renameSensorForm(boardID int64, deviceID string, sensor *leaflabapipb.SensorDetail) {
+	<form
+		hx-post={ fmt.Sprintf("/sensors/%d/rename", sensor.GetSensorId()) }
+		hx-target={ fmt.Sprintf("#sensor-row-%d", sensor.GetSensorId()) }
+		hx-swap="outerHTML"
+		class="flex items-center gap-1"
+	>
+		<input type="hidden" name="board_id" value={ fmt.Sprintf("%d", boardID) }/>
+		<input type="hidden" name="device_id" value={ deviceID }/>
+		<input
+			type="text"
+			name="name"
+			value={ sensor.GetSensorName() }
+			required
+			class="input input-bordered input-xs w-32"
+		/>
+		<button type="submit" class="btn btn-xs">Rename</button>
+	</form>
 }
 
 // sensorHistoryHref builds the reading-history link's target URL,

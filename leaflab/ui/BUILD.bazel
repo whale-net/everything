@@ -9,6 +9,7 @@ go_library(
         "handlers_auth.go",
         "handlers_boards.go",
         "handlers_home.go",
+        "handlers_rename.go",
         "handlers_sensors.go",
         "main.go",
         "templ_render.go",
