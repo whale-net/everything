@@ -96,38 +96,17 @@ func ListAllHelmCharts(bazel BazelRunner, _ FileSystem, workspaceRoot string) ([
 	if fastDiscovery {
 		return ListAllHelmChartsFast(workspaceRoot)
 	}
-	labelsOut, err := bazel.Run("query", helmChartMetadataQuery, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
+	pairs, err := discoverBazelMetadata(bazel, "helm_chart_metadata", helmChartMetadataQuery, helmChartMetadataStarlarkExpr)
 	if err != nil {
-		return nil, fmt.Errorf("bazel query helm_chart_metadata: %w", err)
-	}
-	labels := splitNonEmpty(labelsOut)
-	if len(labels) == 0 {
-		return nil, nil
-	}
-
-	// Scoped to exactly the discovered labels — any cquery error means real
-	// metadata is missing, so fail hard rather than silently planning a
-	// release off a partial chart list.
-	out, err := bazel.Run("cquery", strings.Join(labels, " + "), "--output=starlark",
-		"--starlark:expr="+helmChartMetadataStarlarkExpr)
-	if err != nil {
-		return nil, fmt.Errorf("bazel cquery helm_chart_metadata: %w", err)
+		return nil, err
 	}
 	var charts []HelmChartMetadata
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		label, jsonPart, ok := strings.Cut(line, "\t")
-		if !ok {
-			return nil, fmt.Errorf("malformed cquery line: %q", line)
-		}
+	for _, p := range pairs {
 		manifest := &appmetapb.ChartManifest{}
-		if err := protojson.Unmarshal([]byte(jsonPart), manifest); err != nil {
-			return nil, fmt.Errorf("parse helm metadata for %s: %w", label, err)
+		if err := protojson.Unmarshal([]byte(p.JSON), manifest); err != nil {
+			return nil, fmt.Errorf("parse helm metadata for %s: %w", p.Label, err)
 		}
-		charts = append(charts, HelmChartMetadata{ChartManifest: manifest, BazelTarget: canonicalLabel(label)})
+		charts = append(charts, HelmChartMetadata{ChartManifest: manifest, BazelTarget: canonicalLabel(p.Label)})
 	}
 	sort.Slice(charts, func(i, j int) bool { return charts[i].Name < charts[j].Name })
 	return charts, nil

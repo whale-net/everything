@@ -49,16 +49,62 @@ const appMetadataStarlarkExpr = `str(target.label) + "\t" + json.encode(provider
 // without hardcoding a domain name next to the "demo" exclusion below.
 const appMetadataQuery = "kind(app_metadata, //...) except attr(testonly, 1, //...)"
 
-// ListAllApps discovers every releasable app_metadata target via a two-step
-// Bazel call:
+// bazelLabelJSON is one "<label>\t<json>" line from a metadata cquery,
+// split into its label and JSON parts.
+type bazelLabelJSON struct {
+	Label string
+	JSON  string
+}
+
+// discoverBazelMetadata runs the two-step Bazel metadata discovery shared by
+// ListAllApps and ListAllHelmCharts:
 //
-//  1. `bazel query` (loading only) lists the metadata target labels.
-//  2. `bazel cquery` scoped to those labels reads the AppMetadataInfo
-//     provider for each. Limiting cquery to the metadata closure avoids
-//     analysing unrelated targets in `//...` whose failures would otherwise
-//     break discovery.
+//  1. `bazel query` (loading only) lists target labels matching query.
+//  2. `bazel cquery` scoped to exactly those labels evaluates starlarkExpr
+//     against each target (reading a provider directly, so no build
+//     actions run). Scoping to the discovered labels avoids analysing
+//     unrelated targets in `//...` whose failures would otherwise break
+//     discovery.
 //
-// No metadata JSON files are produced — analysis alone yields the data.
+// name identifies the metadata kind in error messages (e.g. "app_metadata").
+// Any cquery error is returned rather than swallowed: real metadata is
+// missing at that point, and callers plan releases off this list, so
+// failing hard beats silently returning a partial one.
+func discoverBazelMetadata(bazel BazelRunner, name, query, starlarkExpr string) ([]bazelLabelJSON, error) {
+	labelsOut, err := bazel.Run("query", query, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
+	if err != nil {
+		return nil, fmt.Errorf("bazel query %s: %w", name, err)
+	}
+
+	labels := splitNonEmpty(labelsOut)
+	if len(labels) == 0 {
+		return nil, nil
+	}
+
+	out, err := bazel.Run("cquery", strings.Join(labels, " + "), "--output=starlark",
+		"--starlark:expr="+starlarkExpr)
+	if err != nil {
+		return nil, fmt.Errorf("bazel cquery %s: %w", name, err)
+	}
+
+	var pairs []bazelLabelJSON
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		label, jsonPart, ok := strings.Cut(line, "\t")
+		if !ok {
+			return nil, fmt.Errorf("malformed cquery line: %q", line)
+		}
+		pairs = append(pairs, bazelLabelJSON{Label: label, JSON: jsonPart})
+	}
+	return pairs, nil
+}
+
+// ListAllApps discovers every releasable app_metadata target via
+// discoverBazelMetadata, then parses each result's JSON into an
+// AppMetadata.
 //
 // When --fast is set (fastDiscovery, root.go), this skips bazel entirely
 // and statically parses BUILD.bazel files instead -- see discover_fast.go.
@@ -69,40 +115,18 @@ func ListAllApps(bazel BazelRunner, _ FileSystem, workspaceRoot string) ([]AppMe
 	if fastDiscovery {
 		return ListAllAppsFast(workspaceRoot)
 	}
-	labelsOut, err := bazel.Run("query", appMetadataQuery, "--universe_scope=//...", "--noimplicit_deps", "--nodep_deps", "--output=label")
+	pairs, err := discoverBazelMetadata(bazel, "app_metadata", appMetadataQuery, appMetadataStarlarkExpr)
 	if err != nil {
-		return nil, fmt.Errorf("bazel query app_metadata: %w", err)
-	}
-
-	labels := splitNonEmpty(labelsOut)
-	if len(labels) == 0 {
-		return nil, nil
-	}
-
-	// cquery is scoped to exactly the discovered labels, so any error here
-	// means real metadata is missing — fail hard rather than silently
-	// returning a partial app list to callers that plan releases off it.
-	out, err := bazel.Run("cquery", strings.Join(labels, " + "), "--output=starlark",
-		"--starlark:expr="+appMetadataStarlarkExpr)
-	if err != nil {
-		return nil, fmt.Errorf("bazel cquery app_metadata: %w", err)
+		return nil, err
 	}
 
 	var apps []AppMetadata
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		label, jsonPart, ok := strings.Cut(line, "\t")
-		if !ok {
-			return nil, fmt.Errorf("malformed cquery line: %q", line)
-		}
+	for _, p := range pairs {
 		manifest := &appmetapb.AppManifest{}
-		if err := protojson.Unmarshal([]byte(jsonPart), manifest); err != nil {
-			return nil, fmt.Errorf("parse metadata for %s: %w", label, err)
+		if err := protojson.Unmarshal([]byte(p.JSON), manifest); err != nil {
+			return nil, fmt.Errorf("parse metadata for %s: %w", p.Label, err)
 		}
-		meta := AppMetadata{AppManifest: manifest, BazelTarget: canonicalLabel(label)}
+		meta := AppMetadata{AppManifest: manifest, BazelTarget: canonicalLabel(p.Label)}
 		meta.BinaryTarget = canonicalLabel(meta.BinaryTarget)
 		meta.ImageTarget = canonicalLabel(meta.ImageTarget)
 		meta.OpenapiSpecTarget = canonicalLabel(meta.OpenapiSpecTarget)
