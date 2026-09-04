@@ -15,9 +15,11 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -115,46 +117,295 @@ type VideoScriptStore interface {
 }
 
 // videoScriptStore implements VideoScriptStore against `video_script`
-// (migration 010). Every method returns ErrVideoScriptNotImplemented
-// until Implementation wires in the real SQL -- same scaffold/feat split
-// other store methods in this package have followed (e.g. AccessStore,
-// store/access.go).
+// (migration 010).
 type videoScriptStore struct{ pool *pgxpool.Pool }
 
 var _ VideoScriptStore = videoScriptStore{}
 
-// ErrVideoScriptNotImplemented is returned by every VideoScriptStore
-// method until Implementation wires in the real queries.
-var ErrVideoScriptNotImplemented = errors.New("store: video_script lifecycle not implemented")
+const videoScriptColumns = `id, channel_id, idea_id, verdict_id, strategy_id, title, script_text, status, target_publish_date, decided_by_person_id, decided_at, created_by_person_id, created_at, updated_at, COALESCE(idempotency_key, '')`
 
+// videoScriptColumnsAliased is videoScriptColumns qualified with the vs.
+// alias ListDetailByChannel's multi-table join needs (mirroring
+// schedule.go's scheduleEntryColumnsAliased pattern).
+const videoScriptColumnsAliased = `vs.id, vs.channel_id, vs.idea_id, vs.verdict_id, vs.strategy_id, vs.title, vs.script_text, vs.status, vs.target_publish_date, vs.decided_by_person_id, vs.decided_at, vs.created_by_person_id, vs.created_at, vs.updated_at, COALESCE(vs.idempotency_key, '')`
+
+func scanVideoScript(row pgx.Row) (VideoScript, error) {
+	var s VideoScript
+	err := row.Scan(&s.ID, &s.ChannelID, &s.IdeaID, &s.VerdictID, &s.StrategyID, &s.Title, &s.ScriptText, &s.Status, &s.TargetPublishDate, &s.DecidedByPersonID, &s.DecidedAt, &s.CreatedByPersonID, &s.CreatedAt, &s.UpdatedAt, &s.IdempotencyKey)
+	return s, err
+}
+
+// Propose honours IdempotencyKey (a replayed (channel, author, key) triple
+// returns the original row unchanged) exactly like ScheduleStore.SaveDraft
+// (NFR12/LB4). Otherwise, inside the same transaction, it looks up
+// in.VerdictID's verdict, idea, and idea's channel -- rejecting with
+// ErrVerdictNotViable unless the verdict exists and is VerdictViable
+// (mirroring ScheduleStore.SaveDraft's gate exactly), and with a plain
+// error if the verdict's idea is not on in.ChannelID (mirroring
+// StrategyStore.Save's identical check) -- then confirms in.StrategyID is
+// on in.ChannelID (ErrStrategyNotFound otherwise, reused rather than
+// inventing a second "not found on this channel" spelling). idea_id is
+// always taken from the verdict row, never in.IdeaID (there is no such
+// field -- LB3).
 func (s videoScriptStore) Propose(ctx context.Context, in ProposeVideoScriptInput) (VideoScript, error) {
-	return VideoScript{}, ErrVideoScriptNotImplemented
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return VideoScript{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if in.IdempotencyKey != "" {
+		existing, err := scanVideoScript(tx.QueryRow(ctx, `
+			SELECT `+videoScriptColumns+`
+			FROM video_script
+			WHERE channel_id = $1 AND created_by_person_id = $2 AND idempotency_key = $3
+		`, in.ChannelID, in.CreatedByPersonID, in.IdempotencyKey))
+		if err == nil {
+			if err := tx.Commit(ctx); err != nil {
+				return VideoScript{}, fmt.Errorf("commit: %w", err)
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return VideoScript{}, fmt.Errorf("lookup video_script by idempotency key: %w", err)
+		}
+	}
+
+	var verdict VerdictValue
+	var ideaID, ideaChannelID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT vv.verdict, vv.idea_id, i.channel_id
+		FROM viability_verdict vv
+		JOIN idea i ON i.id = vv.idea_id
+		WHERE vv.id = $1
+	`, in.VerdictID).Scan(&verdict, &ideaID, &ideaChannelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return VideoScript{}, fmt.Errorf("verdict %s: %w", in.VerdictID, ErrVerdictNotViable)
+		}
+		return VideoScript{}, fmt.Errorf("lookup verdict for video script: %w", err)
+	}
+	if verdict != VerdictViable {
+		return VideoScript{}, ErrVerdictNotViable
+	}
+	if ideaChannelID != in.ChannelID {
+		return VideoScript{}, fmt.Errorf("verdict %s does not belong to channel %s", in.VerdictID, in.ChannelID)
+	}
+
+	var strategyExists bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM strategy WHERE id = $1 AND channel_id = $2)
+	`, in.StrategyID, in.ChannelID).Scan(&strategyExists); err != nil {
+		return VideoScript{}, fmt.Errorf("check strategy %s on channel %s: %w", in.StrategyID, in.ChannelID, err)
+	}
+	if !strategyExists {
+		return VideoScript{}, ErrStrategyNotFound
+	}
+
+	script, err := scanVideoScript(tx.QueryRow(ctx, `
+		INSERT INTO video_script (channel_id, idea_id, verdict_id, strategy_id, title, script_text, status, target_publish_date, created_by_person_id, idempotency_key)
+		VALUES ($1, $2, $3, $4, $5, $6, 'proposed', $7, $8, NULLIF($9, ''))
+		RETURNING `+videoScriptColumns,
+		in.ChannelID, ideaID, in.VerdictID, in.StrategyID, in.Title, in.ScriptText, in.TargetPublishDate, in.CreatedByPersonID, in.IdempotencyKey))
+	if err != nil {
+		return VideoScript{}, fmt.Errorf("insert video_script: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return VideoScript{}, fmt.Errorf("commit: %w", err)
+	}
+	return script, nil
 }
 
 func (s videoScriptStore) Greenlight(ctx context.Context, scriptID, byPersonID uuid.UUID) error {
-	return ErrVideoScriptNotImplemented
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE video_script
+		SET status = 'greenlit', decided_by_person_id = $1, decided_at = NOW(), updated_at = NOW()
+		WHERE id = $2 AND status = 'proposed'
+	`, byPersonID, scriptID)
+	if err != nil {
+		return fmt.Errorf("greenlight video_script: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("video_script %s not proposed: %w", scriptID, ErrVideoScriptTransition)
+	}
+	return nil
 }
 
 func (s videoScriptStore) Deny(ctx context.Context, scriptID, byPersonID uuid.UUID) error {
-	return ErrVideoScriptNotImplemented
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE video_script
+		SET status = 'denied', decided_by_person_id = $1, decided_at = NOW(), updated_at = NOW()
+		WHERE id = $2 AND status = 'proposed'
+	`, byPersonID, scriptID)
+	if err != nil {
+		return fmt.Errorf("deny video_script: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("video_script %s not proposed: %w", scriptID, ErrVideoScriptTransition)
+	}
+	return nil
 }
 
+// Archive checks the freeze predicate and performs the status change in
+// the same transaction (FR39) -- see isVideoScriptPublished's doc comment
+// for exactly what the freeze predicate is.
 func (s videoScriptStore) Archive(ctx context.Context, scriptID, byPersonID uuid.UUID) error {
-	return ErrVideoScriptNotImplemented
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	published, err := isVideoScriptPublished(ctx, tx, scriptID)
+	if err != nil {
+		return err
+	}
+	if published {
+		return ErrVideoScriptPublished
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE video_script
+		SET status = 'archived', decided_by_person_id = $1, decided_at = NOW(), updated_at = NOW()
+		WHERE id = $2 AND status = 'greenlit'
+	`, byPersonID, scriptID)
+	if err != nil {
+		return fmt.Errorf("archive video_script: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("video_script %s not greenlit: %w", scriptID, ErrVideoScriptTransition)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
 }
 
 func (s videoScriptStore) GetByID(ctx context.Context, id uuid.UUID) (VideoScript, error) {
-	return VideoScript{}, ErrVideoScriptNotImplemented
+	script, err := scanVideoScript(s.pool.QueryRow(ctx, `SELECT `+videoScriptColumns+` FROM video_script WHERE id = $1`, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return VideoScript{}, pgx.ErrNoRows
+		}
+		return VideoScript{}, fmt.Errorf("get video_script by id: %w", err)
+	}
+	return script, nil
 }
 
 func (s videoScriptStore) ListByChannel(ctx context.Context, channelID uuid.UUID) ([]VideoScript, error) {
-	return nil, ErrVideoScriptNotImplemented
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+videoScriptColumns+`
+		FROM video_script
+		WHERE channel_id = $1
+		ORDER BY created_at
+	`, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("list video_script by channel: %w", err)
+	}
+	defer rows.Close()
+
+	var scripts []VideoScript
+	for rows.Next() {
+		script, err := scanVideoScript(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan video_script: %w", err)
+		}
+		scripts = append(scripts, script)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list video_script by channel: %w", err)
+	}
+	return scripts, nil
 }
 
-func (s videoScriptStore) ListDetailByChannel(ctx context.Context, channelID uuid.UUID) ([]VideoScriptDetail, error) {
-	return nil, ErrVideoScriptNotImplemented
+// isVideoScriptPublished is IsPublished's shared body, factored out so
+// Archive can run it inside its own transaction (q == the tx) while
+// VideoScriptStore.IsPublished runs it directly against the pool (q ==
+// s.pool) -- exactly one query defines "recorded as published" for
+// video_script (FR39), mirroring isPublished (schedule.go) for
+// schedule_entry. A pending match does not freeze -- only a live
+// (auto/confirmed) match to a synced_video with a non-null published_at
+// does.
+func isVideoScriptPublished(ctx context.Context, q dbQueryRower, scriptID uuid.UUID) (bool, error) {
+	var published bool
+	err := q.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM video_schedule_match vsm
+			JOIN synced_video sv ON sv.id = vsm.synced_video_id
+			WHERE vsm.video_script_id = $1
+			  AND vsm.state IN ('auto', 'confirmed')
+			  AND sv.published_at IS NOT NULL
+		)
+	`, scriptID).Scan(&published)
+	if err != nil {
+		return false, fmt.Errorf("check video_script %s published: %w", scriptID, err)
+	}
+	return published, nil
 }
 
 func (s videoScriptStore) IsPublished(ctx context.Context, scriptID uuid.UUID) (bool, error) {
-	return false, ErrVideoScriptNotImplemented
+	return isVideoScriptPublished(ctx, s.pool, scriptID)
+}
+
+// ListDetailByChannel joins video_script with its bound idea (title),
+// viability_verdict (version/value), and strategy (title), plus -- via a
+// LATERAL subquery mirroring ScheduleStore.ListDetailByChannel exactly,
+// including the same row-multiplication guard rationale -- whether it has
+// a live, published match. Not channel-scoped by the row's own channel_id
+// alone in the sense of leaking another Channel's rows: the WHERE clause
+// below is exactly vs.channel_id = $1, so a second Channel's scripts never
+// appear.
+func (s videoScriptStore) ListDetailByChannel(ctx context.Context, channelID uuid.UUID) ([]VideoScriptDetail, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT
+			`+videoScriptColumnsAliased+`,
+			vv.version,
+			vv.verdict,
+			i.title,
+			st.title,
+			pub.published
+		FROM video_script vs
+		JOIN idea i ON i.id = vs.idea_id
+		JOIN viability_verdict vv ON vv.id = vs.verdict_id
+		JOIN strategy st ON st.id = vs.strategy_id
+		LEFT JOIN LATERAL (
+			SELECT TRUE AS published
+			FROM video_schedule_match vsm
+			JOIN synced_video sv ON sv.id = vsm.synced_video_id
+			WHERE vsm.video_script_id = vs.id
+			  AND vsm.state IN ('auto', 'confirmed')
+			  AND sv.published_at IS NOT NULL
+			ORDER BY (vsm.state = 'confirmed') DESC, vsm.created_at DESC
+			LIMIT 1
+		) pub ON TRUE
+		WHERE vs.channel_id = $1
+		ORDER BY vs.created_at
+	`, channelID)
+	if err != nil {
+		return nil, fmt.Errorf("list video_script details by channel: %w", err)
+	}
+	defer rows.Close()
+
+	var details []VideoScriptDetail
+	for rows.Next() {
+		var d VideoScriptDetail
+		var published *bool
+		err := rows.Scan(
+			&d.Script.ID, &d.Script.ChannelID, &d.Script.IdeaID, &d.Script.VerdictID, &d.Script.StrategyID, &d.Script.Title, &d.Script.ScriptText, &d.Script.Status, &d.Script.TargetPublishDate,
+			&d.Script.DecidedByPersonID, &d.Script.DecidedAt, &d.Script.CreatedByPersonID, &d.Script.CreatedAt, &d.Script.UpdatedAt, &d.Script.IdempotencyKey,
+			&d.VerdictVersion, &d.Verdict, &d.IdeaTitle, &d.StrategyTitle,
+			&published,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan video_script detail: %w", err)
+		}
+		d.Published = published != nil && *published
+		details = append(details, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list video_script details by channel: %w", err)
+	}
+	return details, nil
 }
