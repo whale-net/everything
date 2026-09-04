@@ -429,6 +429,10 @@ func (a *app) setupRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /channels/{id}/access/invites", a.auth.RequireSignedIn(a.access.HandleInviteCoCreator))
 	mux.HandleFunc("POST /channels/{id}/access/promote", a.auth.RequireSignedIn(a.access.HandlePromote))
 	mux.HandleFunc("POST /channels/{id}/access/remove", a.auth.RequireSignedIn(a.access.HandleRemove))
+
+	// Protected: the cross-Channel "my work" aggregate (M2: FR27/FR28,
+	// #1725) -- see handleMyWork's doc comment.
+	mux.HandleFunc("GET /my-work", a.auth.RequireSignedIn(a.handleMyWork))
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -556,6 +560,53 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		User:  person,
 	}
 	if err := renderTempl(w, r, ch.Title, pages.ChannelDetail(data, ch, canReconnect, canInvite)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// myWorkNotesPerChannel caps how many of each Channel's most-recent
+// research notes handleMyWork requests from SummariesForPerson -- kept
+// small since this page shows several Channels at once, unlike
+// get_channel_overview's single-Channel, larger defaultNotesOverviewLimit.
+const myWorkNotesPerChannel = 5
+
+// handleMyWork serves GET /my-work (M2: FR27/FR28, #1725): one section per
+// Channel the signed-in Person currently holds an open role on, each with
+// its latest research notes, latest viability verdict, current
+// schedule-draft state, and most recent outcome comparison -- sourced from
+// exactly one store call, store.MyWorkStore.SummariesForPerson (#1717), so
+// NFR9 holds for this page exactly as strictly as it does for
+// SummariesForPerson itself and for get_my_work (#1719, the MCP surface
+// reading the identical store method -- NFR3 dual-surface parity).
+//
+// FR28: nothing about the Channel set is cached, sessioned, or computed at
+// sign-in -- SummariesForPerson re-derives the Channel set from
+// AccessStore.ChannelsWithRoleForPerson fresh on every call. A role
+// revoked between two page loads makes that Channel's section disappear
+// on the very next load, with no re-login and no new session required.
+//
+// This page shows no access-management or audit affordance for any tier
+// -- it aggregates content across Channels, distinct from /channels
+// (#1722, navigation) and from web/access (#1723, Founder/Co-Creator-only
+// roster management).
+func (a *app) handleMyWork(w http.ResponseWriter, r *http.Request) {
+	person := auth.PersonFromContext(r.Context())
+	if person == nil {
+		http.Error(w, "not signed in", http.StatusUnauthorized)
+		return
+	}
+
+	summaries, err := a.store.MyWork().SummariesForPerson(r.Context(), person.ID, myWorkNotesPerChannel)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	data := components.LayoutData{
+		Title: "My work",
+		User:  person,
+	}
+	if err := renderTempl(w, r, "My work", pages.MyWork(data, summaries)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }

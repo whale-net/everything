@@ -29,17 +29,18 @@ var themes = []htmxui.Theme{
 }
 
 // nav is `web`'s app-owned nav item list (FR1a -- htmxui.Shell hardcodes
-// no nav of its own, see htmxui.ShellData's doc comment). Home and
-// Channels (FR26's list/switcher, #1722) are the only global entries --
-// Channels exists here specifically so the switcher is reachable from
-// inside a Channel without relying on back-navigation. Every other
-// surface (Channel detail C2, analyst invite C3, schedule approval C8) is
-// Channel-scoped and reached by navigating from a specific Channel (e.g.
+// no nav of its own, see htmxui.ShellData's doc comment). Home, Channels
+// (FR26's list/switcher, #1722), and My work (FR27/FR28's cross-Channel
+// aggregate, #1725) are the only global entries -- each is reachable from
+// anywhere, unlike every other surface (Channel detail C2, analyst invite
+// C3, schedule approval C8, access management M2), which is Channel-scoped
+// and reached by navigating from a specific Channel (e.g.
 // pages.ChannelDetail's "View schedule" link), not from this global nav.
 templ nav() {
 	<ul class="menu menu-horizontal px-1">
 		<li><a href="/">Home</a></li>
 		<li><a href="/channels">Channels</a></li>
+		<li><a href="/my-work">My work</a></li>
 	</ul>
 }
 
