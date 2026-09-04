@@ -183,7 +183,16 @@ func ExecuteBuildApp(p BuildAppParams) (*BuildAppManifest, error) {
 
 	fmt.Printf("Building and pushing %s (build tag: %s) via %s...\n", fullName, p.GitSHA, pushTarget)
 	buildStart := time.Now()
-	if _, err := bazel.Run("run", pushTarget, "--", "--tag", p.GitSHA); err != nil {
+	// --config=ci-images: this is the highest-bandwidth bazel invocation in
+	// the release pipeline (pulling multi-platform image layers out of
+	// remote cache before pushing to ghcr.io) and was previously running
+	// with no --config at all, so it got none of build:ci's CI tuning
+	// (--remote_cache_compression, --remote_timeout, --show_timestamps,
+	// --noshow_progress, downloader retries) -- see .bazelrc's own comment
+	// on ci-images: "use whenever a step needs a real file on disk
+	// afterward (image builds, ...)". build_release.go's OpenAPI build
+	// already follows this pattern.
+	if _, err := bazel.Run("run", "--config=ci-images", pushTarget, "--", "--tag", p.GitSHA); err != nil {
 		return nil, fmt.Errorf("bazel run %s: %w", pushTarget, err)
 	}
 	buildDuration := time.Since(buildStart)
