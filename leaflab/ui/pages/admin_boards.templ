@@ -22,11 +22,10 @@ import (
 // loadErr shape (boards.templ): handlers_admin.go passes a nil boards/
 // users slice on a load failure and a nil loadErr on success.
 //
-// Scaffold scope (#1777): loadErr renders as a single generic alert
-// regardless of gRPC code. Distinguishing codes.PermissionDenied into a
-// dedicated 403-style page (Testing criterion 17) is this task's own
-// Implementation-phase work, landing once ListOwnedBoards itself is wired
-// to requireAdmin.
+// loadErr here is always a non-PermissionDenied failure -- handlers_admin.go
+// intercepts codes.PermissionDenied before ever calling this and renders
+// AdminForbidden instead (Testing criterion 17), so this alert only ever
+// fires for a genuine load failure (e.g. Internal, transport).
 templ AdminBoards(data components.LayoutData, boards []*leaflabapipb.OwnedBoard, users []*leaflabapipb.LeafLabUser, loadErr error) {
 	@components.Layout(data) {
 		<h1 class="text-2xl font-bold mb-4">Board Ownership</h1>
@@ -43,6 +42,22 @@ templ AdminBoards(data components.LayoutData, boards []*leaflabapipb.OwnedBoard,
 		} else {
 			@htmxui.Card(nil, OwnedBoardsTable(boards, users), nil, nil)
 		}
+	}
+}
+
+// AdminForbidden is the dedicated 403-style page handlers_admin.go's
+// handleAdminBoards renders when ListOwnedBoards returns
+// codes.PermissionDenied (FR14, Testing criterion 17) -- a friendly,
+// non-crashing surface for "you are signed in but not an admin", not a
+// redirect loop and not a 500. Reuses components.Layout with
+// LayoutData.IsAdmin false, so the nav's "Admin" link stays hidden here
+// too.
+templ AdminForbidden(data components.LayoutData) {
+	@components.Layout(data) {
+		<h1 class="text-2xl font-bold mb-4">Board Ownership</h1>
+		<div role="alert" class="alert alert-warning shadow-md">
+			<span>This screen is restricted to users holding the admin role. If you believe you should have access, contact an existing admin.</span>
+		</div>
 	}
 }
 

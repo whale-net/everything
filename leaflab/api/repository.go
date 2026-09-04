@@ -762,10 +762,10 @@ func (r *Repository) GetSensorReadingHistory(ctx context.Context, sensorID int64
 }
 
 // -- M2 admin ownership screen repository methods ----------------------------
-// Scaffold only (#1777): signatures exist so //leaflab/api:api_lib compiles
-// and can be wired into the ListOwnedBoards/ReassignBoardOwner/
-// ClearBoardOwner/ListUsers RPCs (server.go). Real bodies land in this
-// task's own Implementation phase.
+// #1777: FR11-FR14's ownership-management data access, wired into
+// server.go's ListOwnedBoards/ReassignBoardOwner/ClearBoardOwner/ListUsers
+// RPCs. requireAdmin gates all four RPCs before any of these run -- see
+// server.go's requireAdmin doc comment.
 
 // OwnedBoardRow is one row of the admin ownership list (FR11): a board's
 // identity plus its current owner. Mirrors api.proto's OwnedBoard message.
@@ -793,9 +793,50 @@ type LeafLabUserRow struct {
 // ListOwnedBoards returns every board with an open board_owner_history row
 // (FR11), joined to its owner. Filters on valid_to IS NULL (backed by
 // idx_board_owner_history_current); unowned boards are absent from the
-// result entirely, never listed with an empty owner.
+// result entirely, never listed with an empty owner -- an INNER JOIN
+// through board_owner_history and leaflab_user, unlike GetBoardIdentity's
+// LEFT JOIN (which must also represent the unowned case).
 func (r *Repository) ListOwnedBoards(ctx context.Context) ([]OwnedBoardRow, error) {
-	return nil, fmt.Errorf("ListOwnedBoards: not implemented")
+	rows, err := r.db.Query(ctx, `
+		SELECT
+			b.board_id, b.device_id, b.name,
+			u.leaflab_user_id, u.display_name, u.preferred_username, u.email
+		FROM board b
+		JOIN board_owner_history boh ON boh.board_id = b.board_id AND boh.valid_to IS NULL
+		JOIN leaflab_user u ON u.leaflab_user_id = boh.leaflab_user_id
+		ORDER BY b.board_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list owned boards: %w", err)
+	}
+	defer rows.Close()
+
+	var result []OwnedBoardRow
+	for rows.Next() {
+		var (
+			row               OwnedBoardRow
+			displayName       *string
+			preferredUsername *string
+			email             *string
+		)
+		if err := rows.Scan(
+			&row.BoardID, &row.DeviceID, &row.BoardName,
+			&row.Owner.LeafLabUserID, &displayName, &preferredUsername, &email,
+		); err != nil {
+			return nil, fmt.Errorf("scan owned board row: %w", err)
+		}
+		if displayName != nil {
+			row.Owner.DisplayName = *displayName
+		}
+		if preferredUsername != nil {
+			row.Owner.PreferredUsername = *preferredUsername
+		}
+		if email != nil {
+			row.Owner.Email = *email
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }
 
 // ReassignBoardOwner closes boardID's open board_owner_history row and
@@ -804,9 +845,32 @@ func (r *Repository) ListOwnedBoards(ctx context.Context) ([]OwnedBoardRow, erro
 // row's leaflab_user_id in place -- the prior ownership must stay recorded
 // as a closed interval. Callers (server.go's ReassignBoardOwner RPC) are
 // responsible for the unowned-board, reassign-to-current-owner, and
-// unknown-user checks before calling this.
+// unknown-user checks before calling this -- this method performs the
+// close-and-open unconditionally, mirroring GrantRole's tx shape.
 func (r *Repository) ReassignBoardOwner(ctx context.Context, boardID, newOwnerUserID int64) error {
-	return fmt.Errorf("ReassignBoardOwner: not implemented")
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin reassign board owner transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE board_owner_history SET valid_to = NOW()
+		WHERE board_id = $1 AND valid_to IS NULL
+	`, boardID); err != nil {
+		return fmt.Errorf("close current ownership for board %d: %w", boardID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO board_owner_history (board_id, leaflab_user_id) VALUES ($1, $2)
+	`, boardID, newOwnerUserID); err != nil {
+		return fmt.Errorf("open new ownership for board %d: %w", boardID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit reassign board owner transaction: %w", err)
+	}
+	return nil
 }
 
 // ClearBoardOwner closes boardID's open board_owner_history row and opens
@@ -816,12 +880,64 @@ func (r *Repository) ReassignBoardOwner(ctx context.Context, boardID, newOwnerUs
 // ClearBoardOwner RPC) are responsible for the unowned-board check before
 // calling this.
 func (r *Repository) ClearBoardOwner(ctx context.Context, boardID int64) error {
-	return fmt.Errorf("ClearBoardOwner: not implemented")
+	if _, err := r.db.Exec(ctx, `
+		UPDATE board_owner_history SET valid_to = NOW()
+		WHERE board_id = $1 AND valid_to IS NULL
+	`, boardID); err != nil {
+		return fmt.Errorf("close current ownership for board %d: %w", boardID, err)
+	}
+	return nil
+}
+
+// LeafLabUserExists reports whether leaflabUserID names a leaflab_user row
+// -- ReassignBoardOwner's unknown-new-owner check (FR12: unknown
+// new_owner_leaflab_user_id -> codes.NotFound).
+func (r *Repository) LeafLabUserExists(ctx context.Context, leaflabUserID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx, `
+		SELECT EXISTS(SELECT 1 FROM leaflab_user WHERE leaflab_user_id = $1)
+	`, leaflabUserID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check leaflab_user %d exists: %w", leaflabUserID, err)
+	}
+	return exists, nil
 }
 
 // ListUsers returns every leaflab_user row, the reassign picker's
 // candidate list (FR11, FR12). Never returns oidc_sub (NFR5) --
 // LeafLabUserRow carries no such field to begin with.
 func (r *Repository) ListUsers(ctx context.Context) ([]LeafLabUserRow, error) {
-	return nil, fmt.Errorf("ListUsers: not implemented")
+	rows, err := r.db.Query(ctx, `
+		SELECT leaflab_user_id, display_name, preferred_username, email
+		FROM leaflab_user
+		ORDER BY leaflab_user_id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+
+	var result []LeafLabUserRow
+	for rows.Next() {
+		var (
+			row               LeafLabUserRow
+			displayName       *string
+			preferredUsername *string
+			email             *string
+		)
+		if err := rows.Scan(&row.LeafLabUserID, &displayName, &preferredUsername, &email); err != nil {
+			return nil, fmt.Errorf("scan leaflab user row: %w", err)
+		}
+		if displayName != nil {
+			row.DisplayName = *displayName
+		}
+		if preferredUsername != nil {
+			row.PreferredUsername = *preferredUsername
+		}
+		if email != nil {
+			row.Email = *email
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }

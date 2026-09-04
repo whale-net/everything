@@ -29,28 +29,44 @@ import (
 // presentation only (components.LayoutData.IsAdmin's doc comment); it
 // gates nothing this handler itself enforces.
 //
-// Scaffold scope (#1777): a non-admin's codes.PermissionDenied currently
-// renders through the same generic loadErr alert as any other failure.
-// Rendering it as a dedicated 403-style page (Testing criterion 17) is
-// this task's own Implementation-phase work, once ListOwnedBoards itself
-// is wired to requireAdmin server-side.
+// codes.PermissionDenied gets its own dedicated 403-style page
+// (pages.AdminForbidden, Testing criterion 17) rather than the generic
+// loadErr alert every other failure uses -- a non-admin reaching this
+// route is an expected outcome (FR14), not a broken load. The UI's own
+// check here is exactly that PermissionDenied from the API; it makes no
+// local role determination that could diverge from the server's (the task
+// issue's UI screen section).
 func (app *App) handleAdminBoards(w http.ResponseWriter, r *http.Request) {
 	user := htmxauth.GetUser(r.Context())
 
 	boardsResp, err := app.api.ListOwnedBoards(r.Context())
 	if err != nil {
-		if st, ok := status.FromError(err); ok && st.Code() == codes.Unauthenticated {
-			// Same re-authenticate flow as handleBoards' identical branch
-			// -- see its comment for why this is a redirect, not an error
-			// page.
-			loginURL := fmt.Sprintf("/auth/login?next=%s", r.URL.RequestURI())
-			if r.Header.Get("HX-Request") == "true" {
-				w.Header().Set("HX-Redirect", loginURL)
-				w.WriteHeader(http.StatusUnauthorized)
+		if st, ok := status.FromError(err); ok {
+			switch st.Code() {
+			case codes.Unauthenticated:
+				// Same re-authenticate flow as handleBoards' identical
+				// branch -- see its comment for why this is a redirect,
+				// not an error page.
+				loginURL := fmt.Sprintf("/auth/login?next=%s", r.URL.RequestURI())
+				if r.Header.Get("HX-Request") == "true" {
+					w.Header().Set("HX-Redirect", loginURL)
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				http.Redirect(w, r, loginURL, http.StatusSeeOther)
+				return
+			case codes.PermissionDenied:
+				layoutData := components.LayoutData{
+					Title:   "Board Ownership",
+					User:    user,
+					IsAdmin: false,
+				}
+				w.WriteHeader(http.StatusForbidden)
+				if renderErr := RenderTempl(w, r, "Board Ownership", pages.AdminForbidden(layoutData)); renderErr != nil {
+					app.log().Error("failed to render admin forbidden page", "err", renderErr)
+				}
 				return
 			}
-			http.Redirect(w, r, loginURL, http.StatusSeeOther)
-			return
 		}
 		app.log().Warn("ListOwnedBoards failed", "err", err)
 	}
