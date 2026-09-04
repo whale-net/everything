@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/configcompose"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -65,7 +66,7 @@ type repositoryStore interface {
 	GetBoardIDForDeviceID(ctx context.Context, deviceID string) (int64, bool, error)
 	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
-	ListSensorInventoryForBoard(ctx context.Context, boardID int64) ([]InventorySensor, error)
+	ListSensorInventoryForBoard(ctx context.Context, boardID int64) ([]configcompose.InventorySensor, error)
 	ListBoards(ctx context.Context) ([]BoardRow, error)
 	ListBoardsWithState(ctx context.Context) ([]BoardWithReadingRow, error)
 	GetBoardIdentity(ctx context.Context, boardID int64) (BoardIdentity, error)
@@ -277,7 +278,7 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	if lastAccepted != nil {
 		lastAcceptedSensors = lastAccepted.Sensors
 	}
-	composedSensors := ComposeDesiredSensors(inventory, lastAcceptedSensors, req.Sensors)
+	composedSensors := configcompose.ComposeDesiredSensors(inventory, lastAcceptedSensors, req.Sensors)
 
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.

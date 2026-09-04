@@ -1,4 +1,11 @@
-package main
+// Package configcompose composes a board's full desired sensor list from its
+// current DB sensor inventory, its last accepted DeviceConfig, and a set of
+// requested overrides. It is shared, unmodified, by both //leaflab/api's
+// caller-invoked PushDeviceConfig (FR8) and //leaflab/processor's
+// process-internal corrective push (FR9) -- see ComposeDesiredSensors' doc
+// comment for the composition semantics and #1772's "Composition parity
+// with FR8" note for why this must be one function, not two copies.
+package configcompose
 
 import (
 	"fmt"

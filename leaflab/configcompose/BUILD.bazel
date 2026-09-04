@@ -1,0 +1,32 @@
+"""Shared config composition -- FR8/FR9 composition parity.
+
+Used by //leaflab/api (PushDeviceConfig, FR8) and //leaflab/processor
+(process-internal corrective push, FR9). Kept as one function so the two
+call sites cannot drift apart -- see configcompose.go's package doc comment.
+"""
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "configcompose",
+    srcs = ["configcompose.go"],
+    importpath = "github.com/whale-net/everything/leaflab/configcompose",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
+    ],
+)
+
+go_test(
+    name = "configcompose_test",
+    srcs = ["configcompose_test.go"],
+    embed = [":configcompose"],
+    deps = [
+        "//firmware/proto:configpb",
+        "//firmware/proto:firmwarepb",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//proto",
+    ],
+)

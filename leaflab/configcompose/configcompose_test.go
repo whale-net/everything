@@ -1,11 +1,12 @@
-package main
+package configcompose
 
 // Table-driven, pure-function coverage for ComposeDesiredSensors (FR8) --
 // issue #1768's Testing criteria 1-7. No DB, no transport: these construct
 // InventorySensor/SensorConfig values directly and assert on
 // ComposeDesiredSensors' return value. Handler-level coverage (criteria 8,
 // 9 -- PushDeviceConfig actually calls through to the composed list) lives
-// in server_test.go alongside the rest of the PushDeviceConfig fixtures.
+// in leaflab/api/server_test.go alongside the rest of the PushDeviceConfig
+// fixtures.
 
 import (
 	"math/rand"

@@ -19,6 +19,7 @@ import (
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
+	"github.com/whale-net/everything/leaflab/configcompose"
 	"github.com/whale-net/everything/libs/go/grpcauth"
 )
 
@@ -138,7 +139,7 @@ type fakeRepository struct {
 	// board_id and device_id, matching the real Repository methods' own
 	// keys. An absent key returns a nil slice/nil pointer, exactly like a
 	// board with no sensors yet / no config ever pushed.
-	inventory    map[int64][]InventorySensor
+	inventory    map[int64][]configcompose.InventorySensor
 	lastAccepted map[string]*configpb.DeviceConfig
 
 	// renamedBoards records every RenameBoard(boardID, name) call, in
@@ -235,7 +236,7 @@ func newFakeRepository() *fakeRepository {
 		devices:               map[string]int64{},
 		owners:                map[int64]int64{},
 		admins:                map[int64]bool{},
-		inventory:             map[int64][]InventorySensor{},
+		inventory:             map[int64][]configcompose.InventorySensor{},
 		lastAccepted:          map[string]*configpb.DeviceConfig{},
 		boardIdentity:         map[int64]BoardIdentity{},
 		sensorDetails:         map[int64][]SensorDetailRow{},
@@ -279,7 +280,7 @@ func (f *fakeRepository) GetLatestAcceptedConfig(_ context.Context, deviceID str
 	return f.lastAccepted[deviceID], nil
 }
 
-func (f *fakeRepository) ListSensorInventoryForBoard(_ context.Context, boardID int64) ([]InventorySensor, error) {
+func (f *fakeRepository) ListSensorInventoryForBoard(_ context.Context, boardID int64) ([]configcompose.InventorySensor, error) {
 	return f.inventory[boardID], nil
 }
 
@@ -534,6 +535,60 @@ func TestPushDeviceConfig_AdminRole_NoBypass_PermissionDenied(t *testing.T) {
 	assert.Empty(t, pub.published)
 }
 
+// -- FR8 composition fixture builders ----------------------------------------
+//
+// Small local copies of leaflab/configcompose's own test builders
+// (inv/cfg/nameOverride/indexByI2CAddress) -- these tests exercise
+// PushDeviceConfig's handler-level wiring to ComposeDesiredSensors, not the
+// pure composition function itself (that is
+// leaflab/configcompose/configcompose_test.go's job), so they need the same
+// small fixtures but in this package.
+
+// noMux is a sensor directly on the root I2C bus -- see
+// leaflab/configcompose/configcompose_test.go's own noMux for why an empty
+// mux_path is enough for these fixtures.
+var noMux []*configpb.MuxHop
+
+func inv(i2cAddr uint32, name string, regionID *int64) configcompose.InventorySensor {
+	return configcompose.InventorySensor{
+		SensorID:   int64(i2cAddr),
+		Name:       name,
+		Unit:       "°C",
+		MuxPath:    noMux,
+		I2CAddress: i2cAddr,
+		RegionID:   regionID,
+	}
+}
+
+func cfg(i2cAddr uint32, name string) *configpb.SensorConfig {
+	return &configpb.SensorConfig{
+		MuxPath:    noMux,
+		I2CAddress: i2cAddr,
+		Name:       name,
+	}
+}
+
+// nameOverride is a sparse override that sets only Name -- the shape a
+// caller sends to rename one sensor without touching its other fields.
+func nameOverride(i2cAddr uint32, name string) *configpb.SensorConfig {
+	return &configpb.SensorConfig{
+		MuxPath:    noMux,
+		I2CAddress: i2cAddr,
+		Name:       name,
+	}
+}
+
+// indexByI2CAddress indexes a composed sensor list by i2c_address for
+// assertions that care about one specific sensor's fields rather than
+// output order.
+func indexByI2CAddress(sensors []*configpb.SensorConfig) map[uint32]*configpb.SensorConfig {
+	out := make(map[uint32]*configpb.SensorConfig, len(sensors))
+	for _, s := range sensors {
+		out[s.GetI2CAddress()] = s
+	}
+	return out
+}
+
 // TestPushDeviceConfig_PublishesComposedList_NotRawRequest is Testing
 // criterion 8 (FR8): PushDeviceConfig publishes the board's full composed
 // sensor list, not exactly req.Sensors -- a push that names only one sensor
@@ -579,7 +634,7 @@ func TestPushDeviceConfig_RecordedRowMatchesPublishedPayload(t *testing.T) {
 	repo.users["owner-sub"] = 1
 	repo.devices["device-a"] = 100
 	repo.owners[100] = 1
-	repo.inventory[100] = []InventorySensor{inv(0x20, "root", nil)}
+	repo.inventory[100] = []configcompose.InventorySensor{inv(0x20, "root", nil)}
 	repo.lastAccepted["device-a"] = &configpb.DeviceConfig{
 		DeviceId: "device-a",
 		Sensors:  []*configpb.SensorConfig{cfg(0x10, "topsoil")},

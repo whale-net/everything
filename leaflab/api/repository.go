@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/configcompose"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -689,7 +690,7 @@ type muxHopJSON struct {
 // 003_sensor_hw_address) and cannot be matched into a SensorConfig entry at
 // all, since (mux_path, i2c_address) is the only identity
 // ComposeDesiredSensors understands.
-func (r *Repository) ListSensorInventoryForBoard(ctx context.Context, boardID int64) ([]InventorySensor, error) {
+func (r *Repository) ListSensorInventoryForBoard(ctx context.Context, boardID int64) ([]configcompose.InventorySensor, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT
 			s.sensor_id,
@@ -713,10 +714,10 @@ func (r *Repository) ListSensorInventoryForBoard(ctx context.Context, boardID in
 	}
 	defer rows.Close()
 
-	var inventory []InventorySensor
+	var inventory []configcompose.InventorySensor
 	for rows.Next() {
 		var (
-			inv            InventorySensor
+			inv            configcompose.InventorySensor
 			unit           string
 			sensorTypeName string
 			muxPathJSON    []byte

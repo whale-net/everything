@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
+	"github.com/whale-net/everything/leaflab/configcompose"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -469,4 +470,193 @@ func (r *Repository) InsertReading(ctx context.Context, sensorID int64, regionID
 		return fmt.Errorf("insert reading for sensor %d: %w", sensorID, err)
 	}
 	return nil
+}
+
+// -- FR9/NFR4: process-internal corrective push convergence --------------------
+
+// ListSensorInventoryForBoard returns boardID's current sensor inventory --
+// one of leaflab/configcompose.ComposeDesiredSensors' three inputs. Mirrors
+// leaflab/api/repository.go's own ListSensorInventoryForBoard exactly (same
+// query shape, same excluded no-i2c_address sensors) so FR9's corrective
+// push composes from the same data FR8's caller-invoked push does.
+//
+// Scaffold note: this is a working query, not a stub -- it is plain data
+// access, not the convergence *decision* logic (drift detection, NFR4's
+// guards) that leaflab/processor/convergence.go's Implementation-phase work
+// still owns.
+func (r *Repository) ListSensorInventoryForBoard(ctx context.Context, boardID int64) ([]configcompose.InventorySensor, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT
+			s.sensor_id,
+			COALESCE(snh.name, s.name),
+			s.unit,
+			st.name,
+			s.mux_path,
+			s.i2c_address,
+			s.region_id
+		FROM sensor s
+		JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
+		LEFT JOIN sensor_name_history snh
+		       ON snh.sensor_id = s.sensor_id
+		      AND snh.valid_to IS NULL
+		WHERE s.board_id = $1
+		  AND s.i2c_address IS NOT NULL
+		ORDER BY s.sensor_id
+	`, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("list sensor inventory for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var inventory []configcompose.InventorySensor
+	for rows.Next() {
+		var (
+			inv            configcompose.InventorySensor
+			unit           string
+			sensorTypeName string
+			muxPathJSON    []byte
+			i2cAddress     int32
+		)
+		if err := rows.Scan(
+			&inv.SensorID,
+			&inv.Name,
+			&unit,
+			&sensorTypeName,
+			&muxPathJSON,
+			&i2cAddress,
+			&inv.RegionID,
+		); err != nil {
+			return nil, fmt.Errorf("scan sensor inventory row: %w", err)
+		}
+		inv.Unit = unit
+		inv.I2CAddress = uint32(i2cAddress)
+		inv.SensorType = sensorTypeFromDBName(sensorTypeName)
+
+		var hops []MuxHop
+		if err := json.Unmarshal(muxPathJSON, &hops); err != nil {
+			return nil, fmt.Errorf("unmarshal mux_path for sensor %d: %w", inv.SensorID, err)
+		}
+		inv.MuxPath = make([]*configpb.MuxHop, len(hops))
+		for i, h := range hops {
+			inv.MuxPath[i] = &configpb.MuxHop{MuxAddress: h.MuxAddress, MuxChannel: h.MuxChannel}
+		}
+
+		inventory = append(inventory, inv)
+	}
+	return inventory, rows.Err()
+}
+
+// sensorTypeFromDBName is the inverse of sensorTypeNameFromConfig -- mirrors
+// leaflab/api/repository.go's own sensorTypeFromName exactly, so
+// ListSensorInventoryForBoard resolves the same firmwarepb.SensorType value
+// leaflab-api's copy would for the same sensor_type.name row.
+func sensorTypeFromDBName(name string) firmwarepb.SensorType {
+	v, ok := firmwarepb.SensorType_value["SENSOR_TYPE_"+strings.ToUpper(name)]
+	if !ok {
+		return firmwarepb.SensorType_SENSOR_TYPE_UNKNOWN
+	}
+	return firmwarepb.SensorType(v)
+}
+
+// GetLatestAcceptedConfig returns the highest-version accepted config for a
+// board -- leaflab/configcompose.ComposeDesiredSensors' second input.
+// Returns nil, nil if no accepted config exists. Byte-identical query to
+// leaflab/api/repository.go's own GetLatestAcceptedConfig.
+func (r *Repository) GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error) {
+	var jsonBytes []byte
+	err := r.db.QueryRow(ctx, `
+		SELECT dc.config_json
+		FROM device_config dc
+		JOIN board b ON b.board_id = dc.board_id
+		WHERE b.device_id = $1
+		  AND dc.accepted = TRUE
+		ORDER BY dc.version DESC
+		LIMIT 1
+	`, deviceID).Scan(&jsonBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get latest config for %s: %w", deviceID, err)
+	}
+
+	var cfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(jsonBytes, &cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal stored config for %s: %w", deviceID, err)
+	}
+	return &cfg, nil
+}
+
+// GetCorrectivePushState reads NFR4's two guard columns (migration 016) for
+// a sensor: attempts bounds the sequential/reconnect-storm guard at 3;
+// outstandingVersion is non-nil while a corrective push for this sensor is
+// issued but not yet acked (the concurrent guard).
+func (r *Repository) GetCorrectivePushState(ctx context.Context, sensorID int64) (attempts int32, outstandingVersion *int64, err error) {
+	err = r.db.QueryRow(ctx, `
+		SELECT corrective_push_attempts, corrective_push_outstanding_version
+		FROM sensor
+		WHERE sensor_id = $1
+	`, sensorID).Scan(&attempts, &outstandingVersion)
+	if err != nil {
+		return 0, nil, fmt.Errorf("get corrective push state for sensor %d: %w", sensorID, err)
+	}
+	return attempts, outstandingVersion, nil
+}
+
+// InsertCorrectiveConfigNextVersion atomically assigns the next
+// device_config.version for boardID, inserts the corrective config row,
+// increments sensor.corrective_push_attempts, and sets
+// sensor.corrective_push_outstanding_version to that version -- one
+// transaction. Uses the same atomic, conflict-safe next-version pattern as
+// leaflab/api/repository.go's InsertDeviceConfigNextVersion (loop + ON
+// CONFLICT DO NOTHING against the (board_id, version) unique constraint) so
+// a user-initiated push and a corrective push for the same board can never
+// land on the same version.
+//
+// Scaffold note: this method is the atomic write primitive NFR4's guards
+// need; deciding *when* to call it (drift detection, the guard checks
+// themselves) is leaflab/processor/convergence.go's Implementation-phase
+// job.
+func (r *Repository) InsertCorrectiveConfigNextVersion(ctx context.Context, boardID, sensorID int64, configJSON []byte) (version int64, err error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin corrective config tx for board %d: %w", boardID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	for {
+		err := tx.QueryRow(ctx, `
+			WITH next AS (
+				SELECT COALESCE(MAX(version), 0) + 1 AS v
+				FROM device_config
+				WHERE board_id = $1
+			)
+			INSERT INTO device_config (board_id, version, config_json)
+			SELECT $1, next.v, $2 FROM next
+			ON CONFLICT (board_id, version) DO NOTHING
+			RETURNING version
+		`, boardID, configJSON).Scan(&version)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			// another writer claimed this version; retry with the new MAX
+			continue
+		}
+		return 0, fmt.Errorf("insert corrective device_config for board %d: %w", boardID, err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor
+		SET corrective_push_attempts = corrective_push_attempts + 1,
+		    corrective_push_outstanding_version = $2
+		WHERE sensor_id = $1
+	`, sensorID, version); err != nil {
+		return 0, fmt.Errorf("update corrective push state for sensor %d: %w", sensorID, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit corrective config tx for board %d: %w", boardID, err)
+	}
+	return version, nil
 }

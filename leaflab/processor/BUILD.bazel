@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "cache.go",
         "config.go",
+        "convergence.go",
         "handler.go",
         "main.go",
         "repository.go",
@@ -15,6 +16,7 @@ go_library(
     deps = [
         "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/configcompose",
         "//libs/go/db",
         "//libs/go/logging",
         "//libs/go/rmq",
@@ -36,7 +38,9 @@ go_test(
     srcs = ["handler_test.go"],
     embed = [":processor_lib"],
     deps = [
+        "//firmware/proto:configpb",
         "//firmware/proto:firmwarepb",
+        "//leaflab/configcompose",
         "@org_golang_google_protobuf//proto",
     ],
 )

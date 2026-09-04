@@ -8,6 +8,7 @@ import (
 
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
+	"github.com/whale-net/everything/leaflab/configcompose"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -88,6 +89,47 @@ func (s *stubRepo) IsKnownChipAddress(_ context.Context, _ string, _ uint32) (bo
 	return true, nil
 }
 
+// -- FR9/NFR4 stubs -----------------------------------------------------
+// Scaffold-phase stubs: return zero values, since converge is not yet
+// wired into handleManifest and no existing test exercises these. The
+// Implementation/Testing phases replace stubRepo's use here with a
+// dedicated fake that actually tracks inventory/last-accepted/guard state,
+// in the style of leaflab/api/server_test.go's fakeRepository.
+
+func (s *stubRepo) ListSensorInventoryForBoard(_ context.Context, _ int64) ([]configcompose.InventorySensor, error) {
+	return nil, nil
+}
+
+func (s *stubRepo) GetLatestAcceptedConfig(_ context.Context, _ string) (*configpb.DeviceConfig, error) {
+	return nil, nil
+}
+
+func (s *stubRepo) GetCorrectivePushState(_ context.Context, _ int64) (int32, *int64, error) {
+	return 0, nil, nil
+}
+
+func (s *stubRepo) InsertCorrectiveConfigNextVersion(_ context.Context, _, _ int64, _ []byte) (int64, error) {
+	return 0, nil
+}
+
+// fakePublisher records every Publish call -- FR9's corrective push
+// publisher, in the same style as leaflab/api/server_test.go's own
+// fakePublisher.
+type fakePublisher struct {
+	published []publishedMessage
+}
+
+type publishedMessage struct {
+	exchange   string
+	routingKey string
+	body       interface{}
+}
+
+func (p *fakePublisher) Publish(_ context.Context, exchange, routingKey string, body interface{}) error {
+	p.published = append(p.published, publishedMessage{exchange: exchange, routingKey: routingKey, body: body})
+	return nil
+}
+
 // marshalManifest encodes a DeviceManifest to wire bytes.
 func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 	t.Helper()
@@ -99,7 +141,7 @@ func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 }
 
 func newTestHandler(repo SensorRepository) *MessageHandler {
-	return NewMessageHandler(slog.Default(), repo, NewSensorCache())
+	return NewMessageHandler(slog.Default(), repo, NewSensorCache(), &fakePublisher{})
 }
 
 // TestHandleManifest_HWAddressPassedThrough verifies that when a SensorDescriptor
