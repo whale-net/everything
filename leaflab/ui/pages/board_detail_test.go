@@ -449,3 +449,54 @@ func TestBoardDetail_UnnamedBoard_ShowsDeviceIDPlaceholder(t *testing.T) {
 		t.Errorf("expected the rename input's value to stay empty (not prefilled with device_id), got %q", body)
 	}
 }
+
+// --- FR4: per-sensor inline rename control (#1770) ---------------------
+
+// TestBoardDetail_SensorRenameControl_OwnedByCaller_Rendered is Testing
+// criterion 13's positive half: the per-sensor rename control (SensorRow's
+// renameSensorForm) renders when ownedByCaller is true.
+func TestBoardDetail_SensorRenameControl_OwnedByCaller_Rendered(t *testing.T) {
+	sensors := []*leaflabapipb.SensorDetail{
+		{SensorId: 5, SensorName: "Soil Moisture", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
+	}
+	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, sensors)
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+
+	if !strings.Contains(body, `hx-post="/sensors/5/rename"`) {
+		t.Errorf("expected the per-sensor rename form (hx-post to /sensors/5/rename) when ownedByCaller is true, got %q", body)
+	}
+}
+
+// TestBoardDetail_SensorRenameControl_NotOwnedByCaller_Hidden is Testing
+// criterion 13's negative half: the per-sensor rename control is absent
+// (not merely disabled) when ownedByCaller is false, since NFR1's
+// enforcement point is server-side (authorizeBoardWrite), not this hide.
+func TestBoardDetail_SensorRenameControl_NotOwnedByCaller_Hidden(t *testing.T) {
+	sensors := []*leaflabapipb.SensorDetail{
+		{SensorId: 5, SensorName: "Soil Moisture", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
+	}
+	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", false, nil, sensors)
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+
+	if strings.Contains(body, `hx-post="/sensors/5/rename"`) {
+		t.Errorf("expected no per-sensor rename form when ownedByCaller is false, got %q", body)
+	}
+}
+
+// TestBoardDetail_SensorRow_ShowsNewNameImmediately is Testing criterion 14
+// at the template level: SensorRow renders whatever name is in the
+// SensorDetail it's handed -- BoardDetail shows a sensor's new name
+// immediately once the caller re-fetches GetBoardDetail after a successful
+// rename (handlers_rename.go's handleRenameSensor exercises this re-fetch
+// end to end; see handlers_rename_test.go for that half).
+func TestBoardDetail_SensorRow_ShowsNewNameImmediately(t *testing.T) {
+	sensors := []*leaflabapipb.SensorDetail{
+		{SensorId: 5, SensorName: "Renamed Sensor", ReportingState: leaflabapipb.ReportingState_REPORTING_STATE_REPORTING},
+	}
+	resp := boardDetailResp(1, "leaflab-aaaaaaaaaaaa", "greenhouse", true, nil, sensors)
+	body := renderPage(t, BoardDetail(layoutData(), resp, nil, ""))
+
+	if !strings.Contains(body, "Renamed Sensor") {
+		t.Errorf("expected the sensor's current (renamed) name in the rendered output, got %q", body)
+	}
+}

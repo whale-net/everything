@@ -54,6 +54,9 @@ type fakeLeafLabAPIClient struct {
 
 	clearResp *leaflabapipb.ClearBoardOwnerResponse
 	clearErr  error
+
+	renameSensorResp *leaflabapipb.RenameSensorResponse
+	renameSensorErr  error
 }
 
 func (f *fakeLeafLabAPIClient) ListBoardsWithState(ctx context.Context, in *leaflabapipb.ListBoardsWithStateRequest, opts ...grpc.CallOption) (*leaflabapipb.ListBoardsWithStateResponse, error) {
@@ -137,6 +140,16 @@ func (f *fakeLeafLabAPIClient) ClearBoardOwner(ctx context.Context, in *leaflaba
 		return f.clearResp, nil
 	}
 	return &leaflabapipb.ClearBoardOwnerResponse{}, nil
+}
+
+func (f *fakeLeafLabAPIClient) RenameSensor(ctx context.Context, in *leaflabapipb.RenameSensorRequest, opts ...grpc.CallOption) (*leaflabapipb.RenameSensorResponse, error) {
+	if f.renameSensorErr != nil {
+		return nil, f.renameSensorErr
+	}
+	if f.renameSensorResp != nil {
+		return f.renameSensorResp, nil
+	}
+	return &leaflabapipb.RenameSensorResponse{}, nil
 }
 
 // TestHandleBoards_RendersBoardsFromAPI covers the happy path: handleBoards

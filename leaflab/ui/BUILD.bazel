@@ -51,6 +51,7 @@ go_test(
         "handlers_admin_test.go",
         "handlers_auth_test.go",
         "handlers_boards_test.go",
+        "handlers_rename_test.go",
         "handlers_sensors_test.go",
         "main_test.go",
     ],
