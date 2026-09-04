@@ -507,6 +507,20 @@ func (a *app) handleChannelDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Re-authorize strictly by this Channel's ID (store.CanRead), never by
+	// anything the Channel list/switcher (handleChannels above) might have
+	// implied -- that page introduces no session-held "current channel"
+	// and grants nothing on its own (FR26, #1722).
+	canRead, err := store.CanRead(r.Context(), a.store.Roles(), channelID, person.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !canRead {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
 	canReconnect, err := store.CanReconnect(r.Context(), a.store.Roles(), channelID, person.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
