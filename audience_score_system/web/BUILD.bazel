@@ -125,6 +125,49 @@ go_test(
     ],
 )
 
+# The cross-Channel "my work" aggregate page coverage (M2: FR27/FR28,
+# #1725): per-Channel section content across three tiers with no
+# cross-Channel bleed, explicit empty-block placeholders for a Channel with
+# no data yet, the empty state, the unauthenticated redirect, FR28's
+# revoked-role-drops-on-next-load behavior against the same session cookie,
+# and bounded query count as Channel count grows (NFR9). Gated behind
+# `//go:build integration`, hand-written with EXACTLY the tag set from
+# //audience_score_system/web:web_oauth_integration_test above. `# keep`
+# tells a later `bazel run //:gazelle` not to touch or remove this rule.
+#
+# Run it explicitly (requires a working Docker daemon):
+#   bazel test //audience_score_system/web:web_my_work_integration_test --test_output=all
+go_test(
+    # keep
+    name = "web_my_work_integration_test",
+    size = "large",
+    timeout = "long",
+    srcs = ["my_work_integration_test.go"],
+    embed = [":web_lib"],
+    gotags = ["integration"],
+    tags = [
+        "external",
+        "integration",
+        "manual",
+        "no-cache",
+        "no-sandbox",
+        "requires-network",
+    ],
+    deps = [
+        "//audience_score_system/migrate/schema",
+        "//audience_score_system/store",
+        "//audience_score_system/web/auth",
+        "//libs/go/dbtest",
+        "//libs/go/migrate",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
+        "@com_github_jackc_pgx_v5//stdlib",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)
+
 # Release metadata. domain "audience-score-system" + name "web" produces
 # the "audience-score-system-web" image/app identity (see #1566).
 # external-api: signed-in creators/analysts reach this over ingress, same
