@@ -311,8 +311,8 @@ func TestHandleApprove_ClosedCreatorRow_Forbidden(t *testing.T) {
 	// mirrors store_integration_test.go's setupChannelWithRoles.
 	_, err = s.db.Pool.Exec(ctx, `
 		UPDATE channel_person SET valid_to = NOW()
-		WHERE person_id = $1 AND valid_to IS NULL
-	`, former.ID)
+		WHERE channel_id = $1 AND person_id = $2 AND valid_to IS NULL
+	`, ch.ID, former.ID)
 	require.NoError(t, err)
 
 	// Now that former's row on ch is closed, grant a fresh Person the
