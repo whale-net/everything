@@ -202,55 +202,41 @@ jobs:
         path: bazel-testlogs/
         retention-days: 7
 
-  # Bazel Cache Image (POC) -- demonstrates consuming the image built by
-  # devcontainer-bazel-cache-image.yml instead of restoring the GH Actions/remote caches
-  # `test` uses above. Not wired into build-summary's `needs:` and not
-  # required for merge: this is a proof of concept for the caching
-  # *approach*, not a replacement for the real Setup Build Environment path.
-  # See docs/BAZEL_CACHE_IMAGE.md.
-  test-bazel-cache-image:
-    name: Test (Bazel Cache Image POC)
-    runs-on: ubuntu-latest
-    if: ${{ vars.BAZEL_CACHE_IMAGE_ENABLED == 'true' }}
-    container:
-      image: ghcr.io/${{ github.repository_owner }}/bazel-cache-devcontainer:latest
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v7
-      with:
-        fetch-depth: 0
-
-    # Deliberately not ./.github/actions/setup-build-env: its GH Actions
-    # cache restore for ~/.bazel/external and its bazel-contrib/setup-bazel
-    # step both target the toolchain/repository cache the image already
-    # bakes in -- reusing them here would just re-fetch what's already on
-    # disk under /var/cache/bazel/ob. This step only adds the remote cache,
-    # which covers actions/repos that have drifted since the image was
-    # last built.
-    - name: Setup Bazel Remote Cache Config
-      uses: ./.github/actions/setup-bazel-remote-cache-config
-      with:
-        cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
-        cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
-        cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
-        downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
-
-    - name: Build all targets from the pre-warmed cache + remote cache
-      run: |
-        # Same explicit --output_base the image was warmed with (see
-        # .devcontainer/Dockerfile). --config=ci here is fine (unlike in
-        # the image build itself): this job's outputs are throwaway, so
-        # --remote_download_minimal not fully materializing remote-cache
-        # hits to disk doesn't matter the way it would for the image bake.
-        #
-        # No `bazel shutdown` afterward: it hung and had to be SIGKILL'd
-        # here every time, seemingly a PID-reaping quirk specific to how
-        # GH Actions execs steps into a job `container:` (a plain `docker
-        # build`'s RUN step -- both locally and in the real image-build
-        # workflow -- shuts down cleanly with the exact same command). The
-        # container is destroyed the moment this job ends regardless, so
-        # there's nothing a clean shutdown buys here.
-        bazel --output_base=/var/cache/bazel/ob build --config=ci //...
+  # Bazel Cache Image (POC) -- DISABLED. Measured negative result: pulling
+  # the baked image on a fresh GH-hosted runner (3m26s for a 5.45GB image,
+  # one 5.14GB layer) costs more than it saves versus the existing `test`
+  # job's baseline (~2m50s), since GH-hosted runners have no persistent
+  # Docker layer cache across jobs to amortize that pull against. See
+  # docs/BAZEL_CACHE_IMAGE.md "Result" for the full numbers. Commented out
+  # rather than deleted so the approach (and what would need to change --
+  # self-hosted/persistent runners, or a much smaller baked image -- for it
+  # to win) stays reviewable. `BAZEL_CACHE_IMAGE_ENABLED` is also set back
+  # to `false` at the repo-variable level; both gates would need to be
+  # reverted to re-enable this.
+  #
+  # test-bazel-cache-image:
+  #   name: Test (Bazel Cache Image POC)
+  #   runs-on: ubuntu-latest
+  #   if: ${{ vars.BAZEL_CACHE_IMAGE_ENABLED == 'true' }}
+  #   container:
+  #     image: ghcr.io/${{ github.repository_owner }}/bazel-cache-devcontainer:latest
+  #   steps:
+  #   - name: Checkout code
+  #     uses: actions/checkout@v7
+  #     with:
+  #       fetch-depth: 0
+  #
+  #   - name: Setup Bazel Remote Cache Config
+  #     uses: ./.github/actions/setup-bazel-remote-cache-config
+  #     with:
+  #       cache-url: ${{ secrets.BAZEL_REMOTE_CACHE_URL || vars.BAZEL_REMOTE_CACHE_URL }}
+  #       cache-user: ${{ secrets.BAZEL_REMOTE_CACHE_USER || vars.BAZEL_REMOTE_CACHE_USER }}
+  #       cache-password: ${{ secrets.BAZEL_REMOTE_CACHE_PASSWORD || vars.BAZEL_REMOTE_CACHE_PASSWORD }}
+  #       downloader-url: ${{ secrets.BAZEL_REMOTE_DOWNLOADER_URL || vars.BAZEL_REMOTE_DOWNLOADER_URL }}
+  #
+  #   - name: Build all targets from the pre-warmed cache + remote cache
+  #     run: |
+  #       bazel --output_base=/var/cache/bazel/ob build --config=ci //...
 
   # Container architecture test - verify cross-compilation works correctly
   # Runs in parallel with test job for faster CI

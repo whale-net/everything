@@ -1,6 +1,8 @@
 # Bazel Cache Image (POC)
 
-**Status: proof of concept, opt-in, not wired into any required pipeline.**
+**Status: proof of concept, disabled.** `ci.yml`'s consumer job is
+commented out and `BAZEL_CACHE_IMAGE_ENABLED` is set back to `false` --
+see "Result" below for why. Never wired into any required pipeline.
 
 **Result: doesn't win on GitHub-hosted runners as built.** The baked
 `//...` output_base makes the image **5.45 GB** (one single layer is
@@ -233,25 +235,21 @@ docker build -f .devcontainer/Dockerfile \
 Use a narrower `WARM_TARGETS` pattern for a fast local smoke test --
 `//...` is what production usage would warm.
 
-**Enable the real workflows.** Both are gated behind the `BAZEL_CACHE_IMAGE_ENABLED`
-repo variable (unset by default -- merging this POC changes no existing
-pipeline's behavior), matching this repo's other opt-in-via-repo-variable
-gates (e.g. `APP_REGISTRY_CICD_OPT_IN`, see `docs/CI_CD.md`):
+**Re-enabling the consumer job.** `ci.yml`'s `test-bazel-cache-image` job
+is commented out (see "Result" at the top) and `BAZEL_CACHE_IMAGE_ENABLED`
+is set to `false`. To bring it back for further experimentation --
+e.g. against a self-hosted runner, or a much smaller baked image --
+uncomment the job in `ci.yml` and:
 
 ```bash
 gh variable set BAZEL_CACHE_IMAGE_ENABLED --repo whale-net/everything --body true
 ```
 
-With it set to `true`:
-- `.github/workflows/devcontainer-bazel-cache-image.yml` (manual dispatch) pushes
-  `ghcr.io/<owner>/bazel-cache-devcontainer:latest` and `:<sha>`.
-- `ci.yml`'s `test-bazel-cache-image` job runs a full `bazel build --config=ci //...`
-  inside that image and reports its own (non-required) result. It skips
-  `./.github/actions/setup-build-env` entirely -- no GH Actions cache
-  restore, no `bazel-contrib/setup-bazel` -- since the image already bakes
-  in what that would restore; it only adds the remote cache (via the same
-  `setup-bazel-remote-cache-config` action used by the image build) to
-  cover anything that's drifted since the image was last built.
+The image-build workflow itself,
+`.github/workflows/devcontainer-bazel-cache-image.yml`, was left enabled
+(manual `workflow_dispatch` only, so it costs nothing unless someone runs
+it) and still pushes `ghcr.io/<owner>/bazel-cache-devcontainer:latest` and
+`:<sha>` when the same repo variable is `true`.
 
 ## Local dev use
 
