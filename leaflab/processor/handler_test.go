@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"github.com/whale-net/everything/leaflab/configcompose"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -142,6 +144,13 @@ func marshalManifest(t *testing.T, m *firmwarepb.DeviceManifest) []byte {
 
 func newTestHandler(repo SensorRepository) *MessageHandler {
 	return NewMessageHandler(slog.Default(), repo, NewSensorCache(), &fakePublisher{})
+}
+
+// newTestHandlerWithPublisher is newTestHandler, but taking the
+// *fakePublisher explicitly so a test can inspect what was published --
+// used by the FR9/NFR4 convergence tests below.
+func newTestHandlerWithPublisher(repo SensorRepository, pub *fakePublisher) *MessageHandler {
+	return NewMessageHandler(slog.Default(), repo, NewSensorCache(), pub)
 }
 
 // TestHandleManifest_HWAddressPassedThrough verifies that when a SensorDescriptor
@@ -440,5 +449,510 @@ func TestHandleConfigAck_RejectedSkipsApplyRegions(t *testing.T) {
 
 	if _, ok := h.cache.GetConfigVersion("leaflab-aabbccdd"); ok {
 		t.Error("config version should not be set in cache after rejected ack")
+	}
+}
+
+// -- FR9/NFR4: process-internal corrective push convergence ----------------
+//
+// convergenceRepo extends stubRepo with the state these tests actually need
+// to drive: sensor inventory (ComposeDesiredSensors' first input),
+// last-accepted config (its second input), and the two Postgres-backed NFR4
+// guard columns (corrective_push_attempts / corrective_push_outstanding_version),
+// keyed the same way the real Repository (leaflab/processor/repository.go)
+// keys them. Unlike stubRepo's own FR9/NFR4 stubs (Scaffold-phase
+// placeholders that return zero values), these are wired up for real so a
+// test can drive drift detection and both storm guards end to end -- in the
+// style of leaflab/api/server_test.go's fakeRepository.
+//
+// Deliberately not wired: UpsertSensorLabel stays stubRepo's no-op, so the
+// fake's inventory Name is never mutated as a side effect of a manifest's
+// own writes (unlike the real DB, where sensor_name_history IS what
+// ListSensorInventoryForBoard reads). Each test controls
+// convergenceRepo.inventory directly instead -- the sequential storm-guard
+// test in particular needs every fed manifest to observe the same "prior
+// name" baseline, not one that silently self-heals after the first write.
+type convergenceRepo struct {
+	stubRepo
+
+	inventory    map[int64][]configcompose.InventorySensor // boardID -> inventory
+	lastAccepted map[string]*configpb.DeviceConfig          // deviceID -> last accepted config
+	pushState    map[int64]correctivePushFixture            // sensorID -> NFR4 guard state
+	sensorBoard  map[int64]int64                            // sensorID -> boardID, recorded by InsertCorrectiveConfigNextVersion
+	nextVersion  map[int64]int64                            // boardID -> highest device_config.version issued so far
+
+	insertCorrectiveCalls []insertCorrectiveCall
+}
+
+// correctivePushFixture mirrors GetCorrectivePushState's two return values.
+type correctivePushFixture struct {
+	attempts           int32
+	outstandingVersion *int64
+}
+
+// insertCorrectiveCall is one recorded InsertCorrectiveConfigNextVersion call.
+type insertCorrectiveCall struct {
+	boardID    int64
+	sensorID   int64
+	configJSON []byte
+	version    int64
+}
+
+func newConvergenceRepo(boardID, sensorTypeID, sensorID int64) *convergenceRepo {
+	return &convergenceRepo{
+		stubRepo:     stubRepo{boardID: boardID, sensorTypeID: sensorTypeID, sensorID: sensorID},
+		inventory:    map[int64][]configcompose.InventorySensor{},
+		lastAccepted: map[string]*configpb.DeviceConfig{},
+		pushState:    map[int64]correctivePushFixture{},
+		sensorBoard:  map[int64]int64{},
+		nextVersion:  map[int64]int64{},
+	}
+}
+
+func (r *convergenceRepo) ListSensorInventoryForBoard(_ context.Context, boardID int64) ([]configcompose.InventorySensor, error) {
+	return r.inventory[boardID], nil
+}
+
+func (r *convergenceRepo) GetLatestAcceptedConfig(_ context.Context, deviceID string) (*configpb.DeviceConfig, error) {
+	return r.lastAccepted[deviceID], nil
+}
+
+func (r *convergenceRepo) GetCorrectivePushState(_ context.Context, sensorID int64) (int32, *int64, error) {
+	s := r.pushState[sensorID]
+	return s.attempts, s.outstandingVersion, nil
+}
+
+// InsertCorrectiveConfigNextVersion mirrors Repository's own atomic
+// behavior: assigns the next per-board version, increments attempts, and
+// sets outstandingVersion to that version -- one "transaction" (this fake
+// has no concurrent callers within a single test).
+func (r *convergenceRepo) InsertCorrectiveConfigNextVersion(_ context.Context, boardID, sensorID int64, configJSON []byte) (int64, error) {
+	r.nextVersion[boardID]++
+	version := r.nextVersion[boardID]
+
+	s := r.pushState[sensorID]
+	s.attempts++
+	v := version
+	s.outstandingVersion = &v
+	r.pushState[sensorID] = s
+	r.sensorBoard[sensorID] = boardID
+
+	r.insertCorrectiveCalls = append(r.insertCorrectiveCalls, insertCorrectiveCall{
+		boardID: boardID, sensorID: sensorID, configJSON: configJSON, version: version,
+	})
+	return version, nil
+}
+
+// AckDeviceConfig overrides stubRepo's no-op to mirror
+// Repository.AckDeviceConfig's own NFR4 behavior: clear
+// corrective_push_outstanding_version for whichever sensor on this board had
+// exactly this version outstanding, leaving corrective_push_attempts
+// untouched -- see repository.go's AckDeviceConfig doc comment for why that
+// asymmetry is what makes the storm case reachable.
+func (r *convergenceRepo) AckDeviceConfig(_ context.Context, boardID, version int64, _ bool, _ string) error {
+	for sensorID, s := range r.pushState {
+		if s.outstandingVersion != nil && *s.outstandingVersion == version && r.sensorBoard[sensorID] == boardID {
+			s.outstandingVersion = nil
+			r.pushState[sensorID] = s
+		}
+	}
+	return nil
+}
+
+// resetCorrectivePushState simulates what a fresh FR4 rename (#1770) or an
+// explicit FR8 push (#1768) does in production, atomically, in Postgres
+// (RenameSensor / PushDeviceConfig -> InsertDeviceConfigNextVersion's
+// resetSensorIDs) -- see #1772 Testing criterion 9. Both of those live in
+// leaflab/api, not leaflab/processor, so there is nothing in this package to
+// call; this directly sets the fake's guard-state fixture to what either
+// reset would leave behind.
+func (r *convergenceRepo) resetCorrectivePushState(sensorID int64) {
+	r.pushState[sensorID] = correctivePushFixture{}
+}
+
+// levelRecorder is a minimal slog.Handler that records every record's level
+// -- used to assert convergence.go's WARNING/ERROR log-level discipline
+// (AGENTS.md § Logging Levels) without depending on a specific slog output
+// format.
+type levelRecorder struct {
+	levels []slog.Level
+}
+
+func (r *levelRecorder) Enabled(context.Context, slog.Level) bool { return true }
+
+func (r *levelRecorder) Handle(_ context.Context, rec slog.Record) error {
+	r.levels = append(r.levels, rec.Level)
+	return nil
+}
+
+func (r *levelRecorder) WithAttrs(_ []slog.Attr) slog.Handler { return r }
+func (r *levelRecorder) WithGroup(_ string) slog.Handler      { return r }
+
+func (r *levelRecorder) count(level slog.Level) int {
+	n := 0
+	for _, l := range r.levels {
+		if l == level {
+			n++
+		}
+	}
+	return n
+}
+
+// ackCorrectivePush marshals and delivers an accepted DeviceConfigAck for
+// version, mirroring what the device publishes after applying a corrective
+// push -- clears the concurrent guard (AckDeviceConfig) without touching
+// corrective_push_attempts.
+func ackCorrectivePush(t *testing.T, h *MessageHandler, deviceID string, version int64) {
+	t.Helper()
+	ack := &configpb.DeviceConfigAck{DeviceId: deviceID, AppliedVersion: uint64(version), Accepted: true}
+	body, err := proto.Marshal(ack)
+	if err != nil {
+		t.Fatalf("marshal ack: %v", err)
+	}
+	if err := h.handleConfigAck(context.Background(), deviceID, body); err != nil {
+		t.Fatalf("handleConfigAck: %v", err)
+	}
+}
+
+// driftingManifest builds a single-sensor manifest reporting name for
+// deviceID at the given i2c address -- the shape every convergence test
+// below feeds through handleManifest.
+func driftingManifest(t *testing.T, deviceID, name string, i2cAddress uint32) []byte {
+	t.Helper()
+	return marshalManifest(t, &firmwarepb.DeviceManifest{
+		DeviceId: deviceID,
+		Sensors: []*firmwarepb.SensorDescriptor{
+			{Name: name, Type: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE, Unit: "°C", I2CAddress: i2cAddress},
+		},
+	})
+}
+
+// TestHandleManifest_DriftTriggersCorrectivePush is Testing criterion 1: a
+// manifest reporting a name different from the DB's current name for that
+// sensor issues exactly one corrective push to leaflab.<device>.config.
+func TestHandleManifest_DriftTriggersCorrectivePush(t *testing.T) {
+	repo := newConvergenceRepo(1, 2, 10)
+	repo.inventory[1] = []configcompose.InventorySensor{
+		{SensorID: 10, Name: "old-name", I2CAddress: 0x23, Unit: "°C", SensorType: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE},
+	}
+	pub := &fakePublisher{}
+	h := newTestHandlerWithPublisher(repo, pub)
+
+	body := driftingManifest(t, "leaflab-a", "new-name", 0x23)
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(pub.published) != 1 {
+		t.Fatalf("expected exactly 1 corrective push, got %d: %+v", len(pub.published), pub.published)
+	}
+	got := pub.published[0]
+	if got.exchange != correctiveConfigExchange {
+		t.Errorf("exchange: want %q, got %q", correctiveConfigExchange, got.exchange)
+	}
+	const wantRoutingKey = "leaflab.leaflab-a.config"
+	if got.routingKey != wantRoutingKey {
+		t.Errorf("routing key: want %q, got %q", wantRoutingKey, got.routingKey)
+	}
+}
+
+// TestHandleManifest_NoDriftNoCorrectivePush is Testing criterion 2: a
+// manifest whose names all match the DB issues no publish.
+func TestHandleManifest_NoDriftNoCorrectivePush(t *testing.T) {
+	repo := newConvergenceRepo(1, 2, 10)
+	repo.inventory[1] = []configcompose.InventorySensor{
+		{SensorID: 10, Name: "same-name", I2CAddress: 0x23, Unit: "°C", SensorType: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE},
+	}
+	pub := &fakePublisher{}
+	h := newTestHandlerWithPublisher(repo, pub)
+
+	body := driftingManifest(t, "leaflab-a", "same-name", 0x23)
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(pub.published) != 0 {
+		t.Fatalf("expected no corrective push when the manifest matches the DB, got %d: %+v", len(pub.published), pub.published)
+	}
+}
+
+// TestHandleManifest_CorrectivePush_CompositionParityAndFullDesiredState is
+// Testing criteria 3 and 4: for a fixture DB state, the corrective push's
+// composed sensor list is byte-identical to what ComposeDesiredSensors
+// itself produces for the equivalent inputs, and it carries every sensor on
+// the board -- not only the one that drifted.
+func TestHandleManifest_CorrectivePush_CompositionParityAndFullDesiredState(t *testing.T) {
+	repo := newConvergenceRepo(1, 2, 10)
+	regionID := int64(3)
+	repo.inventory[1] = []configcompose.InventorySensor{
+		{SensorID: 10, Name: "old-name", I2CAddress: 0x23, Unit: "°C", SensorType: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE},
+		{SensorID: 11, Name: "humidity", I2CAddress: 0x44, Unit: "%", SensorType: firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY, RegionID: &regionID},
+	}
+	lastAcceptedSensors := []*configpb.SensorConfig{
+		{I2CAddress: 0x44, Name: "humidity", SensorType: firmwarepb.SensorType_SENSOR_TYPE_HUMIDITY, RegionId: 3, PollIntervalMs: 5000},
+	}
+	repo.lastAccepted["leaflab-a"] = &configpb.DeviceConfig{DeviceId: "leaflab-a", Sensors: lastAcceptedSensors}
+
+	pub := &fakePublisher{}
+	h := newTestHandlerWithPublisher(repo, pub)
+
+	body := driftingManifest(t, "leaflab-a", "new-name", 0x23)
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("handleManifest: %v", err)
+	}
+
+	if len(repo.insertCorrectiveCalls) != 1 {
+		t.Fatalf("expected exactly 1 corrective config recorded, got %d", len(repo.insertCorrectiveCalls))
+	}
+	var gotCfg configpb.DeviceConfig
+	if err := protojson.Unmarshal(repo.insertCorrectiveCalls[0].configJSON, &gotCfg); err != nil {
+		t.Fatalf("unmarshal corrective config_json: %v", err)
+	}
+
+	// Criterion 4: full desired state -- both board sensors, not just the
+	// drifted one (the manifest only reported the i2c=0x23 sensor).
+	if len(gotCfg.Sensors) != 2 {
+		t.Fatalf("expected corrective push to carry all 2 board sensors, got %d: %+v", len(gotCfg.Sensors), gotCfg.Sensors)
+	}
+
+	// Criterion 3: composition parity, asserted against the shared function
+	// itself, not a re-implementation.
+	wantSensors := configcompose.ComposeDesiredSensors(repo.inventory[1], lastAcceptedSensors, nil)
+	wantJSON, err := protojson.Marshal(&configpb.DeviceConfig{Sensors: wantSensors})
+	if err != nil {
+		t.Fatalf("marshal want sensors: %v", err)
+	}
+	gotJSON, err := protojson.Marshal(&configpb.DeviceConfig{Sensors: gotCfg.Sensors})
+	if err != nil {
+		t.Fatalf("marshal got sensors: %v", err)
+	}
+	if !bytes.Equal(gotJSON, wantJSON) {
+		t.Errorf("corrective push composed sensors not byte-identical to ComposeDesiredSensors' own output:\n got:  %s\n want: %s", gotJSON, wantJSON)
+	}
+}
+
+// TestHandleManifest_ConcurrentGuardSkipsSecondPush is Testing criterion 5:
+// with corrective_push_outstanding_version non-NULL, a second manifest
+// reporting the same stale name issues no second push.
+func TestHandleManifest_ConcurrentGuardSkipsSecondPush(t *testing.T) {
+	repo := newConvergenceRepo(1, 2, 10)
+	repo.inventory[1] = []configcompose.InventorySensor{
+		{SensorID: 10, Name: "old-name", I2CAddress: 0x23, Unit: "°C", SensorType: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE},
+	}
+	pub := &fakePublisher{}
+	h := newTestHandlerWithPublisher(repo, pub)
+
+	body := driftingManifest(t, "leaflab-a", "stale-name", 0x23)
+
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("first handleManifest: %v", err)
+	}
+	if len(pub.published) != 1 {
+		t.Fatalf("expected 1 push after the first drifting manifest, got %d", len(pub.published))
+	}
+
+	// Second manifest, same stale name, no ack in between -- the corrective
+	// push from the first manifest is still outstanding, so the concurrent
+	// guard must skip issuing a second one.
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("second handleManifest: %v", err)
+	}
+	if len(pub.published) != 1 {
+		t.Errorf("expected still only 1 push while a corrective push is outstanding, got %d", len(pub.published))
+	}
+}
+
+// TestHandleConfigAck_ClearsOutstandingMarkerWithoutTouchingAttempts is
+// Testing criterion 6: a matching handleConfigAck sets
+// corrective_push_outstanding_version back to NULL without touching
+// corrective_push_attempts.
+func TestHandleConfigAck_ClearsOutstandingMarkerWithoutTouchingAttempts(t *testing.T) {
+	repo := newConvergenceRepo(7, 2, 10)
+	outstanding := int64(3)
+	repo.pushState[10] = correctivePushFixture{attempts: 1, outstandingVersion: &outstanding}
+	repo.sensorBoard[10] = 7
+	h := newTestHandler(repo)
+
+	ackCorrectivePush(t, h, "leaflab-a", 3)
+
+	attempts, outstandingVersion, err := repo.GetCorrectivePushState(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("GetCorrectivePushState: %v", err)
+	}
+	if outstandingVersion != nil {
+		t.Errorf("expected outstanding version cleared, got %d", *outstandingVersion)
+	}
+	if attempts != 1 {
+		t.Errorf("expected corrective_push_attempts left untouched at 1, got %d", attempts)
+	}
+}
+
+// TestHandleManifest_SequentialStormGuardStopsAfterThreeAttempts is Testing
+// criterion 7 (NFR4's own worked example): 3 manifests, each reporting the
+// same stale name with a corresponding acked-but-unconverged corrective push
+// in between, and a 4th matching manifest issues no 4th corrective push.
+func TestHandleManifest_SequentialStormGuardStopsAfterThreeAttempts(t *testing.T) {
+	repo := newConvergenceRepo(1, 2, 10)
+	repo.inventory[1] = []configcompose.InventorySensor{
+		{SensorID: 10, Name: "correct-name", I2CAddress: 0x23, Unit: "°C", SensorType: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE},
+	}
+	pub := &fakePublisher{}
+	h := newTestHandlerWithPublisher(repo, pub)
+
+	body := driftingManifest(t, "leaflab-a", "stale-name", 0x23)
+
+	for i := 0; i < maxCorrectivePushAttempts; i++ {
+		if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+			t.Fatalf("manifest %d: %v", i+1, err)
+		}
+		if len(pub.published) != i+1 {
+			t.Fatalf("after manifest %d: expected %d pushes, got %d", i+1, i+1, len(pub.published))
+		}
+		// Device acks accepted=true (clearing the concurrent guard) but
+		// never actually persists the correction to NVS -- its next
+		// manifest still reports the stale name.
+		ackCorrectivePush(t, h, "leaflab-a", int64(i+1))
+	}
+
+	// 4th matching manifest: attempts has reached maxCorrectivePushAttempts,
+	// the sequential/reconnect-storm guard stops auto-issuing.
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("4th manifest: %v", err)
+	}
+	if len(pub.published) != maxCorrectivePushAttempts {
+		t.Errorf("expected no 4th push once the storm guard gives up, got %d total pushes", len(pub.published))
+	}
+}
+
+// TestHandleManifest_StormGuardLogLevels is Testing criterion 8: the first
+// two failed convergence attempts log at WARNING and the third at ERROR; no
+// ERROR is emitted on the first attempt.
+func TestHandleManifest_StormGuardLogLevels(t *testing.T) {
+	repo := newConvergenceRepo(1, 2, 10)
+	repo.inventory[1] = []configcompose.InventorySensor{
+		{SensorID: 10, Name: "correct-name", I2CAddress: 0x23, Unit: "°C", SensorType: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE},
+	}
+	pub := &fakePublisher{}
+	rec := &levelRecorder{}
+	h := NewMessageHandler(slog.New(rec), repo, NewSensorCache(), pub)
+
+	body := driftingManifest(t, "leaflab-a", "stale-name", 0x23)
+
+	// First attempt: no prior failure yet, so the guard itself must log
+	// neither WARNING nor ERROR.
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("manifest 1: %v", err)
+	}
+	if got := rec.count(slog.LevelError); got != 0 {
+		t.Errorf("expected 0 ERROR logs after the first attempt, got %d", got)
+	}
+	ackCorrectivePush(t, h, "leaflab-a", 1)
+
+	// Second and third attempts: each retries a prior unconverged push --
+	// WARNING (the system retried to keep going).
+	for i := 2; i <= maxCorrectivePushAttempts; i++ {
+		if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+			t.Fatalf("manifest %d: %v", i, err)
+		}
+		ackCorrectivePush(t, h, "leaflab-a", int64(i))
+	}
+	if got := rec.count(slog.LevelWarn); got != 2 {
+		t.Errorf("expected exactly 2 WARNING logs (the first two failed attempts), got %d", got)
+	}
+	if got := rec.count(slog.LevelError); got != 0 {
+		t.Errorf("expected still 0 ERROR logs before the guard gives up, got %d", got)
+	}
+
+	// 4th matching manifest: attempts == maxCorrectivePushAttempts, the
+	// guard gives up -- ERROR (the operation cannot continue and needs
+	// attention, per AGENTS.md § Logging Levels).
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("4th manifest: %v", err)
+	}
+	if got := rec.count(slog.LevelError); got != 1 {
+		t.Errorf("expected exactly 1 ERROR log when the storm guard gives up, got %d", got)
+	}
+	if got := rec.count(slog.LevelWarn); got != 2 {
+		t.Errorf("expected WARNING count unchanged at 2 once the guard gives up, got %d", got)
+	}
+}
+
+// TestHandleManifest_ResetReArmsAfterGuardGivesUp is Testing criterion 9:
+// after the guard has given up, a reset (standing in for a fresh FR4 rename
+// or an FR8 push -- see resetCorrectivePushState's doc comment) re-arms it,
+// and the next drifting manifest issues a push again.
+func TestHandleManifest_ResetReArmsAfterGuardGivesUp(t *testing.T) {
+	repo := newConvergenceRepo(1, 2, 10)
+	repo.inventory[1] = []configcompose.InventorySensor{
+		{SensorID: 10, Name: "correct-name", I2CAddress: 0x23, Unit: "°C", SensorType: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE},
+	}
+	pub := &fakePublisher{}
+	h := newTestHandlerWithPublisher(repo, pub)
+
+	body := driftingManifest(t, "leaflab-a", "stale-name", 0x23)
+
+	for i := 0; i < maxCorrectivePushAttempts; i++ {
+		if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+			t.Fatalf("manifest %d: %v", i+1, err)
+		}
+		ackCorrectivePush(t, h, "leaflab-a", int64(i+1))
+	}
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("4th manifest (guard should give up): %v", err)
+	}
+	if len(pub.published) != maxCorrectivePushAttempts {
+		t.Fatalf("expected the guard to have given up (%d pushes), got %d", maxCorrectivePushAttempts, len(pub.published))
+	}
+
+	repo.resetCorrectivePushState(10)
+
+	if err := h.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("manifest after reset: %v", err)
+	}
+	if len(pub.published) != maxCorrectivePushAttempts+1 {
+		t.Errorf("expected a new corrective push to be issued after the reset, got %d total pushes", len(pub.published))
+	}
+}
+
+// TestHandleManifest_StormGuardSurvivesHandlerRestart proves NFR4 § Counter
+// persistence: the guard state lives in the repository (production:
+// Postgres), never cached on MessageHandler, so a brand-new handler
+// instance backed by the same repository must not hand a non-persisting
+// device a fresh attempt budget.
+//
+// Red/green discipline (exercised by hand during Testing, not left as a
+// toggle here): temporarily caching attempts on MessageHandler instead of
+// reading it fresh from repo on every converge() call turns this test red
+// (h2 would start counting from 0 again); restoring the Postgres-backed
+// read turns it green.
+func TestHandleManifest_StormGuardSurvivesHandlerRestart(t *testing.T) {
+	repo := newConvergenceRepo(1, 2, 10)
+	repo.inventory[1] = []configcompose.InventorySensor{
+		{SensorID: 10, Name: "correct-name", I2CAddress: 0x23, Unit: "°C", SensorType: firmwarepb.SensorType_SENSOR_TYPE_TEMPERATURE},
+	}
+	pub := &fakePublisher{}
+	h1 := newTestHandlerWithPublisher(repo, pub)
+
+	body := driftingManifest(t, "leaflab-a", "stale-name", 0x23)
+
+	for i := 0; i < maxCorrectivePushAttempts; i++ {
+		if err := h1.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+			t.Fatalf("manifest %d: %v", i+1, err)
+		}
+		ackCorrectivePush(t, h1, "leaflab-a", int64(i+1))
+	}
+	if len(pub.published) != maxCorrectivePushAttempts {
+		t.Fatalf("expected %d pushes before restart, got %d", maxCorrectivePushAttempts, len(pub.published))
+	}
+
+	// Simulate a leaflab-processor restart: a brand-new MessageHandler (a
+	// fresh SensorCache, no in-process state carried over) against the same
+	// repository -- production's Postgres, here the same fake backing
+	// store.
+	h2 := newTestHandlerWithPublisher(repo, pub)
+	if err := h2.handleManifest(context.Background(), "leaflab-a", body); err != nil {
+		t.Fatalf("manifest after restart: %v", err)
+	}
+	if len(pub.published) != maxCorrectivePushAttempts {
+		t.Errorf("expected the storm guard to survive a handler restart (still %d pushes), got %d", maxCorrectivePushAttempts, len(pub.published))
 	}
 }
