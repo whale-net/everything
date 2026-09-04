@@ -49,9 +49,11 @@ go_test(
     ],
     embed = [":api_lib"],
     deps = [
+        "//firmware/proto:configpb",
         "//leaflab/api/proto:leaflabapipb",
         "//libs/go/grpcauth",
         "@com_github_go_jose_go_jose_v4//:go-jose",
+        "@com_github_jackc_pgx_v5//:pgx",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",

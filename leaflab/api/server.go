@@ -13,7 +13,6 @@ import (
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	pb "github.com/whale-net/everything/leaflab/api/proto"
 	"github.com/whale-net/everything/libs/go/grpcauth"
-	"github.com/whale-net/everything/libs/go/rmq"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -49,14 +48,41 @@ const mqttExchange = "amq.topic"
 // the request or response.
 const reportingThreshold = 10 * time.Minute
 
+// repositoryStore is the subset of *Repository's methods LeafLabAPIServer
+// calls, extracted so tests can substitute an in-memory fake (no Postgres)
+// while production code keeps passing the real *Repository straight
+// through -- *Repository already satisfies this interface, no adapter
+// needed. GetBoardIDForSensor is deliberately excluded: no handler in this
+// file calls it yet (it exists for the RenameSensor task).
+type repositoryStore interface {
+	GetLeafLabUserIDBySub(ctx context.Context, oidcSub string) (int64, bool, error)
+	GetCurrentBoardOwner(ctx context.Context, boardID int64) (int64, bool, error)
+	GetBoardIDForDeviceID(ctx context.Context, deviceID string) (int64, bool, error)
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
+	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
+	ListBoards(ctx context.Context) ([]BoardRow, error)
+	ListBoardsWithState(ctx context.Context) ([]BoardWithReadingRow, error)
+	GetBoardIdentity(ctx context.Context, boardID int64) (string, error)
+	ListSensorDetailsForBoard(ctx context.Context, boardID int64) ([]SensorDetailRow, error)
+	SensorExists(ctx context.Context, sensorID int64) (bool, error)
+	GetSensorReadingHistory(ctx context.Context, sensorID int64, from, to time.Time) (*SensorReadingHistory, error)
+}
+
+// configPublisher is the one *rmq.Publisher method PushDeviceConfig calls,
+// extracted for the same reason as repositoryStore: *rmq.Publisher
+// satisfies it as-is (see libs/go/rmq/publisher.go's Publish signature).
+type configPublisher interface {
+	Publish(ctx context.Context, exchange, routingKey string, body interface{}) error
+}
+
 type LeafLabAPIServer struct {
 	pb.UnimplementedLeafLabAPIServer
-	repo      *Repository
-	publisher *rmq.Publisher
+	repo      repositoryStore
+	publisher configPublisher
 	logger    *slog.Logger
 }
 
-func NewLeafLabAPIServer(repo *Repository, publisher *rmq.Publisher, logger *slog.Logger) *LeafLabAPIServer {
+func NewLeafLabAPIServer(repo repositoryStore, publisher configPublisher, logger *slog.Logger) *LeafLabAPIServer {
 	return &LeafLabAPIServer{
 		repo:      repo,
 		publisher: publisher,
