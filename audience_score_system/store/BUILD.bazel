@@ -18,6 +18,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "store",
     srcs = [
+        "access.go",
         "authz.go",
         "browse.go",
         "channel.go",
@@ -77,6 +78,8 @@ go_test(
         "//libs/go/dbtest",
         "//libs/go/migrate",
         "@com_github_google_uuid//:uuid",
+        "@com_github_jackc_pgx_v5//:pgx",
+        "@com_github_jackc_pgx_v5//pgxpool",
         "@com_github_jackc_pgx_v5//stdlib",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

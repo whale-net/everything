@@ -53,7 +53,12 @@ type RoleStore interface {
 	// (valid_to IS NULL) channel_person rows for personID joined to
 	// channel. This is `web`'s signed-in home page (C1)'s data source for
 	// "the Channels the Person has a live channel_person row for" -- see
-	// web/main.go's handleHome.
+	// web/main.go's handleHome. A caller that also needs the Person's
+	// tier on each Channel (FR26's Channel list/switcher page) should use
+	// AccessStore.ChannelsWithRoleForPerson (access.go) instead, which
+	// returns the same Channel set paired with Role in one query, rather
+	// than calling RolesFor per Channel afterward (that per-Channel loop
+	// is exactly the N+1 issue #1716/#1719 replace).
 	ChannelsForPerson(ctx context.Context, personID uuid.UUID) ([]Channel, error)
 }
 

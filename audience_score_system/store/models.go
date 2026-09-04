@@ -74,6 +74,47 @@ type ChannelPerson struct {
 	ValidTo   *time.Time
 }
 
+// ChannelRole is one Channel paired with a Person's currently-held Role on
+// it -- AccessStore.ChannelsWithRoleForPerson's row shape (FR26). Exactly
+// one row per open channel_person row: migration 001's
+// channel_person_channel_id_person_id_current partial unique index
+// guarantees at most one open (channel_id, person_id) row, so a Person
+// never has two ChannelRole entries for the same Channel.
+type ChannelRole struct {
+	Channel Channel
+	Role    Role
+}
+
+// RosterEntry is one Person holding an open role on a Channel, as
+// AccessStore.Roster returns it (FR30/FR31/FR33) -- the access-management
+// page's list. GrantedByDisplayName is "" when granted_by_person_id is
+// NULL (migration 009 does not backfill it on pre-M2 rows) -- render
+// "unknown" upstream rather than inventing a granter here.
+type RosterEntry struct {
+	PersonID             uuid.UUID
+	DisplayName          string
+	Email                string
+	Role                 Role
+	GrantedAt            time.Time
+	GrantedByDisplayName string
+}
+
+// AuditEvent is one row of `v_channel_person_audit` (migration 009, FR35),
+// as AccessStore.AuditTrail returns it. ActorPersonID is nil and
+// ActorDisplayName is "" for pre-M2 rows and for grants with no recorded
+// actor (migration 009 does not backfill granted_by_person_id/
+// revoked_by_person_id) -- render "unknown" upstream rather than
+// inventing an actor.
+type AuditEvent struct {
+	Event              string
+	OccurredAt         time.Time
+	SubjectPersonID    uuid.UUID
+	SubjectDisplayName string
+	Role               Role
+	ActorPersonID      *uuid.UUID
+	ActorDisplayName   string
+}
+
 // Invite is one row of `channel_invite` (migration 001, FR5-FR8; widened by
 // migration 009 for M2, FR29/FR30) -- a single-use, high-entropy code a
 // Channel's Creator (or Co-Creator, FR32) generates to let another Person
