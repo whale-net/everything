@@ -29,17 +29,21 @@ the exact behavioral bar this package reproduces.
 
 ## Schema ownership — the consuming domain owns the migration
 
-This library does **not** own, embed, or run any migration. Exactly like
-`libs/go/htmxauth`'s `DBSessionManager` (see its `README.md` "DB-Backed
-Sessions" section and `db_session.go`'s `probeSessionTable`), it:
+This library does **not** own, embed, or run any migration — the consuming
+domain's own migration tooling must create the table before the first call
+to `NewCredentialStore` (unlike `libs/go/htmxauth`'s `ui_sessions`, whose
+one shared shape the library now bundles and a domain applies via
+`migrate.WithSource`, tracked in its own dedicated table — mcpauth's schema
+varies per domain, so there is no single shape to bundle). It does still
+mirror `DBSessionManager`'s
+boot-time preflight behavior (see `db_session.go`'s `probeSessionTable`):
+it
 
 - names an **unqualified** table (`StoreConfig.TableName`, default
   `mcp_credential`) so every query — including the boot-time preflight
   probe — resolves through the same `search_path` the runtime uses;
 - probes that table at construction time and fails loudly, naming the
-  table, if it is missing;
-- expects the consuming domain's own migration tooling to have created the
-  table before the first call to `NewCredentialStore`.
+  table, if it is missing.
 
 ### Schema contract
 
@@ -356,10 +360,14 @@ store, err := mcpauth.NewCredentialStore(ctx, mcpauth.StoreConfig{
 
 1. Apply your domain's own migration creating the schema above (see
    "Schema contract"). This library does not ship or run migrations
-   (NFR5) — see `tools/app_registry/migrate/schema/migrations/012_ui_sessions.up.sql`
-   and `manmanv2/migrate/migrations/032_ui_sessions.up.sql` for how
-   `htmxauth`'s adopting domains do this for `ui_sessions`; mirror that
-   pattern for `mcp_credential`.
+   (NFR5) — see `audience_score_system/migrate/schema/migrations/006_mcpauth_credential.up.sql`
+   for a real domain-owned migration satisfying this contract; mirror that
+   pattern for `mcp_credential`. (This is deliberately unlike
+   `libs/go/htmxauth`'s `ui_sessions`, which one shared, byte-identical
+   table shape let the library bundle and apply via `migrate.WithSource`
+   instead, tracked in its own dedicated table — mcpauth's schema varies
+   per domain (identity column name/type/FK), so there is no single shape
+   to bundle.)
 2. Construct a `*pgxpool.Pool` (see `//libs/go/db`).
 3. Call `mcpauth.NewCredentialStore` — it preflights the configured table
    and returns an error naming it if the migration has not been applied.
