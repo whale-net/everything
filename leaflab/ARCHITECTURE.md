@@ -234,6 +234,17 @@ goes through the single chokepoint `authorizeBoardWrite`
   access to boards it does not own is out of scope beyond the dedicated
   reassign/clear RPCs.
 
+`ReassignBoardOwner` and `ClearBoardOwner` (FR12, FR13) are the one
+exception to "no role information" above: both are gated by a separate
+chokepoint, `requireAdmin` (checked first, before any repository access),
+not `authorizeBoardWrite` — they are the only writes in this milestone an
+admin may make to a board it does not itself own, and that admin grant
+confers no other write access (an admin is still denied by
+`authorizeBoardWrite` on `RenameBoard`/`RenameSensor`/`PushDeviceConfig` for
+a board it doesn't own). Both are SCD2 close-and-open (reassign) or
+close-only (clear) against `board_owner_history`, same as every other
+write to that table — never an in-place `UPDATE` of `leaflab_user_id`.
+
 Reads are deliberately **not** scoped by ownership (FR5): every signed-in
 user still reads every board, sensor, and reading through
 `ListBoardsWithState`/`GetBoardDetail`/`GetSensorReadingHistory`/

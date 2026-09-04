@@ -159,6 +159,46 @@ type fakeRepository struct {
 	// tests assert on this to prove a refused claim (already owned) issues
 	// no write at all, not just that it returns an error.
 	claimedBoards []claimedBoard
+
+	// -- #1777: admin ownership screen (FR11-FR14) fixtures/recorders --
+
+	// ownedBoards backs ListOwnedBoards's fixture (Testing criterion 3) --
+	// populated directly rather than derived from owners/boardIdentity,
+	// since ListOwnedBoards is a dedicated admin read with its own row
+	// shape (OwnedBoardRow) independent of GetBoardIdentity's.
+	ownedBoards []OwnedBoardRow
+	// existingUsers is the set of leaflab_user_ids LeafLabUserExists
+	// recognizes -- a user_id absent here is unknown, exactly like a fresh
+	// leaflab_user table would report for ReassignBoardOwner's
+	// unknown-new-owner check (Testing criterion 7).
+	existingUsers map[int64]bool
+	// userRows backs ListUsers's fixture (Testing criterion 10).
+	userRows []LeafLabUserRow
+	// reassignedOwners records every ReassignBoardOwner(boardID,
+	// newOwnerUserID) call, in order -- proving a reassign issues exactly
+	// one close-and-open (Testing criterion 4), and that a denied/rejected
+	// attempt issues none at all (criteria 1, 2, 5, 6, 7).
+	reassignedOwners []reassignedOwner
+	// clearedOwners records every ClearBoardOwner(boardID) call, in order
+	// -- proving a clear issues a close-with-no-open (Testing criterion 8),
+	// and that a denied/rejected attempt issues none at all (criteria 1, 2,
+	// 9).
+	clearedOwners []int64
+	// listOwnedBoardsCalls/listUsersCalls/getBoardIdentityCalls count calls
+	// to their namesake methods -- unlike the write recorders above,
+	// ListOwnedBoards/ListUsers/GetBoardIdentity have no state-mutating
+	// side effect of their own to assert "untouched", so a denied caller's
+	// "no repository read performed" (Testing criterion 1) is proven via
+	// these counters staying at zero instead.
+	listOwnedBoardsCalls  int
+	listUsersCalls        int
+	getBoardIdentityCalls int
+}
+
+// reassignedOwner is one recorded fakeRepository.ReassignBoardOwner call.
+type reassignedOwner struct {
+	boardID        int64
+	newOwnerUserID int64
 }
 
 // claimedBoard is one recorded fakeRepository.ClaimBoard call that actually
@@ -181,6 +221,7 @@ func newFakeRepository() *fakeRepository {
 		sensorDetails: map[int64][]SensorDetailRow{},
 		sensorExists:  map[int64]bool{},
 		sensorHistory: map[int64]*SensorReadingHistory{},
+		existingUsers: map[int64]bool{},
 	}
 }
 
@@ -229,6 +270,7 @@ func (f *fakeRepository) ListBoardsWithState(_ context.Context) ([]BoardWithRead
 }
 
 func (f *fakeRepository) GetBoardIdentity(_ context.Context, boardID int64) (BoardIdentity, error) {
+	f.getBoardIdentityCalls++
 	identity, ok := f.boardIdentity[boardID]
 	if !ok {
 		return BoardIdentity{}, pgx.ErrNoRows
@@ -270,6 +312,53 @@ func (f *fakeRepository) GetSensorReadingHistory(_ context.Context, sensorID int
 		return &SensorReadingHistory{}, nil
 	}
 	return h, nil
+}
+
+// -- #1777: admin ownership screen (FR11-FR14) repositoryStore methods --
+
+// ListOwnedBoards returns the ownedBoards fixture verbatim -- see its field
+// doc comment.
+func (f *fakeRepository) ListOwnedBoards(_ context.Context) ([]OwnedBoardRow, error) {
+	f.listOwnedBoardsCalls++
+	return f.ownedBoards, nil
+}
+
+// ReassignBoardOwner records the call (reassignedOwners) and updates
+// f.owners so a subsequent GetCurrentBoardOwner/ClaimBoard call against the
+// fake reflects the new owner -- mirroring ClaimBoard's own
+// mutate-and-record shape above. server.go's ReassignBoardOwner RPC is
+// responsible for the unowned-board, reassign-to-current-owner, and
+// unknown-user checks before ever calling this (via GetBoardIdentity/
+// LeafLabUserExists) -- this fake, like the real Repository method,
+// performs the write unconditionally.
+func (f *fakeRepository) ReassignBoardOwner(_ context.Context, boardID, newOwnerUserID int64) error {
+	f.reassignedOwners = append(f.reassignedOwners, reassignedOwner{boardID: boardID, newOwnerUserID: newOwnerUserID})
+	f.owners[boardID] = newOwnerUserID
+	return nil
+}
+
+// ClearBoardOwner records the call (clearedOwners) and removes boardID from
+// f.owners -- after this, GetCurrentBoardOwner/authorizeBoardWrite see the
+// board as unowned, exactly like ClaimBoard's own "absent key = unowned"
+// convention (FR13 -> FR6 -> FR1 continuity, proven for real against
+// Postgres by the integration test).
+func (f *fakeRepository) ClearBoardOwner(_ context.Context, boardID int64) error {
+	f.clearedOwners = append(f.clearedOwners, boardID)
+	delete(f.owners, boardID)
+	return nil
+}
+
+// LeafLabUserExists reports membership in existingUsers -- a user_id absent
+// there is unknown, exactly like a fresh leaflab_user table would report.
+func (f *fakeRepository) LeafLabUserExists(_ context.Context, leaflabUserID int64) (bool, error) {
+	return f.existingUsers[leaflabUserID], nil
+}
+
+// ListUsers returns the userRows fixture verbatim -- see its field doc
+// comment.
+func (f *fakeRepository) ListUsers(_ context.Context) ([]LeafLabUserRow, error) {
+	f.listUsersCalls++
+	return f.userRows, nil
 }
 
 // fakePublisher is an in-memory configPublisher double: Publish always
@@ -974,3 +1063,299 @@ func TestRenameBoard_NoPublish(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, pub.published)
 }
+
+// -- #1777: admin ownership screen (FR11-FR14) RPC tests --------------------
+//
+// These call ListOwnedBoards/ReassignBoardOwner/ClearBoardOwner/ListUsers
+// directly against fakeRepository/fakePublisher, the same shape as the
+// PushDeviceConfig/RenameBoard fence tests above. requireAdmin's own
+// contract (Unauthenticated with no claims, PermissionDenied with no
+// leaflab_user row / no open admin grant / an OIDC-claimed-but-ungranted
+// role, success with an open grant) is already proven exhaustively by the
+// TestRequireAdmin_* tests above -- what's under test here is that each of
+// the four RPCs actually calls requireAdmin *first*, before touching its
+// own repository fixture, and each RPC's own domain logic (SCD2
+// close-and-open, the unowned/current-owner/unknown-user checks) once past
+// that gate.
+
+// adminRPCCase names one of the four admin RPCs and how to invoke it, so
+// TestAdminRPCs_NonAdmin_PermissionDenied_NoRepositoryAccess and
+// TestAdminRPCs_NoClaims_Unauthenticated can exercise all four identically
+// instead of four near-duplicate test bodies. board_id 100 / new_owner 3
+// are arbitrary non-zero IDs -- what matters is that a denied caller's
+// request still names a plausible target, so a bug that skipped the
+// requireAdmin gate would actually attempt a real write against it.
+var adminRPCCases = []struct {
+	name string
+	call func(srv *LeafLabAPIServer, ctx context.Context) error
+}{
+	{"ListOwnedBoards", func(srv *LeafLabAPIServer, ctx context.Context) error {
+		_, err := srv.ListOwnedBoards(ctx, &pb.ListOwnedBoardsRequest{})
+		return err
+	}},
+	{"ReassignBoardOwner", func(srv *LeafLabAPIServer, ctx context.Context) error {
+		_, err := srv.ReassignBoardOwner(ctx, &pb.ReassignBoardOwnerRequest{BoardId: 100, NewOwnerLeaflabUserId: 3})
+		return err
+	}},
+	{"ClearBoardOwner", func(srv *LeafLabAPIServer, ctx context.Context) error {
+		_, err := srv.ClearBoardOwner(ctx, &pb.ClearBoardOwnerRequest{BoardId: 100})
+		return err
+	}},
+	{"ListUsers", func(srv *LeafLabAPIServer, ctx context.Context) error {
+		_, err := srv.ListUsers(ctx, &pb.ListUsersRequest{})
+		return err
+	}},
+}
+
+// TestAdminRPCs_NonAdmin_PermissionDenied_NoRepositoryAccess is Testing
+// criterion 1: a signed-in caller with no open admin grant is denied by all
+// four RPCs, and none of them ever reaches its own repository read or
+// write -- board 100 stays owned by user 2 throughout (a bypass would show
+// up as a reassign/clear write, or as GetBoardIdentity/ListOwnedBoards/
+// ListUsers being called at all).
+func TestAdminRPCs_NonAdmin_PermissionDenied_NoRepositoryAccess(t *testing.T) {
+	for _, tt := range adminRPCCases {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newFakeRepository()
+			repo.users["plain-sub"] = 1
+			// No repo.admins[1] entry -- signed in, not admin.
+			repo.owners[100] = 2
+			repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a", Owner: &OwnerRow{LeafLabUserID: 2}}
+			repo.existingUsers[3] = true
+			repo.ownedBoards = []OwnedBoardRow{{BoardID: 100, DeviceID: "device-a", Owner: OwnerRow{LeafLabUserID: 2}}}
+			repo.userRows = []LeafLabUserRow{{LeafLabUserID: 2, DisplayName: "Someone"}}
+			srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+			err := tt.call(srv, claimsCtx("plain-sub"))
+			require.Error(t, err)
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+			assert.Empty(t, repo.reassignedOwners, "%s: denied caller must issue no reassign write", tt.name)
+			assert.Empty(t, repo.clearedOwners, "%s: denied caller must issue no clear write", tt.name)
+			assert.Zero(t, repo.listOwnedBoardsCalls, "%s: denied caller must issue no ListOwnedBoards read", tt.name)
+			assert.Zero(t, repo.listUsersCalls, "%s: denied caller must issue no ListUsers read", tt.name)
+			assert.Zero(t, repo.getBoardIdentityCalls, "%s: denied caller must issue no GetBoardIdentity read", tt.name)
+		})
+	}
+}
+
+// TestAdminRPCs_NoClaims_Unauthenticated is Testing criterion 2: no
+// grpcauth.Claims in ctx at all yields codes.Unauthenticated from all four
+// RPCs, with no repository access either.
+func TestAdminRPCs_NoClaims_Unauthenticated(t *testing.T) {
+	for _, tt := range adminRPCCases {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newFakeRepository()
+			repo.owners[100] = 2
+			repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a", Owner: &OwnerRow{LeafLabUserID: 2}}
+			repo.existingUsers[3] = true
+			srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+			err := tt.call(srv, context.Background())
+			require.Error(t, err)
+			assert.Equal(t, codes.Unauthenticated, status.Code(err))
+			assert.Empty(t, repo.reassignedOwners, "%s: unauthenticated caller must issue no reassign write", tt.name)
+			assert.Empty(t, repo.clearedOwners, "%s: unauthenticated caller must issue no clear write", tt.name)
+			assert.Zero(t, repo.listOwnedBoardsCalls, "%s: unauthenticated caller must issue no ListOwnedBoards read", tt.name)
+			assert.Zero(t, repo.listUsersCalls, "%s: unauthenticated caller must issue no ListUsers read", tt.name)
+			assert.Zero(t, repo.getBoardIdentityCalls, "%s: unauthenticated caller must issue no GetBoardIdentity read", tt.name)
+		})
+	}
+}
+
+// TestListOwnedBoards_Admin_ReturnsOnlyOwnedBoardsFixture is Testing
+// criterion 3: an admin caller gets back exactly what the repository's
+// ListOwnedBoards returns -- which itself (per ListOwnedBoards' own INNER
+// JOIN, proven separately against real Postgres) only ever contains boards
+// with an open ownership row. At this fake/handler level, what's provable
+// is that the RPC passes the fixture through verbatim (board_id, device_id,
+// board_name, and owner identity), not that the fake is somehow filtering
+// -- the "only owned boards ever appear" half of the contract is the
+// repository query's job, covered at the repository/integration level.
+// board_name is deliberately left "" on wire (board 100) rather than
+// resolved to device_id here: boardNameOrEmpty's own doc comment says the
+// device_id fallback is the UI's job (pages.boardDisplayName), not this
+// RPC's -- covered by TestOwnedBoardsTable_FallsBackToDeviceIDWhenUnnamed
+// in leaflab/ui/pages/admin_boards_test.go.
+func TestListOwnedBoards_Admin_ReturnsOnlyOwnedBoardsFixture(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.admins[1] = true
+	repo.ownedBoards = []OwnedBoardRow{
+		{BoardID: 100, DeviceID: "device-a", Owner: OwnerRow{LeafLabUserID: 2, DisplayName: "Alice"}},
+		{BoardID: 200, DeviceID: "device-b", BoardName: strPtr("greenhouse"), Owner: OwnerRow{LeafLabUserID: 3, DisplayName: "Bob"}},
+	}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	resp, err := srv.ListOwnedBoards(claimsCtx("admin-sub"), &pb.ListOwnedBoardsRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.GetBoards(), 2)
+	assert.Equal(t, int64(100), resp.Boards[0].BoardId)
+	assert.Equal(t, "device-a", resp.Boards[0].DeviceId)
+	assert.Equal(t, "", resp.Boards[0].BoardName, "unnamed board's board_name is empty on the wire")
+	assert.Equal(t, "Alice", resp.Boards[0].Owner.DisplayName)
+	assert.Equal(t, int64(200), resp.Boards[1].BoardId)
+	assert.Equal(t, "greenhouse", resp.Boards[1].BoardName)
+	assert.Equal(t, "Bob", resp.Boards[1].Owner.DisplayName)
+	assert.Equal(t, 1, repo.listOwnedBoardsCalls)
+}
+
+// strPtr is a small helper for *string fixture fields (OwnedBoardRow.BoardName).
+func strPtr(s string) *string { return &s }
+
+// TestReassignBoardOwner_Admin_OwnedBoard_Succeeds is Testing criterion 4:
+// an admin reassigning an owned board to a different existing user
+// succeeds, and the repository receives exactly one ReassignBoardOwner call
+// (the repository method itself is proven to close-and-open in one
+// transaction, never an in-place UPDATE, at the repository/integration
+// level -- repository_integration_test.go).
+func TestReassignBoardOwner_Admin_OwnedBoard_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.admins[1] = true
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a", Owner: &OwnerRow{LeafLabUserID: 2}}
+	repo.existingUsers[3] = true
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ReassignBoardOwner(claimsCtx("admin-sub"), &pb.ReassignBoardOwnerRequest{BoardId: 100, NewOwnerLeaflabUserId: 3})
+	require.NoError(t, err)
+	require.Len(t, repo.reassignedOwners, 1)
+	assert.Equal(t, reassignedOwner{boardID: 100, newOwnerUserID: 3}, repo.reassignedOwners[0])
+}
+
+// TestReassignBoardOwner_UnownedBoard_FailedPrecondition is Testing
+// criterion 5: reassigning a board with no current owner is
+// codes.FailedPrecondition, and issues no repository write.
+func TestReassignBoardOwner_UnownedBoard_FailedPrecondition(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.admins[1] = true
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"} // Owner nil -- unowned.
+	repo.existingUsers[3] = true
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ReassignBoardOwner(claimsCtx("admin-sub"), &pb.ReassignBoardOwnerRequest{BoardId: 100, NewOwnerLeaflabUserId: 3})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Empty(t, repo.reassignedOwners)
+}
+
+// TestReassignBoardOwner_ToCurrentOwner_FailedPrecondition is Testing
+// criterion 6: reassigning a board to its own current owner is
+// codes.FailedPrecondition (it would otherwise churn the history with a
+// zero-length interval), and issues no repository write.
+func TestReassignBoardOwner_ToCurrentOwner_FailedPrecondition(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.admins[1] = true
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a", Owner: &OwnerRow{LeafLabUserID: 2}}
+	repo.existingUsers[2] = true
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ReassignBoardOwner(claimsCtx("admin-sub"), &pb.ReassignBoardOwnerRequest{BoardId: 100, NewOwnerLeaflabUserId: 2})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Empty(t, repo.reassignedOwners)
+}
+
+// TestReassignBoardOwner_UnknownNewOwner_NotFound is Testing criterion 7: an
+// unknown new_owner_leaflab_user_id is codes.NotFound, checked via
+// LeafLabUserExists before any write.
+func TestReassignBoardOwner_UnknownNewOwner_NotFound(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.admins[1] = true
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a", Owner: &OwnerRow{LeafLabUserID: 2}}
+	// No repo.existingUsers[999] entry -- unknown user.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ReassignBoardOwner(claimsCtx("admin-sub"), &pb.ReassignBoardOwnerRequest{BoardId: 100, NewOwnerLeaflabUserId: 999})
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+	assert.Empty(t, repo.reassignedOwners)
+}
+
+// TestClearBoardOwner_Admin_OwnedBoard_Succeeds is Testing criterion 8: an
+// admin clearing an owned board succeeds, and the repository receives
+// exactly one ClearBoardOwner call and zero reassign (open) calls -- a
+// close with no re-open, per FR13.
+func TestClearBoardOwner_Admin_OwnedBoard_Succeeds(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.admins[1] = true
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a", Owner: &OwnerRow{LeafLabUserID: 2}}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ClearBoardOwner(claimsCtx("admin-sub"), &pb.ClearBoardOwnerRequest{BoardId: 100})
+	require.NoError(t, err)
+	assert.Equal(t, []int64{100}, repo.clearedOwners)
+	assert.Empty(t, repo.reassignedOwners, "clear must never open a new ownership row")
+}
+
+// TestClearBoardOwner_UnownedBoard_FailedPrecondition is Testing criterion
+// 9: clearing an already-unowned board is codes.FailedPrecondition, and
+// issues no repository write.
+func TestClearBoardOwner_UnownedBoard_FailedPrecondition(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.admins[1] = true
+	repo.boardIdentity[100] = BoardIdentity{DeviceID: "device-a"} // Owner nil -- already unowned.
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	_, err := srv.ClearBoardOwner(claimsCtx("admin-sub"), &pb.ClearBoardOwnerRequest{BoardId: 100})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	assert.Empty(t, repo.clearedOwners)
+}
+
+// TestListUsers_ResponseCarriesNoOIDCSub is Testing criterion 10 (NFR5):
+// ListUsers' response carries no oidc_sub value in any field. The fixture
+// deliberately sets DisplayName/PreferredUsername/Email to the string that
+// would be the user's OIDC subject in a real system, then confirms none of
+// LeafLabUserRow's fields (and by construction, LeafLabUserRow has no
+// oidc_sub field to begin with) leak it anywhere unexpected -- and the
+// marshaled wire response contains no "oidc_sub" field key at all, proving
+// the leak-prevention is structural (the message has no such field),  not
+// merely "this particular value happened not to appear".
+func TestListUsers_ResponseCarriesNoOIDCSub(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["admin-sub"] = 1
+	repo.admins[1] = true
+	repo.userRows = []LeafLabUserRow{
+		{LeafLabUserID: 2, DisplayName: "Alice", PreferredUsername: "alice", Email: "alice@example.com"},
+	}
+	srv := newOwnershipTestServer(repo, &fakePublisher{})
+
+	resp, err := srv.ListUsers(claimsCtx("admin-sub"), &pb.ListUsersRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.GetUsers(), 1)
+	assert.Equal(t, int64(2), resp.Users[0].LeaflabUserId)
+	assert.Equal(t, "Alice", resp.Users[0].DisplayName)
+	assert.Equal(t, "alice", resp.Users[0].PreferredUsername)
+	assert.Equal(t, "alice@example.com", resp.Users[0].Email)
+
+	wire, err := protojson.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(wire), "oidc_sub", "LeafLabUser message must never carry an oidc_sub field")
+	assert.NotContains(t, string(wire), "sub", "LeafLabUser message must never carry a raw OIDC subject claim")
+}
+
+// -- Testing criterion 11 (admin role confers no board-write access beyond
+// reassign/clear) is already covered by TestPushDeviceConfig_AdminRole_
+// NoBypass_PermissionDenied and TestRenameBoard_AdminRole_NoBypass_
+// PermissionDenied above (both predate this task, #1775/#1497/#1767's own
+// Testing phases). RenameSensor is not yet implemented (still
+// codes.Unimplemented, FR4's own task) so it cannot be exercised here --
+// that RPC's own admin-no-bypass coverage is that task's responsibility
+// once it lands.
+
+// TestReassignBoardOwner_RequireAdminCalledFirst_RedGreen is the task
+// issue's red/green discipline check, exercised by hand and left as a
+// comment rather than permanent test code (the same convention
+// TestRenameBoard_NoLengthFormatOrUniquenessRule's doc comment describes):
+// with requireAdmin's call temporarily removed from server.go's
+// ReassignBoardOwner, TestAdminRPCs_NonAdmin_PermissionDenied_
+// NoRepositoryAccess's "ReassignBoardOwner" subtest went red -- the
+// non-admin caller's request succeeded (codes.OK) and
+// repo.reassignedOwners gained an entry, exactly the leak FR14 exists to
+// prevent. Restoring the requireAdmin call brought it back to green. See
+// the Testing-phase issue comment on #1777 for the transcript.

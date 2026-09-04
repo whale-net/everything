@@ -282,6 +282,14 @@ func (app *App) setupRoutes(mux *http.ServeMux) {
 	// drag-select (never on a timer, NFR1).
 	mux.HandleFunc("/sensors/{sensor_id}/history", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSensorHistory)))
 	mux.HandleFunc("/sensors/{sensor_id}/history/data", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleSensorHistoryData)))
+	// handleAdminBoards/handleReassignBoardOwner/handleClearBoardOwner
+	// (#1777: FR11-FR14) -- the admin-only ownership correction screen.
+	// Wrapped in the same auth chain as every other route here; the real
+	// admin-only enforcement is server-side requireAdmin on the four
+	// backing RPCs (NFR1), not this wrapper.
+	mux.HandleFunc("/admin/boards", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleAdminBoards)))
+	mux.HandleFunc("POST /admin/boards/{board_id}/reassign", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleReassignBoardOwner)))
+	mux.HandleFunc("POST /admin/boards/{board_id}/clear", app.auth.RequireAuthFunc(app.auth.WithAccessToken(app.handleClearBoardOwner)))
 }
 
 func (app *App) handleHealth(w http.ResponseWriter, r *http.Request) {

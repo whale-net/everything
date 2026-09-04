@@ -1047,3 +1047,150 @@ func TestAnyOpenGrantExists_ReflectsGlobalState(t *testing.T) {
 		t.Fatal("expected AnyOpenGrantExists=true once any user holds an open grant")
 	}
 }
+
+// ─── #1777: ReassignBoardOwner / ClearBoardOwner (FR12, FR13) ──────────────
+
+// TestReassignBoardOwner_OpensExactlyOneRowForNewOwner_ClosesPrevious is
+// Testing criterion 12: after a reassign, board_owner_history has exactly
+// one open row for the new owner and the previous row is closed with
+// valid_to set -- the old row still exists (never deleted, never UPDATEd
+// in place; AGENTS.md § SCD2's close-and-open).
+func TestReassignBoardOwner_OpensExactlyOneRowForNewOwner_ClosesPrevious(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	ctx := context.Background()
+	boardID := seedBoard(t, pool, "board-reassign")
+	firstOwnerID := seedLeafLabUser(t, pool, "sub-reassign-first")
+	secondOwnerID := seedLeafLabUser(t, pool, "sub-reassign-second")
+	openBoardOwnerHistory(t, pool, boardID, firstOwnerID)
+
+	if err := repo.ReassignBoardOwner(ctx, boardID, secondOwnerID); err != nil {
+		t.Fatalf("ReassignBoardOwner: %v", err)
+	}
+
+	// Exactly one open row, and it names the new owner.
+	if got := countOpenOwnerRows(t, pool, boardID); got != 1 {
+		t.Fatalf("expected exactly 1 open board_owner_history row after reassign, got %d", got)
+	}
+	gotOwnerID, owned, err := repo.GetCurrentBoardOwner(ctx, boardID)
+	if err != nil {
+		t.Fatalf("GetCurrentBoardOwner after reassign: %v", err)
+	}
+	if !owned || gotOwnerID != secondOwnerID {
+		t.Fatalf("expected current owner %d after reassign, got owned=%v owner=%d", secondOwnerID, owned, gotOwnerID)
+	}
+
+	// The previous row still exists, closed (valid_to set) -- not deleted,
+	// not UPDATEd in place to the new owner.
+	var (
+		totalRows       int
+		firstOwnerRows  int
+		closedFirstRows int
+	)
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM board_owner_history WHERE board_id = $1`, boardID).Scan(&totalRows); err != nil {
+		t.Fatalf("count all board_owner_history rows: %v", err)
+	}
+	if totalRows != 2 {
+		t.Fatalf("expected exactly 2 board_owner_history rows total (old closed + new open) after one reassign, got %d", totalRows)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM board_owner_history WHERE board_id = $1 AND leaflab_user_id = $2`,
+		boardID, firstOwnerID).Scan(&firstOwnerRows); err != nil {
+		t.Fatalf("count first-owner rows: %v", err)
+	}
+	if firstOwnerRows != 1 {
+		t.Fatalf("expected the first owner's original row to still exist untouched, got %d rows for that owner", firstOwnerRows)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM board_owner_history WHERE board_id = $1 AND leaflab_user_id = $2 AND valid_to IS NOT NULL`,
+		boardID, firstOwnerID).Scan(&closedFirstRows); err != nil {
+		t.Fatalf("count closed first-owner rows: %v", err)
+	}
+	if closedFirstRows != 1 {
+		t.Fatalf("expected the first owner's row to be closed (valid_to set), got %d closed rows", closedFirstRows)
+	}
+}
+
+// TestClearBoardOwner_ClosesRowOpensNone_ThenClaimableByAnyone is Testing
+// criterion 13: after a clear, there are zero open rows for that board and
+// the previous row is closed; a subsequent ClaimBoard by any signed-in user
+// succeeds (FR13 -> FR6 -> FR1 continuity).
+func TestClearBoardOwner_ClosesRowOpensNone_ThenClaimableByAnyone(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	ctx := context.Background()
+	boardID := seedBoard(t, pool, "board-clear")
+	ownerID := seedLeafLabUser(t, pool, "sub-clear-owner")
+	newClaimantID := seedLeafLabUser(t, pool, "sub-clear-claimant")
+	openBoardOwnerHistory(t, pool, boardID, ownerID)
+
+	if err := repo.ClearBoardOwner(ctx, boardID); err != nil {
+		t.Fatalf("ClearBoardOwner: %v", err)
+	}
+
+	if got := countOpenOwnerRows(t, pool, boardID); got != 0 {
+		t.Fatalf("expected zero open board_owner_history rows after clear, got %d", got)
+	}
+	if _, owned, err := repo.GetCurrentBoardOwner(ctx, boardID); err != nil {
+		t.Fatalf("GetCurrentBoardOwner after clear: %v", err)
+	} else if owned {
+		t.Fatal("expected owned=false after clear")
+	}
+
+	var closedRows int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM board_owner_history WHERE board_id = $1 AND leaflab_user_id = $2 AND valid_to IS NOT NULL`,
+		boardID, ownerID).Scan(&closedRows); err != nil {
+		t.Fatalf("count closed rows: %v", err)
+	}
+	if closedRows != 1 {
+		t.Fatalf("expected the previous owner's row to still exist, closed, got %d closed rows", closedRows)
+	}
+
+	// FR13 -> FR6 -> FR1 continuity: the board behaves exactly like any
+	// other unowned board, claimable by any signed-in user.
+	if err := repo.ClaimBoard(ctx, boardID, newClaimantID); err != nil {
+		t.Fatalf("ClaimBoard after clear must succeed (FR13 -> FR6 -> FR1 continuity): %v", err)
+	}
+	gotOwnerID, owned, err := repo.GetCurrentBoardOwner(ctx, boardID)
+	if err != nil {
+		t.Fatalf("GetCurrentBoardOwner after post-clear claim: %v", err)
+	}
+	if !owned || gotOwnerID != newClaimantID {
+		t.Fatalf("expected the new claimant %d to own the board after a post-clear claim, got owned=%v owner=%d", newClaimantID, owned, gotOwnerID)
+	}
+}
+
+// TestReassignBoardOwner_IntervalsDoNotOverlap is Testing criterion 14: the
+// closed row's valid_to equals or precedes the new row's valid_from --
+// close-then-open, never open-then-close, so there is never a moment where
+// two owners' rows are simultaneously open (which idx_board_owner_history_
+// current's partial UNIQUE index would reject anyway, but this proves the
+// timestamps themselves are correctly ordered, not just that the count
+// happens to end at one).
+func TestReassignBoardOwner_IntervalsDoNotOverlap(t *testing.T) {
+	repo, pool := newTestRepository(t)
+	ctx := context.Background()
+	boardID := seedBoard(t, pool, "board-reassign-intervals")
+	firstOwnerID := seedLeafLabUser(t, pool, "sub-intervals-first")
+	secondOwnerID := seedLeafLabUser(t, pool, "sub-intervals-second")
+	openBoardOwnerHistory(t, pool, boardID, firstOwnerID)
+
+	if err := repo.ReassignBoardOwner(ctx, boardID, secondOwnerID); err != nil {
+		t.Fatalf("ReassignBoardOwner: %v", err)
+	}
+
+	var closedValidTo, openValidFrom time.Time
+	if err := pool.QueryRow(ctx,
+		`SELECT valid_to FROM board_owner_history WHERE board_id = $1 AND leaflab_user_id = $2`,
+		boardID, firstOwnerID).Scan(&closedValidTo); err != nil {
+		t.Fatalf("read closed row's valid_to: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT valid_from FROM board_owner_history WHERE board_id = $1 AND leaflab_user_id = $2`,
+		boardID, secondOwnerID).Scan(&openValidFrom); err != nil {
+		t.Fatalf("read open row's valid_from: %v", err)
+	}
+	if closedValidTo.After(openValidFrom) {
+		t.Fatalf("expected the closed row's valid_to (%v) to equal or precede the new row's valid_from (%v) -- intervals must not overlap", closedValidTo, openValidFrom)
+	}
+}

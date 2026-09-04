@@ -5,6 +5,7 @@ go_library(
     name = "ui_lib",
     srcs = [
         "grpc_client.go",
+        "handlers_admin.go",
         "handlers_auth.go",
         "handlers_boards.go",
         "handlers_home.go",
@@ -46,6 +47,7 @@ go_test(
     name = "ui_test",
     size = "small",
     srcs = [
+        "handlers_admin_test.go",
         "handlers_auth_test.go",
         "handlers_boards_test.go",
         "handlers_sensors_test.go",

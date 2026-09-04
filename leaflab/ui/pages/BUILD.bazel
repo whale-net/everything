@@ -26,6 +26,7 @@ go_test(
     name = "pages_test",
     size = "small",
     srcs = [
+        "admin_boards_test.go",
         "board_detail_test.go",
         "boards_test.go",
         "helpers_test.go",

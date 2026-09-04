@@ -77,6 +77,14 @@ type repositoryStore interface {
 	// ClaimBoard is ClaimBoard's own write path (FR1, FR2, NFR2) -- see
 	// repository.go's doc comment for the race-safety argument.
 	ClaimBoard(ctx context.Context, boardID, leaflabUserID int64) error
+	// The remaining five methods back the admin ownership screen (#1777:
+	// FR11-FR14) -- ListOwnedBoards, ReassignBoardOwner, ClearBoardOwner,
+	// LeafLabUserExists, and ListUsers.
+	ListOwnedBoards(ctx context.Context) ([]OwnedBoardRow, error)
+	ReassignBoardOwner(ctx context.Context, boardID, newOwnerUserID int64) error
+	ClearBoardOwner(ctx context.Context, boardID int64) error
+	LeafLabUserExists(ctx context.Context, leaflabUserID int64) (bool, error)
+	ListUsers(ctx context.Context) ([]LeafLabUserRow, error)
 }
 
 // configPublisher is the one *rmq.Publisher method PushDeviceConfig calls,
@@ -616,22 +624,145 @@ func (s *LeafLabAPIServer) RenameSensor(ctx context.Context, req *pb.RenameSenso
 	return nil, status.Error(codes.Unimplemented, "RenameSensor: not implemented")
 }
 
-// ListOwnedBoards is implemented by the admin ownership list task (FR11).
-func (s *LeafLabAPIServer) ListOwnedBoards(ctx context.Context, req *pb.ListOwnedBoardsRequest) (*pb.ListOwnedBoardsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListOwnedBoards: not implemented")
+// ListOwnedBoards returns every currently-owned board and its owner (FR11).
+// requireAdmin runs first, before any repository access (FR14) -- a
+// non-admin caller never reaches s.repo.ListOwnedBoards.
+func (s *LeafLabAPIServer) ListOwnedBoards(ctx context.Context, _ *pb.ListOwnedBoardsRequest) (*pb.ListOwnedBoardsResponse, error) {
+	if _, err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.repo.ListOwnedBoards(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list owned boards: %v", err)
+	}
+
+	boards := make([]*pb.OwnedBoard, 0, len(rows))
+	for _, r := range rows {
+		boards = append(boards, &pb.OwnedBoard{
+			BoardId:   r.BoardID,
+			DeviceId:  r.DeviceID,
+			BoardName: boardNameOrEmpty(r.BoardName),
+			Owner:     ownerToProto(&r.Owner),
+		})
+	}
+
+	s.logger.Info("owned boards listed", "count", len(boards))
+	return &pb.ListOwnedBoardsResponse{Boards: boards}, nil
 }
 
-// ReassignBoardOwner is implemented by the admin reassign task (FR12).
+// ReassignBoardOwner closes boardID's open ownership row and opens one for
+// req.NewOwnerLeaflabUserId, in one transaction (FR12: SCD2 close-and-open,
+// AGENTS.md section SCD2). requireAdmin runs first, before any repository
+// access (FR14).
+//
+// GetBoardIdentity doubles as both the unknown-board_id check (NotFound)
+// and the current-owner read this RPC needs anyway -- one query rather
+// than two. bi.Owner == nil means unowned (FailedPrecondition: nothing to
+// reassign); a nil Owner also means "no history row to close", so this
+// never calls the repository with an unowned board_id. Reassigning to the
+// current owner is FailedPrecondition too (it would otherwise churn the
+// history with a zero-length interval); an unknown new owner is NotFound,
+// checked via LeafLabUserExists before the write.
 func (s *LeafLabAPIServer) ReassignBoardOwner(ctx context.Context, req *pb.ReassignBoardOwnerRequest) (*pb.ReassignBoardOwnerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ReassignBoardOwner: not implemented")
+	if _, err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	bi, err := s.repo.GetBoardIdentity(ctx, req.BoardId)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "board %d not found", req.BoardId)
+		}
+		return nil, status.Errorf(codes.Internal, "get board identity: %v", err)
+	}
+	if bi.Owner == nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "board %d is unowned -- there is no owner to reassign", req.BoardId)
+	}
+	if bi.Owner.LeafLabUserID == req.NewOwnerLeaflabUserId {
+		return nil, status.Errorf(codes.FailedPrecondition, "board %d is already owned by user %d", req.BoardId, req.NewOwnerLeaflabUserId)
+	}
+
+	exists, err := s.repo.LeafLabUserExists(ctx, req.NewOwnerLeaflabUserId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "check new owner exists: %v", err)
+	}
+	if !exists {
+		return nil, status.Errorf(codes.NotFound, "user %d not found", req.NewOwnerLeaflabUserId)
+	}
+
+	previousOwnerID := bi.Owner.LeafLabUserID
+	if err := s.repo.ReassignBoardOwner(ctx, req.BoardId, req.NewOwnerLeaflabUserId); err != nil {
+		return nil, status.Errorf(codes.Internal, "reassign board owner: %v", err)
+	}
+
+	s.logger.Info("board owner reassigned",
+		"board_id", req.BoardId,
+		"previous_owner_leaflab_user_id", previousOwnerID,
+		"new_owner_leaflab_user_id", req.NewOwnerLeaflabUserId)
+	return &pb.ReassignBoardOwnerResponse{}, nil
 }
 
-// ClearBoardOwner is implemented by the admin clear-owner task (FR13).
+// ClearBoardOwner closes boardID's open ownership row and opens none
+// (FR13: SCD2 close, no re-open). requireAdmin runs first, before any
+// repository access (FR14). After this returns, the board behaves exactly
+// as any other unowned board (FR6): open to claim by any signed-in user
+// (FR13 -> FR6 -> FR1 continuity), closed to every other write.
+//
+// GetBoardIdentity doubles as the unknown-board_id check (NotFound) and
+// the current-owner read used for the log line; bi.Owner == nil is
+// FailedPrecondition (already unowned, nothing to clear) -- the repository
+// is never called for an unowned board_id.
 func (s *LeafLabAPIServer) ClearBoardOwner(ctx context.Context, req *pb.ClearBoardOwnerRequest) (*pb.ClearBoardOwnerResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ClearBoardOwner: not implemented")
+	if _, err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	bi, err := s.repo.GetBoardIdentity(ctx, req.BoardId)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, status.Errorf(codes.NotFound, "board %d not found", req.BoardId)
+		}
+		return nil, status.Errorf(codes.Internal, "get board identity: %v", err)
+	}
+	if bi.Owner == nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "board %d is already unowned", req.BoardId)
+	}
+
+	previousOwnerID := bi.Owner.LeafLabUserID
+	if err := s.repo.ClearBoardOwner(ctx, req.BoardId); err != nil {
+		return nil, status.Errorf(codes.Internal, "clear board owner: %v", err)
+	}
+
+	s.logger.Info("board owner cleared", "board_id", req.BoardId, "previous_owner_leaflab_user_id", previousOwnerID)
+	return &pb.ClearBoardOwnerResponse{}, nil
 }
 
-// ListUsers is implemented by the admin ownership tasks (FR11, FR12).
-func (s *LeafLabAPIServer) ListUsers(ctx context.Context, req *pb.ListUsersRequest) (*pb.ListUsersResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListUsers: not implemented")
+// ListUsers returns every leaflab_user row, the admin reassign picker's
+// candidate list (FR11, FR12). requireAdmin runs first, before any
+// repository access (FR14). Never returns oidc_sub (NFR5) --
+// LeafLabUserRow carries no such field to begin with, so there is nothing
+// to strip here.
+func (s *LeafLabAPIServer) ListUsers(ctx context.Context, _ *pb.ListUsersRequest) (*pb.ListUsersResponse, error) {
+	if _, err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	rows, err := s.repo.ListUsers(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list users: %v", err)
+	}
+
+	users := make([]*pb.LeafLabUser, 0, len(rows))
+	for _, r := range rows {
+		users = append(users, &pb.LeafLabUser{
+			LeaflabUserId:     r.LeafLabUserID,
+			DisplayName:       r.DisplayName,
+			PreferredUsername: r.PreferredUsername,
+			Email:             r.Email,
+		})
+	}
+
+	s.logger.Info("users listed", "count", len(users))
+	return &pb.ListUsersResponse{Users: users}, nil
 }

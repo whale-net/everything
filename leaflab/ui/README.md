@@ -17,8 +17,18 @@ leaflab/ui/
   templ_render.go      # wraps a templ.Component in libs/go/htmxbase's layout
   handlers_home.go      # the "/" landing page
   components/               # shared chrome (Layout — thin wrapper around libs/go/htmxui's Shell/UserMenu)
-  pages/                      # screen-level templ components (Home for M1; boards/sensor screens are separate tasks)
+  pages/                      # screen-level templ components — see "Screens" below
 ```
+
+## Screens
+
+| Route | Page | Notes |
+|-------|------|-------|
+| `/` | Home | Landing page. |
+| `/boards` | Boards list | FR4, FR5 — every board, reporting state. |
+| `/boards/{board_id}` | Board detail | FR6-FR9 — sensors, claim, rename, reading history. |
+| `/sensors/{sensor_id}/history` | Sensor reading history | FR9. |
+| `/admin/boards` | Admin ownership | FR11-FR14 — **admin-only**: lists every currently-owned board and lets an admin reassign or clear its ownership. The "Admin" nav link is hidden for a non-admin (presentation only); the real gate is `requireAdmin` on `leaflab-api`'s `ListOwnedBoards`/`ReassignBoardOwner`/`ClearBoardOwner`/`ListUsers` RPCs — a non-admin reaching this route directly gets a 403-style page (`pages.AdminForbidden`), and calling the RPCs directly (bypassing this UI) is denied server-side regardless of what this UI shows. Admin-only mistake-correction, not a self-service release action (C25 boundary) — there is no "release my board" affordance anywhere in this UI. |
 
 ## Auth (FR1, FR3, NFR3)
 
@@ -33,8 +43,10 @@ migration that owns it
 `AUTH_MODE=none` runs without an OIDC provider, for local development —
 see `leaflab/Tiltfile`, which sets `AUTH_MODE=none` and `GRPC_AUTH_MODE=none`
 for `leaflab-ui`, matching `leaflab-api`'s own unauthenticated local-dev
-default. Being authenticated is the **only** requirement M1 enforces on any
-route — no role, grant, or ownership check gates anything here.
+default. Being authenticated is the only requirement most routes enforce;
+the one exception is `/admin/boards` (see "Screens" above), which also
+requires the admin role — enforced server-side by `leaflab-api`'s
+`requireAdmin`, never re-derived locally by this UI.
 
 ## Identity resolution (FR2)
 
