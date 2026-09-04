@@ -139,7 +139,7 @@ spec:
             
             # OpenTelemetry configuration
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ $.Values.otlp.endpoint | default "http://otel-collector:4317" | quote }}
+              value: {{ $.Values.otlp.endpoint | default "otel-collector-collector.logs.svc.cluster.local:4317" | quote }}
             - name: OTEL_SERVICE_NAME
               value: {{ $appName | quote }}
             

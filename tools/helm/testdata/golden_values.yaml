@@ -62,7 +62,7 @@ apps:
       - "golden.worker"
 
 otlp:
-  endpoint: http://otel-collector:4317
+  endpoint: otel-collector-collector.logs.svc.cluster.local:4317
 
 ingressDefaults:
   enabled: true

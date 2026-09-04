@@ -542,7 +542,7 @@ func (c *Composer) generateValuesYaml(chartDir string) error {
 			Enabled: c.hasExternalAPIs(),
 		},
 		OTLP: OTLPConfig{
-			Endpoint: "http://otel-collector:4317",
+			Endpoint: "otel-collector-collector.logs.svc.cluster.local:4317",
 		},
 	}
 
