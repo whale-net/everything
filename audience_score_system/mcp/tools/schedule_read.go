@@ -36,7 +36,20 @@ type GetChannelScheduleInput struct {
 	// IncludeDrafts defaults to true (nil == true) -- set false to omit
 	// scheduled/private drafts and see only what is actually public.
 	IncludeDrafts *bool `json:"include_drafts,omitempty" jsonschema:"whether to include scheduled/private drafts -- defaults to true"`
+
+	// Limit caps the response on top of any From/To window -- without it,
+	// a long-lived, actively-synced Channel's `synced_video` history grows
+	// unconditionally and can exceed an MCP client's response-size cap
+	// (issue #1812).
+	Limit int `json:"limit,omitempty" jsonschema:"Maximum videos to return, in the store's effective-publish-time order (default 50). The response's truncated flag is set when more matching rows exist -- narrow via from/to to page through the rest."`
 }
+
+// defaultGetChannelScheduleLimit bounds get_channel_schedule's response
+// when a caller supplies limit <= 0 -- without this, a Channel with enough
+// synced_video history exceeds the calling MCP client's response-size cap
+// and the tool call fails outright with no way to retrieve the data in
+// pages (issue #1812).
+const defaultGetChannelScheduleLimit = 50
 
 // ChannelScopeID implements server.ChannelScoped -- RegisterRead
 // authorizes every call via store.CanRead before the handler below runs
@@ -62,7 +75,8 @@ type ScheduleVideo struct {
 
 // GetChannelScheduleOutput is get_channel_schedule's structured result.
 type GetChannelScheduleOutput struct {
-	Videos []ScheduleVideo `json:"videos" jsonschema:"the Channel's synced schedule, ordered by effective publish time"`
+	Videos    []ScheduleVideo `json:"videos" jsonschema:"the Channel's synced schedule, ordered by effective publish time"`
+	Truncated bool            `json:"truncated" jsonschema:"True if more matching videos exist beyond limit"`
 }
 
 // RegisterGetChannelSchedule registers get_channel_schedule via
@@ -71,8 +85,10 @@ type GetChannelScheduleOutput struct {
 // (st.Sync(), migration 002).
 func RegisterGetChannelSchedule(reg *server.Registry, syncStore store.SyncStore) {
 	server.RegisterRead(reg, &mcp.Tool{
-		Name:        "get_channel_schedule",
-		Description: "Read a Channel's synced YouTube upload schedule, including scheduled/private drafts not yet published.",
+		Name: "get_channel_schedule",
+		Description: "Read a Channel's synced YouTube upload schedule, including scheduled/private drafts not yet " +
+			"published. Response is capped at limit (default 50); see truncated. Narrow the from/to window to page " +
+			"through the rest of a truncated response.",
 	}, getChannelScheduleHandler(syncStore))
 }
 
@@ -111,7 +127,13 @@ func getChannelScheduleHandler(syncStore store.SyncStore) mcp.ToolHandlerFor[Get
 			})
 		}
 
-		return nil, GetChannelScheduleOutput{Videos: out}, nil
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultGetChannelScheduleLimit
+		}
+		trimmed, truncated := truncateSlice(out, limit)
+
+		return nil, GetChannelScheduleOutput{Videos: trimmed, Truncated: truncated}, nil
 	}
 }
 

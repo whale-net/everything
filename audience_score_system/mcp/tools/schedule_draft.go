@@ -334,7 +334,20 @@ const draftingContextWindow = 14 * 24 * time.Hour
 type GetDraftingContextInput struct {
 	ChannelID string     `json:"channel_id" jsonschema:"Channel to build drafting context for, as a UUID string"`
 	Around    *time.Time `json:"around,omitempty" jsonschema:"optional center of a +/-14 day window restricting the synced schedule and existing schedule_entry rows returned; omit to see everything on file"`
+
+	// Limit caps synced_schedule and schedule_entries independently, on
+	// top of any Around window -- without it, both fetch a Channel's
+	// entire synced_video/schedule_entry history and can exceed an MCP
+	// client's response-size cap (issue #1812).
+	Limit int `json:"limit,omitempty" jsonschema:"Maximum rows to return for EACH of synced_schedule and schedule_entries (default 50, applied independently to each list). The response's truncated flag is set when either list has more matching rows -- narrow via around to page through the rest."`
 }
+
+// defaultDraftingContextLimit bounds get_drafting_context's synced_schedule
+// and schedule_entries lists (independently) when a caller supplies limit
+// <= 0 -- without this, a Channel with enough history in either exceeds
+// the calling MCP client's response-size cap and the tool call fails
+// outright with no way to retrieve the data in pages (issue #1812).
+const defaultDraftingContextLimit = 50
 
 // ChannelScopeID implements server.ChannelScoped.
 func (i GetDraftingContextInput) ChannelScopeID() uuid.UUID {
@@ -348,6 +361,7 @@ type GetDraftingContextOutput struct {
 	Policy          *PacingPolicyOutput   `json:"policy" jsonschema:"the Channel's pacing policy (FR17), or null if none has been set yet"`
 	SyncedSchedule  []ScheduleVideo       `json:"synced_schedule" jsonschema:"the Channel's synced YouTube schedule (FR15), including scheduled/private drafts"`
 	ScheduleEntries []ScheduleEntryOutput `json:"schedule_entries" jsonschema:"the Channel's existing schedule_entry rows (draft and committed)"`
+	Truncated       bool                  `json:"truncated" jsonschema:"True if synced_schedule and/or schedule_entries was capped at limit"`
 }
 
 func registerGetDraftingContext(reg *server.Registry, pacing store.PacingStore, sync store.SyncStore, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore) {
@@ -355,7 +369,9 @@ func registerGetDraftingContext(reg *server.Registry, pacing store.PacingStore, 
 		Name: "get_drafting_context",
 		Description: "Read everything needed to propose a schedule slot that isn't blind (FR18): the Channel's pacing " +
 			"policy (FR17), synced YouTube schedule (FR15), and existing draft/committed schedule_entry rows. Optionally " +
-			"restrict to a +/-14 day window around `around`.",
+			"restrict to a +/-14 day window around `around`. synced_schedule and schedule_entries are each independently " +
+			"capped at limit (default 50); see truncated. Narrow the around window to page through the rest of a " +
+			"truncated response.",
 	}, getDraftingContextHandler(pacing, sync, schedules, ideas, verdicts, persons))
 }
 
@@ -383,15 +399,25 @@ func getDraftingContextHandler(pacing store.PacingStore, sync store.SyncStore, s
 			from, to = &f, &t
 		}
 
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultDraftingContextLimit
+		}
+
 		vids, err := sync.ListSchedule(ctx, channelID)
 		if err != nil {
 			return nil, out, fmt.Errorf("get_drafting_context: list synced schedule: %w", err)
 		}
-		out.SyncedSchedule = make([]ScheduleVideo, 0, len(vids))
+		syncedFiltered := make([]store.SyncedVideo, 0, len(vids))
 		for _, v := range vids {
 			if !withinWindow(v, from, to) {
 				continue
 			}
+			syncedFiltered = append(syncedFiltered, v)
+		}
+		syncedTrimmed, syncedTruncated := truncateSlice(syncedFiltered, limit)
+		out.SyncedSchedule = make([]ScheduleVideo, 0, len(syncedTrimmed))
+		for _, v := range syncedTrimmed {
 			out.SyncedSchedule = append(out.SyncedSchedule, ScheduleVideo{
 				YouTubeVideoID:   v.YouTubeVideoID,
 				Title:            v.Title,
@@ -407,7 +433,7 @@ func getDraftingContextHandler(pacing store.PacingStore, sync store.SyncStore, s
 		if err != nil {
 			return nil, out, fmt.Errorf("get_drafting_context: list schedule entries: %w", err)
 		}
-		out.ScheduleEntries = make([]ScheduleEntryOutput, 0, len(entries))
+		entriesFiltered := make([]store.ScheduleEntry, 0, len(entries))
 		for _, e := range entries {
 			if from != nil && e.ProposedPublishAt.Before(*from) {
 				continue
@@ -415,12 +441,19 @@ func getDraftingContextHandler(pacing store.PacingStore, sync store.SyncStore, s
 			if to != nil && e.ProposedPublishAt.After(*to) {
 				continue
 			}
+			entriesFiltered = append(entriesFiltered, e)
+		}
+		entriesTrimmed, entriesTruncated := truncateSlice(entriesFiltered, limit)
+		out.ScheduleEntries = make([]ScheduleEntryOutput, 0, len(entriesTrimmed))
+		for _, e := range entriesTrimmed {
 			rendered, err := renderScheduleEntry(ctx, ideas, verdicts, persons, e)
 			if err != nil {
 				return nil, out, err
 			}
 			out.ScheduleEntries = append(out.ScheduleEntries, rendered)
 		}
+
+		out.Truncated = syncedTruncated || entriesTruncated
 
 		return nil, out, nil
 	}
@@ -751,9 +784,26 @@ func computeScheduleFlags(entry store.ScheduleEntry, policy *store.PacingPolicy,
 
 // -- list_schedule_entries -------------------------------------------------------
 
+// defaultListScheduleEntriesLimit bounds list_schedule_entries' response
+// when a caller supplies limit <= 0 -- without this, a Channel with enough
+// draft+committed schedule_entry history exceeds the calling MCP client's
+// response-size cap and the tool call fails outright with no way to
+// retrieve the data in pages (issue #1812).
+const defaultListScheduleEntriesLimit = 50
+
 // ListScheduleEntriesInput is list_schedule_entries's argument schema.
 type ListScheduleEntriesInput struct {
 	ChannelID string `json:"channel_id" jsonschema:"Channel to list schedule entries for, as a UUID string"`
+
+	// Since/Before bound the window by each entry's proposed_publish_at,
+	// the same field the response is ordered by. Together they let a
+	// caller page through a truncated response (issue #1812): since
+	// (inclusive) resumes forward past the last returned entry's
+	// proposed_publish_at (mirroring list_pending_matches' oldest-first
+	// paging), or before (exclusive) narrows to what came earlier.
+	Since  *time.Time `json:"since,omitempty" jsonschema:"Only include entries whose proposed_publish_at is at or after this time -- page forward past a truncated response by setting this to the last returned entry's proposed_publish_at"`
+	Before *time.Time `json:"before,omitempty" jsonschema:"Only include entries whose proposed_publish_at is strictly before this time"`
+	Limit  int        `json:"limit,omitempty" jsonschema:"Maximum entries to return, ordered by proposed_publish_at ascending (default 50). The response's truncated flag is set when more matching rows exist."`
 }
 
 // ChannelScopeID implements server.ChannelScoped.
@@ -764,14 +814,39 @@ func (i ListScheduleEntriesInput) ChannelScopeID() uuid.UUID {
 
 // ListScheduleEntriesOutput is list_schedule_entries's structured result.
 type ListScheduleEntriesOutput struct {
-	Entries []ScheduleEntryOutput `json:"entries" jsonschema:"every schedule_entry for this Channel (draft and committed), ordered by proposed publish time"`
+	Entries   []ScheduleEntryOutput `json:"entries" jsonschema:"schedule_entry rows for this Channel (draft and committed), ordered by proposed publish time"`
+	Truncated bool                  `json:"truncated" jsonschema:"True if more matching entries exist beyond limit"`
+}
+
+// filterScheduleEntriesRange returns the subset of entries whose
+// ProposedPublishAt is at/after since (nil = no lower bound) and strictly
+// before before (nil = no upper bound) -- list_schedule_entries' pagination
+// bound (issue #1812), mirroring browse.go's filterNotesRange for the same
+// since/before shape over a different timestamp field.
+func filterScheduleEntriesRange(entries []store.ScheduleEntry, since, before *time.Time) []store.ScheduleEntry {
+	if since == nil && before == nil {
+		return entries
+	}
+	out := make([]store.ScheduleEntry, 0, len(entries))
+	for _, e := range entries {
+		if since != nil && e.ProposedPublishAt.Before(*since) {
+			continue
+		}
+		if before != nil && !e.ProposedPublishAt.Before(*before) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func registerListScheduleEntries(reg *server.Registry, schedules store.ScheduleStore, ideas store.IdeaStore, verdicts store.VerdictStore, persons store.PersonStore) {
 	server.RegisterRead(reg, &mcp.Tool{
 		Name: "list_schedule_entries",
 		Description: "List a Channel's schedule_entry rows (draft and committed), each with its idea, the specific " +
-			"verdict version it's bound to (LB3), state, approver, and timestamps.",
+			"verdict version it's bound to (LB3), state, approver, and timestamps, ordered by proposed_publish_at " +
+			"ascending. Response is capped at limit (default 50); see truncated. Page forward past truncation by " +
+			"re-calling with since set to the last returned entry's proposed_publish_at, or narrow with before.",
 	}, listScheduleEntriesHandler(schedules, ideas, verdicts, persons))
 }
 
@@ -786,9 +861,16 @@ func listScheduleEntriesHandler(schedules store.ScheduleStore, ideas store.IdeaS
 		if err != nil {
 			return nil, ListScheduleEntriesOutput{}, err
 		}
+		entries = filterScheduleEntriesRange(entries, in.Since, in.Before)
 
-		out := ListScheduleEntriesOutput{Entries: make([]ScheduleEntryOutput, 0, len(entries))}
-		for _, e := range entries {
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultListScheduleEntriesLimit
+		}
+		trimmed, truncated := truncateSlice(entries, limit)
+
+		out := ListScheduleEntriesOutput{Entries: make([]ScheduleEntryOutput, 0, len(trimmed)), Truncated: truncated}
+		for _, e := range trimmed {
 			rendered, err := renderScheduleEntry(ctx, ideas, verdicts, persons, e)
 			if err != nil {
 				return nil, ListScheduleEntriesOutput{}, err
