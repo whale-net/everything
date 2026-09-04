@@ -47,6 +47,39 @@ the global OTel tracer provider. This is a no-op until the process
 configures tracing — e.g. via `libs/go/logging`'s
 `logging.Configure(logging.Config{EnableTracing: true, ...})`.
 
+## Schedules
+
+`UpsertSchedule(ctx, schedules client.ScheduleClient, opts client.ScheduleOptions) error`
+creates the schedule described by `opts`, or -- if a schedule with
+`opts.ID` already exists -- patches that schedule's `Spec`/`Action`/
+`Overlap` to match `opts` instead of leaving it alone:
+
+```go
+schedules := temporalClient.ScheduleClient()
+err := temporal.UpsertSchedule(ctx, schedules, client.ScheduleOptions{
+    ID:     "my-recurring-thing",
+    Spec:   client.ScheduleSpec{Intervals: []client.ScheduleIntervalSpec{{Every: interval}}},
+    Action: &client.ScheduleWorkflowAction{Workflow: MyWorkflow, TaskQueue: taskQueue},
+    Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
+})
+```
+
+`client.ScheduleClient.Create`'s own already-exists response
+(`temporal.ErrScheduleAlreadyRunning` from `go.temporal.io/sdk/temporal`)
+has to be tolerated as success by any idempotent caller building a
+create-once, ensure-repeatedly pattern -- but treating it as a pure no-op
+means the schedule's parameters (e.g. its interval) are pinned forever to
+whatever its first caller passed at creation time and never updated
+again, even after the configured value changes and the service restarts.
+`UpsertSchedule` closes that gap (see `audience_score_system`'s
+`ARCHITECTURE.md` "Temporal: schedule upsert helper" for the issue #1742
+incident that motivated it: `ASS_SYNC_INTERVAL` moved from 20m to 24h but
+every already-connected Channel kept syncing every 20m).
+
+The existing schedule's `State` (paused/note/limited-actions) is left
+untouched by the update -- a caller who paused a schedule by hand won't
+have it silently resumed by an unrelated `UpsertSchedule` call.
+
 ## Environment Variables
 
 | Variable | Default | Description |

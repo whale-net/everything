@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/temporal"
 
 	"github.com/whale-net/everything/audience_score_system/store"
+	temporallib "github.com/whale-net/everything/libs/go/temporal"
 )
 
 // MinSyncInterval and MaxSyncInterval bound ASS_SYNC_INTERVAL to NFR4's
@@ -48,8 +48,9 @@ const scheduleIDPrefix = "ass-channel-sync-"
 
 // ScheduleID returns the deterministic Temporal schedule id for channelID:
 // "ass-channel-sync-{channel_id}". Deterministic so EnsureSchedule is safe
-// to call repeatedly for the same Channel (an already-exists response from
-// Temporal is treated as success, not an error) -- see ScheduleManager's
+// to call repeatedly for the same Channel: temporallib.UpsertSchedule
+// resolves an already-exists response from Temporal into an update of the
+// existing schedule (issue #1742), not an error -- see ScheduleManager's
 // doc comment.
 func ScheduleID(channelID uuid.UUID) string {
 	return scheduleIDPrefix + channelID.String()
@@ -63,11 +64,13 @@ func ScheduleID(channelID uuid.UUID) string {
 // ../../ARCHITECTURE.md for whether this is worth promoting to
 // //libs/go/temporal later).
 type ScheduleManager interface {
-	// EnsureSchedule idempotently creates (or, on a later call, leaves
-	// alone) channelID's schedule -- ScheduleID(channelID) is deterministic,
-	// so an already-exists response from Temporal is success, not an
-	// error. Called by `web` after a successful Channel connect (#1571)
-	// and by this worker's Reconcile at startup.
+	// EnsureSchedule idempotently creates channelID's schedule, or -- on a
+	// later call, e.g. after ASS_SYNC_INTERVAL changes and the process
+	// restarts -- patches its Spec/Action/Overlap to match the current
+	// m.Interval (temporallib.UpsertSchedule, issue #1742). ScheduleID
+	// (channelID) is deterministic, so this is safe to call repeatedly for
+	// the same Channel. Called by `web` after a successful Channel connect
+	// (#1571) and by this worker's Reconcile at startup.
 	EnsureSchedule(ctx context.Context, channelID uuid.UUID) error
 
 	// RemoveSchedule deletes channelID's schedule. NOT called for a
@@ -118,7 +121,9 @@ func NewScheduleManager(schedules client.ScheduleClient, channels store.ChannelS
 // don't all fire at the same instant and stampede Google (issue #1574's
 // Implementation scope) -- deterministic (not random) so repeated
 // EnsureSchedule calls for the same Channel always compute the same
-// ScheduleSpec, keeping Update-free idempotency simple.
+// desired ScheduleSpec, which matters now that temporallib.UpsertSchedule
+// actually reapplies it to an existing schedule (issue #1742) rather than
+// only using it once at creation time.
 func channelScheduleOffset(channelID uuid.UUID, interval time.Duration) time.Duration {
 	if interval <= 0 {
 		return 0
@@ -128,15 +133,17 @@ func channelScheduleOffset(channelID uuid.UUID, interval time.Duration) time.Dur
 	return time.Duration(h.Sum64() % uint64(interval))
 }
 
-// EnsureSchedule idempotently creates channelID's schedule: a
+// EnsureSchedule idempotently creates-or-updates channelID's schedule: a
 // ScheduleWorkflowAction targeting ChannelSyncWorkflow on TaskQueue, an
 // interval ScheduleSpec of m.Interval with a per-Channel jitter offset
 // (channelScheduleOffset), and SCHEDULE_OVERLAP_POLICY_SKIP so a slow run
-// never stacks concurrent runs for the same Channel. Temporal's
-// already-exists response (temporal.ErrScheduleAlreadyRunning) is treated
-// as success, not an error -- see ScheduleManager's doc comment.
+// never stacks concurrent runs for the same Channel.
+// temporallib.UpsertSchedule (issue #1742) reconciles an already-exists
+// response from Temporal into an update of the existing schedule's
+// Spec/Action/Overlap, rather than treating it as a no-op -- see
+// ScheduleManager's doc comment.
 func (m *scheduleManager) EnsureSchedule(ctx context.Context, channelID uuid.UUID) error {
-	_, err := m.Schedules.Create(ctx, client.ScheduleOptions{
+	err := temporallib.UpsertSchedule(ctx, m.Schedules, client.ScheduleOptions{
 		ID: ScheduleID(channelID),
 		Spec: client.ScheduleSpec{
 			Intervals: []client.ScheduleIntervalSpec{{
@@ -152,13 +159,10 @@ func (m *scheduleManager) EnsureSchedule(ctx context.Context, channelID uuid.UUI
 		Overlap: enumspb.SCHEDULE_OVERLAP_POLICY_SKIP,
 	})
 	if err != nil {
-		if errors.Is(err, temporal.ErrScheduleAlreadyRunning) {
-			return nil
-		}
 		logger.WarnContext(ctx, "failed to ensure channel sync schedule", "channel_id", channelID, "error", err.Error())
 		return fmt.Errorf("ensure schedule for channel %s: %w", channelID, err)
 	}
-	logger.InfoContext(ctx, "created channel sync schedule", "channel_id", channelID, "interval", m.Interval)
+	logger.InfoContext(ctx, "ensured channel sync schedule", "channel_id", channelID, "interval", m.Interval)
 	return nil
 }
 

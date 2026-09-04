@@ -44,11 +44,21 @@ callback reaches `connection_state = connected` (FR14/NFR4 — see
 startup"), so `web`'s `main.go` now constructs its own Temporal client
 and `sync.ScheduleManager` at startup, following `worker/main.go`'s exact
 pattern. **`web` and `worker` MUST be configured with the same
-`ASS_SYNC_INTERVAL` value** (same default, same NFR4 band-check) — a
-schedule's interval is fixed at whichever `EnsureSchedule` call creates it
-first and never updated by a later call for the same Channel, so a
-`web`/`worker` divergence here could silently create a Channel's schedule
-at the wrong cadence depending on which binary connects it first.
+`ASS_SYNC_INTERVAL` value** (same default, same NFR4 band-check). Until
+issue #1742, an already-existing Channel's schedule interval was fixed at
+whichever `EnsureSchedule` call created it first and never updated by a
+later call, so a `web`/`worker` divergence there could silently pin a
+Channel's schedule at the wrong cadence depending on which binary
+connected it first. `EnsureSchedule` now goes through
+`temporallib.UpsertSchedule` (`//libs/go/temporal`), which reconciles an
+already-exists response into an update of the existing schedule's
+Spec/Action/Overlap instead of a no-op — so a changed `ASS_SYNC_INTERVAL`
+now takes effect for existing Channels too, the next time either binary's
+`EnsureSchedule` runs (`web` at connect/reconnect time, `worker` at
+startup `Reconcile`). The matching requirement stands regardless: if
+`web` and `worker` diverge, whichever one's `EnsureSchedule` call lands
+last wins, so a persistent mismatch would make the effective interval
+flip-flop between restarts instead of just being wrong once.
 
 `worker` also reads C2's `ASS_GOOGLE_CLIENT_ID`/`ASS_GOOGLE_CLIENT_SECRET`/
 `ASS_TOKEN_ENCRYPTION_KEY` (see "OAuth scopes" below) as of issue #1576:

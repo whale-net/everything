@@ -6,6 +6,7 @@ go_library(
         "client.go",
         "config.go",
         "logger.go",
+        "schedule.go",
         "worker.go",
     ],
     importpath = "github.com/whale-net/everything/libs/go/temporal",
@@ -15,6 +16,7 @@ go_library(
         "@io_temporal_go_sdk//client",
         "@io_temporal_go_sdk//interceptor",
         "@io_temporal_go_sdk//log",
+        "@io_temporal_go_sdk//temporal",
         "@io_temporal_go_sdk//worker",
         "@io_temporal_go_sdk_contrib_opentelemetry//:opentelemetry",
     ],
@@ -25,11 +27,15 @@ go_test(
     srcs = [
         "config_test.go",
         "logger_test.go",
+        "schedule_test.go",
     ],
     embed = [":temporal"],
     deps = [
         "//libs/go/logging",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@io_temporal_go_api//enums/v1:enums",
+        "@io_temporal_go_sdk//client",
+        "@io_temporal_go_sdk//temporal",
     ],
 )
