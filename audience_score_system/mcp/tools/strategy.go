@@ -313,10 +313,24 @@ func getStrategyHandler(strategies store.StrategyStore, persons store.PersonStor
 
 // -- list_strategies ---------------------------------------------------------
 
+// defaultListStrategiesLimit bounds list_strategies' response when a
+// caller supplies limit <= 0. Strategies are a deliberately curated
+// per-Channel construct (likely single digits in practice per issue
+// #1813), so this default is generous headroom rather than a tight cap --
+// it exists as a query-level guard against ever hitting the calling MCP
+// client's response-size cap, not because that's expected in normal use.
+// Note this bounds the rendered response only: ListByChannel still loads
+// every matching Strategy's linked verdicts (an N+1 query per Strategy)
+// before this handler ever sees the slice to truncate -- acceptable at
+// this cardinality, but the limit does not protect the database from a
+// pathological Channel the way #1808/#1813's other limits do.
+const defaultListStrategiesLimit = 50
+
 // ListStrategiesInput is list_strategies's argument schema.
 type ListStrategiesInput struct {
 	ChannelID  string `json:"channel_id" jsonschema:"Channel to list Strategies for, as a UUID string"`
 	ActiveOnly bool   `json:"active_only,omitempty" jsonschema:"restrict to active Strategies only; default false lists every Strategy regardless of active"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum Strategies to return, oldest first (default 50). The response's truncated flag is set when more matching Strategies exist."`
 }
 
 // ChannelScopeID implements server.ChannelScoped.
@@ -327,13 +341,16 @@ func (i ListStrategiesInput) ChannelScopeID() uuid.UUID {
 
 // ListStrategiesOutput is list_strategies's structured result.
 type ListStrategiesOutput struct {
-	Strategies []StrategyOutput `json:"strategies" jsonschema:"every Strategy for this Channel matching active_only, ordered by creation time"`
+	Strategies []StrategyOutput `json:"strategies" jsonschema:"Strategies for this Channel matching active_only, oldest first"`
+	Truncated  bool             `json:"truncated" jsonschema:"True if more matching Strategies exist beyond limit"`
 }
 
 func registerListStrategies(reg *server.Registry, strategies store.StrategyStore, persons store.PersonStore) {
 	server.RegisterRead(reg, &mcp.Tool{
-		Name:        "list_strategies",
-		Description: "List a Channel's Strategies (issue #1637), each with its cadence and the viable viability_verdict rows it's built from.",
+		Name: "list_strategies",
+		Description: "List a Channel's Strategies (issue #1637), each with its cadence and the viable viability_verdict " +
+			"rows it's built from, oldest first. Response is capped at limit (default 50); see truncated -- Strategies " +
+			"are a deliberately curated construct so this is a guard rail rather than an expected limit in normal use.",
 	}, listStrategiesHandler(strategies, persons))
 }
 
@@ -349,8 +366,14 @@ func listStrategiesHandler(strategies store.StrategyStore, persons store.PersonS
 			return nil, ListStrategiesOutput{}, err
 		}
 
-		out := ListStrategiesOutput{Strategies: make([]StrategyOutput, 0, len(details))}
-		for _, d := range details {
+		limit := in.Limit
+		if limit <= 0 {
+			limit = defaultListStrategiesLimit
+		}
+		trimmed, truncated := truncateSlice(details, limit)
+
+		out := ListStrategiesOutput{Strategies: make([]StrategyOutput, 0, len(trimmed)), Truncated: truncated}
+		for _, d := range trimmed {
 			rendered, err := renderStrategy(ctx, persons, d)
 			if err != nil {
 				return nil, ListStrategiesOutput{}, err

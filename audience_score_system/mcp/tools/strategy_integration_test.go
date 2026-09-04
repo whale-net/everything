@@ -30,6 +30,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -459,6 +460,34 @@ func TestListStrategies_ActiveOnlyFilter(t *testing.T) {
 	activeOnly := stDecode[tools.ListStrategiesOutput](t, f.call(t, cs, "list_strategies", tools.ListStrategiesInput{ChannelID: f.ch.ID.String(), ActiveOnly: true}))
 	require.Len(t, activeOnly.Strategies, 1)
 	assert.Equal(t, "Active strategy", activeOnly.Strategies[0].Title)
+}
+
+// TestListStrategies_LimitTruncated proves issue #1813's fix: limit caps
+// the response with truncated set once a Channel has more Strategies than
+// the caller-supplied (or default) limit -- before this fix, list_strategies
+// had no limit at all. Strategies are a deliberately curated construct
+// (issue #1813 calls it "single digits in practice"), so unlike list_ideas
+// this only needs limit/truncated, not a since/before paging cursor.
+func TestListStrategies_LimitTruncated(t *testing.T) {
+	f := newStrategyFixture(t)
+	cs := f.connect(t, f.creator.ID)
+
+	const seeded = 3
+	for i := 0; i < seeded; i++ {
+		_, v := f.viableIdea(t, cs, f.creator.ID, fmt.Sprintf("Idea %d", i))
+		f.call(t, cs, "save_strategy", tools.SaveStrategyInput{
+			ChannelID: f.ch.ID.String(), Title: fmt.Sprintf("Strategy %d", i), Cadence: "weekly",
+			VerdictIDs: []string{v.ID}, IdempotencyKeyArg: uuid.NewString(),
+		})
+	}
+
+	limited := stDecode[tools.ListStrategiesOutput](t, f.call(t, cs, "list_strategies", tools.ListStrategiesInput{ChannelID: f.ch.ID.String(), Limit: 2}))
+	require.Len(t, limited.Strategies, 2, "must be capped at the caller-supplied limit")
+	assert.True(t, limited.Truncated, "more strategies exist beyond limit")
+
+	all := stDecode[tools.ListStrategiesOutput](t, f.call(t, cs, "list_strategies", tools.ListStrategiesInput{ChannelID: f.ch.ID.String()}))
+	require.Len(t, all.Strategies, seeded, "the default limit (50) comfortably covers a handful of strategies")
+	assert.False(t, all.Truncated)
 }
 
 // ── generate_schedule_plan ────────────────────────────────────────────────
