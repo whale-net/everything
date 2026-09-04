@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	configpb "github.com/whale-net/everything/firmware/proto/config"
@@ -119,6 +121,14 @@ type fakeRepository struct {
 	insertedConfigs []insertedConfig
 	nextVersion     int64
 
+	// inventory and lastAccepted back ListSensorInventoryForBoard and
+	// GetLatestAcceptedConfig respectively (FR8's compose inputs). Keyed by
+	// board_id and device_id, matching the real Repository methods' own
+	// keys. An absent key returns a nil slice/nil pointer, exactly like a
+	// board with no sensors yet / no config ever pushed.
+	inventory    map[int64][]InventorySensor
+	lastAccepted map[string]*configpb.DeviceConfig
+
 	// Read-path fixtures, returned identically regardless of caller -- FR5
 	// leaves reads unscoped by ownership, so these have no per-caller
 	// variant to configure.
@@ -147,6 +157,8 @@ func newFakeRepository() *fakeRepository {
 		users:         map[string]int64{},
 		devices:       map[string]int64{},
 		owners:        map[int64]int64{},
+		inventory:     map[int64][]InventorySensor{},
+		lastAccepted:  map[string]*configpb.DeviceConfig{},
 		boardIdentity: map[int64]BoardIdentity{},
 		sensorDetails: map[int64][]SensorDetailRow{},
 		sensorExists:  map[int64]bool{},
@@ -175,8 +187,12 @@ func (f *fakeRepository) InsertDeviceConfigNextVersion(_ context.Context, boardI
 	return f.nextVersion, nil
 }
 
-func (f *fakeRepository) GetLatestAcceptedConfig(_ context.Context, _ string) (*configpb.DeviceConfig, error) {
-	return nil, nil
+func (f *fakeRepository) GetLatestAcceptedConfig(_ context.Context, deviceID string) (*configpb.DeviceConfig, error) {
+	return f.lastAccepted[deviceID], nil
+}
+
+func (f *fakeRepository) ListSensorInventoryForBoard(_ context.Context, boardID int64) ([]InventorySensor, error) {
+	return f.inventory[boardID], nil
 }
 
 func (f *fakeRepository) ListBoards(_ context.Context) ([]BoardRow, error) {
@@ -188,11 +204,11 @@ func (f *fakeRepository) ListBoardsWithState(_ context.Context) ([]BoardWithRead
 }
 
 func (f *fakeRepository) GetBoardIdentity(_ context.Context, boardID int64) (BoardIdentity, error) {
-	bi, ok := f.boardIdentity[boardID]
+	identity, ok := f.boardIdentity[boardID]
 	if !ok {
 		return BoardIdentity{}, pgx.ErrNoRows
 	}
-	return bi, nil
+	return identity, nil
 }
 
 // ClaimBoard mirrors ClaimBoard's production race-safety contract (a
@@ -358,6 +374,82 @@ func TestPushDeviceConfig_AdminRole_NoBypass_PermissionDenied(t *testing.T) {
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 	assert.Empty(t, repo.insertedConfigs)
 	assert.Empty(t, pub.published)
+}
+
+// TestPushDeviceConfig_PublishesComposedList_NotRawRequest is Testing
+// criterion 8 (FR8): PushDeviceConfig publishes the board's full composed
+// sensor list, not exactly req.Sensors -- a push that names only one sensor
+// must not drop the board's other sensors from the wire payload.
+func TestPushDeviceConfig_PublishesComposedList_NotRawRequest(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.devices["device-a"] = 100
+	repo.owners[100] = 1
+	repo.lastAccepted["device-a"] = &configpb.DeviceConfig{
+		DeviceId: "device-a",
+		Sensors: []*configpb.SensorConfig{
+			cfg(0x10, "topsoil"),
+			cfg(0x11, "canopy"),
+		},
+	}
+	pub := &fakePublisher{}
+	srv := newOwnershipTestServer(repo, pub)
+
+	_, err := srv.PushDeviceConfig(claimsCtx("owner-sub"), &pb.PushDeviceConfigRequest{
+		DeviceId: "device-a",
+		Sensors:  []*configpb.SensorConfig{nameOverride(0x11, "canopy_renamed")},
+	})
+	require.NoError(t, err)
+	require.Len(t, pub.published, 1)
+
+	published := &configpb.DeviceConfig{}
+	require.NoError(t, proto.Unmarshal(pub.published[0].body.([]byte), published))
+
+	require.Len(t, published.GetSensors(), 2, "the untouched sensor 0x10 must survive the push, not be dropped in favor of only the caller's supplied entry")
+	byAddr := indexByI2CAddress(published.GetSensors())
+	assert.Equal(t, "topsoil", byAddr[0x10].GetName())
+	assert.Equal(t, "canopy_renamed", byAddr[0x11].GetName())
+}
+
+// TestPushDeviceConfig_RecordedRowMatchesPublishedPayload is Testing
+// criterion 9: the device_config row inserted (InsertDeviceConfigNextVersion's
+// configJSON argument) and the payload actually published to MQTT carry the
+// same sensor list -- the recorded row is not silently out of sync with
+// what the device receives.
+func TestPushDeviceConfig_RecordedRowMatchesPublishedPayload(t *testing.T) {
+	repo := newFakeRepository()
+	repo.users["owner-sub"] = 1
+	repo.devices["device-a"] = 100
+	repo.owners[100] = 1
+	repo.inventory[100] = []InventorySensor{inv(0x20, "root", nil)}
+	repo.lastAccepted["device-a"] = &configpb.DeviceConfig{
+		DeviceId: "device-a",
+		Sensors:  []*configpb.SensorConfig{cfg(0x10, "topsoil")},
+	}
+	pub := &fakePublisher{}
+	srv := newOwnershipTestServer(repo, pub)
+
+	_, err := srv.PushDeviceConfig(claimsCtx("owner-sub"), &pb.PushDeviceConfigRequest{
+		DeviceId: "device-a",
+		Sensors:  []*configpb.SensorConfig{nameOverride(0x10, "topsoil_renamed")},
+	})
+	require.NoError(t, err)
+	require.Len(t, repo.insertedConfigs, 1)
+	require.Len(t, pub.published, 1)
+
+	recorded := &configpb.DeviceConfig{}
+	require.NoError(t, protojson.Unmarshal(repo.insertedConfigs[0].configJSON, recorded))
+	published := &configpb.DeviceConfig{}
+	require.NoError(t, proto.Unmarshal(pub.published[0].body.([]byte), published))
+
+	require.Len(t, recorded.GetSensors(), 2)
+	require.Len(t, published.GetSensors(), 2)
+	recordedByAddr := indexByI2CAddress(recorded.GetSensors())
+	publishedByAddr := indexByI2CAddress(published.GetSensors())
+	for _, addr := range []uint32{0x10, 0x20} {
+		assert.True(t, proto.Equal(recordedByAddr[addr], publishedByAddr[addr]),
+			"recorded row and published payload must carry the same sensor entry for 0x%x", addr)
+	}
 }
 
 // TestReads_NonOwner_SameContentAsOwner is Testing criterion 8 (FR5): reads

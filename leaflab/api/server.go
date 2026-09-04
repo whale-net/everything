@@ -60,6 +60,7 @@ type repositoryStore interface {
 	GetBoardIDForDeviceID(ctx context.Context, deviceID string) (int64, bool, error)
 	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
+	ListSensorInventoryForBoard(ctx context.Context, boardID int64) ([]InventorySensor, error)
 	ListBoards(ctx context.Context) ([]BoardRow, error)
 	ListBoardsWithState(ctx context.Context) ([]BoardWithReadingRow, error)
 	GetBoardIdentity(ctx context.Context, boardID int64) (BoardIdentity, error)
@@ -211,11 +212,29 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, err
 	}
 
+	// FR8: compose the board's full desired sensor list rather than
+	// publishing exactly the caller's supplied entries -- see
+	// ComposeDesiredSensors' doc comment. Two indexed reads, no per-sensor
+	// round trips (NFR3).
+	inventory, err := s.repo.ListSensorInventoryForBoard(ctx, boardID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "list sensor inventory: %v", err)
+	}
+	lastAccepted, err := s.repo.GetLatestAcceptedConfig(ctx, req.DeviceId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "get latest accepted config: %v", err)
+	}
+	var lastAcceptedSensors []*configpb.SensorConfig
+	if lastAccepted != nil {
+		lastAcceptedSensors = lastAccepted.Sensors
+	}
+	composedSensors := ComposeDesiredSensors(inventory, lastAcceptedSensors, req.Sensors)
+
 	// Build the proto with a placeholder version; we need configJSON for the
 	// atomic insert that returns the real version, so marshal without version first.
 	cfgProto := &configpb.DeviceConfig{
 		DeviceId: req.DeviceId,
-		Sensors:  req.Sensors,
+		Sensors:  composedSensors,
 	}
 	configJSON, err := protojson.Marshal(cfgProto)
 	if err != nil {
@@ -247,7 +266,8 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 	s.logger.Info("device config pushed",
 		"device_id", req.DeviceId,
 		"version", version,
-		"sensors", len(req.Sensors))
+		"sensors", len(composedSensors),
+		"override_sensors", len(req.Sensors))
 
 	return &pb.PushDeviceConfigResponse{Version: uint64(version)}, nil
 }

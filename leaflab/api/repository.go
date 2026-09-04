@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	firmwarepb "github.com/whale-net/everything/firmware/proto"
 	configpb "github.com/whale-net/everything/firmware/proto/config"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -481,6 +484,104 @@ func (r *Repository) GetBoardIDForDeviceID(ctx context.Context, deviceID string)
 		return 0, false, fmt.Errorf("get board for device %s: %w", deviceID, err)
 	}
 	return boardID, true, nil
+}
+
+// muxHopJSON mirrors the JSONB shape of sensor.mux_path
+// (leaflab/DATA.md § mux_path JSONB Format): [{"muxAddress":...,
+// "muxChannel":...}, ...], outer→inner. Kept local to this file rather than
+// shared with leaflab/processor's own MuxHop type -- these are two separate
+// Go binaries (both package main) with no shared library between them.
+type muxHopJSON struct {
+	MuxAddress uint32 `json:"muxAddress"`
+	MuxChannel uint32 `json:"muxChannel"`
+}
+
+// ListSensorInventoryForBoard returns every sensor registered for a board
+// (FR8) with the hardware identity and current desired state
+// ComposeDesiredSensors needs: current name (from the open
+// sensor_name_history row), unit/type, mux_path, i2c_address, and current
+// region_id.
+//
+// One indexed query (idx_sensor_board_id, idx_sensor_name_history_current)
+// -- not a per-sensor round trip (NFR3). Sensors with no i2c_address are
+// excluded: they predate hardware-address tracking (migration
+// 003_sensor_hw_address) and cannot be matched into a SensorConfig entry at
+// all, since (mux_path, i2c_address) is the only identity
+// ComposeDesiredSensors understands.
+func (r *Repository) ListSensorInventoryForBoard(ctx context.Context, boardID int64) ([]InventorySensor, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT
+			s.sensor_id,
+			COALESCE(snh.name, s.name),
+			s.unit,
+			st.name,
+			s.mux_path,
+			s.i2c_address,
+			s.region_id
+		FROM sensor s
+		JOIN sensor_type st ON st.sensor_type_id = s.sensor_type_id
+		LEFT JOIN sensor_name_history snh
+		       ON snh.sensor_id = s.sensor_id
+		      AND snh.valid_to IS NULL
+		WHERE s.board_id = $1
+		  AND s.i2c_address IS NOT NULL
+		ORDER BY s.sensor_id
+	`, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("list sensor inventory for board %d: %w", boardID, err)
+	}
+	defer rows.Close()
+
+	var inventory []InventorySensor
+	for rows.Next() {
+		var (
+			inv            InventorySensor
+			unit           string
+			sensorTypeName string
+			muxPathJSON    []byte
+			i2cAddress     int32
+		)
+		if err := rows.Scan(
+			&inv.SensorID,
+			&inv.Name,
+			&unit,
+			&sensorTypeName,
+			&muxPathJSON,
+			&i2cAddress,
+			&inv.RegionID,
+		); err != nil {
+			return nil, fmt.Errorf("scan sensor inventory row: %w", err)
+		}
+		inv.Unit = unit
+		inv.I2CAddress = uint32(i2cAddress)
+		inv.SensorType = sensorTypeFromName(sensorTypeName)
+
+		var hops []muxHopJSON
+		if err := json.Unmarshal(muxPathJSON, &hops); err != nil {
+			return nil, fmt.Errorf("unmarshal mux_path for sensor %d: %w", inv.SensorID, err)
+		}
+		inv.MuxPath = make([]*configpb.MuxHop, len(hops))
+		for i, h := range hops {
+			inv.MuxPath[i] = &configpb.MuxHop{MuxAddress: h.MuxAddress, MuxChannel: h.MuxChannel}
+		}
+
+		inventory = append(inventory, inv)
+	}
+	return inventory, rows.Err()
+}
+
+// sensorTypeFromName is the inverse of leaflab/processor's
+// sensorTypeNameFromConfig: converts a sensor_type.name DB value back to
+// its proto SensorType enum value. Unknown names (should not occur --
+// sensor_type is seeded from the same enum, migrations 001/010) map to
+// SENSOR_TYPE_UNKNOWN rather than erroring, since an inventory read must
+// not fail a config push over an unrecognized lookup-table row.
+func sensorTypeFromName(name string) firmwarepb.SensorType {
+	v, ok := firmwarepb.SensorType_value["SENSOR_TYPE_"+strings.ToUpper(name)]
+	if !ok {
+		return firmwarepb.SensorType_SENSOR_TYPE_UNKNOWN
+	}
+	return firmwarepb.SensorType(v)
 }
 
 // GetSensorReadingHistory queries sensor_reading directly (not the enriched
