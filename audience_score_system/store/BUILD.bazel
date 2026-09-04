@@ -27,6 +27,7 @@ go_library(
         "invite.go",
         "match.go",
         "models.go",
+        "mywork.go",
         "pacing.go",
         "person.go",
         "research.go",
