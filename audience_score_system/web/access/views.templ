@@ -1,0 +1,140 @@
+package access
+
+import (
+	"github.com/whale-net/everything/audience_score_system/store"
+	"github.com/whale-net/everything/audience_score_system/web/components"
+)
+
+// roleLabel renders a human-readable label for store.Role, mirroring
+// web/schedule's stateLabel and web/pages's connectionStateLabel
+// convention.
+func roleLabel(r store.Role) string {
+	switch r {
+	case store.RoleCreator:
+		return "Founder"
+	case store.RoleCoCreator:
+		return "Co-Creator"
+	case store.RoleAnalyst:
+		return "Analyst"
+	default:
+		return string(r)
+	}
+}
+
+// roleBadgeClass picks a daisyUI badge color matching roleLabel.
+func roleBadgeClass(r store.Role) string {
+	switch r {
+	case store.RoleCreator:
+		return "badge badge-primary"
+	case store.RoleCoCreator:
+		return "badge badge-secondary"
+	default:
+		return "badge badge-ghost"
+	}
+}
+
+// View is the access-management page (FR30/FR31/FR33): ch's roster, an
+// "Invite Co-Creator" action, and per-row Remove/Promote affordances --
+// each row's affordances already resolved server-side (access.go's
+// HandleShow, via store.CanRemove and RosterEntry.Role) before this
+// template ever runs, so no authorization decision is made here.
+//
+// Audit-trail slot (#1727): this page's history panel over
+// store.AccessStore.AuditTrail (FR35, gated by store.CanViewAudit) lands
+// in the marked spot inside the card body below. Deliberately empty in
+// this task -- do not render a second, duplicate history view anywhere
+// else on this page.
+templ View(data components.LayoutData, ch store.Channel, rows []rosterRow) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">{ ch.Title } access</h1>
+				<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/access/invites") }>
+					<button type="submit" class="btn btn-primary btn-sm">Invite Co-Creator</button>
+				</form>
+				<div class="overflow-x-auto mt-4">
+					<table class="table">
+						<thead>
+							<tr>
+								<th>Name</th>
+								<th>Email</th>
+								<th>Tier</th>
+								<th></th>
+							</tr>
+						</thead>
+						<tbody>
+							for _, row := range rows {
+								@rosterRowView(ch, row)
+							}
+						</tbody>
+					</table>
+				</div>
+				<div class="card-actions justify-end mt-2">
+					<a href={ templ.URL("/channels/" + ch.ID.String()) } class="btn btn-secondary btn-sm">
+						Back to channel
+					</a>
+				</div>
+				<!-- Audit-trail slot (#1727): see View's doc comment above. -->
+				<div id="audit-trail-slot"></div>
+			</div>
+		</div>
+	}
+}
+
+// rosterRowView renders one RosterEntry: display name, email, tier badge,
+// and Remove/Promote when this row's already-computed CanRemove/
+// CanPromote say so (FR30/FR31/FR33) -- the hidden inputs carry
+// row.PersonID as the sole target identifier; the server re-derives
+// authorization from scratch on every POST (access.go's HandlePromote/
+// HandleRemove), so this presentation-only omission is never the only
+// line of defense (mirrors web/schedule's entryActions rationale).
+templ rosterRowView(ch store.Channel, row rosterRow) {
+	<tr>
+		<td>{ row.DisplayName }</td>
+		<td>{ row.Email }</td>
+		<td><span class={ roleBadgeClass(row.Role) }>{ roleLabel(row.Role) }</span></td>
+		<td class="flex gap-2 justify-end">
+			if row.CanPromote {
+				<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/access/promote") }>
+					<input type="hidden" name="person_id" value={ row.PersonID.String() }/>
+					<button type="submit" class="btn btn-secondary btn-sm">Promote to Co-Creator</button>
+				</form>
+			}
+			if row.CanRemove {
+				<form method="post" action={ templ.URL("/channels/" + ch.ID.String() + "/access/remove") }>
+					<input type="hidden" name="person_id" value={ row.PersonID.String() }/>
+					<button type="submit" class="btn btn-error btn-sm">Remove</button>
+				</form>
+			}
+		</td>
+	</tr>
+}
+
+// InviteResult renders the newly-generated (or already-live, FR30/LB4/
+// NFR11) Co-Creator invite code for the Founder/Co-Creator to copy and
+// share out of band -- no email delivery exists anywhere in this system
+// (NFR8). Deliberately does not claim whether this call minted a new code
+// or returned an existing live one (see access.go's HandleInviteCoCreator
+// doc comment): the copy below is accurate either way.
+templ InviteResult(data components.LayoutData, code string, channelID string) {
+	@components.Layout(data) {
+		<div class="card bg-base-100 border border-base-300 shadow-sm">
+			<div class="card-body">
+				<h1 class="card-title">Co-Creator invite</h1>
+				<p class="text-base-content/70">
+					Share this link with the person you want to invite as a
+					Co-Creator. If a Co-Creator invite is already live for this
+					Channel, this is that same code -- generating again does not
+					replace it. Any live Analyst invite is unaffected: both can be
+					live at once.
+				</p>
+				<code class="block bg-base-200 rounded p-4 text-lg break-all">/invites/{ code }</code>
+				<div class="card-actions justify-end mt-2">
+					<a href={ templ.URL("/channels/" + channelID + "/access") } class="btn btn-secondary btn-sm">
+						Back to access
+					</a>
+				</div>
+			</div>
+		</div>
+	}
+}

@@ -36,6 +36,11 @@ func connectionStateBadgeClass(state store.ConnectionState) string {
 // Handler.HandleReconnect), and the invite-analyst affordance (canInvite,
 // store.CanInvite / C3 FR5) that generates a single-use invite code via
 // POST /channels/{id}/invites (web/invite.Handlers.HandleGenerate).
+// canInvite also gates the "Manage access" link to web/access's GET
+// /channels/{id}/access (M2: FR30/FR31/FR33, #1723) -- store.CanInvite
+// names the identical Founder+Co-Creator tier set that page's own
+// HandleShow re-checks server-side, so this link's visibility and that
+// page's access gate always agree.
 templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect bool, canInvite bool) {
 	@components.Layout(data) {
 		<div class="card bg-base-100 border border-base-300 shadow-sm">
@@ -66,6 +71,11 @@ templ ChannelDetail(data components.LayoutData, ch store.Channel, canReconnect b
 					</form>
 				}
 				<div class="card-actions justify-end mt-2">
+					if canInvite {
+						<a href={ templ.URL("/channels/" + ch.ID.String() + "/access") } class="btn btn-secondary btn-sm">
+							Manage access
+						</a>
+					}
 					<a href={ templ.URL("/channels/" + ch.ID.String() + "/schedule") } class="btn btn-secondary btn-sm">
 						View schedule
 					</a>
