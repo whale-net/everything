@@ -252,6 +252,7 @@ needs `PG_DATABASE_URL` to drain the outbox and `TEMPORAL_HOST` to run
 | `WRITEBACK_GIT_AUTHOR_EMAIL` | `app-registry-writeback[bot]@users.noreply.github.com` | Git commit author email for gitops writes. |
 | `ARGOCD_SERVER` | *(unset)*, required for the real (non-noop) ArgoCD integration | Base URL of the ArgoCD API server, e.g. `https://argocd.example.com` — no default. Consumed by `libs/go/argocd`'s `Client` (issue #1027), wired into `TriggerArgoRefresh`/`PollArgoSyncStatus` activities in a later task of the same plan. |
 | `ARGOCD_AUTH_TOKEN` | *(unset)*, required alongside `ARGOCD_SERVER` | Bearer token sent as `Authorization: Bearer <token>` on every ArgoCD API call — no default. Provisioned as a worker secret; must be scoped via ArgoCD-side RBAC to least privilege (NFR1) rather than a cluster-admin credential. |
+| `DISABLE_DEPLOYMENT` | `false` | Kill switch, independent of the `WRITEBACK_GITOPS_REPO`/`ARGOCD_SERVER` opt-in gates above: when truthy (parsed via `strconv.ParseBool`), this worker registers `StubActivities`/`NoopArgoSyncActivities` unconditionally, even if gitops/ArgoCD are fully configured — no gitops commit, no ArgoCD refresh/poll. Lets an environment's worker deployment keep its gitops/ArgoCD credentials wired (no secret churn to flip it back) while intentionally not deploying — e.g. a freeze, or an environment recorded through the registry but deployed some other way. `RenderEnvironmentState` and `RecordWritebackResult` still run; only the `Publish`/ArgoCD side effects are suppressed. |
 
 ### ReleaseWorkflow (issue #889)
 
