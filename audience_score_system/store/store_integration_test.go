@@ -1017,9 +1017,14 @@ func TestSyncStore_UpsertVideos_SameYouTubeIDUpdatesNotDuplicates(t *testing.T) 
 
 // setupPendingMatch creates a Channel/creator, a committed schedule_entry,
 // a published synced_video, and one MatchStatePending video_schedule_match
-// row linking them (as if the matcher had queued it below threshold) --
-// the fixture every Resolve test below starts from.
-func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store) (ch store.Channel, creator store.Person, entry store.ScheduleEntry, video store.SyncedVideo, match store.VideoScheduleMatch) {
+// row linking them via schedule_entry_id (as if a pre-#1829 matcher had
+// queued it below threshold) -- the fixture every Resolve test below
+// starts from. Resolve itself is untouched by #1829 (still keys its
+// optional override off schedule_entry_id; #1830's job to re-anchor it
+// onto video_script) so this fixture seeds schedule_entry_id directly by
+// SQL rather than through MatchStore.Record, which -- as of #1829 --
+// never writes schedule_entry_id (see Record's doc comment, match.go).
+func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres) (ch store.Channel, creator store.Person, entry store.ScheduleEntry, video store.SyncedVideo, match store.VideoScheduleMatch) {
 	t.Helper()
 
 	ch, creator = setupChannel(t, ctx, s)
@@ -1046,9 +1051,11 @@ func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store) (ch st
 	require.Len(t, synced, 1)
 	video = synced[0]
 
-	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.5, State: store.MatchStatePending,
-	}))
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, video.ID, entry.ID, 0.5, store.MatchStatePending)
+	require.NoError(t, err)
 	pending, _, err := s.Matches().ListPending(ctx, ch.ID, nil, 0)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
@@ -1059,8 +1066,8 @@ func setupPendingMatch(t *testing.T, ctx context.Context, s *store.Store) (ch st
 
 func TestMatchStore_Resolve_Confirm_SetsConfirmedLinkAndResolver(t *testing.T) {
 	ctx := context.Background()
-	s, _ := newStore(t)
-	_, creator, entry, _, match := setupPendingMatch(t, ctx, s)
+	s, db := newStore(t)
+	_, creator, entry, _, match := setupPendingMatch(t, ctx, s, db)
 
 	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, nil))
 
@@ -1076,8 +1083,8 @@ func TestMatchStore_Resolve_Confirm_SetsConfirmedLinkAndResolver(t *testing.T) {
 
 func TestMatchStore_Resolve_ConfirmWithOverrideEntryID_LinksToChosenEntryNotBestGuess(t *testing.T) {
 	ctx := context.Background()
-	s, _ := newStore(t)
-	ch, creator, _, _, match := setupPendingMatch(t, ctx, s)
+	s, db := newStore(t)
+	ch, creator, _, _, match := setupPendingMatch(t, ctx, s, db)
 
 	otherIdea, err := s.Ideas().Create(ctx, ch.ID, "A Different Idea", creator.ID)
 	require.NoError(t, err)
@@ -1103,8 +1110,8 @@ func TestMatchStore_Resolve_ConfirmWithOverrideEntryID_LinksToChosenEntryNotBest
 
 func TestMatchStore_Resolve_Reject_LeavesScheduleEntryIDUntouchedVideoUnmatched(t *testing.T) {
 	ctx := context.Background()
-	s, _ := newStore(t)
-	_, creator, entry, _, match := setupPendingMatch(t, ctx, s)
+	s, db := newStore(t)
+	_, creator, entry, _, match := setupPendingMatch(t, ctx, s, db)
 
 	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, false, nil))
 
@@ -1124,8 +1131,8 @@ func TestMatchStore_Resolve_Reject_LeavesScheduleEntryIDUntouchedVideoUnmatched(
 
 func TestMatchStore_Resolve_AlreadyResolved_ReturnsErrMatchNotPending_NoSilentStateFlip(t *testing.T) {
 	ctx := context.Background()
-	s, _ := newStore(t)
-	_, creator, _, _, match := setupPendingMatch(t, ctx, s)
+	s, db := newStore(t)
+	_, creator, _, _, match := setupPendingMatch(t, ctx, s, db)
 
 	require.NoError(t, s.Matches().Resolve(ctx, match.ID, creator.ID, true, nil))
 	firstResolve, err := s.Matches().GetByID(ctx, match.ID)
@@ -1256,10 +1263,16 @@ func TestPredictionVsOutcomeView_OnlyMatchedPublishedCommittedIdeasAppear(t *tes
 	require.Len(t, synced, 1)
 	matchedVideoID := synced[0].ID
 
-	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: matchedVideoID, ScheduleEntryID: &entryMatched.ID,
-		Confidence: 0.97, State: store.MatchStateConfirmed,
-	}))
+	// This view (v_prediction_vs_outcome) still joins on schedule_entry_id
+	// (FR44/#1830's re-anchor onto video_script, not #1829's) -- seed the
+	// match by SQL directly rather than through MatchStore.Record, which
+	// -- as of #1829 -- never writes schedule_entry_id (see Record's doc
+	// comment, match.go).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, matchedVideoID, entryMatched.ID, 0.97, store.MatchStateConfirmed)
+	require.NoError(t, err)
 	require.NoError(t, s.Sync().UpsertMetrics(ctx, []store.VideoMetrics{{
 		SyncedVideoID: matchedVideoID, Views: ptrInt64(1234), MeasuredAt: time.Now(),
 	}}))
@@ -1685,7 +1698,7 @@ func TestMigration006_McpCredentialTable_ConstraintsAndIndexesSurviveDownUp(t *t
 // BrowseStore.PredictionVsOutcome (and MyWorkStore's outcome section,
 // which shares its join) requires. Mirrors mcp/tools/
 // browse_integration_test.go's newFullChainFixture, at the store layer.
-func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, ch store.Channel, creator store.Person, ideaTitle string) (store.Idea, store.Verdict) {
+func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, db *dbtest.Postgres, ch store.Channel, creator store.Person, ideaTitle string) (store.Idea, store.Verdict) {
 	t.Helper()
 
 	idea, err := s.Ideas().Create(ctx, ch.ID, ideaTitle, creator.ID)
@@ -1723,9 +1736,16 @@ func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, 
 		SyncedVideoID: video.ID, Views: ptrInt64(500), MeasuredAt: time.Now(),
 	}}))
 
-	require.NoError(t, s.Matches().Record(ctx, store.VideoScheduleMatch{
-		SyncedVideoID: video.ID, ScheduleEntryID: &entry.ID, Confidence: 0.9, State: store.MatchStateAuto,
-	}))
+	// MyWorkStore.SummariesForPerson's LatestOutcome (mywork.go) still joins
+	// on schedule_entry_id (FR44/#1830's re-anchor onto video_script, not
+	// #1829's) -- seed the match by SQL directly rather than through
+	// MatchStore.Record, which -- as of #1829 -- never writes
+	// schedule_entry_id (see Record's doc comment, match.go).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO video_schedule_match (synced_video_id, schedule_entry_id, confidence, state)
+		VALUES ($1, $2, $3, $4)
+	`, video.ID, entry.ID, 0.9, store.MatchStateAuto)
+	require.NoError(t, err)
 
 	return idea, v
 }
@@ -1737,7 +1757,7 @@ func setupMyWorkOutcomeChain(t *testing.T, ctx context.Context, s *store.Store, 
 // bleed into any section.
 func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSectionContent(t *testing.T) {
 	ctx := context.Background()
-	s, _ := newStore(t)
+	s, db := newStore(t)
 
 	person, _, err := s.Persons().UpsertByGoogleSubject(ctx, "sub-"+uuid.NewString(), "p@example.com", "Person")
 	require.NoError(t, err)
@@ -1768,7 +1788,7 @@ func TestMyWorkStore_SummariesForPerson_CoversEveryAssociatedChannel_WithPerSect
 	require.NoError(t, s.Roles().AddRole(ctx, chB.ID, person.ID, store.RoleCoCreator, founderB.ID))
 	noteB, err := s.Research().SaveNote(ctx, store.SaveNoteInput{ChannelID: chB.ID, Text: "B note", AuthorPersonID: founderB.ID})
 	require.NoError(t, err)
-	ideaB, verdictB := setupMyWorkOutcomeChain(t, ctx, s, chB, founderB, "B Idea")
+	ideaB, verdictB := setupMyWorkOutcomeChain(t, ctx, s, db, chB, founderB, "B Idea")
 
 	// C: person is Analyst, granted by C's own Founder -- a note and a
 	// (not-viable) verdict only, no schedule/outcome data at all.
