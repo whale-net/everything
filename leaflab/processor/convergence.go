@@ -31,14 +31,46 @@ const maxCorrectivePushAttempts = 3
 // the same DB state (composition parity, FR9's explicit testable
 // requirement).
 //
-// Scaffold note: this establishes the compiling shape only. NFR4's two
-// storm guards (concurrent-outstanding via GetCorrectivePushState's
-// outstandingVersion, and sequential-storm via its attempts count against
-// maxCorrectivePushAttempts), the WARNING/ERROR logging on the first two vs
-// third failed attempt, and handleManifest's drift-detection call site are
-// all Implementation-phase work -- see issue #1772 §§4-5. converge is not
-// yet wired into handleManifest.
+// Both of NFR4's storm guards are enforced here, in order, before any
+// composition/publish work happens:
+//
+//  1. Concurrent guard: if a corrective push for this sensor is already
+//     outstanding (issued, not yet acked), do not issue a second one.
+//  2. Sequential/reconnect-storm guard: attempts counts reconnect-triggered
+//     corrective pushes already issued for this sensor that failed to
+//     converge (the device acked accepted=true each time -- clearing the
+//     outstanding marker -- but its next manifest still reported the stale
+//     name, meaning it never persisted the correction to NVS). At
+//     maxCorrectivePushAttempts, stop auto-issuing and log ERROR (giving
+//     up, per AGENTS.md § Logging Levels); the first two detections of an
+//     unconverged prior attempt log WARNING instead (the system retried to
+//     keep going). Both counters live in Postgres (GetCorrectivePushState),
+//     never in-memory -- see #1772 §6 / NFR4 "Counter persistence".
 func (h *MessageHandler) converge(ctx context.Context, deviceID string, boardID, sensorID int64) error {
+	attempts, outstandingVersion, err := h.repo.GetCorrectivePushState(ctx, sensorID)
+	if err != nil {
+		return fmt.Errorf("get corrective push state for sensor %d: %w", sensorID, err)
+	}
+
+	if outstandingVersion != nil {
+		// Concurrent guard: a corrective push for this sensor is already in
+		// flight. The next manifest after it acks will re-evaluate drift
+		// (and, if still drifted, the sequential guard below) on its own.
+		h.logger.Info("corrective push already outstanding for sensor, not issuing another",
+			"device_id", deviceID, "sensor_id", sensorID, "outstanding_version", *outstandingVersion)
+		return nil
+	}
+
+	if attempts >= maxCorrectivePushAttempts {
+		h.logger.Error("giving up on corrective push convergence: device is not persisting the correction",
+			"device_id", deviceID, "sensor_id", sensorID, "attempts", attempts)
+		return nil
+	}
+	if attempts > 0 {
+		h.logger.Warn("prior corrective push did not converge, retrying",
+			"device_id", deviceID, "sensor_id", sensorID, "attempts", attempts)
+	}
+
 	inventory, err := h.repo.ListSensorInventoryForBoard(ctx, boardID)
 	if err != nil {
 		return fmt.Errorf("list sensor inventory for board %d: %w", boardID, err)
@@ -55,9 +87,10 @@ func (h *MessageHandler) converge(ctx context.Context, deviceID string, boardID,
 
 	// FR9's corrective push supplies no caller-content overrides at all --
 	// every value composed comes from already-committed DB state (see
-	// #1772/#1756 FR9's "why this is safe" note). The Implementation phase
-	// wires NFR4's guards around this call; the composition itself is
-	// already parity-guaranteed with FR8 by sharing ComposeDesiredSensors.
+	// #1772/#1756 FR9's "why this is safe" note). Composition parity with
+	// FR8 holds by construction: this is the same
+	// configcompose.ComposeDesiredSensors call leaflab/api's PushDeviceConfig
+	// makes, not a copy.
 	composedSensors := configcompose.ComposeDesiredSensors(inventory, lastAcceptedSensors, nil)
 
 	cfgProto := &configpb.DeviceConfig{
@@ -69,11 +102,11 @@ func (h *MessageHandler) converge(ctx context.Context, deviceID string, boardID,
 
 // publishCorrectiveConfig marshals and publishes a composed corrective
 // DeviceConfig, after atomically recording it via
-// InsertCorrectiveConfigNextVersion. Routing key shape matches
+// InsertCorrectiveConfigNextVersion (which also increments
+// sensor.corrective_push_attempts and sets
+// sensor.corrective_push_outstanding_version -- the NFR4 guard state
+// converge's callers check next time). Routing key shape matches
 // leaflab/api/server.go's PushDeviceConfig ("leaflab.<device_id>.config").
-//
-// Scaffold note: not yet called from handleManifest -- see converge's doc
-// comment.
 func (h *MessageHandler) publishCorrectiveConfig(ctx context.Context, deviceID string, boardID, sensorID int64, cfgProto *configpb.DeviceConfig) error {
 	// configJSON (the device_config.config_json column) is protojson, same
 	// as leaflab/api/repository.go's InsertDeviceConfigNextVersion stores;

@@ -126,3 +126,40 @@ on routing key parts:
 | `leaflab.<device>.sensor.<name>` | decode `SensorReading`, write to TimescaleDB |
 | `leaflab.<device>.config` | decode `DeviceConfig`, persist JSONB to `device_config` |
 | `leaflab.<device>.config.ack` | decode `DeviceConfigAck`, mark accepted, apply regions |
+
+## Corrective config push (FR9 / NFR4)
+
+`leaflab-processor` is a **second publisher** on `leaflab.<device>.config`,
+alongside `leaflab-api`'s `PushDeviceConfig` — both publish the same
+`DeviceConfig` message shape to the same exchange/routing key, and both
+assign versions through the same atomic next-version pattern so they can
+never collide on one `device_config.version` for a board.
+
+**Trigger.** Handling an incoming `manifest` (`handleManifest`), the
+processor compares each sensor's device-reported name against the name the
+DB held for that sensor immediately before this manifest's own writes (the
+processor's own `sensor`/`sensor_name_history` state — no query to
+`leaflab-api`). A difference means the device's self-reported name has
+drifted from an owner-authorized rename (FR4) or a prior config push (FR8)
+that the device hasn't actually persisted to NVS. The processor then
+composes the board's full desired sensor list — via the same
+`leaflab/configcompose.ComposeDesiredSensors` function `PushDeviceConfig`
+uses, guaranteeing composition parity — and publishes it as a corrective
+`DeviceConfig`, entirely within its own process (no RPC to `leaflab-api`;
+see `ARCHITECTURE.md`'s FR9 carve-out).
+
+**NFR4 storm guards**, both backed by Postgres columns on `sensor`
+(`corrective_push_attempts`, `corrective_push_outstanding_version`), never
+in-memory (the processor is `replicas=1` and restart-prone):
+
+- **Concurrent guard.** While a corrective push for a sensor is outstanding
+  (issued, not yet acked), a subsequent manifest reporting the same stale
+  name does not trigger a second one. Handling `config.ack` clears the
+  outstanding marker (on both accept and reject) without touching the
+  attempt counter.
+- **Sequential/reconnect-storm guard.** After 3 consecutive
+  acked-but-unconverged reconnect-triggered round trips for a sensor, the
+  processor stops auto-issuing corrective pushes for it — logging WARNING
+  on each of the first two failed attempts and ERROR on the third (giving
+  up; log-only, no alert route). Only a fresh FR4 rename or an explicit FR8
+  push for that sensor resets the counter.

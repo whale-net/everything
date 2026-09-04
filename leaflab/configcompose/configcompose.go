@@ -108,6 +108,33 @@ func ComposeDesiredSensors(
 	return out
 }
 
+// TouchedSensorIDs returns the sensor_id of every inventory entry whose
+// hardware identity (i2c_address, mux_path) matches one of overrides --
+// i.e. the sensors a caller-driven config push (FR8) actually named, as
+// opposed to every sensor ComposeDesiredSensors carries through in its
+// output. An override matching no inventory entry (configuring a brand-new
+// sensor for the first time) has no existing sensor_id and is omitted.
+//
+// Used by leaflab/api's PushDeviceConfig to know which sensors' NFR4
+// corrective-push retry counters an explicit push re-arms: only the
+// sensors the caller actually pushed, not the whole board's composed list
+// -- see leaflab plan #1756/#1772 NFR4's "Reset" note ("only a fresh
+// legitimate rename or an explicit config push for that sensor resets the
+// attempt count").
+func TouchedSensorIDs(inventory []InventorySensor, overrides []*configpb.SensorConfig) []int64 {
+	byKey := make(map[hwKey]int64, len(inventory))
+	for _, inv := range inventory {
+		byKey[makeHWKey(inv.I2CAddress, inv.MuxPath)] = inv.SensorID
+	}
+	var out []int64
+	for _, ov := range overrides {
+		if id, ok := byKey[makeHWKey(ov.GetI2CAddress(), ov.GetMuxPath())]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // applyOverride returns a new SensorConfig combining base (the last-accepted
 // or inventory-derived entry for this hardware identity) with ov's
 // explicitly-set fields. A scalar field on ov is treated as "set" when it

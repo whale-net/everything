@@ -95,8 +95,9 @@ func timePtr(t time.Time) *time.Time {
 
 // insertedConfig is one recorded InsertDeviceConfigNextVersion call.
 type insertedConfig struct {
-	boardID    int64
-	configJSON []byte
+	boardID        int64
+	configJSON     []byte
+	resetSensorIDs []int64
 }
 
 // renamedBoard is one recorded fakeRepository.RenameBoard call.
@@ -270,9 +271,9 @@ func (f *fakeRepository) GetBoardIDForDeviceID(_ context.Context, deviceID strin
 	return id, ok, nil
 }
 
-func (f *fakeRepository) InsertDeviceConfigNextVersion(_ context.Context, boardID int64, configJSON []byte) (int64, error) {
+func (f *fakeRepository) InsertDeviceConfigNextVersion(_ context.Context, boardID int64, configJSON []byte, resetSensorIDs []int64) (int64, error) {
 	f.nextVersion++
-	f.insertedConfigs = append(f.insertedConfigs, insertedConfig{boardID: boardID, configJSON: configJSON})
+	f.insertedConfigs = append(f.insertedConfigs, insertedConfig{boardID: boardID, configJSON: configJSON, resetSensorIDs: resetSensorIDs})
 	return f.nextVersion, nil
 }
 

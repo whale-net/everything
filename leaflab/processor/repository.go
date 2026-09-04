@@ -393,9 +393,24 @@ func (r *Repository) UpsertDeviceConfig(ctx context.Context, boardID, version in
 	return nil
 }
 
-// AckDeviceConfig records the device's ack for a config push.
+// AckDeviceConfig records the device's ack for a config push and, per NFR4,
+// clears corrective_push_outstanding_version for whichever sensor(s) on
+// this board had this exact version outstanding as a corrective push (an
+// ordinary FR8 user-initiated push never sets that column, so this is a
+// no-op in that case). Cleared on both accept and reject -- either way this
+// version is no longer awaiting an ack, so it is no longer "outstanding" by
+// GetCorrectivePushState's own definition; corrective_push_attempts is left
+// untouched (NFR4's sequential/reconnect-storm guard survives an ack either
+// way -- see GetCorrectivePushState's doc comment for why that is what
+// makes the storm case reachable).
 func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64, accepted bool, reason string) error {
-	tag, err := r.db.Exec(ctx, `
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin ack device_config tx board=%d version=%d: %w", boardID, version, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	tag, err := tx.Exec(ctx, `
 		UPDATE device_config
 		SET accepted = $3, acked_at = NOW(), rejection_reason = $4
 		WHERE board_id = $1 AND version = $2
@@ -405,6 +420,18 @@ func (r *Repository) AckDeviceConfig(ctx context.Context, boardID, version int64
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("ack device_config board=%d version=%d: no matching row", boardID, version)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE sensor
+		SET corrective_push_outstanding_version = NULL
+		WHERE board_id = $1 AND corrective_push_outstanding_version = $2
+	`, boardID, version); err != nil {
+		return fmt.Errorf("clear corrective push outstanding marker board=%d version=%d: %w", boardID, version, err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit ack device_config tx board=%d version=%d: %w", boardID, version, err)
 	}
 	return nil
 }

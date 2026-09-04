@@ -34,10 +34,25 @@ func NewRepository(db *pgxpool.Pool) *Repository {
 // inserts the pending config row. ON CONFLICT DO NOTHING retries when two
 // concurrent writers compute the same MAX(version)+1; the unique constraint on
 // (board_id, version) guarantees only one wins per version number.
-func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error) {
+//
+// resetSensorIDs is NFR4's "Reset" case: the sensor_ids this push's caller
+// actually named (configcompose.TouchedSensorIDs against req.Sensors), each
+// reset to corrective_push_attempts = 0 / corrective_push_outstanding_version
+// = NULL in the same transaction as the version insert -- an explicit,
+// caller-driven push for a sensor re-arms FR9's auto-convergence for it,
+// same as a fresh FR4 rename does (RenameSensor). Empty/nil is a no-op
+// (ordinary pushes that don't correspond to any known sensor touch
+// nothing).
+func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, resetSensorIDs []int64) (int64, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin device config tx for board %d: %w", boardID, err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once Commit succeeds
+
+	var version int64
 	for {
-		var version int64
-		err := r.db.QueryRow(ctx, `
+		err := tx.QueryRow(ctx, `
 			WITH next AS (
 				SELECT COALESCE(MAX(version), 0) + 1 AS v
 				FROM device_config
@@ -49,7 +64,7 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 			RETURNING version
 		`, boardID, configJSON).Scan(&version)
 		if err == nil {
-			return version, nil
+			break
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			// another writer claimed this version; retry with the new MAX
@@ -57,6 +72,21 @@ func (r *Repository) InsertDeviceConfigNextVersion(ctx context.Context, boardID 
 		}
 		return 0, fmt.Errorf("insert device_config for board %d: %w", boardID, err)
 	}
+
+	if len(resetSensorIDs) > 0 {
+		if _, err := tx.Exec(ctx, `
+			UPDATE sensor
+			SET corrective_push_attempts = 0, corrective_push_outstanding_version = NULL
+			WHERE sensor_id = ANY($1)
+		`, resetSensorIDs); err != nil {
+			return 0, fmt.Errorf("reset corrective push state for board %d: %w", boardID, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit device config tx for board %d: %w", boardID, err)
+	}
+	return version, nil
 }
 
 // GetLatestAcceptedConfig returns the highest-version accepted config for a board.

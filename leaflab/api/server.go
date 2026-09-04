@@ -64,7 +64,7 @@ type repositoryStore interface {
 	GetCurrentBoardOwner(ctx context.Context, boardID int64) (int64, bool, error)
 	HasRole(ctx context.Context, leaflabUserID int64, role string) (bool, error)
 	GetBoardIDForDeviceID(ctx context.Context, deviceID string) (int64, bool, error)
-	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte) (int64, error)
+	InsertDeviceConfigNextVersion(ctx context.Context, boardID int64, configJSON []byte, resetSensorIDs []int64) (int64, error)
 	GetLatestAcceptedConfig(ctx context.Context, deviceID string) (*configpb.DeviceConfig, error)
 	ListSensorInventoryForBoard(ctx context.Context, boardID int64) ([]configcompose.InventorySensor, error)
 	ListBoards(ctx context.Context) ([]BoardRow, error)
@@ -291,9 +291,13 @@ func (s *LeafLabAPIServer) PushDeviceConfig(ctx context.Context, req *pb.PushDev
 		return nil, status.Errorf(codes.Internal, "protojson marshal: %v", err)
 	}
 
+	// NFR4 "Reset": an explicit push re-arms FR9's auto-convergence for
+	// exactly the sensors the caller named, same as a fresh FR4 rename does.
+	resetSensorIDs := configcompose.TouchedSensorIDs(inventory, req.Sensors)
+
 	// Atomically assign version and record the pending push before publishing.
 	// This ensures the DB row always exists before the device can ack.
-	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON)
+	version, err := s.repo.InsertDeviceConfigNextVersion(ctx, boardID, configJSON, resetSensorIDs)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "record config push: %v", err)
 	}
